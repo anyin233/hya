@@ -1405,19 +1405,28 @@ impl CompiledResourceView {
 
     /// Skills from directory discovery, including builtins that discovery did
     /// not shadow. Captured once as part of the session's initial context.
+    /// A `disable-model-invocation: true` skill is left out: only
+    /// `/skill:<name>` runs it.
     pub(crate) fn directory_skills_prompt_section(&self) -> Option<String> {
         skill_index_with_spellings(
             "Skills found at session start; use the skill tool to load a current skill:",
-            self.skills()
-                .iter()
-                .filter(|entry| entry.origin != hya_tool::SkillCatalogOrigin::Virtual),
+            self.skills().iter().filter(|entry| {
+                entry.origin != hya_tool::SkillCatalogOrigin::Virtual
+                    && !entry.disable_model_invocation
+            }),
         )
     }
 
     /// Live skill guidance from selected bundle and plugin resources. With the
     /// skill facade these are listed, otherwise bundle-local bodies are inlined.
+    /// A `disable-model-invocation: true` skill is neither listed nor inlined.
     pub(crate) fn skills_prompt_section(&self) -> Option<String> {
-        let skills = self.skills();
+        let skills = self
+            .skills()
+            .iter()
+            .filter(|entry| !entry.disable_model_invocation)
+            .cloned()
+            .collect::<Vec<_>>();
         if skills.is_empty() {
             return None;
         }
@@ -1429,7 +1438,7 @@ impl CompiledResourceView {
                     .filter(|entry| entry.origin == hya_tool::SkillCatalogOrigin::Virtual),
             );
         }
-        Some(inline_selected_skills_with_spellings(skills))
+        Some(inline_selected_skills_with_spellings(&skills))
     }
 
     pub(crate) fn skill_plane(&self) -> SkillPlane {

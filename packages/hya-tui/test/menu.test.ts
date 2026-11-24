@@ -71,3 +71,18 @@ test("requiresArgument: no hint or a [bracketed] hint is optional; anything else
   expect(requiresArgument("set|remove <provider>")).toBe(true)
   expect(requiresArgument("select <name> | run [name]")).toBe(true)
 })
+
+test("backend rows carry their scope in the tag; skill_commands = false leaves the /skill: rows out", () => {
+  const backend: CommandSummary[] = [
+    { name: "review", description: "Review", source: "command", scope: "user" },
+    { name: "skill:greet", description: "Say hello", source: "skill", scope: "project", argumentHint: "[request]" },
+  ]
+  const entries = mergeCommandEntries(createCommandRegistry().list(), backend)
+  const rows = suggestCommandInput("/gree", () => entries, () => [])
+  expect(rows[0]?.label).toBe("/skill:greet [request]  Say hello  [skill · project]")
+  expect(rows[0]?.runOnEnter).toBe(true)
+  expect(suggestCommandInput("/review", () => entries, () => [])[0]?.label).toBe("/review  Review  [command · user]")
+  const withoutSkills = mergeCommandEntries(createCommandRegistry().list(), backend, { skillCommands: false })
+  expect(withoutSkills.some((entry) => entry.name === "/skill:greet")).toBe(false)
+  expect(withoutSkills.some((entry) => entry.name === "/review")).toBe(true)
+})

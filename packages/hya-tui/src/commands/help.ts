@@ -18,10 +18,11 @@ import { bundleKeyRows } from "../state/bundles"
 import type { PickerRow } from "../state/picker"
 import { providerKeyRows } from "../state/providers"
 import { rulesKeyRows } from "../state/rules"
+import { skillsKeyRows } from "../state/skills"
 import type { CommandEntry } from "./menu"
 import { sessionPickerActions } from "./native"
 
-export const helpGroups = ["Composer", "Vim", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Layout", "Providers", "Diff", "Mcp", "Bundles", "Rules", "Agents", "Subagents", "Views", "App", "Commands"] as const
+export const helpGroups = ["Composer", "Vim", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Layout", "Providers", "Diff", "Mcp", "Bundles", "Rules", "Agents", "Skills", "Subagents", "Views", "App", "Commands"] as const
 export type HelpGroup = (typeof helpGroups)[number]
 
 export interface HelpRow {
@@ -197,6 +198,7 @@ export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {
   const bundlesViewRows: HelpRow[] = bundleKeyRows.map((row) => ({ group: "Bundles", keys: row.keys, description: row.description }))
   const savedRuleRows: HelpRow[] = rulesKeyRows.map((row) => ({ group: "Rules", keys: row.keys, description: row.description }))
   const agentsViewRows: HelpRow[] = agentsViewKeyRows.map((row) => ({ group: "Agents", keys: row.keys, description: row.description }))
+  const skillsViewRows: HelpRow[] = skillsKeyRows.map((row) => ({ group: "Skills", keys: row.keys, description: row.description }))
   const rows = [
     ...([
       { keys: "Up / Down", description: "Layout pane: select a tree node or action" },
@@ -213,7 +215,7 @@ export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {
       { keys: "Backspace / Delete", description: "Layout tree: remove marked/cursor auxiliary pane; groups ask confirmation. Weight form: erase text" },
     ].map((row): HelpRow => ({ group: "Layout", ...row }))),
     ...composerRows(), ...vimRows, ...bindingRows, ...mouseRows, ...promptRows, ...pickerRows(),
-    ...providerRows, ...diffRows, ...mcpRows, ...bundlesViewRows, ...savedRuleRows, ...agentsViewRows, ...commandRows,
+    ...providerRows, ...diffRows, ...mcpRows, ...bundlesViewRows, ...savedRuleRows, ...agentsViewRows, ...skillsViewRows, ...commandRows,
     ...Object.entries(customKeybindings()).filter((entry): entry is [string, NonNullable<typeof entry[1]>] => entry[1] !== null).map(([keys, binding]): HelpRow => ({
       group: "Views", keys, description: `Run ${binding.command} (${binding.scope}; custom /keybind shortcut)`,
     })),

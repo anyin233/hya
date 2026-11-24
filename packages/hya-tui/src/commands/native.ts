@@ -2,7 +2,7 @@
 import { revertReadOnlyStatus } from "../app/revert"
 import { subagentsCommand } from "./subagents"
 import { brief, operations } from "../api"
-import { HttpError, parseApiCommand, type SessionInfo } from "../client"
+import { HttpError, parseApiCommand, type CommandSummary, type SessionInfo } from "../client"
 import { effortRows, isKnownEffort, modelRows, relativeTime, sessionRows } from "../state/catalog"
 import { copyNotice } from "../composer/clipboard"
 import { currentModel, modelBaseReference, modelReference, sessionNumbers, sessionTree, strategyText, thinkingEffortLabel, webTabBackgroundNotice } from "../state/format"
@@ -23,6 +23,8 @@ import { CommandRegistry, matchValues, type ArgumentPosition, type CommandContex
 import type { CompletionContext } from "../completion"
 import { keybindingsCommand } from "./keybindings"
 import { configCommand, enableSidebar, layoutNeedsWorkspace, pasteCommand, resourcesCommand, setCommand } from "./config"
+import { closestCommand, looksLikePath, skillCommandPrefix } from "./menu"
+import { reloadCommand, reloadTargetCommands } from "./reload"
 
 /**
  * Session id completions (`/open`, `/resume`): a titled session shows as
@@ -342,8 +344,50 @@ async function respondAndReload(context: CommandContext, respond: Promise<unknow
 }
 
 /** Run an unregistered `/name args` as a backend command turn, creating a session if needed. */
+/**
+ * Whether `name` (no slash) is in the backend command catalog. A miss
+ * re-reads `ListCommands` once (a command or skill added since the last
+ * read); `undefined` when that read fails, so the command still goes to the
+ * backend as before.
+ */
+async function knownBackendCommand({ store, client }: CommandContext, name: string): Promise<boolean | undefined> {
+  if (store.state.backendCommands.some((command) => command.name === name)) return true
+  let commands: CommandSummary[]
+  try {
+    // The open session's catalog: its agent's bundle skills are commands too.
+    commands = await client.listCommands(store.state.selected?.id)
+  } catch {
+    return undefined
+  }
+  store.setBackendCommands(commands)
+  return commands.some((command) => command.name === name)
+}
+
+/**
+ * The refusal of an unknown command line, with the closest name. An unknown
+ * `/skill:<name>` points at `/skills`; a bare skill name (the skill commands
+ * of older releases) at its `/skill:<name>`.
+ */
+export function unknownCommandMessage(name: string, localNames: readonly string[], backend: readonly CommandSummary[]): string {
+  if (name.startsWith(skillCommandPrefix)) return `Unknown skill ${name.slice(skillCommandPrefix.length) || "(no name)"} · /skills lists them`
+  const closest = closestCommand(name, [...localNames.map((local) => local.slice(1)), ...backend.map((command) => command.name)])
+  return `Unknown command /${name}${closest ? ` · did you mean /${closest}?` : ""} · / lists commands`
+}
+
 export async function backendCommand(context: CommandContext, invocation: CommandInvocation): Promise<void> {
   const { store, client, actions } = context
+  const name = invocation.name.slice(1)
+  if (await knownBackendCommand(context, name) === false) {
+    // `/usr/lib/x fails to load` is a prompt that starts with a path, not a command.
+    if (looksLikePath(invocation.name) && actions.sendPrompt) {
+      await actions.sendPrompt(invocation.text)
+      return
+    }
+    // In the transcript too: the refusal is the whole answer to what was typed.
+    const message = unknownCommandMessage(name, context.registry?.names() ?? [], store.state.backendCommands)
+    store.addTranscriptNotice(message)
+    throw new Error(message)
+  }
   if (store.state.selected?.parent) {
     store.setStatus(revertReadOnlyStatus)
     return
@@ -351,12 +395,13 @@ export async function backendCommand(context: CommandContext, invocation: Comman
   if (!store.state.selected) await actions.newSession()
   const selected = store.state.selected
   if (!selected) throw new Error("Session creation failed")
-  const name = invocation.name.slice(1)
   const turn = await client.createCommandTurn(selected.id, name, invocation.argumentsText)
   // `CreateTurn` returns the user message id as the turn id for a command
   // turn (same as a prompt turn); the transcript shows what the user typed
   // instead of the backend's expanded template text (state/messages.ts).
-  store.rememberCommand(turn.id, invocation.text)
+  // A skill's `<skill>` block is folded from the message text itself
+  // (state/skillBlock.ts), the same in every client.
+  if (!name.startsWith(skillCommandPrefix)) store.rememberCommand(turn.id, invocation.text)
   store.setTurn(turn.id)
   store.setStatus(turn.id ? `Command ${name} · ${turn.state.toLowerCase()}` : `Command ${name} finished`)
   actions.scheduleRefresh()
@@ -376,6 +421,8 @@ export const nativeCommandSpecs: CommandSpec[] = [
   setCommand,
   pasteCommand,
   resourcesCommand,
+  reloadCommand,
+  ...reloadTargetCommands,
   {
     name: "/layout",
     description: "Edit workspace panes: split, insert, move, bubble, wrap, remove, assign, focus, resize, close, reload, reset, tree, or show",
@@ -619,6 +666,15 @@ export const nativeCommandSpecs: CommandSpec[] = [
     },
   },
   {
+    // The backend catalog lists `/clear` ("start a fresh session") for the client to run.
+    name: "/clear",
+    description: "Start a fresh session in the active Project (same as /new)",
+    run: async ({ store, actions }) => {
+      await actions.newSession()
+      store.setProjectsFocus(false)
+    },
+  },
+  {
     name: "/open",
     description: "Open a session",
     argumentHint: "<id|number>",
@@ -826,6 +882,13 @@ export const nativeCommandSpecs: CommandSpec[] = [
     name: "/bundles",
     description: "Manage installed bundles: install, uninstall, enable, disable, trust",
     run: ({ actions }) => { actions.openBundles() },
+  },
+  {
+    name: "/skills",
+    description: "Open the Skills view: every skill of the scope by source, its file and body; u puts /skill:<name> into the input",
+    argumentHint: "[filter]",
+    complete: ({ words, current, head }, context) => words.length === 1 ? matchValues(head, current, context.backendCommands.filter((name) => name.startsWith(skillCommandPrefix)).map((name) => name.slice(skillCommandPrefix.length))) : [],
+    run: ({ actions }, { argumentsText }) => { actions.openSkills(argumentsText.trim()) },
   },
   {
     name: "/rules",

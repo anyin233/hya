@@ -5,6 +5,13 @@ use crate::support::catalog_place::CatalogPlace;
 /// Identity of the trusted bundle that owns the prompt-template commands.
 const CORE_COMMANDS_BUNDLE: &str = "hya/core-commands";
 
+/// Reserved command-name prefix of the skill namespace: the skill `reviewer`
+/// runs as `/skill:reviewer`, so a skill never collides with a command.
+pub(crate) const SKILL_COMMAND_PREFIX: &str = "skill:";
+
+/// Argument hint of every `/skill:<name>` row: the request is optional.
+const SKILL_ARGUMENT_HINT: &str = "[request]";
+
 /// The `commands.yaml` asset of `hya/core-commands`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,19 +87,47 @@ pub(crate) struct CommandInfo {
 
     pub(crate) source: &'static str,
     #[serde(skip)]
-    expandable: bool,
+    expansion: Expansion,
     pub(crate) template: String,
+    /// Argument hint shown after the name (`<file>` required, `[focus]` optional).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) argument_hint: Option<String>,
 
     pub(crate) hints: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) subtask: Option<bool>,
+    /// `builtin`, `project`, `user`, or a skill row's source
+    /// (`CommandSummary.scope`).
+    pub(crate) scope: &'static str,
+}
+
+/// A place's commands and the diagnostics of the command files it skipped.
+pub(crate) struct CommandListing {
+    pub(crate) commands: Vec<CommandInfo>,
+    pub(crate) diagnostics: Vec<crate::support::command_sources::CommandDiagnostic>,
 }
 
 /// Commands visible at `place`: builtins, then disk commands from its
-/// directory and each Project root in order (first wins), then skills. The
-/// global view (no directory) has only builtins and user skills, with
-/// `${path}` left unexpanded since there is no directory to name.
+/// directory and each Project root in order, then the user's
+/// (`~/.config/hya/commands`; first wins), then a `skill:<name>` row per
+/// skill. The global view (no directory) has the builtins, the user's
+/// commands, and user skills, with `${path}` left unexpanded since there is
+/// no directory to name.
 pub(crate) fn list(place: &CatalogPlace) -> Vec<CommandInfo> {
+    listing(place).commands
+}
+
+/// [`list`] with the diagnostics of the command files it skipped.
+pub(crate) fn listing(place: &CatalogPlace) -> CommandListing {
+    listing_with_skills(place, crate::support::skill_catalog::list(place))
+}
+
+/// [`listing`] with `skills` as the `skill:<name>` rows (a session's own
+/// skill view, bundle skills included).
+pub(crate) fn listing_with_skills(
+    place: &CatalogPlace,
+    skills: Vec<crate::support::skill_catalog::SkillInfo>,
+) -> CommandListing {
     let workdir = place.workdir();
     let mut commands = core_commands()
         .iter()
@@ -147,87 +182,286 @@ pub(crate) fn list(place: &CatalogPlace) -> Vec<CommandInfo> {
             None,
         ),
     ]);
+    let mut diagnostics = Vec::new();
     let mut disk: Vec<CommandInfo> = Vec::new();
-    for dir in place.dirs() {
-        for command in crate::support::command_sources::disk_commands(dir) {
-            if !disk.iter().any(|known| known.name == command.name) {
-                disk.push(command);
-            }
+    let project = place.dirs().into_iter().flat_map(|dir| {
+        crate::support::command_sources::disk_commands(dir, "project", &mut diagnostics)
+    });
+    let project = project.collect::<Vec<_>>();
+    let user = crate::support::command_sources::root_commands(
+        &crate::support::command_sources::user_command_roots(),
+        "user",
+        &mut diagnostics,
+    );
+    for command in project.into_iter().chain(user) {
+        if !disk.iter().any(|known| known.name == command.name) {
+            disk.push(command);
         }
     }
     upsert_commands(&mut commands, disk);
-    add_skill_commands(&mut commands, place);
-    commands
+    commands.extend(skills.into_iter().map(CommandInfo::skill));
+    CommandListing {
+        commands,
+        diagnostics,
+    }
 }
 
-/// Expand `command` against the catalog a session's turns see
-/// ([`CatalogPlace::for_session`]).
+/// How a catalog row turns into prompt text.
+#[derive(Clone, Debug)]
+enum Expansion {
+    /// A client-side command (`/help`, `/clear`): never expanded here.
+    None,
+    /// A prompt template with `$1` / `$ARGUMENTS` placeholders.
+    Template,
+    /// A skill: a pi-style `<skill>` block with the arguments after it.
+    Skill {
+        /// Catalog path named in the block's `location` attribute.
+        location: String,
+        /// The skill's directory, the base of its relative references.
+        dir: Option<String>,
+    },
+}
+
+/// Expand `command` against the catalog of `place`.
 pub(crate) fn expand_prompt(
     place: &CatalogPlace,
     command: &str,
     arguments: &str,
 ) -> Option<String> {
-    list(place)
-        .into_iter()
-        .find(|item| item.name == command && item.expandable)
-        .map(|item| expand_template(&item.template, arguments))
+    expand_in(list(place), command, arguments)
 }
 
-fn expand_template(template: &str, arguments: &str) -> String {
-    let positional = split_arguments(arguments);
-    let mut out = String::with_capacity(template.len().saturating_add(arguments.len()));
-    let mut chars = template.char_indices().peekable();
-    while let Some((idx, ch)) = chars.next() {
-        if ch != '$' {
-            out.push(ch);
-            continue;
-        }
-        if template[idx..].starts_with("$ARGUMENTS") {
-            out.push_str(arguments);
-            for _ in 0.."ARGUMENTS".len() {
-                chars.next();
-            }
-            continue;
-        }
-        let mut position = 0usize;
-        let mut has_digits = false;
-        while let Some((_, next)) = chars.peek().copied() {
-            if let Some(digit) = next.to_digit(10) {
-                has_digits = true;
-                position = position.saturating_mul(10).saturating_add(digit as usize);
-                chars.next();
-            } else {
-                break;
-            }
-        }
-        if has_digits {
-            if let Some(replacement) = position.checked_sub(1).and_then(|idx| positional.get(idx)) {
-                out.push_str(replacement);
-            }
-        } else {
-            out.push('$');
+/// Expand `command` against the catalog `session`'s turns see
+/// ([`CatalogPlace::for_session`]): a `skill:<name>` also finds the bundle
+/// and plugin skills its agent can load.
+pub(crate) async fn expand_session_prompt(
+    st: &crate::ServerState,
+    session: hya_proto::SessionId,
+    place: &CatalogPlace,
+    command: &str,
+    arguments: &str,
+) -> Option<String> {
+    if !command.starts_with(SKILL_COMMAND_PREFIX) {
+        return expand_prompt(place, command, arguments);
+    }
+    let skills = crate::support::skill_catalog::session_listing(st, session, place)
+        .await
+        .skills;
+    expand_in(
+        listing_with_skills(place, skills).commands,
+        command,
+        arguments,
+    )
+}
+
+fn expand_in(commands: Vec<CommandInfo>, command: &str, arguments: &str) -> Option<String> {
+    commands
+        .into_iter()
+        .find(|item| item.name == command)
+        .and_then(|item| item.expand(arguments))
+}
+
+/// The text a `/skill:<name> [request]` turn sends, as pi writes it:
+///
+/// ```text
+/// <skill name="reviewer" location="/w/.hya/skills/reviewer/SKILL.md">
+/// References are relative to /w/.hya/skills/reviewer.
+///
+/// <body>
+/// </skill>
+///
+/// <request>
+/// ```
+///
+/// The reference line is left out for a built-in skill (no directory), and
+/// the request (with its blank line) when it is empty. Attribute values
+/// escape `&`, `"`, `<`, and `>`.
+pub(crate) fn skill_block(
+    name: &str,
+    location: &str,
+    dir: Option<&str>,
+    body: &str,
+    arguments: &str,
+) -> String {
+    let mut out = format!(
+        "<skill name=\"{}\" location=\"{}\">\n",
+        escape_attribute(name),
+        escape_attribute(location)
+    );
+    if let Some(dir) = dir {
+        out.push_str("References are relative to ");
+        out.push_str(dir);
+        out.push_str(".\n\n");
+    }
+    out.push_str(body.trim());
+    out.push_str("\n</skill>");
+    let request = arguments.trim();
+    if !request.is_empty() {
+        out.push_str("\n\n");
+        out.push_str(request);
+    }
+    out
+}
+
+fn escape_attribute(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            other => out.push(other),
         }
     }
     out
 }
 
-fn split_arguments(arguments: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut current = String::new();
-    let mut quote: Option<char> = None;
-    for ch in arguments.chars() {
-        match (quote, ch) {
-            (Some(q), c) if c == q => quote = None,
-            (None, '"' | '\'') => quote = Some(ch),
-            (None, c) if c.is_whitespace() => {
-                if !current.is_empty() {
-                    out.push(std::mem::take(&mut current));
-                }
+/// Expand a command template with pi's substitutions:
+///
+/// | Syntax | Result |
+/// | --- | --- |
+/// | `$1`, `$2`, … | One positional argument (empty when missing) |
+/// | `$ARGUMENTS`, `$@` | The arguments as typed |
+/// | `${1:-default}` | The first argument, or `default` when it is missing or empty |
+/// | `${@:-default}` | The arguments, or `default` when there are none |
+/// | `${@:N}` | The arguments from position `N`, joined with spaces |
+/// | `${@:N:L}` | `L` arguments from position `N` |
+///
+/// Any other `$` or `${…}` stays as written, and a replacement is never
+/// expanded again.
+fn expand_template(template: &str, arguments: &str) -> String {
+    let positional = split_arguments(arguments);
+    let arg = |index: usize| -> &str {
+        index
+            .checked_sub(1)
+            .and_then(|index| positional.get(index))
+            .map_or("", String::as_str)
+    };
+    let mut out = String::with_capacity(template.len().saturating_add(arguments.len()));
+    let mut rest = template;
+    while let Some(at) = rest.find('$') {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        if let Some(after) = tail.strip_prefix("$ARGUMENTS") {
+            out.push_str(arguments);
+            rest = after;
+        } else if let Some(after) = tail.strip_prefix("$@") {
+            out.push_str(arguments);
+            rest = after;
+        } else if let Some((replacement, after)) = expand_braced(tail, arguments, &positional) {
+            out.push_str(&replacement);
+            rest = after;
+        } else {
+            let digits = tail[1..].bytes().take_while(u8::is_ascii_digit).count();
+            if digits > 0 {
+                let position = tail[1..=digits].parse::<usize>().unwrap_or(usize::MAX);
+                out.push_str(arg(position));
+                rest = &tail[1 + digits..];
+            } else {
+                out.push('$');
+                rest = &tail[1..];
             }
-            _ => current.push(ch),
         }
     }
-    if !current.is_empty() {
+    out.push_str(rest);
+    out
+}
+
+/// A `${…}` form at the start of `tail`: its replacement and the text after
+/// it, or `None` when it is not one of the supported forms.
+fn expand_braced<'a>(
+    tail: &'a str,
+    arguments: &str,
+    positional: &[String],
+) -> Option<(String, &'a str)> {
+    let body_start = tail.strip_prefix("${")?;
+    let close = body_start.find('}')?;
+    let body = &body_start[..close];
+    let after = &body_start[close + 1..];
+    let (head, default) = match body.split_once(":-") {
+        Some((head, default)) => (head, Some(default)),
+        None => (body, None),
+    };
+    if let Some(default) = default {
+        let value = if head == "@" {
+            arguments.trim().to_owned()
+        } else {
+            let position = head
+                .parse::<usize>()
+                .ok()
+                .filter(|position| *position > 0)?;
+            positional.get(position - 1).cloned().unwrap_or_default()
+        };
+        return Some((
+            if value.is_empty() {
+                default.to_owned()
+            } else {
+                value
+            },
+            after,
+        ));
+    }
+    let range = head.strip_prefix("@:")?;
+    let (start, length) = match range.split_once(':') {
+        Some((start, length)) => (start, Some(length.parse::<usize>().ok()?)),
+        None => (range, None),
+    };
+    let start = start.parse::<usize>().ok().filter(|start| *start > 0)?;
+    let from = positional.iter().skip(start - 1);
+    let picked = match length {
+        Some(length) => from.take(length).cloned().collect::<Vec<_>>(),
+        None => from.cloned().collect::<Vec<_>>(),
+    };
+    Some((picked.join(" "), after))
+}
+
+/// Split the arguments as pi does: on whitespace, where a quote only opens
+/// at the start of an argument (so `doesn't` stays one word) and one with no
+/// closing match is plain text; inside quotes a backslash before the same
+/// quote keeps it, other backslashes stay as typed.
+fn split_arguments(arguments: &str) -> Vec<String> {
+    let chars = arguments.chars().collect::<Vec<_>>();
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < chars.len() {
+        if chars[at].is_whitespace() {
+            at += 1;
+            continue;
+        }
+        let mut current = String::new();
+        if let Some(quote) = chars.get(at).copied().filter(|ch| matches!(ch, '"' | '\'')) {
+            let mut end = at + 1;
+            let mut closed = None;
+            while end < chars.len() {
+                if chars[end] == '\\' && chars.get(end + 1) == Some(&quote) {
+                    end += 2;
+                    continue;
+                }
+                if chars[end] == quote {
+                    closed = Some(end);
+                    break;
+                }
+                end += 1;
+            }
+            if let Some(end) = closed {
+                let mut inner = at + 1;
+                while inner < end {
+                    if chars[inner] == '\\' && chars.get(inner + 1) == Some(&quote) {
+                        current.push(quote);
+                        inner += 2;
+                    } else {
+                        current.push(chars[inner]);
+                        inner += 1;
+                    }
+                }
+                at = end + 1;
+            }
+        }
+        while at < chars.len() && !chars[at].is_whitespace() {
+            current.push(chars[at]);
+            at += 1;
+        }
         out.push(current);
     }
     out
@@ -246,13 +480,37 @@ fn command_info(
         agent: None,
         model: None,
         source: "command",
-        expandable: false,
+        expansion: Expansion::None,
         template,
+        argument_hint: None,
         hints: hints.into_iter().map(str::to_string).collect(),
         subtask,
+        scope: "builtin",
     }
 }
 impl CommandInfo {
+    /// The prompt text of this row for `arguments`; `None` for a
+    /// client-side command.
+    fn expand(&self, arguments: &str) -> Option<String> {
+        match &self.expansion {
+            Expansion::None => None,
+            Expansion::Template => Some(expand_template(&self.template, arguments)),
+            Expansion::Skill { location, dir } => {
+                let name = self
+                    .name
+                    .strip_prefix(SKILL_COMMAND_PREFIX)
+                    .unwrap_or(&self.name);
+                Some(skill_block(
+                    name,
+                    location,
+                    dir.as_deref(),
+                    &self.template,
+                    arguments,
+                ))
+            }
+        }
+    }
+
     pub(super) fn command(
         name: String,
         description: Option<String>,
@@ -267,24 +525,45 @@ impl CommandInfo {
             agent,
             model,
             source: "command",
-            expandable: true,
+            expansion: Expansion::Template,
             hints: command_hints(&template),
             template,
+            argument_hint: None,
             subtask,
+            scope: "project",
         }
     }
 
-    fn skill(name: String, description: String, template: String) -> Self {
+    /// The frontmatter's `argument-hint` (`<file>` required, `[focus]` optional).
+    pub(super) fn with_argument_hint(mut self, hint: Option<String>) -> Self {
+        self.argument_hint = hint.filter(|hint| !hint.trim().is_empty());
+        self
+    }
+
+    /// Where the command is defined (`project`, `user`).
+    pub(super) fn with_scope(mut self, scope: &'static str) -> Self {
+        self.scope = scope;
+        self
+    }
+
+    /// The `/skill:<name>` row of `skill`: its body is the template, expanded
+    /// into a `<skill>` block ([`skill_block`]).
+    fn skill(skill: crate::support::skill_catalog::SkillInfo) -> Self {
         Self {
-            name,
-            description: Some(description),
+            name: format!("{SKILL_COMMAND_PREFIX}{}", skill.name),
+            description: Some(skill.description),
             agent: None,
             model: None,
             source: "skill",
-            expandable: true,
-            template,
+            expansion: Expansion::Skill {
+                location: skill.path,
+                dir: skill.dir,
+            },
+            template: skill.content,
+            argument_hint: Some(SKILL_ARGUMENT_HINT.to_string()),
             hints: Vec::new(),
             subtask: None,
+            scope: skill.source,
         }
     }
 }
@@ -327,19 +606,6 @@ fn command_hints(template: &str) -> Vec<String> {
     numbered
 }
 
-fn add_skill_commands(commands: &mut Vec<CommandInfo>, place: &CatalogPlace) {
-    for skill in crate::support::skill_catalog::list(place) {
-        if commands.iter().any(|command| command.name == skill.name) {
-            continue;
-        }
-        commands.push(CommandInfo::skill(
-            skill.name,
-            skill.description,
-            skill.content,
-        ));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::expand_template;
@@ -365,6 +631,169 @@ mod tests {
             assert_eq!(command.template, asset(id), "/{name}");
             assert_eq!(command.subtask, subtask, "/{name}");
         }
+    }
+
+    #[test]
+    fn skill_block_names_the_skill_its_directory_and_appends_the_request() {
+        assert_eq!(
+            super::skill_block(
+                "reviewer",
+                "/w/.hya/skills/reviewer/SKILL.md",
+                Some("/w/.hya/skills/reviewer"),
+                "\n# Reviewer\n\nRead $ARGUMENTS.\n",
+                "  fix auth ",
+            ),
+            "<skill name=\"reviewer\" location=\"/w/.hya/skills/reviewer/SKILL.md\">\n\
+             References are relative to /w/.hya/skills/reviewer.\n\n\
+             # Reviewer\n\nRead $ARGUMENTS.\n</skill>\n\nfix auth"
+        );
+        // A built-in skill has no directory, and no request adds no tail.
+        assert_eq!(
+            super::skill_block("b", "embedded:x/\"q\"&<>", None, "body", ""),
+            "<skill name=\"b\" location=\"embedded:x/&quot;q&quot;&amp;&lt;&gt;\">\nbody\n</skill>"
+        );
+    }
+
+    #[test]
+    fn skills_are_skill_prefixed_rows_and_never_shadow_or_yield_to_commands() {
+        let dir = std::env::temp_dir().join(format!(
+            "hya-skill-commands-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_nanos())
+        ));
+        let write = |path: &str, text: &str| {
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().unwrap_or(&dir))
+                .unwrap_or_else(|error| panic!("{error}"));
+            std::fs::write(path, text).unwrap_or_else(|error| panic!("{error}"));
+        };
+        write(
+            ".hya/skills/greet/SKILL.md",
+            "---\nname: greet\ndescription: Say hello\n---\nSay hello.\n",
+        );
+        write(".hya/commands/greet.md", "COMMAND $ARGUMENTS\n");
+        write(".hya/commands/skill:greet.md", "RESERVED\n");
+        let place = super::CatalogPlace::directory_for_tests(&dir.to_string_lossy());
+        let commands = super::list(&place);
+        let named = |name: &str| commands.iter().filter(|row| row.name == name).count();
+        assert_eq!(named("greet"), 1);
+        assert_eq!(
+            named("skill:greet"),
+            1,
+            "the reserved file is not a command"
+        );
+        let skill = commands
+            .iter()
+            .find(|row| row.name == "skill:greet")
+            .unwrap_or_else(|| panic!("missing /skill:greet"));
+        assert_eq!(skill.source, "skill");
+        assert_eq!(skill.argument_hint.as_deref(), Some("[request]"));
+        let skill_dir = dir.join(".hya/skills/greet");
+        assert_eq!(
+            super::expand_prompt(&place, "skill:greet", "bob").as_deref(),
+            Some(
+                format!(
+                    "<skill name=\"greet\" location=\"{}\">\nReferences are relative to {}.\n\nSay hello.\n</skill>\n\nbob",
+                    skill_dir.join("SKILL.md").display(),
+                    skill_dir.display()
+                )
+                .as_str()
+            )
+        );
+        assert_eq!(
+            super::expand_prompt(&place, "greet", "bob").as_deref(),
+            Some("COMMAND bob")
+        );
+        // A built-in skill expands without a reference line.
+        let builtin = super::expand_prompt(&place, "skill:secure-self-update", "")
+            .unwrap_or_else(|| panic!("missing built-in skill"));
+        assert!(
+            builtin.starts_with(
+                "<skill name=\"secure-self-update\" location=\"embedded:hya/core-skills/skill/secure-self-update/SKILL.md\">\n"
+            ),
+            "{builtin}"
+        );
+        assert!(!builtin.contains("References are relative to"), "{builtin}");
+        // Client-side rows never expand.
+        assert_eq!(super::expand_prompt(&place, "clear", ""), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn expands_pi_template_forms() {
+        let expand = super::expand_template;
+        assert_eq!(expand("a=$@|b=$ARGUMENTS", "x  y"), "a=x  y|b=x  y");
+        assert_eq!(expand("${1:-none}/${2:-none}", "one"), "one/none");
+        assert_eq!(expand("${@:-everything}", "  "), "everything");
+        assert_eq!(expand("${@:-everything}", "a b"), "a b");
+        assert_eq!(expand("${@:2}", "a b c d"), "b c d");
+        assert_eq!(expand("${@:2:2}", "a b c d"), "b c");
+        assert_eq!(expand("${@:9}", "a b"), "");
+        // Anything else stays as written.
+        assert_eq!(
+            expand("${HOME} ${0:-x} ${@:0} ${@:x} $ $x ${unclosed", "a"),
+            "${HOME} ${0:-x} ${@:0} ${@:x} $ $x ${unclosed"
+        );
+    }
+
+    #[test]
+    fn arguments_split_with_pi_quoting() {
+        let split = super::split_arguments;
+        assert_eq!(split("\"hello world\" tail"), ["hello world", "tail"]);
+        assert_eq!(split("doesn't stop"), ["doesn't", "stop"]);
+        assert_eq!(split("\"open value"), ["\"open", "value"]);
+        assert_eq!(
+            split(r#""the \"fast\" path" c:\dir"#),
+            [r#"the "fast" path"#, r"c:\dir"]
+        );
+        assert_eq!(split("'' x"), ["", "x"]);
+    }
+
+    #[test]
+    fn command_files_take_argument_hints_first_line_descriptions_and_report_skips() {
+        let dir = std::env::temp_dir().join(format!(
+            "hya-command-files-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_nanos())
+        ));
+        let write = |path: &str, text: &str| {
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().unwrap_or(&dir))
+                .unwrap_or_else(|error| panic!("{error}"));
+            std::fs::write(path, text).unwrap_or_else(|error| panic!("{error}"));
+        };
+        write(
+            "commands/review.md",
+            "---\ndescription: Review\nargument-hint: \"[focus]\"\n---\nReview ${1:-everything}\n",
+        );
+        write("commands/plain.md", "\n\n  Fix the build please  \nmore\n");
+        write("commands/broken.md", "---\ndescription: [x\n---\nbody\n");
+        write("commands/skill:x.md", "reserved\n");
+        let mut diagnostics = Vec::new();
+        let commands = crate::support::command_sources::root_commands(
+            &[dir.join("commands")],
+            "user",
+            &mut diagnostics,
+        );
+        let review = commands
+            .iter()
+            .find(|row| row.name == "review")
+            .unwrap_or_else(|| panic!("review"));
+        assert_eq!(review.argument_hint.as_deref(), Some("[focus]"));
+        assert_eq!(review.scope, "user");
+        let plain = commands
+            .iter()
+            .find(|row| row.name == "plain")
+            .unwrap_or_else(|| panic!("plain"));
+        assert_eq!(plain.description.as_deref(), Some("Fix the build please"));
+        assert_eq!(commands.len(), 2);
+        let kinds = diagnostics.iter().map(|row| row.kind).collect::<Vec<_>>();
+        assert_eq!(kinds, ["invalid", "reserved"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

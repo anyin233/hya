@@ -48,6 +48,8 @@ export interface TuiStructure {
   statusline: { enabled: boolean; segments: StatusSegment[]; placement: "below" | "band" }
   composer: { style: "box" | "band"; border_info: StatusSegment[]; paste: PasteSettings }
   sidebar: { enabled: boolean }
+  /** `[commands]`: the command menu. `skill_commands = false` leaves the `/skill:<name>` rows out of it (pi's `enableSkillCommands`); typing one still runs it. */
+  commands: { skill_commands: boolean }
 }
 export type ComponentName = keyof TuiStructure
 
@@ -68,6 +70,7 @@ const base = (): TuiStructure => ({
   statusline: { enabled: true, segments: [...defaultSegments], placement: "below" },
   composer: { style: "box", border_info: [], paste: { collapse_lines: 10, collapse_chars: 1000, wrap: true, image_resize: true } },
   sidebar: { enabled: false },
+  commands: { skill_commands: true },
 })
 
 /** The full component values of a built-in preset. */

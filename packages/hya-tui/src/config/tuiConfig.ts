@@ -154,6 +154,7 @@ const rules: { [Component in ComponentName]: Record<keyof TuiStructure[Component
     paste: { table: { collapse_lines: integer(0), collapse_chars: integer(1), wrap: bool, image_resize: bool } },
   },
   sidebar: { enabled: bool },
+  commands: { skill_commands: bool },
 }
 /** Keys of a known component that a later version reads. */
 const laterKeys: Record<ComponentName, readonly string[]> = {
@@ -163,6 +164,7 @@ const laterKeys: Record<ComponentName, readonly string[]> = {
   statusline: [],
   composer: ["attachments"],
   sidebar: ["left", "right", "min_columns"],
+  commands: [],
 }
 /** Component tables a later version reads (startup list, dock rows, layout tree). */
 const laterComponents = ["layout", "transcript"] as const
@@ -408,6 +410,10 @@ ${presets}
 [sidebar]
 # true draws the tiled workspace (Projects, Sessions, Todos, Context).
 # enabled = false
+
+[commands]
+# false leaves the /skill:<name> rows out of the command menu; typing one still runs it.
+# skill_commands = true
 `
 }
 

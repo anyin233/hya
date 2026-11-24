@@ -1,4 +1,5 @@
-//! `/v1` session domain: lifecycle, fork, compact, summarize, revert, and
+//! `/v1` session domain: lifecycle, fork, compact, summarize, context
+//! refresh, revert, and
 //! the user's control of a subagent session (archive, steer).
 
 use std::collections::{BTreeMap, HashSet};
@@ -29,6 +30,10 @@ pub(crate) fn router() -> Router<ServerState> {
         .route("/v1/sessions/:id/fork", post(fork_session))
         .route("/v1/sessions/:id/compact", post(compact_session))
         .route("/v1/sessions/:id/summarize", post(summarize_session))
+        .route(
+            "/v1/sessions/:id/refresh-context",
+            post(refresh_session_context),
+        )
         .route("/v1/sessions/:id/revert", post(revert_session))
         .route("/v1/sessions/:id/archive", post(archive_subagent))
         .route("/v1/sessions/:id/steer", post(steer_subagent))
@@ -687,6 +692,34 @@ async fn summarize_session(
         Ok(summary) => Ok(Json(pb::SummarizeSessionResponse {
             summary_message: summary.to_string(),
         })),
+        Err(hya_engine::CoreError::Invalid(message)) if message == "session not found" => {
+            Err(V1Error::session_not_found(&id))
+        }
+        Err(other) => Err(V1Error::from(other)),
+    }
+}
+
+/// `RefreshSessionContext` (`/reload-context`): discard the session's
+/// recorded initial context so its next turn records it from the files as
+/// they are then. Refused while a turn runs: every round reads the context.
+async fn refresh_session_context(
+    State(st): State<ServerState>,
+    AxumPath(id): AxumPath<String>,
+    Json(_request): Json<pb::RefreshSessionContextRequest>,
+) -> Result<Json<pb::RefreshSessionContextResponse>, V1Error> {
+    let session = parse_session(&id)?;
+    session_exists(&st, session).await?;
+    if st.is_busy(session) {
+        return Err(V1Error::session_busy());
+    }
+    // Hold the admission slot so no turn starts between the check and the
+    // append.
+    let _run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
+    match st.engine.refresh_initial_context(session).await {
+        Ok(pending) => Ok(Json(pb::RefreshSessionContextResponse { pending })),
+        Err(hya_engine::CoreError::Invalid(message)) if message == "session busy" => {
+            Err(V1Error::session_busy())
+        }
         Err(hya_engine::CoreError::Invalid(message)) if message == "session not found" => {
             Err(V1Error::session_not_found(&id))
         }

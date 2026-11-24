@@ -2047,24 +2047,37 @@ section covers **user-defined** prompt commands.
 
 ### Disk markdown commands
 
-hya scans exactly two project-local roots
-([`command_sources.rs`](../crates/hya-server/src/support/command_sources.rs)
-`disk_commands`):
+hya scans these roots, in order
+([`command_sources.rs`](../crates/hya-server/src/support/command_sources.rs)):
 
-1. `<workdir>/.hya/command/**/*.md`
-2. `<workdir>/.hya/commands/**/*.md`
+1. `<dir>/.hya/command/**/*.md` and `<dir>/.hya/commands/**/*.md` of the
+   directory, then of each Project root in order (scope `project`);
+2. `~/.config/hya/command/**/*.md` and `~/.config/hya/commands/**/*.md`, your
+   own commands in every directory (scope `user`, like pi's
+   `~/.pi/agent/prompts`). The global view (no directory) lists them too.
 
-Files are collected **recursively** and sorted by path. The slash-command name is
-the path **relative to the discovery root**, with path segments joined by `/` and
-the `.md` suffix stripped — e.g. `.hya/command/git/commit.md` becomes
-`/git/commit`, not `/commit`. There is **no** user/home tier and no
-inline-config command table.
+The first definition of a name wins. Files are collected **recursively** and
+sorted by path. The slash-command name is the path **relative to the
+discovery root**, with path segments joined by `/` and the `.md` suffix
+stripped — e.g. `.hya/command/git/commit.md` becomes `/git/commit`, not
+`/commit`. Names starting with `skill:` are reserved for skills
+(`/skill:<name>`, see [Skills](skills.md#invoke-a-skill)); such a file is
+skipped and reported. There is no inline-config command table.
+`CommandSummary.scope` says where a command comes from: `builtin`,
+`project`, or `user` (a skill row carries its skill's source).
+
+A file the catalog skips is reported in `ListCommandsResponse.diagnostics`
+(`CatalogDiagnostic {path, kind, message}`; `kind` `reserved` or `invalid`,
+frontmatter that does not parse) and in the TUI's startup list under
+`[Slash commands]`, which also names a project or user command that one of
+the TUI's own commands of the same name hides (`/status`, …).
 
 Optional YAML frontmatter:
 
 | Field | Meaning |
 | --- | --- |
-| `description` | Shown in the command list / `GET /v1/commands` catalog. |
+| `description` | Shown in the command list / `GET /v1/commands` catalog. Without one, the body's first non-empty line (cut to 100 characters), as pi does. |
+| `argument-hint` | Shown after the name in completion (`CommandSummary.argumentHint`): `<file>` names a required argument (the TUI's Enter then waits for it), `[focus]` an optional one. |
 | `agent` | Optional string stored on `CommandInfo` and exposed in the command catalog / bootstrap summary only. **No runtime consumer** switches the session agent from this field; the turn uses the session's current agent. |
 | `model` | Optional string stored and listed the same way as `agent`. Disk frontmatter does not switch the turn model. |
 | `subtask` | Optional boolean parsed into the command wire payload. **No runtime consumer** currently reads it (frontends and the engine do not open a child session from this flag). |
@@ -2079,6 +2092,37 @@ Create $1 in $2.
 
 All args: $ARGUMENTS
 ```
+
+The body takes pi's substitutions:
+
+| Syntax | Result |
+| --- | --- |
+| `$1`, `$2`, … | One positional argument (empty when missing) |
+| `$ARGUMENTS`, `$@` | The arguments as typed |
+| `${1:-default}` | The first argument, or `default` when it is missing or empty |
+| `${@:-default}` | The arguments, or `default` when there are none |
+| `${@:N}` | The arguments from position `N`, joined with spaces |
+| `${@:N:L}` | `L` arguments from position `N` |
+
+Any other `$` or `${…}` (a shell `${HOME}`) stays as written, and a
+substituted value is never expanded again. Arguments split on whitespace
+with pi's quoting: a quote opens only at the start of an argument (so
+`doesn't` stays one word), `/review "API compatibility"` passes one argument
+containing a space, a quote with no closing match is plain text, and inside
+quotes a backslash before the same quote keeps it (`"the \"fast\" path"`);
+other backslashes stay as typed. For example, with
+`.hya/commands/review.md`:
+
+```markdown
+---
+description: Review staged changes
+argument-hint: "[focus]"
+---
+Review the staged changes. Focus on ${1:-correctness, security, and error handling}.
+```
+
+`/review` asks for correctness, security, and error handling; `/review
+concurrency` for concurrency.
 
 `$1`, `$2`, … and `$ARGUMENTS` inside the body become numbered hint slots.
 Expanded command bodies are submitted as normal prompts under the **session's
@@ -2120,8 +2164,9 @@ replaces the built-in `/review`.
 ## Skills
 
 Skill discovery (ten-directory first-wins search path), `SKILL.md` frontmatter
-(`name`, `description`, `allowed-tools`, `model`, `disable`, `license`), silent
-skip rules, and built-in fallback skills are documented in
+(`name`, `description`, `allowed-tools`, `model`, `disable`,
+`disable-model-invocation`, `license`), the diagnostics of skipped files,
+`/skill:<name>`, and built-in fallback skills are documented in
 [Skills](skills.md).
 
 ## Project Context (`AGENTS.md`)
@@ -2139,9 +2184,14 @@ A full-mode session records its platform, UTC date, and discovered
 prompt, which carries the working directory in `<cwd>`
 ([Kernel](kernel.md#system-prompt)). Later rounds and backend restarts use
 that same context. A session recorded before the kernel prompt led the full
-mode's system prompt keeps its recorded `- cwd:` line. To apply an edit, start
-a new session in the workdir (for example, `hya exec "Follow AGENTS.md"`)
-or ask the agent to read the file with a tool. A fork inherits the source
+mode's system prompt keeps its recorded `- cwd:` line. To apply an edit to a
+running session, run `/reload-context` in the TUI (or `POST
+/v1/sessions/{id}/refresh-context`, `RefreshSessionContext`): it discards the
+recorded context (`InitialContextInvalidated`), and the session's next turn
+records it again from the files as they are then — the next request misses
+the provider's prompt cache once. It is refused (`session_busy`) while a turn
+runs. A new session in the workdir, or asking the agent to read the file with
+a tool, works too. A fork inherits the source
 session's recorded context. Each subagent session records its own.
 
 `--pure` skips external context discovery when recording a session's

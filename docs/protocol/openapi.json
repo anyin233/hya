@@ -1006,6 +1006,17 @@
         "x-server-streaming": false
       }
     },
+    "/v1/sessions/{session}/refresh-context": {
+      "post": {
+        "operationId": "Session.RefreshSessionContext",
+        "summary": "Re-record a session's initial context at its next turn: the",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.RefreshSessionContext",
+        "x-server-streaming": false
+      }
+    },
     "/v1/sessions/{session}/revert": {
       "post": {
         "operationId": "Session.RevertSession",
@@ -2271,6 +2282,9 @@
           },
           "page": {
             "$ref": "#/components/schemas/PageRequest"
+          },
+          "session": {
+            "type": "string"
           }
         }
       },
@@ -2307,6 +2321,9 @@
           },
           "subtask": {
             "type": "boolean"
+          },
+          "scope": {
+            "type": "string"
           }
         }
       },
@@ -2322,6 +2339,27 @@
           },
           "page": {
             "$ref": "#/components/schemas/PageInfo"
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogDiagnostic"
+            }
+          }
+        }
+      },
+      "CatalogDiagnostic": {
+        "type": "object",
+        "description": "A resource file a catalog skipped or warns about, for clients to show.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
           }
         }
       },
@@ -2334,6 +2372,9 @@
           },
           "page": {
             "$ref": "#/components/schemas/PageRequest"
+          },
+          "session": {
+            "type": "string"
           }
         }
       },
@@ -2355,6 +2396,12 @@
           },
           "location": {
             "type": "string"
+          },
+          "disable_model_invocation": {
+            "type": "boolean"
+          },
+          "bundle_id": {
+            "type": "string"
           }
         }
       },
@@ -2370,6 +2417,12 @@
           },
           "page": {
             "$ref": "#/components/schemas/PageInfo"
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogDiagnostic"
+            }
           }
         }
       },
@@ -5147,6 +5200,24 @@
         "properties": {
           "summary_message": {
             "type": "string"
+          }
+        }
+      },
+      "RefreshSessionContextRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          }
+        }
+      },
+      "RefreshSessionContextResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "pending": {
+            "type": "boolean"
           }
         }
       },

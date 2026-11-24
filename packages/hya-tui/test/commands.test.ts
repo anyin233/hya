@@ -33,6 +33,8 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     openBundles: () => { calls.push("bundles") },
     openRules: () => { calls.push("rules") },
     openAgents: () => { calls.push("agents") },
+    openSkills: (filter) => { calls.push(`skills ${filter ?? ""}`.trim()) },
+    reload: async (targets) => { calls.push(`reload ${targets.join(",")}`); return targets.map((target) => ({ target, ok: true, text: target })) },
     openProjectOverlay: () => { calls.push("projectView") },
     scheduleRefresh: () => { calls.push("scheduleRefresh") },
     cancelTurn: async () => { calls.push("cancel") },
@@ -305,7 +307,7 @@ test("usage errors are thrown for incomplete commands", async () => {
   await expect(run("/answer req_1")).rejects.toThrow("Usage: /answer <interaction id> <text>")
 })
 
-test("unknown slash commands become backend command turns", async () => {
+test("backend catalog commands become backend command turns", async () => {
   const sent: string[] = []
   const { store, calls, run } = harness({
     createCommandTurn: async (session: string, command: string, argumentsText: string) => {
@@ -313,6 +315,7 @@ test("unknown slash commands become backend command turns", async () => {
       return { id: "msg_c", state: "TURN_STATE_RUNNING" }
     },
   })
+  store.setBackendCommands([{ name: "deploy", source: "command" }])
   store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   await run("/deploy  now please")
   expect(sent).toEqual(["hysec_1 deploy now please"])
@@ -321,13 +324,78 @@ test("unknown slash commands become backend command turns", async () => {
   expect(calls).toEqual(["scheduleRefresh"])
 })
 
+test("a command missing from the catalog is re-read once before it is refused", async () => {
+  const sent: string[] = []
+  let reads = 0
+  const { store, run } = harness({
+    listCommands: async () => { reads++; return [{ name: "deploy", source: "command" }, { name: "skill:reviewer", source: "skill" }] },
+    createCommandTurn: async (_session: string, command: string, argumentsText: string) => {
+      sent.push(`${command} ${argumentsText}`)
+      return { id: "msg_c", state: "TURN_STATE_RUNNING" }
+    },
+  })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
+  await run("/deploy now")
+  expect(reads).toBe(1)
+  expect(store.state.backendCommands.map((command) => command.name)).toEqual(["deploy", "skill:reviewer"])
+  await run("/skill:reviewer fix auth")
+  expect(reads).toBe(1)
+  expect(sent).toEqual(["deploy now", "skill:reviewer fix auth"])
+})
+
+test("an unknown command is refused with the closest name, never sent to the agent", async () => {
+  const sent: string[] = []
+  const { store, run } = harness({
+    listCommands: async () => [{ name: "deploy", source: "command" }, { name: "skill:reviewer", source: "skill" }],
+    createCommandTurn: async (_session: string, command: string) => { sent.push(command); return { id: "msg_c", state: "TURN_STATE_RUNNING" } },
+  })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
+  await expect(run("/deplyo now")).rejects.toThrow("Unknown command /deplyo · did you mean /deploy? · / lists commands")
+  await expect(run("/staus")).rejects.toThrow("did you mean /status?")
+  // The bare skill names of older releases point at the skill namespace.
+  await expect(run("/reviewer fix auth")).rejects.toThrow("Unknown command /reviewer · did you mean /skill:reviewer?")
+  await expect(run("/skill:missing")).rejects.toThrow("Unknown skill missing · /skills lists them")
+  await expect(run("/zzzzzz")).rejects.toThrow(/^Unknown command \/zzzzzz · \/ lists commands$/)
+  expect(sent).toEqual([])
+})
+
+test("an unknown command line that starts with a path is sent as a prompt", async () => {
+  const prompts: string[] = []
+  const { store, actions, registry } = harness({ listCommands: async () => [] })
+  actions.sendPrompt = async (text) => { prompts.push(text) }
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
+  await registry.dispatch("/usr/lib/libx.so fails to load", { store, client: { listCommands: async () => [] } as unknown as HyaClient, actions })
+  expect(prompts).toEqual(["/usr/lib/libx.so fails to load"])
+})
+
+test("a catalog that cannot be read leaves the command to the backend", async () => {
+  const sent: string[] = []
+  const { store, run } = harness({
+    listCommands: async () => { throw new Error("offline") },
+    createCommandTurn: async (_session: string, command: string) => { sent.push(command); return { id: "msg_c", state: "TURN_STATE_RUNNING" } },
+  })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
+  await run("/deploy")
+  expect(sent).toEqual(["deploy"])
+})
+
+test("/clear starts a fresh session like /new", async () => {
+  const { calls, run } = harness()
+  await run("/clear")
+  expect(calls).toEqual(["new"])
+})
+
 test("a backend command turn's user message shows the /name args the user typed", async () => {
   const { store, run } = harness({
-    createCommandTurn: async () => ({ id: "msg_u1", state: "TURN_STATE_RUNNING" }),
+    createCommandTurn: async (_session: string, command: string) => ({ id: command === "review" ? "msg_u1" : "msg_u2", state: "TURN_STATE_RUNNING" }),
   })
+  store.setBackendCommands([{ name: "review", source: "command" }, { name: "skill:greet", source: "skill" }])
   store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   await run("/review  src/main.ts")
   expect(store.state.commandDisplay.get("msg_u1")).toBe("/review  src/main.ts")
+  // A skill turn folds its own `<skill>` block from the message text instead.
+  await run("/skill:greet bob")
+  expect(store.state.commandDisplay.has("msg_u2")).toBe(false)
 })
 
 test("/model with no argument opens a picker of the catalog, the session's current value marked", async () => {

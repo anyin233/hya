@@ -429,14 +429,39 @@ export interface AgentModelState {
   effortSource?: string
 }
 
-/** `SkillSummary` of `Bootstrap.skills` (the TUI never reads `content`). */
+/** `SkillSummary` of `ListSkills` and `Bootstrap.skills`. */
 export interface SkillSummary {
+  /** Run as `/skill:<name>`. */
   name: string
   description?: string
   /** `builtin`, `user`, `project`, or `bundle`; older backends say `builtin` for user skills. */
   source?: string
   /** The skill file (`<built-in>` for compiled-in skills). */
   location?: string
+  /** The body after the frontmatter (the Skills view's details). */
+  content?: string
+  /** `disable-model-invocation: true`: left out of the model's skill index; only `/skill:<name>` runs it. */
+  disableModelInvocation?: boolean
+  /** The bundle (`hya/alpha`) or plugin (`plugin:toolbox`) that contributes it (`source: "bundle"`). */
+  bundleId?: string
+}
+
+/** `CatalogDiagnostic` of `ListSkillsResponse` / `ListCommandsResponse`: a file the catalog skipped or warns about. */
+export interface SkillDiagnostic {
+  /** The file it is about. */
+  path?: string
+  /** Skills: `invalid`, `missing_name`, `missing_description`, `collision`, `name`, `description_length`; commands: `reserved`, `invalid`. */
+  kind?: string
+  message: string
+}
+
+/** `CatalogDiagnostic` (the same shape for commands). */
+export type CatalogDiagnostic = SkillDiagnostic
+
+/** `ListSkills`: the skills of the scope, and the catalog's diagnostics. */
+export interface SkillListing {
+  skills: SkillSummary[]
+  diagnostics: SkillDiagnostic[]
 }
 
 export interface CommandSummary {
@@ -445,6 +470,23 @@ export interface CommandSummary {
   argumentHint?: string
   /** Where the command was discovered: `command` (custom/built-in) or `skill`. */
   source?: string
+  /** `builtin`, `project`, `user`, or a skill's source (`bundle` too); absent on older backends. */
+  scope?: string
+}
+
+/**
+ * A catalog read scoped to a session that the backend answered with 400 (a
+ * backend older than the `session` parameter) or 404 (the session is gone,
+ * e.g. deleted while the TUI had it open): read the directory's instead.
+ */
+function sessionScopeRefused(error: unknown): boolean {
+  return error instanceof HttpError && (error.status === 400 || error.status === 404)
+}
+
+/** `ListCommands`: the commands of the scope, and the command files it skipped. */
+export interface CommandListing {
+  commands: CommandSummary[]
+  diagnostics: CatalogDiagnostic[]
 }
 
 export interface TodoItem {
@@ -938,8 +980,63 @@ export class HyaClient {
     await this.request("POST", "/v1/bundles:set-enabled", { directory: this.directory, bundleId, enabled }, signal)
   }
 
-  async listCommands(): Promise<CommandSummary[]> {
-    return this.listAll("/v1/commands", "commands", "", true)
+  async listCommands(session?: string): Promise<CommandSummary[]> {
+    return (await this.listCommandCatalog(session)).commands
+  }
+
+  /**
+   * `ListCommands` of the client's scope with the diagnostics. `session`
+   * lists what that session's command turns expand against (its agent's
+   * bundle skills included); a backend that refuses the parameter (400,
+   * older than it) or no longer has the session (404, deleted meanwhile)
+   * answers for the directory instead.
+   */
+  async listCommandCatalog(session?: string): Promise<CommandListing> {
+    try {
+      const { rows, diagnostics } = await this.catalogPages<CommandSummary>("/v1/commands", "commands", session)
+      return { commands: rows, diagnostics }
+    } catch (error) {
+      if (!session || !sessionScopeRefused(error)) throw error
+      const { rows, diagnostics } = await this.catalogPages<CommandSummary>("/v1/commands", "commands")
+      return { commands: rows, diagnostics }
+    }
+  }
+
+  /** Every page of a scoped catalog list (`commands` or `skills`), with the diagnostics of its first page. */
+  private async catalogPages<T>(path: string, field: string, session?: string): Promise<{ rows: T[]; diagnostics: CatalogDiagnostic[] }> {
+    const rows: T[] = []
+    let diagnostics: CatalogDiagnostic[] | undefined
+    let cursor = ""
+    for (let pageNumber = 0; pageNumber < 100; pageNumber++) {
+      const query = `page.limit=500${cursor ? `&page.cursor=${encodeURIComponent(cursor)}` : ""}${session ? `&session=${encodeURIComponent(session)}` : ""}`
+      const result = await this.request<Record<string, unknown> & { diagnostics?: CatalogDiagnostic[]; page?: PageInfo }>("GET", this.scoped(`${path}?${query}`))
+      const pageRows = result[field]
+      if (Array.isArray(pageRows)) rows.push(...pageRows as T[])
+      diagnostics ??= result.diagnostics ?? []
+      if (!result.page?.hasMore) return { rows, diagnostics }
+      if (!result.page.nextCursor || result.page.nextCursor === cursor) throw new Error("Server returned an invalid page cursor")
+      cursor = result.page.nextCursor
+    }
+    throw new Error("Too many result pages")
+  }
+
+  /**
+   * `ListSkills` (`GET /v1/skills`) of the client's scope: every page of
+   * skills and the diagnostics (repeated on each page; the first one is
+   * kept). `session` lists what that session's agent can load instead
+   * (bundle and plugin skills included); a backend that refuses the
+   * parameter (400) or no longer has the session (404) answers for the
+   * directory.
+   */
+  async listSkills(session?: string): Promise<SkillListing> {
+    try {
+      const { rows, diagnostics } = await this.catalogPages<SkillSummary>("/v1/skills", "skills", session)
+      return { skills: rows, diagnostics }
+    } catch (error) {
+      if (!session || !sessionScopeRefused(error)) throw error
+      const { rows, diagnostics } = await this.catalogPages<SkillSummary>("/v1/skills", "skills")
+      return { skills: rows, diagnostics }
+    }
   }
 
   /** `SetProviderAuth` (`PUT /v1/auth/{id}`): save a key (applies live); `discovery` when the model list was fetched too. */
@@ -1162,6 +1259,17 @@ export class HyaClient {
   /** `CompactSession`: compact the session's context now (`/compact`). */
   async compactSession(session: string): Promise<{ compactedUntilSeq?: string; strategy?: string }> {
     return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/compact`, {})
+  }
+
+  /**
+   * `RefreshSessionContext` (`/reload-context`): the session's next turn
+   * records its environment, `AGENTS.md` files, and skill index anew;
+   * `pending: false` when it had not recorded them yet. `session_busy`
+   * while a turn runs.
+   */
+  async refreshSessionContext(session: string): Promise<{ pending: boolean }> {
+    const result = await this.request<{ pending?: boolean }>("POST", `/v1/sessions/${encodeURIComponent(session)}/refresh-context`, {})
+    return { pending: result.pending === true }
   }
 
   /** `SummarizeSession`: generate a summary message for the session (`/summarize`). */

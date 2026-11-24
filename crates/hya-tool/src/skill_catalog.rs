@@ -1,6 +1,6 @@
 //! Discovery and parsing of `SKILL.md` catalogs for the skill plane.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -18,6 +18,9 @@ pub struct ParsedSkill {
     pub allowed_tools: Vec<String>,
     /// Optional per-skill model override.
     pub model: Option<String>,
+    /// `disable-model-invocation: true`: left out of the model's skill
+    /// index; `/skill:<name>` still runs it.
+    pub disable_model_invocation: bool,
 }
 
 /// Catalog entry with metadata used by the Skill tool and prompt projection.
@@ -39,6 +42,108 @@ pub struct SkillCatalogEntry {
     pub dir: PathBuf,
     /// How the entry was materialized.
     pub origin: SkillCatalogOrigin,
+    /// `disable-model-invocation: true`: left out of the model's skill
+    /// index (its body still loads by name, and `/skill:<name>` runs it).
+    pub disable_model_invocation: bool,
+}
+
+/// What is wrong with a discovered `SKILL.md` ([`SkillDiagnostic`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SkillDiagnosticKind {
+    /// No or unclosed frontmatter, or YAML that does not parse: skipped.
+    Invalid,
+    /// No `name`: skipped.
+    MissingName,
+    /// No `description`: skipped.
+    MissingDescription,
+    /// A skill of the same name was found first: skipped.
+    Collision,
+    /// The name breaks the Agent Skills rule (lowercase letters, digits,
+    /// single hyphens, at most 64 characters): listed, with a warning.
+    Name,
+    /// The description is over 1024 characters: listed, with a warning.
+    DescriptionLength,
+}
+
+impl SkillDiagnosticKind {
+    /// Wire name (`CatalogDiagnostic.kind`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Invalid => "invalid",
+            Self::MissingName => "missing_name",
+            Self::MissingDescription => "missing_description",
+            Self::Collision => "collision",
+            Self::Name => "name",
+            Self::DescriptionLength => "description_length",
+        }
+    }
+}
+
+/// A `SKILL.md` discovery skipped or warns about, as pi reports its skill
+/// diagnostics. `disable: true` is deliberate and is not one.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SkillDiagnostic {
+    /// The `SKILL.md` it is about.
+    pub path: PathBuf,
+    /// What is wrong.
+    pub kind: SkillDiagnosticKind,
+    /// One line for a person, naming the file.
+    pub message: String,
+}
+
+/// Skills found in a set of roots, and what was wrong with the others.
+#[derive(Clone, Debug, Default)]
+pub struct SkillDiscovery {
+    /// The catalog, first name wins.
+    pub skills: Vec<SkillCatalogEntry>,
+    /// Files skipped or warned about, in discovery order.
+    pub diagnostics: Vec<SkillDiagnostic>,
+}
+
+/// Why [`parse_skill_checked`] did not produce a skill.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SkillParseError {
+    /// The file does not start with a `---` fence.
+    NoFrontmatter,
+    /// The closing `---` fence is missing.
+    UnclosedFrontmatter,
+    /// The frontmatter is not valid YAML of the expected shape.
+    Yaml(String),
+    /// No `name`.
+    MissingName,
+    /// No `description`.
+    MissingDescription,
+    /// `disable: true`.
+    Disabled,
+}
+
+/// The longest skill name the Agent Skills rule allows.
+pub const MAX_SKILL_NAME_CHARS: usize = 64;
+/// The longest skill description the Agent Skills rule allows.
+pub const MAX_SKILL_DESCRIPTION_CHARS: usize = 1024;
+
+/// What breaks the Agent Skills naming rule in `name` (lowercase ASCII
+/// letters, digits, and hyphens; no leading, trailing, or doubled hyphen;
+/// at most 64 characters), or `None`.
+#[must_use]
+pub fn skill_name_problem(name: &str) -> Option<&'static str> {
+    if name.is_empty() {
+        return Some("is empty");
+    }
+    if name.chars().count() > MAX_SKILL_NAME_CHARS {
+        return Some("is longer than 64 characters");
+    }
+    if !name
+        .chars()
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+    {
+        return Some("may use only lowercase letters, digits, and hyphens");
+    }
+    if name.starts_with('-') || name.ends_with('-') || name.contains("--") {
+        return Some("may not start or end with a hyphen or repeat one");
+    }
+    None
 }
 
 /// Provenance of a [`SkillCatalogEntry`].
@@ -64,6 +169,8 @@ struct SkillFrontmatter {
     model: Option<String>,
     #[serde(default)]
     disable: bool,
+    #[serde(default, rename = "disable-model-invocation")]
+    disable_model_invocation: bool,
 }
 
 /// Default skill search roots for a project workdir (project + user paths).
@@ -139,6 +246,27 @@ pub fn skill_dirs_for(workdir: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
 pub fn discover_skills(workdir: &Path) -> Vec<SkillCatalogEntry> {
     discover_skills_from_dirs(&skill_dirs_for_workdir(workdir))
 }
+/// [`discover_skills_for_roots_with_builtins`] with the diagnostics of the
+/// files it skipped or warns about.
+#[must_use]
+pub fn discover_skills_for_roots_with_diagnostics(
+    workdir: &Path,
+    roots: &[PathBuf],
+) -> SkillDiscovery {
+    let mut discovery = discover_skills_from_dirs_with_diagnostics(&skill_dirs_for(workdir, roots));
+    discovery.skills = merge_skill_catalog(discovery.skills);
+    discovery
+}
+
+/// [`discover_user_skills_with_builtins`] with the diagnostics of the files
+/// it skipped or warns about.
+#[must_use]
+pub fn discover_user_skills_with_diagnostics() -> SkillDiscovery {
+    let mut discovery = discover_skills_from_dirs_with_diagnostics(&user_skill_dirs());
+    discovery.skills = merge_skill_catalog(discovery.skills);
+    discovery
+}
+
 /// Discover native skills, then append bundled builtins that were not
 /// overridden by a native entry of the same name.
 #[must_use]
@@ -256,6 +384,7 @@ pub fn builtin_skills() -> Vec<SkillCatalogEntry> {
             path: PathBuf::from(format!("embedded:hya/core-skills/skill/{name}/SKILL.md")),
             dir: PathBuf::new(),
             origin: SkillCatalogOrigin::Embedded,
+            disable_model_invocation: false,
         })
         .collect()
 }
@@ -269,8 +398,18 @@ pub fn is_embedded_skill(skill: &SkillCatalogEntry) -> bool {
 /// Discover unique skills from explicit directory roots (first name wins).
 #[must_use]
 pub fn discover_skills_from_dirs(dirs: &[PathBuf]) -> Vec<SkillCatalogEntry> {
-    let mut seen = HashSet::new();
-    let mut skills = Vec::new();
+    discover_skills_from_dirs_with_diagnostics(dirs).skills
+}
+
+/// [`discover_skills_from_dirs`] with the diagnostics of the files it
+/// skipped (invalid frontmatter, no name or description, a name found
+/// first elsewhere) or warns about (a name or description that breaks the
+/// Agent Skills rules). A directory without a readable `SKILL.md` is not a
+/// skill and has no diagnostic.
+#[must_use]
+pub fn discover_skills_from_dirs_with_diagnostics(dirs: &[PathBuf]) -> SkillDiscovery {
+    let mut first: HashMap<String, PathBuf> = HashMap::new();
+    let mut discovery = SkillDiscovery::default();
 
     for root in dirs {
         let Ok(entries) = std::fs::read_dir(root) else {
@@ -290,16 +429,75 @@ pub fn discover_skills_from_dirs(dirs: &[PathBuf]) -> Vec<SkillCatalogEntry> {
             let Ok(raw) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let Some(parsed) = parse_skill(&raw) else {
-                continue;
+            let mut diagnose = |kind: SkillDiagnosticKind, message: String| {
+                discovery.diagnostics.push(SkillDiagnostic {
+                    path: path.clone(),
+                    kind,
+                    message: format!("{}: {message}", path.display()),
+                });
             };
-            if !seen.insert(parsed.name.clone()) {
+            let parsed = match parse_skill_checked(&raw) {
+                Ok(parsed) => parsed,
+                Err(SkillParseError::Disabled) => continue,
+                Err(SkillParseError::MissingName) => {
+                    diagnose(
+                        SkillDiagnosticKind::MissingName,
+                        "no `name`; skipped".to_owned(),
+                    );
+                    continue;
+                }
+                Err(SkillParseError::MissingDescription) => {
+                    diagnose(
+                        SkillDiagnosticKind::MissingDescription,
+                        "no `description`; skipped".to_owned(),
+                    );
+                    continue;
+                }
+                Err(error) => {
+                    let reason = match error {
+                        SkillParseError::NoFrontmatter => {
+                            "does not start with a `---` frontmatter fence".to_owned()
+                        }
+                        SkillParseError::UnclosedFrontmatter => {
+                            "the frontmatter has no closing `---`".to_owned()
+                        }
+                        SkillParseError::Yaml(error) => format!("frontmatter: {error}"),
+                        _ => "invalid".to_owned(),
+                    };
+                    diagnose(SkillDiagnosticKind::Invalid, format!("{reason}; skipped"));
+                    continue;
+                }
+            };
+            if let Some(earlier) = first.get(&parsed.name) {
+                diagnose(
+                    SkillDiagnosticKind::Collision,
+                    format!(
+                        "`{}` is already defined by {}; skipped",
+                        parsed.name,
+                        earlier.display()
+                    ),
+                );
                 continue;
             }
+            if let Some(problem) = skill_name_problem(&parsed.name) {
+                diagnose(
+                    SkillDiagnosticKind::Name,
+                    format!("the name `{}` {problem}", parsed.name),
+                );
+            }
+            if parsed.description.chars().count() > MAX_SKILL_DESCRIPTION_CHARS {
+                diagnose(
+                    SkillDiagnosticKind::DescriptionLength,
+                    format!(
+                        "the description is longer than {MAX_SKILL_DESCRIPTION_CHARS} characters"
+                    ),
+                );
+            }
+            first.insert(parsed.name.clone(), path.clone());
             let dir = path
                 .parent()
                 .map_or_else(|| entry.path(), std::path::Path::to_path_buf);
-            skills.push(SkillCatalogEntry {
+            discovery.skills.push(SkillCatalogEntry {
                 name: parsed.name,
                 description: parsed.description,
                 content: parsed.content,
@@ -308,16 +506,24 @@ pub fn discover_skills_from_dirs(dirs: &[PathBuf]) -> Vec<SkillCatalogEntry> {
                 path,
                 dir,
                 origin: SkillCatalogOrigin::Filesystem,
+                disable_model_invocation: parsed.disable_model_invocation,
             });
         }
     }
 
-    skills
+    discovery
 }
 
 /// Format an `available_skills` system-prompt section, or `None` when empty.
 #[must_use]
 pub fn skills_section(skills: &[SkillCatalogEntry]) -> Option<String> {
+    if skills.is_empty() {
+        return None;
+    }
+    let skills = skills
+        .iter()
+        .filter(|skill| !skill.disable_model_invocation)
+        .collect::<Vec<_>>();
     if skills.is_empty() {
         return None;
     }
@@ -337,18 +543,35 @@ pub fn skills_section(skills: &[SkillCatalogEntry]) -> Option<String> {
 /// `disable: true` skills so they are skipped during discovery.
 #[must_use]
 pub fn parse_skill(content: &str) -> Option<ParsedSkill> {
-    let after = content.strip_prefix("---")?;
-    let (front, body) = after.split_once("\n---")?;
-    let front: SkillFrontmatter = serde_norway::from_str(front).ok()?;
+    parse_skill_checked(content).ok()
+}
+
+/// [`parse_skill`], saying why a file is not a skill.
+///
+/// # Errors
+/// [`SkillParseError`]: no or unclosed frontmatter, YAML that does not
+/// parse, no `name` or `description`, or `disable: true`.
+pub fn parse_skill_checked(content: &str) -> Result<ParsedSkill, SkillParseError> {
+    let after = content
+        .strip_prefix("---")
+        .ok_or(SkillParseError::NoFrontmatter)?;
+    let (front, body) = after
+        .split_once("\n---")
+        .ok_or(SkillParseError::UnclosedFrontmatter)?;
+    let front: SkillFrontmatter =
+        serde_norway::from_str(front).map_err(|error| SkillParseError::Yaml(error.to_string()))?;
     if front.disable {
-        return None;
+        return Err(SkillParseError::Disabled);
     }
-    Some(ParsedSkill {
-        name: front.name?,
-        description: front.description?,
+    Ok(ParsedSkill {
+        name: front.name.ok_or(SkillParseError::MissingName)?,
+        description: front
+            .description
+            .ok_or(SkillParseError::MissingDescription)?,
         content: body.strip_prefix('\n').unwrap_or(body).to_string(),
         allowed_tools: front.allowed_tools,
         model: front.model,
+        disable_model_invocation: front.disable_model_invocation,
     })
 }
 
@@ -509,5 +732,110 @@ mod tests {
             skills.iter().any(|s| s.name == "only-in-root"),
             "root-only skill is still discovered"
         );
+    }
+
+    #[test]
+    fn discovery_reports_skipped_and_suspicious_skill_files() {
+        let tmp = tempdir("diagnostics");
+        let first = tmp.join("first");
+        let second = tmp.join("second");
+        write_skill(&first, "shared", "from first");
+        write_skill(&second, "shared", "from second");
+        write_skill(&second, "Bad_Name", "listed with a warning");
+        let long = "x".repeat(MAX_SKILL_DESCRIPTION_CHARS + 1);
+        write_skill(&second, "long-description", &long);
+        for (dir, text) in [
+            ("no-fence", "name: x\n"),
+            ("unclosed", "---\nname: x\ndescription: y\n"),
+            ("bad-yaml", "---\nname: [x\n---\nbody"),
+            ("no-name", "---\ndescription: y\n---\nbody"),
+            ("no-description", "---\nname: z\n---\nbody"),
+            (
+                "off",
+                "---\nname: off\ndescription: y\ndisable: true\n---\nbody",
+            ),
+        ] {
+            std::fs::create_dir_all(second.join(dir)).expect("mkdir");
+            std::fs::write(second.join(dir).join("SKILL.md"), text).expect("write");
+        }
+        let discovery =
+            discover_skills_from_dirs_with_diagnostics(&[first.clone(), second.clone()]);
+        let names = discovery
+            .skills
+            .iter()
+            .map(|skill| skill.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["shared", "Bad_Name", "long-description"]);
+        let kinds = discovery
+            .diagnostics
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic
+                        .path
+                        .parent()
+                        .and_then(Path::file_name)
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    diagnostic.kind.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            [
+                ("Bad_Name".to_owned(), "name"),
+                ("bad-yaml".to_owned(), "invalid"),
+                ("long-description".to_owned(), "description_length"),
+                ("no-description".to_owned(), "missing_description"),
+                ("no-fence".to_owned(), "invalid"),
+                ("no-name".to_owned(), "missing_name"),
+                ("shared".to_owned(), "collision"),
+                ("unclosed".to_owned(), "invalid"),
+            ]
+        );
+        let collision = discovery
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.kind == SkillDiagnosticKind::Collision)
+            .expect("collision");
+        assert!(
+            collision
+                .message
+                .contains(&first.join("shared/SKILL.md").display().to_string()),
+            "{}",
+            collision.message
+        );
+        // The plain discovery keeps the same catalog.
+        assert_eq!(
+            discover_skills_from_dirs(&[first, second]).len(),
+            discovery.skills.len()
+        );
+    }
+
+    #[test]
+    fn disable_model_invocation_keeps_the_skill_out_of_the_index_only() {
+        let md = "---\nname: manual\ndescription: run by hand\ndisable-model-invocation: true\n---\nbody";
+        let parsed = parse_skill(md).expect("parses");
+        assert!(parsed.disable_model_invocation);
+        let mut hidden = builtin_skills().remove(0);
+        hidden.name = "manual".to_owned();
+        hidden.disable_model_invocation = true;
+        let shown = builtin_skills().remove(0);
+        let section = skills_section(&[hidden.clone(), shown.clone()]).expect("section");
+        assert!(section.contains(&shown.name));
+        assert!(!section.contains("manual"));
+        assert_eq!(skills_section(&[hidden]), None);
+    }
+
+    #[test]
+    fn the_naming_rule_follows_agent_skills() {
+        assert_eq!(skill_name_problem("pdf-tools-2"), None);
+        assert!(skill_name_problem("PDF").is_some());
+        assert!(skill_name_problem("pdf_tools").is_some());
+        assert!(skill_name_problem("-pdf").is_some());
+        assert!(skill_name_problem("pdf--tools").is_some());
+        assert!(skill_name_problem(&"a".repeat(MAX_SKILL_NAME_CHARS + 1)).is_some());
+        assert!(skill_name_problem(&"a".repeat(MAX_SKILL_NAME_CHARS)).is_none());
     }
 }

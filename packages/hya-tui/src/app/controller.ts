@@ -77,7 +77,7 @@
  * `/resume` and `--resume` unarchive and open one (app/resume.ts).
  */
 import { SessionViews } from "./sessionViews"
-import { HttpError, type HyaClient, type Interaction, type MessageInfo, type ProjectInfo, type PromptAttachment, type SessionInfo, type StreamEvent, type StreamFrame } from "../client"
+import { HttpError, type HyaClient, type Interaction, type MessageInfo, type ProjectInfo, type PromptAttachment, type CommandSummary, type SessionInfo, type SkillListing, type StreamEvent, type StreamFrame } from "../client"
 import { completeCommand } from "../completion"
 import { createCommandRegistry, mergeCommandEntries, openModelPicker, selectAgent, toBackground, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
 import {
@@ -129,6 +129,8 @@ import { createProviderController } from "./providers"
 import { answerPrompt } from "./prompts"
 import { revertReadOnlyStatus as readOnlyStatus, createRevertController } from "./revert"
 import { createRulesController } from "./rules"
+import { createSkillsController } from "./skills"
+import { createReloader } from "./reload"
 import type { AppStore } from "../state/store"
 import { errorLine } from "../state/projectCommands"
 import { createDebounce } from "./debounce"
@@ -212,6 +214,8 @@ export interface ControllerOptions {
   home?: () => Promise<ServerSwitch>
   /** The backend scope changed (server, Project, or temporary session directory): reload the bundle TUI extensions (app/run.tsx). */
   onScopeChanged?: () => void | Promise<void>
+  /** `/reload-tui`: restart this TUI from its files through the launcher's supervisor (src/reload.ts); absent without one. */
+  reloadTui?: () => void
   /** Bundle TUI extension submit interceptors (extensions/manager.ts `interceptSubmit`): a prompt may be rewritten or blocked before it is sent. */
   interceptSubmit?: (text: string) => Promise<{ text: string } | { blocked: string }>
   /** `tui.toml` and the session's `/set` (app/structure.ts); unset in tests: the store's structure stays. */
@@ -253,7 +257,7 @@ const mcpPollMs = 500
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
 
-export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, preferredPermissionMode, terminal, env = process.env, reconnect, find, onRestarted, refreshExtensions, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home, onScopeChanged, interceptSubmit, structure }: ControllerOptions) {
+export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, preferredPermissionMode, terminal, env = process.env, reconnect, find, onRestarted, refreshExtensions, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home, onScopeChanged, interceptSubmit, structure, reloadTui }: ControllerOptions) {
   /** No `EnsureProjectForPath`; new sessions need a chosen Project: `--remote`, or connected through `/connect-remote`. */
   const sessionViews = new SessionViews(client)
   let remote = startedRemote
@@ -332,16 +336,50 @@ export function createController({ client, store, directory, remote: startedRemo
     },
   })
 
+  /**
+   * `ListSkills` and `ListCommands` into the store: the Skills view, the
+   * startup list's `[Skills]`, and the command menu's `/skill:*` rows read
+   * them (`/reload-skills`, `/reload-commands`, the Skills view's `r`).
+   */
+  async function readSkills(): Promise<SkillListing> {
+    const session = store.state.selected?.id
+    const [listing] = await Promise.all([client.listSkills(session), readCommands()])
+    store.setSkills(listing)
+    return listing
+  }
+
+  /**
+   * `ListCommands` (with its diagnostics) into the store, for the open
+   * session when there is one: the command menu then lists the `/skill:*`
+   * rows of its agent's bundle skills too.
+   */
+  async function readCommands(): Promise<CommandSummary[]> {
+    const session = store.state.selected?.id
+    const listing = client.listCommandCatalog
+      ? await client.listCommandCatalog(session)
+      : { commands: await client.listCommands(), diagnostics: [] }
+    store.setBackendCommands(listing.commands)
+    store.setCommandDiagnostics(listing.diagnostics)
+    return listing.commands
+  }
+
   async function refresh(): Promise<void> {
-    const [sessions, interactions, models, agents, workflows, providers, commands, permissionModes, projects] = await Promise.all([
+    const [sessions, interactions, models, agents, workflows, providers, commands, permissionModes, projects, skills] = await Promise.all([
       client.listSessions(), client.listInteractions(), client.listModels(), client.listAgents(), client.listWorkflows(),
-      client.listProviders(), client.listCommands(),
+      client.listProviders(),
+      // The open session's catalog (its agent's bundle skills too), with the command diagnostics.
+      client.listCommandCatalog
+        ? client.listCommandCatalog(store.state.selected?.id).then((listing) => { store.setCommandDiagnostics(listing.diagnostics); return listing.commands })
+        : client.listCommands(),
       // Optional: the Shift+Tab cycle falls back to the built-ins without it.
       client.listPermissionModes().catch(() => undefined),
       // Optional: a failed read keeps the rows read before.
       client.listProjects().catch(() => undefined),
+      // Optional: the skills and their diagnostics (an older backend without them keeps the bootstrap's).
+      (client.listSkills?.(store.state.selected?.id) ?? Promise.resolve(undefined)).catch(() => undefined),
     ])
     store.applyCatalog({ sessions, interactions, models, agents, workflows, providers, commands, ...(permissionModes ? { permissionModes } : {}), ...(projects ? { projects } : {}) })
+    if (skills) store.setSkills(skills)
   }
 
   /** `ListProjects` into the store (the Project list and its `busy` flags); a failure is kept as `projectsError` (the Project view shows it) and thrown. */
@@ -1123,6 +1161,17 @@ export function createController({ client, store, directory, remote: startedRemo
   }
 
   const rules = createRulesController({ store, client })
+  const reloader = createReloader({
+    store, client, structure, preferencesPath, refreshExtensions, reloadTui,
+    readSkills: () => readSkills(),
+    readCommands: () => readCommands(),
+  })
+  const skills = createSkillsController({
+    store,
+    readSkills: () => readSkills(),
+    fillInput: (text) => composer?.setText(text),
+    copyText: (text) => terminal?.copy(text) ?? false,
+  })
   const agentsView = createAgentsViewController({ store, client, openPicker, selectAgent: (agent) => selectAgent({ store, client, actions }, agent) })
   const revert = createRevertController({ store, client, composer: () => composer, openSession, refresh, openPicker })
   const resumer = createResumer({
@@ -1166,6 +1215,7 @@ export function createController({ client, store, directory, remote: startedRemo
     openBundles: () => bundles.open(),
     openRules: () => rules.open(),
     openAgents: () => agentsView.open(),
+    openSkills: (filter) => skills.open(filter),
     openProjectOverlay: () => openProjectOverlay(),
     copyText: (text) => terminal?.copy(text) ?? false,
     undo: () => revert.undo(),
@@ -1175,6 +1225,8 @@ export function createController({ client, store, directory, remote: startedRemo
     connectRemote: (args) => connectRemoteCommand(args),
     disconnectRemote: () => disconnectRemote(),
     cancelTurn: () => turns.cancel(),
+    sendPrompt: (text) => submit(text, "message"),
+    reload: (targets) => reloader.run(targets),
     quit,
     resume: (id) => resumer.resume(id),
     openPicker,
@@ -1904,6 +1956,7 @@ export function createController({ client, store, directory, remote: startedRemo
     mcp.dispose()
     bundles.dispose()
     rules.dispose()
+    skills.dispose()
     agentsView.dispose()
     unsubscribeFocus?.()
     secret.clear()
@@ -1925,7 +1978,7 @@ export function createController({ client, store, directory, remote: startedRemo
   function commandEntries(): CommandEntry[] {
     // A WebUI tab does not offer terminal-only commands (`/to-background`).
     const local = registry.list().filter((spec) => !(store.state.webTab && spec.terminalOnly))
-    return mergeCommandEntries(local, store.state.backendCommands)
+    return mergeCommandEntries(local, store.state.backendCommands, { skillCommands: store.state.structure.commands.skill_commands })
   }
 
   return {
@@ -1977,6 +2030,8 @@ export function createController({ client, store, directory, remote: startedRemo
     closeMcp: () => mcp.close(),
     rulesKey: (key: KeyLike) => rules.key(key),
     closeRules: () => rules.close(),
+    skillsKey: (key: KeyLike) => skills.key(key),
+    closeSkills: () => skills.close(),
     agentsKey: (key: KeyLike) => agentsView.key(key),
     closeAgents: () => agentsView.close(),
     /** One key / a paste while the concealed `/connect-remote` entry is open (components/Composer.tsx routes them). */
