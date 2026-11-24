@@ -40,7 +40,7 @@ For visual dependency and runtime flow diagrams, see
 | `hya-compaction` | [`../bundles/internal/compaction/native`](../bundles/internal/compaction/native) | The `hya/compaction` internal bundle: the `shake` and `remote` context-reduction steps the kernel runs before its own Rewrite, as a native `Rewriter`. |
 | `hya-mcp` | [`../crates/hya-mcp`](../crates/hya-mcp) | MCP stdio/HTTP client & manager, desired/observed/effective reconciliation, and `mcp__<server>__<tool>` bridge into `hya-tool`. |
 | `hya-plugin` | [`../crates/hya-plugin`](../crates/hya-plugin) | Out-of-process NDJSON JSON-RPC 2.0 plugin host (`PluginHost`, `PluginConn`), manifest/config loading, tool/command/hook/permission bridges. |
-| `hya-plugin-bun` | [`../crates/hya-plugin-bun`](../crates/hya-plugin-bun) | `BUN_ADAPTER_VERSION` + `adapter/` Bun runtime loading JS bundle extensions (`--bundle-extension` / `--extension`). |
+| `hya-plugin-bun` | [`../crates/hya-plugin-bun`](../crates/hya-plugin-bun) | `adapter/` Bun runtime loading JS bundle extensions (`--bundle-extension` / `--extension`). |
 | `hya-plugin-claude` | [`../crates/hya-plugin-claude`](../crates/hya-plugin-claude) | Claude Code plugin directory / marketplace importer and runtime bridge (`hya bundle install --claude`). |
 | `hya-store` | [`../crates/hya-store`](../crates/hya-store) | SQLite WAL session store (`event_log`, `session`, `project`/`project_root`, `saved_permission`, `resident_actor_claim`, `pending_resume`, `projection_snapshot`, `file_blob`) plus separate `bundle_registry` DB. |
 | `hya-bundle` | [`../crates/hya-bundle`](../crates/hya-bundle) | Unified `kind: Bundle` (prepared format v4) source parser, validator, deterministic `.hyabundle` 7z packager, 13 first-party bundle loaders, and `BundleCatalog`. |

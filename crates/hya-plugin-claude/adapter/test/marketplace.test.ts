@@ -19,8 +19,8 @@ function writeMarketplace(root: string, document: unknown): void {
 }
 
 describe("readMarketplace", () => {
-  test("parses local and unsupported entries", () => {
-    const root = "/tmp/not-real-market"
+  test("parses local and unsupported entries", async () => {
+    const root = await makeTempDir()
     writeMarketplace(root, {
       name: "demo",
       plugins: [

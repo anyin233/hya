@@ -1,9 +1,3 @@
-/**
- * File-name constants shared with the Rust `hya-plugin-claude` crate.
- *
- * Keep these in sync with `crates/hya-plugin-claude/src/lib.rs`; the Rust
- * side pins the adapter version and the install-layout names.
- */
 
 /** Claude Code plugin manifest file name inside a plugin source directory. */
 export const PLUGIN_MANIFEST_FILE = "plugin.json"
