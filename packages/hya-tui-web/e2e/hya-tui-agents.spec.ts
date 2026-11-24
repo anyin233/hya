@@ -40,7 +40,7 @@ test.describe("hya TUI Agents view", () => {
     await term.waitForText("── Subagents")
     await term.waitForText(/ {3}hya-scout\s+fake\//)
     await term.waitForText("── System agents")
-    await term.waitForText(/ {3}hya-compaction\s/)
+    await term.waitForText(/ {3}hya-goal-guide\s/)
     await term.waitForText(/ {3}hya-title\s/)
     await term.waitForText("↑↓ move · Enter select · m model · t effort · c clear · r refresh · / filter · Esc close")
     // Sections are ordered: primary above subagents above system agents.
