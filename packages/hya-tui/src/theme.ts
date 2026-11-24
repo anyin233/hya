@@ -8,6 +8,10 @@
  * A read outside a tracking scope (a module-level constant) is a snapshot
  * and never updates — compute colors in a function or in JSX instead.
  *
+ * The saved setting may be `auto` (the default): the theme follows the
+ * terminal's light or dark background (`setThemeSetting`,
+ * `setTerminalThemeMode`).
+ *
  * `themeName()` is the reactive name of the theme in effect; Markdown
  * rebuilds its OpenTUI `SyntaxStyle` from `syntaxStylesFor(currentTheme())`
  * when it changes (components/Markdown.tsx).
@@ -121,11 +125,11 @@ export const themes = {
     label: "Light",
     kind: "light",
     description: "Terminal background with dark text, for bright terminals",
-    colors: { bg: terminalBackground, panel: terminalBackground, fg: "#1f2933", muted: "#5b6b7b", focus: "#0b6f94", heading: "#1f2933", link: "#1f2933", activity: "#5b6b7b", success: "#2e7d32", border: "#a9b6c3", error: "#c23b3b", warning: "#946200", selection: "#b7d5ea" },
-    toolColors: { done: "#2e7d32" },
-    diffColors: { add: "#2e7d32", remove: "#c23b3b", hunk: "#1f2933", context: "#5b6b7b" },
-    syntaxColors: { keyword: "#8839c9", string: "#805f20", number: "#805f20", comment: "#6a7a8a", function: "#1f2933", type: "#1f2933", operator: "#1f2933", inlineCode: "#805f20" },
-    attachColors: { paste: "#6a4bb5", file: "#1d7f73", image: "#b0407a" },
+    colors: { bg: terminalBackground, panel: terminalBackground, fg: "#1f2933", muted: "#4f5f6f", focus: "#0b6f94", heading: "#1f2933", link: "#1f2933", activity: "#4f5f6f", success: "#276b2b", border: "#7f8e9d", error: "#c23b3b", warning: "#8a5a00", selection: "#b7d5ea" },
+    toolColors: { done: "#276b2b" },
+    diffColors: { add: "#276b2b", remove: "#c23b3b", hunk: "#1f2933", context: "#4f5f6f" },
+    syntaxColors: { keyword: "#8839c9", string: "#805f20", number: "#805f20", comment: "#5f6f80", function: "#1f2933", type: "#1f2933", operator: "#1f2933", inlineCode: "#805f20" },
+    attachColors: { paste: "#6a4bb5", file: "#17706a", image: "#b0407a" },
   },
   contrast: {
     name: "contrast",
@@ -143,9 +147,9 @@ export const themes = {
     label: "Ember",
     kind: "dark",
     description: "Terminal background with warm text and blue focus highlights",
-    colors: { bg: terminalBackground, panel: terminalBackground, fg: "#f1e6d8", muted: "#b3a393", focus: "#8fc9d9", heading: "#f1e6d8", link: "#f1e6d8", activity: "#b3a393", success: "#a9c77a", border: "#5c4a3d", error: "#e8665a", warning: "#e6b450", selection: "#2c4c55" },
+    colors: { bg: terminalBackground, panel: terminalBackground, fg: "#f1e6d8", muted: "#b3a393", focus: "#8fc9d9", heading: "#f1e6d8", link: "#f1e6d8", activity: "#b3a393", success: "#a9c77a", border: "#5c4a3d", error: "#f07468", warning: "#e6b450", selection: "#2c4c55" },
     toolColors: { done: "#a9c77a" },
-    diffColors: { add: "#a9c77a", remove: "#e8665a", hunk: "#f1e6d8", context: "#b3a393" },
+    diffColors: { add: "#a9c77a", remove: "#f07468", hunk: "#f1e6d8", context: "#b3a393" },
     syntaxColors: { keyword: "#c8a6dd", string: "#d7c28a", number: "#d7c28a", comment: "#85766a", function: "#f1e6d8", type: "#f1e6d8", operator: "#f1e6d8", inlineCode: "#d7c28a" },
     attachColors: { paste: "#c8a6dd", file: "#8fc9b0", image: "#e8a0a0" },
   },
@@ -270,4 +274,62 @@ export function syntaxStylesFor(theme: ThemeDefinition): Record<string, TextStyl
     property: { fg: ui.fg },
     attribute: { fg: syntax.type },
   }
+}
+
+/**
+ * `auto` (the default when no `theme` is saved): follow the terminal's
+ * background — `light` on a light terminal, `hya` on a dark one. The terminal
+ * reports its background to OpenTUI (OSC 11 at start, DEC 2031 when it
+ * changes; app/run.tsx feeds `setTerminalThemeMode`); before that, or when a
+ * terminal does not answer, `COLORFGBG` decides, else dark.
+ */
+export const autoThemeSetting = "auto"
+export type TerminalThemeMode = "dark" | "light"
+
+const [setting, setSetting] = createSignal<string>(autoThemeSetting)
+const [terminalMode, setTerminalMode] = createSignal<TerminalThemeMode | null>(null)
+
+/** The built-in theme `auto` picks for a terminal background. */
+export function autoThemeFor(mode: TerminalThemeMode | null): ThemeName {
+  return mode === "light" ? "light" : defaultThemeName
+}
+
+/**
+ * The terminal background from `COLORFGBG` (`fg;bg` or `fg;default;bg`, ANSI
+ * color indexes, set by rxvt, Konsole, iTerm2, and others): bg 7 or 15 (and
+ * 9–14) is light, 0–6 and 8 dark; `undefined`/other: unknown.
+ */
+export function terminalModeFromEnv(env: Record<string, string | undefined>): TerminalThemeMode | null {
+  const bg = Number((env.COLORFGBG ?? "").split(";").at(-1))
+  if (!(env.COLORFGBG ?? "").includes(";") || !Number.isInteger(bg)) return null
+  return bg === 7 || (bg >= 9 && bg <= 15) ? "light" : bg >= 0 && bg <= 8 ? "dark" : null
+}
+
+/** The saved setting: `auto` or a built-in theme name (reactive). */
+export function themeSetting(): string {
+  return setting()
+}
+
+/** The terminal background mode known so far (reactive; `null` before it answered). */
+export function terminalThemeMode(): TerminalThemeMode | null {
+  return terminalMode()
+}
+
+/** The theme a setting means now: `auto` resolves through the terminal mode. */
+export function resolveThemeSetting(value: string): string {
+  return value === autoThemeSetting ? autoThemeFor(terminalMode()) : value
+}
+
+/** Use `value` (`auto` or a theme name); `false` (and no change) for an unknown name. */
+export function setThemeSetting(value: string): boolean {
+  if (value !== autoThemeSetting && !findTheme(value)) return false
+  setSetting(value)
+  return setTheme(resolveThemeSetting(value))
+}
+
+/** The terminal reported its background (or `COLORFGBG` guessed it): an `auto` setting follows. */
+export function setTerminalThemeMode(mode: TerminalThemeMode | null): void {
+  if (mode === terminalMode()) return
+  setTerminalMode(mode)
+  if (setting() === autoThemeSetting) setTheme(autoThemeFor(mode))
 }

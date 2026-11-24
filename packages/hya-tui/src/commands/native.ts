@@ -14,7 +14,7 @@ import { forkSourceText } from "../state/revert"
 import { defaultModelRef, invalidEffortSuffix } from "../state/providers"
 import type { PickerAction } from "../state/picker"
 import type { BackendInfo } from "../state/store"
-import { setTheme, themeName, themes, type ThemeDefinition } from "../theme"
+import { autoThemeFor, autoThemeSetting, resolveThemeSetting, setTheme, setThemeSetting, terminalThemeMode, themeSetting, themes, type ThemeDefinition } from "../theme"
 import { extensionManager } from "../extensions/manager"
 import { sandboxPolicies, type SandboxPolicy } from "../extensions/sandbox"
 import { loadPreferences, preferencesPath } from "../prefs"
@@ -165,17 +165,19 @@ async function openSessionsPicker(context: CommandContext, showArchived = true):
  * Esc restores the theme in effect when the picker opened.
  */
 function openThemePicker({ store, actions }: CommandContext): void {
-  const previous = themeName()
+  const previous = themeSetting()
+  const mode = terminalThemeMode()
+  const auto = { id: autoThemeSetting, label: "Auto", tag: mode ?? "auto", detail: `Follow the terminal background: ${mode ? `${mode} now, so ${themes[autoThemeFor(mode)].label}` : "not reported yet, so hya"} (light → Light, dark → hya)`, current: previous === autoThemeSetting }
   actions.openPicker({
     title: "Theme",
-    rows: (Object.values(themes) as ThemeDefinition[]).map((theme) => ({
+    rows: [auto, ...(Object.values(themes) as ThemeDefinition[]).map((theme) => ({
       id: theme.name, label: theme.label, tag: theme.kind, detail: theme.description, current: theme.name === previous,
-    })),
+    }))],
     hint: "↑↓ previews · Enter keeps and saves · Esc restores · type to filter",
-    onHighlight: (row) => { setTheme(row.id) },
-    onCancel: () => { setTheme(previous) },
+    onHighlight: (row) => { setTheme(resolveThemeSetting(row.id)) },
+    onCancel: () => { setThemeSetting(previous) },
     onSelect: (row) => {
-      if (!setTheme(row.id)) throw new Error(`Unknown theme ${row.id}`)
+      if (!setThemeSetting(row.id)) throw new Error(`Unknown theme ${row.id}`)
       try {
         actions.savePreferences({ theme: row.id })
         store.setStatus(`Theme → ${row.label}`)
