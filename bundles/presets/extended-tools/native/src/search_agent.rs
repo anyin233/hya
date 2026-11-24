@@ -25,8 +25,8 @@ impl Tool for SearchAgentTool {
             "search_agent",
             "Search YOUR OWN archived direct subagents by their final state \
              handoff (goal / current state / pending). Returns each agent's \
-             handle and digest; `dm` that handle to revive the agent with its \
-             saved state.",
+             handle and digest. Use `send` with the handle as `channel` to revive \
+             the agent with its saved state.",
             json!({
                 "query": {"type": "string", "description": "Free-text query over goal/state/pending digests; empty lists all"}
             }),
