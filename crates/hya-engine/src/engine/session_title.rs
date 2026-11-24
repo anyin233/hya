@@ -55,7 +55,7 @@ impl SessionEngine {
             .model
             .clone()
             .unwrap_or_else(|| fallback_model.clone());
-        let usage = crate::compaction::UsageCollector::default();
+        let usage = crate::UsageCollector::default();
         let generated = self
             .generate_title(
                 &model,
@@ -88,7 +88,7 @@ impl SessionEngine {
         system: Option<String>,
         reasoning: Option<hya_provider::ReasoningEffort>,
         user_text: &str,
-        usage: &crate::compaction::UsageCollector,
+        usage: &crate::UsageCollector,
     ) -> Result<String, CoreError> {
         let request = CompletionRequest {
             model: model.clone(),
@@ -110,7 +110,7 @@ impl SessionEngine {
             .provider_router()
             .stream(request, SessionId::new(), MessageId::new())
             .await?;
-        let (output, reported) = crate::compaction::collect_text_and_usage(stream).await;
+        let (output, reported) = crate::terminal_handoff::collect_text_and_usage(stream).await;
         if let Some(tokens) = reported.filter(|tokens| !tokens.is_zero()) {
             usage.record(model.clone(), tokens);
         }

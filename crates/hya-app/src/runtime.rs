@@ -18,8 +18,9 @@ use hya_engine::{
     AgentSpec, BoundSidecarFactory, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest,
     BoundWorkflowSender, CategoryRegistry, CoreError, DRAIN_DEADLINE, EventBus, ModelSummarizer,
     ResidentSupervisor, RuntimeRegistry, RuntimeSourceKind, SessionEngine, SidecarEnvironment,
-    SidecarHandle, SidecarLifecycle, SidecarStart, SubagentGovernor, Summarizer, TokenAccounting,
-    TurnBinding, TurnDrainReport, run_lifecycle_service, run_mailbox_service,
+    SidecarHandle, SidecarLifecycle, SidecarStart, SubagentGovernor, Summarizer,
+    TerminalHandoffOptions, TokenAccounting, TurnBinding, TurnDrainReport, run_lifecycle_service,
+    run_mailbox_service,
 };
 
 // Single discovery/date implementation lives in hya-engine; re-export for callers.
@@ -1305,7 +1306,13 @@ async fn build_session_engine_with_mcp_defer(
         // plane so turn-time pre-stream failures advance through the ordered
         // candidates instead of failing the whole turn.
         .with_model_fallbacks(category_model_fallbacks(&categories))
-        .with_compaction(summarizer, context_settings.compaction)
+        .with_terminal_handoff(
+            summarizer,
+            TerminalHandoffOptions {
+                max_output_tokens: context_settings.compaction.summary_max_tokens,
+            },
+        )
+        .with_rewriter_keep_recent(context_settings.compaction.keep_recent)
         .with_token_accounting(TokenAccounting::new(context_settings.token_accounting))
         .with_formatter(settings.formatter())
         .with_lsp(settings.lsp()?)
