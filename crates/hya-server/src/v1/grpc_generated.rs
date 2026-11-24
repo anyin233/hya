@@ -1023,6 +1023,20 @@ impl pb::session_server::Session for V1Grpc {
                 .await?,
         )
     }
+    async fn refresh_session_context(
+        &self,
+        request: GrpcRequest<pb::RefreshSessionContextRequest>,
+    ) -> Result<GrpcResponse<pb::RefreshSessionContextResponse>, Status> {
+        let (ctx, inner) = split(request);
+        let path = &format!(
+            "/v1/sessions/{}/refresh-context",
+            encode(&field(&inner, "session"))
+        );
+        into_response(
+            self.dispatch(&ctx, "POST", path, Vec::new(), &inner)
+                .await?,
+        )
+    }
     async fn revert_session(
         &self,
         request: GrpcRequest<pb::RevertSessionRequest>,

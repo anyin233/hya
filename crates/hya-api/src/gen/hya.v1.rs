@@ -15029,6 +15029,20 @@ pub struct SummarizeSessionResponse {
     pub summary_message: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RefreshSessionContextRequest {
+    /// Session whose recorded initial context is re-recorded.
+    #[prost(string, tag = "1")]
+    pub session: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct RefreshSessionContextResponse {
+    /// True when a recorded context was discarded and the next turn records
+    /// it anew; false when the session has not recorded one yet (its first
+    /// turn reads the files as they are anyway).
+    #[prost(bool, tag = "1")]
+    pub pending: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RevertSessionRequest {
     /// Session identifier to revert.
     #[prost(string, tag = "1")]
@@ -15483,6 +15497,40 @@ pub mod session_client {
                 .insert(GrpcMethod::new("hya.v1.Session", "SummarizeSession"));
             self.inner.unary(req, path, codec).await
         }
+        /// Re-record a session's initial context at its next turn: the
+        /// environment, the `AGENTS.md` files, and the directory skill index it
+        /// recorded at its first turn (`InitialContextRecorded`) are discarded
+        /// (`InitialContextInvalidated`), so the next turn renders them from the
+        /// files as they are then. Every round reads the recorded context, so this
+        /// fails with `session_busy` while a turn runs. Only this session: each
+        /// subagent session keeps its own. The system prompt changes, so the next
+        /// request misses the provider's prompt cache once.
+        ///
+        /// hya.http: POST /v1/sessions/{session}/refresh-context
+        pub async fn refresh_session_context(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RefreshSessionContextRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RefreshSessionContextResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Session/RefreshSessionContext",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Session", "RefreshSessionContext"));
+            self.inner.unary(req, path, codec).await
+        }
         /// Revert a session to just before a user message (default: the last
         /// one), or undo the pending revert (`undo`). A revert hides that user
         /// message and every later message and restores the files their tool
@@ -15674,6 +15722,23 @@ pub mod session_server {
             request: tonic::Request<super::SummarizeSessionRequest>,
         ) -> std::result::Result<
             tonic::Response<super::SummarizeSessionResponse>,
+            tonic::Status,
+        >;
+        /// Re-record a session's initial context at its next turn: the
+        /// environment, the `AGENTS.md` files, and the directory skill index it
+        /// recorded at its first turn (`InitialContextRecorded`) are discarded
+        /// (`InitialContextInvalidated`), so the next turn renders them from the
+        /// files as they are then. Every round reads the recorded context, so this
+        /// fails with `session_busy` while a turn runs. Only this session: each
+        /// subagent session keeps its own. The system prompt changes, so the next
+        /// request misses the provider's prompt cache once.
+        ///
+        /// hya.http: POST /v1/sessions/{session}/refresh-context
+        async fn refresh_session_context(
+            &self,
+            request: tonic::Request<super::RefreshSessionContextRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RefreshSessionContextResponse>,
             tonic::Status,
         >;
         /// Revert a session to just before a user message (default: the last
@@ -16145,6 +16210,52 @@ pub mod session_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = SummarizeSessionSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Session/RefreshSessionContext" => {
+                    #[allow(non_camel_case_types)]
+                    struct RefreshSessionContextSvc<T: Session>(pub Arc<T>);
+                    impl<
+                        T: Session,
+                    > tonic::server::UnaryService<super::RefreshSessionContextRequest>
+                    for RefreshSessionContextSvc<T> {
+                        type Response = super::RefreshSessionContextResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::RefreshSessionContextRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Session>::refresh_session_context(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = RefreshSessionContextSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

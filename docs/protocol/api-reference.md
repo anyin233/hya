@@ -769,6 +769,7 @@ every turn, message, and projection read hangs off a session id.
 | `ForkSession` | `POST /v1/sessions/{session}/fork` | `hya.v1.Session.ForkSession` | `ForkSessionRequest` | `ForkSessionResponse` |
 | `CompactSession` | `POST /v1/sessions/{session}/compact` | `hya.v1.Session.CompactSession` | `CompactSessionRequest` | `CompactSessionResponse` |
 | `SummarizeSession` | `POST /v1/sessions/{session}/summarize` | `hya.v1.Session.SummarizeSession` | `SummarizeSessionRequest` | `SummarizeSessionResponse` |
+| `RefreshSessionContext` | `POST /v1/sessions/{session}/refresh-context` | `hya.v1.Session.RefreshSessionContext` | `RefreshSessionContextRequest` | `RefreshSessionContextResponse` |
 | `RevertSession` | `POST /v1/sessions/{session}/revert` | `hya.v1.Session.RevertSession` | `RevertSessionRequest` | `RevertSessionResponse` |
 | `ArchiveSubagent` | `POST /v1/sessions/{session}/archive` | `hya.v1.Session.ArchiveSubagent` | `ArchiveSubagentRequest` | `ArchiveSubagentResponse` |
 | `SteerSubagent` | `POST /v1/sessions/{session}/steer` | `hya.v1.Session.SteerSubagent` | `SteerSubagentRequest` | `SteerSubagentResponse` |
@@ -819,6 +820,18 @@ Compact a session's context using the configured method ladder.
 ### `Session.SummarizeSession`
 
 Produce a summary message for a session (titles, handoffs).
+
+
+### `Session.RefreshSessionContext`
+
+Re-record a session's initial context at its next turn: the
+environment, the `AGENTS.md` files, and the directory skill index it
+recorded at its first turn (`InitialContextRecorded`) are discarded
+(`InitialContextInvalidated`), so the next turn renders them from the
+files as they are then. Every round reads the recorded context, so this
+fails with `session_busy` while a turn runs. Only this session: each
+subagent session keeps its own. The system prompt changes, so the next
+request misses the provider's prompt cache once.
 
 
 ### `Session.RevertSession`
@@ -3185,6 +3198,20 @@ components.
 | Field | Type | Description |
 |---|---|---|
 | `summary_message` (1) | `string` | Id of the generated summary message. |
+
+### `RefreshSessionContextRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `session` (1) | `string` | Session whose recorded initial context is re-recorded. |
+
+### `RefreshSessionContextResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `pending` (1) | `bool` | True when a recorded context was discarded and the next turn records it anew; false when the session has not recorded one yet (its first turn reads the files as they are anyway). |
 
 ### `RevertSessionRequest`
 

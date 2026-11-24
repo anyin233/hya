@@ -60,6 +60,18 @@ service Session {
   // hya.http: POST /v1/sessions/{session}/summarize
   rpc SummarizeSession(SummarizeSessionRequest) returns (SummarizeSessionResponse);
 
+  // Re-record a session's initial context at its next turn: the
+  // environment, the `AGENTS.md` files, and the directory skill index it
+  // recorded at its first turn (`InitialContextRecorded`) are discarded
+  // (`InitialContextInvalidated`), so the next turn renders them from the
+  // files as they are then. Every round reads the recorded context, so this
+  // fails with `session_busy` while a turn runs. Only this session: each
+  // subagent session keeps its own. The system prompt changes, so the next
+  // request misses the provider's prompt cache once.
+  //
+  // hya.http: POST /v1/sessions/{session}/refresh-context
+  rpc RefreshSessionContext(RefreshSessionContextRequest) returns (RefreshSessionContextResponse);
+
   // Revert a session to just before a user message (default: the last
   // one), or undo the pending revert (`undo`). A revert hides that user
   // message and every later message and restores the files their tool
@@ -368,6 +380,18 @@ message SummarizeSessionRequest {
 message SummarizeSessionResponse {
   // Id of the generated summary message.
   string summary_message = 1;
+}
+
+message RefreshSessionContextRequest {
+  // Session whose recorded initial context is re-recorded.
+  string session = 1;
+}
+
+message RefreshSessionContextResponse {
+  // True when a recorded context was discarded and the next turn records
+  // it anew; false when the session has not recorded one yet (its first
+  // turn reads the files as they are anyway).
+  bool pending = 1;
 }
 
 message RevertSessionRequest {

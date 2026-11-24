@@ -882,6 +882,9 @@ impl Projection {
                     self.session.initial_context = Some(text.clone());
                 }
             }
+            Event::InitialContextInvalidated { .. } => {
+                self.session.initial_context = None;
+            }
             Event::SessionAgentModelOverrideSet { agent, model, .. } => match model {
                 Some(model) => {
                     self.session
