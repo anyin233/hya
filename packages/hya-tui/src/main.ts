@@ -2,10 +2,9 @@
  * Entry point: `bun packages/hya-tui/src/main.ts [--server URL | --grpc HOST:PORT] [--dir PATH] [--hya PATH] [--db PATH] [--continue | --session ID | --resume [ID]] [--web-tab]`
  * (src/cli.ts `usage`). Without either explicit transport the TUI starts its own `hya serve` (src/launch.ts).
  *
- * One file, two roles (src/reload.ts): direct and WebUI starts use the Bun
- * supervisor (src/supervisor.ts), which runs this same file again as the app.
- * Bare hya supervises the app directly. Both restart it after `hya serve
- * restart`; the supervisor's environment (`HYA_TUI_RELOAD_FILE`) marks the app.
+ * One file, two roles (src/reload.ts): the Bun supervisor (src/supervisor.ts)
+ * starts this file again as the app and reloads it after `hya serve restart`.
+ * The supervisor sets `HYA_TUI_RELOAD_FILE` to mark the app process.
  */
 import { startupMark } from "./startup"
 import { existsSync } from "node:fs"
