@@ -1695,8 +1695,9 @@ file when it starts.
 
 | Name | Kind | Look |
 | --- | --- | --- |
-| `hya` | dark | The default: terminal background, light text and blue focus highlights (the palette in [Layout](#layout)). |
-| `light` | light | Dark text (`#1f2933`) for terminals with a light background. |
+| `auto` | — | The default (no `theme` saved): `light` on a terminal with a light background, `hya` on a dark one, following the terminal (below). |
+| `hya` | dark | Terminal background, light text and blue focus highlights (the palette in [Layout](#layout)). |
+| `light` | light | Dark text (`#1f2933`), muted `#4f5f6f`, borders `#7f8e9d` for terminals with a light background. |
 | `contrast` | dark | White text and saturated accents on the terminal background. |
 | `ember` | dark | Warm text and blue focus highlights on the terminal background. |
 
@@ -1708,8 +1709,20 @@ fields are OpenTUI `ColorInput` values with ANSI default-background intent
 (`RGBA.defaultBackground()`); they are not fixed RGB colors. Default-color fills
 still clear the area under popups, so underlying content does not show through.
 
-**Usage.** `/theme` (no arguments) opens the [picker](#pickers) with one
-row per theme, `[dark]`/`[light]` tagged; `●` marks the theme in effect.
+**Auto.** With no theme saved (or `"theme": "auto"`), the TUI asks the
+terminal for its background color when it starts (OSC 11, answered by most
+terminals and by xterm.js-based ones) and picks `light` when its brightness is
+over half, else `hya`; a terminal that reports a light/dark switch (DEC 2031)
+switches the theme live. Until the terminal answers, or when it never does,
+`COLORFGBG` decides (`0;15` light, `15;0` dark), else `hya`. On a terminal that
+gives neither, choose `Light` once in `/theme`. Every theme keeps text at a
+contrast of at least 4.5:1 against the backgrounds of its kind
+(`test/theme.test.ts`).
+
+**Usage.** `/theme` (no arguments) opens the [picker](#pickers): an `Auto`
+row first (tagged with the background the terminal reported: `[light]`,
+`[dark]`, or `[auto]` before it answered), then one row per theme,
+`[dark]`/`[light]` tagged; `●` marks the setting in effect.
 Moving the highlight (Up/Down, Tab/Shift+Tab, typing a filter) repaints the
 whole screen in the highlighted theme at once — the transcript, Markdown,
 highlighted code, tool cards, boxes, and the controller status state. Enter keeps it,
@@ -1740,7 +1753,7 @@ JSON object:
 ```ts
 interface TuiPreferences {
   keybindings?: Record<string, { command: string; scope: "workspace" | "conversation" } | null> // command overrides; null disables a key
-  theme?: string          // a built-in theme name: "hya" (default), "light", "contrast", "ember"
+  theme?: string          // "auto" (default when unset), or a built-in theme: "hya", "light", "contrast", "ember"
   vim?: boolean           // vim mode in the input (/vim); default false
   notifications?: boolean // desktop notifications (/notifications); default true
   permissionMode?: string // default for sessions this TUI creates: "manual" (default), "yolo", or a bundle mode id
@@ -1760,7 +1773,7 @@ in `tui.toml` ([TUI structure](tui-config.md)); the two files share no keys.
   means the defaults. An unreadable file, invalid JSON, or a JSON value that
   is not an object is ignored, and the controller status state says
   `Ignored unreadable TUI preferences <path>`; an unknown theme name says
-  `Unknown theme <name> in <path>; using hya`. A key whose value has the
+  `Unknown theme <name> in <path>; using auto`. A key whose value has the
   wrong type is ignored.
 - A change (`/theme`'s Enter, `/vim`, `/keybind set|unset|reset`, or a successful permission mode switch)
   merges the changed key into what is on disk —
@@ -1780,7 +1793,10 @@ a function called from JSX, a memo, or an effect — so a theme switch
 repaints; a module-level copy (`const c = colors.fg`) is a snapshot that
 never updates. `themeName()` is the reactive name of the theme in effect,
 `currentTheme()` its `ThemeDefinition`, `setTheme(name)` switches (returns
-`false` for an unknown name), `themes` lists the built-ins, and
+`false` for an unknown name), `setThemeSetting("auto" | name)` sets the saved
+setting and `setTerminalThemeMode("dark" | "light" | null)` feeds the terminal
+background an `auto` setting follows (`terminalModeFromEnv` reads
+`COLORFGBG`), `themes` lists the built-ins, and
 `syntaxStylesFor(theme)` gives the Markdown/tree-sitter scope styles. The generic
 `colors.accent` property is replaced by `colors.focus`; use the specific role
 in every component. Extension trees accept the same foreground roles; the old

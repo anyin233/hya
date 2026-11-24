@@ -54,7 +54,7 @@ import { tuiConfigPath } from "../config/tuiConfig"
 import { editFile } from "../composer/editor"
 import { createStructureController } from "./structure"
 import { setCustomKeybindings } from "../keys/custom"
-import { colors, setTheme } from "../theme"
+import { autoThemeSetting, colors, setTerminalThemeMode, setThemeSetting, terminalModeFromEnv } from "../theme"
 import { createAppStore, type BackendInfo } from "../state/store"
 import { TitleWriter, titleFromState } from "../title"
 import { createEffect, createRoot } from "solid-js"
@@ -156,8 +156,12 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
   const loaded = loadPreferences(prefsPath)
   setCustomKeybindings(loaded.preferences.keybindings ?? {})
   const warnings = loaded.warning ? [loaded.warning] : []
-  if (loaded.preferences.theme && !setTheme(loaded.preferences.theme)) {
-    warnings.push(`Unknown theme ${loaded.preferences.theme} in ${prefsPath}; using hya`)
+  // No saved theme means `auto`: follow the terminal background. COLORFGBG is the first guess;
+  // the renderer's OSC 11 answer (below) replaces it.
+  setTerminalThemeMode(terminalModeFromEnv(process.env))
+  if (!setThemeSetting(loaded.preferences.theme ?? autoThemeSetting)) {
+    warnings.push(`Unknown theme ${loaded.preferences.theme} in ${prefsPath}; using auto`)
+    setThemeSetting(autoThemeSetting)
   }
 
   // Remote: no directory scope until a Project is chosen (--dir is this machine's).
@@ -314,6 +318,9 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
   // composer's double-press quit (components/Composer.tsx), not the renderer's.
   renderer = await createCliRenderer({ backgroundColor: colors.bg, exitOnCtrlC: false, targetFps: 30, autoFocus: false })
   startupMark("tui_renderer_created")
+  // The terminal's background, light or dark (OSC 11 now, DEC 2031 on a change): an `auto` theme follows it.
+  renderer.on("theme_mode", (mode: "dark" | "light") => setTerminalThemeMode(mode))
+  void renderer.waitForThemeMode(1000).then((mode) => { if (mode) setTerminalThemeMode(mode) })
   // Every full-screen view and the main layout follow the terminal size
   // (`useTerminalDimensions`, one "resize" listener each, all mounted at
   // once). Past Node's default of 10 its MaxListenersExceededWarning would be

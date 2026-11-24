@@ -12,7 +12,7 @@ import { expect, hyaTui, test, textStep } from "./hya"
 
 // Palettes of packages/hya-tui/src/theme.ts.
 const hya = { bg: "default", fg: "#e8edf3", muted: "#9caab9", focus: "#73c8e8" }
-const light = { bg: "default", fg: "#1f2933", muted: "#5b6b7b", focus: "#0b6f94", panel: "default", keyword: "#8839c9" }
+const light = { bg: "default", fg: "#1f2933", muted: "#4f5f6f", focus: "#0b6f94", panel: "default", keyword: "#8839c9" }
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
@@ -45,16 +45,20 @@ test.describe("/theme", () => {
 
     await prompt(term, "/theme")
     await term.waitForText("Theme")
-    await term.waitForText(/▸ ● hya\s+\[dark\]/)
+    // No saved theme: Auto (the terminal does not report its background here, so hya).
+    await term.waitForText(/▸ ● Auto\s+\[auto\]/)
+    await term.waitForText(/ {3}hya\s+\[dark\]/)
     await term.waitForText(/ {3}Light\s+\[light\]/)
     await term.waitForText(/High contrast\s+\[dark\]/)
     await term.waitForText(/Ember\s+\[dark\]/)
     const title = (await term.find("Theme"))!
     expect((await term.cell(title.row, title.col))?.fg).toBe(hya.fg)
-    const choice = (await term.find("▸ ● hya"))!
+    const choice = (await term.find("▸ ● Auto"))!
     expect((await term.cell(choice.row, choice.col))?.fg).toBe(hya.focus)
 
-    // Down highlights Light: the whole screen previews it at once.
+    // Down, Down highlights Light: the whole screen previews it at once.
+    await term.press("ArrowDown")
+    await term.waitForText(/▸ +hya\s+\[dark\]/)
     await term.press("ArrowDown")
     await expect.poll(async () => (await screenColors(term)).focus).toBe(light.focus)
     const lightTitle = (await term.find("Theme"))!
@@ -68,7 +72,8 @@ test.describe("/theme", () => {
 
     // Enter keeps the highlighted theme and writes the preferences file.
     await prompt(term, "/theme")
-    await term.waitForText(/▸ ● hya/)
+    await term.waitForText(/▸ ● Auto/)
+    await term.press("ArrowDown")
     await term.press("ArrowDown")
     await term.waitForText(/▸ +Light\s+\[light\]/)
     await term.press("Enter")
@@ -87,14 +92,27 @@ test.describe("/theme", () => {
     expect((await screenColors(term)).focus).toBe(light.focus)
   })
 
+  test("auto starts light on a light terminal (COLORFGBG) and dark otherwise", async ({ tui, backend }) => {
+    let term = await tui(hyaTui(backend), { env: { HYA_TUI_CONFIG: join(prefsDir, "tui.json"), COLORFGBG: "0;15" } })
+    await term.waitForText("Message, !shell, or @file · / commands")
+    await expect.poll(async () => (await screenColors(term)).focus).toBe(light.focus)
+    await prompt(term, "/theme")
+    await term.waitForText(/▸ ● Auto\s+\[light\]/)
+    await term.press("Escape")
+    term = await tui(hyaTui(backend), { env: { HYA_TUI_CONFIG: join(prefsDir, "tui.json"), COLORFGBG: "15;0" } })
+    await term.waitForText("Message, !shell, or @file · / commands")
+    await expect.poll(async () => (await screenColors(term)).focus).toBe(hya.focus)
+  })
+
   test("at about 80 columns the light theme covers the screen and the picker fits", async ({ tui, backend }) => {
     const env = { HYA_TUI_CONFIG: join(prefsDir, "tui.json") }
     const term = await tui(hyaTui(backend), { env, viewport: { width: 690, height: 640 } })
     await term.waitForText("Message, !shell, or @file · / commands")
     expect((await term.size()).cols).toBeLessThanOrEqual(84)
     await prompt(term, "/theme")
-    // Keys reach the picker once it highlights the current theme; then Down must land on Light.
-    await term.waitForText(/▸ ● hya/)
+    // Keys reach the picker once it highlights the current setting; then Down, Down must land on Light.
+    await term.waitForText(/▸ ● Auto/)
+    await term.press("ArrowDown")
     await term.press("ArrowDown")
     await term.waitForText(/▸ +Light\s+\[light\]/)
     await term.press("Enter")
@@ -119,7 +137,8 @@ test.describe("/theme over a transcript", () => {
     await prompt(term, "show me code")
     await term.waitForText("Done.", 20_000)
     await prompt(term, "/theme")
-    await term.waitForText(/▸ ● hya/)
+    await term.waitForText(/▸ ● Auto/)
+    await term.press("ArrowDown")
     await term.press("ArrowDown")
     await term.waitForText(/▸ +Light\s+\[light\]/)
     await term.press("Enter")
