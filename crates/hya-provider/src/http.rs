@@ -86,15 +86,13 @@ struct RouteCore {
     retry: RetryConfig,
 }
 
-/// Bounded wait for response headers on each streamed-completion attempt.
+/// Bounded response-header wait for streaming completions and native compaction.
 ///
 /// Reasoning endpoints behind large prompt contexts can legitimately take tens
 /// of seconds to produce status line + headers, so 60s sits well above real
 /// pre-header latency while keeping a hung route bounded and operator-visible.
-/// A deadline miss becomes [`ProviderError::Transport`], which the existing
-/// `is_retryable_before_stream()` classification feeds back through the normal
-/// attempt/backoff path unchanged. Configurable per route via
-/// [`HttpProvider::with_response_header_timeout`].
+/// A deadline miss becomes [`ProviderError::Transport`]. Configurable per route
+/// via [`HttpProvider::with_response_header_timeout`].
 const RESPONSE_HEADER_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Bounded silence between SSE frames on an established stream.
@@ -698,11 +696,9 @@ impl RouteCore {
         Ok((headers, refresh_credential))
     }
 
-    /// Issue one streamed-completion request, retrying retryable pre-stream
-    /// failures (transport, 429/5xx) with jittered exponential backoff.
-    ///
-    /// `max_attempts` bounds the attempt loop before returning the response.
-    async fn send_stream_request(
+    /// Send a JSON POST with a bounded response-header wait on each attempt.
+    /// `max_attempts` includes the initial request and any retries.
+    async fn send_request(
         &self,
         url: &str,
         body: &Value,
@@ -837,29 +833,22 @@ impl HttpProvider {
     }
 
     /// Merge route defaults with any per-model limit overrides.
-    fn caps_for_model(&self, model_id: &str) -> Capabilities {
+    fn caps_for_model(&self, row: Option<&RouteModel>) -> Capabilities {
         let mut caps = self.caps.clone();
-        if let Some(limit) = self.models.get(model_id).and_then(|row| row.limit.as_ref()) {
+        if let Some(limit) = row.and_then(|row| row.limit.as_ref()) {
             if limit.context > 0 {
                 caps.max_context = limit.context;
             }
             caps.max_output = limit.output;
         }
-        if let Some(image_input) = self
-            .models
-            .get(model_id)
-            .and_then(|row| row.image_input.as_ref())
-        {
-            caps.image_input = Some(*image_input);
+        if let Some(image_input) = row.and_then(|row| row.image_input) {
+            caps.image_input = Some(image_input);
         }
         if self
             .models
             .values()
             .any(|row| row.reasoning_variants.is_some())
-            || self
-                .models
-                .get(model_id)
-                .is_some_and(|row| row.reasoning_default.is_some())
+            || row.is_some_and(|row| row.reasoning_default.is_some())
         {
             caps.reasoning_request = true;
         }
@@ -869,13 +858,9 @@ impl HttpProvider {
     /// Capabilities published on a catalog row: [`Self::caps_for_model`],
     /// except that the context window is the model's known limit or 0 when
     /// unknown (the route-wide default is a runtime fallback, not metadata).
-    fn catalog_caps_for_model(&self, model_id: &str) -> Capabilities {
-        let mut caps = self.caps_for_model(model_id);
-        caps.max_context = self
-            .models
-            .get(model_id)
-            .and_then(|row| row.limit.as_ref())
-            .map_or(0, |limit| limit.context);
+    fn catalog_caps_for_model(&self, row: &RouteModel) -> Capabilities {
+        let mut caps = self.caps_for_model(Some(row));
+        caps.max_context = row.limit.as_ref().map_or(0, |limit| limit.context);
         caps
     }
 
@@ -891,7 +876,7 @@ impl HttpProvider {
     ) -> Result<(CompletionRequest, Value), ProviderError> {
         let caps = self
             .served_model_name(&req.model)
-            .map(|model| self.caps_for_model(model));
+            .map(|model| self.caps_for_model(self.models.get(model)));
         let output_limit = caps
             .as_ref()
             .map(|caps| caps.max_output)
@@ -1142,7 +1127,7 @@ impl Provider for HttpProvider {
 
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         let served = self.served_model_name(model)?;
-        Some(self.caps_for_model(served))
+        Some(self.caps_for_model(self.models.get(served)))
     }
 
     fn sends_tool_images(&self, caps: &Capabilities) -> bool {
@@ -1208,37 +1193,18 @@ impl Provider for HttpProvider {
         self.models
             .iter()
             .filter(|(_, row)| row.served)
-            .map(|(model, _)| ProviderModel {
+            .map(|(model, row)| ProviderModel {
                 provider_id: self.id.clone(),
                 model_id: model.clone(),
-                capabilities: self.catalog_caps_for_model(model),
-                reasoning_variants: self
-                    .models
-                    .get(model)
-                    .and_then(|row| row.reasoning_variants.as_ref())
-                    .cloned()
+                capabilities: self.catalog_caps_for_model(row),
+                reasoning_variants: row
+                    .reasoning_variants
+                    .clone()
                     .unwrap_or_else(|| variants.clone()),
-                reasoning_default: self
-                    .models
-                    .get(model)
-                    .and_then(|row| row.reasoning_default.as_ref())
-                    .copied(),
-                reasoning: self
-                    .models
-                    .get(model)
-                    .and_then(|row| row.reasoning_declared.as_ref())
-                    .copied(),
-                display_name: self
-                    .models
-                    .get(model)
-                    .and_then(|row| row.display_name.as_ref())
-                    .cloned(),
-                source: self
-                    .models
-                    .get(model)
-                    .and_then(|row| row.source.as_ref())
-                    .copied()
-                    .unwrap_or(self.catalog_source),
+                reasoning_default: row.reasoning_default,
+                reasoning: row.reasoning_declared,
+                display_name: row.display_name.clone(),
+                source: row.source.unwrap_or(self.catalog_source),
             })
             .collect()
     }
@@ -1261,7 +1227,7 @@ impl Provider for HttpProvider {
             matches!(self.core.auth, AuthStyle::GrokSession { .. }).then_some(req.model.as_str());
         let resp = self
             .core
-            .send_stream_request(
+            .send_request(
                 &url,
                 &body,
                 &req.headers,
@@ -1307,24 +1273,10 @@ impl Provider for HttpProvider {
         });
         let model_override =
             matches!(self.core.auth, AuthStyle::GrokSession { .. }).then_some(model_id.as_str());
-        let (headers, _) = self
-            .core
-            .request_headers(&BTreeMap::new(), model_override)?;
         let resp = self
             .core
-            .client
-            .post(&url)
-            .headers(headers)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| ProviderError::Http(e.to_string()))?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            let snippet = text.get(..500).unwrap_or(text.as_str());
-            return Err(ProviderError::Http(format!("compact {status}: {snippet}")));
-        }
+            .send_request(&url, &body, &BTreeMap::new(), model_override, 1)
+            .await?;
         let payload: Value = resp
             .json()
             .await

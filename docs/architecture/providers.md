@@ -652,8 +652,17 @@ Grok Build uses a decoder variant that **requires** a typed terminal
 (`response.completed` or `response.incomplete`); otherwise finish errors with a
 missing-terminal message.
 
-Responses kinds that support compact expose `POST {base}/responses/compact` via
-`Provider::compact_responses`.
+Responses routes that support native compaction use
+`Provider::compact_responses`. For example, an OpenAI Responses route at
+`https://api.openai.com/v1` makes one `POST /v1/responses/compact` with the
+upstream `model` and the conversation `input`. The route converts the reply's
+`output` array into a `CompactedWindow`.
+
+Compaction uses the route's response-header deadline (60 seconds by default,
+overridable through `HttpProvider::with_response_header_timeout`). A header
+deadline miss returns `ProviderError::Transport`. Non-success responses return
+`ProviderError::HttpStatus` with the status, a parsed `Retry-After` when present,
+and up to 500 characters from the body, with a two-second body read deadline.
 
 ## Anthropic Protocol
 

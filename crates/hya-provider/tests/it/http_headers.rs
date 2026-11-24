@@ -2163,6 +2163,76 @@ async fn http_provider_anthropic_sends_thinking_binding_beta_only_when_block_bin
 }
 
 #[tokio::test]
+async fn responses_compact_bounds_multibyte_http_error() {
+    let body = "界".repeat(600);
+    let response = format!(
+        "HTTP/1.1 429 Too Many Requests\r\ncontent-type: text/plain; charset=utf-8\r\ncontent-length: {}\r\nretry-after: 2\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let (base_url, connections, requests) = start_scripted_server(vec![response]).await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiResponse,
+        &base_url,
+        None,
+        ["gpt-5".to_string()],
+    )
+    .unwrap();
+
+    let error = provider
+        .compact_responses(&ModelRef::new("gpt-5"), &[], None)
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        error.to_string().chars().filter(|&ch| ch == '界').count(),
+        500
+    );
+    let ProviderError::HttpStatus {
+        status,
+        message,
+        retry_after,
+    } = error
+    else {
+        panic!("expected a typed HTTP status, got {error:?}");
+    };
+    assert_eq!(status, 429);
+    assert_eq!(message, "界".repeat(500));
+    assert_eq!(retry_after, Some(Duration::from_secs(2)));
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
+    assert!(
+        requests.lock().unwrap()[0]
+            .raw
+            .starts_with("POST /responses/compact ")
+    );
+}
+
+#[tokio::test]
+async fn responses_compact_uses_the_route_header_deadline() {
+    let (base_url, connections) = start_stalled_header_server().await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiResponse,
+        &base_url,
+        None,
+        ["gpt-5".to_string()],
+    )
+    .unwrap()
+    .with_response_header_timeout(Duration::from_millis(200));
+    let model = ModelRef::new("gpt-5");
+
+    let result = timeout(
+        Duration::from_secs(5),
+        provider.compact_responses(&model, &[], None),
+    )
+    .await
+    .expect("compaction should hit the header deadline within the guard");
+
+    assert!(matches!(result, Err(ProviderError::Transport(message)) if message.contains("200ms")));
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn http_provider_forces_single_auth_refresh_on_401_and_retries_once() {
     let (base_url, connections, requests) = start_scripted_server(vec![
         "HTTP/1.1 401 Unauthorized\r\ncontent-length: 12\r\nconnection: close\r\n\r\nstale token.\n".to_string(),
