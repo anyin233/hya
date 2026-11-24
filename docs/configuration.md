@@ -2145,9 +2145,14 @@ implementation — callers re-export it rather than reimplement walk order.
 
 A full-mode session records its working directory, platform, UTC date, and
 discovered `AGENTS.md` text at the start of its first model turn. Later
-rounds and backend restarts use that same context. To apply an edit, start
-a new session in the workdir (for example, `hya exec "Follow AGENTS.md"`)
-or ask the agent to read the file with a tool. A fork inherits the source
+rounds and backend restarts use that same context. To apply an edit to a
+running session, call `POST /v1/sessions/{id}/refresh-context`
+(`RefreshSessionContext`): it discards the recorded context
+(`InitialContextInvalidated`), and the session's next turn
+records it again from the files as they are then — the next request misses
+the provider's prompt cache once. It is refused (`session_busy`) while a turn
+runs. A new session in the workdir, or asking the agent to read the file with
+a tool, works too. A fork inherits the source
 session's recorded context. Each subagent session records its own.
 
 `--pure` skips external context discovery when recording a session's

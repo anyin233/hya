@@ -565,6 +565,12 @@
   },
   {
     "method": "POST",
+    "path": "/v1/sessions/{session}/refresh-context",
+    "operationId": "Session.RefreshSessionContext",
+    "streaming": false
+  },
+  {
+    "method": "POST",
     "path": "/v1/sessions/{session}/revert",
     "operationId": "Session.RevertSession",
     "streaming": false

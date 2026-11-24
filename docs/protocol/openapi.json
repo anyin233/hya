@@ -1006,6 +1006,17 @@
         "x-server-streaming": false
       }
     },
+    "/v1/sessions/{session}/refresh-context": {
+      "post": {
+        "operationId": "Session.RefreshSessionContext",
+        "summary": "Re-record a session's initial context at its next turn: the",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.RefreshSessionContext",
+        "x-server-streaming": false
+      }
+    },
     "/v1/sessions/{session}/revert": {
       "post": {
         "operationId": "Session.RevertSession",
@@ -5132,6 +5143,24 @@
         "properties": {
           "summary_message": {
             "type": "string"
+          }
+        }
+      },
+      "RefreshSessionContextRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          }
+        }
+      },
+      "RefreshSessionContextResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "pending": {
+            "type": "boolean"
           }
         }
       },

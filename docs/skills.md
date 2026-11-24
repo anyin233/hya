@@ -223,9 +223,12 @@ expanded block as `text` ([Plugin protocol](plugin-protocol.md)).
 
 At its first model turn, a full-mode session records the directory skill
 index visible to its agent. The index lists each `name: description`, including
-the built-in fallback entries. Later requests reuse the recorded list. Start a
-new session to see directory changes in the index. The `skill` tool uses the
-current turn's catalog when loading a skill body. There is no per-skill tool
+the built-in fallback entries. Later requests reuse the recorded list. To put
+an added, removed, or edited skill into a running session's index, call
+`RefreshSessionContext` (`POST /v1/sessions/{id}/refresh-context`): the next
+turn records the index again; a new session works too. The `skill` tool and
+`/skill:<name>` always use the current catalog, so they load an edited body
+without a reload. There is no per-skill tool
 gate from `allowed-tools` at that point.
 
 When an agent’s resource view selects harness skills, it must also select the

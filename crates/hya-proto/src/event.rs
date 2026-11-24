@@ -100,6 +100,14 @@ pub enum Event {
         text: String,
     },
 
+    /// Discard the recorded initial context (`/reload-context`): the next
+    /// full-mode turn renders it again from the files as they are then and
+    /// records a new [`Event::InitialContextRecorded`].
+    InitialContextInvalidated {
+        /// Session this event belongs to.
+        session: SessionId,
+    },
+
     /// Set or clear one temporary Agent model for the owning root Session tree.
     /// A `None` model removes the override; unrelated Agent entries remain.
     SessionAgentModelOverrideSet {
@@ -1218,6 +1226,7 @@ impl Event {
         match self {
             Event::SessionCreated { session, .. }
             | Event::InitialContextRecorded { session, .. }
+            | Event::InitialContextInvalidated { session }
             | Event::SessionAgentModelOverrideSet { session, .. }
             | Event::SessionPermissionModeSet { session, .. }
             | Event::SessionTitled { session, .. }

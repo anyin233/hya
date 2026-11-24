@@ -28,6 +28,34 @@ impl SessionEngine {
             .await
     }
 
+    /// Discard `session`'s recorded initial context (`/reload-context`):
+    /// appends `InitialContextInvalidated`, so its next full-mode turn renders
+    /// the environment, `AGENTS.md` files, and directory skill index from
+    /// the files as they are then. Every round of a turn reads the recorded
+    /// text, so this is refused while one runs. Returns `false` without
+    /// appending when nothing is recorded yet (the first turn reads the
+    /// files anyway).
+    ///
+    /// # Errors
+    /// `CoreError::Invalid("session not found")` for an unknown session,
+    /// `CoreError::Invalid("session busy")` while a turn of it runs, plus
+    /// store failures.
+    pub async fn refresh_initial_context(&self, session: SessionId) -> Result<bool, CoreError> {
+        let projection = self.read_projection_shared(session).await?;
+        if projection.session.id.is_none() {
+            return Err(CoreError::Invalid("session not found".to_owned()));
+        }
+        if self.turn_active(session) {
+            return Err(CoreError::Invalid("session busy".to_owned()));
+        }
+        if projection.session.initial_context.is_none() {
+            return Ok(false);
+        }
+        self.emit(session, Event::InitialContextInvalidated { session })
+            .await?;
+        Ok(true)
+    }
+
     /// Set arbitrary session metadata key/value.
     pub async fn set_metadata(
         &self,
