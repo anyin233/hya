@@ -33,6 +33,7 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     openBundles: () => { calls.push("bundles") },
     openRules: () => { calls.push("rules") },
     openAgents: () => { calls.push("agents") },
+    openSkills: (filter) => { calls.push(`skills ${filter ?? ""}`.trim()) },
     openProjectOverlay: () => { calls.push("projectView") },
     scheduleRefresh: () => { calls.push("scheduleRefresh") },
     cancelTurn: async () => { calls.push("cancel") },

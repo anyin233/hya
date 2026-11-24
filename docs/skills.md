@@ -234,6 +234,12 @@ When an agent’s resource view selects harness skills, it must also select the
 
 ---
 
+## Browse skills in the TUI
+
+`/skills [filter]` opens the [Skills view](tui.md#skills-view): every skill of
+the scope under its source directory, with its file, description, and body;
+`u` puts `/skill:<name> ` into the message input.
+
 ---
 
 ## Related

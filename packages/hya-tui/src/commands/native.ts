@@ -880,6 +880,13 @@ export const nativeCommandSpecs: CommandSpec[] = [
     run: ({ actions }) => { actions.openBundles() },
   },
   {
+    name: "/skills",
+    description: "Open the Skills view: every skill of the scope by source, its file and body; u puts /skill:<name> into the input",
+    argumentHint: "[filter]",
+    complete: ({ words, current, head }, context) => words.length === 1 ? matchValues(head, current, context.backendCommands.filter((name) => name.startsWith(skillCommandPrefix)).map((name) => name.slice(skillCommandPrefix.length))) : [],
+    run: ({ actions }, { argumentsText }) => { actions.openSkills(argumentsText.trim()) },
+  },
+  {
     name: "/rules",
     description: "Open the Saved Rules view: saved permission decisions, delete",
     run: ({ actions }) => { actions.openRules() },

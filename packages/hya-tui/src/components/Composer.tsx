@@ -129,7 +129,8 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
   const mcpOpen = () => store.state.mcpView !== undefined
   const rulesOpen = () => store.state.rulesView !== undefined
   const agentsOpen = () => store.state.agentsView !== undefined
-  const overlayViewOpen = () => providersOpen() || bundlesOpen() || diffOpen() || mcpOpen() || rulesOpen() || agentsOpen() || store.state.extensionOverlay !== undefined
+  const skillsOpen = () => store.state.skillsView !== undefined
+  const overlayViewOpen = () => providersOpen() || bundlesOpen() || diffOpen() || mcpOpen() || rulesOpen() || agentsOpen() || skillsOpen() || store.state.extensionOverlay !== undefined
   /** A subagent's session is open: prompts are disabled; the command pane stays available. */
   const readOnly = () => Boolean(store.state.selected?.parent)
   const shell = () => isShellInput(value())
@@ -401,6 +402,7 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
         else if (diffOpen()) controller.closeDiff()
         else if (mcpOpen()) controller.closeMcp()
         else if (rulesOpen()) controller.closeRules()
+        else if (skillsOpen()) controller.closeSkills()
         else if (overlay) extensionManager.close(overlay)
         else controller.closeAgents()
       } else {
@@ -410,6 +412,7 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
         else if (diffOpen()) controller.diffKey(key)
         else if (mcpOpen()) controller.mcpKey(key)
         else if (rulesOpen()) controller.rulesKey(key)
+        else if (skillsOpen()) controller.skillsKey(key)
         else if (overlay) void extensionManager.key(overlay, key)
         else controller.agentsKey(key)
         return

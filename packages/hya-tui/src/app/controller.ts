@@ -77,7 +77,7 @@
  * `/resume` and `--resume` unarchive and open one (app/resume.ts).
  */
 import { SessionViews } from "./sessionViews"
-import { HttpError, type HyaClient, type Interaction, type MessageInfo, type ProjectInfo, type PromptAttachment, type SessionInfo, type StreamEvent, type StreamFrame } from "../client"
+import { HttpError, type HyaClient, type Interaction, type MessageInfo, type ProjectInfo, type PromptAttachment, type SessionInfo, type SkillSummary, type StreamEvent, type StreamFrame } from "../client"
 import { completeCommand } from "../completion"
 import { createCommandRegistry, mergeCommandEntries, openModelPicker, selectAgent, toBackground, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
 import {
@@ -129,6 +129,7 @@ import { createProviderController } from "./providers"
 import { answerPrompt } from "./prompts"
 import { revertReadOnlyStatus as readOnlyStatus, createRevertController } from "./revert"
 import { createRulesController } from "./rules"
+import { createSkillsController } from "./skills"
 import type { AppStore } from "../state/store"
 import { errorLine } from "../state/projectCommands"
 import { createDebounce } from "./debounce"
@@ -331,6 +332,18 @@ export function createController({ client, store, directory, remote: startedRemo
       archiveSession: async (id) => { await client.setArchived(id, true) },
     },
   })
+
+  /**
+   * `ListSkills` and `ListCommands` into the store: the Skills view, the
+   * startup list's `[Skills]`, and the command menu's `/skill:*` rows read
+   * them (the Skills view's `r`).
+   */
+  async function readSkills(): Promise<SkillSummary[]> {
+    const [skills, commands] = await Promise.all([client.listSkills(), client.listCommands()])
+    store.setSkills(skills)
+    store.setBackendCommands(commands)
+    return skills
+  }
 
   async function refresh(): Promise<void> {
     const [sessions, interactions, models, agents, workflows, providers, commands, permissionModes, projects] = await Promise.all([
@@ -1123,6 +1136,12 @@ export function createController({ client, store, directory, remote: startedRemo
   }
 
   const rules = createRulesController({ store, client })
+  const skills = createSkillsController({
+    store,
+    readSkills: () => readSkills(),
+    fillInput: (text) => composer?.setText(text),
+    copyText: (text) => terminal?.copy(text) ?? false,
+  })
   const agentsView = createAgentsViewController({ store, client, openPicker, selectAgent: (agent) => selectAgent({ store, client, actions }, agent) })
   const revert = createRevertController({ store, client, composer: () => composer, openSession, refresh, openPicker })
   const resumer = createResumer({
@@ -1166,6 +1185,7 @@ export function createController({ client, store, directory, remote: startedRemo
     openBundles: () => bundles.open(),
     openRules: () => rules.open(),
     openAgents: () => agentsView.open(),
+    openSkills: (filter) => skills.open(filter),
     openProjectOverlay: () => openProjectOverlay(),
     copyText: (text) => terminal?.copy(text) ?? false,
     undo: () => revert.undo(),
@@ -1905,6 +1925,7 @@ export function createController({ client, store, directory, remote: startedRemo
     mcp.dispose()
     bundles.dispose()
     rules.dispose()
+    skills.dispose()
     agentsView.dispose()
     unsubscribeFocus?.()
     secret.clear()
@@ -1978,6 +1999,8 @@ export function createController({ client, store, directory, remote: startedRemo
     closeMcp: () => mcp.close(),
     rulesKey: (key: KeyLike) => rules.key(key),
     closeRules: () => rules.close(),
+    skillsKey: (key: KeyLike) => skills.key(key),
+    closeSkills: () => skills.close(),
     agentsKey: (key: KeyLike) => agentsView.key(key),
     closeAgents: () => agentsView.close(),
     /** One key / a paste while the concealed `/connect-remote` entry is open (components/Composer.tsx routes them). */
