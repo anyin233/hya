@@ -41,8 +41,6 @@ extensions:
       path: native/src/hashline/state.rs
     - id: native-15
       path: native/src/lib.rs
-    - id: native-16
-      path: native/src/lsp_path.rs
     - id: native-17
       path: native/src/lsp_post_edit.rs
     - id: native-18

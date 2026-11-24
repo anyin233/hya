@@ -35,7 +35,6 @@ pub mod handle;
 pub mod interaction;
 /// Subagent lifecycle requests (`report`, `archive`, `wait`) to the supervisor.
 pub mod lifecycle;
-mod lsp_path;
 mod lsp_plane;
 /// Team mailbox requests and the mailbox plane used by send/channel tools.
 pub mod mailbox;
@@ -46,6 +45,7 @@ pub mod native_bundle;
 /// Nested tool calls from inside a tool call.
 pub mod nested;
 mod output_cap;
+pub mod path;
 /// Allow/ask/deny permission plane: invocation policy, resource rules, and asks.
 pub mod permission;
 #[cfg(unix)]

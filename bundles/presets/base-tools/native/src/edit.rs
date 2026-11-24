@@ -11,9 +11,9 @@ use crate::hashline::{
     MutationBeginError, MutationText, MutationWriteError, PreparedEdit, append_bounded_notices,
     bound_output,
 };
-use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
 use crate::lsp_post_edit;
 use crate::read_media::{ReadFileKind, classify_file};
+use hya_tool::path::{absolutize, display_path, normalize, resolve_file};
 use hya_tool::{Action, Resource};
 use hya_tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
 

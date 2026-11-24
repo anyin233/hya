@@ -12,6 +12,7 @@ use std::io::{self, ErrorKind};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use hya_tool::path::{absolutize, normalize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const UTF8_BOM: &[u8; 3] = b"\xEF\xBB\xBF";
@@ -516,28 +517,7 @@ pub(super) async fn atomic_write(
 
 /// Convert a path to an absolute, lexically normalized candidate.
 fn normalize_absolute_path(path: &Path) -> PathBuf {
-    let absolute = crate::lsp_path::absolutize(path);
-    normalize_path(&absolute)
-}
-
-/// Normalize path components without allowing parent traversal above a root.
-fn normalize_path(path: &Path) -> PathBuf {
-    let absolute = path.is_absolute();
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
-            Component::RootDir => normalized.push(component.as_os_str()),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !normalized.pop() && !absolute {
-                    normalized.push(component.as_os_str());
-                }
-            }
-            Component::Normal(name) => normalized.push(name),
-        }
-    }
-    normalized
+    normalize(&absolutize(path))
 }
 
 /// Remove one leading UTF-8 BOM and report whether it was present.

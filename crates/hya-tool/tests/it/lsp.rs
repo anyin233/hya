@@ -165,6 +165,74 @@ async fn lsp_calls_provider_and_returns_open_code_result_shape() {
     assert_eq!(calls[0].character, 4);
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn dot_workdir_and_dot_file_reach_the_lsp_provider_as_current_directory() {
+    const CHILD_DIR: &str = "HYA_LSP_DOT_TEST_CHILD_DIR";
+    let Some(child_dir) = std::env::var_os(CHILD_DIR) else {
+        let dir = tempdir();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "lsp::dot_workdir_and_dot_file_reach_the_lsp_provider_as_current_directory",
+                "--nocapture",
+            ])
+            .current_dir(&dir)
+            .env(CHILD_DIR, &dir)
+            .output()
+            .unwrap();
+        if dir.exists() {
+            std::fs::remove_dir(dir).unwrap();
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed;"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    };
+
+    let tool = ToolRegistry::from_tool_families(&["hya/extended-tools"])
+        .get("lsp")
+        .unwrap();
+    // A removed cwd isolates the relative fallback without changing the test harness cwd.
+    std::fs::remove_dir(child_dir).unwrap();
+    assert!(std::env::current_dir().is_err());
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let lsp = LspPlane::new(Arc::new(FakeLsp {
+        available: true,
+        result: Vec::new(),
+        requests: requests.clone(),
+    }));
+    let dot = PathBuf::from(".");
+    lsp.workspace_symbols(&dot.join("."), "symbol".to_string())
+        .await
+        .unwrap();
+
+    let ctx = ctx_with(
+        vec![
+            allow(Action::Lsp, "*"),
+            allow(Action::ExternalDirectory, "*"),
+        ],
+        lsp,
+        dot.clone(),
+    );
+    tool.execute(
+        &ctx,
+        json!({"operation": "workspaceSymbol", "filePath": ".", "line": 1, "character": 1}),
+    )
+    .await
+    .unwrap();
+
+    let calls = requests.lock().await;
+    assert_eq!(calls.len(), 2);
+    for call in calls.iter() {
+        assert_eq!(call.file, dot);
+        assert_eq!(call.operation, LspOperation::WorkspaceSymbol);
+    }
+}
+
 #[tokio::test]
 async fn lsp_reports_no_server_when_no_provider_is_available() {
     // Given

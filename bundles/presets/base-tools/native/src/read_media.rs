@@ -5,7 +5,7 @@ use hya_tool::MAX_CODING_ATTACHMENT_BYTES;
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 
-use crate::lsp_path::display_path;
+use hya_tool::path::display_path;
 
 const SAMPLE_BYTES: usize = 4096;
 

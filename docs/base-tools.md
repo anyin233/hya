@@ -52,6 +52,16 @@ through the hidden `patch` alias dispatches to `apply_patch` for every model.
 `ask_user` is the canonical name for the requested `ask` function; `question` remains its hidden alias. The
 user-assigned `lsp` and `task` tools belong to the extended family.
 
+The LSP plane and native tool families share the Rust helpers in
+`hya_tool::path`. For example, `resolve_file(Path::new("."), ".")` returns
+`PathBuf::from(".")`. `resolve_file(&Path, &str) -> PathBuf` joins a relative
+input to the workdir and normalizes it. `normalize(&Path) -> PathBuf` removes
+dot and parent components lexically. `absolutize(&Path) -> PathBuf` joins a
+relative path to the process current directory when available.
+`display_path(&Path) -> String` renders a slash-separated path, and
+`file_uri(&Path) -> String` prefixes that spelling with `file://` for LSP.
+LSP calls use the absolute spelling of the resolved file or directory.
+
 `ask_user` asks structured questions through the interaction plane. For example,
 `{"questions":[{"question":"Ship?","header":"confirm","options":[{"label":"yes","description":"proceed"}]}]}`
 returns the selected labels in `metadata.answers`. If any question is cancelled

@@ -21,8 +21,6 @@ extensions:
       path: native/src/lsp.rs
     - id: native-lsp-description
       path: native/src/lsp.txt
-    - id: native-lsp-path
-      path: native/src/lsp_path.rs
     - id: native-plan
       path: native/src/plan.rs
     - id: native-search-agent

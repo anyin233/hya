@@ -7,7 +7,6 @@ use hya_tool::Tool;
 mod agents;
 mod archive;
 mod lsp;
-mod lsp_path;
 mod plan;
 mod project_activity;
 mod search_agent;
