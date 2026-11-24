@@ -1629,7 +1629,7 @@ pub fn load_configured_plugin_ids() -> Vec<String> {
 /// measured with.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ContextSettings {
-    /// Settings handed to the engine's compaction plane.
+    /// Compaction and terminal handoff values resolved from the shared config block.
     pub compaction: CompactionConfig,
     /// How window occupancy is measured.
     pub token_accounting: TokenAccountingMode,

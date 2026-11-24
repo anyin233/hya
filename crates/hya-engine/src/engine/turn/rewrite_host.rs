@@ -25,7 +25,7 @@ impl SessionEngine {
     /// the kept tail and the token-accounting mode.
     pub(in crate::engine) fn rewriter_config(&self) -> serde_json::Value {
         serde_json::json!({
-            "keep_recent": self.compaction.keep_recent,
+            "keep_recent": self.rewriter_keep_recent,
             "token_accounting": self.token_accounting.mode().as_str(),
         })
     }

@@ -80,7 +80,7 @@ impl SessionEngine {
         actor_claim: Option<&ActorClaim>,
         session: SessionId,
         purpose: hya_proto::UsagePurpose,
-        usage: &crate::compaction::UsageCollector,
+        usage: &crate::UsageCollector,
     ) {
         for (model, tokens) in usage.take() {
             let event = Event::UsageRecorded {

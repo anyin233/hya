@@ -168,7 +168,17 @@ writes the state document an archived subagent carries into its next episode
 the ended episode verbatim plus one trailing state-handoff prompt, capped by
 `summary_max_tokens`, and the call is billed to the session as
 `compaction` usage. It queues for the turn lease; admission errors propagate,
-while summarizer failures produce the degraded document.
+while summarizer failures produce the degraded document. The returned value
+contains `generation: u32`, `doc: String`, and `degraded: bool`.
+
+`hya-app` builds the model summarizer and passes `summary_max_tokens` as
+`TerminalHandoffOptions { max_output_tokens: u32 }` to
+`SessionEngine::with_terminal_handoff(Arc<dyn Summarizer>, TerminalHandoffOptions)`.
+It configures context reduction separately with
+`with_rewriter_keep_recent(usize)` and `with_token_accounting(TokenAccounting)`.
+For example, `compaction.summary_max_tokens: 8192` permits an 8192-token handoff.
+The Rust `with_compaction(Arc<dyn Summarizer>, CompactionConfig)` builder remains
+available for embedders that set the handoff cap and retained tail together.
 
 ## Source map
 
@@ -177,6 +187,6 @@ while summarizer failures produce the degraded document.
 | Pressure, extension order, kernel Rewrite, `/summarize` order | [`crates/hya-core/src/kernel/rewrite.rs`](../crates/hya-core/src/kernel/rewrite.rs) |
 | `shake`, `remote`, `ContextStatus` | [`bundles/internal/compaction/native/src/`](../bundles/internal/compaction/native/src/) (`ladder.rs`, `evict.rs`, `config.rs`) |
 | Rewrite context, native compaction and hook services, error mapping | [`crates/hya-engine/src/engine/turn/rewrite_host.rs`](../crates/hya-engine/src/engine/turn/rewrite_host.rs), [`harness.rs`](../crates/hya-engine/src/engine/turn/harness.rs), [`summary.rs`](../crates/hya-engine/src/engine/summary.rs) |
-| Settings, terminal handoff summarizer | [`crates/hya-engine/src/compaction.rs`](../crates/hya-engine/src/compaction.rs) |
+| Terminal handoff generation, options and summarizer | [`crates/hya-engine/src/engine/terminal_handoff.rs`](../crates/hya-engine/src/engine/terminal_handoff.rs) |
 | Config file/env resolution | [`crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs) |
 | Wire events and strategies | [`crates/hya-proto/src/event.rs`](../crates/hya-proto/src/event.rs) |

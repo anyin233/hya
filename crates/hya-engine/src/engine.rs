@@ -16,7 +16,7 @@ use tokio::sync::Notify;
 
 use crate::agent_catalog::AgentDefinition;
 use crate::bus::EventBus;
-use crate::compaction::{CompactionConfig, SummarizeOptions, Summarizer};
+use crate::compaction::CompactionConfig;
 use crate::error::CoreError;
 use crate::hooks::HookDispatcher;
 use crate::sidecar::SidecarEnvironment;
@@ -46,7 +46,6 @@ mod agent_binding;
 mod events;
 mod file_snapshot;
 mod fork;
-mod handoff;
 mod mailbox;
 mod member_control;
 mod members;
@@ -66,6 +65,8 @@ mod spawn_requests;
 mod steer;
 mod stream_round;
 mod summary;
+/// Model-backed terminal handoff documents for resident agents.
+pub mod terminal_handoff;
 mod text_complete;
 mod tool_error;
 mod turn;
@@ -88,6 +89,7 @@ pub use session_state::CreateSession;
 pub(crate) use session_state::projection_workdir;
 use session_state::session_workdir;
 pub use spawn_requests::{BoundSpawnRequest, BoundSpawnSender};
+use terminal_handoff::{SummarizeOptions, Summarizer, TerminalHandoffOptions};
 pub(crate) use turn::TurnRequestContext;
 pub use workflow_requests::{BoundWorkflowRequest, BoundWorkflowSender};
 
@@ -173,7 +175,8 @@ pub struct SessionEngine {
     lsp: LspPlane,
     bus: EventBus,
     summarizer: Option<Arc<dyn Summarizer>>,
-    compaction: CompactionConfig,
+    handoff_options: TerminalHandoffOptions,
+    rewriter_keep_recent: usize,
     token_accounting: TokenAccounting,
     /// Context-reduction extensions the kernel runs before its own Rewrite,
     /// before each round and on `/summarize`.
@@ -238,7 +241,8 @@ impl Clone for SessionEngine {
             lsp: self.lsp.clone(),
             bus: self.bus.clone(),
             summarizer: self.summarizer.clone(),
-            compaction: self.compaction,
+            handoff_options: self.handoff_options,
+            rewriter_keep_recent: self.rewriter_keep_recent,
             token_accounting: self.token_accounting.clone(),
             rewriters: Arc::clone(&self.rewriters),
             hooks: self.hooks.clone(),
@@ -316,7 +320,8 @@ impl SessionEngine {
             lsp,
             bus,
             summarizer: None,
-            compaction: CompactionConfig::default(),
+            handoff_options: TerminalHandoffOptions::default(),
+            rewriter_keep_recent: CompactionConfig::default().keep_recent,
             token_accounting: TokenAccounting::default(),
             rewriters: internal_rewriters(),
             hooks: None,
@@ -570,15 +575,41 @@ impl SessionEngine {
         self
     }
 
-    /// Enable compaction with a summarizer implementation and thresholds.
+    /// Set both the terminal handoff summarizer and rewriter retention.
+    ///
+    /// Use [`Self::with_terminal_handoff`] and [`Self::with_rewriter_keep_recent`]
+    /// to configure the two independently.
     #[must_use]
     pub fn with_compaction(
-        mut self,
+        self,
         summarizer: Arc<dyn Summarizer>,
         config: CompactionConfig,
     ) -> Self {
+        self.with_terminal_handoff(
+            summarizer,
+            TerminalHandoffOptions {
+                max_output_tokens: config.summary_max_tokens,
+            },
+        )
+        .with_rewriter_keep_recent(config.keep_recent)
+    }
+
+    /// Set the terminal handoff generator and its output budget.
+    #[must_use]
+    pub fn with_terminal_handoff(
+        mut self,
+        summarizer: Arc<dyn Summarizer>,
+        options: TerminalHandoffOptions,
+    ) -> Self {
         self.summarizer = Some(summarizer);
-        self.compaction = config;
+        self.handoff_options = options;
+        self
+    }
+
+    /// Keep tool outputs from this many recent messages when shake runs.
+    #[must_use]
+    pub fn with_rewriter_keep_recent(mut self, keep_recent: usize) -> Self {
+        self.rewriter_keep_recent = keep_recent;
         self
     }
 

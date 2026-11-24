@@ -39,7 +39,7 @@ pub mod catalog_scope;
 pub mod category;
 /// Trusted defaults and restrictive bundle policy for runtime channels.
 pub mod channel_policy;
-/// Compaction settings and the summarizer the `hya/compaction` bundle calls.
+/// Combined compaction configuration and legacy handoff exports.
 pub mod compaction;
 /// Goal-mode iteration driver, safety caps, and independent evaluators.
 pub mod completion;
@@ -105,15 +105,13 @@ pub use category::{
     resolve_dispatch_model,
 };
 pub use channel_policy::{AGENT_CHANNELS_PRESET_ID, ChannelPolicy};
-pub use compaction::{
-    CompactionConfig, ModelSummarizer, SummarizeOptions, Summarizer, UsageCollector,
-    handoff_request_messages,
-};
+pub use compaction::CompactionConfig;
 pub use completion::{GateOutcome, IterationGate, validate_goal_condition};
 pub use completion::{
     GoalEvaluator, IterationDriver, ModelGoalEvaluator, RunOutcome, SafetyCaps, Verdict, run_goal,
 };
 pub use effort::{AgentEffortSource, EffectiveEffort, EffortSource, agent_effort, resolve_effort};
+pub use engine::terminal_handoff;
 pub use engine::{
     AgentSpec, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest, BoundWorkflowSender,
     BundleRefresh, CatalogScopeCacheConfig, CreateSession, DRAIN_DEADLINE, ForkAt, ForkError,
@@ -152,6 +150,10 @@ pub use runtime_registry::{
 };
 pub use sidecar::{
     BoundSidecarFactory, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,
+};
+pub use terminal_handoff::{
+    ModelSummarizer, SummarizeOptions, Summarizer, TerminalHandoff, TerminalHandoffOptions,
+    UsageCollector, handoff_request_messages,
 };
 pub use tokens::{
     CalibratedTokenizer, TokenAccounting, TokenAccountingMode, TokenCount, TokenSource, Tokenizer,
