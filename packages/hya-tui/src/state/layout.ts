@@ -14,9 +14,10 @@ export const layoutBreakpoints = { sidebar: 150, projectsSidebar: 150 } as const
 export const sidebarMinColumns = 29
 
 /**
- * The right sidebar (Sessions, Todos, Context) needs `layoutBreakpoints.sidebar`
- * columns: below it it is always hidden and the top status line carries the
- * Context fields (state/contextFields.ts). At or above it, `closed` hides it.
+ * The right sidebar (Sessions, Todos, Context) of the workspace structure
+ * needs `layoutBreakpoints.sidebar` columns: below it it is always hidden and
+ * the status line below the input (state/statusline.ts) carries the model,
+ * mode, and context. At or above it, `closed` hides it.
  */
 export function sidebarVisible(mode: SidebarMode, columns: number): boolean {
   return columns >= layoutBreakpoints.sidebar && mode !== "closed"
@@ -29,7 +30,7 @@ export function toggledSidebar(mode: SidebarMode, columns: number): SidebarMode 
 }
 
 /** Status line when the sidebar cannot be shown at the current width. */
-export const sidebarTooNarrowNotice = `Sidebar needs ${layoutBreakpoints.sidebar}+ columns · the top status line shows its Context`
+export const sidebarTooNarrowNotice = `Sidebar needs ${layoutBreakpoints.sidebar}+ columns · the status line shows its Context`
 
 /**
  * The left Projects sidebar (docs/tui.md "Projects"): shown automatically

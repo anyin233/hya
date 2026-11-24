@@ -5,6 +5,9 @@
 import type { Tui } from "./harness"
 import { expect, hyaTui, test, wideViewport as wide } from "./hya"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 const sidebarMinColumns = 29
 
 async function cellPoint(term: Tui, row: number, col: number): Promise<{ x: number; y: number }> {

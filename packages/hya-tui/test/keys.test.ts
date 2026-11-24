@@ -54,7 +54,7 @@ test("every binding is documented and reachable without a browser-reserved short
     key("pageup"), key("pagedown"), key("home"), key("end"),
     key("escape"), key("c", { ctrl: true }), key("d", { ctrl: true }), key("tab", { shift: true, sequence: "\x1b[Z" }),
     key("?", { shift: true, sequence: "?" }), key("x", { ctrl: true }), key("f4"),
-    key("p", { ctrl: true }), key("/", { sequence: "/" }),
+    key("p", { ctrl: true }), key("/", { sequence: "/" }), key("v", { ctrl: true }),
     key("left", { meta: true }), key("right", { meta: true }), key("up", { meta: true }), key("down", { meta: true }),
   ]
   const reachable = new Set(probes.filter((probe) => !browserReserved.some((reserved) => reserved(probe)))
@@ -63,7 +63,7 @@ test("every binding is documented and reachable without a browser-reserved short
   reachable.add(resolveBinding(key("e", { ctrl: true }), { chord: "ctrl+x" }))
   for (const name of ["u", "r", "f"]) reachable.add(resolveBinding(key(name, { sequence: name }), { chord: "ctrl+x" }))
   expect([...new Set(keyBindings.map((binding) => binding.action))].sort())
-    .toEqual(["chord", "complete", "eof", "focusPaneDown", "focusPaneLeft", "focusPaneRight", "focusPaneUp", "help", "interrupt", "openCommands", "pageDown", "pageUp", "quit", "scrollBottom", "scrollTop"])
+    .toEqual(["chord", "complete", "eof", "focusPaneDown", "focusPaneLeft", "focusPaneRight", "focusPaneUp", "help", "interrupt", "openCommands", "pageDown", "pageUp", "pasteClipboard", "quit", "scrollBottom", "scrollTop"])
   for (const binding of keyBindings) expect(reachable.has(binding.action)).toBe(true)
 })
 

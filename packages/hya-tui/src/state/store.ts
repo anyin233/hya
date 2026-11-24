@@ -37,6 +37,7 @@ import type {
   ProviderSummary,
   SavedRule,
   SessionInfo,
+  SkillSummary,
   TodoItem,
   TokenUsage,
   VcsStatus,
@@ -49,6 +50,7 @@ import type { AgentsViewState } from "./agentsView"
 import type { DiffViewState } from "./diff"
 import { toggledProjectsSidebar, toggledSidebar, type SidebarMode } from "./layout"
 import { paneNodes, paneLeaves, defaultPaneLayout, normalizePaneFocus, type PaneLayout } from "./panes"
+import { builtinPreset, type TuiStructure } from "../config/presets"
 import { foldMember, foldMemberLifecycle, type ChildState } from "./members"
 import type { McpViewState } from "./mcp"
 import { mergeTranscript, TranscriptOverlay, type OverlayEffect } from "./overlay"
@@ -107,6 +109,21 @@ export interface AppState {
   readonly subagentSelection: string | undefined
   /** Local editable workspace inside the central panel; one passive conversation viewer and one selectable message editor. */
   readonly paneLayout: PaneLayout
+  /**
+   * The component structure in effect (`tui.toml`, ADR-0036; app/structure.ts).
+   * The store starts in the `workspace` structure that matches
+   * `defaultPaneLayout()`; app/run.tsx applies the configured one before the
+   * first frame.
+   */
+  readonly structure: TuiStructure
+  /** Lines at the start of the transcript that outlive session switches: `tui.toml` warnings and one-time notices. */
+  readonly startupNotices: readonly string[]
+  /** `Bootstrap.skills`, for the startup list's `[Skills]` (state/startup.ts). */
+  readonly skills: readonly SkillSummary[]
+  /** `Bootstrap.contextFiles`, the startup list's `[Context]`; `undefined` before the bootstrap. */
+  readonly contextFiles: NonNullable<Bootstrap["contextFiles"]> | undefined
+  /** The startup list of what was loaded has its data: MCP settled and bundles listed (app/controller.ts `loadStartupResources`). */
+  readonly startupReady: boolean
   readonly apiOutput: string
   readonly status: string
   /** The full-screen Provider View (`/key`, state/providers.ts), while open. */
@@ -330,6 +347,11 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     subagentsShowArchived: false,
     subagentSelection: undefined,
     paneLayout: defaultPaneLayout(),
+    structure: builtinPreset("workspace"),
+    startupNotices: [],
+    skills: [],
+    contextFiles: undefined,
+    startupReady: false,
     apiOutput: "Use /api METHOD /v1/path [JSON object] to call any HTTP/JSON endpoint.\n\n" + operations(),
     status: startupStatus,
     providerView: undefined,
@@ -544,6 +566,9 @@ export function createAppStore() {
         set("interactions", mergeInteractions(bootstrap.interactions ?? [], liveAsks, answered))
         set("serverVersion", bootstrap.location?.version ?? "")
         set("serverPid", bootstrap.location?.pid || undefined)
+        if (bootstrap.skills) set("skills", bootstrap.skills)
+        // protojson omits an empty list, so an older backend and an empty chain look alike: both list none.
+        set("contextFiles", bootstrap.contextFiles ?? [])
       })
     },
 
@@ -833,6 +858,11 @@ export function createAppStore() {
     },
     selectSubagent(id: string | undefined): void { set("subagentSelection", id) },
     setPaneLayout(layout: PaneLayout): void { set("paneLayout", normalizePaneFocus(layout)) },
+    setStructure(structure: TuiStructure): void { set("structure", structure) },
+    setStartupNotices(lines: readonly string[]): void { set("startupNotices", lines) },
+    setStartupReady(ready: boolean): void { set("startupReady", ready) },
+    /** A muted notice at the end of the transcript (`/resources`); gone on a session switch. */
+    addTranscriptNotice(text: string): void { addNotice(text, `notice-${++noticeIds}`) },
     setStatus(text: string): void { set("status", text) },
     setApiOutput(text: string): void { set("apiOutput", text) },
 

@@ -12,6 +12,12 @@ import {
   terminalBackground,
   toolColors,
   type ThemeDefinition,
+  autoThemeFor,
+  resolveThemeSetting,
+  setTerminalThemeMode,
+  setThemeSetting,
+  terminalModeFromEnv,
+  themeSetting,
 } from "../src/theme"
 
 afterEach(() => { setTheme(defaultThemeName) })
@@ -40,7 +46,7 @@ test("built-ins: hya, one light theme, and two more dark themes, each defining e
   for (const theme of list) {
     expect(theme.label.length).toBeGreaterThan(0)
     expect(theme.description.length).toBeGreaterThan(0)
-    for (const group of ["colors", "toolColors", "diffColors", "syntaxColors"] as const) {
+    for (const group of ["colors", "toolColors", "diffColors", "syntaxColors", "attachColors"] as const) {
       expect(Object.keys(theme[group]).sort()).toEqual(Object.keys(reference[group]).sort())
       for (const [key, value] of Object.entries(theme[group])) {
         if (group === "colors" && (key === "bg" || key === "panel")) expect(value).toMatchObject({ intent: "default" })
@@ -109,4 +115,59 @@ test("every theme reserves focus for navigation and keeps status and structure d
     expect(styles["markup.list"]).toEqual({ fg: ui.fg })
     expect(styles["markup.list.checked"]).toEqual({ fg: ui.success })
   }
+})
+
+/** WCAG relative-luminance contrast of two `#rrggbb` colors. */
+function contrast(a: string, b: string): number {
+  const luminance = (hex: string) => {
+    const [r, g, bl] = [1, 3, 5].map((at) => parseInt(hex.slice(at, at + 2), 16) / 255).map((v) => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * bl!
+  }
+  const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+  return (high! + 0.05) / (low! + 0.05)
+}
+
+test("text stays readable on the terminal backgrounds each theme is for; borders stay visible", () => {
+  // Typical terminal backgrounds: pure, a common gray, and a tinted one.
+  const backgrounds = { light: ["#ffffff", "#f5f5f5", "#fdf6e3"], dark: ["#000000", "#1e1e1e", "#282c34"] }
+  for (const theme of Object.values(themes) as ThemeDefinition[]) {
+    for (const bg of backgrounds[theme.kind]) {
+      for (const role of ["fg", "muted", "focus", "heading", "success", "error", "warning"] as const) {
+        expect({ theme: theme.name, role, bg, ok: contrast(theme.colors[role] as string, bg) >= 4.5 }).toEqual({ theme: theme.name, role, bg, ok: true })
+      }
+      for (const [role, color] of Object.entries(theme.attachColors)) {
+        expect({ theme: theme.name, role, bg, ok: contrast(color, bg) >= 4.5 }).toEqual({ theme: theme.name, role, bg, ok: true })
+      }
+    }
+    if (theme.kind === "light") for (const bg of backgrounds.light.slice(0, 2)) expect(contrast(theme.colors.border, bg)).toBeGreaterThanOrEqual(3)
+  }
+})
+
+test("auto follows the terminal background; COLORFGBG is the first guess; an explicit theme stays", () => {
+  expect(terminalModeFromEnv({ COLORFGBG: "0;15" })).toBe("light")
+  expect(terminalModeFromEnv({ COLORFGBG: "0;default;7" })).toBe("light")
+  expect(terminalModeFromEnv({ COLORFGBG: "15;0" })).toBe("dark")
+  expect(terminalModeFromEnv({ COLORFGBG: "15" })).toBeNull()
+  expect(terminalModeFromEnv({})).toBeNull()
+  expect(autoThemeFor("light")).toBe("light")
+  expect(autoThemeFor("dark")).toBe("hya")
+  expect(autoThemeFor(null)).toBe("hya")
+  try {
+    expect(setThemeSetting("auto")).toBe(true)
+    setTerminalThemeMode("light")
+    expect(themeName()).toBe("light")
+    expect(themeSetting()).toBe("auto")
+    setTerminalThemeMode("dark")
+    expect(themeName()).toBe("hya")
+    expect(setThemeSetting("ember")).toBe(true)
+    setTerminalThemeMode("light")
+    expect(themeName()).toBe("ember")
+    expect(setThemeSetting("no-such-theme")).toBe(false)
+    expect(themeSetting()).toBe("ember")
+    expect(resolveThemeSetting("auto")).toBe("light")
+  } finally {
+    setTerminalThemeMode(null)
+    setThemeSetting("auto")
+  }
+  expect(themeName()).toBe("hya")
 })

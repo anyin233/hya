@@ -8,7 +8,8 @@
  * `path`, so keeping it costs nothing. A pasted image path (terminals paste a
  * dragged file as its path, quoted or with escaped spaces) is turned into an
  * `@path ` mention instead of being inserted as raw text, so it goes through
- * the same resolution.
+ * the same resolution. A path with white space is written quoted,
+ * `@"shot 1.png"` (`quoteMentionPath`).
  */
 
 /** One image the server accepts (docs/protocol/README.md limits). */
@@ -42,16 +43,81 @@ export function attachmentName(path: string): string {
 }
 
 /**
- * Every `@path` mention in submitted text, in appearance order: an `@` at the
- * start of the text or after white space, then a run of non-space
- * characters. Mirrors `mentionAt`/`insertMention` (composer/mention.ts),
- * which is what puts these tokens in the text in the first place.
+ * One `@` mention: an `@` at the start of the text or after white space, then
+ * either a double-quoted path (`@"my shot.png"`, `\"` and `\\` escaped) or a run
+ * of non-space characters.
+ */
+const mentionPattern = /(?:^|\s)@("(?:[^"\\\n]|\\.)*"|\S+)/g
+
+/** A mention's path: a quoted token is unquoted and unescaped; a bare one is as typed. */
+function mentionTokenPath(token: string): string {
+  return token.length > 1 && token.startsWith('"') && token.endsWith('"') ? token.slice(1, -1).replace(/\\(.)/g, "$1") : token
+}
+
+/**
+ * A path as it is written after `@`: bare when it has no white space, quote,
+ * or backslash, else double-quoted with `"` and `\` escaped
+ * (`@"shots/shot 1.png"`), so `mentionPaths` reads the whole path back.
+ */
+export function quoteMentionPath(path: string): string {
+  return /[\s"'\\]/.test(path) ? `"${path.replace(/["\\]/g, "\\$&")}"` : path
+}
+
+/**
+ * Every `@path` mention in submitted text, in appearance order (see
+ * `mentionPattern`). Mirrors `mentionAt`/`insertMention`
+ * (composer/mention.ts), which is what puts these tokens in the text in the
+ * first place.
  */
 export function mentionPaths(text: string): string[] {
   const paths: string[] = []
-  const pattern = /(?:^|\s)@(\S+)/g
-  for (let match = pattern.exec(text); match; match = pattern.exec(text)) paths.push(match[1]!)
+  const pattern = new RegExp(mentionPattern)
+  for (let match = pattern.exec(text); match; match = pattern.exec(text)) paths.push(mentionTokenPath(match[1]!))
   return paths
+}
+
+/** A bare mention that may be an image path cut at a space (`spacedImageMentions`). */
+export interface SpacedImageMention {
+  /** The path as the mention was read (`/tmp/shot`). */
+  mention: string
+  /** The joined path that ends in an image extension (`/tmp/shot 1.png`). */
+  path: string
+}
+
+/**
+ * Bare mentions that are probably an image path cut at a space:
+ * `@/tmp/shot 1.png` reads as the mention `/tmp/shot` followed by the word
+ * `1.png`. For every bare mention that is not itself an image path, the
+ * candidate is the mention joined with the following words on the same line
+ * (up to `maxWords`, stopping at another `@` word) up to the first that makes
+ * it end in an image extension. The caller checks whether the candidate
+ * exists and refuses to send instead of silently attaching nothing.
+ */
+export function spacedImageMentions(text: string, maxWords = 4): SpacedImageMention[] {
+  const found: SpacedImageMention[] = []
+  const pattern = /(?:^|\s)@(\S+)/g
+  for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+    const mention = match[1]!
+    if (mention.startsWith('"') || isImagePath(mention)) continue
+    let rest = text.slice(match.index + match[0].length).split("\n", 1)[0]!
+    let joined = mention
+    for (let count = 0; count < maxWords; count++) {
+      const next = /^( +)(\S+)/.exec(rest)
+      if (!next || next[2]!.startsWith("@")) break
+      joined += next[1]! + next[2]!
+      rest = rest.slice(next[0].length)
+      if (isImagePath(joined)) {
+        found.push({ mention, path: joined })
+        break
+      }
+    }
+  }
+  return found
+}
+
+/** The composer row and send refusal for an image path cut at a space. */
+export function spacedImageError(path: string): string {
+  return `has a space, so the mention stops before it; write @${quoteMentionPath(path)}`
 }
 
 /** Image-file mentions in `text`, first occurrence order, de-duplicated. */

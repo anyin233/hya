@@ -10,6 +10,9 @@ import { join } from "node:path"
 import type { Tui } from "./harness"
 import { api, createSession, expect, expectStatus, statusSessionId, hyaTui, test, textStep, tuiMain } from "./hya"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 const narrow = { width: 690, height: 640 }
 const wide = { width: 1500, height: 640 }
 

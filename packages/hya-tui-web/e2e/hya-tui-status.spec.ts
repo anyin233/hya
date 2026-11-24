@@ -6,6 +6,9 @@ import type { Tui } from "./harness"
 import { createSession, expect, hyaTui, initGitRepo, showStatusView, statusSessionId, test, textStep, toolStep, toolsStep, wideViewport } from "./hya"
 import { startProxy } from "./proxy"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 const spinner = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/
 const colors = { fg: "#e8edf3", muted: "#9caab9", warning: "#e5c07b", error: "#f07878" }
 
@@ -163,12 +166,15 @@ test.describe("live todo panel", () => {
     await term.waitForText("Messages 2")
     expect(await term.find("Todos 0/1")).toBeNull()
 
-    // Hiding the sidebar removes its metadata without adding conversation headings.
+    // Hiding the sidebar removes its metadata without adding conversation headings; the dock above
+    // the input takes over the open todo (ADR-0036 deduplication).
     await term.press("Control+x")
     await term.type("/sidebar")
     await term.press("Enter")
     await expect.poll(() => term.find("Todos")).toBeNull()
-    expect(await term.find("○ write tests")).toBeNull()
+    const lines = await term.lines()
+    const input = lines.findLastIndex((line) => line.includes("Message, !shell"))
+    expect(lines[input - 2]).toMatch(/ ○ write tests/)
   })
 })
 

@@ -1,5 +1,8 @@
 import { expect, hyaTui, test } from "./hya"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 for (const width of [1100, 700]) {
   test(`commands float above the entire workspace and preserve drafts across resize (${width}px)`, async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: { width, height: 640 } })

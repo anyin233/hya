@@ -1,6 +1,9 @@
 import type { Tui } from "./harness"
 import { expect, hyaTui, statusSessionId, test, wideViewport } from "./hya"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 async function rightClick(term: Tui, text: string) {
   await term.waitForText(text)
   const at = (await term.find(text))!

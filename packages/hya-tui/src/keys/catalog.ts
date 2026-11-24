@@ -49,6 +49,7 @@ const actionInfo: Record<KeyAction, ActionInfo> = {
   redo: { scope: "conversation", command: "/redo" },
   fork: { scope: "conversation", command: "/fork" },
   reviewPending: { scope: "workspace", command: "/pending" },
+  pasteClipboard: { scope: "conversation", command: "/paste" },
 }
 
 const contexts: Record<BindingScope, string> = {

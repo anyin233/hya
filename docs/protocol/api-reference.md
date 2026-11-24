@@ -1549,7 +1549,7 @@ One invocable skill.
 |---|---|---|
 | `name` (1) | `string` | Skill name used with `/skill` and the skill plane. |
 | `description` (2) | `string` | One-line description of what the skill does. |
-| `source` (3) | `string` | Where the skill was discovered (`builtin`, `bundle`, `project`, ...). |
+| `source` (3) | `string` | Where the skill was discovered: `builtin` (compiled in), `bundle` (a runtime resource), `project` (under the directory or a Project root), or `user` (any other file, such as `~/.codex/skills`). |
 | `content` (4) | `string` | Full skill markdown body (frontmatter + content). |
 | `location` (5) | `string` | Where the skill file lives (`<built-in>` for compiled-in skills). |
 
@@ -2625,6 +2625,17 @@ One-round-trip startup snapshot for frontends.
 | `saved_rules` (10) | `repeated SavedRule` | Saved permission rules. |
 | `formatter_available` (11) | `bool` | Formatter availability advertised to the frontend. |
 | `sessions_cursor` (12) | `string` | Cursor for the session list; fetch sessions with `Session.List`. |
+| `context_files` (13) | `repeated ContextFile` | `AGENTS.md` files a full-mode session in this directory reads into its initial context, parent first (from the directory up to `$HOME`). Empty without a directory scope and with `hya serve --pure`. |
+
+### `ContextFile`
+
+One context file (`AGENTS.md`) of `Bootstrap.context_files`.
+
+| Field | Type | Description |
+|---|---|---|
+| `path` (1) | `string` | Absolute path on the backend machine. |
+| `scope` (2) | `string` | `project` (in the directory itself), `parent` (an ancestor directory), or `user` (`$HOME/AGENTS.md`). |
+| `bytes` (3) | `uint64` | File size in bytes. |
 
 ### `ProjectInfo`
 
@@ -2890,6 +2901,36 @@ Client-to-server terminal frame.
 | `input` (1) | `oneof `frame`: bytes` | Terminal input bytes (keystrokes, paste). |
 | `resize` (2) | `oneof `frame`: PtyResize` | Terminal resize. |
 | `ping` (3) | `oneof `frame`: bool` | Liveness ping. |
+| `upload` (5) | `oneof `frame`: PtyUpload` | A file pasted or dropped into a WebUI tab (ADR-0037). The WebUI host stores it and answers `uploaded` with its path or `upload_failed`; `hya serve` PTY sessions always answer `upload_failed`. |
+
+### `PtyUpload`
+
+One file uploaded from the browser.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` (1) | `string` | Client-chosen id, echoed in the answer. |
+| `name` (2) | `string` | File name as the browser reported it; the host sanitizes it. |
+| `mime` (3) | `string` | MIME type the browser reported; may be empty. |
+| `data` (4) | `bytes` | File bytes. |
+
+### `PtyUploaded`
+
+An upload stored on the host.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` (1) | `string` | The `PtyUpload.id` it answers. |
+| `path` (2) | `string` | Absolute path of the stored file on the host machine. |
+
+### `PtyUploadFailed`
+
+An upload the host refused.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` (1) | `string` | The `PtyUpload.id` it answers. |
+| `reason` (2) | `string` | Why, for the user. |
 
 ### `PtyAttach`
 
@@ -2918,6 +2959,8 @@ Server-to-client terminal frame.
 | `output` (1) | `oneof `frame`: bytes` | Frame payload; exactly one kind is set. Terminal output bytes. |
 | `exit` (2) | `oneof `frame`: int32` | Session exit with the shell's exit code. |
 | `pong` (3) | `oneof `frame`: bool` | Liveness pong. |
+| `uploaded` (4) | `oneof `frame`: PtyUploaded` | An upload was stored (answer to `PtyClientFrame.upload`). |
+| `upload_failed` (5) | `oneof `frame`: PtyUploadFailed` | An upload was refused. |
 
 ### `ConnectRelayRequest`
 

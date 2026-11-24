@@ -11,7 +11,7 @@ import { modelReference } from "../src/state/format"
 import { defaultPaneLayout, closePane, paneRects, paneNodes, paneLeaves, type Rect } from "../src/state/panes"
 import { sidebarTooNarrowNotice } from "../src/state/layout"
 import { createPicker, pickerKey, type PickerSpec } from "../src/state/picker"
-import { colors, defaultThemeName, setTheme, themeName, themes } from "../src/theme"
+import { colors, defaultThemeName, setTheme, setThemeSetting, themeName, themes } from "../src/theme"
 afterEach(() => setCustomKeybindings({}))
 
 function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
@@ -629,8 +629,9 @@ test("/theme opens a picker of the built-in themes with live preview; Enter pers
     await run("/theme")
     const picker = pickers.at(-1)!
     expect(picker.title).toBe("Theme")
-    expect(picker.rows.map((row) => row.id)).toEqual(Object.keys(themes))
-    expect(picker.rows.find((row) => row.current)?.id).toBe("hya")
+    expect(picker.rows.map((row) => row.id)).toEqual(["auto", ...Object.keys(themes)])
+    // No saved theme: Auto (following the terminal background) is the setting in effect.
+    expect(picker.rows.find((row) => row.current)?.id).toBe("auto")
     expect(picker.rows.find((row) => row.id === "light")?.tag).toBe("light")
 
     // Moving the highlight previews; Esc (cancel) restores the theme in effect before.
@@ -654,6 +655,7 @@ test("/theme opens a picker of the built-in themes with live preview; Enter pers
     await run("/theme")
     expect(pickers.at(-1)!.rows.find((row) => row.current)?.id).toBe("light")
   } finally {
+    setThemeSetting("auto")
     setTheme(defaultThemeName)
   }
 })
@@ -1063,4 +1065,41 @@ test("/sessions disables deletion of subagents before confirmation", async () =>
   const rootOutcome = pickerKey(picker, { name: "d", ctrl: true, meta: false, shift: false, sequence: "\x04" })
   expect(rootOutcome.type).toBe("update")
   if (rootOutcome.type === "update") expect(rootOutcome.state.mode).toBe("confirm")
+})
+
+test("single-column presets: /layout edits are refused, /set and /sidebar switch the structure for the session", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const { createStructureController } = await import("../src/app/structure")
+  const dir = mkdtempSync(join(tmpdir(), "tui-commands-"))
+  try {
+    const h = harness()
+    h.actions.structure = createStructureController({ store: h.store, path: join(dir, "tui.toml") })
+    h.store.setColumns(190)
+    expect(h.store.state.structure.sidebar.enabled).toBe(false)
+    await expect(h.run("/layout split left jobs")).rejects.toThrow("belongs to the workspace preset")
+    await expect(h.run("/layout reset")).rejects.toThrow("belongs to the workspace preset")
+    await h.run("/layout show")
+    await h.run("/layout focus pane-1")
+    await h.run("/sidebar on")
+    expect(h.store.state.structure.sidebar.enabled).toBe(true)
+    expect(paneLeaves(h.store.state.paneLayout.root).some((pane) => pane.kind === "sessions")).toBe(true)
+    await h.run("/set sidebar off")
+    expect(h.store.state.structure.sidebar.enabled).toBe(false)
+    await h.run("/projects-sidebar on")
+    expect(h.store.state.structure.sidebar.enabled).toBe(true)
+    expect(h.store.state.projectsSidebar).toBe("open")
+    await h.run("/set preset minimal")
+    expect(h.store.state.structure.statusline.enabled).toBe(false)
+    await expect(h.run("/set preset nope")).rejects.toThrow("Unknown preset nope")
+    await expect(h.run("/set colour on")).rejects.toThrow("Usage: /set")
+    await h.run("/config")
+    expect(h.store.state.view).toBe("config")
+    expect(h.store.state.statusText).toMatch(/Preset {4}minimal \(this session\)/)
+    expect(h.registry.complete("/set pre", h.store.completionContext())).toEqual(["/set preset"])
+    expect(h.registry.complete("/set preset w", { ...h.store.completionContext(), presets: h.actions.structure.presets() })).toEqual(["/set preset workspace"])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

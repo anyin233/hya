@@ -2,12 +2,16 @@ import { extensionManager, type HookTree } from "../extensions/manager"
 import { RenderTree } from "../extensions/renderTree"
 import type { RenderNode } from "../extensions/wire"
 import type { BoxRenderable, KeyEvent, PasteEvent, TextareaRenderable } from "@opentui/core"
-import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
 import { readOnlyStatus } from "../app/controller"
 import { historyEntry } from "../bridge"
 import { secretMask } from "../state/format"
-import { attachmentLabel, imageMentionPaths, pastedImagePath, type AttachmentPreview } from "../composer/attachments"
+import { imageMentionPaths, spacedImageMentions, type AttachmentPreview } from "../composer/attachments"
+import { chipRows, maxAttachmentRows, type ChipRow } from "../composer/chipRows"
+import { foldsPaste, sanitizePaste } from "../composer/chips"
+import { pastedPaths } from "../composer/paths"
+import { attachColors } from "../theme"
 import { escapeAction } from "../composer/escape"
 import { InputHistory } from "../composer/history"
 import { insertMention, mentionAt, type MentionToken } from "../composer/mention"
@@ -17,6 +21,8 @@ import { initialVimState, vimKey, type VimResult } from "../composer/vim"
 import { composerKeyBindings, resolveBinding } from "../keys/bindings"
 import { isKeyDisabled, resolveCommandBinding } from "../keys/custom"
 import { layoutBreakpoints, projectsSidebarVisible, sidebarTooNarrowNotice } from "../state/layout"
+import { bandRule, borderInfoText, statusLineShown } from "../state/statusline"
+import { StatusLine } from "./StatusLine"
 import { paneLeaves } from "../state/panes"
 import { subagentsWorking } from "../state/subagents"
 import { focusedPane, keyboardOwner } from "../state/focus"
@@ -80,6 +86,13 @@ interface FileMenu {
  */
 function BaseComposer(props: { width: number; decorationRows?: () => number }) {
   const { store, controller, ui } = useApp()
+  /** `composer.style = "band"` (ADR-0036 `dock`): no box; a status band or rule above a `╰─` input line. */
+  const band = () => store.state.structure.composer.style === "band"
+  /** `composer.border_info` (ADR-0036; the minimal preset's model and mode) on the input's top border. */
+  const borderInfo = () => {
+    const segments = store.state.structure.composer.border_info
+    return segments.length ? borderInfoText(store.state, segments, Math.max(0, Math.floor(props.width) - 4)) || undefined : undefined
+  }
   const composerFocused = () => keyboardOwner(store.state, ui.command?.active() ?? false)
     === paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "composer")?.id
   let editor: TextareaRenderable | undefined
@@ -88,6 +101,12 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
   const [menu, setMenu] = createSignal<FileMenu | undefined>()
   /** Pending `@path` image attachments of the current text (composer/attachments.ts), shown above the input; an `error` entry blocks submit. */
   const [attachments, setAttachments] = createSignal<AttachmentPreview[]>([])
+  /** Why a pasted path stayed text (app/paste.ts); cleared by the next edit after it. */
+  const [pasteNotice, setPasteNotice] = createSignal<string | undefined>()
+  /** A paste still resolving paths (file reads): Enter waits for it, so the chip is sent. */
+  let pendingPaste: Promise<void> | undefined
+  /** Chips and pending `@path` images, one row each, at most `maxAttachmentRows` (+N more). */
+  const rowsAbove = createMemo((): ChipRow[] => chipRows(controller.chips.present(value()), attachments(), maxAttachmentRows))
   const history = ui.composerHistory ??= new InputHistory()
   const quitGuard = createQuitGuard()
   /**
@@ -138,7 +157,7 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
   /** Refresh the pending-attachment row for the current text (debounced like `@file` lookups). */
   function updateAttachments(text: string): void {
     if (attachmentTimer) clearTimeout(attachmentTimer)
-    if (!imageMentionPaths(text).length) {
+    if (!imageMentionPaths(text).length && !spacedImageMentions(text).length) {
       attachmentTicket++
       setAttachments([])
       return
@@ -228,6 +247,7 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
   function sync(): void {
     if (!editor) return
     const text = editor.plainText
+    if (pasteNotice() && !pendingPaste && text !== value()) setPasteNotice(undefined)
     setValue(text)
     store.setDraft(text.length > 0)
     ui.composerInput = { text, cursor: editor.cursorOffset }
@@ -242,6 +262,11 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
 
   function submit(): void {
     if (!editor || overlayViewOpen()) return
+    // A paste and Enter in one read: send once the paste's chips are in the input.
+    if (pendingPaste) {
+      void pendingPaste.then(submit)
+      return
+    }
     const text = editor.plainText
     if (!text.trim()) return
     if (readOnly()) {
@@ -322,6 +347,10 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
     if (store.state.projectsFocus) {
       store.setProjectsFocus(false)
       store.setStatus("Projects sidebar unfocused · Alt+Arrow focuses panes")
+    } else if (!store.state.structure.sidebar.enabled) {
+      // A single-column preset: show the workspace for this session, then focus Projects.
+      controller.focusProjects()
+      store.setStatus("Projects sidebar shown, focused · /set sidebar off returns to the single column")
     } else {
       const projects = paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "projects")
       if (!projects) {
@@ -531,6 +560,17 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
         return
       }
     }
+    // Backspace right after a chip's token, or Delete right before one, removes the whole token.
+    if (editor && !key.ctrl && !key.meta && !key.shift && (key.name === "backspace" || key.name === "delete")) {
+      const text = editor.plainText
+      const span = key.name === "backspace" ? controller.chips.tokenEndingAt(text, editor.cursorOffset) : controller.chips.tokenStartingAt(text, editor.cursorOffset)
+      if (span) {
+        consume()
+        editor.replaceText(text.slice(0, span.start) + text.slice(span.end))
+        editor.cursorOffset = span.start
+        return
+      }
+    }
     if (arrow(key, consume)) return
     // The editor's text, not the `value()` mirror: it can lag one render behind fast typing (`a?` must type `?`).
     const action = resolveBinding(key, { composerEmpty: !(editor?.plainText ?? value()) })
@@ -593,12 +633,18 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
         return
       case "toggleSidebar":
         consume()
-        if (store.state.columns < layoutBreakpoints.sidebar) store.setStatus(sidebarTooNarrowNotice)
+        // A single-column preset turns the sidebar component on first (`/sidebar on`, ADR-0036).
+        if (!store.state.structure.sidebar.enabled) void controller.submit("/sidebar on", "command")
+        else if (store.state.columns < layoutBreakpoints.sidebar) store.setStatus(sidebarTooNarrowNotice)
         else store.toggleSidebar()
         return
       case "toggleProjectsCapture":
         consume()
         toggleProjectsFocus()
+        return
+      case "pasteClipboard":
+        consume()
+        if (!readOnly()) void pasteClipboard(false)
         return
       case "toggleThinking":
         consume()
@@ -671,34 +717,103 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
     if (pane) ui.paneInputs?.get(pane.id)?.onPaste?.(event)
   }
 
+  /** Insert `text` at the cursor, with one space after it unless one follows already. */
+  function insertAtCursor(text: string): void {
+    if (!editor || !text) return
+    const after = editor.plainText.slice(editor.cursorOffset, editor.cursorOffset + 1)
+    editor.insertText(/^\s/.test(after) && text.endsWith(" ") ? text.slice(0, -1) : text)
+  }
+
+  /**
+   * A paste into the message input (docs/tui.md "Paste and attachments"):
+   * paths become chips or `@path` mentions (app/paste.ts), a long text a paste
+   * chip (`[composer.paste]`), anything else is inserted cleaned.
+   */
   const onEditorPaste = (event: PasteEvent) => {
-    const cleaned = new TextDecoder().decode(event.bytes).replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\r\n?/g, "\n")
-    // A terminal pastes a file dragged into the window as its path (quoted or
-    // escaped when it has spaces): turn it into an `@path ` mention instead
-    // of raw text when the path exists, so it resolves like a typed mention.
-    const candidate = pastedImagePath(cleaned)
-    if (candidate && editor) {
-      const cursor = editor.cursorOffset
-      const token: MentionToken = { start: cursor, end: cursor, query: "" }
-      void controller.fileExists(candidate).then((exists) => {
-        if (!editor) return
-        if (exists) {
-          const next = insertMention(editor.plainText, token, candidate)
-          replace(next.text, next.cursor)
-        } else {
-          editor.insertText(cleaned)
-        }
-      })
+    const cleaned = sanitizePaste(new TextDecoder().decode(event.bytes))
+    if (!editor) return
+    // An empty bracketed paste: a terminal that had only an image to paste (macOS). Read the clipboard.
+    if (!cleaned) {
+      void pasteClipboard(false)
       return
     }
-    editor?.insertText(cleaned)
+    pasteText(cleaned)
   }
+
+  /** A cleaned text paste: paths, a paste chip, or the text itself. */
+  function pasteText(cleaned: string): void {
+    if (!editor) return
+    const paths = pastedPaths(cleaned)
+    if (paths) {
+      const work = controller.pastePaths(paths).then((result) => {
+        insertAtCursor(result.insert)
+        setPasteNotice(result.notices.length ? result.notices.join(" · ") : undefined)
+      }).catch((error: unknown) => {
+        editor?.insertText(cleaned)
+        setPasteNotice(`Paste failed: ${error instanceof Error ? error.message : String(error)}`)
+      }).finally(() => { if (pendingPaste === work) pendingPaste = undefined })
+      pendingPaste = work
+      return
+    }
+    if (foldsPaste(cleaned, store.state.structure.composer.paste)) {
+      insertAtCursor(`${controller.chips.addPaste(cleaned).token} `)
+      return
+    }
+    editor.insertText(cleaned)
+  }
+
+  /**
+   * Ctrl+V, `/paste [raw]`, an empty bracketed paste: the system clipboard
+   * (composer/hostClipboard.ts). An image becomes an image chip; text is
+   * handled like a paste (`raw`: inserted as is). Over SSH or without a
+   * display server the notice row says what to do instead.
+   */
+  async function pasteClipboard(raw: boolean): Promise<boolean> {
+    if (!editor) return false
+    const work = (async () => {
+      const result = await controller.clipboard()
+      if (result.kind === "none") {
+        setPasteNotice(result.reason)
+        return
+      }
+      if (result.kind === "image" && !raw) {
+        insertAtCursor(`${(await controller.clipboardImage(result.bytes)).token} `)
+        return
+      }
+      const text = result.kind === "text" ? result.text : ""
+      if (raw) editor?.insertText(text.replace(/\r\n?/g, "\n"))
+      else if (sanitizePaste(text)) pasteText(sanitizePaste(text))
+    })().finally(() => { if (pendingPaste === work) pendingPaste = undefined })
+    pendingPaste = work
+    await work
+    return true
+  }
+  ui.pasteClipboard = pasteClipboard
+  onCleanup(() => { if (ui.pasteClipboard === pasteClipboard) ui.pasteClipboard = undefined })
+
+  /** Replace a paste or file chip's token with its text, so it can be edited (`/paste expand`, a click on its row). */
+  function expandChip(id: number): boolean {
+    const chip = controller.chips.get(id)
+    if (!editor || !chip || chip.kind === "image" || chip.text === undefined) return false
+    const text = editor.plainText
+    const at = text.indexOf(chip.token)
+    if (at < 0) return false
+    editor.replaceText(text.slice(0, at) + chip.text + text.slice(at + chip.token.length))
+    editor.cursorOffset = at + chip.text.length
+    return true
+  }
+  ui.expandChip = (index) => {
+    const expandable = controller.chips.present(editor?.plainText ?? "").filter((chip) => chip.kind !== "image")
+    const chip = index === undefined ? expandable[0] : expandable[index - 1]
+    return chip ? expandChip(chip.id) : false
+  }
+  onCleanup(() => { ui.expandChip = undefined })
 
   const workspaceInput = { onKey: onWorkspaceKey, onPaste: onWorkspacePaste }
   const editorInput = { onKey: onEditorKey, onPaste: onEditorPaste }
   ui.workspaceInput = workspaceInput
-  const composerHeight = () => (store.state.secretEntry ? 4 : rows() + 2)
-    + (menu() ? menu()!.items.length + 3 : 0) + attachments().length + (props.decorationRows?.() ?? 0)
+  const composerHeight = () => (store.state.secretEntry ? 4 : band() ? rows() + 1 : rows() + 2)
+    + (menu() ? menu()!.items.length + 3 : 0) + rowsAbove().length + (pasteNotice() ? 1 : 0) + (props.decorationRows?.() ?? 0)
   ui.composerHeight = composerHeight
   queueMicrotask(() => ui.invalidateLayout?.())
   let editorPaneId: string | undefined
@@ -713,6 +828,45 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
     if (ui.composerHeight === composerHeight) ui.composerHeight = undefined
     if (editorPaneId && ui.paneInputs?.get(editorPaneId) === editorInput) ui.paneInputs.delete(editorPaneId)
   })
+
+  /**
+   * The textarea. The boxed and the band input each make their own (OpenTUI
+   * turns a box's border back on whenever its border color changes, so one box
+   * cannot switch styles); a style switch keeps the draft through
+   * `ui.composerInput`, which every edit updates.
+   */
+  const input = () => (
+    <textarea
+      ref={(element: TextareaRenderable) => {
+        editor = element
+        const saved = ui.composerInput
+        if (saved?.text) {
+          replaced = saved.text
+          element.setText(saved.text)
+          element.cursorOffset = Math.min(saved.cursor, saved.text.length)
+          setValue(saved.text)
+          measure()
+        }
+      }}
+      width={band() ? undefined : "100%"}
+      flexGrow={1}
+      height={rows()}
+      placeholder={readOnly() ? "Read-only subagent view · / opens commands · Esc returns" : "Message, !shell, or @file · / commands"}
+      textColor={colors.fg}
+      focusedTextColor={colors.fg}
+      cursorColor={colors.focus}
+      cursorStyle={store.state.vim ? { style: store.state.vimMode === "normal" ? "block" : "line", blinking: store.state.vimMode !== "normal" } : { style: "line", blinking: true }}
+      wrapMode="word"
+      keyBindings={[...composerKeyBindings]}
+      focused={composerFocused()}
+      onSubmit={submit}
+      onContentChange={sync}
+      onCursorChange={() => {
+        if (editor) ui.composerInput = { text: editor.plainText, cursor: editor.cursorOffset }
+        updateMention()
+      }}
+    />
+  )
 
   return (
     <box width="100%" flexShrink={0} flexDirection="column">
@@ -730,11 +884,19 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
           </box>
         )}
       </Show>
-      <Show when={attachments().length > 0}>
+      <Show when={rowsAbove().length > 0 || pasteNotice()}>
         <box width="100%" flexShrink={0} flexDirection="column">
-          <For each={attachments()}>
-            {(item) => <text height={1} wrapMode="none" fg={item.error ? colors.warning : colors.muted}>{attachmentLabel(item)}</text>}
+          <For each={rowsAbove()}>
+            {(row) => (
+              <text height={1} wrapMode="none" onMouseDown={() => { if (row.chip !== undefined) expandChip(row.chip) }}>
+                <span style={{ fg: row.error ? colors.warning : row.kind ? attachColors[row.kind] : colors.muted, bold: true }}>{row.tag}</span>
+                <span style={{ fg: row.error ? colors.warning : colors.muted }}>{row.detail ? ` ${row.detail}` : ""}</span>
+              </text>
+            )}
           </For>
+          <Show when={pasteNotice()}>
+            {(notice) => <text height={1} wrapMode="none" fg={colors.warning}>{notice()}</text>}
+          </Show>
         </box>
       </Show>
       <Show when={store.state.secretEntry}>
@@ -745,47 +907,34 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
           </box>
         )}
       </Show>
-      <box
-        width="100%"
-        height={rows() + 2}
-        flexShrink={0}
-        border
-        borderColor={composerFocused() ? colors.focus : colors.border}
-        titleColor={colors.heading} title={shell() ? "! shell" : undefined}
-        backgroundColor={colors.panel}
-        paddingX={1}
-        visible={!store.state.secretEntry}
-      >
-        <textarea
-          ref={(element: TextareaRenderable) => {
-            editor = element
-            const saved = ui.composerInput
-            if (saved?.text) {
-              replaced = saved.text
-              element.setText(saved.text)
-              element.cursorOffset = Math.min(saved.cursor, saved.text.length)
-              setValue(saved.text)
-              measure()
-            }
-          }}
+      <Show when={band() && !store.state.secretEntry}>
+        <Show when={statusLineShown(store.state, store.state.columns, "band")} fallback={
+          <text height={1} wrapMode="none" fg={colors.border}>{bandRule(store.state, Math.max(1, Math.floor(props.width)))}</text>
+        }>
+          <StatusLine width={props.width} />
+        </Show>
+      </Show>
+      <Show when={band()} fallback={
+        <box
           width="100%"
-          height={rows()}
-          placeholder={readOnly() ? "Read-only subagent view · / opens commands · Esc returns" : "Message, !shell, or @file · / commands"}
-          textColor={colors.fg}
-          focusedTextColor={colors.fg}
-          cursorColor={colors.focus}
-          cursorStyle={store.state.vim ? { style: store.state.vimMode === "normal" ? "block" : "line", blinking: store.state.vimMode !== "normal" } : { style: "line", blinking: true }}
-          wrapMode="word"
-          keyBindings={[...composerKeyBindings]}
-          focused={composerFocused()}
-          onSubmit={submit}
-          onContentChange={sync}
-          onCursorChange={() => {
-            if (editor) ui.composerInput = { text: editor.plainText, cursor: editor.cursorOffset }
-            updateMention()
-          }}
-        />
-      </box>
+          height={rows() + 2}
+          flexShrink={0}
+          border
+          borderColor={composerFocused() ? colors.focus : colors.border}
+          titleColor={shell() ? colors.heading : colors.muted} title={shell() ? "! shell" : borderInfo()}
+          titleAlignment={shell() ? "left" : "right"}
+          backgroundColor={colors.panel}
+          paddingX={1}
+          visible={!store.state.secretEntry}
+        >
+          {input()}
+        </box>
+      }>
+        <box width="100%" height={rows()} flexShrink={0} flexDirection="row" backgroundColor={colors.panel} visible={!store.state.secretEntry}>
+          <text width={3} height={1} flexShrink={0} wrapMode="none" fg={composerFocused() ? colors.focus : colors.border}>{shell() ? "╰! " : "╰─ "}</text>
+          {input()}
+        </box>
+      </Show>
     </box>
   )
 }

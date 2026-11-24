@@ -21,6 +21,8 @@ export interface CompletionContext {
   permissionModes?: string[]
   /** In a WebUI tab (`--web-tab`) terminal-only commands (`/to-background`) are not offered. */
   webTab?: boolean
+  /** Preset names `/set preset` accepts (app/structure.ts). */
+  presets?: string[]
 }
 
 const defaultRegistry = createCommandRegistry()

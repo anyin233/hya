@@ -4,6 +4,9 @@ import type { Tui } from "./harness"
 import { backendConfigDir, expect, hyaTui, statusSessionId, test } from "./hya"
 import type { PaneLayout, PaneNode, PaneSplit } from "../../hya-tui/src/state/panes"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 async function command(term: Tui, text: string) {
   await term.press("Control+x")
   await term.type(text)

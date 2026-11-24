@@ -537,6 +537,14 @@ impl V1Grpc {
                             Some(F::Input(bytes)) => {
                                 let _ = state.pty.write(&id, &String::from_utf8_lossy(&bytes)).await;
                             }
+                            Some(F::Upload(upload)) => {
+                                let reply = pb::PtyServerFrame {
+                                    frame: Some(super::pty::upload_refused(upload.id)),
+                                };
+                                if output_tx.send(Ok(reply)).await.is_err() {
+                                    break;
+                                }
+                            }
                             Some(F::Attach(_)) | Some(F::Resize(_)) | Some(F::Ping(_)) | None => {}
                         }
                     }

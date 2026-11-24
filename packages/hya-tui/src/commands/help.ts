@@ -58,6 +58,7 @@ const actionGroups: Record<KeyAction, HelpGroup> = {
   help: "Views",
   chord: "Composer",
   externalEditor: "Composer",
+  pasteClipboard: "Composer",
   undo: "Turns",
   redo: "Turns",
   fork: "Turns",

@@ -89,6 +89,16 @@ export function defaultPaneLayout(): PaneLayout {
     weighted({ type: "split", id: "group-3", direction: "column", children: [weighted(leaf(3, "sessions"), .62), weighted(leaf(4, "todos"), .1368), weighted(leaf(5, "context"), .2432)] }, .108),
   ] } }
 }
+/**
+ * The single chat column of the presets without a sidebar (ADR-0036 D10): the
+ * conversation viewer, the activity line, and the message editor, with the
+ * default tree's ids so focus targets (`pane-1`) mean the same thing. Never
+ * saved: only the `workspace` structure reads or writes `paneLayout`.
+ */
+export function chatPaneLayout(): PaneLayout {
+  const leaf = (id: number, kind: PaneKind): PaneLeaf => ({ type: "pane", id: `pane-${id}`, kind })
+  return { version: 4, active: "pane-1", root: { type: "split", id: "group-2", direction: "column", children: [weighted(leaf(6, "conversation")), content(leaf(7, "activity")), content(leaf(1, "composer"))] } }
+}
 export function visiblePaneRoot(root: PaneNode, columns: number, sidebar: SidebarMode, projectsSidebar: SidebarMode): PaneNode {
   const right = sidebarVisible(sidebar, columns), left = projectsSidebarVisible(projectsSidebar, columns)
   const keep = (node: PaneNode): PaneNode | undefined => {
