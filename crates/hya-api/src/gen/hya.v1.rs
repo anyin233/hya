@@ -1522,6 +1522,12 @@ pub struct ListCommandsRequest {
     /// Standard pagination controls.
     #[prost(message, optional, tag = "2")]
     pub page: ::core::option::Option<PageRequest>,
+    /// List the catalog this session's command turns expand against instead:
+    /// its recorded workdir, its Project's roots, and the `skill:<name>` rows
+    /// of the bundle and plugin skills its agent can load. Wins over
+    /// `directory`. `not_found` for an unknown session.
+    #[prost(string, tag = "3")]
+    pub session: ::prost::alloc::string::String,
 }
 /// One slash-command entry.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1606,6 +1612,12 @@ pub struct ListSkillsRequest {
     /// Standard pagination controls.
     #[prost(message, optional, tag = "2")]
     pub page: ::core::option::Option<PageRequest>,
+    /// List what this session's agent can load with the `skill` tool instead:
+    /// the skills of its recorded workdir and Project roots, the built-in
+    /// ones, and the bundle and plugin skills its agent selects. Wins over
+    /// `directory`. `not_found` for an unknown session.
+    #[prost(string, tag = "3")]
+    pub session: ::prost::alloc::string::String,
 }
 /// One invocable skill.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1632,6 +1644,10 @@ pub struct SkillSummary {
     /// index leaves it out; `/skill:<name>` still runs it.
     #[prost(bool, tag = "6")]
     pub disable_model_invocation: bool,
+    /// The bundle or plugin that contributes it (`source: bundle`), e.g.
+    /// `hya/alpha` or `plugin:toolbox`; empty otherwise.
+    #[prost(string, tag = "7")]
+    pub bundle_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListSkillsResponse {

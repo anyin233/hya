@@ -442,6 +442,8 @@ export interface SkillSummary {
   content?: string
   /** `disable-model-invocation: true`: left out of the model's skill index; only `/skill:<name>` runs it. */
   disableModelInvocation?: boolean
+  /** The bundle (`hya/alpha`) or plugin (`plugin:toolbox`) that contributes it (`source: "bundle"`). */
+  bundleId?: string
 }
 
 /** `CatalogDiagnostic` of `ListSkillsResponse` / `ListCommandsResponse`: a file the catalog skipped or warns about. */
@@ -468,8 +470,17 @@ export interface CommandSummary {
   argumentHint?: string
   /** Where the command was discovered: `command` (custom/built-in) or `skill`. */
   source?: string
-  /** `builtin`, `project`, `user`, or a skill's source; absent on older backends. */
+  /** `builtin`, `project`, `user`, or a skill's source (`bundle` too); absent on older backends. */
   scope?: string
+}
+
+/**
+ * A catalog read scoped to a session that the backend answered with 400 (a
+ * backend older than the `session` parameter) or 404 (the session is gone,
+ * e.g. deleted while the TUI had it open): read the directory's instead.
+ */
+function sessionScopeRefused(error: unknown): boolean {
+  return error instanceof HttpError && (error.status === 400 || error.status === 404)
 }
 
 /** `ListCommands`: the commands of the scope, and the command files it skipped. */
@@ -968,23 +979,35 @@ export class HyaClient {
     await this.request("POST", "/v1/bundles:set-enabled", { directory: this.directory, bundleId, enabled }, signal)
   }
 
-  async listCommands(): Promise<CommandSummary[]> {
-    return (await this.listCommandCatalog()).commands
+  async listCommands(session?: string): Promise<CommandSummary[]> {
+    return (await this.listCommandCatalog(session)).commands
   }
 
-  /** `ListCommands` of the client's scope with the diagnostics of the command files it skipped. */
-  async listCommandCatalog(): Promise<CommandListing> {
-    const { rows, diagnostics } = await this.catalogPages<CommandSummary>("/v1/commands", "commands")
-    return { commands: rows, diagnostics }
+  /**
+   * `ListCommands` of the client's scope with the diagnostics. `session`
+   * lists what that session's command turns expand against (its agent's
+   * bundle skills included); a backend that refuses the parameter (400,
+   * older than it) or no longer has the session (404, deleted meanwhile)
+   * answers for the directory instead.
+   */
+  async listCommandCatalog(session?: string): Promise<CommandListing> {
+    try {
+      const { rows, diagnostics } = await this.catalogPages<CommandSummary>("/v1/commands", "commands", session)
+      return { commands: rows, diagnostics }
+    } catch (error) {
+      if (!session || !sessionScopeRefused(error)) throw error
+      const { rows, diagnostics } = await this.catalogPages<CommandSummary>("/v1/commands", "commands")
+      return { commands: rows, diagnostics }
+    }
   }
 
   /** Every page of a scoped catalog list (`commands` or `skills`), with the diagnostics of its first page. */
-  private async catalogPages<T>(path: string, field: string): Promise<{ rows: T[]; diagnostics: CatalogDiagnostic[] }> {
+  private async catalogPages<T>(path: string, field: string, session?: string): Promise<{ rows: T[]; diagnostics: CatalogDiagnostic[] }> {
     const rows: T[] = []
     let diagnostics: CatalogDiagnostic[] | undefined
     let cursor = ""
     for (let pageNumber = 0; pageNumber < 100; pageNumber++) {
-      const query = `page.limit=500${cursor ? `&page.cursor=${encodeURIComponent(cursor)}` : ""}`
+      const query = `page.limit=500${cursor ? `&page.cursor=${encodeURIComponent(cursor)}` : ""}${session ? `&session=${encodeURIComponent(session)}` : ""}`
       const result = await this.request<Record<string, unknown> & { diagnostics?: CatalogDiagnostic[]; page?: PageInfo }>("GET", this.scoped(`${path}?${query}`))
       const pageRows = result[field]
       if (Array.isArray(pageRows)) rows.push(...pageRows as T[])
@@ -999,11 +1022,20 @@ export class HyaClient {
   /**
    * `ListSkills` (`GET /v1/skills`) of the client's scope: every page of
    * skills and the diagnostics (repeated on each page; the first one is
-   * kept).
+   * kept). `session` lists what that session's agent can load instead
+   * (bundle and plugin skills included); a backend that refuses the
+   * parameter (400) or no longer has the session (404) answers for the
+   * directory.
    */
-  async listSkills(): Promise<SkillListing> {
-    const { rows, diagnostics } = await this.catalogPages<SkillSummary>("/v1/skills", "skills")
-    return { skills: rows, diagnostics }
+  async listSkills(session?: string): Promise<SkillListing> {
+    try {
+      const { rows, diagnostics } = await this.catalogPages<SkillSummary>("/v1/skills", "skills", session)
+      return { skills: rows, diagnostics }
+    } catch (error) {
+      if (!session || !sessionScopeRefused(error)) throw error
+      const { rows, diagnostics } = await this.catalogPages<SkillSummary>("/v1/skills", "skills")
+      return { skills: rows, diagnostics }
+    }
   }
 
   /** `SetProviderAuth` (`PUT /v1/auth/{id}`): save a key (applies live); `discovery` when the model list was fetched too. */

@@ -89,6 +89,8 @@ const home = (path: string, env: Record<string, string | undefined>) => {
  * else `project`; `<built-in>` → `builtin`.
  */
 export function skillGroup(skill: SkillSummary, env: Record<string, string | undefined> = process.env): string {
+  // A bundle or plugin skill has no file: group by its owner.
+  if (skill.bundleId) return `bundle ${skill.bundleId}`
   const location = skill.location ?? ""
   if (!location || location.startsWith("<")) return skill.source || "builtin"
   const source = skill.source && skill.source !== "builtin" ? skill.source : (env.HOME && location.startsWith(`${env.HOME}/`) ? "user" : "project")

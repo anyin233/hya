@@ -2282,6 +2282,9 @@
           },
           "page": {
             "$ref": "#/components/schemas/PageRequest"
+          },
+          "session": {
+            "type": "string"
           }
         }
       },
@@ -2369,6 +2372,9 @@
           },
           "page": {
             "$ref": "#/components/schemas/PageRequest"
+          },
+          "session": {
+            "type": "string"
           }
         }
       },
@@ -2393,6 +2399,9 @@
           },
           "disable_model_invocation": {
             "type": "boolean"
+          },
+          "bundle_id": {
+            "type": "string"
           }
         }
       },

@@ -342,15 +342,21 @@ export function createController({ client, store, directory, remote: startedRemo
    * them (`/reload-skills`, `/reload-commands`, the Skills view's `r`).
    */
   async function readSkills(): Promise<SkillListing> {
-    const [listing] = await Promise.all([client.listSkills(), readCommands()])
+    const session = store.state.selected?.id
+    const [listing] = await Promise.all([client.listSkills(session), readCommands()])
     store.setSkills(listing)
     return listing
   }
 
-  /** `ListCommands` (with its diagnostics) into the store. */
+  /**
+   * `ListCommands` (with its diagnostics) into the store, for the open
+   * session when there is one: the command menu then lists the `/skill:*`
+   * rows of its agent's bundle skills too.
+   */
   async function readCommands(): Promise<CommandSummary[]> {
+    const session = store.state.selected?.id
     const listing = client.listCommandCatalog
-      ? await client.listCommandCatalog()
+      ? await client.listCommandCatalog(session)
       : { commands: await client.listCommands(), diagnostics: [] }
     store.setBackendCommands(listing.commands)
     store.setCommandDiagnostics(listing.diagnostics)
@@ -361,16 +367,16 @@ export function createController({ client, store, directory, remote: startedRemo
     const [sessions, interactions, models, agents, workflows, providers, commands, permissionModes, projects, skills] = await Promise.all([
       client.listSessions(), client.listInteractions(), client.listModels(), client.listAgents(), client.listWorkflows(),
       client.listProviders(),
-      // The command catalog with its diagnostics.
+      // The open session's catalog (its agent's bundle skills too), with the command diagnostics.
       client.listCommandCatalog
-        ? client.listCommandCatalog().then((listing) => { store.setCommandDiagnostics(listing.diagnostics); return listing.commands })
+        ? client.listCommandCatalog(store.state.selected?.id).then((listing) => { store.setCommandDiagnostics(listing.diagnostics); return listing.commands })
         : client.listCommands(),
       // Optional: the Shift+Tab cycle falls back to the built-ins without it.
       client.listPermissionModes().catch(() => undefined),
       // Optional: a failed read keeps the rows read before.
       client.listProjects().catch(() => undefined),
       // Optional: the skills and their diagnostics (an older backend without them keeps the bootstrap's).
-      (client.listSkills?.() ?? Promise.resolve(undefined)).catch(() => undefined),
+      (client.listSkills?.(store.state.selected?.id) ?? Promise.resolve(undefined)).catch(() => undefined),
     ])
     store.applyCatalog({ sessions, interactions, models, agents, workflows, providers, commands, ...(permissionModes ? { permissionModes } : {}), ...(projects ? { projects } : {}) })
     if (skills) store.setSkills(skills)

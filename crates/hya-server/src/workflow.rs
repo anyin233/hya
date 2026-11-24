@@ -41,14 +41,21 @@ pub(crate) async fn intercept_slash(
     let text = if !request.text.is_empty() {
         request.text.clone()
     } else {
-        crate::support::command_catalog::expand_prompt(&place, &request.command, &arguments)
-            .unwrap_or_else(|| {
-                if arguments.trim().is_empty() {
-                    format!("/{}", request.command)
-                } else {
-                    format!("/{} {}", request.command, arguments)
-                }
-            })
+        crate::support::command_catalog::expand_session_prompt(
+            st,
+            session,
+            &place,
+            &request.command,
+            &arguments,
+        )
+        .await
+        .unwrap_or_else(|| {
+            if arguments.trim().is_empty() {
+                format!("/{}", request.command)
+            } else {
+                format!("/{} {}", request.command, arguments)
+            }
+        })
     };
     st.engine
         .admit_command_prompt(session, request.command.clone(), arguments, text)

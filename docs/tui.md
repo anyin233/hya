@@ -2602,7 +2602,9 @@ registry), `[command]` (a custom or built-in server command, `/init` and
 `/review` among them), or `[skill]` (a discovered skill, listed as
 `/skill:<name>` — see [Skill commands](#skill-commands) below). A backend row
 adds where it is defined, `CommandSummary.scope`: `[command · user]`,
-`[skill · project]` (pi prefixes its descriptions the same way).
+`[skill · project]`, `[skill · bundle]` (pi prefixes its descriptions the
+same way). With a session open, the catalog is that session's
+(`ListCommands` with `session`), so its agent's bundle skills are listed too.
 `tui.toml` `[commands] skill_commands = false` leaves the `/skill:*` rows out
 ([TUI structure](tui-config.md)); typing one still runs it. The list is fuzzy-filtered as you
 keep typing the name: an exact match ranks first, then a prefix match, then a
@@ -3931,7 +3933,7 @@ binary is not reloaded here: that is `hya serve stop` then `start`
 | `mcp` | `GET /v1/mcp?directory=<dir>` | — | `McpServerStatus[]` (`name`, `state`) |
 | `extensions` | `GET /v1/tui-extensions?directory=<dir>` | — | `ListTuiExtensionsResponse` |
 | `commands`, `skills` | `GET /v1/commands?directory=<dir>` | — | `CommandSummary[]` |
-| `skills` | `GET /v1/skills?directory=<dir>` | — | `SkillSummary[]`, `CatalogDiagnostic[]` |
+| `skills` | `GET /v1/skills?directory=<dir>[&session=<id>]` | — | `SkillSummary[]`, `CatalogDiagnostic[]` |
 | `context`, `skills` | `POST /v1/sessions/{session}/refresh-context` | `RefreshSessionContextRequest {session: string}` | `RefreshSessionContextResponse {pending: bool}`; `session_busy` (409) while a turn runs, `not_found` for an unknown session |
 
 In the TUI, `AppActions.reload(targets: ReloadTarget[]): Promise<ReloadOutcome[]>`
@@ -3945,8 +3947,9 @@ ok: boolean, text: string}` (`state/reload.ts`, with `reloadSummary`).
 `/skills` opens a full-screen list of every skill the scope can run as
 `/skill:<name>`: the directory's and the active Project's skills
 (`.hya/skills`, `.agents/skills`), your own (`~/.config/hya/skills`,
-`~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills`), and the built-in
-ones (see [Skills](skills.md)). Rows are grouped under one divider per source
+`~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills`), the built-in
+ones, and with a session open the bundle and plugin skills its agent can load
+(see [Skills](skills.md)). Rows are grouped under one divider per source
 directory, in the catalog's precedence order (the first definition of a name
 wins there, so a shadowed skill is not listed). Each row shows the name, the
 source (`project`, `user`, `bundle`, `builtin`), and the description:
@@ -3997,7 +4000,7 @@ The help overlay (`?`, group `skills`) lists the same keys.
 
 | Action | Call | Reads |
 | --- | --- | --- |
-| Open, `r` refresh | `GET /v1/skills?directory=<dir>` (paginated, `ListSkills`) and `GET /v1/commands?directory=<dir>` | `ListSkillsResponse.skills: SkillSummary[]` (`name`, `description`, `source`, `content` — the body —, `location`, `disableModelInvocation`) and `diagnostics: CatalogDiagnostic[]` (`path`, `kind`, `message`); the commands keep the menu's `/skill:*` rows current |
+| Open, `r` refresh | `GET /v1/skills?directory=<dir>[&session=<id>]` (paginated, `ListSkills`) and `GET /v1/commands?directory=<dir>` | `ListSkillsResponse.skills: SkillSummary[]` (`name`, `description`, `source`, `content` — the body —, `location`, `disableModelInvocation`, `bundleId`) and `diagnostics: CatalogDiagnostic[]` (`path`, `kind`, `message`); the commands keep the menu's `/skill:*` rows current |
 | `u`, then Enter | `POST /v1/sessions/{id}/turns` | `{command: {command: "skill:<name>", arguments}}` (`CommandTurn`) |
 
 The view's state is `store.skillsView: SkillsViewState` (`screen: "list" |
@@ -4109,8 +4112,8 @@ string encoded 64-bit values, and the error envelope documented in the
 | `POST /v1/interactions/{id}/respond` | Prompt: `{permission: {allowed: boolean, persist: boolean}}`, `{question: {answer: string}}`, or `{question: {rejected: true}}`. `/approve`, `/deny`: `persist: false`. | `RespondInteractionResponse.applied` (`false`: already resolved elsewhere) |
 | `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `reasoningVariants`, `reasoningDefault`, `source`, `imageInput`); the `/model` picker tags rows by `providerId`, and `/effort` uses the advertised variants; `contextLimit` (a uint64 string, `0`/absent = unknown) is the metadata state's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`; `imageInput: false` refuses attachments locally before a turn is sent (see [Paste and attachments](#paste-and-attachments); absent means unknown and is allowed). |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` (`id`, `kind`, `baseUrl`, `keySource`, `auth`, `modelCount`): the Provider View's list. |
-| `GET /v1/commands?directory=<dir>` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes the skills as `skill:<name>` rows, tagged `source: "skill"`; `scope` for the menu tag) for command-pane suggestions and completion, and `diagnostics: CatalogDiagnostic[]` for the startup list. |
-| `GET /v1/skills?directory=<dir>` | No body | `ListSkillsResponse.skills: SkillSummary[]` and `diagnostics: CatalogDiagnostic[]` for the [Skills view](#skills-view), the startup list's `[Skills]`, and `/refresh`. |
+| `GET /v1/commands?directory=<dir>[&session=<id>]` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes the skills as `skill:<name>` rows, tagged `source: "skill"`; `scope` for the menu tag; with `session` its agent's bundle skills too) for command-pane suggestions and completion, and `diagnostics: CatalogDiagnostic[]` for the startup list. A backend that refuses `session` (400), or a session that is gone (404, deleted while open), is asked again without it. |
+| `GET /v1/skills?directory=<dir>[&session=<id>]` | No body | `ListSkillsResponse.skills: SkillSummary[]` and `diagnostics: CatalogDiagnostic[]` for the [Skills view](#skills-view), the startup list's `[Skills]`, and `/refresh`. |
 | `POST /v1/sessions/{id}/refresh-context` | `{}` (`RefreshSessionContext`) | `RefreshSessionContextResponse {pending}` for `/reload-context`, `/reload-skills`, and `/reload` |
 | `PUT /v1/providers/{id}`, `POST …/refresh`, `PUT …/models`, `DELETE …/models?modelId=`, `POST …/test` | See [Provider View interfaces](#provider-view-interfaces) | `ProviderUpdate` / `TestProviderModelResponse` |
 | `PUT /v1/auth/{provider_id}` | `{apiKey: string}` (Provider View `k`) | `{status, provider?, discovery?}`; the key value is sent only to the backend. |

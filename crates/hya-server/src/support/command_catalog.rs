@@ -119,6 +119,15 @@ pub(crate) fn list(place: &CatalogPlace) -> Vec<CommandInfo> {
 
 /// [`list`] with the diagnostics of the command files it skipped.
 pub(crate) fn listing(place: &CatalogPlace) -> CommandListing {
+    listing_with_skills(place, crate::support::skill_catalog::list(place))
+}
+
+/// [`listing`] with `skills` as the `skill:<name>` rows (a session's own
+/// skill view, bundle skills included).
+pub(crate) fn listing_with_skills(
+    place: &CatalogPlace,
+    skills: Vec<crate::support::skill_catalog::SkillInfo>,
+) -> CommandListing {
     let workdir = place.workdir();
     let mut commands = core_commands()
         .iter()
@@ -190,11 +199,7 @@ pub(crate) fn listing(place: &CatalogPlace) -> CommandListing {
         }
     }
     upsert_commands(&mut commands, disk);
-    commands.extend(
-        crate::support::skill_catalog::list(place)
-            .into_iter()
-            .map(CommandInfo::skill),
-    );
+    commands.extend(skills.into_iter().map(CommandInfo::skill));
     CommandListing {
         commands,
         diagnostics,
@@ -217,14 +222,36 @@ enum Expansion {
     },
 }
 
-/// Expand `command` against the catalog a session's turns see
-/// ([`CatalogPlace::for_session`]).
+/// Expand `command` against the catalog of `place`.
 pub(crate) fn expand_prompt(
     place: &CatalogPlace,
     command: &str,
     arguments: &str,
 ) -> Option<String> {
     expand_in(list(place), command, arguments)
+}
+
+/// Expand `command` against the catalog `session`'s turns see
+/// ([`CatalogPlace::for_session`]): a `skill:<name>` also finds the bundle
+/// and plugin skills its agent can load.
+pub(crate) async fn expand_session_prompt(
+    st: &crate::ServerState,
+    session: hya_proto::SessionId,
+    place: &CatalogPlace,
+    command: &str,
+    arguments: &str,
+) -> Option<String> {
+    if !command.starts_with(SKILL_COMMAND_PREFIX) {
+        return expand_prompt(place, command, arguments);
+    }
+    let skills = crate::support::skill_catalog::session_listing(st, session, place)
+        .await
+        .skills;
+    expand_in(
+        listing_with_skills(place, skills).commands,
+        command,
+        arguments,
+    )
 }
 
 fn expand_in(commands: Vec<CommandInfo>, command: &str, arguments: &str) -> Option<String> {
