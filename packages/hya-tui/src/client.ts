@@ -1171,6 +1171,17 @@ export class HyaClient {
     return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/compact`, {})
   }
 
+  /**
+   * `RefreshSessionContext` (`/reload-context`): the session's next turn
+   * records its environment, `AGENTS.md` files, and skill index anew;
+   * `pending: false` when it had not recorded them yet. `session_busy`
+   * while a turn runs.
+   */
+  async refreshSessionContext(session: string): Promise<{ pending: boolean }> {
+    const result = await this.request<{ pending?: boolean }>("POST", `/v1/sessions/${encodeURIComponent(session)}/refresh-context`, {})
+    return { pending: result.pending === true }
+  }
+
   /** `SummarizeSession`: generate a summary message for the session (`/summarize`). */
   async summarizeSession(session: string): Promise<{ summaryMessage?: string }> {
     return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/summarize`, {})

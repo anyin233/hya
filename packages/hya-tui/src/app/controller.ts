@@ -130,6 +130,7 @@ import { answerPrompt } from "./prompts"
 import { revertReadOnlyStatus as readOnlyStatus, createRevertController } from "./revert"
 import { createRulesController } from "./rules"
 import { createSkillsController } from "./skills"
+import { createReloader } from "./reload"
 import type { AppStore } from "../state/store"
 import { errorLine } from "../state/projectCommands"
 import { createDebounce } from "./debounce"
@@ -213,6 +214,8 @@ export interface ControllerOptions {
   home?: () => Promise<ServerSwitch>
   /** The backend scope changed (server, Project, or temporary session directory): reload the bundle TUI extensions (app/run.tsx). */
   onScopeChanged?: () => void | Promise<void>
+  /** `/reload-tui`: restart this TUI from its files through the launcher's supervisor (src/reload.ts); absent without one. */
+  reloadTui?: () => void
   /** Bundle TUI extension submit interceptors (extensions/manager.ts `interceptSubmit`): a prompt may be rewritten or blocked before it is sent. */
   interceptSubmit?: (text: string) => Promise<{ text: string } | { blocked: string }>
   /** `tui.toml` and the session's `/set` (app/structure.ts); unset in tests: the store's structure stays. */
@@ -254,7 +257,7 @@ const mcpPollMs = 500
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
 
-export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, preferredPermissionMode, terminal, env = process.env, reconnect, find, onRestarted, refreshExtensions, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home, onScopeChanged, interceptSubmit, structure }: ControllerOptions) {
+export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, preferredPermissionMode, terminal, env = process.env, reconnect, find, onRestarted, refreshExtensions, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home, onScopeChanged, interceptSubmit, structure, reloadTui }: ControllerOptions) {
   /** No `EnsureProjectForPath`; new sessions need a chosen Project: `--remote`, or connected through `/connect-remote`. */
   const sessionViews = new SessionViews(client)
   let remote = startedRemote
@@ -336,7 +339,7 @@ export function createController({ client, store, directory, remote: startedRemo
   /**
    * `ListSkills` and `ListCommands` into the store: the Skills view, the
    * startup list's `[Skills]`, and the command menu's `/skill:*` rows read
-   * them (the Skills view's `r`).
+   * them (`/reload-skills`, `/reload-commands`, the Skills view's `r`).
    */
   async function readSkills(): Promise<SkillSummary[]> {
     const [skills, commands] = await Promise.all([client.listSkills(), client.listCommands()])
@@ -346,15 +349,18 @@ export function createController({ client, store, directory, remote: startedRemo
   }
 
   async function refresh(): Promise<void> {
-    const [sessions, interactions, models, agents, workflows, providers, commands, permissionModes, projects] = await Promise.all([
+    const [sessions, interactions, models, agents, workflows, providers, commands, permissionModes, projects, skills] = await Promise.all([
       client.listSessions(), client.listInteractions(), client.listModels(), client.listAgents(), client.listWorkflows(),
       client.listProviders(), client.listCommands(),
       // Optional: the Shift+Tab cycle falls back to the built-ins without it.
       client.listPermissionModes().catch(() => undefined),
       // Optional: a failed read keeps the rows read before.
       client.listProjects().catch(() => undefined),
+      // Optional: the skills (a failed read keeps the bootstrap's).
+      (client.listSkills?.() ?? Promise.resolve(undefined)).catch(() => undefined),
     ])
     store.applyCatalog({ sessions, interactions, models, agents, workflows, providers, commands, ...(permissionModes ? { permissionModes } : {}), ...(projects ? { projects } : {}) })
+    if (skills) store.setSkills(skills)
   }
 
   /** `ListProjects` into the store (the Project list and its `busy` flags); a failure is kept as `projectsError` (the Project view shows it) and thrown. */
@@ -1136,6 +1142,10 @@ export function createController({ client, store, directory, remote: startedRemo
   }
 
   const rules = createRulesController({ store, client })
+  const reloader = createReloader({
+    store, client, structure, preferencesPath, refreshExtensions, reloadTui,
+    readSkills: () => readSkills(),
+  })
   const skills = createSkillsController({
     store,
     readSkills: () => readSkills(),
@@ -1196,6 +1206,7 @@ export function createController({ client, store, directory, remote: startedRemo
     disconnectRemote: () => disconnectRemote(),
     cancelTurn: () => turns.cancel(),
     sendPrompt: (text) => submit(text, "message"),
+    reload: (targets) => reloader.run(targets),
     quit,
     resume: (id) => resumer.resume(id),
     openPicker,

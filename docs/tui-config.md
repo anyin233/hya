@@ -209,8 +209,9 @@ A section appears once its data arrived; an empty one has no line.
 states, `sections` picks and orders the sections, and `quiet = true` keeps
 only the problems. The list scrolls away with the history and stays at the top
 of the transcript when you switch sessions. `/resources` prints the full list
-again at the end of the transcript, for example after `/reload`. It is display
-only: no event is written.
+again at the end of the transcript; `/reload` prints it after its summary,
+with this table's settings (see [Reload](tui.md#reload)). It is display only:
+no event is written.
 
 ## Status line
 

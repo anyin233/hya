@@ -6,6 +6,7 @@
  * command line, dispatches it, and completes it. A command line whose name is
  * not registered goes to the fallback handler (backend command catalog).
  */
+import type { ReloadOutcome, ReloadTarget } from "../state/reload"
 import type { StructureControl } from "../app/structure"
 import type { HyaClient } from "../client"
 import type { CompletionContext } from "../completion"
@@ -81,6 +82,8 @@ export interface AppActions {
   openEditor(): void
   /** `/undo`: revert the last prompt (app/revert.ts). */
   undo(): Promise<void>
+  /** `/reload`, `/reload-<target>`: reload each target in order (app/reload.ts); every one runs and reports. */
+  reload(targets: readonly ReloadTarget[]): Promise<ReloadOutcome[]>
   /** Send `text` as a prompt of the open session, as the message composer does (an unknown command line that starts with a path). */
   sendPrompt?(text: string): Promise<void>
   /** `/redo`: undo the pending revert. */
@@ -184,7 +187,7 @@ export class CommandRegistry {
   async dispatch(text: string, context: CommandContext): Promise<void> {
     const invocation = this.parse(text)
     const spec = this.specs.get(invocation.name)
-    if (spec) await spec.run(context, invocation)
+    if (spec) await spec.run({ ...context, registry: this }, invocation)
     else await this.fallback({ ...context, registry: this }, invocation)
   }
 

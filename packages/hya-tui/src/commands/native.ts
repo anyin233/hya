@@ -24,6 +24,7 @@ import type { CompletionContext } from "../completion"
 import { keybindingsCommand } from "./keybindings"
 import { configCommand, enableSidebar, layoutNeedsWorkspace, pasteCommand, resourcesCommand, setCommand } from "./config"
 import { closestCommand, looksLikePath, skillCommandPrefix } from "./menu"
+import { reloadCommand, reloadTargetCommands } from "./reload"
 
 /**
  * Session id completions (`/open`, `/resume`): a titled session shows as
@@ -419,6 +420,8 @@ export const nativeCommandSpecs: CommandSpec[] = [
   setCommand,
   pasteCommand,
   resourcesCommand,
+  reloadCommand,
+  ...reloadTargetCommands,
   {
     name: "/layout",
     description: "Edit workspace panes: split, insert, move, bubble, wrap, remove, assign, focus, resize, close, reload, reset, tree, or show",
