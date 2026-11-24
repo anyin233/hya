@@ -8,6 +8,12 @@ agent. Both outputs pass through the same strict namespace, source-path,
 resource-closure, preparation, digest, install, and generation rules as a
 hand-authored bundle.
 
+The release archive and source installer stage this adapter at
+`<prefix>/lib/hya/claude-adapter`. Both import and runtime mode look for
+`src/main.ts` there. Set `HYA_CLAUDE_ADAPTER_DIR` to the absolute path of an
+adapter directory to override that location. A development build can also
+resolve the adapter in its source checkout.
+
 ## Usage
 
 Import a local plugin directory with:

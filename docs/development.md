@@ -312,7 +312,7 @@ is pushed:
 
 | Tag | Archive | Installer delivery | Payload |
 | --- | --- | --- | --- |
-| `v<version>` (e.g. `v0.47.0`, `v0.47.1-dev.1`) | `hya-<version>-<target>.tar.gz` | Hosted `scripts/hya-install.sh`; no installer asset | `bin/hya`, first-party bundles, Argus example, Bun, Bun adapter, TUI, WebUI, TUI SDK |
+| `v<version>` (e.g. `v0.47.0`, `v0.47.1-dev.1`) | `hya-<version>-<target>.tar.gz` | Hosted `scripts/hya-install.sh`; no installer asset | `bin/hya`, first-party bundles, Argus example, Bun, Bun and Claude adapters, TUI, WebUI, TUI SDK |
 
 ### Git tag rules
 
@@ -435,7 +435,7 @@ remaining argument is forwarded verbatim. The currently supported tasks are
 | `package-native-tool-bundle` | Adds a built target-specific Rust executable and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
 | `package-native-tool-library` | Adds a built tool-family dynamic library and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
 | `stage-first-party-bundles` | Packages the thirteen trusted first-party bundles into a backend package's `<package-root>/bundles/` and fails if any bundle version differs from the backend release version. With `--target` and `--assets`, it also writes versioned standalone release assets. |
-| `release-rehearsal` | Runs the pinned, non-publishing unified release build/package/smoke rehearsal for one target. It checks the unified aggregate version contract, then builds, packages, and smokes the `hya` binary, Bun, Bun adapter, TUI/WebUI/TUI-SDK assets and production dependencies, first-party bundles, Argus example, checksums, and unified installer contract. Run it on a host of that target (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`). |
+| `release-rehearsal` | Runs the pinned, non-publishing unified release build/package/smoke rehearsal for one target. It checks the unified aggregate version contract, then builds, packages, and smokes the `hya` binary, Bun, Bun and Claude adapters, TUI/WebUI/TUI-SDK assets and production dependencies, first-party bundles, Argus example, checksums, and unified installer contract. Run it on a host of that target (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`). |
 
 ```sh
 cargo run -p xtask -- matrix-check
