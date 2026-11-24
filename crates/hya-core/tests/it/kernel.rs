@@ -2125,6 +2125,18 @@ async fn read_corrupt_png_reports_decode_error_without_attachment() {
 }
 
 #[tokio::test]
+async fn read_truncated_png_reports_decode_error_without_attachment() {
+    let png = b"\x89PNG\r\n\x1a\n";
+    let result = read_image_file(png).await;
+
+    assert!(result.get("attachments").is_none());
+    assert!(
+        tool_result_text(&result)
+            .starts_with("Image file (image/png, 8 bytes). It does not decode as image/png (")
+    );
+}
+
+#[tokio::test]
 async fn read_truncated_jpeg_reports_decode_error_without_attachment() {
     let mut jpeg = encoded_test_image(image::ImageFormat::Jpeg);
     jpeg.truncate(32);

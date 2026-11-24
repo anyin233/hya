@@ -412,6 +412,7 @@ again (see [Tool-result images](architecture/providers.md#tool-result-images)).
 For an image above the attachment limit, `output` contains resize guidance and
 is the only field. If an image within the limit fails to decode, the successful
 result contains only `output` with its MIME type, size, and the decoder error.
+Bare and full `read` use the same image decoder and attachment budget.
 Missing files and invalid UTF-8 in non-image files return
 `ToolError`.
 `write` creates parent directories and returns the byte count; I/O errors

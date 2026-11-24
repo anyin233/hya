@@ -38,6 +38,7 @@ pub mod lifecycle;
 mod lsp_plane;
 /// Team mailbox requests and the mailbox plane used by send/channel tools.
 pub mod mailbox;
+pub mod media;
 /// Namespaced tool names (`namespace__local`) and namespaced registration.
 pub mod namespace;
 /// Lockstep native-library loading contract for first-party tool bundles.
