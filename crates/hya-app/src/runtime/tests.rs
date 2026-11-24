@@ -17,6 +17,9 @@ fn agent_bundles(bundles: impl IntoIterator<Item = Bundle>) -> Vec<Bundle> {
 }
 
 use super::*;
+use crate::bundle_registry::{
+    BundleInstallCandidate, BundleInstallOutcome, BundleRegistry, NamespaceInstallPolicy,
+};
 use async_trait::async_trait;
 use hya_bundle::{
     AgentRole, Bundle, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent, PreparedResource,
@@ -40,7 +43,6 @@ use hya_proto::{
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
 };
-use hya_store::{BundleInstallCandidate, BundleInstallOutcome, BundleRegistry};
 use hya_tool::{
     AgentDef, FormatterPlane, InlineAgent, InteractionPlane, LspPlane, MailboxPlane, Mode,
     PermissionModel, PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, Tool,
@@ -1414,7 +1416,7 @@ You are the runtime-installed agent.
     let outcome = registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x52; 32],
                 prepared_digest: installed.digest().to_string(),
@@ -1754,7 +1756,7 @@ You are the installed resident agent.
     let outcome = registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x53; 32],
                 prepared_digest: installed.digest().to_string(),

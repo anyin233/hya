@@ -8,6 +8,10 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::bundle_registry::{
+    BundleInstallAction, BundleInstallCandidate, BundleInstallOutcome, BundleRegistry,
+    BundleRegistryError, BundleRegistryRecord, BundleUninstallOutcome, NamespaceInstallPolicy,
+};
 use hya_bundle::{
     Bundle, BundleCatalog, PreparedCatalog, PreparedCheck, PublicPackageInspection,
     cleanup_orphaned_staging, stage_package,
@@ -16,10 +20,6 @@ use hya_server::{
     BUNDLE_CONFLICT, BUNDLE_CONTROL_FAILURE, BUNDLE_IMMUTABLE, BUNDLE_INVALID_REQUEST,
     BUNDLE_NOT_FOUND, BundleControl, BundleControlError, BundleControlFuture, BundleListing,
     BundleListingComponents,
-};
-use hya_store::{
-    BundleInstallAction, BundleInstallCandidate, BundleInstallOutcome, BundleRegistry,
-    BundleRegistryRecord, BundleUninstallOutcome, NamespaceInstallPolicy, StoreError,
 };
 
 use crate::project_bundles::{
@@ -47,9 +47,9 @@ fn failure(message: impl std::fmt::Display) -> BundleControlError {
 
 /// A registry or project failure, with the policy failures `overwrite` resolves explained.
 #[must_use]
-pub fn store_error(error: StoreError) -> BundleControlError {
+pub fn store_error(error: BundleRegistryError) -> BundleControlError {
     match error {
-        StoreError::NamespaceConflict {
+        BundleRegistryError::NamespaceConflict {
             namespace,
             existing_bundle_id,
             incoming_bundle_id,
@@ -60,7 +60,7 @@ pub fn store_error(error: StoreError) -> BundleControlError {
                  install with overwrite (`--overwrite`) to replace it with {incoming_bundle_id}"
             ),
         ),
-        StoreError::BundleDowngradeRequired {
+        BundleRegistryError::BundleDowngradeRequired {
             bundle_id,
             installed_version,
             incoming_version,
@@ -71,17 +71,19 @@ pub fn store_error(error: StoreError) -> BundleControlError {
                  install with overwrite (`--overwrite`) to install {incoming_version}"
             ),
         ),
-        StoreError::BundleContentConflict { bundle_id, version } => BundleControlError::new(
-            BUNDLE_CONFLICT,
-            format!(
-                "BUNDLE_CONTENT_CONFLICT: project bundle {bundle_id} {version} has different \
+        BundleRegistryError::BundleContentConflict { bundle_id, version } => {
+            BundleControlError::new(
+                BUNDLE_CONFLICT,
+                format!(
+                    "BUNDLE_CONTENT_CONFLICT: project bundle {bundle_id} {version} has different \
                  content; bump the version or install with overwrite (`--overwrite`)"
-            ),
-        ),
-        error @ StoreError::BundleNotFound { .. } => {
+                ),
+            )
+        }
+        error @ BundleRegistryError::BundleNotFound { .. } => {
             BundleControlError::new(BUNDLE_NOT_FOUND, error.to_string())
         }
-        error @ StoreError::BundleAgentIdReserved { .. } => invalid(error.to_string()),
+        error @ BundleRegistryError::BundleAgentIdReserved { .. } => invalid(error.to_string()),
         error => failure(error),
     }
 }
@@ -90,7 +92,7 @@ pub fn store_error(error: StoreError) -> BundleControlError {
 #[must_use]
 pub fn project_error(error: ProjectBundleError) -> BundleControlError {
     match error {
-        ProjectBundleError::Store(error) => store_error(error),
+        ProjectBundleError::Registry(error) => store_error(error),
         ProjectBundleError::Bundle(error) => invalid(error.to_string()),
         error @ ProjectBundleError::DirectoryOccupied { .. } => {
             BundleControlError::new(BUNDLE_CONFLICT, error.to_string())
@@ -483,7 +485,7 @@ pub async fn remove(
                 format!("immutable first-party bundle `{bundle_id}` cannot be removed"),
             ));
         }
-        return Err(store_error(StoreError::BundleNotFound {
+        return Err(store_error(BundleRegistryError::BundleNotFound {
             bundle_id: bundle_id.to_string(),
         }));
     };
@@ -523,8 +525,8 @@ pub async fn set_enabled(bundle_id: &str, enabled: bool) -> Result<(), BundleCon
 /// The row is corrupt or was written by an incompatible version.
 pub fn decode_installed_catalog(
     record: &BundleRegistryRecord,
-) -> Result<PreparedCatalog, StoreError> {
-    let corrupt = || StoreError::BundleRegistryCorrupt {
+) -> Result<PreparedCatalog, BundleRegistryError> {
+    let corrupt = || BundleRegistryError::BundleRegistryCorrupt {
         bundle_id: record.bundle_id.clone(),
     };
     let prepared = PreparedCatalog::decode(&record.prepared_bytes, &record.prepared_digest)?;

@@ -26,7 +26,7 @@ govern sessions, Projects, subagents, and Workflows:
 - **Core Subsystem Specifications:**
   - [Runtime (`hya-engine`)](architecture/runtime.md) — `SessionEngine`, publish seams, `TurnBinding`, Goal/Loop drivers, file snapshots & revert, and workspace roots.
   - [Event Model (`hya-proto`)](architecture/event-model.md) — Strong IDs, `EventSeq` (`seq = 0` live vs `seq > 0` durable), full `Event` wire catalog, and deterministic `Projection` reducer.
-  - [Storage (`hya-store`)](architecture/storage.md) — SQLite WAL schema (`0001_init.sql`), atomic batch appends, `projection_snapshot`, `pending_resume`, and `bundle_registry`.
+  - [Storage and bundle registry](architecture/storage.md) — SQLite WAL schema (`0001_init.sql`), atomic batch appends, `projection_snapshot`, `pending_resume`, and `bundle_registry`.
   - [Subagent Orchestration](architecture/subagent-orchestration.md) — Episodic resident actors, `report` / `handoff` / `archive` / downward-DM revival, and vertical `#announce` / `#DM` channels.
   - [Admission and Governor](architecture/admission-and-governor.md) — Atomic task batches, active-claim capacity, and in-memory `SubagentGovernor` stream budgets.
   - [Providers (`hya-provider`)](architecture/providers.md) — OpenAI Chat/Responses/Codex, Grok Build, Anthropic, Google Gemini, capability preflight, and reasoning routing.

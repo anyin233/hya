@@ -7,12 +7,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use hya_app::bundle_registry::{BundleInstallAction, BundleRegistryError, NamespaceInstallPolicy};
 use hya_app::project_bundles::{
     ProjectBundleError, install_project_bundle, load_project_bundles, plan_project_install,
     project_bundles, remove_project_bundle,
 };
 use hya_bundle::SourceFile;
-use hya_store::{BundleInstallAction, NamespaceInstallPolicy, StoreError};
 
 const DENY: NamespaceInstallPolicy = NamespaceInstallPolicy::DenyConflicts;
 const OVERWRITE: NamespaceInstallPolicy = NamespaceInstallPolicy::OverwriteConflicts;
@@ -125,15 +125,15 @@ fn upgrade_replaces_in_place_and_downgrade_or_same_version_edit_need_overwrite()
     let downgrade = bundle_files("acme/tools", "tools", "1.0.0", "One.");
     assert!(matches!(
         plan_project_install(&dir, &downgrade, &[], DENY),
-        Err(ProjectBundleError::Store(
-            StoreError::BundleDowngradeRequired { .. }
+        Err(ProjectBundleError::Registry(
+            BundleRegistryError::BundleDowngradeRequired { .. }
         ))
     ));
     let edited = bundle_files("acme/tools", "tools", "2.0.0", "Edited.");
     assert!(matches!(
         plan_project_install(&dir, &edited, &[], DENY),
-        Err(ProjectBundleError::Store(
-            StoreError::BundleContentConflict { .. }
+        Err(ProjectBundleError::Registry(
+            BundleRegistryError::BundleContentConflict { .. }
         ))
     ));
     install_project_bundle(&dir, edited, &[], OVERWRITE).expect("overwrite same version");
@@ -159,8 +159,8 @@ fn namespace_takeover_needs_overwrite_and_removes_the_incumbent() {
 
     assert!(matches!(
         plan_project_install(&dir, &rival, &[], DENY),
-        Err(ProjectBundleError::Store(
-            StoreError::NamespaceConflict { .. }
+        Err(ProjectBundleError::Registry(
+            BundleRegistryError::NamespaceConflict { .. }
         ))
     ));
     let plan = install_project_bundle(&dir, rival, &[], OVERWRITE).expect("take over namespace");
@@ -178,8 +178,8 @@ fn reserved_agent_ids_and_foreign_directories_are_refused() {
     let files = bundle_files("acme/tools", "tools", "1.0.0", "Lead.");
     assert!(matches!(
         plan_project_install(&dir, &files, &["acme-tools-lead"], DENY),
-        Err(ProjectBundleError::Store(
-            StoreError::BundleAgentIdReserved { .. }
+        Err(ProjectBundleError::Registry(
+            BundleRegistryError::BundleAgentIdReserved { .. }
         ))
     ));
 
@@ -210,7 +210,9 @@ fn remove_deletes_the_bundle_directory_found_by_id() {
 
     assert!(matches!(
         remove_project_bundle(&dir, "acme/missing"),
-        Err(ProjectBundleError::Store(StoreError::BundleNotFound { .. }))
+        Err(ProjectBundleError::Registry(
+            BundleRegistryError::BundleNotFound { .. }
+        ))
     ));
     let removed = remove_project_bundle(&dir, "acme/tools").expect("remove");
     assert_eq!(removed.dir(), custom.as_path());

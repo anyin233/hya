@@ -12,8 +12,7 @@ pub mod bench;
 
 mod agent_effort_preference;
 mod agent_model_preference;
-mod bundle_registry;
-/// Typed store errors shared by session and bundle registry APIs.
+/// Typed store errors for the session store.
 pub mod error;
 mod file_blob;
 mod handoff;
@@ -46,11 +45,6 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 pub use agent_effort_preference::AgentEffortPreference;
 pub use agent_model_preference::AgentModelPreference;
-pub use bundle_registry::{
-    BundleInstallAction, BundleInstallCandidate, BundleInstallOutcome, BundleInstallPlan,
-    BundleRegistry, BundleRegistryRecord, BundleRegistrySnapshot, BundleUninstallOutcome,
-    NamespaceInstallPolicy, UnreadableBundleRegistryRecord, is_downgrade,
-};
 pub use error::StoreError;
 pub use handoff::PendingResume;
 pub use hya_proto::{ActorClaim, OwnerRunId};

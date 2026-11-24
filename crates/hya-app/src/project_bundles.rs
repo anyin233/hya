@@ -19,7 +19,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use hya_bundle::{Bundle, BundleCatalog, BundleError, BundleSource, PreparedCatalog, SourceFile};
-use hya_store::{BundleInstallAction, NamespaceInstallPolicy, StoreError};
+
+use crate::bundle_registry::{
+    BundleInstallAction, BundleRegistryError, NamespaceInstallPolicy, is_downgrade,
+};
 
 /// One loaded project bundle: its prepared catalog, source directory, and the
 /// content digest that feeds the directory fingerprint.
@@ -61,14 +64,14 @@ pub(crate) fn load_project_bundle_dirs(
             continue;
         }
         let source = directory_source(&bundle_dir)?.ok_or_else(|| {
-            StoreError::BundleRegistryData(format!(
+            BundleRegistryError::BundleRegistryData(format!(
                 "project bundle {} has no bundle.yaml or bundle.hya.md",
                 bundle_dir.display()
             ))
         })?;
         let prepared = hya_bundle::prepare_package(source)?;
         let [bundle] = prepared.bundles() else {
-            return Err(StoreError::BundleRegistryData(format!(
+            return Err(BundleRegistryError::BundleRegistryData(format!(
                 "project bundle {} must prepare to exactly one bundle",
                 bundle_dir.display()
             ))
@@ -294,7 +297,7 @@ pub enum ProjectBundleError {
     /// A policy failure shared with the user registry (namespace conflict,
     /// downgrade, content conflict, reserved Agent id, or bundle not found).
     #[error(transparent)]
-    Store(#[from] StoreError),
+    Registry(#[from] BundleRegistryError),
     /// The bundle sources do not prepare.
     #[error(transparent)]
     Bundle(#[from] BundleError),
@@ -372,7 +375,7 @@ fn prepare_project_bundle(
 ) -> Result<ProjectBundle, ProjectBundleError> {
     let prepared = hya_bundle::prepare_package(source)?;
     let [bundle] = prepared.bundles() else {
-        return Err(StoreError::BundleRegistryData(
+        return Err(BundleRegistryError::BundleRegistryData(
             "a project bundle must prepare to exactly one bundle".to_string(),
         )
         .into());
@@ -487,8 +490,8 @@ fn without_config_entries(files: &[SourceFile]) -> Vec<SourceFile> {
 ///
 /// # Errors
 /// Returns the same policy errors the user registry reports
-/// ([`StoreError::NamespaceConflict`], [`StoreError::BundleDowngradeRequired`],
-/// [`StoreError::BundleContentConflict`], [`StoreError::BundleAgentIdReserved`]),
+/// ([`BundleRegistryError::NamespaceConflict`], [`BundleRegistryError::BundleDowngradeRequired`],
+/// [`BundleRegistryError::BundleContentConflict`], [`BundleRegistryError::BundleAgentIdReserved`]),
 /// a prepare failure, or [`ProjectBundleError::DirectoryOccupied`]. Under
 /// [`NamespaceInstallPolicy::OverwriteConflicts`] a same-version content
 /// change replaces the directory instead of failing.
@@ -507,7 +510,7 @@ pub fn plan_project_install(
     let version = incoming.version().to_string();
     for agent in incoming.bundle().agents() {
         if reserved_agent_ids.contains(&agent.id.as_str()) {
-            return Err(StoreError::BundleAgentIdReserved {
+            return Err(BundleRegistryError::BundleAgentIdReserved {
                 bundle_id,
                 agent_id: agent.id.as_str().to_string(),
             }
@@ -527,10 +530,10 @@ pub fn plan_project_install(
     if let Some(bundle) = existing
         && !same_content
         && bundle.version() != version
-        && hya_store::is_downgrade(&version, bundle.version())
+        && is_downgrade(&version, bundle.version())
         && policy == NamespaceInstallPolicy::DenyConflicts
     {
-        return Err(StoreError::BundleDowngradeRequired {
+        return Err(BundleRegistryError::BundleDowngradeRequired {
             bundle_id,
             installed_version: bundle.version().to_string(),
             incoming_version: version,
@@ -549,7 +552,7 @@ pub fn plan_project_install(
     if let Some(owner) = displaced.first()
         && policy == NamespaceInstallPolicy::DenyConflicts
     {
-        return Err(StoreError::NamespaceConflict {
+        return Err(BundleRegistryError::NamespaceConflict {
             namespace,
             existing_bundle_id: owner.bundle_id().to_string(),
             incoming_bundle_id: bundle_id,
@@ -563,7 +566,7 @@ pub fn plan_project_install(
         Some(bundle)
             if bundle.version() == version && policy == NamespaceInstallPolicy::DenyConflicts =>
         {
-            return Err(StoreError::BundleContentConflict { bundle_id, version }.into());
+            return Err(BundleRegistryError::BundleContentConflict { bundle_id, version }.into());
         }
         Some(bundle) => BundleInstallAction::Replace {
             installed_version: bundle.version().to_string(),
@@ -595,7 +598,7 @@ pub fn plan_project_install(
         .map(|bundle| bundle.bundle().clone())
         .collect::<Vec<_>>();
     complete.push(incoming.bundle().clone());
-    BundleCatalog::from_prepared(&complete).map_err(StoreError::from)?;
+    BundleCatalog::from_prepared(&complete).map_err(BundleRegistryError::from)?;
 
     incoming.dir.clone_from(&target);
     Ok(ProjectInstallPlan {
@@ -700,7 +703,7 @@ pub fn install_project_bundle(
 /// Find the project bundle with `bundle_id` under `dir` without removing it.
 ///
 /// # Errors
-/// [`StoreError::BundleNotFound`] when no valid project bundle has that id.
+/// [`BundleRegistryError::BundleNotFound`] when no valid project bundle has that id.
 pub fn find_project_bundle(
     dir: &Path,
     bundle_id: &str,
@@ -710,7 +713,7 @@ pub fn find_project_bundle(
         .filter_map(Result::ok)
         .find(|bundle| bundle.bundle_id() == bundle_id)
         .ok_or_else(|| {
-            StoreError::BundleNotFound {
+            BundleRegistryError::BundleNotFound {
                 bundle_id: bundle_id.to_string(),
             }
             .into()
@@ -720,7 +723,7 @@ pub fn find_project_bundle(
 /// Delete the source directory of the project bundle with `bundle_id`.
 ///
 /// # Errors
-/// [`StoreError::BundleNotFound`] when no valid project bundle has that id, or
+/// [`BundleRegistryError::BundleNotFound`] when no valid project bundle has that id, or
 /// a filesystem failure.
 pub fn remove_project_bundle(
     dir: &Path,

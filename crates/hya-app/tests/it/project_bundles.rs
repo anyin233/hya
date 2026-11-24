@@ -8,13 +8,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use hya_app::bundle_registry::{BundleInstallCandidate, BundleRegistry, NamespaceInstallPolicy};
 use hya_engine::{
     CatalogScope, EventBus, RuntimeCatalogRefresh, RuntimeRegistry, RuntimeSourceId, SessionEngine,
     TurnBinding,
 };
 use hya_proto::{ModelRef, ProjectId};
 use hya_provider::ProviderRouter;
-use hya_store::{BundleInstallCandidate, BundleRegistry, SessionStore};
+use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 
 fn temp_path(suffix: &str) -> PathBuf {
@@ -119,7 +120,7 @@ async fn install(registry_path: &Path, source: hya_bundle::BundleSource, digest:
     registry
         .install(
             &[],
-            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [digest; 32],
                 prepared_digest: prepared.digest().to_owned(),

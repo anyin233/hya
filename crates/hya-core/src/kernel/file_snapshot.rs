@@ -922,12 +922,12 @@ mod tests {
         let err = omit_or_propagate_budget_error(
             SessionId::new(),
             6,
-            hya_store::StoreError::BundleRegistryData("size overflow".into()),
+            hya_store::StoreError::SessionKeyData("invalid key".into()),
         )
         .unwrap_err();
         assert!(matches!(
             err,
-            CoreError::Store(hya_store::StoreError::BundleRegistryData(_))
+            CoreError::Store(hya_store::StoreError::SessionKeyData(_))
         ));
     }
 
