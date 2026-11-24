@@ -1526,13 +1526,15 @@ pub struct ListCommandsRequest {
 /// One slash-command entry.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandSummary {
-    /// Command name without the leading `/`.
+    /// Command name without the leading `/`. A skill is named `skill:<name>`
+    /// (the reserved skill namespace); no other command uses that prefix.
     #[prost(string, tag = "1")]
     pub name: ::prost::alloc::string::String,
     /// One-line description for completion UIs.
     #[prost(string, tag = "2")]
     pub description: ::prost::alloc::string::String,
-    /// Argument hint shown after the command name.
+    /// Argument hint shown after the command name: `<arg>` marks a required
+    /// argument, `\[arg\]` an optional one (`\[request\]` for every skill).
     #[prost(string, tag = "3")]
     pub argument_hint: ::prost::alloc::string::String,
     /// Positional/flag hints from the command template, in template order.
@@ -1541,7 +1543,8 @@ pub struct CommandSummary {
     /// Where the command was discovered (`command`, `skill`, ...).
     #[prost(string, tag = "6")]
     pub source: ::prost::alloc::string::String,
-    /// Expansion template (positional `$1`/`$ARGUMENTS` placeholders).
+    /// Expansion template (positional `$1`/`$ARGUMENTS` placeholders); for a
+    /// skill, its body, sent as a `<skill>` block with the arguments after it.
     #[prost(string, tag = "7")]
     pub template: ::prost::alloc::string::String,
     /// Agent the command run binds when authored.
@@ -1576,7 +1579,8 @@ pub struct ListSkillsRequest {
 /// One invocable skill.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SkillSummary {
-    /// Skill name used with `/skill` and the skill plane.
+    /// Skill name: `/skill:<name>` runs it, and the `skill` tool loads it by
+    /// this name.
     #[prost(string, tag = "1")]
     pub name: ::prost::alloc::string::String,
     /// One-line description of what the skill does.
@@ -1587,7 +1591,7 @@ pub struct SkillSummary {
     /// `user` (any other file, such as `~/.codex/skills`).
     #[prost(string, tag = "3")]
     pub source: ::prost::alloc::string::String,
-    /// Full skill markdown body (frontmatter + content).
+    /// The skill's markdown body: the text after its frontmatter.
     #[prost(string, tag = "4")]
     pub content: ::prost::alloc::string::String,
     /// Where the skill file lives (`<built-in>` for compiled-in skills).

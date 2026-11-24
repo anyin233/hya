@@ -534,17 +534,20 @@ message ListCommandsRequest {
 
 // One slash-command entry.
 message CommandSummary {
-  // Command name without the leading `/`.
+  // Command name without the leading `/`. A skill is named `skill:<name>`
+  // (the reserved skill namespace); no other command uses that prefix.
   string name = 1;
   // One-line description for completion UIs.
   string description = 2;
-  // Argument hint shown after the command name.
+  // Argument hint shown after the command name: `<arg>` marks a required
+  // argument, `[arg]` an optional one (`[request]` for every skill).
   string argument_hint = 3;
   // Positional/flag hints from the command template, in template order.
   repeated string hints = 5;
   // Where the command was discovered (`command`, `skill`, ...).
   string source = 6;
-  // Expansion template (positional `$1`/`$ARGUMENTS` placeholders).
+  // Expansion template (positional `$1`/`$ARGUMENTS` placeholders); for a
+  // skill, its body, sent as a `<skill>` block with the arguments after it.
   string template = 7;
   // Agent the command run binds when authored.
   string agent = 8;
@@ -571,7 +574,8 @@ message ListSkillsRequest {
 
 // One invocable skill.
 message SkillSummary {
-  // Skill name used with `/skill` and the skill plane.
+  // Skill name: `/skill:<name>` runs it, and the `skill` tool loads it by
+  // this name.
   string name = 1;
   // One-line description of what the skill does.
   string description = 2;
@@ -579,7 +583,7 @@ message SkillSummary {
   // runtime resource), `project` (under the directory or a Project root), or
   // `user` (any other file, such as `~/.codex/skills`).
   string source = 3;
-  // Full skill markdown body (frontmatter + content).
+  // The skill's markdown body: the text after its frontmatter.
   string content = 4;
   // Where the skill file lives (`<built-in>` for compiled-in skills).
   string location = 5;

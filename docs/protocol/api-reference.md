@@ -1515,12 +1515,12 @@ One slash-command entry.
 
 | Field | Type | Description |
 |---|---|---|
-| `name` (1) | `string` | Command name without the leading `/`. |
+| `name` (1) | `string` | Command name without the leading `/`. A skill is named `skill:<name>` (the reserved skill namespace); no other command uses that prefix. |
 | `description` (2) | `string` | One-line description for completion UIs. |
-| `argument_hint` (3) | `string` | Argument hint shown after the command name. |
+| `argument_hint` (3) | `string` | Argument hint shown after the command name: `<arg>` marks a required argument, `[arg]` an optional one (`[request]` for every skill). |
 | `hints` (5) | `repeated string` | Positional/flag hints from the command template, in template order. |
 | `source` (6) | `string` | Where the command was discovered (`command`, `skill`, ...). |
-| `template` (7) | `string` | Expansion template (positional `$1`/`$ARGUMENTS` placeholders). |
+| `template` (7) | `string` | Expansion template (positional `$1`/`$ARGUMENTS` placeholders); for a skill, its body, sent as a `<skill>` block with the arguments after it. |
 | `agent` (8) | `string` | Agent the command run binds when authored. |
 | `model` (9) | `string` | Model the command run binds when authored. |
 | `subtask` (10) | `optional bool` | Whether the command runs as a detached subtask. |
@@ -1547,10 +1547,10 @@ One invocable skill.
 
 | Field | Type | Description |
 |---|---|---|
-| `name` (1) | `string` | Skill name used with `/skill` and the skill plane. |
+| `name` (1) | `string` | Skill name: `/skill:<name>` runs it, and the `skill` tool loads it by this name. |
 | `description` (2) | `string` | One-line description of what the skill does. |
 | `source` (3) | `string` | Where the skill was discovered: `builtin` (compiled in), `bundle` (a runtime resource), `project` (under the directory or a Project root), or `user` (any other file, such as `~/.codex/skills`). |
-| `content` (4) | `string` | Full skill markdown body (frontmatter + content). |
+| `content` (4) | `string` | The skill's markdown body: the text after its frontmatter. |
 | `location` (5) | `string` | Where the skill file lives (`<built-in>` for compiled-in skills). |
 
 ### `ListSkillsResponse`

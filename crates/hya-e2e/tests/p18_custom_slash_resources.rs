@@ -531,6 +531,19 @@ fn response_text(response: &Value) -> &str {
         .expect("command response user text")
 }
 
+/// Assert `text` is the `<skill>` block of the `user-playbook` fixture
+/// (`/skill:user-playbook`), with `request` after it as pi writes it.
+fn assert_skill_block(text: &str, request: &str) {
+    assert!(
+        text.starts_with("<skill name=\"user-playbook\" location=\"")
+            && text.contains("/.hya/skills/user-playbook/SKILL.md\">\nReferences are relative to ")
+            && text.ends_with(&format!(
+                "/.hya/skills/user-playbook.\n\nSKILL_BODY_USER_PLAYBOOK $ARGUMENTS\n</skill>\n\n{request}"
+            )),
+        "skill block: {text}"
+    );
+}
+
 /// Assert a command event carries the exact command/arguments and a message id.
 fn assert_command_event(events: &[Envelope], command: &str, arguments: &str) {
     assert!(
@@ -799,7 +812,8 @@ async fn custom_slash_catalog_and_routes_expand_all_supported_sources() {
         catalog_entry(&catalog, "help")["template"],
         "LATER_HELP $ARGUMENTS"
     );
-    // A command overrides a skill of the same name.
+    // A skill lives in its own `skill:` namespace: a command of the same
+    // name and the skill are both listed, and neither shadows the other.
     assert_eq!(
         catalog_entry(&catalog, "user-playbook")["template"],
         "COMMAND_WINS $ARGUMENTS"
@@ -807,6 +821,14 @@ async fn custom_slash_catalog_and_routes_expand_all_supported_sources() {
     assert_eq!(
         catalog_entry(&catalog, "user-playbook")["source"],
         "command"
+    );
+    assert_eq!(
+        catalog_entry(&catalog, "skill:user-playbook")["source"],
+        "skill"
+    );
+    assert_eq!(
+        catalog_entry(&catalog, "skill:user-playbook")["argumentHint"],
+        "[request]"
     );
     assert_eq!(
         catalog_entry(&catalog, "plain-fence")["template"],
@@ -986,13 +1008,10 @@ async fn skill_backed_slash_expands_without_skill_tool_call() {
     let direct = command_turn(
         &env,
         direct_session,
-        command_request("user-playbook", "DIRECT_NONCE", None),
+        command_request("skill:user-playbook", "DIRECT_NONCE", None),
     )
     .await;
-    assert_eq!(
-        response_text(&direct),
-        "SKILL_BODY_USER_PLAYBOOK DIRECT_NONCE\n"
-    );
+    assert_skill_block(response_text(&direct), "DIRECT_NONCE");
     let direct_events = env
         .events(direct_session, None)
         .await
@@ -1023,13 +1042,10 @@ async fn skill_backed_slash_expands_without_skill_tool_call() {
     let picker = command_turn(
         &env,
         picker_session,
-        command_request("user-playbook", "PICKER_NONCE", None),
+        command_request("skill:user-playbook", "PICKER_NONCE", None),
     )
     .await;
-    assert_eq!(
-        response_text(&picker),
-        "SKILL_BODY_USER_PLAYBOOK PICKER_NONCE\n"
-    );
+    assert_skill_block(response_text(&picker), "PICKER_NONCE");
 
     // A removed Skill leaves a stale TUI name on command transport, but the
     // backend catalog correctly falls back to literal slash text.
@@ -1038,10 +1054,10 @@ async fn skill_backed_slash_expands_without_skill_tool_call() {
     let stale = command_turn(
         &env,
         stale_session,
-        command_request("user-playbook", "STALE_NONCE", None),
+        command_request("skill:user-playbook", "STALE_NONCE", None),
     )
     .await;
-    assert_eq!(response_text(&stale), "/user-playbook STALE_NONCE");
+    assert_eq!(response_text(&stale), "/skill:user-playbook STALE_NONCE");
     assert!(
         !command_catalog(&env)
             .await
@@ -1063,13 +1079,13 @@ async fn skill_backed_slash_expands_without_skill_tool_call() {
     assert!(
         !array_data(&bootstrap_catalog)
             .iter()
-            .any(|entry| entry["name"] == "new-after-bootstrap")
+            .any(|entry| entry["name"] == "skill:new-after-bootstrap")
     );
     let new_session = env.create_session().await.expect("new Skill session");
     let new_command = command_turn(
         &env,
         new_session,
-        command_request("new-after-bootstrap", "ARG", None),
+        command_request("skill:new-after-bootstrap", "ARG", None),
     )
     .await;
     let new_context = env
@@ -1699,9 +1715,16 @@ async fn dynamic_resource_snapshots_and_reload() {
     .expect("dynamic env");
 
     let first = env.create_session().await.expect("dynamic session");
-    let first_command =
-        command_turn(&env, first, command_request("user-playbook", "OLD", None)).await;
-    assert_eq!(response_text(&first_command), "SKILL_OLD_BODY OLD\n");
+    let first_command = command_turn(
+        &env,
+        first,
+        command_request("skill:user-playbook", "OLD", None),
+    )
+    .await;
+    assert!(
+        response_text(&first_command).ends_with("SKILL_OLD_BODY $ARGUMENTS\n</skill>\n\nOLD"),
+        "{first_command}"
+    );
     let before_events = env
         .events(first, None)
         .await
@@ -1725,8 +1748,16 @@ async fn dynamic_resource_snapshots_and_reload() {
         ),
     )
     .expect("edit Skill");
-    let second = command_turn(&env, first, command_request("user-playbook", "NEW", None)).await;
-    assert_eq!(response_text(&second), "SKILL_EDITED_BODY NEW\n");
+    let second = command_turn(
+        &env,
+        first,
+        command_request("skill:user-playbook", "NEW", None),
+    )
+    .await;
+    assert!(
+        response_text(&second).ends_with("SKILL_EDITED_BODY $ARGUMENTS\n</skill>\n\nNEW"),
+        "{second}"
+    );
     let after_skill_events = env.events(first, None).await.expect("after Skill events");
     assert!(
         after_skill_events
@@ -1744,8 +1775,9 @@ async fn dynamic_resource_snapshots_and_reload() {
         "edited Skill must publish a new generation"
     );
     let first_context = env.session_context(&first).await.expect("Skill context");
-    assert!(first_context.to_string().contains("SKILL_OLD_BODY OLD"));
-    assert!(first_context.to_string().contains("SKILL_EDITED_BODY NEW"));
+    let first_context = first_context.to_string();
+    assert!(first_context.contains("SKILL_OLD_BODY $ARGUMENTS\\n</skill>\\n\\nOLD"));
+    assert!(first_context.contains("SKILL_EDITED_BODY $ARGUMENTS\\n</skill>\\n\\nNEW"));
 
     // MCP disconnect/connect is the explicit dynamic publication boundary.
     post_ok(&env, "/v1/mcp/echo/disconnect", Value::Null).await;

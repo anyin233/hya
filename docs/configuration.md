@@ -2064,7 +2064,9 @@ hya scans exactly two project-local roots
 Files are collected **recursively** and sorted by path. The slash-command name is
 the path **relative to the discovery root**, with path segments joined by `/` and
 the `.md` suffix stripped — e.g. `.hya/command/git/commit.md` becomes
-`/git/commit`, not `/commit`. There is **no** user/home tier and no
+`/git/commit`, not `/commit`. Names starting with `skill:` are reserved for
+skills (`/skill:<name>`, see [Skills](skills.md#invoke-a-skill)); such a file
+is skipped. There is **no** user/home tier and no
 inline-config command table.
 
 Optional YAML frontmatter:

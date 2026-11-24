@@ -79,6 +79,8 @@ export interface AppActions {
   openEditor(): void
   /** `/undo`: revert the last prompt (app/revert.ts). */
   undo(): Promise<void>
+  /** Send `text` as a prompt of the open session, as the message composer does (an unknown command line that starts with a path). */
+  sendPrompt?(text: string): Promise<void>
   /** `/redo`: undo the pending revert. */
   redo(): Promise<void>
   /** `/fork`: open the fork picker. */
@@ -107,6 +109,8 @@ export interface CommandContext {
   store: AppStore
   client: HyaClient
   actions: AppActions
+  /** The registry running the command (set by `dispatch`): its local names for an unknown command's `did you mean`. */
+  registry?: CommandRegistry
 }
 
 /** A parsed command line. `argumentsText` is everything after the name, verbatim. */
@@ -179,7 +183,7 @@ export class CommandRegistry {
     const invocation = this.parse(text)
     const spec = this.specs.get(invocation.name)
     if (spec) await spec.run(context, invocation)
-    else await this.fallback(context, invocation)
+    else await this.fallback({ ...context, registry: this }, invocation)
   }
 
   /** Complete the argument of a registered command; `[]` for unknown commands. */

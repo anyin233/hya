@@ -5,6 +5,13 @@ use crate::support::catalog_place::CatalogPlace;
 /// Identity of the trusted bundle that owns the prompt-template commands.
 const CORE_COMMANDS_BUNDLE: &str = "hya/core-commands";
 
+/// Reserved command-name prefix of the skill namespace: the skill `reviewer`
+/// runs as `/skill:reviewer`, so a skill never collides with a command.
+pub(crate) const SKILL_COMMAND_PREFIX: &str = "skill:";
+
+/// Argument hint of every `/skill:<name>` row: the request is optional.
+const SKILL_ARGUMENT_HINT: &str = "[request]";
+
 /// The `commands.yaml` asset of `hya/core-commands`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,8 +87,11 @@ pub(crate) struct CommandInfo {
 
     pub(crate) source: &'static str,
     #[serde(skip)]
-    expandable: bool,
+    expansion: Expansion,
     pub(crate) template: String,
+    /// Argument hint shown after the name (`<file>` required, `[focus]` optional).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) argument_hint: Option<String>,
 
     pub(crate) hints: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -160,6 +170,22 @@ pub(crate) fn list(place: &CatalogPlace) -> Vec<CommandInfo> {
     commands
 }
 
+/// How a catalog row turns into prompt text.
+#[derive(Clone, Debug)]
+enum Expansion {
+    /// A client-side command (`/help`, `/clear`): never expanded here.
+    None,
+    /// A prompt template with `$1` / `$ARGUMENTS` placeholders.
+    Template,
+    /// A skill: a pi-style `<skill>` block with the arguments after it.
+    Skill {
+        /// Catalog path named in the block's `location` attribute.
+        location: String,
+        /// The skill's directory, the base of its relative references.
+        dir: Option<String>,
+    },
+}
+
 /// Expand `command` against the catalog a session's turns see
 /// ([`CatalogPlace::for_session`]).
 pub(crate) fn expand_prompt(
@@ -169,8 +195,64 @@ pub(crate) fn expand_prompt(
 ) -> Option<String> {
     list(place)
         .into_iter()
-        .find(|item| item.name == command && item.expandable)
-        .map(|item| expand_template(&item.template, arguments))
+        .find(|item| item.name == command)
+        .and_then(|item| item.expand(arguments))
+}
+
+/// The text a `/skill:<name> [request]` turn sends, as pi writes it:
+///
+/// ```text
+/// <skill name="reviewer" location="/w/.hya/skills/reviewer/SKILL.md">
+/// References are relative to /w/.hya/skills/reviewer.
+///
+/// <body>
+/// </skill>
+///
+/// <request>
+/// ```
+///
+/// The reference line is left out for a built-in skill (no directory), and
+/// the request (with its blank line) when it is empty. Attribute values
+/// escape `&`, `"`, `<`, and `>`.
+pub(crate) fn skill_block(
+    name: &str,
+    location: &str,
+    dir: Option<&str>,
+    body: &str,
+    arguments: &str,
+) -> String {
+    let mut out = format!(
+        "<skill name=\"{}\" location=\"{}\">\n",
+        escape_attribute(name),
+        escape_attribute(location)
+    );
+    if let Some(dir) = dir {
+        out.push_str("References are relative to ");
+        out.push_str(dir);
+        out.push_str(".\n\n");
+    }
+    out.push_str(body.trim());
+    out.push_str("\n</skill>");
+    let request = arguments.trim();
+    if !request.is_empty() {
+        out.push_str("\n\n");
+        out.push_str(request);
+    }
+    out
+}
+
+fn escape_attribute(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 fn expand_template(template: &str, arguments: &str) -> String {
@@ -246,13 +328,36 @@ fn command_info(
         agent: None,
         model: None,
         source: "command",
-        expandable: false,
+        expansion: Expansion::None,
         template,
+        argument_hint: None,
         hints: hints.into_iter().map(str::to_string).collect(),
         subtask,
     }
 }
 impl CommandInfo {
+    /// The prompt text of this row for `arguments`; `None` for a
+    /// client-side command.
+    fn expand(&self, arguments: &str) -> Option<String> {
+        match &self.expansion {
+            Expansion::None => None,
+            Expansion::Template => Some(expand_template(&self.template, arguments)),
+            Expansion::Skill { location, dir } => {
+                let name = self
+                    .name
+                    .strip_prefix(SKILL_COMMAND_PREFIX)
+                    .unwrap_or(&self.name);
+                Some(skill_block(
+                    name,
+                    location,
+                    dir.as_deref(),
+                    &self.template,
+                    arguments,
+                ))
+            }
+        }
+    }
+
     pub(super) fn command(
         name: String,
         description: Option<String>,
@@ -267,22 +372,29 @@ impl CommandInfo {
             agent,
             model,
             source: "command",
-            expandable: true,
+            expansion: Expansion::Template,
             hints: command_hints(&template),
             template,
+            argument_hint: None,
             subtask,
         }
     }
 
-    fn skill(name: String, description: String, template: String) -> Self {
+    /// The `/skill:<name>` row of `skill`: its body is the template, expanded
+    /// into a `<skill>` block ([`skill_block`]).
+    fn skill(skill: crate::support::skill_catalog::SkillInfo) -> Self {
         Self {
-            name,
-            description: Some(description),
+            name: format!("{SKILL_COMMAND_PREFIX}{}", skill.name),
+            description: Some(skill.description),
             agent: None,
             model: None,
             source: "skill",
-            expandable: true,
-            template,
+            expansion: Expansion::Skill {
+                location: skill.path,
+                dir: skill.dir,
+            },
+            template: skill.content,
+            argument_hint: Some(SKILL_ARGUMENT_HINT.to_string()),
             hints: Vec::new(),
             subtask: None,
         }
@@ -327,17 +439,15 @@ fn command_hints(template: &str) -> Vec<String> {
     numbered
 }
 
+/// One `/skill:<name>` row per visible skill. The `skill:` namespace is
+/// reserved (disk commands cannot use it), so a skill never shadows a
+/// command or is shadowed by one.
 fn add_skill_commands(commands: &mut Vec<CommandInfo>, place: &CatalogPlace) {
-    for skill in crate::support::skill_catalog::list(place) {
-        if commands.iter().any(|command| command.name == skill.name) {
-            continue;
-        }
-        commands.push(CommandInfo::skill(
-            skill.name,
-            skill.description,
-            skill.content,
-        ));
-    }
+    commands.extend(
+        crate::support::skill_catalog::list(place)
+            .into_iter()
+            .map(CommandInfo::skill),
+    );
 }
 
 #[cfg(test)]
@@ -365,6 +475,94 @@ mod tests {
             assert_eq!(command.template, asset(id), "/{name}");
             assert_eq!(command.subtask, subtask, "/{name}");
         }
+    }
+
+    #[test]
+    fn skill_block_names_the_skill_its_directory_and_appends_the_request() {
+        assert_eq!(
+            super::skill_block(
+                "reviewer",
+                "/w/.hya/skills/reviewer/SKILL.md",
+                Some("/w/.hya/skills/reviewer"),
+                "\n# Reviewer\n\nRead $ARGUMENTS.\n",
+                "  fix auth ",
+            ),
+            "<skill name=\"reviewer\" location=\"/w/.hya/skills/reviewer/SKILL.md\">\n\
+             References are relative to /w/.hya/skills/reviewer.\n\n\
+             # Reviewer\n\nRead $ARGUMENTS.\n</skill>\n\nfix auth"
+        );
+        // A built-in skill has no directory, and no request adds no tail.
+        assert_eq!(
+            super::skill_block("b", "embedded:x/\"q\"&<>", None, "body", ""),
+            "<skill name=\"b\" location=\"embedded:x/&quot;q&quot;&amp;&lt;&gt;\">\nbody\n</skill>"
+        );
+    }
+
+    #[test]
+    fn skills_are_skill_prefixed_rows_and_never_shadow_or_yield_to_commands() {
+        let dir = std::env::temp_dir().join(format!(
+            "hya-skill-commands-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_nanos())
+        ));
+        let write = |path: &str, text: &str| {
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().unwrap_or(&dir))
+                .unwrap_or_else(|error| panic!("{error}"));
+            std::fs::write(path, text).unwrap_or_else(|error| panic!("{error}"));
+        };
+        write(
+            ".hya/skills/greet/SKILL.md",
+            "---\nname: greet\ndescription: Say hello\n---\nSay hello.\n",
+        );
+        write(".hya/commands/greet.md", "COMMAND $ARGUMENTS\n");
+        write(".hya/commands/skill:greet.md", "RESERVED\n");
+        let place = super::CatalogPlace::directory_for_tests(&dir.to_string_lossy());
+        let commands = super::list(&place);
+        let named = |name: &str| commands.iter().filter(|row| row.name == name).count();
+        assert_eq!(named("greet"), 1);
+        assert_eq!(
+            named("skill:greet"),
+            1,
+            "the reserved file is not a command"
+        );
+        let skill = commands
+            .iter()
+            .find(|row| row.name == "skill:greet")
+            .unwrap_or_else(|| panic!("missing /skill:greet"));
+        assert_eq!(skill.source, "skill");
+        assert_eq!(skill.argument_hint.as_deref(), Some("[request]"));
+        let skill_dir = dir.join(".hya/skills/greet");
+        assert_eq!(
+            super::expand_prompt(&place, "skill:greet", "bob").as_deref(),
+            Some(
+                format!(
+                    "<skill name=\"greet\" location=\"{}\">\nReferences are relative to {}.\n\nSay hello.\n</skill>\n\nbob",
+                    skill_dir.join("SKILL.md").display(),
+                    skill_dir.display()
+                )
+                .as_str()
+            )
+        );
+        assert_eq!(
+            super::expand_prompt(&place, "greet", "bob").as_deref(),
+            Some("COMMAND bob")
+        );
+        // A built-in skill expands without a reference line.
+        let builtin = super::expand_prompt(&place, "skill:secure-self-update", "")
+            .unwrap_or_else(|| panic!("missing built-in skill"));
+        assert!(
+            builtin.starts_with(
+                "<skill name=\"secure-self-update\" location=\"embedded:hya/core-skills/skill/secure-self-update/SKILL.md\">\n"
+            ),
+            "{builtin}"
+        );
+        assert!(!builtin.contains("References are relative to"), "{builtin}");
+        // Client-side rows never expand.
+        assert_eq!(super::expand_prompt(&place, "clear", ""), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

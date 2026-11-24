@@ -112,3 +112,47 @@ export function suggestCommandInput(input: string, entries: () => CommandEntry[]
       runOnEnter: !requiresArgument(entry.argumentHint),
     }))
 }
+
+/** The reserved skill namespace of the backend catalog: the skill `reviewer` runs as `/skill:reviewer`. */
+export const skillCommandPrefix = "skill:"
+
+function editDistance(a: string, b: string): number {
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index)
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i]
+    for (let j = 1; j <= b.length; j++) {
+      current[j] = Math.min(previous[j]! + 1, current[j - 1]! + 1, previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1))
+    }
+    previous = current
+  }
+  return previous[b.length]!
+}
+
+/**
+ * The `did you mean` for an unknown command `name` (no slash) among `names`
+ * (no slashes): the skill of that very name first (`reviewer` →
+ * `skill:reviewer`, the bare skill commands of older releases), then the
+ * closest name within a typo's distance, else one that starts with it.
+ */
+export function closestCommand(name: string, names: readonly string[]): string | undefined {
+  const lower = name.toLowerCase()
+  if (!lower) return undefined
+  if (names.includes(`${skillCommandPrefix}${name}`)) return `${skillCommandPrefix}${name}`
+  const limit = Math.max(1, Math.floor(lower.length / 3))
+  let best: { name: string; distance: number } | undefined
+  for (const candidate of names) {
+    const distance = editDistance(lower, candidate.toLowerCase())
+    if (distance <= limit && (!best || distance < best.distance || (distance === best.distance && candidate < best.name))) best = { name: candidate, distance }
+  }
+  if (best) return best.name
+  return [...names].sort().find((candidate) => candidate.toLowerCase().startsWith(lower))
+}
+
+/**
+ * An unknown command line whose first word holds another `/` (`/usr/lib/x
+ * fails to load`) reads as a path, not a command: it goes to the agent as
+ * a prompt instead of being refused.
+ */
+export function looksLikePath(name: string): boolean {
+  return /^\/[^/\s]*\/\S*/.test(name)
+}

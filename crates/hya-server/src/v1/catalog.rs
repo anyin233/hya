@@ -706,7 +706,7 @@ pub(crate) fn command_rows(place: &CatalogPlace) -> Vec<pb::CommandSummary> {
         .map(|row| pb::CommandSummary {
             name: row.name.clone(),
             description: row.description.clone().unwrap_or_default(),
-            argument_hint: String::new(),
+            argument_hint: row.argument_hint.clone().unwrap_or_default(),
             hints: row.hints.clone(),
             source: row.source.to_owned(),
             template: row.template.clone(),

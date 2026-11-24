@@ -1009,6 +1009,9 @@ export function createAppStore() {
     setMcpView(view: McpViewState | undefined): void { set("mcpView", view) },
     setMcpServers(servers: McpServerStatus[]): void { set("mcpServers", servers) },
 
+    /** `ListCommands` rows (the command menu's backend entries, `/skill:*` included), re-read alone by an unknown command. */
+    setBackendCommands(commands: CommandSummary[]): void { set("backendCommands", commands) },
+
     /** Open, update, or (`undefined`) close the Saved Rules view (`/rules`). */
     setRulesView(view: RulesViewState | undefined): void { set("rulesView", view) },
     setSavedRules(rules: SavedRule[]): void { set("savedRules", rules) },
