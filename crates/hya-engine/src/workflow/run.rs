@@ -9,7 +9,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::StreamExt;
 use hya_proto::{
     ActorClaim, Event, MemberId, ModelRef, ReportOutcome, SessionId, WorkflowMemberRole,
     WorkflowRunId, WorkflowStageStatus,
@@ -165,6 +164,15 @@ struct ResidentActivation {
     route: Option<WorkflowTurnRoute>,
 }
 
+#[cfg(test)]
+struct StageConnectionHold {
+    hold_stage: &'static str,
+    fast_stage: &'static str,
+    both_activated: Arc<tokio::sync::Barrier>,
+    tx_acquired: Arc<tokio::sync::Notify>,
+    release_tx: Arc<tokio::sync::Notify>,
+}
+
 /// Fully preflighted Workflow execution.
 ///
 /// Preflight creates no child Session or mail and reserves no live capacity.
@@ -177,6 +185,16 @@ pub struct PreparedWorkflowRun {
     verifiers: Vec<Option<ResolvedAgent>>,
     durable_run: Option<WorkflowRunId>,
     actor_claim: Option<ActorClaim>,
+    #[cfg(test)]
+    stage_hold: Option<Arc<StageConnectionHold>>,
+}
+
+#[cfg(test)]
+impl PreparedWorkflowRun {
+    fn with_stage_hold(mut self, hold: Arc<StageConnectionHold>) -> Self {
+        self.stage_hold = Some(hold);
+        self
+    }
 }
 
 fn resolve_agent(
@@ -418,6 +436,8 @@ pub async fn prepare_workflow_run_for_actor(
         verifiers,
         durable_run,
         actor_claim,
+        #[cfg(test)]
+        stage_hold: None,
     })
 }
 
@@ -548,7 +568,13 @@ impl PreparedWorkflowRun {
             verifiers,
             durable_run,
             actor_claim,
+            #[cfg(test)]
+            stage_hold,
         } = self;
+        let workflow = Arc::new(workflow);
+        let context = Arc::new(context);
+        let resolved: Arc<[ResolvedAgent]> = Arc::from(resolved);
+        let verifiers: Arc<[Option<ResolvedAgent>]> = Arc::from(verifiers);
         let _activity = match context.resident_supervisor.as_ref() {
             Some(supervisor) => Some(supervisor.root_driver_activity(lead).await?),
             None => None,
@@ -569,7 +595,7 @@ impl PreparedWorkflowRun {
             .and_then(RoutePersistence::recorder);
         let mut registered = Vec::new();
         let run_cancel = cancel.child_token();
-        let mut running = futures::stream::FuturesUnordered::new();
+        let mut running = tokio::task::JoinSet::new();
         let result = async {
             let mut remaining = plan
                 .stages()
@@ -596,6 +622,7 @@ impl PreparedWorkflowRun {
                     // A ready actor is reserved through its complete Stage (including
                     // verification). Compiled indices break ties between ready uses.
                     let candidates = ready.iter().copied().collect::<Vec<_>>();
+                    let mut pending_spawns = Vec::new();
                     for index in candidates {
                         if run_cancel.is_cancelled() {
                             break;
@@ -743,14 +770,30 @@ impl PreparedWorkflowRun {
                             actor_claim,
                             route,
                         };
+                        pending_spawns.push((
+                            index,
+                            supervisor.clone(),
+                            actor,
+                            activation,
+                            rendered,
+                            verifiers[index].clone(),
+                        ));
+                    }
+                    // Register every ready candidate before spawning any activation so a
+                    // registration failure mid-batch cannot race ahead with an earlier Stage.
+                    for (index, supervisor, actor, activation, rendered, verifier) in pending_spawns
+                    {
                         let engine = engine.clone();
-                        let supervisor = supervisor.clone();
-                        let context = &context;
-                        let resolved = &resolved;
-                        let verifiers = &verifiers;
+                        let workflow = Arc::clone(&workflow);
+                        let context = Arc::clone(&context);
+                        let resolved = Arc::clone(&resolved);
                         let run_cancel = run_cancel.clone();
                         let route_recorder = route_recorder.clone();
-                        running.push(async move {
+                        #[cfg(test)]
+                        let stage_hold = stage_hold.clone();
+                        running.spawn(async move {
+                            let name = workflow.definition().name();
+                            let stage = &workflow.plan().stages()[index];
                             let result = async {
                                 let mut report = activate_resident_stage(
                                     engine.clone(),
@@ -760,15 +803,14 @@ impl PreparedWorkflowRun {
                                     activation,
                                 )
                                 .await?;
-                                if let Some((verify, verifier)) =
-                                    stage.verify().zip(verifiers[index].clone())
+                                if let Some((verify, verifier)) = stage.verify().zip(verifier)
                                     && report.status == StageStatus::Done
                                 {
                                     match drive_loop_stage(
                                         engine.clone(),
                                         lead,
                                         name,
-                                        context,
+                                        &context,
                                         stage,
                                         verify,
                                         rendered.directive(),
@@ -815,22 +857,50 @@ impl PreparedWorkflowRun {
                                 let (root, _) = engine.session_lineage(lead).await?;
                                 supervisor.end_member(root, &actor.handle).await?;
                             }
+                            #[cfg(test)]
+                            if result.is_ok()
+                                && let Some(hold) = stage_hold.as_ref()
+                            {
+                                if stage.id() == hold.hold_stage {
+                                    hold.both_activated.wait().await;
+                                    let tx = engine
+                                        .store()
+                                        .begin_transaction()
+                                        .await
+                                        .map_err(CoreError::Store)?;
+                                    hold.tx_acquired.notify_one();
+                                    hold.release_tx.notified().await;
+                                    drop(tx);
+                                } else if stage.id() == hold.fast_stage {
+                                    hold.both_activated.wait().await;
+                                    hold.tx_acquired.notified().await;
+                                }
+                            }
                             result
                         });
                     }
                 }
-                let Some(result) = running.next().await else {
+                let Some(joined) = running.join_next().await else {
                     // Skipping a blocked Stage can expose another blocked successor.
                     if admit && !ready.is_empty() {
                         continue;
                     }
                     break;
                 };
-                let (index, report) = result?;
+                let (index, report) = joined.map_err(|error| WorkflowError::Invalid {
+                    workflow: name.to_string(),
+                    detail: format!("workflow stage task failed: {error}"),
+                })??;
                 if let Some(key) = plan.stages()[index].actor() {
                     busy_actors.remove(key);
                 }
                 failed |= report.status == StageStatus::Failed;
+                #[cfg(test)]
+                if let Some(hold) = stage_hold.as_ref()
+                    && report.stage == hold.fast_stage
+                {
+                    hold.release_tx.notify_one();
+                }
                 if let Some(run) = durable_run {
                     engine
                         .record_workflow_event_for_actor(
@@ -900,7 +970,7 @@ impl PreparedWorkflowRun {
         // The run token stops admission; each activation owns its cleanup.
         if result.is_err() {
             run_cancel.cancel();
-            while running.next().await.is_some() {}
+            while running.join_next().await.is_some() {}
         }
         if !matches!(&result, Ok(report) if report.status == WorkflowStatus::Completed)
             && let Some(supervisor) = context.resident_supervisor.as_ref()
@@ -1528,5 +1598,126 @@ fn parse_verdict(text: &str) -> Verdict {
             met: false,
             reason: "verifier returned malformed output".to_string(),
         },
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use crate::{CreateSession, EventBus};
+    use hya_proto::{AgentName, ModelRef, SessionKind};
+    use hya_provider::{DevProvider, ProviderRouter};
+    use hya_store::SessionStore;
+    use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+    use hya_workflow::{WorkflowSource, compile};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_stage_holding_sole_store_connection_does_not_self_deadlock() {
+        let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+        let engine = Arc::new(SessionEngine::new(
+            SessionStore::connect_memory().await.unwrap(),
+            Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new()))),
+            crate::test_support::runtime(ToolRegistry::builtins()),
+            permission,
+            EventBus::default(),
+        ));
+        let lead = engine
+            .create(CreateSession {
+                parent: None,
+                agent: AgentName::new("hya-main"),
+                model: ModelRef::new("hya/offline"),
+                workdir: ".".into(),
+                project: None,
+                kind: SessionKind::Project,
+            })
+            .await
+            .unwrap();
+        let supervisor = ResidentSupervisor::start(engine.clone());
+        let binding = engine.bind_runtime(std::path::Path::new(".")).unwrap();
+        let base_agent = AgentSpec {
+            name: AgentName::new("hya-main"),
+            model: ModelRef::new("hya/offline"),
+            workdir: ".".into(),
+            system_prompt: String::new(),
+            reasoning: None,
+        };
+        let source = r#"---
+kind: Workflow
+name: self-deadlock-pin
+description: One stage holds the sole store connection while another finishes.
+nodes:
+  hold:
+    agent: hya-scout
+    directive: Hold the single store connection cleanly.
+  fast:
+    agent: hya-scout
+    directive: Finish first so the coordinator requests a store write.
+---
+flowchart TD
+  hold
+  fast
+"#;
+        let workflow = compile(WorkflowSource::new("self-deadlock.hya.md", source)).unwrap();
+        let hold = Arc::new(StageConnectionHold {
+            hold_stage: "hold",
+            fast_stage: "fast",
+            both_activated: Arc::new(tokio::sync::Barrier::new(2)),
+            tx_acquired: Arc::new(tokio::sync::Notify::new()),
+            release_tx: Arc::new(tokio::sync::Notify::new()),
+        });
+        let prepared = prepare_workflow_run(
+            engine.clone(),
+            lead,
+            &workflow,
+            WorkflowRunContext {
+                binding,
+                caller: "hya-main".to_string(),
+                base_agent,
+                inputs: BTreeMap::new(),
+                resident_supervisor: Some(supervisor.clone()),
+                routing: None,
+            },
+            Some(WorkflowRunId::new()),
+        )
+        .await
+        .unwrap()
+        .with_stage_hold(hold);
+
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            prepared.execute(CancellationToken::new()),
+        )
+        .await
+        .expect(
+            "workflow coordinator must not self-deadlock when a sibling holds the sole connection",
+        )
+        .unwrap();
+
+        assert_eq!(report.status, WorkflowStatus::Completed);
+        assert_eq!(report.stages.len(), 2);
+        assert!(
+            report
+                .stages
+                .iter()
+                .all(|stage| stage.status == StageStatus::Done),
+            "unexpected stage reports: {:#?}",
+            report.stages
+        );
+        let finished_stages: Vec<String> = engine
+            .replay(lead)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|env| match env.event {
+                Event::WorkflowStageFinished { stage, .. } => Some(stage),
+                _ => None,
+            })
+            .collect();
+        assert!(finished_stages.contains(&"fast".to_string()));
+        assert!(finished_stages.contains(&"hold".to_string()));
+        supervisor
+            .drain(hya_proto::FinishCause::Shutdown, crate::DRAIN_DEADLINE)
+            .await;
     }
 }

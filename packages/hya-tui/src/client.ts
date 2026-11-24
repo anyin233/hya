@@ -498,6 +498,7 @@ export interface StreamEvent {
   /** `tool` and `callId` are set for `kind: "tool_call"`. */
   partStarted?: { message: string; part: string; kind?: string; tool?: string; callId?: string }
   partAppended?: { message: string; part: string; textDelta?: string }
+  partDeleted?: { message: string; part: string }
   partReplaced?: { message: string; part: string; text?: string }
   partCompleted?: { message: string; part: string }
   /** Attachment parts appended after the user's text (`docs/protocol/README.md` "Prompt attachments (images)"); fold by appending parts whose id is not already on the message. */

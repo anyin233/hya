@@ -1,4 +1,4 @@
-//! The `shake` rung: stale tool-output bodies leave the request. With the
+//! The `shake` step: stale tool-output bodies leave the request. With the
 //! session's artifact store as the sink, a body moves to disk and the
 //! transcript keeps a handle that reads it back.
 
@@ -25,8 +25,8 @@ const SPILLED_OUTPUT_PREFIX: &str = "[tool output moved to ";
 ///
 /// With a sink, eviction is a *move* rather than a drop: the body lands in
 /// durable storage and the transcript keeps a handle that retrieves it. Without
-/// one the output is simply gone, which is the difference between the ladder's
-/// cheapest rung being recoverable and being merely cheap.
+/// one the output is simply gone, which is the difference between the cheapest
+/// reduction being recoverable and being merely cheap.
 pub(crate) trait EvictionSink: Send + Sync {
     /// Persist `body`, produced by `tool`, and return the handle that reads it back.
     ///
@@ -156,7 +156,7 @@ pub(crate) fn has_spillable_tool_output(
 }
 
 /// Render a JSON value as the model would have seen it.
-pub(crate) fn value_text(value: &serde_json::Value) -> String {
+fn value_text(value: &serde_json::Value) -> String {
     value
         .as_str()
         .map_or_else(|| value.to_string(), ToString::to_string)
@@ -217,10 +217,12 @@ mod tests {
                     output: serde_json::Value::String(output.to_string()),
                     time_ms: 7,
                 },
+                provider_data: None,
             }],
             finish: None,
             tokens: None,
             last_round: None,
+            last_step_start: None,
         }
     }
 
@@ -326,6 +328,7 @@ mod tests {
                     )),
                     time_ms: 1,
                 },
+                provider_data: None,
             })
             .collect();
         let mut messages = vec![Message::Assistant {
@@ -336,6 +339,7 @@ mod tests {
             finish: None,
             tokens: None,
             last_round: None,
+            last_step_start: None,
         }];
 
         assert_eq!(evict(&mut messages, 2, None), 2);

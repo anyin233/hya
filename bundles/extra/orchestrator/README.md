@@ -90,8 +90,8 @@ that a workflow can only call `agents.run` and `models.classify`. Imports,
 a worker thread so deadlines cover CPU loops after `await`. This is effect
 recording discipline, not a security boundary. The runtime's `tool.call`
 gate permits only `task`, `wait`, `archive` and `read` with a `channel://` path.
-It also calls the separate read-only host operation `workspace.state`; it
-never discovers host tools.
+It also calls the separate host operation `workspace.state`; it never
+discovers host tools.
 
 Only a first-line `// @options: {"timeout_ms":1800000,"max_output_chars":3000}`
 comment sets options. Both must be positive integers; maxima are 3000000 ms
@@ -101,19 +101,22 @@ and 3600 characters respectively. The host process timeout is 3600000 ms.
 
 An `orchestrator-scout` that finishes with `status: "done"` and leaves the
 workspace unchanged made an observation. The runtime remembers its complete
-report and parsed result across scripts and sessions, saving another worker
-call when the same question is asked in the same work tree on the same
-content. Runner and editor answers are never remembered: a command can depend
-on, or change, what the state does not cover (ignored files, the environment,
-chance), so the same command on the same files is not the same observation.
+report and parsed result across the scripts of one session, saving another
+worker call when the same question is asked again while the session's
+workspace record is unchanged. Runner and editor answers are never
+remembered: a command can depend on, or change, what the state does not cover
+(files outside the working directory, the environment, chance), so the same
+command on the same files is not the same observation.
 
 Before starting a worker, the runtime calls `workspace.state({})`. Its state
-is a SHA-256 identity of the containing git work tree: its location, and its
-tracked and untracked non-ignored files, excluding the top-level `.hya/`
-directory. A null
-state (outside git or unavailable git state) disables reuse and storage. The
-runtime checks state again after the worker returns; a changed or null state,
-failure, cancellation, timeout or abandonment is never stored.
+is a revision of the calling session's workspace record, which sees every
+regular file under the working directory except Git internals and hya's own
+scratch and output directories ([`workspace.state`](../../../docs/plugin-protocol.md#request-scoped-host-capabilities)).
+It names the session, so an answer is reused within that session only. A null
+state (no native file watch, as on operating systems other than Linux)
+disables reuse and storage. The runtime checks state again after the worker
+returns; a changed or null state, failure, cancellation, timeout or
+abandonment is never stored.
 
 The lookup key is SHA-256 of the JSON array
 `[before, agent, exactPrompt, model ?? null, effort ?? null]`, where
@@ -136,13 +139,13 @@ after `</trace>` says `reused observations: <n>` only when at least one answer
 was reused. The trace's `source` names the original handle, session, absolute
 trace file and sequence number; every agent record carries its state fields.
 
-Use `cache: false` for a scout whose answer depends on files git ignores, such
-as build output or logs. It skips both lookup and storage while still
-recording workspace states:
+Use `cache: false` for a scout whose answer depends on what the record does
+not cover, such as files outside the working directory. It skips both lookup
+and storage while still recording workspace states:
 
 ```js
 return await agents.run({agent: "orchestrator-scout",
-  prompt: "Read build/test.log and list the failing tests", cache: false});
+  prompt: "Read /var/log/app/test.log and list the failing tests", cache: false});
 ```
 
 ## Store, results and traces

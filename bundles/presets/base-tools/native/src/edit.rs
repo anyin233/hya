@@ -33,6 +33,79 @@ impl EditTool {
     pub(crate) fn new(runtime: Arc<HashlineRuntime>) -> Self {
         Self { runtime }
     }
+    async fn bad_ref_error(
+        &self,
+        ctx: &ToolCtx,
+        workdir: &Path,
+        input: &Value,
+        error: HashlineError,
+    ) -> ToolError {
+        let Some(path) = input
+            .get("path")
+            .or_else(|| input.get("file_path"))
+            .and_then(Value::as_str)
+        else {
+            return hashline_input_error(error);
+        };
+        let serialized;
+        let edits = if let Some(text) = input["edits"].as_str() {
+            serialized = serde_json::from_str::<Value>(text).ok();
+            serialized.as_ref().and_then(Value::as_array)
+        } else {
+            input["edits"].as_array()
+        };
+        let mut requested = Vec::new();
+        for line in edits
+            .into_iter()
+            .flatten()
+            .flat_map(|edit| [&edit["pos"], &edit["end"]])
+            .filter_map(Value::as_str)
+            .filter_map(crate::hashline::missing_hash_line)
+        {
+            if !requested.contains(&line) {
+                requested.push(line);
+                if requested.len() == 3 {
+                    break;
+                }
+            }
+        }
+        if requested.is_empty() {
+            return hashline_input_error(error);
+        }
+        let path = resolve_file(workdir, path);
+        let read = async {
+            crate::fs_tools::assert_external_directory(ctx, &path, false).await?;
+            ctx.permission
+                .assert(Action::Read, Resource::Path(display_path(&path)))
+                .await?;
+            let metadata = tokio::fs::metadata(&path).await?;
+            if !metadata.is_file()
+                || metadata.len() > MAX_READ_BYTES as u64
+                || !matches!(classify_file(&path).await?, ReadFileKind::Text)
+            {
+                return Ok(None);
+            }
+            use tokio::io::AsyncReadExt;
+            let mut text = String::new();
+            tokio::fs::File::open(&path)
+                .await?
+                .take(MAX_READ_BYTES as u64 + 1)
+                .read_to_string(&mut text)
+                .await?;
+            Ok((text.len() <= MAX_READ_BYTES).then_some(text))
+        };
+        tokio::select! {
+            biased;
+            () = ctx.cancel.cancelled() => ToolError::Cancelled,
+            result = read => match result {
+                Ok(Some(text)) => {
+                    hashline_input_error(error.with_current_anchors(&text, &requested))
+                }
+                Err(ToolError::Cancelled) => ToolError::Cancelled,
+                Ok(None) | Err(_) => hashline_input_error(error),
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -48,8 +121,8 @@ impl Tool for EditTool {
 \"replace\" (pos/end anchors + lines) to replace anchored line(s); \"append\"/\"prepend\" \
 (optional pos anchor + lines) to insert lines; or \"replace_text\" (oldText + newText) to \
 substitute one exact, unique occurrence of literal text. Never mix oldText/newText with \
-pos/end/lines in the same edit. Anchors (\"LINE#HASH\") come from a prior read/grep/edit result \
-against the current file — re-read the file if an anchor is rejected as stale."
+pos/end/lines in the same edit. Anchors (\"LINE#HASH\") come only from a prior read/grep/edit tool result \
+against the current file. Shell sed/grep output carries no hashes; call read first or use op \"replace_text\". Re-read stale anchors."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -123,11 +196,14 @@ against the current file — re-read the file if an anchor is rejected as stale.
         if ctx.cancel.is_cancelled() {
             return Err(ToolError::Cancelled);
         }
-        let request = self
-            .runtime
-            .parse_edit_request(input)
-            .map_err(hashline_input_error)?;
         let workdir = normalize(&absolutize(&ctx.workdir));
+        let request = match self.runtime.parse_edit_request(&input) {
+            Ok(request) => request,
+            Err(error) if error.code == "E_BAD_REF" => {
+                return Err(self.bad_ref_error(ctx, &workdir, &input, error).await);
+            }
+            Err(error) => return Err(hashline_input_error(error)),
+        };
         let requested_path = resolve_file(&workdir, request.path());
 
         crate::fs_tools::assert_external_directory(ctx, &requested_path, false).await?;

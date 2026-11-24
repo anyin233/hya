@@ -318,6 +318,9 @@ pub enum Part {
         name: ToolName,
         /// Current phase and payloads.
         state: ToolPartState,
+        /// Opaque provider-native metadata recorded when the call was requested.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_data: Option<serde_json::Value>,
     },
 }
 
@@ -344,6 +347,11 @@ pub enum Message {
         model: ModelRef,
         /// Content parts (text, reasoning, tools).
         parts: Vec<Part>,
+        /// Index in `parts` where the message's last step starts, set only on
+        /// the message a request continues. Tool-result images are sent only
+        /// from that step ([`crate::context::ToolImageReplay`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_step_start: Option<usize>,
         /// Latest provider round usage, distinct from cumulative `tokens`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         last_round: Option<TokenUsage>,
@@ -398,6 +406,7 @@ mod message_id_tests {
             finish: None,
             tokens: None,
             last_round: None,
+            last_step_start: None,
         };
         let system = Message::System {
             id: system_id,

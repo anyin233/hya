@@ -36,21 +36,17 @@ use crate::{
 /// Closed set of fixed Harness system-operation agents.
 ///
 /// Exact catalog lookup only — not spawn, not roster, and not an arbitrary-ID
-/// bypass. Callers cannot pass an open string; only these three operations exist.
+/// bypass. Callers cannot pass an open string.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FixedSystemAgent {
-    Compaction,
     Title,
-    Summary,
 }
 
 impl FixedSystemAgent {
     /// Stable catalog id for this fixed system operation.
     const fn stable_id(self) -> &'static str {
         match self {
-            Self::Compaction => "hya-compaction",
             Self::Title => "hya-title",
-            Self::Summary => "hya-summary",
         }
     }
 }
@@ -61,8 +57,55 @@ mod fork;
 mod handoff;
 mod mailbox;
 mod nested_tools;
-mod workspace_state;
 pub(crate) use mailbox::dm_channel_between;
+
+/// Per-turn memory of the last successful effort-preference reads. Healthy turns
+/// still read SQLite every time; only a later storage fault or timeout reuses
+/// the last value and emits one warning for the turn.
+#[derive(Default)]
+pub(super) struct TurnEffortFallback {
+    agent_list: Option<BTreeMap<String, ReasoningEffort>>,
+    agent_pref: Option<(String, Option<ReasoningEffort>)>,
+    model_prefs: HashMap<String, Option<ReasoningEffort>>,
+    warned: bool,
+}
+
+async fn cached_pref<T: Clone, F, Fut>(
+    timeout: std::time::Duration,
+    operation: &'static str,
+    turn: Option<(SessionId, &mut TurnEffortFallback)>,
+    read: F,
+    get: impl FnOnce(&TurnEffortFallback) -> Option<&T>,
+    put: impl FnOnce(&mut TurnEffortFallback, &T),
+) -> Result<T, CoreError>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<T, hya_store::StoreError>>,
+{
+    let Some((session, fb)) = turn else {
+        return Ok(read().await?);
+    };
+    match tokio::time::timeout(timeout, read())
+        .await
+        .map_err(|_| hya_store::StoreError::StorageTimeout { operation, timeout })
+        .and_then(|res| res)
+    {
+        Ok(val) => {
+            put(fb, &val);
+            Ok(val)
+        }
+        Err(error) => {
+            let Some(prev) = get(fb).filter(|_| error.is_storage_fault()).cloned() else {
+                return Err(error.into());
+            };
+            if !fb.warned {
+                fb.warned = true;
+                tracing::warn!(%session, operation, "effort preference store unavailable; reusing last read value for turn: {error}");
+            }
+            Ok(prev)
+        }
+    }
+}
 mod member_control;
 mod members;
 mod model_probe;
@@ -107,7 +150,6 @@ pub use scope_binding::{BundleRefresh, CatalogScopeCacheConfig};
 pub use turn::advertise_tool;
 pub use turn_end::{DRAIN_DEADLINE, TurnDrainReport};
 pub use turn_gate::{TurnBoundaryObserver, TurnLease};
-pub use workspace_state::workspace_state;
 
 /// Parameters for creating a new session event log.
 pub struct CreateSession {
@@ -398,8 +440,9 @@ pub struct SessionEngine {
     summarizer: Option<Arc<dyn Summarizer>>,
     compaction: CompactionConfig,
     token_accounting: TokenAccounting,
-    /// Rewrites the Context before each round and on `/summarize`.
-    rewriter: Arc<dyn hya_tool::Rewriter>,
+    /// Context-reduction extensions the kernel runs before its own Rewrite,
+    /// before each round and on `/summarize`.
+    rewriters: Arc<[Arc<dyn hya_tool::Rewriter>]>,
     hooks: Option<Arc<dyn HookDispatcher>>,
     /// Captured per-session lifecycle/event hooks ([`session_hooks`]).
     session_bundle_hooks: Arc<RwLock<session_hooks::SessionHookMap>>,
@@ -462,7 +505,7 @@ impl Clone for SessionEngine {
             summarizer: self.summarizer.clone(),
             compaction: self.compaction,
             token_accounting: self.token_accounting.clone(),
-            rewriter: Arc::clone(&self.rewriter),
+            rewriters: Arc::clone(&self.rewriters),
             hooks: self.hooks.clone(),
             session_bundle_hooks: Arc::clone(&self.session_bundle_hooks),
             session_channel_policies: Arc::clone(&self.session_channel_policies),
@@ -631,7 +674,7 @@ impl SessionEngine {
             summarizer: None,
             compaction: CompactionConfig::default(),
             token_accounting: TokenAccounting::default(),
-            rewriter: internal_rewriter(),
+            rewriters: internal_rewriters(),
             hooks: None,
             session_bundle_hooks: Arc::new(RwLock::new(HashMap::new())),
             session_channel_policies: Arc::new(RwLock::new(HashMap::new())),
@@ -749,11 +792,39 @@ impl SessionEngine {
         authored: Option<ReasoningEffort>,
         binding: Option<&TurnBinding>,
     ) -> Result<Option<(ReasoningEffort, crate::AgentEffortSource)>, CoreError> {
-        let preference = self
-            .store
-            .get_agent_effort_preference(agent_id)
-            .await?
-            .and_then(|row| ReasoningEffort::parse(&row.effort));
+        self.agent_effort_with(agent_id, authored, binding, None)
+            .await
+    }
+
+    async fn agent_effort_with(
+        &self,
+        agent_id: &str,
+        authored: Option<ReasoningEffort>,
+        binding: Option<&TurnBinding>,
+        turn: Option<(SessionId, &mut TurnEffortFallback)>,
+    ) -> Result<Option<(ReasoningEffort, crate::AgentEffortSource)>, CoreError> {
+        let store = &self.store;
+        let preference = cached_pref(
+            store.read_timeout(),
+            "get_agent_effort_preference",
+            turn,
+            || async {
+                Ok(store
+                    .get_agent_effort_preference(agent_id)
+                    .await?
+                    .and_then(|r| ReasoningEffort::parse(&r.effort)))
+            },
+            |fb| {
+                fb.agent_pref
+                    .as_ref()
+                    .and_then(|(id, v)| (id == agent_id).then_some(v))
+            },
+            |fb, &val| match &mut fb.agent_pref {
+                Some((id, prev)) if id == agent_id => *prev = val,
+                slot => *slot = Some((agent_id.to_string(), val)),
+            },
+        )
+        .await?;
         let configured = binding
             .and_then(|binding| binding.project_agent_effort(agent_id))
             .unwrap_or_else(|| {
@@ -777,13 +848,33 @@ impl SessionEngine {
         agents: Arc<[AgentDef]>,
         binding: Option<&TurnBinding>,
     ) -> Result<Arc<[AgentDef]>, CoreError> {
-        let preferences: BTreeMap<String, ReasoningEffort> = self
-            .store
-            .list_agent_effort_preferences()
-            .await?
-            .into_iter()
-            .filter_map(|row| Some((row.agent_id, ReasoningEffort::parse(&row.effort)?)))
-            .collect();
+        self.annotate_agent_efforts_with(agents, binding, None)
+            .await
+    }
+
+    pub(super) async fn annotate_agent_efforts_with(
+        &self,
+        agents: Arc<[AgentDef]>,
+        binding: Option<&TurnBinding>,
+        turn: Option<(SessionId, &mut TurnEffortFallback)>,
+    ) -> Result<Arc<[AgentDef]>, CoreError> {
+        let store = &self.store;
+        let preferences = cached_pref(
+            store.read_timeout(),
+            "list_agent_effort_preferences",
+            turn,
+            || async {
+                Ok(store
+                    .list_agent_effort_preferences()
+                    .await?
+                    .into_iter()
+                    .filter_map(|row| Some((row.agent_id, ReasoningEffort::parse(&row.effort)?)))
+                    .collect::<BTreeMap<String, ReasoningEffort>>())
+            },
+            |fb| fb.agent_list.as_ref(),
+            |fb, val| fb.agent_list = Some(val.clone()),
+        )
+        .await?;
         let configured = self.runtime.agent_effort_configuration();
         if preferences.is_empty() && configured.is_empty() && binding.is_none() {
             return Ok(agents);
@@ -833,9 +924,26 @@ impl SessionEngine {
         authored: Option<ReasoningEffort>,
         binding: Option<&TurnBinding>,
     ) -> Result<crate::EffectiveEffort, CoreError> {
+        self.effective_effort_with(model, agent_id, authored, binding, None)
+            .await
+    }
+
+    pub(super) async fn effective_effort_with(
+        &self,
+        model: &ModelRef,
+        agent_id: Option<&str>,
+        authored: Option<ReasoningEffort>,
+        binding: Option<&TurnBinding>,
+        mut turn: Option<(SessionId, &mut TurnEffortFallback)>,
+    ) -> Result<crate::EffectiveEffort, CoreError> {
         let agent = match agent_id {
-            Some(agent_id) => self
-                .agent_effort(agent_id, authored, binding)
+            Some(id) => self
+                .agent_effort_with(
+                    id,
+                    authored,
+                    binding,
+                    turn.as_mut().map(|(s, fb)| (*s, &mut **fb)),
+                )
                 .await?
                 .map(|(effort, _)| effort),
             None => authored,
@@ -843,13 +951,31 @@ impl SessionEngine {
         let base = model
             .as_str()
             .rsplit_once('#')
-            .map_or(model.as_str(), |(base, _)| base);
+            .map_or(model.as_str(), |(b, _)| b);
         let preference = match base.split_once('/') {
-            Some((provider, model_id)) => self
-                .store
-                .get_model_effort_preference(provider, model_id)
+            Some((provider, model_id)) => {
+                let store = &self.store;
+                cached_pref(
+                    store.read_timeout(),
+                    "get_model_effort_preference",
+                    turn,
+                    || async {
+                        Ok(store
+                            .get_model_effort_preference(provider, model_id)
+                            .await?
+                            .and_then(|r| ReasoningEffort::parse(&r.effort)))
+                    },
+                    |fb| fb.model_prefs.get(base),
+                    |fb, &val| {
+                        if let Some(prev) = fb.model_prefs.get_mut(base) {
+                            *prev = val;
+                        } else {
+                            fb.model_prefs.insert(base.to_string(), val);
+                        }
+                    },
+                )
                 .await?
-                .and_then(|row| ReasoningEffort::parse(&row.effort)),
+            }
             None => None,
         };
         Ok(crate::resolve_effort(
@@ -2182,26 +2308,22 @@ fn fixed_system_agent(
         })
 }
 
-/// The rewriter of full-mode turns: the first one the internal bundles
-/// register (`hya/compaction`), or the kernel's [`HarnessRewriter`] when none
-/// does. Loaded once per process.
+/// The context-reduction extensions the internal bundles register
+/// (`hya/compaction`), in registration order; the kernel runs them before its
+/// own Rewrite. Loaded once per process.
 ///
 /// # Panics
 ///
 /// When an internal bundle's library cannot be found or loaded, as a missing
 /// tool family does.
-///
-/// [`HarnessRewriter`]: hya_core::kernel::HarnessRewriter
-fn internal_rewriter() -> Arc<dyn hya_tool::Rewriter> {
-    static REWRITER: std::sync::OnceLock<Arc<dyn hya_tool::Rewriter>> = std::sync::OnceLock::new();
-    Arc::clone(REWRITER.get_or_init(|| {
-        let loaded = hya_core::bundles::load_internal()
-            .unwrap_or_else(|error| panic!("load internal bundles: {error}"));
-        loaded
+fn internal_rewriters() -> Arc<[Arc<dyn hya_tool::Rewriter>]> {
+    static REWRITERS: std::sync::OnceLock<Arc<[Arc<dyn hya_tool::Rewriter>]>> =
+        std::sync::OnceLock::new();
+    Arc::clone(REWRITERS.get_or_init(|| {
+        hya_core::bundles::load_internal()
+            .unwrap_or_else(|error| panic!("load internal bundles: {error}"))
             .rewriters
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| Arc::new(hya_core::kernel::HarnessRewriter))
+            .into()
     }))
 }
 
@@ -2232,13 +2354,9 @@ pub(crate) fn summarize_options_from_definition(
             .reasoning
             .as_deref()
             .and_then(ReasoningEffort::parse),
-        // Anchoring, output budget, and handoff mode are per-call, not
-        // per-definition: the caller knows the transcript and the active
-        // compaction config.
+        // Anchoring and output budget are per-call, not per-definition.
         previous_summary: None,
         max_output_tokens: None,
-        handoff: false,
-        state_only: false,
         // Callers that bill a session attach their own collector.
         usage: None,
     }

@@ -105,6 +105,7 @@ pub(crate) async fn wait_for_members(
     supervisor: &ResidentSupervisor,
     caller: SessionId,
     spec: WaitSpec,
+    wait_ack: Option<&hya_tool::WaitAckSlot>,
 ) -> Result<WaitOutcome, CoreError> {
     let started = Instant::now();
     // Subscribe before the first snapshot so no transition is lost between.
@@ -136,7 +137,12 @@ pub(crate) async fn wait_for_members(
             entry.resident_cursor.max(work.inbox_through)
         })
     });
-    let cursor = usize::try_from(cursor).unwrap_or(usize::MAX);
+    let durable_cursor = usize::try_from(cursor).unwrap_or(usize::MAX);
+    let cursor = durable_cursor.max(
+        wait_ack
+            .and_then(hya_tool::WaitAckSlot::staged_through)
+            .unwrap_or(0),
+    );
     // The lead has no parent: without subagents there is nobody to hear from.
     let mail_only = targets.is_empty() && spec.wake_on_mail && caller != root;
     // Leave the run's final-notice grace free of blocking tools.
@@ -157,7 +163,7 @@ pub(crate) async fn wait_for_members(
             &targets,
         )
         .await?;
-        let inbox = scan_inbox(
+        let mut inbox = scan_inbox(
             supervisor,
             root,
             &projection,
@@ -197,31 +203,62 @@ pub(crate) async fn wait_for_members(
             None
         };
         if let Some(woke_by) = woke_by {
-            if inbox.through > cursor {
-                engine
-                    .emit_for_actor(
-                        actor_claim,
-                        root,
-                        Event::MailConsumed {
-                            session: root,
-                            handle: caller_path.clone(),
-                            through: u64::try_from(inbox.through).unwrap_or(u64::MAX),
-                        },
-                    )
-                    .await?;
-                engine.notify_mail_consumed(caller, mark, inbox.consumed_incoming);
-            }
-            for (member, last) in &standing.stalled {
-                supervisor.record_wait_stall(caller, *member, *last);
-            }
-            return Ok(WaitOutcome {
+            let mut outcome = WaitOutcome {
                 woke_by,
                 finished: standing.finished,
                 already_finished: standing.already,
                 running: standing.running,
                 mail: inbox.mail,
+                more_mail: false,
                 waited_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            };
+            if !outcome.direct_mail_all_shown() {
+                // Prefix fit includes the continuation notice. Each received
+                // preview fits by itself, so every page advances the cursor.
+                outcome.more_mail = true;
+                let all = std::mem::take(&mut outcome.mail);
+                let mut fits = 1;
+                let mut overflow = all.len();
+                while fits + 1 < overflow {
+                    let mid = fits + (overflow - fits) / 2;
+                    outcome.mail.clear();
+                    outcome.mail.extend_from_slice(&all[..mid]);
+                    if outcome.direct_mail_all_shown() {
+                        fits = mid;
+                    } else {
+                        overflow = mid;
+                    }
+                }
+                outcome.mail = all;
+                outcome.mail.truncate(fits);
+                inbox.through = inbox.mail_indices[fits];
+            }
+            let ack = (inbox.through > cursor).then(|| {
+                let consumed_incoming = projection.team.inboxes[&caller_path]
+                    [cursor..inbox.through]
+                    .iter()
+                    .any(|index| projection.team.mail[*index].from != caller_path);
+                let event = Event::MailConsumed {
+                    session: root,
+                    handle: caller_path.clone(),
+                    through: u64::try_from(inbox.through).unwrap_or(u64::MAX),
+                };
+                hya_tool::WaitMailAck {
+                    event,
+                    mark: mark.unwrap_or_default(),
+                    consumed_incoming: consumed_incoming && mark.is_some(),
+                }
             });
+            if let Some(slot) = wait_ack {
+                slot.record(outcome.more_mail, ack);
+            } else if let Some(ack) = ack {
+                engine.emit_for_actor(actor_claim, root, ack.event).await?;
+                engine.notify_mail_consumed(caller, mark, ack.consumed_incoming);
+            }
+            for (member, last) in &standing.stalled {
+                supervisor.record_wait_stall(caller, *member, *last);
+            }
+            return Ok(outcome);
         }
         let recheck = (tokio::time::Instant::now() + RECHECK).min(deadline);
         loop {
@@ -466,12 +503,12 @@ async fn last_answer(
 struct InboxScan {
     /// New mail to return (channel-aware wait only).
     mail: Vec<WaitMail>,
+    /// Position of each returned message in the caller's raw inbox.
+    mail_indices: Vec<usize>,
     /// Inbox index this outcome delivers through (commit when past the
     /// cursor): everything for the channel-aware wait; for the member-only
     /// wait just the leading run of own posts and finished targets' reports.
     through: usize,
-    /// Whether that raw cursor range contains incoming work.
-    consumed_incoming: bool,
 }
 
 /// Split the caller's unread inbox into new mail, the report mail of
@@ -492,6 +529,7 @@ fn scan_inbox(
         .get(caller_path)
         .map_or(&[][..], Vec::as_slice);
     let mut mail = Vec::new();
+    let mut mail_indices = Vec::new();
     let mut through = cursor.min(inbox.len());
     let mut contiguous = true;
     for (index, mail_index) in inbox.iter().enumerate().skip(cursor) {
@@ -520,28 +558,23 @@ fn scan_inbox(
         if pending_report {
             continue;
         }
+        mail_indices.push(index);
         mail.push(WaitMail {
             from: message.from.clone(),
             channel: match &message.to {
                 MailEndpoint::Channel(channel) => Some(channel.clone()),
                 MailEndpoint::Handle(_) => None,
             },
-            preview: preview(&message.body),
+            preview: mail_preview(message.body.trim()),
         });
     }
     if wake_on_mail {
         through = through.max(inbox.len());
     }
-    let consumed_incoming = inbox
-        .iter()
-        .take(through)
-        .skip(cursor)
-        .map(|index| &projection.team.mail[*index])
-        .any(|message| message.from != caller_path);
     InboxScan {
         mail,
+        mail_indices,
         through,
-        consumed_incoming,
     }
 }
 
@@ -566,11 +599,9 @@ fn relevant(event: &Event, root: SessionId, caller: SessionId) -> bool {
             .is_some_and(|session| session == root || session == caller)
 }
 
-fn preview(text: &str) -> String {
-    let text = text.trim();
-    if text.chars().count() <= PREVIEW_CHARS {
-        return text.to_string();
+pub(crate) fn mail_preview(text: &str) -> String {
+    match text.char_indices().nth(PREVIEW_CHARS) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_owned(),
     }
-    let cut: String = text.chars().take(PREVIEW_CHARS).collect();
-    format!("{cut}…")
 }

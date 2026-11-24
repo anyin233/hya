@@ -1,0 +1,583 @@
+//! Token accounting: calibrated estimation versus provider-reported usage.
+//!
+//! Ground-truth counts are `o200k_base` encodings; regenerate them with
+//! `python3 scripts/tokenizer-calibration.py fixtures`. They pin the
+//! estimator's accuracy contract so a regression in the weight table, or a
+//! divergence between the Rust counter and the fitting script, cannot pass
+//! silently.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use hya_engine::{
+    CalibratedTokenizer, TokenAccounting, TokenAccountingMode, TokenSource, Tokenizer,
+};
+use hya_proto::{
+    AgentName, FinishReason, Message, MessageId, ModelRef, Part, PartId, TokenUsage, ToolCallId,
+    ToolName, ToolPartState,
+};
+
+/// `(name, text, o200k_base token count)`.
+const FIXTURES: &[(&str, &str, usize)] = &[
+    (
+        "rust_code",
+        "pub fn resolved_threshold(cfg: &CompactionConfig, max_context: Option<u32>) -> usize {\n    let Some(window) = max_context.filter(|w| *w > 0) else {\n        return cfg.token_threshold;\n    };\n    if !(cfg.context_fraction > 0.0 && cfg.context_fraction <= 1.0) {\n        return cfg.token_threshold;\n    }\n    let scaled = f64::from(window) * f64::from(cfg.context_fraction);\n    (scaled as usize).max(MIN_RESOLVED_THRESHOLD)\n}\n",
+        113,
+    ),
+    (
+        "json_blob",
+        "{\n  \"session\": \"01JQ7X8Z9ABCDEFGHJKMNPQRST\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"tokens\": {\n        \"input\": 18422,\n        \"output\": 512,\n        \"cache_read\": 16384\n      }\n    },\n    {\n      \"role\": \"assistant\",\n      \"finish\": \"tool_calls\",\n      \"tools\": [\n        \"read\",\n        \"grep\",\n        \"bash\"\n      ]\n    }\n  ],\n  \"paths\": [\n    \"crates/hya-core/src/compaction.rs\",\n    \"crates/hya-tool/src/handle/artifact.rs\"\n  ]\n}",
+        143,
+    ),
+    (
+        "markdown_prose",
+        "## Compaction ladder\n\nThe turn loop walks a fixed escalation order, cheapest and most recoverable\nfirst, and stops at the first rung that brings the transcript under the\ntrigger. Spilling tool output is lossless because the body moves to an\n`artifact://` handle and only the pointer stays in the transcript.\n",
+        65,
+    ),
+    (
+        "chinese",
+        "本次我们开始开发上下文管理功能，首先阅读当前仓库，分析系统如何管理上下文。压缩工具的实现完全参考分级设计进行，使用多个工具分级依次尝试，从而实现当高效压缩工具有效时直接调用高效的压缩工具。",
+        64,
+    ),
+    (
+        "mixed_cjk",
+        "接下来我们需要为 hya 引入类似 omp 的 artifact:// 等路径工具，即引入包括 skill:// 在内的这类基于 url 的索引工具，替换现有的索引工具，为 hya 带来统一化的外部工具调用体验。",
+        59,
+    ),
+    (
+        "indented_code",
+        "impl Tool for ShellTool {\n    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {\n        let args: ShellArgs = serde_json::from_value(input)?;\n        let artifacts = ctx.handles.artifacts();\n        let mut sink = OutputSink::new(artifacts.clone());\n        for chunk in stream {\n            sink.push(&chunk)?;\n        }\n        Ok(sink.finish()?)\n    }\n}\n",
+        93,
+    ),
+    (
+        "numeric_table",
+        "threshold=150000 reserve=16384 window=200000 fraction=0.75\ninput=18422 output=512 cache_read=16384 cache_write=0\n1234567890 987654321 42 3.14159265358979 0xDEADBEEF\n",
+        60,
+    ),
+    (
+        "log_output",
+        "error[E0433]: failed to resolve: use of undeclared crate or module `handle`\n  --> crates/hya-tool/src/shell.rs:354:41\n   |\n354 |         let artifact_root = normalize(&absolutize(&ctx.workdir));\n   |                                         ^^^^^^^^^^ not found in this scope\nwarning: unused import: `std::sync::Arc`\n",
+        78,
+    ),
+];
+
+/// Relative error of `predicted` against `truth`, as a signed fraction.
+fn relative_error(predicted: usize, truth: usize) -> f64 {
+    (predicted as f64 - truth as f64) / truth as f64
+}
+
+#[test]
+fn calibrated_tokenizer_stays_within_twenty_percent_on_every_fixture() {
+    let tokenizer = CalibratedTokenizer;
+    for (name, text, truth) in FIXTURES {
+        let estimate = tokenizer.count_text(text);
+        let error = relative_error(estimate, *truth);
+        assert!(
+            error.abs() <= 0.20,
+            "{name}: estimate {estimate} vs truth {truth} is {:+.1}% off",
+            error * 100.0
+        );
+    }
+}
+
+/// The retired baseline was `str::len() / 4`, that is *bytes* over four, not
+/// characters.
+fn bytes_div_four(text: &str) -> usize {
+    text.len() / 4
+}
+
+#[test]
+fn calibrated_tokenizer_is_tighter_than_bytes_div_four() {
+    let tokenizer = CalibratedTokenizer;
+    let mut calibrated_total = 0.0f64;
+    let mut baseline_total = 0.0f64;
+    let mut calibrated_worst = 0.0f64;
+    let mut baseline_worst = 0.0f64;
+    for (_, text, truth) in FIXTURES {
+        let calibrated = relative_error(tokenizer.count_text(text), *truth).abs();
+        let baseline = relative_error(bytes_div_four(text), *truth).abs();
+        calibrated_total += calibrated;
+        baseline_total += baseline;
+        calibrated_worst = calibrated_worst.max(calibrated);
+        baseline_worst = baseline_worst.max(baseline);
+    }
+    assert!(
+        calibrated_total < baseline_total,
+        "calibrated total error {calibrated_total:.3} must beat bytes/4 total {baseline_total:.3}"
+    );
+    assert!(
+        calibrated_worst < baseline_worst,
+        "calibrated worst error {calibrated_worst:.3} must beat bytes/4 worst {baseline_worst:.3}"
+    );
+}
+
+/// The failure mode that matters. `bytes / 4` under-counts structured payloads
+/// — JSON tool output and numeric tables — by 22% to 32%, and under-counting is
+/// the direction that overflows the window. Over-counting only compacts early.
+#[test]
+fn structured_payloads_are_not_under_counted() {
+    let tokenizer = CalibratedTokenizer;
+    for (name, text, truth) in FIXTURES
+        .iter()
+        .filter(|(name, ..)| *name == "json_blob" || *name == "numeric_table")
+    {
+        let baseline = relative_error(bytes_div_four(text), *truth);
+        assert!(
+            baseline < -0.20,
+            "{name}: fixture must exercise the baseline's under-count, got {:+.1}%",
+            baseline * 100.0
+        );
+        // Hold the estimator to beating what it replaces rather than to a band
+        // picked to match whatever the current weights happen to produce. The
+        // -15% safety floor is asserted for every fixture just below.
+        let error = relative_error(tokenizer.count_text(text), *truth);
+        assert!(
+            error.abs() < baseline.abs(),
+            "{name}: calibrated error {:+.1}% must beat the baseline's {:+.1}%",
+            error * 100.0,
+            baseline * 100.0
+        );
+    }
+}
+
+/// No fixture may be under-counted enough to matter, in either encoding family.
+#[test]
+fn no_fixture_is_materially_under_counted() {
+    let tokenizer = CalibratedTokenizer;
+    for (name, text, truth) in FIXTURES {
+        let error = relative_error(tokenizer.count_text(text), *truth);
+        assert!(
+            error > -0.15,
+            "{name}: under-counting risks overflow, got {:+.1}%",
+            error * 100.0
+        );
+    }
+}
+
+/// Ground truth from `o200k_base` for the payload shapes that arrive through
+/// tool output rather than source files: a base64 attachment, a hex digest
+/// table, and a long unbroken identifier run.
+///
+/// These drove the piecewise run weighting. Charging every character the prose
+/// rate priced an 8KB base64 blob at a quarter of its real cost, so a
+/// transcript could carry thousands of unaccounted tokens and overflow a window
+/// the ledger reported as half empty.
+const BLOB_FIXTURES: &[(&str, &str, usize)] = &[
+    (
+        "base64_attachment",
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+        52,
+    ),
+    (
+        "hex_digest_table",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\n",
+        80,
+    ),
+    (
+        "long_identifier_run",
+        "averyveryverylongunbrokenidentifiernamethatkeepsgoingwithoutanyseparators",
+        18,
+    ),
+];
+
+/// Long runs are the estimator's hardest case, and its error there is
+/// deliberately one-sided.
+///
+/// A run's true cost turns on whether the vocabulary holds its merges, which no
+/// run-length feature can see, so `weight::WORD_LONG` is pinned to the rate
+/// measured on high-entropy runs — the base64 and hex payloads that actually
+/// arrive through tool output. Runs built from dictionary words are the price
+/// of that choice and over-count, which is the harmless direction: it compacts
+/// a turn early. Under-counting is the direction that silently overflows a
+/// window, so only that side is held tight.
+#[test]
+fn blob_payloads_are_never_under_counted() {
+    let tokenizer = CalibratedTokenizer;
+    for (name, text, truth) in BLOB_FIXTURES {
+        let error = relative_error(tokenizer.count_text(text), *truth);
+        assert!(
+            error > -0.25,
+            "{name}: under-counting a blob risks overflow, got {:+.1}%",
+            error * 100.0
+        );
+        // Over-counting is tolerated, not unbounded: past 2x the estimator
+        // would compact healthy transcripts for no reason.
+        assert!(
+            error < 1.0,
+            "{name}: over-counting would compact for no reason, got {:+.1}%",
+            error * 100.0
+        );
+        // `bytes / 4` prices a base64 or hex payload at roughly half its real
+        // cost. It happens to be exact on an all-lowercase identifier run, so
+        // only the fixtures where it actually fails carry the comparison.
+        let baseline = relative_error(bytes_div_four(text), *truth);
+        if baseline < -0.25 {
+            assert!(
+                error.abs() < baseline.abs(),
+                "{name}: calibrated error {:+.1}% must beat the baseline's {:+.1}%",
+                error * 100.0,
+                baseline * 100.0
+            );
+        }
+    }
+}
+
+#[test]
+fn empty_and_ascii_edge_cases_are_stable() {
+    let tokenizer = CalibratedTokenizer;
+    assert_eq!(tokenizer.count_text(""), 0);
+    assert_eq!(tokenizer.name(), "calibrated");
+    assert!(
+        tokenizer.count_text("a") >= 1,
+        "a single word costs a token"
+    );
+}
+
+/// A transcript whose last assistant message reports `usage`.
+fn transcript(reported: Option<TokenUsage>) -> Vec<Message> {
+    vec![
+        Message::User {
+            id: MessageId::new(),
+            parts: vec![Part::Text {
+                id: PartId::new(),
+                text: "x".repeat(4_000),
+            }],
+        },
+        Message::Assistant {
+            id: MessageId::new(),
+            agent: AgentName::new("build"),
+            model: ModelRef::new("test/model"),
+            parts: vec![Part::Text {
+                id: PartId::new(),
+                text: "ok".to_string(),
+            }],
+            finish: Some(FinishReason::Stop),
+            tokens: reported,
+            last_round: None,
+            last_step_start: None,
+        },
+    ]
+}
+
+#[test]
+fn auto_mode_estimates_when_the_route_reports_no_usage() {
+    let accounting = TokenAccounting::new(TokenAccountingMode::Auto);
+    let counted = accounting.tokens_in_use(&transcript(None), true);
+    assert_eq!(counted.source, TokenSource::Estimate);
+    assert!(counted.tokens > 0, "an estimate must still be produced");
+}
+
+#[test]
+fn auto_mode_estimates_when_the_route_disclaims_usage_support() {
+    let usage = TokenUsage {
+        input: 1_000,
+        output: 10,
+        ..TokenUsage::default()
+    };
+    let accounting = TokenAccounting::new(TokenAccountingMode::Auto);
+    let counted = accounting.tokens_in_use(&transcript(Some(usage)), false);
+    assert_eq!(counted.source, TokenSource::Estimate);
+}
+
+/// A route reporting a token count wildly inconsistent with the prompt it was
+/// given is counting something else — a delta, or a different unit. Believing
+/// it would silently disable compaction.
+#[test]
+fn auto_mode_rejects_implausible_reported_usage() {
+    let accounting = TokenAccounting::new(TokenAccountingMode::Auto);
+    let messages = transcript(Some(TokenUsage {
+        input: 3,
+        output: 1,
+        ..TokenUsage::default()
+    }));
+    let counted = accounting.tokens_in_use(&messages, true);
+    assert_eq!(
+        counted.source,
+        TokenSource::Estimate,
+        "a 3-token claim for a 4000-byte prompt is not believable"
+    );
+    assert!(counted.tokens > 100, "got {}", counted.tokens);
+}
+
+#[test]
+fn auto_mode_anchors_on_plausible_reported_usage() {
+    let accounting = TokenAccounting::new(TokenAccountingMode::Auto);
+    let estimated = accounting.estimate(&transcript(None));
+    let messages = transcript(Some(TokenUsage {
+        input: estimated as u64,
+        output: 10,
+        ..TokenUsage::default()
+    }));
+    let counted = accounting.tokens_in_use(&messages, true);
+    assert_eq!(counted.source, TokenSource::Provider);
+}
+
+#[test]
+fn provider_mode_trusts_even_implausible_usage() {
+    let accounting = TokenAccounting::new(TokenAccountingMode::Provider);
+    let messages = transcript(Some(TokenUsage {
+        input: 3,
+        output: 1,
+        ..TokenUsage::default()
+    }));
+    let counted = accounting.tokens_in_use(&messages, true);
+    assert_eq!(counted.source, TokenSource::Provider);
+    assert_eq!(counted.tokens, 3, "nothing was appended after the report");
+}
+
+#[test]
+fn estimate_mode_ignores_reported_usage() {
+    let accounting = TokenAccounting::new(TokenAccountingMode::Estimate);
+    let messages = transcript(Some(TokenUsage {
+        input: 999_999,
+        output: 1,
+        ..TokenUsage::default()
+    }));
+    let counted = accounting.tokens_in_use(&messages, true);
+    assert_eq!(counted.source, TokenSource::Estimate);
+    assert!(counted.tokens < 999_999);
+}
+
+/// Cached prompt tokens still occupy the window, so they are counted.
+#[test]
+fn cache_read_tokens_count_against_the_window() {
+    let accounting = TokenAccounting::new(TokenAccountingMode::Provider);
+    let messages = transcript(Some(TokenUsage {
+        input: 500,
+        cache_read: 1_500,
+        ..TokenUsage::default()
+    }));
+    assert_eq!(accounting.tokens_in_use(&messages, true).tokens, 2_000);
+}
+
+#[test]
+fn cache_write_tokens_count_against_the_window() {
+    // Normalized usage: `input` excludes both cache reads and cache writes,
+    // and a cache write is still part of the prompt the window holds.
+    let accounting = TokenAccounting::new(TokenAccountingMode::Provider);
+    let messages = transcript(Some(TokenUsage {
+        input: 500,
+        cache_read: 1_000,
+        cache_write: 700,
+        ..TokenUsage::default()
+    }));
+    assert_eq!(accounting.tokens_in_use(&messages, true).tokens, 2_200);
+}
+
+/// The anchor is the latest round's prompt, not the message's cumulative
+/// usage: a 5-round turn that re-sent a growing prompt must not be summed.
+#[test]
+fn occupancy_anchors_on_the_latest_round_not_cumulative_usage() {
+    let accounting = TokenAccounting::new(TokenAccountingMode::Provider);
+    let mut messages = transcript(Some(TokenUsage {
+        input: 50_000,
+        output: 1,
+        ..TokenUsage::default()
+    }));
+    let Message::Assistant { last_round, .. } = &mut messages[1] else {
+        panic!("assistant");
+    };
+    *last_round = Some(TokenUsage {
+        input: 120,
+        cache_read: 30,
+        cache_write: 20,
+        ..TokenUsage::default()
+    });
+    messages.push(user_text("appended after the last round"));
+    let appended = accounting.estimate(&messages[2..]);
+    assert!(appended > 0);
+
+    let count = accounting.tokens_in_use(&messages, true);
+    assert_eq!(count.tokens, 170 + appended);
+    assert_eq!(count.source, TokenSource::Provider);
+}
+
+fn user_text(text: &str) -> Message {
+    Message::User {
+        id: MessageId::new(),
+        parts: vec![Part::Text {
+            id: PartId::new(),
+            text: text.to_string(),
+        }],
+    }
+}
+
+fn reasoning(text: &str, signed: bool) -> Part {
+    Part::Reasoning {
+        id: PartId::new(),
+        text: text.to_string(),
+        provider_data: signed.then(|| serde_json::json!({"type": "thinking", "signature": "sig"})),
+    }
+}
+
+fn assistant(parts: Vec<Part>) -> Message {
+    Message::Assistant {
+        id: MessageId::new(),
+        agent: AgentName::new("build"),
+        model: ModelRef::new("test/model"),
+        parts,
+        finish: None,
+        tokens: None,
+        last_round: None,
+        last_step_start: None,
+    }
+}
+
+/// [q1, A(old signed), q2, A(current signed, current unsigned)].
+fn replay_fixture() -> Vec<Message> {
+    vec![
+        user_text("q1"),
+        assistant(vec![reasoning(&"o".repeat(400), true)]),
+        user_text("q2"),
+        assistant(vec![
+            reasoning(&"c".repeat(400), true),
+            reasoning(&"u".repeat(400), false),
+        ]),
+    ]
+}
+
+/// Reasoning counts only where the route's encoder sends it: never for Chat /
+/// Google, only current-turn signed thinking for Anthropic.
+#[test]
+fn estimate_counts_only_reasoning_the_route_replays() {
+    use hya_provider::ReasoningReplayPolicy;
+    let accounting = TokenAccounting::new(TokenAccountingMode::Estimate);
+    let messages = replay_fixture();
+    let none = accounting.estimate_with_reasoning_policy(&messages, ReasoningReplayPolicy::None);
+    let text_only = accounting.estimate(&[user_text("q1"), user_text("q2")]);
+    assert_eq!(none, text_only, "no route-dropped reasoning is counted");
+
+    let anthropic = accounting
+        .estimate_with_reasoning_policy(&messages, ReasoningReplayPolicy::SignedCurrentTurn);
+    let current_signed = accounting.estimate(&[assistant(vec![reasoning(&"c".repeat(400), true)])]);
+    assert_eq!(
+        anthropic,
+        none + current_signed,
+        "only the current turn's signed thinking is replayed"
+    );
+    assert!(
+        accounting.estimate(&messages) > anthropic,
+        "route-agnostic estimate over-counts"
+    );
+}
+
+/// Chat routes resend `reasoning_content` from every turn, and only the
+/// reasoning a chat route streamed.
+#[test]
+fn chat_estimate_counts_reasoning_content_from_every_turn() {
+    use hya_provider::ReasoningReplayPolicy;
+    let chat = |text: &str| Part::Reasoning {
+        id: PartId::new(),
+        text: text.to_string(),
+        provider_data: Some(serde_json::json!({"type": "reasoning_content"})),
+    };
+    let accounting = TokenAccounting::new(TokenAccountingMode::Estimate);
+    let mut messages = replay_fixture();
+    messages.insert(2, assistant(vec![chat(&"p".repeat(400))]));
+    messages.push(assistant(vec![chat(&"n".repeat(400))]));
+    let none = accounting.estimate_with_reasoning_policy(&messages, ReasoningReplayPolicy::None);
+    let replayed = accounting.estimate(&[
+        assistant(vec![chat(&"p".repeat(400))]),
+        assistant(vec![chat(&"n".repeat(400))]),
+    ]);
+    assert_eq!(
+        accounting
+            .estimate_with_reasoning_policy(&messages, ReasoningReplayPolicy::ReasoningContent),
+        none + replayed,
+    );
+}
+
+/// The Anthropic encoder and the estimator use one predicate: the thinking
+/// blocks the encoder emits are exactly the parts the estimator counts.
+#[test]
+fn anthropic_encoder_and_estimator_agree_on_replayed_reasoning() {
+    use hya_provider::{AnthropicMessagesProtocol, Protocol, ReasoningReplayPolicy};
+    let messages = replay_fixture();
+    let turn_start = hya_provider::current_turn_start(&messages);
+    let counted: Vec<String> = messages
+        .iter()
+        .enumerate()
+        .flat_map(|(index, message)| match message {
+            Message::Assistant { parts, .. } => parts
+                .iter()
+                .filter(|part| {
+                    ReasoningReplayPolicy::SignedCurrentTurn.replays(turn_start, index, part)
+                })
+                .filter_map(|part| match part {
+                    Part::Reasoning { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .collect();
+    let request = hya_provider::CompletionRequest {
+        // Signed thinking can be replayed only on the model that generated it.
+        model: ModelRef::new("test/model"),
+        system: None,
+        messages,
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: Some(64),
+        reasoning: None,
+        headers: Default::default(),
+    };
+    let body = AnthropicMessagesProtocol.encode(&request).unwrap();
+    let emitted: Vec<String> = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
+        .filter(|block| block["type"] == "thinking")
+        .map(|block| block["thinking"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(emitted, counted);
+    assert_eq!(emitted, vec!["c".repeat(400)]);
+}
+
+#[test]
+fn accounting_mode_round_trips_through_parse() {
+    for mode in [
+        TokenAccountingMode::Auto,
+        TokenAccountingMode::Provider,
+        TokenAccountingMode::Estimate,
+    ] {
+        assert_eq!(TokenAccountingMode::parse(mode.as_str()), Some(mode));
+    }
+    assert_eq!(
+        TokenAccountingMode::parse("  AUTO "),
+        Some(TokenAccountingMode::Auto)
+    );
+    assert_eq!(TokenAccountingMode::parse("nonsense"), None);
+}
+
+/// Tool input and output dominate a tool-heavy transcript; skipping them is how
+/// the old estimator let explore loops run past the window.
+#[test]
+fn tool_payloads_are_counted() {
+    let accounting = TokenAccounting::new(TokenAccountingMode::Estimate);
+    let bare = vec![Message::Assistant {
+        id: MessageId::new(),
+        agent: AgentName::new("build"),
+        model: ModelRef::new("test/model"),
+        parts: vec![Part::Tool {
+            id: PartId::new(),
+            call_id: ToolCallId::new(),
+            name: ToolName::new("grep"),
+            state: ToolPartState::Completed {
+                input: serde_json::json!({ "pattern": "fn main" }),
+                output: serde_json::Value::String("hit\n".repeat(500)),
+                time_ms: 4,
+            },
+            provider_data: None,
+        }],
+        finish: Some(FinishReason::Stop),
+        tokens: None,
+        last_round: None,
+        last_step_start: None,
+    }];
+    assert!(
+        accounting.estimate(&bare) > 400,
+        "tool output must be counted, got {}",
+        accounting.estimate(&bare)
+    );
+}

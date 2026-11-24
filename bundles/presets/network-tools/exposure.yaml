@@ -7,7 +7,9 @@ tools:
     schema_version: 1
     permission: tool
     aliases: [{ name: fetch, visibility: hidden }]
+    prompt: fetch a web page
   - name: websearch
     schema_version: 1
     permission: tool
     aliases: [{ name: search, visibility: hidden }]
+    prompt: search the web

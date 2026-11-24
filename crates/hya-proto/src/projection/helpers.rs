@@ -31,12 +31,18 @@ pub(super) fn upsert_tool(
     call: ToolCallId,
     name: ToolName,
     state: ToolPartState,
+    provider_data: Option<serde_json::Value>,
 ) {
     if let Some(PartProjection::Tool {
-        state: existing, ..
+        state: existing,
+        provider_data: existing_data,
+        ..
     }) = find_part(p, msg, part)
     {
         *existing = state;
+        if provider_data.is_some() {
+            *existing_data = provider_data;
+        }
     } else {
         push_part(
             p,
@@ -47,6 +53,7 @@ pub(super) fn upsert_tool(
                 name,
                 state,
                 eviction_notice: None,
+                provider_data,
             },
         );
     }

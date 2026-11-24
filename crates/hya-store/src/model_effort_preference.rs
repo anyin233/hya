@@ -31,7 +31,7 @@ impl SessionStore {
             "SELECT provider_id, model_id, effort, updated_at
              FROM model_effort_preference ORDER BY provider_id, model_id",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.read_pool_checked()?)
         .await?;
         rows.into_iter().map(decode_preference).collect()
     }
@@ -48,7 +48,7 @@ impl SessionStore {
         )
         .bind(provider_id)
         .bind(model_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.read_pool_checked()?)
         .await?;
         row.map(decode_preference).transpose()
     }
@@ -64,7 +64,7 @@ impl SessionStore {
     ) -> Result<(), StoreError> {
         validate(provider_id, model_id, effort)?;
         self.require_runtime_owner(owner)?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         self.require_runtime_owner(owner)?;
         sqlx::query(
             "INSERT INTO model_effort_preference
@@ -91,7 +91,7 @@ impl SessionStore {
     ) -> Result<(), StoreError> {
         validate(provider_id, model_id, "clear")?;
         self.require_runtime_owner(owner)?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         self.require_runtime_owner(owner)?;
         sqlx::query("DELETE FROM model_effort_preference WHERE provider_id = ? AND model_id = ?")
             .bind(provider_id)

@@ -28,10 +28,9 @@ bundle-qualified reference may use `bundle:hya/core-agents/agent/hya-main`;
 it resolves to the same definition as `hya-main`. An omitted or empty
 `subagent_type` on `task` selects `hya-task`. Ordinary core agents can spawn
 ordinary catalog agents, including agents from installed bundles; the
-read-only `hya-scout` cannot call `task`. `hya-compaction`, `hya-summary`, and
-`hya-title` are reserved for engine-owned operations: they are resolvable by
-exact id but excluded from selectors and spawn rosters and cannot spawn other
-agents.
+read-only `hya-scout` cannot call `task`. `hya-title` is reserved for an
+engine-owned operation: it is resolvable by exact id but excluded from
+selectors and spawn rosters and cannot spawn other agents.
 
 ### Built-in agents
 
@@ -45,8 +44,6 @@ on canonical `harness:tool/*` resources, not merely by prompt instructions.
 | `hya-task` | subagent (`task` default) | None | General-purpose focused work. |
 | `hya-scout` | subagent | Denies write, edit, apply_patch, bash, task, archive | Fast read-only research. |
 | `hya-reviewer` | subagent | Denies write, edit, apply_patch | Review patches and report findings. |
-| `hya-compaction` | reserved system subagent | Not selectable or spawnable | Context compaction. |
-| `hya-summary` | reserved system subagent | Not selectable or spawnable | Explicit summarization. |
 | `hya-title` | reserved system subagent | Not selectable or spawnable | Session titles. |
 
 ### Migrating agent ids
@@ -58,7 +55,8 @@ on canonical `harness:tool/*` resources, not merely by prompt instructions.
 | `general`, `hya-worker`, `hya-implementer`, `hya-tester`, `hya-docs` | `hya-task` |
 | `explore`, `hya-explorer` | `hya-scout` |
 | `hya-reviewer` | `hya-reviewer` |
-| `compaction`, `summary`, `title` | `hya-compaction`, `hya-summary`, `hya-title` respectively |
+| `title` | `hya-title` |
+| `compaction`, `summary`, `hya-compaction`, `hya-summary` | Removed (context reduction runs no agent; see [Compaction](compaction.md)) |
 | `hya-release` | Removed (no replacement) |
 
 Update custom `agents` keys, `default_agent`, and explicit spawn targets to
@@ -92,10 +90,22 @@ their id, kind, version, digest, exported ids, and
 `immutable: true, installable: false`. They do not enter the installed bundle
 catalog and cannot be upgraded or uninstalled through public bundle commands.
 
-The `hya-main` and `hya-task` prompts guide delegation toward one `task`
-call containing independent `tasks[]`, with shared `context` and per-member
-scope, ownership and acceptance criteria. They distinguish running handles
-from completed reports and encourage useful parent work before `wait`.
+The scout, task worker and reviewer stay within their assigned workspace
+and task inputs, including during read-only inspection. Their scope excludes
+harness internals, unrelated system paths, or credentials not provided for
+the task. A credential provided for the assignment is an in-scope input.
+
+The lead delegates only focused, independent work. Submit independent
+assignments together in one `task` call with a `tasks[]` array. Each item
+has its own scope, ownership and acceptance criteria. Use the returned
+`<subagent_type>-<operator>` handle to follow up with that child. Copy the original hard constraints,
+edge-case notes and negative requirements verbatim into `context` or the
+relevant `prompt`. Omit `effort` to use the explicit `model#effort` suffix or the child agent's default shown by `list_agents`. An explicit effort must be supported by the child model.
+
+The lead resolves single-thread reasoning and competing interpretations with
+the smallest check against real inputs or the specification that distinguishes them. A `hya-reviewer` P0 or P1 finding includes a
+concrete failing case so the lead can test it before dismissing the finding.
+`wait` lists reported subagents as finished and already archived.
 See the [task input and worked example](architecture/agent-tool-surface.md#task).
 
 ## Interface definitions

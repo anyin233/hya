@@ -705,10 +705,10 @@ workspace suite.
 
 ## 14. Test surface impact
 
-- `crates/hya-engine/tests/turn_loop.rs`, resident/subagent unit seams: re-based
+- `crates/hya-engine/tests/it/turn_loop.rs`, resident/subagent unit seams: re-based
   on episode semantics (arm/report/archive/revive cycles, gate rejections,
   degraded handoffs).
-- `crates/hya-app/tests/spawn_admission.rs`, `nested_spawn_tree.rs`: unified
+- `crates/hya-app/tests/it/spawn_admission.rs`, `nested_spawn_tree.rs`: unified
   path only; atomic batch registration and active-claim capacity.
 - `crates/hya-proto`: projection fold tests for the new events; legacy
   flat-mailbox fixture retired (breaking mandate).

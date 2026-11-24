@@ -1,4 +1,4 @@
-use eventsource_stream::Eventsource as _;
+use eventsource_stream::{EventStreamError, Eventsource as _};
 use futures::StreamExt as _;
 use hya_proto::Event;
 use serde_json::Value;
@@ -33,7 +33,7 @@ pub(super) async fn pump(
             Ok(None) => break,
             Err(_elapsed) => {
                 let _ = tx
-                    .send(Err(ProviderError::Http(format!(
+                    .send(Err(ProviderError::StreamInterrupted(format!(
                         "stalled stream: no SSE frame within {idle_timeout:#?}"
                     ))))
                     .await;
@@ -43,7 +43,14 @@ pub(super) async fn pump(
         let frame = match next {
             Ok(f) => f,
             Err(e) => {
-                let _ = tx.send(Err(ProviderError::Http(e.to_string()))).await;
+                let message = e.to_string();
+                let error = match e {
+                    EventStreamError::Transport(_) => ProviderError::StreamInterrupted(message),
+                    EventStreamError::Utf8(_) | EventStreamError::Parser(_) => {
+                        ProviderError::Http(message)
+                    }
+                };
+                let _ = tx.send(Err(error)).await;
                 return;
             }
         };

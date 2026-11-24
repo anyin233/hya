@@ -19,7 +19,7 @@ Examples:
 - Working split-entrypoint example: [`docs/examples/bun-disjoint`](examples/bun-disjoint/) (`bun-disjoint`)
 
 Core agents (`hya-main`, `hya-plan`, `hya-task`, `hya-scout`,
-`hya-reviewer`, and reserved `hya-compaction`, `hya-summary`, `hya-title`)
+`hya-reviewer`, and reserved `hya-title`)
 come from the trusted [`hya/core-agents` preset](core-agents.md). The preset
 has access to the Harness plane subject to each agent's `resource_view.deny`:
 `hya-plan` denies write, edit, apply_patch, and bash; `hya-scout` also denies
@@ -1015,8 +1015,8 @@ They differ from bundle agents in three ways:
 - Ordinary built-ins can spawn ordinary catalog agents, so installing a bundle
   makes its public agents spawnable immediately, with no edit to a built-in's
   `can_spawn`; `hya-scout` cannot call `task` because its view denies it. The
-  reserved system agents `hya-compaction`, `hya-summary`, and `hya-title` are never
-  selectable and never an ordinary spawn target.
+  reserved system agent `hya-title` is never selectable and never an ordinary
+  spawn target.
 
 ---
 

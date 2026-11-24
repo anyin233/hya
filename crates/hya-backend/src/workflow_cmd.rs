@@ -210,7 +210,12 @@ pub(crate) async fn run(
     // `list`/`info` only read an existing database. Every other command writes it
     // (a Session, a selection, a run, crash recovery on open), so it holds
     // the database lock, or goes through the server that owns the database.
-    let store = match crate::db_writer::claim(db, "workflow").await? {
+    let claimed = if is_run && session.is_none() {
+        crate::db_writer::claim_or_memory(db, "workflow").await?
+    } else {
+        crate::db_writer::claim(db, "workflow").await?
+    };
+    let store = match claimed {
         Writer::Direct(store) => store,
         Writer::Server(server) => {
             let route = match command {
@@ -249,23 +254,36 @@ pub(crate) async fn run(
             return finish(&result, json_output, is_run);
         }
     };
-    let runtime =
-        crate::startup::HeadlessSession::start(store, model_override, yolo, pure, session).await?;
-    let result = runtime
-        .run(async move |runtime| {
-            runtime
-                .built
-                .workflow_control()
-                .execute(
-                    runtime.session,
-                    WorkflowInvocation::default(),
-                    command,
-                    CancellationToken::new(),
-                )
-                .await
-                .map_err(control_error)
-        })
-        .await?;
+    let exit_store = store.clone();
+    let mut signals = crate::stop_signals::StopSignals::install()?;
+    let mut runtime = crate::stop_signals::start_headless_with_signals(
+        &mut signals,
+        store,
+        model_override,
+        yolo,
+        pure,
+        session,
+    )
+    .await?;
+    let cancel = CancellationToken::new();
+    let (result, stop) = crate::stop_signals::run_until_stopped(
+        &runtime.built,
+        &mut signals,
+        &cancel,
+        runtime.built.workflow_control().execute(
+            runtime.session,
+            WorkflowInvocation::default(),
+            command,
+            cancel.clone(),
+        ),
+    )
+    .await;
+    let shutdown_res = signals
+        .finish_with_store_report(&exit_store, stop.is_some(), runtime.shutdown())
+        .await;
+    shutdown_res?;
+    crate::stop_signals::exit_if_stopped(stop);
+    let result = result.map_err(control_error)?;
     finish(&result, json_output, is_run)
 }
 

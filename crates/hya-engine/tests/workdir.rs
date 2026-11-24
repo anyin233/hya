@@ -2,6 +2,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "it/support/mod.rs"]
 mod support;
 
 use std::ffi::OsString;

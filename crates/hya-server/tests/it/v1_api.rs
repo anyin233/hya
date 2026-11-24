@@ -1,0 +1,930 @@
+//! Integration tests for `hya-server`: the `/v1` dual-protocol HTTP binding.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use crate::support;
+
+use std::sync::{Arc, Mutex};
+
+use axum::body::Body;
+use axum::http::{Method, Request, StatusCode, header};
+use http_body_util::BodyExt;
+use hya_engine::{AgentSpec, EventBus, SessionEngine};
+use hya_proto::{AgentName, FinishReason, ModelRef};
+use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
+use hya_server::{AppState, router};
+use hya_store::SessionStore;
+use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use serde_json::{Value, json};
+use tower::ServiceExt;
+
+async fn state() -> AppState {
+    let provider = FakeProvider::scripted_turns(vec![vec![
+        FakeStep::Text("hello from the agent".to_string()),
+        FakeStep::Finish(FinishReason::Stop),
+    ]]);
+    let providers = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let store = SessionStore::connect_memory().await.unwrap();
+    let engine = SessionEngine::new(
+        store,
+        providers,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
+    AppState::new(
+        Arc::new(engine),
+        Arc::new(AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            system_prompt: "x".to_string(),
+            workdir: std::env::temp_dir(),
+            reasoning: None,
+        }),
+    )
+}
+
+async fn send(app: axum::Router, method: Method, uri: &str, body: Value) -> (StatusCode, Value) {
+    let body = if body.is_null() {
+        Body::empty()
+    } else {
+        Body::from(body.to_string())
+    };
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(body)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes)
+            .unwrap_or(Value::String(String::from_utf8_lossy(&bytes).into_owned()))
+    };
+    (status, json)
+}
+
+async fn create_session(app: &axum::Router) -> String {
+    let (status, body) = send(
+        app.clone(),
+        Method::POST,
+        "/v1/sessions",
+        json!({
+            "agent": "build",
+            "model": "fake",
+            "workdir": std::env::temp_dir().to_string_lossy(),
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body["session"]["id"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn v1_process_config_and_catalog_surfaces_answer() {
+    let app = router(state().await);
+
+    let (status, health) = send(app.clone(), Method::GET, "/v1/health", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(health["ok"], json!(true));
+
+    let (status, _location) = send(app.clone(), Method::GET, "/v1/location", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, config) = send(app.clone(), Method::GET, "/v1/config", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(config["values"].is_object());
+
+    let (status, merged) = send(
+        app.clone(),
+        Method::PATCH,
+        "/v1/config",
+        json!({"patch": {"v1Probe": {"nested": true}}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{merged}");
+    assert_eq!(merged["values"]["v1Probe"]["nested"], json!(true));
+
+    let (status, models) = send(app.clone(), Method::GET, "/v1/models", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        models["models"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty())
+    );
+
+    let (status, tools) = send(app.clone(), Method::GET, "/v1/tools", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        tools["tools"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["name"] == "read"))
+    );
+
+    let (status, _) = send(
+        app.clone(),
+        Method::POST,
+        "/v1/logs",
+        json!({"service": "tui", "level": "LOG_LEVEL_INFO", "message": "probe"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+/// Key writes belong to the app-owned provider control (`hya_app::auth`,
+/// atomic 0600, live rebuild — covered in `hya-app/tests/provider_control.rs`);
+/// a bare server without one answers `unavailable` and never writes a file.
+#[tokio::test]
+async fn v1_auth_without_a_provider_control_is_unavailable_and_validates_ids() {
+    let app = router(state().await);
+
+    let (status, body) = send(
+        app.clone(),
+        Method::PUT,
+        "/v1/auth/testprovider",
+        json!({"apiKey": "secret-key"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"]["code"], json!("unavailable"));
+
+    let (status, _) = send(app.clone(), Method::GET, "/v1/auth", Value::Null).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+
+    let (status, _) = send(
+        app.clone(),
+        Method::DELETE,
+        "/v1/auth/testprovider",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+
+    let (status, _body) = send(app, Method::PUT, "/v1/auth/bad..id", json!({"apiKey": "x"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn v1_session_lifecycle_create_get_patch_delete() {
+    let app = router(state().await);
+    let session = create_session(&app).await;
+
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!("/v1/sessions/{session}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["id"], json!(session));
+    assert_eq!(body["agent"], json!("build"));
+
+    let (status, body) = send(
+        app.clone(),
+        Method::PATCH,
+        &format!("/v1/sessions/{session}"),
+        json!({"title": "v1 probe"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["title"], json!("v1 probe"));
+
+    let (status, body) = send(app.clone(), Method::GET, "/v1/sessions", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["sessions"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["id"] == json!(session)))
+    );
+
+    let (status, _) = send(
+        app.clone(),
+        Method::GET,
+        "/v1/sessions/hysec_00000000000000000000",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = send(
+        app.clone(),
+        Method::DELETE,
+        &format!("/v1/sessions/{session}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = send(
+        app,
+        Method::GET,
+        &format!("/v1/sessions/{session}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], json!("session_not_found"));
+}
+
+#[tokio::test]
+async fn v1_turn_runs_event_driven_and_finishes() {
+    let app = router(state().await);
+    let session = create_session(&app).await;
+
+    let (status, body) = send(
+        app.clone(),
+        Method::POST,
+        &format!("/v1/sessions/{session}/turns"),
+        json!({"prompt": {"text": "say hello"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let turn = body["turn"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(body["turn"]["state"], json!("TURN_STATE_RUNNING"));
+
+    let (status, body) = send(
+        app.clone(),
+        Method::POST,
+        &format!("/v1/sessions/{session}/turns/{turn}/wait"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["state"], json!("TURN_STATE_FINISHED"), "{body}");
+    assert_eq!(body["finish"], json!("FINISH_REASON_STOP"));
+
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!("/v1/sessions/{session}/messages"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let messages = body["messages"].as_array().unwrap();
+    assert!(
+        messages.iter().any(
+            |message| message["parts"].as_array().is_some_and(|parts| parts
+                .iter()
+                .any(|part| part["text"]["text"] == json!("hello from the agent")))
+        )
+    );
+
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!("/v1/sessions/{session}/events"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["events"]
+            .as_array()
+            .is_some_and(|events| !events.is_empty())
+    );
+    let next_seq = body["nextSeq"]
+        .as_str()
+        .and_then(|value| value.parse::<u64>().ok())
+        .or_else(|| body["nextSeq"].as_u64())
+        .unwrap_or(0);
+    assert!(next_seq > 0);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/v1/sessions/{session}/events/stream"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let content_type = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(content_type.starts_with("text/event-stream"));
+}
+
+/// An empty agent or model takes the server's default, as for a headless
+/// root session (`hya exec` routed through a daemon relies on this).
+#[tokio::test]
+async fn v1_create_session_defaults_an_empty_agent_and_model() {
+    let app = router(state().await);
+    let workdir = std::env::temp_dir().to_string_lossy().into_owned();
+    let (status, body) = send(
+        app.clone(),
+        Method::POST,
+        "/v1/sessions",
+        json!({ "workdir": workdir }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // The default agent on its default model (the bare `fake` here, which
+    // the wire `ModelRef` cannot split into provider/model).
+    assert_eq!(body["session"]["agent"], json!("build"), "{body}");
+
+    // An explicit model with the default agent.
+    let (status, body) = send(
+        app,
+        Method::POST,
+        "/v1/sessions",
+        json!({ "workdir": workdir, "model": "other/m" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["session"]["agent"], json!("build"), "{body}");
+    assert_eq!(body["session"]["model"]["modelId"], json!("m"), "{body}");
+}
+
+#[tokio::test]
+async fn v1_invalid_requests_render_the_stable_error_model() {
+    let app = router(state().await);
+
+    let (status, body) = send(
+        app.clone(),
+        Method::POST,
+        "/v1/sessions/not-a-session/turns",
+        json!({"prompt": {"text": "x"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], json!("invalid_argument"));
+
+    let (status, body) = send(
+        app.clone(),
+        Method::POST,
+        "/v1/sessions",
+        json!({"agent": "build"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], json!("invalid_argument"));
+
+    let (status, _) = send(app, Method::GET, "/v1/interactions", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn v1_fs_reads_lists_finds_and_searches() {
+    let app = router(state().await);
+    let root = std::env::temp_dir().join(format!(
+        "hya-v1-fs-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/a.rs"), "fn alpha() {}\n").unwrap();
+    std::fs::write(root.join("notes.txt"), "hello v1 probe\n").unwrap();
+    let scope = root.to_string_lossy().into_owned();
+
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!("/v1/fs/read?directory={}&path=notes.txt", enc(&scope)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["text"], json!(true));
+    assert!(String::from_utf8_lossy(&decode_b64(&body)).contains("hello v1 probe"));
+
+    // `maxBytes` caps what is read and returned (a frontend checking an
+    // attachment's size never pulls more than its limit + 1); binary
+    // content comes back as base64 bytes with `text` false.
+    std::fs::write(
+        root.join("shot.png"),
+        [0x89, b'P', b'N', b'G', 0xff, 0xfe, 0, 1, 2, 3],
+    )
+    .unwrap();
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!(
+            "/v1/fs/read?directory={}&path=shot.png&maxBytes=6",
+            enc(&scope)
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(decode_b64(&body), vec![0x89, b'P', b'N', b'G', 0xff, 0xfe]);
+    // protojson omits a false `text`.
+    assert_ne!(body["text"], json!(true));
+    assert_eq!(body["mime"], json!("image/png"));
+    // An absolute path inside the scope reads the same file.
+    let absolute = root.join("shot.png").to_string_lossy().into_owned();
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!(
+            "/v1/fs/read?directory={}&path={}",
+            enc(&scope),
+            enc(&absolute)
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(decode_b64(&body).len(), 10);
+
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!("/v1/fs/list?directory={}", enc(&scope)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["entries"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["name"] == json!("src")))
+    );
+
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!(
+            "/v1/fs/find?directory={}&pattern={}",
+            enc(&scope),
+            enc("**/*.rs")
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["paths"].as_array().is_some_and(|rows| {
+        rows.iter()
+            .any(|p| p.as_str().is_some_and(|p| p.ends_with("a.rs")))
+    }));
+
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!(
+            "/v1/fs/search?directory={}&query={}",
+            enc(&scope),
+            enc("v1 probe")
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["matches"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty())
+    );
+
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!(
+            "/v1/fs/read?directory={}&path={}",
+            enc(&scope),
+            enc("../../etc/passwd")
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], json!("invalid_argument"));
+}
+
+/// Percent-encode a query component for URI construction in tests.
+fn enc(text: &str) -> String {
+    text.bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
+fn decode_b64(body: &Value) -> Vec<u8> {
+    use base64::Engine;
+    body["content"]
+        .as_str()
+        .map(|text| {
+            base64::engine::general_purpose::STANDARD
+                .decode(text)
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn v1_project_vcs_mcp_and_workflow_catalog_answer() {
+    let app = router(state().await);
+    let root = std::env::temp_dir().join(format!(
+        "hya-v1-proj-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let scope = root.to_string_lossy().into_owned();
+
+    // No Project exists until a client names a workspace (ADR-0024).
+    let (status, body) = send(app.clone(), Method::GET, "/v1/projects", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["projects"].as_array().is_none_or(Vec::is_empty),
+        "{body}"
+    );
+    let (status, body) = send(
+        app.clone(),
+        Method::POST,
+        "/v1/projects/ensure",
+        json!({ "path": scope }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = send(app.clone(), Method::GET, "/v1/projects", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["projects"][0]["roots"], json!([scope]), "{body}");
+
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!("/v1/vcs?directory={}", enc(&scope)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["branch"].is_null() || body["branch"] == json!(""));
+    assert!(body["files"].as_array().is_none_or(|rows| rows.is_empty()));
+
+    let (status, body) = send(app.clone(), Method::GET, "/v1/mcp", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["servers"]
+            .as_array()
+            .is_none_or(|rows| rows.is_empty()),
+        "{body}"
+    );
+
+    let (status, body) = send(app, Method::GET, "/v1/workflows", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["workflows"]
+            .as_array()
+            .is_none_or(|rows| rows.is_empty()),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn v1_pty_lifecycle_creates_lists_tokens_and_deletes() {
+    let app = router(state().await);
+
+    let (status, body) = send(app.clone(), Method::GET, "/v1/pty/shells", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["shells"]
+            .as_array()
+            .is_none_or(|rows| rows.iter().all(|row| row.as_str().is_some()))
+    );
+
+    let (status, body) = send(
+        app.clone(),
+        Method::POST,
+        "/v1/pty",
+        json!({"shell": "/bin/sh", "cwd": std::env::temp_dir().to_string_lossy()}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let id = body["id"].as_str().unwrap().to_owned();
+
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!("/v1/pty/{id}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["id"], json!(id));
+
+    let (status, body) = send(
+        app.clone(),
+        Method::POST,
+        &format!("/v1/pty/{id}/connect-token"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["token"]
+            .as_str()
+            .is_some_and(|token| !token.is_empty())
+    );
+    assert!(
+        body["url"]
+            .as_str()
+            .is_some_and(|url| url.contains("/connect"))
+    );
+
+    let (status, _) = send(
+        app.clone(),
+        Method::DELETE,
+        &format!("/v1/pty/{id}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = send(app, Method::GET, &format!("/v1/pty/{id}"), Value::Null).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], json!("not_found"));
+}
+
+#[tokio::test]
+async fn runtime_schemas_lists_the_snapshot_scheme_table() {
+    let app = router(state().await);
+    let (status, body) = send(app, Method::GET, "/v1/runtime/schemas", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["schemas"],
+        json!([]),
+        "a runtime without scheme sources publishes an empty table: {body}"
+    );
+    assert!(
+        body["generation"].is_u64(),
+        "the response is generation-tagged: {body}"
+    );
+}
+
+/// `SessionInfo.busy` reflects any engine turn on the session — a resident
+/// wake or deferred synthesis turn the server did not start — not only the
+/// server's own run registry; `turns/{turn}/cancel` stops that engine turn.
+#[tokio::test]
+async fn v1_session_busy_reflects_engine_turns() {
+    let state = state().await;
+    let engine = Arc::clone(&state.engine);
+    let app = router(state);
+    let session = create_session(&app).await;
+    let id: hya_proto::SessionId = session.parse().unwrap();
+    let uri = format!("/v1/sessions/{session}");
+    let get = || send(app.clone(), Method::GET, &uri, Value::Null);
+
+    let (status, body) = get().await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_ne!(body["busy"], json!(true), "{body}");
+
+    let lease = engine.try_begin_turn(id).unwrap();
+    let (_, body) = get().await;
+    assert_eq!(
+        body["busy"],
+        json!(true),
+        "an engine turn makes the session busy: {body}"
+    );
+    let (status, body) = send(
+        app.clone(),
+        Method::POST,
+        &format!("/v1/sessions/{session}/turns/t/cancel"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["state"], json!("TURN_STATE_CANCELLED"), "{body}");
+    drop(lease);
+
+    let (_, body) = get().await;
+    assert_ne!(body["busy"], json!(true), "{body}");
+}
+
+/// Fake Workflow control that records the exact scope each `list` call named,
+/// without touching a real catalog or runtime.
+#[derive(Default)]
+struct RecordingWorkflowControl {
+    seen: Mutex<Vec<Option<std::path::PathBuf>>>,
+}
+
+impl hya_server::WorkflowControl for RecordingWorkflowControl {
+    fn execute(
+        &self,
+        _session: hya_proto::SessionId,
+        _command: hya_proto::WorkflowCommand,
+        _delivery: hya_proto::WorkflowDelivery,
+    ) -> hya_server::WorkflowControlFuture<'_> {
+        Box::pin(async {
+            Err(hya_server::WorkflowControlError::new(
+                "UNIMPLEMENTED",
+                "execute is not exercised by this fake",
+            ))
+        })
+    }
+
+    fn list(
+        &self,
+        scope: Option<std::path::PathBuf>,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<Vec<hya_proto::WorkflowSummary>, hya_server::WorkflowControlError>,
+    > {
+        self.seen.lock().unwrap().push(scope);
+        Box::pin(async { Ok(Vec::new()) })
+    }
+}
+
+/// `ListWorkflows` forwards the exact directory scope named by the header
+/// (which wins), the request field, or neither (the project-less global
+/// view) — it must not silently substitute some other session's catalog.
+#[tokio::test]
+async fn v1_list_workflows_forwards_the_named_directory_scope() {
+    let control = Arc::new(RecordingWorkflowControl::default());
+    let app = router(state().await.with_workflow_control(control.clone()));
+
+    // No directory named anywhere: the global (project-less) view.
+    let (status, body) = send(app.clone(), Method::GET, "/v1/workflows", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // The request's `directory` field names a scope.
+    let field_dir = std::env::temp_dir().join("hya-v1-list-workflows-field");
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!(
+            "/v1/workflows?directory={}",
+            enc(&field_dir.to_string_lossy())
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // The removed `x-hya-directory` header is refused, never forwarded.
+    let header_dir = std::env::temp_dir().join("hya-v1-list-workflows-header");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v1/workflows?directory={}",
+                    enc(&field_dir.to_string_lossy())
+                ))
+                .header("x-hya-directory", header_dir.to_string_lossy().to_string())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let seen = control.seen.lock().unwrap().clone();
+    assert_eq!(seen, vec![None, Some(field_dir)]);
+}
+
+#[tokio::test]
+async fn pagination_preserves_contents_and_cursors() {
+    let st = state().await;
+    let app = router(st);
+    let mut session = String::new();
+    for _ in 0..5 {
+        session = create_session(&app).await;
+    }
+    for _ in 0..3 {
+        let (status, body) = send(
+            app.clone(),
+            Method::POST,
+            &format!("/v1/sessions/{session}/turns"),
+            json!({"prompt": {"text": "hello"}}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let turn = body["turn"]["id"].as_str().unwrap();
+        let (status, _) = send(
+            app.clone(),
+            Method::POST,
+            &format!("/v1/sessions/{session}/turns/{turn}/wait"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    for (path, field) in [
+        ("/v1/sessions".to_string(), "sessions"),
+        (format!("/v1/sessions/{session}/messages"), "messages"),
+    ] {
+        let (_, all) = send(app.clone(), Method::GET, &path, Value::Null).await;
+        let rows = all[field].as_array().unwrap();
+        for offset in [0, 2, 4, rows.len()] {
+            let cursor = hya_api::cursor::encode_offset(offset as u64);
+            let (status, page) = send(
+                app.clone(),
+                Method::GET,
+                &format!("{path}?page.limit=2&page.cursor={cursor}"),
+                Value::Null,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            let expected: Vec<_> = rows.iter().skip(offset).take(2).cloned().collect();
+            assert_eq!(
+                page[field],
+                if expected.is_empty() {
+                    Value::Null
+                } else {
+                    json!(expected)
+                }
+            );
+            let next = offset + expected.len();
+            let more = next < rows.len();
+            assert_eq!(page["page"]["hasMore"].as_bool().unwrap_or(false), more);
+            assert_eq!(
+                page["page"]["nextCursor"].as_str().unwrap_or(""),
+                if more {
+                    hya_api::cursor::encode_offset(next as u64)
+                } else {
+                    String::new()
+                }
+            );
+        }
+    }
+    let path = format!("/v1/sessions/{session}/events");
+    let (_, all) = send(
+        app.clone(),
+        Method::GET,
+        &format!("{path}?includeRaw=true"),
+        Value::Null,
+    )
+    .await;
+    let raw = all["rawEnvelopes"].as_array().unwrap();
+    for offset in [0, raw.len() / 2, raw.len().saturating_sub(1), raw.len()] {
+        let since = if offset == 0 {
+            0
+        } else {
+            serde_json::from_str::<Value>(raw[offset - 1].as_str().unwrap()).unwrap()["seq"]
+                .as_u64()
+                .unwrap()
+        };
+        let (status, page) = send(
+            app.clone(),
+            Method::GET,
+            &format!("{path}?includeRaw=true&limit=1&sinceSeq={since}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let expected: Vec<_> = raw.iter().skip(offset).take(1).cloned().collect();
+        assert_eq!(
+            page["rawEnvelopes"],
+            if expected.is_empty() {
+                Value::Null
+            } else {
+                json!(expected)
+            }
+        );
+        let next = expected.first().map_or(since, |line| {
+            serde_json::from_str::<Value>(line.as_str().unwrap()).unwrap()["seq"]
+                .as_u64()
+                .unwrap()
+        });
+        let expected_events: Vec<_> = all["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| {
+                let seq = event["seq"].as_str().unwrap().parse::<u64>().unwrap();
+                seq > since && seq <= next
+            })
+            .cloned()
+            .collect();
+        assert_eq!(
+            page["events"],
+            if expected_events.is_empty() {
+                Value::Null
+            } else {
+                json!(expected_events)
+            }
+        );
+        assert_eq!(
+            page["nextSeq"].as_str().unwrap().parse::<u64>().unwrap(),
+            next
+        );
+    }
+}

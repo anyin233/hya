@@ -37,6 +37,11 @@ impl Tool for Edit {
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
         let Args { path, old, new } = super::args(input)?;
+        if old == new {
+            return Err(ToolError::Input(
+                "`old` and `new` are identical. The file was not changed".into(),
+            ));
+        }
         let file = super::resolve(&ctx.workdir, &path);
         let text = tokio::fs::read_to_string(&file).await?;
         let count = text.matches(old.as_str()).count();

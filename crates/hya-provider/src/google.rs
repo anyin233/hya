@@ -1,7 +1,8 @@
 use base64::Engine as _;
+use hya_proto::context::{GOOGLE_TEXT_SIGNATURE_TYPE, GOOGLE_THOUGHT_TYPE, same_model_id};
 use hya_proto::{
-    Event, FinishReason, Message, MessageId, Part, PartId, Role, SessionId, TokenUsage, ToolCallId,
-    ToolName,
+    Event, FinishReason, Message, MessageId, ModelRef, Part, PartId, Role, SessionId, TokenUsage,
+    ToolCallId, ToolName,
 };
 use serde_json::{Map, Value, json};
 
@@ -29,47 +30,191 @@ const MEDIA_MIMES: &[&str] = &[
 const MAX_MEDIA_ENCODED_BYTES: usize = 28 * 1024 * 1024;
 const MAX_MEDIA_DECODED_BYTES: usize = 20 * 1024 * 1024;
 
-fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) -> Result<(), ProviderError> {
-    let mut model_parts: Vec<Value> = Vec::new();
-    let mut responses: Vec<Value> = Vec::new();
-    for part in parts {
-        match part {
-            Part::Text { text, .. } => {
-                if !text.is_empty() {
-                    model_parts.push(json!({ "text": text }));
-                }
+fn uses_google_thinking_level(model_id: &str) -> bool {
+    let bare = hya_proto::context::bare_model_id(&ModelRef::new(model_id)).to_ascii_lowercase();
+    let Some(rest) = bare.strip_prefix("gemini-") else {
+        return false;
+    };
+    let major = rest.split(['.', '-']).next().unwrap_or_default();
+    major.parse::<u32>().is_ok_and(|v| v >= 3)
+}
+
+fn is_google_reasoning_data(data: &Value) -> bool {
+    matches!(
+        data.get("type").and_then(Value::as_str),
+        Some(t) if t == GOOGLE_THOUGHT_TYPE || t == GOOGLE_TEXT_SIGNATURE_TYPE
+    )
+}
+
+fn tool_thought_signature(provider_data: Option<&Value>) -> Option<&str> {
+    provider_data
+        .and_then(|d| {
+            d.get("thought_signature")
+                .or_else(|| d.get("thoughtSignature"))
+        })
+        .and_then(Value::as_str)
+        .filter(|sig| !sig.is_empty())
+}
+
+fn extract_thought_signature(part: &Value) -> Option<&str> {
+    part.get("thoughtSignature")
+        .or_else(|| part.get("thought_signature"))
+        .and_then(Value::as_str)
+        .filter(|sig| !sig.is_empty())
+}
+
+fn push_coalesced(out: &mut Vec<Value>, role: &str, parts: Vec<Value>) {
+    if parts.is_empty() {
+        return;
+    }
+    if let Some(last) = out.last_mut()
+        && last.get("role").and_then(Value::as_str) == Some(role)
+        && let Some(existing) = last.get_mut("parts").and_then(Value::as_array_mut)
+    {
+        existing.extend(parts);
+        return;
+    }
+    out.push(json!({ "role": role, "parts": parts }));
+}
+
+fn google_assistant_clusters(parts: &[Part], same_model: bool) -> Vec<&[Part]> {
+    let mut clusters = Vec::new();
+    let mut start = 0;
+    let mut tools = false;
+    for (index, part) in parts.iter().enumerate() {
+        let boundary = match part {
+            Part::Text { .. } => true,
+            Part::Reasoning { provider_data, .. } => {
+                same_model && provider_data.as_ref().is_some_and(is_google_reasoning_data)
             }
-            Part::Tool {
-                id, name, state, ..
-            } => {
-                let input = tool_input(state);
-                let args = if input.is_null() {
-                    json!({})
-                } else {
-                    input.clone()
-                };
-                model_parts.push(json!({
-                    "functionCall": { "name": name.as_str(), "args": args }
-                }));
-                // This route sends no tool-result image; the text says so.
-                let result = tool_result(id, state, &ToolImages::new(&[], false)).text;
-                responses.push(json!({
-                    "functionResponse": { "name": name.as_str(), "response": { "result": result } }
-                }));
+            Part::Tool { provider_data, .. } => {
+                same_model && tool_thought_signature(provider_data.as_ref()).is_some()
             }
-            Part::Reasoning { .. } => {}
-            Part::Media { media_type, .. } => {
-                return Err(ProviderError::Incompatible(format!(
-                    "Google does not support assistant media type {media_type}"
-                )));
-            }
+            Part::Media { .. } => false,
+        };
+        if tools && boundary {
+            clusters.push(&parts[start..index]);
+            start = index;
+            tools = false;
+        }
+        if matches!(part, Part::Tool { .. }) {
+            tools = true;
         }
     }
-    if !model_parts.is_empty() {
-        out.push(json!({ "role": "model", "parts": model_parts }));
+    clusters.push(&parts[start..]);
+    clusters
+}
+
+fn attach_text_signature(model_parts: &mut Vec<Value>, sig: &str) {
+    if let Some(last_text) = model_parts.iter_mut().rev().find(|part| {
+        part.get("text").is_some()
+            && part.get("thought").and_then(Value::as_bool) != Some(true)
+            && part.get("thoughtSignature").is_none()
+    }) {
+        last_text["thoughtSignature"] = json!(sig);
+    } else {
+        model_parts.push(json!({ "text": "", "thoughtSignature": sig }));
     }
-    if !responses.is_empty() {
-        out.push(json!({ "role": "user", "parts": responses }));
+}
+
+fn emit_assistant(
+    out: &mut Vec<Value>,
+    parts: &[Part],
+    same_model: bool,
+) -> Result<(), ProviderError> {
+    for cluster in google_assistant_clusters(parts, same_model) {
+        let mut model_parts: Vec<Value> = Vec::new();
+        let mut responses: Vec<Value> = Vec::new();
+        for part in cluster {
+            match part {
+                Part::Text { text, .. } => {
+                    if !text.is_empty() {
+                        model_parts.push(json!({ "text": text }));
+                    }
+                }
+                Part::Tool {
+                    id,
+                    name,
+                    state,
+                    provider_data,
+                    ..
+                } => {
+                    let input = tool_input(state);
+                    let args = if input.is_null() {
+                        json!({})
+                    } else {
+                        input.clone()
+                    };
+                    let mut fc = json!({ "name": name.as_str(), "args": args });
+                    let upstream_id = if same_model {
+                        provider_data
+                            .as_ref()
+                            .and_then(|d| d.get("call_id"))
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                    } else {
+                        None
+                    };
+                    if let Some(uid) = upstream_id {
+                        fc["id"] = json!(uid);
+                    }
+                    let mut call_part = json!({ "functionCall": fc });
+                    if same_model && let Some(sig) = tool_thought_signature(provider_data.as_ref())
+                    {
+                        call_part["thoughtSignature"] = json!(sig);
+                    }
+                    model_parts.push(call_part);
+
+                    // This route sends no tool-result image; the text says so.
+                    let result = tool_result(id, state, &ToolImages::new(&[], false)).text;
+                    let mut fr = json!({ "name": name.as_str(), "response": { "result": result } });
+                    if let Some(uid) = upstream_id {
+                        fr["id"] = json!(uid);
+                    }
+                    responses.push(json!({ "functionResponse": fr }));
+                }
+                Part::Reasoning {
+                    text,
+                    provider_data,
+                    ..
+                } => {
+                    if !same_model {
+                        continue;
+                    }
+                    let Some(data) = provider_data else {
+                        continue;
+                    };
+                    let sig = data
+                        .get("thought_signature")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty());
+                    match data.get("type").and_then(Value::as_str) {
+                        Some(t) if t == GOOGLE_THOUGHT_TYPE => {
+                            if !text.is_empty() || sig.is_some() {
+                                let mut entry = json!({ "thought": true, "text": text });
+                                if let Some(sig) = sig {
+                                    entry["thoughtSignature"] = json!(sig);
+                                }
+                                model_parts.push(entry);
+                            }
+                        }
+                        Some(t) if t == GOOGLE_TEXT_SIGNATURE_TYPE => {
+                            if let Some(sig) = sig {
+                                attach_text_signature(&mut model_parts, sig);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Part::Media { media_type, .. } => {
+                    return Err(ProviderError::Incompatible(format!(
+                        "Google does not support assistant media type {media_type}"
+                    )));
+                }
+            }
+        }
+        push_coalesced(out, "model", model_parts);
+        push_coalesced(out, "user", responses);
     }
     Ok(())
 }
@@ -134,25 +279,25 @@ fn validate_media(media_type: &str, data: &str) -> Result<(String, String), Prov
 
 impl Protocol for GoogleProtocol {
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
-        let mut system_text = req.system.clone().unwrap_or_default();
         let mut contents: Vec<Value> = Vec::new();
         for m in &req.messages {
             match m {
                 Message::System { content, .. } => {
-                    if !system_text.is_empty() {
-                        system_text.push('\n');
+                    if !content.is_empty() {
+                        push_coalesced(&mut contents, "user", vec![json!({ "text": content })]);
                     }
-                    system_text.push_str(content);
                 }
                 Message::User { parts, .. } => {
-                    contents.push(json!({"role":"user","parts": user_parts(parts)?}));
+                    push_coalesced(&mut contents, "user", user_parts(parts)?);
                 }
-                Message::Assistant { parts, .. } => emit_assistant(&mut contents, parts)?,
+                Message::Assistant { model, parts, .. } => {
+                    emit_assistant(&mut contents, parts, same_model_id(model, &req.model))?;
+                }
             }
         }
         let mut body = json!({ "contents": contents });
-        if !system_text.is_empty() {
-            body["systemInstruction"] = json!({"parts":[{"text": system_text}]});
+        if let Some(system) = req.system.as_deref().filter(|s| !s.is_empty()) {
+            body["systemInstruction"] = json!({"parts":[{"text": system}]});
         }
         let decls: Vec<Value> = req
             .tools
@@ -175,13 +320,23 @@ impl Protocol for GoogleProtocol {
         if let Some(m) = req.max_output_tokens {
             gen_config.insert("maxOutputTokens".to_string(), json!(m));
         }
-        if let Some(budget) = req
+        if uses_google_thinking_level(req.model.as_str()) {
+            if let Some(level) = req
+                .reasoning
+                .and_then(|e| e.google_thinking_level(req.model.as_str()))
+            {
+                gen_config.insert(
+                    "thinkingConfig".to_string(),
+                    json!({ "thinkingLevel": level, "includeThoughts": true }),
+                );
+            }
+        } else if let Some(budget) = req
             .reasoning
             .and_then(|e| e.google_budget(req.model.as_str()))
         {
             gen_config.insert(
                 "thinkingConfig".to_string(),
-                json!({ "thinkingBudget": budget }),
+                json!({ "thinkingBudget": budget, "includeThoughts": true }),
             );
         }
         if !gen_config.is_empty() {
@@ -194,9 +349,9 @@ impl Protocol for GoogleProtocol {
         &self,
         session: SessionId,
         message: MessageId,
-        _reasoning: Option<ReasoningEffort>,
+        reasoning: Option<ReasoningEffort>,
     ) -> Box<dyn Decoder> {
-        Box::new(GoogleDecoder::new(session, message))
+        Box::new(GoogleDecoder::new(session, message).with_reasoning(reasoning))
     }
 }
 
@@ -204,6 +359,9 @@ impl Protocol for GoogleProtocol {
 pub struct GoogleDecoder {
     session: SessionId,
     message: MessageId,
+    reasoning_effort: Option<ReasoningEffort>,
+    reasoning_part: Option<PartId>,
+    reasoning_signature: Option<String>,
     text_part: Option<PartId>,
     saw_tool: bool,
     usage: TokenUsage,
@@ -217,10 +375,47 @@ impl GoogleDecoder {
         Self {
             session,
             message,
+            reasoning_effort: None,
+            reasoning_part: None,
+            reasoning_signature: None,
             text_part: None,
             saw_tool: false,
             usage: TokenUsage::default(),
             finished: false,
+        }
+    }
+
+    /// Attach the request's reasoning effort so decoded thought parts record `reason`.
+    #[must_use]
+    pub fn with_reasoning(mut self, reasoning: Option<ReasoningEffort>) -> Self {
+        self.reasoning_effort = reasoning;
+        self
+    }
+
+    fn end_reasoning(&mut self, out: &mut Vec<Event>) {
+        if let Some(part) = self.reasoning_part.take() {
+            let mut data = json!({ "type": GOOGLE_THOUGHT_TYPE });
+            if let Some(sig) = self.reasoning_signature.take() {
+                data["thought_signature"] = Value::String(sig);
+            }
+            out.push(Event::ReasoningEnd {
+                session: self.session,
+                message: self.message,
+                part,
+                provider_data: Some(data),
+            });
+        } else {
+            self.reasoning_signature = None;
+        }
+    }
+
+    fn end_text(&mut self, out: &mut Vec<Event>) {
+        if let Some(part) = self.text_part.take() {
+            out.push(Event::TextEnd {
+                session: self.session,
+                message: self.message,
+                part,
+            });
         }
     }
 
@@ -231,13 +426,8 @@ impl GoogleDecoder {
         self.finished = true;
         let (session, message) = (self.session, self.message);
         let mut out = Vec::new();
-        if let Some(part) = self.text_part.take() {
-            out.push(Event::TextEnd {
-                session,
-                message,
-                part,
-            });
-        }
+        self.end_reasoning(&mut out);
+        self.end_text(&mut out);
         let finish = if self.saw_tool {
             FinishReason::ToolCalls
         } else {
@@ -284,8 +474,85 @@ impl Decoder for GoogleDecoder {
         };
         if let Some(parts) = cand.pointer("/content/parts").and_then(Value::as_array) {
             for part in parts {
-                if let Some(text) = part.get("text").and_then(Value::as_str) {
-                    if !text.is_empty() {
+                let thought = part.get("thought").and_then(Value::as_bool) == Some(true);
+                let sig = extract_thought_signature(part);
+                if thought {
+                    self.end_text(&mut out);
+                    let text = part.get("text").and_then(Value::as_str).unwrap_or_default();
+                    if !text.is_empty() || sig.is_some() {
+                        let reason = self
+                            .reasoning_effort
+                            .map(|effort| effort.as_str().to_string());
+                        let p = match self.reasoning_part {
+                            Some(p) => p,
+                            None => {
+                                let p = PartId::new();
+                                self.reasoning_part = Some(p);
+                                out.push(Event::ReasoningStart {
+                                    session,
+                                    message,
+                                    part: p,
+                                    reason,
+                                });
+                                p
+                            }
+                        };
+                        if !text.is_empty() {
+                            out.push(Event::ReasoningDelta {
+                                session,
+                                message,
+                                part: p,
+                                delta: text.to_string(),
+                            });
+                        }
+                        if let Some(sig) = sig {
+                            self.reasoning_signature = Some(sig.to_string());
+                        }
+                    }
+                } else if let Some(fc) = part.get("functionCall") {
+                    self.end_reasoning(&mut out);
+                    self.end_text(&mut out);
+                    self.saw_tool = true;
+                    let name = fc.get("name").and_then(Value::as_str).unwrap_or_default();
+                    let args = fc.get("args").cloned().unwrap_or(Value::Null);
+                    let upstream_id = fc
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty());
+                    let mut meta = Map::new();
+                    if let Some(id) = upstream_id {
+                        meta.insert("call_id".to_string(), Value::String(id.to_string()));
+                    }
+                    if let Some(sig) = sig {
+                        meta.insert(
+                            "thought_signature".to_string(),
+                            Value::String(sig.to_string()),
+                        );
+                    }
+                    let provider_data = (!meta.is_empty()).then_some(Value::Object(meta));
+                    let part_id = PartId::new();
+                    let call = ToolCallId::new();
+                    out.push(Event::ToolInputStart {
+                        session,
+                        message,
+                        part: part_id,
+                        call,
+                        name: ToolName::new(name),
+                    });
+                    out.push(Event::ToolCallRequested {
+                        session,
+                        message,
+                        part: part_id,
+                        call,
+                        name: ToolName::new(name),
+                        input: args,
+                        provider_data,
+                    });
+                } else if part.get("text").is_some() || sig.is_some() {
+                    self.end_reasoning(&mut out);
+                    if let Some(text) = part.get("text").and_then(Value::as_str)
+                        && !text.is_empty()
+                    {
                         let p = match self.text_part {
                             Some(p) => p,
                             None => {
@@ -306,27 +573,28 @@ impl Decoder for GoogleDecoder {
                             delta: text.to_string(),
                         });
                     }
-                } else if let Some(fc) = part.get("functionCall") {
-                    self.saw_tool = true;
-                    let name = fc.get("name").and_then(Value::as_str).unwrap_or_default();
-                    let args = fc.get("args").cloned().unwrap_or(Value::Null);
-                    let part_id = PartId::new();
-                    let call = ToolCallId::new();
-                    out.push(Event::ToolInputStart {
-                        session,
-                        message,
-                        part: part_id,
-                        call,
-                        name: ToolName::new(name),
-                    });
-                    out.push(Event::ToolCallRequested {
-                        session,
-                        message,
-                        part: part_id,
-                        call,
-                        name: ToolName::new(name),
-                        input: args,
-                    });
+                    if let Some(sig) = sig {
+                        self.end_text(&mut out);
+                        let p = PartId::new();
+                        let reason = self
+                            .reasoning_effort
+                            .map(|effort| effort.as_str().to_string());
+                        out.push(Event::ReasoningStart {
+                            session,
+                            message,
+                            part: p,
+                            reason,
+                        });
+                        out.push(Event::ReasoningEnd {
+                            session,
+                            message,
+                            part: p,
+                            provider_data: Some(json!({
+                                "type": GOOGLE_TEXT_SIGNATURE_TYPE,
+                                "thought_signature": sig,
+                            })),
+                        });
+                    }
                 }
             }
         }

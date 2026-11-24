@@ -1,5 +1,5 @@
 //! The `wait` tool: block until subagents finish — report or are archived; idle never counts, a member that stops without a report wakes it once as `stalled` (member progress only; the channel-tools family overrides it with a version that also wakes on mail).
-use hya_tool::{Tool, ToolCtx, ToolError, WaitSpec, wait_tool_schema};
+use hya_tool::{Tool, ToolCtx, ToolError, ToolResultPolicy, WaitSpec, wait_tool_schema};
 use serde_json::Value;
 
 /// Wake on mail too.
@@ -16,6 +16,10 @@ impl Tool for WaitTool {
 
     fn schema(&self) -> hya_proto::ToolSchema {
         wait_tool_schema(WAKE_ON_MAIL)
+    }
+
+    fn result_policy(&self) -> ToolResultPolicy {
+        ToolResultPolicy::SelfBudgeted
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {

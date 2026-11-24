@@ -34,6 +34,9 @@
 
 ## Query Patterns
 
+- Every SQLite write transaction (including read-then-write control updates)
+  begins with `BEGIN IMMEDIATE` so a deferred read-to-write upgrade cannot fail
+  with `SQLITE_BUSY_SNAPSHOT`.
 - Prefer conditional single-statement transitions (`UPDATE ... WHERE state =
   ... RETURNING`) for compare-and-set state changes.
 - Resident actors use one indexed `resident_actor_claim` row keyed by their
