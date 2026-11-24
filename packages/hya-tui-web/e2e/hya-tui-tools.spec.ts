@@ -187,7 +187,7 @@ test.describe("running tool", () => {
 })
 
 test.describe("subagents", () => {
-  test.use({ model: { steps: [] } })
+  test.use({ model: { steps: [] }, preset: "workspace" })
 
   test("a task card shows the child's status and activity; the child opens read-only and Esc returns", async ({ tui, backend, fakeModel }, testInfo) => {
     await writeFile(join(backend.dir, "notes.txt"), "alpha\n")
@@ -196,7 +196,7 @@ test.describe("subagents", () => {
       toolStep("task", { description: "survey the repo", prompt: "list the files", subagent_type: "hya-task" }),
       textStep("Spawned a helper."),
     ])
-    fakeModel!.route("Finish your task with `report`", [toolStep("read", { path: "notes.txt" }), hangStep(20_000)])
+    fakeModel!.route("Finish your task with `report`", [toolStep("read", { path: "notes.txt" }), hangStep()])
     const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "delegate the survey")
@@ -235,6 +235,7 @@ test.describe("subagents", () => {
     await expect.poll(() => term.find("can I type here")).toBeNull()
 
     // The child finishes its turn: the card says idle.
+    await expect.poll(() => fakeModel!.pendingHangs()).toBe(1)
     fakeModel!.release()
     await term.waitForText(/✓ idle/, 15_000)
 
