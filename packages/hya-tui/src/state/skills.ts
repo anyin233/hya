@@ -8,7 +8,7 @@
  * source, and description) and `detail` (one skill: its file, description,
  * and its scrolling body, opened with Enter). `u` closes the view and puts
  * `/skill:<name> ` into the message input; `y` copies the skill file's path;
- * `r` re-reads the catalog.
+ * `r` re-reads the catalog (the same as `/reload-skills`).
  */
 import type { SkillSummary } from "../client"
 import type { KeyLike } from "../keys/bindings"
@@ -60,7 +60,7 @@ export const skillsKeyRows: readonly SkillsKeyRow[] = [
   { keys: "Enter", description: "Open the highlighted skill's details: file, description, body", hint: "Enter details" },
   { keys: "u", description: "Close the view and put /skill:<name> into the message input", hint: "u use" },
   { keys: "y", description: "Copy the skill file's path (OSC 52)", hint: "y copy path" },
-  { keys: "r", description: "Re-read the skill catalog", hint: "r refresh" },
+  { keys: "r", description: "Re-read the skill catalog (the same as /reload-skills)", hint: "r refresh" },
   { keys: "/", description: "Filter the rows by name, description, or source; Enter keeps the filter, Esc clears it", hint: "/ filter" },
   { keys: "Esc", description: "Cancel a running call, back out of the details, clear the filter, then close the view" },
 ]

@@ -697,7 +697,8 @@ where the reason identifies installation, catalog unavailability, or extension s
 | `/approve <id>`, `/deny <id>` | Respond to a permission request for this run only (`persist: false`); the keyboard fallback of the prompt, which shows the id. |
 | `/answer <id> <text>` | Answer a question request. |
 | `/cancel` or Esc | Cancel the running turn and stop every subagent below the session: the controller status state shows `Cancelling…`, then `Cancelled · Ready`. With the session's own turn over but subagents still working, Esc in an empty editor (or `/cancel`) stops just them (`Stopping subagents…`, then `Stopped subagents · Ready`). Stopped subagents stay available and are not restarted by the parent or the harness until you send the parent a message or steer them. |
-| `/refresh` | Reload sessions, messages, interactions, models, Workflows, and the command catalog (commands and skills). |
+| `/refresh` | Reload sessions, messages, interactions, models, Workflows, the command catalog, and the skills. |
+| `/reload`, `/reload-<target>` | Read resources again without a restart: `tui.toml`, keybindings, theme, bundles, TUI extensions, MCP, commands, skills, and the open session's recorded `AGENTS.md` context; one target with `/reload-config`, `-keybindings`, `-theme`, `-extensions`, `-bundles`, `-mcp`, `-commands`, `-skills`, `-context`, `-layout`, or `-tui` (see [Reload](#reload)). |
 | `/reconnect` | Find the database's backend daemon or start it, now, and switch to it: after `hya serve stop` (see [When the server goes away](#when-the-server-goes-away)), or any time. Says `Connected · pid N` when the current server is the database's live one. With `--server` and no `--db`, or on a remote backend, it only resubscribes to that URL (never a local daemon). |
 | `/connect-remote [link] [--transport auto\|grpc\|ws] [--relay-ca <pem>]` | Move this TUI to a remote backend through a relay link: starts a local `hya bridge` child and uses its loopback URL. Without a link a concealed `Relay link` entry asks for it. See [Remote backends](#remote-backends-connect-remote). |
 | `/disconnect-remote` | Stop the relay bridge and go back to the local backend (the database's daemon, found or started), with the Project of `--dir` and a new session. |
@@ -3868,6 +3869,73 @@ next matching call asks again.
 | Open, `r` refresh | `GET /v1/permissions/rules?directory=<dir>` (paginated) | `SavedRule[]` (`id`, `permission`, `tool`, `pattern`, `timeCreated`, `projectId`) |
 | `d` then Enter | `DELETE /v1/permissions/rules/{id}?directory=<dir>` | — |
 
+## Reload
+
+`/reload` reads every resource again without restarting the TUI or the
+backend, then puts a summary into the transcript, followed by the startup
+list as it is now ([Startup list](tui-config.md#startup-list)):
+
+```text
+Reloaded tui.toml (preset statusline), keybindings (2 custom), theme auto (hya),
+bundles, 1 TUI extension, MCP (1 connected), 8 commands, 4 skills,
+context (re-recorded at the next turn)
+Failed: MCP (1 connected, 1 failed: broken; /mcp to fix)
+[Skills] agent-bundle-authoring, greet, pdf-tools, secure-self-update
+…
+```
+
+Each target also has its own command. Every target runs whatever the others
+did, and says what it did; a failure is a `Failed:` line.
+
+| Command | What it reads again | How |
+| --- | --- | --- |
+| `/reload-config` | `tui.toml` (the same as `/config reload`, without switching to the `/config` view) | `structure.reload()` |
+| `/reload-keybindings` | The custom keybindings in `tui.json` | Re-read `tui.json`, `setCustomKeybindings` |
+| `/reload-theme` | The theme in `tui.json`; `auto` follows the terminal background | Re-read `tui.json`, `setThemeSetting`; an unknown name falls back to `auto` |
+| `/reload-extensions` | Every bundle TUI extension of the scope | Re-read the extension catalog (`GET /v1/tui-extensions`), then restart each running or failed one |
+| `/reload-bundles` | Installed and Project bundles, plugins, MCP declarations (ADR-0031 hot reload) | `POST /v1/bundles:refresh` (`RefreshBundles`), then the extension catalog |
+| `/reload-mcp` | The MCP declarations, then each server's state | `RefreshBundles` (unless `/reload` already ran it), then `GET /v1/mcp`; a failed server is reported, not reconnected (`/mcp`, `c`) |
+| `/reload-commands` | The command catalog: custom commands and `/skill:*` rows | `GET /v1/commands` |
+| `/reload-skills` | The skill catalog and, with a session open, its skill index | `GET /v1/skills` and `GET /v1/commands`, then `RefreshSessionContext` |
+| `/reload-context` | The open session's recorded environment, `AGENTS.md` files, and skill index | `POST /v1/sessions/{id}/refresh-context` (`RefreshSessionContext`) |
+| `/reload-layout` | The saved pane layout (the same as `/layout reload`; workspace preset only) | Re-read `paneLayout` from `tui.json` |
+| `/reload-tui` | This TUI's own code, on the open session with the unsent draft | The launcher's supervisor restarts it (`src/reload.ts`, the same path as after `hya serve restart`); without a launcher it says to restart `hya` |
+
+`/reload` runs config, keybindings, theme, bundles, extensions, MCP,
+commands, skills, and context, in that order; not the layout (your state,
+not a resource) and not the TUI's code.
+
+A running turn keeps the binding it started with: bundles, MCP servers, and
+skills reloaded now apply from the next turn. A session records its
+environment, `AGENTS.md` text, and skill index at its first turn
+([Project Context](configuration.md#project-context-agentsmd)); the context
+target discards that record, so the next turn records it from the files as
+they are then (`context (re-recorded at the next turn)`; `context (read at
+the first turn)` when nothing was recorded yet). That changes the system
+prompt, so the next request misses the provider's prompt cache once. Every
+round of a turn reads the record, so the context target is refused while a
+turn runs: `Failed: context: a turn is running; /reload-context after it
+finishes`. Unlike pi, the other targets run during a turn. The backend
+binary is not reloaded here: that is `hya serve stop` then `start`
+(ADR-0031), which cancels every running turn.
+
+### Reload interfaces
+
+| Target | Call | Request | Response read |
+| --- | --- | --- | --- |
+| `bundles`, `mcp` | `POST /v1/bundles:refresh` | `{directory: string}` | `RefreshBundlesResponse.errors: {bundleId, message}[]` (each a failure) |
+| `mcp` | `GET /v1/mcp?directory=<dir>` | — | `McpServerStatus[]` (`name`, `state`) |
+| `extensions` | `GET /v1/tui-extensions?directory=<dir>` | — | `ListTuiExtensionsResponse` |
+| `commands`, `skills` | `GET /v1/commands?directory=<dir>` | — | `CommandSummary[]` |
+| `skills` | `GET /v1/skills?directory=<dir>` | — | `SkillSummary[]` |
+| `context`, `skills` | `POST /v1/sessions/{session}/refresh-context` | `RefreshSessionContextRequest {session: string}` | `RefreshSessionContextResponse {pending: bool}`; `session_busy` (409) while a turn runs, `not_found` for an unknown session |
+
+In the TUI, `AppActions.reload(targets: ReloadTarget[]): Promise<ReloadOutcome[]>`
+runs them (`app/reload.ts` `createReloader`); `ReloadTarget` is `"config" |
+"keybindings" | "theme" | "extensions" | "bundles" | "mcp" | "commands" |
+"skills" | "context" | "layout" | "tui"` and `ReloadOutcome` is `{target,
+ok: boolean, text: string}` (`state/reload.ts`, with `reloadSummary`).
+
 ## Skills view
 
 `/skills` opens a full-screen list of every skill the scope can run as
@@ -3881,7 +3949,7 @@ source (`project`, `user`, `bundle`, `builtin`), and the description:
 
 ```text
 ┌─Skills───────────────────────────────────────────────────────────────────────┐
-│ 4 skills · hya · new skills reach the model in a new session                 │
+│ 4 skills · hya · /reload-skills applies edits to this session                │
 │   SKILL                  SOURCE   DESCRIPTION                                │
 │ ── project ~/work/hya/.hya/skills ────────────────────────────────────────── │
 │ ▸ greet                  project  Say hello to someone                       │
@@ -3912,7 +3980,7 @@ out (the divider above says it).
 | Enter | Open the highlighted skill's details. |
 | `u` | Close the view and put `/skill:<name> ` into the message input, ready for the request; Enter sends it (see [Skill commands](#skill-commands)). |
 | `y` | Copy the skill file's path with OSC 52 (on a remote backend, the path is on that machine). A built-in skill has no file. |
-| `r` | Re-read the catalog. |
+| `r` | Re-read the catalog, the same as `/reload-skills`'s catalog half. |
 | `/` | Filter by name, description, or source group; Enter keeps the filter, Esc clears it. |
 | Esc / Left | Cancel a running call, back out of the details, clear the filter, then close the view. Ctrl+C closes it too and keeps its quit meaning. |
 
@@ -4035,7 +4103,8 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `reasoningVariants`, `reasoningDefault`, `source`, `imageInput`); the `/model` picker tags rows by `providerId`, and `/effort` uses the advertised variants; `contextLimit` (a uint64 string, `0`/absent = unknown) is the metadata state's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`; `imageInput: false` refuses attachments locally before a turn is sent (see [Paste and attachments](#paste-and-attachments); absent means unknown and is allowed). |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` (`id`, `kind`, `baseUrl`, `keySource`, `auth`, `modelCount`): the Provider View's list. |
 | `GET /v1/commands?directory=<dir>` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes the skills as `skill:<name>` rows, tagged `source: "skill"`) for command-pane suggestions and completion. |
-| `GET /v1/skills?directory=<dir>` | No body | `ListSkillsResponse.skills: SkillSummary[]` for the [Skills view](#skills-view) and the startup list's `[Skills]`. |
+| `GET /v1/skills?directory=<dir>` | No body | `ListSkillsResponse.skills: SkillSummary[]` for the [Skills view](#skills-view), the startup list's `[Skills]`, and `/refresh`. |
+| `POST /v1/sessions/{id}/refresh-context` | `{}` (`RefreshSessionContext`) | `RefreshSessionContextResponse {pending}` for `/reload-context`, `/reload-skills`, and `/reload` |
 | `PUT /v1/providers/{id}`, `POST …/refresh`, `PUT …/models`, `DELETE …/models?modelId=`, `POST …/test` | See [Provider View interfaces](#provider-view-interfaces) | `ProviderUpdate` / `TestProviderModelResponse` |
 | `PUT /v1/auth/{provider_id}` | `{apiKey: string}` (Provider View `k`) | `{status, provider?, discovery?}`; the key value is sent only to the backend. |
 | `DELETE /v1/auth/{provider_id}` | No body (Provider View `x`) | `{provider?}` |
@@ -4154,6 +4223,7 @@ together.
 | `src/state/agentsView.ts`, `src/app/agentsView.ts`, `src/components/AgentsView.tsx` | The [Agents view](#agents-view) (`/agent`): pure state and keys (`agentsViewLines()` sections, `agentsViewKey()`), its calls and pickers (`createAgentsViewController()`), and its rendering. |
 | `src/state/skills.ts`, `src/app/skills.ts`, `src/components/SkillsView.tsx` | The [Skills view](#skills-view) (`/skills`): pure state and keys (`skillsViewLines()` groups, `skillsViewKey()`, `skillBodyLines()`), its calls (`createSkillsController()`: open, refresh, `u` fills the input, `y` copies), and its rendering. |
 | `src/state/skillBlock.ts` | `parseSkillBlock()` and `skillBlockLabel()`: a `/skill:<name>` turn's `<skill>` block, folded in the transcript ([Skill commands](#skill-commands)). |
+| `src/state/reload.ts`, `src/app/reload.ts`, `src/commands/reload.ts` | [Reload](#reload): the targets and `reloadSummary()`, `createReloader()` (each target's reload), and the `/reload` and `/reload-<target>` commands. |
 | `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (internal mode navigation), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session or saved as the TUI default, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, saves the successfully selected default, re-lists interactions, reports in the controller status state. |
 | `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`, `askFrameRoute()` (the session stream) and `globalAskRoute()` (the global stream). |
 | `src/app/prompts.ts` | `answerPrompt()`: send a choice's `RespondInteraction`, hide the ask, report the outcome in the controller status state. |

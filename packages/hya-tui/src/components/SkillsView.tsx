@@ -112,7 +112,7 @@ export function SkillsView() {
                 </Show>
               }
             >
-              <text height={1} flexShrink={0} wrapMode="none" fg={colors.fg}>{`${skillsCountLine(skills())} · ${scope()} · new skills reach the model in a new session`}</text>
+              <text height={1} flexShrink={0} wrapMode="none" fg={colors.fg}>{`${skillsCountLine(skills())} · ${scope()} · /reload-skills applies edits to this session`}</text>
               <text height={1} flexShrink={0} wrapMode="none" fg={colors.muted}>{`  ${skillHeaderLine(lineWidth(), skills())}`}</text>
               <box flexGrow={1} flexDirection="column">
                 <For each={shown()}>

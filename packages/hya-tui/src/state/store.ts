@@ -1013,9 +1013,9 @@ export function createAppStore() {
     setMcpView(view: McpViewState | undefined): void { set("mcpView", view) },
     setMcpServers(servers: McpServerStatus[]): void { set("mcpServers", servers) },
 
-    /** `ListCommands` rows (the command menu's backend entries, `/skill:*` included), re-read alone by an unknown command. */
+    /** `ListCommands` rows (the command menu's backend entries, `/skill:*` included), re-read alone by `/reload-commands` and an unknown command. */
     setBackendCommands(commands: CommandSummary[]): void { set("backendCommands", commands) },
-    /** `ListSkills` rows (the startup list's `[Skills]`, `/skills`), re-read by the Skills view. */
+    /** `ListSkills` rows (the startup list's `[Skills]`, `/skills`), re-read by `/reload-skills` and the Skills view. */
     setSkills(skills: SkillSummary[]): void { set("skills", skills) },
     /** Open, update, or (`undefined`) close the Skills view (`/skills`). */
     setSkillsView(view: SkillsViewState | undefined): void { set("skillsView", view) },

@@ -212,8 +212,9 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
       store.setStatus(`TUI extensions unavailable: ${reason}`)
     }
   }
-  // `hya serve restart` replaced the backend: start this TUI again from its files (src/reload.ts), on the open session with the unsent draft.
-  const reload = supervision && db
+  // Start this TUI again from its files (src/reload.ts), on the open session with the unsent draft:
+  // after `hya serve restart` replaced the backend, and on `/reload-tui`.
+  const reloadTui = supervision
     ? () => {
         const draft = controller?.ui.composerInput
         try {
@@ -228,6 +229,7 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
         void shutdown(reloadExitCode, "signal")
       }
     : undefined
+  const reload = db ? reloadTui : undefined
   controller = createController({
     client, store, directory: options.directory, remote: options.remote === true,
     quit: (mode) => void shutdown(0, mode),
@@ -310,6 +312,7 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
       },
     },
     onScopeChanged: refreshExtensions,
+    ...(reloadTui ? { reloadTui } : {}),
     interceptSubmit: (text) => extensionManager.interceptSubmit(text),
     structure,
   })

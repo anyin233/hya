@@ -10,7 +10,7 @@ import { hasSkillFile, initialSkillsView, settleSkillsView, skillBodyLines, skil
 
 export interface SkillsControllerOptions {
   store: AppStore
-  /** Re-read the skill catalog (`ListSkills` and `ListCommands`). */
+  /** Re-read the skill catalog (`ListSkills` and `ListCommands`): `/reload-skills`'s catalog half. */
   readSkills(signal?: AbortSignal): Promise<SkillSummary[]>
   /** Replace the message input (not sent). */
   fillInput(text: string): void

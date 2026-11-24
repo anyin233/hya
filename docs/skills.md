@@ -224,11 +224,12 @@ expanded block as `text` ([Plugin protocol](plugin-protocol.md)).
 At its first model turn, a full-mode session records the directory skill
 index visible to its agent. The index lists each `name: description`, including
 the built-in fallback entries. Later requests reuse the recorded list. To put
-an added, removed, or edited skill into a running session's index, call
-`RefreshSessionContext` (`POST /v1/sessions/{id}/refresh-context`): the next
-turn records the index again; a new session works too. The `skill` tool and
-`/skill:<name>` always use the current catalog, so they load an edited body
-without a reload. There is no per-skill tool
+an added, removed, or edited skill into a running session's index, run
+`/reload-skills` (or `/reload-context`, `RefreshSessionContext`): the next
+turn records the index again (see [Browse and reload skills in the
+TUI](#browse-and-reload-skills-in-the-tui)); a new session works too. The
+`skill` tool and `/skill:<name>` always use the current catalog, so they load
+an edited body without a reload. There is no per-skill tool
 gate from `allowed-tools` at that point.
 
 When an agent’s resource view selects harness skills, it must also select the
@@ -237,11 +238,24 @@ When an agent’s resource view selects harness skills, it must also select the
 
 ---
 
-## Browse skills in the TUI
+## Browse and reload skills in the TUI
 
-`/skills [filter]` opens the [Skills view](tui.md#skills-view): every skill of
-the scope under its source directory, with its file, description, and body;
-`u` puts `/skill:<name> ` into the message input.
+- `/skills [filter]` opens the [Skills view](tui.md#skills-view): every skill
+  of the scope under its source directory, with its file, description, and
+  body; `u` puts `/skill:<name> ` into the message input.
+- `/reload-skills` re-reads the catalog (the command menu's `/skill:*` rows,
+  the startup list's `[Skills]`, the Skills view) and, with a session open,
+  re-records its skill index at its next turn. `/reload` does that and
+  reloads everything else too (see [Reload](tui.md#reload)).
+
+For example, after adding `.hya/skills/pdf-tools/SKILL.md` while the TUI
+runs:
+
+```text
+/reload-skills
+Reloaded 4 skills, context (re-recorded at the next turn)
+/skill:pdf-tools extract report.pdf
+```
 
 ---
 
