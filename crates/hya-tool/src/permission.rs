@@ -24,88 +24,9 @@ use hya_proto::{MessageId, PermissionRequestId, SessionId, ToolCallId};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use thiserror::Error;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
-/// Resource operation category used by legacy rules and user-facing asks.
-///
-/// Serialized lowercase in saved-permission rows (`read`, `edit`, …).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Action {
-    /// Invocation-level native tool subject (generic tool call).
-    Tool,
-    /// Read file/directory contents (`read`, `ls`).
-    Read,
-    /// Mutate file contents (`write`, `edit`, `apply_patch`).
-    Edit,
-    /// Path pattern search (`glob`, `find`).
-    Glob,
-    /// Content regex search (`grep`).
-    Grep,
-    /// Bash command execution (`bash`).
-    Bash,
-    /// Subagent spawn (`task`).
-    Task,
-    /// MCP tool call (`mcp__…`).
-    Mcp,
-    /// HTTP(S) fetch (`webfetch`).
-    WebFetch,
-    /// Provider-backed web search (`websearch`).
-    WebSearch,
-    /// Legacy permission action for historical todo tools.
-    TodoWrite,
-    /// Load a skill by name (`skill`).
-    Skill,
-    /// Language-server query (`lsp`).
-    Lsp,
-    /// Path outside the session workdir trust boundary (never covered by call grant).
-    ExternalDirectory,
-}
-
-/// Object of a resource-level permission check.
-///
-/// Flattened via [`Resource::pattern`] for `*` wildcard matching.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Resource {
-    /// Tool name for invocation-level tool subjects.
-    Tool(String),
-    /// Resolved filesystem path (display form).
-    Path(String),
-    /// Glob or grep pattern string.
-    Glob(String),
-    /// Shell command text, or namespaced MCP tool name.
-    Command(String),
-    /// Subagent / agent type id.
-    Subagent(String),
-    /// Fetched URL.
-    Url(String),
-    /// Web-search query string.
-    WebSearch(String),
-    /// Skill name.
-    Skill(String),
-    /// Matches every pattern (`pattern()` → `"*"`); used for whole-action grants.
-    Any,
-}
-
-impl Resource {
-    /// Single string used by the `*` wildcard rule matcher.
-    #[must_use]
-    pub fn pattern(&self) -> String {
-        match self {
-            Resource::Tool(s)
-            | Resource::Path(s)
-            | Resource::Glob(s)
-            | Resource::Command(s)
-            | Resource::Subagent(s)
-            | Resource::Url(s)
-            | Resource::WebSearch(s)
-            | Resource::Skill(s) => s.clone(),
-            Resource::Any => "*".to_string(),
-        }
-    }
-}
-
+pub use hya_tool_error::{Action, PermissionError, Resource};
 /// Outcome of evaluating a permission rule for a subject or resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -505,24 +426,6 @@ fn grant_directory(pattern: &str) -> &str {
         Some(directory) => directory,
         None => pattern,
     }
-}
-
-/// Denial or infrastructure failure from the permission plane.
-#[derive(Error, Debug)]
-pub enum PermissionError {
-    /// Explicit deny or user reject.
-    #[error("permission denied: {action:?} on {resource:?}{}", .feedback.as_deref().map_or(String::new(), |f| format!(" — user says: {f}")))]
-    Denied {
-        /// Action that was refused.
-        action: Action,
-        /// Resource that was refused.
-        resource: Resource,
-        /// Optional human feedback from a reject decision.
-        feedback: Option<String>,
-    },
-    /// Ask channel closed or dropped before a reply arrived.
-    #[error("permission channel unavailable")]
-    Unavailable,
 }
 
 /// Outstanding ask delivered to the TUI/CLI for a user decision.

@@ -11,13 +11,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use hya_context::rewrite::RewriteCtx;
 use hya_proto::{
     AgentName, Event, FinishReason, MessageId, ModelRef, PartProjection, Projection, SessionId,
     TokenUsage, ToolSchema,
 };
 use hya_provider::{CompletionRequest, EventStream, ProviderError, ProviderRouter};
 use hya_store::ActorClaim;
-use hya_tool::{AgentDef, ReportLatch, RewriteCtx};
+use hya_tool::{AgentDef, ReportLatch};
 use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::sync::CancellationToken;
 

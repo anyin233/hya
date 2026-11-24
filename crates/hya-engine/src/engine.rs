@@ -183,7 +183,7 @@ pub struct SessionEngine {
     token_accounting: TokenAccounting,
     /// Context-reduction extensions the kernel runs before its own Rewrite,
     /// before each round and on `/summarize`.
-    rewriters: Arc<[Arc<dyn hya_tool::Rewriter>]>,
+    rewriters: Arc<[Arc<dyn hya_context::rewrite::Rewriter>]>,
     hooks: Option<Arc<dyn HookDispatcher>>,
     /// Captured per-session lifecycle/event hooks ([`session_hooks`]).
     session_bundle_hooks: Arc<RwLock<session_hooks::SessionHookMap>>,
@@ -680,7 +680,7 @@ fn fixed_system_agent(
 
 /// The rewriters registered by internal bundles, in registration order.
 /// Successful registrations are shared process-wide.
-type NativeRewriters = Arc<[Arc<dyn hya_tool::Rewriter>]>;
+type NativeRewriters = Arc<[Arc<dyn hya_context::rewrite::Rewriter>]>;
 
 fn internal_rewriters() -> Result<NativeRewriters, CoreError> {
     static REWRITERS: std::sync::Mutex<Option<NativeRewriters>> = std::sync::Mutex::new(None);

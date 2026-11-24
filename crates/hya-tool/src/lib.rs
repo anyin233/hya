@@ -57,13 +57,15 @@ pub mod project_activity;
 pub mod project_scope;
 /// The rewrite contract between the host and a native bundle, and the host
 /// services a rewriter calls.
-pub mod rewrite;
+#[deprecated(note = "Use hya_context::rewrite instead")]
+pub use hya_context::rewrite;
 mod skill;
 mod skill_catalog;
 /// Subagent spawn plane and request types used by the `task` tool.
 pub mod spawn;
 /// Token accounting: how much of the context window a transcript occupies.
-pub mod tokens;
+#[deprecated(note = "Use hya_context::tokens instead")]
+pub use hya_context::tokens;
 /// Tool trait, registry, and permission class metadata.
 pub mod tool;
 mod websearch;
@@ -81,6 +83,11 @@ pub use base_tools::{
 pub use formatter::{
     BuiltinFormatterProvider, FormatterConfig, FormatterEntry, FormatterError, FormatterPlane,
     FormatterProvider, FormatterStatus,
+};
+/// Deprecated compatibility exports for the native rewrite contract.
+#[deprecated(note = "Use hya_context::rewrite instead")]
+pub use hya_context::rewrite::{
+    CompactionHooks, ModelHost, ModelWindow, Pressure, RewriteCtx, Rewriter, SessionLog, Transcript,
 };
 pub use interaction::{
     InteractionError, InteractionPlane, QuestionAnswer, QuestionInfo, QuestionKind, QuestionOption,
@@ -114,9 +121,6 @@ pub use project_activity::{
     ProjectActivityRequestMsg, ProjectActivityResult, ProjectActivitySession,
 };
 pub use project_scope::ProjectScope;
-pub use rewrite::{
-    CompactionHooks, ModelHost, ModelWindow, Pressure, RewriteCtx, Rewriter, SessionLog, Transcript,
-};
 pub use skill::{SkillError, SkillInfo, SkillPlane};
 pub use skill_catalog::{
     MAX_SKILL_DESCRIPTION_CHARS, MAX_SKILL_NAME_CHARS, ParsedSkill, SkillCatalogEntry,

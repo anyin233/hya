@@ -15,6 +15,7 @@ hya-bundle = { workspace = true }
 hya-proto = { workspace = true }
 hya-provider = { workspace = true }
 hya-tool = { workspace = true }
+hya-context = { workspace = true }
 hya-store = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

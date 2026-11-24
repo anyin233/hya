@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Provenance for the `CalibratedTokenizer` weight table.
 
-`crates/hya-engine/src/tokens.rs` estimates tokens by classifying text into run
+`crates/hya-context/src/tokens.rs` estimates tokens by classifying text into run
 categories and weighting them. This script is how those weights were derived and
 how they are re-derived if the table ever needs to change:
 

@@ -28,8 +28,9 @@ declaring a library resource.
 Internal bundles are first-party native libraries that carry full-mode
 features out of the kernel ([Kernel](kernel.md)). Their sources live under
 `bundles/internal/<name>` (`bundle.yaml` plus a `native/` crate with
-`crate-type = ["rlib", "cdylib"]` that links only `hya-tool` and
-`hya-proto`), and `hya_bundle::INTERNAL_BUNDLES` lists them (`hya/compaction`,
+`crate-type = ["rlib", "cdylib"]`). They use `hya-context` for the rewrite
+contract, `hya-tool` for the native registration ABI, and `hya-proto` for
+events and messages. `hya_bundle::INTERNAL_BUNDLES` lists them (`hya/compaction`,
 the [context-reduction steps](compaction.md) the kernel runs before its own
 Rewrite; every entry is also in
 `FIRST_PARTY_BUNDLES`). Full mode loads them once per process, when the first
@@ -44,7 +45,7 @@ allowed), plus the optional
 ```rust
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hya_tool_bundle_register_rewriters_v1(
-    out: *mut Vec<Arc<dyn hya_tool::Rewriter>>,
+    out: *mut Vec<Arc<dyn hya_context::rewrite::Rewriter>>,
 )
 ```
 

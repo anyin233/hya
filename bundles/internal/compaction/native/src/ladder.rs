@@ -5,12 +5,12 @@
 //! (`RewriteCtx::pressure`) and rewrites itself after these steps when the
 //! request is still over its threshold.
 
+use hya_context::rewrite::{RewriteCtx, ToolError};
+use hya_context::tokens::{TokenAccounting, TokenSource};
 use hya_proto::context::{ReasoningReplayPolicy, marker_goal};
 use hya_proto::{
     CompactionStrategy, Event, FinishReason, Message, MessageId, PartId, Role, SessionId,
 };
-use hya_tool::tokens::{TokenAccounting, TokenSource};
-use hya_tool::{RewriteCtx, ToolError};
 
 use crate::config::Config;
 use crate::evict::{ArtifactEvictionSink, evict_stale_tool_outputs, has_spillable_tool_output};

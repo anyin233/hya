@@ -20,7 +20,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
-use crate::{RewriteCtx, Rewriter, Tool, ToolCtx, ToolError, ToolResultPolicy};
+use hya_context::rewrite::{RewriteCtx, Rewriter};
+
+use crate::{Tool, ToolCtx, ToolError, ToolResultPolicy};
 
 type RuntimeEntry = unsafe extern "C" fn(
     *const libc::c_void,
@@ -279,8 +281,10 @@ pub fn abi_digest_v1() -> [u8; 32] {
     hash.update(include_bytes!("tool.rs"));
     hash.update(include_bytes!("deadline.rs"));
     hash.update(include_bytes!("lifecycle.rs"));
-    hash.update(include_bytes!("rewrite.rs"));
-    hash.update(include_bytes!("tokens.rs"));
+    hash.update(hya_tool_error::NATIVE_ABI_SOURCE);
+    for source in hya_context::NATIVE_ABI_SOURCES {
+        hash.update(source);
+    }
     hash.finalize().into()
 }
 

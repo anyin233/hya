@@ -910,9 +910,12 @@ records it at the first model turn run by the new runtime.
 
 ## Rewrite contract
 
-The contract an extension is written against lives in `hya-tool`
-(`hya_tool::rewrite`), because a native bundle links only `hya-tool` and
-`hya-proto`. All of it is part of the native ABI digest.
+Implement `hya_context::rewrite::Rewriter` and register an `Arc` of the
+implementation through the [native bundle entry point](bundle-runtime.md).
+The host passes a `RewriteCtx` when it calls the implementation. The native ABI
+digest covers this contract and the shared `ToolError` it returns.
+The old `hya_tool::rewrite`, `hya_tool::tokens`, and root rewrite exports are
+deprecated compatibility paths.
 
 | Item | Implemented by | Purpose |
 | --- | --- | --- |
@@ -944,6 +947,6 @@ engine's `keep_recent` and token-accounting mode, as JSON. A host failure
 reaches the kernel or an extension as a `ToolError`; the host keeps the
 original `CoreError` and a failed reduction ends the turn with it (for
 example a stale actor claim).
-Token estimation (`hya_tool::tokens`) is shared by host and bundles, and the
+Token estimation (`hya_context::tokens`) is shared by host and bundles, and the
 reasoning replay policy and compacted-context markers it and the request
 encoders read are in `hya_proto::context`.

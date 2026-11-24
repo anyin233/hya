@@ -1,7 +1,7 @@
+use hya_context::rewrite::RewriteCtx;
 use hya_proto::{
     AgentName, Message, MessageId, ModelRef, PartProjection, Projection, Role, SessionId,
 };
-use hya_tool::RewriteCtx;
 
 use super::turn::rewrite_host::{EpisodeTranscript, HostErrors, TurnLog, TurnModels, model_window};
 use super::{SessionEngine, projection_workdir};

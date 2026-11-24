@@ -17,66 +17,13 @@ use crate::handle::{ArtifactPlane, HandleRouter};
 use crate::interaction::InteractionPlane;
 use crate::lsp_plane::LspPlane;
 use crate::mailbox::MailboxPlane;
-use crate::permission::{Invocation, Mode, PermissionError, PermissionPlane};
+use crate::permission::{Invocation, Mode, PermissionPlane};
 use crate::skill::SkillPlane;
 use crate::spawn::SpawnerPlane;
 use crate::websearch::WebSearchPlane;
 use crate::workflow_plane::WorkflowPlane;
 
-/// Failure returned from tool execution and mapped to wire `error.type` strings by the engine.
-#[derive(Error, Debug)]
-pub enum ToolError {
-    /// Caller-supplied arguments failed validation or schema checks.
-    #[error("input: {0}")]
-    Input(String),
-    /// Permission plane denied the call (or ask channel was unavailable).
-    #[error(transparent)]
-    Permission(#[from] PermissionError),
-    /// Filesystem or process I/O failure during the tool body.
-    #[error("io: {0}")]
-    Io(#[from] std::io::Error),
-    /// JSON parse/serialize failure for tool input or output.
-    #[error("json: {0}")]
-    Json(#[from] serde_json::Error),
-    /// Cooperative cancellation via [`ToolCtx::cancel`].
-    #[error("cancelled")]
-    Cancelled,
-    /// Transient capacity pressure (for example spawn admission overloaded).
-    #[error("overloaded: {0}")]
-    Overloaded(String),
-    /// App-owned Workflow control rejected a structured command.
-    #[error("{code}: {message}")]
-    WorkflowControl {
-        /// Machine-stable control code.
-        code: String,
-        /// Bounded diagnostic.
-        message: String,
-    },
-    /// Requested subagent type is not in the caller's authorized roster.
-    #[error("UNKNOWN_AGENT_ID: `{agent_id}`")]
-    UnknownAgentId {
-        /// Agent id that was requested.
-        agent_id: String,
-    },
-    /// Caller is not allowed to spawn the named agent (`can_spawn` / roster).
-    #[error("AGENT_SPAWN_NOT_ALLOWED: `{caller}` cannot spawn `{agent_id}`")]
-    AgentSpawnNotAllowed {
-        /// Calling agent id.
-        caller: String,
-        /// Target agent id that was refused.
-        agent_id: String,
-    },
-    /// Inline agent overlay used a field the runtime does not support.
-    #[error("UNSUPPORTED_INLINE_AGENT_FIELD: `{field}`")]
-    UnsupportedInlineAgentField {
-        /// Unsupported field name.
-        field: &'static str,
-    },
-    /// Catch-all message mapped to wire type `unknown`.
-    #[error("{0}")]
-    Other(String),
-}
-
+pub use hya_tool_error::ToolError;
 /// Registry rejected a registration because the name (or alias) is already taken.
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 #[error("duplicate tool name: {name}")]
