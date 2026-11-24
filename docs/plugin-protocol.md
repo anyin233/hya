@@ -455,7 +455,9 @@ the wire method, params, outcomes, and failure behavior.
 ### `command.execute.before`
 
 - **Method:** `hook/command.execute.before`
-- **Params:** `{ "session", "command", "arguments", "text" }`
+- **Params:** `{ "session", "command", "arguments", "text" }`. `command` has no
+  leading `/`; a skill run is `skill:<name>` and its `text` is the expanded
+  `<skill>` block with the request after it ([Skills](skills.md#invoke-a-skill)).
 - **Outcome:** `{ "outcome": "continue", "text": "<rewritten>" }`
 - **Role:** enrichment (folds across plugins)
 - **Failure behavior:** fail-open.

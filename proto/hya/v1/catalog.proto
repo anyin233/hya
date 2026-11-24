@@ -530,21 +530,29 @@ message ListCommandsRequest {
   string directory = 1;
   // Standard pagination controls.
   PageRequest page = 2;
+  // List the catalog this session's command turns expand against instead:
+  // its recorded workdir, its Project's roots, and the `skill:<name>` rows
+  // of the bundle and plugin skills its agent can load. Wins over
+  // `directory`. `not_found` for an unknown session.
+  string session = 3;
 }
 
 // One slash-command entry.
 message CommandSummary {
-  // Command name without the leading `/`.
+  // Command name without the leading `/`. A skill is named `skill:<name>`
+  // (the reserved skill namespace); no other command uses that prefix.
   string name = 1;
   // One-line description for completion UIs.
   string description = 2;
-  // Argument hint shown after the command name.
+  // Argument hint shown after the command name: `<arg>` marks a required
+  // argument, `[arg]` an optional one (`[request]` for every skill).
   string argument_hint = 3;
   // Positional/flag hints from the command template, in template order.
   repeated string hints = 5;
   // Where the command was discovered (`command`, `skill`, ...).
   string source = 6;
-  // Expansion template (positional `$1`/`$ARGUMENTS` placeholders).
+  // Expansion template (positional `$1`/`$ARGUMENTS` placeholders); for a
+  // skill, its body, sent as a `<skill>` block with the arguments after it.
   string template = 7;
   // Agent the command run binds when authored.
   string agent = 8;
@@ -552,6 +560,12 @@ message CommandSummary {
   string model = 9;
   // Whether the command runs as a detached subtask.
   optional bool subtask = 10;
+  // Where it is defined: `builtin` (the client-side rows and the
+  // `hya/core-commands` templates), `project` (`.hya/commands` of the
+  // directory or a Project root), `user` (`~/.config/hya/commands`); a
+  // skill row carries its `SkillSummary.source` (`project`, `user`,
+  // `bundle`, `builtin`).
+  string scope = 11;
 }
 
 message ListCommandsResponse {
@@ -559,6 +573,26 @@ message ListCommandsResponse {
   repeated CommandSummary commands = 1;
   // Pagination outcome.
   PageInfo page = 2;
+  // Command files the catalog skipped or warns about (the same list on
+  // every page).
+  repeated CatalogDiagnostic diagnostics = 3;
+}
+
+// A resource file a catalog skipped or warns about, for clients to show.
+message CatalogDiagnostic {
+  // The file it is about.
+  string path = 1;
+  // What is wrong: for a skill `invalid` (no or unclosed frontmatter, YAML
+  // that does not parse), `missing_name`, `missing_description`,
+  // `collision` (a skill of the same name was found first; this one is not
+  // listed), `name` (breaks the Agent Skills naming rule: lowercase
+  // letters, digits, and single hyphens, at most 64 characters), or
+  // `description_length` (over 1024 characters); for a command `reserved`
+  // (named `skill:…`) or `invalid` (frontmatter that does not parse).
+  // Only `name` and `description_length` leave the skill listed.
+  string kind = 2;
+  // One line for a person.
+  string message = 3;
 }
 
 message ListSkillsRequest {
@@ -567,11 +601,17 @@ message ListSkillsRequest {
   string directory = 1;
   // Standard pagination controls.
   PageRequest page = 2;
+  // List what this session's agent can load with the `skill` tool instead:
+  // the skills of its recorded workdir and Project roots, the built-in
+  // ones, and the bundle and plugin skills its agent selects. Wins over
+  // `directory`. `not_found` for an unknown session.
+  string session = 3;
 }
 
 // One invocable skill.
 message SkillSummary {
-  // Skill name used with `/skill` and the skill plane.
+  // Skill name: `/skill:<name>` runs it, and the `skill` tool loads it by
+  // this name.
   string name = 1;
   // One-line description of what the skill does.
   string description = 2;
@@ -579,10 +619,16 @@ message SkillSummary {
   // runtime resource), `project` (under the directory or a Project root), or
   // `user` (any other file, such as `~/.codex/skills`).
   string source = 3;
-  // Full skill markdown body (frontmatter + content).
+  // The skill's markdown body: the text after its frontmatter.
   string content = 4;
   // Where the skill file lives (`<built-in>` for compiled-in skills).
   string location = 5;
+  // `disable-model-invocation: true` in its frontmatter: the model's skill
+  // index leaves it out; `/skill:<name>` still runs it.
+  bool disable_model_invocation = 6;
+  // The bundle or plugin that contributes it (`source: bundle`), e.g.
+  // `hya/alpha` or `plugin:toolbox`; empty otherwise.
+  string bundle_id = 7;
 }
 
 message ListSkillsResponse {
@@ -590,6 +636,9 @@ message ListSkillsResponse {
   repeated SkillSummary skills = 1;
   // Pagination outcome.
   PageInfo page = 2;
+  // Skill files the catalog skipped or warns about (the same list on every
+  // page).
+  repeated CatalogDiagnostic diagnostics = 3;
 }
 
 message ListToolsRequest {

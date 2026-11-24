@@ -266,6 +266,40 @@ impl SessionEngine {
         self.bind_scope_runtime_lenient(&scope, &workdir).await
     }
 
+    /// The skills `session`'s current agent can load with the `skill` tool
+    /// (`ListSkills` with `session`): the directory skills of its recorded
+    /// workdir and Project roots, the built-in ones, and the bundle and
+    /// plugin skills (`SkillCatalogOrigin::Virtual`) its resource view
+    /// selects, from a lenient bind of the session's scope. A bundle agent
+    /// sees only what its view selects. A session without a recorded agent
+    /// lists the binding's directory skills.
+    ///
+    /// # Errors
+    /// `CoreError::Invalid("session not found")` for an unknown session,
+    /// plus bind and resource-view failures.
+    pub async fn session_skill_catalog(
+        &self,
+        session: SessionId,
+    ) -> Result<Vec<hya_tool::SkillCatalogEntry>, CoreError> {
+        let projection = self.read_projection_shared(session).await?;
+        if projection.session.id.is_none() {
+            return Err(CoreError::Invalid("session not found".to_owned()));
+        }
+        let agent = projection.session.agent.clone();
+        drop(projection);
+        let binding = self.session_scope_binding(session).await?;
+        let Some(agent) = agent else {
+            return Ok(binding.skills().to_vec());
+        };
+        let policy = binding
+            .agent_resource_policy(agent.as_str())
+            .map_err(CoreError::bundle)?;
+        let resources = binding
+            .compile_agent_resources(&policy)
+            .map_err(CoreError::bundle)?;
+        Ok(resources.skills().to_vec())
+    }
+
     fn bind_scope_unrefreshed(
         &self,
         scope: &CatalogScope,

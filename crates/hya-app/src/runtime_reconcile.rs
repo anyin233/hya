@@ -590,6 +590,7 @@ fn parse_skill_contribution(
         path,
         dir,
         origin: hya_tool::SkillCatalogOrigin::Virtual,
+        disable_model_invocation: parsed.disable_model_invocation,
     })
 }
 

@@ -1,5 +1,5 @@
 // The separate `/` command pane (docs/tui.md "Command pane"): fuzzy filtering, key
-// handling, merged local/server/skill sources, skill command turns, /compact,
+// handling, merged local/server/skill sources, `/skill:<name>` turns, unknown commands, /compact,
 // /rename, and /status, against the offline echo model or the fake model.
 //
 // Command-menu filtering runs off the command input's content-change event, which
@@ -67,6 +67,11 @@ async function writeSkill(dir: string, name: string, description: string, body: 
   await writeFile(join(skillDir, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\n${body}\n`)
 }
 
+async function writeCommand(dir: string, name: string, description: string, body: string): Promise<void> {
+  await mkdir(join(dir, ".hya/commands"), { recursive: true })
+  await writeFile(join(dir, ".hya/commands", `${name}.md`), `---\ndescription: ${description}\n---\n${body}\n`)
+}
+
 /**
  * Type `/new`, then Enter: its argument hint (`[agent] [model]`) is
  * bracketed/optional (commands/menu.ts `requiresArgument`), so the menu's
@@ -105,7 +110,7 @@ test.describe("command menu", () => {
     })
 
     test(`Up/Down reach commands beyond the visible rows and wrap at the full list (${width}px)`, async ({ tui, backend }, testInfo) => {
-      await writeSkill(backend.dir, "zz-navigation-last", "Last navigation choice", "Say hello.")
+      await writeCommand(backend.dir, "zz-navigation-last", "Last navigation choice", "Say hello.")
       const term = await tui(hyaTui(backend), { viewport: { width, height: 640 } })
       await connected(term, backend)
       await term.type("/")
@@ -308,27 +313,41 @@ test.describe("command menu", () => {
 test.describe("skill commands", () => {
   test.use({ model: { steps: [textStep("hello from the greet skill")] } })
 
-  test("a skill runs as a command turn; the transcript shows /name args, then the reply", async ({ tui, backend }) => {
-    await writeSkill(backend.dir, "greet", "Say hello", "Say hello to $ARGUMENTS.")
+  test("/skill:<name> runs a skill turn; the transcript folds the skill and shows the request, then the reply", async ({ tui, backend }) => {
+    await writeSkill(backend.dir, "greet", "Say hello", "Say hello.")
+    const term = await tui(hyaTui(backend))
+    await connected(term, backend)
+    await term.type("/skill:greet world")
+    // The space after the name hides suggestions; the command input stays focused.
+    await expect.poll(() => commandText(term)).toBe("/skill:greet world")
+    await term.press("Enter")
+    await term.waitForText(/┃ ▸ \/skill:greet · \d+ lines/, 20_000)
+    await term.waitForText("┃ world")
+    await term.waitForText("hello from the greet skill")
+    // The folded block hides the body.
+    expect(await term.text()).not.toContain("Say hello.")
+  })
+
+  test("the menu lists a skill as /skill:<name>, tagged apart from a server command", async ({ tui, backend }) => {
+    await writeSkill(backend.dir, "greet", "Say hello", "Say hello.")
+    const term = await tui(hyaTui(backend))
+    await connected(term, backend)
+    await term.type("/skill:gre")
+    await term.waitForText("▸ /skill:greet")
+    const menu = (await box(term, "Commands"))!
+    const row = menu.rows.find((line) => line.includes("/skill:greet"))!
+    expect(row).toContain("[skill · project]")
+  })
+
+  test("an unknown command is refused with a hint and never reaches the agent", async ({ tui, backend }) => {
+    await writeSkill(backend.dir, "greet", "Say hello", "Say hello.")
     const term = await tui(hyaTui(backend))
     await connected(term, backend)
     await term.type("/greet world")
-    // The space after "greet" hides suggestions; the command input stays focused.
     await expect.poll(() => commandText(term)).toBe("/greet world")
     await term.press("Enter")
-    await term.waitForText("┃ /greet world", 20_000)
-    await term.waitForText("hello from the greet skill")
-  })
-
-  test("the menu tags a skill as a distinct source from a server command", async ({ tui, backend }) => {
-    await writeSkill(backend.dir, "greet", "Say hello", "Say hello to $ARGUMENTS.")
-    const term = await tui(hyaTui(backend))
-    await connected(term, backend)
-    await term.type("/gre")
-    await term.waitForText("▸ /greet")
-    const menu = (await box(term, "Commands"))!
-    const row = menu.rows.find((line) => line.includes("/greet"))!
-    expect(row).toContain("[skill]")
+    await term.waitForText("Unknown command /greet · did you mean /skill:greet?")
+    expect(await term.text()).not.toContain("hello from the greet skill")
   })
 })
 

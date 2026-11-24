@@ -861,6 +861,7 @@ fn runtime_semantic_fingerprint_tracks_selected_workdir_skill_semantics() {
                 .parent()
                 .map_or_else(PathBuf::new, Path::to_path_buf),
             origin: hya_tool::SkillCatalogOrigin::Filesystem,
+            disable_model_invocation: false,
         }
     };
     let selected_skills = || {

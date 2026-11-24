@@ -7,7 +7,7 @@
  * Pure: the component (components/StartupBlock.tsx) feeds it the store and
  * the extension manager and draws the lines.
  */
-import type { BundleSummary, CommandSummary, McpServerStatus, SkillSummary } from "../client"
+import type { BundleSummary, CatalogDiagnostic, CommandSummary, McpServerStatus, SkillSummary } from "../client"
 import type { ExtensionInfo } from "../extensions/manager"
 import { formatBytes } from "../composer/attachments"
 
@@ -28,7 +28,13 @@ export interface StartupInput {
   notices: readonly string[]
   contextFiles?: readonly ContextFileSummary[]
   skills?: readonly SkillSummary[]
+  /** Skill files the catalog skipped or warns about (`[Skills]` problems). */
+  skillDiagnostics?: readonly CatalogDiagnostic[]
   commands?: readonly CommandSummary[]
+  /** Command files the catalog skipped (`[Slash commands]` problems). */
+  commandDiagnostics?: readonly CatalogDiagnostic[]
+  /** Backend commands a local command of the same name hides (`[Slash commands]` problems). */
+  shadowedCommands?: readonly CommandSummary[]
   mcp?: readonly McpServerStatus[]
   bundles?: readonly BundleSummary[]
   extensions?: readonly ExtensionInfo[]
@@ -83,6 +89,8 @@ const home = (path: string, env: Record<string, string | undefined>) => {
  * else `project`; `<built-in>` → `builtin`.
  */
 export function skillGroup(skill: SkillSummary, env: Record<string, string | undefined> = process.env): string {
+  // A bundle or plugin skill has no file: group by its owner.
+  if (skill.bundleId) return `bundle ${skill.bundleId}`
   const location = skill.location ?? ""
   if (!location || location.startsWith("<")) return skill.source || "builtin"
   const source = skill.source && skill.source !== "builtin" ? skill.source : (env.HOME && location.startsWith(`${env.HOME}/`) ? "user" : "project")
@@ -102,12 +110,15 @@ function sections(input: StartupInput, env: Record<string, string | undefined>):
     skills: input.skills ? {
       title: titles.skills,
       items: input.skills.map((skill) => ({ name: skill.name, group: skillGroup(skill, env) })),
-      problems: [],
+      problems: (input.skillDiagnostics ?? []).map((diagnostic) => `${home(diagnostic.message, env)} · /skills`),
     } : undefined,
     commands: input.commands ? {
       title: titles.commands,
-      items: input.commands.filter((command) => (command.source ?? "command") === "command").map((command) => ({ name: `/${command.name.replace(/^\//, "")}`, group: "commands", detail: command.description })),
-      problems: [],
+      items: input.commands.filter((command) => (command.source ?? "command") === "command").map((command) => ({ name: `/${command.name.replace(/^\//, "")}`, group: command.scope && command.scope !== "builtin" ? `${command.scope} commands` : "commands", detail: command.description })),
+      problems: [
+        ...(input.commandDiagnostics ?? []).map((diagnostic) => home(diagnostic.message, env)),
+        ...(input.shadowedCommands ?? []).map((command) => `/${command.name}: the TUI's own /${command.name} hides this ${command.scope ? `${command.scope} ` : ""}command; rename its file to run it`),
+      ],
     } : undefined,
     mcp: input.mcp ? {
       title: titles.mcp,

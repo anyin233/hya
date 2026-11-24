@@ -37,6 +37,9 @@ import type {
   ProviderSummary,
   SavedRule,
   SessionInfo,
+  CatalogDiagnostic,
+  SkillDiagnostic,
+  SkillListing,
   SkillSummary,
   TodoItem,
   TokenUsage,
@@ -62,6 +65,7 @@ import type { ProviderViewState } from "./providers"
 import type { BundleViewState } from "./bundles"
 import { sessionRow } from "./revert"
 import type { RulesViewState } from "./rules"
+import type { SkillsViewState } from "./skills"
 
 /** A prompt submitted while a turn runs; sent when the session is free. */
 export interface QueuedPrompt {
@@ -118,8 +122,14 @@ export interface AppState {
   readonly structure: TuiStructure
   /** Lines at the start of the transcript that outlive session switches: `tui.toml` warnings and one-time notices. */
   readonly startupNotices: readonly string[]
-  /** `Bootstrap.skills`, for the startup list's `[Skills]` (state/startup.ts). */
+  /** `Bootstrap.skills`, then `ListSkills`: the startup list's `[Skills]` (state/startup.ts) and the Skills view. */
   readonly skills: readonly SkillSummary[]
+  /** `ListSkillsResponse.diagnostics`: skill files skipped or warned about (the startup list's `[Skills]` problems, the Skills view). */
+  readonly skillDiagnostics: readonly SkillDiagnostic[]
+  /** `ListCommandsResponse.diagnostics`: command files skipped (reserved `skill:` names, broken frontmatter). */
+  readonly commandDiagnostics: readonly CatalogDiagnostic[]
+  /** The Skills view (`/skills`; state/skills.ts), when open. */
+  readonly skillsView: SkillsViewState | undefined
   /** `Bootstrap.contextFiles`, the startup list's `[Context]`; `undefined` before the bootstrap. */
   readonly contextFiles: NonNullable<Bootstrap["contextFiles"]> | undefined
   /** The startup list of what was loaded has its data: MCP settled and bundles listed (app/controller.ts `loadStartupResources`). */
@@ -350,6 +360,9 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     structure: builtinPreset("workspace"),
     startupNotices: [],
     skills: [],
+    skillDiagnostics: [],
+    commandDiagnostics: [],
+    skillsView: undefined,
     contextFiles: undefined,
     startupReady: false,
     apiOutput: "Use /api METHOD /v1/path [JSON object] to call any HTTP/JSON endpoint.\n\n" + operations(),
@@ -1008,6 +1021,20 @@ export function createAppStore() {
     /** Open, update, or (`undefined`) close the MCP View (`/mcp`). */
     setMcpView(view: McpViewState | undefined): void { set("mcpView", view) },
     setMcpServers(servers: McpServerStatus[]): void { set("mcpServers", servers) },
+
+    /** `ListCommands` rows (the command menu's backend entries, `/skill:*` included), re-read alone by `/reload-commands` and an unknown command. */
+    setBackendCommands(commands: CommandSummary[]): void { set("backendCommands", commands) },
+    /** `ListCommandsResponse.diagnostics`: command files the catalog skipped (the startup list's `[Slash commands]` problems). */
+    setCommandDiagnostics(diagnostics: CatalogDiagnostic[]): void { set("commandDiagnostics", diagnostics) },
+    /** `ListSkills` rows and diagnostics (the startup list's `[Skills]`, `/skills`), re-read by `/reload-skills` and the Skills view. */
+    setSkills(listing: SkillListing): void {
+      batch(() => {
+        set("skills", listing.skills)
+        set("skillDiagnostics", listing.diagnostics)
+      })
+    },
+    /** Open, update, or (`undefined`) close the Skills view (`/skills`). */
+    setSkillsView(view: SkillsViewState | undefined): void { set("skillsView", view) },
 
     /** Open, update, or (`undefined`) close the Saved Rules view (`/rules`). */
     setRulesView(view: RulesViewState | undefined): void { set("rulesView", view) },

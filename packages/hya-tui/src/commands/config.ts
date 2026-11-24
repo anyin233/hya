@@ -118,9 +118,9 @@ export const pasteCommand: CommandSpec = {
 export const resourcesCommand: CommandSpec = {
   name: "/resources",
   description: "List the loaded context files, skills, commands, MCP servers, bundles, and TUI extensions, grouped by source",
-  run: ({ store }) => {
+  run: ({ store, registry }) => {
     const settings = store.state.structure.startup
-    const lines = startupLines({ ...startupInput(store.state), notices: [] }, { resources: "full", quiet: false, sections: settings.sections }, Math.max(20, store.state.columns - 4))
+    const lines = startupLines({ ...startupInput(store.state, registry?.names() ?? []), notices: [] }, { resources: "full", quiet: false, sections: settings.sections }, Math.max(20, store.state.columns - 4))
     store.setView("chat")
     store.addTranscriptNotice(lines.length ? lines.map((line) => line.text).join("\n") : "Nothing loaded yet")
   },

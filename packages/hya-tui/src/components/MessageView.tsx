@@ -24,6 +24,7 @@ import { waitingKind } from "../state/prompts"
 import { messageBlockGap, reasoningExpanded, reasoningLabel, toolExpanded, type Block, type MessageView } from "../state/messages"
 import type { TaskInfo, Tone, ToolStatus } from "../state/tools"
 import { colors, diffColors, toolColors } from "../theme"
+import { parseSkillBlock, skillBlockLabel } from "../state/skillBlock"
 import { Markdown } from "./Markdown"
 import { useSpinner } from "./Spinner"
 
@@ -82,8 +83,12 @@ function UserMessage(props: { view: MessageView }) {
   const raw = () => props.view.blocks.map((block) => (block.kind === "text" ? block.text : "")).filter(Boolean).join("\n")
   // Pasted text and files sent as `<attachment>` blocks show folded (`[paste #1 · 150 lines]`); a click shows them whole.
   const [unfolded, setUnfolded] = createSignal(false)
-  const folds = createMemo(() => foldedAttachments(raw()).length > 0)
-  const text = () => folds() && !unfolded() ? foldAttachments(raw()) : raw()
+  // A `/skill:<name> [request]` turn: its `<skill>` block folds to one line, the request below it (state/skillBlock.ts).
+  const skill = createMemo(() => parseSkillBlock(raw()))
+  const request = () => skill()?.request ?? ""
+  const folds = createMemo(() => foldedAttachments(skill() ? request() : raw()).length > 0)
+  const plain = () => skill() ? request() : raw()
+  const text = () => folds() && !unfolded() ? foldAttachments(plain()) : plain()
   const attachments = () => props.view.blocks.filter((block): block is Extract<Block, { kind: "attachment" }> => block.kind === "attachment")
   return (
     <box
@@ -96,8 +101,20 @@ function UserMessage(props: { view: MessageView }) {
       paddingLeft={1}
       paddingRight={1}
     >
+      <Show when={skill()}>
+        {(block) => (
+          <box width="100%" flexDirection="column" onMouseDown={() => setUnfolded(!unfolded())}>
+            <text height={1} wrapMode="none" fg={colors.heading}>{skillBlockLabel(block(), unfolded())}</text>
+            <Show when={unfolded()}>
+              <text width="100%" wrapMode="word" fg={colors.muted}>{block().content}</text>
+            </Show>
+          </box>
+        )}
+      </Show>
       <box width="100%" flexDirection="row" onMouseDown={() => { if (folds()) setUnfolded(!unfolded()) }}>
-        <text flexGrow={1} wrapMode="word" fg={props.view.queued ? colors.muted : colors.fg}>{text()}</text>
+        <Show when={text()}>
+          <text flexGrow={1} wrapMode="word" fg={props.view.queued ? colors.muted : colors.fg}>{text()}</text>
+        </Show>
         <Show when={props.view.queued}>
           <text flexShrink={0} fg={colors.muted}> queued</text>
         </Show>

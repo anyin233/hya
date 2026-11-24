@@ -1522,17 +1522,25 @@ pub struct ListCommandsRequest {
     /// Standard pagination controls.
     #[prost(message, optional, tag = "2")]
     pub page: ::core::option::Option<PageRequest>,
+    /// List the catalog this session's command turns expand against instead:
+    /// its recorded workdir, its Project's roots, and the `skill:<name>` rows
+    /// of the bundle and plugin skills its agent can load. Wins over
+    /// `directory`. `not_found` for an unknown session.
+    #[prost(string, tag = "3")]
+    pub session: ::prost::alloc::string::String,
 }
 /// One slash-command entry.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandSummary {
-    /// Command name without the leading `/`.
+    /// Command name without the leading `/`. A skill is named `skill:<name>`
+    /// (the reserved skill namespace); no other command uses that prefix.
     #[prost(string, tag = "1")]
     pub name: ::prost::alloc::string::String,
     /// One-line description for completion UIs.
     #[prost(string, tag = "2")]
     pub description: ::prost::alloc::string::String,
-    /// Argument hint shown after the command name.
+    /// Argument hint shown after the command name: `<arg>` marks a required
+    /// argument, `\[arg\]` an optional one (`\[request\]` for every skill).
     #[prost(string, tag = "3")]
     pub argument_hint: ::prost::alloc::string::String,
     /// Positional/flag hints from the command template, in template order.
@@ -1541,7 +1549,8 @@ pub struct CommandSummary {
     /// Where the command was discovered (`command`, `skill`, ...).
     #[prost(string, tag = "6")]
     pub source: ::prost::alloc::string::String,
-    /// Expansion template (positional `$1`/`$ARGUMENTS` placeholders).
+    /// Expansion template (positional `$1`/`$ARGUMENTS` placeholders); for a
+    /// skill, its body, sent as a `<skill>` block with the arguments after it.
     #[prost(string, tag = "7")]
     pub template: ::prost::alloc::string::String,
     /// Agent the command run binds when authored.
@@ -1553,6 +1562,13 @@ pub struct CommandSummary {
     /// Whether the command runs as a detached subtask.
     #[prost(bool, optional, tag = "10")]
     pub subtask: ::core::option::Option<bool>,
+    /// Where it is defined: `builtin` (the client-side rows and the
+    /// `hya/core-commands` templates), `project` (`.hya/commands` of the
+    /// directory or a Project root), `user` (`~/.config/hya/commands`); a
+    /// skill row carries its `SkillSummary.source` (`project`, `user`,
+    /// `bundle`, `builtin`).
+    #[prost(string, tag = "11")]
+    pub scope: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListCommandsResponse {
@@ -1562,6 +1578,30 @@ pub struct ListCommandsResponse {
     /// Pagination outcome.
     #[prost(message, optional, tag = "2")]
     pub page: ::core::option::Option<PageInfo>,
+    /// Command files the catalog skipped or warns about (the same list on
+    /// every page).
+    #[prost(message, repeated, tag = "3")]
+    pub diagnostics: ::prost::alloc::vec::Vec<CatalogDiagnostic>,
+}
+/// A resource file a catalog skipped or warns about, for clients to show.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CatalogDiagnostic {
+    /// The file it is about.
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    /// What is wrong: for a skill `invalid` (no or unclosed frontmatter, YAML
+    /// that does not parse), `missing_name`, `missing_description`,
+    /// `collision` (a skill of the same name was found first; this one is not
+    /// listed), `name` (breaks the Agent Skills naming rule: lowercase
+    /// letters, digits, and single hyphens, at most 64 characters), or
+    /// `description_length` (over 1024 characters); for a command `reserved`
+    /// (named `skill:…`) or `invalid` (frontmatter that does not parse).
+    /// Only `name` and `description_length` leave the skill listed.
+    #[prost(string, tag = "2")]
+    pub kind: ::prost::alloc::string::String,
+    /// One line for a person.
+    #[prost(string, tag = "3")]
+    pub message: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListSkillsRequest {
@@ -1572,11 +1612,18 @@ pub struct ListSkillsRequest {
     /// Standard pagination controls.
     #[prost(message, optional, tag = "2")]
     pub page: ::core::option::Option<PageRequest>,
+    /// List what this session's agent can load with the `skill` tool instead:
+    /// the skills of its recorded workdir and Project roots, the built-in
+    /// ones, and the bundle and plugin skills its agent selects. Wins over
+    /// `directory`. `not_found` for an unknown session.
+    #[prost(string, tag = "3")]
+    pub session: ::prost::alloc::string::String,
 }
 /// One invocable skill.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SkillSummary {
-    /// Skill name used with `/skill` and the skill plane.
+    /// Skill name: `/skill:<name>` runs it, and the `skill` tool loads it by
+    /// this name.
     #[prost(string, tag = "1")]
     pub name: ::prost::alloc::string::String,
     /// One-line description of what the skill does.
@@ -1587,12 +1634,20 @@ pub struct SkillSummary {
     /// `user` (any other file, such as `~/.codex/skills`).
     #[prost(string, tag = "3")]
     pub source: ::prost::alloc::string::String,
-    /// Full skill markdown body (frontmatter + content).
+    /// The skill's markdown body: the text after its frontmatter.
     #[prost(string, tag = "4")]
     pub content: ::prost::alloc::string::String,
     /// Where the skill file lives (`<built-in>` for compiled-in skills).
     #[prost(string, tag = "5")]
     pub location: ::prost::alloc::string::String,
+    /// `disable-model-invocation: true` in its frontmatter: the model's skill
+    /// index leaves it out; `/skill:<name>` still runs it.
+    #[prost(bool, tag = "6")]
+    pub disable_model_invocation: bool,
+    /// The bundle or plugin that contributes it (`source: bundle`), e.g.
+    /// `hya/alpha` or `plugin:toolbox`; empty otherwise.
+    #[prost(string, tag = "7")]
+    pub bundle_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListSkillsResponse {
@@ -1602,6 +1657,10 @@ pub struct ListSkillsResponse {
     /// Pagination outcome.
     #[prost(message, optional, tag = "2")]
     pub page: ::core::option::Option<PageInfo>,
+    /// Skill files the catalog skipped or warns about (the same list on every
+    /// page).
+    #[prost(message, repeated, tag = "3")]
+    pub diagnostics: ::prost::alloc::vec::Vec<CatalogDiagnostic>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListToolsRequest {
@@ -15040,6 +15099,20 @@ pub struct SummarizeSessionResponse {
     pub summary_message: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RefreshSessionContextRequest {
+    /// Session whose recorded initial context is re-recorded.
+    #[prost(string, tag = "1")]
+    pub session: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct RefreshSessionContextResponse {
+    /// True when a recorded context was discarded and the next turn records
+    /// it anew; false when the session has not recorded one yet (its first
+    /// turn reads the files as they are anyway).
+    #[prost(bool, tag = "1")]
+    pub pending: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RevertSessionRequest {
     /// Session identifier to revert.
     #[prost(string, tag = "1")]
@@ -15494,6 +15567,40 @@ pub mod session_client {
                 .insert(GrpcMethod::new("hya.v1.Session", "SummarizeSession"));
             self.inner.unary(req, path, codec).await
         }
+        /// Re-record a session's initial context at its next turn: the
+        /// environment, the `AGENTS.md` files, and the directory skill index it
+        /// recorded at its first turn (`InitialContextRecorded`) are discarded
+        /// (`InitialContextInvalidated`), so the next turn renders them from the
+        /// files as they are then. Every round reads the recorded context, so this
+        /// fails with `session_busy` while a turn runs. Only this session: each
+        /// subagent session keeps its own. The system prompt changes, so the next
+        /// request misses the provider's prompt cache once.
+        ///
+        /// hya.http: POST /v1/sessions/{session}/refresh-context
+        pub async fn refresh_session_context(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RefreshSessionContextRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RefreshSessionContextResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Session/RefreshSessionContext",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Session", "RefreshSessionContext"));
+            self.inner.unary(req, path, codec).await
+        }
         /// Revert a session to just before a user message (default: the last
         /// one), or undo the pending revert (`undo`). A revert hides that user
         /// message and every later message and restores the files their tool
@@ -15685,6 +15792,23 @@ pub mod session_server {
             request: tonic::Request<super::SummarizeSessionRequest>,
         ) -> std::result::Result<
             tonic::Response<super::SummarizeSessionResponse>,
+            tonic::Status,
+        >;
+        /// Re-record a session's initial context at its next turn: the
+        /// environment, the `AGENTS.md` files, and the directory skill index it
+        /// recorded at its first turn (`InitialContextRecorded`) are discarded
+        /// (`InitialContextInvalidated`), so the next turn renders them from the
+        /// files as they are then. Every round reads the recorded context, so this
+        /// fails with `session_busy` while a turn runs. Only this session: each
+        /// subagent session keeps its own. The system prompt changes, so the next
+        /// request misses the provider's prompt cache once.
+        ///
+        /// hya.http: POST /v1/sessions/{session}/refresh-context
+        async fn refresh_session_context(
+            &self,
+            request: tonic::Request<super::RefreshSessionContextRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RefreshSessionContextResponse>,
             tonic::Status,
         >;
         /// Revert a session to just before a user message (default: the last
@@ -16156,6 +16280,52 @@ pub mod session_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = SummarizeSessionSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Session/RefreshSessionContext" => {
+                    #[allow(non_camel_case_types)]
+                    struct RefreshSessionContextSvc<T: Session>(pub Arc<T>);
+                    impl<
+                        T: Session,
+                    > tonic::server::UnaryService<super::RefreshSessionContextRequest>
+                    for RefreshSessionContextSvc<T> {
+                        type Response = super::RefreshSessionContextResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::RefreshSessionContextRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Session>::refresh_session_context(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = RefreshSessionContextSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

@@ -769,6 +769,7 @@ every turn, message, and projection read hangs off a session id.
 | `ForkSession` | `POST /v1/sessions/{session}/fork` | `hya.v1.Session.ForkSession` | `ForkSessionRequest` | `ForkSessionResponse` |
 | `CompactSession` | `POST /v1/sessions/{session}/compact` | `hya.v1.Session.CompactSession` | `CompactSessionRequest` | `CompactSessionResponse` |
 | `SummarizeSession` | `POST /v1/sessions/{session}/summarize` | `hya.v1.Session.SummarizeSession` | `SummarizeSessionRequest` | `SummarizeSessionResponse` |
+| `RefreshSessionContext` | `POST /v1/sessions/{session}/refresh-context` | `hya.v1.Session.RefreshSessionContext` | `RefreshSessionContextRequest` | `RefreshSessionContextResponse` |
 | `RevertSession` | `POST /v1/sessions/{session}/revert` | `hya.v1.Session.RevertSession` | `RevertSessionRequest` | `RevertSessionResponse` |
 | `ArchiveSubagent` | `POST /v1/sessions/{session}/archive` | `hya.v1.Session.ArchiveSubagent` | `ArchiveSubagentRequest` | `ArchiveSubagentResponse` |
 | `SteerSubagent` | `POST /v1/sessions/{session}/steer` | `hya.v1.Session.SteerSubagent` | `SteerSubagentRequest` | `SteerSubagentResponse` |
@@ -819,6 +820,18 @@ Compact a session's context using the configured method ladder.
 ### `Session.SummarizeSession`
 
 Produce a summary message for a session (titles, handoffs).
+
+
+### `Session.RefreshSessionContext`
+
+Re-record a session's initial context at its next turn: the
+environment, the `AGENTS.md` files, and the directory skill index it
+recorded at its first turn (`InitialContextRecorded`) are discarded
+(`InitialContextInvalidated`), so the next turn renders them from the
+files as they are then. Every round reads the recorded context, so this
+fails with `session_busy` while a turn runs. Only this session: each
+subagent session keeps its own. The system prompt changes, so the next
+request misses the provider's prompt cache once.
 
 
 ### `Session.RevertSession`
@@ -1508,6 +1521,7 @@ A provider after a change, applied live.
 |---|---|---|
 | `directory` (1) | `string` | Directory scope (absolute). Optional: empty lists the global view (no project sources). |
 | `page` (2) | `PageRequest` | Standard pagination controls. |
+| `session` (3) | `string` | List the catalog this session's command turns expand against instead: its recorded workdir, its Project's roots, and the `skill:<name>` rows of the bundle and plugin skills its agent can load. Wins over `directory`. `not_found` for an unknown session. |
 
 ### `CommandSummary`
 
@@ -1515,15 +1529,16 @@ One slash-command entry.
 
 | Field | Type | Description |
 |---|---|---|
-| `name` (1) | `string` | Command name without the leading `/`. |
+| `name` (1) | `string` | Command name without the leading `/`. A skill is named `skill:<name>` (the reserved skill namespace); no other command uses that prefix. |
 | `description` (2) | `string` | One-line description for completion UIs. |
-| `argument_hint` (3) | `string` | Argument hint shown after the command name. |
+| `argument_hint` (3) | `string` | Argument hint shown after the command name: `<arg>` marks a required argument, `[arg]` an optional one (`[request]` for every skill). |
 | `hints` (5) | `repeated string` | Positional/flag hints from the command template, in template order. |
 | `source` (6) | `string` | Where the command was discovered (`command`, `skill`, ...). |
-| `template` (7) | `string` | Expansion template (positional `$1`/`$ARGUMENTS` placeholders). |
+| `template` (7) | `string` | Expansion template (positional `$1`/`$ARGUMENTS` placeholders); for a skill, its body, sent as a `<skill>` block with the arguments after it. |
 | `agent` (8) | `string` | Agent the command run binds when authored. |
 | `model` (9) | `string` | Model the command run binds when authored. |
 | `subtask` (10) | `optional bool` | Whether the command runs as a detached subtask. |
+| `scope` (11) | `string` | Where it is defined: `builtin` (the client-side rows and the `hya/core-commands` templates), `project` (`.hya/commands` of the directory or a Project root), `user` (`~/.config/hya/commands`); a skill row carries its `SkillSummary.source` (`project`, `user`, `bundle`, `builtin`). |
 
 ### `ListCommandsResponse`
 
@@ -1532,6 +1547,17 @@ One slash-command entry.
 |---|---|---|
 | `commands` (1) | `repeated CommandSummary` | Commands visible in this directory. |
 | `page` (2) | `PageInfo` | Pagination outcome. |
+| `diagnostics` (3) | `repeated CatalogDiagnostic` | Command files the catalog skipped or warns about (the same list on every page). |
+
+### `CatalogDiagnostic`
+
+A resource file a catalog skipped or warns about, for clients to show.
+
+| Field | Type | Description |
+|---|---|---|
+| `path` (1) | `string` | The file it is about. |
+| `kind` (2) | `string` | What is wrong: for a skill `invalid` (no or unclosed frontmatter, YAML that does not parse), `missing_name`, `missing_description`, `collision` (a skill of the same name was found first; this one is not listed), `name` (breaks the Agent Skills naming rule: lowercase letters, digits, and single hyphens, at most 64 characters), or `description_length` (over 1024 characters); for a command `reserved` (named `skill:…`) or `invalid` (frontmatter that does not parse). Only `name` and `description_length` leave the skill listed. |
+| `message` (3) | `string` | One line for a person. |
 
 ### `ListSkillsRequest`
 
@@ -1540,6 +1566,7 @@ One slash-command entry.
 |---|---|---|
 | `directory` (1) | `string` | Directory scope (absolute). Optional: empty lists the global view (no project sources). |
 | `page` (2) | `PageRequest` | Standard pagination controls. |
+| `session` (3) | `string` | List what this session's agent can load with the `skill` tool instead: the skills of its recorded workdir and Project roots, the built-in ones, and the bundle and plugin skills its agent selects. Wins over `directory`. `not_found` for an unknown session. |
 
 ### `SkillSummary`
 
@@ -1547,11 +1574,13 @@ One invocable skill.
 
 | Field | Type | Description |
 |---|---|---|
-| `name` (1) | `string` | Skill name used with `/skill` and the skill plane. |
+| `name` (1) | `string` | Skill name: `/skill:<name>` runs it, and the `skill` tool loads it by this name. |
 | `description` (2) | `string` | One-line description of what the skill does. |
 | `source` (3) | `string` | Where the skill was discovered: `builtin` (compiled in), `bundle` (a runtime resource), `project` (under the directory or a Project root), or `user` (any other file, such as `~/.codex/skills`). |
-| `content` (4) | `string` | Full skill markdown body (frontmatter + content). |
+| `content` (4) | `string` | The skill's markdown body: the text after its frontmatter. |
 | `location` (5) | `string` | Where the skill file lives (`<built-in>` for compiled-in skills). |
+| `disable_model_invocation` (6) | `bool` | `disable-model-invocation: true` in its frontmatter: the model's skill index leaves it out; `/skill:<name>` still runs it. |
+| `bundle_id` (7) | `string` | The bundle or plugin that contributes it (`source: bundle`), e.g. `hya/alpha` or `plugin:toolbox`; empty otherwise. |
 
 ### `ListSkillsResponse`
 
@@ -1560,6 +1589,7 @@ One invocable skill.
 |---|---|---|
 | `skills` (1) | `repeated SkillSummary` | Skills visible in this directory. |
 | `page` (2) | `PageInfo` | Pagination outcome. |
+| `diagnostics` (3) | `repeated CatalogDiagnostic` | Skill files the catalog skipped or warns about (the same list on every page). |
 
 ### `ListToolsRequest`
 
@@ -3195,6 +3225,20 @@ components.
 | Field | Type | Description |
 |---|---|---|
 | `summary_message` (1) | `string` | Id of the generated summary message. |
+
+### `RefreshSessionContextRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `session` (1) | `string` | Session whose recorded initial context is re-recorded. |
+
+### `RefreshSessionContextResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `pending` (1) | `bool` | True when a recorded context was discarded and the next turn records it anew; false when the session has not recorded one yet (its first turn reads the files as they are anyway). |
 
 ### `RevertSessionRequest`
 

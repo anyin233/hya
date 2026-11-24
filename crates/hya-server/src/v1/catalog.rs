@@ -690,29 +690,58 @@ async fn list_commands(
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Result<Json<pb::ListCommandsResponse>, V1Error> {
     let request: pb::ListCommandsRequest = super::query_request(&[], &query)?;
-    let place = catalog_scope(&st, &request.directory).await?;
-    let commands = command_rows(&place);
-    let (commands, page) = paginate(commands, &request.page);
+    // A session's own catalog (its workdir, Project, and agent's bundle
+    // skills) wins over the request directory.
+    let listing = match super::scope_session(&st, &request.session).await? {
+        Some(session) => {
+            let place = CatalogPlace::for_session(&st, session).await?;
+            let skills = crate::support::skill_catalog::session_listing(&st, session, &place)
+                .await
+                .skills;
+            crate::support::command_catalog::listing_with_skills(&place, skills)
+        }
+        None => {
+            let place = catalog_scope(&st, &request.directory).await?;
+            crate::support::command_catalog::listing(&place)
+        }
+    };
+    let diagnostics = listing
+        .diagnostics
+        .iter()
+        .map(|diagnostic| pb::CatalogDiagnostic {
+            path: diagnostic.path.to_string_lossy().into_owned(),
+            kind: diagnostic.kind.to_owned(),
+            message: diagnostic.message.clone(),
+        })
+        .collect();
+    let (commands, page) = paginate(command_summaries(listing.commands), &request.page);
     Ok(Json(pb::ListCommandsResponse {
         commands,
         page: Some(page),
+        diagnostics,
     }))
 }
 
 /// Command rows shared with the bootstrap snapshot.
 pub(crate) fn command_rows(place: &CatalogPlace) -> Vec<pb::CommandSummary> {
-    crate::support::command_catalog::list(place)
-        .into_iter()
+    command_summaries(crate::support::command_catalog::list(place))
+}
+
+fn command_summaries(
+    rows: Vec<crate::support::command_catalog::CommandInfo>,
+) -> Vec<pb::CommandSummary> {
+    rows.into_iter()
         .map(|row| pb::CommandSummary {
             name: row.name.clone(),
             description: row.description.clone().unwrap_or_default(),
-            argument_hint: String::new(),
+            argument_hint: row.argument_hint.clone().unwrap_or_default(),
             hints: row.hints.clone(),
             source: row.source.to_owned(),
             template: row.template.clone(),
             agent: row.agent.clone().unwrap_or_default(),
             model: row.model.clone().unwrap_or_default(),
             subtask: row.subtask,
+            scope: row.scope.to_owned(),
         })
         .collect()
 }
@@ -722,26 +751,51 @@ async fn list_skills(
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Result<Json<pb::ListSkillsResponse>, V1Error> {
     let request: pb::ListSkillsRequest = super::query_request(&[], &query)?;
-    let place = catalog_scope(&st, &request.directory).await?;
-    let skills = skill_rows(&place);
-    let (skills, page) = paginate(skills, &request.page);
+    // What a session's agent can load (bundle and plugin skills included)
+    // wins over the request directory.
+    let listing = match super::scope_session(&st, &request.session).await? {
+        Some(session) => {
+            let place = CatalogPlace::for_session(&st, session).await?;
+            crate::support::skill_catalog::session_listing(&st, session, &place).await
+        }
+        None => {
+            let place = catalog_scope(&st, &request.directory).await?;
+            crate::support::skill_catalog::listing(&place)
+        }
+    };
+    let diagnostics = listing
+        .diagnostics
+        .iter()
+        .map(|diagnostic| pb::CatalogDiagnostic {
+            path: diagnostic.path.to_string_lossy().into_owned(),
+            kind: diagnostic.kind.as_str().to_owned(),
+            message: diagnostic.message.clone(),
+        })
+        .collect();
+    let (skills, page) = paginate(skill_summaries(listing.skills), &request.page);
     Ok(Json(pb::ListSkillsResponse {
         skills,
         page: Some(page),
+        diagnostics,
     }))
 }
 
 /// Skill rows shared with the bootstrap snapshot; the global view lists
 /// user skills and builtins only.
 pub(crate) fn skill_rows(place: &CatalogPlace) -> Vec<pb::SkillSummary> {
-    crate::support::skill_catalog::list(place)
-        .into_iter()
+    skill_summaries(crate::support::skill_catalog::list(place))
+}
+
+fn skill_summaries(rows: Vec<crate::support::skill_catalog::SkillInfo>) -> Vec<pb::SkillSummary> {
+    rows.into_iter()
         .map(|row| pb::SkillSummary {
-            name: row.name.clone(),
-            description: row.description.clone(),
+            name: row.name,
+            description: row.description,
             source: row.source.to_owned(),
-            content: row.content.clone(),
-            location: row.location.clone(),
+            content: row.content,
+            location: row.location,
+            disable_model_invocation: row.disable_model_invocation,
+            bundle_id: row.bundle_id.unwrap_or_default(),
         })
         .collect()
 }
