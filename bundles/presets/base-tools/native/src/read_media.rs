@@ -1,11 +1,10 @@
 use std::path::Path;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use hya_tool::MAX_CODING_ATTACHMENT_BYTES;
+use hya_tool::media::{max_image_attachment_bytes, sniff_image_mime, validate_image_decode};
+use hya_tool::path::display_path;
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
-
-use hya_tool::path::display_path;
 
 const SAMPLE_BYTES: usize = 4096;
 
@@ -34,7 +33,7 @@ pub(crate) async fn attachment_value(
 ) -> Result<Value, std::io::Error> {
     if !is_pdf_attachment(mime) {
         let size = tokio::fs::metadata(path).await?.len();
-        let limit = max_image_bytes(mime);
+        let limit = max_image_attachment_bytes(mime) as u64;
         if size > limit {
             return Ok(json!({
                 "title": relative_title(path, workdir),
@@ -54,14 +53,9 @@ pub(crate) async fn attachment_value(
     }
     let bytes = tokio::fs::read(path).await?;
     let bytes = if let Some(format) = image::ImageFormat::from_mime_type(mime) {
-        let (bytes, decoded) = tokio::task::spawn_blocking(move || {
-            let decoded = image::ImageReader::with_format(std::io::Cursor::new(&bytes), format)
-                .decode()
-                .map(drop);
-            (bytes, decoded)
-        })
-        .await
-        .map_err(std::io::Error::other)?;
+        let (bytes, decoded) = validate_image_decode(bytes, format)
+            .await
+            .map_err(std::io::Error::other)?;
         if let Err(error) = decoded {
             return Ok(json!({
                 "title": relative_title(path, workdir),
@@ -106,14 +100,6 @@ pub(crate) async fn attachment_value(
     }))
 }
 
-/// Largest image file whose one-entry attachment array (base64 data URL)
-/// fits the tool-result attachment budget.
-fn max_image_bytes(mime: &str) -> u64 {
-    let empty = json!([{"type": "file", "mime": mime, "url": format!("data:{mime};base64,")}]);
-    let base64 = MAX_CODING_ATTACHMENT_BYTES.saturating_sub(empty.to_string().len());
-    (base64 / 4 * 3) as u64
-}
-
 async fn read_sample(path: &Path) -> Result<Vec<u8>, std::io::Error> {
     let mut file = tokio::fs::File::open(path).await?;
     let mut sample = vec![0; SAMPLE_BYTES];
@@ -123,24 +109,15 @@ async fn read_sample(path: &Path) -> Result<Vec<u8>, std::io::Error> {
 }
 
 fn sniff_attachment_mime<'a>(bytes: &[u8], fallback: &'a str) -> &'a str {
-    if bytes.starts_with(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) {
-        return "image/png";
+    if let Some((mime, _)) = sniff_image_mime(bytes) {
+        return mime;
     }
-    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
-        return "image/jpeg";
-    }
-    if bytes.starts_with(&[0x47, 0x49, 0x46, 0x38]) {
+    // Full read also reports a decode error for a partial GIF header.
+    if bytes.starts_with(b"GIF8") {
         return "image/gif";
     }
-    if bytes.starts_with(&[0x25, 0x50, 0x44, 0x46, 0x2d]) {
+    if bytes.starts_with(b"%PDF-") {
         return "application/pdf";
-    }
-    if bytes.starts_with(&[0x52, 0x49, 0x46, 0x46])
-        && bytes
-            .get(8..)
-            .is_some_and(|rest| rest.starts_with(&[0x57, 0x45, 0x42, 0x50]))
-    {
-        return "image/webp";
     }
     fallback
 }
@@ -228,27 +205,4 @@ fn is_binary_file(path: &Path, bytes: &[u8]) -> bool {
 fn relative_title(path: &Path, workdir: &Path) -> String {
     path.strip_prefix(workdir)
         .map_or_else(|_| display_path(path), display_path)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn corrupt_png_is_explained_without_an_attachment() -> std::io::Result<()> {
-        let dir = std::env::temp_dir().join(format!("hya-read-{}", hya_proto::SessionId::new()));
-        tokio::fs::create_dir(&dir).await?;
-        let path = dir.join("corrupt.png");
-        tokio::fs::write(&path, b"\x89PNG\r\n\x1a\n").await?;
-        let result = attachment_value(&path, &dir, "image/png").await?;
-        tokio::fs::remove_dir_all(dir).await?;
-        assert_eq!(result["title"], "corrupt.png");
-        assert!(
-            result["output"]
-                .as_str()
-                .is_some_and(|text| text.contains("Malformed"))
-        );
-        assert!(result.get("attachments").is_none());
-        Ok(())
-    }
 }

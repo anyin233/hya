@@ -450,6 +450,31 @@ async fn read_returns_open_code_attachment_for_png_files() {
 }
 
 #[tokio::test]
+async fn read_truncated_png_reports_decode_error_without_attachment() {
+    let workdir = tempdir();
+    tokio::fs::write(workdir.join("image.data"), b"\x89PNG\r\n\x1a\n")
+        .await
+        .unwrap();
+    let ctx = ctx_with(workdir);
+    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let result = tool
+        .execute(&ctx, json!({"path": "image.data"}))
+        .await
+        .unwrap();
+    tokio::fs::remove_dir_all(&ctx.workdir).await.unwrap();
+
+    assert_eq!(result["title"], "image.data");
+    assert_eq!(result["metadata"]["preview"], "Image could not be decoded");
+    assert!(result.get("attachments").is_none());
+    assert!(
+        result["output"]
+            .as_str()
+            .unwrap()
+            .starts_with("Malformed or incomplete image (image/png, 8 bytes). Decoding failed:")
+    );
+}
+
+#[tokio::test]
 async fn read_does_not_attach_an_image_over_the_attachment_budget() {
     // Given: a PNG whose base64 data URL is larger than the attachment budget.
     let workdir = tempdir();

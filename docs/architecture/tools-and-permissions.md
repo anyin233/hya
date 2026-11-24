@@ -247,8 +247,10 @@ metadata, existence, or target-kind probing. Cancellation while waiting for a lo
 returns the typed `cancelled` error. Bash cancellation or a terminating timeout kills and
 reaps the complete process group, including a PTY descendant that retains the
 slave after leader exit. File contents never enter logs or error payloads.
-For example, reading a truncated PNG returns `{title, output, metadata}` with
-a decode error in `output`. Read attaches only successfully decoded images.
+For example, `read {"path":"truncated.png"}` returns `{title, output, metadata}`
+with a decode error in `output` and no `attachments` field. Full and bare
+`read` share image signature checks, the attachment limit, and decode
+validation. Full `read` can also identify an image by its filename extension.
 PDFs retain their separate attachment handling.
 
 Budgeted Unix non-PTY Bash yields the process group when its requested wait

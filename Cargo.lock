@@ -1529,6 +1529,7 @@ dependencies = [
  "hya-network-tools",
  "hya-proto",
  "hya-version",
+ "image",
  "libc",
  "regex",
  "serde",
