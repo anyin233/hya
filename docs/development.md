@@ -115,12 +115,13 @@ static owners do no work. A custom registry embedder calls
 activations. Retained tool views stay closed after owner shutdown.
 
 The existing runtime task owner also tracks I/O completion during initialization,
-before a source can be published. `hya_mcp::io_tasks::scope(tracker, future)` carries
+before a source can be published. `hya_child_io::io_tasks::scope(tracker, future)` carries
 `Option<tokio_util::task::TaskTracker>` through preparation; `current()` captures
 it for connection restarts/cleanup, and `spawn(future)` / `spawn_in(tracker, future)`
 return the owned `JoinHandle<F::Output>`. These helpers track completion without
 owning cancellation. The runtime waits for this barrier after stopping source
 owners, including cleanup from canceled deferred initialization.
+The old `hya_mcp::io_tasks` path remains available as a deprecated re-export.
 
 For an embedded headless root driver, hold
 `ResidentSupervisor::root_driver_activity(session: SessionId) -> Result<RootDriverActivity, CoreError>`

@@ -24,6 +24,7 @@ hya-workflow = { workspace = true }
 hya-store = { workspace = true }
 hya-server = { workspace = true }
 hya-proto = { workspace = true }
+hya-child-io = { workspace = true }
 hya-mcp = { workspace = true }
 hya-plugin = { workspace = true }
 async-trait = { workspace = true }

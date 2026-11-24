@@ -456,7 +456,7 @@ impl InstalledBundleRefresh {
         runtime: &RuntimeRegistry,
         inspect_configs: bool,
     ) -> Result<bool, CoreError> {
-        hya_mcp::io_tasks::scope(
+        hya_child_io::io_tasks::scope(
             self.io_tasks(),
             self.refresh_scoped(runtime, inspect_configs),
         )

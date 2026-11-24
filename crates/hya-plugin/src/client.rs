@@ -310,7 +310,7 @@ impl Drop for ChildGuard {
                 let client = self.client.clone();
                 match tokio::runtime::Handle::try_current() {
                     Ok(_) => {
-                        hya_mcp::io_tasks::spawn_in(self.io_tasks.clone(), async move {
+                        hya_child_io::io_tasks::spawn_in(self.io_tasks.clone(), async move {
                             let _ = child.wait().await;
                             client.shutdown().await;
                             let _ = await_stderr_task(stderr_task).await;
@@ -328,7 +328,7 @@ impl Drop for ChildGuard {
                     let client = self.client.clone();
                     match tokio::runtime::Handle::try_current() {
                         Ok(_) => {
-                            hya_mcp::io_tasks::spawn_in(self.io_tasks.clone(), async move {
+                            hya_child_io::io_tasks::spawn_in(self.io_tasks.clone(), async move {
                                 client.shutdown().await;
                                 let _ = await_stderr_task(Some(task)).await;
                             });
@@ -516,7 +516,7 @@ impl PluginClient {
             None => (None, None),
         };
         let guard = ChildGuard {
-            io_tasks: hya_mcp::io_tasks::current(),
+            io_tasks: hya_child_io::io_tasks::current(),
             child: StdMutex::new(Some(child)),
             client: client.clone(),
             stderr_tail,
@@ -771,7 +771,7 @@ impl PluginClient {
             return Err(PluginError::Closed);
         }
         let mut writer = self.inner.writer.lock().await;
-        hya_mcp::codec::write_frame(&mut *writer, frame)
+        hya_child_io::codec::write_frame(&mut *writer, frame)
             .await
             .map_err(crate::codec::framing_error)
     }
@@ -827,7 +827,7 @@ fn spawn_reader<R>(
 where
     R: AsyncRead + Send + Unpin + 'static,
 {
-    hya_mcp::io_tasks::spawn(async move {
+    hya_child_io::io_tasks::spawn(async move {
         let mut requests = JoinSet::new();
         let mut reader = BufReader::new(reader);
         let mut buf = Vec::new();
@@ -983,7 +983,7 @@ async fn write_host_response(
     writer: &Writer,
     response: JsonRpcResponse,
 ) -> Result<(), PluginError> {
-    hya_mcp::codec::write_frame(&mut *writer.lock().await, &response)
+    hya_child_io::codec::write_frame(&mut *writer.lock().await, &response)
         .await
         .map_err(crate::codec::framing_error)
 }
@@ -992,7 +992,7 @@ fn spawn_stderr_reader<R>(mut reader: R, tail: StderrTail) -> StderrTask
 where
     R: AsyncRead + Send + Unpin + 'static,
 {
-    tokio_util::task::AbortOnDropHandle::new(hya_mcp::io_tasks::spawn(async move {
+    tokio_util::task::AbortOnDropHandle::new(hya_child_io::io_tasks::spawn(async move {
         let mut buf = [0_u8; 8192];
         loop {
             let read = reader.read(&mut buf).await?;
@@ -1094,7 +1094,7 @@ mod tests {
     async fn canceled_stderr_join_stops_its_reader() {
         let tasks = tokio_util::task::TaskTracker::new();
         let (dropped, mut observed) = tokio::sync::oneshot::channel();
-        let reader = hya_mcp::io_tasks::scope(Some(tasks.clone()), async {
+        let reader = hya_child_io::io_tasks::scope(Some(tasks.clone()), async {
             let task = super::spawn_stderr_reader(
                 PendingReader(Some(dropped)),
                 std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -1122,7 +1122,7 @@ mod tests {
     #[tokio::test]
     async fn completion_tracker_joins_dropped_unpublished_connection() {
         let tasks = tokio_util::task::TaskTracker::new();
-        let (client, guard) = hya_mcp::io_tasks::scope(Some(tasks.clone()), async {
+        let (client, guard) = hya_child_io::io_tasks::scope(Some(tasks.clone()), async {
             PluginClient::spawn(&["sh".into(), "-c".into(), "exec sleep 60".into()], None).unwrap()
         })
         .await;

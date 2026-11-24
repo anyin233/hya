@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use hya_child_io::io_tasks;
 use hya_tool::Tool;
 use serde::{Deserialize, Serialize};
 
@@ -200,10 +201,9 @@ impl McpManager {
                 continue;
             }
             let status_name = name.clone();
-            set.spawn(crate::io_tasks::scope(
-                crate::io_tasks::current(),
-                async move { (status_name, connect_server(name, config, None).await) },
-            ));
+            set.spawn(io_tasks::scope(io_tasks::current(), async move {
+                (status_name, connect_server(name, config, None).await)
+            }));
         }
         while let Some(joined) = set.join_next().await {
             match joined {

@@ -11,6 +11,7 @@ version-reference = "hya"
 workspace = true
 
 [dependencies]
+hya-child-io = { workspace = true }
 hya-tool = { workspace = true }
 hya-version = { workspace = true }
 hya-proto = { workspace = true }

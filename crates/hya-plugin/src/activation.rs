@@ -51,7 +51,7 @@ pub async fn start_activation_sidecar(
     let activation_dir = BundleActivationDirGuard::new(activation_dir);
     let spec = launch(&start, activation_dir.path())?;
     let host = Arc::new(
-        hya_mcp::io_tasks::scope(io_tasks, PluginHost::connect(spec, host_info, None))
+        hya_child_io::io_tasks::scope(io_tasks, PluginHost::connect(spec, host_info, None))
             .await
             .map_err(|error| CoreError::Invalid(format!("initialize bundle sidecar: {error}")))?,
     );

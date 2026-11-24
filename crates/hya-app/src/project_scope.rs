@@ -182,7 +182,7 @@ impl ProjectScopeRefresh {
         let retained_plugins = runtime
             .scope_overlay(&key)
             .map_or_else(Vec::new, |overlay| overlay.plugin_sources.clone());
-        let (plugin_sources, plugin_errors, plugins_changed) = hya_mcp::io_tasks::scope(
+        let (plugin_sources, plugin_errors, plugins_changed) = hya_child_io::io_tasks::scope(
             self.installed.io_tasks(),
             state
                 .plugins
@@ -421,7 +421,7 @@ impl ProjectScopeRefresh {
             self.installed.config_file().to_path_buf(),
             BTreeMap::from([(id, dir.to_path_buf())]),
         );
-        let composition = hya_mcp::io_tasks::scope(
+        let composition = hya_child_io::io_tasks::scope(
             self.installed.io_tasks(),
             compose(
                 &[&published.catalog],

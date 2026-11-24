@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
+use hya_child_io::io_tasks;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, oneshot};
 
@@ -264,7 +265,7 @@ impl ClassicSseTransport {
         let pending: Pending = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let (endpoint_tx, endpoint_rx) = oneshot::channel();
         let reader_task =
-            crate::io_tasks::spawn(run_sse_stream(response, base, pending.clone(), endpoint_tx));
+            io_tasks::spawn(run_sse_stream(response, base, pending.clone(), endpoint_tx));
         let mut transport = Self {
             http,
             post_url: String::new(),

@@ -35,7 +35,7 @@ pub(super) async fn connect_one(
     let (event_tx, event_rx) = mpsc::channel(EVENT_CHANNEL_CAP);
     let activation_loss = spec.is_activation().then(|| live.client.closed_token());
     let conn = Arc::new(PluginConn {
-        io_tasks: hya_mcp::io_tasks::current(),
+        io_tasks: hya_child_io::io_tasks::current(),
         id: spec.id.clone(),
         hooks,
         contributions,
@@ -104,7 +104,7 @@ fn spawn_event_drain(
     conn: Weak<PluginConn>,
     mut rx: mpsc::Receiver<Envelope>,
 ) -> tokio::task::JoinHandle<()> {
-    hya_mcp::io_tasks::spawn(async move {
+    hya_child_io::io_tasks::spawn(async move {
         while let Some(envelope) = rx.recv().await {
             let client = conn
                 .upgrade()

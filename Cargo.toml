@@ -29,6 +29,7 @@ hya-core = { path = "crates/hya-core" }
 hya-engine = { path = "crates/hya-engine" }
 hya-workflow = { path = "crates/hya-workflow" }
 hya-server = { path = "crates/hya-server" }
+hya-child-io = { path = "crates/hya-child-io" }
 hya-mcp = { path = "crates/hya-mcp" }
 hya-plugin = { path = "crates/hya-plugin" }
 hya-plugin-claude = { path = "crates/hya-plugin-claude" }
