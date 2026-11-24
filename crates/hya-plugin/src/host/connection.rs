@@ -9,13 +9,14 @@ use crate::client::{DEFAULT_CALL_TIMEOUT, PluginClient};
 use crate::config::{PluginSpec, ProcessLaunch};
 use crate::error::PluginError;
 use crate::messages::{HookName, HostInfo, InitializeResult};
+use crate::native_capability::SessionUsageReader;
 
 use super::{EVENT_CHANNEL_CAP, LiveClient, PluginConn, canonical_initialize, validate_initialize};
 
 pub(super) async fn connect_one(
     spec: PluginSpec,
     host: HostInfo,
-    host_reads: Option<Arc<dyn hya_engine::HostSessionReads>>,
+    host_reads: Option<SessionUsageReader>,
 ) -> Result<Arc<PluginConn>, PluginError> {
     let timeout = spec
         .timeout_ms

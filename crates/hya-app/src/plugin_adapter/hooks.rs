@@ -1,5 +1,5 @@
-//! `impl HookDispatcher for PluginHost`: converts the engine's native payloads
-//! to wire frames, folds each interception hook through the plugins in load
+//! Converts the engine's native hook payloads
+//! to wire frames, folds each interception hook through plugins in load
 //! order, and applies fixed failure behavior (guards fail safe, enrichment
 //! fails open).
 
@@ -20,33 +20,35 @@ use hya_tool::{Action, Decision, Resource};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::host::{PluginConn, PluginHost};
-use crate::messages::{
+use hya_plugin::PreparedPlugin;
+use hya_plugin::messages::{
     AgentSpawnParams, ChatParamsOutcomeWire, ChatParamsParams, CommandBeforeOutcomeWire,
     CommandExecuteBeforeParams, CompactionAfterParams, CompactionBeforeOutcomeWire,
     CompactionBeforeParams, EvidenceQualityWire, GoalEvaluateParams, GoalVerdictWire, HookName,
     LoopPlanParams, LoopShouldStopParams, LoopShouldStopWire, LoopVerifyParams,
     MessageUserBeforeOutcomeWire, MessageUserBeforeParams, ModelFailureClassWire,
-    ModelFallbackErrorWire, ModelFallbackOutcomeWire, ModelFallbackParams, PlannerOutputWire,
-    SessionLifecycleParams, TextCompleteOutcomeWire, TextCompleteParams, ToolAfterOutcomeWire,
-    ToolBeforeOutcomeWire, ToolExecuteAfterParams, ToolExecuteBeforeParams, VerifierVerdictWire,
-    WireCompletionRequest, WireToolResult,
+    ModelFallbackErrorWire, ModelFallbackOutcomeWire, ModelFallbackParams, PermissionApproveParams,
+    PlannerOutputWire, SessionLifecycleParams, TextCompleteOutcomeWire, TextCompleteParams,
+    ToolAfterOutcomeWire, ToolBeforeOutcomeWire, ToolExecuteAfterParams, ToolExecuteBeforeParams,
+    VerifierVerdictWire, WireCompletionRequest, WireToolResult,
 };
+
+use super::PluginHostAdapter;
 
 const GUARD_FAILED_SAFE: &str = "guard failed safe";
 
 #[async_trait]
-impl HookDispatcher for PluginHost {
+impl HookDispatcher for PluginHostAdapter {
     fn is_healthy(&self) -> bool {
-        PluginHost::is_healthy(self)
+        self.host.is_healthy()
     }
 
     fn dispatch_event(&self, envelope: &Envelope) {
-        self.fan_out_event(envelope);
+        self.host.fan_out_event(envelope);
     }
 
     fn permission_semantic_identity_v1(&self) -> Option<[u8; 32]> {
-        PluginHost::permission_semantic_identity_v1(self)
+        self.host.permission_semantic_identity_v1()
     }
 
     async fn permission_ask(
@@ -55,14 +57,23 @@ impl HookDispatcher for PluginHost {
         action: Action,
         resource: &Resource,
     ) -> Option<Decision> {
-        PluginHost::permission_ask(self, session, action, resource).await
+        self.host.permission_ask(session, action, resource).await
     }
 
     async fn permission_approve(
         &self,
         input: hya_engine::hooks::PermissionApproveInput,
     ) -> Option<Decision> {
-        PluginHost::permission_approve(self, input).await
+        self.host
+            .permission_approve(PermissionApproveParams {
+                session: input.session,
+                root_session: input.root_session,
+                agent: input.agent,
+                mode: input.mode,
+                action: input.action,
+                resource: (&input.resource).into(),
+            })
+            .await
     }
 
     async fn command_execute_before(
@@ -70,7 +81,7 @@ impl HookDispatcher for PluginHost {
         input: CommandExecuteBeforeInput,
     ) -> CommandExecuteBeforeOutcome {
         let mut text = input.text;
-        for conn in self.plugins() {
+        for conn in &self.plugins {
             if !conn.has_hook(HookName::CommandExecuteBefore) {
                 continue;
             }
@@ -91,7 +102,7 @@ impl HookDispatcher for PluginHost {
 
     async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
         let mut text = input.text;
-        for conn in self.plugins() {
+        for conn in &self.plugins {
             if !conn.has_hook(HookName::TextComplete) {
                 continue;
             }
@@ -112,7 +123,7 @@ impl HookDispatcher for PluginHost {
 
     async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
         let mut text = input.text;
-        for conn in self.plugins() {
+        for conn in &self.plugins {
             if !conn.has_hook(HookName::MessageUserBefore) {
                 continue;
             }
@@ -131,7 +142,7 @@ impl HookDispatcher for PluginHost {
 
     async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
         let mut request = input.request;
-        for conn in self.plugins() {
+        for conn in &self.plugins {
             if !conn.has_hook(HookName::ChatParams) {
                 continue;
             }
@@ -153,7 +164,7 @@ impl HookDispatcher for PluginHost {
 
     async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
         let mut current = input.input;
-        for conn in self.plugins() {
+        for conn in &self.plugins {
             if !conn.has_hook(HookName::ToolExecuteBefore) {
                 continue;
             }
@@ -164,7 +175,8 @@ impl HookDispatcher for PluginHost {
                 tool: input.tool.clone(),
                 input: current.clone(),
             };
-            match call_outcome::<ToolBeforeOutcomeWire>(conn, HookName::ToolExecuteBefore, &params)
+            match conn
+                .call_hook::<_, ToolBeforeOutcomeWire>(HookName::ToolExecuteBefore, &params)
                 .await
             {
                 Ok(ToolBeforeOutcomeWire::Continue { input: next }) => current = next,
@@ -176,7 +188,7 @@ impl HookDispatcher for PluginHost {
                         reason: if conn.is_activation() {
                             format!("{GUARD_FAILED_SAFE}: {failed}")
                         } else {
-                            format!("{GUARD_FAILED_SAFE}: {} ({failed})", conn.id)
+                            format!("{GUARD_FAILED_SAFE}: {} ({failed})", conn.id())
                         },
                     };
                 }
@@ -187,7 +199,7 @@ impl HookDispatcher for PluginHost {
 
     async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
         let mut result = outcome_to_wire(input.result);
-        for conn in self.plugins() {
+        for conn in &self.plugins {
             if !conn.has_hook(HookName::ToolExecuteAfter) {
                 continue;
             }
@@ -224,11 +236,12 @@ impl HookDispatcher for PluginHost {
             attempt: input.attempt,
             tried: input.tried,
         };
-        for conn in self.plugins() {
+        for conn in &self.plugins {
             if !conn.has_hook(HookName::ModelFallback) {
                 continue;
             }
-            match call_outcome::<ModelFallbackOutcomeWire>(conn, HookName::ModelFallback, &params)
+            match conn
+                .call_hook::<_, ModelFallbackOutcomeWire>(HookName::ModelFallback, &params)
                 .await
             {
                 Ok(ModelFallbackOutcomeWire::Retry { model })
@@ -238,7 +251,7 @@ impl HookDispatcher for PluginHost {
                 }
                 Ok(ModelFallbackOutcomeWire::Retry { .. }) => {
                     tracing::warn!(
-                        plugin = %conn.id,
+                        plugin = %conn.id(),
                         hook = HookName::ModelFallback.as_str(),
                         "model.fallback retry named an empty model; treating it as give_up"
                     );
@@ -248,7 +261,7 @@ impl HookDispatcher for PluginHost {
                     // Fail-open: a broken hook reads
                     // as give_up and the next plugin still gets the consult.
                     tracing::warn!(
-                        plugin = %conn.id,
+                        plugin = %conn.id(),
                         hook = HookName::ModelFallback.as_str(),
                         "model.fallback hook failed; treating it as give_up: {failed}"
                     );
@@ -260,10 +273,10 @@ impl HookDispatcher for PluginHost {
 
     async fn compaction_before(&self, input: CompactionBeforeInput) -> CompactionDecision {
         let trigger = match input.trigger {
-            CompactionTrigger::Overflow => crate::messages::CompactionTriggerWire::Overflow,
-            CompactionTrigger::Proactive => crate::messages::CompactionTriggerWire::Proactive,
+            CompactionTrigger::Overflow => hya_plugin::messages::CompactionTriggerWire::Overflow,
+            CompactionTrigger::Proactive => hya_plugin::messages::CompactionTriggerWire::Proactive,
         };
-        for conn in self.plugins() {
+        for conn in &self.plugins {
             if !conn.has_hook(HookName::CompactionBefore) {
                 continue;
             }
@@ -273,12 +286,9 @@ impl HookDispatcher for PluginHost {
                 messages_token_estimate: u64::try_from(input.messages_token_estimate)
                     .unwrap_or(u64::MAX),
             };
-            match call_outcome::<CompactionBeforeOutcomeWire>(
-                conn,
-                HookName::CompactionBefore,
-                &params,
-            )
-            .await
+            match conn
+                .call_hook::<_, CompactionBeforeOutcomeWire>(HookName::CompactionBefore, &params)
+                .await
             {
                 Ok(CompactionBeforeOutcomeWire::Proceed) => {}
                 Ok(CompactionBeforeOutcomeWire::Skip { reason }) => {
@@ -292,7 +302,7 @@ impl HookDispatcher for PluginHost {
                     // compaction guards against context overflow, so a broken
                     // hook must never block it.
                     tracing::warn!(
-                        plugin = %conn.id,
+                        plugin = %conn.id(),
                         hook = HookName::CompactionBefore.as_str(),
                         "compaction.before hook failed; proceeding with built-in compaction: {failed}"
                     );
@@ -303,7 +313,7 @@ impl HookDispatcher for PluginHost {
     }
 
     async fn compaction_after(&self, input: CompactionAfterInput) {
-        for conn in self.plugins() {
+        for conn in &self.plugins {
             if !conn.has_hook(HookName::CompactionAfter) {
                 continue;
             }
@@ -311,7 +321,7 @@ impl HookDispatcher for PluginHost {
                 session: input.session,
                 summary_tokens: u64::try_from(input.summary_tokens).unwrap_or(u64::MAX),
             };
-            notify(conn, HookName::CompactionAfter, &params).await;
+            conn.notify_hook(HookName::CompactionAfter, &params).await;
         }
     }
 
@@ -319,11 +329,11 @@ impl HookDispatcher for PluginHost {
         let params = SessionLifecycleParams {
             session: input.session,
         };
-        for conn in self.plugins() {
+        for conn in &self.plugins {
             if !conn.has_hook(HookName::SessionStart) {
                 continue;
             }
-            notify(conn, HookName::SessionStart, &params).await;
+            conn.notify_hook(HookName::SessionStart, &params).await;
         }
     }
 
@@ -331,11 +341,11 @@ impl HookDispatcher for PluginHost {
         let params = SessionLifecycleParams {
             session: input.session,
         };
-        for conn in self.plugins() {
+        for conn in &self.plugins {
             if !conn.has_hook(HookName::SessionEnd) {
                 continue;
             }
-            notify(conn, HookName::SessionEnd, &params).await;
+            conn.notify_hook(HookName::SessionEnd, &params).await;
         }
     }
 
@@ -344,16 +354,16 @@ impl HookDispatcher for PluginHost {
             parent: input.parent,
             child: input.child,
         };
-        for conn in self.plugins() {
+        for conn in &self.plugins {
             if !conn.has_hook(HookName::AgentSpawn) {
                 continue;
             }
-            notify(conn, HookName::AgentSpawn, &params).await;
+            conn.notify_hook(HookName::AgentSpawn, &params).await;
         }
     }
 
     fn has_goal_evaluate(&self) -> bool {
-        self.plugins()
+        self.plugins
             .iter()
             .any(|conn| conn.has_hook(HookName::GoalEvaluate))
     }
@@ -369,11 +379,14 @@ impl HookDispatcher for PluginHost {
         })
         .map_err(|error| CoreError::Invalid(error.to_string()))?;
         let mut last_failure: Option<String> = None;
-        for conn in self.plugins() {
+        for conn in &self.plugins {
             if !conn.has_hook(HookName::GoalEvaluate) {
                 continue;
             }
-            match conn.call_hook(HookName::GoalEvaluate, value.clone()).await {
+            match conn
+                .call_hook::<_, serde_json::Value>(HookName::GoalEvaluate, value.clone())
+                .await
+            {
                 Ok(reply) => {
                     return match serde_json::from_value::<GoalVerdictWire>(reply) {
                         Ok(verdict) => Ok(GoalEvaluateReply::Verdict {
@@ -391,7 +404,7 @@ impl HookDispatcher for PluginHost {
                     // Evaluators fail open: a broken provider never decides the
                     // run; the next registered one gets the call.
                     tracing::warn!(
-                        plugin = %conn.id,
+                        plugin = %conn.id(),
                         hook = HookName::GoalEvaluate.as_str(),
                         "goal.evaluate provider failed; trying next in load order: {failed}"
                     );
@@ -411,15 +424,18 @@ impl HookDispatcher for PluginHost {
     ) -> Result<VerifierVerdict, CoreError> {
         let params = LoopVerifyParams { target, transcript };
         let mut last_failure: Option<String> = None;
-        for conn in self.plugins() {
+        for conn in &self.plugins {
             if !conn.has_hook(HookName::LoopVerifier) {
                 continue;
             }
-            match call_outcome::<VerifierVerdictWire>(conn, HookName::LoopVerifier, &params).await {
-                Ok(wire) => return Ok(wire.into()),
+            match conn
+                .call_hook::<_, VerifierVerdictWire>(HookName::LoopVerifier, &params)
+                .await
+            {
+                Ok(wire) => return Ok(wire_to_verdict(wire)),
                 Err(failed) => {
                     tracing::warn!(
-                        plugin = %conn.id,
+                        plugin = %conn.id(),
                         hook = HookName::LoopVerifier.as_str(),
                         "loop.verifier provider failed; trying next in load order: {failed}"
                     );
@@ -442,19 +458,22 @@ impl HookDispatcher for PluginHost {
         let params = LoopPlanParams {
             target,
             history,
-            last: last.into(),
+            last: verdict_to_wire(last),
             planner_notes,
         };
         let mut last_failure: Option<String> = None;
-        for conn in self.plugins() {
+        for conn in &self.plugins {
             if !conn.has_hook(HookName::LoopPlanner) {
                 continue;
             }
-            match call_outcome::<PlannerOutputWire>(conn, HookName::LoopPlanner, &params).await {
-                Ok(wire) => return Ok(wire.into()),
+            match conn
+                .call_hook::<_, PlannerOutputWire>(HookName::LoopPlanner, &params)
+                .await
+            {
+                Ok(wire) => return Ok(wire_to_plan(wire)),
                 Err(failed) => {
                     tracing::warn!(
-                        plugin = %conn.id,
+                        plugin = %conn.id(),
                         hook = HookName::LoopPlanner.as_str(),
                         "loop.planner provider failed; trying next in load order: {failed}"
                     );
@@ -469,11 +488,13 @@ impl HookDispatcher for PluginHost {
 
     async fn loop_should_stop(&self, target: &str, transcript: &str) -> Option<String> {
         let params = LoopShouldStopParams { target, transcript };
-        for conn in self.plugins() {
+        for conn in &self.plugins {
             if !conn.has_hook(HookName::LoopShouldStop) {
                 continue;
             }
-            match call_outcome::<LoopShouldStopWire>(conn, HookName::LoopShouldStop, &params).await
+            match conn
+                .call_hook::<_, LoopShouldStopWire>(HookName::LoopShouldStop, &params)
+                .await
             {
                 Ok(wire) if wire.stop => {
                     let reason = if wire.reason.is_empty() {
@@ -491,7 +512,7 @@ impl HookDispatcher for PluginHost {
                     // broken hook logs and yields to the next provider (and
                     // ultimately to the verifier).
                     tracing::warn!(
-                        plugin = %conn.id,
+                        plugin = %conn.id(),
                         hook = HookName::LoopShouldStop.as_str(),
                         "loop.should_stop provider failed; continuing the loop: {failed}"
                     );
@@ -502,113 +523,66 @@ impl HookDispatcher for PluginHost {
     }
 }
 
-impl From<&VerifierVerdict> for VerifierVerdictWire {
-    fn from(verdict: &VerifierVerdict) -> Self {
-        Self {
-            score: verdict.score,
-            satisfied: verdict.satisfied,
-            evidence_quality: match verdict.evidence_quality {
-                EvidenceQuality::Missing => EvidenceQualityWire::Missing,
-                EvidenceQuality::ClaimOnly => EvidenceQualityWire::ClaimOnly,
-                EvidenceQuality::Supported => EvidenceQualityWire::Supported,
-                EvidenceQuality::Verified => EvidenceQualityWire::Verified,
-            },
-            critical_gaps: verdict.critical_gaps.clone(),
-            iteration_summary: verdict.iteration_summary.clone(),
-            reason: verdict.reason.clone(),
-        }
+fn verdict_to_wire(verdict: &VerifierVerdict) -> VerifierVerdictWire {
+    VerifierVerdictWire {
+        score: verdict.score,
+        satisfied: verdict.satisfied,
+        evidence_quality: match verdict.evidence_quality {
+            EvidenceQuality::Missing => EvidenceQualityWire::Missing,
+            EvidenceQuality::ClaimOnly => EvidenceQualityWire::ClaimOnly,
+            EvidenceQuality::Supported => EvidenceQualityWire::Supported,
+            EvidenceQuality::Verified => EvidenceQualityWire::Verified,
+        },
+        critical_gaps: verdict.critical_gaps.clone(),
+        iteration_summary: verdict.iteration_summary.clone(),
+        reason: verdict.reason.clone(),
     }
 }
 
-impl From<VerifierVerdictWire> for VerifierVerdict {
-    fn from(wire: VerifierVerdictWire) -> Self {
-        Self {
-            score: wire.score,
-            satisfied: wire.satisfied,
-            evidence_quality: match wire.evidence_quality {
-                EvidenceQualityWire::Missing => EvidenceQuality::Missing,
-                EvidenceQualityWire::ClaimOnly => EvidenceQuality::ClaimOnly,
-                EvidenceQualityWire::Supported => EvidenceQuality::Supported,
-                EvidenceQualityWire::Verified => EvidenceQuality::Verified,
-            },
-            critical_gaps: wire.critical_gaps,
-            iteration_summary: wire.iteration_summary,
-            reason: wire.reason,
-        }
+fn wire_to_verdict(wire: VerifierVerdictWire) -> VerifierVerdict {
+    VerifierVerdict {
+        score: wire.score,
+        satisfied: wire.satisfied,
+        evidence_quality: match wire.evidence_quality {
+            EvidenceQualityWire::Missing => EvidenceQuality::Missing,
+            EvidenceQualityWire::ClaimOnly => EvidenceQuality::ClaimOnly,
+            EvidenceQualityWire::Supported => EvidenceQuality::Supported,
+            EvidenceQualityWire::Verified => EvidenceQuality::Verified,
+        },
+        critical_gaps: wire.critical_gaps,
+        iteration_summary: wire.iteration_summary,
+        reason: wire.reason,
     }
 }
 
-impl From<PlannerOutputWire> for PlannerOutput {
-    fn from(wire: PlannerOutputWire) -> Self {
-        Self {
-            directive: wire.directive,
-            continuity_brief: wire.continuity_brief,
-            planner_notes: wire.planner_notes,
-            strategy_change: wire.strategy_change,
-            change_note: wire.change_note,
-        }
+fn wire_to_plan(wire: PlannerOutputWire) -> PlannerOutput {
+    PlannerOutput {
+        directive: wire.directive,
+        continuity_brief: wire.continuity_brief,
+        planner_notes: wire.planner_notes,
+        strategy_change: wire.strategy_change,
+        change_note: wire.change_note,
     }
 }
 
-async fn enrich<P, O>(conn: &PluginConn, hook: HookName, params: &P) -> Option<O>
+async fn enrich<P, O>(conn: &PreparedPlugin, hook: HookName, params: &P) -> Option<O>
 where
-    P: Serialize,
+    P: Serialize + Sync,
     O: DeserializeOwned,
 {
-    match call_outcome(conn, hook, params).await {
+    match conn.call_hook(hook, params).await {
         Ok(outcome) => Some(outcome),
         Err(failed) => {
             // Enrichment hooks fail open, but never silently: the pipeline
             // continues with the prior payload and the failure is logged.
             tracing::warn!(
-                plugin = %conn.id,
+                plugin = %conn.id(),
                 hook = hook.as_str(),
                 "hook failed; continuing with prior payload: {failed}"
             );
             None
         }
     }
-}
-
-/// Fire a notification-style hook (no decisive reply) and log any failure.
-///
-/// Used by the observation points (`compaction.after`, `session.start`,
-/// `session.end`, `agent.spawn`), which must never affect the main flow.
-async fn notify<P: Serialize>(conn: &PluginConn, hook: HookName, params: &P) {
-    let value = match serde_json::to_value(params) {
-        Ok(value) => value,
-        Err(failed) => {
-            tracing::warn!(
-                plugin = %conn.id,
-                hook = hook.as_str(),
-                "hook params failed to serialize: {failed}"
-            );
-            return;
-        }
-    };
-    if let Err(failed) = conn.call_hook(hook, value).await {
-        tracing::warn!(
-            plugin = %conn.id,
-            hook = hook.as_str(),
-            "notification hook failed: {failed}"
-        );
-    }
-}
-
-async fn call_outcome<O>(
-    conn: &PluginConn,
-    hook: HookName,
-    params: &impl Serialize,
-) -> Result<O, String>
-where
-    O: DeserializeOwned,
-{
-    let value = serde_json::to_value(params).map_err(|e| e.to_string())?;
-    let reply = conn
-        .call_hook(hook, value)
-        .await
-        .map_err(|e| e.to_string())?;
-    serde_json::from_value::<O>(reply).map_err(|e| e.to_string())
 }
 
 fn request_to_wire(request: &CompletionRequest) -> WireCompletionRequest {
@@ -651,85 +625,16 @@ fn failure_class_to_wire(class: ModelFailureClass) -> ModelFailureClassWire {
     }
 }
 
-pub(crate) fn outcome_to_wire(outcome: ToolOutcomeNative) -> WireToolResult {
+fn outcome_to_wire(outcome: ToolOutcomeNative) -> WireToolResult {
     match outcome {
         ToolOutcomeNative::Ok { output, time_ms } => WireToolResult::Ok { output, time_ms },
         ToolOutcomeNative::Err { message } => WireToolResult::Err { message },
     }
 }
 
-pub(crate) fn wire_to_outcome(wire: WireToolResult) -> ToolOutcomeNative {
+fn wire_to_outcome(wire: WireToolResult) -> ToolOutcomeNative {
     match wire {
         WireToolResult::Ok { output, time_ms } => ToolOutcomeNative::Ok { output, time_ms },
         WireToolResult::Err { message } => ToolOutcomeNative::Err { message },
-    }
-}
-
-#[cfg(test)]
-mod wire_golden_tests {
-    #![allow(clippy::unwrap_used)]
-    use super::*;
-    use serde_json::Value;
-    #[test]
-    fn evaluator_payloads_keep_their_wire_shape() {
-        let fixtures: Value =
-            serde_json::from_str(include_str!("../tests/fixtures/hook-wire.json")).unwrap();
-        let params = &fixtures["goal.evaluate"]["params"];
-        assert_eq!(
-            serde_json::to_value(GoalEvaluateParams {
-                condition: "done",
-                transcript: "text"
-            })
-            .unwrap(),
-            *params
-        );
-        assert_eq!(
-            serde_json::to_value(LoopVerifyParams {
-                target: "done",
-                transcript: "text"
-            })
-            .unwrap(),
-            fixtures["loop.verifier"]["params"]
-        );
-        assert_eq!(
-            serde_json::to_value(LoopShouldStopParams {
-                target: "done",
-                transcript: "text"
-            })
-            .unwrap(),
-            fixtures["loop.should_stop"]["params"]
-        );
-        let last =
-            serde_json::from_value(fixtures["loop.planner"]["params"]["last"].clone()).unwrap();
-        assert_eq!(
-            serde_json::to_value(LoopPlanParams {
-                target: "done",
-                history: &["first".into()],
-                last,
-                planner_notes: "notes"
-            })
-            .unwrap(),
-            fixtures["loop.planner"]["params"]
-        );
-        let goal: GoalVerdictWire =
-            serde_json::from_value(fixtures["goal.evaluate"]["replies"][0].clone()).unwrap();
-        assert!(goal.met);
-        assert_eq!(goal.reason, "verified");
-        let stop: LoopShouldStopWire =
-            serde_json::from_value(fixtures["loop.should_stop"]["replies"][0].clone()).unwrap();
-        assert!(stop.stop);
-        assert_eq!(stop.reason, "stop");
-        let verdict: VerifierVerdictWire =
-            serde_json::from_value(fixtures["loop.verifier"]["replies"][0].clone()).unwrap();
-        assert_eq!(
-            serde_json::to_value(verdict).unwrap(),
-            fixtures["loop.verifier"]["replies"][0]
-        );
-        let plan: PlannerOutputWire =
-            serde_json::from_value(fixtures["loop.planner"]["replies"][0].clone()).unwrap();
-        assert_eq!(
-            serde_json::to_value(plan).unwrap(),
-            fixtures["loop.planner"]["replies"][0]
-        );
     }
 }

@@ -43,7 +43,9 @@ main and team queue tasks, then stops sources and joins plugin/MCP connection
 I/O. Both engine supervisor references are weak. Runtime teardown terminates processes after resident drain; explicit
 `PluginHost::shutdown` and `PreparedPlugin::shutdown` keep the graceful shutdown
 RPC. Source owners remain reachable for shutdown through weak references even
-when only an older turn binding retains their generation. Retaining an engine
+when an older turn binding retains their generation. A resolved tool from a
+configured or Project plugin also retains its app-owned source adapter, so
+shutdown stops the process after the binding is released. Retaining an engine
 or control clone does not keep those services running after shutdown. Dropping the built value signals
 cancellation without waiting; explicit shutdown is the completion boundary.
 

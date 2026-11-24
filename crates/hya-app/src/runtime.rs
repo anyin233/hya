@@ -42,6 +42,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::agent_model_control::PersistentAgentModelControl;
 use crate::config;
+use crate::plugin_adapter::PluginHostAdapter;
 use crate::runtime_reconcile::{
     DesiredSource, RuntimeExtensionsRefresh, RuntimeMcpControl, RuntimeReconciler, SourceId,
     adapt_prepared_bundle_skills,
@@ -180,7 +181,7 @@ struct BundleSidecarFactory {
 #[async_trait::async_trait]
 impl BoundSidecarFactory for BundleSidecarFactory {
     async fn start(&self, start: SidecarStart) -> Result<Box<dyn SidecarHandle>, CoreError> {
-        let handle = hya_plugin::activation::start_activation_sidecar(
+        let handle = sidecar::start_activation_sidecar(
             start, &self.command, &self.staging_root, host_info(), self.io_tasks.clone(),
             |start, activation_dir| {
                 let extension_paths = materialize_bundle_sidecar_resources(
@@ -276,8 +277,9 @@ impl BoundSidecarFactory for BundleSidecarFactory {
                 }
                 let hooks = self
                     .binding
-                    .sidecar_hook_view(&self.stable_agent_id, host.clone()).map_err(CoreError::bundle)?;
-                Ok(hya_plugin::activation::ActivationBindings { tools, hooks })
+                    .sidecar_hook_view(&self.stable_agent_id, Arc::new(PluginHostAdapter::new(host)))
+                    .map_err(CoreError::bundle)?;
+                Ok(sidecar::ActivationBindings { tools, hooks })
             },
         ).await?;
         #[cfg(test)]

@@ -1,23 +1,18 @@
 //! `hya-plugin` — out-of-process plugin host for the hya harness.
 //!
 //! This crate owns the JSON-RPC 2.0 stdio protocol, the per-plugin client, the
-//! [`PluginHost`] manager, and the bridges that implement the engine-facing
-//! `hya_engine::HookDispatcher` and `hya_tool::PermissionInterceptor` traits.
+//! [`PluginHost`] manager, and tool and permission bridges.
 //!
 //! External plugin authors implement the wire ABI documented in
 //! `docs/plugin-protocol.md` (and mirrored by [`messages`] / [`protocol`]).
 //! The host spawns each configured binary, runs `initialize`, then dispatches
 //! tools and hooks over newline-delimited JSON on the child's stdio.
 
-/// Activation-sidecar process handshake, ownership, and stop protocol.
-pub mod activation;
 pub mod client;
 /// Newline-delimited frame reader/writer over async stdio.
 pub mod codec;
 /// Config entries, manifests, and the merged [`config::PluginSpec`] list.
 pub mod config;
-/// Engine `HookDispatcher` that chains loaded plugins by declared load order.
-pub mod dispatcher;
 /// Errors from spawn, transport, handshake, and protocol mismatch.
 pub mod error;
 /// Multi-plugin manager: connect, restart budget, tools, and status.
@@ -40,4 +35,5 @@ pub use messages::{
     HostInfo, MAX_SKILL_CONTENT_BYTES, MAX_SKILL_DIGEST_BYTES, MAX_SKILL_ID_BYTES,
     PROTOCOL_VERSION, PluginContributionSet, SkillContribution,
 };
+pub use native_capability::{SessionUsageReader, SessionUsageScope};
 pub use permission_bridge::PermissionBridge;

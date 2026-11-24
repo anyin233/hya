@@ -59,3 +59,64 @@ fn every_hook_keeps_its_wire_shape() {
     }
     assert_eq!(fixtures.as_object().unwrap().len(), HookName::ALL.len());
 }
+
+#[test]
+fn evaluator_payloads_keep_their_wire_shape() {
+    let fixtures: Value = serde_json::from_str(include_str!("../fixtures/hook-wire.json")).unwrap();
+    let params = &fixtures["goal.evaluate"]["params"];
+    assert_eq!(
+        serde_json::to_value(GoalEvaluateParams {
+            condition: "done",
+            transcript: "text"
+        })
+        .unwrap(),
+        *params
+    );
+    assert_eq!(
+        serde_json::to_value(LoopVerifyParams {
+            target: "done",
+            transcript: "text"
+        })
+        .unwrap(),
+        fixtures["loop.verifier"]["params"]
+    );
+    assert_eq!(
+        serde_json::to_value(LoopShouldStopParams {
+            target: "done",
+            transcript: "text"
+        })
+        .unwrap(),
+        fixtures["loop.should_stop"]["params"]
+    );
+    let last = serde_json::from_value(fixtures["loop.planner"]["params"]["last"].clone()).unwrap();
+    assert_eq!(
+        serde_json::to_value(LoopPlanParams {
+            target: "done",
+            history: &["first".into()],
+            last,
+            planner_notes: "notes"
+        })
+        .unwrap(),
+        fixtures["loop.planner"]["params"]
+    );
+    let goal: GoalVerdictWire =
+        serde_json::from_value(fixtures["goal.evaluate"]["replies"][0].clone()).unwrap();
+    assert!(goal.met);
+    assert_eq!(goal.reason, "verified");
+    let stop: LoopShouldStopWire =
+        serde_json::from_value(fixtures["loop.should_stop"]["replies"][0].clone()).unwrap();
+    assert!(stop.stop);
+    assert_eq!(stop.reason, "stop");
+    let verdict: VerifierVerdictWire =
+        serde_json::from_value(fixtures["loop.verifier"]["replies"][0].clone()).unwrap();
+    assert_eq!(
+        serde_json::to_value(verdict).unwrap(),
+        fixtures["loop.verifier"]["replies"][0]
+    );
+    let plan: PlannerOutputWire =
+        serde_json::from_value(fixtures["loop.planner"]["replies"][0].clone()).unwrap();
+    assert_eq!(
+        serde_json::to_value(plan).unwrap(),
+        fixtures["loop.planner"]["replies"][0]
+    );
+}

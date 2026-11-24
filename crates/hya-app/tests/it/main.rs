@@ -6,6 +6,7 @@ mod agent_model_control;
 mod config_minimal_edit;
 mod installed_bundle_refresh;
 mod nested_spawn_tree;
+mod plugin_adapter;
 mod preset_inventory;
 mod project_bundle_install;
 mod project_bundles;

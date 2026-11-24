@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use hya_proto::{Envelope, SessionId, ToolCallId};
 use hya_tool::{Tool, ToolCtx};
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use tokio::sync::{Mutex, mpsc};
 
@@ -18,10 +19,11 @@ use crate::client::{ChildGuard, PluginClient};
 use crate::config::PluginSpec;
 use crate::error::PluginError;
 use crate::messages::{
-    EventNotificationParams, HookName, HostInfo, METHOD_EVENT, PluginContributionSet, ToolCallReply,
+    ApiRequestParams, ApiRequestResult, EventNotificationParams, HookName, HostInfo, METHOD_EVENT,
+    PluginContributionSet, ToolCallReply,
 };
 
-use crate::native_capability::BundleCapability;
+use crate::native_capability::{BundleCapability, SessionUsageReader};
 use crate::plugin_tool::PluginTool;
 
 mod connection;
@@ -56,10 +58,56 @@ pub struct PreparedPlugin {
 }
 
 impl PreparedPlugin {
-    /// The same connection owner retained by tool adapters and hook dispatch.
+    /// Whether this connection belongs to a session-private activation.
     #[must_use]
-    pub fn runtime_owner(&self) -> Arc<dyn hya_engine::RuntimeSourceOwner> {
-        self.conn.clone()
+    pub fn is_activation(&self) -> bool {
+        self.conn.is_activation()
+    }
+
+    /// Whether the plugin declared this hook during initialization.
+    #[must_use]
+    pub fn has_hook(&self, hook: HookName) -> bool {
+        self.conn.has_hook(hook)
+    }
+
+    /// Send typed hook params and decode the reply for a registered hook.
+    ///
+    /// # Errors
+    /// Returns a diagnostic for serialization, transport, or reply decoding failures.
+    pub async fn call_hook<P: Serialize, O: DeserializeOwned>(
+        &self,
+        hook: HookName,
+        params: P,
+    ) -> Result<O, String> {
+        let params = serde_json::to_value(params).map_err(|error| error.to_string())?;
+        let reply = self
+            .conn
+            .call_hook(hook, params)
+            .await
+            .map_err(|error| error.to_string())?;
+        serde_json::from_value(reply).map_err(|error| error.to_string())
+    }
+
+    /// Deliver a notification-style hook and log any failure.
+    pub async fn notify_hook(&self, hook: HookName, params: impl Serialize) {
+        let value = match serde_json::to_value(params) {
+            Ok(value) => value,
+            Err(failed) => {
+                tracing::warn!(
+                    plugin = %self.id(),
+                    hook = hook.as_str(),
+                    "hook params failed to serialize: {failed}"
+                );
+                return;
+            }
+        };
+        if let Err(failed) = self.conn.call_hook(hook, value).await {
+            tracing::warn!(
+                plugin = %self.id(),
+                hook = hook.as_str(),
+                "notification hook failed: {failed}"
+            );
+        }
     }
 
     /// Stop this connection and join its I/O even while tools retain it.
@@ -120,16 +168,6 @@ impl PreparedPlugin {
     }
 }
 
-impl hya_engine::RuntimeSourceOwner for PluginConn {
-    fn shutdown(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
-        Box::pin(async move {
-            if let Err(error) = PluginConn::shutdown(self, true).await {
-                tracing::warn!(%error, "stop plugin connection");
-            }
-        })
-    }
-}
-
 struct LiveClient {
     client: PluginClient,
     guard: ChildGuard,
@@ -156,7 +194,7 @@ pub(crate) struct PluginConn {
     event_task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Read-only host services behind bundle capabilities (bundle processes
     /// only; `None` for configured plugins and hosts without a store).
-    host_reads: Option<Arc<dyn hya_engine::HostSessionReads>>,
+    host_reads: Option<SessionUsageReader>,
 }
 
 impl Drop for PluginConn {
@@ -273,33 +311,21 @@ impl PluginConn {
     /// Forward one routed bundle API request to this bundle process.
     pub(crate) async fn request_api(
         &self,
-        request: hya_engine::BundleApiRequest,
-    ) -> Result<crate::messages::ApiRequestResult, PluginError> {
+        request: ApiRequestParams,
+    ) -> Result<ApiRequestResult, PluginError> {
         if !self.spec.has_capabilities() {
             return Err(PluginError::Json(
                 "only bundle processes serve API endpoints".to_string(),
             ));
         }
         let client = self.ensure_client().await?;
-        let call = ToolCallId::new();
         let capability = Arc::new(BundleCapability::api(
             &request.api,
             request.session,
-            call,
+            request.call,
             self.host_reads.clone(),
         ));
-        let params = crate::messages::ApiRequestParams {
-            api: request.api,
-            method: request.method.as_str().to_string(),
-            path: request.path,
-            path_params: request.path_params,
-            query: request.query,
-            body: request.body,
-            session: request.session,
-            call,
-            host_capability: String::new(),
-        };
-        match client.request_api(params, capability, self.timeout).await {
+        match client.request_api(request, capability, self.timeout).await {
             Ok(result) => Ok(result),
             Err(error) => {
                 self.invalidate_client(&client).await;
@@ -570,7 +596,9 @@ impl PluginHost {
         first_error.map_or(Ok(()), Err)
     }
 
-    pub(crate) fn is_healthy(&self) -> bool {
+    /// Whether all connections are unstopped and private activations still have transport.
+    #[must_use]
+    pub fn is_healthy(&self) -> bool {
         self.plugins.iter().all(|conn| {
             !conn.stopped.load(Ordering::Relaxed)
                 && conn
@@ -585,7 +613,7 @@ impl PluginHost {
     pub async fn connect(
         spec: PluginSpec,
         host: HostInfo,
-        reads: Option<Arc<dyn hya_engine::HostSessionReads>>,
+        reads: Option<SessionUsageReader>,
     ) -> Result<Self, PluginError> {
         let conn = connection::connect_one(spec, host, reads).await?;
         Ok(Self {
@@ -700,22 +728,22 @@ impl PluginHost {
         &self.plugins
     }
 
-    pub(crate) fn fan_out_event(&self, envelope: &Envelope) {
+    /// Queue an event for every connection that declared the event hook.
+    pub fn fan_out_event(&self, envelope: &Envelope) {
         for conn in &self.plugins {
             if conn.hooks.contains(&HookName::Event) {
                 conn.enqueue_event(envelope);
             }
         }
     }
-}
 
-/// A bundle host forwards routed API requests to its (single) bundle process.
-#[async_trait::async_trait]
-impl hya_engine::BundleApiProvider for PluginHost {
-    async fn request(
-        &self,
-        request: hya_engine::BundleApiRequest,
-    ) -> Result<hya_engine::BundleApiReply, String> {
+    /// Send a routed API request to the bundle process that declares the endpoint.
+    ///
+    /// Supply a fresh synthetic call id. The client fills the host capability token.
+    ///
+    /// # Errors
+    /// Returns a diagnostic when no bundle process declares the endpoint or it cannot reply.
+    pub async fn request_api(&self, request: ApiRequestParams) -> Result<ApiRequestResult, String> {
         let conn = self
             .plugins
             .iter()
@@ -728,14 +756,9 @@ impl hya_engine::BundleApiProvider for PluginHost {
                         .any(|declared| declared.name == request.api)
             })
             .ok_or_else(|| format!("no bundle process declares API endpoint `{}`", request.api))?;
-        let result = conn
-            .request_api(request)
+        conn.request_api(request)
             .await
-            .map_err(|error| error.to_string())?;
-        Ok(hya_engine::BundleApiReply {
-            status: result.status,
-            body: result.body,
-        })
+            .map_err(|error| error.to_string())
     }
 }
 

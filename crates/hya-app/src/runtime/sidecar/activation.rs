@@ -1,4 +1,4 @@
-//! Activation process ownership behind the core sidecar interfaces.
+//! Compose activation process ownership behind the engine sidecar interfaces.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -7,8 +7,8 @@ use hya_engine::{CoreError, SidecarHandle, SidecarStart};
 use hya_tool::ResolvedTool;
 use tokio_util::task::TaskTracker;
 
-use crate::config::PluginSpec;
-use crate::{HostInfo, PluginHost, PreparedPlugin};
+use hya_plugin::config::PluginSpec;
+use hya_plugin::{HostInfo, PluginHost, PreparedPlugin};
 
 /// Capabilities selected from a completed activation handshake.
 pub struct ActivationBindings {

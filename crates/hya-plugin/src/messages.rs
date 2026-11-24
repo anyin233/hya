@@ -1051,87 +1051,116 @@ pub enum ModelFallbackOutcomeWire {
 
 /// Wire params for `goal.evaluate`.
 #[derive(Serialize)]
-pub(crate) struct GoalEvaluateParams<'a> {
-    pub(crate) condition: &'a str,
-    pub(crate) transcript: &'a str,
+pub struct GoalEvaluateParams<'a> {
+    /// Goal condition being evaluated.
+    pub condition: &'a str,
+    /// Transcript supplied to the evaluator.
+    pub transcript: &'a str,
 }
 
 /// Wire verdict for `goal.evaluate`: tolerant `{"met": bool, "reason": str}` —
 /// `reason` may be omitted, anything else is a malformed reply.
 #[derive(Deserialize)]
-pub(crate) struct GoalVerdictWire {
-    pub(crate) met: bool,
+pub struct GoalVerdictWire {
+    /// Whether the condition was met.
+    pub met: bool,
     #[serde(default)]
-    pub(crate) reason: String,
+    /// Reason for the goal verdict.
+    pub reason: String,
 }
 
 /// Wire params for `loop.verifier`.
 #[derive(Serialize)]
-pub(crate) struct LoopVerifyParams<'a> {
-    pub(crate) target: &'a str,
-    pub(crate) transcript: &'a str,
+pub struct LoopVerifyParams<'a> {
+    /// Goal of the loop.
+    pub target: &'a str,
+    /// Transcript supplied to the evaluator.
+    pub transcript: &'a str,
 }
 
 /// Wire params for `loop.planner`.
 #[derive(Serialize)]
-pub(crate) struct LoopPlanParams<'a> {
-    pub(crate) target: &'a str,
-    pub(crate) history: &'a [String],
-    pub(crate) last: VerifierVerdictWire,
-    pub(crate) planner_notes: &'a str,
+pub struct LoopPlanParams<'a> {
+    /// Goal of the loop.
+    pub target: &'a str,
+    /// Summaries of previous iterations.
+    pub history: &'a [String],
+    /// Latest verifier verdict.
+    pub last: VerifierVerdictWire,
+    /// Notes carried forward by the planner.
+    pub planner_notes: &'a str,
 }
 
 /// Wire params for `loop.should_stop`.
 #[derive(Serialize)]
-pub(crate) struct LoopShouldStopParams<'a> {
-    pub(crate) target: &'a str,
-    pub(crate) transcript: &'a str,
+pub struct LoopShouldStopParams<'a> {
+    /// Goal of the loop.
+    pub target: &'a str,
+    /// Transcript supplied to the evaluator.
+    pub transcript: &'a str,
 }
 
 /// Wire reply for `loop.should_stop`: `{"stop": bool, "reason": str}` —
 /// `reason` may be omitted (it reads as "no reason given"), anything else is
 /// a malformed reply and fails open to "keep going".
 #[derive(Deserialize)]
-pub(crate) struct LoopShouldStopWire {
-    pub(crate) stop: bool,
+pub struct LoopShouldStopWire {
+    /// Whether to stop the loop.
+    pub stop: bool,
     #[serde(default)]
-    pub(crate) reason: String,
+    /// Reason supplied for stopping.
+    pub reason: String,
 }
 
-/// Wire mirror of [`EvidenceQuality`] (`missing`/`claim_only`/`supported`/`verified`).
+/// Wire mirror of engine evidence quality (`missing`/`claim_only`/`supported`/`verified`).
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum EvidenceQualityWire {
+pub enum EvidenceQualityWire {
+    /// No evidence was supplied.
     Missing,
+    /// Evidence consists of an unsupported claim.
     ClaimOnly,
+    /// Evidence supports the claim.
     Supported,
+    /// Evidence directly verifies the claim.
     Verified,
 }
 
-/// Wire mirror of [`VerifierVerdict`]. Free-text fields may be omitted.
+/// Wire mirror of the engine verifier verdict. Free-text fields may be omitted.
 #[derive(Serialize, Deserialize)]
-pub(crate) struct VerifierVerdictWire {
-    pub(crate) score: u8,
-    pub(crate) satisfied: bool,
-    pub(crate) evidence_quality: EvidenceQualityWire,
+pub struct VerifierVerdictWire {
+    /// Verifier score.
+    pub score: u8,
+    /// Whether the verifier considers the target satisfied.
+    pub satisfied: bool,
+    /// Strength of the supplied evidence.
+    pub evidence_quality: EvidenceQualityWire,
     #[serde(default)]
-    pub(crate) critical_gaps: Vec<String>,
+    /// Gaps that still need to be addressed.
+    pub critical_gaps: Vec<String>,
     #[serde(default)]
-    pub(crate) iteration_summary: String,
+    /// Summary of the iteration being evaluated.
+    pub iteration_summary: String,
     #[serde(default)]
-    pub(crate) reason: String,
+    /// Reason for the verifier verdict.
+    pub reason: String,
 }
 
-/// Wire mirror of [`PlannerOutput`]. Only `directive` is required.
+/// Wire mirror of the engine planner output. Only `directive` is required.
 #[derive(Serialize, Deserialize)]
-pub(crate) struct PlannerOutputWire {
-    pub(crate) directive: String,
+pub struct PlannerOutputWire {
+    /// Instruction for the next iteration.
+    pub directive: String,
     #[serde(default)]
-    pub(crate) continuity_brief: String,
+    /// Context for continuing the loop.
+    pub continuity_brief: String,
     #[serde(default)]
-    pub(crate) planner_notes: String,
+    /// Notes carried forward by the planner.
+    pub planner_notes: String,
     #[serde(default)]
-    pub(crate) strategy_change: bool,
+    /// Whether the plan changes strategy.
+    pub strategy_change: bool,
     #[serde(default)]
-    pub(crate) change_note: String,
+    /// Explanation of a strategy change.
+    pub change_note: String,
 }

@@ -4,8 +4,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::sync::Arc;
+
 use std::collections::BTreeMap;
 
+use hya_app::plugin_adapter::PluginHostAdapter;
 use hya_engine::hooks::HookDispatcher;
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
@@ -75,9 +78,11 @@ for line in sys.stdin:
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
 "#;
     let host = PluginHost::connect_all(vec![spec("gate", script)], host_info()).await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 1, "fixture must connect");
 
-    let stop = host
+    let stop = adapter
         .loop_should_stop("green tests", "[User] worker output")
         .await;
     assert_eq!(
@@ -112,8 +117,9 @@ for line in sys.stdin:
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
 "#;
     let host = PluginHost::connect_all(vec![spec("watcher", script)], host_info()).await;
+    let adapter = PluginHostAdapter::new(Arc::new(host));
     assert_eq!(
-        host.loop_should_stop("target", "transcript").await,
+        adapter.loop_should_stop("target", "transcript").await,
         None,
         "stop=false must read as keep-going"
     );
@@ -124,7 +130,8 @@ for line in sys.stdin:
 #[tokio::test]
 async fn loop_should_stop_without_registration_defaults_to_none() {
     let host = PluginHost::connect_all(Vec::new(), host_info()).await;
-    assert_eq!(host.loop_should_stop("target", "transcript").await, None);
+    let adapter = PluginHostAdapter::new(Arc::new(host));
+    assert_eq!(adapter.loop_should_stop("target", "transcript").await, None);
 }
 
 /// Fail-open: a registered provider whose reply is not a
@@ -154,8 +161,9 @@ for line in sys.stdin:
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
 "#;
     let host = PluginHost::connect_all(vec![spec("sloppy", malformed)], host_info()).await;
+    let adapter = PluginHostAdapter::new(Arc::new(host));
     assert_eq!(
-        host.loop_should_stop("target", "transcript").await,
+        adapter.loop_should_stop("target", "transcript").await,
         None,
         "a malformed reply must fail open to None, never to a stop"
     );

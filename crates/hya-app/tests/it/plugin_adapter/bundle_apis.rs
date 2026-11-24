@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use hya_app::plugin_adapter::{PluginHostAdapter, session_usage_reader};
 use hya_engine::bundle_apis::{SessionUsageReport, UsageReport};
 use hya_engine::{
     ApiMethod, BundleApiProvider, BundleApiRequest, CoreError, HostSessionReads, UsageScope,
@@ -162,7 +163,7 @@ async fn bundle_host(kind: PluginKindWire, reads: Arc<FakeReads>) -> PluginHost 
     PluginHost::connect(
         spec(kind, APIS).in_bundle(std::env::temp_dir()),
         host_info(),
-        Some(reads),
+        Some(session_usage_reader(reads)),
     )
     .await
     .unwrap()
@@ -226,7 +227,8 @@ async fn session_api_request_gets_a_session_bound_read_only_capability() {
     let host = bundle_host(PluginKindWire::Bun, reads.clone()).await;
     assert_eq!(host.declared_apis()[0].name, "usage");
     let session = SessionId::new();
-    let reply = host
+    let adapter = PluginHostAdapter::new(Arc::new(host));
+    let reply = adapter
         .request(request("usage", Some(session), &[("scope", "session")]))
         .await
         .unwrap();
@@ -270,7 +272,7 @@ async fn session_api_request_gets_a_session_bound_read_only_capability() {
     );
 
     // A session API request may not widen its read to the lineage root.
-    let body = host
+    let body = adapter
         .request(request("usage", Some(session), &[("scope", "root")]))
         .await
         .unwrap()
@@ -286,7 +288,11 @@ async fn session_api_request_gets_a_session_bound_read_only_capability() {
 async fn global_api_request_gets_a_sessionless_capability() {
     let reads = Arc::new(FakeReads::default());
     let host = bundle_host(PluginKindWire::Rust, reads.clone()).await;
-    let body = host.request(request("echo", None, &[])).await.unwrap().body;
+    let body = PluginHostAdapter::new(Arc::new(host))
+        .request(request("echo", None, &[]))
+        .await
+        .unwrap()
+        .body;
     assert!(
         body["request"].get("session").is_none(),
         "a global request carries no session: {body}"
@@ -310,9 +316,10 @@ async fn global_api_request_gets_a_sessionless_capability() {
 #[tokio::test]
 async fn api_reply_status_defaults_to_200_and_unknown_fields_fail() {
     let host = bundle_host(PluginKindWire::Bun, Arc::new(FakeReads::default())).await;
-    let reply = host.request(request("plain", None, &[])).await.unwrap();
+    let adapter = PluginHostAdapter::new(Arc::new(host));
+    let reply = adapter.request(request("plain", None, &[])).await.unwrap();
     assert_eq!(reply.status, 200);
-    let error = host
+    let error = adapter
         .request(request("malformed", None, &[]))
         .await
         .unwrap_err();
@@ -322,7 +329,7 @@ async fn api_reply_status_defaults_to_200_and_unknown_fields_fail() {
 #[tokio::test]
 async fn undeclared_api_is_refused_by_the_host() {
     let host = bundle_host(PluginKindWire::Rust, Arc::new(FakeReads::default())).await;
-    let error = host
+    let error = PluginHostAdapter::new(Arc::new(host))
         .request(request("missing", None, &[]))
         .await
         .unwrap_err();

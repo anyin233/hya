@@ -4,9 +4,12 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::sync::Arc;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+use hya_app::plugin_adapter::PluginHostAdapter;
 use hya_engine::hooks::{
     AgentSpawnInput, ChatParamsInput, CompactionAfterInput, CompactionBeforeInput,
     CompactionDecision, CompactionTrigger, HookDispatcher, SessionLifecycleInput,
@@ -91,10 +94,12 @@ for line in sys.stdin:
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
 "#;
     let host = PluginHost::connect_all(vec![spec("compact", script)], host_info()).await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 1, "fixture must connect");
 
     let session = SessionId::new();
-    let outcome = host
+    let outcome = adapter
         .compaction_before(CompactionBeforeInput {
             session,
             trigger: CompactionTrigger::Overflow,
@@ -159,9 +164,11 @@ for line in sys.stdin:
         host_info(),
     )
     .await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 2, "both fixtures must connect");
 
-    let outcome = host
+    let outcome = adapter
         .compaction_before(CompactionBeforeInput {
             session: SessionId::new(),
             trigger: CompactionTrigger::Proactive,
@@ -203,9 +210,11 @@ for line in sys.stdin:
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
 "#;
     let host = PluginHost::connect_all(vec![spec("poison", script)], host_info()).await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 1, "fixture must connect");
 
-    let outcome = host
+    let outcome = adapter
         .compaction_before(CompactionBeforeInput {
             session: SessionId::new(),
             trigger: CompactionTrigger::Overflow,
@@ -267,22 +276,28 @@ for line in sys.stdin:
     let mut plugin = spec("watch", script);
     plugin.env = env;
     let host = PluginHost::connect_all(vec![plugin], host_info()).await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 1, "fixture must connect");
 
     let session = SessionId::new();
     let child = SessionId::new();
-    host.session_start(SessionLifecycleInput { session }).await;
-    host.session_end(SessionLifecycleInput { session }).await;
-    host.agent_spawn(AgentSpawnInput {
-        parent: session,
-        child,
-    })
-    .await;
-    host.compaction_after(CompactionAfterInput {
-        session,
-        summary_tokens: 128,
-    })
-    .await;
+    adapter
+        .session_start(SessionLifecycleInput { session })
+        .await;
+    adapter.session_end(SessionLifecycleInput { session }).await;
+    adapter
+        .agent_spawn(AgentSpawnInput {
+            parent: session,
+            child,
+        })
+        .await;
+    adapter
+        .compaction_after(CompactionAfterInput {
+            session,
+            summary_tokens: 128,
+        })
+        .await;
 
     let mut delivered = BTreeSet::new();
     for _ in 0..50 {
@@ -381,10 +396,12 @@ for line in sys.stdin:
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
 "#;
     let host = PluginHost::connect_all(vec![spec("lineage", script)], host_info()).await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 1, "fixture must connect");
 
     let root = SessionId::new();
-    let outcome = host
+    let outcome = adapter
         .chat_params(ChatParamsInput {
             session: SessionId::new(),
             root_session: root,
@@ -435,10 +452,12 @@ for line in sys.stdin:
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
 "#;
     let host = PluginHost::connect_all(vec![spec("poison-params", script)], host_info()).await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 1, "fixture must connect");
 
     let original = wire_request("fake/model");
-    let outcome = host
+    let outcome = adapter
         .chat_params(ChatParamsInput {
             session: SessionId::new(),
             root_session: SessionId::new(),
@@ -490,10 +509,12 @@ for line in sys.stdin:
     let mut plugin = spec("slow-params", script);
     plugin.timeout_ms = Some(200);
     let host = PluginHost::connect_all(vec![plugin], host_info()).await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 1, "fixture must connect");
 
     let original = wire_request("fake/model");
-    let outcome = host
+    let outcome = adapter
         .chat_params(ChatParamsInput {
             session: SessionId::new(),
             root_session: SessionId::new(),

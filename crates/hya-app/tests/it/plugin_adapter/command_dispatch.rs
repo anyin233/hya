@@ -2,8 +2,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::sync::Arc;
+
 use std::collections::BTreeMap;
 
+use hya_app::plugin_adapter::PluginHostAdapter;
 use hya_engine::hooks::{CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, HookDispatcher};
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
@@ -56,9 +59,11 @@ async fn command_execute_before_dispatches_through_plugin_host() {
         },
     )
     .await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 1, "fixture must connect");
 
-    let outcome = host
+    let outcome = adapter
         .command_execute_before(CommandExecuteBeforeInput {
             session: SessionId::new(),
             command: "review".to_string(),

@@ -1,0 +1,14 @@
+mod bundle_apis;
+mod chain_load_order;
+mod command_dispatch;
+mod crash_restart;
+mod enrichment_timeout;
+mod goal_evaluator_hooks;
+mod guard_timeout;
+mod host_dispatch;
+mod injection_hooks;
+mod loop_should_stop_hooks;
+mod model_fallback_hooks;
+mod permission_approve_hooks;
+mod plugin_tools;
+mod text_complete_dispatch;

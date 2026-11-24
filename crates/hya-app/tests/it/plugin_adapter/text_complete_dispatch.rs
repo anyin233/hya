@@ -2,8 +2,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::sync::Arc;
+
 use std::collections::BTreeMap;
 
+use hya_app::plugin_adapter::PluginHostAdapter;
 use hya_engine::hooks::{HookDispatcher, TextCompleteInput, TextCompleteOutcome};
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
@@ -57,10 +60,12 @@ async fn text_complete_dispatches_through_plugin_host() {
         },
     )
     .await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 1, "fixture must connect");
 
     // When: the engine-facing hook is dispatched through the plugin host.
-    let outcome = host
+    let outcome = adapter
         .text_complete(TextCompleteInput {
             session: SessionId::new(),
             message: MessageId::new(),

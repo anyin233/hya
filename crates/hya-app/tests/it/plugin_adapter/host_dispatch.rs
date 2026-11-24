@@ -2,9 +2,12 @@
 //! Phase 4: a `PluginHost` over a single fixture mutates `tool.execute.before`
 //! input and delivers `event` notifications over the bounded channel.
 
+use std::sync::Arc;
+
 use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use hya_app::plugin_adapter::PluginHostAdapter;
 use hya_engine::hooks::{HookDispatcher, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome};
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
@@ -81,10 +84,12 @@ async fn before_hook_mutates_input_and_event_reaches_plugin() {
     };
 
     let host = PluginHost::connect_all(vec![spec], host_info()).await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 1, "fixture must connect");
 
     let session = SessionId::new();
-    let outcome = host
+    let outcome = adapter
         .tool_execute_before(ToolExecuteBeforeInput {
             session,
             message: MessageId::new(),
@@ -109,7 +114,7 @@ async fn before_hook_mutates_input_and_event_reaches_plugin() {
             title: "hello".to_string(),
         },
     };
-    host.dispatch_event(&envelope);
+    adapter.dispatch_event(&envelope);
 
     let mut delivered = false;
     for _ in 0..50 {

@@ -1437,13 +1437,13 @@ back to its recorded state.
 ## Hooks
 
 [`hooks.rs`](../../crates/hya-engine/src/hooks.rs) defines `HookDispatcher`, the
-runtime hook boundary used by `hya-plugin` and activation sidecars.
+runtime hook boundary. `hya_app::plugin_adapter::PluginHostAdapter` implements it
+for configured plugins, generation-owned bundle processes and private activations.
 
 ### `HookDispatcher` methods
 
-There is **no** permission-ask method on `HookDispatcher`. Permission
-callbacks are owned by `PermissionPlane` and the `hya-plugin` permission
-bridge (see below).
+`PermissionPlane` calls the permission interceptor. For captured bundle and
+plugin hooks, the interceptor delegates through the bound `HookDispatcher`.
 
 | Method | Input | Outcome |
 | --- | --- | --- |
@@ -1456,6 +1456,8 @@ bridge (see below).
 | `model_fallback` | `ModelFallbackInput { session, root_session, agent, message, model, error_class, error_message, attempt, tried }` | `Retry { model }` or `GiveUp` (default); first `Retry` in chain order wins |
 | `tool_execute_before` | `ToolExecuteBeforeInput { session, message, call, tool, input }` | `Continue { input }` or `Veto { reason }` |
 | `tool_execute_after` | `ToolExecuteAfterInput { …, result: ToolOutcomeNative }` | `Continue { result }` where result is `Ok { output, time_ms }` or `Err { message }` |
+| `permission_ask` | `Option<SessionId>`, `Action`, `&Resource` | `Option<Decision>` |
+| `permission_approve` | `PermissionApproveInput` | `Option<Decision>` |
 
 The app publishes one complete runtime source for each configured plugin.
 
@@ -1479,10 +1481,10 @@ return replacement text. A rewrite:
 
 So this hook can alter the stored transcript, not just the display.
 
-### `permission.ask` (plugin bridge, not `HookDispatcher`)
+### `permission.ask`
 
-`PermissionBridge` implements `PermissionInterceptor` over the plugin host
-(wired in `hya-app` when plugins are present). Every plugin that declared the
+`PermissionBridge` implements `PermissionInterceptor` over a plugin host.
+The app-owned `PluginHostAdapter` also forwards the engine hook to the host.
 `permission.ask` hook is polled in declaration order; the **first non-`defer`
 reply decides** and later plugins are not consulted.
 

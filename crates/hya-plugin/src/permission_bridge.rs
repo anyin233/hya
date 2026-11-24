@@ -51,7 +51,9 @@ impl PermissionInterceptor for PermissionBridge {
 }
 
 impl PluginHost {
-    pub(crate) fn permission_semantic_identity_v1(&self) -> Option<[u8; 32]> {
+    /// Hash the ordered declarations that participate in permission interception.
+    #[must_use]
+    pub fn permission_semantic_identity_v1(&self) -> Option<[u8; 32]> {
         let prepared = self.prepared_plugins();
         let participants = self
             .plugins()
@@ -93,7 +95,7 @@ impl PluginHost {
             let params = PermissionAskParams {
                 session,
                 action,
-                resource: resource_to_wire(resource),
+                resource: resource.into(),
             };
             let value = match serde_json::to_value(&params) {
                 Ok(value) => value,
@@ -126,18 +128,7 @@ impl PluginHost {
     /// active session permission mode. Plugins without the hook are skipped;
     /// `defer`, RPC failures, timeouts, and malformed replies continue, so an
     /// all-defer result (`None`) falls through to the user ask.
-    pub async fn permission_approve(
-        &self,
-        input: hya_engine::hooks::PermissionApproveInput,
-    ) -> Option<Decision> {
-        let params = PermissionApproveParams {
-            session: input.session,
-            root_session: input.root_session,
-            agent: input.agent,
-            mode: input.mode,
-            action: input.action,
-            resource: resource_to_wire(&input.resource),
-        };
+    pub async fn permission_approve(&self, params: PermissionApproveParams) -> Option<Decision> {
         let value = match serde_json::to_value(&params) {
             Ok(value) => value,
             Err(error) => {
@@ -188,32 +179,34 @@ fn append_identity_bytes(bytes: &mut Vec<u8>, value: &[u8]) -> Option<()> {
     Some(())
 }
 
-fn resource_to_wire(resource: &Resource) -> WireResource {
-    match resource {
-        Resource::Tool(value) => WireResource::Tool {
-            value: value.clone(),
-        },
-        Resource::Path(value) => WireResource::Path {
-            value: value.clone(),
-        },
-        Resource::Glob(value) => WireResource::Glob {
-            value: value.clone(),
-        },
-        Resource::Command(value) => WireResource::Command {
-            value: value.clone(),
-        },
-        Resource::Subagent(value) => WireResource::Subagent {
-            value: value.clone(),
-        },
-        Resource::Url(value) => WireResource::Url {
-            value: value.clone(),
-        },
-        Resource::WebSearch(value) => WireResource::WebSearch {
-            value: value.clone(),
-        },
-        Resource::Skill(value) => WireResource::Skill {
-            value: value.clone(),
-        },
-        Resource::Any => WireResource::Any,
+impl From<&Resource> for WireResource {
+    fn from(resource: &Resource) -> Self {
+        match resource {
+            Resource::Tool(value) => WireResource::Tool {
+                value: value.clone(),
+            },
+            Resource::Path(value) => WireResource::Path {
+                value: value.clone(),
+            },
+            Resource::Glob(value) => WireResource::Glob {
+                value: value.clone(),
+            },
+            Resource::Command(value) => WireResource::Command {
+                value: value.clone(),
+            },
+            Resource::Subagent(value) => WireResource::Subagent {
+                value: value.clone(),
+            },
+            Resource::Url(value) => WireResource::Url {
+                value: value.clone(),
+            },
+            Resource::WebSearch(value) => WireResource::WebSearch {
+                value: value.clone(),
+            },
+            Resource::Skill(value) => WireResource::Skill {
+                value: value.clone(),
+            },
+            Resource::Any => WireResource::Any,
+        }
     }
 }

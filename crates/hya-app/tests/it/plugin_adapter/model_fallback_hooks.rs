@@ -3,8 +3,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::sync::Arc;
+
 use std::collections::BTreeMap;
 
+use hya_app::plugin_adapter::PluginHostAdapter;
 use hya_engine::hooks::{
     HookDispatcher, ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome,
 };
@@ -128,9 +131,11 @@ async fn model_fallback_params_reach_plugin_and_retry_propagates() {
                  + '/' + str(p['attempt']) + '/' + str(len(p['tried'])) + '/' + p['model'] \
                  + '/' + str(p['root_session'] != p['session'])}";
     let host = PluginHost::connect_all(vec![plugin("chooser", Some(reply))], host_info()).await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 1, "fixture must connect");
 
-    let outcome = host.model_fallback(input(SessionId::new())).await;
+    let outcome = adapter.model_fallback(input(SessionId::new())).await;
     assert_eq!(
         outcome,
         ModelFallbackOutcome::Retry {
@@ -161,10 +166,12 @@ async fn model_fallback_first_retry_wins_and_failures_fail_open() {
         host_info(),
     )
     .await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 6, "fixtures must connect");
 
     assert_eq!(
-        host.model_fallback(input(SessionId::new())).await,
+        adapter.model_fallback(input(SessionId::new())).await,
         ModelFallbackOutcome::Retry {
             model: ModelRef::new("first/model")
         }
@@ -182,9 +189,11 @@ async fn model_fallback_all_give_up_gives_up() {
         host_info(),
     )
     .await;
+    let host = Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 2, "fixtures must connect");
     assert_eq!(
-        host.model_fallback(input(SessionId::new())).await,
+        adapter.model_fallback(input(SessionId::new())).await,
         ModelFallbackOutcome::GiveUp
     );
 }

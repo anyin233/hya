@@ -29,6 +29,8 @@ pub mod model_cache;
 pub mod oauth;
 /// Headless permission auto-reject responder for non-interactive runs.
 pub mod permission;
+/// Adapt plugin process handles to the engine runtime.
+pub mod plugin_adapter;
 /// Resolve plugin specs from config and per-root `.hya/plugins` manifests.
 pub mod plugins;
 mod preset_inventory;

@@ -1351,11 +1351,8 @@ name = "hya-plugin"
 version = "0.0.0"
 dependencies = [
  "async-trait",
- "hya-bundle",
  "hya-child-io",
- "hya-engine",
  "hya-proto",
- "hya-provider",
  "hya-tool",
  "serde",
  "serde_json",

@@ -208,6 +208,7 @@ async fn shared_process_launch_policies_respawn_through_the_same_owner() {
 
 #[tokio::test]
 async fn private_activation_keeps_metadata_and_reports_hook_loss_without_respawning() {
+    use hya_app::plugin_adapter::PluginHostAdapter;
     use hya_engine::hooks::{HookDispatcher, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome};
     use hya_plugin::messages::{ActivationLifecycle, ActivationMetadata};
     let root = std::env::temp_dir().join(format!("hya-owner-{}", SessionId::new()));
@@ -228,6 +229,8 @@ async fn private_activation_keeps_metadata_and_reports_hook_loss_without_respawn
     )
     .await
     .unwrap();
+    let host = std::sync::Arc::new(host);
+    let adapter = PluginHostAdapter::new(host.clone());
     let plugin = host.prepared_plugins().remove(0);
     let loss = plugin.loss_token().unwrap();
     let alpha = plugin.tool("alpha", "selected-alpha").unwrap();
@@ -249,13 +252,13 @@ async fn private_activation_keeps_metadata_and_reports_hook_loss_without_respawn
         input: json!({"crash":true}),
     };
     assert!(matches!(
-        host.tool_execute_before(input()).await,
+        adapter.tool_execute_before(input()).await,
         ToolExecuteBeforeOutcome::Veto { .. }
     ));
     assert!(loss.is_cancelled());
-    assert!(!HookDispatcher::is_healthy(&host));
+    assert!(!HookDispatcher::is_healthy(&adapter));
     assert!(matches!(
-        host.tool_execute_before(input()).await,
+        adapter.tool_execute_before(input()).await,
         ToolExecuteBeforeOutcome::Veto { .. }
     ));
     assert!(matches!(
