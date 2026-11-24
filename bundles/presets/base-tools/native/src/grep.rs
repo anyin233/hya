@@ -23,8 +23,8 @@ use crate::fs_tools::assert_external_search_target;
 use crate::hashline::{
     HashlineRuntime, MAX_SNAPSHOT_BYTES, MAX_SNAPSHOT_TARGETS, ReadRuntimeError,
 };
-use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
 use crate::read_media::{ReadFileKind, classify_file};
+use hya_tool::path::{absolutize, display_path, normalize, resolve_file};
 use hya_tool::{Action, Resource};
 use hya_tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
 

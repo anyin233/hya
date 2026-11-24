@@ -11,7 +11,6 @@ mod file_diff;
 mod fs_tools;
 mod grep;
 mod hashline;
-mod lsp_path;
 mod lsp_post_edit;
 mod read;
 mod read_media;

@@ -10,9 +10,9 @@ use tokio_util::sync::CancellationToken;
 use crate::hashline::{
     DEFAULT_READ_LIMIT, HashlineRuntime, MAX_READ_BYTES, ReadOptions, ReadResult, ReadRuntimeError,
 };
-use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
 use crate::read_media::{ReadFileKind, attachment_value, classify_file};
 use hya_tool::handle::{HandleError, HandleRef};
+use hya_tool::path::{absolutize, display_path, normalize, resolve_file};
 use hya_tool::{Action, Resource};
 use hya_tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
 

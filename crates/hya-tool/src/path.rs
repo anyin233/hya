@@ -1,7 +1,10 @@
+//! Lexical workspace paths for tools. These helpers do not resolve symlinks.
+
 use std::path::{Component, Path, PathBuf};
 
+/// Resolve a tool path against its workdir, then normalize it lexically.
 #[must_use]
-pub(crate) fn resolve_file(workdir: &Path, file_path: &str) -> PathBuf {
+pub fn resolve_file(workdir: &Path, file_path: &str) -> PathBuf {
     let candidate = Path::new(file_path);
     if candidate.is_absolute() {
         normalize(candidate)
@@ -10,8 +13,9 @@ pub(crate) fn resolve_file(workdir: &Path, file_path: &str) -> PathBuf {
     }
 }
 
+/// Join relative paths to the process working directory when available.
 #[must_use]
-pub(crate) fn absolutize(path: &Path) -> PathBuf {
+pub fn absolutize(path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -19,8 +23,9 @@ pub(crate) fn absolutize(path: &Path) -> PathBuf {
     }
 }
 
+/// Remove dot and parent components lexically. A collapsed path becomes `.`.
 #[must_use]
-pub(crate) fn normalize(path: &Path) -> PathBuf {
+pub fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for comp in path.components() {
         match comp {
@@ -32,19 +37,22 @@ pub(crate) fn normalize(path: &Path) -> PathBuf {
         }
     }
     if out.as_os_str().is_empty() {
-        // A relative path that normalizes away entirely (e.g. joining "."
-        // onto a "." workdir) still names a real directory: the current one.
-        // An empty PathBuf is not a valid filesystem argument on any
-        // platform, so collapse back to "." instead of silently failing
-        // every syscall a caller makes against it.
+        // A collapsed path still names the current directory.
         out.push(".");
     }
     out
 }
 
+/// Convert a path to the slash-separated spelling used in tool output.
 #[must_use]
-pub(crate) fn display_path(path: &Path) -> String {
+pub fn display_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+/// Build the `file://` spelling used by the LSP tool plane.
+#[must_use]
+pub fn file_uri(path: &Path) -> String {
+    format!("file://{}", display_path(path))
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::grep;
-use crate::lsp_path::{display_path, resolve_file};
+use hya_tool::path::{display_path, resolve_file};
 use hya_tool::tool::obj_schema;
 use hya_tool::{Action, ProjectScope, Resource, Tool, ToolCtx, ToolError, glob_match};
 

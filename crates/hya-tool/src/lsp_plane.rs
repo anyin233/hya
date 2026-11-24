@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
 
-use crate::lsp_path::{absolutize, file_uri, normalize};
+use crate::path::{absolutize, file_uri, normalize};
 
 /// LSP operation names advertised by the `lsp` tool (camelCase wire values).
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]

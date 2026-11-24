@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use crate::lsp_path::display_path;
+use hya_tool::path::display_path;
 use hya_tool::{ToolCtx, ToolError};
 
 const MAX_PER_FILE: usize = 20;

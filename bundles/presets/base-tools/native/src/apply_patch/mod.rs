@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 
 use async_trait::async_trait;
 use hya_proto::{ToolName, ToolSchema};
+use hya_tool::path::{display_path, normalize};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -164,27 +165,23 @@ impl Tool for ApplyPatchTool {
 /// Relative paths resolve against the workdir; absolute paths are kept. A
 /// `..` component is rejected so the checked and the written path agree.
 fn resolve_workdir_path(workdir: &Path, raw: &str) -> Result<PathBuf, ToolError> {
-    let mut normalized = PathBuf::new();
+    let path = Path::new(raw);
     let mut named = false;
-    for component in Path::new(raw).components() {
+    for component in path.components() {
         match component {
-            Component::CurDir => {}
-            Component::Normal(part) => {
-                named = true;
-                normalized.push(part);
-            }
-            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
+            Component::Normal(_) => named = true,
             Component::ParentDir => {
                 return Err(ToolError::Input(
                     "apply_patch paths must not contain `..`".to_string(),
                 ));
             }
+            _ => {}
         }
     }
     if !named {
         return Err(ToolError::Input("apply_patch path is empty".to_string()));
     }
-    Ok(workdir.join(normalized))
+    Ok(workdir.join(normalize(path)))
 }
 
 /// Reject a patch path that lies outside every Project root.
@@ -197,8 +194,4 @@ fn ensure_in_project(scope: &ProjectScope, workdir: &Path, raw: &str) -> Result<
             "apply_patch path is outside the Project roots: {raw}"
         )))
     }
-}
-
-fn display_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
 }

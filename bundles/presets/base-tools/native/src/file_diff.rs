@@ -2,7 +2,7 @@ use std::path::Path;
 
 use similar::{ChangeTag, TextDiff};
 
-use crate::lsp_path::display_path;
+use hya_tool::path::display_path;
 
 pub(crate) struct FileDiff {
     pub patch: String,
