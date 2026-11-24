@@ -418,7 +418,7 @@ engine.refresh_runtime(|candidate| {
   `aarch64-apple-darwin` (`macos-15`).
 - Unified archive per target: `hya-<version>-<target>.tar.gz` with `bin/hya`,
   the thirteen first-party bundles, the Argus example bundle, Bun,
-  `lib/hya/bun-adapter`, `lib/hya/tui`, `lib/hya/tui-web`, and
+  `lib/hya/bun-adapter`, `lib/hya/claude-adapter`, `lib/hya/tui`, `lib/hya/tui-web`, and
   `lib/hya/tui-sdk`.
 - Installer: releases publish no installer script. `scripts/hya-install.sh`
   (served at `https://hya.ed-aisys.com/install.sh` from `main`, embedded in
@@ -454,7 +454,7 @@ cargo run -p xtask -- release-rehearsal \
   require manual approval.
 - Unified release payload includes `bin/hya`, the thirteen first-party bundles
   under `bundles/`, the Argus example bundle, Bun, and production
-  `lib/hya/{bun-adapter,tui,tui-web,tui-sdk}`.
+  `lib/hya/{bun-adapter,claude-adapter,tui,tui-web,tui-sdk}`.
 - The rehearsal requires the explicit `--no-publish` guard, builds and packages
   in a temporary directory, and never creates a tag or GitHub Release.
 
@@ -476,7 +476,7 @@ cargo run -p xtask -- release-rehearsal \
   rehearsal fails before build and names the lockfile version.
 - Rehearsal target outside the build matrix or a target other than the host ->
   rehearsal fails before build.
-- Missing Bun adapter, TUI/WebUI/TUI-SDK runtime, Argus package, locked
+- Missing Bun or Claude adapter, TUI/WebUI/TUI-SDK runtime, Argus package, locked
   production dependency, first-party bundle, or archive member ->
   package/rehearsal smoke fails before publication.
 - Installer staging lacks `node_modules` or a required runtime dependency ->
@@ -492,7 +492,7 @@ cargo run -p xtask -- release-rehearsal \
 - Base: first release has no historical changelog; keep `docs/changes/.gitkeep` and `CHANGELOG.md`.
 - Bad: appending old release notes to `CHANGELOG.md`, or pushing `backend/*`, `frontend/*`, `phase*`, or bare semver tags without `v`.
 - Good: the no-publish rehearsal validates unified metadata, exact archive
-  payload, Bun adapter/TUI/WebUI/TUI-SDK and first-party bundle closure, and
+  payload, Bun and Claude adapters, TUI/WebUI/TUI-SDK and first-party bundle closure, and
   checksums without publishing.
 - Base: a rehearsal uses temporary package/extract roots and leaves the source
   checkout and release provider untouched.
@@ -511,7 +511,7 @@ cargo run -p xtask -- release-rehearsal \
   `--version` pinning (with and without `v`, including `-dev.x`), checksum
   verification, foreign-file preservation, and rollback on failure.
 - Run the release build command for the configured target.
-- Package `bin/hya`, Bun, `bun-adapter`, `tui`, `tui-web`, `tui-sdk`, and
+- Package `bin/hya`, Bun, `bun-adapter`, `claude-adapter`, `tui`, `tui-web`, `tui-sdk`, and
   first-party bundles; verify `SHA256SUMS`, extract the archive, and run smoke
   checks.
 - Assert locked production dependencies and required archive members.

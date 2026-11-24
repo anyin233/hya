@@ -122,6 +122,7 @@ jobs:
             "dist/$package_dir/bundles" \
             "dist/$package_dir/lib/hya/bin" \
             "dist/$package_dir/lib/hya/bun-adapter/src" \
+            "dist/$package_dir/lib/hya/claude-adapter/src" \
             "dist/$package_dir/lib/hya/tui/src" \
             "dist/$package_dir/lib/hya/tui-web/src" \
             "dist/$package_dir/lib/hya/tui-web/web" \
@@ -132,6 +133,9 @@ jobs:
           cp crates/hya-plugin-bun/adapter/package.json crates/hya-plugin-bun/adapter/bun.lock "dist/$package_dir/lib/hya/bun-adapter/"
           cp -R crates/hya-plugin-bun/adapter/src/. "dist/$package_dir/lib/hya/bun-adapter/src/"
           (cd "dist/$package_dir/lib/hya/bun-adapter" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
+          cp crates/hya-plugin-claude/adapter/package.json crates/hya-plugin-claude/adapter/bun.lock "dist/$package_dir/lib/hya/claude-adapter/"
+          cp -R crates/hya-plugin-claude/adapter/src/. "dist/$package_dir/lib/hya/claude-adapter/src/"
+          (cd "dist/$package_dir/lib/hya/claude-adapter" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
           cp packages/hya-tui-sdk/package.json packages/hya-tui-sdk/bun.lock packages/hya-tui-sdk/tsconfig.json "dist/$package_dir/lib/hya/tui-sdk/"
           cp -R packages/hya-tui-sdk/src/. "dist/$package_dir/lib/hya/tui-sdk/src/"
           (cd "dist/$package_dir/lib/hya/tui-sdk" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
@@ -162,6 +166,7 @@ jobs:
           grep -Fx "$package_dir/bin/hya" "$listing"
           grep -Fx "$package_dir/lib/hya/bin/bun" "$listing"
           grep -Fx "$package_dir/lib/hya/bun-adapter/package.json" "$listing"
+          grep -Fx "$package_dir/lib/hya/claude-adapter/src/main.ts" "$listing"
           grep -Fx "$package_dir/lib/hya/tui/frontend-version.ts" "$listing"
           grep -Fx "$package_dir/lib/hya/tui/dist/app.js" "$listing"
           grep -Fx "$package_dir/lib/hya/tui-web/web/index.html" "$listing"

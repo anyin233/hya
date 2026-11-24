@@ -25,6 +25,7 @@ Installs the release layout:
   bin/hya                   unified CLI: exec, serve, login, bundles, models, update, ...
   bundles/hya-*.hyabundle   the thirteen trusted first-party bundles it loads at startup
   lib/hya/bun-adapter       Bun adapter for JavaScript bundle extensions
+  lib/hya/claude-adapter    Claude Code plugin import and runtime adapter
   lib/hya/tui               terminal UI that bare `hya` starts
   lib/hya/tui-web           WebUI host that serves the TUI to the browser
 
@@ -116,22 +117,24 @@ source_dir="$(pwd -P)"
 
 # Bun programs installed under lib/hya: name, source directory, top-level
 # files, and recursively copied directories (the release archive layout).
-lib_names=(bun-adapter tui tui-web tui-sdk)
+lib_names=(bun-adapter claude-adapter tui tui-web tui-sdk)
 lib_sources=(
   "$source_dir/crates/hya-plugin-bun/adapter"
+  "$source_dir/crates/hya-plugin-claude/adapter"
   "$source_dir/packages/hya-tui"
   "$source_dir/packages/hya-tui-web"
   "$source_dir/packages/hya-tui-sdk"
 )
 lib_files=(
   "package.json bun.lock"
+  "package.json bun.lock"
   "package.json bun.lock bunfig.toml tsconfig.json frontend-version.ts"
   "package.json bun.lock tsconfig.json"
   "package.json bun.lock tsconfig.json"
 )
-lib_dirs=("src" "src" "src web" "src")
-had_lib=(0 0 0 0)
-placed_lib=(0 0 0 0)
+lib_dirs=("src" "src" "src" "src web" "src")
+had_lib=(0 0 0 0 0)
+placed_lib=(0 0 0 0 0)
 
 lib_tmp() {
   printf '%s\n' "$lib_dir/.$1.tmp.$$"
@@ -256,8 +259,8 @@ stage_lib() {
 trap on_error ERR INT TERM
 say "Installing hya to $bin_dir"
 say "Installing first-party bundles to $bundles_dir"
-say "Installing Bun adapter, TUI, WebUI host, and TUI SDK to $lib_dir/{bun-adapter,tui,tui-web,tui-sdk}"
-say "Rollback backup paths: $bak_backend $bak_bundles $(lib_bak '{bun-adapter,tui,tui-web,tui-sdk}')"
+say "Installing Bun and Claude adapters, TUI, WebUI host, and TUI SDK to $lib_dir/{bun-adapter,claude-adapter,tui,tui-web,tui-sdk}"
+say "Rollback backup paths: $bak_backend $bak_bundles $(lib_bak '{bun-adapter,claude-adapter,tui,tui-web,tui-sdk}')"
 say "Permission preflight: $bin_dir $bundles_dir $lib_dir"
 preflight_path "$bin_dir"
 preflight_path "$bundles_dir"
@@ -325,6 +328,9 @@ if [[ "$dry_run" -eq 0 ]]; then
   test -f "$lib_dir/bun-adapter/bun.lock"
   test -f "$lib_dir/bun-adapter/src/main.ts"
   test -d "$lib_dir/bun-adapter/node_modules"
+  test -f "$lib_dir/claude-adapter/package.json"
+  test -f "$lib_dir/claude-adapter/bun.lock"
+  test -f "$lib_dir/claude-adapter/src/main.ts"
   test -f "$lib_dir/tui/src/main.ts"
   test -d "$lib_dir/tui/node_modules/@opentui/core"
   test -f "$lib_dir/tui-web/src/main.ts"
@@ -357,6 +363,7 @@ else
   say "+ test -f $lib_dir/bun-adapter/bun.lock"
   say "+ test -f $lib_dir/bun-adapter/src/main.ts"
   say "+ test -d $lib_dir/bun-adapter/node_modules"
+  say "+ test -f $lib_dir/claude-adapter/package.json $lib_dir/claude-adapter/bun.lock $lib_dir/claude-adapter/src/main.ts"
   say "+ test -f $lib_dir/tui/src/main.ts; test -d $lib_dir/tui/node_modules/@opentui/core"
   say "+ test -f $lib_dir/tui-web/src/main.ts $lib_dir/tui-web/web/index.html; test -d $lib_dir/tui-web/node_modules/@xterm/xterm"
   say "+ bun $lib_dir/tui/src/main.ts --help; bun $lib_dir/tui-web/src/main.ts --help (outside the checkout)"

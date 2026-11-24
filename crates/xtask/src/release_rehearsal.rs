@@ -115,6 +115,14 @@ const BUN_ADAPTER_RUNTIME: BunRuntime = BunRuntime {
     directories: &["src"],
 };
 
+/// The Claude Code adapter for local imports and `kind: claude` plugins.
+const CLAUDE_ADAPTER_RUNTIME: BunRuntime = BunRuntime {
+    source: "crates/hya-plugin-claude/adapter",
+    destination: "lib/hya/claude-adapter",
+    files: &["package.json", "bun.lock"],
+    directories: &["src"],
+};
+
 /// The OpenTUI terminal UI bare `hya` runs.
 const TUI_RUNTIME: BunRuntime = BunRuntime {
     source: "packages/hya-tui",
@@ -148,8 +156,9 @@ const TUI_SDK_RUNTIME: BunRuntime = BunRuntime {
 };
 
 /// Every Bun program in the release archive, in staging order.
-const PACKAGED_RUNTIMES: [&BunRuntime; 4] = [
+const PACKAGED_RUNTIMES: [&BunRuntime; 5] = [
     &BUN_ADAPTER_RUNTIME,
+    &CLAUDE_ADAPTER_RUNTIME,
     &TUI_SDK_RUNTIME,
     &TUI_RUNTIME,
     &TUI_WEB_RUNTIME,
@@ -581,7 +590,19 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
     let bin = package_root.join("bin");
     fs::create_dir_all(&bin).with_context(|| format!("create {}", bin.display()))?;
 
-    let backend_source = root.join("target").join(target).join("release").join("hya");
+    let metadata = run_checked(
+        OsStr::new("cargo"),
+        &arg_list(&["metadata", "--format-version", "1", "--no-deps", "--locked"]),
+        root,
+        &[],
+        &[],
+    )?;
+    let metadata: serde_json::Value = serde_json::from_slice(&metadata.stdout)?;
+    let target_dir = metadata["target_directory"]
+        .as_str()
+        .context("cargo metadata did not report a target directory")?;
+    let release_inputs = Path::new(target_dir).join(target).join("release");
+    let backend_source = release_inputs.join("hya");
     let backend_destination = bin.join("hya");
     copy_file(&backend_source, &backend_destination)?;
     set_executable(&backend_destination)?;
@@ -628,7 +649,7 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
 
     let staged = crate::first_party_release::stage(&crate::first_party_release::StageOptions {
         version: version.to_owned(),
-        library_dir: root.join("target").join(target).join("release"),
+        library_dir: release_inputs,
         package_root: package_root.clone(),
         target: Some(target.to_owned()),
         assets: Some(dist.clone()),
@@ -812,10 +833,20 @@ fn verify_package_layout(package_root: &Path, target: &str) -> Result<()> {
     require_file(&package_root.join("bin").join("hya"), "packaged binary")?;
     require_file(&package_root.join(PACKAGED_BUN), "packaged Bun")?;
 
-    let bun_adapter = package_root.join("lib/hya/bun-adapter");
-    for path in ["package.json", "bun.lock", "src/main.ts"] {
-        require_file(&bun_adapter.join(path), "packaged Bun adapter file")?;
-    }
+    verify_staged_program(
+        package_root,
+        &BUN_ADAPTER_RUNTIME,
+        &["src/main.ts"],
+        &[],
+        &[],
+    )?;
+    verify_staged_program(
+        package_root,
+        &CLAUDE_ADAPTER_RUNTIME,
+        &["src/main.ts"],
+        &[],
+        &["@types/bun", "typescript"],
+    )?;
     verify_tui_layout(package_root, target)?;
     for identity in hya_bundle::FIRST_PARTY_BUNDLES {
         let name = hya_bundle::first_party_package_name(identity)
@@ -916,6 +947,9 @@ fn verify_archive_listing(
         "lib/hya/bun-adapter/package.json",
         "lib/hya/bun-adapter/bun.lock",
         "lib/hya/bun-adapter/src/main.ts",
+        "lib/hya/claude-adapter/package.json",
+        "lib/hya/claude-adapter/bun.lock",
+        "lib/hya/claude-adapter/src/main.ts",
         "lib/hya/tui/frontend-version.ts",
         "lib/hya/tui/dist/app.js",
         "lib/hya/tui-web/web/index.html",
@@ -1099,6 +1133,74 @@ fn smoke_release_installer(
         combined_output(&update).contains(&format!("hya {version} is already installed")),
         "hya update did not find the installed {version} current"
     );
+    smoke_claude_adapter(&backend, scratch, &home, &envs)
+}
+
+/// Exercise the configured runtime and import CLI through the installed adapter resolver.
+fn smoke_claude_adapter(
+    backend: &Path,
+    scratch: &ScratchDirectory,
+    home: &Path,
+    envs: &[(&str, OsString)],
+) -> Result<()> {
+    let plugin = scratch.path().join("claude-smoke");
+    fs::create_dir_all(plugin.join("hooks"))?;
+    fs::write(
+        plugin.join("plugin.json"),
+        r#"{"name":"claude-smoke","version":"1.0.0"}"#,
+    )?;
+    let marker = scratch.path().join("claude-smoke-marker");
+    let marker_argument = marker.to_string_lossy().replace('\'', "'\"'\"'");
+    let hooks = serde_json::json!({
+        "hooks": { "SessionStart": [{ "hooks": [{
+            "type": "command",
+            "command": format!("printf ready > '{marker_argument}'"),
+        }] }] },
+    });
+    fs::write(plugin.join("hooks/hooks.json"), serde_json::to_vec(&hooks)?)?;
+    let config_dir = home.join("config/hya");
+    fs::create_dir_all(&config_dir)?;
+    let plugin_dir = serde_json::to_string(&plugin)?;
+    fs::write(
+        config_dir.join("config.yaml"),
+        format!("plugins:\n  claude-smoke:\n    kind: claude\n    plugin_dir: {plugin_dir}\n"),
+    )?;
+    let removed_env = ["HYA_CLAUDE_ADAPTER_DIR", "BUN"];
+    run_checked(
+        backend.as_os_str(),
+        &arg_list(&[
+            "--model",
+            "hya/offline",
+            "exec",
+            "--time-budget",
+            "30",
+            "Claude smoke",
+        ]),
+        scratch.path(),
+        envs,
+        &removed_env,
+    )
+    .context("run a configured kind: claude plugin from the installed release")?;
+    ensure!(
+        fs::read_to_string(&marker).context("read Claude SessionStart marker")? == "ready",
+        "the installed Claude adapter did not run the SessionStart hook"
+    );
+    fs::remove_file(&marker)?;
+    let mut args = arg_list(&["bundle", "install", "-y", "--claude"]);
+    args.push(plugin.display().to_string());
+    let install = run_checked(
+        backend.as_os_str(),
+        &args,
+        scratch.path(),
+        envs,
+        &removed_env,
+    )
+    .context("import a Claude plugin from the installed release")?;
+    ensure!(
+        combined_output(&install).contains("installed claude/claude-smoke 1.0.0"),
+        "the installed hya did not report the imported Claude bundle"
+    );
+    println!("release-rehearsal: installed Claude plugin hook and bundle import passed");
     Ok(())
 }
 

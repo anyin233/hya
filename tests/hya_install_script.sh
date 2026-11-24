@@ -47,6 +47,10 @@ if [ "\${1:-}" = --version ]; then printf '1.4.2\\n'; else printf 'bun\\n'; fi
 EOF
   chmod 755 "$scratch/$package/lib/hya/bin/bun"
   printf '%s\n' backend >"$scratch/$package/lib/hya/bun-adapter/src/main.ts"
+  if [[ ${5:-0} == 1 ]]; then
+    mkdir -p "$scratch/$package/lib/hya/claude-adapter/src"
+    printf '%s\n' claude >"$scratch/$package/lib/hya/claude-adapter/src/main.ts"
+  fi
   printf 'export const frontendVersion = "%s"\n' "$frontend_reported" >"$scratch/$package/lib/hya/tui/frontend-version.ts"
   printf '%s\n' tui >"$scratch/$package/lib/hya/tui/src/main.ts"
   printf '%s\n' web >"$scratch/$package/lib/hya/tui-web/src/main.ts"
@@ -88,6 +92,12 @@ out="$(install_into "$prefix" 2>&1)" || fail "unified install failed: $out"
 [[ -f "$prefix/lib/hya/bun-adapter/src/main.ts" && -f "$prefix/lib/hya/tui/src/main.ts" && -f "$prefix/lib/hya/tui-web/src/main.ts" && -f "$prefix/lib/hya/tui-sdk/src/main.ts" ]] || fail 'missing runtime payload'
 [[ "$(cat "$prefix/lib/hya/claude-adapter/marker")" == keep ]] || fail 'foreign lib entry changed'
 [[ "$(cat "$prefix/bundles/my-own.hyabundle")" == mine ]] || fail 'foreign bundle changed'
+
+# Releases that contain the Claude adapter install it as part of the payload.
+# Older archives above still install and preserve an existing adapter.
+make_release 9.9.5 9.9.5 0 9.9.5 1
+out="$(install_into "$scratch/with-claude" --version 9.9.5 2>&1)" || fail "Claude adapter install failed: $out"
+[[ $(<"$scratch/with-claude/lib/hya/claude-adapter/src/main.ts") == claude ]] || fail 'missing release Claude adapter'
 
 # Reinstall is a no-op; --force replaces the payload.
 touch "$prefix/lib/hya/bun-adapter/untouched"

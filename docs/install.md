@@ -4,7 +4,7 @@
 releases, or `v0.47.0-dev.1` for pre-releases). Each target ships one combined
 archive, `hya-<version>-<target>.tar.gz`, containing the `hya` executable, the
 thirteen first-party bundles, the Argus example bundle, a pinned Bun runtime,
-the Bun plugin adapter, the TUI, the WebUI host, and the TUI extension SDK.
+the Bun and Claude Code plugin adapters, the TUI, the WebUI host, and the TUI extension SDK.
 
 One installer, `scripts/hya-install.sh`, installs or updates the unified
 release. Releases do not carry the installer script as an asset:
@@ -105,7 +105,7 @@ Each `v<version>` tag publishes unified target archives:
 
 | Tag | Archive | Contents |
 | --- | --- | --- |
-| `v<version>` (e.g. `v0.47.0`, `v0.47.1-dev.1`) | `hya-<version>-<target>.tar.gz` | `bin/hya`, `bundles/hya-*.hyabundle`, `examples/hya-argus-example.hyabundle`, `lib/hya/bin/bun`, `lib/hya/bun-adapter`, `lib/hya/tui`, `lib/hya/tui-web`, `lib/hya/tui-sdk` |
+| `v<version>` (e.g. `v0.47.0`, `v0.47.1-dev.1`) | `hya-<version>-<target>.tar.gz` | `bin/hya`, `bundles/hya-*.hyabundle`, `examples/hya-argus-example.hyabundle`, `lib/hya/bin/bun`, `lib/hya/bun-adapter`, `lib/hya/claude-adapter`, `lib/hya/tui`, `lib/hya/tui-web`, `lib/hya/tui-sdk` |
 
 Supported targets are `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
 and `aarch64-apple-darwin`; Intel macOS is not built. Each release also
