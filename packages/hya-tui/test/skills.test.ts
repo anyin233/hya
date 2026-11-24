@@ -93,13 +93,14 @@ test("details text: the file, a built-in's origin, and the word-wrapped body", (
   expect(hasSkillFile(skills[3]!)).toBe(false)
   expect(skillBodyLines("one two three four\n\nxxxxxxxxxxxx", 9)).toEqual(["one two", "three", "four", "", "xxxxxxxxx", "xxx"])
   expect(skillsCountLine(skills)).toBe("4 skills")
+  expect(skillsCountLine(skills.slice(0, 1), [{ message: "bad" }, { message: "worse" }])).toBe("1 skill · 2 warnings")
   expect(skillsViewHint(initialSkillsView(skills))).toBe("↑↓ move · Enter details · u use · y copy path · r refresh · / filter · Esc close")
   expect(skillsViewHint({ ...initialSkillsView(skills), screen: "detail" })).toBe("↑↓ PgUp PgDn scroll · u use · y copy path · Esc back")
 })
 
 test("the controller opens on the skills read last, re-reads them, and fills the input on u", async () => {
   const store = createAppStore()
-  store.setSkills(skills.slice(0, 1))
+  store.setSkills({ skills: skills.slice(0, 1), diagnostics: [] })
   const filled: string[] = []
   const copied: string[] = []
   let reads = 0
@@ -107,8 +108,9 @@ test("the controller opens on the skills read last, re-reads them, and fills the
     store,
     readSkills: async () => {
       reads++
-      store.setSkills(skills)
-      return skills
+      const listing = { skills, diagnostics: [] }
+      store.setSkills(listing)
+      return listing
     },
     fillInput: (text) => { filled.push(text) },
     copyText: (text) => { copied.push(text); return true },
@@ -133,8 +135,8 @@ test("the controller opens on the skills read last, re-reads them, and fills the
 
 test("y on a built-in skill says it has no file", () => {
   const store = createAppStore()
-  store.setSkills(skills)
-  const controller = createSkillsController({ store, readSkills: async () => skills, fillInput: () => undefined, copyText: () => true })
+  store.setSkills({ skills, diagnostics: [] })
+  const controller = createSkillsController({ store, readSkills: async () => ({ skills, diagnostics: [] }), fillInput: () => undefined, copyText: () => true })
   controller.open("secure")
   controller.key(char("y"))
   expect(store.state.skillsView?.notice?.text).toBe("Built-in skill has no file")

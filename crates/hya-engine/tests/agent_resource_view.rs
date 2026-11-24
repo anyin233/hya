@@ -270,6 +270,7 @@ fn bundle_skill_source(bundle: &Bundle) -> RuntimeSource {
                     path,
                     dir,
                     origin: hya_tool::SkillCatalogOrigin::Virtual,
+                    disable_model_invocation: false,
                 },
             )
         })

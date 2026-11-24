@@ -86,6 +86,14 @@ statusline = { enabled = true, segments = ["model", "mode", "ctx"] }
 segments = ["model", "ctx"]
 ```
 
+Keep the many `/skill:<name>` rows out of the command menu (typing one
+still runs the skill; `/skills` lists them):
+
+```toml
+[commands]
+skill_commands = false
+```
+
 `/config init` writes a commented template that lists every preset and key.
 
 ### File location
@@ -198,7 +206,7 @@ section, sorted by name and cut with `+N` at the width:
 | --- | --- | --- |
 | `[Config]`, `[Layout]` | `tui.toml` warnings and the one-time default-change notice | Always |
 | `[Context]` | `Bootstrap.contextFiles`: the `AGENTS.md` files a session here reads, parent first; the full list groups them by `project`, `parent`, `user` with sizes | — |
-| `[Skills]` | `Bootstrap.skills`; the full list groups them by `source` (`builtin`, `bundle`, `project`, `user`) and skill directory | — |
+| `[Skills]` | `Bootstrap.skills`, then `ListSkills`; the full list groups them by `source` (`builtin`, `bundle`, `project`, `user`) and skill directory | A skipped or suspicious `SKILL.md` (`ListSkillsResponse.diagnostics`: no frontmatter, no name or description, a name taken first, a name or description that breaks the Agent Skills rules; see [Skills](skills.md#skipped-files-and-warnings)) |
 | `[Slash commands]` | Custom commands (`CommandSummary.source = command`) | — |
 | `[MCP]` | `GetMcpStatus`, asked again every 0.5 s while a server is still connecting, for at most 10 s; then once | A failed server, a server that needs a login |
 | `[Bundles]` | `ListBundles`; `(disabled)` and `(shadowed)` are marked, not problems | An unreadable bundle |
@@ -272,6 +280,7 @@ and returns when the width or `/sidebar off` hides it.
 | `composer.paste.wrap` | boolean | `true` | Send paste and file chips as `<attachment>` blocks; `false` sends their raw text. |
 | `composer.paste.image_resize` | boolean | `true` | Convert a pasted image the server refuses (BMP, TIFF, HEIC, AVIF) to PNG and scale one over 10 MiB down (`Bun.Image`); `false` refuses them. |
 | `sidebar.enabled` | boolean | `false` | `true` draws the tiled workspace (the saved `paneLayout`, or the default tree). |
+| `commands.skill_commands` | boolean | `true` | `false` leaves the `/skill:<name>` rows out of the command menu (pi's `enableSkillCommands`); typing `/skill:<name>` still runs the skill, and `/skills` still lists them. |
 
 Keys of later versions (`todos.*`, `subagents.*`, `layout.*`,
 `transcript.*`, `sidebar.left`, `sidebar.right`, `sidebar.min_columns`,

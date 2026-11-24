@@ -723,25 +723,39 @@ async fn list_skills(
 ) -> Result<Json<pb::ListSkillsResponse>, V1Error> {
     let request: pb::ListSkillsRequest = super::query_request(&[], &query)?;
     let place = catalog_scope(&st, &request.directory).await?;
-    let skills = skill_rows(&place);
-    let (skills, page) = paginate(skills, &request.page);
+    let listing = crate::support::skill_catalog::listing(&place);
+    let diagnostics = listing
+        .diagnostics
+        .iter()
+        .map(|diagnostic| pb::CatalogDiagnostic {
+            path: diagnostic.path.to_string_lossy().into_owned(),
+            kind: diagnostic.kind.as_str().to_owned(),
+            message: diagnostic.message.clone(),
+        })
+        .collect();
+    let (skills, page) = paginate(skill_summaries(listing.skills), &request.page);
     Ok(Json(pb::ListSkillsResponse {
         skills,
         page: Some(page),
+        diagnostics,
     }))
 }
 
 /// Skill rows shared with the bootstrap snapshot; the global view lists
 /// user skills and builtins only.
 pub(crate) fn skill_rows(place: &CatalogPlace) -> Vec<pb::SkillSummary> {
-    crate::support::skill_catalog::list(place)
-        .into_iter()
+    skill_summaries(crate::support::skill_catalog::list(place))
+}
+
+fn skill_summaries(rows: Vec<crate::support::skill_catalog::SkillInfo>) -> Vec<pb::SkillSummary> {
+    rows.into_iter()
         .map(|row| pb::SkillSummary {
-            name: row.name.clone(),
-            description: row.description.clone(),
+            name: row.name,
+            description: row.description,
             source: row.source.to_owned(),
-            content: row.content.clone(),
-            location: row.location.clone(),
+            content: row.content,
+            location: row.location,
+            disable_model_invocation: row.disable_model_invocation,
         })
         .collect()
 }

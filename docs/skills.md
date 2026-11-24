@@ -58,24 +58,44 @@ When invoked, inspect the named paths and report findings.
 | `allowed-tools` | no | List of tool name strings. **Parsed and stored**, and hashed into the skill-view semantic-identity digest only. **Not enforced** as a runtime tool allowlist — declaring `allowed-tools: [read]` does not restrict which tools the model may call. |
 | `model` | no | Optional model string. **Parsed and stored**, and hashed into the skill-view semantic-identity digest only. **Not used** for model routing or turn completion. |
 | `disable` | no | When `true`, the skill is skipped entirely (never appears in the catalog). Default `false`. |
+| `disable-model-invocation` | no | When `true` (as in pi and the Agent Skills specification), the skill stays out of the model's skill index (the recorded directory index and the bundle skill section), so the model does not pick it on its own; `/skill:<name>` still runs it, `/skills` lists it (`only /skill:<name>`), and `ListSkills` reports `disableModelInvocation: true`. Default `false`. |
 | `license` | no | Parsed but **currently unused** by the runtime. |
 
 Every field beyond `name` / `description` is optional so minimal skills keep
 working.
 
-### Silent skip (most common authoring mistake)
+### Naming rules
 
-`parse_skill` returns `None` (and discovery **silently skips** the skill with
-**no error**) when:
+Names follow the [Agent Skills](https://agentskills.io/specification) rule:
+lowercase letters, digits, and hyphens, with no leading, trailing, or doubled
+hyphen, at most 64 characters; descriptions at most 1024 characters. A skill
+that breaks either rule is still listed and runs, with a warning (below).
+Matching the name to the skill's directory is the portable choice; hya does
+not require it.
 
-- the file does not start with `---`
-- the closing frontmatter fence is missing
-- YAML fails to parse
-- `name` or `description` is missing
-- `disable: true`
+### Skipped files and warnings
 
-If a skill “does not appear”, check name/description and the frontmatter fence
-first.
+Discovery reports every `SKILL.md` it skips or warns about, as pi does, in
+`ListSkillsResponse.diagnostics` (`CatalogDiagnostic {path, kind, message}`),
+in the TUI's startup list under `[Skills]` (in the warning color, also with
+`quiet = true`), and at the top of the [Skills view](tui.md#skills-view):
+
+| `kind` | When | Skill |
+| --- | --- | --- |
+| `invalid` | The file does not start with `---`, the closing fence is missing, or the YAML does not parse | Skipped |
+| `missing_name` | No `name` | Skipped |
+| `missing_description` | No `description` | Skipped |
+| `collision` | A skill of the same name was found first (the message names that file) | Skipped |
+| `name` | The name breaks the naming rule | Listed |
+| `description_length` | The description is over 1024 characters | Listed |
+
+`disable: true` is deliberate and is not reported. A directory without a
+readable `SKILL.md` is not a skill and is not reported either. For example:
+
+```text
+[Skills] agent-bundle-authoring, pdf-tools, secure-self-update
+  ~/.codex/skills/notes/SKILL.md: no `description`; skipped · /skills
+```
 
 ---
 

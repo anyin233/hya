@@ -92,3 +92,15 @@ test("a compact line ends in +N when the width runs out", () => {
   expect(compactLine("[Skills]", names, 12)).toBe("[Skills] +5")
   expect(compactLine("[Skills]", [], 30)).toBe("[Skills] none")
 })
+
+test("skill diagnostics are problems of [Skills]", () => {
+  const lines = startupLines({
+    notices: [],
+    skills: [{ name: "guide", source: "project", location: "/w/.hya/skills/guide/SKILL.md" }],
+    skillDiagnostics: [{ path: "/home/u/.codex/skills/x/SKILL.md", kind: "missing_description", message: "/home/u/.codex/skills/x/SKILL.md: no `description`; skipped" }],
+  }, { ...compact, sections: ["skills"] }, 200, env)
+  expect(lines.map((line) => `${line.tone}: ${line.text}`)).toEqual([
+    "muted: [Skills] guide",
+    "warning:   ~/.codex/skills/x/SKILL.md: no `description`; skipped · /skills",
+  ])
+})

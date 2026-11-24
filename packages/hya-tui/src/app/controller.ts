@@ -77,7 +77,7 @@
  * `/resume` and `--resume` unarchive and open one (app/resume.ts).
  */
 import { SessionViews } from "./sessionViews"
-import { HttpError, type HyaClient, type Interaction, type MessageInfo, type ProjectInfo, type PromptAttachment, type SessionInfo, type SkillSummary, type StreamEvent, type StreamFrame } from "../client"
+import { HttpError, type HyaClient, type Interaction, type MessageInfo, type ProjectInfo, type PromptAttachment, type SessionInfo, type SkillListing, type StreamEvent, type StreamFrame } from "../client"
 import { completeCommand } from "../completion"
 import { createCommandRegistry, mergeCommandEntries, openModelPicker, selectAgent, toBackground, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
 import {
@@ -341,11 +341,11 @@ export function createController({ client, store, directory, remote: startedRemo
    * startup list's `[Skills]`, and the command menu's `/skill:*` rows read
    * them (`/reload-skills`, `/reload-commands`, the Skills view's `r`).
    */
-  async function readSkills(): Promise<SkillSummary[]> {
-    const [skills, commands] = await Promise.all([client.listSkills(), client.listCommands()])
-    store.setSkills(skills)
+  async function readSkills(): Promise<SkillListing> {
+    const [listing, commands] = await Promise.all([client.listSkills(), client.listCommands()])
+    store.setSkills(listing)
     store.setBackendCommands(commands)
-    return skills
+    return listing
   }
 
   async function refresh(): Promise<void> {
@@ -356,7 +356,7 @@ export function createController({ client, store, directory, remote: startedRemo
       client.listPermissionModes().catch(() => undefined),
       // Optional: a failed read keeps the rows read before.
       client.listProjects().catch(() => undefined),
-      // Optional: the skills (a failed read keeps the bootstrap's).
+      // Optional: the skills and their diagnostics (an older backend without them keeps the bootstrap's).
       (client.listSkills?.() ?? Promise.resolve(undefined)).catch(() => undefined),
     ])
     store.applyCatalog({ sessions, interactions, models, agents, workflows, providers, commands, ...(permissionModes ? { permissionModes } : {}), ...(projects ? { projects } : {}) })
@@ -1958,7 +1958,7 @@ export function createController({ client, store, directory, remote: startedRemo
   function commandEntries(): CommandEntry[] {
     // A WebUI tab does not offer terminal-only commands (`/to-background`).
     const local = registry.list().filter((spec) => !(store.state.webTab && spec.terminalOnly))
-    return mergeCommandEntries(local, store.state.backendCommands)
+    return mergeCommandEntries(local, store.state.backendCommands, { skillCommands: store.state.structure.commands.skill_commands })
   }
 
   return {

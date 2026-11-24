@@ -71,3 +71,17 @@ test("requiresArgument: no hint or a [bracketed] hint is optional; anything else
   expect(requiresArgument("set|remove <provider>")).toBe(true)
   expect(requiresArgument("select <name> | run [name]")).toBe(true)
 })
+
+test("skill_commands = false leaves the /skill: rows out of the menu", () => {
+  const backend: CommandSummary[] = [
+    { name: "review", description: "Review", source: "command" },
+    { name: "skill:greet", description: "Say hello", source: "skill", argumentHint: "[request]" },
+  ]
+  const entries = mergeCommandEntries(createCommandRegistry().list(), backend)
+  const rows = suggestCommandInput("/gree", () => entries, () => [])
+  expect(rows[0]?.label).toBe("/skill:greet [request]  Say hello  [skill]")
+  expect(rows[0]?.runOnEnter).toBe(true)
+  const withoutSkills = mergeCommandEntries(createCommandRegistry().list(), backend, { skillCommands: false })
+  expect(withoutSkills.some((entry) => entry.name === "/skill:greet")).toBe(false)
+  expect(withoutSkills.some((entry) => entry.name === "/review")).toBe(true)
+})

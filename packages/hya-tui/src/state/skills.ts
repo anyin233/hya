@@ -10,7 +10,7 @@
  * `/skill:<name> ` into the message input; `y` copies the skill file's path;
  * `r` re-reads the catalog (the same as `/reload-skills`).
  */
-import type { SkillSummary } from "../client"
+import type { SkillDiagnostic, SkillSummary } from "../client"
 import type { KeyLike } from "../keys/bindings"
 import { truncate } from "./format"
 import { skillGroup } from "./startup"
@@ -272,7 +272,8 @@ export function skillsViewHint(view: SkillsViewState): string {
   return [...skillsKeyRows.filter((row) => row.hint).map((row) => row.hint!), "Esc close"].join(" · ")
 }
 
-/** `6 skills`. */
-export function skillsCountLine(skills: readonly SkillSummary[]): string {
-  return `${skills.length} skill${skills.length === 1 ? "" : "s"}`
+/** `6 skills · 2 warnings`: the skill count and the catalog's diagnostics. */
+export function skillsCountLine(skills: readonly SkillSummary[], diagnostics: readonly SkillDiagnostic[] = []): string {
+  const count = `${skills.length} skill${skills.length === 1 ? "" : "s"}`
+  return diagnostics.length ? `${count} · ${diagnostics.length} warning${diagnostics.length === 1 ? "" : "s"}` : count
 }

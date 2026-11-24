@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { HyaClient, SkillSummary } from "../src/client"
+import type { HyaClient, SkillListing } from "../src/client"
 import { createReloader, reloadAllTargets, reloadSummary } from "../src/app/reload"
 import { createCommandRegistry, type AppActions } from "../src/commands"
 import { customKeybindings, setCustomKeybindings } from "../src/keys/custom"
@@ -31,7 +31,7 @@ function fakeClient(calls: string[], overrides: Partial<HyaClient> = {}): HyaCli
   } as unknown as HyaClient
 }
 
-const listing: SkillSummary[] = [{ name: "greet" }, { name: "review" }]
+const listing: SkillListing = { skills: [{ name: "greet" }, { name: "review" }], diagnostics: [{ message: "x" }] }
 
 test("/reload runs every target in order once, refreshing bundles a single time, and says what each did", async () => {
   const calls: string[] = []
@@ -51,7 +51,7 @@ test("/reload runs every target in order once, refreshing bundles a single time,
   expect(themeSetting()).toBe("light")
   expect(store.state.backendCommands.map((command) => command.name)).toEqual(["review", "skill:greet"])
   expect(reloadSummary(outcomes)).toBe([
-    "Reloaded keybindings (1 custom), theme light, bundles, 0 TUI extensions, 1 command, 2 skills, context (re-recorded at the next turn)",
+    "Reloaded keybindings (1 custom), theme light, bundles, 0 TUI extensions, 1 command, 2 skills (1 warning), context (re-recorded at the next turn)",
     "Failed: tui.toml: not used by this client",
     "Failed: MCP (1 connected, 1 failed: broken; /mcp to fix)",
   ].join("\n"))
@@ -63,7 +63,7 @@ test("/reload-skills alone re-records the session's skill index; /reload-mcp ref
   store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
   const reloader = createReloader({ store, client: fakeClient(calls), readSkills: async () => { calls.push("skills"); return listing } })
   const [skills] = await reloader.run(["skills"])
-  expect(skills).toEqual({ target: "skills", ok: true, text: "2 skills, context (re-recorded at the next turn)" })
+  expect(skills).toEqual({ target: "skills", ok: true, text: "2 skills (1 warning), context (re-recorded at the next turn)" })
   await reloader.run(["mcp"])
   expect(calls).toEqual(["skills", "context hysec_1", "refreshBundles", "mcp"])
 })

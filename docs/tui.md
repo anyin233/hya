@@ -2600,7 +2600,9 @@ argument hint, its description (truncated to width), and its source in
 brackets: `[local]` (this TUI's own
 registry), `[command]` (a custom or built-in server command, `/init` and
 `/review` among them), or `[skill]` (a discovered skill, listed as
-`/skill:<name>` — see [Skill commands](#skill-commands) below). The list is fuzzy-filtered as you
+`/skill:<name>` — see [Skill commands](#skill-commands) below).
+`tui.toml` `[commands] skill_commands = false` leaves the `/skill:*` rows out
+([TUI structure](tui-config.md)); typing one still runs it. The list is fuzzy-filtered as you
 keep typing the name: an exact match ranks first, then a prefix match, then a
 substring match, then any name whose letters appear in order (a subsequence
 match); ties break alphabetically. Up/Down move the highlight through every
@@ -3927,7 +3929,7 @@ binary is not reloaded here: that is `hya serve stop` then `start`
 | `mcp` | `GET /v1/mcp?directory=<dir>` | — | `McpServerStatus[]` (`name`, `state`) |
 | `extensions` | `GET /v1/tui-extensions?directory=<dir>` | — | `ListTuiExtensionsResponse` |
 | `commands`, `skills` | `GET /v1/commands?directory=<dir>` | — | `CommandSummary[]` |
-| `skills` | `GET /v1/skills?directory=<dir>` | — | `SkillSummary[]` |
+| `skills` | `GET /v1/skills?directory=<dir>` | — | `SkillSummary[]`, `CatalogDiagnostic[]` |
 | `context`, `skills` | `POST /v1/sessions/{session}/refresh-context` | `RefreshSessionContextRequest {session: string}` | `RefreshSessionContextResponse {pending: bool}`; `session_busy` (409) while a turn runs, `not_found` for an unknown session |
 
 In the TUI, `AppActions.reload(targets: ReloadTarget[]): Promise<ReloadOutcome[]>`
@@ -3960,12 +3962,15 @@ source (`project`, `user`, `bundle`, `builtin`), and the description:
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The first line counts the skills and names the scope: the active Project,
-else the session's directory, else `global`.
+The first line counts the skills (and the catalog's warnings, listed below
+it: a `SKILL.md` that was skipped or breaks a naming rule) and names the
+scope: the active Project, else the session's directory, else `global`.
 Enter opens the skill's details (`Skills › <name>`): the name and source,
 the file (`<built-in> (hya/core-skills)` for a built-in skill), the
 description, and the body below a rule, scrolled with Up/Down,
-PgUp/PgDn, and Home/End (`↓ N more lines` while more follows).
+PgUp/PgDn, and Home/End (`↓ N more lines` while more follows). A skill
+marked `disable-model-invocation: true` says `only /skill:<name>` next to
+its source: the model's skill index leaves it out.
 
 `/skills <filter>` opens the view with the filter already typed; its
 argument completes skill names. Under 60 columns the source column is left
@@ -3990,13 +3995,13 @@ The help overlay (`?`, group `skills`) lists the same keys.
 
 | Action | Call | Reads |
 | --- | --- | --- |
-| Open, `r` refresh | `GET /v1/skills?directory=<dir>` (paginated, `ListSkills`) and `GET /v1/commands?directory=<dir>` | `ListSkillsResponse.skills: SkillSummary[]` (`name`, `description`, `source`, `content` — the body —, `location`); the commands keep the menu's `/skill:*` rows current |
+| Open, `r` refresh | `GET /v1/skills?directory=<dir>` (paginated, `ListSkills`) and `GET /v1/commands?directory=<dir>` | `ListSkillsResponse.skills: SkillSummary[]` (`name`, `description`, `source`, `content` — the body —, `location`, `disableModelInvocation`) and `diagnostics: CatalogDiagnostic[]` (`path`, `kind`, `message`); the commands keep the menu's `/skill:*` rows current |
 | `u`, then Enter | `POST /v1/sessions/{id}/turns` | `{command: {command: "skill:<name>", arguments}}` (`CommandTurn`) |
 
 The view's state is `store.skillsView: SkillsViewState` (`screen: "list" |
 "detail"`, `skill`, `filter`, `filtering`, `scroll`, `busy`, `notice`;
 `state/skills.ts`), opened by `AppActions.openSkills(filter?: string)`; the
-rows are `store.skills`.
+rows are `store.skills` and `store.skillDiagnostics`.
 
 ## Agents view
 
@@ -4103,7 +4108,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `reasoningVariants`, `reasoningDefault`, `source`, `imageInput`); the `/model` picker tags rows by `providerId`, and `/effort` uses the advertised variants; `contextLimit` (a uint64 string, `0`/absent = unknown) is the metadata state's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`; `imageInput: false` refuses attachments locally before a turn is sent (see [Paste and attachments](#paste-and-attachments); absent means unknown and is allowed). |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` (`id`, `kind`, `baseUrl`, `keySource`, `auth`, `modelCount`): the Provider View's list. |
 | `GET /v1/commands?directory=<dir>` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes the skills as `skill:<name>` rows, tagged `source: "skill"`) for command-pane suggestions and completion. |
-| `GET /v1/skills?directory=<dir>` | No body | `ListSkillsResponse.skills: SkillSummary[]` for the [Skills view](#skills-view), the startup list's `[Skills]`, and `/refresh`. |
+| `GET /v1/skills?directory=<dir>` | No body | `ListSkillsResponse.skills: SkillSummary[]` and `diagnostics: CatalogDiagnostic[]` for the [Skills view](#skills-view), the startup list's `[Skills]`, and `/refresh`. |
 | `POST /v1/sessions/{id}/refresh-context` | `{}` (`RefreshSessionContext`) | `RefreshSessionContextResponse {pending}` for `/reload-context`, `/reload-skills`, and `/reload` |
 | `PUT /v1/providers/{id}`, `POST …/refresh`, `PUT …/models`, `DELETE …/models?modelId=`, `POST …/test` | See [Provider View interfaces](#provider-view-interfaces) | `ProviderUpdate` / `TestProviderModelResponse` |
 | `PUT /v1/auth/{provider_id}` | `{apiKey: string}` (Provider View `k`) | `{status, provider?, discovery?}`; the key value is sent only to the backend. |

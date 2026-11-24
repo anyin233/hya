@@ -15,7 +15,7 @@
  * A failing target does not stop the next one; each says what it did. A
  * running turn keeps its binding: what changed applies from the next turn.
  */
-import type { HyaClient, SkillSummary } from "../client"
+import type { HyaClient, SkillListing } from "../client"
 import { customKeybindings, setCustomKeybindings } from "../keys/custom"
 import { extensionManager } from "../extensions/manager"
 import { loadPreferences } from "../prefs"
@@ -37,7 +37,7 @@ export interface ReloaderOptions {
   /** Re-read the scope's TUI extension catalog and load it (app/run.tsx). */
   refreshExtensions?: () => Promise<void>
   /** `ListSkills` and `ListCommands` into the store (app/controller.ts `readSkills`). */
-  readSkills: () => Promise<SkillSummary[]>
+  readSkills: () => Promise<SkillListing>
   /** Restart the TUI process through its supervisor; absent without one. */
   reloadTui?: () => void
 }
@@ -110,7 +110,8 @@ export function createReloader({ store, client, structure, preferencesPath, refr
         return ok(target, plural(commands.filter((command) => command.source !== "skill").length, "command"))
       }
       case "skills": {
-        const skills = ok(target, plural((await readSkills()).length, "skill"))
+        const listing = await readSkills()
+        const skills = ok(target, `${plural(listing.skills.length, "skill")}${listing.diagnostics.length ? ` (${plural(listing.diagnostics.length, "warning")})` : ""}`)
         // The open session's skill index is part of its recorded context.
         if (plan.has("context")) return skills
         const context = await one("context", plan, done)

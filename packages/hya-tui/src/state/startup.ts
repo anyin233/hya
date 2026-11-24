@@ -7,7 +7,7 @@
  * Pure: the component (components/StartupBlock.tsx) feeds it the store and
  * the extension manager and draws the lines.
  */
-import type { BundleSummary, CommandSummary, McpServerStatus, SkillSummary } from "../client"
+import type { BundleSummary, CatalogDiagnostic, CommandSummary, McpServerStatus, SkillSummary } from "../client"
 import type { ExtensionInfo } from "../extensions/manager"
 import { formatBytes } from "../composer/attachments"
 
@@ -28,6 +28,8 @@ export interface StartupInput {
   notices: readonly string[]
   contextFiles?: readonly ContextFileSummary[]
   skills?: readonly SkillSummary[]
+  /** Skill files the catalog skipped or warns about (`[Skills]` problems). */
+  skillDiagnostics?: readonly CatalogDiagnostic[]
   commands?: readonly CommandSummary[]
   mcp?: readonly McpServerStatus[]
   bundles?: readonly BundleSummary[]
@@ -102,7 +104,7 @@ function sections(input: StartupInput, env: Record<string, string | undefined>):
     skills: input.skills ? {
       title: titles.skills,
       items: input.skills.map((skill) => ({ name: skill.name, group: skillGroup(skill, env) })),
-      problems: [],
+      problems: (input.skillDiagnostics ?? []).map((diagnostic) => `${home(diagnostic.message, env)} · /skills`),
     } : undefined,
     commands: input.commands ? {
       title: titles.commands,

@@ -2,7 +2,7 @@
  * The Skills view's calls (docs/tui.md "Skills view"; the pure state is
  * state/skills.ts, the rendering components/SkillsView.tsx).
  */
-import type { SkillSummary } from "../client"
+import type { SkillListing } from "../client"
 import type { KeyLike } from "../keys/bindings"
 import type { AppStore } from "../state/store"
 import { errorText } from "../state/providers"
@@ -11,7 +11,7 @@ import { hasSkillFile, initialSkillsView, settleSkillsView, skillBodyLines, skil
 export interface SkillsControllerOptions {
   store: AppStore
   /** Re-read the skill catalog (`ListSkills` and `ListCommands`): `/reload-skills`'s catalog half. */
-  readSkills(signal?: AbortSignal): Promise<SkillSummary[]>
+  readSkills(signal?: AbortSignal): Promise<SkillListing>
   /** Replace the message input (not sent). */
   fillInput(text: string): void
   /** OSC 52; `false` when the terminal does not take it. */
@@ -34,8 +34,8 @@ export function createSkillsController({ store, readSkills, fillInput, copyText,
   const notify = (notice: SkillsNotice | undefined): void => patch((current) => ({ ...current, notice }))
 
   async function reload(signal?: AbortSignal): Promise<void> {
-    const skills = await readSkills(signal)
-    patch((current) => settleSkillsView(current, skills))
+    const listing = await readSkills(signal)
+    patch((current) => settleSkillsView(current, listing.skills))
   }
 
   /** `/skills [filter]`: open on the skills read last, then re-read them. */
