@@ -5,8 +5,6 @@ use anyhow::Context as _;
 use crate::cli_args::RelayFlags;
 use crate::{db_lock, serve_relay};
 
-use hya_app::open_store;
-
 pub(crate) async fn cmd_serve(
     bind: String,
     db: String,
@@ -20,30 +18,7 @@ pub(crate) async fn cmd_serve(
     let hosts = crate::cli_args::serve_host_policy(&bind, &allow_hosts)?;
     // Restored turns can run tools during bootstrap, so catch stop signals already.
     let terminate = install_termination_signals().context("install termination handlers")?;
-    let prepared = match prepare_server(
-        &bind,
-        db.clone(),
-        model_override,
-        yolo,
-        pure,
-        &relay,
-        &hosts,
-    )
-    .await
-    {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            if runtime_owner_busy(&error) {
-                if let Some(busy) = db_lock::holder(&db).ok().flatten() {
-                    eprintln!("{}", busy.serve_message());
-                } else {
-                    eprintln!("hya: {error:#}");
-                }
-                std::process::exit(db_lock::EXIT_DB_IN_USE);
-            }
-            return Err(error);
-        }
-    };
+    let prepared = prepare_server(&bind, db, model_override, yolo, pure, &relay, &hosts).await?;
     let link = match relay_settings {
         Some(settings) => match prepared.relay.connect(settings).await {
             Ok(link) => Some(link),
@@ -362,17 +337,6 @@ async fn shutdown_prepared(prepared: PreparedServer) {
     }
 }
 
-/// Whether startup failed because another process still holds the runtime
-/// owner of the database (`RUNTIME_OWNER_BUSY`), e.g. a server shutting down.
-fn runtime_owner_busy(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        matches!(
-            cause.downcast_ref::<hya_store::StoreError>(),
-            Some(hya_store::StoreError::RuntimeOwnerBusy)
-        )
-    })
-}
-
 /// Compose the runtime, bind fresh listeners, and publish discovery.
 // The composition inputs of one server; a struct would only rename them.
 #[allow(clippy::too_many_arguments)]
@@ -386,7 +350,18 @@ pub(crate) async fn prepare_server(
     hosts: &hya_server::HostPolicy,
 ) -> anyhow::Result<PreparedServer> {
     emit_startup_mark("backend_start", None);
-    let store = open_store(&db).await?;
+    let store = match hya_app::open_runtime_store(&db).await {
+        Ok(store) => store,
+        Err(error) if error.is_owner_busy() => {
+            if let Some(busy) = db_lock::holder(&db).ok().flatten() {
+                eprintln!("{}", busy.serve_message());
+            } else {
+                eprintln!("hya: {:#}", anyhow::Error::from(error));
+            }
+            std::process::exit(db_lock::EXIT_DB_IN_USE);
+        }
+        Err(error) => return Err(error.into()),
+    };
     let exit_store = store.clone();
     match prepare_server_with_store(
         store,
@@ -547,18 +522,9 @@ fn emit_startup_mark(mark: &str, detail: Option<&str>) {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
-mod runtime_owner_busy_tests {
-    use super::{PreparedServer, prepare_server, runtime_owner_busy, shutdown_prepared};
+mod tests {
+    use super::{PreparedServer, prepare_server, shutdown_prepared};
     use crate::cli_args::RelayFlags;
-
-    #[test]
-    fn a_held_runtime_owner_anywhere_in_the_chain_is_busy() {
-        let busy = anyhow::Error::new(hya_store::StoreError::RuntimeOwnerBusy)
-            .context("claim runtime owner before startup recovery");
-        assert!(runtime_owner_busy(&busy));
-        let other = anyhow::anyhow!("bind 127.0.0.1:0").context("listen");
-        assert!(!runtime_owner_busy(&other));
-    }
 
     #[tokio::test]
     async fn shutdown_prepared_drains_store_after_post_prepare_failure() {

@@ -1100,6 +1100,39 @@ fn tempdir() -> PathBuf {
     dir
 }
 
+#[tokio::test]
+async fn runtime_store_open_reports_owner_contention_in_both_policies() {
+    let dir = tempdir();
+    let db = dir.join("sessions.db");
+    let db = db.to_str().unwrap();
+    let held = open_runtime_store(db).await.unwrap();
+    let strict_error = open_runtime_store(db).await.err().unwrap();
+    let fallback_error = open_runtime_store_or_memory(db).await.err().unwrap();
+    assert!(strict_error.is_owner_busy());
+    assert!(fallback_error.is_owner_busy());
+
+    let legacy_error = open_store(db).await.err().unwrap();
+    assert!(matches!(
+        legacy_error.downcast_ref::<hya_store::StoreError>(),
+        Some(hya_store::StoreError::RuntimeOwnerBusy)
+    ));
+    assert_eq!(
+        format!("{:#}", anyhow::Error::from(strict_error)),
+        format!("{legacy_error:#}")
+    );
+
+    let invalid_db = dir.join("directory.db");
+    std::fs::create_dir(&invalid_db).unwrap();
+    let other_error = open_runtime_store(invalid_db.to_str().unwrap())
+        .await
+        .err()
+        .unwrap();
+    assert!(!other_error.is_owner_busy());
+
+    drop(held);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 fn temp_socket(tag: &str) -> PathBuf {
     static NEXT_SOCKET_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
