@@ -918,9 +918,14 @@ until one changes the log, otherwise the kernel's own Rewrite. Bare mode
 passes no extensions. Full mode passes every rewriter the internal bundles
 register, in registration order (today `hya/compaction`,
 [Compaction](compaction.md)); nothing replaces the kernel's Rewrite.
-`SessionEngine::new` loads them once per process with
-`hya_core::bundles::load_internal()` and panics when a listed bundle's library
-cannot be loaded, as a missing tool family does. Full mode's `config` is the
+`hya-app` constructs full mode with `SessionEngine::try_new`, which loads
+rewriters through `hya_core::bundles::load_internal()` and shares successful
+registrations process-wide. The constructor returns `Result<SessionEngine, CoreError>`.
+A missing or invalid native library yields `CoreError::BundleRuntime` with
+the bundle ID and the loader diagnostic, so a full-mode startup such as
+`hya exec --pure "hello"` exits with an error if `hya/compaction` cannot load.
+Existing Rust embedders can still use `SessionEngine::new`, which panics on
+that error. Full mode's `config` is the
 engine's `keep_recent` and token-accounting mode, as JSON. A host failure
 reaches the kernel or an extension as a `ToolError`; the host keeps the
 original `CoreError` and a failed reduction ends the turn with it (for
