@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { HyaClient, SseDecoder, bridgeTokenHeader, parseApiCommand, serverTokenEnv, type FetchLike } from "../src/client"
+import { mergeTranscript, TranscriptOverlay } from "../src/state/overlay"
 
 test("creates a session and admits a prompt through scoped v1 requests", async () => {
   const calls: Array<{ url: string; method: string; header: string | null; body: unknown }> = []
@@ -71,6 +72,38 @@ test("decodes SSE frames split across transport chunks", () => {
   ])
   expect(decoder.push("data: {\"resync\":{\"lastSeq\":\"12\"}}\n")).toEqual([])
   expect(decoder.push("\n")).toEqual([{ resync: { lastSeq: "12" } }])
+})
+
+test("an SSE deletion hides streamed and stale projected text before message finish", async () => {
+  const message = "msg_1"
+  const part = "part_1"
+  const session = "hysec_1"
+  const role = "ROLE_ASSISTANT"
+  const events = [
+    { seq: "1", messageStarted: { message, role } },
+    { partStarted: { message, part, kind: "text" } },
+    { partAppended: { message, part, textDelta: "partial reply" } },
+    { seq: "2", partDeleted: { message, part } },
+  ]
+  const sse = events.map(event => `data: ${JSON.stringify({ event: { session, ...event } })}\n\n`).join("")
+  const client = new HyaClient("http://127.0.0.1:8080", "/work", async () =>
+    new Response(sse, { headers: { "content-type": "text/event-stream" } }))
+  const overlay = new TranscriptOverlay()
+  const projected = [{ id: message, role, parts: [{ id: part, text: { text: "stale reply" } }] }]
+  const displayed = () => mergeTranscript(projected, overlay.messages())[0]?.parts
+  const snapshots: ReturnType<typeof displayed>[] = []
+  await client.streamSession(session, "0", ({ event }) => {
+    if (event) {
+      overlay.apply(event)
+      snapshots.push(displayed())
+    }
+  }, new AbortController().signal)
+
+  expect(snapshots.at(-2)).toEqual([{ id: part, text: { text: "partial reply" } }])
+  expect(snapshots.at(-1)).toEqual([])
+  expect(overlay.messages()[0]?.finish).toBeUndefined()
+  const finished = [{ ...projected[0]!, finish: "FINISH_REASON_STOP", parts: [{ id: "part_2", text: { text: "stored reply" } }] }]
+  expect(mergeTranscript(finished, overlay.messages())[0]).toBe(finished[0])
 })
 
 test("parses only scoped JSON API commands", () => {

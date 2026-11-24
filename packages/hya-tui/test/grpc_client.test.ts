@@ -6,6 +6,8 @@ import { resolve } from "node:path"
 import { GrpcHyaClient, resolveGrpcOperation } from "../src/grpc_client"
 import { parseArguments } from "../src/cli"
 import catalog from "../src/operations.json"
+import type { MessagePart } from "../src/client"
+import { TranscriptOverlay } from "../src/state/overlay"
 
 test("maps a frontend request to the v1 gRPC operation and protobuf fields", () => {
   expect(resolveGrpcOperation("GET", "/v1/sessions/hysec_1/events?sinceSeq=12", undefined, "/work")).toEqual({
@@ -52,13 +54,22 @@ test("every API command maps to a method in the packaged gRPC contract", () => {
   }
 })
 
-test("connects through native gRPC for bootstrap and live session frames", async () => {
-  const protoRoot = resolve(import.meta.dir, "../src/proto")
+test("native gRPC bootstraps and applies a streamed part deletion before message finish", async () => {
+  const protoRoot = resolve(import.meta.dir, "../../../proto")
   const protoDir = resolve(protoRoot, "hya/v1")
   const definitions = protoLoader.loadSync(
     readdirSync(protoDir).filter((name) => name.endsWith(".proto")).map((name) => resolve(protoDir, name)),
     { includeDirs: [protoRoot], keepCase: false, longs: String, enums: String, defaults: false },
   )
+  const message = "msg_1"
+  const part = "part_1"
+  const session = "hysec_1"
+  const frames = [
+    { event: { session, seq: "12", messageStarted: { message, role: "ROLE_ASSISTANT" } } },
+    { event: { session, partStarted: { message, part, kind: "text" } } },
+    { event: { session, partAppended: { message, part, textDelta: "partial reply" } } },
+    { event: { session, seq: "13", partDeleted: { message, part } } },
+  ]
   const server = new grpc.Server()
   const requests: Record<string, unknown>[] = []
   server.addService(definitions["hya.v1.Process"] as grpc.ServiceDefinition, {
@@ -70,7 +81,7 @@ test("connects through native gRPC for bootstrap and live session frames", async
   server.addService(definitions["hya.v1.Events"] as grpc.ServiceDefinition, {
     StreamSessionEvents(call: grpc.ServerWritableStream<Record<string, unknown>, unknown>) {
       requests.push(call.request)
-      call.write({ event: { seq: "12", session: "hysec_1", messageStarted: { message: "msg_1" } } })
+      for (const frame of frames) call.write(frame)
       call.end()
     },
     StreamGlobalEvents(call: grpc.ServerWritableStream<Record<string, unknown>, unknown>) {
@@ -88,11 +99,20 @@ test("connects through native gRPC for bootstrap and live session frames", async
   const client = new GrpcHyaClient(`127.0.0.1:${port}`, "/work")
   try {
     expect((await client.bootstrap()).location?.version).toBe("grpc-test")
-    const frames: unknown[] = []
+    const overlay = new TranscriptOverlay("11")
+    const snapshots: (MessagePart[] | undefined)[] = []
     let opened = false
-    await client.streamSession("hysec_1", "11", (frame) => { frames.push(frame) }, new AbortController().signal, () => { opened = true })
+    await client.streamSession(session, "11", ({ event }) => {
+      if (event) {
+        overlay.apply(event)
+        snapshots.push(overlay.messages()[0]?.parts)
+      }
+    }, new AbortController().signal, () => { opened = true })
     expect(opened).toBe(true)
-    expect(frames).toEqual([{ event: { seq: "12", session: "hysec_1", messageStarted: { message: "msg_1" } } }])
+    expect(snapshots.at(-2)).toEqual([{ id: part, text: { text: "partial reply" } }])
+    expect(snapshots.at(-1)).toEqual([])
+    expect(overlay.lastSeq).toBe("13")
+    expect(overlay.messages()[0]?.finish).toBeUndefined()
     const global: unknown[] = []
     await client.streamGlobal((frame) => { global.push(frame) }, new AbortController().signal)
     expect(global).toEqual([{ event: { session: "hysec_2", catalogUpdated: {} } }])
