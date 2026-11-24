@@ -15,6 +15,7 @@ export function keyboardOwner(state: AppState, commandsOpen: boolean): string | 
   if (state.mcpView) return "mcp"
   if (state.bundlesView) return "bundles"
   if (state.rulesView) return "rules"
+  if (state.skillsView) return "skills"
   if (state.agentsView) return "agents"
   if (state.extensionOverlay) return state.extensionOverlay
   if (commandsOpen) return "commands"

@@ -62,6 +62,7 @@ import type { ProviderViewState } from "./providers"
 import type { BundleViewState } from "./bundles"
 import { sessionRow } from "./revert"
 import type { RulesViewState } from "./rules"
+import type { SkillsViewState } from "./skills"
 
 /** A prompt submitted while a turn runs; sent when the session is free. */
 export interface QueuedPrompt {
@@ -118,8 +119,10 @@ export interface AppState {
   readonly structure: TuiStructure
   /** Lines at the start of the transcript that outlive session switches: `tui.toml` warnings and one-time notices. */
   readonly startupNotices: readonly string[]
-  /** `Bootstrap.skills`, for the startup list's `[Skills]` (state/startup.ts). */
+  /** `Bootstrap.skills`, then `ListSkills`: the startup list's `[Skills]` (state/startup.ts) and the Skills view. */
   readonly skills: readonly SkillSummary[]
+  /** The Skills view (`/skills`; state/skills.ts), when open. */
+  readonly skillsView: SkillsViewState | undefined
   /** `Bootstrap.contextFiles`, the startup list's `[Context]`; `undefined` before the bootstrap. */
   readonly contextFiles: NonNullable<Bootstrap["contextFiles"]> | undefined
   /** The startup list of what was loaded has its data: MCP settled and bundles listed (app/controller.ts `loadStartupResources`). */
@@ -350,6 +353,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     structure: builtinPreset("workspace"),
     startupNotices: [],
     skills: [],
+    skillsView: undefined,
     contextFiles: undefined,
     startupReady: false,
     apiOutput: "Use /api METHOD /v1/path [JSON object] to call any HTTP/JSON endpoint.\n\n" + operations(),
@@ -1011,6 +1015,10 @@ export function createAppStore() {
 
     /** `ListCommands` rows (the command menu's backend entries, `/skill:*` included), re-read alone by an unknown command. */
     setBackendCommands(commands: CommandSummary[]): void { set("backendCommands", commands) },
+    /** `ListSkills` rows (the startup list's `[Skills]`, `/skills`), re-read by the Skills view. */
+    setSkills(skills: SkillSummary[]): void { set("skills", skills) },
+    /** Open, update, or (`undefined`) close the Skills view (`/skills`). */
+    setSkillsView(view: SkillsViewState | undefined): void { set("skillsView", view) },
 
     /** Open, update, or (`undefined`) close the Saved Rules view (`/rules`). */
     setRulesView(view: RulesViewState | undefined): void { set("rulesView", view) },

@@ -41,6 +41,8 @@ export interface AppActions {
   openRules(): void
   /** Open the full-screen Agents view (`/agent`; state/agentsView.ts, app/agentsView.ts). */
   openAgents(): void
+  /** Open the full-screen Skills view (`/skills [filter]`; state/skills.ts, app/skills.ts). */
+  openSkills(filter?: string): void
   /** Open the full-screen `project_view` extension overlay (`/project`, `/projects`). */
   openProjectOverlay(): void
   scheduleRefresh(): void

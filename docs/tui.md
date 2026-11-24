@@ -691,6 +691,7 @@ where the reason identifies installation, catalog unavailability, or extension s
 | `/bundles` | Open the full-screen [Bundles](#bundles) view: every bundle of the scope with its components and TUI extension; install, uninstall, enable, disable, trust. |
 | `/extensions [enable\|disable\|reload\|trust\|untrust <bundle id>\|sandbox <policy>]` | List the scope's [bundle TUI extensions](tui-extensions.md) (state, tier, sandboxing, permissions, contributions, log), or enable, disable, reload, trust, untrust one, or set the sandbox policy. |
 | `/rules` | Open the full-screen [Saved Rules](#saved-rules) view: saved permission decisions, delete. |
+| `/skills [filter]` | Open the full-screen [Skills view](#skills-view): every skill of the scope by source, its file and body; `u` puts `/skill:<name> ` into the input. |
 | `/workflows`, `/workflow select <name>`, `/workflow run [name]` | View sources and selected state; select or start a Workflow in the selected session. |
 | `/interactions` | View pending permissions and questions. |
 | `/approve <id>`, `/deny <id>` | Respond to a permission request for this run only (`persist: false`); the keyboard fallback of the prompt, which shows the id. |
@@ -3867,6 +3868,68 @@ next matching call asks again.
 | Open, `r` refresh | `GET /v1/permissions/rules?directory=<dir>` (paginated) | `SavedRule[]` (`id`, `permission`, `tool`, `pattern`, `timeCreated`, `projectId`) |
 | `d` then Enter | `DELETE /v1/permissions/rules/{id}?directory=<dir>` | — |
 
+## Skills view
+
+`/skills` opens a full-screen list of every skill the scope can run as
+`/skill:<name>`: the directory's and the active Project's skills
+(`.hya/skills`, `.agents/skills`), your own (`~/.config/hya/skills`,
+`~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills`), and the built-in
+ones (see [Skills](skills.md)). Rows are grouped under one divider per source
+directory, in the catalog's precedence order (the first definition of a name
+wins there, so a shadowed skill is not listed). Each row shows the name, the
+source (`project`, `user`, `bundle`, `builtin`), and the description:
+
+```text
+┌─Skills───────────────────────────────────────────────────────────────────────┐
+│ 4 skills · hya · new skills reach the model in a new session                 │
+│   SKILL                  SOURCE   DESCRIPTION                                │
+│ ── project ~/work/hya/.hya/skills ────────────────────────────────────────── │
+│ ▸ greet                  project  Say hello to someone                       │
+│   reviewer               project  Review the diff                            │
+│ ── builtin ───────────────────────────────────────────────────────────────── │
+│   agent-bundle-authoring builtin  Use when authoring, packaging, importing…  │
+│ ↑↓ move · Enter details · u use · y copy path · r refresh · / filter · Esc   │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+The first line counts the skills and names the scope: the active Project,
+else the session's directory, else `global`.
+Enter opens the skill's details (`Skills › <name>`): the name and source,
+the file (`<built-in> (hya/core-skills)` for a built-in skill), the
+description, and the body below a rule, scrolled with Up/Down,
+PgUp/PgDn, and Home/End (`↓ N more lines` while more follows).
+
+`/skills <filter>` opens the view with the filter already typed; its
+argument completes skill names. Under 60 columns the source column is left
+out (the divider above says it).
+
+### Keys
+
+| Key | Action |
+| --- | --- |
+| Up / Down | Move the highlight over skills, wrapping at the ends; divider rules are skipped. On the details, scroll the body. |
+| PgUp / PgDn, Home / End | Page through the skills or the body. |
+| Enter | Open the highlighted skill's details. |
+| `u` | Close the view and put `/skill:<name> ` into the message input, ready for the request; Enter sends it (see [Skill commands](#skill-commands)). |
+| `y` | Copy the skill file's path with OSC 52 (on a remote backend, the path is on that machine). A built-in skill has no file. |
+| `r` | Re-read the catalog. |
+| `/` | Filter by name, description, or source group; Enter keeps the filter, Esc clears it. |
+| Esc / Left | Cancel a running call, back out of the details, clear the filter, then close the view. Ctrl+C closes it too and keeps its quit meaning. |
+
+The help overlay (`?`, group `skills`) lists the same keys.
+
+### Skills view interfaces
+
+| Action | Call | Reads |
+| --- | --- | --- |
+| Open, `r` refresh | `GET /v1/skills?directory=<dir>` (paginated, `ListSkills`) and `GET /v1/commands?directory=<dir>` | `ListSkillsResponse.skills: SkillSummary[]` (`name`, `description`, `source`, `content` — the body —, `location`); the commands keep the menu's `/skill:*` rows current |
+| `u`, then Enter | `POST /v1/sessions/{id}/turns` | `{command: {command: "skill:<name>", arguments}}` (`CommandTurn`) |
+
+The view's state is `store.skillsView: SkillsViewState` (`screen: "list" |
+"detail"`, `skill`, `filter`, `filtering`, `scroll`, `busy`, `notice`;
+`state/skills.ts`), opened by `AppActions.openSkills(filter?: string)`; the
+rows are `store.skills`.
+
 ## Agents view
 
 `/agent` opens a full-screen list of every catalog agent, grouped into three
@@ -3972,6 +4035,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `reasoningVariants`, `reasoningDefault`, `source`, `imageInput`); the `/model` picker tags rows by `providerId`, and `/effort` uses the advertised variants; `contextLimit` (a uint64 string, `0`/absent = unknown) is the metadata state's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`; `imageInput: false` refuses attachments locally before a turn is sent (see [Paste and attachments](#paste-and-attachments); absent means unknown and is allowed). |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` (`id`, `kind`, `baseUrl`, `keySource`, `auth`, `modelCount`): the Provider View's list. |
 | `GET /v1/commands?directory=<dir>` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes the skills as `skill:<name>` rows, tagged `source: "skill"`) for command-pane suggestions and completion. |
+| `GET /v1/skills?directory=<dir>` | No body | `ListSkillsResponse.skills: SkillSummary[]` for the [Skills view](#skills-view) and the startup list's `[Skills]`. |
 | `PUT /v1/providers/{id}`, `POST …/refresh`, `PUT …/models`, `DELETE …/models?modelId=`, `POST …/test` | See [Provider View interfaces](#provider-view-interfaces) | `ProviderUpdate` / `TestProviderModelResponse` |
 | `PUT /v1/auth/{provider_id}` | `{apiKey: string}` (Provider View `k`) | `{status, provider?, discovery?}`; the key value is sent only to the backend. |
 | `DELETE /v1/auth/{provider_id}` | No body (Provider View `x`) | `{provider?}` |
@@ -4088,6 +4152,7 @@ together.
 | `src/components/BundlesView.tsx` | The full-screen Bundles view. |
 | `src/state/catalog.ts` | `/model`/`/effort`/`/sessions` picker row builders: `modelRows()`, `effortRows()`, `sessionRows()` (the `New session` row + `sessionTree()`), `relativeTime()`. |
 | `src/state/agentsView.ts`, `src/app/agentsView.ts`, `src/components/AgentsView.tsx` | The [Agents view](#agents-view) (`/agent`): pure state and keys (`agentsViewLines()` sections, `agentsViewKey()`), its calls and pickers (`createAgentsViewController()`), and its rendering. |
+| `src/state/skills.ts`, `src/app/skills.ts`, `src/components/SkillsView.tsx` | The [Skills view](#skills-view) (`/skills`): pure state and keys (`skillsViewLines()` groups, `skillsViewKey()`, `skillBodyLines()`), its calls (`createSkillsController()`: open, refresh, `u` fills the input, `y` copies), and its rendering. |
 | `src/state/skillBlock.ts` | `parseSkillBlock()` and `skillBlockLabel()`: a `/skill:<name>` turn's `<skill>` block, folded in the transcript ([Skill commands](#skill-commands)). |
 | `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (internal mode navigation), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session or saved as the TUI default, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, saves the successfully selected default, re-lists interactions, reports in the controller status state. |
 | `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`, `askFrameRoute()` (the session stream) and `globalAskRoute()` (the global stream). |

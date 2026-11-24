@@ -10,6 +10,7 @@ import { Picker } from "../components/Picker"
 import { PaneWorkspace } from "../components/PaneWorkspace"
 import { ProviderView } from "../components/ProviderView"
 import { RulesView } from "../components/RulesView"
+import { SkillsView } from "../components/SkillsView"
 import { paintSelection } from "../components/selection"
 import { copyNotice } from "../composer/clipboard"
 import { extensionContext } from "../extensions/context"
@@ -65,6 +66,7 @@ export function App() {
       <McpView />
       <BundlesView />
       <RulesView />
+      <SkillsView />
       <AgentsView />
       <Picker />
       <ExtensionOverlay />

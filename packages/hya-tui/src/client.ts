@@ -429,14 +429,17 @@ export interface AgentModelState {
   effortSource?: string
 }
 
-/** `SkillSummary` of `Bootstrap.skills` (the TUI never reads `content`). */
+/** `SkillSummary` of `ListSkills` and `Bootstrap.skills`. */
 export interface SkillSummary {
+  /** Run as `/skill:<name>`. */
   name: string
   description?: string
   /** `builtin`, `user`, `project`, or `bundle`; older backends say `builtin` for user skills. */
   source?: string
   /** The skill file (`<built-in>` for compiled-in skills). */
   location?: string
+  /** The body after the frontmatter (the Skills view's details). */
+  content?: string
 }
 
 export interface CommandSummary {
@@ -939,6 +942,11 @@ export class HyaClient {
 
   async listCommands(): Promise<CommandSummary[]> {
     return this.listAll("/v1/commands", "commands", "", true)
+  }
+
+  /** `ListSkills` (`GET /v1/skills`) of the client's scope: every page. */
+  async listSkills(): Promise<SkillSummary[]> {
+    return this.listAll("/v1/skills", "skills", "", true)
   }
 
   /** `SetProviderAuth` (`PUT /v1/auth/{id}`): save a key (applies live); `discovery` when the model list was fetched too. */
