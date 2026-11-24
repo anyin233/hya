@@ -32,6 +32,7 @@ use hya_proto::{FinishCause, MessageId, SessionId};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
+use super::SessionEngine;
 use crate::error::CoreError;
 
 tokio::task_local! {
@@ -441,4 +442,65 @@ pub(crate) async fn scope_held_turn<F: std::future::Future>(
     let mut held = HELD_TURNS.try_with(Clone::clone).unwrap_or_default();
     held.push(session);
     HELD_TURNS.scope(held, future).await
+}
+
+impl SessionEngine {
+    /// Claim `session`'s single active turn without waiting.
+    ///
+    /// A session runs at most one turn at a time; every turn path holds this
+    /// lease for the whole turn. Dropping the lease releases the claim.
+    ///
+    /// # Errors
+    /// [`CoreError::TurnAlreadyActive`] when the session already has a turn.
+    pub fn try_begin_turn(&self, session: SessionId) -> Result<TurnLease, CoreError> {
+        self.turn_gate.try_acquire(session)
+    }
+
+    /// Whether `session` currently has an active turn.
+    #[must_use]
+    pub fn turn_active(&self, session: SessionId) -> bool {
+        self.turn_gate.is_active(session)
+    }
+
+    /// Install the turn-boundary observer (the resident supervisor). Held
+    /// weakly so the observer may own the engine.
+    pub fn set_turn_observer(&self, observer: std::sync::Weak<dyn TurnBoundaryObserver>) {
+        self.turn_gate.set_observer(observer);
+    }
+
+    /// The turn-boundary observer's work mark for `session`: take it before
+    /// snapshotting the inbox a read will consume, and pass it to
+    /// [`notify_mail_consumed`](Self::notify_mail_consumed).
+    pub(crate) fn mail_mark(&self, session: SessionId) -> Option<u64> {
+        self.turn_gate
+            .observer()
+            .and_then(|observer| observer.mail_mark(session))
+    }
+
+    /// Notify the turn-boundary observer that this turn consumed its mail up
+    /// to the snapshot taken after `mark` ([`mail_mark`](Self::mail_mark)).
+    /// Outgoing-only cursor cleanup never acknowledges team work.
+    pub(crate) fn notify_mail_consumed(
+        &self,
+        session: SessionId,
+        mark: Option<u64>,
+        incoming: bool,
+    ) {
+        if incoming
+            && let Some(mark) = mark
+            && let Some(observer) = self.turn_gate.observer()
+        {
+            observer.mail_consumed(session, mark);
+        }
+    }
+
+    /// Claim `session`'s turn, queueing behind an active one. `Ok(None)` when
+    /// `cancel` fires while waiting.
+    pub(crate) async fn begin_turn(
+        &self,
+        session: SessionId,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<Option<TurnLease>, CoreError> {
+        self.turn_gate.acquire(session, cancel).await
+    }
 }

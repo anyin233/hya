@@ -41,7 +41,7 @@ use hya_proto::{ConfigGeneration, SessionId};
 
 use super::SessionEngine;
 use crate::catalog_scope::ScopeKey;
-use crate::hooks::{HookChain, HookDispatcher, SessionLifecycleInput};
+use crate::hooks::{HookChain, HookDispatcher, SessionLifecycleInput, activation_hook_for};
 use crate::runtime_registry::{BoundAgentHook, TurnBinding};
 
 #[cfg(test)]
@@ -242,5 +242,150 @@ impl SessionEngine {
             .filter_map(|captured| captured.chain.take())
             .collect::<Vec<_>>();
         drop(released);
+    }
+}
+
+impl SessionEngine {
+    pub(crate) async fn notify_session_start(&self, session: SessionId) {
+        for hooks in self
+            .hooks
+            .iter()
+            .cloned()
+            .chain(self.runtime.global_plugin_hooks())
+        {
+            hooks.session_start(SessionLifecycleInput { session }).await;
+        }
+    }
+
+    /// Notify session lifecycle hooks. Best-effort by contract: implementors
+    /// log their own failures, and the engine never propagates them.
+    pub(super) async fn notify_session_lifecycle(&self, session: SessionId, start: bool) {
+        for hooks in self
+            .hooks
+            .iter()
+            .cloned()
+            .chain(self.runtime.global_plugin_hooks())
+        {
+            let input = SessionLifecycleInput { session };
+            if start {
+                hooks.session_start(input).await;
+            } else {
+                hooks.session_end(input).await;
+            }
+        }
+        let bundle_hooks = if start {
+            self.captured_session_hooks(session)
+        } else {
+            self.session_channel_policies
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&session);
+            self.remove_captured_session_hooks(session)
+        };
+        if let Some(hooks) = bundle_hooks {
+            let input = SessionLifecycleInput { session };
+            if start {
+                hooks.session_start(input).await;
+            } else {
+                hooks.session_end(input).await;
+            }
+        }
+    }
+
+    /// `session.end` for a session whose turn is still running (archived
+    /// mid-turn): fires the startup and captured bundle hooks but keeps the
+    /// captured hooks and channel policy the turn still reads.
+    pub(super) async fn notify_session_end_keeping_state(&self, session: SessionId) {
+        for hooks in self
+            .hooks
+            .iter()
+            .cloned()
+            .chain(self.runtime.global_plugin_hooks())
+        {
+            hooks.session_end(SessionLifecycleInput { session }).await;
+        }
+        if let Some(hooks) = self.captured_session_hooks(session) {
+            hooks.session_end(SessionLifecycleInput { session }).await;
+        }
+    }
+
+    /// Record `session`'s channel policy and make its captured lifecycle/event
+    /// hooks `binding`'s chain for `stable_agent_id` (creating the record on a
+    /// first capture; see [`self`] for the swap contract).
+    pub(crate) async fn capture_session_bundle_hooks(
+        &self,
+        session: SessionId,
+        binding: &TurnBinding,
+        stable_agent_id: &str,
+    ) {
+        let channel_policy = crate::ChannelPolicy::from_binding(binding)
+            .map(|policy| policy.snapshot_for(stable_agent_id))
+            .unwrap_or_default();
+        self.session_channel_policies
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(session, channel_policy);
+        self.swap_session_hooks(session, binding, stable_agent_id)
+            .await;
+    }
+
+    pub(crate) fn session_channel_policy(
+        &self,
+        session: SessionId,
+    ) -> Option<hya_tool::ChannelPolicySnapshot> {
+        self.session_channel_policies
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&session)
+            .copied()
+    }
+
+    pub(crate) fn update_session_channel_policy(
+        &self,
+        session: SessionId,
+        policy: hya_tool::ChannelPolicySnapshot,
+    ) {
+        self.session_channel_policies
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(session, policy);
+    }
+
+    pub(crate) fn session_hook_dispatcher(
+        &self,
+        session: SessionId,
+    ) -> Option<Arc<dyn HookDispatcher>> {
+        let mut dispatchers = Vec::new();
+        if let Some(hooks) = &self.hooks {
+            dispatchers.push(Arc::clone(hooks));
+        }
+        dispatchers.extend(self.runtime.global_plugin_hooks());
+        if let Some(hooks) = self.captured_session_hooks(session) {
+            dispatchers.push(hooks);
+        }
+        match dispatchers.len() {
+            0 => None,
+            1 => dispatchers.pop(),
+            _ => Some(Arc::new(HookChain::new(dispatchers))),
+        }
+    }
+
+    /// Startup hooks followed by the immutable activation-bound hook chain.
+    pub(crate) fn active_hook_dispatcher(
+        &self,
+        session: SessionId,
+    ) -> Option<Arc<dyn HookDispatcher>> {
+        let mut dispatchers = Vec::new();
+        if let Some(hooks) = &self.hooks {
+            dispatchers.push(Arc::clone(hooks));
+        }
+        if let Some(hooks) = activation_hook_for(session) {
+            dispatchers.push(hooks);
+        }
+        match dispatchers.len() {
+            0 => None,
+            1 => dispatchers.pop(),
+            _ => Some(Arc::new(HookChain::new(dispatchers))),
+        }
     }
 }
