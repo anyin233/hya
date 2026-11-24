@@ -10,15 +10,33 @@ pub(crate) enum Writer {
     Server(Discovery),
 }
 
-/// Find out how `hya <command>` writes `db`. Exits 75 when the database is
-/// held by a process that serves no HTTP yet.
+/// Find out how `hya <command>` writes `db` with strict open (no in-memory
+/// fallback). Exits 75 when held by a process that serves no HTTP yet.
 pub(crate) async fn claim(db: &str, command: &str) -> anyhow::Result<Writer> {
-    match hya_app::open_store(db).await {
+    claim_with(hya_app::open_store(db).await, db, command)
+}
+
+/// Find out how a one-shot headless `hya <command>` writes `db`, falling back
+/// to an in-memory store on open timeout or storage fault. Exits 75 when held
+/// by a process that serves no HTTP yet.
+pub(crate) async fn claim_or_memory(db: &str, command: &str) -> anyhow::Result<Writer> {
+    claim_with(hya_app::open_store_or_memory(db).await, db, command)
+}
+
+fn claim_with(
+    opened: anyhow::Result<hya_store::SessionStore>,
+    db: &str,
+    command: &str,
+) -> anyhow::Result<Writer> {
+    match opened {
         Ok(store) => Ok(Writer::Direct(store)),
         Err(error)
-            if error
-                .downcast_ref::<hya_store::StoreError>()
-                .is_some_and(|error| matches!(error, hya_store::StoreError::RuntimeOwnerBusy)) =>
+            if error.chain().any(|cause| {
+                matches!(
+                    cause.downcast_ref::<hya_store::StoreError>(),
+                    Some(hya_store::StoreError::RuntimeOwnerBusy)
+                )
+            }) =>
         {
             let busy = db_lock::holder(db)?;
             if let Some(server) = busy.as_ref().and_then(|busy| busy.discovery.clone()) {

@@ -138,7 +138,8 @@ leaves `reasoning_request` false.
 | Variant | Display | Typical cause | Troubleshooting |
 | --- | --- | --- | --- |
 | `Json` | `json: …` | Serde failure while encoding a body or parsing a stream frame. | No dedicated entry; inspect the JSON payload and stream frames. |
-| `Http(String)` | `http: …` | Unclassified in-stream provider error frame, link-level stream failure (body decode error, idle stall), invalid request header name/value, or client build failure. | No dedicated entry; check the provider payload, base URL, and headers. |
+| `Http(String)` | `http: …` | Unclassified in-stream provider error frame, SSE UTF-8 or parser error, invalid request header name/value, or client build failure. | Check the provider payload, base URL, and headers. |
+| `StreamInterrupted(String)` | `http: …` | An established SSE stream hit the frame-idle deadline or failed while reading the HTTP body. | Check the connection and provider. Bare mode may retry the round, also after partial output, when the wait fits and the run stays active; a break after the stream's final frame completes the round instead. See [When a bare round fails](../kernel.md#when-a-bare-round-fails). |
 | `Transport(String)` | `transport: …` | Request transport failed before an event stream was returned. | Check provider reachability and connection health. This class is eligible for bounded retry/failover before stream ownership passes to the caller. |
 | `HttpStatus { status, message, retry_after }` | `http status <code>: …` | Upstream returned a non-success response before the stream began, or a classified in-stream error frame (message starts with `in-stream error`; see [In-stream error frames](#in-stream-error-frames)). | HTTP 429 and 5xx are retryable; other statuses fail immediately. `Retry-After` (or an in-band `retry_after` hint), when valid, is retained as a bounded delay. |
 | `UnknownModel(String)` | `unknown provider for model: …` | No route's `capabilities()` returned `Some` for the ref. | [`../troubleshooting.md`](../troubleshooting.md) — *unknown provider for model*. |
@@ -219,7 +220,7 @@ installs a plane mapping each preferred `ModelRef` to its ordered candidate
 chain, populated from configured `categories:` entries when the app runtime
 builds the engine. Members resolved onto a category candidate — including a
 servability pick that is not the configured preference — carry the forward
-suffix of their chain.
+suffix of their chain. If a serving stream fails before a tool request, its retry uses the same model. Billed usage remains attributed to the serving model for each attempt. Cancelling the retry wait ends the turn as cancelled.
 
 **When it advances.** Only while no `EventStream` exists. If the preferred
 model fails with an error classified by `is_retryable_before_stream()`, or no
@@ -462,7 +463,8 @@ earlier assistant message. The route's replay policy is
 `ReasoningReplayPolicy::ReasoningContent`: reasoning parts marked
 `{"type": "reasoning_content"}` (or the older
 `{"openai_chat_reasoning_content": true}`) are resent on every turn as the wire
-message's `reasoning_content`. Once a transcript holds any such part, every
+message's `reasoning_content`. Nonempty reasoning parts in the same assistant
+message are separated by two newlines. Once a transcript holds any such part, every
 assistant wire message carries `reasoning_content`; it is `""` when that
 message had none. Reasoning from other protocols (for example Anthropic
 thinking before a model switch) is never sent. A transcript without
@@ -477,6 +479,8 @@ a tool round:
                  "function": {"name": "glob", "arguments": "{\"pattern\":\"**/*slide*\"}"}}]},
 {"role": "tool", "tool_call_id": "…", "content": "slides_draft.md"}
 ```
+
+**Upstream tool metadata & Gemini compat passthrough.** The chat decoder captures each streamed tool call's upstream `id` (`provider_data.call_id`) and any `extra_content.google.thought_signature` (`provider_data.google_thought_signature`). On subsequent turns targeting the same normalized model (`same_model_id` ignores `<provider>/` and `#<variant>`), the encoder replays the upstream tool `id` in both `tool_calls[].id` and `role: "tool"` `tool_call_id` (falling back to hya's `ToolCallId` across model switches) and re-attaches `extra_content.google.thought_signature` on `tool_calls[]`.
 
 **Media.** User image parts are sent as `{"type":"image_url","image_url":{"url":…}}`
 content items; see [Media parts](#media-parts-non-google-routes). Assistant
@@ -508,8 +512,29 @@ Optional fields when present on the request:
 
 - `instructions` — from `CompletionRequest.system`
 - `reasoning`: `{ "effort": "<level>", "summary": "auto" }`
+- `include`: `["reasoning.encrypted_content"]` — only when `reasoning` is set
+  and not `off` (see below)
 - `temperature`
 - `max_output_tokens`
+
+For example, a request with effort `high` carries:
+
+```json
+{
+  "store": false,
+  "reasoning": { "effort": "high", "summary": "auto" },
+  "include": ["reasoning.encrypted_content"]
+}
+```
+
+With `store: false` the endpoint keeps no server-side state, so a reasoning
+item can be replayed on a later round only if it carries its
+`encrypted_content`; without `include` the endpoint returns summary-only items
+and ignores them when they are echoed back. Both `openai-response` and
+`openai-codex` therefore request it whenever an effort other than `off` is
+set. A request with no effort or effort `off` omits `include`, because
+non-reasoning models reject it (HTTP 400 "Encrypted content is not supported
+with this model").
 
 `GrokBuildProtocol` wraps the same encoder and always adds
 `include: ["reasoning.encrypted_content"]`.
@@ -520,9 +545,26 @@ and `/responses/compact`.
 ### Encrypted-reasoning replay
 
 When re-emitting an assistant message that contains reasoning parts, the encoder
-pushes each reasoning part's stored `provider_data` item **verbatim** into
-`input`. That is how encrypted reasoning content survives multi-round turns
-instead of being summarized away.
+pushes each stored `provider_data` item **verbatim** into `input` — holding
+`encrypted_content` because requests set `include: ["reasoning.encrypted_content"]`
+(above) — only when the assistant message's served model matches the request
+model (`same_model_id`) and `provider_data.type == "reasoning"`. Foreign
+`provider_data` envelopes from other protocols (or reasoning items from a
+different Responses model) are omitted so anti-distillation signature checks
+never fail after a model switch. `projection_to_messages` populates historical
+`Message::Assistant.model` from `MessageProjection::served_model()` so this
+comparison reflects the model that actually produced each message.
+
+The API rejects a reasoning item sent without the answer or call that
+followed it, so the encoder holds each item until the assistant's next text or
+tool call and sends it right before that. An item with neither after it — a
+step stopped while thinking, or a later reasoning item of the same message
+taking its place — is left out of `input`; the transcript keeps it.
+
+Tool calls decoded from Responses capture their upstream `call_id` into
+`Part::Tool.provider_data["call_id"]` and replay it on same-model turns in both
+`function_call.call_id` and `function_call_output.call_id`, while omitting the
+server item `id` (`fc_...`) under `store: false`.
 
 ### Media
 
@@ -544,15 +586,67 @@ Handled event `type` values include:
 | Event type | Behavior |
 | --- | --- |
 | `response.reasoning_summary_text.delta` / `response.reasoning_text.delta` | Reasoning delta |
+| `response.output_item.added` (`item.type` = `reasoning`) | Reasoning start (the part takes its place before later output items) |
 | `response.output_item.added` (`item.type` = `function_call`) | Tool assembly start |
-| `response.output_item.done` (`item.type` = `reasoning`) | Reasoning close + `provider_data` |
+| `response.output_item.done` (`item.type` = `reasoning`) | Reasoning close + `provider_data` when the item has a non-empty `encrypted_content`; otherwise the part stays open (see terminal capture) |
 | `response.output_item.done` (`item.type` = `function_call`) | Tool call finalize |
 | `response.function_call_arguments.delta` | Tool args delta |
 | `response.output_text.delta` / `response.output_text.done` | Text stream |
-| `response.completed` | Usage + finish (`ToolCalls` if any tool was seen, else `Stop`) |
-| `response.incomplete` | Usage + `Length` |
+| `response.completed` | Usage + terminal capture (below) + finish (`ToolCalls` if any tool was seen, else `Stop`) |
+| `response.incomplete` | Usage + terminal capture (below) + `Length` |
 | `response.failed` | `ProviderError::Http` from `/response/error/message` |
 | bare `error` | `ProviderError::Http` from error message fields |
+
+Terminal capture: some streams deliver a full `reasoning` item (with
+`encrypted_content`) only in `/response/output` of the terminal frame, either
+without an `output_item.done` or after a summary-only one. For each
+`/response/output[i]` with `type: "reasoning"` whose part at output index `i`
+has not ended yet, the decoder emits `ReasoningStart` (if needed) and one
+`ReasoningEnd { provider_data: Some(item) }` before `MessageFinished`; the
+streamed summary text is kept. If the terminal item has no `encrypted_content`
+either, the summary-only `output_item.done` item is used. Rules that keep the
+replayed history in order and intact:
+
+- A part already closed is left alone: a second `ReasoningEnd` would replace
+  its streamed text with an empty one.
+- A reasoning item with no part yet is skipped, with a warning, when a later
+  output item already started a part: its part would land after that item's
+  and replay out of order. `output_item.added` for reasoning prevents this by
+  opening the part when the item starts.
+- Text still open at an earlier output index gets its `TextEnd` before a
+  terminal reasoning item closes, since the kernel records text at `TextEnd`
+  and would otherwise record it after the reasoning.
+- A part left open by a summary-only `output_item.done` with no terminal item
+  closes at finish with that summary-only item as `provider_data`.
+
+When `/response/input_transformations` lists entries with
+`action: "removed"` and `type: "reasoning"`, the decoder logs one warning
+(`responses upstream removed reasoning items from input`, with the count and
+the `reason` values) — the endpoint dropped replayed reasoning from the input.
+
+Two different upstream behaviours lose replayed reasoning:
+
+- **Prefix-bound removal, reported.** An endpoint that binds each reasoning
+  item to the history before it removes the item when that history changed in
+  place, and reports it in `/response/input_transformations`, for example
+  `{"action": "removed", "type": "reasoning", "reason": "prefix_mismatch"}`.
+  hya changes earlier history in place in known cases: after an image step,
+  `ToolImageReplay` replaces the earlier result's `[input_text, input_image]`
+  content with a text placeholder in the next request; `shake` replaces an
+  older tool output with its `eviction_notice`
+  ([compaction](../compaction.md#shake)); and a transient notice is appended
+  for one request and removed from the next.
+- **Unconditional drop, unreported.** A gateway or transcoding endpoint may
+  return reasoning items without `encrypted_content` and drop every input
+  `type: "reasoning"` item on later requests, even when the history only
+  grew. No HTTP error and no `input_transformations` entry mark it.
+
+The decoder's warning covers the reported removals. The unreported drop is
+found by the kernel from provider usage, on rounds whose history only grew: it
+skips rounds where hya itself changed earlier history (image note, tool-output
+eviction, rewrite or compaction, transient notices), and tells the model once
+per turn to keep its working state in visible text
+([dropped-reasoning notice](../kernel.md#dropped-reasoning-notice)).
 
 Grok Build uses a decoder variant that **requires** a typed terminal
 (`response.completed` or `response.incomplete`); otherwise finish errors with a
@@ -566,34 +660,53 @@ Responses kinds that support compact expose `POST {base}/responses/compact` via
 [`anthropic.rs`](../../crates/hya-provider/src/anthropic.rs) encodes requests
 for Anthropic Messages:
 
-- system prompt is placed only in the top-level `system` field
-- **`Message::System` rows in the message history are dropped** — they never
-  become wire messages; only `CompletionRequest.system` reaches Anthropic
-- tools use Anthropic `input_schema`
+- top-level system prompt is placed in `system`
+- mid-conversation `Message::System` rows (compaction summaries and notices)
+  are encoded as coalesced `user` text at the position they were injected so
+  the top-level `system` prompt-cache prefix stays stable
+- tools use Anthropic `input_schema`; decoded `tool_use.id` (`provider_data.call_id`)
+  is replayed in both `tool_use.id` and `tool_result.tool_use_id` on same-model turns
 - assistant `tool_use` blocks are paired with following user `tool_result`
   blocks
 - `stop_reason: tool_use` maps to `FinishReason::ToolCalls`
 - `stop_reason: max_tokens` maps to `FinishReason::Length`
 
-### `max_tokens` and thinking budget
+### Adaptive thinking, `max_tokens`, and thinking budget
 
 The encoder always emits `{ model, messages, stream: true, max_tokens }` (plus
-optional `system`, `tools`, `thinking`).
+optional `system`, `tools`, `thinking`, `output_config`).
 
-- When the model has a known output limit, the route has already set
-  `CompletionRequest.max_output_tokens` to it (or clamped an explicit value);
-  see [Per-model limits](#per-model-limits).
-- When `max_output_tokens` is still absent (no known limit), **`max_tokens`
-  defaults to 4096**, which caps output length on Anthropic routes.
-- When a thinking budget is set from reasoning effort
-  (`reasoning.anthropic_budget()`), the body includes
-  `thinking: { type: "enabled", budget_tokens: <budget> }`, and `max_tokens` is
-  raised to `budget + 4096` if the current value would not already exceed the
-  budget (`max_tokens <= budget`).
-- A known limit caps that raise. If the capped `max_tokens` cannot exceed the
-  budget, the budget shrinks to `max(max_tokens - 4096, max_tokens / 2)`; if the
-  result is below Anthropic's 1024-token minimum, `thinking` is omitted. The
-  body therefore always satisfies `budget_tokens < max_tokens <= limit`.
+- **Adaptive thinking (Claude 4.6 / 4.7 / 4.8 / 5.x+)**: models whose parsed
+  Claude version is `>= (4, 6)` never receive `budget_tokens`. When reasoning
+  effort is non-`Off`:
+  - `thinking` is encoded as
+    `{"type": "adaptive", "display": "summarized"}`
+  - `output_config` is encoded as
+    `{"effort": "low" | "medium" | "high" | "xhigh" | "max"}` (`Minimal` maps
+    to `"low"`)
+  - if any current-turn signed `thinking` or `redacted_thinking` block is
+    replayed in `messages`, `thinking.block_binding` is set to
+    `{"prefix_mismatch_behavior": "drop_block"}` and `HttpProvider` merges the
+    beta token `thinking-binding-controls-2026-08-01` into the `anthropic-beta`
+    request header (deduplicated, preserving caller beta tokens)
+  - `max_tokens` uses the explicit request limit, else the model's known
+    output limit, else **16384** (`ADAPTIVE_DEFAULT_MAX_TOKENS`), clamped to any
+    known model output limit
+- **Extended-thinking budget (Claude <= 4.5 and non-Claude compatible models)**:
+  - When the model has a known output limit, the route has already set
+    `CompletionRequest.max_output_tokens` to it (or clamped an explicit value);
+    see [Per-model limits](#per-model-limits).
+  - When `max_output_tokens` is still absent (no known limit), **`max_tokens`
+    defaults to 4096**, which caps output length on Anthropic routes.
+  - When a thinking budget is set from reasoning effort
+    (`reasoning.anthropic_budget()`), the body includes
+    `thinking: { type: "enabled", budget_tokens: <budget> }`, and `max_tokens`
+    is raised to `budget + 4096` if the current value would not already exceed
+    the budget (`max_tokens <= budget`).
+  - A known limit caps that raise. If the capped `max_tokens` cannot exceed the
+    budget, the budget shrinks to `max(max_tokens - 4096, max_tokens / 2)`; if
+    the result is below Anthropic's 1024-token minimum, `thinking` is omitted.
+    The body therefore always satisfies `budget_tokens < max_tokens <= limit`.
 
 ### Media
 
@@ -604,30 +717,56 @@ encode with
 `ProviderError::Incompatible("Anthropic messages does not support assistant media type <mime>")`.
 
 Like the OpenAI decoder, the Anthropic decoder converts provider-specific
-stream events into the same hya event variants.
+stream events into the same hya event variants, concatenates chunked
+`signature_delta` fragments onto the active thinking block, and logs a warning if
+`input_transformations` reports dropped thinking blocks.
 
 Anthropic thinking blocks are preserved for replay through the canonical
 `Part::Reasoning.provider_data` envelope. A signed block stores
 `{"type":"thinking","signature":"..."}` at `ReasoningEnd`; a redacted block
 stores `{"type":"redacted_thinking","data":"..."}` and emits no readable
-reasoning delta. During encoding, only reasoning after the latest user message
-containing text is replayed, and only these envelopes are accepted. Replayed
-thinking blocks precede text and `tool_use` blocks in each assistant cluster.
-Legacy histories that place final text after tool calls fold that text back before
-the tool calls in the final assistant cluster to avoid Anthropic treating the
-request as an assistant prefill.
+reasoning delta. During encoding, only signed reasoning belonging to the active
+assistant turn after the latest real user message (`current_turn_start` skips
+trailing harness transient notices rendered as `Message::User`, such as bare
+clock/deadline/continuation/goal/dropped-reasoning notices) and produced by the
+same normalized model (`same_model_id`) is replayed, and only these envelopes
+are accepted. Replayed thinking blocks precede text and `tool_use` blocks in
+each assistant cluster. Legacy histories that place final text after tool calls
+fold that text back before the tool calls in the final assistant cluster to
+avoid Anthropic treating the request as an assistant prefill.
 
 ## Google Protocol
 
 [`google.rs`](../../crates/hya-provider/src/google.rs) encodes requests for
-Gemini:
+Gemini (`ProviderKind::Google`, `ReasoningReplayPolicy::GoogleThought`):
 
-- system prompts become `systemInstruction` (top-level system plus any
-  `Message::System` history rows concatenated)
+- top-level `CompletionRequest.system` populates `systemInstruction` without
+  mutating it mid-turn; mid-conversation `Message::System` rows (such as
+  compaction markers) are emitted as coalesced `role: "user"` text parts inside
+  `contents` to preserve prompt-prefix caching
 - user text and canonical media parts become `contents[].parts`
-- tools become Gemini function declarations
-- tool results become `functionResponse` parts
-- reasoning effort maps to Gemini thinking-budget settings
+- tools become Gemini function declarations; assistant turns are split per step
+  (`google_assistant_clusters`) into alternating `role: "model"` and
+  `role: "user"` (`functionResponse`) entries, coalescing adjacent same-role
+  entries
+- when the assistant message's served model matches the target request model
+  (`same_model_id`), the encoder replays `google_thought` parts
+  (`{"thought": true, "text": ..., "thoughtSignature"?: ...}`), attaches
+  `google_text_signature` (`thoughtSignature` on the preceding text part), and
+  preserves `functionCall.id` / `functionResponse.id` and `functionCall`
+  `thoughtSignature` (with only the first call of a parallel batch or each
+  sequential step carrying one, as required by Gemini 3+ anti-distillation
+  checks); across model switches all signatures, thought parts, and upstream IDs
+  are stripped
+- `generationConfig.thinkingConfig`: Gemini 3+ (`gemini-3*`, `gemini-4*`, …)
+  emits `{"thinkingLevel": "minimal" | "low" | "medium" | "high", "includeThoughts": true}`
+  (`XHigh` and `Max` map to `"high"`), never pairing `thinkingBudget`;
+  Gemini 2.5 and legacy/generic ids emit
+  `{"thinkingBudget": <tokens>, "includeThoughts": true}` when reasoning is
+  `High`/`XHigh`/`Max`
+- because Gemini replays opaque `thoughtSignature` tokens without billing
+  prior `thoughtsTokenCount` back into `promptTokenCount`,
+  `ReasoningReplayPolicy::GoogleThought.expands_next_prompt()` returns `false`
 
 ### Inline media contract
 
@@ -654,8 +793,15 @@ is sent as `inlineData: { mimeType, data }`.
 
 ### Decoder and finish reasons
 
-The decoder reads **`candidates[0]` only**, coalesces all text parts into a
-single text part, and closes on the first `finishReason` it sees.
+The decoder reads **`candidates[0]` only**, routes `part.thought == true` to
+`ReasoningStart`/`ReasoningDelta`/`ReasoningEnd` (`provider_data:
+{"type": "google_thought", "thought_signature"?: ...}`), separates non-thought
+text parts (capturing any trailing `thoughtSignature` as
+`{"type": "google_text_signature", "thought_signature": ...}`), captures
+`functionCall.id` (`provider_data.call_id`) and `functionCall`
+`thoughtSignature` (`provider_data.thought_signature`), closes open
+reasoning/text parts before each transition so persisted part order matches the
+stream, and closes on the first `finishReason` it sees.
 
 | Condition | hya `FinishReason` |
 | --- | --- |
@@ -699,12 +845,39 @@ renders it per request ([`wire.rs`](../../crates/hya-provider/src/wire.rs)
 - Otherwise (`Some(false)`, unknown, a rejected image, or the Google route)
   the result stays text and gets the line `[The image attached to this result
   (<mime>) is not shown to you. Inspect it with a program instead …]`.
-- A request carries at most **16 MiB** of tool-result image data (data URL
-  length, about the base64 length). Walking back from the newest image, images
-  are sent until the next one would exceed that; it and every older image
-  become the line `[The image attached to this result (<mime>) is no longer
-  attached: newer images fill this request's image budget. Read the file again
-  to see it.]`.
+- A tool-result image is sent at most once: in the request that follows the
+  round that read it ([`context.rs`](../../crates/hya-proto/src/context.rs)
+  `ToolImageReplay`). That round is the last step of the assistant message
+  the request continues: the completed tool results among the parts of that
+  step. The request builder records where the step starts
+  (`Message::Assistant.last_step_start`, from the projection's
+  `last_step_start`) on the turn's own assistant message only, in bare and
+  full mode alike. So a request after a step without tool calls (a completion
+  check, an empty response) or the first request of a new turn sends no
+  tool-result image, and neither does a message without step information
+  (older logs, side requests such as titles and summaries).
+- Inside that round, images are taken in the order of the round's tool parts
+  and their sizes (data URL length, about the base64 length) added up. The
+  first image is always attached, without any notice, even when it alone
+  exceeds the budget; each later image is attached while the total stays
+  within **2 MiB**. A later image that takes the total over 2 MiB and every
+  image after it in the round get the line `[The image attached to this result (<mime>) was not
+  shown: this step's images exceed what one request can carry. Read it again
+  in a later step, fewer images at a time.]`.
+- On a route that takes tool-result images, every image of an earlier round
+  gets the line `[An image is sent to you only in the request right after the
+  call that produced it; later requests, like this one, carry this note
+  instead. This is the normal course, not a failure. To look at the image of
+  this result (<mime>), make the call again (for a file: read it again).]`;
+  on a route that does not, it keeps the "not shown to you" line above. The
+  line says this is the normal course because models read a bare "not
+  attached" as a failed attachment and stopped reading images. It does not
+  say the image was shown: the round's budget, a rejected media type, or a
+  model without image input at the time may have kept it out of its own
+  round's request. Every request that carries
+  image data is slow and costs tokens, and what the model concluded from the
+  image stays in its replayed reasoning and text. To look again, the model
+  reads the file again; the bare `read` description says so.
 - When the coding-tool result cap dropped an attachment for size
   (`metadata.attachmentsTruncated`; the cap keeps at most 2 MiB of serialized
   attachments per result), the text says the attachment is not shown, for
@@ -712,9 +885,15 @@ renders it per request ([`wire.rs`](../../crates/hya-provider/src/wire.rs)
   (a file over about 1.5 MiB); its text says so and suggests downscaling or
   cropping the image with a program and reading the smaller file.
 
-The rendering depends only on the stored history and the model, so an image
-stays at the same place in every later request of the session and the prompt
-cache prefix is stable, until newer images push it out of the request budget.
+The rendering depends only on the messages of the request and the route
+(protocol and the model's image input). In bare mode those messages come from
+the log alone, so a request rebuilt for the same point of the log with the
+same route settings is identical; in full mode the same holds for the same
+harness inputs and hook output. A retried round sends the same request again,
+image included. A hook that replaces the messages has to keep
+`last_step_start` on the assistant message it continues, or no tool-result
+image is sent. From the second request after the round that read it, a tool
+result carries its notice instead of its image.
 A result without images is encoded exactly as before.
 
 ## Usage Reporting
@@ -858,7 +1037,14 @@ models are surfaced through `hya models`, the v1 catalog routes
 saved-token auth commands. See
 [`../configuration.md`](../configuration.md) for the YAML shape.
 
-Tool argument decoding is strict across Chat Completions, Responses, and
-Anthropic streams. Invalid or truncated argument JSON returns
-`ProviderError::Decode` with the tool name and JSON parse location. No
-`ToolCallRequested` with a substituted null input is emitted for that call.
+Tool argument decoding never substitutes or repairs arguments. On the Chat
+Completions, Responses, and Anthropic streams, argument text that is not valid
+JSON (truncated, or followed by extra text) is still emitted as
+`ToolCallRequested`. Its input is the marker
+`{"invalid_json_arguments": {"text": <raw text>, "error": <parser error with
+line and column>}}`, which `hya_provider::invalid_tool_arguments` both builds
+and recognises. The kernel fails such a call before any tool runs, and the
+model receives the parser error as a failed tool result ([kernel](../kernel.md#tool-calls-whose-arguments-are-not-valid-json)).
+The marker is an object, so every request builder replays it as the call's
+arguments. Empty argument text still returns `ProviderError::Decode` with the
+tool name and parse location.

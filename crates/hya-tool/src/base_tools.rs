@@ -28,6 +28,16 @@ pub struct BaseToolsPreset {
     protected_names: Vec<String>,
     schemes: Vec<BaseToolScheme>,
     tools: Vec<BaseToolExposure>,
+    file_operations_rule: Option<FileOperationsRule>,
+}
+
+/// A family's replacement for the kernel prompt's rule that sends file
+/// operations to `bash`, used when the round offers one of `tools`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileOperationsRule {
+    text: String,
+    tools: Vec<String>,
 }
 
 /// One builtin URI scheme declaration retained by the preset owner.
@@ -58,6 +68,10 @@ pub struct BaseToolExposure {
     /// load or lexicographic order.
     #[serde(default)]
     overrides: Option<String>,
+    /// The tool's line in the system prompt's `<tools>` list (the text after
+    /// `- <name>: `); a tool without one is not listed.
+    #[serde(default)]
+    prompt: Option<String>,
 }
 
 /// An alternate exported spelling and whether models see its schema.
@@ -88,6 +102,8 @@ struct ExposurePolicy {
     #[serde(default)]
     schemes: Vec<BaseToolScheme>,
     tools: Vec<BaseToolExposure>,
+    #[serde(default)]
+    file_operations_rule: Option<FileOperationsRule>,
 }
 
 const fn default_exposed() -> bool {
@@ -118,6 +134,7 @@ fn load_preset(identity: &str) -> Result<BaseToolsPreset, String> {
         schemes: policy.schemes,
         protected_names: policy.protected_names,
         tools: policy.tools,
+        file_operations_rule: policy.file_operations_rule,
     })
 }
 
@@ -173,6 +190,30 @@ fn validate_policy(policy: &ExposurePolicy, identity: &str) -> Result<(), String
         .find(|scheme| !names.contains(scheme.tool.as_str()))
     {
         return Err(format!("scheme tool is not canonical: {}", scheme.tool));
+    }
+    if let Some(tool) = policy.tools.iter().find(|tool| {
+        tool.prompt
+            .as_deref()
+            .is_some_and(|line| line.trim().is_empty() || line.contains('\n'))
+    }) {
+        return Err(format!(
+            "prompt of {} must be one non-empty line",
+            tool.name
+        ));
+    }
+    if let Some(rule) = &policy.file_operations_rule {
+        if rule.text.trim().is_empty() || rule.text.contains('\n') {
+            return Err("file_operations_rule text must be one non-empty line".to_string());
+        }
+        if let Some(tool) = rule
+            .tools
+            .iter()
+            .find(|tool| !names.contains(tool.as_str()))
+        {
+            return Err(format!(
+                "file_operations_rule tool is not canonical: {tool}"
+            ));
+        }
     }
     Ok(())
 }
@@ -365,6 +406,28 @@ pub fn tool_bundle_presets() -> &'static [BaseToolsPreset] {
     PRESETS.get_or_init(|| {
         load_presets().unwrap_or_else(|error| panic!("load tool-family policy {error}"))
     })
+}
+
+/// The `<tools>` line the tool families declare for `name`; when two families
+/// export it, the line of the entry that overrides the other.
+#[must_use]
+pub fn tool_prompt(name: &str) -> Option<&'static str> {
+    tool_bundle_presets()
+        .iter()
+        .filter_map(|preset| preset.tool(name))
+        .max_by_key(|tool| tool.overrides.is_some())
+        .and_then(|tool| tool.prompt.as_deref())
+}
+
+/// The rule a tool family declares in place of the kernel prompt's
+/// file-operations rule, when `offered` accepts one of the tools it names.
+#[must_use]
+pub fn file_operations_rule(offered: impl Fn(&str) -> bool) -> Option<&'static str> {
+    tool_bundle_presets()
+        .iter()
+        .filter_map(|preset| preset.file_operations_rule.as_ref())
+        .find(|rule| rule.tools.iter().any(|tool| offered(tool)))
+        .map(|rule| rule.text.as_str())
 }
 
 /// Return the foundational `hya/base-tools` policy for compatibility.

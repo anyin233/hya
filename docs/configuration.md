@@ -34,9 +34,9 @@ use built-in defaults:
 | `permission` | Static invocation rules (`allow` / `ask` / `deny`) and default permission model. | [Permissions](#permissions) |
 | `mcp` | Local stdio and remote HTTP MCP servers (`mcp.<server>`). | [MCP Servers](#mcp-servers) |
 | `plugins` | Out-of-process stdio JSON-RPC plugins (`rust`, `bun`, `claude`). | [Plugins](#plugins) |
-| `tools` | Tool-plane settings: `tools.websearch` (`exa` or `parallel`) and `tools.code.mode` (`normal`, `with_tools`, `only`). | [Web Search](#web-search), [Code Mode](#code-mode) |
+| `tools` | Tool settings for `tools.webfetch.enabled`, `tools.websearch` (`exa` or `parallel`), and `tools.code.mode` (`normal`, `with_tools`, `only`). | [Web Fetch](#web-fetch), [Web Search](#web-search), [Code Mode](#code-mode) |
 | `subagents` | Concurrency permits and per-team resident turn/mail/spawn governor budgets. | [Subagent Limits](#subagent-limits) |
-| `compaction` | Context-reduction thresholds, token accounting mode, and 5-stage method order. | [Compaction](compaction.md) |
+| `compaction` | The tail `shake` keeps, the terminal handoff's output cap, and the token accounting mode. | [Compaction](compaction.md) |
 | `goal` | Independent evaluator model (`goal.evaluator_model`) for `-p` Goal mode and `loop`. | [Goal and Loop Authoring](goal-loop-authoring.md) |
 | `provider_retry` | Global HTTP/stream retry budget (overridable per provider and via `HYA_PROVIDER_RETRY_*`). | [Provider Retry](#provider-retry) |
 | `formatter`, `lsp` | Post-edit code formatters and language-server selections. | [Formatter](#formatter), [LSP](#lsp) |
@@ -160,8 +160,8 @@ default_agent: hya-main
 
 ## Remembered Agent Models
 
-Agent model selection covers primary Agents, ordinary subagents, and hidden
-`hya-title`, `hya-summary`, and `hya-compaction` Agents. Defaults and temporary
+Agent model selection covers primary Agents, ordinary subagents, and the hidden
+`hya-title` Agent. Defaults and temporary
 choices have separate owners: user configuration files, remembered defaults in
 the backend Session database, and temporary overrides in the root Session
 event stream. Attached and remote clients update the backend's state, not the
@@ -367,29 +367,14 @@ subagents:
   per_team_turn_budget: 1024
   per_team_message_budget: 1024
 
-# Context management (optional; defaults shown). Thresholds and the token
-# accounting they are measured with. Per-field HYA_COMPACTION_* and
-# HYA_TOKEN_ACCOUNTING env vars override these. The five reduction
-# mechanisms and the method_order semantics are documented in
-# docs/compaction.md.
+# Context management (optional; defaults shown). The kernel reduces the
+# Context at a fixed 80% of the model's window; these settings tune full
+# mode's extension steps. Per-field HYA_COMPACTION_* and HYA_TOKEN_ACCOUNTING
+# env vars override these. See docs/compaction.md.
 compaction:
-  token_threshold: 100000      # used when the route advertises no window
-  keep_recent: 6               # messages kept verbatim
-  context_fraction: 0.75       # share of an advertised window
-  reserve_tokens: 16384        # held back for the reply; tighter bound wins
-  summary_max_tokens: 4096     # output cap for the summarizer call
-  token_accounting: auto       # auto | provider | estimate
-  # Order the five built-in reduction mechanisms (oh-my-pi names) are tried in
-  # when a turn crosses the threshold. The walk stops at the first mechanism
-  # that fits; an unavailable one (unsupported route, no summarizer) advances
-  # to the next. A partial list is completed with the unmentioned names in
-  # default order; an unknown name ignores the whole list.
-  #   shake        evict stale tool outputs to artifact:// handles (no model)
-  #   remote       provider-native compaction (/responses/compact)
-  #   soft         structured LLM summary of the folded prefix
-  #   snapcompact  local deterministic dense archive (no model call)
-  #   handoff      LLM handoff document over the verbatim transcript
-  method_order: [shake, remote, soft, snapcompact, handoff]
+  keep_recent: 6               # messages and tool steps whose outputs shake keeps
+  summary_max_tokens: 4096     # output cap for the terminal handoff
+  token_accounting: auto       # auto | provider | estimate (ContextStatus)
 
 # Logical model categories → ordered provider/model failover lists.
 categories:
@@ -581,7 +566,7 @@ the v1 `ModelSummary.source` field (`remote`, `config`, `override`, or
 | `limit.context` | positive `u32` | Context window (see [Model limits](#model-limits)). |
 | `limit.output` | positive `u32` | Max output tokens (see [Model limits](#model-limits)). |
 | `reasoning` | `true`, `false`, or `{default?, variants?}` | `false` advertises no effort menu (same as `variants: []`); `true` keeps the remote or provider-kind menu; the mapping is described in [Reasoning metadata](#reasoning-metadata). |
-| `modalities.input` | list of names (`text`, `image`, ...) | Whether the model accepts images: with `image` in the list, prompt image attachments are sent; without it, a prompt turn with attachments is refused with `invalid_argument` before anything runs. Unset means unknown, and attachments are allowed. Only a model with `image` in the list also gets the images tools return (for example `read` of a PNG) as images; any other model is told in text that the image is not shown. A tool result attaches at most 2 MiB of image data and a request carries at most 16 MiB, newest first (see [Tool-result images](architecture/providers.md#tool-result-images)). Shown as v1 `ModelSummary.imageInput`. `modalities.output` is accepted and ignored. See [Prompt attachments](protocol/README.md#prompt-attachments-images). |
+| `modalities.input` | list of names (`text`, `image`, ...) | Whether the model accepts images: with `image` in the list, prompt image attachments are sent; without it, a prompt turn with attachments is refused with `invalid_argument` before anything runs. Unset means unknown, and attachments are allowed. Only a model with `image` in the list also gets the images tools return (for example `read` of a PNG) as images; any other model is told in text that the image is not shown. A tool result attaches at most 2 MiB of image data. A tool-result image is sent only in the request after the round that read it, up to 2 MiB per round in call order (the first always); later requests carry a notice telling the model to read the file again. Each image costs time and tokens on every request that carries it (see [Tool-result images](architecture/providers.md#tool-result-images)). Shown as v1 `ModelSummary.imageInput`. `modalities.output` is accepted and ignored. See [Prompt attachments](protocol/README.md#prompt-attachments-images). |
 
 ```yaml
 providers:
@@ -907,8 +892,8 @@ ones field by field.
 
 1. When the model's output limit is known (a configured `limit.output`, or a
    non-zero cached output limit for a remote model), a request without an
-   explicit max-tokens value sends the limit, and an explicit value (compaction
-   summaries, titles, plugin or model policy) larger than the limit is clamped
+   explicit max-tokens value sends the limit, and an explicit value (terminal
+   handoffs, titles, plugin or model policy) larger than the limit is clamped
    to it. Anthropic sends it as `max_tokens`, OpenAI-compatible Chat as
    `max_tokens`, Responses (`openai-response`, `openai-codex`, `grok-build`) as
    `max_output_tokens`, and Google as `generationConfig.maxOutputTokens`.
@@ -1266,6 +1251,18 @@ and starts them again. Scopes are checked at every bind and by a sweep every
 60 seconds, so an idle server releases them too. A scope that a live turn is
 bound to is never dropped.
 
+## Web Fetch
+
+`tools.webfetch.enabled` is a boolean and defaults to `true`. To disable the
+built-in URL fetch tool and its `fetch` alias while keeping web search available,
+set this in the startup configuration:
+
+```yaml
+tools:
+  webfetch:
+    enabled: false
+```
+
 ## Web Search
 
 Web search is enabled by default and uses Exa without authentication. Override
@@ -1438,13 +1435,9 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 | Variable | Effect | Default | Source |
 | --- | --- | --- | --- |
 | `HYA_MODEL` | Active request model when `--model` is not passed. **Wins over** the row-backed startup default. Unknown overrides stay outside the catalog and fail through normal routing when used. | Configured `default_model` when it names a resolved row, otherwise the deterministic first live row, otherwise `hya/offline`. | `crates/hya-app/src/runtime.rs`, `crates/hya-app/src/config.rs` |
-| `HYA_COMPACTION_THRESHOLD` | Estimated tokens that trigger context compaction, used when the route advertises no context window. Overrides `compaction.token_threshold`; **env wins**. Unparseable values ignored. | `100000` | `crates/hya-engine/src/compaction.rs`, `crates/hya-app/src/config.rs` |
-| `HYA_COMPACTION_KEEP_RECENT` | Most-recent messages kept verbatim during compaction. Overrides `compaction.keep_recent`; env wins. Unparseable values ignored. | `6` | same |
-| `HYA_COMPACTION_CONTEXT_FRACTION` | Share of an advertised `max_context` window the transcript may occupy. With a window, the trip threshold is the **tighter** of `window * fraction` and `window - reserve_tokens`, floored at `1000`. Missing or zero window, or a fraction outside `(0.0, 1.0]`, falls back to `HYA_COMPACTION_THRESHOLD`. Overrides `compaction.context_fraction`; env wins. | `0.75` | same |
-| `HYA_COMPACTION_RESERVE_TOKENS` | Tokens held back from the advertised window for the model's reply. Bounds the trigger independently of the fraction: a generous fraction on a large window can still leave less headroom than the reply needs. Overrides `compaction.reserve_tokens`; env wins. | `16384` | same |
-| `HYA_COMPACTION_SUMMARY_MAX_TOKENS` | Output cap for the summarizer call that folds the transcript prefix. The structured section template does not fit a smaller cap, and a truncated summary loses its trailing sections — the ones describing what to do next. Overrides `compaction.summary_max_tokens`; env wins. | `4096` | same |
-| `HYA_COMPACTION_METHOD_ORDER` | Comma-separated order of the five compaction mechanisms (`shake`, `remote`, `soft`, `snapcompact`, `handoff` — oh-my-pi `methodOrder` names). A partial list is completed with the unmentioned mechanisms in default order; an unknown name ignores the value. Overrides `compaction.method_order`; env wins. | `shake,remote,soft,snapcompact,handoff` | `crates/hya-engine/src/compaction.rs`, `crates/hya-app/src/config.rs` |
-| `HYA_TOKEN_ACCOUNTING` | How window occupancy is measured. `auto` believes a route's reported usage only while it advertises usage support and stays plausible against the local estimate (ratio within `[0.5, 2.0]`), otherwise estimates locally; `provider` always trusts reported usage; `estimate` always counts locally. Overrides `compaction.token_accounting`; env wins. Unrecognized values ignored. | `auto` | `crates/hya-tool/src/tokens.rs`, `crates/hya-app/src/config.rs` |
+| `HYA_COMPACTION_KEEP_RECENT` | Most-recent messages and tool steps whose outputs `shake` keeps. Overrides `compaction.keep_recent`; env wins. Unparseable values ignored. | `6` | `crates/hya-engine/src/compaction.rs`, `crates/hya-app/src/config.rs` |
+| `HYA_COMPACTION_SUMMARY_MAX_TOKENS` | Output cap for the summarizer call that writes the terminal handoff. Overrides `compaction.summary_max_tokens`; env wins. | `4096` | same |
+| `HYA_TOKEN_ACCOUNTING` | How window occupancy is measured for `ContextStatus`. `auto` believes a route's reported usage only while it advertises usage support and stays plausible against the local estimate (ratio within `[0.5, 2.0]`), otherwise estimates locally; `provider` always trusts reported usage; `estimate` always counts locally. Overrides `compaction.token_accounting`; env wins. Unrecognized values ignored. | `auto` | `crates/hya-tool/src/tokens.rs`, `crates/hya-app/src/config.rs` |
 | `HYA_SUBAGENT_MAX_CONCURRENCY` | Overrides `subagents.max_concurrency`. Env wins. | `100` | same |
 | `HYA_SUBAGENT_BUDGET` | Overrides `subagents.per_run_budget` (env name drops `PER_RUN`). Env wins. | `1024` | same |
 | `HYA_SUBAGENT_TURN_BUDGET` | Overrides `subagents.per_team_turn_budget`. Env wins. | `1024` | same |
@@ -2186,9 +2179,12 @@ and the workdir-local one last
 or missing files are skipped silently. This is the sole discovery
 implementation — callers re-export it rather than reimplement walk order.
 
-A full-mode session records its working directory, platform, UTC date, and
-discovered `AGENTS.md` text at the start of its first model turn. Later
-rounds and backend restarts use that same context. To apply an edit to a
+A full-mode session records its platform, UTC date, and discovered
+`AGENTS.md` text at the start of its first model turn, after the kernel
+prompt, which carries the working directory in `<cwd>`
+([Kernel](kernel.md#system-prompt)). Later rounds and backend restarts use
+that same context. A session recorded before the kernel prompt led the full
+mode's system prompt keeps its recorded `- cwd:` line. To apply an edit to a
 running session, run `/reload-context` in the TUI (or `POST
 /v1/sessions/{id}/refresh-context`, `RefreshSessionContext`): it discards the
 recorded context (`InitialContextInvalidated`), and the session's next turn

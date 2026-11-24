@@ -25,6 +25,8 @@ use crate::{AgentResourcePolicy, TurnBinding};
 mod harness;
 pub(super) mod messages;
 pub(super) mod rewrite_host;
+#[cfg(test)]
+mod route_retry_test;
 mod tool_gate;
 
 pub use messages::advertise_tool;
@@ -36,6 +38,7 @@ pub(super) fn tool_available(name: &str, interaction_available: bool) -> bool {
 }
 
 struct TurnExecution<'a> {
+    ran_known_tool: Option<&'a mut bool>,
     binding: TurnBinding,
     resources: Arc<CompiledResourceView>,
     agents: Arc<[AgentDef]>,
@@ -59,6 +62,8 @@ struct TurnExecution<'a> {
     workflow_route: Option<&'a WorkflowTurnRoute>,
     /// Round-boundary rebind inputs, present for Root activations only.
     rebind: Option<TurnRebindInputs<'a>>,
+    /// Per-turn fallback holding last successful SQL preference reads.
+    effort_fallback: super::TurnEffortFallback,
 }
 
 /// What a Root activation retains so a round-boundary rebind can recompile.
@@ -75,6 +80,7 @@ struct TurnRebindInputs<'a> {
 
 /// Request-local context shared by one governed turn activation.
 pub(crate) struct TurnRequestContext<'a> {
+    ran_known_tool: Option<&'a mut bool>,
     cancel: CancellationToken,
     external_dirs: &'a [PathBuf],
     guidance: Option<Arc<str>>,
@@ -105,6 +111,7 @@ impl<'a> TurnRequestContext<'a> {
             actor_claim,
             explicit_model: None,
             workflow_route,
+            ran_known_tool: None,
             lease: None,
             admitted_prompt: None,
         }
@@ -199,7 +206,9 @@ fn workflow_provider_failure_class(error: &ProviderError) -> hya_proto::Workflow
         ProviderError::AuthExpired { .. } => Class::Auth,
         ProviderError::Incompatible(_) => Class::Incompatible,
         ProviderError::Decode(_) => Class::Decode,
-        ProviderError::Json(_) | ProviderError::Http(_) => Class::Http,
+        ProviderError::Json(_) | ProviderError::Http(_) | ProviderError::StreamInterrupted(_) => {
+            Class::Http
+        }
     }
 }
 
@@ -368,7 +377,10 @@ impl SessionEngine {
         let Some(capabilities) = router.capabilities(&request.model) else {
             return Ok(()); // The router reports unknown models through its normal path.
         };
-        let tokens = self.token_accounting.estimate_request(
+        let accounting = self
+            .token_accounting
+            .with_tool_images(router.sends_tool_images(&request.model));
+        let tokens = accounting.estimate_request(
             &request.messages,
             request.system.as_deref(),
             &request.tools,
@@ -408,17 +420,18 @@ impl SessionEngine {
     ///
     /// The route remains request-local. Only pre-stream retryable failures can
     /// advance it, and a returned stream is never replayed on another model.
-    /// Returns the stream with the selected candidate's model.
+    /// Returns the stream with the selected candidate's index.
     async fn stream_with_workflow_route(
         &self,
         request: &CompletionRequest,
         session: SessionId,
         message: MessageId,
         route: &WorkflowTurnRoute,
-    ) -> Result<(EventStream, ModelRef), ProviderError> {
+        pinned: Option<usize>,
+    ) -> Result<(EventStream, usize), ProviderError> {
         let candidates = &route.route().candidates;
         let mut pending_failure = None;
-        for index in route.route().selected_index..candidates.len() {
+        for index in pinned.unwrap_or(route.route().selected_index)..candidates.len() {
             let candidate = &candidates[index];
             route.begin_attempt(index);
             let mut attempt = request.clone();
@@ -431,14 +444,17 @@ impl SessionEngine {
                 .await
             {
                 Ok(stream) => {
-                    route.selected(index, pending_failure);
-                    return Ok((stream, candidate.model.clone()));
+                    if pinned.is_none() {
+                        route.selected(index, pending_failure);
+                    }
+                    return Ok((stream, index));
                 }
                 Err(error) => {
                     let failure = workflow_provider_failure_class(&error);
                     pending_failure = Some(failure);
                     let advance = (error.is_retryable_before_stream()
                         || matches!(error, ProviderError::UnknownModel(_)))
+                        && pinned.is_none()
                         && index + 1 < candidates.len();
                     route.record_failure(index, failure);
                     if !advance {
@@ -474,6 +490,24 @@ impl SessionEngine {
         )
         .await
     }
+    /// Run a headless lead turn and remember calls resolved by any of its
+    /// round bindings, including kernel primitives and activation sidecars.
+    pub async fn run_headless_lead_turn(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+        cancel: CancellationToken,
+        admitted_prompt: Option<MessageId>,
+        ran_known_tool: &mut bool,
+    ) -> Result<FinishReason, CoreError> {
+        self.ensure_external_turn_allowed(session).await?;
+        let mut request = TurnRequestContext::new(cancel, &[], None, None, None)
+            .with_admitted_prompt(admitted_prompt);
+        request.ran_known_tool = Some(ran_known_tool);
+        self.run_turn_with_external_dirs_and_claim(session, agent, TurnActivation::Root, request)
+            .await
+    }
+
     /// Run a turn with temporary ExternalDirectory allow rules for `external_dirs`.
     pub async fn run_turn_with_external_dirs(
         &self,
@@ -820,6 +854,7 @@ impl SessionEngine {
             actor_claim,
             workflow_route,
             explicit_model,
+            ran_known_tool,
             lease: _,
             admitted_prompt: _,
         } = request;
@@ -951,8 +986,15 @@ impl SessionEngine {
                 }
             };
             let (agent, agents, resources) = prepared?;
+            let mut effort_fallback = super::TurnEffortFallback::default();
             // `list_agents` shows the user's runtime/configured Agent efforts.
-            let agents = self.annotate_agent_efforts(agents, Some(&binding)).await?;
+            let agents = self
+                .annotate_agent_efforts_with(
+                    agents,
+                    Some(&binding),
+                    Some((session, &mut effort_fallback)),
+                )
+                .await?;
             let stable_id = projection
                 .session
                 .agent
@@ -987,6 +1029,7 @@ impl SessionEngine {
             drop(message_guard);
 
             let execution = TurnExecution {
+                ran_known_tool,
                 binding,
                 resources,
                 agents,
@@ -1004,6 +1047,7 @@ impl SessionEngine {
                     sidecar_tools: Arc::clone(&root_sidecar_tools),
                     sidecar_hooks,
                 }),
+                effort_fallback,
             };
             let mut rounds = Box::pin(self.run_turn_rounds(session, message, &agent, execution));
             if let Some(loss_token) = sidecar_loss {
@@ -1153,20 +1197,21 @@ impl SessionEngine {
 }
 
 impl SessionEngine {
-    /// Tool schemas a full-mode request offers: the agent's filtered tools
-    /// plus `rewrite` and `todo`, handled by the kernel loop.
+    /// Tool schemas a full-mode request to `model` offers: the agent's
+    /// filtered tools plus `rewrite` and `todo`, handled by the kernel loop.
     fn offered_tools(
         &self,
         resources: &CompiledResourceView,
         depth: u32,
+        model: &ModelRef,
     ) -> Vec<hya_proto::ToolSchema> {
         let mut tools = filtered_tool_schemas(
             resources,
             self.interaction.is_available(),
             depth,
             self.exclusive_tool.as_deref(),
+            model,
         );
-        tools.retain(|tool| tool.name.as_str() != crate::kernel::tools::TODO);
         tools.extend([
             crate::kernel::tools::rewrite_schema(),
             crate::kernel::tools::todo_schema(),

@@ -107,25 +107,36 @@ async fn set_archived(db: &str, id: &str, archived: bool) -> anyhow::Result<()> 
             update_through_server(&server.url, session, archived).await?;
         }
         Writer::Direct(store) => {
-            store.claim_runtime_owner(hya_store::OwnerRunId::new())?;
-            let projection = store.read_projection_shared(session).await?;
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |elapsed| {
-                    i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
-                });
-            let event = session_archive_event(&projection, archived, now);
-            drop(projection);
-            match event {
-                Ok(Some(event)) => {
-                    store
-                        .append_event(session, &event)
-                        .await
-                        .context("append archive event")?;
+            let mut signals = crate::stop_signals::StopSignals::install()?;
+            let work = async {
+                store.claim_runtime_owner(hya_store::OwnerRunId::new())?;
+                let projection = store.read_projection_shared(session).await?;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |elapsed| {
+                        i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
+                    });
+                let event = session_archive_event(&projection, archived, now);
+                drop(projection);
+                match event {
+                    Ok(Some(event)) => {
+                        store
+                            .append_event(session, &event)
+                            .await
+                            .context("append archive event")?;
+                    }
+                    Ok(None) => {}
+                    Err(error) => anyhow::bail!("{error}: {session}"),
                 }
-                Ok(None) => {}
-                Err(error) => anyhow::bail!("{error}: {session}"),
-            }
+                Ok::<(), anyhow::Error>(())
+            };
+            let (outcome, stop) = tokio::select! {
+                outcome = work => (outcome, None),
+                stop = signals.recv() => (Ok(()), Some(stop)),
+            };
+            signals.drain_store_on_exit(&store, stop.is_some()).await;
+            crate::stop_signals::exit_if_stopped(stop);
+            outcome?;
         }
     }
     println!("{verb} {session}");

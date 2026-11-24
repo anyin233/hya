@@ -48,6 +48,8 @@ pub mod nested;
 mod output_cap;
 /// Allow/ask/deny permission plane: invocation policy, resource rules, and asks.
 pub mod permission;
+#[cfg(unix)]
+pub mod process_group;
 /// Read-only activity query scoped to the caller's Project.
 pub mod project_activity;
 /// Project-root path boundary shared by the builtin file tools (ADR-0026).
@@ -73,7 +75,7 @@ pub use workflow_plane::{
 pub use agents::AgentDef;
 pub use base_tools::{
     AliasVisibility, BaseToolAlias, BaseToolExposure, BaseToolScheme, BaseToolsPreset,
-    base_tools_preset, tool_bundle_presets,
+    base_tools_preset, file_operations_rule, tool_bundle_presets, tool_prompt,
 };
 pub use formatter::{
     BuiltinFormatterProvider, FormatterConfig, FormatterEntry, FormatterError, FormatterPlane,
@@ -85,8 +87,9 @@ pub use interaction::{
 };
 pub use lifecycle::{
     ArchiveReceipt, LifecyclePlane, LifecycleRequest, REPORT_ALREADY_ACCEPTED, ReportLatch,
-    WAIT_DEFAULT_TIMEOUT_SECS, WAIT_MAX_TIMEOUT_SECS, WAIT_RESULT_BUDGET, WaitMail, WaitMember,
-    WaitMemberState, WaitMode, WaitOutcome, WaitSpec, WaitWake, wait_tool_schema,
+    WAIT_DEFAULT_TIMEOUT_SECS, WAIT_MAX_TIMEOUT_SECS, WAIT_OUTPUT_BUDGET_CHARS, WaitAckSlot,
+    WaitMail, WaitMailAck, WaitMember, WaitMemberState, WaitMode, WaitOutcome, WaitSpec, WaitWake,
+    wait_tool_schema,
 };
 pub use lsp_plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 pub use mailbox::{
@@ -111,8 +114,7 @@ pub use project_activity::{
 };
 pub use project_scope::ProjectScope;
 pub use rewrite::{
-    CompactionHooks, FoldAgent, ModelHost, ModelWindow, RewriteCtx, Rewriter, SessionLog,
-    SummaryCall, Transcript,
+    CompactionHooks, ModelHost, ModelWindow, Pressure, RewriteCtx, Rewriter, SessionLog, Transcript,
 };
 pub use skill::{SkillError, SkillInfo, SkillPlane};
 pub use skill_catalog::{

@@ -179,6 +179,7 @@ fn head_and_tail(text: &str, n: usize, artifact: Option<&str>) -> String {
 pub fn cap_tool_output_with_policy(output: Value, policy: ToolResultPolicy) -> Value {
     match policy {
         ToolResultPolicy::Default => cap_tool_output(output),
+        ToolResultPolicy::SelfBudgeted => output,
         ToolResultPolicy::Coding => cap_coding_result(output, false),
         ToolResultPolicy::CodingWithDiff => cap_coding_result(output, true),
     }
@@ -1011,6 +1012,9 @@ fn is_allowed_metadata_key(key: &str, include_diff: bool) -> bool {
             | "timeoutSeconds"
             | "timeoutClamped"
             | "deadlineCapped"
+            | "pgid"
+            | "stillRunning"
+            | "exitPath"
             | "pty"
             | "cwd"
             | "entries"
@@ -1082,7 +1086,7 @@ fn bound_metadata_field(
         "diff" | "patch" => return None,
         "filediff" => bound_filediff(value, include_diff, facts),
         "preview" | "output" | "text" => bound_display_value(value, facts),
-        "outputPath" => {
+        "outputPath" | "exitPath" => {
             let Value::String(path) = value else {
                 facts.metadata = true;
                 return None;
@@ -1881,6 +1885,9 @@ fn is_adapter_metadata_flag(key: &str) -> bool {
             | "timeoutSeconds"
             | "timeoutClamped"
             | "deadlineCapped"
+            | "pgid"
+            | "stillRunning"
+            | "exitPath"
             | "pty"
             | "cwd"
             | "lineStart"

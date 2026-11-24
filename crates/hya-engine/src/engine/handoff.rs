@@ -69,8 +69,6 @@ impl SessionEngine {
         {
             let usage = UsageCollector::default();
             let options = SummarizeOptions {
-                handoff: true,
-                state_only: true,
                 previous_summary: previous_doc,
                 max_output_tokens: Some(self.compaction.summary_max_tokens),
                 usage: Some(usage.clone()),

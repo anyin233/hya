@@ -2244,6 +2244,17 @@ fn model_schema_public_names(
             }
             continue;
         }
+        // The kernel loop handles calls of these names itself.
+        if [crate::kernel::tools::REWRITE, crate::kernel::tools::TODO]
+            .contains(&public_name.as_str())
+        {
+            return Err(BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!(
+                    "{kind} name `{public_name}` is reserved for the kernel's own tool"
+                ),
+            });
+        }
         names.insert(public_name.clone());
         covered.insert(canonical_id.clone());
     }

@@ -19,7 +19,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 const MATRIX_REL: &str = "crates/hya-e2e/matrix.toml";
-const TRACK_P_DIR: &str = "crates/hya-e2e/tests";
+const TRACK_P_DIR: &str = "crates/hya-e2e/tests/it";
 
 #[derive(Debug, Deserialize)]
 struct Matrix {

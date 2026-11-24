@@ -203,6 +203,10 @@ impl BundleRegistry {
             .busy_timeout(Duration::ZERO);
         let pool = SqlitePoolOptions::new()
             .max_connections(8)
+            .acquire_timeout(crate::FILE_POOL_WAIT_TIMEOUT)
+            // Closing the last connection of a WAL database checkpoints under an exclusive lock.
+            .max_lifetime(None)
+            .idle_timeout(None)
             .connect_with(options)
             .await?;
         if let Err(error) = Self::migrate(&pool).await {
@@ -242,7 +246,7 @@ impl BundleRegistry {
         bundle_id: &str,
         enabled: bool,
     ) -> Result<u64, StoreError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let current =
             sqlx::query("SELECT generation FROM bundle_registry_generation WHERE singleton = 1")
                 .fetch_one(&mut *transaction)
@@ -802,6 +806,30 @@ mod disabled_tests {
         assert!(registry.disabled_bundle_ids().await?.is_empty());
         registry.pool.close().await;
         std::fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bundle_registry_pool_disables_lifetime_and_idle_retirement()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!(
+            "hya-registry-pool-opts-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("registry.sqlite3");
+        let registry = BundleRegistry::connect(&path.to_string_lossy()).await?;
+        assert_eq!(
+            registry.pool.options().get_acquire_timeout(),
+            crate::FILE_POOL_WAIT_TIMEOUT
+        );
+        assert_eq!(registry.pool.options().get_max_lifetime(), None);
+        assert_eq!(registry.pool.options().get_idle_timeout(), None);
+        registry.pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
         Ok(())
     }
 }

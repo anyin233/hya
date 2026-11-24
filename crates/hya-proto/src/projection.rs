@@ -132,6 +132,11 @@ pub struct SessionProjection {
     /// Highest issued numeric todo id. Stored in the durable snapshot only.
     #[serde(skip)]
     pub todo_last_id: u64,
+    /// Count of this session's `FilesObserved` and `FilesChanged` events: a
+    /// revision of the workspace record that changes whenever it does.
+    /// Stored in the durable snapshot only.
+    #[serde(skip)]
+    pub file_revision: u64,
 }
 
 /// Latest window-occupancy report, mirroring the newest `ContextStatus` event.
@@ -299,6 +304,9 @@ pub enum PartProjection {
         /// [`Event::ContextEvicted`]. `state` keeps the full output.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         eviction_notice: Option<String>,
+        /// Opaque provider-native metadata recorded when the call was requested.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_data: Option<serde_json::Value>,
     },
 }
 
@@ -616,7 +624,7 @@ pub fn session_archive_event(
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 12;
+pub const PROJECTION_REDUCER_VERSION: u32 = 13;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -627,6 +635,8 @@ struct SnapshotRef<'a> {
     workflow_seen_runs: Vec<WorkflowRunId>,
     #[serde(skip_serializing_if = "is_zero")]
     todo_last_id: u64,
+    #[serde(skip_serializing_if = "is_zero")]
+    file_revision: u64,
 }
 
 #[derive(Deserialize)]
@@ -636,6 +646,8 @@ struct SnapshotOwned {
     workflow_seen_runs: BTreeSet<WorkflowRunId>,
     #[serde(default)]
     todo_last_id: u64,
+    #[serde(default)]
+    file_revision: u64,
 }
 
 #[cfg(feature = "lifecycle-bench")]
@@ -748,7 +760,7 @@ impl Projection {
     /// Encode this projection as a durable snapshot.
     ///
     /// Unlike the wire form, the snapshot keeps replay-only reducer state
-    /// (Workflow run dedupe and todo id allocation), so [`Projection::decode_snapshot`] followed by
+    /// (Workflow run dedupe, todo id allocation and the file revision), so [`Projection::decode_snapshot`] followed by
     /// applying the remaining events equals a full replay.
     ///
     /// # Errors
@@ -764,6 +776,7 @@ impl Projection {
             projection: self,
             workflow_seen_runs,
             todo_last_id: self.session.todo_last_id,
+            file_revision: self.session.file_revision,
         })
     }
 
@@ -777,8 +790,10 @@ impl Projection {
             mut projection,
             workflow_seen_runs,
             todo_last_id,
+            file_revision,
         } = serde_json::from_slice(bytes)?;
         projection.session.todo_last_id = todo_last_id;
+        projection.session.file_revision = file_revision;
         if let Some(workflow) = projection.session.workflow.as_mut() {
             workflow.seen_runs = workflow_seen_runs;
         }
@@ -1166,6 +1181,7 @@ impl Projection {
                 files,
                 ..
             } => {
+                self.session.file_revision += 1;
                 if let Some(message) = self.message_mut(*message) {
                     message
                         .file_changes
@@ -1178,6 +1194,7 @@ impl Projection {
                 }
             }
             Event::FilesObserved { files, .. } => {
+                self.session.file_revision += 1;
                 self.session
                     .files
                     .extend(files.iter().map(|file| (file.path.clone(), file.clone())));
@@ -1303,6 +1320,7 @@ impl Projection {
                         input: serde_json::Value::Null,
                     },
                     eviction_notice: None,
+                    provider_data: None,
                 },
             ),
             Event::ToolCallRequested {
@@ -1311,6 +1329,7 @@ impl Projection {
                 call,
                 name,
                 input,
+                provider_data,
                 ..
             } => upsert_tool(
                 self,
@@ -1321,6 +1340,7 @@ impl Projection {
                 ToolPartState::Running {
                     input: input.clone(),
                 },
+                provider_data.clone(),
             ),
             Event::ToolResult {
                 message,

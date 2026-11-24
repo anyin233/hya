@@ -42,17 +42,17 @@ pub(crate) async fn run_lead(
     let (mut ignored, mut notices) = (0u32, 0u32);
     let mut last_notice: Option<MessageId> = None;
     let mut initial_prompt = Some(initial_prompt);
+    let mut completion_checked = false;
+    let mut ran_known_tool = false;
     let deadline = hya_tool::deadline::current();
     loop {
         let finish = engine
-            .run_turn_with_external_dirs_and_guidance(
+            .run_headless_lead_turn(
                 session,
                 agent,
                 cancel.clone(),
-                &[],
-                None,
-                None,
                 initial_prompt.take(),
+                &mut ran_known_tool,
             )
             .await?;
         if !matches!(finish, FinishReason::Stop | FinishReason::Length) {
@@ -65,6 +65,26 @@ pub(crate) async fn run_lead(
         let projection = engine.read_projection_shared(session).await?;
         let pending = Pending::of(&projection, finish);
         if pending.is_empty() {
+            if !completion_checked
+                && deadline.is_some_and(|d| d.remaining() > 2 * d.final_window())
+                && ran_known_tool
+                && !projection.session.messages.iter().any(|row| {
+                    row.role == Role::System
+                        && row.parts.iter().any(|part| {
+                            matches!(part, PartProjection::Text { text, .. }
+                        if hya_core::kernel::is_completion_check(text))
+                        })
+                })
+                && !cancel.is_cancelled()
+            {
+                completion_checked = true;
+                engine
+                    .inject_system_message(session, hya_core::kernel::COMPLETION_CHECK.to_string())
+                    .await?;
+                ignored = 0;
+                last_notice = None;
+                continue;
+            }
             return Ok(finish);
         }
         if let Some(notice) = last_notice {
@@ -405,6 +425,30 @@ const LEADS: &[&str] = &[
     "let me ",
     "i'll now",
     "i will now",
+    "i'll start by ",
+    "i will start by ",
+    "i'll begin by ",
+    "i will begin by ",
+    "i'll first ",
+    "i will first ",
+    "first, i'll ",
+    "first i'll ",
+    "first, i will ",
+    "first i will ",
+    "first, let me ",
+    "first let me ",
+    "next i will ",
+    "next, i'll ",
+    "next, i will ",
+    "let's start by ",
+    "let's begin by ",
+    "先让我",
+    "我先来",
+    "我先看",
+    "我先查",
+    "我先检查",
+    "我先读",
+    "我先运行",
     "现在我来",
     "现在我",
     "现在来",
@@ -434,7 +478,7 @@ fn announces_next_step(text: &str) -> bool {
         return false;
     };
     clauses(sentence).any(|clause| {
-        let clause = clause.trim_start().to_lowercase();
+        let clause = clause.trim_start().to_lowercase().replace('\u{2019}', "'");
         LEADS.iter().any(|lead| clause.starts_with(lead))
             && !NOT_LEADS.iter().any(|not| clause.starts_with(not))
     })
@@ -479,9 +523,12 @@ fn last_sentence(paragraph: &str) -> Option<&str> {
 }
 
 fn clauses(sentence: &str) -> impl Iterator<Item = &str> {
-    sentence
-        .split("**")
-        .flat_map(|part| part.split(['，', ',', '；', ';', '…', '—']))
+    sentence.split("**").flat_map(|part| {
+        std::iter::once(part).chain(
+            part.match_indices(['，', ',', '；', ';', '…', '—'])
+                .map(|(at, delimiter)| &part[at + delimiter.len()..]),
+        )
+    })
 }
 
 /// Whether any message after the `since` notice calls a tool: the one signal
@@ -538,6 +585,7 @@ mod tests {
                 input: serde_json::json!({}),
             },
             eviction_notice: None,
+            provider_data: None,
         }
     }
 
@@ -574,6 +622,28 @@ mod tests {
             "handle": handle, "session": SessionId::new(), "status": status,
         }))
         .expect("roster fixture")
+    }
+
+    #[test]
+    fn imminent_starts_announce_work_but_completed_steps_do_not() {
+        for text in [
+            "I'll start by examining the config file.",
+            "I’ll start by reading config.yaml.",
+            "I will begin by running tests.",
+            "First, I'll check the logs.",
+            "我先查看配置文件。",
+        ] {
+            assert!(announces_next_step(text), "{text}");
+        }
+        for text in [
+            "我先后运行了单元测试和集成测试，全部通过。",
+            "我先前已验证输出。",
+            "I started by examining the config file and wrote the output.",
+            "First, I checked the logs; all tests pass.",
+            "Let me know if you need anything else.",
+        ] {
+            assert!(!announces_next_step(text), "{text}");
+        }
     }
 
     #[test]

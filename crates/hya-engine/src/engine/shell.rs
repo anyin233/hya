@@ -79,6 +79,7 @@ struct OwnedBashArtifact {
 pub(super) struct BashArtifactGuard {
     bash: bool,
     artifact: Option<OwnedBashArtifact>,
+    yielded_path: Option<String>,
 }
 
 impl BashArtifactGuard {
@@ -91,7 +92,19 @@ impl BashArtifactGuard {
         } else {
             None
         };
-        Self { bash, artifact }
+        // A yielded job owns its private output through its supervisor. Keep
+        // the original path publishable without treating it as a spill to unlink.
+        let yielded_path = output
+            .filter(|_| bash)
+            .and_then(|value| value.get("metadata"))
+            .filter(|meta| meta["stillRunning"] == true)
+            .and_then(|meta| meta["outputPath"].as_str())
+            .map(str::to_owned);
+        Self {
+            bash,
+            artifact,
+            yielded_path,
+        }
     }
 
     /// Return whether the post-hook, post-cap result exposes the exact captured path.
@@ -108,7 +121,12 @@ impl BashArtifactGuard {
 
     /// Remove an output path introduced or changed by a Bash after-hook.
     pub(super) fn remove_unowned_path(&self, output: &mut Value) {
-        if !self.bash || self.retained_by(output) {
+        if !self.bash
+            || self.retained_by(output)
+            || self.yielded_path.as_ref().is_some_and(|path| {
+                output["metadata"]["outputPath"].as_str() == Some(path.as_str())
+            })
+        {
             return;
         }
         if let Some(Value::Object(metadata)) = output.get_mut("metadata") {
@@ -421,6 +439,7 @@ impl SessionEngine {
                 call: shell_part.call,
                 name: shell_part.name,
                 input: input.clone(),
+                provider_data: None,
             },
         )
         .await?;

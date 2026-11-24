@@ -1,0 +1,5 @@
+# 0.48.0-dev.21
+
+- **`hya exec -` reads the prompt from standard input.** With the prompt argument `-`, `exec` (bare and full) reads the prompt from stdin, so it no longer has to be in the process's argument list — where it is visible in process listings and where a command the agent runs that matches processes by command line (`pkill -f`) can match hya itself when the prompt names the same file or program.
+- **`hya exec --bare --json` streams the session's events.** Bare mode now accepts `--json`: every durable event is written to stdout as one JSON line, flushed as it is committed, in the format of `exec --json` and `tail-session`. With `--db` left out the session lives in memory and the caller keeps the record, which keeps it out of a sandbox the agent's own commands can read.
+- **Store tests:** a fault-injection harness for the session store (an in-process SQLite VFS and a simulated clock) with regression tests for the connection-retirement and stale-snapshot fixes of 0.48.0-dev.19.

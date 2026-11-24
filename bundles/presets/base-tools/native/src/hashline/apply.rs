@@ -436,7 +436,7 @@ fn is_diff_minus_prefix(line: &str) -> bool {
 }
 
 /// Normalize all supported top-level edit dialects into strict operations.
-pub(super) fn parse_edit_request(input: Value) -> Result<EditRequest, HashlineError> {
+pub(super) fn parse_edit_request(input: &Value) -> Result<EditRequest, HashlineError> {
     let Some(object) = input.as_object() else {
         return Err(error("E_BAD_REQUEST", "Edit request must be an object."));
     };
@@ -1669,7 +1669,7 @@ mod tests {
     use serde_json::json;
 
     fn request(value: Value) -> EditRequest {
-        parse_edit_request(value).unwrap_or_else(|error| panic!("{}", error.diagnostic()))
+        parse_edit_request(&value).unwrap_or_else(|error| panic!("{}", error.diagnostic()))
     }
 
     #[test]
@@ -1693,7 +1693,7 @@ mod tests {
     #[test]
     fn rejects_display_prefixes_and_empty_result() {
         let display = parse_edit_request(
-            json!({"path":"x","edits":[{"op":"replace","pos":"2#JB","lines":["2#JB:beta"]}]}),
+            &json!({"path":"x","edits":[{"op":"replace","pos":"2#JB","lines":["2#JB:beta"]}]}),
         );
         assert_eq!(display.unwrap_err().code, "E_INVALID_PATCH");
         let one_line = vec!["a".to_string(), String::new()];
@@ -1754,7 +1754,7 @@ mod tests {
 
     #[test]
     fn replace_op_with_text_pair_and_pos_still_rejected_with_actionable_message() {
-        let error = parse_edit_request(json!({
+        let error = parse_edit_request(&json!({
             "path": "x",
             "edits": [{"op": "replace", "pos": "1#AA", "oldText": "a", "newText": "b"}]
         }))
@@ -1766,7 +1766,7 @@ mod tests {
 
     #[test]
     fn missing_op_lists_valid_values() {
-        let error = parse_edit_request(json!({
+        let error = parse_edit_request(&json!({
             "path": "x",
             "edits": [{"lines": ["x"]}]
         }))
@@ -1778,7 +1778,7 @@ mod tests {
 
     #[test]
     fn replace_text_only_supports_old_new_text_message_points_to_replace_op() {
-        let error = parse_edit_request(json!({
+        let error = parse_edit_request(&json!({
             "path": "x",
             "edits": [{"op": "replace_text", "pos": "1#AA", "oldText": "a", "newText": "b"}]
         }))

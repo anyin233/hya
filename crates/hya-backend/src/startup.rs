@@ -28,7 +28,13 @@ pub(crate) async fn start(
     pure: bool,
     surface: Surface,
 ) -> anyhow::Result<StartedEngine> {
-    crate::first_run_config_bootstrap(false)?;
+    let exit_store = store.clone();
+    if let Err(error) = crate::first_run_config_bootstrap(false) {
+        exit_store
+            .drain_and_report_exit(hya_store::EXIT_DRAIN_TIMEOUT)
+            .await;
+        return Err(error);
+    }
     let runtime = hya_app::resolve_runtime(model)
         .await
         .with_yolo(yolo)
@@ -47,7 +53,7 @@ pub(crate) async fn start(
     )
     .to_string();
     let tool_config = (runtime.websearch, runtime.permission, runtime.settings);
-    let built = if pure {
+    let built_res = if pure {
         hya_app::build_session_engine_pure(
             store,
             runtime.router,
@@ -56,7 +62,7 @@ pub(crate) async fn start(
             runtime.plugins,
             tool_config,
         )
-        .await?
+        .await
     } else {
         hya_app::build_session_engine(
             store,
@@ -66,7 +72,16 @@ pub(crate) async fn start(
             runtime.plugins,
             tool_config,
         )
-        .await?
+        .await
+    };
+    let built = match built_res {
+        Ok(built) => built,
+        Err(error) => {
+            exit_store
+                .drain_and_report_exit(hya_store::EXIT_DRAIN_TIMEOUT)
+                .await;
+            return Err(error);
+        }
     };
     Ok(StartedEngine {
         built,
@@ -110,7 +125,7 @@ impl HeadlessSession {
 
     /// Stop permission intake before awaiting every runtime child, on both
     /// successful and failed headless commands.
-    async fn shutdown(&mut self) -> anyhow::Result<()> {
+    pub(crate) async fn shutdown(&mut self) -> anyhow::Result<()> {
         self.responder.0.abort();
         shutdown(&mut self.built).await
     }

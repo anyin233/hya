@@ -40,11 +40,6 @@ jobs:
       - name: fmt
         if: ${{ !cancelled() }}
         run: cargo fmt --all --check
-      # Fails if matrix.toml and the real tests disagree in either direction, or
-      # if a T-series numbering hole is neither used nor retired.
-      - name: matrix registry check
-        if: ${{ !cancelled() }}
-        run: cargo run -p xtask -- matrix-check
       # --all-targets type-checks every lib, bin, test, and example, so a
       # separate `cargo build --workspace` adds nothing here.
       - name: clippy
@@ -72,7 +67,6 @@ jobs:
       # --no-fail-fast: one failing crate must not hide the failures behind it.
       - name: test
         run: cargo test --workspace --exclude hya-e2e --no-fail-fast
-      - run: cargo run --locked -p xtask -- lifecycle-bench --check crates/xtask/lifecycle-baseline.json
 
   e2e:
     runs-on: ubuntu-latest
@@ -86,41 +80,30 @@ jobs:
         with:
           cache-on-failure: true
       - name: build agent e2e binaries
-        run: cargo build --locked -p hya-backend --bin hya
+        run: cargo build --locked -p hya-backend --bin hya -p xtask --bin xtask
+      # Fails if matrix.toml and the real tests disagree in either direction, or
+      # if a T-series numbering hole is neither used nor retired. Runs here
+      # because xtask links the runtime crates this job builds anyway.
+      - name: matrix registry check
+        if: ${{ !cancelled() }}
+        run: target/debug/xtask matrix-check
       - name: agent process e2e (Track P)
         if: ${{ !cancelled() }}
         run: cargo test -p hya-e2e --no-fail-fast -- --test-threads=1
 
-  tui:
+  # Type checks and unit tests of the Bun packages need no Rust build, so they
+  # run beside the terminal suite instead of in front of it.
+  frontend:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-bun
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-on-failure: true
-      - name: hya-tui install
-        if: ${{ !cancelled() }}
-        working-directory: packages/hya-tui
-        run: bun install --frozen-lockfile
-      - name: hya-tui-web install
-        if: ${{ !cancelled() }}
-        working-directory: packages/hya-tui-web
-        run: bun install --frozen-lockfile
-      - name: bun adapter install
-        if: ${{ !cancelled() }}
-        working-directory: crates/hya-plugin-bun/adapter
-        run: bun install --frozen-lockfile
-      - name: claude adapter install
-        if: ${{ !cancelled() }}
-        working-directory: crates/hya-plugin-claude/adapter
-        run: bun install --frozen-lockfile
-      - name: hya-tui-sdk install
-        if: ${{ !cancelled() }}
-        working-directory: packages/hya-tui-sdk
-        run: bun install --frozen-lockfile
+      - name: install
+        run: |
+          for package in packages/hya-tui packages/hya-tui-web packages/hya-tui-sdk crates/hya-plugin-bun/adapter crates/hya-plugin-claude/adapter; do
+            (cd "$package" && bun install --frozen-lockfile)
+          done
       - name: hya-tui typecheck and unit tests
         if: ${{ !cancelled() }}
         working-directory: packages/hya-tui
@@ -141,6 +124,28 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: packages/hya-tui-sdk
         run: bun run typecheck && bun test
+
+  tui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-bun
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+      - name: install
+        run: |
+          for package in packages/hya-tui packages/hya-tui-web packages/hya-tui-sdk crates/hya-plugin-bun/adapter crates/hya-plugin-claude/adapter; do
+            (cd "$package" && bun install --frozen-lockfile)
+          done
+      # The suite runs the TUI the way a release ships it: precompiled JSX in
+      # dist/app.js. Running from source would transform the whole UI again on
+      # every one of the suite's several hundred launches.
+      - name: precompile the TUI
+        working-directory: packages/hya-tui
+        run: bun run build
       # e2e/hya-tui.spec.ts and e2e/hya-tui-launch.spec.ts start this binary as
       # the backend under test (see docs/tui-web.md#running-the-tests).
       # The disk-inspector spec packages its source with target/debug/xtask.

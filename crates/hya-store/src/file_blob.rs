@@ -23,6 +23,15 @@ impl SessionStore {
         hash: &str,
         content: &[u8],
     ) -> Result<(), StoreError> {
+        if let Some(queue) = &self.write_queue {
+            return queue
+                .submit(
+                    vec![(session, hash.to_string(), content.to_vec())],
+                    Vec::new(),
+                )
+                .await
+                .map(drop);
+        }
         let size = i64::try_from(content.len()).unwrap_or(i64::MAX);
         sqlx::query(
             "INSERT OR IGNORE INTO file_blob (session_id, hash, size, content) \
@@ -32,7 +41,7 @@ impl SessionStore {
         .bind(hash)
         .bind(size)
         .bind(content)
-        .execute(&self.pool)
+        .execute(&self.writer_pool)
         .await?;
         Ok(())
     }
@@ -49,8 +58,16 @@ impl SessionStore {
         blobs: &[(String, Vec<u8>)],
         events: Vec<Event>,
     ) -> Result<Vec<Envelope>, StoreError> {
+        if let Some(queue) = &self.write_queue {
+            let blob_rows = blobs
+                .iter()
+                .map(|(hash, content)| (session, hash.clone(), content.clone()))
+                .collect();
+            let event_rows = events.into_iter().map(|ev| (session, ev)).collect();
+            return queue.submit(blob_rows, event_rows).await;
+        }
         let key = session.storage_key();
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         for (hash, content) in blobs {
             let size = i64::try_from(content.len()).unwrap_or(i64::MAX);
             sqlx::query(
@@ -81,24 +98,85 @@ impl SessionStore {
         session: SessionId,
         hash: &str,
     ) -> Result<Option<Vec<u8>>, StoreError> {
-        let row = sqlx::query("SELECT content FROM file_blob WHERE session_id = ? AND hash = ?")
-            .bind(session.storage_key())
-            .bind(hash)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(row.map(|row| row.get::<Vec<u8>, _>(0)))
+        if let Some(queue) = &self.write_queue
+            && let Some(content) = queue.queued_blob(session, hash)
+        {
+            return Ok(Some(content));
+        }
+        let pool = self.read_pool_checked()?;
+        self.run_read_bounded("file_blob", async {
+            let row =
+                sqlx::query("SELECT content FROM file_blob WHERE session_id = ? AND hash = ?")
+                    .bind(session.storage_key())
+                    .bind(hash)
+                    .fetch_optional(pool)
+                    .await?;
+            Ok(row.map(|row| row.get::<Vec<u8>, _>(0)))
+        })
+        .await
     }
 
     /// Total bytes of every blob stored for `session`.
     ///
+    /// Queries SQLite (`SUM(size)`) plus acknowledged queued blobs whose hash is
+    /// not yet on disk in one read transaction, bounded only while degraded
+    /// (`run_read_bounded`). Fallback-guarded callers enforce `read_timeout()`
+    /// themselves.
+    ///
     /// # Errors
-    /// Returns the SQLite error when the query fails.
+    /// Returns the SQLite error or `StorageTimeout` when the query fails or
+    /// stalls past `write_timeout()` while degraded.
     pub async fn file_blob_bytes(&self, session: SessionId) -> Result<u64, StoreError> {
-        let total: Option<i64> =
-            sqlx::query_scalar("SELECT SUM(size) FROM file_blob WHERE session_id = ?")
-                .bind(session.storage_key())
-                .fetch_one(&self.pool)
+        let queued_sizes = self
+            .write_queue
+            .as_ref()
+            .map(|queue| queue.queued_blob_sizes(session))
+            .unwrap_or_default();
+        let pool = self.read_pool_checked()?;
+        self.run_read_bounded("file_blob_bytes", async {
+            let key = session.storage_key();
+            if queued_sizes.is_empty() {
+                let total: i64 = sqlx::query_scalar(
+                    "SELECT COALESCE(SUM(size), 0) FROM file_blob WHERE session_id = ?",
+                )
+                .bind(key)
+                .fetch_one(pool)
                 .await?;
-        Ok(total.map_or(0, |total| u64::try_from(total).unwrap_or(0)))
+                return Ok(u64::try_from(total).unwrap_or(0));
+            }
+            let mut conn = pool.acquire().await?;
+            let mut tx = sqlx::Connection::begin(&mut *conn).await?;
+            let disk_total: i64 = sqlx::query_scalar(
+                "SELECT COALESCE(SUM(size), 0) FROM file_blob WHERE session_id = ?",
+            )
+            .bind(&key)
+            .fetch_one(&mut *tx)
+            .await?;
+            let mut on_disk = std::collections::HashSet::with_capacity(queued_sizes.len());
+            let hashes: Vec<&str> = queued_sizes.keys().map(String::as_str).collect();
+            for chunk in hashes.chunks(500) {
+                let mut qb =
+                    sqlx::QueryBuilder::new("SELECT hash FROM file_blob WHERE session_id = ");
+                qb.push_bind(&key);
+                qb.push(" AND hash IN (");
+                let mut sep = qb.separated(", ");
+                for hash in chunk {
+                    sep.push_bind(*hash);
+                }
+                sep.push_unseparated(")");
+                let found: Vec<String> = qb.build_query_scalar().fetch_all(&mut *tx).await?;
+                on_disk.extend(found);
+            }
+            tx.commit().await?;
+            let queued_extra: u64 = queued_sizes
+                .iter()
+                .filter(|(hash, _)| !on_disk.contains(*hash))
+                .map(|(_, size)| *size)
+                .sum();
+            Ok(u64::try_from(disk_total)
+                .unwrap_or(0)
+                .saturating_add(queued_extra))
+        })
+        .await
     }
 }

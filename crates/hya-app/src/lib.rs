@@ -65,8 +65,9 @@ pub use runtime::{
     BUILTIN_DEFAULT_AGENT_ID, BuiltSessionEngine, HARNESS_AGENT_BASE, HyaRuntime, OfflineNotice,
     RuntimeConfig, RuntimeOptions, RuntimeTaskOwner, agent_base_with_model, agent_with_model,
     agent_with_model_pure, build_session_engine, build_session_engine_pure, builtin_agent_catalog,
-    discover_context_files, host_info, offline_router, open_store, resolve_headless_agent_name,
-    resolve_runtime, spawn_team_supervisor, today, with_built_session_engine,
+    discover_context_files, host_info, offline_router, open_store, open_store_or_memory,
+    resolve_headless_agent_name, resolve_runtime, spawn_team_supervisor, today,
+    with_built_session_engine,
 };
 pub use workflow_control::{
     FIRST_PARTY_BUNDLE_ID, ResolvedWorkflow, WorkflowCatalog, WorkflowCatalogOwner,
@@ -74,5 +75,5 @@ pub use workflow_control::{
 };
 
 #[cfg(test)]
-#[path = "../../hya-engine/tests/support/resident.rs"]
+#[path = "../../hya-engine/tests/it/support/resident.rs"]
 mod resident_fixture;

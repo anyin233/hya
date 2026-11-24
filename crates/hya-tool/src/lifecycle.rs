@@ -32,6 +32,8 @@ pub enum LifecycleRequest {
         session: SessionId,
         /// Claim captured by the calling turn; roots use `None`.
         actor_claim: Option<ActorClaim>,
+        /// Cursor to commit with the calling tool result.
+        wait_ack: Option<WaitAckSlot>,
         /// Parsed request.
         spec: WaitSpec,
         /// Rejection text or the outcome.
@@ -271,11 +273,8 @@ pub struct WaitMember {
     pub channel: Option<String>,
 }
 
-/// Most serialized characters one `wait` tool result may take — the whole
-/// `{title, output, metadata}` envelope as the generic output cap measures it
-/// — kept well under [`crate::MAX_TOOL_OUTPUT_CHARS`] so the cap never
-/// replaces the result with its tail.
-pub const WAIT_RESULT_BUDGET: usize = 4500;
+/// Maximum number of display characters in the output of a wait.
+pub const WAIT_OUTPUT_BUDGET_CHARS: usize = 4_500;
 
 /// One new mail message returned by a channel-aware `wait`. Each message is
 /// returned once: the wait advances the caller's durable inbox cursor
@@ -288,8 +287,7 @@ pub struct WaitMail {
     /// Channel id it arrived on, when channel-addressed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
-    /// The message body, bounded (600 chars); the full history stays readable
-    /// with `read channel://<id>`.
+    /// The received body (at most 600 chars). Channel-addressed mail also has readable history.
     pub preview: String,
 }
 
@@ -309,6 +307,8 @@ pub struct WaitOutcome {
     /// New mail for the caller (channel-aware wait only), returned once.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub mail: Vec<WaitMail>,
+    /// More unread direct mail is available on the next page.
+    pub more_mail: bool,
     /// Wall-clock milliseconds spent waiting.
     pub waited_ms: u64,
 }
@@ -317,6 +317,9 @@ pub struct WaitOutcome {
 struct PreviewBody<'a> {
     /// The member whose report this is (`None` for mail).
     member: Option<&'a str>,
+    unrecoverable: bool,
+    chars: usize,
+    shown: usize,
     heading: String,
     text: &'a str,
     /// `read channel://<id>` target holding the full text, if readable.
@@ -326,37 +329,78 @@ struct PreviewBody<'a> {
 impl WaitOutcome {
     /// Tool result JSON: `{title, output, metadata}`.
     ///
-    /// Self-budgeted to [`WAIT_RESULT_BUDGET`] serialized characters so the
-    /// generic output cap never cuts it. `output` leads with a compact header
-    /// — why the wait woke, one line per target (handle, state, outcome),
-    /// the still-running handles, and the new-mail count — then bounded
-    /// previews of every report and mail body, sharing what is left of the
-    /// budget; a cut preview ends with where the full text is readable
-    /// (`read channel://<DM id>`) when the caller can read it. `metadata`
-    /// carries the structured outcome without the bodies (`report_chars` and
-    /// `report_truncated` instead of the text).
+    /// Show member status and bounded previews. Direct mail has first claim on the
+    /// preview budget because consuming it advances the inbox cursor.
     #[must_use]
     pub fn to_tool_result(&self) -> Value {
-        let bodies = self.preview_bodies();
-        let lengths: Vec<usize> = bodies
+        let (bodies, reminder, visible) = self.layout();
+        self.result(self.render_output(&bodies, reminder, visible), &bodies)
+    }
+
+    /// Whether the provider-visible output contains every direct mail preview in full.
+    #[must_use]
+    pub fn direct_mail_all_shown(&self) -> bool {
+        let direct = self
+            .mail
             .iter()
-            .map(|body| body.text.chars().count())
-            .collect();
-        let size = |result: &Value| result.to_string().chars().count();
-        // Everything but the body text (header, headings, pointers, metadata).
-        let bare = size(&self.render(&bodies, &vec![0; bodies.len()]));
-        let mut budget = WAIT_RESULT_BUDGET
-            .saturating_sub(bare)
-            .min(lengths.iter().sum());
-        loop {
-            let result = self.render(&bodies, &water_fill(&lengths, budget));
-            // JSON escaping can grow the text past its char count: shrink
-            // until the whole envelope fits.
-            if budget == 0 || size(&result) <= WAIT_RESULT_BUDGET {
-                return result;
-            }
-            budget = budget * 9 / 10;
+            .filter(|mail| mail.channel.is_none())
+            .count();
+        if direct == 0 {
+            return true;
         }
+        let (bodies, _, _) = self.layout();
+        bodies
+            .iter()
+            .filter(|b| b.unrecoverable && b.shown >= b.chars)
+            .count()
+            == direct
+    }
+
+    fn layout(&self) -> (Vec<PreviewBody<'_>>, bool, usize) {
+        let mut bodies = self.preview_bodies();
+        let direct_mail_need = bodies
+            .iter()
+            .filter(|b| b.unrecoverable)
+            .map(|b| b.chars)
+            .sum::<usize>()
+            .min(WAIT_OUTPUT_BUDGET_CHARS);
+        let mut reminder = self
+            .finished
+            .iter()
+            .chain(&self.already_finished)
+            .any(|member| member.state == WaitMemberState::Reported);
+        let mut visible = self.finished.len() + self.already_finished.len() + self.running.len();
+        // With zero characters shown, the rendered size reserves headings and cut notices.
+        let bare = loop {
+            let bare = self
+                .render_output(&bodies, reminder, visible)
+                .chars()
+                .count();
+            if bare + direct_mail_need <= WAIT_OUTPUT_BUDGET_CHARS {
+                break bare;
+            }
+            if reminder {
+                reminder = false;
+            } else if let Some(index) = bodies.iter().rposition(|b| !b.unrecoverable) {
+                bodies.remove(index);
+            } else if visible > 0 {
+                visible -= 1;
+            } else if bare > WAIT_OUTPUT_BUDGET_CHARS {
+                bodies.pop();
+            } else {
+                break bare;
+            }
+        };
+        let budget = WAIT_OUTPUT_BUDGET_CHARS.saturating_sub(bare);
+        let remaining = water_fill(
+            bodies.iter_mut().filter(|b| b.unrecoverable).collect(),
+            budget,
+        );
+        water_fill(
+            bodies.iter_mut().filter(|b| !b.unrecoverable).collect(),
+            remaining,
+        );
+        (bodies, reminder, visible)
     }
 
     fn preview_bodies(&self) -> Vec<PreviewBody<'_>> {
@@ -372,6 +416,9 @@ impl WaitOutcome {
                 };
                 bodies.push(PreviewBody {
                     member: Some(member.handle.as_str()),
+                    unrecoverable: false,
+                    shown: 0,
+                    chars: report.chars().count(),
                     heading,
                     text: report.as_str(),
                     channel: member.channel.as_deref(),
@@ -385,6 +432,9 @@ impl WaitOutcome {
                 .map_or(String::new(), |id| format!(" @{id}"));
             bodies.push(PreviewBody {
                 member: None,
+                unrecoverable: mail.channel.is_none(),
+                chars: mail.preview.chars().count(),
+                shown: 0,
                 heading: format!("Mail from {}{channel}:", mail.from),
                 text: mail.preview.as_str(),
                 channel: mail.channel.as_deref(),
@@ -393,7 +443,7 @@ impl WaitOutcome {
         bodies
     }
 
-    fn render(&self, bodies: &[PreviewBody<'_>], shown: &[usize]) -> Value {
+    fn render_output(&self, bodies: &[PreviewBody<'_>], reminder: bool, visible: usize) -> String {
         let mut lines = Vec::new();
         let headline = match self.woke_by {
             WaitWake::Members => "Subagents finished.",
@@ -417,14 +467,24 @@ impl WaitOutcome {
             }
             line
         };
-        for member in &self.finished {
+        for member in self.finished.iter().take(visible) {
             lines.push(member_line(member, state_label(member.state)));
         }
-        for member in &self.already_finished {
+        let remaining = visible.saturating_sub(self.finished.len());
+        for member in self.already_finished.iter().take(remaining) {
             let tag = format!("already {}", state_label(member.state));
             lines.push(member_line(member, &tag));
         }
-        for member in &self.running {
+        if reminder {
+            lines.push(
+                "Reported subagents are automatically archived; do not call `archive` on them."
+                    .to_string(),
+            );
+        }
+        let running = &self.running[..remaining
+            .saturating_sub(self.already_finished.len())
+            .min(self.running.len())];
+        for member in running {
             if member.state == WaitMemberState::Idle {
                 lines.push(format!(
                     "- {} [idle: ended its turn without `report`; nothing queued]",
@@ -438,8 +498,7 @@ impl WaitOutcome {
                 ));
             }
         }
-        let working: Vec<&str> = self
-            .running
+        let working: Vec<&str> = running
             .iter()
             .filter(|member| member.state == WaitMemberState::Working)
             .map(|member| member.handle.as_str())
@@ -447,28 +506,42 @@ impl WaitOutcome {
         if !working.is_empty() {
             lines.push(format!("Still running: {}", working.join(", ")));
         }
-        if !self.mail.is_empty() {
+        let omitted =
+            self.finished.len() + self.already_finished.len() + self.running.len() - visible;
+        if omitted > 0 {
             lines.push(format!(
-                "{} new mail message(s), now marked read (history: read channel://<id>?last=N).",
-                self.mail.len()
+                "… and {omitted} more member(s). All targets are listed in metadata."
             ));
         }
-        for (body, &limit) in bodies.iter().zip(shown) {
+        if !self.mail.is_empty() {
+            let mut summary = format!(
+                "{} new mail message(s), now marked read (history: read channel://<id>?last=N).",
+                self.mail.len()
+            );
+            if self.more_mail {
+                summary.push_str(" More unread direct mail remains; call `wait` again to read it.");
+            }
+            lines.push(summary);
+        }
+        for body in bodies {
             lines.push(String::new());
             lines.push(body.heading.clone());
-            let total = body.text.chars().count();
-            if limit >= total {
+            if body.shown >= body.chars {
                 lines.push(body.text.to_string());
                 continue;
             }
-            let cut: String = body.text.chars().take(limit).collect();
-            let omitted = total - limit;
+            let cut: String = body.text.chars().take(body.shown).collect();
+            let omitted = body.chars - body.shown;
             let pointer = body.channel.map_or(String::new(), |id| {
                 format!("; full text: read channel://{id}")
             });
             lines.push(format!("{cut}\n[… {omitted} more chars{pointer}]"));
         }
 
+        lines.join("\n")
+    }
+
+    fn result(&self, output: String, bodies: &[PreviewBody<'_>]) -> Value {
         let member_meta = |member: &WaitMember| {
             let mut meta = json!({
                 "handle": member.handle,
@@ -485,9 +558,8 @@ impl WaitOutcome {
                 let chars = report.chars().count();
                 let shown = bodies
                     .iter()
-                    .zip(shown)
-                    .find(|(body, _)| body.member == Some(member.handle.as_str()))
-                    .map_or(chars, |(_, shown)| *shown);
+                    .find(|body| body.member == Some(member.handle.as_str()))
+                    .map_or(0, |body| body.shown);
                 meta["report_chars"] = json!(chars);
                 meta["report_truncated"] = json!(shown < chars);
             }
@@ -512,9 +584,10 @@ impl WaitOutcome {
                 self.mail
                     .iter()
                     .map(|mail| {
+                        let chars = mail.preview.chars().count();
                         let mut meta = json!({
                             "from": mail.from,
-                            "chars": mail.preview.chars().count(),
+                            "chars": chars,
                         });
                         if let Some(channel) = &mail.channel {
                             meta["channel"] = json!(channel);
@@ -524,6 +597,9 @@ impl WaitOutcome {
                     .collect::<Vec<_>>()
             );
         }
+        if self.more_mail {
+            metadata["more_mail"] = json!(true);
+        }
         json!({
             "title": format!("wait: {}", match self.woke_by {
                 WaitWake::Members => "members",
@@ -532,25 +608,21 @@ impl WaitOutcome {
                 WaitWake::Timeout => "timeout",
                 WaitWake::NothingToWaitFor => "nothing to wait for",
             }),
-            "output": lines.join("\n"),
+            "output": output,
             "metadata": metadata,
         })
     }
 }
 
-/// Split `budget` characters across bodies of `lengths`: short bodies are
-/// shown whole, and what they leave is shared equally by the longer ones.
-fn water_fill(lengths: &[usize], budget: usize) -> Vec<usize> {
-    let mut shown = vec![0; lengths.len()];
-    let mut order: Vec<usize> = (0..lengths.len()).collect();
-    order.sort_by_key(|&index| lengths[index]);
-    let mut remaining = budget;
-    for (position, &index) in order.iter().enumerate() {
-        let share = remaining / (order.len() - position);
-        shown[index] = lengths[index].min(share);
-        remaining -= shown[index];
+/// Show short bodies whole, share the rest equally, and return the unused budget.
+fn water_fill(mut bodies: Vec<&mut PreviewBody<'_>>, mut budget: usize) -> usize {
+    bodies.sort_by_key(|body| body.chars);
+    let count = bodies.len();
+    for (index, body) in bodies.into_iter().enumerate() {
+        body.shown = body.chars.min(budget / (count - index));
+        budget -= body.shown;
     }
-    shown
+    budget
 }
 
 fn state_label(state: WaitMemberState) -> &'static str {
@@ -607,6 +679,75 @@ impl ReportLatch {
     }
 }
 
+/// The inbox cursor and observer watermark for the mail returned by one wait.
+#[derive(Debug)]
+pub struct WaitMailAck {
+    /// Team-log acknowledgement to append alongside the result.
+    pub event: hya_proto::Event,
+    /// Observer watermark captured before reading the inbox.
+    pub mark: u64,
+    /// Whether to notify the observer of incoming mail at this watermark.
+    pub consumed_incoming: bool,
+}
+
+/// Mail delivered by waits inside one outer tool call.
+#[derive(Debug, Default)]
+pub struct WaitAckState {
+    /// Cursor to append with the outer result.
+    pub ack: Option<WaitMailAck>,
+    /// Whether a wait returned, even when it found no mail.
+    pub saw_wait: bool,
+    /// Whether the last wait left another page unread.
+    pub more_mail: bool,
+}
+
+/// Handoff from the wait service to the owner of the tool-result transaction.
+#[derive(Clone, Debug, Default)]
+pub struct WaitAckSlot(Arc<std::sync::Mutex<WaitAckState>>);
+
+impl WaitAckSlot {
+    /// Inbox position already delivered within this tool call.
+    pub fn staged_through(&self) -> Option<usize> {
+        let state = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match &state.ack.as_ref()?.event {
+            hya_proto::Event::MailConsumed { through, .. } => {
+                Some(usize::try_from(*through).unwrap_or(usize::MAX))
+            }
+            _ => None,
+        }
+    }
+
+    /// Stage the latest page, keeping the observer watermark from the first page.
+    pub fn record(&self, more_mail: bool, ack: Option<WaitMailAck>) {
+        let mut state = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.saw_wait = true;
+        state.more_mail = more_mail;
+        if let Some(mut ack) = ack {
+            if let Some(prev) = &state.ack {
+                ack.mark = prev.mark;
+                ack.consumed_incoming |= prev.consumed_incoming;
+            }
+            state.ack = Some(ack);
+        }
+    }
+
+    /// Claim all staged delivery once the outer tool's final result is known.
+    pub fn take_state(&self) -> WaitAckState {
+        std::mem::take(
+            &mut *self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+}
+
 /// Session-scoped facade tools use to request lifecycle transitions.
 #[derive(Clone)]
 pub struct LifecyclePlane {
@@ -615,6 +756,7 @@ pub struct LifecyclePlane {
     actor_claim: Option<ActorClaim>,
     channel_policy: Option<ChannelPolicySnapshot>,
     report_latch: Option<ReportLatch>,
+    wait_ack: Option<WaitAckSlot>,
 }
 
 impl Default for LifecyclePlane {
@@ -635,6 +777,7 @@ impl LifecyclePlane {
                 actor_claim: None,
                 channel_policy: None,
                 report_latch: None,
+                wait_ack: None,
             },
             rx,
         )
@@ -649,6 +792,7 @@ impl LifecyclePlane {
             actor_claim: None,
             channel_policy: None,
             report_latch: None,
+            wait_ack: None,
         }
     }
 
@@ -690,6 +834,13 @@ impl LifecyclePlane {
     #[must_use]
     pub fn with_report_latch(mut self, latch: ReportLatch) -> Self {
         self.report_latch = Some(latch);
+        self
+    }
+
+    /// Commit a wait's mail cursor with its tool result through this slot.
+    #[must_use]
+    pub fn with_wait_ack(mut self, slot: WaitAckSlot) -> Self {
+        self.wait_ack = Some(slot);
         self
     }
 
@@ -773,6 +924,7 @@ impl LifecyclePlane {
             .send(LifecycleRequest::Wait {
                 session,
                 actor_claim: self.actor_claim,
+                wait_ack: self.wait_ack.clone(),
                 spec,
                 reply: reply_tx,
             })
@@ -990,13 +1142,9 @@ mod tests {
         }
     }
 
-    /// Run 6 (seq 173427): four reports overflowed the generic cap, which
-    /// kept only the tail. The rendered result budgets itself: the header
-    /// (why it woke, every target, the mail count) always leads, every report
-    /// gets a bounded preview ending in a readable pointer, and the whole
-    /// envelope fits under the cap so its metadata survives intact.
+    /// Long reports share the preview budget and retain their full-text pointers.
     #[test]
-    fn a_wait_with_four_long_reports_keeps_its_header_and_metadata_under_the_cap() {
+    fn four_long_reports_keep_their_header_and_metadata() {
         let report = |n: usize| format!("REPORT_{n}_START {} REPORT_{n}_END", "x".repeat(3000));
         let finished: Vec<WaitMember> = (1..=4)
             .map(|n| WaitMember {
@@ -1022,20 +1170,10 @@ mod tests {
                 channel: Some("DM-0000000b".to_string()),
                 preview: "m".repeat(600),
             }],
+            more_mail: false,
             waited_ms: 7,
         };
         let result = outcome.to_tool_result();
-        let serialized = result.to_string().chars().count();
-        assert!(
-            serialized <= WAIT_RESULT_BUDGET && WAIT_RESULT_BUDGET < crate::MAX_TOOL_OUTPUT_CHARS,
-            "{serialized} chars"
-        );
-        assert_eq!(
-            crate::cap_tool_output(result.clone()),
-            result,
-            "the generic cap leaves the wait result untouched"
-        );
-
         let output = result["output"].as_str().unwrap();
         assert!(output.starts_with("Subagents finished.\n"), "{output}");
         let header_end = output.find("REPORT_1_START").unwrap();
@@ -1087,6 +1225,168 @@ mod tests {
         assert_eq!(metadata["mail"][0]["channel"], "DM-0000000b");
     }
 
+    #[test]
+    fn archive_note_applies_once_to_new_and_previous_reports_only() {
+        let note = "Reported subagents are automatically archived; do not call `archive` on them.";
+        for (new, previous) in [(true, false), (false, true), (true, true), (false, false)] {
+            let state = |reported| {
+                if reported {
+                    WaitMemberState::Reported
+                } else {
+                    WaitMemberState::Archived
+                }
+            };
+            let outcome = WaitOutcome {
+                woke_by: WaitWake::Members,
+                finished: vec![member("main/new", state(new), Some(&"x".repeat(5000)))],
+                already_finished: vec![member("main/old", state(previous), None)],
+                running: vec![],
+                mail: vec![],
+                more_mail: false,
+                waited_ms: 0,
+            };
+            let result = outcome.to_tool_result();
+            let output = result["output"].as_str().unwrap_or_default();
+            assert!(output.starts_with("Subagents finished.\n"));
+            assert_eq!(
+                output.lines().filter(|line| *line == note).count(),
+                usize::from(new || previous)
+            );
+            assert_eq!(result["metadata"]["finished"][0]["report_truncated"], true);
+            assert!(result["output"].as_str().unwrap().chars().count() <= WAIT_OUTPUT_BUDGET_CHARS);
+        }
+    }
+
+    #[test]
+    fn fifteen_reports_keep_every_member_row() {
+        let finished = (0..15)
+            .map(|i| {
+                let mut m = member(
+                    &format!("main/{}-exusiai-{i:02}", "a".repeat(32)),
+                    WaitMemberState::Reported,
+                    Some(&"x".repeat(3000)),
+                );
+                m.channel = Some(format!("DM-{i:08}"));
+                m
+            })
+            .collect();
+        let outcome = WaitOutcome {
+            woke_by: WaitWake::Members,
+            finished,
+            already_finished: vec![],
+            running: vec![],
+            mail: vec![],
+            more_mail: false,
+            waited_ms: 0,
+        };
+        let result = outcome.to_tool_result();
+        let output = result["output"].as_str().unwrap_or_default();
+        assert_eq!(
+            result["metadata"]["finished"].as_array().map(Vec::len),
+            Some(15)
+        );
+        for (i, member) in outcome.finished.iter().enumerate() {
+            assert!(output.contains(&format!("- {} [reported]", member.handle)));
+            let meta = &result["metadata"]["finished"][i];
+            assert_eq!(meta["handle"], member.handle);
+            assert_eq!(meta["report_chars"], 3000);
+            assert_eq!(meta["report_truncated"], true);
+        }
+        assert!(output.chars().count() <= WAIT_OUTPUT_BUDGET_CHARS);
+    }
+
+    #[test]
+    fn crowded_nested_reports_preserve_direct_harness_mail_through_host_spilling() {
+        let finished = (0..20).map(|i| {
+            let prefix = crate::sanitize_handle_prefix(&format!("integration-platform-worker-{i:02}"));
+            let handle = format!(
+                "main/distributed-integration-reviewer-exusiai-the-new-covenant/{prefix}-skadi-the-corrupting-heart"
+            );
+            WaitMember {
+                channel: Some(format!("DM-{i:08}")),
+                ..member(&handle, WaitMemberState::Reported, Some(&"x".repeat(3000)))
+            }
+        }).collect();
+        let notice = "LEADER FAILED: your parent ended before collecting the results. Keep the completed work and report it to the user.";
+        let outcome = WaitOutcome {
+            woke_by: WaitWake::Members,
+            finished,
+            already_finished: vec![],
+            running: vec![],
+            mail: vec![WaitMail {
+                from: "harness".into(),
+                channel: None,
+                preview: notice.into(),
+            }],
+            more_mail: false,
+            waited_ms: 0,
+        };
+        assert!(outcome.direct_mail_all_shown());
+        let result = crate::cap_tool_output_spilling(
+            outcome.to_tool_result(),
+            crate::ToolResultPolicy::SelfBudgeted,
+            &crate::handle::ArtifactStore::new(std::env::temp_dir()),
+            "wait",
+        );
+        assert_eq!(result["title"], "wait: members");
+        let output = result["output"].as_str().unwrap();
+        assert!(output.starts_with("Subagents finished."));
+        assert!(hya_proto::context::tool_result_text(&result).contains(notice));
+        assert_eq!(
+            result["metadata"]["mail"],
+            json!([{"from": "harness", "chars": notice.chars().count()}])
+        );
+        assert!(output.chars().count() <= WAIT_OUTPUT_BUDGET_CHARS);
+        assert!(result["metadata"].to_string().chars().count() > crate::MAX_TOOL_OUTPUT_CHARS);
+        let rows = result["metadata"]["finished"].as_array().unwrap();
+        assert_eq!(rows.len(), outcome.finished.len());
+        for (row, member) in rows.iter().zip(&outcome.finished) {
+            assert_eq!(row["handle"], member.handle);
+            assert_eq!(row["report_chars"], 3000);
+            assert_eq!(row["report_truncated"], true);
+        }
+    }
+
+    #[test]
+    fn crowded_direct_mail_requires_another_page() {
+        for count in [10, 200] {
+            let outcome = WaitOutcome {
+                woke_by: WaitWake::Mail,
+                finished: vec![],
+                already_finished: vec![],
+                running: vec![],
+                mail: (0..count)
+                    .map(|i| WaitMail {
+                        from: format!("sender-{i:03}"),
+                        channel: None,
+                        preview: format!("{i:03}{}!", "界".repeat(596)),
+                    })
+                    .collect(),
+                more_mail: false,
+                waited_ms: 0,
+            };
+            let result = crate::cap_tool_output_spilling(
+                outcome.to_tool_result(),
+                crate::ToolResultPolicy::SelfBudgeted,
+                &crate::handle::ArtifactStore::new(std::env::temp_dir()),
+                "wait",
+            );
+            let output = result["output"].as_str().unwrap();
+            assert!(output.chars().count() <= WAIT_OUTPUT_BUDGET_CHARS);
+            assert!(!outcome.direct_mail_all_shown());
+            assert!(!output.contains("metadata.mail"));
+            if count == 200 {
+                assert!(!output.contains("Mail from sender-199:"));
+            }
+            let mail = result["metadata"]["mail"].as_array().unwrap();
+            assert_eq!(mail.len(), outcome.mail.len());
+            for (entry, original) in mail.iter().zip(&outcome.mail) {
+                assert!(!output.contains(&original.preview));
+                assert_eq!(entry, &json!({"from":original.from, "chars":600}));
+            }
+        }
+    }
+
     /// Without a DM channel the preview does not invent a pointer.
     #[test]
     fn a_truncated_report_without_a_readable_channel_names_no_pointer() {
@@ -1100,10 +1400,11 @@ mod tests {
             already_finished: Vec::new(),
             running: Vec::new(),
             mail: Vec::new(),
+            more_mail: false,
             waited_ms: 0,
         };
         let result = outcome.to_tool_result();
-        assert!(result.to_string().chars().count() <= WAIT_RESULT_BUDGET);
+        assert!(result["output"].as_str().unwrap().chars().count() <= WAIT_OUTPUT_BUDGET_CHARS);
         let output = result["output"].as_str().unwrap();
         assert!(!output.contains("channel://"), "{output}");
         assert!(output.contains("more chars"), "{output}");
@@ -1117,6 +1418,7 @@ mod tests {
             already_finished: vec![member("main/a-1", WaitMemberState::Reported, Some("A"))],
             running: Vec::new(),
             mail: Vec::new(),
+            more_mail: false,
             waited_ms: 0,
         }
         .to_tool_result();
@@ -1149,6 +1451,7 @@ mod tests {
                 channel: Some("DM-x".to_string()),
                 preview: "status".to_string(),
             }],
+            more_mail: false,
             waited_ms: 5,
         }
         .to_tool_result();

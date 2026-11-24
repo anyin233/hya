@@ -1,20 +1,19 @@
-//! `hya/compaction`: full mode's context compaction (ADR-0033), an internal
-//! native bundle. Its [`CompactionRewriter`] walks the reduction ladder before
-//! each round and folds the session on `/summarize`, appending every change
-//! as events through the host's session log.
+//! `hya/compaction`: full mode's context-reduction extension (ADR-0033), an
+//! internal native bundle. Before each round, ahead of the kernel's own
+//! Rewrite, its [`CompactionRewriter`] spills stale tool outputs (`shake`) and
+//! then lets the route fold its own window (`remote`); on `/summarize` it
+//! tries `remote`. Every change is events through the host's session log.
 
 mod config;
 mod evict;
-mod fold;
 mod ladder;
-mod snap;
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_tool::{RewriteCtx, Rewriter, Tool, ToolError};
 
-/// The compaction ladder as a [`Rewriter`].
+/// The `shake` and `remote` steps as a [`Rewriter`] extension.
 pub struct CompactionRewriter;
 
 #[async_trait]
@@ -24,7 +23,7 @@ impl Rewriter for CompactionRewriter {
     }
 
     async fn rewrite_now(&self, cx: RewriteCtx<'_>) -> Result<bool, ToolError> {
-        ladder::summarize_now(&cx).await
+        ladder::compact_now(&cx).await
     }
 }
 

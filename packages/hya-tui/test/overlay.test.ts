@@ -276,3 +276,15 @@ test("partsAdded appends attachment parts once, de-duplicated by part id", () =>
   overlay.apply(ev(4, { partsAdded: { message: "m_a", parts: [{ id: "p_att2", attachment: { name: "b.png" } }] } }))
   expect(overlay.messages().find((message) => message.id === "m_a")?.parts).toHaveLength(2)
 })
+
+test("partDeleted hides discarded live and stale projected parts during retry backoff", () => {
+  const overlay = new TranscriptOverlay()
+  streamReply(overlay, 1, ["partial"])
+  const projected = overlay.messages()
+  overlay.apply(ev(2, { partDeleted: { message: "m_a", part: "p_a" } }))
+  expect(textOf(overlay.messages(), "m_a")).toEqual([])
+  expect(textOf(mergeTranscript(projected, overlay.messages()), "m_a")).toEqual([])
+  overlay.apply(ev(3, partStarted("m_a", "retry")))
+  overlay.apply(ev(4, replaced("m_a", "retry", "final")))
+  expect(textOf(mergeTranscript(projected, overlay.messages()), "m_a")).toEqual(["final"])
+})

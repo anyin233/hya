@@ -1,0 +1,7 @@
+# 0.48.0-dev.10
+
+- **Bundle inventory lists internal bundles.** `hya bundle list` and `ListBundles` now show the internal bundle `hya/compaction` as an immutable first-party row (`state: "active"`, `removable: false`), like the trusted presets; it cannot be installed over, removed, or disabled.
+- **Time in budgeted bare runs.** With `--time-budget`, `hya exec --bare` tells the model the elapsed and remaining time each time another tenth of the budget has passed (`HEADLESS RUN — clock: …`), as a notice that is shown once.
+- **The kernel `bash` tool runs bash.** It uses `bash -c` when a `bash` is on `PATH` and `sh -c` otherwise. Its description now says that processes left in the command's process group are killed when the call returns.
+- **Completion check.** A bare run that executed a tool call receives one notice the first time the model answers without a tool call, asking it to compare the result with the request's literal wording; the next such answer ends the run. It is not sent near the end of a time budget, after an error finish, or to a run that only talked.
+- **Context estimate counts what is sent.** A tool result is estimated as the provider sends it: its text, plus 5,000 tokens for each image sent as image content or the notice that replaces an image. Before, an image or other attachment was counted at its base64 size, which made the kernel rewrite the context right after an image was read.

@@ -180,6 +180,7 @@ impl FileCapture {
                     store,
                     session,
                     store.read_projection_shared(session).await?,
+                    BTreeMap::new(),
                     false,
                 )
                 .await
@@ -274,7 +275,7 @@ impl FileCapture {
         if changed.is_empty() {
             return Ok((None, stamps));
         }
-        let mut budget = BlobBudget::load(store, session).await?;
+        let mut budget = BlobBudget::lazy();
         let mut files = Vec::with_capacity(changed.len());
         for (path, prior) in changed {
             files.push(FileChange {
@@ -508,7 +509,7 @@ async fn git(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
 }
 
 /// Run an observational Git command without taking the index lock.
-pub async fn git_output(cwd: &Path, args: &[&str]) -> Option<std::process::Output> {
+async fn git_output(cwd: &Path, args: &[&str]) -> Option<std::process::Output> {
     let run = tokio::process::Command::new("git")
         .args(args)
         .current_dir(cwd)
@@ -696,18 +697,30 @@ async fn head_tree(root: &Path) -> Option<String> {
     (!tree.is_empty()).then_some(tree)
 }
 
+enum BudgetState {
+    Unloaded,
+    Loaded(u64),
+    Unavailable,
+}
+
 /// Running total of a session's blobs, so the cap is checked without a
 /// query per file.
 pub struct BlobBudget {
-    used: u64,
+    state: BudgetState,
 }
 
 impl BlobBudget {
     /// Load the current size of the session's stored file contents.
     pub async fn load(store: &SessionStore, session: SessionId) -> Result<Self, CoreError> {
         Ok(Self {
-            used: store.file_blob_bytes(session).await?,
+            state: BudgetState::Loaded(store.file_blob_bytes(session).await?),
         })
+    }
+
+    fn lazy() -> Self {
+        Self {
+            state: BudgetState::Unloaded,
+        }
     }
 
     /// The current state of `path`, its content kept as a blob.
@@ -738,7 +751,37 @@ impl BlobBudget {
             }
         };
         let size = bytes.len() as u64;
-        if self.used.saturating_add(size) > MAX_SESSION_BLOB_BYTES {
+        let used = match self.state {
+            BudgetState::Loaded(used) => used,
+            BudgetState::Unavailable => {
+                return Ok(FileState::Omitted {
+                    size,
+                    reason: "store unavailable".to_string(),
+                });
+            }
+            BudgetState::Unloaded => {
+                let timeout = store.read_timeout();
+                let used_res =
+                    match tokio::time::timeout(timeout, store.file_blob_bytes(session)).await {
+                        Ok(res) => res,
+                        Err(_) => Err(hya_store::StoreError::StorageTimeout {
+                            operation: "file_blob_bytes",
+                            timeout,
+                        }),
+                    };
+                match used_res {
+                    Ok(used) => {
+                        self.state = BudgetState::Loaded(used);
+                        used
+                    }
+                    Err(error) => {
+                        self.state = BudgetState::Unavailable;
+                        return omit_or_propagate_budget_error(session, size, error);
+                    }
+                }
+            }
+        };
+        if used.saturating_add(size) > MAX_SESSION_BLOB_BYTES {
             return Ok(FileState::Omitted {
                 size,
                 reason: "session_cap".to_string(),
@@ -747,13 +790,30 @@ impl BlobBudget {
         let hash = content_hash(&bytes);
         // Blobs stay unreferenced until the corresponding event commits.
         store.put_file_blob(session, &hash, &bytes).await?;
-        self.used = self.used.saturating_add(size);
+        self.state = BudgetState::Loaded(used.saturating_add(size));
         Ok(FileState::Stored { hash, size })
+    }
+}
+
+fn omit_or_propagate_budget_error(
+    session: SessionId,
+    size: u64,
+    error: hya_store::StoreError,
+) -> Result<FileState, CoreError> {
+    if error.is_storage_fault() {
+        tracing::warn!(%session, "file blob budget unavailable: {error}");
+        Ok(FileState::Omitted {
+            size,
+            reason: "store unavailable".to_string(),
+        })
+    } else {
+        Err(error.into())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use serde_json::json;
 
@@ -793,5 +853,251 @@ mod tests {
             content_hash(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[tokio::test]
+    async fn file_capture_omits_with_store_unavailable_when_first_blob_budget_read_fails() {
+        let dir = tempfile::Builder::new()
+            .prefix("hya-snapshot-omitted-")
+            .tempdir()
+            .unwrap();
+        let db = dir.path().join("hya.db");
+        let workdir = dir.path().join("work");
+        tokio::fs::create_dir_all(&workdir).await.unwrap();
+        let file = workdir.join("a.txt");
+        tokio::fs::write(&file, b"before").await.unwrap();
+
+        let store = SessionStore::connect(db.to_str().unwrap()).await.unwrap();
+        let session = SessionId::new();
+        store
+            .append_event(
+                session,
+                &Event::SessionCreated {
+                    session,
+                    parent: None,
+                    agent: hya_proto::AgentName::new("build"),
+                    model: hya_proto::ModelRef::new("fake"),
+                    workdir: workdir.to_string_lossy().into_owned(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
+                },
+            )
+            .await
+            .unwrap();
+
+        let capture = FileCapture::full("write", &json!({ "path": "a.txt" }), &workdir).await;
+        tokio::fs::write(&file, b"after").await.unwrap();
+        // Unlink the database file before `read_pool` opens any connection so the first
+        // `file_blob_bytes` query fails with SQLITE_CANTOPEN.
+        std::fs::remove_file(&db).unwrap();
+
+        let (event, _stamps) = capture
+            .finish_at(
+                &store,
+                session,
+                MessageId::new(),
+                ToolCallId::new(),
+                Some(&json!("ok")),
+                Vec::new(),
+            )
+            .await
+            .expect("edit must continue when initial blob-budget read fails");
+        match event.expect("FilesChanged event") {
+            Event::FilesChanged { files, .. } => {
+                assert_eq!(files.len(), 1);
+                assert_eq!(
+                    files[0].before,
+                    FileState::Omitted {
+                        size: 6,
+                        reason: "store unavailable".to_string(),
+                    }
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn file_capture_propagates_non_storage_blob_budget_error() {
+        let err = omit_or_propagate_budget_error(
+            SessionId::new(),
+            6,
+            hya_store::StoreError::BundleRegistryData("size overflow".into()),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            CoreError::Store(hya_store::StoreError::BundleRegistryData(_))
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    struct ShmReadStall(std::fs::File);
+
+    #[cfg(target_os = "linux")]
+    impl ShmReadStall {
+        fn acquire(db: &Path) -> Self {
+            use std::os::unix::io::AsRawFd;
+            let shm_path = format!("{}-shm", db.display());
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&shm_path)
+                .unwrap();
+            let lock = libc::flock {
+                l_type: libc::F_WRLCK as libc::c_short,
+                l_whence: libc::SEEK_SET as libc::c_short,
+                l_start: 120,
+                l_len: 8,
+                l_pid: 0,
+            };
+            assert_eq!(
+                unsafe { libc::fcntl(file.as_raw_fd(), libc::F_OFD_SETLK, &lock) },
+                0
+            );
+            Self(file)
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for ShmReadStall {
+        fn drop(&mut self) {
+            use std::os::unix::io::AsRawFd;
+            let lock = libc::flock {
+                l_type: libc::F_UNLCK as libc::c_short,
+                l_whence: libc::SEEK_SET as libc::c_short,
+                l_start: 120,
+                l_len: 8,
+                l_pid: 0,
+            };
+            unsafe { libc::fcntl(self.0.as_raw_fd(), libc::F_OFD_SETLK, &lock) };
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn file_capture_omits_with_store_unavailable_when_healthy_read_stalls() {
+        let dir = tempfile::Builder::new()
+            .prefix("hya-snapshot-stall-")
+            .tempdir()
+            .unwrap();
+        let db = dir.path().join("hya.db");
+        let workdir = dir.path().join("work");
+        tokio::fs::create_dir_all(&workdir).await.unwrap();
+        let file = workdir.join("a.txt");
+        tokio::fs::write(&file, b"before").await.unwrap();
+
+        let store = SessionStore::connect_with_write_timeout(
+            db.to_str().unwrap(),
+            std::time::Duration::from_millis(40),
+        )
+        .await
+        .unwrap();
+        let session = SessionId::new();
+        store
+            .append_event(
+                session,
+                &Event::SessionCreated {
+                    session,
+                    parent: None,
+                    agent: hya_proto::AgentName::new("build"),
+                    model: hya_proto::ModelRef::new("fake"),
+                    workdir: workdir.to_string_lossy().into_owned(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
+                },
+            )
+            .await
+            .unwrap();
+        // Warm `read_pool` on healthy disk, then stall shm locks while writes stay healthy.
+        assert_eq!(store.file_blob_bytes(session).await.unwrap(), 0);
+        let capture = FileCapture::full("write", &json!({ "path": "a.txt" }), &workdir).await;
+        tokio::fs::write(&file, b"after").await.unwrap();
+
+        let _stall = ShmReadStall::acquire(&db);
+        let (event, _stamps) = tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            capture.finish_at(
+                &store,
+                session,
+                MessageId::new(),
+                ToolCallId::new(),
+                Some(&json!("ok")),
+                Vec::new(),
+            ),
+        )
+        .await
+        .expect("stalled blob budget read must cut off at READ_TIMEOUT")
+        .expect("stalled blob budget read must omit rather than abort");
+        match event.expect("FilesChanged event") {
+            Event::FilesChanged { files, .. } => {
+                assert_eq!(files.len(), 1);
+                assert_eq!(
+                    files[0].before,
+                    FileState::Omitted {
+                        size: 6,
+                        reason: "store unavailable".to_string(),
+                    }
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn file_capture_skips_budget_read_when_no_prior_needs_a_blob() {
+        let dir = tempfile::Builder::new()
+            .prefix("hya-snapshot-lazy-")
+            .tempdir()
+            .unwrap();
+        let db = dir.path().join("hya.db");
+        let workdir = dir.path().join("work");
+        tokio::fs::create_dir_all(&workdir).await.unwrap();
+        let file = workdir.join("new.txt");
+
+        let store = SessionStore::connect(db.to_str().unwrap()).await.unwrap();
+        let session = SessionId::new();
+        store
+            .append_event(
+                session,
+                &Event::SessionCreated {
+                    session,
+                    parent: None,
+                    agent: hya_proto::AgentName::new("build"),
+                    model: hya_proto::ModelRef::new("fake"),
+                    workdir: workdir.to_string_lossy().into_owned(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
+                },
+            )
+            .await
+            .unwrap();
+        let capture = FileCapture::full("write", &json!({ "path": "new.txt" }), &workdir).await;
+        tokio::fs::write(&file, b"created").await.unwrap();
+
+        // Lock shm so any `file_blob_bytes` read would stall for `READ_TIMEOUT` (5s).
+        let _stall = ShmReadStall::acquire(&db);
+        let (event, _stamps) = tokio::time::timeout(
+            std::time::Duration::from_millis(80),
+            capture.finish_at(
+                &store,
+                session,
+                MessageId::new(),
+                ToolCallId::new(),
+                Some(&json!("ok")),
+                Vec::new(),
+            ),
+        )
+        .await
+        .expect("Prior::Absent must not query file_blob_bytes")
+        .unwrap();
+        match event.expect("FilesChanged event") {
+            Event::FilesChanged { files, .. } => {
+                assert_eq!(files.len(), 1);
+                assert_eq!(files[0].before, FileState::Absent);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 }

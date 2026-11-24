@@ -18,6 +18,7 @@ hya-tool = { workspace = true }
 hya-proto = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
+image = { workspace = true }
 libc = { workspace = true }
 pty-process = { workspace = true }
 regex = { workspace = true }

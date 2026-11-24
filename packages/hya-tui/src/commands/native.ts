@@ -801,7 +801,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/summarize",
-    description: "Summarize the session into a new message",
+    description: "Remove earlier context now (the route's native compaction where it has one); your messages and the todo list are kept",
     run: async ({ store, client, actions }) => {
       const selected = store.state.selected
       if (!selected) throw new Error("Usage: /summarize in a session")

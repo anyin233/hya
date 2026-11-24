@@ -37,7 +37,7 @@ impl SessionStore {
             "SELECT agent_id, provider_id, model_id \
              FROM agent_model_preference ORDER BY agent_id",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.read_pool_checked()?)
         .await?;
 
         rows.into_iter().map(decode_preference).collect()
@@ -61,7 +61,7 @@ impl SessionStore {
         validate_preference(entry)?;
         self.require_runtime_owner(owner)?;
 
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.begin_transaction().await?;
         self.require_runtime_owner(owner)?;
         sqlx::query(
             "INSERT INTO agent_model_preference (agent_id, provider_id, model_id) \
@@ -97,7 +97,7 @@ impl SessionStore {
         validate_agent(agent)?;
         self.require_runtime_owner(owner)?;
 
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.begin_transaction().await?;
         self.require_runtime_owner(owner)?;
         sqlx::query("DELETE FROM agent_model_preference WHERE agent_id = ?")
             .bind(agent.as_str())

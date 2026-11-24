@@ -133,7 +133,7 @@ pub(crate) enum ServeAction {
         #[arg(long)]
         force: bool,
         /// Seconds to wait for a graceful stop.
-        #[arg(long, default_value_t = 30, value_name = "SECONDS")]
+        #[arg(long, default_value_t = 45, value_name = "SECONDS")]
         timeout: u64,
     },
     /// Stop the backend of `--db` (if one runs), then start a new daemon.
@@ -146,7 +146,7 @@ pub(crate) enum ServeAction {
         #[arg(long)]
         force: bool,
         /// Seconds to wait for the old backend to stop.
-        #[arg(long, default_value_t = 30, value_name = "SECONDS")]
+        #[arg(long, default_value_t = 45, value_name = "SECONDS")]
         timeout: u64,
         /// Join this relay instead of the one the old backend was joined to
         /// (by default the new daemon rejoins the old backend's relay).
@@ -255,20 +255,24 @@ pub(crate) enum ServeRelayAction {
 pub(crate) enum Command {
     /// Run a single prompt headlessly and print the resulting transcript.
     Exec {
-        /// The user prompt to send to the agent.
+        /// The user prompt to send to the agent. Use `-` to read it from stdin.
         prompt: String,
         /// Emit the event stream as JSONL instead of a rendered transcript.
         #[arg(long)]
         json: bool,
-        /// Wall-clock seconds this run may take (an outside harness kills it
-        /// then). Enables deadline notices and caps tool timeouts to the
-        /// time left.
+        /// Include durable events from every descendant in the local JSONL stream.
+        #[arg(long, requires = "json", conflicts_with = "bare")]
+        include_subagents: bool,
+        /// Wall-clock budget in seconds for in-process runs, including --bare.
+        /// Enables deadline notices and caps tool timeouts. The outside harness
+        /// enforces the process deadline.
         #[arg(long, value_name = "SECS", value_parser = clap::value_parser!(u64).range(1..))]
         time_budget: Option<u64>,
         /// Run the three-primitive kernel alone with six built-in tools, its
         /// minimal system prompt, no bundles or permission checks. Prints
-        /// the final text. Always runs in process against `--db`.
-        #[arg(long, conflicts_with_all = ["pure", "time_budget", "json"])]
+        /// the final text unless --json is set. Supports --time-budget and
+        /// always runs in process against `--db`.
+        #[arg(long, conflicts_with = "pure")]
         bare: bool,
     },
     /// Start the HTTP + SSE server.
@@ -1060,6 +1064,13 @@ mod tests {
             )
         );
         assert_eq!(
+            action(parse(["hya", "serve", "stop"])).0,
+            Some(ServeAction::Stop {
+                force: false,
+                timeout: 45
+            })
+        );
+        assert_eq!(
             action(parse(["hya", "serve", "stop", "--force", "--timeout", "5"])).0,
             Some(ServeAction::Stop {
                 force: true,
@@ -1071,7 +1082,7 @@ mod tests {
             Some(ServeAction::Restart {
                 json: false,
                 force: false,
-                timeout: 30,
+                timeout: 45,
                 relay: super::RelayFlags::default(),
             })
         );

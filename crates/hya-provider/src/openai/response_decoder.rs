@@ -14,6 +14,9 @@ struct PartAsm {
     ended: bool,
     summary_index: Option<usize>,
     pending_summary_index: Option<usize>,
+    /// A summary-only `output_item.done` item, kept open in case the terminal
+    /// output carries the item with its `encrypted_content`.
+    pending_provider_data: Option<Value>,
 }
 
 impl PartAsm {
@@ -24,6 +27,7 @@ impl PartAsm {
             ended: false,
             summary_index: None,
             pending_summary_index: None,
+            pending_provider_data: None,
         }
     }
 }
@@ -78,7 +82,7 @@ impl OpenAiResponsesDecoder {
                     session,
                     message,
                     part: entry.part,
-                    provider_data: None,
+                    provider_data: entry.pending_provider_data.take(),
                 });
             }
         }
@@ -102,6 +106,7 @@ impl OpenAiResponsesDecoder {
                     call: entry.call,
                     name: ToolName::new(&entry.name),
                     input: entry.input()?,
+                    provider_data: entry.provider_data.clone(),
                 });
             }
         }
@@ -170,24 +175,46 @@ impl OpenAiResponsesDecoder {
             .pending_summary_index = Some(summary_index);
     }
 
-    fn reasoning_done(&mut self, index: usize, item: &Value) -> Vec<Event> {
+    /// Open the reasoning part at `index`, so it keeps its place before any
+    /// later output item.
+    fn reasoning_added(&mut self, index: usize) -> Vec<Event> {
         let (session, message) = (self.session, self.message);
         let reason = self
             .reasoning_effort
             .map(|effort| effort.as_str().to_string());
         let entry = self.reasoning.entry(index).or_insert_with(PartAsm::new);
-        let mut out = Vec::new();
-        if !entry.started {
-            entry.started = true;
-            out.push(Event::ReasoningStart {
-                session,
-                message,
-                part: entry.part,
-                reason,
-            });
+        if entry.started {
+            return Vec::new();
         }
+        entry.started = true;
+        vec![Event::ReasoningStart {
+            session,
+            message,
+            part: entry.part,
+            reason,
+        }]
+    }
+
+    /// `output_item.done` for a reasoning item: close it, unless it lacks
+    /// `encrypted_content` that the terminal output may still supply.
+    fn reasoning_item_done(&mut self, index: usize, item: &Value) -> Vec<Event> {
+        if has_encrypted_content(item) {
+            return self.reasoning_done(index, item);
+        }
+        let out = self.reasoning_added(index);
+        if let Some(entry) = self.reasoning.get_mut(&index) {
+            entry.pending_provider_data = Some(item.clone());
+        }
+        out
+    }
+
+    fn reasoning_done(&mut self, index: usize, item: &Value) -> Vec<Event> {
+        let (session, message) = (self.session, self.message);
+        let mut out = self.reasoning_added(index);
+        let entry = self.reasoning.entry(index).or_insert_with(PartAsm::new);
         if !entry.ended {
             entry.ended = true;
+            entry.pending_provider_data = None;
             out.push(Event::ReasoningEnd {
                 session,
                 message,
@@ -203,6 +230,13 @@ impl OpenAiResponsesDecoder {
         let entry = self.tools.entry(index).or_insert_with(ToolAsm::new);
         if let Some(name) = item.get("name").and_then(Value::as_str) {
             entry.name = name.to_string();
+        }
+        if let Some(call_id) = item
+            .get("call_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        {
+            entry.set_provider_field("call_id", Value::String(call_id.to_string()));
         }
         if let Some(args) = item.get("arguments").and_then(Value::as_str)
             && entry.args.is_empty()
@@ -251,6 +285,7 @@ impl OpenAiResponsesDecoder {
                 call: entry.call,
                 name: ToolName::new(&entry.name),
                 input: entry.input()?,
+                provider_data: entry.provider_data.clone(),
             });
         }
         Ok(out)
@@ -298,6 +333,74 @@ impl OpenAiResponsesDecoder {
                 message,
                 part: entry.part,
             });
+        }
+        out
+    }
+
+    /// Whether an output item after `index` has started a part.
+    fn has_started_after(&self, index: usize) -> bool {
+        let after = index + 1..;
+        self.reasoning
+            .range(after.clone())
+            .any(|(_, entry)| entry.started)
+            || self
+                .text
+                .range(after.clone())
+                .any(|(_, entry)| entry.started)
+            || self.tools.range(after).any(|(_, entry)| entry.started)
+    }
+
+    /// Close each open reasoning item with its terminal `/response/output`
+    /// item, and log reasoning the upstream removed from the input.
+    /// `reasoning_done` leaves an ended item alone: a second `ReasoningEnd`
+    /// would blank its text. An item never started is skipped once a later
+    /// item streamed, since its part would follow that item's and replay out
+    /// of order.
+    fn finalize_terminal_response(&mut self, event: &Value) -> Vec<Event> {
+        let mut out = Vec::new();
+        let output = event.pointer("/response/output").and_then(Value::as_array);
+        for (index, item) in output.into_iter().flatten().enumerate() {
+            if item.get("type").and_then(Value::as_str) != Some("reasoning") {
+                continue;
+            }
+            let entry = self.reasoning.get_mut(&index);
+            let started = entry.as_ref().is_some_and(|entry| entry.started);
+            let pending = entry.and_then(|entry| entry.pending_provider_data.take());
+            if !started && self.has_started_after(index) {
+                tracing::warn!(
+                    session = %self.session,
+                    index,
+                    "responses terminal reasoning item follows streamed output; it is not kept"
+                );
+                continue;
+            }
+            let item = match pending {
+                Some(pending) if !has_encrypted_content(item) => pending,
+                _ => item.clone(),
+            };
+            // The kernel records text at `TextEnd`: end earlier open text
+            // first, so it is not recorded after this reasoning.
+            let (session, message) = (self.session, self.message);
+            for entry in self.text.range_mut(..index).map(|(_, entry)| entry) {
+                if entry.started && !entry.ended {
+                    entry.ended = true;
+                    out.push(Event::TextEnd {
+                        session,
+                        message,
+                        part: entry.part,
+                    });
+                }
+            }
+            out.extend(self.reasoning_done(index, &item));
+        }
+        let reasons = removed_reasoning_reasons(event);
+        if !reasons.is_empty() {
+            tracing::warn!(
+                session = %self.session,
+                removed = reasons.len(),
+                reasons = %reasons.join(", "),
+                "responses upstream removed reasoning items from input"
+            );
         }
         out
     }
@@ -384,10 +487,15 @@ impl Decoder for OpenAiResponsesDecoder {
             {
                 self.tool_added(index, &event["item"])
             }
+            "response.output_item.added"
+                if event.pointer("/item/type").and_then(Value::as_str) == Some("reasoning") =>
+            {
+                self.reasoning_added(index)
+            }
             "response.output_item.done"
                 if event.pointer("/item/type").and_then(Value::as_str) == Some("reasoning") =>
             {
-                self.reasoning_done(index, &event["item"])
+                self.reasoning_item_done(index, &event["item"])
             }
             "response.output_item.done"
                 if event.pointer("/item/type").and_then(Value::as_str) == Some("function_call") =>
@@ -410,11 +518,15 @@ impl Decoder for OpenAiResponsesDecoder {
                 } else {
                     FinishReason::Stop
                 };
-                self.close(finish)?
+                let mut out = self.finalize_terminal_response(&event);
+                out.extend(self.close(finish)?);
+                out
             }
             "response.incomplete" => {
                 self.record_usage(&event);
-                self.close(FinishReason::Length)?
+                let mut out = self.finalize_terminal_response(&event);
+                out.extend(self.close(FinishReason::Length)?);
+                out
             }
             "response.failed" => {
                 let error = event.pointer("/response/error").unwrap_or(&Value::Null);
@@ -450,5 +562,53 @@ impl Decoder for OpenAiResponsesDecoder {
             FinishReason::Stop
         };
         self.close(finish)
+    }
+}
+
+fn has_encrypted_content(item: &Value) -> bool {
+    item.get("encrypted_content")
+        .and_then(Value::as_str)
+        .is_some_and(|content| !content.is_empty())
+}
+
+/// The `reason` of each reasoning item `/response/input_transformations`
+/// reports removed (`unspecified` when absent).
+fn removed_reasoning_reasons(event: &Value) -> Vec<&str> {
+    event
+        .pointer("/response/input_transformations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| {
+            item.get("action").and_then(Value::as_str) == Some("removed")
+                && item.get("type").and_then(Value::as_str) == Some("reasoning")
+        })
+        .map(|item| {
+            item.get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("unspecified")
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::removed_reasoning_reasons;
+
+    #[test]
+    fn removed_reasoning_reasons_lists_only_removed_reasoning_items() {
+        let event = json!({"response": {"input_transformations": [
+            {"action": "removed", "type": "reasoning", "reason": "prefix_mismatch"},
+            {"action": "removed", "type": "reasoning"},
+            {"action": "removed", "type": "message", "reason": "other"},
+            {"action": "rewritten", "type": "reasoning", "reason": "other"},
+        ]}});
+        assert_eq!(
+            removed_reasoning_reasons(&event),
+            ["prefix_mismatch", "unspecified"]
+        );
+        assert!(removed_reasoning_reasons(&json!({"response": {}})).is_empty());
     }
 }

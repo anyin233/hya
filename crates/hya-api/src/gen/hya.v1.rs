@@ -7600,7 +7600,7 @@ pub struct StreamEvent {
     /// Event payload; exactly one kind is set.
     #[prost(
         oneof = "stream_event::Payload",
-        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28"
+        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29"
     )]
     pub payload: ::core::option::Option<stream_event::Payload>,
 }
@@ -7713,6 +7713,11 @@ pub mod stream_event {
         /// belongs to another parent's log. This never changes the task outcome.
         #[prost(message, tag = "28")]
         MemberLifecycleChanged(super::MemberLifecycleChanged),
+        /// A part was removed from a message (durable): a part deleted through
+        /// `DeleteMessagePart`, or a part of a failed bare round attempt that is
+        /// retried. Drop the part with this id from the message.
+        #[prost(message, tag = "29")]
+        PartDeleted(super::PartDeleted),
     }
 }
 /// Actor lifecycle, separate from parent-local member task updates.
@@ -7763,6 +7768,16 @@ pub struct PartsAdded {
     /// The added parts, in message order.
     #[prost(message, repeated, tag = "2")]
     pub parts: ::prost::alloc::vec::Vec<PartInfo>,
+}
+/// A part removed from a message.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PartDeleted {
+    /// Owning message identifier.
+    #[prost(string, tag = "1")]
+    pub message: ::prost::alloc::string::String,
+    /// The removed part's identifier.
+    #[prost(string, tag = "2")]
+    pub part: ::prost::alloc::string::String,
 }
 /// A session revert or its undo.
 #[derive(Clone, PartialEq, ::prost::Message)]

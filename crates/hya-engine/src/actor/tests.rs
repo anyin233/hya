@@ -307,6 +307,71 @@ async fn mail_revival_fast_archive_cannot_be_erased_by_a_late_restart() {
 }
 
 #[tokio::test]
+async fn list_channels_counts_each_incoming_message_on_its_channel() {
+    let engine = engine().await;
+    let root = root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let lead = engine.try_begin_turn(root).unwrap();
+    let (child, handle) = parked(&supervisor, root).await;
+    let projection = engine.read_projection(root).await.unwrap();
+    let team = &projection.team;
+    let dm = team.resolve_dm(&handle, "^parent").unwrap();
+    let announce = team
+        .channels
+        .iter()
+        .find(|(_, ch)| ch.kind == ChannelKind::Group && ch.members.contains(&handle))
+        .unwrap()
+        .0
+        .clone();
+    engine
+        .store()
+        .append_event(
+            root,
+            &Event::MailConsumed {
+                session: root,
+                handle: handle.clone(),
+                through: team
+                    .inboxes
+                    .get(&handle)
+                    .map_or(0, |rows| rows.len() as u64),
+            },
+        )
+        .await
+        .unwrap();
+    let (mailbox, rx) = hya_tool::MailboxPlane::new();
+    let stop = CancellationToken::new();
+    let service = tokio::spawn(crate::run_mailbox_service(engine.clone(), rx, stop.clone()));
+    for (channel, group_count) in [(&dm, 0), (&announce, 1)] {
+        engine
+            .store()
+            .append_event(
+                root,
+                &Event::MailSent {
+                    session: root,
+                    from: "main".into(),
+                    to: MailEndpoint::Channel(channel.clone()),
+                    kind: MailKind::Message,
+                    body: "update".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let rows = mailbox.for_session(child).list_channels().await.unwrap();
+        assert_eq!(rows.iter().find(|row| row.id == dm).unwrap().unread, 1);
+        assert_eq!(
+            rows.iter().find(|row| row.id == announce).unwrap().unread,
+            group_count
+        );
+    }
+    stop.cancel();
+    service.await.unwrap();
+    drop(lead);
+    supervisor
+        .drain(FinishCause::Shutdown, Duration::from_secs(2))
+        .await;
+}
+
+#[tokio::test]
 async fn list_channels_ignores_the_senders_directive_copy() {
     outgoing_directive_reader(false).await;
 }
@@ -2174,6 +2239,7 @@ async fn o2_interactive_turn_release_retires_the_finished_team() {
         &supervisor,
         root,
         hya_tool::WaitSpec::parse(&serde_json::json!({"timeout_secs": 0}), true).unwrap(),
+        None,
     )
     .await
     .unwrap();

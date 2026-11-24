@@ -107,7 +107,7 @@ struct FileConfig {
     categories: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     permission: Option<PermissionConfig>,
-    /// Compaction thresholds and token-accounting mode. Absent → engine
+    /// Compaction settings and token-accounting mode. Absent → engine
     /// defaults; per-field `HYA_COMPACTION_*` / `HYA_TOKEN_ACCOUNTING` env
     /// overrides win over file values.
     #[serde(default)]
@@ -165,6 +165,12 @@ impl EngineSettings {
     pub(crate) fn scopes(&self) -> hya_engine::CatalogScopeCacheConfig {
         resolve_catalog_scope_cache(self.file.catalog_scopes.as_ref())
     }
+    pub(crate) fn webfetch_enabled(&self) -> bool {
+        self.file
+            .tools
+            .as_ref()
+            .is_none_or(|tools| tools.webfetch.enabled)
+    }
     pub(crate) fn code_mode(&self) -> CodeMode {
         self.file
             .tools
@@ -200,9 +206,30 @@ struct CatalogScopesFile {
 #[derive(Debug, Deserialize)]
 struct ToolsConfig {
     #[serde(default)]
+    webfetch: WebFetchConfig,
+    #[serde(default)]
     websearch: WebSearchConfig,
     #[serde(default)]
     code: CodeToolConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WebFetchConfig {
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for WebFetchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -307,23 +334,12 @@ struct SubagentLimitsFile {
 #[derive(Debug, Deserialize)]
 pub(crate) struct CompactionFile {
     #[serde(default)]
-    token_threshold: Option<usize>,
-    #[serde(default)]
     keep_recent: Option<usize>,
-    #[serde(default)]
-    context_fraction: Option<f32>,
-    #[serde(default)]
-    reserve_tokens: Option<usize>,
     #[serde(default)]
     summary_max_tokens: Option<u32>,
     /// `auto`, `provider`, or `estimate`; anything else is ignored.
     #[serde(default)]
     token_accounting: Option<String>,
-    /// oh-my-pi `compaction.methodOrder` names (`shake`, `remote`,
-    /// `snapcompact`, `handoff`, `soft`); a partial list is completed with the
-    /// unmentioned methods in default order, an unknown name ignores the field.
-    #[serde(default)]
-    method_order: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1609,42 +1625,14 @@ pub fn load_configured_plugin_ids() -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Compaction thresholds plus the token-accounting mode they are measured with.
-///
-/// The two travel together because a threshold is only as trustworthy as the
-/// token count it is compared against.
+/// Compaction settings plus the token-accounting mode `ContextStatus` is
+/// measured with.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ContextSettings {
-    /// Thresholds handed to the engine's compaction plane.
+    /// Settings handed to the engine's compaction plane.
     pub compaction: CompactionConfig,
-    /// How window occupancy is measured for those thresholds.
+    /// How window occupancy is measured.
     pub token_accounting: TokenAccountingMode,
-}
-
-/// Resolve a configured method order (oh-my-pi `compaction.methodOrder`).
-///
-/// A partial list is honoured and completed with the unmentioned methods in
-/// default order — omp's filter-and-drop behaviour, minus its ability to
-/// silently lose a mechanism. An unknown name or an empty list invalidates the
-/// whole value, so a typo cannot reorder the ladder by accident; the caller
-/// then keeps whatever it had (file value or engine default).
-fn resolve_method_order(names: &[String]) -> Option<[hya_engine::CompactionRung; 5]> {
-    let mut order: Vec<hya_engine::CompactionRung> = Vec::new();
-    for name in names {
-        let rung = hya_engine::CompactionRung::from_wire_name(name.trim())?;
-        if !order.contains(&rung) {
-            order.push(rung);
-        }
-    }
-    if order.is_empty() {
-        return None;
-    }
-    for rung in hya_engine::CompactionRung::DEFAULT_ORDER {
-        if !order.contains(&rung) {
-            order.push(rung);
-        }
-    }
-    order.try_into().ok()
 }
 
 /// Resolve context settings from an optional file block, then apply per-field
@@ -1657,61 +1645,27 @@ fn resolve_context_settings(file: Option<&CompactionFile>) -> ContextSettings {
     let defaults = CompactionConfig::default();
     let mut settings = ContextSettings {
         compaction: CompactionConfig {
-            token_threshold: file
-                .and_then(|f| f.token_threshold)
-                .unwrap_or(defaults.token_threshold),
             keep_recent: file
                 .and_then(|f| f.keep_recent)
                 .unwrap_or(defaults.keep_recent),
-            context_fraction: file
-                .and_then(|f| f.context_fraction)
-                .unwrap_or(defaults.context_fraction),
-            reserve_tokens: file
-                .and_then(|f| f.reserve_tokens)
-                .unwrap_or(defaults.reserve_tokens),
             summary_max_tokens: file
                 .and_then(|f| f.summary_max_tokens)
                 .unwrap_or(defaults.summary_max_tokens),
-            method_order: file
-                .and_then(|f| f.method_order.as_deref())
-                .and_then(resolve_method_order)
-                .unwrap_or(defaults.method_order),
         },
         token_accounting: file
             .and_then(|f| f.token_accounting.as_deref())
             .and_then(TokenAccountingMode::parse)
             .unwrap_or_default(),
     };
-    if let Ok(v) = std::env::var("HYA_COMPACTION_THRESHOLD")
-        && let Ok(parsed) = v.trim().parse()
-    {
-        settings.compaction.token_threshold = parsed;
-    }
     if let Ok(v) = std::env::var("HYA_COMPACTION_KEEP_RECENT")
         && let Ok(parsed) = v.trim().parse()
     {
         settings.compaction.keep_recent = parsed;
     }
-    if let Ok(v) = std::env::var("HYA_COMPACTION_CONTEXT_FRACTION")
-        && let Ok(parsed) = v.trim().parse()
-    {
-        settings.compaction.context_fraction = parsed;
-    }
-    if let Ok(v) = std::env::var("HYA_COMPACTION_RESERVE_TOKENS")
-        && let Ok(parsed) = v.trim().parse()
-    {
-        settings.compaction.reserve_tokens = parsed;
-    }
     if let Ok(v) = std::env::var("HYA_COMPACTION_SUMMARY_MAX_TOKENS")
         && let Ok(parsed) = v.trim().parse()
     {
         settings.compaction.summary_max_tokens = parsed;
-    }
-    if let Ok(v) = std::env::var("HYA_COMPACTION_METHOD_ORDER") {
-        let names: Vec<String> = v.split(',').map(str::to_string).collect();
-        if let Some(parsed) = resolve_method_order(&names) {
-            settings.compaction.method_order = parsed;
-        }
     }
     if let Ok(v) = std::env::var("HYA_TOKEN_ACCOUNTING")
         && let Some(parsed) = TokenAccountingMode::parse(&v)
@@ -2860,29 +2814,29 @@ permission:
     fn compaction_settings_parse_from_file_and_env_wins() {
         let mut env = EnvGuard::new();
         let file = parse_config(
-            "default_model: x\ncompaction:\n  token_threshold: 40000\n  keep_recent: 12\n  context_fraction: 0.6\n  reserve_tokens: 32768\n  summary_max_tokens: 8192\n  token_accounting: estimate\n",
+            "default_model: x\ncompaction:\n  keep_recent: 12\n  summary_max_tokens: 8192\n  token_accounting: estimate\n",
         )
         .unwrap();
         let from_file = resolve_context_settings(file.compaction.as_ref());
-        assert_eq!(from_file.compaction.token_threshold, 40_000);
         assert_eq!(from_file.compaction.keep_recent, 12);
-        assert!((from_file.compaction.context_fraction - 0.6).abs() < f32::EPSILON);
-        assert_eq!(from_file.compaction.reserve_tokens, 32_768);
         assert_eq!(from_file.compaction.summary_max_tokens, 8_192);
         assert_eq!(from_file.token_accounting, TokenAccountingMode::Estimate);
 
         // Absent block → engine defaults, accounting on Auto.
         let defaults = resolve_context_settings(None);
-        assert_eq!(defaults.compaction.reserve_tokens, 16_384);
+        assert_eq!(defaults.compaction.summary_max_tokens, 4_096);
         assert_eq!(defaults.token_accounting, TokenAccountingMode::Auto);
 
         // Env wins over the file value.
-        env.set("HYA_COMPACTION_RESERVE_TOKENS", "4096");
+        env.set("HYA_COMPACTION_SUMMARY_MAX_TOKENS", "2048");
         env.set("HYA_TOKEN_ACCOUNTING", "provider");
         let overridden = resolve_context_settings(file.compaction.as_ref());
-        env.remove("HYA_COMPACTION_RESERVE_TOKENS");
+        env.remove("HYA_COMPACTION_SUMMARY_MAX_TOKENS");
         env.remove("HYA_TOKEN_ACCOUNTING");
-        assert_eq!(overridden.compaction.reserve_tokens, 4_096, "env must win");
+        assert_eq!(
+            overridden.compaction.summary_max_tokens, 2_048,
+            "env must win"
+        );
         assert_eq!(overridden.token_accounting, TokenAccountingMode::Provider);
         assert_eq!(
             overridden.compaction.keep_recent, 12,
@@ -2943,56 +2897,6 @@ permission:
         );
     }
 
-    #[test]
-    fn compaction_method_order_parses_from_file_and_env_wins() {
-        let mut env = EnvGuard::new();
-        // oh-my-pi's own default order, spelled as an omp user would.
-        let file = parse_config(
-            "default_model: x\ncompaction:\n  method_order: [remote, snapcompact, handoff, shake, soft]\n",
-        )
-        .unwrap();
-        let from_file = resolve_context_settings(file.compaction.as_ref());
-        assert_eq!(
-            from_file.compaction.method_order,
-            hya_engine::parse_method_order(&["remote", "snapcompact", "handoff", "shake", "soft"])
-                .unwrap(),
-            "file order is honoured"
-        );
-
-        // Env wins over the file order; a partial list is completed with the
-        // unmentioned methods in default order (omp filter-and-drop, but the
-        // ladder never loses a mechanism).
-        env.set("HYA_COMPACTION_METHOD_ORDER", "handoff, soft, shake");
-        let overridden = resolve_context_settings(file.compaction.as_ref());
-        assert_eq!(
-            overridden.compaction.method_order,
-            hya_engine::parse_method_order(&["handoff", "soft", "shake", "remote", "snapcompact"])
-                .unwrap(),
-            "env order wins and missing methods append in default order"
-        );
-
-        // An unknown method name invalidates the env value, which keeps the
-        // file order — matching how unparseable numbers keep the file value.
-        env.set("HYA_COMPACTION_METHOD_ORDER", "shake, banana");
-        let bogus_env = resolve_context_settings(file.compaction.as_ref());
-        assert_eq!(
-            bogus_env.compaction.method_order, from_file.compaction.method_order,
-            "an invalid env order keeps the file order"
-        );
-
-        // An unknown name in the file falls back to the engine default rather
-        // than silently dropping a mechanism from the ladder.
-        let broken =
-            parse_config("default_model: x\ncompaction:\n  method_order: [shake, banana]\n")
-                .unwrap();
-        let bogus_file = resolve_context_settings(broken.compaction.as_ref());
-        assert_eq!(
-            bogus_file.compaction.method_order,
-            hya_engine::CompactionConfig::default().method_order,
-            "a broken file order keeps the default ladder"
-        );
-    }
-
     const FIXTURE: &str = "
 default_model: gpt-5.5
 providers:
@@ -3044,6 +2948,24 @@ providers:
         }
         assert!(mode("tools:\n  code:\n    mode: always\n").is_err());
         assert!(mode("tools:\n  code:\n    enabled: true\n").is_err());
+    }
+
+    #[test]
+    fn parses_webfetch_enabled_and_rejects_unknown_fields() -> anyhow::Result<()> {
+        for (yaml, enabled) in [
+            ("{}", true),
+            ("tools: {}", true),
+            ("tools: {webfetch: {}}", true),
+            ("tools: {webfetch: {enabled: true}}", true),
+            ("tools: {webfetch: {enabled: false}}", false),
+        ] {
+            let settings = EngineSettings {
+                file: parse_config(yaml)?,
+            };
+            assert_eq!(settings.webfetch_enabled(), enabled, "{yaml}");
+        }
+        assert!(parse_config("tools: {webfetch: {enable: false}}").is_err());
+        Ok(())
     }
 
     #[test]
@@ -3179,10 +3101,13 @@ providers:
         let anthropic = parsed.iter().find(|entry| entry.id == "gw-anth").unwrap();
         assert_eq!(
             anthropic.models[0].reasoning_variants,
-            vec!["low", "medium", "high", "max"]
+            vec!["low", "medium", "high", "xhigh", "max"]
         );
         let google = parsed.iter().find(|entry| entry.id == "gw-google").unwrap();
-        assert_eq!(google.models[0].reasoning_variants, vec!["high", "max"]);
+        assert_eq!(
+            google.models[0].reasoning_variants,
+            vec!["minimal", "low", "medium", "high", "max"]
+        );
     }
 
     #[test]
@@ -3673,7 +3598,7 @@ plugins:
         // Entry-level kind override changes only the capability menu.
         assert_eq!(
             models[1].reasoning_variants,
-            vec!["low", "medium", "high", "max"]
+            vec!["low", "medium", "high", "xhigh", "max"]
         );
         assert_eq!(models[1].reasoning_default, None);
         // Explicit reasoning.variants still replaces the overridden kind's menu.

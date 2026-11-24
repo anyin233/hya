@@ -1,7 +1,8 @@
 //! The full mode's [`Harness`]: what a full-mode turn adds around the kernel
 //! loop. Before each round it re-validates the actor claim, rebinds a Root
 //! activation to a new runtime generation, resolves the round's model, and
-//! walks the compaction ladder; the request carries the agent's prompt,
+//! runs the kernel's context reduction with the internal bundles' extensions
+//! (`hya/compaction`); the request carries the agent's prompt,
 //! tools, and effort through `chat.params`; streams open through model
 //! fallback or the Workflow route under a governor permit; a round that
 //! failed before any output is retried; an accepted `report` ends the turn.
@@ -11,8 +12,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_proto::{
-    AgentName, Event, FinishReason, MessageId, ModelRef, Projection, SessionId, TokenUsage,
-    ToolSchema,
+    AgentName, Event, FinishReason, MessageId, ModelRef, PartProjection, Projection, SessionId,
+    TokenUsage, ToolSchema,
 };
 use hya_provider::{CompletionRequest, EventStream, ProviderError};
 use hya_store::ActorClaim;
@@ -24,12 +25,12 @@ use super::super::roots::SessionWorkspace;
 use super::super::steer::SteerMailbox;
 use super::super::stream_round::TurnEmit;
 use super::super::{
-    AgentSpec, FixedSystemAgent, SessionEngine, agent_roster,
-    effective_agent_for_binding_with_sidecar_tools, session_workdir,
+    AgentSpec, SessionEngine, agent_roster, effective_agent_for_binding_with_sidecar_tools,
+    session_workdir,
 };
 use super::messages::{AttachmentData, prompt_digests, system_prompt};
 use super::rewrite_host::{HostErrors, TurnLog, TurnModels, TurnTranscript};
-use super::tool_gate::TurnToolGate;
+use super::tool_gate::{TurnToolGate, can_report};
 use super::{
     RequestLineage, TurnExecution, TurnRebindInputs, workflow_failure_class,
     workflow_provider_failure_class,
@@ -44,9 +45,6 @@ use crate::kernel::{self, Failure, Harness, Round, ToolCall, ToolGate, View};
 use crate::prompt::{PromptEnv, discover_context_files, render_environment_and_context, today};
 use crate::runtime_registry::CompiledResourceView;
 use crate::workflow::WorkflowTurnRoute;
-
-/// Maximum additional provider opens for one engine round.
-const MAX_ROUND_RETRIES: u32 = 2;
 
 impl SessionEngine {
     /// Drive the streaming rounds of one turn activation on the kernel loop,
@@ -84,8 +82,10 @@ impl SessionEngine {
             actor_claim,
             guidance,
             workflow_route,
+            ran_known_tool,
             explicit_model,
             rebind,
+            effort_fallback,
         } = execution;
         // Depth in the subagent tree, derived from the parent chain. Subagents use
         // the general live provider-stream class; the root uses the independent
@@ -100,12 +100,11 @@ impl SessionEngine {
             _ => 0,
         };
         let mut events = Vec::with_capacity(2);
+        let workdir = session_workdir(agent, &projection);
         let initial_context = match &projection.session.initial_context {
             Some(text) => text.clone(),
             None => {
-                let workdir = session_workdir(agent, &projection);
                 let env = PromptEnv {
-                    cwd: workdir.to_string_lossy().into_owned(),
                     platform: std::env::consts::OS.to_string(),
                     date: today(),
                 };
@@ -126,11 +125,25 @@ impl SessionEngine {
                 text
             }
         };
+        // The first round's model: the tool list depends on it.
+        let model = self.requested_turn_model(
+            &binding,
+            projection
+                .session
+                .agent
+                .as_ref()
+                .unwrap_or(&agent.name)
+                .as_str(),
+            apply_default_overlays,
+            explicit_model,
+            &projection,
+            agent,
+        );
         drop(projection);
         // Digests of the system prompt and tool list, recorded with the
         // binding at turn start and again whenever a round's differ.
-        let tools = self.offered_tools(&resources, depth);
-        let system = system_prompt(agent, Some(&initial_context), &tools, depth);
+        let tools = self.offered_tools(&resources, depth, &model);
+        let system = system_prompt(agent, &workdir, Some(&initial_context), &tools, depth);
         let recorded_digests = prompt_digests(&system, &tools)?;
         events.push(Event::TurnBindingRecorded {
             session,
@@ -178,6 +191,7 @@ impl SessionEngine {
             apply_default_overlays,
             explicit_model,
             workflow_route,
+            ran_known_tool,
             guidance,
             external_dirs,
             workspace,
@@ -185,19 +199,27 @@ impl SessionEngine {
             cancel,
             depth,
             steer,
+            defer_steer: false,
             recorded_digests,
             report_latch: ReportLatch::new(),
             nested_engine: None,
             root_session_cache: None,
             rounds: 0,
             stable_id: String::new(),
-            model: agent.model.clone(),
+            model,
             attachments: AttachmentData::new(),
             parent_session: None,
             offered: Vec::new(),
             permit: None,
             retries: 0,
+            serving_model: None,
+            workflow_candidate: None,
+            reasoning_tokens: None,
+            empty_turns: 0,
+            output_tokens: None,
+            last_finish: None,
             total_tokens: None,
+            effort_fallback,
         };
         let finish = kernel::drive(&scope, &mut harness, cancel).await?;
         if finish != FinishReason::Cancelled {
@@ -217,6 +239,7 @@ impl SessionEngine {
 
 /// One full-mode turn's state across the kernel's rounds.
 struct TurnHarness<'a> {
+    ran_known_tool: Option<&'a mut bool>,
     engine: &'a SessionEngine,
     session: SessionId,
     message: MessageId,
@@ -239,6 +262,7 @@ struct TurnHarness<'a> {
     cancel: &'a CancellationToken,
     depth: u32,
     steer: SteerMailbox,
+    defer_steer: bool,
     /// Prompt digests last recorded in `TurnBindingRecorded`.
     recorded_digests: (String, String),
     /// Set when a `report` of this turn is accepted: the turn ends right
@@ -261,11 +285,30 @@ struct TurnHarness<'a> {
     /// blocked in the `task` tool (awaiting its children) holds none.
     permit: Option<OwnedSemaphorePermit>,
     /// Retries of the current round.
-    retries: u32,
+    retries: usize,
+    serving_model: Option<ModelRef>,
+    workflow_candidate: Option<usize>,
+    reasoning_tokens: Option<u64>,
+    empty_turns: usize,
+    output_tokens: Option<u64>,
+    last_finish: Option<FinishReason>,
     total_tokens: Option<TokenUsage>,
+    effort_fallback: super::super::TurnEffortFallback,
 }
 
 impl TurnHarness<'_> {
+    async fn check_failure_cancelled(&self) -> Result<(), CoreError> {
+        if self.cancel.is_cancelled() {
+            if let Some(route) = self.workflow_route {
+                route
+                    .finalize(Some(hya_proto::WorkflowRouteFailureClass::Cancelled))
+                    .await?;
+            }
+            return Err(CoreError::Cancelled);
+        }
+        Ok(())
+    }
+
     /// Swap in a new runtime generation when the registry has one.
     async fn rebind(&mut self, projection: &Projection) -> Result<(), CoreError> {
         let Some(inputs) = &self.rebind else {
@@ -334,7 +377,13 @@ impl TurnHarness<'_> {
         if let Some(sidecar_hooks) = &inputs.sidecar_hooks {
             hooks.push(Arc::clone(sidecar_hooks));
         }
-        self.agents = engine.annotate_agent_efforts(roster, Some(&fresh)).await?;
+        self.agents = engine
+            .annotate_agent_efforts_with(
+                roster,
+                Some(&fresh),
+                Some((session, &mut self.effort_fallback)),
+            )
+            .await?;
         self.binding = fresh;
         self.live_agent = materialized;
         self.resources = compiled;
@@ -353,7 +402,7 @@ impl TurnHarness<'_> {
 #[async_trait]
 impl ToolGate for TurnHarness<'_> {
     async fn call(&mut self, call: ToolCall) -> Result<(), CoreError> {
-        TurnToolGate {
+        let mut gate = TurnToolGate {
             engine: self.engine,
             session: self.session,
             message: self.message,
@@ -361,7 +410,6 @@ impl ToolGate for TurnHarness<'_> {
             resources: &self.resources,
             agents: &self.agents,
             agent: &self.live_agent,
-            depth: self.depth,
             external_dirs: self.external_dirs,
             workspace: &self.workspace,
             actor_claim: self.actor_claim,
@@ -370,11 +418,13 @@ impl ToolGate for TurnHarness<'_> {
             report_latch: &self.report_latch,
             nested_engine: &mut self.nested_engine,
             steer: &mut self.steer,
+            defer_steer: self.defer_steer,
             parent_session: self.parent_session,
             offered: &self.offered,
-        }
-        .call(call)
-        .await
+        };
+        gate.call(call).await?;
+        self.defer_steer = gate.defer_steer;
+        Ok(())
     }
 
     /// Unrun calls stay open; the turn end closes them as `CANCELLED`.
@@ -386,9 +436,10 @@ impl ToolGate for TurnHarness<'_> {
 #[async_trait]
 impl Harness for TurnHarness<'_> {
     /// Re-validate the actor claim, rebind (Root, after the first round),
-    /// resolve the round's model and attachments, then run the engine's
-    /// rewriter (the `hya/compaction` ladder).
+    /// resolve the round's model and attachments, then run the kernel's
+    /// context reduction with the engine's extensions (`hya/compaction`).
     async fn before_round(&mut self, projection: &Projection) -> Result<bool, CoreError> {
+        self.defer_steer = false;
         let engine = self.engine;
         engine.validate_actor_claim(self.actor_claim).await?;
         if activation_hook_for(self.session).is_some_and(|hooks| !hooks.is_healthy()) {
@@ -415,11 +466,13 @@ impl Harness for TurnHarness<'_> {
         self.parent_session = projection.session.parent;
         self.attachments = engine.attachment_data(self.session, projection).await?;
         // What the system prompt and tools cost: a request with no messages.
-        let tools = engine.offered_tools(&self.resources, self.depth);
+        let tools = engine.offered_tools(&self.resources, self.depth, &self.model);
+        let workdir = session_workdir(&self.live_agent, projection);
         let overhead_tokens = engine.token_accounting.estimate_request(
             &[],
             Some(&system_prompt(
                 &self.live_agent,
+                &workdir,
                 projection.session.initial_context.as_deref(),
                 &tools,
                 self.depth,
@@ -443,9 +496,6 @@ impl Harness for TurnHarness<'_> {
         };
         let models = TurnModels {
             engine,
-            actor_claim: self.actor_claim,
-            binding: &self.binding,
-            fold: FixedSystemAgent::Compaction,
             errors: &errors,
         };
         let cx = RewriteCtx {
@@ -455,18 +505,17 @@ impl Harness for TurnHarness<'_> {
             projection,
             window: engine.model_window(&self.model),
             overhead_tokens,
-            workdir: &session_workdir(&self.live_agent, projection),
+            pressure: None,
+            workdir: &workdir,
             config: &config,
             log: &log,
             transcript: &transcript,
             models: Some(&models),
             hooks: Some(engine),
         };
-        let result = match engine.rewriter.before_round(cx).await {
-            Ok(false) => hya_core::kernel::goal_checkpoint(cx).await,
-            other => other,
-        };
-        result.map_err(|error| errors.into_error(error))
+        kernel::before_round(cx, &engine.rewriters)
+            .await
+            .map_err(|error| errors.into_error(error))
     }
 
     async fn request(&mut self, view: &View<'_>) -> Result<CompletionRequest, CoreError> {
@@ -476,17 +525,19 @@ impl Harness for TurnHarness<'_> {
         // the next request without a restart. `live_agent.reasoning` is the
         // Agent's authored effort; the user's per-Agent choices outrank it.
         let effort = engine
-            .effective_effort(
+            .effective_effort_with(
                 &self.model,
                 Some(&self.stable_id),
                 self.live_agent.reasoning,
                 Some(&self.binding),
+                Some((session, &mut self.effort_fallback)),
             )
             .await?
             .effort;
-        let tools = engine.offered_tools(&self.resources, self.depth);
+        let tools = engine.offered_tools(&self.resources, self.depth, &self.model);
         let system = system_prompt(
             &self.live_agent,
+            &session_workdir(&self.live_agent, view.projection),
             view.projection.session.initial_context.as_deref(),
             &tools,
             self.depth,
@@ -559,62 +610,141 @@ impl Harness for TurnHarness<'_> {
             root_session_cache: &mut self.root_session_cache,
         };
         let open = async {
-            match workflow_route {
-                Some(route) => match engine
-                    .stream_with_workflow_route(request, session, message, route)
-                    .await
-                {
-                    Ok(opened) => Ok(opened),
-                    Err(error) => {
-                        route
-                            .finalize(Some(workflow_provider_failure_class(&error)))
-                            .await?;
-                        Err(error.into())
-                    }
-                },
-                None => Ok(engine
-                    .stream_with_model_fallback(request, session, message, lineage)
-                    .await?),
+            match (workflow_route, self.serving_model.as_ref()) {
+                (Some(route), _) => {
+                    let (stream, index) = engine
+                        .stream_with_workflow_route(
+                            request,
+                            session,
+                            message,
+                            route,
+                            self.workflow_candidate,
+                        )
+                        .await?;
+                    self.workflow_candidate = Some(index);
+                    Ok((stream, route.route().candidates[index].model.clone()))
+                }
+                (None, Some(model)) => Ok((
+                    engine
+                        .stream_model_candidate(request, model, session, message)
+                        .await?,
+                    model.clone(),
+                )),
+                (None, None) => {
+                    engine
+                        .stream_with_model_fallback(request, session, message, lineage)
+                        .await
+                }
             }
         };
-        tokio::select! {
+        let opened = tokio::select! {
             biased;
-            () = cancel.cancelled() => Ok(None),
-            opened = open => opened.map(Some),
+            () = cancel.cancelled() => return Ok(None),
+            opened = open => opened,
+        };
+        match opened {
+            Ok((stream, model)) => {
+                self.serving_model = Some(model.clone());
+                Ok(Some((stream, model)))
+            }
+            Err(_) if cancel.is_cancelled() => Ok(None),
+            Err(error) => {
+                if let Some(route) = workflow_route {
+                    route
+                        .finalize(Some(workflow_provider_failure_class(&error)))
+                        .await?;
+                }
+                Err(error.into())
+            }
         }
     }
 
     async fn failed(&mut self, failure: &Failure) -> Result<bool, CoreError> {
-        let retryable = self.retries < MAX_ROUND_RETRIES
-            && !failure.saw_tool_call
-            && !failure.saw_text
-            && is_retryable_round_error(&failure.error);
-        if !retryable {
-            if let Some(route) = self.workflow_route {
-                route
-                    .finalize(Some(workflow_failure_class(&failure.error, self.cancel)))
-                    .await?;
-            }
+        // Workflow opens have already finalized on error in open().
+        if !failure.step_started && self.workflow_route.is_some() {
             return Ok(false);
         }
-        self.retries += 1;
-        tracing::warn!(
-            session = %self.session,
-            retry = self.retries,
-            "provider round failed before text or tool output; retrying"
-        );
-        let delay = std::time::Duration::from_secs(1 << (self.retries - 1))
-            + std::time::Duration::from_millis(50 * u64::from(self.retries));
-        tokio::select! {
-            biased;
-            () = self.cancel.cancelled() => Err(CoreError::Cancelled),
-            () = tokio::time::sleep(delay) => Ok(true),
+        self.check_failure_cancelled().await?;
+        // Before the first successful open there is no pin. A failed reopen
+        // during recovery still belongs to the model that served the stream.
+        let deadline = hya_tool::deadline::current();
+        if let Some(&wait) = kernel::ROUND_RETRY_WAITS.get(self.retries)
+            && !failure.saw_tool_call
+            && is_retryable_round_error(&failure.error)
+            && !self.cancel.is_cancelled()
+            && deadline.is_none_or(|d| d.remaining().saturating_sub(d.final_window()) > wait)
+        {
+            self.permit = None;
+            if failure.step_started {
+                let session = self.session;
+                let message = self.message;
+                let discarded: Vec<_> = self
+                    .engine
+                    .store
+                    .with_projection(session, |projection| {
+                        projection
+                            .session
+                            .messages
+                            .iter()
+                            .find(|row| row.id == message)
+                            .and_then(|row| row.parts.get(row.last_step_start?..))
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|part| Event::PartDeleted {
+                                session,
+                                message,
+                                part: part.id(),
+                            })
+                            .collect()
+                    })
+                    .await?;
+                if !discarded.is_empty() {
+                    self.engine
+                        .emit_batch_for_actor(self.actor_claim, session, discarded)
+                        .await?;
+                }
+            }
+            self.retries += 1;
+            tracing::warn!(session = %self.session, retry = self.retries, error = %failure.error,
+                "provider round failed; waiting {wait:?} before retry");
+            tokio::select! {
+                biased;
+                () = self.cancel.cancelled() => {}
+                () = tokio::time::sleep(wait) => {}
+            }
+            self.check_failure_cancelled().await?;
+            if deadline.is_none_or(|d| d.stage() < hya_tool::deadline::Stage::Final) {
+                return Ok(true);
+            }
         }
+        self.check_failure_cancelled().await?;
+        if let Some(route) = self.workflow_route {
+            route
+                .finalize(Some(workflow_failure_class(&failure.error, self.cancel)))
+                .await?;
+        }
+        Ok(false)
     }
 
     async fn collected(&mut self, round: &Round) -> Result<(), CoreError> {
+        if let Some(ran) = self.ran_known_tool.as_deref_mut()
+            && !*ran
+        {
+            *ran = round.tool_calls.iter().any(|call| {
+                [kernel::tools::REWRITE, kernel::tools::TODO].contains(&call.name.as_str())
+                    || self.resources.resolve_tool(&call.name).is_some()
+            });
+        }
         if let Some(route) = self.workflow_route {
             route.finalize(None).await?;
+        }
+        self.serving_model = None;
+        self.workflow_candidate = None;
+        self.reasoning_tokens = round.tokens.map(|tokens| tokens.reasoning);
+        self.last_finish = Some(round.finish);
+        self.output_tokens = round.tokens.map(|tokens| tokens.output);
+        if !round.tool_calls.is_empty() {
+            self.empty_turns = 0;
         }
         if let Some(tokens) = round.tokens {
             self.total_tokens
@@ -629,29 +759,89 @@ impl Harness for TurnHarness<'_> {
         Ok(())
     }
 
+    async fn before_end(&mut self) -> Result<bool, CoreError> {
+        let projection = self
+            .engine
+            .store
+            .read_projection_shared(self.session)
+            .await?;
+        let parts = projection
+            .session
+            .messages
+            .iter()
+            .find(|row| row.id == self.message)
+            .and_then(|row| row.parts.get(row.last_step_start.unwrap_or(0)..))
+            .unwrap_or_default();
+        if parts.iter().any(
+            |part| matches!(part, PartProjection::Text { text, .. } if !text.trim().is_empty()),
+        ) {
+            self.empty_turns = 0;
+            return Ok(false);
+        }
+        let has_reasoning = parts
+            .iter()
+            .any(|part| matches!(part, PartProjection::Reasoning { text, .. } if !text.trim().is_empty()))
+            || self.reasoning_tokens.is_some_and(|n| n > 0);
+        if (!has_reasoning && self.last_finish != Some(FinishReason::Length))
+            || self.empty_turns >= kernel::EMPTY_TURN_NOTICES
+            || self.cancel.is_cancelled()
+            || hya_tool::deadline::current()
+                .is_some_and(|d| d.stage() >= hya_tool::deadline::Stage::Final)
+        {
+            return Ok(false);
+        }
+        self.empty_turns += 1;
+        let events = kernel::empty_turn_events(self.session, parts, self.output_tokens);
+        self.engine
+            .emit_batch_for_actor(self.actor_claim, self.session, events)
+            .await?;
+        Ok(true)
+    }
+
     fn done(&self) -> bool {
         // An accepted `report` ends the member's episode: the round's other
         // tool calls have completed and are recorded.
         self.report_latch.is_set()
     }
+
+    fn deadline_subagent(&self) -> Result<bool, CoreError> {
+        can_report(
+            self.engine,
+            &self.binding,
+            &self.live_agent,
+            self.parent_session,
+            &self.offered,
+        )
+    }
+
+    /// Rounds open on the live router (a fallback route can be added
+    /// mid-turn); the turn's `Scope` holds the router from its start.
+    fn served_route(
+        &self,
+        model: &ModelRef,
+    ) -> Option<(hya_proto::context::ReasoningReplayPolicy, bool)> {
+        let router = self.engine.provider_router();
+        Some((
+            router.reasoning_replay_policy(model),
+            router.sends_tool_images(model),
+        ))
+    }
 }
 
-/// Mid-stream retries are limited to link failures that are safe to replay before
-/// any assistant text or tool request was delivered. Decode is deliberately
+/// Retry transient opens and interrupted streams before a tool request. Decode is deliberately
 /// narrow: only the known truncated response-body diagnostics are included.
 fn is_retryable_round_error(error: &CoreError) -> bool {
     let CoreError::Provider(error) = error else {
         return false;
     };
     match error.as_ref() {
-        ProviderError::Transport(_) => true,
-        ProviderError::HttpStatus { status, .. } => *status == 429 || (500..=599).contains(status),
+        ProviderError::StreamInterrupted(_) => true,
         ProviderError::Decode(message) => {
             let message = message.to_ascii_lowercase();
             message == "error decoding response body"
                 || message.contains("unexpected eof")
                 || message.contains("unexpected end of file")
         }
-        _ => false,
+        _ => error.is_retryable_before_stream(),
     }
 }
