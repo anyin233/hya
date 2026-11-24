@@ -11,8 +11,13 @@ dynamic libraries inside public `.hyabundle` packages. `hya-tool` supplies the
 
 The sources live in `bundles/presets/{base,extended,network,channel}-tools`.
 Each `bundle.yaml` identifies a `Plugin` and declares `exposure.yaml` as an inert
-`extensions.files` asset. Every source also declares its Cargo manifest and Rust implementation modules
-as source assets. The companion file carries trusted preset metadata
+`extensions.files` asset. List every file under `native/` in that same array
+so packaged sources and the prepared digest cover the native implementation,
+including tool descriptions loaded by Rust. For example, add
+`{ id: native-task-description, path: native/src/task.txt }` for the packaged
+`task` description.
+
+The `exposure.yaml` file carries trusted preset metadata
 that the public Plugin manifest intentionally cannot grant as permissions. Each
 family's bundle is loaded from its [first-party bundle](bundle-runtime.md#first-party-bundles)
 source once per process, which verifies its digest and policy and rejects

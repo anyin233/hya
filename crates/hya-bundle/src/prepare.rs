@@ -2449,3 +2449,41 @@ fn validate_tui(tui: &PreparedTuiExtension, extensions: &[PreparedResource]) -> 
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_family_manifests_declare_every_native_source_file() -> Result<(), BundleError> {
+        let presets = crate::first_party_source_root().join("presets");
+        let mut missing = Vec::new();
+        for family in [
+            "base-tools",
+            "extended-tools",
+            "network-tools",
+            "channel-tools",
+        ] {
+            let source = parse_source(BundleSource::read_directory(presets.join(family))?)?;
+            let declared = source
+                .manifest
+                .extensions
+                .files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<BTreeSet<_>>();
+            missing.extend(
+                source
+                    .files
+                    .keys()
+                    .filter(|path| path.starts_with("native/") && !declared.contains(path.as_str()))
+                    .map(|path| format!("{family}/{path}")),
+            );
+        }
+        assert!(
+            missing.is_empty(),
+            "undeclared native source files: {missing:?}"
+        );
+        Ok(())
+    }
+}
