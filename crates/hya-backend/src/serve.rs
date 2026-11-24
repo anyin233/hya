@@ -434,53 +434,23 @@ async fn prepare_server_with_store(
 ) -> anyhow::Result<PreparedServer> {
     let has_file_store = store.paths().is_some();
     emit_startup_mark("store_open", None);
-    let crate::startup::StartedEngine {
-        mut built,
-        agent,
-        default_agent,
-        pending_discovery,
-        ..
-    } = crate::startup::start(
-        store,
-        model_override,
-        yolo,
-        pure,
-        crate::startup::Surface::Server,
-    )
-    .await?;
-    let agent = Arc::new(agent);
+    crate::first_run_config_bootstrap(false)?;
+    let config = hya_app::resolve_runtime(model_override)
+        .await
+        .with_yolo(yolo)
+        .with_pure(pure);
+    emit_startup_mark("runtime_resolved", None);
+    let engine = hya_app::ServerEngine::build(store, config).await?;
     let mut lock = if has_file_store {
         db_lock::owned_metadata(db)?
     } else {
         None
     };
     emit_startup_mark("engine_built", None);
-    let engine = built.engine();
-    let asks = built
-        .take_asks()
-        .ok_or_else(|| anyhow::anyhow!("asks receiver missing"))?;
-    let questions = built
-        .take_questions()
-        .ok_or_else(|| anyhow::anyhow!("questions receiver missing"))?;
-    let mcp_control = built.mcp_control();
-    let agent_model_control = Arc::new(built.agent_model_control());
-    let workflow_control = Arc::new(built.workflow_control());
-    let provider_manager = hya_app::ProviderManager::new(Arc::clone(&engine));
-    let mut state = AppState::new(Arc::clone(&engine), Arc::clone(&agent))
-        .with_provider_control(Arc::new(provider_manager.clone()))
-        .with_bundle_control(Arc::new(hya_app::bundle_admin::BundleManager))
-        .with_question_requests(questions)
-        .with_mcp_control(mcp_control)
-        .with_workflow_control(workflow_control)
-        .with_agent_model_control(agent_model_control)
-        .with_default_agent(default_agent)
-        .with_pure_guidance(pure)
-        .with_auto_title(true)
-        .with_allowed_hosts(hosts.clone());
+    let runtime = engine.assemble(hosts.clone())?;
     if yolo {
         eprintln!("hya: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
     }
-    state = state.with_permission_requests(asks);
     // The relay host connector: its identity lives next to the database;
     // the discovery file records the relay it joins (never the link).
     let relay = hya_server::RelayHost::new(serve_relay::host_config(db, relay_flags));
@@ -493,17 +463,14 @@ async fn prepare_server_with_store(
             }
         }));
     }
-    state = state.with_relay_host(relay.clone());
-    // Remembered "allow always" grants survive restarts: reload them into
-    // the process permission plane before serving.
-    if let Err(error) = state.restore_saved_permissions().await {
+    let mut runtime = runtime.with_relay_host(relay.clone());
+    // Remembered grants must be loaded before any restore runs tools.
+    if let Err(error) = runtime.app_state().restore_saved_permissions().await {
         eprintln!("hya: failed to restore saved permission grants ({error})");
     }
-    spawn_provider_catalog_refresh(
-        provider_manager,
-        state.catalog_updates_sender(),
-        pending_discovery,
-    );
+    runtime.spawn_provider_catalog_refresh(|error| {
+        eprintln!("hya: provider catalog refresh failed ({error:#})");
+    });
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .context("bind server listener")?;
@@ -524,10 +491,10 @@ async fn prepare_server_with_store(
         .and_then(|extra| extra.local_addr().ok())
         .map(|addr| format!("http://{addr}"));
     // Build the complete shared server before advertising readiness.
-    let server = hya_server::build(state.clone());
+    let server = hya_server::build(runtime.app_state().clone());
     relay.set_service(server.clone());
-    let resumed = built
-        .resume_interrupted(&state)
+    let resumed = runtime
+        .resume_interrupted()
         .await
         .context("admit restores and start recovered residents")?;
     if !resumed.is_empty() {
@@ -540,6 +507,7 @@ async fn prepare_server_with_store(
         lock.publish_with(&db_lock::connect_url(addr), &hosts.extra_hosts())
             .context("publish the server discovery file")?;
     }
+    let (built, state) = runtime.into_parts();
     Ok(PreparedServer {
         url: format!("http://{addr}"),
         listener,
@@ -552,41 +520,6 @@ async fn prepare_server_with_store(
         lock,
         relay,
     })
-}
-
-/// Background discovery for providers without cached remote models (and
-/// discovery-only providers), serialized with live provider edits through the
-/// provider manager's lock.
-fn spawn_provider_catalog_refresh(
-    manager: hya_app::ProviderManager,
-    catalog_updates: tokio::sync::broadcast::Sender<serde_json::Value>,
-    pending: Vec<hya_app::config::PendingCatalogDiscovery>,
-) {
-    if pending.is_empty() {
-        return;
-    }
-    tokio::spawn(async move {
-        match manager.refresh_pending(pending).await {
-            Ok(false) => {}
-            Ok(true) => {
-                let payload = serde_json::json!({
-                    "id": format!(
-                        "catalog-{}",
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|duration| duration.as_millis())
-                            .unwrap_or(0)
-                    ),
-                    "type": "catalog.updated",
-                    "properties": {}
-                });
-                let _ = catalog_updates.send(payload);
-            }
-            Err(error) => {
-                eprintln!("hya: provider catalog refresh failed ({error:#})");
-            }
-        }
-    });
 }
 
 /// Registered SIGTERM/SIGINT/SIGHUP streams, held so the handlers are live before we serve.

@@ -909,9 +909,13 @@ the claim after asynchronous work; stale cleanup quietly exits. The existing
 Before runtime readiness, `hya-app` advances all active resident claims, folds
 the canonical projections, terminalizes old-epoch running work through the
 recovered claim, and stages the existing residents without starting their
-episodes. The daemon and `HyaRuntime` call
-`BuiltSessionEngine::resume_interrupted(&AppState)`: admit every root restore
-through the server, then call `ResidentSupervisor::start_recovered()`.
+episodes. Both `hya serve` and `HyaRuntime::start` compose their full runtime
+through `ServerEngine::build(SessionStore, RuntimeConfig)` and
+`ServerEngine::assemble(HostPolicy)`. This installs the five application
+controls and both interaction bridges on one server state. The CLI retains
+listener binding, relay setup and discovery publication. Each host restores
+saved grants before admitting every root restore with
+`ServerRuntime::resume_interrupted()`, which then starts recovered residents.
 Each restore reserves its engine turn lease before acknowledging admission;
 queued recovered mail cannot drive main until that restore has answered.
 Headless commands reserve external driver ownership of the selected and recovered

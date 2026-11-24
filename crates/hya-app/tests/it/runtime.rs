@@ -2,8 +2,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use hya_app::{OfflineNotice, builtin_agent_catalog};
+use axum::{body::Body, http::Request};
+use hya_app::{HyaRuntime, OfflineNotice, RuntimeOptions, builtin_agent_catalog};
 use std::path::PathBuf;
+use tower::ServiceExt;
 
 #[test]
 fn builtin_agent_catalog_includes_first_party_workflow_bundle() {
@@ -69,4 +71,29 @@ fn offline_notice_names_path_offline_mode_and_the_fix() {
     // (c) how to fix it.
     assert!(text.contains("hya login"));
     assert!(text.contains("docs/configuration.md"));
+}
+
+#[tokio::test]
+async fn hya_runtime_starts_a_server_with_the_offline_engine() {
+    let mut runtime = HyaRuntime::start(RuntimeOptions {
+        model: None,
+        db: String::new(),
+        yolo: false,
+        default_agent: None,
+        force_offline: true,
+    })
+    .await
+    .unwrap();
+    assert!(std::sync::Arc::ptr_eq(
+        &runtime.engine(),
+        &runtime.app_state().engine
+    ));
+    let response = runtime
+        .router()
+        .clone()
+        .oneshot(Request::get("/v1/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    runtime.shutdown().await.unwrap();
 }
