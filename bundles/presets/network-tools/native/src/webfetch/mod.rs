@@ -12,6 +12,7 @@ use hya_tool::{Action, Resource};
 use hya_tool::{Tool, ToolCtx, ToolError};
 
 const MAX_RESPONSE_BYTES: usize = 5 * 1024 * 1024;
+const RESPONSE_TOO_LARGE: &str = "response too large (exceeds 5MB limit)";
 const DEFAULT_TIMEOUT_SECS: f64 = 30.0;
 const MAX_TIMEOUT_SECS: f64 = 120.0;
 
@@ -84,13 +85,9 @@ impl Tool for WebFetchTool {
             .unwrap_or(DEFAULT_TIMEOUT_SECS)
             .clamp(0.0, MAX_TIMEOUT_SECS);
         let timeout = Duration::from_secs_f64(timeout_secs);
-        let client = reqwest::Client::builder()
-            .timeout(timeout)
-            .user_agent("hya")
-            .build()
-            .map_err(|e| ToolError::Other(e.to_string()))?;
-        let response = client
+        let mut response = crate::http_client()?
             .get(url.clone())
+            .timeout(timeout)
             .header(reqwest::header::ACCEPT, accept_header(input.format))
             .send()
             .await
@@ -104,9 +101,7 @@ impl Tool for WebFetchTool {
         if let Some(length) = response.content_length()
             && length > u64::try_from(MAX_RESPONSE_BYTES).unwrap_or(u64::MAX)
         {
-            return Err(ToolError::Other(
-                "response too large (exceeds 5MB limit)".to_string(),
-            ));
+            return Err(ToolError::Other(RESPONSE_TOO_LARGE.to_string()));
         }
         let content_type = response
             .headers()
@@ -114,14 +109,16 @@ impl Tool for WebFetchTool {
             .and_then(|value| value.to_str().ok())
             .unwrap_or("")
             .to_string();
-        let bytes = response
-            .bytes()
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
             .await
-            .map_err(|e| ToolError::Other(e.to_string()))?;
-        if bytes.len() > MAX_RESPONSE_BYTES {
-            return Err(ToolError::Other(
-                "response too large (exceeds 5MB limit)".to_string(),
-            ));
+            .map_err(|e| ToolError::Other(e.to_string()))?
+        {
+            if chunk.len() > MAX_RESPONSE_BYTES - bytes.len() {
+                return Err(ToolError::Other(RESPONSE_TOO_LARGE.to_string()));
+            }
+            bytes.extend_from_slice(&chunk);
         }
         if let Some(mime) = image_attachment_mime(&content_type) {
             return Ok(json!({

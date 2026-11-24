@@ -549,7 +549,7 @@ and artifact spill; coding results use its structured field/envelope bounds.
 | `plan_exit` | Interaction response; no output-byte cap. |
 | `project_activity` | Requested row limit (schema 1–200, default 50); no wrapper byte cap. |
 | `wait` | Both family implementations delegate to planes; no wrapper byte cap. |
-| `webfetch` | Response body rejected above 5 MiB; much larger than the host default threshold. |
+| `webfetch` | Streams the response body up to 5 MiB. A declared body above the cap is rejected immediately and a chunked body is rejected when it crosses the cap. |
 | `websearch` | Optional requested context character limit; no unconditional native output cap. |
 | `send` | Mailbox-plane response; no wrapper byte cap. |
 | `list_channel` | Mailbox-plane response; no wrapper byte cap. |
