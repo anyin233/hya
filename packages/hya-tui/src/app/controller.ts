@@ -85,11 +85,20 @@ import {
   exceedsTurnBudget,
   imageMentionPaths,
   maxAttachmentBytes,
+  maxTurnAttachmentBytes,
   mimeForPath,
+  spacedImageError,
+  spacedImageMentions,
   validateAttachmentBytes,
   type AttachmentPreview,
 } from "../composer/attachments"
 import { findPattern, rankPaths } from "../composer/mention"
+import { ChipTable } from "../composer/chips"
+import type { PastedPath } from "../composer/paths"
+import { resolvePastedPaths, type PasteResult } from "./paste"
+import { inSshSession, readClipboard, type ClipboardPaste } from "../composer/hostClipboard"
+import { prepareImage } from "../composer/images"
+import type { Chip } from "../composer/chips"
 import { shellCommand } from "../composer/shell"
 import type { KeyLike } from "../keys/bindings"
 import { helpPickerHint, helpPickerRows } from "../commands"
@@ -98,7 +107,8 @@ import { askSessionLabel, currentModel, modelReference, otherAskNotice, webNotic
 import { childActivity, childSessionIds } from "../state/members"
 import { subagentRows } from "../state/subagents"
 import { editText } from "../composer/editor"
-import { loadPaneLayout, savePreferences } from "../prefs"
+import { loadPaneLayout, savePreferences, type TuiPreferences } from "../prefs"
+import type { StructureControl } from "./structure"
 import { notificationBody, notificationSequence, shouldNotify, type NotifyKind } from "../notify"
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
 import { askFrameRoute, globalAskRoute, treeSessionIds, type PromptChoice } from "../state/prompts"
@@ -204,6 +214,8 @@ export interface ControllerOptions {
   onScopeChanged?: () => void | Promise<void>
   /** Bundle TUI extension submit interceptors (extensions/manager.ts `interceptSubmit`): a prompt may be rewritten or blocked before it is sent. */
   interceptSubmit?: (text: string) => Promise<{ text: string } | { blocked: string }>
+  /** `tui.toml` and the session's `/set` (app/structure.ts); unset in tests: the store's structure stays. */
+  structure?: StructureControl
 }
 
 /** What the controller needs from the renderer (CliRenderer in app/run.tsx; a fake in tests). */
@@ -233,11 +245,15 @@ const helpMaxRows = 40
 /** One attachment file read: its size and (within the per-file cap) its base64 bytes, or why it could not be read. */
 type FileRead = { size: number; data?: string } | { error: string }
 
+/** How long the startup list waits for MCP servers that are still connecting, and how often it asks. */
+const mcpSettleMs = 10_000
+const mcpPollMs = 500
+
 /** Paths requested per `@file` lookup; the best `fileSuggestionLimit` are shown. */
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
 
-export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, preferredPermissionMode, terminal, env = process.env, reconnect, find, onRestarted, refreshExtensions, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home, onScopeChanged, interceptSubmit }: ControllerOptions) {
+export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, preferredPermissionMode, terminal, env = process.env, reconnect, find, onRestarted, refreshExtensions, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home, onScopeChanged, interceptSubmit, structure }: ControllerOptions) {
   /** No `EnsureProjectForPath`; new sessions need a chosen Project: `--remote`, or connected through `/connect-remote`. */
   const sessionViews = new SessionViews(client)
   let remote = startedRemote
@@ -1054,6 +1070,8 @@ export function createController({ client, store, directory, remote: startedRemo
    * replacing it; components/Composer.tsx).
    */
   function focusProjects(): void {
+    // The single-column presets have no Projects pane: show the workspace for this session.
+    if (!store.state.structure.sidebar.enabled && structure) structure.setEnabled("sidebar", true)
     if (!paneLeaves(store.state.paneLayout.root).some((pane) => pane.kind === "projects")) {
       status("No Projects pane · /layout split left projects to add one")
       return
@@ -1122,6 +1140,21 @@ export function createController({ client, store, directory, remote: startedRemo
     await resumer.resume(root)
   }
 
+  /**
+   * Merge `patch` into `tui.json`. Only the `workspace` structure owns
+   * `paneLayout` (ADR-0036 D10): the chat column of the other presets is
+   * never written over the saved tree.
+   */
+  function savePreferencesPatch(patch: Partial<TuiPreferences>): void {
+    if (!preferencesPath) return
+    let next = patch
+    if ("paneLayout" in next && !store.state.structure.sidebar.enabled) {
+      const { paneLayout: _chat, ...rest } = next
+      next = rest
+    }
+    if (Object.keys(next).length) savePreferences(preferencesPath, next)
+  }
+
   const actions: AppActions = {
     reviewPending, refresh, refreshMessages, openSession, newSession, scheduleRefresh, openHelp, openEditor,
     newTemporarySession: (agent, model) => newSession(agent, model, { temporary: true }),
@@ -1146,7 +1179,10 @@ export function createController({ client, store, directory, remote: startedRemo
     resume: (id) => resumer.resume(id),
     openPicker,
     requestPermissionMode: (mode) => modes.request(mode),
-    savePreferences: (patch) => { if (preferencesPath) savePreferences(preferencesPath, patch) },
+    savePreferences: (patch) => savePreferencesPatch(patch),
+    structure,
+    expandChip: (index) => ui.expandChip?.(index) ?? false,
+    pasteClipboard: (raw) => ui.pasteClipboard?.(raw) ?? Promise.resolve(false),
     paneBounds: () => new Map([...ui.paneBounds ?? []].map(([id, read]) => [id, read()])),
     loadPaneLayout: () => {
       if (!preferencesPath) throw new Error("No TUI preferences path configured")
@@ -1161,6 +1197,38 @@ export function createController({ client, store, directory, remote: startedRemo
    * never looked up on the backend.
    */
   const localPastes = new Set<string>()
+
+  /** Paste and attachment chips of the composer (composer/chips.ts); kept for the process, so history entries keep their tokens. */
+  const chips = new ChipTable()
+
+  /** What pasted paths become (app/paste.ts): chips, mentions, or text with a notice. */
+  function pastePaths(paths: readonly PastedPath[]): Promise<PasteResult> {
+    return resolvePastedPaths(paths, {
+      chips,
+      remote,
+      workdir: store.state.selected?.workdir || directory,
+      roots: activeProject(store.state)?.roots ?? [],
+      existsOnBackend: (path) => {
+        const scope = backendScope(path)
+        return scope ? client.readFile(path, { directory: scope, maxBytes: 1 }).then(() => true, () => false) : Promise.resolve(false)
+      },
+      resizeImages: store.state.structure.composer.paste.image_resize,
+      ssh: inSshSession(env),
+    })
+  }
+
+  /** Ctrl+V, `/paste`, an empty bracketed paste: the system clipboard (composer/hostClipboard.ts); never over SSH. */
+  function clipboard(): Promise<ClipboardPaste> {
+    return readClipboard(env)
+  }
+
+  /** An image chip for clipboard bytes, named `clipboard-<hash>.<ext>`, converted or scaled when needed. */
+  async function clipboardImage(bytes: Uint8Array): Promise<Chip> {
+    const prepared = await prepareImage(bytes, { resize: store.state.structure.composer.paste.image_resize })
+    const hash = new Bun.CryptoHasher("sha256").update(bytes).digest("hex").slice(0, 8)
+    const extension = ({ "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" } as Record<string, string>)[prepared.image?.mime ?? ""] ?? "png"
+    return chips.addImage(`clipboard-${hash}.${extension}`, prepared.image, prepared.error)
+  }
   /** Remote-mode previews per server + scope + path: typing re-runs the preview, the file is fetched once (cleared on submit). */
   const remotePreviews = new Map<string, Promise<FileRead>>()
   const remotePreviewLimit = 16
@@ -1217,7 +1285,8 @@ export function createController({ client, store, directory, remote: startedRemo
    */
   async function loadAttachments(text: string, preview = false): Promise<AttachmentPreview[]> {
     const paths = imageMentionPaths(text)
-    if (!paths.length) return []
+    const spaced = spacedImageMentions(text).filter((item) => !paths.includes(item.path))
+    if (!paths.length && !spaced.length) return []
     const workdir = (store.state.selected?.workdir || directory).replace(/\/+$/, "")
     const sizes: number[] = []
     const previews: AttachmentPreview[] = []
@@ -1245,6 +1314,11 @@ export function createController({ client, store, directory, remote: startedRemo
       } catch (error) {
         previews.push({ path, name, error: String(error) })
       }
+    }
+    // `@/tmp/shot 1.png` without quotes names `/tmp/shot`: when the joined path is an
+    // existing image, say so and refuse to send rather than silently attaching nothing.
+    for (const item of spaced) {
+      if (await fileExists(item.path).catch(() => false)) previews.push({ path: item.path, name: attachmentName(item.path), error: spacedImageError(item.path) })
     }
     return previews
   }
@@ -1311,21 +1385,30 @@ export function createController({ client, store, directory, remote: startedRemo
         prompt = intercepted.text
       }
       remotePreviews.clear()
+      // `@path` mentions are read from the text as typed: never from inside a pasted chip.
       const previews = await loadAttachments(prompt)
-      const failed = previews.filter((item) => item.error)
+      const chipErrors = chips.present(prompt).filter((chip) => chip.error)
+      const failed = [...previews.filter((item) => item.error), ...chipErrors.map((chip) => ({ name: chip.name ?? chip.token, error: chip.error }))]
       if (failed.length) {
         status(`Not sent · ${failed.map((item) => `${item.name}: ${item.error}`).join(" · ")}`)
         return
       }
-      if (previews.length && currentModel(store.state)?.imageInput === false) {
+      const expanded = chips.expand(prompt, { wrap: store.state.structure.composer.paste.wrap })
+      const images = [...expanded.images.map((item) => ({ name: item.name, mime: item.mime, data: item.data, path: item.path })), ...previews.map((item) => ({ name: item.name, mime: item.mime ?? "", data: item.data ?? "", path: item.path }))]
+      if (images.length && currentModel(store.state)?.imageInput === false) {
         status(`Not sent · ${modelReference(store.state.selected!)} does not accept image attachments`)
         return
       }
-      const attachments: PromptAttachment[] = previews.map((item) => ({ name: item.name, mime: item.mime, data: item.data ?? "", path: item.path }))
+      const total = expanded.chips.reduce((sum, chip) => sum + (chip.image?.size ?? 0), 0) + previews.reduce((sum, item) => sum + (item.size ?? 0), 0)
+      if (total > maxTurnAttachmentBytes) {
+        status("Not sent · attachments over 20 MiB for this turn")
+        return
+      }
+      const attachments: PromptAttachment[] = images
       store.followTranscript()
       // Subscribe before CreateTurn, so no frame of the new turn is missed.
       await Promise.race([streamReady, Bun.sleep(streamWaitMs)])
-      await turns.submit(prompt, attachments.length ? { attachments } : {})
+      await turns.submit(expanded.text, attachments.length ? { attachments } : {})
     } catch (error) {
       // The refusal already says what to do.
       if (!(error instanceof NoProjectError)) status(`Error: ${String(error)}`)
@@ -1393,6 +1476,28 @@ export function createController({ client, store, directory, remote: startedRemo
     starting = startOnce().finally(() => { starting = undefined })
     return starting
   }
+  /**
+   * The startup list's bundles and MCP servers (state/startup.ts). MCP has no
+   * push for connection changes: poll `GetMcpStatus` while a server is still
+   * connecting, at most `mcpSettleMs`. Failures leave the sections out.
+   */
+  async function loadStartupResources(): Promise<void> {
+    const attempt = async <T>(read: () => Promise<T>): Promise<T | undefined> => {
+      try { return await read() } catch { return undefined }
+    }
+    const bundles = attempt(() => client.listBundles()).then((rows) => { if (rows) store.setBundles(rows) })
+    const deadline = Date.now() + mcpSettleMs
+    for (;;) {
+      const servers = await attempt(() => client.getMcpStatus())
+      if (!servers) break
+      store.setMcpServers(servers)
+      if (!servers.some((server) => server.state === "MCP_SERVER_STATE_DESIRED") || Date.now() >= deadline) break
+      await Bun.sleep(mcpPollMs)
+    }
+    await bundles
+    store.setStartupReady(true)
+  }
+
   async function startOnce(): Promise<void> {
     unsubscribeFocus = terminal?.onFocusChange?.((focused) => store.setFocused(focused))
     try {
@@ -1414,6 +1519,7 @@ export function createController({ client, store, directory, remote: startedRemo
       await refresh()
       if (ensured) activateProject(ensured)
       void refreshVcs()
+      void loadStartupResources()
       startGlobalStream()
       const target = initialSessionId(store.state.sessions, startup, store.state.activeProjectId)
       const resumeId = startup.resume?.id
@@ -1845,9 +1951,14 @@ export function createController({ client, store, directory, remote: startedRemo
     answer,
     findFiles,
     fileExists,
+    /** The composer's chip table (composer/chips.ts). */
+    chips,
+    pastePaths,
+    clipboard,
+    clipboardImage,
     /** Pending `@path` image attachments of the composer's current text, for the pending-attachment row (components/Composer.tsx). */
     previewAttachments: (text: string) => loadAttachments(text, true),
-    complete: (input: string) => completeCommand(input, store.completionContext(), registry),
+    complete: (input: string) => completeCommand(input, { ...store.completionContext(), ...(structure ? { presets: structure.presets() } : {}) }, registry),
     commandEntries,
     modes,
     pickerKey,

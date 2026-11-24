@@ -2,6 +2,9 @@ import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { backendConfigDir, expect, hyaTui, statusSessionId, test } from "./hya"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 const leaf = (id: number, kind: string) => ({ type: "pane", id: `pane-${id}`, kind })
 const initial = { version: 3, active: "pane-1", root: {
   type: "split", axis: "horizontal", weight: 0.8, sizing: "content-second",

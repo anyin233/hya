@@ -7,6 +7,9 @@ import { dirname, join } from "node:path"
 import type { Tui } from "./harness"
 import { expect, hyaTui, test, textStep, wideViewport } from "./hya"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 /** Center of one terminal cell in page pixels (see hya-tui-projects.spec.ts). */
 async function cellPoint(term: Tui, row: number, col: number): Promise<{ x: number; y: number }> {
   const box = await term.screenBox()

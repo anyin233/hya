@@ -41,6 +41,33 @@ test.describe("image attachments", () => {
     expect(image?.image_url?.url).toMatch(/^data:image\/png;base64,/)
   })
 
+  test("a pasted image path with an escaped space becomes an image chip and is sent", async ({ tui, backend, fakeModel }) => {
+    await writeFile(join(backend.dir, "shot 1.png"), pngBytes(2048))
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Message, !shell, or @file · / commands")
+    await term.paste(`${backend.dir}/shot\\ 1.png`)
+    await term.waitForText("[image #1 shot 1.png]")
+    await term.waitForText("[image #1] shot 1.png · 2 KB")
+    await term.type("describe this")
+    await term.press("Enter")
+    await term.waitForText("looks fine", 20_000)
+    const requests = fakeModel!.requests() as { messages?: { role?: string; content?: unknown }[] }[]
+    const parts = requests[0]?.messages?.find((message) => message.role === "user")?.content as { type?: string }[]
+    expect(parts.some((part) => part.type === "image_url")).toBe(true)
+  })
+
+  test("an unquoted image path with a space is flagged and not sent", async ({ tui, backend, fakeModel }) => {
+    await writeFile(join(backend.dir, "shot 1.png"), pngBytes(2048))
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Message, !shell, or @file · / commands")
+    await term.type("@shot 1.png describe")
+    await term.waitForText("[image] shot 1.png · has a space")
+    await term.press("Enter")
+    await prompt(term, "/status")
+    await term.waitForText("Status")
+    expect(fakeModel!.requests()).toHaveLength(0)
+  })
+
   test("an oversized image is refused locally and nothing is sent", async ({ tui, backend, fakeModel }) => {
     await writeFile(join(backend.dir, "huge.png"), pngBytes(11 * 1024 * 1024))
     const term = await tui(hyaTui(backend))

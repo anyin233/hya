@@ -2,6 +2,9 @@ import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
 import { backendConfigDir, expect, hyaTui, statusSessionId, test, textStep } from "./hya"
+
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
 const leaf = (id: number, kind: string) => ({ type: "pane", id: `pane-${id}`, kind })
 const weight = (node: unknown, value = 1) => ({ node, size: { mode: "weight", value } })
 const content = (node: unknown) => ({ node, size: { mode: "content" } })

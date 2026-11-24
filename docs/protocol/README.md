@@ -176,7 +176,13 @@ parameters. Events use the monotonic `sinceSeq` watermark instead.
    works: a `workdir`, a `projectId`, or `kind: SESSION_KIND_TEMPORARY`; see
    [Projects and session placement](#projects-and-session-placement)).
 2. `GET /v1/bootstrap` fetches config + catalogs + pending interactions in
-   one round trip at startup.
+   one round trip at startup. With a `directory` it also lists
+   `contextFiles`: the `AGENTS.md` files a full-mode session there reads into
+   its initial context, parent first, each `{path, scope, bytes}` with
+   `scope` = `project` (the directory itself), `parent`, or `user`
+   (`$HOME/AGENTS.md`); empty with `hya serve --pure`. Skills say where they
+   came from in `source`: `builtin`, `bundle`, `project` (under the directory
+   or a Project root), or `user`.
 3. `POST /v1/sessions/{id}/turns` admits work — body is a `oneof` of
    `prompt`, `command`, or `shell` — and returns a `RUNNING` turn handle
    immediately. For prompt and command turns the turn id is the id of the
@@ -1384,8 +1390,14 @@ one-time ticket. `GET /v1/pty/{id}/connect?ticket=...` upgrades to a
 WebSocket speaking the same frames as the gRPC `StreamPty` rpc:
 
 - client → server: `{"input": "<base64>"}`, `{"resize": {"cols": 120,
-  "rows": 40}}`, `{"ping": true}`
-- server → client: `{"output": "<base64>"}`, `{"exit": 0}`, `{"pong": true}`
+  "rows": 40}}`, `{"ping": true}`, `{"upload": {"id", "name", "mime",
+  "data"}}`
+- server → client: `{"output": "<base64>"}`, `{"exit": 0}`, `{"pong": true}`,
+  `{"uploadFailed": {"id", "reason"}}`
+
+`upload` is the WebUI host's file upload (ADR-0037, docs/tui-web.md); these
+backend PTY sessions refuse it with `uploadFailed` (`uploads are not supported
+by hya serve PTY sessions`) and never send `uploaded`.
 
 The first server frame replays the current buffer. Resize currently relies
 on the shell's own TTY sizing; a runtime resize API is tracked in the

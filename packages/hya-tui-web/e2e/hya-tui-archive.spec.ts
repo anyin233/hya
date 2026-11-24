@@ -11,6 +11,9 @@ import { createServer } from "node:net"
 import { Tui, terminalDriver } from "./harness"
 import { createSession, expectStatus, api, daemonStatus, expect, fakeModelRef, hangStep, hyaBin, launchTest as test, selfLaunch, statusSessionId, textStep, tuiInstances, type Backend, type Workspace } from "./hya"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 type Session = { id: string; title?: string; archived?: boolean; busy?: boolean }
 
 async function prompt(term: Tui, text: string): Promise<void> {

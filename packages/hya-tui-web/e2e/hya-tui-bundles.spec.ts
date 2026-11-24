@@ -6,6 +6,9 @@ import { dirname, join } from "node:path"
 import type { Tui } from "./harness"
 import { expect, hyaTui, test, wideViewport } from "./hya"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 const fixture = join(import.meta.dirname, "fixtures", "bundle-panel.hyabundle")
 const panel = "BUNDLES_E2E_PANEL"
 

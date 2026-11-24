@@ -2,7 +2,8 @@
  * Start the TUI: the backend (src/launch.ts; ADR-0023: the database's
  * running daemon, else one started with `hya serve start`) unless
  * `--server` names one, the preferences file (src/prefs.ts: the saved theme
- * and vim mode), then the renderer, store, controller, Solid tree, and the
+ * and vim mode), `tui.toml` (app/structure.ts: the component structure and
+ * pane tree), then the renderer, store, controller, Solid tree, and the
  * initial load.
  *
  * `--server` with `--db` (bare `hya` passes both to every TUI it starts,
@@ -49,8 +50,11 @@ import type { GrpcHyaClient } from "../grpc_client"
 import { BackendError, connectOrStart, defaultDatabase, findRunningServer, probeHealth, resolveHyaBinary, type Connection } from "../launch"
 import { startBridge, takeServerToken } from "../bridge"
 import { loadPreferences, preferencesPath } from "../prefs"
+import { tuiConfigPath } from "../config/tuiConfig"
+import { editFile } from "../composer/editor"
+import { createStructureController } from "./structure"
 import { setCustomKeybindings } from "../keys/custom"
-import { colors, setTheme } from "../theme"
+import { autoThemeSetting, colors, setTerminalThemeMode, setThemeSetting, terminalModeFromEnv } from "../theme"
 import { createAppStore, type BackendInfo } from "../state/store"
 import { TitleWriter, titleFromState } from "../title"
 import { createEffect, createRoot } from "solid-js"
@@ -152,8 +156,12 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
   const loaded = loadPreferences(prefsPath)
   setCustomKeybindings(loaded.preferences.keybindings ?? {})
   const warnings = loaded.warning ? [loaded.warning] : []
-  if (loaded.preferences.theme && !setTheme(loaded.preferences.theme)) {
-    warnings.push(`Unknown theme ${loaded.preferences.theme} in ${prefsPath}; using hya`)
+  // No saved theme means `auto`: follow the terminal background. COLORFGBG is the first guess;
+  // the renderer's OSC 11 answer (below) replaces it.
+  setTerminalThemeMode(terminalModeFromEnv(process.env))
+  if (!setThemeSetting(loaded.preferences.theme ?? autoThemeSetting)) {
+    warnings.push(`Unknown theme ${loaded.preferences.theme} in ${prefsPath}; using auto`)
+    setThemeSetting(autoThemeSetting)
   }
 
   // Remote: no directory scope until a Project is chosen (--dir is this machine's).
@@ -168,7 +176,12 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
   if (options.web) store.setWeb(options.web)
   if (options.webTab) store.setWebTab(true)
   if (loaded.preferences.vim) store.setVim(true)
-  if (loaded.preferences.paneLayout) store.setPaneLayout(loaded.preferences.paneLayout)
+  // The structure (tui.toml, ADR-0036) before the first frame: it also picks the pane tree,
+  // the saved `paneLayout` for the workspace preset or the chat column.
+  const structure = createStructureController({
+    store, path: tuiConfigPath(process.env), preferencesPath: prefsPath,
+    editFile: (file) => editFile(file, { env: process.env, suspend: () => renderer?.suspend(), resume: () => renderer?.resume() }),
+  })
   // Bundle TUI extensions of the backend scope (extensions/manager.ts); reloaded whenever the scope changes.
   extensionManager.configure({
     cacheRoot: extensionCacheRoot(process.env),
@@ -298,12 +311,16 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
     },
     onScopeChanged: refreshExtensions,
     interceptSubmit: (text) => extensionManager.interceptSubmit(text),
+    structure,
   })
   // autoFocus off: a click (on the transcript, a Thinking line, the sidebar)
   // must not move focus from the one input to a scrollbox. Ctrl+C is the
   // composer's double-press quit (components/Composer.tsx), not the renderer's.
   renderer = await createCliRenderer({ backgroundColor: colors.bg, exitOnCtrlC: false, targetFps: 30, autoFocus: false })
   startupMark("tui_renderer_created")
+  // The terminal's background, light or dark (OSC 11 now, DEC 2031 on a change): an `auto` theme follows it.
+  renderer.on("theme_mode", (mode: "dark" | "light") => setTerminalThemeMode(mode))
+  void renderer.waitForThemeMode(1000).then((mode) => { if (mode) setTerminalThemeMode(mode) })
   // Every full-screen view and the main layout follow the terminal size
   // (`useTerminalDimensions`, one "resize" listener each, all mounted at
   // once). Past Node's default of 10 its MaxListenersExceededWarning would be

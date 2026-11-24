@@ -2,8 +2,11 @@
  * `@file` references. An `@` at the start of the input or after white space,
  * followed by at least one character up to the cursor, is a mention: its text
  * is looked up with `FindFiles` and a chosen path replaces the token as
- * `@<relative path> `. Nothing is attached; the prompt carries the text.
+ * `@<relative path> ` (`@"<path>" ` when it has white space or quotes).
+ * Nothing is attached; the prompt carries the text.
  */
+import { quoteMentionPath } from "./attachments"
+
 export interface MentionToken {
   /** Offset of the `@`. */
   start: number
@@ -26,10 +29,15 @@ export function mentionAt(text: string, cursor: number): MentionToken | undefine
   return { start: at, end, query }
 }
 
-/** Replace the token with `@path` and one space after it (unless white space follows already); the cursor goes after what was inserted. */
+/**
+ * Replace the token with `@path` and one space after it (unless white space
+ * follows already); the cursor goes after what was inserted. A path with white
+ * space, a quote, or a backslash is written `@"…"` (`quoteMentionPath`), so
+ * `mentionPaths` reads the whole path back.
+ */
 export function insertMention(text: string, token: MentionToken, path: string): { text: string; cursor: number } {
   const rest = text.slice(token.end)
-  const inserted = `@${path}${/^\s/.test(rest) ? "" : " "}`
+  const inserted = `@${quoteMentionPath(path)}${/^\s/.test(rest) ? "" : " "}`
   return { text: text.slice(0, token.start) + inserted + rest, cursor: token.start + inserted.length }
 }
 

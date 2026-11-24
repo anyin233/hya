@@ -4,6 +4,7 @@
 import { FitAddon } from "@xterm/addon-fit"
 import { Terminal } from "@xterm/xterm"
 import { decodeServerFrame, encodeClientFrame } from "../src/frames"
+import { pastedPathsText } from "../src/uploadText"
 import { pageTitle } from "../src/title"
 import { createNotificationDeduper, notificationTag, osc777Notification, osc9Notification, shouldShowNotification, type NotificationRequest } from "../src/notify"
 
@@ -49,6 +50,9 @@ const encoder = new TextEncoder()
 socket.addEventListener("open", () => {
   hook.connected = true
 })
+/** Answers to upload frames, by upload id. */
+const pendingUploads = new Map<string, (answer: { path: string } | { reason: string }) => void>()
+
 socket.addEventListener("message", (event) => {
   const frame = decodeServerFrame(String(event.data))
   if (!frame) return
@@ -58,6 +62,10 @@ socket.addEventListener("message", (event) => {
   } else if ("exit" in frame) {
     hook.exitCode = frame.exit
     term.write(`\r\n\x1b[2m[process exited with code ${frame.exit}]\x1b[0m\r\n`)
+  } else if ("uploaded" in frame) {
+    pendingUploads.get(frame.uploaded.id)?.({ path: frame.uploaded.path })
+  } else if ("uploadFailed" in frame) {
+    pendingUploads.get(frame.uploadFailed.id)?.({ reason: frame.uploadFailed.reason })
   }
 })
 
@@ -125,4 +133,56 @@ term.parser.registerOscHandler(777, (payload) => {
   const request = osc777Notification(payload)
   if (request) showNotification(request)
   return true
+})
+
+// Pasted and dropped files (ADR-0037): each file goes to the host as an
+// `upload` frame; once the host has stored them, their paths are pasted into
+// the terminal, as a native terminal pastes the path of a file dragged into it.
+// Text pastes keep xterm.js's own handling. The host stores files only; what
+// the program does with the pasted paths is its own business.
+let uploadIds = 0
+function upload(file: File): Promise<{ path: string } | { reason: string }> {
+  return file.arrayBuffer().then((buffer) => new Promise((resolve) => {
+    const id = `u${++uploadIds}`
+    pendingUploads.set(id, (answer) => {
+      pendingUploads.delete(id)
+      resolve(answer)
+    })
+    send(encodeClientFrame({ upload: { id, name: file.name || "pasted", mime: file.type, data: new Uint8Array(buffer) } }))
+  }))
+}
+
+function notice(text: string): void {
+  const element = document.createElement("div")
+  element.className = "notice"
+  element.textContent = text
+  document.body.append(element)
+  setTimeout(() => element.remove(), 6000)
+}
+
+async function uploadAndPaste(files: readonly File[]): Promise<void> {
+  if (!files.length) return
+  const answers = await Promise.all(files.map(upload))
+  const paths = answers.flatMap((answer) => "path" in answer ? [answer.path] : [])
+  const failed = answers.flatMap((answer, index) => "reason" in answer ? [`${files[index]!.name}: ${answer.reason}`] : [])
+  if (failed.length) notice(`Not uploaded · ${failed.join(" · ")}`)
+  if (paths.length) term.paste(pastedPathsText(paths))
+  term.focus()
+}
+
+terminalElement.addEventListener("paste", (event) => {
+  const files = [...(event.clipboardData?.files ?? [])]
+  if (!files.length) return
+  event.preventDefault()
+  event.stopImmediatePropagation()
+  void uploadAndPaste(files)
+}, true)
+terminalElement.addEventListener("dragover", (event) => {
+  if (event.dataTransfer?.types.includes("Files")) event.preventDefault()
+})
+terminalElement.addEventListener("drop", (event) => {
+  const files = [...(event.dataTransfer?.files ?? [])]
+  if (!files.length) return
+  event.preventDefault()
+  void uploadAndPaste(files)
 })

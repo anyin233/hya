@@ -214,6 +214,12 @@ export class ExtensionManager {
 
   sandboxPolicy(): SandboxPolicy { return this.options.sandbox ?? "best-effort" }
 
+  /** Whether a catalog was read (or failed), and why it failed (reactive like `list`). */
+  catalogStatus(): { loaded: boolean; error?: string } {
+    this.listVersion()
+    return { loaded: this.loaded, ...(this.catalogError ? { error: this.catalogError } : {}) }
+  }
+
   /** Every catalog extension of the current scope, sorted by id. */
   list(): ExtensionInfo[] {
     this.listVersion()

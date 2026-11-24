@@ -12,6 +12,10 @@
  *
  * A subagent's session (one with a parent) shows a one-line banner above the
  * messages, `Viewing subagent <agent> · Esc returns`; its input is read-only.
+ *
+ * The transcript starts with the startup list (components/StartupBlock.tsx:
+ * `tui.toml` notices and what was loaded): it scrolls away with the history
+ * and outlives session switches.
  */
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
@@ -22,6 +26,7 @@ import { transcriptViews } from "../state/messages"
 import { pageStep, ScrollFollow } from "../state/scroll"
 import { colors } from "../theme"
 import { KeyedFor, MessageItem } from "./MessageView"
+import { StartupBlock } from "./StartupBlock"
 
 export function Transcript(props: { secondary?: boolean; scroller?: (scroller: TranscriptScroller, mounted: boolean) => void } = {}) {
   const { store, ui } = useApp()
@@ -91,6 +96,9 @@ export function Transcript(props: { secondary?: boolean; scroller?: (scroller: T
         paddingTop={1}
         verticalScrollbarOptions={{ trackOptions: { backgroundColor: colors.bg, foregroundColor: colors.border } }}
       >
+        <Show when={!props.secondary}>
+          <StartupBlock />
+        </Show>
         <Show when={empty()}>
           <text width="100%" fg={colors.muted}>{empty()}</text>
         </Show>

@@ -3,6 +3,9 @@ import { join } from "node:path"
 import type { Tui } from "./harness"
 import { backendConfigDir, expect, hyaTui, statusSessionId, test } from "./hya"
 
+// These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
+test.use({ preset: "workspace" })
+
 async function command(term: Tui, text: string) {
   await term.press("Control+x"); await term.type(text); await term.press("Enter")
   await expect.poll(() => term.find("Commands")).toBeNull()

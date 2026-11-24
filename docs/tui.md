@@ -984,6 +984,8 @@ leave more keys available for editing and personal bindings.
   exit and archive. Ctrl+D on empty input: exit and leave the session running.
 - Enter submits; Ctrl+J, Shift+Enter and Alt+Enter insert newlines. Text editing
   and view-local picker/prompt controls remain available.
+- Ctrl+V: paste from the system clipboard, an image first (`/paste` does the
+  same); see [Paste and attachments](#paste-and-attachments).
 
 Ctrl+Home/End, Ctrl+R/B/P/O/G, F4, global Shift+Tab mode cycling and the editor/undo/redo/fork
 Ctrl+X chords are unassigned. Use `/refresh`, `/sidebar`, `/projects-sidebar`,
@@ -1007,6 +1009,32 @@ using existing `GetSession` and session resume/update RPCs. If none exists, its
 status is `No pending request in another session`. No wire contract changes.
 
 ## Layout
+
+The structure comes from `tui.toml` ([TUI structure](tui-config.md),
+ADR-0036). The default, `statusline`, is one column: the transcript, the
+running-turn line, the pending and prompt docks, the message input, and one
+status row below the input with the model, the permission mode, and the
+context occupancy:
+
+```text
+ ┃ your prompt
+ Assistant response
+
+ ◌ Working · Running bash
+┌──────────────────────────────────────────────┐
+│ Message                                      │
+└──────────────────────────────────────────────┘
+ gpt-6.1 · high · manual · hya · ⎇ main · ctx ━━─── 42%
+```
+
+`minimal` drops the status row and writes the model and mode on the input
+border. `dock` draws the input without a box, as a `╰─` line under a status
+band, with open todos and running subagents above it
+([Dock](tui-config.md#dock)). `workspace` is the tiled workspace below, with the sidebars, the
+layout tree, and the layout editor; write `preset = "workspace"` in
+`tui.toml`, or run `/set preset workspace` for one session. The rest of this
+section describes the workspace; the rules on boxes, prompts, pending
+requests, keys, and focus apply to every preset.
 
 Enclosing boxes identify selectable UI. Pending summaries, notifications,
 warning docks, transcript tool/task blocks, and passive extension containers are
@@ -1032,6 +1060,11 @@ opens another session's request. For example:
 ```
 
 ### Conversation without headings
+
+ADR-0036 limits this rule to the `workspace` preset, whose Context pane shows
+the session facts: the other presets add the status row below the input (and
+the workspace adds it back while Context is hidden). No preset draws a session
+header, metadata bar, or footer instructions above the messages.
 
 Conversation starts directly with the transcript (or the explicitly selected
 models, Workflows, API, or help view). It has no session/model/server header,
@@ -1135,9 +1168,12 @@ same rule. `PaneFrame` reads `PaneDefinition.selectable` rather than accepting
 an independent border setting, so shared frames cannot draw passive borders. This separates message editing from viewing and provides the
 foundation for additional built-in panes and a future pane plugin interface.
 
-The default arrangement is Projects on the left; a conversation viewer,
-agent activity line, and message editor in the middle; and Sessions, Todos,
-and Context on the right. The viewer is passive and the editor is selectable.
+The workspace preset's arrangement (the default tree, until you edit it) is
+Projects on the left; a conversation viewer, agent activity line, and message
+editor in the middle; and Sessions, Todos, and Context on the right. The other
+presets draw the same middle column alone (`pane-6` conversation, `pane-7`
+activity, `pane-1` editor), never save it, and refuse `/layout` editing
+commands; `/layout show` and `/layout focus` still work. The viewer is passive and the editor is selectable.
 They read the same session projection. No additional stream or durable state
 model is created. The editor also holds the existing permission/question dock
 and pending-request controls.
@@ -1660,8 +1696,9 @@ file when it starts.
 
 | Name | Kind | Look |
 | --- | --- | --- |
-| `hya` | dark | The default: terminal background, light text and blue focus highlights (the palette in [Layout](#layout)). |
-| `light` | light | Dark text (`#1f2933`) for terminals with a light background. |
+| `auto` | — | The default (no `theme` saved): `light` on a terminal with a light background, `hya` on a dark one, following the terminal (below). |
+| `hya` | dark | Terminal background, light text and blue focus highlights (the palette in [Layout](#layout)). |
+| `light` | light | Dark text (`#1f2933`), muted `#4f5f6f`, borders `#7f8e9d` for terminals with a light background. |
 | `contrast` | dark | White text and saturated accents on the terminal background. |
 | `ember` | dark | Warm text and blue focus highlights on the terminal background. |
 
@@ -1673,8 +1710,20 @@ fields are OpenTUI `ColorInput` values with ANSI default-background intent
 (`RGBA.defaultBackground()`); they are not fixed RGB colors. Default-color fills
 still clear the area under popups, so underlying content does not show through.
 
-**Usage.** `/theme` (no arguments) opens the [picker](#pickers) with one
-row per theme, `[dark]`/`[light]` tagged; `●` marks the theme in effect.
+**Auto.** With no theme saved (or `"theme": "auto"`), the TUI asks the
+terminal for its background color when it starts (OSC 11, answered by most
+terminals and by xterm.js-based ones) and picks `light` when its brightness is
+over half, else `hya`; a terminal that reports a light/dark switch (DEC 2031)
+switches the theme live. Until the terminal answers, or when it never does,
+`COLORFGBG` decides (`0;15` light, `15;0` dark), else `hya`. On a terminal that
+gives neither, choose `Light` once in `/theme`. Every theme keeps text at a
+contrast of at least 4.5:1 against the backgrounds of its kind
+(`test/theme.test.ts`).
+
+**Usage.** `/theme` (no arguments) opens the [picker](#pickers): an `Auto`
+row first (tagged with the background the terminal reported: `[light]`,
+`[dark]`, or `[auto]` before it answered), then one row per theme,
+`[dark]`/`[light]` tagged; `●` marks the setting in effect.
 Moving the highlight (Up/Down, Tab/Shift+Tab, typing a filter) repaints the
 whole screen in the highlighted theme at once — the transcript, Markdown,
 highlighted code, tool cards, boxes, and the controller status state. Enter keeps it,
@@ -1705,7 +1754,7 @@ JSON object:
 ```ts
 interface TuiPreferences {
   keybindings?: Record<string, { command: string; scope: "workspace" | "conversation" } | null> // command overrides; null disables a key
-  theme?: string          // a built-in theme name: "hya" (default), "light", "contrast", "ember"
+  theme?: string          // "auto" (default when unset), or a built-in theme: "hya", "light", "contrast", "ember"
   vim?: boolean           // vim mode in the input (/vim); default false
   notifications?: boolean // desktop notifications (/notifications); default true
   permissionMode?: string // default for sessions this TUI creates: "manual" (default), "yolo", or a bundle mode id
@@ -1713,15 +1762,19 @@ interface TuiPreferences {
   extensionEnabled?: Record<string, boolean> // bundle TUI extensions by bundle id (/extensions enable|disable)
   extensionSandbox?: "required" | "best-effort" | "disabled" // OS sandbox of the extension host (/extensions sandbox)
   extensionTrusted?: Record<string, boolean> // bundle TUI extensions on the JIT tier (/extensions trust|untrust, /bundles t)
+  seenNotices?: string[]  // one-time notices already shown, e.g. "statusline-default" (tui-config.md)
 }
 ```
+
+The structure — the preset, the status line, the sidebars — is not here but
+in `tui.toml` ([TUI structure](tui-config.md)); the two files share no keys.
 
 - The file is read at start, before the first frame; `/layout reload` can
   explicitly reread only its layout using stricter failure handling. A missing file
   means the defaults. An unreadable file, invalid JSON, or a JSON value that
   is not an object is ignored, and the controller status state says
   `Ignored unreadable TUI preferences <path>`; an unknown theme name says
-  `Unknown theme <name> in <path>; using hya`. A key whose value has the
+  `Unknown theme <name> in <path>; using auto`. A key whose value has the
   wrong type is ignored.
 - A change (`/theme`'s Enter, `/vim`, `/keybind set|unset|reset`, or a successful permission mode switch)
   merges the changed key into what is on disk —
@@ -1735,12 +1788,16 @@ theme in effect as Solid stores: `colors` (`bg`, `panel`, `fg`, `muted`,
 background), `toolColors` (`done`), `diffColors`
 (`add`, `remove`, `hunk`, `context`), and `syntaxColors` (`keyword`,
 `string`, `number`, `comment`, `function`, `type`, `operator`,
-`inlineCode`). Read them where they are used — in JSX (`fg={colors.muted}`),
+`inlineCode`), and `attachColors` (`paste`, `file`, `image`: the chip and
+attachment-row colors of [Paste and attachments](#paste-and-attachments)). Read them where they are used — in JSX (`fg={colors.muted}`),
 a function called from JSX, a memo, or an effect — so a theme switch
 repaints; a module-level copy (`const c = colors.fg`) is a snapshot that
 never updates. `themeName()` is the reactive name of the theme in effect,
 `currentTheme()` its `ThemeDefinition`, `setTheme(name)` switches (returns
-`false` for an unknown name), `themes` lists the built-ins, and
+`false` for an unknown name), `setThemeSetting("auto" | name)` sets the saved
+setting and `setTerminalThemeMode("dark" | "light" | null)` feeds the terminal
+background an `auto` setting follows (`terminalModeFromEnv` reads
+`COLORFGBG`), `themes` lists the built-ins, and
 `syntaxStylesFor(theme)` gives the Markdown/tree-sitter scope styles. The generic
 `colors.accent` property is replaced by `colors.focus`; use the specific role
 in every component. Extension trees accept the same foreground roles; the old
@@ -1748,7 +1805,7 @@ in every component. Extension trees accept the same foreground roles; the old
 `components/Markdown.tsx` keeps one OpenTUI `SyntaxStyle` per theme and, on
 a switch, sets it and rebuilds the blocks so fenced-code boxes repaint too.
 A new theme is one more `ThemeDefinition` entry in `themes` with every key
-of the four groups (`test/theme.test.ts` checks it).
+of the five groups (`test/theme.test.ts` checks it).
 
 ## Working indicator, metadata state, and todo panel
 
@@ -1771,10 +1828,11 @@ While a streaming assistant message has no blocks yet, its header's `●`
 marker is the spinner too, so a slow first token still shows the turn is
 alive before the working line's own elapsed clock is very interesting.
 
-**Metadata.** The former metadata state and session header are not rendered in
-Conversation. Model, permission mode, directory, connection, and token/context
-information belong to explicit information views or user-selected monitoring
-panes. The existing Context pane can show usage when the backend reports it.
+**Metadata.** No session header is rendered above Conversation. The status
+row below the input ([Status line](tui-config.md#status-line)) shows the
+model, permission mode, directory, branch, connection, and token/context
+information; in the workspace preset the Context pane shows them while it is
+visible. `/status` keeps the full list.
 
 - **`ctx N%`** is the prompt the latest provider round sent against the
   context window of the model that served it (the rule in the protocol
@@ -1811,6 +1869,12 @@ long list cannot push the `Context` section below the visible area. `/todos`
 still opens the full-panel view (same glyphs) for a longer list.
 
 ## Notices
+
+**Startup list.** The transcript starts with what was loaded — `[Skills]`,
+`[Slash commands]`, `[MCP]`, `[Bundles]`, `[Extensions]` — and any `tui.toml`
+warning, with problems such as a failed MCP server in the warning color; see
+[Startup list](tui-config.md#startup-list). `/resources` prints the full list
+again.
 
 **Compaction.** A `compactionApplied { untilSeq, strategy, message,
 foldedCount, manual }` frame renders as a muted transcript divider,
@@ -2345,50 +2409,145 @@ Type `@` and at least one character (at the start of the input or after a
 space) to see up to 8 files and directories under `--dir` whose relative
 path contains the text. The list is a `Files` box above the input; the
 selected row is marked `▸` in the focus color. Up/Down move the selection;
-Tab or Enter replaces the `@text` token with `@<relative path>` and a space;
-Esc closes the list until you edit the token again. The lookup runs 120 ms
+Tab or Enter replaces the `@text` token with `@<relative path>` and a space
+(`@"<relative path>"` when the path has a space, a quote, or a backslash, with
+`"` and `\` escaped by a backslash); Esc closes the list until you edit the
+token again. The lookup runs 120 ms
 after the last keystroke. Matching is case-sensitive (the server's glob), and
 the best matches come first: file name starts with the text, then file name
 contains it, then only the path does; shorter paths first. The separate
 command input does not resolve file references.
 
+A reference ends at the first space unless it is quoted: `@"shots/shot 1.png"`
+names `shots/shot 1.png`, while `@shots/shot 1.png` names `shots/shot`.
+
 The reference is plain text: the prompt carries `@src/main.rs` as typed. For
 most files nothing else happens — the agent reads the file with its tools if
 it needs it. A reference to an image file (`.png`, `.jpg`/`.jpeg`, `.gif`,
-`.webp`) is different: see [Attachments](#attachments) below.
+`.webp`) is different: see [Paste and attachments](#paste-and-attachments) below.
 
-### Attachments
+### Paste and attachments
 
-An `@path` reference to an image file — typed, completed from the `@file`
-list, or turned from a pasted path (see below) — is read from disk (relative
-to the session's workdir, else `--dir`) and sent as an image attachment
-alongside the prompt text (`PromptTurn.attachments`,
+A paste into the message input is cleaned (escape sequences and control
+characters other than line feeds and tabs removed, CRLF and CR turned into LF,
+NFC-normalized) and then becomes one of these:
+
+| Paste | Becomes |
+| --- | --- |
+| Text of at most 10 lines and 1000 characters (`[composer.paste]`, [TUI structure](tui-config.md)) | The text, inserted at the cursor |
+| Longer text | A paste chip: the token `[paste #1 · 150 lines]` (`[paste #1 · 1500 chars]` for one long line) and an attachment row |
+| Only paths (dragged files), each explicit — `/…`, `~/…`, `./…`, `../…`, `file://…`, bare, quoted, or with backslash-escaped spaces, separated by spaces or line breaks; or one unescaped absolute image path such as a macOS screenshot name | One piece per path, below |
+
+| Pasted path | Becomes |
+| --- | --- |
+| An image (`.png`, `.jpg`/`.jpeg`, `.gif`, `.webp`) on this machine | An image chip `[image #2 shot 1.png]`, read now; its type comes from the file header |
+| A file or directory the backend can read: local mode, inside the session directory or a root of the active Project | An `@path` mention (relative to the session directory when inside it; `@"…"` with a space) |
+| A text file the backend cannot read (outside those directories, or any local file in remote mode), up to 256 KiB | A file chip `[file #3 notes.md]` with its content |
+| A path that exists only on the backend (remote mode) | An `@path` mention |
+| Anything else (missing, a directory outside the workspace, a binary or larger file) | The pasted words as text, and a notice row in the warning color saying why (`missing.txt: not found on this machine; pasted as text`); the next edit clears it |
+
+A paste that mixes paths and prose is text. Only the message input makes
+chips: the command input, the concealed entries, pickers, and the Provider
+View take the cleaned text.
+
+**Images.** A pasted image file may also be BMP, TIFF, HEIC/HEIF, or AVIF: with
+`image_resize = true` (`[composer.paste]`, the default) it is converted to
+PNG, and an image over 10 MiB is scaled down (JPEG) until it fits, with
+`Bun.Image`; its row shows the size in pixels, `[image #1] shot.png · 1292×780
+· 240 KB`. With `image_resize = false` such an image is a chip with an error.
+
+**The system clipboard.** Ctrl+V, `/paste`, or a bracketed paste with nothing in
+it (what macOS terminals send for an image) read the system clipboard through
+OpenTUI's host clipboard: an image becomes an image chip named
+`clipboard-<hash>.png`, text is handled like a paste. `/paste raw` inserts the
+clipboard text as is, without a chip. In a browser (the WebUI), Ctrl+V is the
+browser's own paste. The clipboard is never read over SSH, where it would be
+the SSH host's, nor without a display server; the notice row says what to do
+instead:
+
+| You run | Text | Clipboard image | A file from your machine |
+| --- | --- | --- | --- |
+| `hya` in a local terminal | Terminal paste | Ctrl+V | Drag or paste its path |
+| `hya` after `ssh` | Terminal paste | Not readable: `The clipboard here belongs to the SSH host …` | Its path does not exist there: `… is on your machine, not on the SSH host · upload it in the WebUI, or copy it over with scp` |
+| The WebUI (browser, e.g. over an SSH port forward) | Browser paste | Paste it in the tab: uploaded to the host, then an image chip | Drop it on the tab (or paste a copied file): uploaded, then a chip ([WebUI uploads](tui-web.md#pasting-and-dropping-files)) |
+| `hya --connect` on your machine, remote backend | Terminal paste | Ctrl+V | Read here: images and text files become chips |
+
+The SSH check is `SSH_CONNECTION`, `SSH_TTY`, or `SSH_CLIENT` in the TUI's
+environment. Terminals that send clipboard images through the terminal
+connection (kitty's OSC 5522) are not supported yet.
+
+**Chips.** A chip is one token of plain text in the input, followed by a space.
+Backspace right after the token (after the space, the second Backspace) or
+Delete right before it removes the whole token. Deleting a token drops its
+attachment; a token that is cut in the middle no longer counts as a chip. The
+token stays in history (Up/Down), in a queued prompt, and in the external
+editor, where you can move or delete it as text. Ids count up for the life of
+the TUI, so a history entry's token keeps its content.
+
+**Attachment rows.** Right above the input, one row per chip in the input and
+per pending `@path` image, in the chip's color (`attachColors` of the theme:
+`paste`, `file`, `image`): `[paste #1] 150 lines · const value1 = compute(1)`,
+`[file #3] notes.md · 12 lines · 1.2 KB`, `[image #2] shot 1.png · 240 KB`,
+`[image] shot.png · 240 KB` for an `@path` reference. At most four rows; the
+rest fold into `+N more`. A row with an error (an image that is not PNG, JPEG,
+GIF, or WebP by its header, empty, larger than 10 MiB, …) is in the warning
+color, and Enter refuses to send. Clicking a paste or file row, or
+`/paste expand [n]` (the n-th paste or file chip, default the first), replaces
+the chip with its text so you can edit it.
+
+**Sending.** Enter expands the tokens still in the input, numbered 1..K per
+kind in order of appearance. A paste becomes
+`<attachment kind="paste" id="1" lines="150">…</attachment>`, a file
+`<attachment kind="file" name="notes.md" lines="12">…</attachment>` (each on its
+own lines; `wrap = false` in `[composer.paste]` sends the raw text instead),
+and an image `[image #1: shot 1.png]` in the text plus a `PromptAttachment` in
+the same order, before any `@path` images. `@path` mentions are read from the
+text as typed, never from inside a chip. A paste followed by Enter at once
+waits for the paste's chips. The `hya.v1` turn contract is unchanged.
+
+**Transcript.** A user message shows each `<attachment>` block this TUI wrote
+folded to its label, `explain [paste #1 · 150 lines]`; a click on the message
+shows it whole and another folds it again. This is display only: the stored
+text, other clients, and replay see the full text.
+
+An `@path` reference to an image file — typed, or completed from the `@file`
+list — is read from disk (relative to the session's workdir, else `--dir`) and
+sent as an image attachment alongside the prompt text (`PromptTurn.attachments`,
 [Prompt attachments](protocol/README.md#prompt-attachments-images)); the
 `@path` text itself stays in the prompt unchanged, since it is useful context
 for the model and the server never reads it back from disk. Referencing the
-same image twice sends it once.
+same image twice sends it once. `PromptAttachment.path` carries the path
+without its quotes (`shots/shot 1.png` for `@"shots/shot 1.png"`).
 
-Pasting a path to an image file — a terminal pastes a file dragged into the
-window as its path, quoted or with escaped spaces when it has spaces — inserts
-an `@path ` mention instead of the raw text, so it is treated exactly like a
-typed reference; an ordinary text paste (prose, a path to a non-image file, a
-path that does not exist) is inserted as-is.
+An unquoted reference that stops at a space before an image name, such as
+`@shots/shot 1.png`, is not sent as `shots/shot`: when `shots/shot 1.png` is an
+existing file, its row reads `[image] shot 1.png · has a space, so the mention
+stops before it; write @"shots/shot 1.png"` in the warning color, and Enter
+refuses to send until you quote it. Up to four following words on the same
+line are joined, stopping at another `@` word.
 
-Before you press Enter, every pending image reference in the input shows as
-its own row above the composer: `[image] shot.png · 240 KB`, or `[image]
-shot.png · <reason>` in the warning color when it fails validation — not a
-supported type, larger than 10 MiB, the turn's attachments together over
-20 MiB, the file cannot be read, or the current model's `imageInput` is
-`false` ([Providers and keys](protocol/README.md#providers-and-keys),
-`ModelSummary.imageInput`; absent means unknown and is allowed). Enter refuses
-to send while any row has an error — the controller status state names the file and the
-reason, and nothing is sent — so a bad reference never reaches the server.
+A pending `@path` image row fails validation in the warning color when the file
+is not a supported type, larger than 10 MiB, the turn's attachments together
+are over 20 MiB, the file cannot be read, or the current model's `imageInput`
+is `false` ([Providers and keys](protocol/README.md#providers-and-keys),
+`ModelSummary.imageInput`; absent means unknown and is allowed); the same
+limits apply to image chips. Enter refuses to send while any row has an error —
+the controller status state names the file and the reason, and nothing is
+sent — so a bad reference never reaches the server.
 
 Once sent, the user message's transcript row shows each attachment under the
 text: `↳ attachment · shot.png · image/png · 240 KB` (an `AttachmentPart`
 listing never carries the bytes; size is shown once the server records it,
 either in the initial response or right after, via a live `partsAdded` stream
 frame appended to the message).
+
+**Interfaces.** `composer/chips.ts` (`ChipTable`: `addPaste`, `addFile`,
+`addImage`, `present`, `tokenEndingAt`, `tokenStartingAt`, `expand`;
+`foldsPaste`, `sanitizePaste`, `foldAttachments`), `composer/paths.ts`
+(`pastedPaths`, `sniffImage`), `app/paste.ts` (`resolvePastedPaths`), and
+`composer/chipRows.ts` (`chipRows`), `composer/images.ts` (`prepareImage`),
+`composer/hostClipboard.ts` (`readClipboard`, `inSshSession`). Commands:
+`/paste [raw]`, `/paste expand [n]`; key action `pasteClipboard` (Ctrl+V).
 
 #### Remote files
 
@@ -2407,10 +2566,12 @@ path is looked up:
   composer's preview fetches each file once while you type; Enter reads it
   again.
 - **A pasted or dragged image that exists on this machine** (an absolute
-  path) is your local file: it becomes an `@path ` mention and is read here
-  and sent inline, never looked up on the backend.
-- **Any other pasted image path** becomes a mention only when it exists on
-  the backend (a one-byte `ReadFile`); otherwise the raw text is inserted.
+  path) is your local file: it becomes an image chip, read here and sent
+  inline, never looked up on the backend. Any other local file becomes a file
+  chip (text up to 256 KiB).
+- **Any other pasted path** becomes a mention only when it exists on the
+  backend (a one-byte `ReadFile`); otherwise the raw text is inserted with a
+  notice.
 - `@file` suggestions already come from the backend (`FindFiles`).
 
 A file only in this machine's `--dir` is `file not found` in remote mode
@@ -3741,7 +3902,7 @@ string encoded 64-bit values, and the error envelope documented in the
 
 | Method and route | Request | Response read by the TUI |
 | --- | --- | --- |
-| `GET /v1/bootstrap?directory=<dir>` | No body | `Bootstrap` (`location`, `agents`, `models`, `interactions`) |
+| `GET /v1/bootstrap?directory=<dir>` | No body | `Bootstrap` (`location`, `agents`, `models`, `interactions`; `skills`, `commands`, and `contextFiles` feed the [startup list](tui-config.md#startup-list)) |
 | `GET /v1/sessions` | No body | `ListSessionsResponse.sessions: SessionInfo[]` (every session of the directory, subagent sessions included; `parent` nests them in the sidebar and the `/sessions` picker, `busy` marks `· running`, `timeUpdated` feeds the picker's relative time). Re-read with each child-session round (see [Subagents](#subagents)). |
 | `POST /v1/sessions` | `{agent: string, model: string, workdir: string}` | `CreateSessionResponse.session: SessionInfo` |
 | `GET /v1/sessions/{id}` | No body | `SessionInfo` (including `permissionMode`, read by `/status`; `parent`, which makes the view read-only; `members: MemberInfo[]`, the subagent rows the task cards link to; `usage: TokenUsage`, the metadata state's token total, re-read after `tokensRecorded`). For a child session: `busy` and `agent` for its task card. |
@@ -3751,14 +3912,14 @@ string encoded 64-bit values, and the error envelope documented in the
 | `DELETE /v1/sessions/{id}` | No body (`DeleteSession`; the `/sessions` picker's Ctrl+D, confirmed first) | Empty response; deletes the requested session and every descendant subagent session, while unrelated sessions remain. The TUI re-reads the session list and, if the deleted session was open, opens the next top-level one. |
 | `GET /v1/agents?directory=<dir>` | No body (`ListAgents`; read with the catalogs) | `ListAgentsResponse.agents: AgentSummary[]` (`name`, `model`, `description`, `hidden`); completes `/agent <name>`. |
 | `GET /v1/permission-modes?directory=<dir>` | No body (`ListPermissionModes`; read with the catalogs and by `/permissions`; a `404` from an older backend counts as an empty list) | `ListPermissionModesResponse.modes: [{id, title, description, source}]` — built-ins first; `source` is `builtin` or the bundle id. Feeds the picker rows, and bundle mode titles. |
-| `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]` (`roundUsage` and `model` of the newest assistant message give the metadata state's `ctx N%`); tool cards read `parts[].toolCall` (`ToolCallPart {callId, tool, state, inputJson, outputJson, durationMs, errorCode, errorMessage}`). For a child session: its latest activity. `parts[].attachment` is an `AttachmentPart {name, mime?, path?, size?}` (never the bytes) — see [Attachments](#attachments). |
+| `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]` (`roundUsage` and `model` of the newest assistant message give the metadata state's `ctx N%`); tool cards read `parts[].toolCall` (`ToolCallPart {callId, tool, state, inputJson, outputJson, durationMs, errorCode, errorMessage}`). For a child session: its latest activity. `parts[].attachment` is an `AttachmentPart {name, mime?, path?, size?}` (never the bytes) — see [Paste and attachments](#paste-and-attachments). |
 | `POST /v1/sessions/{id}/compact` | `{}` (`CompactSession`) | `CompactSessionResponse {compactedUntilSeq, strategy}` for `/compact` |
 | `POST /v1/sessions/{id}/summarize` | No body (`SummarizeSession`) | `SummarizeSessionResponse {summaryMessage}` for `/summarize` |
 | `POST /v1/sessions/{id}/revert` | `{}` (`/undo`) or `{undo: true}` (`/redo`) (`RevertSession`) | `RevertSessionResponse {session, files}`; `SessionInfo.revert` drives the pending-revert line (see [Undo, redo, and fork](#undo-redo-and-fork)) |
 | `POST /v1/sessions/{id}/fork` | `{}` or `{messageId}` (`ForkSession`, `/fork`) | `ForkSessionResponse {session, promptText}`; `SessionInfo.forkedFrom` is shown in the sidebar and `/status` |
 | `GET /v1/sessions/{id}/todo` | No body (`GetSessionTodo`) | `TodoList.items: TodoItem[]` for `/todos` and to seed the sidebar's `Todos` box when a session opens; `todoUpdated` frames keep it current. |
 | `GET /v1/vcs?directory=<--dir>` | No body (`GetVcsStatus`) | `VcsStatus.branch` for the metadata state's git branch; read when a session opens and after a turn ends. Never errors on a non-repository directory (`branch` comes back empty, so the segment is omitted). |
-| `POST /v1/sessions/{id}/turns` | `{prompt: {text: string, attachments?: PromptAttachment[]}}`; `PromptAttachment {name, mime?, data, path?}`, `data` standard base64 of the file bytes — see [Attachments](#attachments) | `CreateTurnResponse.turn: TurnInfo` |
+| `POST /v1/sessions/{id}/turns` | `{prompt: {text: string, attachments?: PromptAttachment[]}}`; `PromptAttachment {name, mime?, data, path?}`, `data` standard base64 of the file bytes — see [Paste and attachments](#paste-and-attachments) | `CreateTurnResponse.turn: TurnInfo` |
 | `POST /v1/sessions/{id}/turns` | `{command: {command: string, arguments: string}}` for other slash commands | `CreateTurnResponse.turn: TurnInfo` |
 | `POST /v1/sessions/{id}/turns` | `{shell: {command: string, agent: string, model?: {providerId: string, modelId: string}}}` for `!command` (the session's agent and model) | `CreateTurnResponse.turn: TurnInfo` once the command has finished; `id` is the shell turn's assistant message. |
 | `POST /v1/sessions/{id}/turns/{turn}/cancel` | `{}` | `TurnInfo`. Esc and `/cancel` send the admitted turn id (the user message id). The server cancels whatever runs in the session, so a shell turn whose id is not known yet is sent as `current`. |
@@ -3769,7 +3930,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions/{id}/events?sinceSeq=N&limit=500` | No body | `ListEventsResponse.events` / `nextSeq`, paged, to fill the gap after each stream (re)connect and `resync`. |
 | `GET /v1/interactions` | No body (every type, every session; read at start, on a full refresh, after every stream (re)subscribe and `resync`, and after a permission mode switch — never polled) | `ListInteractionsResponse.interactions: Interaction[]`, oldest first. The TUI reads `id`, `session` (the asking session, a subagent's child session included), `type` (`INTERACTION_TYPE_PERMISSION` / `_QUESTION`), `title`, `detail` (a question's header), `options` (a question's option labels), and a permission's `payload`: `action`, `resource`, `always` (what Always allow covers), `callId` (marks the waiting tool card, `◌ <tool>  awaiting approval`), `tool` and `input` (the prompt's details). A listed question has no options or header; the TUI keeps those from its live `questionRequested` frame, else reads them from the waiting `ask_user` call in the transcript. |
 | `POST /v1/interactions/{id}/respond` | Prompt: `{permission: {allowed: boolean, persist: boolean}}`, `{question: {answer: string}}`, or `{question: {rejected: true}}`. `/approve`, `/deny`: `persist: false`. | `RespondInteractionResponse.applied` (`false`: already resolved elsewhere) |
-| `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `reasoningVariants`, `reasoningDefault`, `source`, `imageInput`); the `/model` picker tags rows by `providerId`, and `/effort` uses the advertised variants; `contextLimit` (a uint64 string, `0`/absent = unknown) is the metadata state's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`; `imageInput: false` refuses attachments locally before a turn is sent (see [Attachments](#attachments); absent means unknown and is allowed). |
+| `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `reasoningVariants`, `reasoningDefault`, `source`, `imageInput`); the `/model` picker tags rows by `providerId`, and `/effort` uses the advertised variants; `contextLimit` (a uint64 string, `0`/absent = unknown) is the metadata state's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`; `imageInput: false` refuses attachments locally before a turn is sent (see [Paste and attachments](#paste-and-attachments); absent means unknown and is allowed). |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` (`id`, `kind`, `baseUrl`, `keySource`, `auth`, `modelCount`): the Provider View's list. |
 | `GET /v1/commands` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes skills, tagged `source: "skill"`) for command-pane suggestions and completion. |
 | `PUT /v1/providers/{id}`, `POST …/refresh`, `PUT …/models`, `DELETE …/models?modelId=`, `POST …/test` | See [Provider View interfaces](#provider-view-interfaces) | `ProviderUpdate` / `TestProviderModelResponse` |
@@ -3806,7 +3967,7 @@ rules follow the protocol guide's
 | `memberUpdated {member, child, agent, description, status, summary, callId, depth}` | durable (parent session) | Folded into the open session's member rows by `member` (partial frames keep known fields); triggers a child-session round. |
 | `partReplaced {message, part, text}` | live (plugin rewrite) or durable (end of round) | Sets the part's whole text, replacing the live deltas. |
 | `partCompleted {message, part}` | live or durable | No overlay change; a durable one triggers a projection re-read. |
-| `partsAdded {message, parts}` | durable | Appends each `parts[].attachment` to the message as an `attachment` part, skipping any part id already there (a reconnect/gap-fill duplicate); triggers a projection re-read. Sent for a prompt's image attachments (see [Attachments](#attachments)), right after the user message. |
+| `partsAdded {message, parts}` | durable | Appends each `parts[].attachment` to the message as an `attachment` part, skipping any part id already there (a reconnect/gap-fill duplicate); triggers a projection re-read. Sent for a prompt's image attachments (see [Paste and attachments](#paste-and-attachments)), right after the user message. |
 | `errorReported {message, code, errorMessage}` | durable | Stored as the message's error. Shown in the transcript and, at turn end, in the controller status state. |
 | `messageFinished {message, finish, cause}` | durable | The turn ends at the first assistant `messageFinished` after the turn's user message whose `finish` is not `FINISH_REASON_TOOL_CALLS`. Then the projection is re-read. |
 | `permissionRequested {interaction}`, `questionRequested {interaction}` | live | The ask is added to the pending list at once (a prompt appears); its options and header are remembered by id. With `includeDescendants=true` a subagent's asks arrive here too (`event.session` = the child): they change only the pending list, never the open session's transcript. Other frames of another session are ignored. |

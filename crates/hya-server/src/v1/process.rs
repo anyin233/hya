@@ -136,6 +136,18 @@ async fn bootstrap(
     let commands = super::catalog::command_rows(&place);
     let skills = super::catalog::skill_rows(&place);
     let tools = super::catalog::tool_rows(&st);
+    // What a full-mode session here reads into its initial context (`--pure` reads none).
+    let context_files = match place.workdir() {
+        Some(workdir) if !st.pure_guidance => hya_engine::context_file_entries(workdir)
+            .into_iter()
+            .map(|entry| pb::ContextFile {
+                path: entry.path.to_string_lossy().into_owned(),
+                scope: entry.scope.to_owned(),
+                bytes: entry.bytes,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
 
     Ok(Json(pb::Bootstrap {
         location: Some(location_info(place.workdir())),
@@ -150,5 +162,6 @@ async fn bootstrap(
         saved_rules: super::catalog::saved_rule_rows(&st).await,
         formatter_available: !st.formatter_status.is_empty(),
         sessions_cursor: String::new(),
+        context_files,
     }))
 }

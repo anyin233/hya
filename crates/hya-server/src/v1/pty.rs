@@ -224,7 +224,9 @@ async fn stream(st: ServerState, id: String, cursor: Option<i64>, socket: WebSoc
                 };
                 match message {
                     Message::Text(text) => {
-                        if handle_client_frame(&st, &id, &text).await.is_err() {
+                        if let Some(reply) = handle_client_frame(&st, &id, &text).await
+                            && send_frame(&mut tx, reply).await.is_err()
+                        {
                             break;
                         }
                     }
@@ -254,18 +256,28 @@ async fn stream(st: ServerState, id: String, cursor: Option<i64>, socket: WebSoc
     let _ = tx.send(Message::Close(None)).await;
 }
 
-async fn handle_client_frame(st: &ServerState, id: &str, text: &str) -> Result<(), ()> {
+/// Apply one client frame; the frame to answer with, if any.
+async fn handle_client_frame(st: &ServerState, id: &str, text: &str) -> Option<ServerFrame> {
     let Ok(frame) = serde_json::from_str::<pb::PtyClientFrame>(text) else {
-        return Ok(());
+        return None;
     };
     match frame.frame {
         Some(ClientFrame::Input(bytes)) => {
             let _ = st.pty.write(id, &String::from_utf8_lossy(&bytes)).await;
+            None
         }
-        Some(ClientFrame::Resize(_)) | Some(ClientFrame::Attach(_)) => {}
-        Some(ClientFrame::Ping(_)) | None => {}
+        Some(ClientFrame::Upload(upload)) => Some(upload_refused(upload.id)),
+        Some(ClientFrame::Resize(_)) | Some(ClientFrame::Attach(_)) => None,
+        Some(ClientFrame::Ping(_)) | None => None,
     }
-    Ok(())
+}
+
+/// `hya serve` PTY sessions store no uploads (ADR-0037: only the WebUI host does).
+pub(crate) fn upload_refused(id: String) -> ServerFrame {
+    ServerFrame::UploadFailed(pb::PtyUploadFailed {
+        id,
+        reason: "uploads are not supported by hya serve PTY sessions".to_owned(),
+    })
 }
 
 async fn send_frame(
@@ -275,4 +287,34 @@ async fn send_frame(
     let message = pb::PtyServerFrame { frame: Some(frame) };
     let text = serde_json::to_string(&message).unwrap_or_default();
     tx.send(Message::Text(text)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_upload_frame_decodes_and_is_refused_in_protojson() {
+        let frame: Result<pb::PtyClientFrame, _> = serde_json::from_str(
+            r#"{"upload":{"id":"u1","name":"shot.png","mime":"image/png","data":"iVBORw=="}}"#,
+        );
+        let Ok(pb::PtyClientFrame {
+            frame: Some(ClientFrame::Upload(upload)),
+        }) = frame
+        else {
+            panic!("upload frame did not decode: {frame:?}");
+        };
+        assert_eq!(
+            (upload.id.as_str(), upload.name.as_str(), upload.data.len()),
+            ("u1", "shot.png", 4)
+        );
+        let reply = pb::PtyServerFrame {
+            frame: Some(upload_refused(upload.id)),
+        };
+        let text = serde_json::to_string(&reply).unwrap_or_default();
+        assert_eq!(
+            text,
+            r#"{"uploadFailed":{"id":"u1","reason":"uploads are not supported by hya serve PTY sessions"}}"#
+        );
+    }
 }

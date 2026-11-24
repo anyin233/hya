@@ -6,6 +6,7 @@
  * command line, dispatches it, and completes it. A command line whose name is
  * not registered goes to the fallback handler (backend command catalog).
  */
+import type { StructureControl } from "../app/structure"
 import type { HyaClient } from "../client"
 import type { CompletionContext } from "../completion"
 import type { TuiPreferences } from "../prefs"
@@ -65,6 +66,12 @@ export interface AppActions {
   savePreferences(patch: Partial<TuiPreferences>): void
   /** Strictly read the saved layout from this frontend's preferences file; does not write. */
   loadPaneLayout(): { layout: PaneLayout; path: string }
+  /** `tui.toml` and `/set` (app/structure.ts): `/config`, `/set`, `/sidebar`; unset in tests without one. */
+  structure?: StructureControl
+  /** `/paste expand [n]`: replace the n-th paste or file chip of the message input with its text; `false` when there is none. */
+  expandChip?(index?: number): boolean
+  /** `/paste [raw]`: paste the system clipboard into the message input (an image first, else text); `false` when there is no input. */
+  pasteClipboard?(raw: boolean): Promise<boolean>
   paneBounds?(): ReadonlyMap<string, Rect>
   /** Copy `text` to the system clipboard with OSC 52; `false` when the terminal does not accept it. */
   copyText(text: string): boolean
