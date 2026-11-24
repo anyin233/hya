@@ -258,7 +258,9 @@ test.describe("question prompt", () => {
     await term.waitForText("Noted your answer.", 20_000)
     await promptGone(term)
     await prompt(term, "/tools on")
-    await term.waitForText(/"Which color do you want\?"="Unanswered"/)
+    await term.waitForText(toolCardBlock("✗", "ask_user", '"question":"Which color do you want?"'))
+    await term.waitForText("│ cancelled")
+    expect(await term.find('"Which color do you want?"="Unanswered"')).toBeNull()
   })
 })
 
