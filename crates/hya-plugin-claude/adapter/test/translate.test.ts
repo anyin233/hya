@@ -151,7 +151,7 @@ describe("translatePlugin", () => {
 })
 
 describe("sanitizeToken", () => {
-  test("mirrors the Rust namespace sanitizer", () => {
+  test("normalizes plugin names and trims separator characters", () => {
     expect(sanitizeToken("Code Review")).toBe("code-review")
     expect(sanitizeToken("My__Plugin")).toBe("my-plugin")
     expect(sanitizeToken("--v2--")).toBe("v2")

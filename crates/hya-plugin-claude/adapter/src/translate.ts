@@ -149,7 +149,7 @@ export function translatePlugin(dir: string): Translation {
 /**
  * Sanitize a Claude Code name into a hya namespace/resource token:
  * lowercase, `__` and non-`[a-z0-9_]` characters map to `-`, repeats
- * collapse, edges trim. Mirrors `hya-plugin-claude::emit::sanitize_namespace`.
+ * collapse, and leading and trailing hyphens are trimmed.
  */
 export function sanitizeToken(name: string): string {
   return name
