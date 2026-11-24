@@ -218,7 +218,7 @@ test.describe("subagents", () => {
     await click(term, card.row, card.col + 2)
     await term.waitForText("Viewing subagent hya-task · Esc returns")
     await term.waitForText("Read-only subagent view · / opens commands · Esc returns")
-    await term.waitForText("┃ list the files")
+    await term.waitForText("┃ [mail from main] list the files")
     await term.waitForText(toolCardBlock("✓", "read", '"path":"notes.txt"'))
     await term.attach(testInfo, "child-view")
     await prompt(term, "can I type here")
