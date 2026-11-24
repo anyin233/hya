@@ -50,9 +50,9 @@ backendTest("compiled gRPC startup resolves bundled definitions in a narrow brow
 })
 
 
-test.describe("native TUI supervision", () => {
-  test.use({ model: { steps: [textStep("Before native reload."), textStep("After native reload.")] } })
-  test("bare hya reloads the same session and unsent draft without a Bun supervisor", async ({ tui, workspace }, info) => {
+test.describe("TUI reload", () => {
+  test.use({ model: { steps: [textStep("Before reload."), textStep("After reload.")] } })
+  test("bare hya reloads the same session and unsent draft", async ({ tui, workspace }, info) => {
     const trace = join(workspace.dir, "reload.jsonl")
     const term = await tui([hyaBin, "--port", "0"], {
       cwd: workspace.dir,
@@ -61,20 +61,21 @@ test.describe("native TUI supervision", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("first prompt")
     await term.press("Enter")
-    await term.waitForText("Before native reload.")
+    await term.waitForText("Before reload.")
     await term.waitForIdle()
     const session = await statusSessionId(term)
     await term.type("preserved draft")
     await term.waitForText("preserved draft")
     expect((await daemon(workspace, ["restart", "--json"])).code).toBe(0)
     await expect.poll(async () => (await readFile(trace, "utf8")).match(/tui_app_entry/g)?.length, { timeout: 30_000 }).toBe(2)
-    expect(await readFile(trace, "utf8")).not.toContain("tui_supervisor_entry")
+    expect((await readFile(trace, "utf8")).match(/tui_supervisor_entry/g)).toHaveLength(1)
     await term.waitForText("preserved draft")
-    await term.waitForText("Before native reload.")
+    await term.waitForText("Before reload.")
     await term.press("Enter")
-    await term.waitForText("After native reload.")
+    await term.waitForText("After reload.")
+    await term.waitForText("┃ preserved draft")
     expect(await statusSessionId(term)).toBe(session)
-    await term.attach(info, "native-reloaded")
+    await term.attach(info, "reloaded")
     await term.press("Control+d")
     expect(await term.waitForExit()).toBe(0)
     expect(await daemonStatus(workspace)).toBeDefined()

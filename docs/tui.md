@@ -406,15 +406,13 @@ stop` plus another client's start, or through `/reconnect` does not, and
 neither does a remote backend (`/connect-remote`, `hya --connect`), a
 `--grpc` start, or a fixed `--server` without `--db`.
 
-How it works: bare `hya` supervises the terminal app directly, saving an
-extra Bun process at startup. Direct TUI starts and each WebUI tab still use
-the small Bun supervisor (`src/supervisor.ts`). Both use the same reload
-protocol and run `src/main.ts` as the app on the inherited terminal.
-To reload, the app
-restores the terminal, writes `{"argv": [...], "draft": {"text", "cursor"}}`
-to the file the supervisor named in `HYA_TUI_RELOAD_FILE` (mode 0600 in the
-temporary directory), and exits with status **75**; the supervisor starts a
-new app with those arguments and hands the draft over in `HYA_TUI_RELOAD`.
+Bare `hya`, direct TUI starts, and each WebUI tab use the Bun supervisor
+(`src/supervisor.ts`). The supervisor starts `src/main.ts` as the app on the
+inherited terminal. To reload, the app restores the terminal, writes
+`{"argv": [...], "draft": {"text", "cursor"}}` to the file the supervisor
+named in `HYA_TUI_RELOAD_FILE` (mode 0600 in the temporary directory), and
+exits with status **75**. The supervisor starts a new app with those
+arguments and hands the draft over in `HYA_TUI_RELOAD`.
 Any other exit (or 75 without a readable request, or any exit after a
 forwarded signal) ends the supervisor with the same status (128 + the signal
 number when the app died of a signal). The app removes `HYA_TUI_RELOAD_FILE`,
