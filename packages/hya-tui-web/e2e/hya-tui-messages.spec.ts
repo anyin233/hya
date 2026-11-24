@@ -79,26 +79,25 @@ test.describe("markdown", () => {
     await term.waitForText("Done.", 20_000)
     await term.waitForIdle()
 
-    const heading = await at(term, "Release plan")
-    await expect.poll(async () => (await term.cell(heading.row, heading.col))?.fg).toBe(colors.heading)
-    expect((await term.cell(heading.row, heading.col))?.bold).toBe(true)
+    // Tree-sitter highlights each block asynchronously. Plain text can already
+    // have the heading's foreground while its bold style is still pending.
+    const cellAt = async (text: string) => {
+      const position = await term.find(text)
+      return position && term.cell(position.row, position.col)
+    }
+    await expect.poll(() => cellAt("Release plan")).toMatchObject({ fg: colors.heading, bold: true })
     expect(await term.find("# Release plan")).toBeNull()
 
-    const bold = await at(term, "bold change")
-    expect((await term.cell(bold.row, bold.col))?.bold).toBe(true)
+    await expect.poll(() => cellAt("bold change")).toMatchObject({ bold: true })
     expect(await term.find("**bold**")).toBeNull()
-    const code = await at(term, "bun test")
-    expect((await term.cell(code.row, code.col))?.fg).toBe(colors.inlineCode)
+    await expect.poll(() => cellAt("bun test")).toMatchObject({ fg: colors.inlineCode })
 
     const nested = await at(term, "- nested item")
     const first = await at(term, "- first item")
     expect(nested.col).toBe(first.col + 2)
 
-    const keyword = await at(term, "const answer")
-    await expect.poll(async () => (await term.cell(keyword.row, keyword.col))?.fg).toBe(colors.keyword)
-    expect((await term.cell(keyword.row, keyword.col))?.bg).toBe(colors.panel)
-    const string = await at(term, "\"forty-two\"")
-    expect((await term.cell(string.row, string.col))?.fg).toBe(colors.string)
+    await expect.poll(() => cellAt("const answer")).toMatchObject({ fg: colors.keyword, bg: colors.panel })
+    await expect.poll(() => cellAt('"forty-two"')).toMatchObject({ fg: colors.string })
     expect(await term.find("```")).toBeNull()
   })
 })
