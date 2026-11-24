@@ -28,22 +28,14 @@ script=$(<./install.sh)
 ci_workflow=$(<.github/workflows/ci.yml)
 release_workflow=$(<.github/workflows/release.yml)
 package_helper=$(<scripts/package-argus-example.sh)
-contains "$release_workflow" "scripts/package-argus-example.sh"
 contains "$release_workflow" "examples/hya-argus-example.hyabundle"
 [[ -x ./scripts/package-argus-example.sh ]] || fail "Argus package helper must be executable"
 contains "$package_helper" "package-bundle"
 not_contains "$package_helper" "7z a"
 contains "$script" "set -Eeuo pipefail"
-contains "$script" '(cd "$tmp" && bun install --frozen-lockfile --production)'
-contains "$script" "crates/hya-plugin-bun/adapter"
-contains "$script" "packages/hya-tui"
-contains "$script" "packages/hya-tui-web"
 contains "$script" "stage-first-party-bundles"
-contains "$release_workflow" "crates/hya-plugin-bun/adapter"
-contains "$release_workflow" "lib/hya/bun-adapter"
-contains "$release_workflow" "lib/hya/tui"
-contains "$release_workflow" "lib/hya/tui-web"
-contains "$release_workflow" "stage-first-party-bundles"
+contains "$script" "stage-bun-programs"
+contains "$release_workflow" "stage-release"
 not_contains "$script" "compat"
 not_contains "$release_workflow" "compat-adapter"
 not_contains "$script" "hya-tui-ts"
@@ -83,15 +75,12 @@ contains "$dry_run" "Permission preflight: /tmp/hya-install-test/bin /tmp/hya-in
 contains "$dry_run" "cargo build --locked -p hya-backend --bins"
 contains "$dry_run" "cargo build --locked -p hya-base-tools -p hya-extended-tools -p hya-network-tools -p hya-channel-tools -p hya-compaction --lib"
 contains "$dry_run" "stage-first-party-bundles --library-dir"
-contains "$dry_run" "bun install --frozen-lockfile --production"
+contains "$dry_run" "stage-bun-programs --package-root"
 not_contains "$dry_run" "--profile debug"
 contains "$dry_run" "/tmp/hya-install-test/bin/.hya.tmp"
 contains "$dry_run" "/tmp/hya-install-test/bin/.hya.bak"
-contains "$dry_run" "/tmp/hya-install-test/lib/hya/.bun-adapter.tmp"
-contains "$dry_run" "/tmp/hya-install-test/lib/hya/.{bun-adapter,claude-adapter,tui,tui-web,tui-sdk}.bak"
-contains "$dry_run" "/tmp/hya-install-test/lib/hya/.tui.tmp"
-contains "$dry_run" "/tmp/hya-install-test/lib/hya/.tui-web.tmp"
-contains "$dry_run" "/tmp/hya-install-test/lib/hya/.tui-sdk.tmp"
+contains "$dry_run" "/tmp/hya-install-test/lib/hya/.hya-programs.tmp"
+contains "$dry_run" 'lib/hya/.<program>.bak'
 contains "$dry_run" "/tmp/hya-install-test/bundles/.hya-bundles.tmp"
 contains "$dry_run" "/tmp/hya-install-test/bundles/.hya-bundles.bak"
 contains "$dry_run" "/tmp/hya-install-test/bin/hya"
@@ -122,11 +111,25 @@ fake_bin="$fixture/fake-bin"
 target="$fixture/target"
 mkdir -p "$fake_bin"
 
-# Fake cargo: builds a scripted backend and stages placeholder bundles.
+# Fake cargo: supplies a scripted backend and staged fixtures for transaction tests.
 cat >"$fake_bin/cargo" <<'FAKE_CARGO'
 #!/usr/bin/env bash
 set -euo pipefail
 test -f "${HYA_BUN_PREFLIGHT_MARKER:?}"
+if [[ " $* " == *" stage-bun-programs "* ]]; then
+  [[ "$*" == *"--package-root "* ]] || exit 1
+  root="${@: -1}"/lib/hya
+  for name in bun-adapter claude-adapter tui tui-web tui-sdk; do
+    mkdir -p "$root/$name/src"
+    touch "$root/$name/"{package.json,bun.lock,src/main.ts}
+  done
+  [[ "${HYA_FAIL_ADAPTER_INSTALL:-0}" != 1 ]] || exit 1
+  mkdir -p "$root/bun-adapter/node_modules" "$root/tui/node_modules/@opentui/core" \
+    "$root/tui-web/web" "$root/tui-web/node_modules/@xterm/xterm"
+  touch "$root/tui/"{bunfig.toml,tsconfig.json,frontend-version.ts} \
+    "$root/tui-web/"{tsconfig.json,web/index.html}
+  exit 0
+fi
 if [[ " $* " == *" stage-first-party-bundles "* ]]; then
   package_root=""
   while [[ $# -gt 0 ]]; do
@@ -177,22 +180,7 @@ if [[ "${2:-}" == "--help" && "${1:-}" == */src/main.ts ]]; then
   test -f "$1"
   exit 0
 fi
-[[ "$*" == "install --frozen-lockfile --production" ]]
-test -f package.json
-test -f bun.lock
-if [[ "${HYA_FAIL_ADAPTER_INSTALL:-0}" == 1 ]]; then
-  exit 1
-fi
-mkdir -p node_modules
-if grep -Fq '"name": "@hya/tui",' package.json; then
-  mkdir -p node_modules/@opentui/core
-elif grep -Fq '"name": "@hya/tui-web",' package.json; then
-  mkdir -p node_modules/@xterm/xterm
-elif grep -Eq '"name": "@hya/(tui-sdk|claude-adapter)",' package.json; then
-  :
-else
-  grep -Fq '"name": "@hya/bun-adapter",' package.json
-fi
+exit 1
 FAKE_BUN
 chmod +x "$fake_bin/bun"
 
@@ -243,9 +231,10 @@ no_leftovers "$install_root" || fail "installer left temporary or backup paths a
 
 seed_previous_install() {
   local root=$1
-  mkdir -p "$root/bin" "$root/lib/hya/bun-adapter" "$root/bundles"
+  mkdir -p "$root/bin" "$root/lib/hya/bun-adapter" "$root/lib/hya/claude-adapter" "$root/bundles"
   printf 'old-binary\n' >"$root/bin/hya"
   printf 'old-adapter\n' >"$root/lib/hya/bun-adapter/marker"
+  printf 'old-claude\n' >"$root/lib/hya/claude-adapter/marker"
   printf 'old-core-agents\n' >"$root/bundles/hya-core-agents.hyabundle"
 }
 
@@ -254,6 +243,7 @@ assert_previous_install() {
   local reason=$2
   [[ $(<"$root/bin/hya") == old-binary ]] || fail "$reason replaced the previous binary"
   [[ $(<"$root/lib/hya/bun-adapter/marker") == old-adapter ]] || fail "$reason replaced the previous Bun adapter"
+  [[ $(<"$root/lib/hya/claude-adapter/marker") == old-claude ]] || fail "$reason replaced the previous Claude adapter"
   [[ $(<"$root/bundles/hya-core-agents.hyabundle") == old-core-agents ]] ||
     fail "$reason replaced the previous first-party bundle"
   [[ ! -e "$root/bundles/hya-core-skills.hyabundle" ]] || fail "$reason left a new first-party bundle"

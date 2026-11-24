@@ -422,8 +422,8 @@ There is **no** Cargo alias named `xtask` in this workspace: invoke it as
 dispatcher (not clap): the first positional argument selects the task and every
 remaining argument is forwarded verbatim. The currently supported tasks are
 `startup-bench`, `lifecycle-bench`, `matrix-check`, `package-bundle`, `package-native-tool-bundle`,
-`package-native-tool-library`, `stage-first-party-bundles`, `gen-api`, and
-`release-rehearsal`.
+`package-native-tool-library`, `stage-first-party-bundles`, `stage-release`,
+`stage-bun-programs`, `gen-api`, and `release-rehearsal`.
 
 | Task | Role |
 | --- | --- |
@@ -435,6 +435,8 @@ remaining argument is forwarded verbatim. The currently supported tasks are
 | `package-native-tool-bundle` | Adds a built target-specific Rust executable and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
 | `package-native-tool-library` | Adds a built tool-family dynamic library and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
 | `stage-first-party-bundles` | Packages the thirteen trusted first-party bundles into a backend package's `<package-root>/bundles/` and fails if any bundle version differs from the backend release version. With `--target` and `--assets`, it also writes versioned standalone release assets. |
+| `stage-release` | Stages the backend and native libraries from `--library-dir <dir>` into a fresh `--package-root <dir>` for tagged CI and rehearsal. It adds release notices, pinned Bun, production Bun programs with precompiled TUI JSX, first-party bundles, and the Argus example. The optional `--version <semver>` defaults to the workspace version. `--target <triple>` selects the native library suffix and is required with `--assets <dir>` for standalone bundle assets. |
+| `stage-bun-programs` | Takes `--package-root <dir>` and installs the production Bun programs into its `lib/hya/` using Bun on `PATH`. The source installer places those staged files in the live prefix after all build and staging steps succeed. The source path runs the TUI from its TypeScript source. |
 | `release-rehearsal` | Runs the pinned, non-publishing unified release build/package/smoke rehearsal for one target. It checks the unified aggregate version contract, then builds, packages, and smokes the `hya` binary, Bun, Bun and Claude adapters, TUI/WebUI/TUI-SDK assets and production dependencies, first-party bundles, Argus example, checksums, and unified installer contract. Run it on a host of that target (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`). |
 
 ```sh
@@ -444,6 +446,8 @@ cargo run -p xtask -- package-bundle <source-dir> <output.hyabundle>
 cargo run -p xtask -- package-native-tool-bundle <tool-family-source-dir> <built-executable> <output.hyabundle>
 cargo run -p xtask -- package-native-tool-library <tool-family-source-dir> <built-library> <output.hyabundle>
 cargo run -p xtask -- stage-first-party-bundles --library-dir target/release --package-root dist/hya [--version <semver>] [--target <triple> --assets dist]
+cargo run -p xtask -- stage-release --library-dir target/"$TARGET"/release --package-root dist/hya --target "$TARGET" --assets dist
+cargo run -p xtask -- stage-bun-programs --package-root /tmp/hya-source-stage
 cargo run -p xtask -- release-rehearsal --version <semver> --target "$(rustc -vV | sed -n 's/^host: //p')" --no-publish
 ```
 

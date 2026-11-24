@@ -40,6 +40,16 @@ pub(crate) struct StagedBundle {
 pub fn run(args: Vec<String>) -> anyhow::Result<()> {
     let usage = "usage: cargo xtask stage-first-party-bundles --library-dir <dir> \
                  --package-root <dir> [--version <semver>] [--target <triple> --assets <dir>]";
+    for staged in stage(&parse_options(args, usage)?)? {
+        println!("{}", staged.installed.display());
+        if let Some(asset) = staged.asset {
+            println!("{}", asset.display());
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn parse_options(args: Vec<String>, usage: &str) -> anyhow::Result<StageOptions> {
     let mut version = hya_version::BACKEND_VERSION.to_string();
     let (mut library_dir, mut package_root, mut target, mut assets) = (None, None, None, None);
     let mut args = args.into_iter();
@@ -60,20 +70,15 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
         assets.is_none() || target.is_some(),
         "--assets requires --target so native asset names carry the platform\n{usage}"
     );
-    let options = StageOptions {
+    let library_dir = library_dir.with_context(|| usage.to_owned())?;
+    let package_root = package_root.with_context(|| usage.to_owned())?;
+    Ok(StageOptions {
         version,
-        library_dir: library_dir.context(usage)?,
-        package_root: package_root.context(usage)?,
+        library_dir,
+        package_root,
         target,
         assets,
-    };
-    for staged in stage(&options)? {
-        println!("{}", staged.installed.display());
-        if let Some(asset) = staged.asset {
-            println!("{}", asset.display());
-        }
-    }
-    Ok(())
+    })
 }
 
 /// Package every first-party bundle and verify its identity and version.
