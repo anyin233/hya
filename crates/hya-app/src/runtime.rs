@@ -559,41 +559,79 @@ async fn resolve_runtime_strict(model_override: Option<String>) -> anyhow::Resul
     })
 }
 
-/// Reserve ownership and open a SQLite runtime store strictly (no in-memory
-/// fallback on open failure or timeout; returns an in-memory store only when
-/// `db` is `""`).
-pub async fn open_store(db: &str) -> anyhow::Result<SessionStore> {
-    if db.is_empty() {
-        SessionStore::connect_memory()
-            .await
-            .context("open in-memory store")
-    } else {
-        SessionStore::connect_runtime(db)
-            .await
-            .with_context(|| format!("open store at {db}"))
+/// A runtime store open failure with its SQLite or ownership error as the source.
+#[derive(Debug, thiserror::Error)]
+#[error("{context}")]
+pub struct RuntimeStoreOpenError {
+    context: String,
+    #[source]
+    source: hya_store::StoreError,
+}
+
+impl RuntimeStoreOpenError {
+    /// Whether another runtime owns the database before SQLite opens.
+    #[must_use]
+    pub fn is_owner_busy(&self) -> bool {
+        matches!(self.source, hya_store::StoreError::RuntimeOwnerBusy)
+    }
+
+    fn into_anyhow(self) -> anyhow::Error {
+        anyhow::Error::new(self.source).context(self.context)
     }
 }
 
-/// Reserve ownership before opening a SQLite runtime store, falling back to an
-/// in-memory store on open timeout or storage fault (or using memory when `db`
-/// is empty) for one-shot headless runs.
-pub async fn open_store_or_memory(db: &str) -> anyhow::Result<SessionStore> {
-    if db.is_empty() {
-        SessionStore::connect_memory()
-            .await
-            .context("open in-memory store")
-    } else {
-        let store = SessionStore::connect_runtime_or_memory(db)
-            .await
-            .with_context(|| format!("open store at {db}"))?;
-        if let Some((path, reason)) = store.memory_fallback() {
-            eprintln!(
-                "warning: could not open store at {} ({reason}); running in memory — nothing will be persisted",
-                path.display()
-            );
-        }
-        Ok(store)
+/// Reserve ownership and open a SQLite runtime store. File-open failures and
+/// timeouts are returned to the caller.
+pub async fn open_runtime_store(db: &str) -> Result<SessionStore, RuntimeStoreOpenError> {
+    open_runtime_store_with_fallback(db, false).await
+}
+
+/// Reserve ownership before opening a runtime store, falling back to memory on
+/// open timeout or storage fault. Contention remains an error.
+pub async fn open_runtime_store_or_memory(db: &str) -> Result<SessionStore, RuntimeStoreOpenError> {
+    let store = open_runtime_store_with_fallback(db, true).await?;
+    if let Some((path, reason)) = store.memory_fallback() {
+        eprintln!(
+            "warning: could not open store at {} ({reason}); running in memory — nothing will be persisted",
+            path.display()
+        );
     }
+    Ok(store)
+}
+
+async fn open_runtime_store_with_fallback(
+    db: &str,
+    fallback: bool,
+) -> Result<SessionStore, RuntimeStoreOpenError> {
+    let opened = match (db, fallback) {
+        ("", _) => SessionStore::connect_memory().await,
+        (_, true) => SessionStore::connect_runtime_or_memory(db).await,
+        (_, false) => SessionStore::connect_runtime(db).await,
+    };
+    opened.map_err(|source| RuntimeStoreOpenError {
+        context: if db.is_empty() {
+            "open in-memory store".to_owned()
+        } else {
+            format!("open store at {db}")
+        },
+        source,
+    })
+}
+
+/// Open a runtime store strictly, returning the failure through `anyhow`.
+/// Use [`open_runtime_store`] to handle owner contention directly.
+pub async fn open_store(db: &str) -> anyhow::Result<SessionStore> {
+    open_runtime_store(db)
+        .await
+        .map_err(RuntimeStoreOpenError::into_anyhow)
+}
+
+/// Open a runtime store with memory fallback, returning failures through
+/// `anyhow`. Use [`open_runtime_store_or_memory`] to handle contention directly.
+pub async fn open_store_or_memory(db: &str) -> anyhow::Result<SessionStore> {
+    open_runtime_store_or_memory(db)
+        .await
+        .map_err(RuntimeStoreOpenError::into_anyhow)
 }
 
 pub use hya_server::RuntimeTaskOwner;

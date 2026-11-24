@@ -125,6 +125,14 @@ use the store's single-connection pool with a keeper connection.
 `connect_runtime` reserves the canonical file's lock before opening SQLite;
 `claim_runtime_owner` returns `RuntimeOwnerBusy` when that lock is already held.
 
+Rust callers handling contention directly can use `hya_app::open_runtime_store`
+for strict open or `hya_app::open_runtime_store_or_memory` for memory fallback.
+Both accept `db: &str` and return `Result<SessionStore, RuntimeStoreOpenError>`.
+`RuntimeStoreOpenError::is_owner_busy(&self) -> bool` identifies a held lock
+before SQLite opens. The CLI uses it to choose server routing or exit 75.
+`open_store` and `open_store_or_memory` expose the same policies through their
+existing `anyhow::Result<SessionStore>` interfaces.
+
 ### Open policy and exit durability reporting
 
 Runtime commands open file-backed databases bounded by `OPEN_TIMEOUT` (5 s,

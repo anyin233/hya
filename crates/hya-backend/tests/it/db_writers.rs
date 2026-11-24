@@ -493,9 +493,11 @@ fn a_direct_writer_holds_the_lock_for_its_whole_run() -> TestResult {
         );
         assert!(String::from_utf8(output.stderr)?.contains(&pid));
 
+        let session_id = hya_proto::SessionId::new().to_string();
         for args in [
             &["exec", "second writer"][..],
             &["workflow", "run", "echo-input", "--input", "v=x"][..],
+            &["sessions", "archive", &session_id][..],
         ] {
             let output = scratch.run(args)?;
             assert_eq!(
