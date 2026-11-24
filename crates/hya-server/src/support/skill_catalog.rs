@@ -12,6 +12,14 @@ pub(crate) struct SkillInfo {
     pub(crate) name: String,
     pub(crate) description: String,
     pub(crate) location: String,
+    /// The skill's own directory, the base of its relative references;
+    /// `None` for a built-in skill (no filesystem base).
+    #[serde(skip)]
+    pub(crate) dir: Option<String>,
+    /// The catalog path (`embedded:hya/core-skills/skill/<name>/SKILL.md`
+    /// for a built-in skill), named by an expanded `/skill:<name>` block.
+    #[serde(skip)]
+    pub(crate) path: String,
     pub(crate) content: String,
     /// `builtin`, `project`, `user`, or `bundle` (`SkillSummary.source`).
     pub(crate) source: &'static str,
@@ -57,10 +65,19 @@ pub(crate) fn list(place: &CatalogPlace) -> Vec<SkillInfo> {
                 }
             };
             let source = skill_source(skill.origin, &skill.path, place.workdir(), place.roots());
+            let dir = match skill.origin {
+                SkillCatalogOrigin::Embedded => None,
+                SkillCatalogOrigin::Filesystem | SkillCatalogOrigin::Virtual => {
+                    (!skill.dir.as_os_str().is_empty())
+                        .then(|| skill.dir.to_string_lossy().into_owned())
+                }
+            };
             SkillInfo {
                 name: skill.name,
                 description: skill.description,
                 location,
+                dir,
+                path: skill.path.to_string_lossy().into_owned(),
                 content: skill.content,
                 source,
             }

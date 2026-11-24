@@ -133,8 +133,8 @@ the same name exists:
 
 A user-authored skill with a matching `name` **shadows the built-in entirely**.
 
-Both `/skill` and skill-backed `/command` entries use this effective catalog,
-as do captured Session calls to the `skill` tool. Skills from `hya/core-skills`
+`/skill:<name>` commands use this effective catalog, as do captured Session
+calls to the `skill` tool. Skills from `hya/core-skills`
 (`SkillCatalogOrigin::Embedded`) have no filesystem base directory or sampled
 file list: load them with `skill`, not by opening their synthetic catalog
 path. Existing tool output limits still apply, so a long skill body can be
@@ -161,6 +161,64 @@ Skill catalog exposes
 
 ---
 
+## Invoke a skill
+
+Run a skill yourself with `/skill:<name> [request]`, the same command name pi
+uses. The model may fail to load a skill that fits; the command forces it.
+
+```text
+/skill:pdf-tools extract report.pdf
+```
+
+The backend command catalog lists every visible skill as one row named
+`skill:<name>` (`GET /v1/commands`: `source: "skill"`, `argumentHint:
+"[request]"`, the skill body as `template`). `skill:` is a reserved namespace:
+a command file named `skill:<x>.md` is skipped, so a skill and a command of
+the same name never shadow each other — `/review` runs the command and
+`/skill:review` the skill.
+
+A command turn for `skill:<name>` (`CreateTurn` with `{command: {command:
+"skill:<name>", arguments}}`) sends this text as the user message:
+
+```text
+<skill name="pdf-tools" location="/work/.hya/skills/pdf-tools/SKILL.md">
+References are relative to /work/.hya/skills/pdf-tools.
+
+<the SKILL.md body, without its frontmatter>
+</skill>
+
+extract report.pdf
+```
+
+- The request is appended after a blank line, as the user's ask; it is never
+  substituted into the body (`$ARGUMENTS` in a body stays as written). With
+  no request the block ends the message.
+- `location` is the skill file; a built-in skill names its synthetic path
+  (`embedded:hya/core-skills/skill/<name>/SKILL.md`) and has no `References
+  are relative to` line, since it has no directory. Attribute values escape
+  `&`, `"`, `<`, and `>` as `&amp;`, `&quot;`, `&lt;`, and `&gt;`.
+- The block is expanded server-side from the session's catalog (its workdir,
+  then its Project's roots), so a skill added or edited on disk is used by
+  the next command without a restart.
+
+The TUI folds the block in the transcript to one line and shows the request
+below it, in every client (it reads the durable message text):
+
+```text
+┃ ▸ /skill:pdf-tools · 3 lines
+┃ extract report.pdf
+```
+
+Click the line to show the whole block. An unknown `/skill:<name>` is refused
+in the TUI (`Unknown skill <name> · /skills lists them`) and never reaches the
+model. Bare `/<name>` no longer runs a skill: the TUI answers `Unknown command
+/<name> · did you mean /skill:<name>?`.
+
+A plugin's `command.execute.before` hook sees `command: "skill:<name>"` and the
+expanded block as `text` ([Plugin protocol](plugin-protocol.md)).
+
+---
+
 ## How skills surface to the model
 
 At its first model turn, a full-mode session records the directory skill
@@ -173,6 +231,8 @@ gate from `allowed-tools` at that point.
 When an agent’s resource view selects harness skills, it must also select the
 `skill` tool facade; otherwise the view is rejected. See
 [AgentBundle authoring](agent-bundle-authoring.md#resource_view).
+
+---
 
 ---
 

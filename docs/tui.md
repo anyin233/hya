@@ -672,6 +672,8 @@ where the reason identifies installation, catalog unavailability, or extension s
 | `/exit`, `/quit` | Quit and archive the session (an unused one is left for the daemon to delete). See [Quit and keep running, or archive](#quit-and-keep-running-or-archive). |
 | `/to-background` | Quit at once and leave the session running on the daemon, not archived. Terminal only: not offered in a WebUI tab (close the tab instead). |
 | `/resume [id]` | Unarchive and open that session; without an id, pick one of the active Project's top-level sessions (every session without an active Project), archived ones included and tagged `[archived]`, newest first. |
+| `/clear` | Start a fresh session in the active Project, the same as `/new`. |
+| `/skill:<name> [request]` | Run a skill: the backend sends its `SKILL.md` body as a `<skill>` block with the request after it; the transcript folds the block to one line (see [Skill commands](#skill-commands)). An unknown command or skill is refused with a hint, not sent to the model (see [Unknown commands](#unknown-commands)). |
 | `/new [agent] [model]`, `/new --temp [agent] [model]` | Create a session in the active Project (in `--dir` when it lies inside the Project, else in its primary root), using the first visible agent and its model by default; `--temp` creates a temporary one instead (no Project). Keyboard focus goes to the composer afterwards, even when the command pane was opened from the focused Projects sidebar. |
 | `/sessions` | Open the sessions picker, scoped to the active Project (temporary sessions in their own group): a `New session` row, then saved and archived sessions (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation, Ctrl+A hides or shows archived sessions, F3 shows every Project's sessions instead (see [Pickers](#pickers)). |
 | `/project`, `/projects` | Open the full-screen [Project view](#project-view): list, open/switch, create, edit roots, rename, delete, or start a temporary session. |
@@ -2595,8 +2597,8 @@ Tab copies it into the input bar. Each suggestion row shows the command name, it
 argument hint, its description (truncated to width), and its source in
 brackets: `[local]` (this TUI's own
 registry), `[command]` (a custom or built-in server command, `/init` and
-`/review` among them), or `[skill]` (a discovered skill — see
-[Skill commands](#skill-commands) below). The list is fuzzy-filtered as you
+`/review` among them), or `[skill]` (a discovered skill, listed as
+`/skill:<name>` — see [Skill commands](#skill-commands) below). The list is fuzzy-filtered as you
 keep typing the name: an exact match ranks first, then a prefix match, then a
 substring match, then any name whose letters appear in order (a subsequence
 match); ties break alphabetically. Up/Down move the highlight through every
@@ -2688,19 +2690,58 @@ the main panel in the current layout.
 
 ### Skill commands
 
-A discovered skill runs as `/<skill> [args]`, the same as any other backend
-command: the TUI sends `{command: {command, arguments}}` (`CommandTurn`);
-the backend catalog (`crates/hya-server/src/support/command_catalog.rs`)
-resolves the name against custom commands and skills together, expands the
-skill's template with the arguments (`$1`, `$ARGUMENTS`) server-side, and
-runs the result as a normal prompt turn. The transcript shows what you typed,
-`/<skill> args`, in place of the backend's expanded prompt text — the same
+A discovered skill runs as `/skill:<name> [request]`, as in pi: the command
+menu lists every skill under that name (`[skill]`), and the TUI sends
+`{command: {command: "skill:<name>", arguments}}` (`CommandTurn`). The
+backend catalog (`crates/hya-server/src/support/command_catalog.rs`) expands
+it into a `<skill name location>` block with the request after it and runs
+that as a normal prompt turn (the format is in
+[Skills](skills.md#invoke-a-skill)). `skill:` is a namespace of its own, so a
+skill and a command of the same name never shadow each other.
+
+The transcript folds the block to one line, the request below it, then the
+agent's streamed reply as usual:
+
+```text
+┃ ▸ /skill:reviewer · 12 lines
+┃ fix auth
+```
+
+Click the line to unfold the block (`▾`). The fold reads the durable message
+text (`state/skillBlock.ts` `parseSkillBlock`), so a reconnect, the WebUI,
+and another TUI show the same thing. Other command turns still show what you
+typed, `/<name> args`, in place of the backend's expanded template — the same
 idea as a `!command` shell turn showing `!<command>` (see
-[Shell turns](#shell-turns)) — then the agent's streamed reply as usual.
-`CreateTurn` returns the user message id as the turn id for a command turn
-(unlike a shell turn), so the TUI remembers the typed `/name args` by that id
-(`state/store.ts` `commandDisplay`, `state/messages.ts`
-`commandUserView`) and shows it once the projection carries that message.
+[Shell turns](#shell-turns)). `CreateTurn` returns the user message id as the
+turn id for a command turn (unlike a shell turn), so the TUI remembers the
+typed `/name args` by that id (`state/store.ts` `commandDisplay`,
+`state/messages.ts` `commandUserView`) and shows it once the projection
+carries that message.
+
+### Unknown commands
+
+A command line the TUI cannot run is refused here and never reaches the
+model. The TUI looks the name up in its own registry, then in the backend
+catalog it read last; on a miss it reads `GET /v1/commands` once more (a
+command or skill added since). Still unknown, it shows a transcript notice
+with the closest name:
+
+```text
+Unknown command /reviewer · did you mean /skill:reviewer? · / lists commands
+Unknown skill revieer · /skills lists them
+```
+
+A bare skill name (the skill commands of older releases) points at its
+`/skill:<name>`; otherwise the suggestion is the closest name within a typo's
+distance, else one that starts with what was typed. Two cases still send:
+
+- A line whose first word holds another `/`, such as `/usr/lib/libx.so fails
+  to load`, reads as a path: it is sent as a prompt (`AppActions.sendPrompt`).
+- When the catalog cannot be read (the backend is unreachable), the command
+  goes to the backend as before.
+
+`/clear` starts a fresh session, the same as `/new` (the backend catalog
+lists it for clients to run).
 
 ### Copy
 
@@ -3930,7 +3971,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `POST /v1/interactions/{id}/respond` | Prompt: `{permission: {allowed: boolean, persist: boolean}}`, `{question: {answer: string}}`, or `{question: {rejected: true}}`. `/approve`, `/deny`: `persist: false`. | `RespondInteractionResponse.applied` (`false`: already resolved elsewhere) |
 | `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `reasoningVariants`, `reasoningDefault`, `source`, `imageInput`); the `/model` picker tags rows by `providerId`, and `/effort` uses the advertised variants; `contextLimit` (a uint64 string, `0`/absent = unknown) is the metadata state's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`; `imageInput: false` refuses attachments locally before a turn is sent (see [Paste and attachments](#paste-and-attachments); absent means unknown and is allowed). |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` (`id`, `kind`, `baseUrl`, `keySource`, `auth`, `modelCount`): the Provider View's list. |
-| `GET /v1/commands` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes skills, tagged `source: "skill"`) for command-pane suggestions and completion. |
+| `GET /v1/commands?directory=<dir>` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes the skills as `skill:<name>` rows, tagged `source: "skill"`) for command-pane suggestions and completion. |
 | `PUT /v1/providers/{id}`, `POST …/refresh`, `PUT …/models`, `DELETE …/models?modelId=`, `POST …/test` | See [Provider View interfaces](#provider-view-interfaces) | `ProviderUpdate` / `TestProviderModelResponse` |
 | `PUT /v1/auth/{provider_id}` | `{apiKey: string}` (Provider View `k`) | `{status, provider?, discovery?}`; the key value is sent only to the backend. |
 | `DELETE /v1/auth/{provider_id}` | No body (Provider View `x`) | `{provider?}` |
@@ -4047,6 +4088,7 @@ together.
 | `src/components/BundlesView.tsx` | The full-screen Bundles view. |
 | `src/state/catalog.ts` | `/model`/`/effort`/`/sessions` picker row builders: `modelRows()`, `effortRows()`, `sessionRows()` (the `New session` row + `sessionTree()`), `relativeTime()`. |
 | `src/state/agentsView.ts`, `src/app/agentsView.ts`, `src/components/AgentsView.tsx` | The [Agents view](#agents-view) (`/agent`): pure state and keys (`agentsViewLines()` sections, `agentsViewKey()`), its calls and pickers (`createAgentsViewController()`), and its rendering. |
+| `src/state/skillBlock.ts` | `parseSkillBlock()` and `skillBlockLabel()`: a `/skill:<name>` turn's `<skill>` block, folded in the transcript ([Skill commands](#skill-commands)). |
 | `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (internal mode navigation), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session or saved as the TUI default, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, saves the successfully selected default, re-lists interactions, reports in the controller status state. |
 | `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`, `askFrameRoute()` (the session stream) and `globalAskRoute()` (the global stream). |
 | `src/app/prompts.ts` | `answerPrompt()`: send a choice's `RespondInteraction`, hide the ask, report the outcome in the controller status state. |

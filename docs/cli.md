@@ -186,9 +186,10 @@ slash commands in their prompt UIs. The `/init` and `/review` prompt templates
 are loaded from the trusted `hya/core-commands` [first-party
 bundle](bundle-runtime.md#first-party-bundles).
 
-**Expandability.** Every built-in is constructed with `expandable: false`.
-Server-side `expand_prompt` only expands entries with `expandable: true`
-(user-defined commands and skills). For the eight built-ins below, admitting a
+**Expandability.** Every built-in is client-side: server-side `expand_prompt`
+never expands it. Only user-defined commands (their template) and skills
+(`/skill:<name>`, a `<skill>` block; see [Skills](skills.md#invoke-a-skill))
+expand. For the eight built-ins below, admitting a
 slash command therefore uses the literal admitted text `/<name>` or
 `/<name> <arguments>` — **not** the stored AGENTS.md / review template body.
 Catalog construction still substitutes the current workdir for `${path}` inside
@@ -207,11 +208,14 @@ the *stored* init/review template strings, but that body is not applied by
 
 User-defined commands from config and on-disk command sources are merged with
 this list via upsert: a user-defined command with the same name **overrides** the
-built-in of that name. Every user-defined command is constructed with
-`expandable: true` **unconditionally** (`CommandInfo::command` hardcodes it);
-frontmatter / inline maps have no `expandable` field — writing `expandable` in
-`opencode.json` or markdown frontmatter is ignored. Server-side `expand_prompt`
-therefore expands those templates.
+built-in of that name. Every user-defined command expands its template
+**unconditionally**; frontmatter has no `expandable` field — writing
+`expandable` in markdown frontmatter is ignored.
+
+**Skills.** Every visible skill is one more row named `skill:<name>` (source
+`skill`, argument hint `[request]`, its body as `template`). `skill:` is a
+reserved namespace: a command file named `skill:<x>.md` is skipped, so a skill
+never overrides a command and a command never overrides a skill.
 
 ## Workflow Commands
 

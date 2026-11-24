@@ -1175,6 +1175,7 @@ export function createController({ client, store, directory, remote: startedRemo
     connectRemote: (args) => connectRemoteCommand(args),
     disconnectRemote: () => disconnectRemote(),
     cancelTurn: () => turns.cancel(),
+    sendPrompt: (text) => submit(text, "message"),
     quit,
     resume: (id) => resumer.resume(id),
     openPicker,

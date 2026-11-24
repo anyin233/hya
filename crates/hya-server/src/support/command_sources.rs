@@ -28,6 +28,14 @@ pub(super) fn disk_commands(workdir: &Path) -> Vec<CommandInfo> {
 
     let mut commands = Vec::new();
     for file in files {
+        // `skill:` names the skill namespace (`/skill:<name>`); a command
+        // file cannot take it.
+        if file
+            .name
+            .starts_with(crate::support::command_catalog::SKILL_COMMAND_PREFIX)
+        {
+            continue;
+        }
         let Ok(content) = std::fs::read_to_string(&file.path) else {
             continue;
         };
