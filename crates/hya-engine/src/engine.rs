@@ -51,6 +51,9 @@ mod member_control;
 mod members;
 mod model_probe;
 mod models;
+#[cfg(unix)]
+#[cfg(test)]
+mod native_rewriters_test;
 mod nested_tools;
 mod permissions;
 mod restart;
@@ -268,6 +271,10 @@ impl SessionEngine {
     /// Build an engine with disconnected mailbox/spawner and default tool planes.
     ///
     /// Wire product planes with `with_*` before serving interactive traffic.
+    ///
+    /// # Panics
+    /// Panics if an internal rewriter cannot load. Use [`Self::try_new`] at startup
+    /// boundaries that return errors.
     #[must_use]
     pub fn new(
         store: SessionStore,
@@ -276,6 +283,22 @@ impl SessionEngine {
         permission: PermissionPlane,
         bus: EventBus,
     ) -> Self {
+        Self::try_new(store, providers, runtime, permission, bus)
+            .unwrap_or_else(|error| panic!("load internal bundles: {error}"))
+    }
+
+    /// Build the engine after loading the required native rewriters.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::BundleRuntime`] when an internal bundle cannot load.
+    pub fn try_new(
+        store: SessionStore,
+        providers: Arc<ProviderRouter>,
+        runtime: Arc<RuntimeRegistry>,
+        permission: PermissionPlane,
+        bus: EventBus,
+    ) -> Result<Self, CoreError> {
+        let rewriters = internal_rewriters()?;
         let (interaction, _rx) = InteractionPlane::new();
         let spawner = BoundSpawnSender::disconnected();
         let workflows = BoundWorkflowSender::disconnected();
@@ -323,7 +346,7 @@ impl SessionEngine {
             handoff_options: TerminalHandoffOptions::default(),
             rewriter_keep_recent: CompactionConfig::default().keep_recent,
             token_accounting: TokenAccounting::default(),
-            rewriters: internal_rewriters(),
+            rewriters,
             hooks: None,
             session_bundle_hooks: Arc::new(RwLock::new(HashMap::new())),
             session_channel_policies: Arc::new(RwLock::new(HashMap::new())),
@@ -345,7 +368,7 @@ impl SessionEngine {
                 activity_rx,
             ));
         }
-        engine
+        Ok(engine)
     }
 
     /// Record the id claimed with `SessionStore::claim_runtime_owner`.
@@ -672,23 +695,21 @@ fn fixed_system_agent(
         })
 }
 
-/// The context-reduction extensions the internal bundles register
-/// (`hya/compaction`), in registration order; the kernel runs them before its
-/// own Rewrite. Loaded once per process.
-///
-/// # Panics
-///
-/// When an internal bundle's library cannot be found or loaded, as a missing
-/// tool family does.
-fn internal_rewriters() -> Arc<[Arc<dyn hya_tool::Rewriter>]> {
-    static REWRITERS: std::sync::OnceLock<Arc<[Arc<dyn hya_tool::Rewriter>]>> =
-        std::sync::OnceLock::new();
-    Arc::clone(REWRITERS.get_or_init(|| {
-        hya_core::bundles::load_internal()
-            .unwrap_or_else(|error| panic!("load internal bundles: {error}"))
-            .rewriters
-            .into()
-    }))
+/// The rewriters registered by internal bundles, in registration order.
+/// Successful registrations are shared process-wide.
+type NativeRewriters = Arc<[Arc<dyn hya_tool::Rewriter>]>;
+
+fn internal_rewriters() -> Result<NativeRewriters, CoreError> {
+    static REWRITERS: std::sync::Mutex<Option<NativeRewriters>> = std::sync::Mutex::new(None);
+    let mut slot = REWRITERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(rewriters) = slot.as_ref() {
+        return Ok(Arc::clone(rewriters));
+    }
+    let rewriters: NativeRewriters = hya_core::bundles::load_internal()?.rewriters.into();
+    *slot = Some(Arc::clone(&rewriters));
+    Ok(rewriters)
 }
 
 /// Build summarize options from a fixed system definition and bound preference.

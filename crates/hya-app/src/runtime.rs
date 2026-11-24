@@ -1292,7 +1292,14 @@ async fn build_session_engine_with_mcp_defer(
         ..BundleSidecarEnvironment::production()
     });
     let context_settings = settings.context();
-    let engine_builder = SessionEngine::new(store, router, runtime, permission, bus)
+    let engine = match SessionEngine::try_new(store.clone(), router, runtime, permission, bus) {
+        Ok(engine) => engine,
+        Err(error) => {
+            store.release_runtime_owner(owner_run_id)?;
+            return Err(error).context("load internal native rewriters at startup");
+        }
+    };
+    let engine_builder = engine
         .with_base_system_prompt(agent.system_prompt.clone())
         .with_pure_context(options.pure)
         // Stop/start records use this store's runtime-owner claim.
