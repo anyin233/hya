@@ -394,7 +394,7 @@ impl PluginConn {
             tracing::warn!(plugin = %self.id, "plugin disabled after exceeding restart budget");
             return Err(PluginError::Disabled);
         }
-        let (mut started, init) = hya_mcp::io_tasks::scope(
+        let (mut started, init) = hya_child_io::io_tasks::scope(
             self.io_tasks.clone(),
             connection::start_client(&self.spec, &self.host_info),
         )
@@ -620,8 +620,8 @@ impl PluginHost {
         for (index, spec) in specs.into_iter().enumerate() {
             let host = host.clone();
             let id = spec.id.clone();
-            set.spawn(hya_mcp::io_tasks::scope(
-                hya_mcp::io_tasks::current(),
+            set.spawn(hya_child_io::io_tasks::scope(
+                hya_child_io::io_tasks::current(),
                 async move { (index, id, connection::connect_one(spec, host, None).await) },
             ));
         }

@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 hya-bundle = { workspace = true }
-hya-mcp = { workspace = true }
+hya-child-io = { workspace = true }
 hya-proto = { workspace = true }
 hya-provider = { workspace = true }
 hya-engine = { workspace = true }

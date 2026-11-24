@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
+use hya_child_io::{codec, io_tasks};
 use serde_json::{Value, json};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, BufReader};
@@ -72,12 +73,12 @@ pub enum McpError {
     },
 }
 
-impl From<crate::codec::FrameError> for McpError {
-    fn from(error: crate::codec::FrameError) -> Self {
+impl From<codec::FrameError> for McpError {
+    fn from(error: codec::FrameError) -> Self {
         match error {
-            crate::codec::FrameError::Io(message) => Self::Io(message),
-            crate::codec::FrameError::Json(message) => Self::Json(message),
-            crate::codec::FrameError::OversizedLine => Self::OversizedLine,
+            codec::FrameError::Io(message) => Self::Io(message),
+            codec::FrameError::Json(message) => Self::Json(message),
+            codec::FrameError::OversizedLine => Self::OversizedLine,
         }
     }
 }
@@ -144,7 +145,7 @@ impl Drop for ChildGuard {
             match tokio::runtime::Handle::try_current() {
                 Ok(_) => {
                     let client = self.client.clone();
-                    crate::io_tasks::spawn_in(self.io_tasks.clone(), async move {
+                    io_tasks::spawn_in(self.io_tasks.clone(), async move {
                         client.shutdown().await;
                         terminate_child(&mut child).await;
                     });
@@ -250,7 +251,7 @@ impl McpClient {
         let stdin = child.stdin.take().ok_or(McpError::MissingPipe("stdin"))?;
         let client = Self::new(stdout, stdin);
         let guard = ChildGuard {
-            io_tasks: crate::io_tasks::current(),
+            io_tasks: io_tasks::current(),
             child: Mutex::new(Some(child)),
             client: client.clone(),
         };
@@ -314,7 +315,7 @@ impl McpClient {
         match &self.transport {
             Transport::Stdio(inner) => {
                 let message = json!({ "jsonrpc": "2.0", "method": method, "params": params });
-                crate::codec::write_frame(&mut *inner.writer.lock().await, &message).await?;
+                codec::write_frame(&mut *inner.writer.lock().await, &message).await?;
                 Ok(())
             }
             Transport::StreamableHttp(transport) => transport.notify(method, params).await,
@@ -347,7 +348,7 @@ impl McpClient {
                 inner.pending.lock().await.insert(id, tx);
                 {
                     let mut writer = inner.writer.lock().await;
-                    crate::codec::write_frame(&mut *writer, &request).await?;
+                    codec::write_frame(&mut *writer, &request).await?;
                 }
                 match tokio::time::timeout(timeout, rx).await {
                     Ok(Ok(result)) => result,
@@ -370,11 +371,11 @@ fn spawn_reader<R>(reader: R, pending: Pending) -> JoinHandle<()>
 where
     R: AsyncRead + Send + Unpin + 'static,
 {
-    crate::io_tasks::spawn(async move {
+    io_tasks::spawn(async move {
         let mut reader = BufReader::new(reader);
         let mut buf = Vec::new();
         loop {
-            match crate::codec::read_bounded_line(&mut reader, &mut buf).await {
+            match codec::read_bounded_line(&mut reader, &mut buf).await {
                 Ok(0) => break,
                 Ok(_) => {}
                 Err(error) => {
@@ -487,7 +488,7 @@ mod tests {
             .unwrap();
         let mut stdout = child.stdout.take().unwrap();
         let guard = ChildGuard {
-            io_tasks: crate::io_tasks::current(),
+            io_tasks: io_tasks::current(),
             child: Mutex::new(Some(child)),
             client: McpClient::new(tokio::io::empty(), tokio::io::sink()),
         };

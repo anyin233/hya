@@ -1043,7 +1043,7 @@ impl RuntimeMcpControl {
         let mut tasks = BTreeMap::new();
         for source in plan.sources().iter().cloned() {
             let id = source.id().clone();
-            let handle = set.spawn(hya_mcp::io_tasks::scope(
+            let handle = set.spawn(hya_child_io::io_tasks::scope(
                 self.reconciler.io_tasks.clone(),
                 async move { prepare_desired_source(source).await },
             ));

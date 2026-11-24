@@ -7,7 +7,7 @@ use crate::error::PluginError;
 use crate::protocol::Frame;
 
 /// Maximum accepted length of a single NDJSON line (1 MiB).
-pub use hya_mcp::codec::MAX_LINE_BYTES;
+pub use hya_child_io::codec::MAX_LINE_BYTES;
 
 /// Async reader that yields one classified [`Frame`] per newline-delimited line.
 pub struct FrameReader<R> {
@@ -45,16 +45,18 @@ pub(crate) async fn read_bounded_line<R: AsyncRead + Unpin>(
     reader: &mut BufReader<R>,
     buf: &mut Vec<u8>,
 ) -> Result<usize, PluginError> {
-    hya_mcp::codec::read_bounded_line(reader, buf)
+    hya_child_io::codec::read_bounded_line(reader, buf)
         .await
         .map_err(framing_error)
 }
 
-pub(crate) fn framing_error(error: hya_mcp::codec::FrameError) -> PluginError {
+pub(crate) fn framing_error(error: hya_child_io::codec::FrameError) -> PluginError {
     match error {
-        hya_mcp::codec::FrameError::Io(message) => PluginError::Io(message),
-        hya_mcp::codec::FrameError::Json(message) => PluginError::Json(message),
-        hya_mcp::codec::FrameError::OversizedLine => PluginError::OversizedLine(MAX_LINE_BYTES),
+        hya_child_io::codec::FrameError::Io(message) => PluginError::Io(message),
+        hya_child_io::codec::FrameError::Json(message) => PluginError::Json(message),
+        hya_child_io::codec::FrameError::OversizedLine => {
+            PluginError::OversizedLine(MAX_LINE_BYTES)
+        }
     }
 }
 
@@ -72,7 +74,7 @@ impl<W: AsyncWrite + Unpin> FrameWriter<W> {
     /// # Errors
     /// `Json` if `frame` cannot serialize, `Io` on a write/flush failure.
     pub async fn write<T: Serialize>(&mut self, frame: &T) -> Result<(), PluginError> {
-        hya_mcp::codec::write_frame(&mut self.inner, frame)
+        hya_child_io::codec::write_frame(&mut self.inner, frame)
             .await
             .map_err(framing_error)
     }

@@ -1079,6 +1079,7 @@ dependencies = [
  "hya-base-tools",
  "hya-bundle",
  "hya-channel-tools",
+ "hya-child-io",
  "hya-engine",
  "hya-extended-tools",
  "hya-mcp",
@@ -1196,6 +1197,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hya-child-io"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "hya-compaction"
 version = "0.0.0"
 dependencies = [
@@ -1307,6 +1319,7 @@ dependencies = [
  "async-trait",
  "eventsource-stream",
  "futures",
+ "hya-child-io",
  "hya-proto",
  "hya-tool",
  "hya-version",
@@ -1339,8 +1352,8 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "hya-bundle",
+ "hya-child-io",
  "hya-engine",
- "hya-mcp",
  "hya-proto",
  "hya-provider",
  "hya-tool",

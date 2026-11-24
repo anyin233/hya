@@ -105,7 +105,7 @@ impl BundleSidecarEnvironment {
     #[cfg(test)]
     fn from_command(command: Vec<String>, staging_root: PathBuf) -> Self {
         Self {
-            io_tasks: hya_mcp::io_tasks::current(),
+            io_tasks: hya_child_io::io_tasks::current(),
             command: Some(command),
             staging_root,
             terminate_notify: None,
@@ -119,7 +119,7 @@ impl BundleSidecarEnvironment {
             |parent| parent.join("activations"),
         );
         Self {
-            io_tasks: hya_mcp::io_tasks::current(),
+            io_tasks: hya_child_io::io_tasks::current(),
             command: plugins::bundle_sidecar_command(),
             staging_root,
             #[cfg(test)]

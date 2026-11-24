@@ -17,11 +17,17 @@ pub mod bridge;
 /// JSON-RPC client over stdio/HTTP transports, child process guard, and errors.
 pub mod client;
 /// Bounded NDJSON framing shared with native plugins.
-pub mod codec;
+#[deprecated(note = "use hya_child_io::codec")]
+pub mod codec {
+    pub use hya_child_io::codec::*;
+}
 /// Streamable HTTP and classic HTTP+SSE transports.
 mod http;
 /// Composition completion tracking for connection I/O.
-pub mod io_tasks;
+#[deprecated(note = "use hya_child_io::io_tasks")]
+pub mod io_tasks {
+    pub use hya_child_io::io_tasks::*;
+}
 /// Multi-server manager, config, prepare entry, and status snapshots.
 pub mod manager;
 /// Wire types for JSON-RPC and MCP tools/list / tools/call payloads.
