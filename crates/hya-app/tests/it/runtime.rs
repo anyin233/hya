@@ -74,7 +74,7 @@ fn offline_notice_names_path_offline_mode_and_the_fix() {
 }
 
 #[tokio::test]
-async fn hya_runtime_starts_a_server_with_the_offline_engine() {
+async fn hya_runtime_starts_and_shuts_down_an_offline_server() {
     let mut runtime = HyaRuntime::start(RuntimeOptions {
         model: None,
         db: String::new(),
@@ -95,5 +95,18 @@ async fn hya_runtime_starts_a_server_with_the_offline_engine() {
         .await
         .unwrap();
     assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let state = runtime.app_state();
+    let store = state.engine.store();
+    let owner = hya_proto::OwnerRunId::new();
+    assert!(matches!(
+        store.claim_runtime_owner(owner),
+        Err(hya_store::StoreError::RuntimeOwnerBusy)
+    ));
     runtime.shutdown().await.unwrap();
+    assert_eq!(
+        state.streams().reason(),
+        Some(hya_server::ShutdownReason::Stop)
+    );
+    store.claim_runtime_owner(owner).unwrap();
+    store.release_runtime_owner(owner).unwrap();
 }

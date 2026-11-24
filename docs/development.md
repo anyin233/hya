@@ -599,28 +599,20 @@ and delayed checks), and permission/question bridges. Routers retain the owner;
 background tasks retain only its cancellation and tracking handles, so dropping
 the final owner can cancel them without an ownership cycle.
 
-Shutdown keeps the interaction bridges alive until their turns have been
-cancelled and drained. Embedders use this order:
+Shutdown keeps the interaction bridges alive until their turns have drained.
+The daemon and `HyaRuntime` share the following application sequence:
 
-```rust,ignore
-state.begin_shutdown();
-built.shutdown().await?;
-state.shutdown().await;
-```
+1. `ServerRuntime::drain(&self, reason: ShutdownReason, on_fenced: impl FnOnce())`
+   closes streams with the host's reason and fences server admission. It calls
+   `on_fenced` so the host can signal secondary listeners, then drains
+   composition, residents and turns. It joins server services after reserved
+   runs settle or hit the drain deadline.
+2. The daemon joins its listeners and relay and removes its discovery file.
+3. `ServerRuntime::finish_shutdown(&mut self) -> Result<(), CoreError>` reports
+   the store exit drain and releases database ownership.
 
-`AppState::begin_shutdown(&self) -> ()` ends live streams and fences server
-admission without stopping services. The built engine then closes engine
-admission, joins composition intake/registration handlers, and drains residents.
-`AppState::shutdown(&self) -> impl Future<Output = ()>` drains any remaining
-turns and reserved server runs, then cancels and joins server services and their
-tracked children. `AppState::stop_for_restart(Duration) -> Result<TurnDrainReport,
-CoreError>` uses the same final drain/join sequence with the caller's deadline
-and a `restart` stream-close reason. Server services are joined after the drain
-wait, including when that wait reaches its deadline.
-
-`HyaRuntime::shutdown(&mut self) -> Result<(), hya_engine::CoreError>` performs
-all three steps; the CLI serve path follows the same order. For example:
-
+`HyaRuntime::shutdown(&mut self) -> Result<(), hya_engine::CoreError>` calls
+both application steps with the `stop` stream reason. For example:
 ```rust,ignore
 let mut runtime = hya_app::HyaRuntime::start(options).await?;
 serve(runtime.router().clone()).await;

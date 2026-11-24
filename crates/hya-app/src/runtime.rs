@@ -724,14 +724,14 @@ impl BuiltSessionEngine {
     /// residents so no late registration can escape the drain. Safe to call repeatedly.
     pub async fn shutdown(&mut self) -> Result<(), CoreError> {
         self.drain(FinishCause::Shutdown).await;
+        self.finish_shutdown().await
+    }
+
+    async fn finish_shutdown(&mut self) -> Result<(), CoreError> {
         self.engine
             .store()
             .drain_and_report_exit(hya_store::EXIT_DRAIN_TIMEOUT)
             .await;
-        self.release_runtime_owner()
-    }
-
-    fn release_runtime_owner(&mut self) -> Result<(), CoreError> {
         if let Some(owner) = self.runtime_owner {
             self.engine.store().release_runtime_owner(owner)?;
             self.runtime_owner = None;
@@ -1569,9 +1569,21 @@ impl ServerRuntime {
         self.built.resume_interrupted(&self.state).await
     }
 
-    /// Split the runtime for hosts that drain the server inside a listener callback.
-    pub fn into_parts(self) -> (BuiltSessionEngine, hya_server::AppState) {
-        (self.built, self.state)
+    /// End streams and fence admission, then drain composition, residents, and
+    /// server services. Call `on_fenced` immediately after closing server admission
+    /// so the host can signal any secondary listeners to stop accepting.
+    pub async fn drain(&self, reason: hya_server::ShutdownReason, on_fenced: impl FnOnce()) {
+        self.state.streams().close(reason);
+        self.state.begin_shutdown();
+        on_fenced();
+        self.built.drain(FinishCause::Shutdown).await;
+        self.state.shutdown().await;
+    }
+
+    /// Report the store exit drain and release database ownership. Hosts call
+    /// this after `drain`, once their listeners, relay, and discovery are gone.
+    pub async fn finish_shutdown(&mut self) -> Result<(), CoreError> {
+        self.built.finish_shutdown().await
     }
 }
 
@@ -1593,9 +1605,7 @@ pub struct RuntimeOptions {
 /// planes stay connected until the runtime is dropped.
 pub struct HyaRuntime {
     router: axum::Router,
-    engine: Arc<SessionEngine>,
-    app_state: hya_server::AppState,
-    _built: BuiltSessionEngine,
+    runtime: ServerRuntime,
 }
 
 impl HyaRuntime {
@@ -1642,26 +1652,16 @@ impl HyaRuntime {
             tracing::warn!(%error, "failed to restore saved permission grants");
         }
         runtime.resume_interrupted().await?;
-        let (built, app_state) = runtime.into_parts();
-        let router = hya_server::router(app_state.clone());
-        Ok(Self {
-            router,
-            engine: built.engine(),
-            app_state,
-            _built: built,
-        })
+        let router = hya_server::router(runtime.app_state().clone());
+        Ok(Self { router, runtime })
     }
 
-    /// Fence server admission, drain composition and residents, then join server services.
+    /// Shut down server admission, runtime services, and the database owner.
     pub async fn shutdown(&mut self) -> Result<(), CoreError> {
-        self.app_state.begin_shutdown();
-        self._built.drain(FinishCause::Shutdown).await;
-        self.app_state.shutdown().await;
-        self.engine
-            .store()
-            .drain_and_report_exit(hya_store::EXIT_DRAIN_TIMEOUT)
+        self.runtime
+            .drain(hya_server::ShutdownReason::Stop, || {})
             .await;
-        self._built.release_runtime_owner()
+        self.runtime.finish_shutdown().await
     }
 
     /// Axum router with native and Compat routes (from [`hya_server::router`]).
@@ -1672,13 +1672,13 @@ impl HyaRuntime {
     /// Shared session engine for in-process callers (same instance the router uses).
     #[must_use]
     pub fn engine(&self) -> Arc<SessionEngine> {
-        self.engine.clone()
+        self.runtime.built.engine()
     }
 
     /// Clone of the HTTP `AppState` wrapped by the router.
     #[must_use]
     pub fn app_state(&self) -> hya_server::AppState {
-        self.app_state.clone()
+        self.runtime.app_state().clone()
     }
 }
 
