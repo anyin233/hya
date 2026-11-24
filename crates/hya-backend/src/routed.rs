@@ -20,8 +20,8 @@ use hya_proto::{
 };
 use hya_sdk_v1::{SdkError, V1Sdk};
 
-use crate::StopSignal;
-use crate::exec_stream::JsonStreamPrinter;
+use crate::exec_stream::{JsonStreamPrinter, StreamScope};
+use crate::stop_signals::StopSignal;
 
 /// How often a routed command polls the server while it waits.
 const POLL: Duration = Duration::from_millis(250);
@@ -115,14 +115,14 @@ pub(crate) async fn exec(url: &str, request: ExecRequest) -> anyhow::Result<()> 
     let mut terminate = signal(SignalKind::terminate()).context("install SIGTERM handler")?;
     let mut printer = request
         .json
-        .then(|| JsonStreamPrinter::new(std::io::stdout()));
+        .then(|| JsonStreamPrinter::new(std::io::stdout(), StreamScope::Single(session)));
     let mut since = 0u64;
     let mut asks = Asks::new(id.clone());
     let mut stop: Option<StopSignal> = None;
     let mut idle_rounds = 0u8;
     let info = loop {
         if let Some(printer) = printer.as_mut() {
-            since = pump(&sdk, &id, session, since, printer).await?;
+            since = pump(&sdk, &id, since, printer).await?;
         }
         asks.reject_pending(&sdk).await;
         tokio::select! {
@@ -159,7 +159,7 @@ pub(crate) async fn exec(url: &str, request: ExecRequest) -> anyhow::Result<()> 
     let failed = info.state == pb::TurnState::Failed as i32;
     if let Some(mut printer) = printer.take() {
         // Authoritative tail flush from the durable log (deduplicated by seq).
-        pump(&sdk, &id, session, 0, &mut printer).await?;
+        pump(&sdk, &id, 0, &mut printer).await?;
         printer.flush().context("flush json stream")?;
     } else if !failed {
         let envelopes = replay(&sdk, &id, 0).await?.0;
@@ -204,15 +204,12 @@ async fn replay(sdk: &V1Sdk, id: &str, since: u64) -> anyhow::Result<(Vec<Envelo
 async fn pump<W: std::io::Write>(
     sdk: &V1Sdk,
     id: &str,
-    session: SessionId,
     since: u64,
     printer: &mut JsonStreamPrinter<W>,
 ) -> anyhow::Result<u64> {
     let (envelopes, next) = replay(sdk, id, since).await?;
     for envelope in &envelopes {
-        printer
-            .print(envelope, session)
-            .context("write json envelope")?;
+        printer.print(envelope).context("write json envelope")?;
     }
     printer.flush().context("flush json stream")?;
     Ok(next)

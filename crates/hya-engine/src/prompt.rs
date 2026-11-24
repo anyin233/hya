@@ -1,9 +1,8 @@
 use std::path::{Path, PathBuf};
 
 /// Process-local environment facts rendered into the Harness prompt layer.
+/// The working directory is the kernel prompt's `<cwd>`.
 pub struct PromptEnv {
-    /// Absolute or display cwd string.
-    pub cwd: String,
     /// OS/platform label for the Environment block.
     pub platform: String,
     /// Calendar date string (`YYYY-MM-DD`).
@@ -106,8 +105,8 @@ pub fn render_environment_and_context(
     context_files: &[(String, String)],
 ) -> String {
     let mut out = format!(
-        "## Environment\n- cwd: {}\n- platform: {}\n- date: {}\n",
-        env.cwd, env.platform, env.date
+        "## Environment\n- platform: {}\n- date: {}\n",
+        env.platform, env.date
     );
     for (name, content) in context_files {
         out.push_str("\n## Project context: ");
@@ -135,7 +134,7 @@ pub fn team_quick_reference(has: impl Fn(&str) -> bool, depth: u32) -> Option<St
     let mut lines: Vec<&str> = Vec::new();
     if has("task") {
         lines.push(
-            "- Batch independent work in one `task` call with tasks[] and shared context; each item has its own prompt, subagent_type and optional overrides. Assign non-overlapping scopes and acceptance criteria. `task` is non-blocking: it returns the children's handles after registration (choose the agent with its subagent_type parameter; the harness names the member <subagent_type>-<operator>, so subagent_type scout becomes scout-suzuran under your path). Running means launched, not finished. Continue independent work before `wait`; do not spawn/wait serially for independent siblings. Results arrive later as mail — watch for `[NEW MAIL]` notices appended to tool results.",
+            "- A `task` result marked running acknowledges launch. Continue independent work while the children run; address follow-up mail to the returned handle for that child. Results arrive later as mail.",
         );
     }
     if mail {
@@ -194,7 +193,6 @@ mod tests {
 
     fn env() -> PromptEnv {
         PromptEnv {
-            cwd: "/work/proj".to_string(),
             platform: "linux".to_string(),
             date: "2026-06-21".to_string(),
         }
@@ -319,14 +317,13 @@ mod tests {
     }
 
     #[test]
-    fn team_reference_chooses_the_agent_by_subagent_type() {
+    fn team_reference_explains_launch_and_delivery() {
         let out = reference(&FULL_TOOLS, 0);
         assert!(
-            out.contains("choose the agent with its subagent_type parameter")
-                && out.contains("<subagent_type>-<operator>"),
+            out.contains("running acknowledges launch")
+                && out.contains("Results arrive later as mail"),
             "{out}"
         );
-        assert!(!out.contains("name parameter"), "{out}");
     }
 
     #[test]
@@ -352,7 +349,7 @@ mod tests {
     fn render_environment_and_context_omits_agent_base() {
         let ctx = vec![("AGENTS.md".to_string(), "Prefer spaces.".to_string())];
         let out = render_environment_and_context(&env(), &ctx);
-        assert!(out.starts_with("## Environment\n"));
+        assert!(out.starts_with("## Environment\n- platform: linux\n- date: 2026-06-21\n"));
         assert!(out.contains("## Project context: AGENTS.md"));
         assert!(out.contains("Prefer spaces."));
         assert!(!out.contains("You are hya"));

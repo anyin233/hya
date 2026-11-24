@@ -89,6 +89,8 @@ pub(super) struct HashlineError {
     pub(super) hints: Vec<String>,
 }
 
+pub(super) use hash::missing_hash_line;
+
 impl HashlineError {
     /// Construct a content-free hashline error with no hints.
     pub(super) fn new(code: &'static str, message: impl Into<String>) -> Self {
@@ -127,6 +129,54 @@ impl HashlineError {
         } else {
             format!("{code_prefix} {}", self.message)
         }
+    }
+
+    /// Include authorized live rows while reserving space for the retry instructions.
+    pub(super) fn with_current_anchors(mut self, text: &str, requested: &[usize]) -> Self {
+        let text = hash::normalize_line_endings(text.strip_prefix('\u{feff}').unwrap_or(text));
+        let lines = hash::visible_line_slices(&text);
+        let mut requested = requested.to_vec();
+        requested.sort_unstable();
+        let (visible, outside) =
+            requested.split_at(requested.partition_point(|&line| line <= lines.len()));
+        let mut windows: Vec<(usize, usize)> = Vec::new();
+        for &line in visible {
+            let start = line.saturating_sub(2).max(1);
+            let end = (line + 2).min(lines.len());
+            if let Some((_, previous_end)) = windows.last_mut()
+                && start <= *previous_end
+            {
+                *previous_end = end;
+            } else {
+                windows.push((start, end));
+            }
+        }
+        let mut regions = Vec::new();
+        for (start, end) in windows {
+            if let Ok(rows) =
+                hash::format_hashline_region_with_width(&lines, start, end, DEFAULT_HASH_LENGTH)
+            {
+                regions.push(rows);
+            }
+        }
+        for line in outside {
+            regions.push(format!(
+                "File has {} visible lines; line {line} is out of range.",
+                lines.len()
+            ));
+        }
+        if !self.message.contains("No edits were applied.") {
+            self.message.push_str(" No edits were applied.");
+        }
+        let heading = "\nCurrent anchors near requested line(s):\n";
+        let retry = "\nRetry with these LINE#HASH anchors, or use op \"replace_text\" with exact oldText/newText.";
+        let available = HASHLINE_ERROR_MESSAGE_BYTES
+            .saturating_sub(self.message.len() + heading.len() + retry.len());
+        self.message.push_str(heading);
+        self.message
+            .push_str(&bound_utf8_text(&regions.join("\n"), available));
+        self.message.push_str(retry);
+        self
     }
 
     /// Add one bounded recovery note without exposing file contents.
@@ -393,7 +443,7 @@ impl HashlineRuntime {
     }
 
     /// Parse a strict edit request through the private native boundary.
-    pub(super) fn parse_edit_request(&self, input: Value) -> Result<EditRequest, HashlineError> {
+    pub(super) fn parse_edit_request(&self, input: &Value) -> Result<EditRequest, HashlineError> {
         let _ = self;
         apply::parse_edit_request(input).map(|inner| EditRequest { inner })
     }

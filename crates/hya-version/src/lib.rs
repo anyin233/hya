@@ -9,3 +9,7 @@ pub const FRONTEND_VERSION: &str = VERSION;
 
 /// The minimum backend version required by the current frontend.
 pub const MINIMUM_BACKEND_VERSION: &str = env!("HYA_MINIMUM_BACKEND_VERSION");
+
+/// `rustc -V` of the compiler that built this crate. Rust has no stable ABI
+/// across compilers, so natively loaded libraries must report the same one.
+pub const RUSTC: &str = env!("HYA_RUSTC");

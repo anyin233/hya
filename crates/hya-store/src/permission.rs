@@ -24,6 +24,7 @@ pub struct SavedPermission {
 impl SessionStore {
     /// Insert a grant if the id is new (`INSERT OR IGNORE`); no-op on conflict.
     pub async fn save_permission(&self, entry: &SavedPermission) -> Result<(), StoreError> {
+        let mut tx = self.begin_transaction().await?;
         sqlx::query(
             "INSERT OR IGNORE INTO saved_permission \
              (id, project_id, action, resource, time_created) VALUES (?, ?, ?, ?, ?)",
@@ -33,8 +34,9 @@ impl SessionStore {
         .bind(&entry.action)
         .bind(&entry.resource)
         .bind(entry.time_created_ms.unwrap_or_else(now_ms))
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -43,6 +45,7 @@ impl SessionStore {
         &self,
         project_id: Option<&str>,
     ) -> Result<Vec<SavedPermission>, StoreError> {
+        let pool = self.read_pool_checked()?;
         let rows =
             match project_id {
                 Some(project_id) => sqlx::query(
@@ -50,13 +53,13 @@ impl SessionStore {
                      WHERE project_id = ? ORDER BY id",
                 )
                 .bind(project_id)
-                .fetch_all(&self.pool)
+                .fetch_all(pool)
                 .await?,
                 None => sqlx::query(
                     "SELECT id, project_id, action, resource, time_created FROM saved_permission \
                      ORDER BY id",
                 )
-                .fetch_all(&self.pool)
+                .fetch_all(pool)
                 .await?,
             };
         rows.into_iter().map(saved_permission).collect()
@@ -69,17 +72,19 @@ impl SessionStore {
              WHERE id = ?",
         )
         .bind(id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.read_pool_checked()?)
         .await?;
         row.map(saved_permission).transpose()
     }
 
     /// Delete a grant by id (no error if the row is already absent).
     pub async fn remove_saved_permission(&self, id: &str) -> Result<(), StoreError> {
+        let mut tx = self.begin_transaction().await?;
         sqlx::query("DELETE FROM saved_permission WHERE id = ?")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 }

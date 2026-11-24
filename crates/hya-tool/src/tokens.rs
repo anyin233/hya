@@ -7,8 +7,12 @@
 
 use std::sync::Arc;
 
-use hya_proto::context::{ReasoningReplayPolicy, current_turn_start};
-use hya_proto::{Message, Part, ToolPartState, ToolSchema};
+use hya_proto::context::{
+    ReasoningReplayPolicy, ToolImageReplay, current_turn_start, tool_attachment_limit_notice,
+    tool_result_text,
+};
+use hya_proto::{Message, Part, PartId, ToolPartState, ToolSchema};
+use serde_json::Value;
 
 /// Counts tokens for a text fragment.
 ///
@@ -71,6 +75,9 @@ const CJK_START: u32 = 0x2E80;
 /// regime of base64 attachments, digests and minified bundles arriving through
 /// tool output. Charging those the prose rate under-counted them fourfold.
 const LONG_RUN: u64 = 12;
+
+// Claude's high-resolution vision tier caps an image at 4,784 tokens, rounded up.
+const IMAGE_TOKENS: usize = 5_000;
 
 /// Structure-aware token estimator calibrated against `o200k_base`.
 ///
@@ -212,6 +219,7 @@ const PLAUSIBLE_MAX_RATIO: f64 = 2.0;
 pub struct TokenAccounting {
     mode: TokenAccountingMode,
     tokenizer: Arc<dyn Tokenizer>,
+    sends_tool_images: bool,
 }
 
 impl Default for TokenAccounting {
@@ -236,6 +244,16 @@ impl TokenAccounting {
         Self {
             mode,
             tokenizer: Arc::new(CalibratedTokenizer),
+            sends_tool_images: true,
+        }
+    }
+
+    /// Estimate tool results using the route's image-attachment capability.
+    #[must_use]
+    pub fn with_tool_images(&self, sends_tool_images: bool) -> Self {
+        Self {
+            sends_tool_images,
+            ..self.clone()
         }
     }
 
@@ -301,6 +319,7 @@ impl TokenAccounting {
         policy: Option<ReasoningReplayPolicy>,
     ) -> usize {
         let turn_start = current_turn_start(messages);
+        let images = ToolImageReplay::new(messages, self.sends_tool_images);
         let replayed = |index: usize, part: &Part| {
             policy.is_none_or(|policy| policy.replays(turn_start, index, part))
         };
@@ -321,7 +340,7 @@ impl TokenAccounting {
                         ) => provider_data
                             .as_ref()
                             .map_or(0, |value| self.estimate_json(value)),
-                        _ => self.estimate_part(part),
+                        _ => self.estimate_part(part, &images),
                     })
                     .sum(),
                 Message::System { content, .. } => self.tokenizer.count_text(content),
@@ -400,11 +419,7 @@ impl TokenAccounting {
     }
 
     /// Estimated tokens for one non-reasoning-filtered part.
-    ///
-    /// Tool input and output dominate a tool-heavy transcript, so they are
-    /// counted rather than skipped. Media payloads are base64 blobs whose
-    /// byte length, not token structure, is the useful signal.
-    fn estimate_part(&self, part: &Part) -> usize {
+    fn estimate_part(&self, part: &Part, images: &ToolImageReplay<'_>) -> usize {
         match part {
             Part::Reasoning {
                 text,
@@ -417,15 +432,25 @@ impl TokenAccounting {
                         .map_or(0, |value| self.estimate_json(value))
             }
             Part::Text { text, .. } => self.tokenizer.count_text(text),
+            Part::Media { media_type, .. }
+                if media_type
+                    .get(..6)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("image/")) =>
+            {
+                IMAGE_TOKENS
+            }
             Part::Media { data, .. } => data.len() / 4,
-            Part::Tool { name, state, .. } => {
+            Part::Tool {
+                id, name, state, ..
+            } => {
                 self.tokenizer.count_text(name.as_str())
                     + match state {
                         ToolPartState::Pending { input } | ToolPartState::Running { input } => {
                             self.estimate_json(input)
                         }
                         ToolPartState::Completed { input, output, .. } => {
-                            self.estimate_json(input) + self.estimate_json(output)
+                            self.estimate_json(input)
+                                + self.estimate_tool_output(id, output, images)
                         }
                         ToolPartState::Error {
                             input,
@@ -442,8 +467,27 @@ impl TokenAccounting {
         }
     }
 
+    fn estimate_tool_output(
+        &self,
+        id: &PartId,
+        output: &Value,
+        images: &ToolImageReplay<'_>,
+    ) -> usize {
+        let text = tool_result_text(output);
+        let attachments = images
+            .attachments(id, output, |_, _| true)
+            .map(|(_, _, notice)| match notice {
+                Some(notice) => self.tokenizer.count_text(&notice),
+                None => IMAGE_TOKENS,
+            })
+            .sum::<usize>();
+        let limit_notice =
+            tool_attachment_limit_notice(output).map_or(0, |text| self.tokenizer.count_text(text));
+        self.tokenizer.count_text(&text) + attachments + limit_notice
+    }
+
     /// Estimated tokens for a JSON value as the provider will see it.
-    fn estimate_json(&self, value: &serde_json::Value) -> usize {
+    fn estimate_json(&self, value: &Value) -> usize {
         match value.as_str() {
             Some(text) => self.tokenizer.count_text(text),
             None => self.tokenizer.count_text(&value.to_string()),
@@ -472,4 +516,185 @@ fn last_reported_usage(messages: &[Message]) -> Option<(usize, usize)> {
         let reported = usize::try_from(usage.prompt()).unwrap_or(usize::MAX);
         Some((index, reported))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hya_proto::{MessageId, ToolCallId};
+    use serde_json::json;
+
+    /// Estimate one message; an assistant message's parts are its last step.
+    fn estimate(parts: Vec<Part>, user: bool, sends_tool_images: bool) -> usize {
+        if user {
+            estimate_message(
+                Message::User {
+                    id: MessageId::new(),
+                    parts,
+                },
+                sends_tool_images,
+            )
+        } else {
+            estimate_message(assistant(parts, 0), sends_tool_images)
+        }
+    }
+
+    fn assistant(parts: Vec<Part>, last_step_start: usize) -> Message {
+        Message::Assistant {
+            id: MessageId::new(),
+            agent: "agent".into(),
+            model: "model".into(),
+            parts,
+            finish: None,
+            tokens: None,
+            last_round: None,
+            last_step_start: Some(last_step_start),
+        }
+    }
+
+    fn estimate_message(message: Message, sends_tool_images: bool) -> usize {
+        TokenAccounting::default()
+            .with_tool_images(sends_tool_images)
+            .estimate_request(&[message], None, &[], ReasoningReplayPolicy::None)
+    }
+
+    fn tool(output: Value) -> Part {
+        Part::Tool {
+            id: PartId::new(),
+            call_id: ToolCallId::new(),
+            name: "example".into(),
+            state: ToolPartState::Completed {
+                input: json!({}),
+                output,
+                time_ms: 0,
+            },
+            provider_data: None,
+        }
+    }
+
+    fn image_result(url: &str) -> Value {
+        json!({
+            "output": "Image file.",
+            "attachments": [{"type": "file", "mime": "image/png", "url": url}],
+        })
+    }
+
+    #[test]
+    fn request_estimate_charges_images_separately_from_text() {
+        let media = |data| {
+            vec![Part::Media {
+                id: PartId::new(),
+                media_type: "image/png".into(),
+                data,
+                filename: None,
+            }]
+        };
+
+        let tiny = "data:image/png;base64,AAAA";
+        let blob = "AbCD".repeat(128 * 1024);
+        let large = format!("data:image/png;base64,{blob}");
+        let attached = estimate(vec![tool(image_result(&large))], false, true);
+        assert!(
+            (IMAGE_TOKENS..IMAGE_TOKENS + 100).contains(&attached),
+            "large attachment: {attached}",
+        );
+        assert_eq!(
+            attached,
+            estimate(vec![tool(image_result(tiny))], false, true)
+        );
+        assert_eq!(estimate(media(large.clone()), true, true), IMAGE_TOKENS);
+        assert_eq!(estimate(media(tiny.into()), true, true), IMAGE_TOKENS);
+
+        let hidden = estimate(vec![tool(image_result(&large))], false, false);
+        assert_eq!(
+            hidden,
+            estimate(vec![tool(image_result(tiny))], false, false)
+        );
+        assert!(hidden < 100, "omission notice: {hidden}");
+
+        let fallback = || {
+            json!({
+                "attachments": [{"type": "file", "mime": "image/png", "url": large}],
+            })
+        };
+        let serialized = estimate(vec![tool(fallback())], false, false);
+        assert!(serialized > blob.len() / 4, "JSON fallback: {serialized}");
+        assert!(
+            (serialized + IMAGE_TOKENS - 100..=serialized + IMAGE_TOKENS).contains(&estimate(
+                vec![tool(fallback())],
+                false,
+                true
+            ))
+        );
+
+        for output in [json!({"output": blob}), json!({"output": large})] {
+            let tokens = estimate(vec![tool(output)], false, true);
+            assert!(tokens > blob.len() / 4, "large tool text: {tokens}");
+        }
+
+        // The encoder validates the payload. The estimate prices the candidate as an image.
+        let mismatched = image_result(&format!("data:image/jpeg;base64,{blob}"));
+        assert_eq!(estimate(vec![tool(mismatched)], false, true), attached);
+    }
+
+    #[test]
+    fn request_estimate_uses_text_for_a_result_with_a_pdf_attachment() {
+        let text = "PDF file.";
+        let pdf = json!({
+            "output": text,
+            "attachments": [{
+                "type": "file",
+                "mime": "application/pdf",
+                "url": format!("data:application/pdf;base64,{}", "AbCD".repeat(128 * 1024)),
+            }],
+        });
+        let text_only = json!({"output": text});
+        assert_eq!(
+            estimate(vec![tool(pdf)], false, true),
+            estimate(vec![tool(text_only)], false, true),
+        );
+    }
+
+    #[test]
+    fn request_estimate_counts_an_image_only_in_the_request_after_its_round() {
+        let text = estimate(vec![tool(json!({"output": "Image file."}))], false, true);
+        let small = "data:image/png;base64,AAAA";
+        let image = || tool(image_result(small));
+        assert_eq!(estimate(vec![image()], false, true), text + IMAGE_TOKENS);
+
+        // The request after a later round (here the model's text) carries the
+        // notice instead.
+        let answer = Part::Text {
+            id: PartId::new(),
+            text: "A board.".into(),
+        };
+        let not_attached = CalibratedTokenizer.count_text(
+            "\n\n[An image is sent to you only in the request right after the call \
+             that produced it; later requests, like this one, carry this note \
+             instead. This is the normal course, not a failure. To look at the \
+             image of this result (image/png), make the call again (for a file: read \
+             it again).]",
+        );
+        assert_eq!(
+            estimate_message(assistant(vec![image(), answer], 1), true),
+            text + not_attached + CalibratedTokenizer.count_text("A board."),
+        );
+
+        // One round's images share a 2 MiB budget; the first is always counted.
+        let not_fitted = CalibratedTokenizer.count_text(
+            "\n\n[The image attached to this result (image/png) was not shown: this \
+             step's images exceed what one request can carry. Read it again in a \
+             later step, fewer images at a time.]",
+        );
+        let fits = 2 * 1024 * 1024 - small.len();
+        for (second, expected) in [
+            (fits, 2 * text + 2 * IMAGE_TOKENS),
+            (fits + 4, 2 * text + IMAGE_TOKENS + not_fitted),
+        ] {
+            let second = tool(image_result(&"A".repeat(second)));
+            assert_eq!(estimate(vec![image(), second], false, true), expected);
+        }
+        let oversized = tool(image_result(&"A".repeat(3 * 1024 * 1024)));
+        assert_eq!(estimate(vec![oversized], false, true), text + IMAGE_TOKENS);
+    }
 }

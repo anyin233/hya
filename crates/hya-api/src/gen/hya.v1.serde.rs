@@ -20181,6 +20181,114 @@ impl<'de> serde::Deserialize<'de> for PartCompleted {
         deserializer.deserialize_struct("hya.v1.PartCompleted", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for PartDeleted {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.message.is_empty() {
+            len += 1;
+        }
+        if !self.part.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.PartDeleted", len)?;
+        if !self.message.is_empty() {
+            struct_ser.serialize_field("message", &self.message)?;
+        }
+        if !self.part.is_empty() {
+            struct_ser.serialize_field("part", &self.part)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PartDeleted {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "message",
+            "part",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Message,
+            Part,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "message" => Ok(GeneratedField::Message),
+                            "part" => Ok(GeneratedField::Part),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PartDeleted;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.PartDeleted")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PartDeleted, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut message__ = None;
+                let mut part__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Message => {
+                            if message__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("message"));
+                            }
+                            message__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Part => {
+                            if part__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("part"));
+                            }
+                            part__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(PartDeleted {
+                    message: message__.unwrap_or_default(),
+                    part: part__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.PartDeleted", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for PartInfo {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -30596,6 +30704,9 @@ impl serde::Serialize for StreamEvent {
                 stream_event::Payload::MemberLifecycleChanged(v) => {
                     struct_ser.serialize_field("memberLifecycleChanged", v)?;
                 }
+                stream_event::Payload::PartDeleted(v) => {
+                    struct_ser.serialize_field("partDeleted", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -30662,6 +30773,8 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
             "projectsUpdated",
             "member_lifecycle_changed",
             "memberLifecycleChanged",
+            "part_deleted",
+            "partDeleted",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -30694,6 +30807,7 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
             ServerStopping,
             ProjectsUpdated,
             MemberLifecycleChanged,
+            PartDeleted,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -30743,6 +30857,7 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
                             "serverStopping" | "server_stopping" => Ok(GeneratedField::ServerStopping),
                             "projectsUpdated" | "projects_updated" => Ok(GeneratedField::ProjectsUpdated),
                             "memberLifecycleChanged" | "member_lifecycle_changed" => Ok(GeneratedField::MemberLifecycleChanged),
+                            "partDeleted" | "part_deleted" => Ok(GeneratedField::PartDeleted),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -30961,6 +31076,13 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
                                 return Err(serde::de::Error::duplicate_field("memberLifecycleChanged"));
                             }
                             payload__ = map_.next_value::<::std::option::Option<_>>()?.map(stream_event::Payload::MemberLifecycleChanged)
+;
+                        }
+                        GeneratedField::PartDeleted => {
+                            if payload__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partDeleted"));
+                            }
+                            payload__ = map_.next_value::<::std::option::Option<_>>()?.map(stream_event::Payload::PartDeleted)
 ;
                         }
                     }

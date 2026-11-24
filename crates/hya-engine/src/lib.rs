@@ -106,8 +106,8 @@ pub use category::{
 };
 pub use channel_policy::{AGENT_CHANNELS_PRESET_ID, ChannelPolicy};
 pub use compaction::{
-    CompactionConfig, CompactionRung, ModelSummarizer, SummarizeOptions, Summarizer,
-    UsageCollector, handoff_request_messages, parse_method_order,
+    CompactionConfig, ModelSummarizer, SummarizeOptions, Summarizer, UsageCollector,
+    handoff_request_messages,
 };
 pub use completion::{GateOutcome, IterationGate, validate_goal_condition};
 pub use completion::{

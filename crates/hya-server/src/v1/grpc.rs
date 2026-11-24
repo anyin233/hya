@@ -3,6 +3,9 @@
 //! dual-transport parity holds by construction. Streaming rpcs share the
 //! engine-bus producers with the SSE handlers.
 
+// tonic fixes `Status` as the error type of every rpc.
+#![allow(clippy::result_large_err)]
+
 use std::collections::BTreeMap;
 use std::pin::Pin;
 
@@ -108,7 +111,6 @@ impl V1Grpc {
     /// carrying the gRPC call's context (`ctx`): its origin (a relay-origin
     /// call stays one, so the relay refusals hold), its peer address, and
     /// its admitted host and browser headers.
-    #[allow(clippy::result_large_err)]
     async fn dispatch<Req, Resp>(
         &self,
         ctx: &Call,
@@ -156,7 +158,6 @@ impl V1Grpc {
             .map_err(|error| Status::internal(format!("decode response: {error}")))
     }
 
-    #[allow(clippy::result_large_err)]
     async fn get<Req, Resp>(&self, ctx: &Call, path: &str, request: &Req) -> Result<Resp, Status>
     where
         Req: Serialize,
@@ -166,7 +167,6 @@ impl V1Grpc {
         self.dispatch(ctx, "GET", path, query, request).await
     }
 
-    #[allow(clippy::result_large_err)]
     async fn post<Req, Resp>(&self, ctx: &Call, path: &str, request: &Req) -> Result<Resp, Status>
     where
         Req: Serialize,
@@ -317,7 +317,6 @@ fn field(request: &impl Serialize, name: &str) -> String {
         .unwrap_or_default()
 }
 
-#[allow(clippy::result_large_err)]
 fn into_response<T>(message: T) -> Result<GrpcResponse<T>, Status> {
     Ok(GrpcResponse::new(message))
 }
@@ -329,7 +328,6 @@ impl V1Grpc {
     /// [`super::bundle_api::invoke`] directly instead of decoding an HTTP
     /// response: a process status (2xx or not) is an OK gRPC reply carrying
     /// `status`, and only host-side failures become a gRPC error.
-    #[allow(clippy::result_large_err)]
     async fn invoke_bundle_api(
         &self,
         call: Result<hya_engine::BundleApiCall, super::V1Error>,
@@ -593,7 +591,6 @@ impl V1Grpc {
 /// Refuse a relay-control call that did not come from the local owner:
 /// through the relay, from a non-loopback peer, or from an unknown one
 /// (fails closed).
-#[allow(clippy::result_large_err)]
 fn require_loopback_peer(ctx: &Call) -> Result<(), Status> {
     if ctx.relay {
         return Err(Status::permission_denied(
@@ -612,7 +609,6 @@ fn require_loopback_peer(ctx: &Call) -> Result<(), Status> {
 }
 
 impl V1Grpc {
-    #[allow(clippy::result_large_err)]
     async fn relay_post<Req, Resp>(
         &self,
         path: &str,
@@ -627,7 +623,6 @@ impl V1Grpc {
         into_response(self.post(&ctx, path, &inner).await?)
     }
 
-    #[allow(clippy::result_large_err)]
     async fn relay_get<Req, Resp>(
         &self,
         path: &str,

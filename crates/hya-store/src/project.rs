@@ -136,7 +136,7 @@ impl SessionStore {
         let roots = normalize_roots(roots)?;
         let id = ProjectId::new();
         let now = now_millis();
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         sqlx::query(
             "INSERT INTO project (id, name, created_at, updated_at, archived) \
              VALUES (?, ?, ?, ?, 0)",
@@ -164,7 +164,7 @@ impl SessionStore {
     /// # Errors
     /// SQLite failures or corrupt rows ([`StoreError::ProjectData`]).
     pub async fn get_project(&self, id: ProjectId) -> Result<Option<Project>, StoreError> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.read_pool_checked()?.acquire().await?;
         load_project(&mut conn, id).await
     }
 
@@ -174,6 +174,7 @@ impl SessionStore {
     /// # Errors
     /// SQLite failures or corrupt rows ([`StoreError::ProjectData`]).
     pub async fn list_projects(&self) -> Result<Vec<ProjectSummary>, StoreError> {
+        let pool = self.read_pool_checked()?;
         let rows = sqlx::query(&format!(
             "SELECT p.id, p.name, p.created_at, p.updated_at, p.archived, \
              (SELECT count(*) {}) AS session_count \
@@ -181,14 +182,14 @@ impl SessionStore {
              ORDER BY p.updated_at DESC, p.id DESC",
             live_root_sessions("p.id")
         ))
-        .fetch_all(&self.pool)
+        .fetch_all(pool)
         .await?;
         let root_rows = sqlx::query(
             "SELECT r.project_id, r.path FROM project_root r \
              JOIN project p ON p.id = r.project_id WHERE p.archived = 0 \
              ORDER BY r.project_id, r.ord",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(pool)
         .await?;
         let mut roots: HashMap<String, Vec<String>> = HashMap::new();
         for row in root_rows {
@@ -227,7 +228,7 @@ impl SessionStore {
     ) -> Result<Project, StoreError> {
         let name = name.map(validate_name).transpose()?;
         let roots = roots.map(normalize_roots).transpose()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         if name.is_some() || roots.is_some() {
             let updated = sqlx::query(
                 "UPDATE project SET name = coalesce(?, name), \
@@ -266,7 +267,7 @@ impl SessionStore {
         let count: i64 =
             sqlx::query_scalar(&format!("SELECT count(*) {}", live_root_sessions("?")))
                 .bind(id.to_string())
-                .fetch_one(&self.pool)
+                .fetch_one(self.read_pool_checked()?)
                 .await?;
         Ok(count.max(0) as u64)
     }
@@ -284,7 +285,7 @@ impl SessionStore {
         let keys: Vec<Vec<u8>> =
             sqlx::query_scalar(&format!("SELECT s.id {}", live_root_sessions("?")))
                 .bind(id.to_string())
-                .fetch_all(&self.pool)
+                .fetch_all(self.read_pool_checked()?)
                 .await?;
         let mut live = 0_u64;
         for key in keys {
@@ -302,7 +303,7 @@ impl SessionStore {
                 sessions: live,
             });
         }
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         let deleted = sqlx::query("DELETE FROM project WHERE id = ?")
             .bind(id.to_string())
             .execute(&mut *tx)
@@ -334,7 +335,7 @@ impl SessionStore {
             "SELECT r.project_id, r.path, p.updated_at FROM project_root r \
              JOIN project p ON p.id = r.project_id WHERE p.archived = 0",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.read_pool_checked()?)
         .await?;
         let mut best: Option<(usize, i64, String)> = None;
         for row in rows {
@@ -376,7 +377,7 @@ impl SessionStore {
     /// for `path`, or SQLite failures.
     pub async fn ensure_project_for_path(&self, path: &str) -> Result<(Project, bool), StoreError> {
         let path = normalize_project_path(path.trim())?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.begin_transaction().await?;
         if let Some(project) = resolve_project_by_path_in_tx(&mut tx, &path).await? {
             tx.commit().await?;
             return Ok((project, false));
@@ -417,7 +418,7 @@ impl SessionStore {
 /// transaction so [`SessionStore::ensure_project_for_path`] sees a consistent
 /// snapshot alongside its create-if-missing insert.
 async fn resolve_project_by_path_in_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut crate::StoreTransaction<'_>,
     path: &str,
 ) -> Result<Option<Project>, StoreError> {
     let path = Path::new(path);
@@ -450,7 +451,7 @@ async fn resolve_project_by_path_in_tx(
 }
 
 async fn insert_roots(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut crate::StoreTransaction<'_>,
     id: ProjectId,
     roots: &[String],
 ) -> Result<(), StoreError> {

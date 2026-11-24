@@ -6,6 +6,7 @@
 //! from the turn's captured TurnBinding catalog. Bundle model/category defaults
 //! and prepared workdirs are not per-turn overrides; session model/workdir win.
 
+#[path = "it/support/mod.rs"]
 mod support;
 
 use std::ffi::OsString;
@@ -915,8 +916,10 @@ async fn root_turn_bundle_prompt_replaces_base_and_sees_no_workdir_skill() {
     let requests = provider.requests.lock().unwrap();
     let system = requests[0].system.as_deref().expect("system prompt");
     assert!(
-        system.starts_with(BUNDLE_PROMPT),
-        "non-empty Bundle prompt replaces the base once: {system}"
+        system
+            .split_once("</cwd>\n\n")
+            .is_some_and(|(_, agent)| agent.starts_with(BUNDLE_PROMPT)),
+        "non-empty Bundle prompt follows the kernel prompt and replaces the base once: {system}"
     );
     assert!(
         !system.contains(BASE_MARKER),

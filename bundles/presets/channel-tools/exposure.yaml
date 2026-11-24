@@ -3,9 +3,9 @@ identity: hya/channel-tools
 protected_names: []
 schemes: []
 tools:
-  - { name: send, schema_version: 1, permission: tool }
-  - { name: list_channel, schema_version: 1, permission: read_only }
-  - { name: report, schema_version: 1, permission: tool }
+  - { name: send, schema_version: 1, permission: tool, prompt: send mail to a channel or agent }
+  - { name: list_channel, schema_version: 1, permission: read_only, prompt: list your channels with unread counts and team status }
+  - { name: report, schema_version: 1, permission: tool, prompt: finish your subagent task with its result }
   # Replaces extended-tools' `wait` whenever both families are loaded: this
   # one also wakes on mail for the caller. Declared, never implied by order.
-  - { name: wait, schema_version: 1, permission: read_only, overrides: hya/extended-tools }
+  - { name: wait, schema_version: 1, permission: read_only, overrides: hya/extended-tools, prompt: block until your subagents finish or new mail arrives }

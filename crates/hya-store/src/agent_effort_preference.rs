@@ -27,7 +27,7 @@ impl SessionStore {
         let rows = sqlx::query(
             "SELECT agent_id, effort, updated_at FROM agent_effort_preference ORDER BY agent_id",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.read_pool_checked()?)
         .await?;
         rows.into_iter().map(decode_preference).collect()
     }
@@ -41,7 +41,7 @@ impl SessionStore {
             "SELECT agent_id, effort, updated_at FROM agent_effort_preference WHERE agent_id = ?",
         )
         .bind(agent_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.read_pool_checked()?)
         .await?;
         row.map(decode_preference).transpose()
     }
@@ -56,7 +56,7 @@ impl SessionStore {
     ) -> Result<(), StoreError> {
         validate(agent_id, effort)?;
         self.require_runtime_owner(owner)?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         self.require_runtime_owner(owner)?;
         sqlx::query(
             "INSERT INTO agent_effort_preference (agent_id, effort, updated_at) VALUES (?, ?, ?)
@@ -80,7 +80,7 @@ impl SessionStore {
     ) -> Result<(), StoreError> {
         validate(agent_id, "clear")?;
         self.require_runtime_owner(owner)?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_transaction().await?;
         self.require_runtime_owner(owner)?;
         sqlx::query("DELETE FROM agent_effort_preference WHERE agent_id = ?")
             .bind(agent_id)

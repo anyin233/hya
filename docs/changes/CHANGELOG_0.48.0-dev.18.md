@@ -1,0 +1,3 @@
+# 0.48.0-dev.18
+
+- **The model now sees how a bare `bash` call ended.** A tool result reaches the model as its `output` string only, so the exit code and the notices that a command was left running or was stopped — stored in other fields of the result — never reached it: models restarted commands that were still running and took an unfinished command for one without output. The `output` of every `bash` result now ends with one status line: `[exit code: N]`, `[still running: …]` (with the process group and the file that receives the output), `[stopped: …]` or `[not started: …]`. The structured fields are unchanged.

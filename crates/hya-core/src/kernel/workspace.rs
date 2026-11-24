@@ -1,11 +1,14 @@
 //! Per-runtime native watches for the session's durable workspace observations.
+use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use hya_proto::{Projection, SessionId, event::FileStamp};
 use hya_store::SessionStore;
 
-use super::file_snapshot;
+use super::{Emit, file_snapshot};
+use crate::error::CoreError;
 
 #[cfg(target_os = "linux")]
 mod native;
@@ -13,7 +16,7 @@ mod native;
 use {
     native::{Cut, Filter, Monitor, Snapshot, lock},
     std::{
-        collections::{BTreeMap, VecDeque},
+        collections::VecDeque,
         fs, io,
         path::PathBuf,
         sync::Mutex,
@@ -50,6 +53,15 @@ pub(super) struct Batch {
 }
 
 impl Batch {
+    /// Whether a native watch produced this batch.
+    #[cfg(target_os = "linux")]
+    fn native(&self) -> bool {
+        self.cut.is_some()
+    }
+    #[cfg(not(target_os = "linux"))]
+    fn native(&self) -> bool {
+        false
+    }
     pub fn committed(self) {
         #[cfg(target_os = "linux")]
         if let Some(cut) = self.cut {
@@ -64,12 +76,62 @@ impl Batch {
     }
 }
 
+fn known(
+    files: &BTreeMap<String, FileStamp>,
+    pending: BTreeMap<String, FileStamp>,
+) -> Cow<'_, BTreeMap<String, FileStamp>> {
+    if pending.is_empty() {
+        return Cow::Borrowed(files);
+    }
+    let mut known = files.clone();
+    known.extend(pending);
+    Cow::Owned(known)
+}
+
 impl WorkspaceWatches {
+    /// Reconcile `session`'s workspace record with its root's native watch
+    /// outside a round, as a round does, appending any observation through
+    /// `emit`. `pending` holds stamps the running tool call has observed but
+    /// not yet appended, so they are not reported as external changes.
+    ///
+    /// Returns the session's file revision afterwards, or `None` when the root
+    /// has no native watch: the record then cannot see new files.
+    ///
+    /// # Errors
+    /// Store or emit failures.
+    pub async fn reconcile(
+        &self,
+        store: &SessionStore,
+        emit: &dyn Emit,
+        session: SessionId,
+        pending: BTreeMap<String, FileStamp>,
+    ) -> Result<Option<u64>, CoreError> {
+        let projection = store.read_projection_shared(session).await?;
+        let mut batch = self
+            .changes(store, session, projection, pending, true)
+            .await;
+        let native = batch.native();
+        if let Some(event) =
+            file_snapshot::observation(session, true, std::mem::take(&mut batch.files))
+        {
+            emit.emit(session, vec![event]).await?;
+        }
+        let revision = store
+            .read_projection_shared(session)
+            .await?
+            .session
+            .file_revision;
+        batch.committed();
+        Ok(native.then_some(revision))
+    }
+
+    /// `pending` stamps take precedence over the projection's known files.
     pub(super) async fn changes(
         &self,
         store: &SessionStore,
         session: SessionId,
         projection: Arc<Projection>,
+        pending: BTreeMap<String, FileStamp>,
         inventory: bool,
     ) -> Batch {
         #[cfg(target_os = "linux")]
@@ -78,6 +140,7 @@ impl WorkspaceWatches {
             let watches = self.clone();
             let db = store.paths().cloned();
             let view = projection.clone();
+            let overlay = pending.clone();
             let result = tokio::task::spawn_blocking(move || {
                 let path = path.canonicalize()?;
                 let root = watches.root(path, db.as_ref());
@@ -88,7 +151,8 @@ impl WorkspaceWatches {
                     // A standalone shell turn cannot attribute an entire cold baseline to its command.
                     return Ok::<_, io::Error>(None);
                 }
-                root.collect(snapshot, &view.session.files).map(Some)
+                root.collect(snapshot, &known(&view.session.files, overlay))
+                    .map(Some)
             })
             .await;
             match result {
@@ -103,7 +167,8 @@ impl WorkspaceWatches {
         #[cfg(not(target_os = "linux"))]
         let _ = (store, session, inventory);
         Batch {
-            files: file_snapshot::external_changes(&projection.session.files).await,
+            files: file_snapshot::external_changes(&known(&projection.session.files, pending))
+                .await,
             #[cfg(target_os = "linux")]
             cut: None,
         }

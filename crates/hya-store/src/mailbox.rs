@@ -502,7 +502,13 @@ impl SessionStore {
             Event::AgentActivityChanged {
                 session: root,
                 handle: handle.to_string(),
-                status: RosterStatus::Failed,
+                status: match member_status {
+                    MemberRunStatus::Done => RosterStatus::Done,
+                    MemberRunStatus::Spawning
+                    | MemberRunStatus::Running
+                    | MemberRunStatus::Failed
+                    | MemberRunStatus::Cancelled => RosterStatus::Failed,
+                },
                 current_task: Some(reason.to_string()),
             },
         )
@@ -630,7 +636,7 @@ fn resident_effect_terminal_events(
 
 async fn append_resident_effects_in_transaction(
     cache: &ProjectionCache,
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut crate::StoreTransaction<'_>,
     actor: SessionId,
     reason: &str,
 ) -> Result<Vec<Envelope>, StoreError> {
@@ -647,7 +653,7 @@ async fn append_resident_effects_in_transaction(
 /// started its first turn. The finalizer's claim/archive fence owns idempotency.
 async fn close_parent_member_row_in_transaction(
     cache: &ProjectionCache,
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut crate::StoreTransaction<'_>,
     actor: SessionId,
     status: MemberRunStatus,
     reason: &str,
@@ -675,7 +681,7 @@ async fn close_parent_member_row_in_transaction(
 
 async fn released_resident_matches(
     cache: &ProjectionCache,
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut crate::StoreTransaction<'_>,
     claim: &ActorClaim,
     root: SessionId,
     handle: &str,
@@ -704,7 +710,7 @@ async fn released_resident_matches(
         || projection.team.roster.get(handle).is_some_and(|entry| {
             entry.session == claim.actor_id
                 && entry.mode == SubagentMode::Resident
-                && entry.status == RosterStatus::Failed
+                && matches!(entry.status, RosterStatus::Done | RosterStatus::Failed)
         }))
 }
 
@@ -716,7 +722,7 @@ async fn released_resident_matches(
 /// ordered log independently of who happened to be alive at post time.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn append_resolved_channel_mail(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut crate::StoreTransaction<'_>,
     root: SessionId,
     from: String,
     key: String,
@@ -830,7 +836,7 @@ pub(crate) async fn append_resolved_channel_mail(
 }
 
 async fn has_active_claim(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut crate::StoreTransaction<'_>,
     actor_id: SessionId,
 ) -> Result<bool, StoreError> {
     Ok(sqlx::query(
@@ -843,7 +849,7 @@ async fn has_active_claim(
 }
 
 async fn resident_member_is_eligible(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut crate::StoreTransaction<'_>,
     entry: &RosterEntry,
 ) -> Result<bool, StoreError> {
     if !entry.accepts_mail() {

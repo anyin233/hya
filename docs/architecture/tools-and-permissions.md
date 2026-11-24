@@ -65,7 +65,7 @@ stay globally unique inside a registry. `hya-tool` exposes the mechanism in
 | `find` | `{ "pattern": string, "path"?: string }` | `{path, size}` matches (no row cap). |
 | `grep` | `{ "pattern": string, "path"?: string, "glob"?: string, "ignoreCase"?: boolean, "literal"?: boolean, "context"?: integer 0..5, "limit"?: integer 1..200 }` (closed) | Hashline match/context rows, summary, and bounded per-file display metadata. |
 | `bash` | `{ "command": string, "env"?: object<string,string>, "timeout"?: number, "cwd"?: string, "pty"?: boolean }` (closed) | Structured command/output result with exit, timeout, truncation, and artifact metadata. |
-| `webfetch` (`fetch`) | `{ "url": string, "format"?: "text"\|"markdown"\|"html", "timeout"?: number }` | Fetched web content or image attachment. |
+| `webfetch` (`fetch`) | `{ "url": string, "format"?: "text"\|"markdown"\|"html", "timeout"?: number }` | Fetched web content or image attachment. Set `tools.webfetch.enabled: false` to remove the tool and its alias. |
 | `websearch` (`search`) | `{ "query": string, "numResults"?: number, "livecrawl"?: string, "type"?: string, "contextMaxCharacters"?: number }` | Search results from the configured `WebSearchPlane`. |
 | `ask_user` (`question`) | `{ "questions": [{ "question", "header", "options": [{ "label", "description" }], "multiple"?, "allow_custom"?, "default"? }] }` (alias `question`) | Structured per-question answers `{question, answer, cancelled}`; unanswered renders as `Unanswered`; plane failures error. |
 | `lsp` | `{ "operation", "filePath", "line", "character", "query"? }` | LSP provider response. |
@@ -73,7 +73,7 @@ stay globally unique inside a registry. `hya-tool` exposes the mechanism in
 | `list_agents` | (none) | Agent definitions usable by `task`. |
 | `task` | `{ "description", "prompt", "subagent_type"?, "category"?, "model"?, "command"?, "inline_agent"?, "members"?: [...] }` | Non-blocking: per member `{member (handle), session, status: running}`; results arrive as the member's report mail. Every member is a resident actor. |
 | `workflow` | `{ "action"?: "list"\|"info"\|"select"\|"run"\|"state", "name"?: string, "expected_revision"?: string, "inputs"?: object, "run"?: string }` | Shared app-owned Workflow control. |
-| `todo` | `{"ops":[...]}` ([operations](../kernel.md#session-todos)) | Atomic batch with a full rendered session todo list. The kernel executes the tool directly. |
+| `todo` | `{"ops":[...]}` ([operations](../kernel.md#session-todos)) | Every schema-valid operation has an explicit `op` (`add`, `edit`, `status`, or `remove`). Only the decoder accepts compatibility forms with omitted `op` or a status in `op`. Atomic batch with a full rendered session todo list. The kernel executes the tool directly. |
 | `plan_exit` (`plan`) | plan status input | Plan-mode completion signal. |
 | `send` | `{ "channel"?: string, "body": string }` — `#channel`/channel id/handle/`^parent`; omitted = role default | Delivery receipt: group channel = broadcast announcement, DM channel/handle = private mail (archived child revives), default = led unit or parent. `^parent` auto-infers the DM channel minted with the direct parent at registration time (works even when the parent handle is not yet in the roster, and at any depth — it never targets the root); without an existing DM channel the request is rejected. Agent mail persists channel endpoints; only harness notices may persist a handle. |
 | `list_channel` | (none) | The caller's channels: group pipes with can-post flag, DM channels with peer + unread. |
@@ -190,11 +190,14 @@ and Edit diff metadata remain objects, and independent hard limits set explicit
 truncation flags. The envelope is held to `MAX_CODING_ENVELOPE_BYTES = 256 KiB`
 not counting its `attachments` array, which has its own budget,
 `MAX_CODING_ATTACHMENT_BYTES = 2 MiB` serialized: an entry that does not fit is
-dropped whole and `metadata.attachmentsTruncated` is set. A request then sends
-at most 16 MiB of tool-result image data, newest first (see
-[Tool-result images](providers.md#tool-result-images)). No metadata or hook can bypass the final cap. Provider replay
-uses an object's string `output` field when present and falls back to JSON only
-when no such field exists.
+dropped whole and `metadata.attachmentsTruncated` is set. No metadata or hook
+can bypass the tool-result cap.
+[Tool-result images](providers.md#tool-result-images) are sent only in the
+request after the round that read them, up to 2 MiB per round in call order
+(the first always); every other image becomes a notice that tells the model to
+read the file again. Each image costs time and tokens on every request that
+carries it. Provider replay uses an object's string `output` field when present
+and falls back to JSON only when no such field exists.
 
 ## Coding-tool runtime
 
@@ -235,9 +238,24 @@ Read clears the no-op/duplicate marker.
 All coding tools honor `ToolCtx` cancellation. Read and Grep authorize one
 kind-blind external parent resource (the target's lexical parent) before
 metadata, existence, or target-kind probing. Cancellation while waiting for a lock or during I/O
-returns the typed `cancelled` error. Bash cancellation/timeout terminates and
+returns the typed `cancelled` error. Bash cancellation or a terminating timeout kills and
 reaps the complete process group, including a PTY descendant that retains the
 slave after leader exit. File contents never enter logs or error payloads.
+For example, reading a truncated PNG returns `{title, output, metadata}` with
+a decode error in `output`. Read attaches only successfully decoded images.
+PDFs retain their separate attachment handling.
+
+Budgeted Unix non-PTY Bash yields the process group when its requested wait
+or budget/10 limit expires. The wait covers the whole process group, including
+background writers after Bash exits. On Linux, completion includes the last
+worker thread of each descendant and requires two matching scans of the
+remaining zombie process identities. A yielded group is supervised until
+completion, cancellation, or the run deadline. Cancellation and expiry kill
+the group before publishing its exit code. The end cap wins an exact tie
+with the requested wait. The result exposes `stillRunning: true`, numeric
+`pgid`, and string `outputPath` and `exitPath` in metadata. The end-of-budget
+cap terminates the group. See [Budgeted Bash timeouts](../base-tools.md#budgeted-bash-timeouts).
+
 Durable `Event::ToolResult`/`Event::ToolError` and the shared projection remain
 the only result path. Hashline snapshots are process-local and are lost on
 restart; current-file anchor validation still works after restart.
@@ -529,7 +547,7 @@ even inside an already-approved tool call. Canonicalization costs a few
 | `grep` | Search root, file or directory, when outside (kind-blind canonical `<parent>/*`). |
 | `find` | Resolved search root directory when outside (canonical `<root>/*`); asserts `Action::Glob` on the pattern first. |
 | `ls` | Resolved directory when outside (canonical `<dir>/*`), then `Action::Read` on the directory. |
-| `bash` (including hidden `shell`) | **Nothing path-based.** Its `cwd` may be any directory and its command's file effects are not inspected; only `Action::Bash` invocation rules apply. Its output artifacts stay under `<workdir>/.hya/tool-output`. |
+| `bash` (including hidden `shell`) | **Nothing path-based.** Its `cwd` may be any directory and its command's file effects are not inspected; only `Action::Bash` invocation rules apply. Budgeted Unix non-PTY jobs capture output in private temporary directories. Other spill artifacts stay under `<workdir>/.hya/tool-output`. |
 
 ### Per-turn external directories
 

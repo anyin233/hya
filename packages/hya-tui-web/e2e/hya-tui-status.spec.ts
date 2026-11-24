@@ -213,36 +213,43 @@ test.describe("sidebar context and tokens", () => {
   })
 })
 
-test.describe("compaction divider", () => {
-  test.use({ model: { steps: [textStep("First answer before compaction."), textStep("Summary: the user said hi.")] } })
+/** First words of the kernel's Rewrite marker message. */
+const MARKER = "Earlier context was removed by the harness"
 
-  test("/compact shows a manual divider with the folded message count before the summary", async ({ tui, backend }, testInfo) => {
+test.describe("compaction divider", () => {
+  test.use({ model: { steps: [textStep("First answer before compaction.")] } })
+
+  test("/compact shows a manual divider with the folded message count before the rewrite marker", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "hi there")
     await term.waitForText("First answer before compaction.", 20_000)
     await term.waitForIdle()
     await prompt(term, "/compact")
-    await term.waitForText(/── context compacted · \d+ messages? · manual · local summary ──/, 20_000)
+    await term.waitForText(/── context compacted · \d+ messages? · manual · rewrite ──/, 20_000)
+    await term.waitForText(MARKER, 20_000)
+    // A kernel Rewrite keeps the turn's user message: once the transcript is
+    // re-read, the marker sits before it.
+    await expect.poll(async () => (await at(term, MARKER)).row < (await at(term, "First answer before compaction.")).row, { timeout: 20_000 }).toBe(true)
     const divider = await match(term, /── context compacted/)
-    expect(divider.row).toBeGreaterThan((await at(term, "First answer before compaction.")).row)
+    expect(divider.row).toBeLessThan((await at(term, MARKER)).row)
     expect((await term.cell(divider.row, divider.col))?.fg).toBe(colors.muted)
     await term.attach(testInfo, "compacted")
   })
 })
 
 test.describe("compaction divider in history", () => {
-  test.use({ model: { steps: [textStep("First answer before compaction."), textStep("Summary: the user said hi.")] } })
+  test.use({ model: { steps: [textStep("First answer before compaction.")] } })
 
-  /** The divider sits between the folded answer and the summary, exactly once. */
+  /** The divider sits right before the rewrite marker, above the kept turn, exactly once. */
   async function dividerOnce(term: Tui): Promise<void> {
     await term.waitForText(/── context compacted ──/, 20_000)
     await term.waitForText("First answer before compaction.")
     const text = await term.text()
     expect(text.match(/context compacted/g)).toHaveLength(1)
     const divider = await match(term, /── context compacted ──/)
-    expect(divider.row).toBeGreaterThan((await at(term, "First answer before compaction.")).row)
-    expect(divider.row).toBeLessThan((await at(term, "Summary: the user said hi.")).row)
+    expect(divider.row).toBeLessThan((await at(term, MARKER)).row)
+    expect((await at(term, MARKER)).row).toBeLessThan((await at(term, "First answer before compaction.")).row)
     expect((await term.cell(divider.row, divider.col))?.fg).toBe(colors.muted)
   }
 
@@ -253,8 +260,8 @@ test.describe("compaction divider in history", () => {
     await first.waitForText("First answer before compaction.", 20_000)
     await first.waitForIdle()
     await prompt(first, "/compact")
-    await first.waitForText(/── context compacted · \d+ messages? · manual · local summary ──/, 20_000)
-    await first.waitForText("Summary: the user said hi.", 20_000)
+    await first.waitForText(/── context compacted · \d+ messages? · manual · rewrite ──/, 20_000)
+    await first.waitForText(MARKER, 20_000)
     await showStatusView(first)
     const session = await statusSessionId(first)
     await prompt(first, "/exit")
@@ -280,7 +287,7 @@ test.describe("compaction divider in history", () => {
     await first.waitForText("First answer before compaction.", 20_000)
     await first.waitForIdle()
     await prompt(first, "/compact")
-    await first.waitForText("Summary: the user said hi.", 20_000)
+    await first.waitForText(MARKER, 20_000)
     await showStatusView(first)
     const session = await statusSessionId(first)
     await prompt(first, "/exit")

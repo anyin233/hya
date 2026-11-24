@@ -10,7 +10,9 @@ use hya_proto::{
     ToolName,
 };
 
-use crate::{Capabilities, CompletionRequest, EventStream, Provider, ProviderError};
+use crate::{
+    Capabilities, CompletionRequest, EventStream, Provider, ProviderError, ReasoningEffort,
+};
 
 /// One step in a scripted assistant turn materialised as canonical events.
 #[derive(Clone, Debug)]
@@ -38,6 +40,8 @@ pub struct FakeProvider {
     scripts: Vec<Vec<FakeStep>>,
     turn: AtomicUsize,
     max_context: u32,
+    tool_images: bool,
+    reasoning_default: Option<ReasoningEffort>,
     requests: Mutex<Vec<CompletionRequest>>,
 }
 
@@ -58,6 +62,8 @@ impl FakeProvider {
             scripts,
             turn: AtomicUsize::new(0),
             max_context: 200_000,
+            tool_images: false,
+            reasoning_default: None,
             requests: Mutex::new(Vec::new()),
         }
     }
@@ -66,6 +72,21 @@ impl FakeProvider {
     #[must_use]
     pub fn with_max_context(mut self, max_context: u32) -> Self {
         self.max_context = max_context;
+        self
+    }
+
+    /// Advertise support for replaying tool-result images.
+    #[must_use]
+    pub fn with_tool_images(mut self) -> Self {
+        self.tool_images = true;
+        self
+    }
+
+    /// Report `effort` as every model's configured reasoning default and accept
+    /// reasoning on requests.
+    #[must_use]
+    pub fn with_reasoning_default(mut self, effort: ReasoningEffort) -> Self {
+        self.reasoning_default = Some(effort);
         self
     }
 
@@ -150,6 +171,7 @@ impl FakeProvider {
                         call,
                         name: tool,
                         input: input.clone(),
+                        provider_data: None,
                     });
                 }
                 FakeStep::Usage(usage) => merge_tokens(&mut tokens, *usage),
@@ -177,13 +199,23 @@ impl Provider for FakeProvider {
         &self.id
     }
 
+    fn reasoning_default(&self, _model: &ModelRef) -> Option<ReasoningEffort> {
+        self.reasoning_default
+    }
+
     fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
         Some(Capabilities {
             streaming_tool_calls: true,
             usage_reporting: true,
             max_context: self.max_context,
+            image_input: self.tool_images.then_some(true),
+            reasoning_request: self.reasoning_default.is_some(),
             ..Capabilities::default()
         })
+    }
+
+    fn sends_tool_images(&self, caps: &Capabilities) -> bool {
+        caps.image_input == Some(true)
     }
 
     async fn stream(

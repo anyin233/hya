@@ -32,12 +32,13 @@ mod serve;
 mod serve_relay;
 mod sessions_cmd;
 mod startup;
+mod stop_signals;
 mod update_cmd;
 mod workflow_cmd;
 
 pub use hya_app::{auth, config, formatter_config, permission, plugins};
 
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -49,11 +50,12 @@ use hya_engine::{
     GoalEvaluator, HookChain, HookLoopPlanner, HookLoopVerifier, ModelGoalEvaluator, RunOutcome,
     SafetyCaps, TurnBinding, run_goal,
 };
-use hya_proto::{FinishCause, ModelRef, ProjectId, SessionId};
+use hya_proto::{ModelRef, ProjectId, SessionId};
 use hya_store::SessionStore;
 use tokio_util::sync::CancellationToken;
 
 use cli_args::{Cli, Command};
+use stop_signals::{StopSignals, exit_if_stopped, run_until_stopped, start_headless_with_signals};
 
 pub use hya_app::{
     InvocationPolicy, RuntimeConfig, WebSearchConfig, agent_base_with_model, agent_with_model,
@@ -109,6 +111,13 @@ fn state_dir() -> std::path::PathBuf {
     dir
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExecOutput {
+    Transcript,
+    Json,
+    TreeJson,
+}
+
 /// `hya exec` on `db`, respecting the database lock
 /// ([`db_writer`]): through the server that owns a file database, else
 /// in process while holding its lock (in-memory stores are not locked).
@@ -117,12 +126,20 @@ async fn exec_entry(
     model_override: Option<String>,
     db: &str,
     yolo: bool,
-    json: bool,
+    output: ExecOutput,
     pure: bool,
     time_budget: Option<u64>,
 ) -> anyhow::Result<()> {
-    match db_writer::claim(db, "exec").await? {
+    match db_writer::claim_or_memory(db, "exec").await? {
         db_writer::Writer::Server(server) => {
+            if output == ExecOutput::TreeJson {
+                db_writer::exit_unroutable(
+                    "exec",
+                    db,
+                    &server,
+                    "--include-subagents requires an in-process JSON stream",
+                );
+            }
             if pure {
                 db_writer::exit_unroutable(
                     "exec",
@@ -145,13 +162,22 @@ async fn exec_entry(
                     prompt,
                     model: model_override,
                     yolo,
-                    json,
+                    json: output == ExecOutput::Json,
                 },
             )
             .await
         }
         db_writer::Writer::Direct(store) => {
-            cmd_exec(prompt, model_override, store, yolo, json, pure, time_budget).await
+            cmd_exec(
+                prompt,
+                model_override,
+                store,
+                yolo,
+                output,
+                pure,
+                time_budget,
+            )
+            .await
         }
     }
 }
@@ -179,176 +205,147 @@ async fn cmd_exec(
     model_override: Option<String>,
     store: SessionStore,
     yolo: bool,
-    json: bool,
+    output: ExecOutput,
     pure: bool,
     time_budget: Option<u64>,
 ) -> anyhow::Result<()> {
+    let mut signals = StopSignals::install()?;
     if let Some(seconds) = time_budget {
         hya_tool::deadline::install(std::time::Duration::from_secs(seconds));
     }
-    let headless = startup::HeadlessSession::start(store, model_override, yolo, pure, None).await?;
-    let (turn, stop) = headless
-        .run(async move |headless| {
-            let engine = headless.built.engine();
-            let session = headless.session;
-            let agent = &headless.agent;
-            let built = &mut headless.built;
-            // `--json` streams durable envelopes live from the event bus (db
-            // persistence is unchanged and per-event): an abnormally terminated run
-            // still leaves a usable partial trajectory on stdout.
-            let mut json_printer = json.then(|| {
-                let rx = engine.bus().subscribe();
-                let engine_for_stream = engine.clone();
-                let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
-                let task = tokio::spawn(exec_stream::stream_until_done(
+    let exit_store = store.clone();
+    let mut headless =
+        start_headless_with_signals(&mut signals, store, model_override, yolo, pure, None).await?;
+    let body_result: anyhow::Result<(
+        anyhow::Result<hya_proto::FinishReason>,
+        Option<stop_signals::StopSignal>,
+    )> = async {
+        let engine = headless.built.engine();
+        let session = headless.session;
+        let agent = &headless.agent;
+        let built = &mut headless.built;
+        // `--json` streams durable envelopes live from the event bus (db
+        // persistence is unchanged and per-event): an abnormally terminated run
+        // still leaves a usable partial trajectory on stdout.
+        let mut json_printer = (output != ExecOutput::Transcript).then(|| {
+            let scope = if output == ExecOutput::TreeJson {
+                exec_stream::StreamScope::tree(session, engine.store().clone())
+            } else {
+                exec_stream::StreamScope::Single(session)
+            };
+            let replay_scope = scope.clone();
+            let final_scope = scope.clone();
+            let rx = engine.bus().subscribe();
+            let engine_for_stream = engine.clone();
+            let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+            let task = tokio::spawn(async move {
+                exec_stream::stream_until_done(
                     rx,
-                    session,
+                    scope,
                     done_rx,
-                    move || {
-                        let engine = engine_for_stream.clone();
-                        async move { engine.replay(session).await.map_err(anyhow::Error::from) }
-                    },
+                    |pass| replay_scope.replay(engine_for_stream.store(), pass),
                     std::io::stdout(),
-                ));
-                (task, done_tx)
+                )
+                .await
             });
-            let prompt = engine
+            (task, done_tx, final_scope)
+        });
+        let cancel = CancellationToken::new();
+        let resident_supervisor = built.resident_supervisor();
+        let engine_for_turn = engine.clone();
+        let cancel_for_turn = cancel.clone();
+        let (turn, stop) = run_until_stopped(built, &mut signals, &cancel, async move {
+            let prompt = engine_for_turn
                 .admit_user_prompt(session, prompt)
                 .await
                 .context("admit prompt")?;
             if let Some(deadline) = hya_tool::deadline::current() {
-                engine
+                engine_for_turn
                     .inject_system_message(session, deadline.opening())
                     .await
                     .context("announce the time budget")?;
             }
-            let cancel = CancellationToken::new();
-            let (turn, stop) = run_until_stopped(
-                built,
-                &cancel,
-                lead_wrapup::run_lead(
-                    &engine,
-                    &built.resident_supervisor(),
-                    session,
-                    agent,
-                    cancel.clone(),
-                    prompt,
-                ),
+            lead_wrapup::run_lead(
+                &engine_for_turn,
+                &resident_supervisor,
+                session,
+                agent,
+                cancel_for_turn,
+                prompt,
             )
-            .await?;
-            // End of the run: nothing may keep streaming after `exec` returns. Every
-            // other in-flight member turn is drained before the trajectory is flushed, so stdout and the log end
-            // on terminal events.
-            if stop.is_none() {
-                built
-                    .drain(if turn.is_err() {
-                        FinishCause::LeaderFailed
-                    } else {
-                        FinishCause::Shutdown
-                    })
-                    .await;
-            }
-            if let Some((task, done_tx)) = json_printer.take() {
-                let _ = done_tx.send(());
-                let printer = task
-                    .await
-                    .map_err(|e| anyhow::anyhow!("json stream task failed: {e}"))?
-                    .context("stream json envelopes")?;
-                // Authoritative tail flush: anything the bus dropped or that was
-                // appended between the last broadcast and turn completion comes from
-                // the durable log, keeping stdout exactly equal to `tail-session`.
-                let envelopes = engine.replay(session).await.context("replay session")?;
-                let mut printer = printer;
-                for env in &envelopes {
-                    printer.print(env, session).context("write json envelope")?;
-                }
-                printer.flush().context("flush json stream")?;
-            } else if turn.is_ok() {
-                let projection = engine
-                    .read_projection_shared(session)
-                    .await
-                    .context("read projection")?;
-                print!("{}", render_transcript(&projection));
-            }
-            Ok((turn, stop))
+            .await
+            .context("run turn")
         })
-        .await?;
+        .await;
+        hya_tool::deadline::shutdown_background_jobs().await;
+        // End of the run: nothing may keep streaming after `exec` returns. Every
+        // other in-flight member turn is drained before the trajectory is flushed, so stdout and the log end
+        // on terminal events.
+        let stop_seen = stop.is_some();
+        if !stop_seen {
+            signals
+                .finish_with_store_report(
+                    &exit_store,
+                    false,
+                    built.drain(if turn.is_err() {
+                        hya_proto::FinishCause::LeaderFailed
+                    } else {
+                        hya_proto::FinishCause::Shutdown
+                    }),
+                )
+                .await;
+        }
+        if let Some((task, done_tx, final_scope)) = json_printer.take() {
+            let store_for_replay = engine.store().clone();
+            signals
+                .finish_with_store_report(&exit_store, stop_seen, async move {
+                    let _ = done_tx.send(());
+                    let printer = task
+                        .await
+                        .map_err(|e| anyhow::anyhow!("json stream task failed: {e}"))?
+                        .context("stream json envelopes")?;
+                    // Authoritative tail flush: anything the bus dropped or that was
+                    // appended without a broadcast comes from the durable log, keeping
+                    // stdout equal to `tail-session` on healthy disks and warning once
+                    // on stderr if a storage fault or timeout intervenes.
+                    exec_stream::finish_json_stream(
+                        printer,
+                        || final_scope.replay(&store_for_replay, exec_stream::ReplayPass::Lag),
+                        std::io::stderr(),
+                    )
+                    .await
+                    .context("finish json stream")
+                })
+                .await?;
+        } else if turn.is_ok() {
+            let projection = signals
+                .finish_with_store_report(
+                    &exit_store,
+                    stop_seen,
+                    engine.read_projection_shared(session),
+                )
+                .await
+                .context("read projection")?;
+            print!("{}", render_transcript(&projection));
+            let _ = std::io::stdout().flush();
+        }
+        Ok((turn, stop))
+    }
+    .await;
+    let already_stopped = body_result
+        .as_ref()
+        .ok()
+        .is_some_and(|(_, stop)| stop.is_some());
+    let shutdown_res = signals
+        .finish_with_store_report(&exit_store, already_stopped, headless.shutdown())
+        .await;
+    hya_tool::deadline::shutdown_background_jobs().await;
+    let (turn, stop) = body_result?;
+    shutdown_res?;
     exit_if_stopped(stop);
     // Surface the turn error only after the stdout trajectory is complete.
-    turn.context("run turn")?;
+    turn?;
     Ok(())
-}
-
-/// A stop signal that ended a one-shot run early.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum StopSignal {
-    /// SIGINT (Ctrl-C): the user stopped the run.
-    Interrupt,
-    /// SIGTERM: the process is being stopped.
-    Terminate,
-}
-
-impl StopSignal {
-    fn cause(self) -> FinishCause {
-        match self {
-            Self::Interrupt => FinishCause::UserCancel,
-            Self::Terminate => FinishCause::Shutdown,
-        }
-    }
-
-    /// Conventional `128 + signal` exit status.
-    fn exit_code(self) -> i32 {
-        match self {
-            Self::Interrupt => 130,
-            Self::Terminate => 143,
-        }
-    }
-}
-
-/// Drive a one-shot run's `work` (`exec`/`run`, `-p` goal, `loop`).
-///
-/// SIGINT/SIGTERM starts a graceful drain instead of killing the process:
-/// every in-flight turn in every session is cancelled with cause
-/// `user_cancel` (SIGINT) or `shutdown` (SIGTERM) and closes its messages,
-/// members go terminal, and `work` — still polled — observes the cancel and
-/// returns. The drain is bounded by [`hya_engine::DRAIN_DEADLINE`]; a second
-/// SIGINT during the drain exits immediately (crash recovery closes what is
-/// left on the next start).
-async fn run_until_stopped<T>(
-    built: &hya_app::BuiltSessionEngine,
-    cancel: &CancellationToken,
-    work: impl std::future::Future<Output = T>,
-) -> anyhow::Result<(T, Option<StopSignal>)> {
-    use tokio::signal::unix::{SignalKind, signal};
-    let mut interrupt = signal(SignalKind::interrupt()).context("install SIGINT handler")?;
-    let mut terminate = signal(SignalKind::terminate()).context("install SIGTERM handler")?;
-    tokio::pin!(work);
-    let stop = tokio::select! {
-        output = &mut work => return Ok((output, None)),
-        _ = interrupt.recv() => StopSignal::Interrupt,
-        _ = terminate.recv() => StopSignal::Terminate,
-    };
-    eprintln!("hya: stopping — draining in-flight turns (Ctrl-C again to exit now)");
-    // Record the cause on every in-flight turn first, then stop the driver.
-    built.engine().begin_drain(stop.cause());
-    cancel.cancel();
-    let drained = async { tokio::join!(&mut work, built.drain(stop.cause())) };
-    tokio::select! {
-        (output, _) = drained => Ok((output, Some(stop))),
-        _ = interrupt.recv() => {
-            eprintln!("hya: interrupted again; exiting without finishing the drain");
-            std::process::exit(StopSignal::Interrupt.exit_code());
-        }
-    }
-}
-
-/// Exit with the stop signal's conventional status once teardown is done.
-fn exit_if_stopped(stop: Option<StopSignal>) {
-    if let Some(stop) = stop {
-        use std::io::Write as _;
-        let _ = std::io::stdout().flush();
-        std::process::exit(stop.exit_code());
-    }
 }
 
 async fn cmd_goal(
@@ -359,9 +356,16 @@ async fn cmd_goal(
     yolo: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
-    let headless =
-        startup::HeadlessSession::start(open_store("").await?, model_override, yolo, pure, None)
-            .await?;
+    let mut signals = StopSignals::install()?;
+    let headless = start_headless_with_signals(
+        &mut signals,
+        open_store("").await?,
+        model_override,
+        yolo,
+        pure,
+        None,
+    )
+    .await?;
     let (outcome, stop) = headless
         .run(async move |headless| {
             let engine = headless.built.engine();
@@ -407,8 +411,10 @@ async fn cmd_goal(
                 ..SafetyCaps::default()
             };
             let cancel = CancellationToken::new();
+            let signals_ref = &mut signals;
             let (outcome, stop) = run_until_stopped(
                 built,
+                signals_ref,
                 &cancel,
                 run_goal(
                     engine.clone(),
@@ -420,7 +426,7 @@ async fn cmd_goal(
                     cancel.clone(),
                 ),
             )
-            .await?;
+            .await;
             Ok((outcome, stop))
         })
         .await?;
@@ -446,9 +452,16 @@ async fn cmd_loop(
     yolo: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
-    let headless =
-        startup::HeadlessSession::start(open_store("").await?, model_override, yolo, pure, None)
-            .await?;
+    let mut signals = StopSignals::install()?;
+    let headless = start_headless_with_signals(
+        &mut signals,
+        open_store("").await?,
+        model_override,
+        yolo,
+        pure,
+        None,
+    )
+    .await?;
     let (outcome, stop) = headless
         .run(async move |headless| {
             let engine = headless.built.engine();
@@ -493,8 +506,10 @@ async fn cmd_loop(
             );
             let should_stop = Arc::clone(&evaluator_dispatcher);
             let cancel = CancellationToken::new();
+            let signals_ref = &mut signals;
             let (outcome, stop) = run_until_stopped(
                 built,
+                signals_ref,
                 &cancel,
                 run_loop(
                     engine.clone(),
@@ -511,7 +526,7 @@ async fn cmd_loop(
                     Some(should_stop),
                 ),
             )
-            .await?;
+            .await;
             Ok((outcome, stop))
         })
         .await?;
@@ -623,7 +638,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         ) => db,
         _ => &cli.db,
     };
-    hya_store::database_paths(database)?;
+    // Validate only the lexical database argument here (no filesystem syscalls on main thread).
+    if let Err(error) = hya_store::validate_database_arg(database) {
+        return Err(error.into());
+    }
     let web_port = cli_args::bare_web_port(&cli)?;
     let backend = cli_args::bare_backend(&cli)?;
     let resume = cli_args::bare_resume(&cli)?;
@@ -706,14 +724,35 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 .exit()
         }
         Some(Command::Exec {
-            prompt, bare: true, ..
-        }) => bare::exec_entry(prompt, model, &db).await,
-        Some(Command::Exec {
-            prompt,
+            mut prompt,
             json,
+            include_subagents,
             time_budget,
-            bare: false,
-        }) => exec_entry(prompt, model, &db, yolo, json, pure, time_budget).await,
+            bare,
+        }) => {
+            if prompt == "-" {
+                prompt.clear();
+                std::io::stdin()
+                    .read_to_string(&mut prompt)
+                    .context("read the exec prompt from stdin as UTF-8")?;
+                if prompt.ends_with('\n') {
+                    prompt.pop();
+                }
+                anyhow::ensure!(!prompt.is_empty(), "empty exec prompt on stdin");
+            }
+            if bare {
+                bare::exec_entry(prompt, model, &db, time_budget, json).await
+            } else {
+                let output = if include_subagents {
+                    ExecOutput::TreeJson
+                } else if json {
+                    ExecOutput::Json
+                } else {
+                    ExecOutput::Transcript
+                };
+                exec_entry(prompt, model, &db, yolo, output, pure, time_budget).await
+            }
+        }
         Some(Command::Serve {
             action: Some(action),
             db: command_db,
@@ -891,7 +930,9 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stop_signals::StopSignal;
     use hya_engine::hooks::NoopHookHost;
+    use hya_proto::FinishCause;
 
     #[test]
     fn evaluator_hook_order_is_global_agentless_selected_intelligent_and_deduplicated() {

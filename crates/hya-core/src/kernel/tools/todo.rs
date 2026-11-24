@@ -12,25 +12,84 @@ pub(in crate::kernel) struct Args {
     ops: Vec<Op>,
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 enum Op {
     Add {
         content: String,
-        #[serde(default, deserialize_with = "present")]
         status: Option<TodoStatus>,
     },
-    #[serde(rename = "edit", alias = "status")]
     Update {
         id: String,
-        #[serde(default, deserialize_with = "present")]
         content: Option<String>,
-        #[serde(default, deserialize_with = "present")]
         status: Option<TodoStatus>,
     },
     Remove {
         id: String,
     },
+}
+
+const OP_HINT: &str =
+    r#"use add, edit, status, or remove; for example {"op":"add","content":"tests pass"}"#;
+
+impl<'de> Deserialize<'de> for Op {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::{Error, MapAccess, Visitor, value::MapAccessDeserializer};
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            #[serde(default, deserialize_with = "present")]
+            op: Option<String>,
+            #[serde(default, deserialize_with = "present")]
+            id: Option<String>,
+            #[serde(default, deserialize_with = "present")]
+            content: Option<String>,
+            #[serde(default, deserialize_with = "present")]
+            status: Option<TodoStatus>,
+        }
+
+        struct Operation;
+        impl<'de> Visitor<'de> for Operation {
+            type Value = Op;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(OP_HINT)
+            }
+
+            fn visit_map<M: MapAccess<'de>>(self, map: M) -> Result<Op, M::Error> {
+                let Fields {
+                    op,
+                    id,
+                    content,
+                    status,
+                } = Fields::deserialize(MapAccessDeserializer::new(map))
+                    .map_err(|error| M::Error::custom(format!("{error}; {OP_HINT}")))?;
+                match (op.as_deref(), id, content, status) {
+                    (None | Some("add"), None, Some(content), status) => {
+                        Ok(Op::Add { content, status })
+                    }
+                    (None | Some("edit" | "status"), Some(id), content, status) => Ok(Op::Update {
+                        id,
+                        content,
+                        status,
+                    }),
+                    (Some("remove"), Some(id), None, None) => Ok(Op::Remove { id }),
+                    (Some(label), Some(id), content, None) => {
+                        let status = TodoStatus::deserialize(serde::de::value::StrDeserializer::<
+                            M::Error,
+                        >::new(label))
+                        .map_err(|_| M::Error::custom(OP_HINT))?;
+                        Ok(Op::Update {
+                            id,
+                            content,
+                            status: Some(status),
+                        })
+                    }
+                    _ => Err(M::Error::custom(OP_HINT)),
+                }
+            }
+        }
+        deserializer.deserialize_map(Operation)
+    }
 }
 
 fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -65,9 +124,9 @@ impl Args {
                     status,
                 } => {
                     if content.is_none() && status.is_none() {
-                        return Err(ToolError::Input(
-                            "todo edit or status requires content or status".to_string(),
-                        ));
+                        return Err(ToolError::Input(format!(
+                            "todo edit or status requires content or status; {OP_HINT}"
+                        )));
                     }
                     let index = index(&items, &id)?;
                     if let Some(content) = content {
@@ -110,6 +169,8 @@ impl Tool for Todo {
         super::TODO
     }
 
+    // The advertised contract requires op. Only non-validating callers can
+    // reach the decoder's omitted-op and status-as-op compatibility forms.
     fn schema(&self) -> ToolSchema {
         let id = json!({"type": "string", "description": "Item id from the todo list"});
         let content = json!({"type": "string", "pattern": r"\S"});
@@ -118,7 +179,7 @@ impl Tool for Todo {
         });
         super::schema(
             super::TODO,
-            "Record checkable completion criteria (such as \"tests pass\") and results needed after earlier context is removed. The list survives rewrites verbatim. Write it when the task is clear, update statuses as they change, and leave correct items as written. Add takes content and optional status (pending by default). Edit and status both take an id and content, status, or both. Remove takes an id. Operations apply atomically in order and return the full list with ids. Pass empty ops to read it.",
+            "Record checkable completion criteria (such as \"tests pass\") and results needed after earlier context is removed. The list survives rewrites verbatim. Write it when the task is clear, update statuses as they change, and leave correct items as written. Add takes content and optional status (pending by default). Edit and status both take an id and content, status, or both. Remove takes an id. Operations apply atomically in order and return the full list with ids. Pass empty ops to read it. Examples: {\"ops\":[{\"op\":\"add\",\"content\":\"tests pass\"}]}, {\"ops\":[{\"op\":\"status\",\"id\":\"#1\",\"status\":\"completed\"}]}, {\"ops\":[{\"op\":\"remove\",\"id\":\"#1\"}]}.",
             json!({
                 "type": "object",
                 "properties": {
@@ -213,6 +274,57 @@ mod tests {
             ));
         }
         Ok(())
+    }
+
+    #[test]
+    fn omitted_op_uses_id_to_distinguish_edit_from_add() -> Result<(), Box<dyn std::error::Error>> {
+        let args: Args = serde_json::from_value(json!({"ops": [
+            {"content": "write tests"},
+            {"content": "run tests", "status": "blocked"},
+            {"id": "#1", "content": "write regression test"},
+            {"id": "#2", "status": "completed"},
+        ]}))?;
+        let items = args.apply(Vec::new(), 0)?;
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].content, "write regression test");
+        assert_eq!(items[0].status, TodoStatus::Pending);
+        assert_eq!(items[1].status, TodoStatus::Completed);
+        Ok(())
+    }
+
+    #[test]
+    fn status_as_op_updates_the_item() -> Result<(), Box<dyn std::error::Error>> {
+        for status in [
+            TodoStatus::Pending,
+            TodoStatus::InProgress,
+            TodoStatus::Completed,
+            TodoStatus::Blocked,
+        ] {
+            let args: Args = serde_json::from_value(json!({"ops": [
+                {"content": "original", "status": "blocked"},
+                {"op": status, "id": "#1", "content": "updated"},
+            ]}))?;
+            let items = args.apply(Vec::new(), 0)?;
+            assert_eq!(items[0].status, status);
+            assert_eq!(items[0].content, "updated");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ambiguous_or_malformed_ops_get_a_canonical_example() {
+        for op in [
+            json!({"op":"done","id":"#1"}),
+            json!({"op":"completed","id":"#1","status":"pending"}),
+            json!({"op":"completed","content":"no id"}),
+            json!({"op":null,"content":"no op"}),
+            json!({"id":"#1","status":null}),
+            json!({"content":"new","extra":true}),
+            json!({"op":"remove","id":"#1","content":"extra"}),
+        ] {
+            let err = serde_json::from_value::<Args>(json!({"ops":[op]})).err();
+            assert!(err.is_some_and(|e| e.to_string().contains(OP_HINT)), "{op}");
+        }
     }
 
     #[test]

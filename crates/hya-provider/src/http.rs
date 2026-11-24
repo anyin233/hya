@@ -24,7 +24,7 @@ mod stream;
 use crate::anthropic::{AnthropicMessagesProtocol, add_prompt_cache_breakpoints};
 use crate::google::GoogleProtocol;
 use crate::openai::{
-    GrokBuildProtocol, OpenAiChatProtocol, OpenAiResponsesProtocol, encode_input_items,
+    GrokBuildProtocol, OpenAiChatProtocol, OpenAiResponsesProtocol, encode_input_items_for_model,
 };
 use crate::{
     Capabilities, CompactedWindow, CompletionRequest, EventStream, ModelCatalogSource, Protocol,
@@ -131,13 +131,13 @@ impl ProviderKind {
     /// Static default reasoning labels used without allocating during capability checks.
     fn reasoning_variant_labels(self) -> &'static [&'static str] {
         match self {
-            ProviderKind::Anthropic => &["low", "medium", "high", "max"],
+            ProviderKind::Anthropic => &["low", "medium", "high", "xhigh", "max"],
             ProviderKind::OpenAiCompatible => &["minimal", "low", "medium", "high", "xhigh"],
             ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex => {
                 &["none", "minimal", "low", "medium", "high", "xhigh", "max"]
             }
             ProviderKind::GrokBuild => &["low", "medium", "high"],
-            ProviderKind::Google => &["high", "max"],
+            ProviderKind::Google => &["minimal", "low", "medium", "high", "max"],
         }
     }
 
@@ -896,7 +896,7 @@ impl HttpProvider {
             .as_ref()
             .map(|caps| caps.max_output)
             .filter(|limit| *limit > 0);
-        let images = caps.is_some_and(|caps| caps.image_input == Some(true));
+        let images = caps.is_some_and(|caps| self.sends_tool_images(&caps));
         if let Some(model_id) = self.served_model_id(&req.model) {
             req.model = ModelRef::new(model_id);
         }
@@ -906,6 +906,10 @@ impl HttpProvider {
         let mut body = self.protocol.encode_for_model(&req, output_limit, images)?;
         if self.prompt_caching {
             add_prompt_cache_breakpoints(&mut body);
+        }
+        if self.kind == ProviderKind::Anthropic && body.pointer("/thinking/block_binding").is_some()
+        {
+            merge_anthropic_beta(&mut req.headers, crate::anthropic::THINKING_BINDING_BETA);
         }
         Ok((req, body))
     }
@@ -995,6 +999,28 @@ impl HttpProvider {
             None => identity.push(0),
         }
         Some(identity)
+    }
+}
+
+fn merge_anthropic_beta(headers: &mut BTreeMap<String, String>, token: &str) {
+    let existing_key = headers
+        .keys()
+        .find(|k| k.eq_ignore_ascii_case("anthropic-beta"))
+        .cloned();
+    if let Some(key) = existing_key {
+        let current = headers.get(&key).map(String::as_str).unwrap_or("");
+        if current.split(',').map(str::trim).any(|item| item == token) {
+            return;
+        }
+        let trimmed = current.trim().trim_end_matches(',').trim();
+        let updated = if trimmed.is_empty() {
+            token.to_string()
+        } else {
+            format!("{trimmed}, {token}")
+        };
+        headers.insert(key, updated);
+    } else {
+        headers.insert("anthropic-beta".to_string(), token.to_string());
     }
 }
 
@@ -1118,6 +1144,11 @@ impl Provider for HttpProvider {
         let served = self.served_model_name(model)?;
         Some(self.caps_for_model(served))
     }
+
+    fn sends_tool_images(&self, caps: &Capabilities) -> bool {
+        self.kind != ProviderKind::Google && caps.image_input == Some(true)
+    }
+
     fn reasoning_replay_policy(&self) -> crate::ReasoningReplayPolicy {
         match self.kind {
             ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex | ProviderKind::GrokBuild => {
@@ -1125,7 +1156,7 @@ impl Provider for HttpProvider {
             }
             ProviderKind::Anthropic => crate::ReasoningReplayPolicy::SignedCurrentTurn,
             ProviderKind::OpenAiCompatible => crate::ReasoningReplayPolicy::ReasoningContent,
-            ProviderKind::Google => crate::ReasoningReplayPolicy::None,
+            ProviderKind::Google => crate::ReasoningReplayPolicy::GoogleThought,
         }
     }
 
@@ -1261,9 +1292,10 @@ impl Provider for HttpProvider {
             .unwrap_or_else(|| model.as_str().to_string());
         let images = self
             .capabilities(model)
-            .is_some_and(|caps| caps.image_input == Some(true));
+            .is_some_and(|caps| self.sends_tool_images(&caps));
         // Encode the same input window the create path would send.
-        let mut input = encode_input_items(messages, images)?;
+        let target = ModelRef::new(&model_id);
+        let mut input = encode_input_items_for_model(messages, images, Some(&target))?;
         if let Some(system) = system.filter(|s| !s.is_empty()) {
             // Prefer instructions-equivalent as a system item at the front when
             // the compact endpoint is given an explicit system prompt.
@@ -1493,13 +1525,16 @@ mod tests {
     fn reasoning_variants_are_family_specific() {
         assert_eq!(
             ProviderKind::Anthropic.reasoning_variants(),
-            ["low", "medium", "high", "max"]
+            ["low", "medium", "high", "xhigh", "max"]
         );
         assert_eq!(
             ProviderKind::OpenAiCompatible.reasoning_variants(),
             ["minimal", "low", "medium", "high", "xhigh"]
         );
-        assert_eq!(ProviderKind::Google.reasoning_variants(), ["high", "max"]);
+        assert_eq!(
+            ProviderKind::Google.reasoning_variants(),
+            ["minimal", "low", "medium", "high", "max"]
+        );
     }
 
     #[test]

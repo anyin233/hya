@@ -86,7 +86,6 @@ impl QuestionRequests {
 
     /// Pending-plane bridge retained for the interaction event stream.
     #[allow(dead_code)]
-    #[allow(dead_code)]
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<Value> {
         self.events.subscribe()
     }
@@ -97,7 +96,6 @@ impl QuestionRequests {
     }
 
     /// Pending-plane bridge retained for the interaction event stream.
-    #[allow(dead_code)]
     #[allow(dead_code)]
     pub(crate) async fn list(&self) -> Vec<QuestionRequestView> {
         self.inner

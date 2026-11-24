@@ -1804,6 +1804,7 @@ One curated projected event from the event log.
 | `server_stopping` (26) | `oneof `payload`: ServerStopping` | The server is shutting down (ADR-0023): the last frame of every live stream (global and session, SSE and gRPC) before it ends, and the only frame of a stream opened while shutting down. Live-only and process-wide (`seq` 0, empty `session`). `reason` says whether a client should start the next server itself; see `ServerStopping`. |
 | `projects_updated` (27) | `oneof `payload`: ProjectsUpdated` | The Project list changed: a Project was created, updated, or deleted, a Project gained or lost a session, or a Project's `busy` flag changed. Live-only and process-wide, delivered on the global stream only (also with `interactions_only`): `seq` is 0 and `session` is empty. Re-read `ListProjects`. |
 | `member_lifecycle_changed` (28) | `oneof `payload`: MemberLifecycleChanged` | An actor archived or revived (durable, on the team root's log). Match members by child session, including nested members whose spawn belongs to another parent's log. This never changes the task outcome. |
+| `part_deleted` (29) | `oneof `payload`: PartDeleted` | A part was removed from a message (durable): a part deleted through `DeleteMessagePart`, or a part of a failed bare round attempt that is retried. Drop the part with this id from the message. |
 
 ### `MemberLifecycleChanged`
 
@@ -1841,6 +1842,15 @@ Complete parts added to a message in one step.
 |---|---|---|
 | `message` (1) | `string` | Owning message identifier. |
 | `parts` (2) | `repeated PartInfo` | The added parts, in message order. |
+
+### `PartDeleted`
+
+A part removed from a message.
+
+| Field | Type | Description |
+|---|---|---|
+| `message` (1) | `string` | Owning message identifier. |
+| `part` (2) | `string` | The removed part's identifier. |
 
 ### `SessionReverted`
 

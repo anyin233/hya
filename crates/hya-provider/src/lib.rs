@@ -63,6 +63,7 @@ pub use openai::{
     format_responses_compact_system, parse_responses_compact_items,
 };
 pub use router::ProviderRouter;
+pub use wire::invalid_tool_arguments;
 
 /// Reject a request a route cannot serve before a turn starts (risk #12):
 /// tool-using turns require `streaming_tool_calls`.
@@ -84,10 +85,13 @@ pub enum ProviderError {
     /// JSON body or frame (de)serialization failed.
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
-    /// Unclassified provider API error frame, link-level stream failure, bad
-    /// header, or HTTP client construction failure.
+    /// Unclassified provider API error frame, malformed SSE, bad header, or
+    /// HTTP client construction failure.
     #[error("http: {0}")]
     Http(String),
+    /// An established SSE stream stalled or failed while reading its HTTP body.
+    #[error("http: {0}")]
+    StreamInterrupted(String),
     /// Request transport failed before an HTTP response established the event stream.
     #[error("transport: {0}")]
     Transport(String),
@@ -132,6 +136,7 @@ impl ProviderError {
             Self::HttpStatus { status, .. } => *status == 429 || (500..=599).contains(status),
             Self::Json(_)
             | Self::Http(_)
+            | Self::StreamInterrupted(_)
             | Self::UnknownModel(_)
             | Self::Incompatible(_)
             | Self::Decode(_)
@@ -321,6 +326,19 @@ impl ReasoningEffort {
         }
     }
 
+    /// Anthropic `output_config.effort` label for adaptive-thinking Claude models.
+    #[must_use]
+    pub fn anthropic_effort(self) -> Option<&'static str> {
+        match self {
+            Self::Off => None,
+            Self::Minimal | Self::Low => Some("low"),
+            Self::Medium => Some("medium"),
+            Self::High => Some("high"),
+            Self::XHigh => Some("xhigh"),
+            Self::Max => Some("max"),
+        }
+    }
+
     /// Google `thinkingBudget` when effort is high enough; `Max` scales by model id.
     #[must_use]
     pub fn google_budget(self, model_id: &str) -> Option<u32> {
@@ -336,6 +354,18 @@ impl ReasoningEffort {
                     Some(24576)
                 }
             }
+        }
+    }
+
+    /// Google Gemini 3+ `thinkingLevel` label; `Off` omits.
+    #[must_use]
+    pub fn google_thinking_level(self, _model_id: &str) -> Option<&'static str> {
+        match self {
+            Self::Off => None,
+            Self::Minimal => Some("minimal"),
+            Self::Low => Some("low"),
+            Self::Medium => Some("medium"),
+            Self::High | Self::XHigh | Self::Max => Some("high"),
         }
     }
 }
@@ -404,6 +434,14 @@ mod reasoning_effort_tests {
         assert_eq!(R::Max.anthropic_budget(), Some(31999));
         assert_eq!(R::Minimal.anthropic_budget(), None);
         assert_eq!(R::Off.anthropic_budget(), None);
+
+        assert_eq!(R::Off.anthropic_effort(), None);
+        assert_eq!(R::Minimal.anthropic_effort(), Some("low"));
+        assert_eq!(R::Low.anthropic_effort(), Some("low"));
+        assert_eq!(R::Medium.anthropic_effort(), Some("medium"));
+        assert_eq!(R::High.anthropic_effort(), Some("high"));
+        assert_eq!(R::XHigh.anthropic_effort(), Some("xhigh"));
+        assert_eq!(R::Max.anthropic_effort(), Some("max"));
     }
 
     #[test]
@@ -412,6 +450,23 @@ mod reasoning_effort_tests {
         assert_eq!(R::Max.google_budget("gemini-2.5-flash"), Some(24576));
         assert_eq!(R::High.google_budget("gemini-2.5-flash"), Some(16000));
         assert_eq!(R::Low.google_budget("gemini-2.5-flash"), None);
+    }
+
+    #[test]
+    fn google_thinking_levels_map_all_efforts() {
+        assert_eq!(R::Off.google_thinking_level("gemini-3-pro"), None);
+        assert_eq!(
+            R::Minimal.google_thinking_level("gemini-3-pro"),
+            Some("minimal")
+        );
+        assert_eq!(R::Low.google_thinking_level("gemini-3-pro"), Some("low"));
+        assert_eq!(
+            R::Medium.google_thinking_level("gemini-3-pro"),
+            Some("medium")
+        );
+        assert_eq!(R::High.google_thinking_level("gemini-3-pro"), Some("high"));
+        assert_eq!(R::XHigh.google_thinking_level("gemini-3-pro"), Some("high"));
+        assert_eq!(R::Max.google_thinking_level("gemini-3-pro"), Some("high"));
     }
 }
 
@@ -466,6 +521,10 @@ pub trait Provider: Send + Sync {
     /// Reasoning replay behavior of this route's request encoder.
     fn reasoning_replay_policy(&self) -> ReasoningReplayPolicy {
         ReasoningReplayPolicy::None
+    }
+    /// Whether this route encodes tool-result attachments as images for these model capabilities.
+    fn sends_tool_images(&self, _caps: &Capabilities) -> bool {
+        false
     }
     /// Report whether a claimed model supports one typed reasoning effort.
     ///

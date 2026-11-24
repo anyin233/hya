@@ -1,26 +1,28 @@
-//! The reduction ladder before each round, and the `/summarize` fold. Every
-//! change either makes to what a request sends is an event in the session log,
-//! so the host rebuilds the request from the projection.
+//! The extension steps before each round, `shake` then `remote`, and the
+//! `/summarize` fold (`remote`). Every change either makes to what a request
+//! sends is an event in the session log, so the host rebuilds the request from
+//! the projection. The kernel decides whether to reduce
+//! (`RewriteCtx::pressure`) and rewrites itself after these steps when the
+//! request is still over its threshold.
 
-use hya_proto::context::{COMPACT_CONTEXT_MARKER, ReasoningReplayPolicy, marker_goal};
+use hya_proto::context::{ReasoningReplayPolicy, marker_goal};
 use hya_proto::{
-    CompactionStrategy, Event, FinishReason, Message, MessageId, PartId, Role, StepCut,
+    CompactionStrategy, Event, FinishReason, Message, MessageId, PartId, Role, SessionId,
 };
 use hya_tool::tokens::{TokenAccounting, TokenSource};
-use hya_tool::{ModelHost, RewriteCtx, SummaryCall, ToolError};
+use hya_tool::{RewriteCtx, ToolError};
 
-use crate::config::{Config, Rung};
+use crate::config::Config;
 use crate::evict::{ArtifactEvictionSink, evict_stale_tool_outputs, has_spillable_tool_output};
-use crate::fold::{fold_cut, previous_summary};
-use crate::snap::snapcompact_archive;
 
-/// Walk the configured rungs while the transcript `cx` would send is over the
-/// threshold, stopping at the first that brings it under; an unavailable or
-/// failed rung advances to the next. Then record the round's `ContextStatus`.
+/// Over the threshold, run `shake`, then `remote` while the request is still
+/// over it; a route without native compaction, or a failed call, leaves the
+/// rest to the kernel. Every round, record the round's `ContextStatus`.
 /// `true` when the log changed.
 pub(crate) async fn walk(cx: &RewriteCtx<'_>) -> Result<bool, ToolError> {
     let config = Config::from_value(cx.config)?;
-    let accounting = TokenAccounting::new(config.token_accounting);
+    let accounting = TokenAccounting::new(config.token_accounting)
+        .with_tool_images(cx.window.is_some_and(|window| window.sends_tool_images));
     let session = cx.session;
     let mut messages = cx.transcript.messages(cx.projection).await?;
     // The in-flight assistant message does not count against the kept tail.
@@ -30,289 +32,144 @@ pub(crate) async fn walk(cx: &RewriteCtx<'_>) -> Result<bool, ToolError> {
         config.keep_recent
     };
     let keep_steps = config.keep_recent;
-    // The route's advertised window scales the threshold.
-    let threshold = config.threshold(cx.window.map(|window| window.max_context));
     let usage_reporting = cx.window.is_some_and(|window| window.usage_reporting);
     // Route-specific accounting must mirror what its encoder replays.
     let policy = cx.window.map_or(ReasoningReplayPolicy::None, |window| {
         window.reasoning_replay
     });
-    let max_context = cx.window.map_or(0, |window| {
-        usize::try_from(window.max_context).unwrap_or(usize::MAX)
-    });
     let overhead = cx.overhead_tokens;
     let count = |messages: &[Message]| accounting.estimate_with_reasoning_policy(messages, policy);
-    let over_window = |messages: &[Message]| {
-        max_context > 0 && count(messages).saturating_add(overhead) > max_context
-    };
-    // One running count for the whole walk, adjusted after each rung so the
-    // next decision reflects the transcript that will actually be sent. When
-    // the host's pre-send check would reject the request although the
-    // reported occupancy sits under the threshold, measure by the estimate,
-    // so the ladder reduces the request instead of the check failing the turn.
     let initial =
         accounting.tokens_in_use_with_reasoning_policy(&messages, usage_reporting, policy);
-    let (mut tokens, mut source) = {
-        let reported = initial.tokens.saturating_add(overhead);
-        if reported <= threshold && over_window(&messages) {
-            (
-                count(&messages).saturating_add(overhead),
-                TokenSource::Estimate,
-            )
-        } else {
-            (reported, initial.source)
-        }
-    };
-    let needs_reduction =
-        |tokens: usize, messages: &[Message]| tokens > threshold || over_window(messages);
-    let spill = ArtifactEvictionSink::new(cx.workdir);
-    // `compaction.before` once per walk, only when the walk runs. The only
-    // trigger is overflow, so a hook may only replace the summarizer prompt.
-    let instructions = match cx.hooks {
-        Some(hooks) if needs_reduction(tokens, &messages) => hooks.before(session, tokens).await,
-        _ => None,
-    };
-    let estimate_tokens = |tokens: usize| u64::try_from(tokens).unwrap_or(u64::MAX);
-    let threshold_tokens = estimate_tokens(threshold);
-    // Estimated size of the last summary the walk committed, for
-    // `compaction.after`.
-    let mut summary_tokens: Option<usize> = None;
-    let mut rewrote = false;
-
-    for rung in config.method_order {
-        if !needs_reduction(tokens, &messages) {
-            break;
-        }
-        if rung == Rung::SpillToolOutputs
-            && !has_spillable_tool_output(&messages, keep_messages, keep_steps)
-        {
-            continue;
-        }
-        // What tripped the threshold before this rung edits the transcript,
-        // so each record explains why that rung ran.
-        let estimated_now = count(&messages).saturating_add(overhead);
-        let input_tokens_est = estimate_tokens(if over_window(&messages) {
-            tokens.max(estimated_now)
-        } else {
-            tokens
-        });
-        let fold =
-            |messages: &[Message]| fold_cut(messages, keep_messages, keep_steps, threshold, &count);
-        let mut committed = match rung {
-            Rung::SpillToolOutputs => {
-                let before = count(&messages);
-                let evicted = evict_stale_tool_outputs(
-                    &mut messages,
-                    keep_messages,
-                    keep_steps,
-                    Some(&spill),
-                );
-                if evicted.is_empty() {
-                    continue;
-                }
-                tokens = tokens.saturating_sub(before.saturating_sub(count(&messages)));
-                // Recorded whether or not it sufficed; the notices ride on the
-                // event, so later requests send exactly these bytes.
-                cx.log
-                    .append(
+    // The occupancy `ContextStatus` reports, in the configured accounting.
+    let mut tokens = initial.tokens.saturating_add(overhead);
+    let mut source = initial.source;
+    let threshold = cx.pressure.map_or(0, |pressure| pressure.threshold);
+    // The kernel's figure decides; each step lowers it by what it freed.
+    let mut over = cx
+        .pressure
+        .filter(|pressure| pressure.over())
+        .map(|pressure| pressure.used);
+    let mut changed = false;
+    if let Some(used) = over
+        && has_spillable_tool_output(&messages, keep_messages, keep_steps)
+    {
+        let before = count(&messages);
+        let evicted = evict_stale_tool_outputs(
+            &mut messages,
+            keep_messages,
+            keep_steps,
+            Some(&ArtifactEvictionSink::new(cx.workdir)),
+        );
+        if !evicted.is_empty() {
+            let freed = before.saturating_sub(count(&messages));
+            tokens = tokens.saturating_sub(freed);
+            let after = used.saturating_sub(u64::try_from(freed).unwrap_or(u64::MAX));
+            // The notices ride on the event, so later requests send exactly
+            // these bytes.
+            cx.log
+                .append(
+                    session,
+                    vec![Event::ContextEvicted {
                         session,
-                        vec![Event::ContextEvicted {
-                            session,
-                            evicted_parts: u32::try_from(evicted.len()).unwrap_or(u32::MAX),
-                            parts: evicted,
-                            tokens_before: input_tokens_est,
-                            tokens_after: estimate_tokens(tokens),
-                            threshold: threshold_tokens,
-                        }],
-                    )
-                    .await?;
-                rewrote = true;
-                continue;
-            }
-            Rung::ProviderCompact => {
-                let Some(models) = cx.models else {
-                    continue;
-                };
-                // The fold agent must exist before any compact call.
-                let agent = models.fold_agent()?;
-                let model = agent.model.unwrap_or_else(|| cx.model.clone());
-                let Ok(Some(body)) = models
-                    .compact_window(&model, &messages, agent.system.as_deref())
-                    .await
-                else {
-                    continue;
-                };
-                // Native compact folds the whole window it was given.
-                Fold {
-                    body,
-                    strategy: CompactionStrategy::Native,
-                    folded: whole_range(&messages),
-                    step_cut: None,
-                }
-            }
-            Rung::SnapCompact => {
-                // Local and deterministic: works where no summarizer is wired.
-                let Some(cut) = fold(&messages) else {
-                    continue;
-                };
-                Fold {
-                    body: format!(
-                        "{COMPACT_CONTEXT_MARKER}\n{}",
-                        snapcompact_archive(&cut.folded)
-                    ),
-                    strategy: CompactionStrategy::SnapCompact,
-                    folded: Some((cut.from_message, cut.to_message, cut.folded_count)),
-                    step_cut: cut.step_cut,
-                }
-            }
-            Rung::Handoff | Rung::Summarize => {
-                let Some(models) = cx.models.filter(|models| models.has_summarizer()) else {
-                    continue;
-                };
-                let Some(cut) = fold(&messages) else {
-                    continue;
-                };
-                let handoff = rung == Rung::Handoff;
-                let mut call = summary_call(models, &messages, &config)?;
-                call.handoff = handoff;
-                if let Some(text) = &instructions {
-                    call.system = Some(text.clone());
-                }
-                // A handoff reads the whole transcript verbatim; the fold
-                // range still keeps the recent tail. A failed call is soft.
-                let input = if handoff { &messages } else { &cut.folded };
-                let Ok(summary) = models.summarize(session, input, call).await else {
-                    continue;
-                };
-                Fold {
-                    body: format!("{COMPACT_CONTEXT_MARKER}\n{summary}"),
-                    strategy: if handoff {
-                        CompactionStrategy::Handoff
-                    } else {
-                        CompactionStrategy::LocalSummarizer
-                    },
-                    folded: Some((cut.from_message, cut.to_message, cut.folded_count)),
-                    step_cut: cut.step_cut,
-                }
-            }
-        };
-        committed.carry_todos(cx);
-        summary_tokens = Some(committed.body.len() / 4);
-        commit(cx, committed, input_tokens_est, threshold_tokens).await?;
+                        evicted_parts: u32::try_from(evicted.len()).unwrap_or(u32::MAX),
+                        parts: evicted,
+                        tokens_before: used,
+                        tokens_after: after,
+                        threshold,
+                    }],
+                )
+                .await?;
+            changed = true;
+            over = Some(after).filter(|after| *after > threshold);
+        }
+    }
+    if let (Some(used), Some(models)) = (over, cx.models)
+        && let Ok(Some(body)) = models.compact_window(cx.model, &messages).await
+    {
+        let summary_tokens = body.len() / 4;
+        commit(cx, body, &messages, used, threshold).await?;
+        changed = true;
         // Re-read and re-estimate: the provider's reported usage described
         // the prompt that no longer exists.
         let projection = cx.log.projection(session).await?;
         messages = cx.transcript.messages(&projection).await?;
         tokens = count(&messages).saturating_add(overhead);
         source = TokenSource::Estimate;
+        if let Some(hooks) = cx.hooks {
+            hooks.after(session, summary_tokens).await;
+        }
     }
-    if let (Some(hooks), Some(summary_tokens)) = (cx.hooks, summary_tokens) {
-        hooks.after(session, summary_tokens).await;
-    }
-    // One occupancy report per round, after the ladder, so the figure is
-    // what this request carries.
+    // One occupancy report per round, after these steps, so the figure is
+    // what this request carries unless the kernel rewrites after them.
     cx.log
         .append(
             session,
             vec![Event::ContextStatus {
                 session,
-                tokens: estimate_tokens(tokens),
+                tokens: u64::try_from(tokens).unwrap_or(u64::MAX),
                 source,
                 mode: accounting.mode(),
-                threshold: threshold_tokens,
+                threshold,
             }],
         )
         .await?;
-    Ok(rewrote || summary_tokens.is_some())
+    Ok(changed)
 }
 
-/// Fold the whole episode `cx.transcript` yields into one summary now
-/// (`/summarize`).
-pub(crate) async fn summarize_now(cx: &RewriteCtx<'_>) -> Result<bool, ToolError> {
-    let config = Config::from_value(cx.config)?;
-    let models = cx
-        .models
-        .ok_or_else(|| ToolError::Other("summarizer not configured".to_string()))?;
-    let messages = cx.transcript.messages(cx.projection).await?;
-    let mut call = summary_call(models, &messages, &config)?;
-    // Anchor on the last terminal handoff when the episode carries no summary.
-    call.previous_summary = call.previous_summary.or_else(|| {
-        cx.projection
-            .session
-            .handoff
-            .as_ref()
-            .map(|handoff| handoff.doc.clone())
-    });
-    let summary = models.summarize(cx.session, &messages, call).await?;
-    let tokens = TokenAccounting::new(config.token_accounting).estimate(&messages);
-    // Behind the marker, so the request cuts the folded history.
-    let mut fold = Fold {
-        body: format!("{COMPACT_CONTEXT_MARKER}\n{summary}"),
-        strategy: CompactionStrategy::LocalSummarizer,
-        folded: whole_range(&messages),
-        step_cut: None,
+/// Fold the transcript `cx` yields with the route's native compaction now
+/// (`/summarize`); `false` when the route has none or the call failed, which
+/// leaves the fold to the kernel.
+pub(crate) async fn compact_now(cx: &RewriteCtx<'_>) -> Result<bool, ToolError> {
+    let Some(models) = cx.models else {
+        return Ok(false);
     };
-    fold.carry_todos(cx);
-    commit(cx, fold, u64::try_from(tokens).unwrap_or(u64::MAX), 0).await?;
+    let messages = cx.transcript.messages(cx.projection).await?;
+    let Ok(Some(body)) = models.compact_window(cx.model, &messages).await else {
+        return Ok(false);
+    };
+    let (used, threshold) = cx
+        .pressure
+        .map_or((0, 0), |pressure| (pressure.used, pressure.threshold));
+    commit(cx, body, &messages, used, threshold).await?;
     Ok(true)
 }
 
-/// The fold agent's summary call, anchored on the summary `messages` carry.
-fn summary_call(
-    models: &dyn ModelHost,
-    messages: &[Message],
-    config: &Config,
-) -> Result<SummaryCall, ToolError> {
-    let agent = models.fold_agent()?;
-    Ok(SummaryCall {
-        model: agent.model,
-        system: agent.system,
-        reasoning: agent.reasoning,
-        previous_summary: previous_summary(messages),
-        max_output_tokens: Some(config.summary_max_tokens),
-        handoff: false,
-    })
-}
-
-/// The range of a fold of all of `messages`; `None` when there are none.
-fn whole_range(messages: &[Message]) -> Option<(MessageId, MessageId, u32)> {
-    let (first, last) = messages.first().zip(messages.last())?;
-    Some((
-        first.id(),
-        last.id(),
-        u32::try_from(messages.len()).unwrap_or(u32::MAX),
-    ))
-}
-
-/// One fold to commit: the marker body and the range it replaces.
-struct Fold {
-    body: String,
-    strategy: CompactionStrategy,
-    /// First and last folded message and how many; `None` records the marker
-    /// alone.
-    folded: Option<(MessageId, MessageId, u32)>,
-    step_cut: Option<StepCut>,
-}
-
-impl Fold {
-    fn carry_todos(&mut self, cx: &RewriteCtx<'_>) {
-        let todos = cx.projection.session.todos.as_deref().unwrap_or_default();
-        self.body.push_str("\n\n");
-        self.body.push_str(&marker_goal(todos));
-    }
-}
-
-/// Append the marker message and its `ContextCompacted` as one batch.
+/// Append a marker with `body` and the latest todo list, and the
+/// `ContextCompacted{strategy: Native}` that folds all of `messages` behind
+/// it, as one batch.
 async fn commit(
     cx: &RewriteCtx<'_>,
-    fold: Fold,
+    mut body: String,
+    messages: &[Message],
     input_tokens_est: u64,
     threshold: u64,
 ) -> Result<(), ToolError> {
     let session = cx.session;
+    let todos = cx.projection.session.todos.as_deref().unwrap_or_default();
+    body.push_str("\n\n");
+    body.push_str(&marker_goal(todos));
     let message = MessageId::new();
+    let mut events = marker_events(session, message, body);
+    if let (Some(first), Some(last)) = (messages.first(), messages.last()) {
+        events.push(Event::ContextCompacted {
+            session,
+            message,
+            strategy: CompactionStrategy::Native,
+            from_message: first.id(),
+            to_message: last.id(),
+            folded_count: u32::try_from(messages.len()).unwrap_or(u32::MAX),
+            input_tokens_est,
+            threshold,
+            step_cut: None,
+        });
+    }
+    cx.log.append(session, events).await
+}
+
+fn marker_events(session: SessionId, message: MessageId, text: String) -> Vec<Event> {
     let part = PartId::new();
-    let mut events = vec![
+    vec![
         Event::MessageStarted {
             session,
             message,
@@ -329,7 +186,7 @@ async fn commit(
             session,
             message,
             part,
-            delta: fold.body,
+            delta: text,
         },
         Event::TextEnd {
             session,
@@ -344,19 +201,5 @@ async fn commit(
             tokens: None,
             cause: None,
         },
-    ];
-    if let Some((from_message, to_message, folded_count)) = fold.folded {
-        events.push(Event::ContextCompacted {
-            session,
-            message,
-            strategy: fold.strategy,
-            from_message,
-            to_message,
-            folded_count,
-            input_tokens_est,
-            threshold,
-            step_cut: fold.step_cut,
-        });
-    }
-    cx.log.append(session, events).await
+    ]
 }

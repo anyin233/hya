@@ -1,7 +1,8 @@
 //! The kernel's tools: `bash`, `read`, `write`, `edit`, `rewrite`, and `todo`.
 //!
-//! Plain implementations: no permission checks, output truncation, timeouts,
-//! or path boundaries. Relative paths resolve against `ToolCtx::workdir`.
+//! Plain implementations: no permission checks, output truncation, or path
+//! boundaries; `bash` alone has a per-call timeout. Relative paths resolve
+//! against `ToolCtx::workdir`.
 
 mod bash;
 mod edit;

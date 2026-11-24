@@ -30,7 +30,8 @@ features out of the kernel ([Kernel](kernel.md)). Their sources live under
 `bundles/internal/<name>` (`bundle.yaml` plus a `native/` crate with
 `crate-type = ["rlib", "cdylib"]` that links only `hya-tool` and
 `hya-proto`), and `hya_bundle::INTERNAL_BUNDLES` lists them (`hya/compaction`,
-the [compaction ladder](compaction.md); every entry is also in
+the [context-reduction steps](compaction.md) the kernel runs before its own
+Rewrite; every entry is also in
 `FIRST_PARTY_BUNDLES`). Full mode loads them once per process, when the first
 `SessionEngine` is built, with `hya_core::bundles::load_internal()`, which calls
 `hya_tool::native_bundle::load(identity)` for each: identity `hya/<name>` maps
@@ -211,6 +212,11 @@ request's scope and returns that refresh in `BundleChange.refresh`.
 | `UninstallBundle` | `POST /v1/bundles:uninstall` `{directory, bundleId, project}` | `hya bundle remove`; first-party bundles fail with `failed_precondition`. |
 | `SetBundleEnabled` | `POST /v1/bundles:set-enabled` `{directory, bundleId, enabled}` | `hya bundle enable\|disable`: the disabled set (`bundle_disabled` in the registry database) applies to every scope; trusted presets cannot be disabled. |
 
+Internal bundles (`hya/compaction`) belong to the same immutable inventory as
+the trusted presets: `ListBundles` and `hya bundle list` show them with
+`scope: "first_party"`, `state: "active"`, `enabled: true`, and
+`removable: false`, and they cannot be installed over, removed, or disabled.
+
 An unreadable installed row still appears in `ListBundles` with its stored
 `id`, `version`, `publisher`, `scope: "user"`, `state: "unreadable"`, and an
 `error` string containing the validation failure and reinstall instruction.
@@ -250,10 +256,19 @@ trusted identities:
 | `hya/goal-loop`, `hya/plan-impl-review` | `bundles/first-party/<name>` | First-party AgentSet and Workflow bundles |
 | `hya/basic-tui-components` | `bundles/first-party/basic-tui-components` | Built-in TUI Sessions, Todos, Projects and Context surfaces |
 | `hya/code-mode` | `bundles/first-party/code-mode` | The `code-mode__run` tool. Shipped disabled; `tools.code.mode` enables it ([Code mode](code-mode.md)) |
-| `hya/compaction` | `bundles/internal/compaction` | Internal bundle: the full-mode [compaction ladder](compaction.md) as a native rewriter |
+| `hya/compaction` | `bundles/internal/compaction` | Internal bundle: the full-mode [`shake` and `remote` steps](compaction.md) as a native rewriter extension |
 
 In-tree sources are searched in the `presets`, `first-party`, and `internal`
 groups, in that order.
+
+The four `hya/base-tools` tools `read`, `write`, `edit`, and `bash` replace
+the kernel's built-in tools of the same names in full mode; the kernel's
+versions run only in `hya exec --bare` ([Kernel](kernel.md#differences-from-full-mode)).
+The kernel's `rewrite` and `todo` stay kernel-run in both modes, and no
+bundle tool or alias may take either name. Full mode's system prompt starts
+with the kernel prompt composed from the round's offered tools; the tool
+families contribute the `<tools>` lines and file-operations rule their
+`exposure.yaml` declares ([System prompt](kernel.md#system-prompt)).
 
 The former `hya/subagents` bundle and `hya-release` agent have been removed.
 

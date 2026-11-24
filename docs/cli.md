@@ -125,6 +125,51 @@ use the store's single-connection pool with a keeper connection.
 `connect_runtime` reserves the canonical file's lock before opening SQLite;
 `claim_runtime_owner` returns `RuntimeOwnerBusy` when that lock is already held.
 
+### Open policy and exit durability reporting
+
+Runtime commands open file-backed databases bounded by `OPEN_TIMEOUT` (5 s,
+running path resolution, owner-lock I/O, and initial file `stat` on detached OS
+threads; [ADR-0036](adr/0036-bounded-append-queue-and-degraded-store.md)):
+
+- **Strict open for servers, TUI runtime, and existing-session commands (`hya_app::open_store` / `SessionStore::connect_runtime`):**
+  `hya serve`, detached daemon `hya serve start|restart`, embedded `HyaRuntime`
+  (used by the TUI), `hya sessions archive|unarchive`, `hya workflow use|state`,
+  and `hya workflow run --session <id>` fail immediately with the underlying open
+  or timeout error rather than silently starting against an empty in-memory
+  store.
+- **Lifetime in-memory fallback for one-shot headless runs (`hya_app::open_store_or_memory` / `SessionStore::connect_runtime_or_memory`):**
+  Only one-shot headless runs that create and execute a single task —
+  `hya exec`, `hya exec --bare` (plain and `--json`), `hya -p` (already
+  in-memory), and direct `hya workflow run` (without `--session` or a server)
+  — fall back to an in-memory store for their whole life when opening fails with
+  a storage fault (e.g., read-only directory, missing parent, unwritable
+  filesystem, `ENOSPC`) or exceeds `OPEN_TIMEOUT` (5 s), writing one warning line
+  on stderr (`warning: could not open store at <path> (<reason>); running in memory — nothing will be persisted`)
+  and never switching to a different journal mode, another file path, or disk
+  mid-run.
+- **Propagated non-fallback errors:** `RuntimeOwnerBusy` (exit **75**),
+  `UnsupportedDatabase`, and `InvalidInput` path/URI/symlink errors always
+  propagate and are never masked by in-memory fallback.
+- **Exit drain and single stderr report (`EXIT_DRAIN_TIMEOUT` = 30 s):** After a
+  successful open, degraded writes and bounded exit drain apply to every
+  store-owning exit path — bare `hya exec --bare` (and `--json`), full-mode
+  headless runs (`exec`, `-p`, `loop`, direct `workflow`), `hya serve` /
+  `HyaRuntime` post-open startup failures and shutdown, and direct short writing
+  commands (`hya sessions archive|unarchive`, `hya workflow use|state`) —
+  draining pending queued appends up to `EXIT_DRAIN_TIMEOUT` (30 s; returning
+  immediately if flushing halted on file deletion/replacement/truncation/conflict
+  or if running in an open-time in-memory fallback) and emitting at most one
+  status line on stderr when not `Clean`:
+  - `hya: store <path> recovered after storage fault (<reason>); all events persisted`
+  - `hya: store <path> left <N> event(s) (<B> bytes, blobs included) unpersisted at exit: <reason>`
+  - `hya: store <path> ran in memory; nothing was persisted (<N> event(s), <B> bytes, blobs included): <reason>`
+  Commands routed to a running server (`exec`, `workflow`, or `sessions archive`
+  when a daemon holds `--db`) leave store durability and exit reporting to that
+  server rather than emitting a client exit report; an uncatchable `SIGKILL`
+  cannot run turn drain or store exit drain.
+- **`exec --json` stream purity:** All open and exit durability warnings go to
+  stderr so `--json` stdout stays pure JSONL lines.
+
 | Command | Store | Server holds the file `--db` | Nobody holds it |
 | --- | --- | --- | --- |
 | `exec` | `--db`, else in-memory | Through the server: a new root session in the current directory, one prompt turn, the same stdout. `--model` sets the session's model, `--yolo` its permission mode. `--bare`, `--pure`, or `--time-budget` exits 75. | Lock held for the run |
@@ -436,7 +481,8 @@ lines).
 the four tool-family presets (`hya/base-tools`, `hya/extended-tools`,
 `hya/network-tools`, `hya/channel-tools`), and
 `hya/core-skills`, `hya/core-commands`, and `hya/agent-channels` preset inventory
-alongside first-party and installed packages. Trusted inventory rows are
+and the internal bundle `hya/compaction` alongside first-party and installed
+packages. Trusted inventory rows are
 immutable and not installable; public packages cannot acquire preset
 privileges. A user or project bundle that overrides a first-party bundle takes
 precedence; removing the override restores the first-party bundle, which itself
@@ -749,25 +795,77 @@ runs whose prompt context is exactly what you passed.
 ```sh
 hya exec "summarize this repo"
 hya exec --json "summarize this repo"
+hya exec --json --include-subagents "delegate the checks" > tree.jsonl
+hya exec --bare --json "say hi" > run.jsonl
 hya exec --time-budget 900 "implement the requested change"
 ```
 
+A prompt argument of `-` reads UTF-8 from standard input through EOF, removes
+one trailing newline, and rejects an empty result or invalid UTF-8.
+
 ### `--bare`
 
-`hya exec --bare "<prompt>"` runs the three-primitive kernel alone, with five
-built-in tools (`bash`, `read`, `write`, `edit`, `rewrite`), its minimal system
-prompt, and event logging. It loads no bundle. It prints the final text to
-stdout; `--db` keeps the event log in SQLite.
+`hya exec --bare "<prompt>"` runs the three-primitive kernel alone, with six
+built-in tools (`bash`, `read`, `write`, `edit`, `rewrite`, `todo`), its minimal
+system prompt, and event logging. It runs without bundles and prints the final
+text to stdout by default. `--db` keeps the event log in SQLite.
+
+`hya exec --bare --json "<prompt>"` writes only the session's durable events
+to stdout, flushing one JSON envelope per line in sequence order as events
+commit, in the same format as `exec --json` and `tail-session`.
+To record a sandboxed run outside the sandbox, omit `--db` to keep the store
+in memory and save the JSON lines on the caller's side.
+
+Use `-` with `--bare` to keep the prompt out of process listings and prevent
+commands such as `pkill -f` and `pgrep -f` from matching hya itself on a file
+or program named in the prompt.
 
 ```sh
+printf '%s' "$PROMPT" | hya exec --bare -
 hya exec --bare "say hi" --db /tmp/x.db
+hya exec --bare --time-budget 900 "implement the change and write report.md"
 ```
 
-`--bare` conflicts with `--pure`, `--time-budget`, and `--json` (a usage
-error). It always runs in process against `--db`: when a running server holds
-that database it exits 75 instead of routing the run. Use another database or
-stop that server first. The model is `--model` or the configured default; the
-working directory is the cwd.
+`--bare` conflicts with `--pure` (a usage error). It always
+runs in process against `--db`. When a running server holds that database,
+it exits 75. Use another database or stop that server first. The model is
+`--model` or the configured default. The working directory is the cwd.
+
+`--time-budget <SECS>` accepts a positive integer (`u64`, at least 1).
+Bare mode announces the total budget on the first request. On the first
+model request after crossing another tenth of the budget, it reports elapsed
+and remaining seconds as `HEADLESS RUN — clock: Xs of Ys used, Zs left.`
+For a 900-second budget, the first update is due at 90 seconds. A new WrapUp
+or Final notice takes precedence and also reports the time. The event log
+records these as system messages. Each stage notice and clock line leaves
+the request history when the assistant responds. The shared thresholds and
+Bash timeout calculation are described below.
+The outside harness enforces the process deadline.
+
+Before the run ends, a run that has executed at least one tool call gets one
+completion check: when the model first answers without a tool call, bare mode
+adds a logged notice asking it to compare the result with the request's
+literal wording, and the run continues. Like a stage notice, the check is
+shown on the next model request once and leaves the request history when the
+assistant responds. The next answer without a tool call ends the run, and
+that answer is what `exec` prints. A turn with neither answer text nor a tool
+call (thinking only) does not end the run: up to twice in a row, a logged
+notice asks the model to continue
+([Turns without an answer](kernel.md#turns-without-an-answer)). No check is sent when the model never
+called a known tool, when the answer's round ended with an error, or when the
+run is cancelled.
+With `--time-budget`, the check is sent only while more than twice the Final
+window remains (more than 216 seconds for a 900-second budget or 432 seconds
+for a 1,800-second budget), giving the check a few rounds and keeping the
+Final window free for the last step.
+The exact text and rules are in [How a bare run ends](kernel.md#how-a-bare-run-ends).
+
+Bare mode retries a transient provider error or a stream that stalls or breaks
+up to eight times per round, after 5, 10, 20, 40, and then 60 seconds. A retry
+requires that the run stays active and the wait fits before Final. Output the
+failed attempt already produced is deleted from the message before the retry:
+it is never run and is not part of the printed answer. See [When a bare round fails](kernel.md#when-a-bare-round-fails).
+
 See [Kernel](kernel.md) for tool contracts, rewrite rules, and the differences
 from full mode.
 
@@ -813,7 +911,10 @@ A parameter opener may precede a long value, but its result closing tag must
 end the output. Ordinary endings such as `Vec<Calls>` and `syscalls>` do not
 count as tool calls. Corrective notices name DSML without repeating its raw
 marker glyphs.
-A trailing separator paragraph is ignored when checking an announcement.
+The driver skips trailing separator paragraphs. If the final paragraph has
+at most 400 characters, it checks the last sentence for a clause such as
+“First, I’ll check the logs” or “我先查看配置文件” that announces pending work.
+A paragraph ending with a colon signals unfinished work regardless of length.
 Done/failed roster entries and idle actors belonging to the finished Workflow
 run do not hold it open. Completed/blocked todos do not hold the run open.
 Use `wait` to collect workers or `archive` workers whose results are no longer
@@ -831,6 +932,12 @@ added by the continuation driver; late-stage worker guidance still asks for
 archiving work that cannot be integrated in time.
 These guards add no CLI flags, RPC routes, or wire types; `--json` includes the
 notices and continuation events in the same session's canonical JSONL stream.
+In direct full mode, a lead that called a known tool receives one completion check when
+it would otherwise stop and more than two Final windows remain. Each round resolves calls against its own tool registry, including sidecar tools, plus the kernel primitives. A plugin veto of an unknown name leaves the lead ineligible. For example,
+`hya exec --time-budget 900 "build and verify the package"` can use that
+extra turn to compare the files it produced against the request. The logged
+system notice suppresses duplicate checks when the session continues. It starts a fresh count of consecutive ignored continuation notices.
+
 Routed runs retain the server's single-prompt-turn behavior.
 
 `--time-budget <SECS>` accepts a positive integer (`u64`, at least 1). It
@@ -843,16 +950,54 @@ notices, a tool result carries one clock line (`HEADLESS RUN — clock: …s of
 …s used, …s left.`) each time another tenth of the budget has passed since
 the session was last told the time.
 
-The thresholds are remaining time: WrapUp is
+In either mode, the lead agent’s Final notice includes this instruction to
+preserve a checked deliverable as the time limit approaches.
+
+> If a delivered file already passes your checks, do not edit it in place — test
+> any change on a copy first and replace the file only if the copy still passes.
+> If a delivered file is unverified, verify it now and fix it directly only if
+> it fails.
+
+Both modes use the same thresholds, measured in remaining time. WrapUp is
 `min(clamp(35% B, 300s, 3600s), 50% B)`, Final is
 `clamp(12% B, 90s, 600s)`, and the Over guard is `clamp(5% B, 30s, 120s)`.
-Over uses the Final notice. Bash and member `wait` timeouts are capped to
-`max(remaining - min(guard, remaining / 2), 5s)`; a shorter requested timeout
-remains unchanged.
-This includes Bash's omitted timeout and `timeout: 0`. Bash reports
-`metadata.deadlineCapped: true` when shortened and explains the effective
-limit in `<shell_metadata>`. For example, a 900-second run with 200 seconds
-left caps a 300-second Bash call to about 155 seconds, reserving 45 seconds.
+Over uses the Final notice. The end-of-budget cap for Bash and member
+`wait` is `max(remaining - min(guard, remaining / 2), 5s)`.
+In bare mode Bash waits at most the smaller of
+`timeout` (300 seconds when omitted) and one tenth of the run's budget.
+While it waits, the model cannot act or see time updates. A 900-second
+budget limits one wait to 90 seconds and a 1,800-second budget limits it
+to 180 seconds. With a 3,600-second budget the default stays 300 seconds
+and a requested 600-second wait is capped at 360 seconds. Without a
+budget the requested or default wait applies.
+
+The end-of-budget cap above also applies in bare mode, bounded by the
+remaining time if less than 5 seconds are left. If this cap is the
+shorter limit and ends the wait, Bash kills the command's process group
+and returns the captured `output` and a `timed_out` note. Cancellation
+kills it too. If the requested timeout, default, or tenth-of-budget limit
+ends the wait, the command keeps running in the background. The
+`still_running` result names the limit and the output and exit code files.
+For output over 30,000 bytes, bare Bash returns the first 10,000 and last
+20,000 bytes with a marker naming the file that keeps the complete output.
+Bare Bash sets `PYTHONUNBUFFERED=1` so Python output reaches the file as it
+is printed. Other programs that buffer output when writing to a file may
+still show it late.
+The model receives the `output` string, which ends with `[exit code: N]`,
+`[still running: …]`, `[stopped: …]`, or `[not started: …]`.
+A yielded job keeps running across calls. To check it, read the output or
+exit code file in a later call. When the run ends, is cancelled, or reaches
+its deadline, Bash kills any remaining yielded group and writes `137` to its
+exit code file before exit. Without a budget, a job started with `&` can
+outlive a shell that has already returned its exit code.
+[Kernel tool reference](kernel.md#built-in-tools)
+In full mode the one-tenth wait (minimum five seconds) also applies to
+the default and to `timeout: 0`. In a 900-second run with 200 seconds left,
+a Unix non-PTY call that requests 300 seconds yields after 90 seconds with
+`metadata.stillRunning: true` and paths for live output and the exit code.
+When the end-of-budget limit shortens that wait, Bash reports
+`metadata.deadlineCapped: true` and kills the group at the effective limit.
+[Budgeted Bash timeouts](base-tools.md#budgeted-bash-timeouts)
 
 The flag is for an in-process run. When a running daemon owns `--db`, it exits
 75 through the normal unroutable-command diagnostic before creating a session;
@@ -861,15 +1006,45 @@ tool timeout caps; it also bounds continuation turns and does not itself kill
 the process. An outside harness owns the final wall-clock limit. Without the flag,
 no deadline is installed and existing timeouts apply.
 
-`--json` streams live: envelopes print as the engine broadcasts them (the
-database is written per-event regardless), with an initial catch-up pass for
-anything persisted before the stream attached and a final tail flush from the
-durable log. The printed set is exactly what `tail-session` replays for the
-session — sequence numbers and timestamps included — so an abnormally
-terminated run still leaves a usable partial trajectory on stdout before the
-nonzero exit surfaces. Ordering is bus-arrival order: almost always ascending,
-but concurrent writers (the turn loop, resident batches, mailbox commits) can
-interleave, so the final tail flush may append a late lower seq.
+`--include-subagents` extends the local full-mode `exec --json` stream to the
+root and every descendant, including grandchildren. The first creation fixes a session’s parent. Repeated creation events cannot bring an unrelated session into live output or replay. Each line is the same
+durable event envelope with its original session ID and global sequence number.
+Live events print in arrival order. If a storage fault delays the ancestry lookup, the next durable event for that session retries it. Startup, lag recovery, and final catch-up
+replay the tree in sequence order and skip numbers already printed.
+The flag requires `--json`, conflicts with `--bare`, and exits 75 if a
+running server owns the database. Omit it to stream only the root session.
+
+`--json` streams live: envelopes print as events commit (`exec --bare --json`
+writes directly from `JsonEmit` as each kernel append finishes without running
+`exec_stream` replay; routed `exec --json` forwards events from the owning
+server and propagates raw SDK replay errors without client-side recovery). For
+local full-mode `exec --json`, events print as the engine broadcasts them (the
+database is written per-event regardless), with an initial startup catch-up
+pass (`SessionStore::replay`, unbounded on a healthy store like `origin/main`)
+for anything persisted before the stream attached. Matching `origin/main` on a
+healthy store, local full-mode `exec --json` runs a full-session replay on
+broadcast lag and at the end of every run through the printer's seen sequence
+set. Lag replays and the final replay (not startup catch-up) are bounded by
+`READ_TIMEOUT` (5 s) regardless of write health; non-storage errors at lag are
+ignored during live streaming (as on `origin/main`, so the final replay surfaces
+them if they persist). If either a lag replay or the final replay fails with a
+storage fault or exceeds `READ_TIMEOUT`, `exec --json` retains the first fault,
+flushes what has already been printed (stdout remains pure JSON lines), writes
+one warning line to stderr (even when the final replay later succeeds or fails
+with a non-storage error), and exits with the run's own result (non-storage
+final replay errors propagate after flushing stdout and emitting any recorded
+lag warning). The stream contains what was broadcast, what the final read's SQL
+snapshot shows, and the acknowledged queue tail — an event whose producer was
+cancelled and whose SQLite COMMIT lands after that snapshot is not in it. What
+the user loses in that replay-fault mode is an incomplete `--json` stream with a
+warning (and `BlobBudget::keep_prior` / in-turn effort preference fallbacks log
+`tracing::warn!` events to subscribing hosts rather than printing to CLI
+stderr). When readable and not superseded by a post-snapshot raw-tx COMMIT, the
+printed set matches `tail-session` — sequence numbers and timestamps included —
+so an abnormally terminated run still leaves a usable partial trajectory on
+stdout before the nonzero exit surfaces. Ordering is bus-arrival order: almost
+always ascending, but concurrent writers (the turn loop, resident batches,
+mailbox commits) can interleave, so the final replay may append a late lower seq.
 
 When no command-line model override is present, a new headless root Session
 uses the selected Agent's effective default from that database. Direct/category
@@ -904,15 +1079,34 @@ restore prompt for the next start.
 | Signal during the run | What happens | `cause` | Exit status |
 | --- | --- | --- | --- |
 | SIGINT (Ctrl-C) | Drain: every in-flight turn in every session is cancelled and closed; the transcript/trajectory is still printed | `user_cancel` | **130** |
-| second SIGINT while draining | Exit immediately; the next start's crash recovery closes what is left (`cause: interrupted`) | — | **130** |
+| second SIGINT while draining | Stop and join foreground and yielded Bash jobs, then emit one store durability status line on stderr and exit. The next start's crash recovery closes what is left (`cause: interrupted`) | — | **130** |
 | SIGTERM | Drain as above | `shutdown` | **143** |
+| first SIGINT / SIGTERM during store exit drain or `--json` final replay | Stop and join foreground and yielded Bash jobs, emit the current store durability status on stderr, flush stdout, and exit with that signal's code | — | **130** / **143** |
 
-The drain waits at most **5 s** (`DRAIN_DEADLINE`) for cancelled turns to
-close themselves, then closes any still-open message itself. A process killed
-outright (SIGKILL, crash) leaves turns open; the next `hya` process that opens
-the same `--db` closes them at startup with `cause: interrupted`, once. The same
-stop handling applies to `-p` goal mode and `hya loop`; `hya workflow` drains at
-its normal end. Example:
+Bash closes admission before draining. A pipe or PTY command already running
+is supervised through cleanup even when a second signal interrupts its caller.
+On Unix, a foreground Bash call waits for same-group descendants even if the
+shell has exited and those descendants closed their output. For example,
+`(sleep 1 0<&- 1>&- 2>&-) & exit 7` waits for the sleep and returns the
+shell's exit code of 7. A writer that starts a separate session gets a bounded
+output drain once the original group finishes. On Linux, termination keeps the
+leader waitable during the group scan and releases the saved group ID before
+reaping the leader, including when the scan reports an error.
+
+The turn drain waits at most **5 s** (`DRAIN_DEADLINE`) for cancelled turns to
+close themselves, then closes any still-open message itself; store exit drain
+then waits up to **30 s** (`EXIT_DRAIN_TIMEOUT`) to flush queued appends and
+reports the final durability status on stderr. Direct `exec --bare` (plain and
+`--json`), `hya workflow` (`use`/`run`/`state`), and `hya sessions archive|unarchive`
+likewise catch `SIGINT`/`SIGTERM` once the store is open (a signal received while opening the database ends the process through the default handler; nothing is owned yet) to run store exit
+drain and exit **130** / **143** (a second `SIGINT` during draining, or a first
+`SIGINT`/`SIGTERM` arriving once store exit drain has begun, stops waiting on the
+drain, emits the single stderr durability status line for the current queue
+state, and exits **130** / **143**). An uncatchable `SIGKILL` (or process crash) cannot be
+caught and skips both turn drain and store exit drain; the next `hya` process
+that opens the same `--db` closes left-open turns at startup with
+`cause: interrupted`, once. The same stop handling applies to `-p` goal mode and
+`hya loop`. Example:
 
 ```sh
 hya --db run.db exec --json "long task" & pid=$!
@@ -1074,7 +1268,7 @@ restore.
 hya serve start                 # start the daemon of the default database (or find it)
 hya serve status                # url, pid, version, db, uptime; exit 1 when none runs
 hya serve stop                  # graceful stop; waits until it released the database
-hya serve stop --force          # SIGKILL after --timeout (default 30 s)
+hya serve stop --force          # SIGKILL after --timeout (default 45 s)
 hya serve restart --db ~/work.db
 hya serve start --json          # machine-readable (the TUI uses this)
 hya serve start --relay https://relay.example.com   # a daemon on a secure relay
@@ -1089,7 +1283,7 @@ after the action. The path is made absolute.
 | --- | --- | --- | --- |
 | `start [--json]` | If a server of the database answers (discovery file, live pid, healthy), report it. Else run `hya serve --bind 127.0.0.1:0 --db <db>` (plus this command's `--model`, `--yolo`, `--pure`, `--allow-host`, and relay flags) **detached**: its own session (`setsid`), working directory your home directory (`$HOME` when it exists, else `/`; never the caller's, since the backend serves every client wherever it runs), stdin `/dev/null`, stdout and stderr appended to `<db>.server.log` (rotated to `.1` above 4 MiB). Wait up to 60 s until it answers. If its start exits 75 (another client's daemon won the race, or the last one is still shutting down), wait for that server, or start again once the lock is free. | `started hya server pid <pid> at <url> (db <db>, log <log>)` or `hya server pid <pid> already running at <url> (hya <version>, db <db>)`. `--json`: `{"url", "pid", "version", "startedAt", "db", "log", "started"}` (`started` is true only when this call started it). A server of another hya version adds `note: the running server is hya X, this is hya Y; run `hya serve restart` to switch` on stderr. | **0**; **1** when the daemon exits with an error (its log tail is printed) or does not answer in 60 s |
 | `status [--json]` | Read the discovery file and probe the server. | `hya server pid <pid> running at <url>` and `version`, `db`, `uptime`, `log` lines. `--json`: `{"url", "pid", "version", "startedAt", "uptimeMs", "db", "log", "relay"?, "allowHosts"?}` (text: `relay` and `hosts` lines when set). | **0** running; **1** with `no hya server is running on <db>` (or `hya server pid <pid> holds <db> but does not answer (starting or stopping)`) on stderr |
-| `stop [--force] [--timeout <s>]` | Write the stop request (`<db>.server.stop`, reason `stop`), verify ownership and send SIGTERM to the PID published under the held kernel lock, then wait until the lock is free. The server drains turns (5 s) and ends every client stream with `serverStopping {reason: "stop"}`. `--force`: verify that the same PID still owns the lock before SIGKILL when it has not stopped within `--timeout` (default 30). | `stopped hya server pid <pid> (db <db>)` and `connected TUIs stay disconnected until /reconnect, or until a new hya client starts the next server`; `killed …` with `--force`; or `no hya server is running on <db>`. | **0** (also when nothing ran); **1** when it did not stop in time without `--force` |
+| `stop [--force] [--timeout <s>]` | Write the stop request (`<db>.server.stop`, reason `stop`), verify ownership and send SIGTERM to the PID published under the held kernel lock, then wait until the lock is free. The server drains turns (`DRAIN_DEADLINE`, 5 s), drains pending queued store writes (`EXIT_DRAIN_TIMEOUT`, 30 s), and ends every client stream with `serverStopping {reason: "stop"}`. Default `--timeout` is **45 s** (`> 5 s + 30 s`). Passing a shorter `--timeout` without `--force` causes `stop` to report failure early while the daemon finishes draining on its own; `--force` verifies the same PID still owns the lock before sending `SIGKILL` when it has not exited within `--timeout`, aborting any remaining turn/store drain and losing unpersisted queued writes. | `stopped hya server pid <pid> (db <db>)` and `connected TUIs stay disconnected until /reconnect, or until a new hya client starts the next server`; `killed …` with `--force`; or `no hya server is running on <db>`. | **0** (also when nothing ran); **1** when it did not stop in time without `--force` |
 | `restart [--json] [--force] [--timeout <s>]` | Stop the old daemon with reason `restart`, wait for it to release the database, then start this binary as a fresh daemon. Preserve the old relay and allowed hosts unless overridden. | A new ready line, or the `start --json` shape plus `restarted: true`; old streams end with `serverStopping {reason: "restart"}`. | **0** once the new daemon is healthy; **1** if stop or start fails |
 | `relay connect\|disconnect\|status\|link\|rotate` | Control the running backend's relay connector over its loopback-only `RelayControl` rpcs; see [the command table](relay.md#hosting-a-backend-on-a-relay). | `status`: `relay <state>` plus detail lines (`--json`: `RelayStatus`); `link`: the link alone; `connect`/`rotate`: `hya relay link: <link>`. | **0**; **1** when no server runs or the rpc fails (not joined for `link`, a bad URL for `connect`) |
 

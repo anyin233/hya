@@ -1,0 +1,2500 @@
+//! Integration tests for `hya`: bundle cli.
+
+use std::fs;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const LIST_HEADER: &str = "NAME VERSION AGENT STATE KIND WORKFLOW SCOPE";
+
+/// One `bundle list` row for a first-party bundle, released at the hya version.
+fn first_party_row(id: &str, rest: &str) -> String {
+    format!("{id} {}{rest} builtin", env!("CARGO_PKG_VERSION"))
+}
+const BUNDLE_ID: &str = "hya/valid-public";
+const BUNDLE_AGENT_ID: &str = "valid-public-lead";
+
+/// Creates and returns a data root that no other test in this binary can share.
+///
+/// Every test here runs on its own thread, so `std::process::id()` is constant
+/// across them and `as_nanos()` is not a reliable discriminator: seven threads
+/// released together observe the identical nanosecond in ~1.6% of rounds
+/// (measured, minimum delta 0ns), which is how
+/// `bundle_info_lists_prepared_static_resources` once hit `AlreadyExists` on
+/// `fs::create_dir`. The atomic serial makes uniqueness a guarantee instead of a
+/// probability — same idiom as `hya-app`'s runtime test `tempdir()`.
+///
+/// Returns the freshly created directory; callers must not create it again.
+fn unique_data_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    static NEXT_DATA_ROOT: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let serial = NEXT_DATA_ROOT.fetch_add(1, Ordering::Relaxed);
+    let data_root = std::env::temp_dir().join(format!(
+        "hya-bundle-cli-{}-{nanos}-{serial}",
+        std::process::id()
+    ));
+    fs::create_dir(&data_root)?;
+    Ok(data_root)
+}
+
+/// Build one minimal packaged Workflow source for installed CLI presentation tests.
+fn workflow_bundle_source() -> hya_bundle::BundleSource {
+    hya_bundle::BundleSource::new(
+        "workflow-info",
+        vec![
+            hya_bundle::SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Bundle
+identity:
+  id: hya/workflow-info
+  version: 1.0.0
+  publisher: hya
+workflow:
+  id: demo
+  path: workflows/demo.hya.md
+agents:
+  - id: demo-worker
+    role: subagent
+    prompt: prompts/worker.md
+"#,
+            ),
+            hya_bundle::SourceFile::new(
+                "workflows/demo.hya.md",
+                br#"---
+kind: Workflow
+name: demo
+description: Show one installed Workflow.
+nodes:
+  execute:
+    agent: demo-worker
+    directive: Execute.
+---
+flowchart TD
+  execute
+"#,
+            ),
+            hya_bundle::SourceFile::new(
+                "prompts/worker.md",
+                b"Execute the Workflow stage.\n".as_slice(),
+            ),
+        ],
+    )
+}
+
+/// Build a package that tries to replace the immutable first-party bundle id.
+fn first_party_collision_source() -> hya_bundle::BundleSource {
+    hya_bundle::BundleSource::new(
+        "first-party-collision",
+        vec![
+            hya_bundle::SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Bundle
+identity:
+  id: hya/core-agents
+  version: 9.9.9
+  publisher: attacker
+agents:
+  - id: collision-agent
+    role: main
+    prompt: prompts/collision.md
+"#,
+            ),
+            hya_bundle::SourceFile::new(
+                "prompts/collision.md",
+                b"This package must not replace a first-party bundle.\n".as_slice(),
+            ),
+        ],
+    )
+}
+
+fn goal_loop_override_source() -> hya_bundle::BundleSource {
+    hya_bundle::BundleSource::new(
+        "goal-loop-override",
+        vec![
+            hya_bundle::SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Bundle
+identity: { id: hya/goal-loop, version: 9.0.0, publisher: local }
+namespace: goal-loop
+resources:
+  skills: [{ id: evaluator-prompt, path: evaluator.md }]
+"#,
+            ),
+            hya_bundle::SourceFile::new(
+                "evaluator.md",
+                b"---\nname: evaluator-prompt\ndescription: override\n---\nCLI_OVERRIDE\n",
+            ),
+        ],
+    )
+}
+
+fn bundle_command(data_root: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hya"));
+    command
+        .env("XDG_DATA_HOME", data_root)
+        .env("XDG_STATE_HOME", data_root.join("state"))
+        .env("XDG_CONFIG_HOME", data_root.join("config"))
+        .env("HOME", data_root)
+        .current_dir(data_root);
+    command
+}
+
+/// Fixture Claude Code plugin source directory (`fixtures/claude-plugin/`).
+fn claude_fixture_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude-plugin")
+}
+
+/// The `--claude` path shells out to Bun for the offline translation; when
+/// Bun is unavailable (restricted environments) the CLI tests self-skip.
+fn bun_available() -> bool {
+    Command::new("bun")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+/// A package that claims the `demo` namespace under a different bundle id, so
+/// a subsequent `--claude` install must hit the namespace conflict policy.
+fn namespace_napper_package(data_root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let source = hya_bundle::BundleSource::new(
+        "namespace-napper",
+        vec![
+            hya_bundle::SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Bundle
+identity:
+  id: hya/demo-napper
+  version: 1.0.0
+  publisher: hya
+namespace: demo
+agents:
+  - id: napper
+    role: main
+    prompt: prompts/nap.md
+"#,
+            ),
+            hya_bundle::SourceFile::new("prompts/nap.md", b"Take a nap.\n"),
+        ],
+    );
+    let package = data_root.join("demo-napper.hyabundle");
+    fs::write(&package, hya_bundle::write_public_package(&source)?)?;
+    Ok(package)
+}
+
+fn assert_success(action: &str, output: &Output) {
+    assert!(
+        output.status.success(),
+        "bundle {action} failed with {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+async fn registry_with_old_and_current_bundles(
+    data_root: &Path,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let package = write_fixture(data_root)?;
+    let install = bundle_command(data_root)
+        .args(["bundle", "install", "-y"])
+        .arg(&package)
+        .output()?;
+    assert_success("install fixture", &install);
+    let registry_path = data_root.join("hya/bundles/registry.sqlite3");
+    let registry = hya_store::BundleRegistry::connect(&registry_path.to_string_lossy()).await?;
+    let prepared = hya_bundle::prepare_package(workflow_bundle_source())?;
+    registry
+        .install(
+            &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            hya_store::BundleInstallCandidate {
+                source_digest: [0x67; 32],
+                prepared_digest: prepared.digest().to_owned(),
+                prepared_bytes: prepared.bytes().to_vec(),
+                installed_at: 1,
+            },
+        )
+        .await?;
+    drop(registry);
+    corrupt_registry_row(data_root, BUNDLE_ID)?;
+    Ok(package)
+}
+
+fn corrupt_registry_row(data_root: &Path, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let corrupt = Command::new("python3")
+        .args([
+            "-c",
+            "import sqlite3,json,hashlib,sys\nwith sqlite3.connect(sys.argv[1]) as db:\n row=db.execute('SELECT prepared_bytes FROM installed_bundle WHERE bundle_id=?',(sys.argv[2],)).fetchone()\n doc=json.loads(row[0]);doc['format_version']=3\n data=json.dumps(doc).encode()\n db.execute('UPDATE installed_bundle SET prepared_bytes=?,prepared_digest=? WHERE bundle_id=?',(data,hashlib.sha256(data).hexdigest(),sys.argv[2]))",
+        ])
+        .arg(data_root.join("hya/bundles/registry.sqlite3"))
+        .arg(id)
+        .output()?;
+    assert_success("write old registry row", &corrupt);
+    Ok(())
+}
+
+struct BundleDaemon {
+    root: PathBuf,
+    db: String,
+    url: String,
+}
+
+impl BundleDaemon {
+    fn start(root: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let db = root.join("s.db").to_string_lossy().into_owned();
+        let started = bundle_command(root)
+            .args(["serve", "start", "--json", "--db", &db])
+            .output()?;
+        assert_success("serve start", &started);
+        let discovery: serde_json::Value = serde_json::from_slice(&started.stdout)?;
+        Ok(Self {
+            root: root.to_path_buf(),
+            db,
+            url: discovery["url"].as_str().ok_or("daemon URL")?.to_string(),
+        })
+    }
+
+    fn command(&self, args: &[&str]) -> Result<Output, std::io::Error> {
+        bundle_command(&self.root)
+            .arg("bundle")
+            .args(args)
+            .args(["--db", &self.db])
+            .output()
+    }
+}
+
+impl Drop for BundleDaemon {
+    fn drop(&mut self) {
+        let stopped = bundle_command(&self.root)
+            .args(["serve", "stop", "--db", &self.db])
+            .output();
+        assert!(stopped.is_ok_and(|output| output.status.success()));
+    }
+}
+
+#[tokio::test]
+async fn live_bundle_operations_isolate_unreadable_rows() -> Result<(), Box<dyn std::error::Error>>
+{
+    let root = unique_data_root()?;
+    let package = registry_with_old_and_current_bundles(&root).await?;
+    let override_package = root.join("override.hyabundle");
+    fs::write(
+        &override_package,
+        hya_bundle::write_public_package(&goal_loop_override_source())?,
+    )?;
+    assert_success(
+        "install override",
+        &bundle_command(&root)
+            .args(["bundle", "install", "-y"])
+            .arg(&override_package)
+            .output()?,
+    );
+    corrupt_registry_row(&root, "hya/goal-loop")?;
+    let daemon = BundleDaemon::start(&root)?;
+    for args in [
+        vec!["remove", "-y", BUNDLE_ID],
+        vec!["disable", "hya/workflow-info"],
+        vec!["enable", "hya/workflow-info"],
+        vec!["install", "-y", package.to_str().ok_or("package path")?],
+    ] {
+        let output = daemon.command(&args)?;
+        assert_success(&format!("{args:?}"), &output);
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(
+            stderr.contains("warning:") && stderr.contains("hya/goal-loop"),
+            "{stderr}"
+        );
+    }
+    let disabled = daemon.command(&["disable", "hya/goal-loop"])?;
+    assert_success("disable unreadable", &disabled);
+    let enabled = daemon.command(&["enable", "hya/goal-loop"])?;
+    assert!(
+        !enabled.status.success(),
+        "enabling the unreadable target must fail its own refresh"
+    );
+    assert!(String::from_utf8(enabled.stderr)?.contains("hya/goal-loop"));
+    assert_success(
+        "remove last unreadable",
+        &daemon.command(&["remove", "-y", "hya/goal-loop"])?,
+    );
+    drop(daemon);
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_refresh_attributes_each_unreadable_row() -> Result<(), Box<dyn std::error::Error>> {
+    let root = unique_data_root()?;
+    registry_with_old_and_current_bundles(&root).await?;
+    corrupt_registry_row(&root, "hya/workflow-info")?;
+    let daemon = BundleDaemon::start(&root)?;
+    for _ in 0..2 {
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/bundles:refresh", daemon.url))
+            .json(&serde_json::json!({}))
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<hya_api::v1::RefreshBundlesResponse>()
+            .await?;
+        let errors = response.errors;
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert_eq!(
+            errors
+                .iter()
+                .map(|error| error.bundle_id.as_str())
+                .collect::<Vec<_>>(),
+            [BUNDLE_ID, "hya/workflow-info"]
+        );
+        assert!(
+            errors
+                .iter()
+                .all(|error| error.message.contains("reinstall"))
+        );
+    }
+    drop(daemon);
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_info_and_schema_report_unreadable_ids_without_builtin_fallthrough()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = unique_data_root()?;
+    registry_with_old_and_current_bundles(&root).await?;
+    let package = root.join("override.hyabundle");
+    fs::write(
+        &package,
+        hya_bundle::write_public_package(&goal_loop_override_source())?,
+    )?;
+    assert_success(
+        "install override",
+        &bundle_command(&root)
+            .args(["bundle", "install", "-y"])
+            .arg(&package)
+            .output()?,
+    );
+    corrupt_registry_row(&root, "hya/goal-loop")?;
+    let daemon = BundleDaemon::start(&root)?;
+    for id in [BUNDLE_ID, "hya/goal-loop"] {
+        for action in ["info", "schema"] {
+            for scope in [None, Some("--user")] {
+                let mut args = vec!["bundle", action, id];
+                args.extend(scope);
+                let output = bundle_command(&root).args(args).output()?;
+                let text = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                for expected in [id, "unreadable", "format", "reinstall"] {
+                    assert!(text.contains(expected), "{action} {id}: {text}");
+                }
+                assert!(!text.contains("state=active"), "{text}");
+            }
+        }
+    }
+    drop(daemon);
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_reinstall_preserves_disabled_and_uninstall_clears_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = unique_data_root()?;
+    let package = write_fixture(&root)?;
+    assert_success(
+        "install",
+        &bundle_command(&root)
+            .args(["bundle", "install", "-y"])
+            .arg(&package)
+            .output()?,
+    );
+    let daemon = BundleDaemon::start(&root)?;
+    assert_success("disable", &daemon.command(&["disable", BUNDLE_ID])?);
+    corrupt_registry_row(&root, BUNDLE_ID)?;
+    let registry = hya_store::BundleRegistry::connect(
+        &root.join("hya/bundles/registry.sqlite3").to_string_lossy(),
+    )
+    .await?;
+    let install = daemon.command(&["install", "-y", package.to_str().ok_or("package path")?])?;
+    assert_success("reinstall disabled unreadable", &install);
+    assert!(String::from_utf8(install.stdout)?.contains("installed, disabled"));
+    assert!(registry.disabled_bundle_ids().await?.contains(BUNDLE_ID));
+    assert_success(
+        "uninstall disabled",
+        &daemon.command(&["uninstall", "-y", BUNDLE_ID])?,
+    );
+    assert!(!registry.disabled_bundle_ids().await?.contains(BUNDLE_ID));
+    drop(daemon);
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_refresh_skips_disabled_unreadable_rows() -> Result<(), Box<dyn std::error::Error>> {
+    let root = unique_data_root()?;
+    registry_with_old_and_current_bundles(&root).await?;
+    let registry = hya_store::BundleRegistry::connect(
+        &root.join("hya/bundles/registry.sqlite3").to_string_lossy(),
+    )
+    .await?;
+    registry.set_bundle_enabled(BUNDLE_ID, false).await?;
+    let daemon = BundleDaemon::start(&root)?;
+    let response = reqwest::Client::new()
+        .post(format!("{}/v1/bundles:refresh", daemon.url))
+        .json(&serde_json::json!({}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<hya_api::v1::RefreshBundlesResponse>()
+        .await?;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let list = bundle_command(&root).args(["bundle", "list"]).output()?;
+    assert_success("list disabled unreadable", &list);
+    let text = String::from_utf8(list.stdout)?;
+    let row = text
+        .lines()
+        .find(|line| line.starts_with(BUNDLE_ID))
+        .ok_or("missing row")?;
+    assert!(
+        row.contains("disabled") && row.contains("unreadable"),
+        "{row}"
+    );
+    drop(daemon);
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn bundle_list_shows_readable_and_unreadable_registry_rows()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    registry_with_old_and_current_bundles(&data_root).await?;
+    let output = bundle_command(&data_root)
+        .args(["bundle", "list"])
+        .output()?;
+    assert_success("list with unreadable row", &output);
+    let text = String::from_utf8(output.stdout)?;
+    let old = text
+        .lines()
+        .find(|line| line.starts_with(BUNDLE_ID))
+        .ok_or("missing old row")?;
+    assert!(old.contains("unreadable"), "{text}");
+    let current = text
+        .lines()
+        .find(|line| line.starts_with("hya/workflow-info "))
+        .ok_or("missing readable row")?;
+    assert!(current.contains("active"), "{text}");
+    fs::remove_dir_all(data_root)?;
+    Ok(())
+}
+
+#[test]
+fn bundle_list_includes_an_unpreparable_project_manifest() -> Result<(), Box<dyn std::error::Error>>
+{
+    let data_root = unique_data_root()?;
+    let dir = data_root.join(".hya/bundles/broken");
+    fs::create_dir_all(&dir)?;
+    fs::write(
+        dir.join("bundle.yaml"),
+        "kind: Bundle\nidentity: { id: test/broken, version: 1.0.0, publisher: test }\nagents: [{ id: broken, role: main, prompt: missing.md }]\n",
+    )?;
+    let output = bundle_command(&data_root)
+        .args(["bundle", "list", "--project"])
+        .output()?;
+    assert_success("list invalid project bundle", &output);
+    let text = String::from_utf8(output.stdout)?;
+    assert!(
+        text.lines().any(|line| line.starts_with("test/broken ")
+            && line.contains("unreadable")
+            && line.ends_with("project")),
+        "{text}"
+    );
+    fs::remove_dir_all(data_root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn bundle_remove_deletes_an_unreadable_registry_row() -> Result<(), Box<dyn std::error::Error>>
+{
+    let data_root = unique_data_root()?;
+    registry_with_old_and_current_bundles(&data_root).await?;
+    let output = bundle_command(&data_root)
+        .args(["bundle", "remove", "-y", BUNDLE_ID])
+        .output()?;
+    assert_success("remove unreadable row", &output);
+    let registry = hya_store::BundleRegistry::connect(
+        &data_root
+            .join("hya/bundles/registry.sqlite3")
+            .to_string_lossy(),
+    )
+    .await?;
+    let snapshot = registry.snapshot().await?;
+    assert_eq!(snapshot.generation, 3);
+    assert_eq!(snapshot.bundles.len(), 1);
+    assert_eq!(snapshot.bundles[0].bundle_id, "hya/workflow-info");
+    fs::remove_dir_all(data_root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn bundle_install_overwrite_replaces_an_unreadable_row_with_the_same_package()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = registry_with_old_and_current_bundles(&data_root).await?;
+    let output = bundle_command(&data_root)
+        .args(["bundle", "install", "--overwrite", "-y"])
+        .arg(package)
+        .output()?;
+    assert_success("overwrite unreadable row", &output);
+    let registry = hya_store::BundleRegistry::connect(
+        &data_root
+            .join("hya/bundles/registry.sqlite3")
+            .to_string_lossy(),
+    )
+    .await?;
+    let snapshot = registry.snapshot().await?;
+    assert_eq!(
+        snapshot.generation, 3,
+        "the same source still needs replacement"
+    );
+    assert_eq!(snapshot.bundles.len(), 2);
+    fs::remove_dir_all(data_root)?;
+    Ok(())
+}
+
+#[test]
+fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = write_fixture(&data_root)?;
+
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "-y"])
+        .arg(&package)
+        .output()?;
+    assert_success("install", &install);
+    let install_stdout = String::from_utf8(install.stdout)?;
+    for expected in [BUNDLE_ID, "1.0.0", "generation=1"] {
+        assert!(
+            install_stdout.contains(expected),
+            "install stdout omitted {expected:?}:\n{install_stdout}"
+        );
+    }
+
+    let list = bundle_command(&data_root)
+        .args(["bundle", "list"])
+        .output()?;
+    assert_success("list", &list);
+    let list_stdout = String::from_utf8(list.stdout)?;
+    let mut list_lines = list_stdout.lines();
+    assert_eq!(
+        list_lines.next(),
+        Some(LIST_HEADER),
+        "unexpected bundle list header:\n{list_stdout}"
+    );
+    let installed_row = list_lines.find(|line| line.split_whitespace().next() == Some(BUNDLE_ID));
+    assert_eq!(
+        installed_row.map(|line| line.split_whitespace().collect::<Vec<_>>()),
+        Some(vec![
+            BUNDLE_ID,
+            "1.0.0",
+            BUNDLE_AGENT_ID,
+            "active",
+            "Bundle",
+            "-",
+            "user",
+        ]),
+        "bundle list omitted the installed row:\n{list_stdout}"
+    );
+
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", BUNDLE_ID])
+        .output()?;
+    assert_success("info", &info);
+    let info_stdout = String::from_utf8(info.stdout)?;
+    let expected_digest = format!(
+        "prepared_digest={}",
+        hya_bundle::inspect_public_package(&fs::read(&package)?)?.digest()
+    );
+    for expected in [
+        "name=hya/valid-public",
+        "version=1.0.0",
+        "publisher=hya",
+        "origin=installed",
+        "format=public-v1",
+        "state=active",
+        "immutable=false",
+        "source_digest=7eccef7d54c0cbd1df6dea2a54bfc0761b1800f144f11eb3fe4244299203aabe",
+        expected_digest.as_str(),
+        "kind=Bundle",
+        "agent=valid-public-lead",
+    ] {
+        assert!(
+            info_stdout.lines().any(|line| line == expected),
+            "bundle info omitted {expected:?}:\n{info_stdout}"
+        );
+    }
+
+    let uninstall = bundle_command(&data_root)
+        .args(["bundle", "uninstall", "-y", BUNDLE_ID])
+        .output()?;
+    assert_success("uninstall", &uninstall);
+    let uninstall_stdout = String::from_utf8(uninstall.stdout)?;
+    assert!(
+        uninstall_stdout.contains("generation=2"),
+        "uninstall stdout omitted generation=2:\n{uninstall_stdout}"
+    );
+
+    let final_list = bundle_command(&data_root)
+        .args(["bundle", "list"])
+        .output()?;
+    assert_success("final list", &final_list);
+    let final_list_stdout = String::from_utf8(final_list.stdout)?;
+    assert!(
+        !final_list_stdout.contains(BUNDLE_ID),
+        "uninstalled bundle remained listed:\n{final_list_stdout}"
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn private_format_is_rejected_without_mutating_registry()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let private_package = data_root.join("private.hyabundle");
+    fs::write(&private_package, private_v1_envelope())?;
+    let registry_dir = data_root.join("hya/bundles");
+    let registry_path = registry_dir.join("registry.sqlite3");
+
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", "-f"])
+        .arg(&private_package)
+        .output()?;
+    assert!(!info.status.success());
+    assert!(String::from_utf8(info.stderr)?.contains("invalid bundle package format"));
+    assert!(
+        !registry_path.exists(),
+        "unsupported format created a registry"
+    );
+
+    fs::create_dir_all(&registry_dir)?;
+    let registry_path_string = registry_path.to_string_lossy().into_owned();
+    let registry = hya_store::BundleRegistry::connect(&registry_path_string).await?;
+    let before = registry.snapshot().await?;
+    assert_eq!(before.generation, 0);
+    assert!(before.bundles.is_empty());
+
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "-y"])
+        .arg(&private_package)
+        .output()?;
+    assert!(
+        !install.status.success(),
+        "private bundle install unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&install.stdout),
+        String::from_utf8_lossy(&install.stderr),
+    );
+    let install_stderr = String::from_utf8(install.stderr)?;
+    assert!(
+        install_stderr.contains("invalid bundle package format"),
+        "private bundle install omitted typed error:\n{install_stderr}"
+    );
+    let after = registry.snapshot().await?;
+    assert_eq!(after.generation, 0);
+    assert!(after.bundles.is_empty());
+
+    drop(registry);
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn bundle_list_and_info_include_first_party_without_creating_registry()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let registry_path = data_root.join("hya/bundles/registry.sqlite3");
+    assert!(!registry_path.exists());
+
+    let list = bundle_command(&data_root)
+        .args(["bundle", "list"])
+        .output()?;
+    assert_success("first-party list", &list);
+    let list_stdout = String::from_utf8(list.stdout)?;
+    for expected in [
+        LIST_HEADER.to_string(),
+        first_party_row("hya/base-tools", "  active Bundle -"),
+        first_party_row("hya/channel-tools", "  active Bundle -"),
+        first_party_row("hya/compaction", "  active Bundle -"),
+        first_party_row("hya/core-commands", "  active Bundle -"),
+        first_party_row("hya/core-skills", "  active Bundle -"),
+        first_party_row("hya/extended-tools", "  active Bundle -"),
+        first_party_row("hya/network-tools", "  active Bundle -"),
+        first_party_row(
+            "hya/goal-loop",
+            " hya-goal-guide,hya-goal-verifier active Bundle -",
+        ),
+        first_party_row(
+            "hya/plan-impl-review",
+            " hya-pir-implementer,hya-pir-planner,hya-pir-reviewer active Bundle plan-impl-review",
+        ),
+    ] {
+        assert!(
+            list_stdout.lines().any(|line| line == expected),
+            "bundle list omitted {expected:?}:\n{list_stdout}"
+        );
+    }
+    assert!(
+        !registry_path.exists(),
+        "read-only bundle list created a bundle registry"
+    );
+
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", "hya/plan-impl-review"])
+        .output()?;
+    assert_success("first-party info", &info);
+    let info_stdout = String::from_utf8(info.stdout)?;
+    for expected in [
+        "name=hya/plan-impl-review",
+        "origin=first-party",
+        "format=prepared-v4",
+        "immutable=true",
+        "kind=Bundle",
+        "workflow=plan-impl-review",
+    ] {
+        assert!(
+            info_stdout.lines().any(|line| line == expected),
+            "first-party bundle info omitted {expected:?}:\n{info_stdout}"
+        );
+    }
+    assert!(
+        !registry_path.exists(),
+        "read-only first-party bundle info created a bundle registry"
+    );
+
+    let uninstall = bundle_command(&data_root)
+        .args(["bundle", "uninstall", "-y", "hya/plan-impl-review"])
+        .output()?;
+    assert!(
+        !uninstall.status.success(),
+        "immutable first-party uninstall unexpectedly succeeded"
+    );
+    assert!(
+        String::from_utf8_lossy(&uninstall.stderr).contains("immutable first-party"),
+        "first-party uninstall must report immutability: {}",
+        String::from_utf8_lossy(&uninstall.stderr)
+    );
+    assert!(
+        !registry_path.exists(),
+        "rejected first-party uninstall created a bundle registry"
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+/// Installation rejects identities reserved by immutable trusted presets.
+#[test]
+fn bundle_install_rejects_first_party_identity_collision_before_registry_mutation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = data_root.join("collision.hyabundle");
+    fs::write(
+        &package,
+        hya_bundle::write_public_package(&first_party_collision_source())?,
+    )?;
+
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "-y"])
+        .arg(&package)
+        .output()?;
+    assert!(
+        !install.status.success(),
+        "colliding install unexpectedly succeeded"
+    );
+    let stderr = String::from_utf8(install.stderr)?;
+    assert!(
+        stderr.contains("immutable trusted preset `hya/core-agents`"),
+        "colliding install reported the wrong error:\n{stderr}"
+    );
+    assert!(
+        !data_root.join("hya/bundles/registry.sqlite3").exists(),
+        "rejected first-party collision created a bundle registry"
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn bundle_install_first_party_override_and_uninstall_restores_fallback()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = data_root.join("goal-loop-override.hyabundle");
+    fs::write(
+        &package,
+        hya_bundle::write_public_package(&goal_loop_override_source())?,
+    )?;
+
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "-y"])
+        .arg(&package)
+        .output()?;
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", "hya/goal-loop"])
+        .output()?;
+    let info_stdout = String::from_utf8(info.stdout)?;
+    assert!(info_stdout.contains("version=9.0.0\n"), "{info_stdout}");
+    assert!(info_stdout.contains("origin=installed\n"), "{info_stdout}");
+
+    let list = bundle_command(&data_root)
+        .args(["bundle", "list"])
+        .output()?;
+    let list_stdout = String::from_utf8(list.stdout)?;
+    let goal_rows = list_stdout
+        .lines()
+        .filter(|line| line.starts_with("hya/goal-loop "))
+        .collect::<Vec<_>>();
+    assert_eq!(goal_rows.len(), 1, "{list_stdout}");
+    assert!(goal_rows[0].starts_with("hya/goal-loop 9.0.0 "));
+
+    let uninstall = bundle_command(&data_root)
+        .args(["bundle", "uninstall", "-y", "hya/goal-loop"])
+        .output()?;
+    assert!(
+        uninstall.status.success(),
+        "{}",
+        String::from_utf8_lossy(&uninstall.stderr)
+    );
+
+    let fallback = bundle_command(&data_root)
+        .args(["bundle", "info", "hya/goal-loop"])
+        .output()?;
+    let fallback_stdout = String::from_utf8(fallback.stdout)?;
+    assert!(
+        fallback_stdout.contains(&format!("version={}\n", env!("CARGO_PKG_VERSION"))),
+        "{fallback_stdout}"
+    );
+    assert!(
+        fallback_stdout.contains("origin=first-party\n"),
+        "{fallback_stdout}"
+    );
+
+    fs::remove_dir_all(data_root)?;
+    Ok(())
+}
+
+#[test]
+fn public_info_file_prepares_without_registry_mutation() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = write_fixture(&data_root)?;
+    let registry_path = data_root.join("hya/bundles/registry.sqlite3");
+    assert!(
+        !registry_path.exists(),
+        "fresh data root unexpectedly contains a bundle registry"
+    );
+
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", "-f"])
+        .arg(&package)
+        .output()?;
+    assert_success("public package info", &info);
+    let stdout = String::from_utf8(info.stdout)?;
+    let expected_digest = format!(
+        "prepared_digest: {}",
+        hya_bundle::inspect_public_package(&fs::read(&package)?)?.digest()
+    );
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        vec![
+            "format: public-v1",
+            "name: hya/valid-public",
+            "version: 1.0.0",
+            "publisher: hya",
+            "origin: package",
+            "state: inspected",
+            "immutable: false",
+            "source_digest: 7eccef7d54c0cbd1df6dea2a54bfc0761b1800f144f11eb3fe4244299203aabe",
+            expected_digest.as_str(),
+            "kind: Bundle",
+            "agent: valid-public-lead",
+        ],
+        "unexpected public package info:\n{stdout}"
+    );
+    assert!(
+        !registry_path.exists(),
+        "public package info created a bundle registry"
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn install_and_info_file_require_exact_lowercase_hyabundle_suffix()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let packages = [
+        data_root.join("demo.HYABUNDLE"),
+        data_root.join("demo.hyabundle.extra"),
+    ];
+    for package in &packages {
+        fs::write(
+            package,
+            include_bytes!(
+                "../../../hya-bundle/tests/fixtures/packages/valid_public_bundle_copy.7z"
+            ),
+        )?;
+    }
+    let registry_path = data_root.join("hya/bundles/registry.sqlite3");
+    assert!(!registry_path.exists());
+    let commands: [(&str, &[&str]); 2] = [
+        ("bundle info -f", &["bundle", "info", "-f"]),
+        ("bundle install", &["bundle", "install", "-y"]),
+    ];
+
+    for package in &packages {
+        for &(action, args) in &commands {
+            let output = bundle_command(&data_root)
+                .args(args)
+                .arg(package)
+                .output()?;
+            assert!(
+                !output.status.success(),
+                "{action} accepted invalid package suffix {}\nstdout:\n{}\nstderr:\n{}",
+                package.display(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            let stderr = String::from_utf8(output.stderr)?;
+            assert!(
+                stderr.contains("exact lowercase .hyabundle suffix"),
+                "{action} omitted the suffix error for {}:\n{stderr}",
+                package.display(),
+            );
+            assert!(
+                !registry_path.exists(),
+                "{action} created a bundle registry for {}",
+                package.display(),
+            );
+        }
+    }
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn bundle_info_lists_prepared_static_resources() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let registry_parent = data_root.join("hya/bundles");
+    fs::create_dir_all(&registry_parent)?;
+    let registry_path = registry_parent.join("registry.sqlite3");
+    let prepared = hya_bundle::prepare_package(hya_bundle::BundleSource::new(
+        "resource-info",
+        vec![
+            hya_bundle::SourceFile::new(
+                "bundle.hya.md",
+                br#"---
+kind: Bundle
+identity:
+  id: hya/resource-info
+  version: 1.0.0
+  publisher: hya
+resources:
+  skills:
+    - id: handbook
+      path: skills/handbook.md
+agents:
+  - id: resource-info-lead
+    role: main
+---
+You are the resource info lead.
+"#,
+            ),
+            hya_bundle::SourceFile::new(
+                "skills/handbook.md",
+                b"# Handbook\nUse the handbook.\n".as_slice(),
+            ),
+        ],
+    ))?;
+    let registry_path_string = registry_path.to_string_lossy().into_owned();
+    let registry = hya_store::BundleRegistry::connect(&registry_path_string).await?;
+    let installed = registry
+        .install(
+            &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            hya_store::BundleInstallCandidate {
+                source_digest: [0x52; 32],
+                prepared_digest: prepared.digest().to_owned(),
+                prepared_bytes: prepared.bytes().to_vec(),
+                installed_at: 1_725_000_011,
+            },
+        )
+        .await?;
+    assert_eq!(
+        installed,
+        hya_store::BundleInstallOutcome::Installed { generation: 1 }
+    );
+    drop(registry);
+
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", "hya/resource-info"])
+        .output()?;
+    assert_success("resource bundle info", &info);
+    let stdout = String::from_utf8(info.stdout)?;
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line == "agent=resource-info-lead"),
+        "resource bundle info omitted the stable agent:\n{stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line == "skill=bundle:hya/resource-info/skill/handbook"),
+        "resource bundle info omitted the prepared skill:\n{stdout}"
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+/// Installed Bundle list/info output names its payload and complete Agent closure.
+#[tokio::test]
+async fn workflow_bundle_list_and_info_show_kind_workflow_and_agents()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let registry_parent = data_root.join("hya/bundles");
+    fs::create_dir_all(&registry_parent)?;
+    let registry_path = registry_parent.join("registry.sqlite3");
+    let prepared = hya_bundle::prepare_package(workflow_bundle_source())?;
+    let registry_path_string = registry_path.to_string_lossy().into_owned();
+    let registry = hya_store::BundleRegistry::connect(&registry_path_string).await?;
+    registry
+        .install(
+            &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            hya_store::BundleInstallCandidate {
+                source_digest: [0x63; 32],
+                prepared_digest: prepared.digest().to_owned(),
+                prepared_bytes: prepared.bytes().to_vec(),
+                installed_at: 1_725_000_012,
+            },
+        )
+        .await?;
+    drop(registry);
+
+    let list = bundle_command(&data_root)
+        .args(["bundle", "list"])
+        .output()?;
+    assert_success("Bundle list", &list);
+    let list_stdout = String::from_utf8(list.stdout)?;
+    assert!(
+        list_stdout
+            .lines()
+            .any(|line| line == "hya/workflow-info 1.0.0 demo-worker active Bundle demo user"),
+        "unexpected Bundle list:\n{list_stdout}"
+    );
+
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", "hya/workflow-info"])
+        .output()?;
+    assert_success("Bundle info", &info);
+    let info_stdout = String::from_utf8(info.stdout)?;
+    for expected in ["kind=Bundle", "workflow=demo", "agent=demo-worker"] {
+        assert!(
+            info_stdout.lines().any(|line| line == expected),
+            "Bundle info omitted {expected:?}:\n{info_stdout}"
+        );
+    }
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn public_bun_bundle_install_publishes_resources_atomically()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = data_root.join("archive-js.hyabundle");
+    fs::write(
+        &package,
+        include_bytes!(
+            "../../../hya-bundle/tests/fixtures/packages/valid_public_bundle_js_copy.7z"
+        ),
+    )?;
+
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "-y"])
+        .arg(&package)
+        .output()?;
+    assert_success("public Bun bundle install", &install);
+    let install_stdout = String::from_utf8(install.stdout)?;
+    for expected in ["hya/archive-js", "1.0.0", "generation=1"] {
+        assert!(
+            install_stdout.contains(expected),
+            "install stdout omitted {expected:?}:\n{install_stdout}"
+        );
+    }
+
+    let registry_path = data_root.join("hya/bundles/registry.sqlite3");
+    let registry_path_string = registry_path.to_string_lossy().into_owned();
+    let registry = hya_store::BundleRegistry::connect(&registry_path_string).await?;
+    let snapshot = registry.snapshot().await?;
+    assert_eq!(snapshot.generation, 1);
+    assert_eq!(snapshot.bundles.len(), 1);
+    let Some(record) = snapshot.bundles.first() else {
+        return Err("installed bundle row is missing".into());
+    };
+    assert_eq!(record.bundle_id, "hya/archive-js");
+    let prepared =
+        hya_bundle::PreparedCatalog::decode(&record.prepared_bytes, &record.prepared_digest)?;
+    assert_eq!(prepared.bundles().len(), 1);
+    let Some(bundle) = prepared.bundles().first() else {
+        return Err("prepared bundle is missing".into());
+    };
+    assert_eq!(bundle.identity().id, "hya/archive-js");
+    let [agent] = bundle.agents() else {
+        return Err("prepared Bundle did not contain one Agent".into());
+    };
+    assert_eq!(agent.id.as_str(), "archive-js-lead");
+    assert_eq!(bundle.tools().len(), 1);
+    assert_eq!(bundle.hooks().len(), 1);
+    assert_eq!(bundle.extensions().len(), 1);
+    assert_eq!(
+        bundle.tools()[0].stable_id,
+        "bundle:hya/archive-js/tool/echo"
+    );
+    assert_eq!(bundle.tools()[0].content, "export const runtime = true;\n");
+    assert_eq!(
+        bundle.hooks()[0].stable_id,
+        "bundle:hya/archive-js/hook/event"
+    );
+    assert_eq!(bundle.hooks()[0].content, "export const runtime = true;\n");
+    assert_eq!(
+        bundle.extensions()[0].stable_id,
+        "bundle:hya/archive-js/extension/runtime"
+    );
+    assert_eq!(
+        bundle.extensions()[0].content,
+        "export const runtime = true;\n"
+    );
+    drop(registry);
+
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", "hya/archive-js"])
+        .output()?;
+    assert_success("public Bun bundle info", &info);
+    let info_stdout = String::from_utf8(info.stdout)?;
+    for expected in [
+        "agent=archive-js-lead",
+        "tool=bundle:hya/archive-js/tool/echo",
+        "hook=bundle:hya/archive-js/hook/event",
+        "extension=bundle:hya/archive-js/extension/runtime",
+    ] {
+        assert!(
+            info_stdout.lines().any(|line| line == expected),
+            "bundle info omitted {expected:?}:\n{info_stdout}"
+        );
+    }
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+fn write_fixture(data_root: &Path) -> Result<PathBuf, std::io::Error> {
+    let package = data_root.join("demo.hyabundle");
+    fs::write(
+        &package,
+        include_bytes!("../../../hya-bundle/tests/fixtures/packages/valid_public_bundle_copy.7z"),
+    )?;
+    Ok(package)
+}
+
+fn private_v1_envelope() -> Vec<u8> {
+    let mut bytes = b"HYABNDL\0".to_vec();
+    for value in [1_u16, 1, 1, 24, 12, 16] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes.extend_from_slice(&1_u64.to_le_bytes());
+    bytes.extend_from_slice(&[
+        0x6e, 0x34, 0x0b, 0x9c, 0xff, 0xb3, 0x7a, 0x98, 0x9c, 0xa5, 0x44, 0xe6, 0xbb, 0x78, 0x0a,
+        0x2c, 0x78, 0x90, 0x1d, 0x3f, 0xb3, 0x37, 0x38, 0x76, 0x85, 0x11, 0xa3, 0x06, 0x17, 0xaf,
+        0xa0, 0x1d,
+    ]);
+    bytes.extend_from_slice(b"x86_64-unknown-linux-gnu");
+    bytes.extend_from_slice(&[0; 12]);
+    bytes.push(0);
+    bytes.extend_from_slice(&[0; 16]);
+    assert_eq!(bytes.len(), 113);
+    bytes
+}
+
+/// Build one Bundle package declaring one JS tool and a `db` schema.
+fn schema_bundle_package(
+    data_root: &std::path::Path,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let source = hya_bundle::BundleSource::new(
+        "schema-cli",
+        vec![
+            hya_bundle::SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Bundle
+identity:
+  id: hya/schema-cli
+  version: 1.0.0
+  publisher: hya
+schemas:
+  - scheme: db
+    tool: query
+    writable: false
+resources:
+  tools:
+    - id: query
+      path: extensions/runtime.js
+extensions:
+  js:
+    - id: runtime
+      path: extensions/runtime.js
+agents:
+  - id: lead
+    role: main
+    resource_view:
+      allow:
+        - query
+        - runtime
+"#,
+            ),
+            hya_bundle::SourceFile::new("extensions/runtime.js", b"export default {}".to_vec()),
+        ],
+    );
+    let package = data_root.join("schema-cli.hyabundle");
+    fs::write(&package, hya_bundle::write_public_package(&source)?)?;
+    Ok(package)
+}
+
+fn stdout_lines(output: &Output) -> Vec<String> {
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn bundle_schema_shows_one_bundles_declarations_in_any_scope()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = schema_bundle_package(&data_root)?;
+    let expected = vec![
+        "SCHEME TOOL WRITABLE".to_string(),
+        "db query false".to_string(),
+    ];
+
+    // A package file prints its declarations without installing it.
+    let from_file = bundle_command(&data_root)
+        .args(["bundle", "schema"])
+        .arg(&package)
+        .output()?;
+    assert_success("schema <file>", &from_file);
+    assert_eq!(stdout_lines(&from_file), expected);
+
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "-y"])
+        .arg(&package)
+        .output()?;
+    assert_success("install", &install);
+    let installed = bundle_command(&data_root)
+        .args(["bundle", "schema", "hya/schema-cli"])
+        .output()?;
+    assert_success("schema <installed>", &installed);
+    assert_eq!(
+        stdout_lines(&installed),
+        expected,
+        "only this bundle's rows"
+    );
+
+    // A builtin bundle without declarations prints just the header.
+    let builtin = bundle_command(&data_root)
+        .args(["bundle", "schema", "hya/goal-loop"])
+        .output()?;
+    assert_success("schema <builtin>", &builtin);
+    assert_eq!(
+        stdout_lines(&builtin),
+        vec!["SCHEME TOOL WRITABLE".to_string()]
+    );
+    let preset = bundle_command(&data_root)
+        .args(["bundle", "schema", "hya/base-tools"])
+        .output()?;
+    assert_success("schema <preset>", &preset);
+
+    let unknown = bundle_command(&data_root)
+        .args(["bundle", "schema", "acme/missing"])
+        .output()?;
+    assert!(!unknown.status.success(), "unknown bundle must fail");
+    assert!(String::from_utf8(unknown.stderr)?.contains("BUNDLE_NOT_FOUND"));
+
+    let remove = bundle_command(&data_root)
+        .args(["bundle", "remove", "-y", "hya/schema-cli"])
+        .output()?;
+    assert_success("remove", &remove);
+    let after = bundle_command(&data_root)
+        .args(["bundle", "schema", "hya/schema-cli"])
+        .output()?;
+    assert!(!after.status.success(), "removed bundle must not resolve");
+
+    let project = bundle_command(&data_root)
+        .args(["bundle", "install", "--project", "-y"])
+        .arg(&package)
+        .output()?;
+    assert_success("install --project", &project);
+    let project_schema = bundle_command(&data_root)
+        .args(["bundle", "schema", "--project", "hya/schema-cli"])
+        .output()?;
+    assert_success("schema --project", &project_schema);
+    assert_eq!(stdout_lines(&project_schema), expected);
+    let user_schema = bundle_command(&data_root)
+        .args(["bundle", "schema", "--user", "hya/schema-cli"])
+        .output()?;
+    assert!(
+        !user_schema.status.success(),
+        "--user must not see project bundles"
+    );
+
+    let plural = bundle_command(&data_root)
+        .args(["bundle", "schemas"])
+        .output()?;
+    assert!(
+        !plural.status.success(),
+        "`bundle schemas` is replaced by `bundle schema <NAME>`"
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn bundle_search_covers_user_and_project_bundles_with_scope_and_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = write_fixture(&data_root)?;
+    let schema_package = schema_bundle_package(&data_root)?;
+    for args in [
+        vec!["bundle", "install", "-y"],
+        vec!["bundle", "install", "--project", "-y"],
+    ] {
+        let install = bundle_command(&data_root)
+            .args(&args)
+            .arg(&package)
+            .output()?;
+        assert_success("install", &install);
+    }
+    let project_only = bundle_command(&data_root)
+        .args(["bundle", "install", "--project", "-y"])
+        .arg(&schema_package)
+        .output()?;
+    assert_success("install --project schema bundle", &project_only);
+
+    let both = bundle_command(&data_root)
+        .args(["bundle", "search", "valid-public"])
+        .output()?;
+    assert_success("search", &both);
+    assert_eq!(
+        stdout_lines(&both),
+        vec![
+            LIST_HEADER.to_string(),
+            "hya/valid-public 1.0.0 valid-public-lead active Bundle - project".to_string(),
+            "hya/valid-public 1.0.0 valid-public-lead shadowed Bundle - user".to_string(),
+        ],
+        "search must cover both scopes the way list does"
+    );
+
+    let narrowed = bundle_command(&data_root)
+        .args(["bundle", "search", "--user", "valid-public"])
+        .output()?;
+    assert_success("search --user", &narrowed);
+    assert_eq!(
+        stdout_lines(&narrowed),
+        vec![
+            LIST_HEADER.to_string(),
+            "hya/valid-public 1.0.0 valid-public-lead shadowed Bundle - user".to_string(),
+        ]
+    );
+
+    let project = bundle_command(&data_root)
+        .args(["bundle", "search", "SCHEMA-CLI"])
+        .output()?;
+    assert_success("search project-only bundle", &project);
+    let rows = stdout_lines(&project);
+    assert_eq!(rows.len(), 2, "one matching row:\n{rows:?}");
+    assert!(rows[1].starts_with("hya/schema-cli ") && rows[1].ends_with(" project"));
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+/// Build one packaged Bundle declaring schemas, `extensions.process`, and
+/// `resources.mcp` for the `bundle info` declaration surface.
+fn declaration_bundle_package(
+    data_root: &std::path::Path,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let source = hya_bundle::BundleSource::new(
+        "decl-demo",
+        vec![
+            hya_bundle::SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Bundle
+identity:
+  id: hya/decl-demo
+  version: 1.0.0
+  publisher: hya
+schemas:
+  - scheme: db
+    tool: query
+    writable: false
+apis:
+  - id: usage
+    method: GET
+    scope: session
+    path: /usage
+    description: Token usage
+  - id: put-item
+    method: PUT
+    scope: global
+    path: /items/{id}
+    request_schema: schemas/item.json
+    response_schema: schemas/item.json
+permission_modes:
+  - id: careful
+    title: Careful
+    description: Approves read-only commands
+  - id: ci
+    title: CI
+resources:
+  tools:
+    - id: query
+      path: extensions/runtime.js
+  mcp:
+    - id: vecdb
+      path: mcp/vecdb.json
+  hooks:
+    - id: permission.approve
+      path: hooks/permission-approve.json
+extensions:
+  js:
+    - id: runtime
+      path: extensions/runtime.js
+  files:
+    - id: item-schema
+      path: schemas/item.json
+  process:
+    kind: bun
+    command: [bun, run, extensions/runtime.ts]
+agents:
+  - id: decl-lead
+    role: main
+    resource_view:
+      allow:
+        - query
+        - runtime
+"#,
+            ),
+            hya_bundle::SourceFile::new("extensions/runtime.js", b"export default {}".to_vec()),
+            hya_bundle::SourceFile::new("schemas/item.json", br#"{"type":"object"}"#.to_vec()),
+            hya_bundle::SourceFile::new("hooks/permission-approve.json", b"{}".to_vec()),
+            hya_bundle::SourceFile::new(
+                "mcp/vecdb.json",
+                br#"{"command": ["python3", "vecdb.py"]}"#.to_vec(),
+            ),
+        ],
+    );
+    let package = data_root.join("decl-demo.hyabundle");
+    fs::write(&package, hya_bundle::write_public_package(&source)?)?;
+    Ok(package)
+}
+
+/// `bundle info` reports declared schemas, the process extension, API endpoints,
+/// permission modes, and mcp entries — and prints none of those lines when the bundle declares none.
+#[test]
+fn bundle_info_reports_schema_process_and_mcp_declarations()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = declaration_bundle_package(&data_root)?;
+
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "-y"])
+        .arg(&package)
+        .output()?;
+    assert_success("install", &install);
+
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", "hya/decl-demo"])
+        .output()?;
+    assert_success("info", &info);
+    let stdout = String::from_utf8(info.stdout)?;
+    let lines = stdout.lines().collect::<Vec<_>>();
+    for expected in [
+        "schema=db tool=query writable=false",
+        "process=bun command=bun run extensions/runtime.ts",
+        "mcp=bundle:hya/decl-demo/mcp/vecdb",
+        "api=PUT global /items/{id} id=put-item request_schema=schemas/item.json response_schema=schemas/item.json",
+        "api=GET session /usage id=usage description=Token usage",
+        "permission_mode=hya/decl-demo/careful title=Careful description=Approves read-only commands",
+        "permission_mode=hya/decl-demo/ci title=CI",
+    ] {
+        assert!(
+            lines.contains(&expected),
+            "bundle info omitted {expected:?}:\n{stdout}"
+        );
+    }
+
+    // A bundle with no declarations prints none of the new lines.
+    let plain = bundle_command(&data_root)
+        .args(["bundle", "info", "hya/valid-public"])
+        .output()?;
+    let plain_ok = plain.status.success();
+    if plain_ok {
+        let plain_stdout = String::from_utf8(plain.stdout)?;
+        for fragment in ["schema=", "process=", "mcp=", "api=", "permission_mode="] {
+            assert!(
+                !plain_stdout.lines().any(|line| line.starts_with(fragment)),
+                "plain bundle info must not print {fragment:?} lines:\n{plain_stdout}"
+            );
+        }
+    }
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+/// `bundle install --claude <dir>` translates the fixture plugin offline and
+/// installs it as `claude/demo`; `bundle list` and `bundle info` show the
+/// translated Bundle with its skills and MCP declarations.
+#[test]
+fn bundle_install_claude_translates_and_installs_fixture() -> Result<(), Box<dyn std::error::Error>>
+{
+    if !bun_available() {
+        eprintln!("skipping: bun is not available");
+        return Ok(());
+    }
+    let data_root = unique_data_root()?;
+
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "-y", "--claude"])
+        .arg(claude_fixture_dir())
+        .output()?;
+    assert_success("claude install", &install);
+    let install_stdout = String::from_utf8(install.stdout)?;
+    for expected in ["installed claude/demo 1.0.0", "generation=1"] {
+        assert!(
+            install_stdout.contains(expected),
+            "claude install stdout omitted {expected:?}:\n{install_stdout}"
+        );
+    }
+
+    let list = bundle_command(&data_root)
+        .args(["bundle", "list"])
+        .output()?;
+    assert_success("list", &list);
+    let list_stdout = String::from_utf8(list.stdout)?;
+    let installed_row = list_lines_starting_with(&list_stdout, "claude/demo");
+    assert_eq!(
+        installed_row, "claude/demo 1.0.0 reviewer active Bundle - user",
+        "bundle list omitted the claude/demo row:\n{list_stdout}"
+    );
+
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", "claude/demo"])
+        .output()?;
+    assert_success("info", &info);
+    let info_stdout = String::from_utf8(info.stdout)?;
+    for expected in [
+        "name=claude/demo",
+        "version=1.0.0",
+        "publisher=claude",
+        "kind=Bundle",
+        "agent=reviewer",
+        "skill=bundle:claude/demo/skill/audit",
+        "skill=bundle:claude/demo/skill/review",
+        "mcp=bundle:claude/demo/mcp/vecdb",
+    ] {
+        assert!(
+            info_stdout.lines().any(|line| line == expected),
+            "bundle info omitted {expected:?}:\n{info_stdout}"
+        );
+    }
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn bundle_install_claude_resolves_local_marketplace_reference()
+-> Result<(), Box<dyn std::error::Error>> {
+    if !bun_available() {
+        eprintln!("skipping: bun is not available");
+        return Ok(());
+    }
+    let data_root = unique_data_root()?;
+    let marketplace = data_root.join("marketplace");
+    let plugin = marketplace.join("plugins/resource-only");
+    fs::create_dir_all(plugin.join("skills/scan"))?;
+    fs::write(
+        plugin.join("plugin.json"),
+        r#"{"name":"market-resource","version":"1.0.0"}"#,
+    )?;
+    fs::write(plugin.join("skills/scan/SKILL.md"), "# Scan\n")?;
+    fs::write(
+        marketplace.join("marketplace.json"),
+        r#"{"name":"fixture","plugins":[{"name":"resource-only","source":"./plugins/resource-only"}]}"#,
+    )?;
+    let reference = format!("{}#resource-only", marketplace.display());
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "-y", "--claude", &reference])
+        .output()?;
+    assert_success("claude marketplace install", &install);
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", "claude/market-resource"])
+        .output()?;
+    assert_success("claude marketplace info", &info);
+    assert!(String::from_utf8(info.stdout)?.contains("kind=Bundle"));
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+/// Reinstalling the same claude source is a no-op; a foreign bundle owning
+/// the `demo` namespace triggers NAMESPACE_CONFLICT guidance, and
+/// `--overwrite` replaces the incumbent.
+#[test]
+fn bundle_install_claude_conflicts_follow_namespace_policy()
+-> Result<(), Box<dyn std::error::Error>> {
+    if !bun_available() {
+        eprintln!("skipping: bun is not available");
+        return Ok(());
+    }
+    let data_root = unique_data_root()?;
+
+    // Same source twice: the registry dedupes to `unchanged`.
+    let first = bundle_command(&data_root)
+        .args(["bundle", "install", "-y", "--claude"])
+        .arg(claude_fixture_dir())
+        .output()?;
+    assert_success("first claude install", &first);
+    let second = bundle_command(&data_root)
+        .args(["bundle", "install", "-y", "--claude"])
+        .arg(claude_fixture_dir())
+        .output()?;
+    assert_success("second claude install", &second);
+    assert!(
+        String::from_utf8(second.stdout)?.contains("unchanged claude/demo"),
+        "identical claude reinstall must be unchanged"
+    );
+
+    // Uninstall, then let a foreign bundle claim the `demo` namespace.
+    let uninstall = bundle_command(&data_root)
+        .args(["bundle", "uninstall", "-y", "claude/demo"])
+        .output()?;
+    assert_success("uninstall", &uninstall);
+    let napper = namespace_napper_package(&data_root)?;
+    let napper_install = bundle_command(&data_root)
+        .args(["bundle", "install", "-y"])
+        .arg(&napper)
+        .output()?;
+    assert_success("napper install", &napper_install);
+
+    let denied = bundle_command(&data_root)
+        .args(["bundle", "install", "-y", "--claude"])
+        .arg(claude_fixture_dir())
+        .output()?;
+    assert!(
+        !denied.status.success(),
+        "namespace conflict install unexpectedly succeeded\nstdout:\n{}",
+        String::from_utf8_lossy(&denied.stdout)
+    );
+    let denied_stderr = String::from_utf8(denied.stderr)?;
+    assert!(
+        denied_stderr.contains("NAMESPACE_CONFLICT") && denied_stderr.contains("--overwrite"),
+        "conflict install omitted NAMESPACE_CONFLICT guidance:\n{denied_stderr}"
+    );
+
+    let replaced = bundle_command(&data_root)
+        .args(["bundle", "install", "-y", "--overwrite", "--claude"])
+        .arg(claude_fixture_dir())
+        .output()?;
+    assert_success("overwrite claude install", &replaced);
+    let replaced_stdout = String::from_utf8(replaced.stdout)?;
+    assert!(
+        replaced_stdout.contains("installed claude/demo")
+            || replaced_stdout.contains("replaced claude/demo"),
+        "overwrite install stdout unexpected:\n{replaced_stdout}"
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+fn list_lines_starting_with(stdout: &str, prefix: &str) -> String {
+    stdout
+        .lines()
+        .find(|line| line.starts_with(prefix))
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `bundle search <query>` filters the merged first-party + installed catalog
+/// by a case-insensitive substring over bundle ids, agent ids, and skill ids,
+/// printing `bundle list`-shaped rows for matching bundles only.
+#[test]
+fn bundle_search_filters_first_party_and_installed_metadata()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+
+    // Mixed-case bundle id match: only the goal-loop row prints.
+    let by_bundle_id = bundle_command(&data_root)
+        .args(["bundle", "search", "GOAL-LOOP"])
+        .output()?;
+    assert_success("search by bundle id", &by_bundle_id);
+    let by_bundle_id_stdout = String::from_utf8(by_bundle_id.stdout)?;
+    assert_eq!(
+        by_bundle_id_stdout.lines().collect::<Vec<_>>(),
+        vec![
+            LIST_HEADER.to_string(),
+            first_party_row(
+                "hya/goal-loop",
+                " hya-goal-guide,hya-goal-verifier active Bundle -"
+            ),
+        ],
+        "unexpected bundle id search rows:\n{by_bundle_id_stdout}"
+    );
+
+    // Skill id match: `goal-contract` exists only on hya/goal-loop.
+    let by_skill = bundle_command(&data_root)
+        .args(["bundle", "search", "goal-contract"])
+        .output()?;
+    assert_success("search by skill id", &by_skill);
+    let by_skill_stdout = String::from_utf8(by_skill.stdout)?;
+    assert!(
+        by_skill_stdout
+            .lines()
+            .any(|line| line.starts_with("hya/goal-loop")),
+        "skill id search omitted hya/goal-loop:\n{by_skill_stdout}"
+    );
+    assert!(
+        !by_skill_stdout.contains("hya/plan-impl-review"),
+        "skill id search printed an unrelated bundle:\n{by_skill_stdout}"
+    );
+
+    // Agent id match reaches the other first-party bundle.
+    let by_agent = bundle_command(&data_root)
+        .args(["bundle", "search", "hya-pir-planner"])
+        .output()?;
+    assert_success("search by agent id", &by_agent);
+    assert!(
+        String::from_utf8(by_agent.stdout)?
+            .lines()
+            .any(|line| line.starts_with("hya/plan-impl-review")),
+        "agent id search omitted hya/plan-impl-review"
+    );
+
+    // Installed bundles join the search surface after `bundle install`.
+    let package = write_fixture(&data_root)?;
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "-y"])
+        .arg(&package)
+        .output()?;
+    assert_success("install", &install);
+    let installed = bundle_command(&data_root)
+        .args(["bundle", "search", "VALID-PUBLIC"])
+        .output()?;
+    assert_success("search installed bundle", &installed);
+    let installed_stdout = String::from_utf8(installed.stdout)?;
+    assert_eq!(
+        installed_stdout.lines().collect::<Vec<_>>(),
+        vec![
+            LIST_HEADER,
+            "hya/valid-public 1.0.0 valid-public-lead active Bundle - user",
+        ],
+        "installed search must match the installed bundle only:\n{installed_stdout}"
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+/// `bundle search` requires a query (missing or whitespace-only exits
+/// non-zero) and `--help` prints the usage line.
+#[test]
+fn bundle_search_requires_query_and_answers_help() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+
+    let missing = bundle_command(&data_root)
+        .args(["bundle", "search"])
+        .output()?;
+    assert!(
+        !missing.status.success(),
+        "bundle search without a query must exit non-zero"
+    );
+    let missing_stderr = String::from_utf8(missing.stderr)?;
+    assert!(
+        missing_stderr.contains("Usage:"),
+        "missing-query error must print the usage line:\n{missing_stderr}"
+    );
+
+    let blank = bundle_command(&data_root)
+        .args(["bundle", "search", "   "])
+        .output()?;
+    assert!(
+        !blank.status.success(),
+        "whitespace-only query must exit non-zero"
+    );
+
+    let help = bundle_command(&data_root)
+        .args(["bundle", "search", "--help"])
+        .output()?;
+    assert_success("search help", &help);
+    let help_stdout = String::from_utf8(help.stdout)?;
+    assert!(
+        help_stdout.contains("Usage:") && help_stdout.contains("<QUERY>"),
+        "search help must show the usage line with <QUERY>:\n{help_stdout}"
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+/// When no bundle metadata matches, `bundle search` exits 0 and lists the
+/// full catalog instead (with a stderr hint). `schemas` matches no
+/// first-party bundle id, agent, or skill, so this pins the documented
+/// fallback that keeps `bundle search schemas` showing `hya/goal-loop`.
+#[test]
+fn bundle_search_without_a_metadata_match_lists_the_catalog()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let registry_path = data_root.join("hya/bundles/registry.sqlite3");
+
+    let search = bundle_command(&data_root)
+        .args(["bundle", "search", "schemas"])
+        .output()?;
+    assert_success("no-match search", &search);
+    let stdout = String::from_utf8(search.stdout)?;
+    for expected in [
+        LIST_HEADER.to_string(),
+        first_party_row("hya/base-tools", "  active Bundle -"),
+        first_party_row("hya/channel-tools", "  active Bundle -"),
+        first_party_row("hya/core-commands", "  active Bundle -"),
+        first_party_row("hya/core-skills", "  active Bundle -"),
+        first_party_row("hya/extended-tools", "  active Bundle -"),
+        first_party_row("hya/network-tools", "  active Bundle -"),
+        first_party_row(
+            "hya/goal-loop",
+            " hya-goal-guide,hya-goal-verifier active Bundle -",
+        ),
+        first_party_row(
+            "hya/plan-impl-review",
+            " hya-pir-implementer,hya-pir-planner,hya-pir-reviewer active Bundle plan-impl-review",
+        ),
+    ] {
+        assert!(
+            stdout.lines().any(|line| line == expected),
+            "no-match search omitted {expected:?}:\n{stdout}"
+        );
+    }
+    assert!(
+        String::from_utf8(search.stderr)?.contains("no bundle metadata matched"),
+        "no-match search must explain the fallback on stderr"
+    );
+    assert!(
+        !registry_path.exists(),
+        "read-only bundle search created a bundle registry"
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn agent_set_installs_lists_searches_and_uninstalls_as_one_package()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = unique_data_root()?;
+    let source = hya_bundle::BundleSource::new(
+        "agent-set-cli",
+        vec![hya_bundle::SourceFile::new(
+            "bundle.yaml",
+            br#"kind: Bundle
+identity: { id: acme/set-cli, version: 1.0.0, publisher: acme }
+agents:
+  - { id: set-cli-lead, role: main }
+  - { id: set-cli-reviewer, role: subagent }
+"#,
+        )],
+    );
+    let package = root.join("team.hyabundle");
+    fs::write(&package, hya_bundle::write_public_package(&source)?)?;
+    let path = package.to_str().ok_or("non-UTF8 package path")?;
+    for args in [
+        vec!["bundle", "info", "-f", path],
+        vec!["bundle", "install", "-y", path],
+        vec!["bundle", "info", "acme/set-cli"],
+        vec!["bundle", "list"],
+        vec!["bundle", "search", "set-cli-reviewer"],
+    ] {
+        let output = bundle_command(&root).args(&args).output()?;
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("acme/set-cli"), "{args:?}: {stdout}");
+        if args[1] != "install" {
+            assert!(stdout.contains("Bundle"), "{args:?}: {stdout}");
+            assert!(
+                stdout.contains("set-cli-lead") && stdout.contains("set-cli-reviewer"),
+                "{args:?}: {stdout}"
+            );
+        }
+    }
+    let uninstall = bundle_command(&root)
+        .args(["bundle", "uninstall", "-y", "acme/set-cli"])
+        .output()?;
+    assert_success("uninstall agent set", &uninstall);
+    let list = bundle_command(&root).args(["bundle", "list"]).output()?;
+    assert_success("list after agent-set uninstall", &list);
+    assert!(!String::from_utf8_lossy(&list.stdout).contains("acme/set-cli"));
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn plugin_installs_lists_searches_and_uninstalls_without_an_agent()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = unique_data_root()?;
+    let source = hya_bundle::BundleSource::new(
+        "plugin-cli",
+        vec![
+            hya_bundle::SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Bundle
+identity: { id: acme/plugin-cli, version: 1.0.0, publisher: acme }
+resources:
+  skills:
+    - id: plugin-help
+      path: resources/skills/plugin-help.md
+"#,
+            ),
+            hya_bundle::SourceFile::new(
+                "resources/skills/plugin-help.md",
+                b"---\nname: plugin-help\ndescription: Plugin CLI fixture.\n---\n# Plugin Help\nPlugin-only searchable skill.\n",
+            ),
+        ],
+    );
+    let package = root.join("plugin.hyabundle");
+    fs::write(&package, hya_bundle::write_public_package(&source)?)?;
+    let path = package.to_str().ok_or("non-UTF8 package path")?;
+
+    for args in [
+        vec!["bundle", "info", "-f", path],
+        vec!["bundle", "install", "-y", path],
+        vec!["bundle", "info", "acme/plugin-cli"],
+        vec!["bundle", "list"],
+        vec!["bundle", "search", "plugin-help"],
+    ] {
+        let output = bundle_command(&root).args(&args).output()?;
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("acme/plugin-cli"), "{args:?}: {stdout}");
+        if args[1] != "install" {
+            assert!(stdout.contains("Bundle"), "{args:?}: {stdout}");
+            if args[1] == "info" {
+                assert!(stdout.contains("plugin-help"), "{args:?}: {stdout}");
+            }
+        }
+    }
+    assert!(
+        bundle_command(&root)
+            .args(["bundle", "uninstall", "-y", "acme/plugin-cli"])
+            .output()?
+            .status
+            .success()
+    );
+    let list = bundle_command(&root).args(["bundle", "list"]).output()?;
+    assert!(!String::from_utf8_lossy(&list.stdout).contains("acme/plugin-cli"));
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+/// Run `hya bundle <args>` with `answer` written to stdin (`None` closes it).
+fn bundle_with_stdin(
+    data_root: &Path,
+    args: &[&std::ffi::OsStr],
+    answer: Option<&str>,
+) -> Result<Output, Box<dyn std::error::Error>> {
+    let mut child = bundle_command(data_root)
+        .arg("bundle")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut stdin = child.stdin.take().ok_or("child stdin missing")?;
+    if let Some(answer) = answer {
+        stdin.write_all(answer.as_bytes())?;
+    }
+    drop(stdin);
+    Ok(child.wait_with_output()?)
+}
+
+fn registry_bundle_ids(data_root: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let list = bundle_command(data_root)
+        .args(["bundle", "list", "--user"])
+        .output()?;
+    assert_success("list --user", &list);
+    Ok(String::from_utf8(list.stdout)?
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_whitespace().next().map(str::to_string))
+        .collect())
+}
+
+#[test]
+fn install_and_remove_ask_for_confirmation_unless_yes() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = write_fixture(&data_root)?;
+    let install = [std::ffi::OsStr::new("install"), package.as_os_str()];
+
+    for (answer, label) in [(Some("n\n"), "declined"), (None, "closed stdin")] {
+        let output = bundle_with_stdin(&data_root, &install, answer)?;
+        assert!(!output.status.success(), "{label} install must not succeed");
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(
+            stderr.contains(BUNDLE_ID) && stderr.contains("[y/N]"),
+            "{label} install must summarize and prompt:\n{stderr}"
+        );
+        assert!(stderr.contains("cancelled"), "{label}:\n{stderr}");
+        assert!(
+            registry_bundle_ids(&data_root)?.is_empty(),
+            "{label} installed"
+        );
+    }
+
+    let accepted = bundle_with_stdin(&data_root, &install, Some("y\n"))?;
+    assert_success("confirmed install", &accepted);
+    assert!(String::from_utf8(accepted.stdout)?.contains("scope=user"));
+    assert_eq!(
+        registry_bundle_ids(&data_root)?,
+        vec![BUNDLE_ID.to_string()]
+    );
+
+    let remove = [
+        std::ffi::OsStr::new("remove"),
+        std::ffi::OsStr::new(BUNDLE_ID),
+    ];
+    let declined = bundle_with_stdin(&data_root, &remove, Some("no\n"))?;
+    assert!(!declined.status.success());
+    assert!(String::from_utf8(declined.stderr)?.contains("[y/N]"));
+    assert_eq!(
+        registry_bundle_ids(&data_root)?,
+        vec![BUNDLE_ID.to_string()]
+    );
+
+    let silent = bundle_with_stdin(
+        &data_root,
+        &[
+            std::ffi::OsStr::new("uninstall"),
+            std::ffi::OsStr::new("-y"),
+            std::ffi::OsStr::new(BUNDLE_ID),
+        ],
+        None,
+    )?;
+    assert_success("uninstall -y", &silent);
+    assert!(
+        !String::from_utf8(silent.stderr)?.contains("[y/N]"),
+        "-y must not prompt"
+    );
+    assert!(registry_bundle_ids(&data_root)?.is_empty());
+
+    let silent_install = bundle_with_stdin(
+        &data_root,
+        &[
+            std::ffi::OsStr::new("install"),
+            std::ffi::OsStr::new("--yes"),
+            package.as_os_str(),
+        ],
+        None,
+    )?;
+    assert_success("install --yes", &silent_install);
+    assert!(!String::from_utf8(silent_install.stderr)?.contains("[y/N]"));
+    assert_eq!(
+        registry_bundle_ids(&data_root)?,
+        vec![BUNDLE_ID.to_string()]
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn verify_checks_a_package_without_installing_it() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = write_fixture(&data_root)?;
+    let registry_path = data_root.join("hya/bundles/registry.sqlite3");
+
+    let verify = bundle_command(&data_root)
+        .args(["bundle", "verify"])
+        .arg(&package)
+        .output()?;
+    assert_success("verify", &verify);
+    let stdout = String::from_utf8(verify.stdout)?;
+    for expected in [
+        "verified hya/valid-public 1.0.0",
+        "format=public-v1",
+        "kind=Bundle",
+        "scope=user",
+        "action=install",
+    ] {
+        assert!(
+            stdout.lines().any(|line| line == expected),
+            "verify omitted {expected:?}:\n{stdout}"
+        );
+    }
+    assert!(
+        !registry_path.exists(),
+        "verify must not create the registry"
+    );
+    assert!(
+        !data_root.join(".hya").exists(),
+        "verify must not write project files"
+    );
+
+    let collision = data_root.join("collision.hyabundle");
+    fs::write(
+        &collision,
+        hya_bundle::write_public_package(&first_party_collision_source())?,
+    )?;
+    let rejected = bundle_command(&data_root)
+        .args(["bundle", "verify", "--project"])
+        .arg(&collision)
+        .output()?;
+    assert!(
+        !rejected.status.success(),
+        "verify must fail for a package install would reject"
+    );
+    assert!(!data_root.join(".hya").exists());
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn project_scope_installs_lists_and_removes_under_dot_hya() -> Result<(), Box<dyn std::error::Error>>
+{
+    let data_root = unique_data_root()?;
+    let package = write_fixture(&data_root)?;
+    let registry_path = data_root.join("hya/bundles/registry.sqlite3");
+
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "--project", "-y"])
+        .arg(&package)
+        .output()?;
+    assert_success("install --project", &install);
+    assert!(String::from_utf8(install.stdout)?.contains("scope=project"));
+    let bundle_dir = data_root.join(".hya/bundles/hya__valid-public");
+    assert!(
+        bundle_dir.join("bundle.yaml").is_file() || bundle_dir.join("bundle.hya.md").is_file(),
+        "project install must write the bundle sources to {}",
+        bundle_dir.display()
+    );
+    assert!(
+        !registry_path.exists(),
+        "project install must not touch the user registry"
+    );
+
+    let list = bundle_command(&data_root)
+        .args(["bundle", "list", "--project"])
+        .output()?;
+    assert_success("list --project", &list);
+    let list_stdout = String::from_utf8(list.stdout)?;
+    let rows = list_stdout.lines().collect::<Vec<_>>();
+    assert_eq!(rows.first().copied(), Some(LIST_HEADER));
+    assert_eq!(
+        rows.len(),
+        2,
+        "only the project bundle is listed:\n{list_stdout}"
+    );
+    assert!(rows[1].starts_with(BUNDLE_ID) && rows[1].ends_with(" project"));
+
+    let all = bundle_command(&data_root)
+        .args(["bundle", "list"])
+        .output()?;
+    assert_success("list", &all);
+    let all_stdout = String::from_utf8(all.stdout)?;
+    assert!(all_stdout.lines().any(|line| line.ends_with(" builtin")));
+    assert!(all_stdout.lines().any(|line| line.starts_with(BUNDLE_ID)));
+
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", BUNDLE_ID])
+        .output()?;
+    assert_success("info project bundle", &info);
+    let info_stdout = String::from_utf8(info.stdout)?;
+    for expected in ["name=hya/valid-public", "origin=project", "scope=project"] {
+        assert!(
+            info_stdout.lines().any(|line| line == expected),
+            "project info omitted {expected:?}:\n{info_stdout}"
+        );
+    }
+    let user_info = bundle_command(&data_root)
+        .args(["bundle", "info", "--user", BUNDLE_ID])
+        .output()?;
+    assert!(
+        !user_info.status.success(),
+        "--user must not find a project bundle"
+    );
+
+    let remove = bundle_command(&data_root)
+        .args(["bundle", "remove", "--project", "-y", BUNDLE_ID])
+        .output()?;
+    assert_success("remove --project", &remove);
+    assert!(!bundle_dir.exists());
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn info_reads_a_package_file_given_as_the_positional_argument()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = write_fixture(&data_root)?;
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info"])
+        .arg(&package)
+        .output()?;
+    assert_success("info <file>", &info);
+    let stdout = String::from_utf8(info.stdout)?;
+    assert!(stdout.lines().any(|line| line == "name: hya/valid-public"));
+    assert!(stdout.lines().any(|line| line == "origin: package"));
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+/// A one-agent package whose manifest declares `check` (a YAML flow list).
+fn checked_package(
+    data_root: &Path,
+    name: &str,
+    check: &str,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let manifest = format!(
+        r#"kind: Bundle
+identity:
+  id: hya/{name}
+  version: 1.0.0
+  publisher: hya
+check:
+  command: {check}
+  timeout_secs: 30
+agents:
+  - id: {name}
+    role: subagent
+    prompt: prompts/p.md
+"#
+    );
+    let source = hya_bundle::BundleSource::new(
+        name,
+        vec![
+            hya_bundle::SourceFile::new("bundle.yaml", manifest.into_bytes()),
+            hya_bundle::SourceFile::new("prompts/p.md", b"Prove yourself.\n".to_vec()),
+        ],
+    );
+    let package = data_root.join(format!("{name}.hyabundle"));
+    fs::write(&package, hya_bundle::write_public_package(&source)?)?;
+    Ok(package)
+}
+
+/// The declared self-check runs in a copy of the package sources (cwd and
+/// `HYA_BUNDLE_ROOT`) before install; passing installs and says so.
+#[test]
+fn install_runs_the_bundle_self_check_in_its_sources() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = checked_package(
+        &data_root,
+        "self-proven",
+        r#"[sh, -c, 'test -f prompts/p.md && test -f "$HYA_BUNDLE_ROOT/bundle.yaml" && echo proven-$HYA_BUNDLE_ID']"#,
+    )?;
+    let verify = bundle_command(&data_root)
+        .args(["bundle", "verify"])
+        .arg(&package)
+        .output()?;
+    assert_success("verify", &verify);
+    assert!(String::from_utf8(verify.stdout)?.contains("self-check: passed"));
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "-y"])
+        .arg(&package)
+        .output()?;
+    assert_success("install", &install);
+    let stdout = String::from_utf8(install.stdout)?;
+    assert!(stdout.contains("self-check: passed"), "{stdout}");
+    assert!(
+        stdout.contains("installed hya/self-proven 1.0.0 scope=user"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("activation: no backend runs"), "{stdout}");
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+/// A failing self-check refuses install and verify with its output; nothing
+/// is written.
+#[test]
+fn a_failing_self_check_refuses_install() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = checked_package(
+        &data_root,
+        "self-broken",
+        "[sh, -c, 'echo tests-are-red >&2; exit 4']",
+    )?;
+    for action in ["verify", "install"] {
+        let output = bundle_command(&data_root)
+            .args(["bundle", action])
+            .args(if action == "install" {
+                vec!["-y"]
+            } else {
+                vec![]
+            })
+            .arg(&package)
+            .output()?;
+        assert!(!output.status.success(), "{action} must fail");
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains("tests-are-red"), "{stderr}");
+        assert!(stderr.contains("nothing was installed"), "{stderr}");
+    }
+    assert!(!data_root.join("hya/bundles/registry.sqlite3").exists());
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn install_without_a_declared_check_says_so() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = write_fixture(&data_root)?;
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "-y"])
+        .arg(&package)
+        .output()?;
+    assert_success("install", &install);
+    assert!(String::from_utf8(install.stdout)?.contains("self-check: none declared"));
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+/// With a backend running for the database, install proves activation: the
+/// backend refreshes now and publishes the bundle; a bundle whose process
+/// cannot start is refused by the backend, which keeps its bundles, and
+/// install fails loudly.
+#[test]
+fn install_proves_activation_in_the_running_backend() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let db = data_root.join("s.db");
+    let db = db.to_str().ok_or("db path")?;
+    let started = bundle_command(&data_root)
+        .args(["serve", "start", "--json", "--db", db])
+        .output()?;
+    assert_success("serve start", &started);
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let package = checked_package(&data_root, "live-agent", "[true]")?;
+        let install = bundle_command(&data_root)
+            .args(["bundle", "install", "-y", "--db", db])
+            .arg(&package)
+            .output()?;
+        assert_success("install", &install);
+        let stdout = String::from_utf8(install.stdout)?;
+        assert!(
+            stdout.contains("activation: active in the backend"),
+            "{stdout}"
+        );
+
+        let source = hya_bundle::BundleSource::new(
+            "dead-process",
+            vec![
+                hya_bundle::SourceFile::new(
+                    "bundle.yaml",
+                    br#"kind: Bundle
+identity: { id: acme/dead-process, version: 1.0.0, publisher: acme }
+extensions:
+  process: { kind: rust, command: [sh, -c, 'exit 3'] }
+resources:
+  tools: [{ id: echo, path: tool.json }]
+"#
+                    .to_vec(),
+                ),
+                hya_bundle::SourceFile::new("tool.json", b"{}".to_vec()),
+            ],
+        );
+        let dead = data_root.join("dead-process.hyabundle");
+        fs::write(&dead, hya_bundle::write_public_package(&source)?)?;
+        let install = bundle_command(&data_root)
+            .args(["bundle", "install", "-y", "--db", db])
+            .arg(&dead)
+            .output()?;
+        assert!(
+            !install.status.success(),
+            "a dead process must not activate"
+        );
+        let stderr = String::from_utf8(install.stderr)?;
+        assert!(stderr.contains("installed but not activated"), "{stderr}");
+        // The failure is attributed to the bundle that could not start.
+        assert!(stderr.contains("\n  acme/dead-process: "), "{stderr}");
+
+        Ok(())
+    })();
+    let _ = bundle_command(&data_root)
+        .args(["serve", "stop", "--db", db])
+        .output();
+    result?;
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn healthy_install_activates_despite_unrelated_failed_process()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = unique_data_root()?;
+    let daemon = BundleDaemon::start(&root)?;
+    let source = hya_bundle::BundleSource::new(
+        "dead-process",
+        vec![hya_bundle::SourceFile::new(
+            "bundle.yaml",
+            "kind: Bundle\nidentity: { id: acme/dead-process, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [/nonexistent/hya-bundle-test-process] }\n",
+        )],
+    );
+    let dead = root.join("dead.hyabundle");
+    fs::write(&dead, hya_bundle::write_public_package(&source)?)?;
+    let failed = daemon.command(&["install", "-y", dead.to_str().ok_or("dead path")?])?;
+    assert!(!failed.status.success());
+    let healthy = checked_package(&root, "healthy-live", "[true]")?;
+    let installed = daemon.command(&["install", "-y", healthy.to_str().ok_or("healthy path")?])?;
+    assert_success("healthy install", &installed);
+    assert!(
+        String::from_utf8_lossy(&installed.stdout).contains("activation: active in the backend")
+    );
+    assert!(String::from_utf8_lossy(&installed.stderr).contains("acme/dead-process"));
+    drop(daemon);
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

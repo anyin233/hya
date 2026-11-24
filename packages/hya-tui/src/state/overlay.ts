@@ -45,6 +45,8 @@ interface OverlayPart {
   liveLost: boolean
 }
 
+type OverlayView = MessageInfo & { deletedParts?: ReadonlySet<string> }
+
 interface OverlayMessage {
   id: string
   role: string | undefined
@@ -53,7 +55,8 @@ interface OverlayMessage {
   error?: MessageError
   parts: OverlayPart[]
   /** Cached snapshot; cleared whenever the message changes. */
-  view?: MessageInfo
+  deletedParts?: Set<string>
+  view?: OverlayView
 }
 
 /** A message's terminal frame, as reported by `apply`. */
@@ -164,6 +167,14 @@ export class TranscriptOverlay {
       found.message.view = undefined
       return { ...base, changed: true }
     }
+    if (event.partDeleted) {
+      const { message: id, part } = event.partDeleted
+      const message = this.message(id, undefined)
+      ;(message.deletedParts ??= new Set()).add(part)
+      message.parts = message.parts.filter((item) => item.id !== part)
+      message.view = undefined
+      return { ...base, changed: true }
+    }
     if (event.partReplaced) {
       const { message: id, part: partId, text } = event.partReplaced
       const found = this.part(id, partId)
@@ -234,7 +245,7 @@ export class TranscriptOverlay {
   }
 
   /** Snapshot in arrival order. Unchanged messages keep their object identity. */
-  messages(): MessageInfo[] {
+  messages(): OverlayView[] {
     return [...this.byId.values()].map((message) => (message.view ??= toMessageInfo(message)))
   }
 
@@ -278,11 +289,12 @@ function mergeTool(projected: ToolCallPart, live: ToolCallPart): ToolCallPart {
   return { ...projected, ...known }
 }
 
-function toMessageInfo(message: OverlayMessage): MessageInfo {
+function toMessageInfo(message: OverlayMessage): OverlayView {
   return {
     id: message.id,
     role: message.role ?? assistantRole,
     parts: message.parts.map(toPart),
+    ...(message.deletedParts ? { deletedParts: new Set(message.deletedParts) } : {}),
     ...(message.finish ? { finish: message.finish } : {}),
     ...(message.error ? { error: message.error } : {}),
   }
@@ -299,10 +311,10 @@ function withText(part: MessagePart, text: string): MessagePart {
   return part
 }
 
-function mergeMessage(projected: MessageInfo, overlay: MessageInfo): MessageInfo {
+function mergeMessage(projected: MessageInfo, overlay: OverlayView): MessageInfo {
   const overlayParts = new Map((overlay.parts ?? []).map((part) => [part.id, part]))
   const projectedIds = new Set<string>()
-  const parts = (projected.parts ?? []).map((part) => {
+  const parts = (projected.parts ?? []).filter((part) => !overlay.deletedParts?.has(part.id)).map((part) => {
     projectedIds.add(part.id)
     const live = overlayParts.get(part.id)
     if (part.toolCall && live?.toolCall) {
@@ -323,7 +335,7 @@ function mergeMessage(projected: MessageInfo, overlay: MessageInfo): MessageInfo
  * messages the projection has not finished yet, followed by overlay-only
  * messages. A projected message with a `finish` is shown exactly as projected.
  */
-export function mergeTranscript(projection: MessageInfo[], overlay: MessageInfo[]): MessageInfo[] {
+export function mergeTranscript(projection: MessageInfo[], overlay: OverlayView[]): MessageInfo[] {
   if (overlay.length === 0) return projection
   const byId = new Map(overlay.map((message) => [message.id, message]))
   const merged = projection.map((message) => {
