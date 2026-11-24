@@ -1209,9 +1209,8 @@ mod step_error_tests {
         assert_eq!(exact_summary.chars().count(), STEP_ERROR_MAX_CHARS);
 
         // Multi-byte UTF-8 truncates cleanly on character boundaries.
-        let multibyte = CoreError::Provider(Arc::new(ProviderError::StreamInterrupted(
-            "中".repeat(600),
-        )));
+        let multibyte =
+            CoreError::Provider(Arc::new(ProviderError::StreamInterrupted("中".repeat(600))));
         let mb_summary = step_error_summary(&multibyte);
         assert!(mb_summary.ends_with('…'));
         assert_eq!(mb_summary.chars().count(), STEP_ERROR_MAX_CHARS);
