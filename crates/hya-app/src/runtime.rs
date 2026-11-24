@@ -1441,6 +1441,140 @@ async fn run_catalog_scope_sweeper(
     }
 }
 
+/// Engine staged for a server host. A host can prepare its discovery metadata
+/// before consuming this value to attach the server controls and interaction bridges.
+#[must_use]
+pub struct ServerEngine {
+    built: BuiltSessionEngine,
+    agent: Arc<AgentSpec>,
+    default_agent: Option<String>,
+    pure: bool,
+    pending_discovery: Vec<config::PendingCatalogDiscovery>,
+}
+
+impl ServerEngine {
+    /// Build the server engine from its resolved provider and tool policy.
+    pub async fn build(store: SessionStore, runtime: RuntimeConfig) -> anyhow::Result<Self> {
+        // The server retains the base. Per-turn guidance is resolved by the harness.
+        let agent = Arc::new(agent_base_with_model(&runtime.model, None));
+        let tool_config = (runtime.websearch, runtime.permission, runtime.settings);
+        let built = build_session_engine_with_mcp_defer(
+            store,
+            runtime.router,
+            &agent,
+            runtime.mcp,
+            runtime.plugins,
+            tool_config,
+            EngineBuildOptions {
+                defer_mcp: defer_sideplanes(),
+                pure: runtime.pure,
+            },
+        )
+        .await?;
+        Ok(Self {
+            built,
+            agent,
+            default_agent: runtime.default_agent,
+            pure: runtime.pure,
+            pending_discovery: runtime.pending_discovery,
+        })
+    }
+
+    /// Claim the interaction receivers and attach the application control services.
+    pub fn assemble(mut self, hosts: hya_server::HostPolicy) -> anyhow::Result<ServerRuntime> {
+        let asks = self.built.take_asks().context("asks receiver missing")?;
+        let questions = self
+            .built
+            .take_questions()
+            .context("questions receiver missing")?;
+        let engine = self.built.engine();
+        let provider_manager = crate::ProviderManager::new(Arc::clone(&engine));
+        let state = hya_server::AppState::new(engine, self.agent)
+            .with_provider_control(Arc::new(provider_manager.clone()))
+            .with_bundle_control(Arc::new(crate::bundle_admin::BundleManager))
+            .with_question_requests(questions)
+            .with_mcp_control(self.built.mcp_control())
+            .with_workflow_control(Arc::new(self.built.workflow_control()))
+            .with_agent_model_control(Arc::new(self.built.agent_model_control()))
+            .with_default_agent(self.default_agent)
+            .with_pure_guidance(self.pure)
+            .with_auto_title(true)
+            .with_allowed_hosts(hosts)
+            .with_permission_requests(asks);
+        Ok(ServerRuntime {
+            built: self.built,
+            state,
+            provider_manager,
+            pending_discovery: self.pending_discovery,
+        })
+    }
+}
+
+/// Full application runtime shared by the daemon and in-process servers.
+#[must_use]
+pub struct ServerRuntime {
+    built: BuiltSessionEngine,
+    state: hya_server::AppState,
+    provider_manager: crate::ProviderManager,
+    pending_discovery: Vec<config::PendingCatalogDiscovery>,
+}
+
+impl ServerRuntime {
+    /// State shared by the server's HTTP and gRPC bindings.
+    pub fn app_state(&self) -> &hya_server::AppState {
+        &self.state
+    }
+
+    /// Attach the host's relay before building a server from this state.
+    pub fn with_relay_host(mut self, relay: hya_server::RelayHost) -> Self {
+        self.state = self.state.with_relay_host(relay);
+        self
+    }
+
+    /// Start deferred provider discovery once, under the live control's mutation lock.
+    pub fn spawn_provider_catalog_refresh(
+        &mut self,
+        report_error: impl FnOnce(anyhow::Error) + Send + 'static,
+    ) {
+        let pending = std::mem::take(&mut self.pending_discovery);
+        if pending.is_empty() {
+            return;
+        }
+        let manager = self.provider_manager.clone();
+        let catalog_updates = self.state.catalog_updates_sender();
+        tokio::spawn(async move {
+            match manager.refresh_pending(pending).await {
+                Ok(false) => {}
+                Ok(true) => {
+                    let payload = serde_json::json!({
+                        "id": format!(
+                            "catalog-{}",
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|duration| duration.as_millis())
+                                .unwrap_or(0)
+                        ),
+                        "type": "catalog.updated",
+                        "properties": {}
+                    });
+                    let _ = catalog_updates.send(payload);
+                }
+                Err(error) => report_error(error),
+            }
+        });
+    }
+
+    /// Admit server restores before starting recovered resident episodes.
+    pub async fn resume_interrupted(&self) -> Result<Vec<SessionId>, CoreError> {
+        self.built.resume_interrupted(&self.state).await
+    }
+
+    /// Split the runtime for hosts that drain the server inside a listener callback.
+    pub fn into_parts(self) -> (BuiltSessionEngine, hya_server::AppState) {
+        (self.built, self.state)
+    }
+}
+
 /// Inputs for [`HyaRuntime::start`] (store path, model, and safety flags).
 pub struct RuntimeOptions {
     /// Override default model; `None` uses config / offline default.
@@ -1501,48 +1635,18 @@ impl HyaRuntime {
         if opts.yolo {
             eprintln!("hya: --yolo auto-approves ALL tool actions for the hya frontend (RCE risk)");
         }
-        // Server/TUI AppState retains the base; the harness records context.
-        let agent = Arc::new(agent_base_with_model(&runtime.model, None));
-        let mut built = build_session_engine(
-            store,
-            runtime.router,
-            agent.as_ref(),
-            runtime.mcp,
-            runtime.plugins,
-            (runtime.websearch, runtime.permission, runtime.settings),
-        )
-        .await?;
-        let engine = built.engine();
-        let questions = built.take_questions().ok_or_else(|| {
-            anyhow::anyhow!("BuiltSessionEngine questions receiver already taken")
-        })?;
-        let asks = built
-            .take_asks()
-            .ok_or_else(|| anyhow::anyhow!("BuiltSessionEngine asks receiver already taken"))?;
-        let mcp_control = built.mcp_control();
-        let workflow_control = Arc::new(built.workflow_control());
-        let agent_model_control = Arc::new(built.agent_model_control());
-        let mut state = hya_server::AppState::new(engine.clone(), agent)
-            .with_provider_control(Arc::new(crate::ProviderManager::new(engine.clone())))
-            .with_bundle_control(Arc::new(crate::bundle_admin::BundleManager))
-            .with_question_requests(questions)
-            .with_mcp_control(mcp_control)
-            .with_workflow_control(workflow_control)
-            .with_agent_model_control(agent_model_control)
-            .with_default_agent(runtime.default_agent.clone())
-            .with_auto_title(true);
-        state = state.with_permission_requests(asks);
-        // Remembered "allow always" grants survive restarts: reload them into
-        // the process permission plane before serving.
-        if let Err(error) = state.restore_saved_permissions().await {
+        let runtime = ServerEngine::build(store, runtime)
+            .await?
+            .assemble(hya_server::HostPolicy::loopback())?;
+        if let Err(error) = runtime.app_state().restore_saved_permissions().await {
             tracing::warn!(%error, "failed to restore saved permission grants");
         }
-        built.resume_interrupted(&state).await?;
-        let app_state = state.clone();
-        let router = hya_server::router(state);
+        runtime.resume_interrupted().await?;
+        let (built, app_state) = runtime.into_parts();
+        let router = hya_server::router(app_state.clone());
         Ok(Self {
             router,
-            engine,
+            engine: built.engine(),
             app_state,
             _built: built,
         })

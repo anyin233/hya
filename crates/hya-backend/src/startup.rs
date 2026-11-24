@@ -1,4 +1,4 @@
-//! The CLI's single engine composition path, shared by serve and headless runs.
+//! Runtime composition for headless CLI commands.
 
 use anyhow::Context as _;
 use hya_app::{BuiltSessionEngine, config};
@@ -7,16 +7,10 @@ use hya_proto::SessionId;
 use hya_provider::ProviderRouter;
 use hya_store::SessionStore;
 
-pub(crate) enum Surface {
-    Server,
-    Headless,
-}
-
 pub(crate) struct StartedEngine {
     pub(crate) built: BuiltSessionEngine,
     pub(crate) agent: AgentSpec,
     pub(crate) default_agent: Option<String>,
-    pub(crate) pending_discovery: Vec<config::PendingCatalogDiscovery>,
     pub(crate) evaluator_router: ProviderRouter,
     pub(crate) evaluator_model: String,
 }
@@ -26,7 +20,6 @@ pub(crate) async fn start(
     model: Option<String>,
     yolo: bool,
     pure: bool,
-    surface: Surface,
 ) -> anyhow::Result<StartedEngine> {
     let exit_store = store.clone();
     if let Err(error) = crate::first_run_config_bootstrap(false) {
@@ -40,10 +33,10 @@ pub(crate) async fn start(
         .with_yolo(yolo)
         .with_pure(pure);
     hya_app::startup_trace::mark("runtime_resolved", None);
-    let agent = match surface {
-        Surface::Server => hya_app::agent_base_with_model(&runtime.model, None),
-        Surface::Headless if pure => hya_app::agent_with_model_pure(&runtime.model, None),
-        Surface::Headless => hya_app::agent_with_model(&runtime.model, None),
+    let agent = if pure {
+        hya_app::agent_with_model_pure(&runtime.model, None)
+    } else {
+        hya_app::agent_with_model(&runtime.model, None)
     };
     let evaluator_router = runtime.router.clone();
     let evaluator_model = config::resolve_evaluator_model(
@@ -87,7 +80,6 @@ pub(crate) async fn start(
         built,
         agent,
         default_agent: runtime.default_agent,
-        pending_discovery: runtime.pending_discovery,
         evaluator_router,
         evaluator_model,
     })
@@ -144,8 +136,7 @@ impl HeadlessSession {
             default_agent,
             evaluator_router,
             evaluator_model,
-            ..
-        } = start(store, model, yolo, pure, Surface::Headless).await?;
+        } = start(store, model, yolo, pure).await?;
         let prepared = async {
             let engine = built.engine();
             let asks = built.take_asks().context("asks receiver missing")?;
