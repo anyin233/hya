@@ -100,27 +100,30 @@ test.describe("subagent panes", () => {
       toolStep("task", { description: "long helper", prompt: "long child prompt", subagent_type: "hya-task" }),
       textStep("Parent scroll marker."),
     ])
-    fakeModel!.route("Finish your task with `report`", [textStep(rows), hangStep(40_000)])
+    // A length-limited reply leaves the member available in the selector.
+    fakeModel!.route("Finish your task with `report`", [textStep(rows, { finish: "length" })])
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     for (const pane of ["projects", "sessions", "todos", "context"]) await command(term, `/layout close ${pane}`)
-    await command(term, "/subagents")
-    await command(term, "/layout focus pane-1")
     await command(term, "delegate long")
+    // The first reply confirms the parent session is open before opening its selector.
     await term.waitForText("Parent scroll marker.", 20_000)
+    await command(term, "/subagents")
+    await term.waitForText("Subagent · pane-9 · following")
     await term.waitForText("child row 80.", 20_000)
-    await command(term, "/layout focus pane-8")
+    const parent = await term.find("Parent scroll marker.")
+    expect(parent).not.toBeNull()
 
     await term.press("PageUp")
     await expect.poll(() => term.find("child row 80.")).toBeNull()
     await term.press("Home")
     await term.waitForText("child row 1.")
+    expect(await term.find("Parent scroll marker.")).toEqual(parent)
     await term.press("PageDown")
     await expect.poll(() => term.find("child row 1.")).toBeNull()
     await term.press("End")
     await term.waitForText("child row 80.")
-    // The parent's transcript did not move.
-    await term.waitForText("Parent scroll marker.")
+    expect(await term.find("Parent scroll marker.")).toEqual(parent)
   })
 
   test("x interrupts, s steers, and d archives the selected subagent", async ({ tui, backend, fakeModel }) => {
@@ -128,11 +131,8 @@ test.describe("subagent panes", () => {
     fakeModel!.route("NEVER call `report`", [
       toolStep("task", { description: "steerable helper", prompt: "steer-child-prompt", subagent_type: "hya-task" }),
       textStep("Parent left it running."),
-      textStep("Parent synthesis one."),
-      textStep("Parent synthesis two."),
-      textStep("Parent synthesis three."),
     ])
-    fakeModel!.route("Finish your task with `report`", [hangStep(40_000), textStep("child-heard-the-user"), hangStep(40_000)])
+    fakeModel!.route("Finish your task with `report`", [hangStep(), textStep("child-heard-the-user", { finish: "length" })])
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     for (const pane of ["projects", "sessions", "todos", "context"]) await command(term, `/layout close ${pane}`)
