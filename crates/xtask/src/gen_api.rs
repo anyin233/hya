@@ -9,6 +9,8 @@
 //! - `packages/hya-tui/src/operations.json`, the TUI's `/api` operation
 //!   catalog (method, path, operation id, streaming), so the TUI package is
 //!   self-contained when it ships under `lib/hya/tui`,
+//! - `packages/hya-tui/src/proto/hya/v1/`, the same proto sources for the TUI
+//!   gRPC client to load from the shipped package,
 //! - `crates/hya-server/src/v1/grpc_generated.rs`, the typed gRPC router
 //!   adapters (streaming and other irregular methods delegate explicitly),
 //! - a coverage check that every rpc declares exactly one
@@ -82,14 +84,9 @@ pub fn run(_args: Vec<String>) -> Result<()> {
     fs::create_dir_all(&docs_dir).context("create docs/protocol")?;
     write_api_reference(&docs_dir.join("api-reference.md"), &contract)?;
     write_openapi(&docs_dir.join("openapi.json"), &contract)?;
-    write_tui_operations(
-        &root
-            .join("packages")
-            .join("hya-tui")
-            .join("src")
-            .join("operations.json"),
-        &contract,
-    )?;
+    let tui_src = root.join("packages/hya-tui/src");
+    write_tui_operations(&tui_src.join("operations.json"), &contract)?;
+    write_tui_protos(&tui_src.join("proto/hya/v1"), &protos)?;
 
     let mut emitted: Vec<String> = Vec::new();
     for entry in fs::read_dir(&gen_dir).context("list gen dir")? {
@@ -113,6 +110,22 @@ pub fn run(_args: Vec<String>) -> Result<()> {
         contract.messages.len(),
     );
     Ok(())
+}
+
+fn write_tui_protos(destination: &Path, protos: &[PathBuf]) -> Result<()> {
+    let parent = destination.parent().context("missing TUI proto parent")?;
+    fs::create_dir_all(parent).context("create TUI proto parent")?;
+    let staging = tempfile::tempdir_in(parent).context("stage TUI protos")?;
+    let staged = staging.path().join("v1");
+    fs::create_dir(&staged).context("create staged TUI proto directory")?;
+    for proto in protos {
+        let name = proto.file_name().context("missing proto filename")?;
+        fs::copy(proto, staged.join(name)).with_context(|| format!("stage {}", proto.display()))?;
+    }
+    if destination.try_exists()? {
+        fs::remove_dir_all(destination).context("remove previous TUI proto directory")?;
+    }
+    fs::rename(staged, destination).context("install staged TUI proto directory")
 }
 
 /// Run the vendored protoc to produce a self-contained descriptor set.

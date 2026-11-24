@@ -26,12 +26,14 @@ test("selects the gRPC listener without treating it as an HTTP URL", () => {
   expect(() => parseArguments(["--grpc", "127.0.0.1:22104", "--server", "http://127.0.0.1:22103"])).toThrow()
 })
 
-test("packaged protobuf definitions match the server contract", () => {
+test("packaged protobuf filenames and bytes match the server contract (run cargo run -p xtask -- gen-api)", () => {
   const bundled = resolve(import.meta.dir, "../src/proto/hya/v1")
   const contract = resolve(import.meta.dir, "../../../proto/hya/v1")
-  for (const name of readdirSync(contract).filter((entry) => entry.endsWith(".proto"))) {
-    expect(readFileSync(resolve(bundled, name), "utf8")).toBe(readFileSync(resolve(contract, name), "utf8"))
-  }
+  const protoFiles = (dir: string) => readdirSync(dir).filter(name => name.endsWith(".proto")).sort()
+  const files = protoFiles(contract)
+  expect(protoFiles(bundled)).toEqual(files)
+  const mismatches = files.filter(name => !readFileSync(resolve(bundled, name)).equals(readFileSync(resolve(contract, name))))
+  expect(mismatches).toEqual([])
 })
 
 test("every API command maps to a method in the packaged gRPC contract", () => {
