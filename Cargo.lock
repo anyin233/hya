@@ -4324,6 +4324,7 @@ dependencies = [
  "serde_json",
  "serde_norway",
  "syn 2.0.119",
+ "tempfile",
  "tokio",
  "tokio-util",
  "toml",

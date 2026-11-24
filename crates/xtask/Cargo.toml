@@ -30,6 +30,7 @@ protoc-bin-vendored = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_norway = { workspace = true }
+tempfile = "3"
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 toml = { workspace = true }

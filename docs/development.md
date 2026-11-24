@@ -427,7 +427,7 @@ remaining argument is forwarded verbatim. The currently supported tasks are
 
 | Task | Role |
 | --- | --- |
-| `gen-api` | Regenerate the `hya.v1` contract from `proto/hya/v1`: Rust types (prost/tonic/pbjson), the API reference, and OpenAPI. Uses a vendored protoc; output is committed, and the task fails when any rpc lacks its `// hya.http:` mapping or two rpcs collide. |
+| `gen-api` | Run `cargo run -p xtask -- gen-api` after editing `proto/hya/v1`. It regenerates Rust types (prost/tonic/pbjson), gRPC adapters, the API reference, OpenAPI, the TUI operation catalog, and the byte-for-byte proto set shipped in `packages/hya-tui/src/proto/hya/v1`. Commit the regenerated outputs. CI runs the generator and checks for drift. The task uses a vendored protoc and requires one unique `// hya.http:` mapping per RPC. |
 | `startup-bench` | Startup latency benchmark. Honours `HYA_BACKEND_BIN` to select the binary under test. `--db <seed.db>` runs every sample against a fresh copy of an existing database and prints the `HYA_STARTUP_TRACE` phase waterfall; `--timeout-secs N` (default 30) bounds the wait for the listen line. |
 | `lifecycle-bench` | Offline app-wired task lifecycle timings and store counts. See [Lifecycle benchmark](#lifecycle-benchmark). |
 | `matrix-check` | Validates `crates/hya-e2e/matrix.toml`. See [agent-matrix.md](testing/agent-matrix.md). |
