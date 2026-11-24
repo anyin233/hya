@@ -104,13 +104,9 @@ async fn call_provider(
     {
         url.query_pairs_mut().append_pair("exaApiKey", key);
     }
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-        .user_agent("hya")
-        .build()
-        .map_err(|e| ToolError::Other(e.to_string()))?;
-    let mut request = client
+    let mut request = crate::http_client()?
         .post(url)
+        .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
         .header(
             reqwest::header::ACCEPT,
             "application/json, text/event-stream",

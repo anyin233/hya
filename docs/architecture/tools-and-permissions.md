@@ -65,7 +65,7 @@ stay globally unique inside a registry. `hya-tool` exposes the mechanism in
 | `find` | `{ "pattern": string, "path"?: string }` | `{path, size}` matches (no row cap). |
 | `grep` | `{ "pattern": string, "path"?: string, "glob"?: string, "ignoreCase"?: boolean, "literal"?: boolean, "context"?: integer 0..5, "limit"?: integer 1..200 }` (closed) | Hashline match/context rows, summary, and bounded per-file display metadata. |
 | `bash` | `{ "command": string, "env"?: object<string,string>, "timeout"?: number, "cwd"?: string, "pty"?: boolean }` (closed) | Structured command/output result with exit, timeout, truncation, and artifact metadata. |
-| `webfetch` (`fetch`) | `{ "url": string, "format"?: "text"\|"markdown"\|"html", "timeout"?: number }` | Fetched web content or image attachment. Set `tools.webfetch.enabled: false` to remove the tool and its alias. |
+| `webfetch` (`fetch`) | `{ "url": string, "format"?: "text"\|"markdown"\|"html", "timeout"?: number }` | Fetched web content or image attachment. The 5 MiB body limit also applies to chunked responses. Set `tools.webfetch.enabled: false` to remove the tool and its alias. |
 | `websearch` (`search`) | `{ "query": string, "numResults"?: number, "livecrawl"?: string, "type"?: string, "contextMaxCharacters"?: number }` | Search results from the configured `WebSearchPlane`. |
 | `ask_user` (`question`) | `{ "questions": [{ "question", "header", "options": [{ "label", "description" }], "multiple"?, "allow_custom"?, "default"? }] }` (alias `question`) | Structured per-question answers `{question, answer, cancelled}`; unanswered renders as `Unanswered`; plane failures error. |
 | `lsp` | `{ "operation", "filePath", "line", "character", "query"? }` | LSP provider response. |
@@ -86,6 +86,12 @@ stay globally unique inside a registry. `hya-tool` exposes the mechanism in
 `lsp` is a separate language-server contract and intentionally retains its
 `filePath` field. This does not advertise or restore a legacy Read, Write, or
 Edit schema; the coding-tool compatibility boundary is documented below.
+
+The network tools share an HTTP client so requests can reuse connections.
+`webfetch` accepts HTTP(S) URLs and applies its timeout to each request,
+including reading the body. For example, call `webfetch` with
+`{"url":"https://example.com/","format":"text","timeout":10}` to read text with
+a ten-second timeout. The default is 30 seconds and the maximum is 120.
 
 `read.filePath` is a hidden, runtime-only compatibility spelling for captured
 pre-0.36.9 calls. It is parsed separately from canonical `path`: one non-empty

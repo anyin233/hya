@@ -4,6 +4,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Resource, Rule,
@@ -85,6 +86,44 @@ async fn webfetch_fetches_text_from_http_url() {
     assert_eq!(out["output"], "plain body");
     assert_eq!(out["status"], 200);
     assert_eq!(out["content_type"], "text/plain");
+}
+
+#[tokio::test]
+async fn webfetch_rejects_an_oversized_chunked_body_before_eof() {
+    const CHUNK_BYTES: usize = 64 * 1024;
+    const MAX_RESPONSE_BYTES: usize = 5 * 1024 * 1024;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0; 1024];
+        let _ = socket.read(&mut request).await.unwrap();
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n")
+            .await
+            .unwrap();
+        let mut chunk = format!("{CHUNK_BYTES:x}\r\n").into_bytes();
+        chunk.extend(std::iter::repeat_n(b'x', CHUNK_BYTES));
+        chunk.extend_from_slice(b"\r\n");
+        for _ in 0..MAX_RESPONSE_BYTES / CHUNK_BYTES {
+            socket.write_all(&chunk).await.unwrap();
+        }
+        socket.write_all(b"1\r\nx\r\n").await.unwrap();
+        // Keep the response open to distinguish rejecting the extra byte from waiting for EOF.
+        let _ = socket.read(&mut request).await;
+    });
+    let tool = ToolRegistry::builtins().get("webfetch").unwrap();
+    let ctx = ctx_with(vec![allow(Action::WebFetch, "http://127.0.0.1:*")]);
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        tool.execute(&ctx, json!({"url": format!("http://{addr}/large")})),
+    )
+    .await;
+    server.abort();
+    let error = result
+        .expect("webfetch must reject the oversized body before EOF")
+        .unwrap_err();
+    assert_eq!(error.to_string(), "response too large (exceeds 5MB limit)");
 }
 
 #[tokio::test]
