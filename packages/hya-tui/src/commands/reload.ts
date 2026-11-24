@@ -9,10 +9,10 @@ import { reloadAllTargets, reloadSummary, reloadTargetDescriptions, reloadTarget
 import { startupLines } from "../state/startup"
 import type { CommandContext, CommandSpec } from "./registry"
 
-function report({ store }: CommandContext, summary: string, resources: boolean): void {
+function report({ store, registry }: CommandContext, summary: string, resources: boolean): void {
   const settings = store.state.structure.startup
   const lines = resources
-    ? startupLines({ ...startupInput(store.state), notices: [] }, { resources: settings.resources, quiet: settings.quiet, sections: settings.sections }, Math.max(20, store.state.columns - 4))
+    ? startupLines({ ...startupInput(store.state, registry?.names() ?? []), notices: [] }, { resources: settings.resources, quiet: settings.quiet, sections: settings.sections }, Math.max(20, store.state.columns - 4))
     : []
   store.setView("chat")
   store.addTranscriptNotice([summary, ...lines.map((line) => line.text)].join("\n"))

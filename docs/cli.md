@@ -214,8 +214,14 @@ built-in of that name. Every user-defined command expands its template
 
 **Skills.** Every visible skill is one more row named `skill:<name>` (source
 `skill`, argument hint `[request]`, its body as `template`). `skill:` is a
-reserved namespace: a command file named `skill:<x>.md` is skipped, so a skill
-never overrides a command and a command never overrides a skill.
+reserved namespace: a command file named `skill:<x>.md` is skipped (and
+reported in `diagnostics`), so a skill never overrides a command and a
+command never overrides a skill.
+
+Every row carries `scope`: `builtin` for the rows above, `project` or `user`
+for command files (`.hya/commands`, `~/.config/hya/commands`; see
+[Custom Commands](configuration.md#custom-commands)), and a skill row its
+skill's source.
 
 ## Workflow Commands
 

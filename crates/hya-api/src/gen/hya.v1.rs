@@ -1556,6 +1556,13 @@ pub struct CommandSummary {
     /// Whether the command runs as a detached subtask.
     #[prost(bool, optional, tag = "10")]
     pub subtask: ::core::option::Option<bool>,
+    /// Where it is defined: `builtin` (the client-side rows and the
+    /// `hya/core-commands` templates), `project` (`.hya/commands` of the
+    /// directory or a Project root), `user` (`~/.config/hya/commands`); a
+    /// skill row carries its `SkillSummary.source` (`project`, `user`,
+    /// `bundle`, `builtin`).
+    #[prost(string, tag = "11")]
+    pub scope: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListCommandsResponse {
@@ -1565,6 +1572,10 @@ pub struct ListCommandsResponse {
     /// Pagination outcome.
     #[prost(message, optional, tag = "2")]
     pub page: ::core::option::Option<PageInfo>,
+    /// Command files the catalog skipped or warns about (the same list on
+    /// every page).
+    #[prost(message, repeated, tag = "3")]
+    pub diagnostics: ::prost::alloc::vec::Vec<CatalogDiagnostic>,
 }
 /// A resource file a catalog skipped or warns about, for clients to show.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1577,8 +1588,9 @@ pub struct CatalogDiagnostic {
     /// `collision` (a skill of the same name was found first; this one is not
     /// listed), `name` (breaks the Agent Skills naming rule: lowercase
     /// letters, digits, and single hyphens, at most 64 characters), or
-    /// `description_length` (over 1024 characters). Only `name` and
-    /// `description_length` leave the skill listed.
+    /// `description_length` (over 1024 characters); for a command `reserved`
+    /// (named `skill:…`) or `invalid` (frontmatter that does not parse).
+    /// Only `name` and `description_length` leave the skill listed.
     #[prost(string, tag = "2")]
     pub kind: ::prost::alloc::string::String,
     /// One line for a person.

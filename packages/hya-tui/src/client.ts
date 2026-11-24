@@ -444,16 +444,16 @@ export interface SkillSummary {
   disableModelInvocation?: boolean
 }
 
-/** `CatalogDiagnostic` of `ListSkillsResponse`: a skill file the catalog skipped or warns about. */
+/** `CatalogDiagnostic` of `ListSkillsResponse` / `ListCommandsResponse`: a file the catalog skipped or warns about. */
 export interface SkillDiagnostic {
   /** The file it is about. */
   path?: string
-  /** `invalid`, `missing_name`, `missing_description`, `collision`, `name`, or `description_length`. */
+  /** Skills: `invalid`, `missing_name`, `missing_description`, `collision`, `name`, `description_length`; commands: `reserved`, `invalid`. */
   kind?: string
   message: string
 }
 
-/** `CatalogDiagnostic`: a file a catalog skipped or warns about. */
+/** `CatalogDiagnostic` (the same shape for commands). */
 export type CatalogDiagnostic = SkillDiagnostic
 
 /** `ListSkills`: the skills of the scope, and the catalog's diagnostics. */
@@ -468,6 +468,14 @@ export interface CommandSummary {
   argumentHint?: string
   /** Where the command was discovered: `command` (custom/built-in) or `skill`. */
   source?: string
+  /** `builtin`, `project`, `user`, or a skill's source; absent on older backends. */
+  scope?: string
+}
+
+/** `ListCommands`: the commands of the scope, and the command files it skipped. */
+export interface CommandListing {
+  commands: CommandSummary[]
+  diagnostics: CatalogDiagnostic[]
 }
 
 export interface TodoItem {
@@ -961,10 +969,16 @@ export class HyaClient {
   }
 
   async listCommands(): Promise<CommandSummary[]> {
-    return this.listAll("/v1/commands", "commands", "", true)
+    return (await this.listCommandCatalog()).commands
   }
 
-  /** Every page of a scoped catalog list (`skills`), with the diagnostics of its first page. */
+  /** `ListCommands` of the client's scope with the diagnostics of the command files it skipped. */
+  async listCommandCatalog(): Promise<CommandListing> {
+    const { rows, diagnostics } = await this.catalogPages<CommandSummary>("/v1/commands", "commands")
+    return { commands: rows, diagnostics }
+  }
+
+  /** Every page of a scoped catalog list (`commands` or `skills`), with the diagnostics of its first page. */
   private async catalogPages<T>(path: string, field: string): Promise<{ rows: T[]; diagnostics: CatalogDiagnostic[] }> {
     const rows: T[] = []
     let diagnostics: CatalogDiagnostic[] | undefined

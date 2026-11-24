@@ -691,18 +691,33 @@ async fn list_commands(
 ) -> Result<Json<pb::ListCommandsResponse>, V1Error> {
     let request: pb::ListCommandsRequest = super::query_request(&[], &query)?;
     let place = catalog_scope(&st, &request.directory).await?;
-    let commands = command_rows(&place);
-    let (commands, page) = paginate(commands, &request.page);
+    let listing = crate::support::command_catalog::listing(&place);
+    let diagnostics = listing
+        .diagnostics
+        .iter()
+        .map(|diagnostic| pb::CatalogDiagnostic {
+            path: diagnostic.path.to_string_lossy().into_owned(),
+            kind: diagnostic.kind.to_owned(),
+            message: diagnostic.message.clone(),
+        })
+        .collect();
+    let (commands, page) = paginate(command_summaries(listing.commands), &request.page);
     Ok(Json(pb::ListCommandsResponse {
         commands,
         page: Some(page),
+        diagnostics,
     }))
 }
 
 /// Command rows shared with the bootstrap snapshot.
 pub(crate) fn command_rows(place: &CatalogPlace) -> Vec<pb::CommandSummary> {
-    crate::support::command_catalog::list(place)
-        .into_iter()
+    command_summaries(crate::support::command_catalog::list(place))
+}
+
+fn command_summaries(
+    rows: Vec<crate::support::command_catalog::CommandInfo>,
+) -> Vec<pb::CommandSummary> {
+    rows.into_iter()
         .map(|row| pb::CommandSummary {
             name: row.name.clone(),
             description: row.description.clone().unwrap_or_default(),
@@ -713,6 +728,7 @@ pub(crate) fn command_rows(place: &CatalogPlace) -> Vec<pb::CommandSummary> {
             agent: row.agent.clone().unwrap_or_default(),
             model: row.model.clone().unwrap_or_default(),
             subtask: row.subtask,
+            scope: row.scope.to_owned(),
         })
         .collect()
 }

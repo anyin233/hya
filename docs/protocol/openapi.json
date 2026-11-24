@@ -2318,6 +2318,9 @@
           },
           "subtask": {
             "type": "boolean"
+          },
+          "scope": {
+            "type": "string"
           }
         }
       },
@@ -2333,6 +2336,12 @@
           },
           "page": {
             "$ref": "#/components/schemas/PageInfo"
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogDiagnostic"
+            }
           }
         }
       },

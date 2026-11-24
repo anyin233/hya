@@ -17,6 +17,8 @@ export interface CommandEntry {
   description: string
   argumentHint?: string
   source: CommandSource
+  /** A backend row's `scope` (`project`, `user`, `builtin`, a skill's `bundle`): the menu tags it `[skill · project]`. */
+  scope?: string
 }
 
 /** What the menu lists besides the local commands. */
@@ -57,6 +59,7 @@ export function mergeCommandEntries(local: CommandSpec[], backend: CommandSummar
       description: command.description ?? "",
       ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
       source,
+      ...(command.scope ? { scope: command.scope } : {}),
     })
   }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name))
@@ -114,7 +117,7 @@ export function suggestCommandInput(input: string, entries: () => CommandEntry[]
   }
   return filterCommands(entries(), input.slice(1))
     .map((entry) => ({
-      label: `${entry.name}${entry.argumentHint ? ` ${entry.argumentHint}` : ""}  ${entry.description}  [${entry.source}]`,
+      label: `${entry.name}${entry.argumentHint ? ` ${entry.argumentHint}` : ""}  ${entry.description}  [${entry.source}${entry.scope ? ` · ${entry.scope}` : ""}]`,
       replacement: entry.name,
       kind: "command",
       runOnEnter: !requiresArgument(entry.argumentHint),

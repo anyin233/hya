@@ -1537,6 +1537,7 @@ One slash-command entry.
 | `agent` (8) | `string` | Agent the command run binds when authored. |
 | `model` (9) | `string` | Model the command run binds when authored. |
 | `subtask` (10) | `optional bool` | Whether the command runs as a detached subtask. |
+| `scope` (11) | `string` | Where it is defined: `builtin` (the client-side rows and the `hya/core-commands` templates), `project` (`.hya/commands` of the directory or a Project root), `user` (`~/.config/hya/commands`); a skill row carries its `SkillSummary.source` (`project`, `user`, `bundle`, `builtin`). |
 
 ### `ListCommandsResponse`
 
@@ -1545,6 +1546,7 @@ One slash-command entry.
 |---|---|---|
 | `commands` (1) | `repeated CommandSummary` | Commands visible in this directory. |
 | `page` (2) | `PageInfo` | Pagination outcome. |
+| `diagnostics` (3) | `repeated CatalogDiagnostic` | Command files the catalog skipped or warns about (the same list on every page). |
 
 ### `CatalogDiagnostic`
 
@@ -1553,7 +1555,7 @@ A resource file a catalog skipped or warns about, for clients to show.
 | Field | Type | Description |
 |---|---|---|
 | `path` (1) | `string` | The file it is about. |
-| `kind` (2) | `string` | What is wrong: for a skill `invalid` (no or unclosed frontmatter, YAML that does not parse), `missing_name`, `missing_description`, `collision` (a skill of the same name was found first; this one is not listed), `name` (breaks the Agent Skills naming rule: lowercase letters, digits, and single hyphens, at most 64 characters), or `description_length` (over 1024 characters). Only `name` and `description_length` leave the skill listed. |
+| `kind` (2) | `string` | What is wrong: for a skill `invalid` (no or unclosed frontmatter, YAML that does not parse), `missing_name`, `missing_description`, `collision` (a skill of the same name was found first; this one is not listed), `name` (breaks the Agent Skills naming rule: lowercase letters, digits, and single hyphens, at most 64 characters), or `description_length` (over 1024 characters); for a command `reserved` (named `skill:…`) or `invalid` (frontmatter that does not parse). Only `name` and `description_length` leave the skill listed. |
 | `message` (3) | `string` | One line for a person. |
 
 ### `ListSkillsRequest`

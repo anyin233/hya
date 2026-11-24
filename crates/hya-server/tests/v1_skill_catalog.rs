@@ -1,5 +1,7 @@
 //! The skill catalog over v1: `ListSkills` reports the skill files it
-//! skipped or warns about (`diagnostics`) and `disable-model-invocation`.
+//! skipped or warns about (`diagnostics`) and `disable-model-invocation`;
+//! `ListCommands` reports the command files it skipped and where each
+//! command comes from (`scope`).
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -164,6 +166,7 @@ async fn skill_listing_reports_diagnostics_and_manual_only_skills() {
         ".hya/skills/broken/SKILL.md",
         "---\nname: broken\n---\nno description\n",
     );
+    write(&dir, ".hya/commands/skill:taken.md", "reserved\n");
     let (status, skills) = call(
         &app,
         Method::GET,
@@ -186,6 +189,25 @@ async fn skill_listing_reports_diagnostics_and_manual_only_skills() {
                     .unwrap()
                     .ends_with(".hya/skills/broken/SKILL.md")),
         "{skills}"
+    );
+    let (_, commands) = call(
+        &app,
+        Method::GET,
+        &format!("/v1/commands?directory={}", encode(&dir)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(
+        named(&commands, "commands", "skill:manual").unwrap()["scope"],
+        "project"
+    );
+    assert!(
+        commands["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["kind"] == "reserved"),
+        "{commands}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
