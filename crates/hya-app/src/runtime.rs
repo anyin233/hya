@@ -25,9 +25,6 @@ use hya_engine::{
 // Single discovery/date implementation lives in hya-engine; re-export for callers.
 pub use hya_engine::{discover_context_files, today};
 use hya_mcp::McpServerConfig;
-use hya_plugin::activation::{
-    bind_bundle_sidecar_tools, materialize_bundle_sidecar_resources, validate_bundle_sidecar_hooks,
-};
 use hya_plugin::config::{PluginSpec, ProcessLaunch};
 use hya_plugin::messages::{ActivationLifecycle, ActivationMetadata, PluginKindWire};
 use hya_plugin::{HostInfo, PluginContributionSet};
@@ -50,6 +47,12 @@ use crate::runtime_reconcile::{
     adapt_prepared_bundle_skills,
 };
 use crate::{InstalledBundleRefresh, bundle_registry_path, plugins};
+
+/// Catalog materialization and export validation for Bundle sidecars.
+pub mod sidecar;
+use sidecar::{
+    bind_bundle_sidecar_tools, materialize_bundle_sidecar_resources, validate_bundle_sidecar_hooks,
+};
 
 /// Agent catalog for a process before installed bundles are refreshed.
 ///

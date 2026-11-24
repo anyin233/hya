@@ -1004,7 +1004,7 @@ configuration-file environment in `launch`, then validates and binds that
 catalog's tool/hook selections in `bind`. The plugin adapter retains the sole
 connection owner. No new command, configuration key, or wire message is needed.
 
-The adapter's captured-resource helpers are
+The captured-resource helpers now live in `hya_app::runtime::sidecar`.
 `materialize_bundle_sidecar_resources(&TurnBinding, &str, &Path) -> Result<Vec<PathBuf>, CoreError>`,
 `bind_bundle_sidecar_tools(&TurnBinding, &str, &PreparedPlugin) -> Result<Arc<[ResolvedTool]>, CoreError>`,
 and `validate_bundle_sidecar_hooks(&TurnBinding, &str, &[HookRegistration]) -> Result<(), CoreError>`.
