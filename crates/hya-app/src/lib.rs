@@ -49,7 +49,9 @@ mod runtime_reconcile;
 pub mod startup_trace;
 #[cfg(test)]
 mod test_env;
-/// Shared Workflow discovery, selection, state, and execution control.
+/// Immutable Workflow sources, discovery, and inspection.
+pub mod workflow_catalog;
+/// Durable Workflow selection, state, and execution control.
 pub mod workflow_control;
 
 pub use agent_model_control::{
@@ -78,10 +80,11 @@ pub use runtime::{
     open_store_or_memory, resolve_headless_agent_name, resolve_runtime, spawn_team_supervisor,
     today, with_built_session_engine,
 };
-pub use workflow_control::{
+pub use workflow_catalog::{
     FIRST_PARTY_BUNDLE_ID, ResolvedWorkflow, WorkflowCatalog, WorkflowCatalogOwner,
-    WorkflowCatalogRoots, WorkflowControl, WorkflowControlError, WorkflowInvocation,
+    WorkflowCatalogRoots,
 };
+pub use workflow_control::{WorkflowControl, WorkflowControlError, WorkflowInvocation};
 
 #[cfg(test)]
 #[path = "../../hya-engine/tests/it/support/resident.rs"]
