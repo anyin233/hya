@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use hya_engine::RuntimeRegistry;
 
-use crate::runtime_mcp_control::RuntimeMcpControl;
 use crate::runtime_reconcile::RuntimeReconciler;
 
 /// Refresh config plugins at the same bind/explicit-refresh boundary as bundles.
@@ -72,7 +71,8 @@ impl RuntimeExtensionsRefresh {
             .reconciler
             .replace_plugins(specs, explicit)
             .map_err(|error| hya_engine::CoreError::Invalid(error.to_string()))?;
-        let result = RuntimeMcpControl::new(self.reconciler.clone())
+        let result = self
+            .reconciler
             .reconcile_plan(plan, tokio_util::sync::CancellationToken::new())
             .await
             .map(|_| ())

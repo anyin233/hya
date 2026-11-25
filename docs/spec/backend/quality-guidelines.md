@@ -357,8 +357,9 @@ engine.refresh_runtime(|candidate| {
 
 ### 2. Contracts
 
-- `hya-app::RuntimeReconciler` owns desired revision/tickets and observed
-  results only. It has no resolve/dispatch surface and no effective-tool cache.
+- The app-owned RuntimeReconciler owns desired revisions, source tickets and
+  observed results. It executes preparation plans and has no dispatch surface
+  or effective-tool cache.
 - `RuntimeRegistry` remains the sole effective authority. A snapshot owns each
   source's client/child, declaration digest, resources, and tool exports.
 - Source identity is `(mcp|plugin, configured_id)`. External tool names remain
@@ -367,9 +368,8 @@ engine.refresh_runtime(|candidate| {
 - Process I/O completes before reconciliation state is locked. Stale prepared
   successes are closed after releasing the state lock; stale failures are
   discarded.
-- Current additions publish only when the whole revision succeeds. Failure
-  records typed observed state, closes every unpublished success, and preserves
-  the prior effective generation exactly.
+- Each successful source publishes independently. Failure records typed observed
+  state and preserves that source’s previous effective contribution.
 - Explicit removal publishes a drop-only candidate before unrelated additions.
   Old `TurnBinding` snapshots retain their source owner until the last binding
   is dropped.

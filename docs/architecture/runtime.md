@@ -730,13 +730,13 @@ Any change to the effective policy — including swapping the interceptor —
 changes the fingerprint, so a reload can detect that permissions actually
 changed rather than re-deriving the rule set.
 
-`hya-app::RuntimeReconciler` owns only desired/observed coordination for MCP
-and configured plugin declarations. It has no resolve or dispatch API and caches
-no effective tool set. Stable source IDs are `(mcp|plugin, configured_id)`;
-the effective source manifest, declaration digest, client/child owner, and
-exports live only in `RuntimeSnapshot`. Startup, deferred MCP, plugin config
-edits, and v1 MCP control all submit to this reconciler. Each source has its own
-operation ticket and publishes its complete contribution through `RuntimeRegistry`.
+The app’s `RuntimeReconciler` coordinates desired and observed state and
+executes preparation plans for MCP and configured plugins. Stable source IDs
+are `(mcp|plugin, configured_id)`. `RuntimeSnapshot` owns the effective source
+manifest, declaration digest, client or child process, and exports. Startup,
+deferred MCP, plugin config edits, and v1 MCP control all submit to this
+reconciler. Each source has its own operation ticket and publishes its complete
+contribution through `RuntimeRegistry`.
 A mutation of one source leaves other pending preparations valid. Stale results
 are dropped, failed sources can be retried with identical declarations, and
 explicit removals publish before unrelated additions. A failed source keeps its

@@ -33,7 +33,7 @@ pub(crate) struct DesiredSource {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AttemptTicket {
+struct AttemptTicket {
     revision: u64,
     source: SourceId,
 }
@@ -79,14 +79,14 @@ struct ReconcileState {
 }
 
 pub(crate) struct RuntimeReconciler {
-    pub(crate) io_tasks: Option<tokio_util::task::TaskTracker>,
+    io_tasks: Option<tokio_util::task::TaskTracker>,
     pub(crate) registry: Arc<RuntimeRegistry>,
     state: Mutex<ReconcileState>,
 }
 
 pub(crate) struct ReconcilePlan {
-    pub(crate) tickets: BTreeMap<SourceId, AttemptTicket>,
-    pub(crate) sources: Vec<DesiredSource>,
+    tickets: BTreeMap<SourceId, AttemptTicket>,
+    sources: Vec<DesiredSource>,
 }
 
 pub(crate) struct ReconcileOutcome {
@@ -289,7 +289,7 @@ impl From<PreparedFailure> for PreparedResult {
 }
 
 impl PreparedResult {
-    pub(crate) fn source(&self) -> &SourceId {
+    fn source(&self) -> &SourceId {
         match self {
             Self::Ready(source) => &source.id,
             Self::Failed(failure) => &failure.source,
@@ -312,6 +312,85 @@ impl RuntimeReconciler {
         self
     }
 
+    pub(crate) async fn reconcile_plan(
+        &self,
+        mut plan: ReconcilePlan,
+        stop: tokio_util::sync::CancellationToken,
+    ) -> Result<ReconcileOutcome, ReconcileError> {
+        if plan.is_complete() {
+            return Ok(ReconcileOutcome {
+                published_generation: None,
+            });
+        }
+        let mut set = tokio::task::JoinSet::new();
+        let mut tasks = BTreeMap::new();
+        for source in plan.sources().iter().cloned() {
+            let id = source.id().clone();
+            let handle = set.spawn(hya_child_io::io_tasks::scope(
+                self.io_tasks.clone(),
+                async move { prepare_desired_source(source).await },
+            ));
+            tasks.insert(handle.id(), id);
+        }
+        let mut first_error = None;
+        let mut published_generation = None;
+        loop {
+            let joined = tokio::select! {
+                biased;
+                () = stop.cancelled() => {
+                    set.abort_all();
+                    while set.join_next().await.is_some() {}
+                    return Err(ReconcileError::InvalidPrepared("runtime reconciliation cancelled".to_string()));
+                }
+                joined = set.join_next_with_id() => match joined {
+                    Some(joined) => joined,
+                    None => break,
+                },
+            };
+            let result = match joined {
+                Ok((id, result)) => {
+                    tasks.remove(&id);
+                    result
+                }
+                Err(error) => {
+                    let Some(source) = tasks.remove(&error.id()) else {
+                        return Err(ReconcileError::InvalidPrepared(format!(
+                            "source preparation task {} had no source ticket",
+                            error.id()
+                        )));
+                    };
+                    PreparedResult::Failed(PreparedFailure::new(
+                        source,
+                        format!("SOURCE_PREPARE_TASK_FAILED: {error}"),
+                    ))
+                }
+            };
+            let id = result.source().clone();
+            let ticket = plan.tickets.remove(&id).ok_or_else(|| {
+                ReconcileError::InvalidPrepared(format!("missing planned ticket for {id}"))
+            })?;
+            let source_plan = ReconcilePlan {
+                tickets: BTreeMap::from([(id, ticket)]),
+                sources: Vec::new(),
+            };
+            match self.finish_revision(&source_plan, [result]) {
+                Ok(outcome) => {
+                    if outcome.published_generation.is_some() {
+                        published_generation = outcome.published_generation;
+                    }
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(ReconcileOutcome {
+                published_generation,
+            }),
+        }
+    }
     pub(crate) fn replace_desired(
         &self,
         desired: Vec<DesiredSource>,
@@ -622,7 +701,7 @@ impl RuntimeReconciler {
     }
 }
 
-pub(crate) async fn prepare_desired_source(source: DesiredSource) -> PreparedResult {
+async fn prepare_desired_source(source: DesiredSource) -> PreparedResult {
     let id = source.id().clone();
     match source.spec {
         DesiredSpec::Mcp(config) => crate::runtime_mcp_source::prepare(id, config).await,
@@ -728,6 +807,35 @@ mod tests {
         PreparedSource, ReconcileError, RuntimeReconciler, SourceId,
     };
 
+    #[tokio::test]
+    async fn cancelled_plan_does_not_publish_or_finish_tickets() -> anyhow::Result<()> {
+        let _env = StableEnvGuard::new();
+        let registry = Arc::new(RuntimeRegistry::new(
+            hya_tool_loader::builtins(),
+            crate::runtime::builtin_agent_catalog()?,
+        ));
+        let before = registry.effective_manifest().generation;
+        let reconciler = RuntimeReconciler::new(registry.clone());
+        let source = SourceId::mcp("cancelled");
+        let plan = reconciler.upsert_mcp(
+            source.configured_id().to_string(),
+            McpServerConfig {
+                command: vec!["/nonexistent/hya-mcp-missing-binary".into()],
+                ..McpServerConfig::default()
+            },
+        )?;
+        let stop = tokio_util::sync::CancellationToken::new();
+        stop.cancel();
+        let result = reconciler.reconcile_plan(plan, stop).await;
+        assert!(
+            matches!(result, Err(ReconcileError::InvalidPrepared(error)) if error == "runtime reconciliation cancelled")
+        );
+        let status = &reconciler.status()[&source];
+        assert_eq!(status.observed, ObservedState::Connecting);
+        assert!(!status.effective);
+        assert_eq!(registry.effective_manifest().generation, before);
+        Ok(())
+    }
     struct MarkerTool(&'static str);
 
     #[async_trait]

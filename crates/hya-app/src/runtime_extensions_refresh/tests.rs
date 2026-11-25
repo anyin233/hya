@@ -8,7 +8,7 @@ use hya_mcp::McpServerConfig;
 use hya_proto::AgentName;
 use serde_json::{Value, json};
 
-use super::RuntimeMcpControl;
+use crate::runtime_mcp_control::RuntimeMcpControl;
 use crate::runtime_reconcile::{DesiredSource, RuntimeReconciler, SourceId};
 use crate::test_env::StableEnvGuard;
 
@@ -146,7 +146,7 @@ async fn hot_reload_explicit_refresh_retries_identical_failed_config() -> anyhow
             .collect(),
     )?;
     assert!(
-        RuntimeMcpControl::new(h.reconciler.clone())
+        h.reconciler
             .reconcile_plan(plan, tokio_util::sync::CancellationToken::new())
             .await
             .is_err()
