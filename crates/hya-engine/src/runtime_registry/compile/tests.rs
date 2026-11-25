@@ -14,312 +14,141 @@ use hya_tool::{
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-#[path = "../../../tests/it/runtime_registry_moved/support.rs"]
-mod support;
-use support::*;
+// ---------------------------------------------------------------------------
+// Self-contained test fixtures and compact builders
+// ---------------------------------------------------------------------------
 
-#[test]
-fn skill_discovery_runs_outside_publication_lock() {
-    let registry = RuntimeRegistry::new(
-        hya_tool_loader::builtins(),
-        Arc::new(TestCatalog::from_prepared(&[]).unwrap()),
-    );
-    let directory = Path::new("/skill-discovery-lock-test");
-    registry
-        .bind_scoped_with_skills(
-            &CatalogScope::Directory(directory.to_path_buf()),
-            directory,
-            || {
-                assert!(registry.publication.try_lock().is_ok());
-                Vec::new()
-            },
-        )
-        .unwrap();
+static NEXT_TEMP_SKILL_DIR: AtomicU64 = AtomicU64::new(0);
+const WITHOUT_CHANNEL_TOOLS: [&str; 3] =
+    ["hya/base-tools", "hya/extended-tools", "hya/network-tools"];
+
+fn catalog_from(bundles: &[Bundle]) -> Arc<AgentCatalog> {
+    Arc::new(AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(bundles).unwrap())).unwrap())
 }
 
-#[test]
-fn full_view_exposes_only_catalog_confirmed_plugin_bundle_skills() {
-    let prepare = |kind: &str, id: &str, name: &str, agent: &str| {
-        prepare_package(BundleSource::new(
-                id,
-                vec![
-                    SourceFile::new("bundle.yaml", format!(
-                        "kind: {kind}\nidentity: {{ id: acme/{id}, version: 1.0.0, publisher: acme }}\nresources:\n  skills:\n    - id: {name}\n      path: skills/guide.md\n{agent}"
-                    )),
-                    SourceFile::new("skills/guide.md", skill_md(name, "SKILL_BODY")),
-                ],
-            )).unwrap()
-    };
-    let plugin = prepare("Bundle", "shared", "shared-skill", "");
-    let agent = prepare(
-        "Bundle",
-        "private",
-        "private-skill",
-        "agents: [{ id: private-agent, role: main }]\n",
-    );
-    let catalog = Arc::new(TestCatalog::from_verified_catalogs(&[&plugin, &agent]).unwrap());
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    // An unrecognized bundle source cannot opt into shared Skill visibility.
-    let mut unknown = registry.active().sources[&RuntimeSourceId::bundle("acme/shared")].clone();
-    unknown.id = RuntimeSourceId::bundle("acme/unknown");
-    unknown.skills[0].stable_id = "bundle:acme/unknown/skill/unknown-skill".into();
-    unknown.skills[0].local_id = "unknown-skill".into();
-    unknown.skills[0].entry.name = "unknown-skill".into();
-    registry
-        .refresh(|candidate| candidate.upsert_sources(vec![unknown]))
-        .unwrap();
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-plugin-skill-view"))
-        .unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("hya-main", AgentToolPlane::Full)
-        .unwrap();
-    let resources = binding.compile_agent_resources(&policy).unwrap();
-    assert!(
-        resources
-            .skills()
-            .iter()
-            .any(|skill| skill.name == "shared-skill")
-    );
-    assert!(
-        resources
-            .skills()
-            .iter()
-            .any(|skill| skill.name == "bundle:acme/shared/skill/shared-skill")
-    );
-    assert!(
-        !resources
-            .skills()
-            .iter()
-            .any(|skill| skill.name == "private-skill")
-    );
-    assert!(
-        !resources
-            .skills()
-            .iter()
-            .any(|skill| skill.name == "unknown-skill")
-    );
-    let private_policy = binding.agent_resource_policy("private-agent").unwrap();
-    let private_resources = binding.compile_agent_resources(&private_policy).unwrap();
-    assert!(
-        private_resources
-            .skills()
-            .iter()
-            .any(|skill| skill.name == "private-skill")
-    );
-    assert!(
-        !private_resources
-            .skills()
-            .iter()
-            .any(|skill| skill.name == "shared-skill")
-    );
+fn verified_catalog(catalogs: &[&hya_bundle::PreparedCatalog]) -> Arc<AgentCatalog> {
+    Arc::new(
+        AgentCatalog::new(Arc::new(
+            BundleCatalog::from_verified_catalogs(catalogs).unwrap(),
+        ))
+        .unwrap(),
+    )
 }
 
-#[test]
-fn bundled_mcp_stays_in_mcp_partition() {
-    let prepared = prepare_package(BundleSource::new(
-        "bundled-mcp",
-        vec![SourceFile::new(
-            "bundle.yaml",
-            "kind: Bundle\nidentity: { id: acme/bundled-mcp, version: 1.0.0, publisher: acme }\n",
-        )],
-    ))
-    .unwrap();
-    let catalog = Arc::new(TestCatalog::from_verified_catalogs(&[&prepared]).unwrap());
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    registry
-        .refresh(|candidate| {
-            candidate.upsert_sources(vec![RuntimeSource::new(
-                RuntimeSourceId::bundle("acme/bundled-mcp"),
-                [1; 32],
-                Arc::new(()),
-                vec![RuntimeSourceExport::tool(
-                    "mcp/echo/ping",
-                    "bundled-mcp__mcp__echo__ping",
-                    Vec::new(),
-                    Arc::new(NoopTool::new("bundled-mcp__mcp__echo__ping")),
-                    ToolPermission::Mcp,
-                )],
-            )])
-        })
-        .unwrap();
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-bundled-mcp-kind"))
-        .unwrap();
-    let policy = binding.agent_resource_policy("hya-main").unwrap();
-    let candidates = binding.collect_resource_candidates(&policy).unwrap();
-    assert!(
-        candidates
-            .mcp
-            .contains_key("harness:mcp/bundled-mcp__mcp__echo__ping")
-    );
-    assert!(
-        !candidates
-            .tool
-            .contains_key("harness:tool/bundled-mcp__mcp__echo__ping")
-    );
-}
-
-#[test]
-fn bundle_process_tool_is_owner_scoped_and_needs_no_bun_sidecar() {
-    let prepared = prepare_package(BundleSource::new(
-        "private-process",
-        vec![
-            SourceFile::new(
-                "bundle.yaml",
-                r#"kind: Bundle
-identity: { id: acme/private-process, version: 1.0.0, publisher: acme }
-extensions:
-  process: { kind: rust, command: [fixture] }
-resources:
-  tools: [{ id: echo, path: echo.json }]
-  hooks: [{ id: tool.execute.before, path: echo.json }]
-agents:
-  - hook_refs: [tool.execute.before]
-    id: private-process-agent
-    role: main
-    resource_view: { allow: [echo] }
-"#,
-            ),
-            SourceFile::new("echo.json", "{}"),
-        ],
-    ))
-    .unwrap();
-    let catalog = Arc::new(TestCatalog::from_verified_catalogs(&[&prepared]).unwrap());
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    registry
-        .refresh(|candidate| {
-            candidate.upsert_sources(vec![
+fn reg_with(tools: ToolRegistry, catalog: Arc<AgentCatalog>) -> RuntimeRegistry {
+    let sources: Vec<_> = catalog
+        .bundles()
+        .bundles()
+        .iter()
+        .filter_map(|bundle| {
+            let skills: Vec<_> = bundle
+                .resources(hya_bundle::ExportKind::Skill)
+                .iter()
+                .map(|r| {
+                    let p = hya_app::skill_catalog::parse_skill(&r.content).expect("valid skill");
+                    let path =
+                        PathBuf::from(format!("bundle:{}/{}", bundle.identity().id, r.source_path));
+                    let dir = path.parent().unwrap().to_path_buf();
+                    RuntimeSourceSkill::new(
+                        r.stable_id.clone(),
+                        r.local_id.clone(),
+                        r.aliases.clone(),
+                        r.digest.clone(),
+                        r.content.clone(),
+                        SkillCatalogEntry {
+                            name: p.name,
+                            description: p.description,
+                            content: p.content,
+                            allowed_tools: p.allowed_tools,
+                            model: p.model,
+                            path,
+                            dir,
+                            origin: hya_tool::SkillCatalogOrigin::Virtual,
+                            disable_model_invocation: false,
+                        },
+                    )
+                })
+                .collect();
+            (!skills.is_empty()).then(|| {
                 RuntimeSource::new(
-                    RuntimeSourceId::bundle("acme/private-process"),
-                    [2; 32],
+                    RuntimeSourceId::bundle(bundle.identity().id.clone()),
+                    [0; 32],
                     Arc::new(()),
-                    vec![RuntimeSourceExport::tool(
-                        "echo",
-                        "private-process__echo",
-                        Vec::new(),
-                        Arc::new(NoopTool::new("private-process__echo")),
-                        ToolPermission::Tool,
-                    )],
-                )
-                .with_hooks(Arc::new(crate::hooks::HookChain::new(Vec::new()))),
-            ])
-        })
-        .unwrap();
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-private-process"))
-        .unwrap();
-    let policy = binding
-        .agent_resource_policy("private-process-agent")
-        .unwrap();
-    let compiled = binding
-        .compile_agent_resources(&policy)
-        .expect("owner process resource must compile");
-    assert!(compiled.resolve_tool("echo").is_some());
-    assert_eq!(
-        binding
-            .bundle_hooks_for_agent("private-process-agent")
-            .len(),
-        1
-    );
-    assert!(binding.bundle_hooks_for_agent("hya-main").is_empty());
-    assert!(
-        !binding
-            .has_selected_bundle_sidecar_capability("private-process-agent")
-            .unwrap()
-    );
-    let root = binding
-        .compile_agent_resources(&binding.agent_resource_policy("hya-main").unwrap())
-        .unwrap();
-    assert!(root.resolve_tool("private-process__echo").is_none());
-}
-
-#[test]
-fn bundle_mcp_server_selection_expands_owner_tools_only() {
-    let prepared = prepare_package(BundleSource::new(
-        "private-mcp",
-        vec![
-            SourceFile::new(
-                "bundle.yaml",
-                r#"kind: Bundle
-identity: { id: acme/private-mcp, version: 1.0.0, publisher: acme }
-resources:
-  mcp: [{ id: echo, path: mcp.json }]
-agents:
-  - id: private-mcp-agent
-    role: main
-    resource_view: { allow: [echo] }
-"#,
-            ),
-            SourceFile::new("mcp.json", r#"{"command":["fixture"]}"#),
-        ],
-    ))
-    .unwrap();
-    let catalog = Arc::new(TestCatalog::from_verified_catalogs(&[&prepared]).unwrap());
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    registry
-        .refresh(|candidate| {
-            candidate.upsert_sources(vec![RuntimeSource::new(
-                RuntimeSourceId::bundle("acme/private-mcp"),
-                [3; 32],
-                Arc::new(()),
-                vec![RuntimeSourceExport::tool(
-                    "mcp/echo/ping",
-                    "private-mcp__mcp__echo__ping",
                     Vec::new(),
-                    Arc::new(NoopTool::new("private-mcp__mcp__echo__ping")),
-                    ToolPermission::Mcp,
-                )],
-            )])
+                )
+                .with_skills(skills)
+            })
         })
-        .unwrap();
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-private-mcp"))
-        .unwrap();
-    let policy = binding.agent_resource_policy("private-mcp-agent").unwrap();
-    let compiled = binding
-        .compile_agent_resources(&policy)
-        .expect("selected MCP server must provide its tools");
-    assert_eq!(
-        compiled.resolve_tool("echo__ping").unwrap().permission,
-        ToolPermission::Mcp
+        .collect();
+    let reg = RuntimeRegistry::new(tools, catalog).with_skill_discovery(
+        hya_app::skill_catalog::discover,
+        hya_app::skill_catalog::builtin_skills,
     );
-    assert_eq!(
-        domain_schema_names(&compiled),
-        BTreeSet::from(["echo__ping".to_string()])
-    );
-    let root = binding
-        .compile_agent_resources(&binding.agent_resource_policy("hya-main").unwrap())
-        .unwrap();
-    assert!(root.resolve_tool("private-mcp__mcp__echo__ping").is_none());
+    if !sources.is_empty() {
+        reg.refresh(|c| c.replace_sources_of_kind(RuntimeSourceKind::Bundle, sources))
+            .unwrap();
+    }
+    reg
 }
 
-struct FingerprintTool {
+fn reg_for(bundles: &[Bundle]) -> RuntimeRegistry {
+    reg_with(hya_tool_loader::builtins(), catalog_from(bundles))
+}
+
+fn bind(reg: &RuntimeRegistry) -> TurnBinding {
+    reg.bind_turn(Path::new("/tmp/hya-compile-tests")).unwrap()
+}
+
+fn compile_on(
+    b: &TurnBinding,
+    id: &str,
+    plane: Option<AgentToolPlane>,
+) -> Result<Arc<CompiledResourceView>, BundleError> {
+    let pol = match plane {
+        Some(p) => b.agent_resource_policy_on_plane(id, p)?,
+        None => b.agent_resource_policy(id)?,
+    };
+    b.compile_agent_resources(&pol)
+}
+
+fn full(b: &TurnBinding, id: &str) -> Arc<CompiledResourceView> {
+    compile_on(b, id, Some(AgentToolPlane::Full)).unwrap()
+}
+
+fn basic(b: &TurnBinding, id: &str) -> Arc<CompiledResourceView> {
+    compile_on(b, id, None).unwrap()
+}
+
+struct StubTool {
     name: String,
     description: String,
     input_schema: Value,
 }
 
-impl FingerprintTool {
-    fn new(name: impl Into<String>, marker: &str) -> Self {
+impl StubTool {
+    fn noop(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: "noop".into(),
+            input_schema: json!({ "type": "object" }),
+        }
+    }
+    fn marked(name: impl Into<String>, marker: &str) -> Self {
         Self {
             name: name.into(),
             description: format!("fingerprint schema {marker}"),
-            input_schema: json!({
-                "type": "object",
-                "properties": {"marker": {"const": marker}},
-            }),
+            input_schema: json!({"type": "object", "properties": {"marker": {"const": marker}}}),
         }
     }
 }
 
 #[async_trait]
-impl Tool for FingerprintTool {
+impl Tool for StubTool {
     fn name(&self) -> &str {
         &self.name
     }
-
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: ToolName::new(self.name.clone()),
@@ -328,2823 +157,11 @@ impl Tool for FingerprintTool {
             output_schema: None,
         }
     }
-
     async fn execute(&self, _ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {
-        Ok(json!({"ok": true}))
+        Ok(json!({ "ok": true }))
     }
 }
 
-#[test]
-fn pure_registry_serves_builtin_skills_only() {
-    let dir = std::env::temp_dir().join(format!("hya-pure-skills-{}", std::process::id()));
-    let skill_dir = dir.join(".hya/skills/external-skill");
-    std::fs::create_dir_all(&skill_dir).unwrap();
-    std::fs::write(
-        skill_dir.join("SKILL.md"),
-        "---\nname: external-skill\ndescription: must not appear in pure mode\n---\nbody\n",
-    )
-    .unwrap();
-
-    let catalog = Arc::new(TestCatalog::from_prepared(&[]).unwrap());
-    let plain = test_runtime_registry(hya_tool_loader::builtins(), catalog.clone());
-    let pure = test_runtime_registry(hya_tool_loader::builtins(), catalog).with_pure_skills(true);
-
-    let plain_binding = plain.bind_turn(&dir).unwrap();
-    let plain_names: Vec<String> = plain_binding
-        .snapshot
-        .skills
-        .get(&dir)
-        .map(|skills| skills.iter().map(|skill| skill.name.clone()).collect())
-        .unwrap_or_default();
-    assert!(
-        plain_names.iter().any(|name| name == "external-skill"),
-        "default registry discovers the project skill: {plain_names:?}"
-    );
-
-    let pure_binding = pure.bind_turn(&dir).unwrap();
-    let pure_names: Vec<String> = pure_binding
-        .snapshot
-        .skills
-        .get(&dir)
-        .map(|skills| skills.iter().map(|skill| skill.name.clone()).collect())
-        .unwrap_or_default();
-    assert!(
-        !pure_names.iter().any(|name| name == "external-skill"),
-        "pure registry never reads external skill dirs: {pure_names:?}"
-    );
-    assert!(
-        !pure_names.is_empty(),
-        "pure registry still serves the embedded builtin catalog"
-    );
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn old_turn_binding_pins_tools_across_later_publication() {
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/pin",
-            agent("pin-agent", ResourceView::default()),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let workdir = PathBuf::from("/tmp/hya-resource-view-pin");
-    let binding = registry.bind_turn(&workdir).unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("pin-agent", AgentToolPlane::Full)
-        .unwrap();
-    let before = binding.compile_agent_resources(&policy).unwrap();
-    assert!(before.resolve_tool("read").is_some());
-    assert!(before.resolve_tool("dynamic_marker").is_none());
-
-    registry
-        .refresh(|candidate| candidate.register_tool(Arc::new(NoopTool::new("dynamic_marker"))))
-        .unwrap();
-
-    let after = binding.compile_agent_resources(&policy).unwrap();
-    assert!(
-        after.resolve_tool("dynamic_marker").is_none(),
-        "retained TurnBinding must not observe later registry publication"
-    );
-    assert_eq!(
-        before.tools.keys().collect::<BTreeSet<_>>(),
-        after.tools.keys().collect::<BTreeSet<_>>(),
-        "pinned binding must compile an identical public tool set"
-    );
-}
-
-#[test]
-fn binding_clones_reuse_selected_resources_across_assembly() {
-    let catalog = Arc::new(TestCatalog::from_prepared(&[]).unwrap());
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let source_id = RuntimeSourceId::plugin("mask-src");
-    registry
-        .refresh(|candidate| {
-            candidate.upsert_sources(vec![RuntimeSource::new(
-                source_id.clone(),
-                [14; 32],
-                Arc::new(()),
-                vec![RuntimeSourceExport::tool(
-                    "fast",
-                    "mask__fast",
-                    vec!["bash".to_string()],
-                    Arc::new(NoopTool::new("mask__fast")),
-                    ToolPermission::Tool,
-                )],
-            )])
-        })
-        .unwrap();
-    let workdir = Path::new("/tmp/hya-reuse-bound-selection");
-    let binding = registry.bind_turn(workdir).unwrap();
-    let retained = binding.clone();
-    let policy = binding.agent_resource_policy("hya-main").unwrap();
-    let before = binding.compile_agent_resources(&policy).unwrap();
-    let masked_bash = before.resolve_tool("bash").unwrap().tool;
-    assert!(before.resolve_tool("harness:tool/mask__fast").is_some());
-
-    registry
-        .refresh(|candidate| {
-            candidate.remove_sources(&BTreeSet::from([source_id]));
-            Ok(())
-        })
-        .unwrap();
-    let fresh = registry.bind_turn(workdir).unwrap();
-    let fresh_policy = fresh.agent_resource_policy("hya-main").unwrap();
-    let fresh_view = fresh.compile_agent_resources(&fresh_policy).unwrap();
-    assert!(fresh_view.resolve_tool("harness:tool/mask__fast").is_none());
-    assert!(fresh_view.resolve_tool("harness:tool/bash").is_some());
-    let foreign_policy_view = fresh.compile_agent_resources(&policy).unwrap();
-    assert!(
-        foreign_policy_view
-            .resolve_tool("harness:tool/mask__fast")
-            .is_none()
-    );
-
-    let retained_policy = retained.agent_resource_policy("hya-main").unwrap();
-    let after = retained.compile_agent_resources(&retained_policy).unwrap();
-    assert!(after.resolve_tool("harness:tool/mask__fast").is_some());
-    assert!(Arc::ptr_eq(
-        &masked_bash,
-        &after.resolve_tool("bash").unwrap().tool
-    ));
-}
-
-#[test]
-fn alias_masking_publishes_and_compiles_bare_name_to_winner() {
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/mask",
-            agent("mask-agent", ResourceView::default()),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    registry
-        .refresh(|candidate| {
-            candidate.upsert_sources(vec![RuntimeSource::new(
-                RuntimeSourceId::plugin("mask-src"),
-                [14; 32],
-                Arc::new(()),
-                vec![RuntimeSourceExport::tool(
-                    "fast",
-                    "mask__fast",
-                    vec!["bash".to_string()],
-                    Arc::new(NoopTool::new("mask__fast")),
-                    ToolPermission::Tool,
-                )],
-            )])
-        })
-        .expect("alias masking a built-in must publish");
-
-    let workdir = PathBuf::from("/tmp/hya-alias-mask-builtin");
-    let binding = registry.bind_turn(&workdir).unwrap();
-    assert_eq!(
-        binding.masks().get("bash").map(String::as_str),
-        Some("mask__fast"),
-        "the contributed alias must win the bare name from the built-in"
-    );
-
-    let policy = binding
-        .agent_resource_policy_on_plane("mask-agent", AgentToolPlane::Full)
-        .unwrap();
-    let compiled = binding.compile_agent_resources(&policy).unwrap();
-    let names = compiled.tools.keys().cloned().collect::<BTreeSet<String>>();
-    assert!(
-        names.contains("bash") && !names.contains("harness:tool/bash"),
-        "the masked built-in must be excluded while the bare name stays: {names:?}"
-    );
-    assert!(
-        names.contains("harness:tool/mask__fast"),
-        "the winning contributed tool must stay in the view: {names:?}"
-    );
-    let bash_schemas = compiled
-        .tool_schemas()
-        .into_iter()
-        .filter(|schema| schema.name.as_str() == "bash")
-        .collect::<Vec<_>>();
-    assert_eq!(
-        bash_schemas.len(),
-        1,
-        "the bare name must appear exactly once"
-    );
-    assert_eq!(
-        bash_schemas[0].input_schema,
-        json!({ "type": "object" }),
-        "the advertised bash schema must be the contributed winner, not the built-in"
-    );
-    assert!(compiled.resolve_tool("bash").is_some());
-
-    let mut removed = BTreeSet::new();
-    removed.insert(RuntimeSourceId::plugin("mask-src"));
-    registry
-        .refresh(|candidate| {
-            candidate.remove_sources(&removed);
-            Ok(())
-        })
-        .expect("source removal must publish");
-
-    let binding = registry.bind_turn(&workdir).unwrap();
-    assert!(
-        binding.masks().is_empty(),
-        "removing the winner must dissolve the mask"
-    );
-    let policy = binding
-        .agent_resource_policy_on_plane("mask-agent", AgentToolPlane::Full)
-        .unwrap();
-    let compiled = binding.compile_agent_resources(&policy).unwrap();
-    let names = compiled.tools.keys().cloned().collect::<BTreeSet<String>>();
-    assert!(
-        names.contains("harness:tool/bash"),
-        "the built-in must be resolvable again after the masking source is removed: {names:?}"
-    );
-}
-
-#[test]
-fn cross_source_alias_mask_goes_to_greater_source_id() {
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/mask",
-            agent("mask-agent", ResourceView::default()),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let contender = |configured_id: &str, digest: [u8; 32], canonical: &str| {
-        RuntimeSource::new(
-            RuntimeSourceId::plugin(configured_id),
-            digest,
-            Arc::new(()),
-            vec![RuntimeSourceExport::tool(
-                "lookup",
-                canonical,
-                vec!["lookup".to_string()],
-                Arc::new(NoopTool::new(canonical)),
-                ToolPermission::Tool,
-            )],
-        )
-    };
-    registry
-        .refresh(|candidate| {
-            candidate.upsert_sources(vec![
-                contender("alpha", [16; 32], "alpha__lookup"),
-                contender("beta", [17; 32], "beta__lookup"),
-            ])
-        })
-        .expect("cross-source alias collisions must mask instead of rejecting");
-
-    let workdir = PathBuf::from("/tmp/hya-alias-mask-cross-source");
-    let binding = registry.bind_turn(&workdir).unwrap();
-    assert_eq!(
-        binding.masks().get("lookup").map(String::as_str),
-        Some("beta__lookup"),
-        "the lexicographically greater source id must win the bare name"
-    );
-    let policy = binding
-        .agent_resource_policy_on_plane("mask-agent", AgentToolPlane::Full)
-        .unwrap();
-    let compiled = binding.compile_agent_resources(&policy).unwrap();
-    let names = compiled.tools.keys().cloned().collect::<BTreeSet<String>>();
-    assert!(
-        names.contains("lookup"),
-        "the contested bare name must resolve in the view: {names:?}"
-    );
-    assert!(
-        names.contains("harness:tool/beta__lookup"),
-        "the winner keeps its qualified identity: {names:?}"
-    );
-    assert!(
-        names.contains("alpha__lookup"),
-        "the loser must stay resolvable via its qualified canonical: {names:?}"
-    );
-    assert!(
-        compiled.resolve_tool("alpha__lookup").is_some(),
-        "the loser's qualified canonical is the escape hatch"
-    );
-    let lookup_schemas = compiled
-        .tool_schemas()
-        .into_iter()
-        .filter(|schema| schema.name.as_str() == "lookup")
-        .collect::<Vec<_>>();
-    assert_eq!(
-        lookup_schemas.len(),
-        1,
-        "the bare name must appear exactly once"
-    );
-    assert_eq!(
-        lookup_schemas[0].input_schema,
-        json!({ "type": "object" }),
-        "the advertised lookup schema must be the winner's tool"
-    );
-    assert!(
-        !compiled
-            .tool_schemas()
-            .iter()
-            .any(|schema| schema.name.as_str() == "beta__lookup"),
-        "a masked-in winner must not also advertise its qualified spelling"
-    );
-}
-
-#[test]
-fn runtime_source_dispatch_identity_tracks_authoritative_source_semantics() {
-    let source_identity =
-        |configured_id: &str, declaration_digest: [u8; 32], resource_value: Value| {
-            let catalog = Arc::new(
-                TestCatalog::from_prepared(&[bundle_with_agent(
-                    "hya/source-identity",
-                    agent("source-identity", ResourceView::default()),
-                    Vec::new(),
-                )])
-                .unwrap(),
-            );
-            let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-            let mut resources = BTreeMap::new();
-            resources.insert("probe".to_string(), resource_value);
-            registry
-                .refresh(|candidate| {
-                    candidate.upsert_sources(vec![
-                        RuntimeSource::new(
-                            RuntimeSourceId::plugin(configured_id),
-                            declaration_digest,
-                            Arc::new(()),
-                            vec![RuntimeSourceExport::tool(
-                                "probe",
-                                "plugin__fixture__probe",
-                                Vec::new(),
-                                Arc::new(NoopTool::new("plugin__fixture__probe")),
-                                ToolPermission::Tool,
-                            )],
-                        )
-                        .with_resources(resources),
-                    ])
-                })
-                .unwrap();
-            let identity = registry
-                .active()
-                .tools
-                .dispatch_identity_v1("plugin__fixture__probe");
-            let Some(identity) = identity else {
-                panic!("plugin source must expose dispatch identity");
-            };
-            assert_ne!(identity, [0_u8; 32]);
-            identity
-        };
-
-    let baseline = source_identity("fixture", [1; 32], json!({"mode": "one"}));
-    let same = source_identity("fixture", [1; 32], json!({"mode": "one"}));
-    assert_eq!(same, baseline);
-    assert_ne!(
-        source_identity("fixture-other", [1; 32], json!({"mode": "one"})),
-        baseline
-    );
-    assert_ne!(
-        source_identity("fixture", [2; 32], json!({"mode": "one"})),
-        baseline
-    );
-    assert_ne!(
-        source_identity("fixture", [1; 32], json!({"mode": "two"})),
-        baseline
-    );
-}
-
-#[test]
-fn runtime_semantic_fingerprint_is_generation_independent_and_base_section_sensitive() {
-    let Some(next_generation) = ConfigGeneration::INITIAL.checked_next() else {
-        panic!("test generation must have a successor");
-    };
-
-    let fixture = |catalog_marker: &str,
-                   schema_marker: &str,
-                   reverse_registration: bool,
-                   first_dispatch_identity: [u8; 32],
-                   permission_mode: Mode,
-                   generation: ConfigGeneration| {
-        let manifest = format!(
-            r#"kind: Bundle
-identity:
-  id: hya/runtime-fingerprint
-  version: 1.0.0
-  publisher: hya-tests
-agents:
-  - id: fingerprint
-    description: "manifest {catalog_marker}"
-    role: main
-"#
-        );
-        let prepared = prepare_package(BundleSource::new(
-            "runtime-fingerprint",
-            vec![SourceFile::new("bundle.yaml", manifest.into_bytes())],
-        ));
-        let Ok(prepared) = prepared else {
-            panic!("runtime fingerprint fixture preparation failed: {prepared:?}");
-        };
-        let catalog = TestCatalog::from_verified_catalogs(&[&prepared]);
-        let Ok(catalog) = catalog else {
-            panic!("runtime fingerprint verified catalog construction failed: {catalog:?}");
-        };
-
-        let registry = hya_tool_loader::builtins();
-        let mut custom_tools = vec![
-            (
-                Arc::new(FingerprintTool::new("custom_one", schema_marker)) as Arc<dyn Tool>,
-                first_dispatch_identity,
-            ),
-            (
-                Arc::new(FingerprintTool::new("custom_two", "stable")) as Arc<dyn Tool>,
-                [2; 32],
-            ),
-        ];
-        if reverse_registration {
-            custom_tools.reverse();
-        }
-        for (tool, dispatch_identity) in custom_tools {
-            if let Err(error) = registry.register_with_permission_and_aliases_and_dispatch_identity(
-                tool,
-                ToolPermission::Tool,
-                &[],
-                dispatch_identity,
-            ) {
-                panic!("runtime fingerprint tool fixture registration failed: {error}");
-            }
-        }
-
-        let rules =
-            PermissionRules::new(vec![Rule::new(Action::Tool, "custom_one", permission_mode)]);
-        let policy = InvocationPolicy::compile(
-            PermissionModel::Default,
-            vec![InvocationRule::new(
-                PermissionTarget::Tool,
-                "^custom_one$",
-                Mode::Allow,
-            )],
-        );
-        let Ok(policy) = policy else {
-            panic!("runtime fingerprint invocation policy fixture must compile: {policy:?}");
-        };
-        let (permission, _asks) = PermissionPlane::new_with_policy(rules, policy);
-        let tools = registry.snapshot();
-        let snapshot = RuntimeSnapshot {
-            generation,
-            catalog: Arc::new(catalog),
-            basic_tools: tools.clone(),
-            tools,
-            skills: BTreeMap::new(),
-            sources: BTreeMap::new(),
-            masks: Arc::new(BTreeMap::new()),
-            schemes: Arc::new(BTreeMap::new()),
-        };
-        (
-            TurnBinding {
-                snapshot: Arc::new(snapshot),
-                agent_model_preferences: Arc::new(BTreeMap::new()),
-                agent_model_configuration: Arc::new(AgentModelConfiguration::default()),
-                session_agent_models: Arc::new(BTreeMap::new()),
-                place: BindingPlace::new(
-                    PathBuf::from("/tmp/runtime-fingerprint"),
-                    CatalogScope::Global,
-                ),
-            },
-            permission,
-        )
-    };
-
-    let fingerprint = |binding: &TurnBinding, permission: &PermissionPlane| {
-        let Some(fingerprint) = binding.semantic_fingerprint_v1(permission) else {
-            panic!("runtime semantic fingerprint should be available for this fixture");
-        };
-        assert_ne!(fingerprint, [0_u8; 32]);
-        fingerprint
-    };
-
-    let (baseline_binding, baseline_permission) = fixture(
-        "one",
-        "one",
-        false,
-        [1; 32],
-        Mode::Allow,
-        ConfigGeneration::INITIAL,
-    );
-    let baseline = fingerprint(&baseline_binding, &baseline_permission);
-
-    let (equivalent_binding, equivalent_permission) =
-        fixture("one", "one", true, [1; 32], Mode::Allow, next_generation);
-    assert_eq!(
-        fingerprint(&equivalent_binding, &equivalent_permission),
-        baseline,
-        "fresh objects, registration order, and ConfigGeneration must not affect semantics"
-    );
-
-    let (catalog_binding, catalog_permission) = fixture(
-        "two",
-        "one",
-        false,
-        [1; 32],
-        Mode::Allow,
-        ConfigGeneration::INITIAL,
-    );
-    assert_ne!(
-        fingerprint(&catalog_binding, &catalog_permission),
-        baseline,
-        "verified catalog semantics must affect the base fingerprint"
-    );
-
-    let (schema_binding, schema_permission) = fixture(
-        "one",
-        "two",
-        false,
-        [1; 32],
-        Mode::Allow,
-        ConfigGeneration::INITIAL,
-    );
-    assert_ne!(
-        fingerprint(&schema_binding, &schema_permission),
-        baseline,
-        "tool schema semantics must affect the base fingerprint"
-    );
-
-    let (dispatch_binding, dispatch_permission) = fixture(
-        "one",
-        "one",
-        false,
-        [3; 32],
-        Mode::Allow,
-        ConfigGeneration::INITIAL,
-    );
-    assert_ne!(
-        fingerprint(&dispatch_binding, &dispatch_permission),
-        baseline,
-        "explicit dispatch identity must affect the base fingerprint"
-    );
-
-    let (permission_binding, permission_variant) = fixture(
-        "one",
-        "one",
-        false,
-        [1; 32],
-        Mode::Deny,
-        ConfigGeneration::INITIAL,
-    );
-    assert_ne!(
-        fingerprint(&permission_binding, &permission_variant),
-        baseline,
-        "permission-rule semantics must affect the base fingerprint"
-    );
-}
-
-#[test]
-fn runtime_semantic_fingerprint_tracks_selected_workdir_skill_semantics() {
-    let skill_fixture = |name: &str,
-                         description: &str,
-                         content: &str,
-                         allowed_tools: &[&str],
-                         model: Option<&str>,
-                         path: &str| {
-        SkillCatalogEntry {
-            name: name.to_string(),
-            description: description.to_string(),
-            content: content.to_string(),
-            allowed_tools: allowed_tools
-                .iter()
-                .map(|tool| (*tool).to_string())
-                .collect(),
-            model: model.map(str::to_string),
-            path: PathBuf::from(path),
-            dir: PathBuf::from(path)
-                .parent()
-                .map_or_else(PathBuf::new, Path::to_path_buf),
-            origin: hya_tool::SkillCatalogOrigin::Filesystem,
-            disable_model_invocation: false,
-        }
-    };
-    let selected_skills = || {
-        vec![
-            skill_fixture(
-                "alpha",
-                "Alpha skill",
-                "alpha body",
-                &["custom_one"],
-                Some("model-a"),
-                "/tmp/runtime-fingerprint-skills/alpha/SKILL.md",
-            ),
-            skill_fixture(
-                "beta",
-                "Beta skill",
-                "beta body",
-                &[],
-                None,
-                "/tmp/runtime-fingerprint-skills/beta/SKILL.md",
-            ),
-        ]
-    };
-    let fixture = |selected: Vec<SkillCatalogEntry>, unrelated: Vec<SkillCatalogEntry>| {
-        let manifest = r#"kind: Bundle
-identity:
-  id: hya/runtime-fingerprint-skills
-  version: 1.0.0
-  publisher: hya-tests
-agents:
-  - id: fingerprint-skills
-    role: main
-"#;
-        let prepared = prepare_package(BundleSource::new(
-            "runtime-fingerprint-skills",
-            vec![SourceFile::new("bundle.yaml", manifest.as_bytes())],
-        ));
-        let Ok(prepared) = prepared else {
-            panic!("skill fingerprint fixture preparation failed: {prepared:?}");
-        };
-        let catalog = TestCatalog::from_verified_catalogs(&[&prepared]);
-        let Ok(catalog) = catalog else {
-            panic!("skill fingerprint verified catalog construction failed: {catalog:?}");
-        };
-        let tools = hya_tool_loader::builtins().snapshot();
-        let workdir = PathBuf::from("/tmp/runtime-fingerprint-skills");
-        let mut skills = BTreeMap::new();
-        skills.insert(workdir.clone(), Arc::new(selected));
-        if !unrelated.is_empty() {
-            skills.insert(
-                PathBuf::from("/tmp/runtime-fingerprint-unrelated"),
-                Arc::new(unrelated),
-            );
-        }
-        let snapshot = RuntimeSnapshot {
-            generation: ConfigGeneration::INITIAL,
-            catalog: Arc::new(catalog),
-            basic_tools: tools.clone(),
-            tools,
-            skills,
-            sources: BTreeMap::new(),
-            masks: Arc::new(BTreeMap::new()),
-            schemes: Arc::new(BTreeMap::new()),
-        };
-        let (permission, _asks) = PermissionPlane::new_with_policy(
-            PermissionRules::default(),
-            InvocationPolicy::default(),
-        );
-        (
-            TurnBinding {
-                snapshot: Arc::new(snapshot),
-                agent_model_preferences: Arc::new(BTreeMap::new()),
-                agent_model_configuration: Arc::new(AgentModelConfiguration::default()),
-                session_agent_models: Arc::new(BTreeMap::new()),
-                place: BindingPlace::new(workdir, CatalogScope::Global),
-            },
-            permission,
-        )
-    };
-    let fingerprint = |binding: &TurnBinding, permission: &PermissionPlane| {
-        let Some(fingerprint) = binding.semantic_fingerprint_v1(permission) else {
-            panic!("selected workdir skills must be fingerprintable");
-        };
-        assert_ne!(fingerprint, [0_u8; 32]);
-        fingerprint
-    };
-
-    let (baseline_binding, baseline_permission) = fixture(selected_skills(), Vec::new());
-    let baseline = fingerprint(&baseline_binding, &baseline_permission);
-    let (equivalent_binding, equivalent_permission) = fixture(selected_skills(), Vec::new());
-    assert_eq!(
-        fingerprint(&equivalent_binding, &equivalent_permission),
-        baseline,
-        "fresh skill entries, catalogs, and permission planes must match"
-    );
-
-    let mut changed_content = selected_skills();
-    changed_content[0].content = "changed body".to_string();
-    let (content_binding, content_permission) = fixture(changed_content, Vec::new());
-    assert_ne!(
-        fingerprint(&content_binding, &content_permission),
-        baseline,
-        "skill content must affect the fingerprint"
-    );
-
-    let mut renamed = selected_skills();
-    renamed[0].name = "alpha-renamed".to_string();
-    let (rename_binding, rename_permission) = fixture(renamed, Vec::new());
-    assert_ne!(
-        fingerprint(&rename_binding, &rename_permission),
-        baseline,
-        "skill identity must affect the fingerprint"
-    );
-
-    let mut moved = selected_skills();
-    moved[0].path = PathBuf::from("/tmp/runtime-fingerprint-skills/moved/SKILL.md");
-    moved[0].dir = PathBuf::from("/tmp/runtime-fingerprint-skills/moved");
-    let (path_binding, path_permission) = fixture(moved, Vec::new());
-    assert_ne!(
-        fingerprint(&path_binding, &path_permission),
-        baseline,
-        "skill path must affect the fingerprint"
-    );
-
-    let mut changed_description = selected_skills();
-    changed_description[0].description = "changed description".to_string();
-    let (description_binding, description_permission) = fixture(changed_description, Vec::new());
-    assert_ne!(
-        fingerprint(&description_binding, &description_permission),
-        baseline,
-        "skill semantic metadata must affect the fingerprint"
-    );
-
-    let mut changed_allowed_tools = selected_skills();
-    changed_allowed_tools[0].allowed_tools = vec!["custom_two".to_string()];
-    let (allowed_tools_binding, allowed_tools_permission) =
-        fixture(changed_allowed_tools, Vec::new());
-    assert_ne!(
-        fingerprint(&allowed_tools_binding, &allowed_tools_permission),
-        baseline,
-        "skill semantic metadata must affect the fingerprint"
-    );
-
-    let mut changed_model = selected_skills();
-    changed_model[0].model = Some("model-b".to_string());
-    let (model_binding, model_permission) = fixture(changed_model, Vec::new());
-    assert_ne!(
-        fingerprint(&model_binding, &model_permission),
-        baseline,
-        "skill semantic metadata must affect the fingerprint"
-    );
-
-    let mut reversed = selected_skills();
-    reversed.reverse();
-    let (reversed_binding, reversed_permission) = fixture(reversed, Vec::new());
-    assert_ne!(
-        fingerprint(&reversed_binding, &reversed_permission),
-        baseline,
-        "selected skill order must preserve precedence semantics"
-    );
-
-    let unrelated = vec![skill_fixture(
-        "unrelated",
-        "unrelated skill",
-        "unrelated body",
-        &[],
-        None,
-        "/tmp/runtime-fingerprint-unrelated/unrelated/SKILL.md",
-    )];
-    let (unrelated_binding, unrelated_permission) = fixture(selected_skills(), unrelated);
-    assert_eq!(
-        fingerprint(&unrelated_binding, &unrelated_permission),
-        baseline,
-        "skills cached for another workdir must not affect this binding"
-    );
-}
-
-#[test]
-fn runtime_semantic_fingerprint_tracks_plugin_and_mcp_source_semantics() {
-    let nested_value = |marker: &str, reverse: bool| {
-        let mut nested = serde_json::Map::new();
-        let entries = [
-            ("marker", Value::String(marker.to_string())),
-            ("enabled", Value::Bool(true)),
-        ];
-        if reverse {
-            for (key, value) in entries.into_iter().rev() {
-                nested.insert(key.to_string(), value);
-            }
-        } else {
-            for (key, value) in entries {
-                nested.insert(key.to_string(), value);
-            }
-        }
-        let mut outer = serde_json::Map::new();
-        if reverse {
-            outer.insert("nested".to_string(), Value::Object(nested));
-            outer.insert("version".to_string(), Value::from(1));
-        } else {
-            outer.insert("version".to_string(), Value::from(1));
-            outer.insert("nested".to_string(), Value::Object(nested));
-        }
-        Value::Object(outer)
-    };
-    let fixture = |plugin_kind: RuntimeSourceKind,
-                   plugin_id: &str,
-                   plugin_digest: [u8; 32],
-                   plugin_resource_marker: &str,
-                   mcp_digest: [u8; 32],
-                   mcp_resource_marker: &str,
-                   include_mcp: bool,
-                   reverse_sources: bool,
-                   reverse_resources: bool| {
-        let manifest = r#"kind: Bundle
-identity:
-  id: hya/runtime-fingerprint-sources
-  version: 1.0.0
-  publisher: hya-tests
-agents:
-  - id: fingerprint-sources
-    role: main
-"#;
-        let prepared = prepare_package(BundleSource::new(
-            "runtime-fingerprint-sources",
-            vec![SourceFile::new("bundle.yaml", manifest.as_bytes())],
-        ));
-        let Ok(prepared) = prepared else {
-            panic!("source fingerprint fixture preparation failed: {prepared:?}");
-        };
-        let catalog = TestCatalog::from_verified_catalogs(&[&prepared]);
-        let Ok(catalog) = catalog else {
-            panic!("source fingerprint verified catalog construction failed: {catalog:?}");
-        };
-        let registry = test_runtime_registry(hya_tool_loader::builtins(), Arc::new(catalog));
-        let mut plugin_resources = BTreeMap::new();
-        plugin_resources.insert(
-            "config".to_string(),
-            nested_value(plugin_resource_marker, reverse_resources),
-        );
-        let probe_name = match plugin_kind {
-            RuntimeSourceKind::Mcp => format!("mcp__{plugin_id}__probe"),
-            _ => format!("plugin__{plugin_id}__probe"),
-        };
-        let plugin = RuntimeSource::new(
-            RuntimeSourceId::new(plugin_kind, plugin_id),
-            plugin_digest,
-            Arc::new(()),
-            vec![RuntimeSourceExport::tool(
-                "probe",
-                probe_name.clone(),
-                vec!["plugin_probe".to_string()],
-                Arc::new(NoopTool::new(&probe_name)),
-                ToolPermission::Tool,
-            )],
-        )
-        .with_resources(plugin_resources);
-        let mut mcp_resources = BTreeMap::new();
-        mcp_resources.insert(
-            "config".to_string(),
-            nested_value(mcp_resource_marker, reverse_resources),
-        );
-        let mcp = RuntimeSource::new(
-            RuntimeSourceId::mcp("fixture-mcp"),
-            mcp_digest,
-            Arc::new(()),
-            Vec::new(),
-        )
-        .with_resources(mcp_resources);
-        let mut sources = vec![plugin];
-        if include_mcp {
-            sources.push(mcp);
-        }
-        if reverse_sources {
-            sources.reverse();
-        }
-        let refreshed = registry.refresh(|candidate| candidate.upsert_sources(sources));
-        let Ok(_) = refreshed else {
-            panic!("source fingerprint refresh failed: {refreshed:?}");
-        };
-        let tools = registry.active();
-        let (permission, _asks) = PermissionPlane::new_with_policy(
-            PermissionRules::default(),
-            InvocationPolicy::default(),
-        );
-        (
-            TurnBinding {
-                agent_model_configuration: Arc::new(AgentModelConfiguration::default()),
-                session_agent_models: Arc::new(BTreeMap::new()),
-                snapshot: tools,
-                agent_model_preferences: Arc::new(BTreeMap::new()),
-                place: BindingPlace::new(
-                    PathBuf::from("/tmp/runtime-fingerprint-sources"),
-                    CatalogScope::Global,
-                ),
-            },
-            permission,
-        )
-    };
-    let fingerprint = |binding: &TurnBinding, permission: &PermissionPlane| {
-        let Some(fingerprint) = binding.semantic_fingerprint_v1(permission) else {
-            panic!("runtime source semantics must be fingerprintable");
-        };
-        assert_ne!(fingerprint, [0_u8; 32]);
-        fingerprint
-    };
-
-    let (baseline_binding, baseline_permission) = fixture(
-        RuntimeSourceKind::Plugin,
-        "fixture-plugin",
-        [1; 32],
-        "plugin-one",
-        [2; 32],
-        "mcp-one",
-        true,
-        false,
-        false,
-    );
-    let baseline = fingerprint(&baseline_binding, &baseline_permission);
-    let (equivalent_binding, equivalent_permission) = fixture(
-        RuntimeSourceKind::Plugin,
-        "fixture-plugin",
-        [1; 32],
-        "plugin-one",
-        [2; 32],
-        "mcp-one",
-        true,
-        true,
-        true,
-    );
-    assert_eq!(
-        fingerprint(&equivalent_binding, &equivalent_permission),
-        baseline,
-        "fresh owners, source order, and nested JSON order must not affect semantics"
-    );
-
-    let (source_kind_binding, source_kind_permission) = fixture(
-        RuntimeSourceKind::Mcp,
-        "fixture-plugin",
-        [1; 32],
-        "plugin-one",
-        [2; 32],
-        "mcp-one",
-        true,
-        false,
-        false,
-    );
-    assert_ne!(
-        fingerprint(&source_kind_binding, &source_kind_permission),
-        baseline,
-        "runtime source kind must affect the fingerprint"
-    );
-
-    let (plugin_id_binding, plugin_id_permission) = fixture(
-        RuntimeSourceKind::Plugin,
-        "fixture-plugin-other",
-        [1; 32],
-        "plugin-one",
-        [2; 32],
-        "mcp-one",
-        true,
-        false,
-        false,
-    );
-    assert_ne!(
-        fingerprint(&plugin_id_binding, &plugin_id_permission),
-        baseline,
-        "plugin configured ID must affect the fingerprint"
-    );
-
-    let (plugin_digest_binding, plugin_digest_permission) = fixture(
-        RuntimeSourceKind::Plugin,
-        "fixture-plugin",
-        [3; 32],
-        "plugin-one",
-        [2; 32],
-        "mcp-one",
-        true,
-        false,
-        false,
-    );
-    assert_ne!(
-        fingerprint(&plugin_digest_binding, &plugin_digest_permission),
-        baseline,
-        "plugin declaration digest must affect the fingerprint"
-    );
-
-    let (plugin_resource_binding, plugin_resource_permission) = fixture(
-        RuntimeSourceKind::Plugin,
-        "fixture-plugin",
-        [1; 32],
-        "plugin-two",
-        [2; 32],
-        "mcp-one",
-        true,
-        false,
-        false,
-    );
-    assert_ne!(
-        fingerprint(&plugin_resource_binding, &plugin_resource_permission),
-        baseline,
-        "plugin resource semantics must affect the fingerprint"
-    );
-
-    let (mcp_digest_binding, mcp_digest_permission) = fixture(
-        RuntimeSourceKind::Plugin,
-        "fixture-plugin",
-        [1; 32],
-        "plugin-one",
-        [3; 32],
-        "mcp-one",
-        true,
-        false,
-        false,
-    );
-    assert_ne!(
-        fingerprint(&mcp_digest_binding, &mcp_digest_permission),
-        baseline,
-        "zero-export MCP declaration digest must affect the fingerprint"
-    );
-
-    let (mcp_resource_binding, mcp_resource_permission) = fixture(
-        RuntimeSourceKind::Plugin,
-        "fixture-plugin",
-        [1; 32],
-        "plugin-one",
-        [2; 32],
-        "mcp-two",
-        true,
-        false,
-        false,
-    );
-    assert_ne!(
-        fingerprint(&mcp_resource_binding, &mcp_resource_permission),
-        baseline,
-        "zero-export MCP resources must affect the fingerprint"
-    );
-
-    let (without_mcp_binding, without_mcp_permission) = fixture(
-        RuntimeSourceKind::Plugin,
-        "fixture-plugin",
-        [1; 32],
-        "plugin-one",
-        [2; 32],
-        "mcp-one",
-        false,
-        false,
-        false,
-    );
-    assert_ne!(
-        fingerprint(&without_mcp_binding, &without_mcp_permission),
-        baseline,
-        "removing a zero-export MCP source must affect the fingerprint"
-    );
-}
-
-#[test]
-fn missing_and_filtered_alias_targets_fail_typed() {
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/alias-miss",
-            agent(
-                "alias-miss",
-                ResourceView {
-                    allow: Vec::new(),
-                    deny: Vec::new(),
-                    aliases: BTreeMap::from([(
-                        "marker".to_string(),
-                        "harness:tool/dynamic_marker".to_string(),
-                    )]),
-                    namespace: None,
-                },
-            ),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    // Register after construction so basic_tools stays builtins-only.
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    registry
-        .refresh(|candidate| candidate.register_tool(Arc::new(NoopTool::new("dynamic_marker"))))
-        .unwrap();
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-alias-miss"))
-        .unwrap();
-    let policy = binding.agent_resource_policy("alias-miss").unwrap();
-    match binding.compile_agent_resources(&policy) {
-        Err(BundleError::UnknownResourceReference { .. }) => {}
-        Ok(_) => panic!("expected unknown filtered alias target"),
-        Err(other) => panic!("expected unknown filtered alias target, got {other:?}"),
-    }
-}
-
-#[test]
-fn deny_filtered_alias_target_fails_typed() {
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/alias-denied",
-            agent(
-                "alias-denied",
-                ResourceView {
-                    allow: Vec::new(),
-                    deny: vec!["harness:tool/read".to_string()],
-                    aliases: BTreeMap::from([(
-                        "reader".to_string(),
-                        "harness:tool/read".to_string(),
-                    )]),
-                    namespace: None,
-                },
-            ),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-alias-denied"))
-        .unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("alias-denied", AgentToolPlane::Full)
-        .unwrap();
-    match binding.compile_agent_resources(&policy) {
-        Err(BundleError::UnknownResourceReference { .. }) => {}
-        Ok(_) => panic!("expected denied alias target to fail"),
-        Err(other) => panic!("expected denied alias target to fail, got {other:?}"),
-    }
-}
-
-#[test]
-fn alias_cannot_override_qualified_stable_name() {
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/alias-qualified",
-            agent(
-                "alias-qualified",
-                ResourceView {
-                    allow: Vec::new(),
-                    deny: Vec::new(),
-                    aliases: BTreeMap::from([(
-                        "harness:tool/read".to_string(),
-                        "harness:tool/write".to_string(),
-                    )]),
-                    namespace: None,
-                },
-            ),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-alias-qualified"))
-        .unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("alias-qualified", AgentToolPlane::Full)
-        .unwrap();
-    match binding.compile_agent_resources(&policy) {
-        Err(BundleError::AliasCollision { name, .. }) => {
-            assert_eq!(name, "harness:tool/read");
-        }
-        Ok(_) => panic!("expected qualified alias override to fail"),
-        Err(other) => panic!("expected alias collision, got {other:?}"),
-    }
-}
-
-#[test]
-fn alias_collision_with_public_short_name_fails_typed() {
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/alias-collide",
-            agent(
-                "alias-collide",
-                ResourceView {
-                    allow: Vec::new(),
-                    deny: Vec::new(),
-                    aliases: BTreeMap::from([(
-                        "read".to_string(),
-                        "harness:tool/write".to_string(),
-                    )]),
-                    namespace: None,
-                },
-            ),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-alias-collide"))
-        .unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("alias-collide", AgentToolPlane::Full)
-        .unwrap();
-    match binding.compile_agent_resources(&policy) {
-        Err(BundleError::AliasCollision { bundle_id, name }) => {
-            assert_eq!(bundle_id, "hya/alias-collide");
-            assert_eq!(name, "read");
-        }
-        Ok(_) => panic!("expected alias collision"),
-        Err(other) => panic!("expected alias collision, got {other:?}"),
-    }
-}
-
-#[test]
-fn local_skill_short_name_wins_and_filtered_local_restores_harness_short() {
-    let local = PreparedResource {
-        local_id: "shared".to_string(),
-        stable_id: "bundle:hya/skill-collision/skill/shared".to_string(),
-        source_path: "resources/skills/shared.md".to_string(),
-        digest: "test-only".to_string(),
-        content: skill_md("shared", "LOCAL"),
-        binary_base64: None,
-        aliases: Vec::new(),
-    };
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/skill-collision",
-            agent("skill-agent", ResourceView::default()),
-            vec![local],
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let workdir = tempfile_skill_workdir("shared", "HARNESS");
-    let binding = registry.bind_turn(&workdir).unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("skill-agent", AgentToolPlane::Full)
-        .unwrap();
-    let compiled = binding.compile_agent_resources(&policy).unwrap();
-    let names = compiled
-        .skills()
-        .iter()
-        .map(|skill| skill.name.as_str())
-        .collect::<BTreeSet<_>>();
-    assert!(names.contains("shared"));
-    assert!(names.contains("harness:skill/shared"));
-    let shared = compiled
-        .skills()
-        .iter()
-        .find(|skill| skill.name == "shared")
-        .unwrap();
-    assert!(shared.content.contains("LOCAL"));
-
-    let filtered_catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/skill-collision",
-            agent(
-                "skill-agent",
-                ResourceView {
-                    allow: vec![
-                        "harness:skill/shared".to_string(),
-                        "harness:tool/skill".to_string(),
-                    ],
-                    deny: Vec::new(),
-                    aliases: BTreeMap::new(),
-                    namespace: None,
-                },
-            ),
-            vec![PreparedResource {
-                local_id: "shared".to_string(),
-                stable_id: "bundle:hya/skill-collision/skill/shared".to_string(),
-                source_path: "resources/skills/shared.md".to_string(),
-                digest: "test-only".to_string(),
-                content: skill_md("shared", "LOCAL"),
-                binary_base64: None,
-                aliases: Vec::new(),
-            }],
-        )])
-        .unwrap(),
-    );
-    let filtered_registry = test_runtime_registry(hya_tool_loader::builtins(), filtered_catalog);
-    let filtered_binding = filtered_registry.bind_turn(&workdir).unwrap();
-    let filtered_policy = filtered_binding
-        .agent_resource_policy_on_plane("skill-agent", AgentToolPlane::Full)
-        .unwrap();
-    let filtered = filtered_binding
-        .compile_agent_resources(&filtered_policy)
-        .unwrap();
-    let filtered_names = filtered
-        .skills()
-        .iter()
-        .map(|skill| skill.name.as_str())
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        filtered_names,
-        BTreeSet::from(["shared", "harness:skill/shared"]),
-        "filtering the local restores harness short and keeps qualified spelling"
-    );
-    assert!(
-        filtered
-            .skills()
-            .iter()
-            .any(|skill| skill.name == "shared" && skill.content.contains("HARNESS"))
-    );
-}
-
-#[test]
-fn model_schemas_use_explicit_aliases_and_canonical_short_names() {
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/schema-dispatch",
-            agent(
-                "sd-agent",
-                ResourceView {
-                    allow: vec![
-                        "harness:tool/read".to_string(),
-                        "harness:tool/write".to_string(),
-                    ],
-                    deny: Vec::new(),
-                    aliases: BTreeMap::from([(
-                        "reader".to_string(),
-                        "harness:tool/read".to_string(),
-                    )]),
-                    namespace: None,
-                },
-            ),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-schema-dispatch"))
-        .unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("sd-agent", AgentToolPlane::Full)
-        .unwrap();
-    let compiled = binding.compile_agent_resources(&policy).unwrap();
-    let schema_names = domain_schema_names(&compiled);
-    assert_eq!(
-        schema_names,
-        BTreeSet::from(["reader".to_string(), "write".to_string()])
-    );
-    assert!(compiled.resolve_tool("reader").is_some());
-    assert!(compiled.resolve_tool("read").is_none());
-    assert!(compiled.resolve_tool("write").is_some());
-    assert!(
-        compiled.resolve_tool("harness:tool/read").is_some(),
-        "alias must preserve the exact qualified binding"
-    );
-    assert!(compiled.resolve_tool("harness:tool/write").is_some());
-}
-
-#[test]
-fn a_bundle_local_allow_list_yields_no_skill_facade_and_inlines_the_skill() {
-    let local = PreparedResource {
-        local_id: "bundle-skill".to_string(),
-        stable_id: "bundle:hya/none-inline/skill/bundle-skill".to_string(),
-        source_path: "resources/skills/bundle-skill.md".to_string(),
-        digest: "test-only".to_string(),
-        content: skill_md("bundle-skill", "INLINE_BODY_MARKER"),
-        binary_base64: None,
-        aliases: Vec::new(),
-    };
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/none-inline",
-            agent(
-                "none-agent",
-                ResourceView {
-                    allow: vec!["bundle:hya/none-inline/skill/bundle-skill".to_string()],
-                    deny: Vec::new(),
-                    aliases: BTreeMap::new(),
-                    namespace: None,
-                },
-            ),
-            vec![local],
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    registry
-        .refresh(|candidate| candidate.register_tool(Arc::new(NoopTool::new("dynamic_marker"))))
-        .unwrap();
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-none-inline"))
-        .unwrap();
-    let policy = binding.agent_resource_policy("none-agent").unwrap();
-    assert_eq!(
-        policy.selected_bundle_skill_ids(),
-        &["bundle:hya/none-inline/skill/bundle-skill".to_string()]
-    );
-    let compiled = binding.compile_agent_resources(&policy).unwrap();
-    assert!(
-        domain_tool_names(&compiled).is_empty(),
-        "an allow list of only bundle-local resources admits no harness domain tool"
-    );
-    assert!(
-        compiled.resolve_tool("skill").is_none(),
-        "no harness skill tool is inserted when none is selected"
-    );
-    assert!(
-        compiled.resolve_tool("dynamic_marker").is_none(),
-        "dispatch must not fall back to the live registry"
-    );
-    assert!(
-        compiled.resolve_tool("bash").is_none(),
-        "dispatch must not fall back to builtins outside the compiled view"
-    );
-    assert!(
-        has_mail_only_read(&compiled),
-        "without its own read the view gets only the mail-only channel read"
-    );
-    let section = compiled
-        .skills_prompt_section()
-        .expect("selected local static skill must produce prompt content");
-    assert!(
-        section.contains("INLINE_BODY_MARKER"),
-        "local static skill body must be inlined when no skill facade exists: {section}"
-    );
-    assert!(
-        section.contains("bundle-skill"),
-        "local static skill name must remain consumable via prompt content"
-    );
-    let unique_paths = compiled
-        .skills()
-        .iter()
-        .map(|skill| skill.path.clone())
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        unique_paths.len(),
-        1,
-        "short and qualified public spellings share one selected local skill"
-    );
-    assert!(
-        compiled
-            .skills()
-            .iter()
-            .any(|skill| skill.name == "bundle-skill")
-    );
-    assert!(
-        compiled
-            .skills()
-            .iter()
-            .any(|skill| { skill.name == "bundle:hya/none-inline/skill/bundle-skill" }),
-        "qualified public spelling must be real for selected local skills"
-    );
-}
-
-#[test]
-fn qualified_public_spellings_namespace_alias_and_dispatch() {
-    let local = PreparedResource {
-        local_id: "probe".to_string(),
-        stable_id: "bundle:hya/qualified-map/skill/probe".to_string(),
-        source_path: "resources/skills/probe.md".to_string(),
-        digest: "test-only".to_string(),
-        content: skill_md("probe", "LOCAL_PROBE"),
-        binary_base64: None,
-        aliases: Vec::new(),
-    };
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/qualified-map",
-            agent(
-                "q-agent",
-                ResourceView {
-                    allow: vec![
-                        "harness:tool/read".to_string(),
-                        "harness:tool/write".to_string(),
-                        "bundle:hya/qualified-map/skill/probe".to_string(),
-                    ],
-                    deny: Vec::new(),
-                    aliases: BTreeMap::from([
-                        ("reader".to_string(), "harness:tool/read".to_string()),
-                        ("book".to_string(), "harness:tool/read".to_string()),
-                    ]),
-                    namespace: Some("custom.ns".to_string()),
-                },
-            ),
-            vec![local],
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-qualified-map"))
-        .unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("q-agent", AgentToolPlane::Full)
-        .unwrap();
-    let compiled = binding.compile_agent_resources(&policy).unwrap();
-    let schema_names = domain_schema_names(&compiled);
-    assert_eq!(
-        schema_names,
-        BTreeSet::from([
-            "book".to_string(),
-            "reader".to_string(),
-            "write".to_string()
-        ])
-    );
-    assert!(compiled.resolve_tool("reader").is_some());
-    assert!(compiled.resolve_tool("book").is_some());
-    assert!(
-        compiled.resolve_tool("read").is_none(),
-        "alias replaces the ordinary short spelling"
-    );
-    assert!(
-        compiled.resolve_tool("harness:tool/read").is_some(),
-        "exact qualified binding must remain after aliases"
-    );
-    assert!(compiled.resolve_tool("write").is_some());
-    assert!(compiled.resolve_tool("harness:tool/write").is_some());
-    let skill_names = compiled
-        .skills()
-        .iter()
-        .map(|skill| skill.name.as_str())
-        .collect::<BTreeSet<_>>();
-    assert!(
-        skill_names.contains("probe"),
-        "bundle-local short remains available: {skill_names:?}"
-    );
-    assert!(
-        skill_names.contains("bundle:custom.ns/skill/probe"),
-        "namespace changes only the bundle-local qualified public spelling: {skill_names:?}"
-    );
-    assert!(
-        !skill_names.contains("bundle:hya/qualified-map/skill/probe")
-            || skill_names.contains("bundle:custom.ns/skill/probe"),
-        "custom namespace must be the public qualified spelling"
-    );
-}
-
-#[test]
-fn harness_mcp_is_source_owned_full_only_and_pins_with_binding() {
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[
-            bundle_with_agent(
-                "hya/mcp-full",
-                agent("full-mcp", ResourceView::default()),
-                Vec::new(),
-            ),
-            bundle_with_agent(
-                "hya/mcp-basic",
-                agent("basic-mcp", ResourceView::default()),
-                Vec::new(),
-            ),
-            bundle_with_agent(
-                "hya/mcp-allow",
-                agent(
-                    "allow-mcp",
-                    ResourceView {
-                        allow: vec!["harness:mcp/mcp__fixture__ping".to_string()],
-                        deny: Vec::new(),
-                        aliases: BTreeMap::new(),
-                        namespace: None,
-                    },
-                ),
-                Vec::new(),
-            ),
-            bundle_with_agent(
-                "hya/mcp-deny",
-                agent(
-                    "deny-mcp",
-                    ResourceView {
-                        allow: Vec::new(),
-                        deny: vec!["harness:mcp/mcp__fixture__ping".to_string()],
-                        aliases: BTreeMap::new(),
-                        namespace: None,
-                    },
-                ),
-                Vec::new(),
-            ),
-        ])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    registry
-        .refresh(|candidate| {
-            candidate.upsert_sources(vec![RuntimeSource::new(
-                RuntimeSourceId::mcp("fixture"),
-                [7; 32],
-                Arc::new(()),
-                vec![RuntimeSourceExport::tool(
-                    "ping",
-                    "mcp__fixture__ping",
-                    Vec::new(),
-                    Arc::new(NoopTool::new("mcp__fixture__ping")),
-                    ToolPermission::Mcp,
-                )],
-            )])
-        })
-        .unwrap();
-    let workdir = Path::new("/tmp/hya-mcp-kind");
-    let binding = registry.bind_turn(workdir).unwrap();
-
-    let full = binding
-        .compile_agent_resources(
-            &binding
-                .agent_resource_policy_on_plane("full-mcp", AgentToolPlane::Full)
-                .unwrap(),
-        )
-        .unwrap();
-    assert!(full.resolve_tool("mcp__fixture__ping").is_some());
-    assert!(
-        full.resolve_tool("harness:mcp/mcp__fixture__ping")
-            .is_some()
-    );
-    assert!(
-        full.resolve_tool("harness:tool/mcp__fixture__ping")
-            .is_none(),
-        "MCP must not be re-homed under the tool kind"
-    );
-
-    let basic = binding
-        .compile_agent_resources(&binding.agent_resource_policy("basic-mcp").unwrap())
-        .unwrap();
-    assert!(basic.resolve_tool("mcp__fixture__ping").is_none());
-    assert!(
-        basic
-            .resolve_tool("harness:mcp/mcp__fixture__ping")
-            .is_none()
-    );
-
-    let allowed = binding
-        .compile_agent_resources(
-            &binding
-                .agent_resource_policy_on_plane("allow-mcp", AgentToolPlane::Full)
-                .unwrap(),
-        )
-        .unwrap();
-    assert!(allowed.resolve_tool("mcp__fixture__ping").is_some());
-    assert!(!domain_tool_names(&allowed).contains("read"));
-
-    let denied = binding
-        .compile_agent_resources(
-            &binding
-                .agent_resource_policy_on_plane("deny-mcp", AgentToolPlane::Full)
-                .unwrap(),
-        )
-        .unwrap();
-    assert!(denied.resolve_tool("mcp__fixture__ping").is_none());
-    assert!(denied.resolve_tool("read").is_some());
-
-    // Pin: remove MCP source after binding capture.
-    registry
-        .refresh(|candidate| {
-            let mut removed = BTreeSet::new();
-            removed.insert(RuntimeSourceId::mcp("fixture"));
-            candidate.remove_sources(&removed);
-            Ok(())
-        })
-        .unwrap();
-    let pinned = binding
-        .compile_agent_resources(
-            &binding
-                .agent_resource_policy_on_plane("full-mcp", AgentToolPlane::Full)
-                .unwrap(),
-        )
-        .unwrap();
-    assert!(
-        pinned.resolve_tool("mcp__fixture__ping").is_some(),
-        "old TurnBinding must pin the prior MCP view"
-    );
-    let fresh = registry.bind_turn(workdir).unwrap();
-    let after = fresh
-        .compile_agent_resources(
-            &fresh
-                .agent_resource_policy_on_plane("full-mcp", AgentToolPlane::Full)
-                .unwrap(),
-        )
-        .unwrap();
-    assert!(after.resolve_tool("mcp__fixture__ping").is_none());
-}
-
-#[test]
-fn global_canonical_reference_rejects_wrong_kind_and_cross_kind_short_ambiguity() {
-    let local = PreparedResource {
-        local_id: "shared".to_string(),
-        stable_id: "bundle:hya/global-ref/skill/shared".to_string(),
-        source_path: "resources/skills/shared.md".to_string(),
-        digest: "test-only".to_string(),
-        content: skill_md("shared", "LOCAL"),
-        binary_base64: None,
-        aliases: Vec::new(),
-    };
-    let wrong_kind = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/global-ref",
-            agent(
-                "wrong-kind",
-                ResourceView {
-                    allow: vec!["harness:skill/read".to_string()],
-                    deny: Vec::new(),
-                    aliases: BTreeMap::new(),
-                    namespace: None,
-                },
-            ),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), wrong_kind);
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-global-wrong-kind"))
-        .unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("wrong-kind", AgentToolPlane::Full)
-        .unwrap();
-    match binding.compile_agent_resources(&policy) {
-        Err(BundleError::UnknownResourceReference { reference, .. }) => {
-            assert_eq!(reference, "harness:skill/read");
-        }
-        Ok(_) => panic!("wrong-kind prefix must typed-reject"),
-        Err(other) => panic!("expected unknown resource reference, got {other:?}"),
-    }
-
-    let ambiguous = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/global-ref",
-            agent(
-                "ambiguous",
-                ResourceView {
-                    allow: vec!["shared".to_string()],
-                    deny: Vec::new(),
-                    aliases: BTreeMap::new(),
-                    namespace: None,
-                },
-            ),
-            vec![local],
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), ambiguous);
-    // Register a harness tool whose short name collides with the local skill.
-    registry
-        .refresh(|candidate| candidate.register_tool(Arc::new(NoopTool::new("shared"))))
-        .unwrap();
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-global-ambiguous"))
-        .unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("ambiguous", AgentToolPlane::Full)
-        .unwrap();
-    match binding.compile_agent_resources(&policy) {
-        Err(BundleError::NamespaceCollision { name, .. }) => {
-            assert_eq!(name, "shared");
-        }
-        Ok(_) => panic!("cross-kind short ambiguity must typed-reject"),
-        Err(other) => panic!("expected namespace collision, got {other:?}"),
-    }
-}
-
-#[test]
-fn alias_cannot_occupy_same_target_stable_spelling() {
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/alias-self",
-            agent(
-                "alias-self",
-                ResourceView {
-                    allow: Vec::new(),
-                    deny: Vec::new(),
-                    aliases: BTreeMap::from([(
-                        "read".to_string(),
-                        "harness:tool/read".to_string(),
-                    )]),
-                    namespace: None,
-                },
-            ),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-alias-self"))
-        .unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("alias-self", AgentToolPlane::Full)
-        .unwrap();
-    match binding.compile_agent_resources(&policy) {
-        Err(BundleError::AliasCollision { name, .. }) => {
-            assert_eq!(name, "read");
-        }
-        Ok(_) => panic!("alias occupying the target short spelling must fail"),
-        Err(other) => panic!("expected alias collision, got {other:?}"),
-    }
-}
-
-#[test]
-fn tool_and_skill_may_share_public_spelling_independently() {
-    let local = PreparedResource {
-        local_id: "read".to_string(),
-        stable_id: "bundle:hya/cross-kind-ok/skill/read".to_string(),
-        source_path: "resources/skills/read.md".to_string(),
-        digest: "test-only".to_string(),
-        content: skill_md("read", "SKILL_READ_BODY"),
-        binary_base64: None,
-        aliases: Vec::new(),
-    };
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/cross-kind-ok",
-            agent(
-                "cross-ok",
-                ResourceView {
-                    allow: vec![
-                        "harness:tool/read".to_string(),
-                        "bundle:hya/cross-kind-ok/skill/read".to_string(),
-                    ],
-                    deny: Vec::new(),
-                    aliases: BTreeMap::new(),
-                    namespace: None,
-                },
-            ),
-            vec![local],
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-cross-kind-ok"))
-        .unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("cross-ok", AgentToolPlane::Full)
-        .unwrap();
-    let compiled = binding
-        .compile_agent_resources(&policy)
-        .expect("tool and skill may share public spelling `read`");
-    let tool = compiled
-        .resolve_tool("read")
-        .expect("tool public name `read` must dispatch");
-    assert_eq!(tool.tool.name(), "read");
-    assert!(
-        compiled
-            .skills()
-            .iter()
-            .any(|skill| skill.name == "read" && skill.content.contains("SKILL_READ_BODY")),
-        "skill public name `read` must remain independently addressable"
-    );
-}
-
-#[test]
-fn tool_mcp_public_name_collision_is_typed_rejected() {
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/tool-mcp-collide",
-            agent(
-                "collide",
-                ResourceView {
-                    allow: vec![
-                        "harness:tool/read".to_string(),
-                        "harness:mcp/mcp__fixture__ping".to_string(),
-                    ],
-                    deny: Vec::new(),
-                    // Alias the tool onto the MCP public short spelling.
-                    aliases: BTreeMap::from([(
-                        "mcp__fixture__ping".to_string(),
-                        "harness:tool/read".to_string(),
-                    )]),
-                    namespace: None,
-                },
-            ),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    registry
-        .refresh(|candidate| {
-            candidate.upsert_sources(vec![RuntimeSource::new(
-                RuntimeSourceId::mcp("fixture"),
-                [1; 32],
-                Arc::new(()),
-                vec![RuntimeSourceExport::tool(
-                    "ping",
-                    "mcp__fixture__ping",
-                    Vec::new(),
-                    Arc::new(NoopTool::new("mcp__fixture__ping")),
-                    ToolPermission::Mcp,
-                )],
-            )])
-        })
-        .unwrap();
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-tool-mcp-collide"))
-        .unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("collide", AgentToolPlane::Full)
-        .unwrap();
-    match binding.compile_agent_resources(&policy) {
-        Err(BundleError::NamespaceCollision { name, .. })
-        | Err(BundleError::AliasCollision { name, .. }) => {
-            assert_eq!(name, "mcp__fixture__ping");
-        }
-        Ok(_) => panic!("tool/MCP shared dispatch collision must typed-reject"),
-        Err(other) => panic!("expected tool/MCP collision, got {other:?}"),
-    }
-}
-
-#[test]
-fn cross_kind_ambiguous_alias_target_fails_typed() {
-    let local = PreparedResource {
-        local_id: "shared".to_string(),
-        stable_id: "bundle:hya/alias-ambiguous/skill/shared".to_string(),
-        source_path: "resources/skills/shared.md".to_string(),
-        digest: "test-only".to_string(),
-        content: skill_md("shared", "LOCAL"),
-        binary_base64: None,
-        aliases: Vec::new(),
-    };
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/alias-ambiguous",
-            agent(
-                "alias-amb",
-                ResourceView {
-                    allow: Vec::new(),
-                    deny: Vec::new(),
-                    aliases: BTreeMap::from([("marker".to_string(), "shared".to_string())]),
-                    namespace: None,
-                },
-            ),
-            vec![local],
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    registry
-        .refresh(|candidate| candidate.register_tool(Arc::new(NoopTool::new("shared"))))
-        .unwrap();
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-alias-ambiguous"))
-        .unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("alias-amb", AgentToolPlane::Full)
-        .unwrap();
-    match binding.compile_agent_resources(&policy) {
-        Err(BundleError::NamespaceCollision { name, .. }) => {
-            assert_eq!(name, "shared");
-        }
-        Ok(_) => panic!("cross-kind ambiguous alias target must typed-reject"),
-        Err(other) => panic!("expected namespace collision, got {other:?}"),
-    }
-}
-
-#[test]
-fn both_planes_keep_builtin_aliases_out_of_model_schemas() {
-    let expected = hya_tool_loader::builtins()
-        .schemas()
-        .into_iter()
-        .map(|schema| schema.name.as_str().to_string())
-        .collect::<BTreeSet<_>>();
-    assert_eq!(expected.len(), 25);
-    for (agent_id, plane, workdir) in [
-        (
-            "full-alias",
-            AgentToolPlane::Full,
-            "/tmp/hya-builtin-alias-full",
-        ),
-        (
-            "internal-public-alias",
-            AgentToolPlane::InternalPublic,
-            "/tmp/hya-builtin-alias-internal-public",
-        ),
-    ] {
-        let catalog = Arc::new(
-            TestCatalog::from_prepared(&[bundle_with_agent(
-                "hya/builtin-alias",
-                agent(agent_id, ResourceView::default()),
-                Vec::new(),
-            )])
-            .unwrap(),
-        );
-        let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-        let binding = registry.bind_turn(Path::new(workdir)).unwrap();
-        let policy = binding
-            .agent_resource_policy_on_plane(agent_id, plane)
-            .unwrap();
-        let compiled = binding.compile_agent_resources(&policy).unwrap();
-        assert!(
-            compiled.resolve_tool("apply_patch").is_some(),
-            "{agent_id}: canonical apply_patch must remain public"
-        );
-        for alias in ["fetch", "search", "patch", "plan", "shell", "question"] {
-            assert!(
-                compiled.resolve_tool(alias).is_some(),
-                "{agent_id}: hidden alias `{alias}` must remain dispatchable"
-            );
-        }
-        let schema_names = compiled
-            .tool_schemas()
-            .into_iter()
-            .map(|schema| schema.name.as_str().to_string())
-            .collect::<BTreeSet<_>>();
-        // A bundle agent that can spawn nobody gets no `task`/`archive`.
-        let mut expected = expected.clone();
-        for name in crate::coordination::SPAWN_TOOLS {
-            expected.remove(name);
-        }
-        assert_eq!(
-            schema_names, expected,
-            "{agent_id}: canonical schema set drifted"
-        );
-        assert!(
-            schema_names.contains("apply_patch"),
-            "{agent_id}: canonical schema must remain model-facing"
-        );
-        assert!(
-            !schema_names.contains("patch") && !schema_names.contains("shell"),
-            "{agent_id}: hidden dispatch aliases must not be advertised"
-        );
-        assert!(
-            schema_names.iter().all(|name| !name.contains([':', '/'])),
-            "{agent_id}: qualified dispatch identities must not reach providers: {schema_names:?}"
-        );
-    }
-}
-
-#[test]
-fn explicit_view_alias_suppresses_candidate_aliases_for_target() {
-    // Consult23: after ResourceView explicitly aliases a selected canonical
-    // target, only the explicit public aliases and the qualified stable name
-    // remain callable. Candidate registry aliases (e.g. `patch`) must not
-    // re-enter the public map and bypass the mapping.
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/view-alias-suppress",
-            agent(
-                "suppress-agent",
-                ResourceView {
-                    allow: Vec::new(),
-                    deny: Vec::new(),
-                    aliases: BTreeMap::from([(
-                        "applier".to_string(),
-                        "harness:tool/apply_patch".to_string(),
-                    )]),
-                    namespace: None,
-                },
-            ),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-view-alias-suppress"))
-        .unwrap();
-    let compiled = binding
-        .compile_agent_resources(
-            &binding
-                .agent_resource_policy_on_plane("suppress-agent", AgentToolPlane::Full)
-                .unwrap(),
-        )
-        .expect("explicit view alias of apply_patch must compile");
-
-    assert!(
-        compiled.resolve_tool("applier").is_some(),
-        "explicit view alias `applier` must be callable"
-    );
-    assert!(
-        compiled.resolve_tool("harness:tool/apply_patch").is_some(),
-        "qualified stable name must remain callable"
-    );
-    assert!(
-        compiled.resolve_tool("apply_patch").is_none(),
-        "ordinary short spelling must be removed after explicit aliasing"
-    );
-    assert!(
-        compiled.resolve_tool("patch").is_none(),
-        "preexisting candidate alias `patch` must not re-enter after explicit aliasing"
-    );
-
-    let schema_names = compiled
-        .tool_schemas()
-        .into_iter()
-        .map(|schema| schema.name.as_str().to_string())
-        .collect::<BTreeSet<_>>();
-    assert!(
-        schema_names
-            .iter()
-            .all(|name| compiled.resolve_tool(name).is_some())
-    );
-    assert!(schema_names.contains("applier"));
-    assert!(!schema_names.contains("harness:tool/apply_patch"));
-    assert!(!schema_names.contains("apply_patch"));
-    assert!(!schema_names.contains("patch"));
-    assert!(
-        schema_names
-            .iter()
-            .all(|name| !name.contains(':') && !name.contains('/'))
-    );
-}
-
-#[test]
-fn invalid_provider_tool_alias_fails_during_resource_compile() {
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/invalid-provider-alias",
-            agent(
-                "invalid-alias-agent",
-                ResourceView {
-                    allow: vec!["harness:tool/read".to_string()],
-                    deny: Vec::new(),
-                    aliases: BTreeMap::from([(
-                        "bad:name".to_string(),
-                        "harness:tool/read".to_string(),
-                    )]),
-                    namespace: None,
-                },
-            ),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-invalid-provider-alias"))
-        .unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("invalid-alias-agent", AgentToolPlane::Full)
-        .unwrap();
-    match binding.compile_agent_resources(&policy) {
-        Err(BundleError::InvalidManifest { detail, .. }) => {
-            assert!(detail.contains("model-facing tool name `bad:name`"));
-        }
-        Ok(_) => panic!("invalid provider Tool alias must fail before a request"),
-        Err(other) => panic!("expected invalid manifest, got {other:?}"),
-    }
-}
-
-#[test]
-fn explicit_view_alias_collides_with_candidate_alias_even_same_target() {
-    // Explicit view alias named `patch` targeting harness:tool/apply_patch
-    // collides with the existing candidate alias of that same tool.
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/view-alias-candidate-collide",
-            agent(
-                "collide-agent",
-                ResourceView {
-                    allow: Vec::new(),
-                    deny: Vec::new(),
-                    aliases: BTreeMap::from([(
-                        "patch".to_string(),
-                        "harness:tool/apply_patch".to_string(),
-                    )]),
-                    namespace: None,
-                },
-            ),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-view-alias-candidate-collide"))
-        .unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("collide-agent", AgentToolPlane::Full)
-        .unwrap();
-    match binding.compile_agent_resources(&policy) {
-        Err(BundleError::AliasCollision { name, .. }) => {
-            assert_eq!(name, "patch");
-        }
-        Ok(_) => panic!(
-            "explicit alias occupying an existing candidate alias must typed-reject even for the same target"
-        ),
-        Err(other) => panic!("expected alias collision, got {other:?}"),
-    }
-}
-
-#[test]
-fn mcp_and_skill_may_share_public_spelling_independently() {
-    // Only tool versus MCP share invocation syntax. An MCP public spelling
-    // and an independent skill public spelling may be identical and both
-    // remain addressable.
-    let local = PreparedResource {
-        local_id: "pingy".to_string(),
-        stable_id: "bundle:hya/mcp-skill-ok/skill/pingy".to_string(),
-        source_path: "resources/skills/pingy.md".to_string(),
-        digest: "test-only".to_string(),
-        content: skill_md("pingy", "SKILL_PINGY_BODY"),
-        binary_base64: None,
-        aliases: Vec::new(),
-    };
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/mcp-skill-ok",
-            agent(
-                "mcp-skill-ok",
-                ResourceView {
-                    allow: vec![
-                        "harness:mcp/mcp__fixture__ping".to_string(),
-                        "bundle:hya/mcp-skill-ok/skill/pingy".to_string(),
-                    ],
-                    deny: Vec::new(),
-                    aliases: BTreeMap::new(),
-                    namespace: None,
-                },
-            ),
-            vec![local],
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    registry
-        .refresh(|candidate| {
-            candidate.upsert_sources(vec![RuntimeSource::new(
-                RuntimeSourceId::mcp("fixture"),
-                [5; 32],
-                Arc::new(()),
-                vec![RuntimeSourceExport::tool(
-                    "ping",
-                    "mcp__fixture__ping",
-                    vec!["pingy".to_string()],
-                    Arc::new(NoopTool::new("mcp__fixture__ping")),
-                    ToolPermission::Mcp,
-                )],
-            )])
-        })
-        .unwrap();
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-mcp-skill-ok"))
-        .unwrap();
-    let compiled = binding
-        .compile_agent_resources(
-            &binding
-                .agent_resource_policy_on_plane("mcp-skill-ok", AgentToolPlane::Full)
-                .unwrap(),
-        )
-        .expect("MCP and skill may share public spelling `pingy`");
-    let mcp = compiled
-        .resolve_tool("pingy")
-        .expect("MCP public spelling `pingy` must dispatch");
-    assert_eq!(mcp.tool.name(), "mcp__fixture__ping");
-    assert!(
-        compiled
-            .skills()
-            .iter()
-            .any(|skill| skill.name == "pingy" && skill.content.contains("SKILL_PINGY_BODY")),
-        "skill public name `pingy` must remain independently addressable"
-    );
-}
-
-#[test]
-fn full_mcp_preserves_source_alias_under_mcp_kind() {
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/mcp-alias",
-            agent("mcp-alias", ResourceView::default()),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    registry
-        .refresh(|candidate| {
-            candidate.upsert_sources(vec![RuntimeSource::new(
-                RuntimeSourceId::mcp("fixture"),
-                [3; 32],
-                Arc::new(()),
-                vec![RuntimeSourceExport::tool(
-                    "ping",
-                    "mcp__fixture__ping",
-                    vec!["pingy".to_string()],
-                    Arc::new(NoopTool::new("mcp__fixture__ping")),
-                    ToolPermission::Mcp,
-                )],
-            )])
-        })
-        .unwrap();
-    let binding = registry.bind_turn(Path::new("/tmp/hya-mcp-alias")).unwrap();
-    let compiled = binding
-        .compile_agent_resources(
-            &binding
-                .agent_resource_policy_on_plane("mcp-alias", AgentToolPlane::Full)
-                .unwrap(),
-        )
-        .unwrap();
-    assert!(compiled.resolve_tool("mcp__fixture__ping").is_some());
-    assert!(
-        compiled.resolve_tool("pingy").is_some(),
-        "source export alias must be a public MCP spelling"
-    );
-    assert!(
-        compiled
-            .resolve_tool("harness:mcp/mcp__fixture__ping")
-            .is_some()
-    );
-    let schema_names = compiled
-        .tool_schemas()
-        .into_iter()
-        .map(|schema| schema.name.as_str().to_string())
-        .collect::<BTreeSet<_>>();
-    assert!(
-        schema_names
-            .iter()
-            .all(|name| compiled.resolve_tool(name).is_some())
-    );
-    assert!(schema_names.contains("mcp__fixture__ping"));
-    assert!(!schema_names.contains("pingy"));
-    assert!(!schema_names.contains("harness:mcp/mcp__fixture__ping"));
-}
-
-#[test]
-fn prepared_skill_alias_is_public_spelling_for_skill_plane() {
-    let local = PreparedResource {
-        local_id: "docs".to_string(),
-        stable_id: "bundle:hya/skill-alias/skill/docs".to_string(),
-        source_path: "resources/skills/docs.md".to_string(),
-        digest: "test-only".to_string(),
-        content: skill_md("docs", "DOCS_BODY"),
-        binary_base64: None,
-        aliases: vec!["handbook".to_string()],
-    };
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/skill-alias",
-            agent(
-                "skill-alias",
-                ResourceView {
-                    allow: vec!["bundle:hya/skill-alias/skill/docs".to_string()],
-                    deny: Vec::new(),
-                    aliases: BTreeMap::new(),
-                    namespace: None,
-                },
-            ),
-            vec![local],
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-skill-alias"))
-        .unwrap();
-    let compiled = binding
-        .compile_agent_resources(&binding.agent_resource_policy("skill-alias").unwrap())
-        .unwrap();
-    assert!(compiled.skills().iter().any(|skill| skill.name == "docs"));
-    assert!(
-        compiled
-            .skills()
-            .iter()
-            .any(|skill| skill.name == "handbook" && skill.content.contains("DOCS_BODY")),
-        "PreparedResource alias must be a dispatchable skill public spelling"
-    );
-}
-
-#[test]
-fn alias_cannot_impersonate_filtered_stable_name() {
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/filtered-stable",
-            agent(
-                "filtered-stable",
-                ResourceView {
-                    allow: vec!["harness:tool/read".to_string()],
-                    deny: Vec::new(),
-                    aliases: BTreeMap::from([(
-                        "write".to_string(),
-                        "harness:tool/read".to_string(),
-                    )]),
-                    namespace: None,
-                },
-            ),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-filtered-stable"))
-        .unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("filtered-stable", AgentToolPlane::Full)
-        .unwrap();
-    match binding.compile_agent_resources(&policy) {
-        Err(BundleError::AliasCollision { name, .. }) => {
-            assert_eq!(name, "write");
-        }
-        Ok(_) => panic!("alias must not impersonate unselected stable identity"),
-        Err(other) => panic!("expected alias collision, got {other:?}"),
-    }
-}
-
-#[test]
-fn aliased_skill_facade_drives_prompt_not_public_key_skill() {
-    let local = PreparedResource {
-        local_id: "bundle-skill".to_string(),
-        stable_id: "bundle:hya/facade-alias/skill/bundle-skill".to_string(),
-        source_path: "resources/skills/bundle-skill.md".to_string(),
-        digest: "test-only".to_string(),
-        content: skill_md("bundle-skill", "SHOULD_NOT_INLINE"),
-        binary_base64: None,
-        aliases: Vec::new(),
-    };
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/facade-alias",
-            agent(
-                "facade-alias",
-                ResourceView {
-                    allow: vec![
-                        "harness:tool/skill".to_string(),
-                        "bundle:hya/facade-alias/skill/bundle-skill".to_string(),
-                    ],
-                    deny: Vec::new(),
-                    aliases: BTreeMap::from([(
-                        "load_skill".to_string(),
-                        "harness:tool/skill".to_string(),
-                    )]),
-                    namespace: None,
-                },
-            ),
-            vec![local],
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-facade-alias"))
-        .unwrap();
-    let compiled = binding
-        .compile_agent_resources(
-            &binding
-                .agent_resource_policy_on_plane("facade-alias", AgentToolPlane::Full)
-                .unwrap(),
-        )
-        .unwrap();
-    assert!(compiled.resolve_tool("load_skill").is_some());
-    assert!(
-        compiled.resolve_tool("skill").is_none(),
-        "resource-view alias replaces the ordinary short spelling of the facade"
-    );
-    let section = compiled
-        .skills_prompt_section()
-        .expect("facade selected => on-demand skill index");
-    assert!(
-        !section.contains("SHOULD_NOT_INLINE"),
-        "aliased skill facade must not fall through to body inlining: {section}"
-    );
-    assert!(
-        section.contains("bundle-skill"),
-        "index must list the selected skill: {section}"
-    );
-}
-
-#[test]
-fn skill_prompt_lists_all_dispatchable_spellings_with_short_preference() {
-    let local = PreparedResource {
-        local_id: "probe".to_string(),
-        stable_id: "bundle:hya/spellings/skill/probe".to_string(),
-        source_path: "resources/skills/probe.md".to_string(),
-        digest: "test-only".to_string(),
-        content: skill_md("probe", "PROBE_BODY"),
-        binary_base64: None,
-        aliases: vec!["probe-alias".to_string()],
-    };
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/spellings",
-            agent(
-                "spellings",
-                ResourceView {
-                    allow: vec!["bundle:hya/spellings/skill/probe".to_string()],
-                    deny: Vec::new(),
-                    aliases: BTreeMap::new(),
-                    namespace: None,
-                },
-            ),
-            vec![local],
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let binding = registry.bind_turn(Path::new("/tmp/hya-spellings")).unwrap();
-    let compiled = binding
-        .compile_agent_resources(&binding.agent_resource_policy("spellings").unwrap())
-        .unwrap();
-    let section = compiled
-        .skills_prompt_section()
-        .expect("a bundle-local-only view inlines selected local static skills");
-    assert!(
-        section.contains("probe"),
-        "short spelling preferred in prompt: {section}"
-    );
-    assert!(
-        section.contains("probe-alias") || section.contains("bundle:hya/spellings/skill/probe"),
-        "prompt must expose additional dispatchable spellings honestly: {section}"
-    );
-    assert_eq!(
-        section.matches("PROBE_BODY").count(),
-        1,
-        "content must be emitted once with a spelling list: {section}"
-    );
-}
-
-#[test]
-fn selected_harness_skill_without_facade_fails_typed() {
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/no-facade",
-            agent(
-                "no-facade",
-                ResourceView {
-                    allow: Vec::new(),
-                    deny: vec!["harness:tool/skill".to_string()],
-                    aliases: BTreeMap::new(),
-                    namespace: None,
-                },
-            ),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let workdir = tempfile_skill_workdir("workdir-only", "MUST_NOT_INLINE");
-    let binding = registry.bind_turn(&workdir).unwrap();
-    let policy = binding
-        .agent_resource_policy_on_plane("no-facade", AgentToolPlane::Full)
-        .unwrap();
-    match binding.compile_agent_resources(&policy) {
-        Err(BundleError::InvalidManifest { detail, .. }) => {
-            assert!(
-                detail.contains("skill") || detail.contains("facade"),
-                "typed rejection must mention missing skill facade: {detail}"
-            );
-        }
-        Err(BundleError::UnknownResourceReference { .. }) => {}
-        Ok(compiled) => {
-            let section = compiled.skills_prompt_section().unwrap_or_default();
-            panic!(
-                "selected harness skills without facade must typed-reject, not expose content: {section}"
-            );
-        }
-        Err(other) => panic!("expected typed facade rejection, got {other:?}"),
-    }
-}
-
-#[test]
-fn bundle_id_with_kind_path_segments_parses_structurally() {
-    let bundle_id = "hya/tool/skill/mcp-nest";
-    let local = PreparedResource {
-        local_id: "docs".to_string(),
-        stable_id: format!("bundle:{bundle_id}/skill/docs"),
-        source_path: "resources/skills/docs.md".to_string(),
-        digest: "test-only".to_string(),
-        content: skill_md("docs", "NESTED_BUNDLE_BODY"),
-        binary_base64: None,
-        aliases: Vec::new(),
-    };
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            bundle_id,
-            agent(
-                "nested-agent",
-                ResourceView {
-                    allow: vec![format!("bundle:{bundle_id}/skill/docs")],
-                    deny: Vec::new(),
-                    aliases: BTreeMap::new(),
-                    namespace: None,
-                },
-            ),
-            vec![local],
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-nested-bundle-id"))
-        .unwrap();
-    let compiled = binding
-        .compile_agent_resources(&binding.agent_resource_policy("nested-agent").unwrap())
-        .expect("rightmost kind/local parse must accept nested kind segments in bundle id");
-    assert!(
-        compiled
-            .skills()
-            .iter()
-            .any(|skill| skill.name == "docs" && skill.content.contains("NESTED_BUNDLE_BODY"))
-    );
-    assert!(
-        compiled
-            .skills()
-            .iter()
-            .any(|skill| skill.name == format!("bundle:{bundle_id}/skill/docs"))
-    );
-}
-
-#[test]
-fn bundle_sidecar_collision_requires_provider_safe_names_for_both_targets() {
-    let bundle_id = "hya/sidecar-map";
-    let mut bundle = bundle_with_agent(
-        bundle_id,
-        agent("sidecar-agent", ResourceView::default()),
-        Vec::new(),
-    );
-    bundle.tools.push(PreparedResource {
-        local_id: "echo".to_string(),
-        stable_id: format!("bundle:{bundle_id}/tool/echo"),
-        source_path: "tools/echo.js".to_string(),
-        digest: "test-only-digest".to_string(),
-        content: "export default {}".to_string(),
-        binary_base64: None,
-        aliases: Vec::new(),
-    });
-    let catalog = Arc::new(TestCatalog::from_prepared(&[bundle]).unwrap());
-
-    let tools = hya_tool_loader::builtins();
-    tools
-        .register_with_permission(Arc::new(NoopTool::new("echo")), ToolPermission::Tool)
-        .unwrap();
-    let registry = test_runtime_registry(tools, catalog);
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-sidecar-tool-map"))
-        .unwrap();
-    let mut policy = binding
-        .agent_resource_policy_on_plane("sidecar-agent", AgentToolPlane::Full)
-        .unwrap();
-    let sidecar_tool = ResolvedTool {
-        tool: Arc::new(NoopTool::new(format!("bundle:{bundle_id}/tool/echo"))),
-        permission: ToolPermission::Tool,
-    };
-
-    match binding
-        .compile_agent_resources_with_sidecar_tools(&policy, std::slice::from_ref(&sidecar_tool))
-    {
-        Err(BundleError::InvalidManifest { detail, .. }) => {
-            assert!(detail.contains("harness:tool/echo"));
-            assert!(detail.contains("no provider-safe schema name"));
-        }
-        Ok(_) => panic!("selected harness Tool must not silently vanish from schemas"),
-        Err(other) => panic!("expected provider-safe schema rejection, got {other:?}"),
-    }
-
-    Arc::make_mut(&mut policy.resource_view)
-        .aliases
-        .insert("harness_echo".to_string(), "harness:tool/echo".to_string());
-    let compiled = binding
-        .compile_agent_resources_with_sidecar_tools(&policy, &[sidecar_tool])
-        .expect("an explicit provider-safe alias must preserve both selected Tools");
-    let schema_names = compiled
-        .tool_schemas()
-        .into_iter()
-        .map(|schema| schema.name.as_str().to_string())
-        .collect::<BTreeSet<_>>();
-    assert!(schema_names.contains("echo"));
-    assert!(schema_names.contains("harness_echo"));
-    assert!(!schema_names.contains(&format!("bundle:{bundle_id}/tool/echo")));
-    assert!(!schema_names.contains("harness:tool/echo"));
-
-    let bundle_short = compiled.resolve_tool("echo").unwrap();
-    assert_eq!(
-        bundle_short.tool.name(),
-        format!("bundle:{bundle_id}/tool/echo")
-    );
-    let bundle_qualified = compiled
-        .resolve_tool(&format!("bundle:{bundle_id}/tool/echo"))
-        .unwrap();
-    assert_eq!(
-        bundle_qualified.tool.name(),
-        format!("bundle:{bundle_id}/tool/echo")
-    );
-    let harness_alias = compiled.resolve_tool("harness_echo").unwrap();
-    assert_eq!(harness_alias.tool.name(), "echo");
-    let harness_qualified = compiled.resolve_tool("harness:tool/echo").unwrap();
-    assert_eq!(harness_qualified.tool.name(), "echo");
-}
-
-#[test]
-fn captured_agent_resource_policy_retains_disjoint_bundle_tool_and_hook_ids() {
-    // One agent per bundle, so disjointness is now across two installed
-    // bundles rather than across agents inside one.
-    let alpha_bundle_id = "hya/disjoint-alpha";
-    let beta_bundle_id = "hya/disjoint-beta";
-    let alpha_tool_id = format!("bundle:{alpha_bundle_id}/tool/alpha");
-    let beta_tool_id = format!("bundle:{beta_bundle_id}/tool/beta");
-    let alpha_hook_id = format!("bundle:{alpha_bundle_id}/hook/event");
-    let beta_hook_id = format!("bundle:{beta_bundle_id}/hook/tool.execute.before");
-
-    let mut alpha = agent(
-        "alpha-agent",
-        ResourceView {
-            allow: vec![alpha_tool_id.clone()],
-            deny: Vec::new(),
-            aliases: BTreeMap::new(),
-            namespace: None,
-        },
-    );
-    alpha.hook_refs = vec![alpha_hook_id.clone()];
-
-    let mut beta = agent(
-        "beta-agent",
-        ResourceView {
-            allow: vec![beta_tool_id.clone()],
-            deny: Vec::new(),
-            aliases: BTreeMap::new(),
-            namespace: None,
-        },
-    );
-    beta.hook_refs = vec![beta_hook_id.clone()];
-
-    let mut alpha_bundle = bundle_with_agent(alpha_bundle_id, alpha, Vec::new());
-    alpha_bundle.tools = vec![PreparedResource {
-        local_id: "alpha".to_string(),
-        stable_id: alpha_tool_id.clone(),
-        source_path: "extensions/alpha.js".to_string(),
-        digest: "alpha-tool".to_string(),
-        content: "export default {}".to_string(),
-        binary_base64: None,
-        aliases: Vec::new(),
-    }];
-    alpha_bundle.hooks = vec![PreparedResource {
-        local_id: "event".to_string(),
-        stable_id: alpha_hook_id.clone(),
-        source_path: "extensions/event.js".to_string(),
-        digest: "alpha-hook".to_string(),
-        content: "export default {}".to_string(),
-        binary_base64: None,
-        aliases: Vec::new(),
-    }];
-
-    let mut beta_bundle = bundle_with_agent(beta_bundle_id, beta, Vec::new());
-    beta_bundle.tools = vec![PreparedResource {
-        local_id: "beta".to_string(),
-        stable_id: beta_tool_id.clone(),
-        source_path: "extensions/beta.js".to_string(),
-        digest: "beta-tool".to_string(),
-        content: "export default {}".to_string(),
-        binary_base64: None,
-        aliases: Vec::new(),
-    }];
-    beta_bundle.hooks = vec![PreparedResource {
-        local_id: "tool.execute.before".to_string(),
-        stable_id: beta_hook_id.clone(),
-        source_path: "extensions/before.js".to_string(),
-        digest: "beta-hook".to_string(),
-        content: "export default {}".to_string(),
-        binary_base64: None,
-        aliases: Vec::new(),
-    }];
-
-    let catalog = Arc::new(TestCatalog::from_prepared(&[alpha_bundle, beta_bundle]).unwrap());
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let binding = registry
-        .bind_turn(Path::new("/tmp/hya-disjoint-sidecars"))
-        .unwrap();
-    let alpha_policy = binding.agent_resource_policy("alpha-agent").unwrap();
-    let beta_policy = binding.agent_resource_policy("beta-agent").unwrap();
-
-    let alpha_selected_tools = alpha_policy
-        .selected_bundle_tool_ids()
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let beta_selected_tools = beta_policy
-        .selected_bundle_tool_ids()
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        alpha_selected_tools,
-        BTreeSet::from([alpha_tool_id.clone()])
-    );
-    assert_eq!(beta_selected_tools, BTreeSet::from([beta_tool_id.clone()]));
-
-    let alpha_hook_ids = alpha_policy
-        .canonical_hook_ids()
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let beta_hook_ids = beta_policy
-        .canonical_hook_ids()
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    assert_eq!(alpha_hook_ids, BTreeSet::from([alpha_hook_id.clone()]));
-    assert_eq!(beta_hook_ids, BTreeSet::from([beta_hook_id.clone()]));
-    assert!(alpha_hook_ids.is_disjoint(&beta_hook_ids));
-
-    let alpha_compiled = binding
-        .compile_agent_resources_with_sidecar_tools(
-            &alpha_policy,
-            &[ResolvedTool {
-                tool: Arc::new(NoopTool::new(alpha_tool_id.clone())),
-                permission: ToolPermission::Tool,
-            }],
-        )
-        .unwrap();
-    let beta_compiled = binding
-        .compile_agent_resources_with_sidecar_tools(
-            &beta_policy,
-            &[ResolvedTool {
-                tool: Arc::new(NoopTool::new(beta_tool_id.clone())),
-                permission: ToolPermission::Tool,
-            }],
-        )
-        .unwrap();
-
-    let alpha_compiled_hooks = alpha_compiled
-        .canonical_hook_ids()
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let beta_compiled_hooks = beta_compiled
-        .canonical_hook_ids()
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    assert_eq!(alpha_compiled_hooks, alpha_hook_ids);
-    assert_eq!(beta_compiled_hooks, beta_hook_ids);
-
-    let alpha_names = domain_tool_names(&alpha_compiled);
-    let beta_names = domain_tool_names(&beta_compiled);
-    assert!(alpha_names.contains("alpha"));
-    assert!(alpha_names.contains(alpha_tool_id.as_str()));
-    assert!(!alpha_names.contains("beta"));
-    assert!(!alpha_names.contains(beta_tool_id.as_str()));
-    assert!(beta_names.contains("beta"));
-    assert!(beta_names.contains(beta_tool_id.as_str()));
-    assert!(!beta_names.contains("alpha"));
-    assert!(!beta_names.contains(alpha_tool_id.as_str()));
-    assert!(alpha_names.is_disjoint(&beta_names));
-}
-
-fn tempfile_skill_workdir(name: &str, body: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!(
-        "hya-resource-view-skill-{}-{}",
-        name,
-        std::process::id()
-    ));
-    let skill_dir = path.join(".hya/skills").join(name);
-    std::fs::create_dir_all(&skill_dir).unwrap();
-    std::fs::write(skill_dir.join("SKILL.md"), skill_md(name, body)).unwrap();
-    path
-}
-
-/// A tool that records every reference argument it is dispatched with, so
-/// scheme-dispatch tests can observe exactly what the owner received.
 struct ReferenceRecordingTool {
     name: String,
     seen: Mutex<Vec<String>>,
@@ -3157,7 +174,6 @@ impl ReferenceRecordingTool {
             seen: Mutex::new(Vec::new()),
         })
     }
-
     fn references(&self) -> Vec<String> {
         self.seen.lock().unwrap().clone()
     }
@@ -3168,22 +184,196 @@ impl Tool for ReferenceRecordingTool {
     fn name(&self) -> &str {
         &self.name
     }
-
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: ToolName::new(self.name.clone()),
-            description: "records dispatch references".to_string(),
+            description: "records dispatch references".into(),
             input_schema: json!({ "type": "object" }),
             output_schema: None,
         }
     }
-
     async fn execute(&self, _ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        if let Some(reference) = input.get("reference").and_then(Value::as_str) {
-            self.seen.lock().unwrap().push(reference.to_string());
+        if let Some(r) = input.get("reference").and_then(Value::as_str) {
+            self.seen.lock().unwrap().push(r.to_string());
         }
         Ok(json!({ "output": "owner body" }))
     }
+}
+
+struct TempSkillDir(PathBuf);
+
+impl TempSkillDir {
+    fn new(label: &str, name: &str, content: &str) -> Self {
+        let serial = NEXT_TEMP_SKILL_DIR.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "hya-compile-{label}-{}-{serial}",
+            std::process::id()
+        ));
+        let dir = root.join(".hya/skills").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), content).unwrap();
+        Self(root)
+    }
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempSkillDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn skill_md(name: &str, body: &str) -> String {
+    format!("---\nname: {name}\ndescription: {name}\n---\n{body}\n")
+}
+
+fn res(
+    bundle_id: &str,
+    kind: &str,
+    local: &str,
+    path: &str,
+    content: String,
+    aliases: &[&str],
+) -> PreparedResource {
+    PreparedResource {
+        local_id: local.into(),
+        stable_id: format!("bundle:{bundle_id}/{kind}/{local}"),
+        source_path: path.into(),
+        digest: "test-only".into(),
+        content,
+        binary_base64: None,
+        aliases: aliases.iter().map(|a| (*a).into()).collect(),
+    }
+}
+
+fn skill_res(bundle_id: &str, local: &str, body: &str, aliases: &[&str]) -> PreparedResource {
+    res(
+        bundle_id,
+        "skill",
+        local,
+        &format!("resources/skills/{local}.md"),
+        skill_md(local, body),
+        aliases,
+    )
+}
+
+fn agent(id: &str, resource_view: ResourceView) -> PreparedAgent {
+    PreparedAgent {
+        private: false,
+        id: AgentName::new(id),
+        description: None,
+        role: AgentRole::Main,
+        color: None,
+        prompt: Some("prompt".into()),
+        prompt_source: None,
+        prompt_digest: None,
+        model_policy: ModelPolicy::default(),
+        workdir: None,
+        resource_view,
+        can_spawn: Vec::new(),
+        hook_refs: Vec::new(),
+        advertise: Vec::new(),
+        handoff: hya_bundle::HandoffPolicy::Model,
+    }
+}
+
+fn bundle_with_agent(id: &str, ag: PreparedAgent, skills: Vec<PreparedResource>) -> Bundle {
+    Bundle {
+        check: None,
+        format_version: 4,
+        identity: BundleIdentity {
+            id: id.into(),
+            version: "0.0.0".into(),
+            publisher: "hya-tests".into(),
+        },
+        namespace: None,
+        digest: "test-only".into(),
+        agents: vec![ag],
+        tools: Vec::new(),
+        skills,
+        mcp: Vec::new(),
+        hooks: Vec::new(),
+        extensions: Vec::new(),
+        tui: None,
+        workflow: None,
+        channels: Vec::new(),
+        schemas: Vec::new(),
+        process: None,
+        apis: Vec::new(),
+        permission_modes: Vec::new(),
+    }
+}
+
+fn one(bundle_id: &str, agent_id: &str, rv: ResourceView, skills: Vec<PreparedResource>) -> Bundle {
+    bundle_with_agent(bundle_id, agent(agent_id, rv), skills)
+}
+
+fn view(allow: &[&str], deny: &[&str]) -> ResourceView {
+    view_with(allow, deny, &[], None)
+}
+
+fn view_with(
+    allow: &[&str],
+    deny: &[&str],
+    aliases: &[(&str, &str)],
+    ns: Option<&str>,
+) -> ResourceView {
+    ResourceView {
+        allow: allow.iter().map(|s| (*s).into()).collect(),
+        deny: deny.iter().map(|s| (*s).into()).collect(),
+        aliases: aliases
+            .iter()
+            .map(|(k, v)| ((*k).into(), (*v).into()))
+            .collect(),
+        namespace: ns.map(str::to_string),
+    }
+}
+
+fn export(
+    local: &str,
+    canonical: &str,
+    aliases: &[&str],
+    perm: ToolPermission,
+) -> RuntimeSourceExport {
+    RuntimeSourceExport::tool(
+        local,
+        canonical,
+        aliases.iter().map(|a| (*a).into()).collect(),
+        Arc::new(StubTool::noop(canonical)),
+        perm,
+    )
+}
+
+fn mcp_ping(aliases: &[&str], digest: [u8; 32]) -> RuntimeSource {
+    RuntimeSource::new(
+        RuntimeSourceId::mcp("fixture"),
+        digest,
+        Arc::new(()),
+        vec![export(
+            "ping",
+            "mcp__fixture__ping",
+            aliases,
+            ToolPermission::Mcp,
+        )],
+    )
+}
+
+fn compile_bundle_agent(
+    tools: ToolRegistry,
+    ag: PreparedAgent,
+) -> Result<Arc<CompiledResourceView>, BundleError> {
+    let id = ag.id.as_str().to_string();
+    let reg = reg_with(
+        tools,
+        catalog_from(&[bundle_with_agent(
+            &format!("hya/coord-{id}"),
+            ag,
+            Vec::new(),
+        )]),
+    );
+    compile_on(&bind(&reg), &id, None)
 }
 
 fn dispatch_ctx(workdir: &Path) -> ToolCtx {
@@ -3216,460 +406,1749 @@ fn dispatch_ctx(workdir: &Path) -> ToolCtx {
     }
 }
 
-#[test]
-fn source_schema_claims_publish_and_dispatch_through_compiled_views() {
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/scheme",
-            agent("scheme-agent", ResourceView::default()),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let owner = ReferenceRecordingTool::new("scheme__query");
-    registry
-        .refresh(|candidate| {
-            candidate.upsert_sources(vec![scheme_source(
-                "scheme-src",
-                vec![RuntimeSourceExport::tool(
-                    "scheme__query",
-                    "scheme__query",
-                    Vec::new(),
-                    owner.clone(),
-                    ToolPermission::ReadOnly,
-                )],
-                vec![SourceSchema {
-                    scheme: "db".to_string(),
-                    canonical_tool: "scheme__query".to_string(),
-                    writable: false,
-                }],
-            )])
-        })
-        .expect("a source claiming its own export's scheme must publish");
-
-    let workdir = PathBuf::from("/tmp/hya-scheme-dispatch");
-    let binding = registry.bind_turn(&workdir).unwrap();
-    let binding_binding = &binding;
-    let schemes = binding_binding.schemes();
-    assert_eq!(
-        schemes.get("db").map(SchemeBinding::canonical_tool),
-        Some("scheme__query"),
-        "the winning binding must be published on the snapshot"
-    );
-    assert_eq!(
-        binding.scheme_chain("db"),
-        vec![("plugin:scheme-src".to_string(), "scheme__query".to_string())],
-        "the chain lists the sole claimant"
-    );
-    let effective = registry.effective_schemes();
-    assert_eq!(effective.schemes.len(), 1);
-
-    let policy = binding
-        .agent_resource_policy_on_plane("scheme-agent", AgentToolPlane::Full)
-        .unwrap();
-    let compiled = binding.compile_agent_resources(&policy).unwrap();
-
-    let ctx = dispatch_ctx(&workdir);
-    let read = compiled.resolve_tool("read").unwrap();
-    let result = futures::executor::block_on(
-        read.tool
-            .execute(&ctx, json!({ "path": "db://x/y?head=2" })),
-    )
-    .unwrap();
-    assert_eq!(
-        result.get("output").and_then(Value::as_str),
-        Some("owner body"),
-        "read over a registered scheme dispatches the owner tool"
-    );
-    assert_eq!(
-        owner.references(),
-        vec!["db://x/y?head=2".to_string()],
-        "the owner receives the full handle text as its reference"
-    );
-
-    let write = compiled.resolve_tool("write").unwrap();
-    let error = futures::executor::block_on(
-        write
-            .tool
-            .execute(&ctx, json!({ "path": "db://x/y", "content": "row" })),
-    )
-    .expect_err("a read-only scheme must reject write dispatch");
-    assert!(
-        error.to_string().contains("db:// is read-only"),
-        "write dispatch must fail with the NotWritable-style error: {error}"
-    );
-    assert!(
-        owner.references().len() == 1,
-        "the rejected write must not reach the owner"
-    );
+fn is_coord(name: &str) -> bool {
+    crate::coordination::COORDINATION_TOOLS
+        .contains(&name.strip_prefix("harness:tool/").unwrap_or(name))
 }
 
-#[test]
-fn scheme_dispatch_stays_absent_when_the_view_lacks_the_owner() {
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            "hya/scheme-scope",
-            agent("scheme-scope-agent", ResourceView::default()),
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let owner = ReferenceRecordingTool::new("scheme__query");
-    registry
-        .refresh(|candidate| {
-            candidate.upsert_sources(vec![scheme_source(
-                "scheme-src",
-                vec![RuntimeSourceExport::tool(
-                    "scheme__query",
-                    "scheme__query",
-                    Vec::new(),
-                    owner.clone(),
-                    ToolPermission::ReadOnly,
-                )],
-                vec![SourceSchema {
-                    scheme: "db".to_string(),
-                    canonical_tool: "scheme__query".to_string(),
-                    writable: false,
-                }],
-            )])
-        })
-        .expect("a valid scheme claim must publish");
-
-    let workdir = PathBuf::from("/tmp/hya-scheme-scope");
-    let binding = registry.bind_turn(&workdir).unwrap();
-    // The bundle agent's InternalPublic plane never contains plugin tools,
-    // so the owning tool is absent from this view.
-    let policy = binding
-        .agent_resource_policy_on_plane("scheme-scope-agent", AgentToolPlane::InternalPublic)
-        .unwrap();
-    let compiled = binding.compile_agent_resources(&policy).unwrap();
-    assert!(
-        compiled.resolve_tool("scheme__query").is_none(),
-        "the owner tool must be absent from the restricted view"
-    );
-
-    let ctx = dispatch_ctx(&workdir);
-    let read = compiled.resolve_tool("read").unwrap();
-    let error = futures::executor::block_on(read.tool.execute(&ctx, json!({ "path": "db://x/y" })))
-        .expect_err("a view without the owner keeps the historical unknown-scheme error");
-    assert!(
-        error.to_string().contains("unknown handle scheme"),
-        "no global fallback may dispatch outside the view: {error}"
-    );
-    assert!(
-        owner.references().is_empty(),
-        "the owner tool must never be invoked from a view it is not in"
-    );
+fn has_mail_only_read(c: &CompiledResourceView) -> bool {
+    c.resolve_tool("read")
+        .is_some_and(|r| r.tool.schema().description.starts_with("Read team mail"))
 }
 
-/// A bundle agent whose view selects both the owner tool and the scheme
-/// reads `scheme://` handles through the view's own sidecar tool.
-#[test]
-fn bundle_agent_view_with_sidecar_owner_reads_registered_scheme() {
-    let view = ResourceView {
-        allow: vec!["query".to_string(), "harness:tool/read".to_string()],
-        deny: Vec::new(),
-        aliases: BTreeMap::new(),
-        namespace: None,
+fn schema_names(c: &CompiledResourceView) -> BTreeSet<String> {
+    c.tool_schemas()
+        .into_iter()
+        .map(|s| s.name.as_str().into())
+        .collect()
+}
+
+fn domain_tool_names(c: &CompiledResourceView) -> BTreeSet<String> {
+    let mail = has_mail_only_read(c);
+    c.tools
+        .keys()
+        .filter(|n| !is_coord(n) && (!mail || *n != "read"))
+        .cloned()
+        .collect()
+}
+
+fn domain_schema_names(c: &CompiledResourceView) -> BTreeSet<String> {
+    let mail = has_mail_only_read(c);
+    schema_names(c)
+        .into_iter()
+        .filter(|n| !is_coord(n) && (!mail || n != "read"))
+        .collect()
+}
+
+fn fp_of(snapshot: Arc<RuntimeSnapshot>, workdir: &str, perm: &PermissionPlane) -> [u8; 32] {
+    let binding = TurnBinding {
+        snapshot,
+        agent_model_preferences: Arc::new(BTreeMap::new()),
+        agent_model_configuration: Arc::new(AgentModelConfiguration::default()),
+        session_agent_models: Arc::new(BTreeMap::new()),
+        place: BindingPlace::new(PathBuf::from(workdir), CatalogScope::Global),
     };
-    let mut bundle = bundle_with_agent("hya/vecdb", agent("vecdb-lead", view), Vec::new());
-    bundle.tools.push(PreparedResource {
-        local_id: "query".to_string(),
-        stable_id: "bundle:hya/vecdb/tool/query".to_string(),
-        source_path: "extensions/runtime.js".to_string(),
-        digest: "test-only".to_string(),
-        content: "export default {}".to_string(),
-        binary_base64: None,
-        aliases: Vec::new(),
-    });
-    let catalog = Arc::new(TestCatalog::from_prepared(&[bundle]).unwrap());
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    registry
-        .refresh(|candidate| {
-            candidate.replace_sources_of_kind(
-                RuntimeSourceKind::Bundle,
-                vec![bundle_scheme_source(
-                    "hya/vecdb",
-                    "db",
-                    "bundle:hya/vecdb/tool/query",
+    let fp = binding.semantic_fingerprint_v1(perm).unwrap();
+    assert_ne!(fp, [0_u8; 32]);
+    fp
+}
+
+// ---------------------------------------------------------------------------
+// 1. Publication lock, pure skills, and TurnBinding pinning
+// ---------------------------------------------------------------------------
+
+#[test]
+fn skill_discovery_is_unlocked_and_pure_mode_excludes_filesystem_skills() {
+    let unlocked = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog_from(&[]));
+    let p = Path::new("/skill-discovery-lock-test");
+    unlocked
+        .bind_scoped_with_skills(&CatalogScope::Directory(p.to_path_buf()), p, || {
+            assert!(unlocked.publication.try_lock().is_ok());
+            Vec::new()
+        })
+        .unwrap();
+
+    let dir = TempSkillDir::new(
+        "pure-skills",
+        "external-skill",
+        &skill_md("external-skill", "body"),
+    );
+    let plain = reg_for(&[]);
+    let pure = reg_for(&[]).with_pure_skills(true);
+    let names = |b: &TurnBinding| -> Vec<String> {
+        b.snapshot
+            .skills
+            .get(dir.path())
+            .map(|s| s.iter().map(|e| e.name.clone()).collect())
+            .unwrap_or_default()
+    };
+    assert!(
+        names(&plain.bind_turn(dir.path()).unwrap())
+            .iter()
+            .any(|n| n == "external-skill")
+    );
+    let pure_names = names(&pure.bind_turn(dir.path()).unwrap());
+    assert!(!pure_names.iter().any(|n| n == "external-skill") && !pure_names.is_empty());
+}
+
+#[test]
+fn turn_binding_and_clones_pin_tools_and_masks_across_refresh() {
+    // Part A: Retained TurnBinding does not observe later tool publications.
+    let reg = reg_for(&[one(
+        "hya/pin",
+        "pin-agent",
+        ResourceView::default(),
+        Vec::new(),
+    )]);
+    let b = bind(&reg);
+    let pol = b
+        .agent_resource_policy_on_plane("pin-agent", AgentToolPlane::Full)
+        .unwrap();
+    let before = b.compile_agent_resources(&pol).unwrap();
+    assert!(
+        before.resolve_tool("read").is_some() && before.resolve_tool("dynamic_marker").is_none()
+    );
+
+    reg.refresh(|c| c.register_tool(Arc::new(StubTool::noop("dynamic_marker"))))
+        .unwrap();
+    let after = b.compile_agent_resources(&pol).unwrap();
+    assert!(after.resolve_tool("dynamic_marker").is_none());
+    assert_eq!(
+        before.tools.keys().collect::<BTreeSet<_>>(),
+        after.tools.keys().collect::<BTreeSet<_>>()
+    );
+
+    // Part B: Cloned bindings reuse masked winners after source removal; fresh bindings drop them.
+    let mask_reg = reg_for(&[]);
+    let sid = RuntimeSourceId::plugin("mask-src");
+    mask_reg
+        .refresh(|c| {
+            c.upsert_sources(vec![RuntimeSource::new(
+                sid.clone(),
+                [14; 32],
+                Arc::new(()),
+                vec![export(
+                    "fast",
+                    "mask__fast",
+                    &["bash"],
+                    ToolPermission::Tool,
+                )],
+            )])
+        })
+        .unwrap();
+    let bound = bind(&mask_reg);
+    let retained = bound.clone();
+    let main_pol = bound.agent_resource_policy("hya-main").unwrap();
+    let masked_before = bound.compile_agent_resources(&main_pol).unwrap();
+    let masked_bash = masked_before.resolve_tool("bash").unwrap().tool;
+    assert!(
+        masked_before
+            .resolve_tool("harness:tool/mask__fast")
+            .is_some()
+    );
+
+    mask_reg
+        .refresh(|c| {
+            c.remove_sources(&BTreeSet::from([sid]));
+            Ok(())
+        })
+        .unwrap();
+    let fresh = bind(&mask_reg);
+    let fresh_view = basic(&fresh, "hya-main");
+    assert!(fresh_view.resolve_tool("harness:tool/mask__fast").is_none());
+    assert!(fresh_view.resolve_tool("harness:tool/bash").is_some());
+    assert!(
+        fresh
+            .compile_agent_resources(&main_pol)
+            .unwrap()
+            .resolve_tool("harness:tool/mask__fast")
+            .is_none()
+    );
+
+    let retained_view = basic(&retained, "hya-main");
+    assert!(
+        retained_view
+            .resolve_tool("harness:tool/mask__fast")
+            .is_some()
+    );
+    assert!(Arc::ptr_eq(
+        &masked_bash,
+        &retained_view.resolve_tool("bash").unwrap().tool
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// 2. Bundle owner scoping: skills, process tools, and bundled MCP
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bundle_owner_scoping_for_plugin_skills_and_process_tools() {
+    let prep = |id: &str, name: &str, ag: &str| {
+        prepare_package(BundleSource::new(
+            id,
+            vec![
+                SourceFile::new(
+                    "bundle.yaml",
+                    format!(
+                        "kind: Bundle\nidentity: {{ id: acme/{id}, version: 1.0.0, publisher: acme }}\nresources:\n  skills: [{{ id: {name}, path: skills/guide.md }}]\n{ag}"
+                    ),
+                ),
+                SourceFile::new("skills/guide.md", skill_md(name, "SKILL_BODY")),
+            ],
+        ))
+        .unwrap()
+    };
+    let plugin = prep("shared", "shared-skill", "");
+    let private = prep(
+        "private",
+        "private-skill",
+        "agents: [{ id: private-agent, role: main }]\n",
+    );
+    let process = prepare_package(BundleSource::new(
+        "private-process",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                "kind: Bundle\nidentity: { id: acme/private-process, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [fixture] }\nresources:\n  tools: [{ id: echo, path: echo.json }]\n  hooks: [{ id: tool.execute.before, path: echo.json }]\nagents:\n  - { id: private-process-agent, role: main, hook_refs: [tool.execute.before], resource_view: { allow: [echo] } }\n",
+            ),
+            SourceFile::new("echo.json", "{}"),
+        ],
+    ))
+    .unwrap();
+
+    let reg = reg_with(
+        hya_tool_loader::builtins(),
+        verified_catalog(&[&plugin, &private, &process]),
+    );
+    let mut unknown = reg.active().sources[&RuntimeSourceId::bundle("acme/shared")].clone();
+    unknown.id = RuntimeSourceId::bundle("acme/unknown");
+    unknown.skills[0].stable_id = "bundle:acme/unknown/skill/unknown-skill".into();
+    unknown.skills[0].local_id = "unknown-skill".into();
+    unknown.skills[0].entry.name = "unknown-skill".into();
+    reg.refresh(|c| {
+        c.upsert_sources(vec![
+            unknown,
+            RuntimeSource::new(
+                RuntimeSourceId::bundle("acme/private-process"),
+                [2; 32],
+                Arc::new(()),
+                vec![export(
+                    "echo",
+                    "private-process__echo",
+                    &[],
+                    ToolPermission::Tool,
                 )],
             )
-        })
-        .expect("the bundle claim must publish");
-
-    let workdir = PathBuf::from("/tmp/hya-bundle-scheme-dispatch");
-    let binding = registry.bind_turn(&workdir).unwrap();
-    let policy = binding.agent_resource_policy("vecdb-lead").unwrap();
-    let owner = ReferenceRecordingTool::new("bundle:hya/vecdb/tool/query");
-    let sidecar = ResolvedTool {
-        tool: owner.clone(),
-        permission: ToolPermission::Tool,
-    };
-    let compiled = binding
-        .compile_agent_resources_with_sidecar_tools(&policy, &[sidecar])
-        .unwrap();
-
-    let ctx = dispatch_ctx(&workdir);
-    let read = compiled.resolve_tool("read").unwrap();
-    let result =
-        futures::executor::block_on(read.tool.execute(&ctx, json!({ "path": "db://rows/42" })))
-            .unwrap();
-    assert_eq!(
-        result.get("output").and_then(Value::as_str),
-        Some("owner body"),
-        "read over the registered scheme dispatches the view's sidecar tool"
-    );
-    assert_eq!(
-        owner.references(),
-        vec!["db://rows/42".to_string()],
-        "the owner receives the full handle text as its reference"
-    );
-}
-
-/// Whether `name` spells a harness coordination tool (short or qualified).
-fn is_coordination_spelling(name: &str) -> bool {
-    let short = name.strip_prefix("harness:tool/").unwrap_or(name);
-    crate::coordination::COORDINATION_TOOLS.contains(&short)
-}
-
-/// Whether the view's `read` is the injected mail-only channel reader.
-fn has_mail_only_read(compiled: &CompiledResourceView) -> bool {
-    compiled
-        .resolve_tool("read")
-        .is_some_and(|read| read.tool.schema().description.starts_with("Read team mail"))
-}
-
-/// Public tool names minus the harness-injected coordination set: the
-/// domain tools a `resource_view` actually narrows.
-#[expect(clippy::nonminimal_bool, reason = "preserve the upstream filter")]
-fn domain_tool_names(compiled: &CompiledResourceView) -> BTreeSet<String> {
-    let mail_only_read = has_mail_only_read(compiled);
-    compiled
-        .tools
-        .keys()
-        .cloned()
-        .collect::<BTreeSet<String>>()
-        .into_iter()
-        .filter(|name| !is_coordination_spelling(name) && !(mail_only_read && name == "read"))
-        .collect()
-}
-
-/// Model-facing schema names minus the harness-injected coordination set.
-#[expect(clippy::nonminimal_bool, reason = "preserve the upstream filter")]
-fn domain_schema_names(compiled: &CompiledResourceView) -> BTreeSet<String> {
-    let mail_only_read = has_mail_only_read(compiled);
-    compiled
-        .tool_schemas()
-        .into_iter()
-        .map(|schema| schema.name.as_str().to_string())
-        .filter(|name| !is_coordination_spelling(name) && !(mail_only_read && name == "read"))
-        .collect()
-}
-
-// ---- Coordination tools (0.41.0): harness-owned, injected at startup ----
-
-const WITHOUT_CHANNEL_TOOLS: [&str; 3] =
-    ["hya/base-tools", "hya/extended-tools", "hya/network-tools"];
-
-fn view(allow: &[&str], deny: &[&str]) -> ResourceView {
-    ResourceView {
-        allow: allow.iter().map(|entry| (*entry).to_string()).collect(),
-        deny: deny.iter().map(|entry| (*entry).to_string()).collect(),
-        aliases: BTreeMap::new(),
-        namespace: None,
-    }
-}
-
-/// Compile `agent` (installed as its own bundle) and return the view.
-fn compile_bundle_agent(
-    tools: ToolRegistry,
-    agent: PreparedAgent,
-) -> Result<Arc<CompiledResourceView>, BundleError> {
-    let stable_id = agent.id.as_str().to_string();
-    let catalog = Arc::new(
-        TestCatalog::from_prepared(&[bundle_with_agent(
-            &format!("hya/coord-{stable_id}"),
-            agent,
-            Vec::new(),
-        )])
-        .unwrap(),
-    );
-    let registry = test_runtime_registry(tools, catalog);
-    let binding = registry
-        .bind_turn(&PathBuf::from("/tmp/hya-coordination-tools"))
-        .unwrap();
-    let policy = binding.agent_resource_policy(&stable_id)?;
-    binding.compile_agent_resources(&policy)
-}
-
-fn schema_names(compiled: &CompiledResourceView) -> BTreeSet<String> {
-    compiled
-        .tool_schemas()
-        .into_iter()
-        .map(|schema| schema.name.as_str().to_string())
-        .collect()
-}
-
-#[test]
-fn coordination_tools_join_a_narrow_bundle_view() {
-    let compiled = compile_bundle_agent(
-        hya_tool_loader::builtins(),
-        agent("narrow-scout", view(&["harness:tool/grep"], &[])),
-    )
+            .with_hooks(Arc::new(crate::hooks::HookChain::new(Vec::new()))),
+        ])
+    })
     .unwrap();
-    let names = schema_names(&compiled);
-    for expected in ["grep", "report", "wait", "send", "list_channel", "read"] {
-        assert!(names.contains(expected), "missing `{expected}`: {names:?}");
-    }
-    for absent in ["task", "archive", "bash", "glob", "edit", "write"] {
-        assert!(!names.contains(absent), "`{absent}` leaked: {names:?}");
-    }
+
+    let b = bind(&reg);
+    let main_view = full(&b, "hya-main");
+    let main_skills: BTreeSet<&str> = main_view.skills().iter().map(|s| s.name.as_str()).collect();
+    assert!(
+        main_skills.contains("shared-skill")
+            && main_skills.contains("bundle:acme/shared/skill/shared-skill")
+    );
+    assert!(!main_skills.contains("private-skill") && !main_skills.contains("unknown-skill"));
+    assert!(main_view.resolve_tool("private-process__echo").is_none());
+    assert!(b.bundle_hooks_for_agent("hya-main").is_empty());
+
+    let priv_view = basic(&b, "private-agent");
+    assert!(priv_view.skills().iter().any(|s| s.name == "private-skill"));
+    assert!(!priv_view.skills().iter().any(|s| s.name == "shared-skill"));
+
+    let proc_view = basic(&b, "private-process-agent");
+    assert!(proc_view.resolve_tool("echo").is_some());
+    assert_eq!(b.bundle_hooks_for_agent("private-process-agent").len(), 1);
+    assert!(
+        !b.has_selected_bundle_sidecar_capability("private-process-agent")
+            .unwrap()
+    );
 }
 
-/// The core-agents preset's `resource_view` narrows built-ins too: the
-/// read-only planner and scout never see the write or shell tools, and the
-/// scout cannot spawn; the default agent keeps the full set.
 #[test]
-fn read_only_builtins_are_denied_write_and_shell_tools() {
-    let registry = test_runtime_registry(
+fn bundled_mcp_partitioning_and_owner_server_expansion() {
+    let shared_mcp = prepare_package(BundleSource::new(
+        "bundled-mcp",
+        vec![SourceFile::new(
+            "bundle.yaml",
+            "kind: Bundle\nidentity: { id: acme/bundled-mcp, version: 1.0.0, publisher: acme }\n",
+        )],
+    ))
+    .unwrap();
+    let private_mcp = prepare_package(BundleSource::new(
+        "private-mcp",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                "kind: Bundle\nidentity: { id: acme/private-mcp, version: 1.0.0, publisher: acme }\nresources:\n  mcp: [{ id: echo, path: mcp.json }]\nagents:\n  - { id: private-mcp-agent, role: main, resource_view: { allow: [echo] } }\n",
+            ),
+            SourceFile::new("mcp.json", r#"{"command":["fixture"]}"#),
+        ],
+    ))
+    .unwrap();
+    let reg = reg_with(
         hya_tool_loader::builtins(),
-        Arc::new(TestCatalog::from_prepared(&[]).unwrap()),
+        verified_catalog(&[&shared_mcp, &private_mcp]),
     );
-    let binding = registry
-        .bind_turn(&PathBuf::from("/tmp/hya-read-only-builtins"))
-        .unwrap();
-    let names = |stable_id: &str| {
-        let policy = binding.agent_resource_policy(stable_id).unwrap();
-        schema_names(&binding.compile_agent_resources(&policy).unwrap())
+    reg.refresh(|c| {
+        c.upsert_sources(vec![
+            RuntimeSource::new(
+                RuntimeSourceId::bundle("acme/bundled-mcp"),
+                [1; 32],
+                Arc::new(()),
+                vec![export(
+                    "mcp/echo/ping",
+                    "bundled-mcp__mcp__echo__ping",
+                    &[],
+                    ToolPermission::Mcp,
+                )],
+            ),
+            RuntimeSource::new(
+                RuntimeSourceId::bundle("acme/private-mcp"),
+                [3; 32],
+                Arc::new(()),
+                vec![export(
+                    "mcp/echo/ping",
+                    "private-mcp__mcp__echo__ping",
+                    &[],
+                    ToolPermission::Mcp,
+                )],
+            ),
+        ])
+    })
+    .unwrap();
+
+    let b = bind(&reg);
+    let main_pol = b.agent_resource_policy("hya-main").unwrap();
+    let cand = b.collect_resource_candidates(&main_pol).unwrap();
+    assert!(
+        cand.mcp
+            .contains_key("harness:mcp/bundled-mcp__mcp__echo__ping")
+    );
+    assert!(
+        !cand
+            .tool
+            .contains_key("harness:tool/bundled-mcp__mcp__echo__ping")
+    );
+    assert!(
+        b.compile_agent_resources(&main_pol)
+            .unwrap()
+            .resolve_tool("private-mcp__mcp__echo__ping")
+            .is_none()
+    );
+
+    let owner = basic(&b, "private-mcp-agent");
+    assert_eq!(
+        owner.resolve_tool("echo__ping").unwrap().permission,
+        ToolPermission::Mcp
+    );
+    assert_eq!(
+        domain_schema_names(&owner),
+        BTreeSet::from(["echo__ping".into()])
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 3. Alias masking (built-in override, dissolution, cross-source precedence)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn alias_masking_builtin_override_dissolution_and_cross_source_precedence() {
+    let reg = reg_for(&[one(
+        "hya/mask",
+        "mask-agent",
+        ResourceView::default(),
+        Vec::new(),
+    )]);
+    let plugin = |id: &str, d: [u8; 32], loc: &str, can: &str, alias: &str| {
+        RuntimeSource::new(
+            RuntimeSourceId::plugin(id),
+            d,
+            Arc::new(()),
+            vec![export(loc, can, &[alias], ToolPermission::Tool)],
+        )
     };
-    let writes = ["write", "edit", "apply_patch", "bash"];
+    reg.refresh(|c| {
+        c.upsert_sources(vec![
+            plugin("mask-src", [14; 32], "fast", "mask__fast", "bash"),
+            plugin("alpha", [16; 32], "lookup", "alpha__lookup", "lookup"),
+            plugin("beta", [17; 32], "lookup", "beta__lookup", "lookup"),
+        ])
+    })
+    .expect("masks must publish");
 
-    let plan = names("hya-plan");
-    for denied in writes {
-        assert!(!plan.contains(denied), "hya-plan sees `{denied}`: {plan:?}");
+    let b = bind(&reg);
+    assert_eq!(
+        b.masks().get("bash").map(String::as_str),
+        Some("mask__fast")
+    );
+    assert_eq!(
+        b.masks().get("lookup").map(String::as_str),
+        Some("beta__lookup")
+    );
+
+    let compiled = full(&b, "mask-agent");
+    let names: BTreeSet<&str> = compiled.tools.keys().map(String::as_str).collect();
+    assert!(names.contains("bash") && !names.contains("harness:tool/bash"));
+    assert!(names.contains("harness:tool/mask__fast"));
+    assert!(names.contains("lookup") && names.contains("harness:tool/beta__lookup"));
+    assert!(names.contains("alpha__lookup") && compiled.resolve_tool("alpha__lookup").is_some());
+
+    let schemas = compiled.tool_schemas();
+    for bare in ["bash", "lookup"] {
+        let m: Vec<_> = schemas.iter().filter(|s| s.name.as_str() == bare).collect();
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].input_schema, json!({ "type": "object" }));
     }
-    assert!(plan.contains("grep") && plan.contains("task"), "{plan:?}");
+    assert!(!schemas.iter().any(|s| s.name.as_str() == "beta__lookup"));
 
-    let scout = names("hya-scout");
-    for denied in writes.into_iter().chain(["task", "archive"]) {
-        assert!(
-            !scout.contains(denied),
-            "hya-scout sees `{denied}`: {scout:?}"
+    reg.refresh(|c| {
+        c.remove_sources(&BTreeSet::from([RuntimeSourceId::plugin("mask-src")]));
+        Ok(())
+    })
+    .unwrap();
+    let b2 = bind(&reg);
+    assert!(!b2.masks().contains_key("bash"));
+    assert!(
+        full(&b2, "mask-agent")
+            .tools
+            .contains_key("harness:tool/bash")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 4. Dispatch identity and runtime semantic fingerprints
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dispatch_identity_and_base_semantic_fingerprint_invariants() {
+    let source_id = |id: &str, digest: [u8; 32], res: Value| {
+        let reg = reg_for(&[one(
+            "hya/source-id",
+            "sid",
+            ResourceView::default(),
+            Vec::new(),
+        )]);
+        reg.refresh(|c| {
+            c.upsert_sources(vec![
+                RuntimeSource::new(
+                    RuntimeSourceId::plugin(id),
+                    digest,
+                    Arc::new(()),
+                    vec![export(
+                        "probe",
+                        "plugin__fixture__probe",
+                        &[],
+                        ToolPermission::Tool,
+                    )],
+                )
+                .with_resources(BTreeMap::from([("probe".into(), res)])),
+            ])
+        })
+        .unwrap();
+        let did = reg
+            .active()
+            .tools
+            .dispatch_identity_v1("plugin__fixture__probe")
+            .unwrap();
+        assert_ne!(did, [0_u8; 32]);
+        did
+    };
+    let base_did = source_id("fixture", [1; 32], json!({"mode": "one"}));
+    assert_eq!(
+        source_id("fixture", [1; 32], json!({"mode": "one"})),
+        base_did
+    );
+    for (lbl, id, dig, res) in [
+        ("id", "fixture-other", [1; 32], json!({"mode": "one"})),
+        ("digest", "fixture", [2; 32], json!({"mode": "one"})),
+        ("resource", "fixture", [1; 32], json!({"mode": "two"})),
+    ] {
+        assert_ne!(source_id(id, dig, res), base_did, "{lbl}");
+    }
+
+    let next_gen = ConfigGeneration::INITIAL.checked_next().unwrap();
+    let base_fp = |cat: &str,
+                   sch: &str,
+                   rev: bool,
+                   did: [u8; 32],
+                   mode: Mode,
+                   generation: ConfigGeneration| {
+        let pkg = prepare_package(BundleSource::new(
+            "rf",
+            vec![SourceFile::new(
+                "bundle.yaml",
+                format!("kind: Bundle\nidentity: {{ id: hya/rf, version: 1.0.0, publisher: hya-tests }}\nagents: [{{ id: fp, description: \"manifest {cat}\", role: main }}]\n"),
+            )],
+        ))
+        .unwrap();
+        let tr = hya_tool_loader::builtins();
+        let mut custom: Vec<(Arc<dyn Tool>, [u8; 32])> = vec![
+            (Arc::new(StubTool::marked("custom_one", sch)), did),
+            (Arc::new(StubTool::marked("custom_two", "stable")), [2; 32]),
+        ];
+        if rev {
+            custom.reverse();
+        }
+        for (t, d) in custom {
+            tr.register_with_permission_and_aliases_and_dispatch_identity(
+                t,
+                ToolPermission::Tool,
+                &[],
+                d,
+            )
+            .unwrap();
+        }
+        let pol = InvocationPolicy::compile(
+            PermissionModel::Default,
+            vec![InvocationRule::new(
+                PermissionTarget::Tool,
+                "^custom_one$",
+                Mode::Allow,
+            )],
+        )
+        .unwrap();
+        let (perm, _asks) = PermissionPlane::new_with_policy(
+            PermissionRules::new(vec![Rule::new(Action::Tool, "custom_one", mode)]),
+            pol,
+        );
+        let tools = tr.snapshot();
+        fp_of(
+            Arc::new(RuntimeSnapshot {
+                generation,
+                catalog: verified_catalog(&[&pkg]),
+                basic_tools: tools.clone(),
+                tools,
+                skills: BTreeMap::new(),
+                sources: BTreeMap::new(),
+                masks: Arc::new(BTreeMap::new()),
+                schemes: Arc::new(BTreeMap::new()),
+            }),
+            "/tmp/rf",
+            &perm,
+        )
+    };
+
+    let base = base_fp(
+        "one",
+        "one",
+        false,
+        [1; 32],
+        Mode::Allow,
+        ConfigGeneration::INITIAL,
+    );
+    assert_eq!(
+        base_fp("one", "one", true, [1; 32], Mode::Allow, next_gen),
+        base
+    );
+    for (lbl, cat, sch, did, mode) in [
+        ("catalog", "two", "one", [1; 32], Mode::Allow),
+        ("schema", "one", "two", [1; 32], Mode::Allow),
+        ("dispatch", "one", "one", [3; 32], Mode::Allow),
+        ("permission", "one", "one", [1; 32], Mode::Deny),
+    ] {
+        assert_ne!(
+            base_fp(cat, sch, false, did, mode, ConfigGeneration::INITIAL),
+            base,
+            "{lbl}"
         );
     }
-    assert!(
-        scout.contains("grep") && scout.contains("read"),
-        "{scout:?}"
+}
+
+#[test]
+fn semantic_fingerprint_tracks_selected_workdir_skills() {
+    let mk =
+        |name: &str, desc: &str, content: &str, tools: &[&str], model: Option<&str>, path: &str| {
+            SkillCatalogEntry {
+                name: name.into(),
+                description: desc.into(),
+                content: content.into(),
+                allowed_tools: tools.iter().map(|t| (*t).into()).collect(),
+                model: model.map(str::to_string),
+                path: PathBuf::from(path),
+                dir: PathBuf::from(path)
+                    .parent()
+                    .map_or_else(PathBuf::new, Path::to_path_buf),
+                origin: hya_tool::SkillCatalogOrigin::Filesystem,
+                disable_model_invocation: false,
+            }
+        };
+    let selected = || {
+        vec![
+            mk(
+                "alpha",
+                "Alpha",
+                "alpha body",
+                &["custom_one"],
+                Some("model-a"),
+                "/tmp/rf-sk/alpha/SKILL.md",
+            ),
+            mk(
+                "beta",
+                "Beta",
+                "beta body",
+                &[],
+                None,
+                "/tmp/rf-sk/beta/SKILL.md",
+            ),
+        ]
+    };
+    let pkg = prepare_package(BundleSource::new(
+        "rf-sk",
+        vec![SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: hya/rf-sk, version: 1.0.0, publisher: hya-tests }\nagents: [{ id: fp-sk, role: main }]\n")],
+    ))
+    .unwrap();
+    let fp_for = |sel: Vec<SkillCatalogEntry>, unrelated: Vec<SkillCatalogEntry>| {
+        let tools = hya_tool_loader::builtins().snapshot();
+        let mut skills = BTreeMap::from([(PathBuf::from("/tmp/rf-sk"), Arc::new(sel))]);
+        if !unrelated.is_empty() {
+            skills.insert(PathBuf::from("/tmp/rf-other"), Arc::new(unrelated));
+        }
+        let (perm, _) = PermissionPlane::new_with_policy(
+            PermissionRules::default(),
+            InvocationPolicy::default(),
+        );
+        fp_of(
+            Arc::new(RuntimeSnapshot {
+                generation: ConfigGeneration::INITIAL,
+                catalog: verified_catalog(&[&pkg]),
+                basic_tools: tools.clone(),
+                tools,
+                skills,
+                sources: BTreeMap::new(),
+                masks: Arc::new(BTreeMap::new()),
+                schemes: Arc::new(BTreeMap::new()),
+            }),
+            "/tmp/rf-sk",
+            &perm,
+        )
+    };
+
+    let base = fp_for(selected(), Vec::new());
+    assert_eq!(fp_for(selected(), Vec::new()), base);
+    assert_eq!(
+        fp_for(
+            selected(),
+            vec![mk("u", "u", "u", &[], None, "/tmp/rf-other/u/SKILL.md")]
+        ),
+        base
     );
 
-    let main = names("hya-main");
-    for kept in writes {
-        assert!(main.contains(kept), "hya-main lacks `{kept}`: {main:?}");
+    type SkillMutator = fn(&mut Vec<SkillCatalogEntry>);
+    let muts: [(&str, SkillMutator); 7] = [
+        ("content", |s| s[0].content = "changed".into()),
+        ("name", |s| s[0].name = "alpha-renamed".into()),
+        ("path_and_dir", |s| {
+            s[0].path = PathBuf::from("/tmp/rf-sk/moved/SKILL.md");
+            s[0].dir = PathBuf::from("/tmp/rf-sk/moved");
+        }),
+        ("description", |s| s[0].description = "changed".into()),
+        ("allowed_tools", |s| {
+            s[0].allowed_tools = vec!["custom_two".into()]
+        }),
+        ("model", |s| s[0].model = Some("model-b".into())),
+        ("order", |s| s.reverse()),
+    ];
+    for (lbl, f) in muts {
+        let mut entries = selected();
+        f(&mut entries);
+        assert_ne!(fp_for(entries, Vec::new()), base, "skill `{lbl}`");
     }
 }
 
 #[test]
-fn injected_read_serves_channel_mail_but_never_files() {
-    let compiled = compile_bundle_agent(
-        hya_tool_loader::builtins(),
-        agent("mail-reader", view(&["harness:tool/grep"], &[])),
-    )
+fn semantic_fingerprint_tracks_plugin_and_mcp_sources() {
+    let nested = |marker: &str, rev: bool| {
+        let mut inner = serde_json::Map::new();
+        let pairs = [
+            ("marker", Value::String(marker.into())),
+            ("enabled", Value::Bool(true)),
+        ];
+        let mut outer = serde_json::Map::new();
+        if rev {
+            pairs.into_iter().rev().for_each(|(k, v)| {
+                inner.insert(k.into(), v);
+            });
+            outer.insert("nested".into(), Value::Object(inner));
+            outer.insert("version".into(), Value::from(1));
+        } else {
+            pairs.into_iter().for_each(|(k, v)| {
+                inner.insert(k.into(), v);
+            });
+            outer.insert("version".into(), Value::from(1));
+            outer.insert("nested".into(), Value::Object(inner));
+        }
+        Value::Object(outer)
+    };
+    let pkg = prepare_package(BundleSource::new(
+        "rf-src",
+        vec![SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: hya/rf-src, version: 1.0.0, publisher: hya-tests }\nagents: [{ id: fp-src, role: main }]\n")],
+    ))
     .unwrap();
-    let schema = compiled
-        .tool_schemas()
-        .into_iter()
-        .find(|schema| schema.name.as_str() == "read")
-        .expect("channel read is advertised");
-    assert!(
-        schema.description.contains("channel://"),
-        "{}",
-        schema.description
+    #[derive(Clone, Copy)]
+    struct C {
+        kind: RuntimeSourceKind,
+        pid: &'static str,
+        pdig: [u8; 32],
+        pm: &'static str,
+        mdig: [u8; 32],
+        mm: &'static str,
+        mcp: bool,
+        rev: bool,
+    }
+    let fp_for = |c: C| {
+        let reg = reg_with(hya_tool_loader::builtins(), verified_catalog(&[&pkg]));
+        let probe = match c.kind {
+            RuntimeSourceKind::Mcp => format!("mcp__{}__probe", c.pid),
+            _ => format!("plugin__{}__probe", c.pid),
+        };
+        let mut sources = vec![
+            RuntimeSource::new(
+                RuntimeSourceId::new(c.kind, c.pid),
+                c.pdig,
+                Arc::new(()),
+                vec![export(
+                    "probe",
+                    &probe,
+                    &["plugin_probe"],
+                    ToolPermission::Tool,
+                )],
+            )
+            .with_resources(BTreeMap::from([("config".into(), nested(c.pm, c.rev))])),
+        ];
+        if c.mcp {
+            sources.push(
+                RuntimeSource::new(
+                    RuntimeSourceId::mcp("fixture-mcp"),
+                    c.mdig,
+                    Arc::new(()),
+                    Vec::new(),
+                )
+                .with_resources(BTreeMap::from([("config".into(), nested(c.mm, c.rev))])),
+            );
+        }
+        if c.rev {
+            sources.reverse();
+        }
+        reg.refresh(|cand| cand.upsert_sources(sources)).unwrap();
+        let (perm, _) = PermissionPlane::new_with_policy(
+            PermissionRules::default(),
+            InvocationPolicy::default(),
+        );
+        fp_of(reg.active(), "/tmp/rf-src", &perm)
+    };
+    let base_c = C {
+        kind: RuntimeSourceKind::Plugin,
+        pid: "fixture-plugin",
+        pdig: [1; 32],
+        pm: "plugin-one",
+        mdig: [2; 32],
+        mm: "mcp-one",
+        mcp: true,
+        rev: false,
+    };
+    let base = fp_for(base_c);
+    assert_eq!(
+        fp_for(C {
+            rev: true,
+            ..base_c
+        }),
+        base
     );
-    let read = compiled.resolve_tool("read").unwrap();
-    let ctx = dispatch_ctx(Path::new("/tmp/hya-coordination-tools"));
-    let error =
-        futures::executor::block_on(read.tool.execute(&ctx, json!({ "path": "Cargo.toml" })))
-            .unwrap_err();
-    assert!(
-        matches!(&error, ToolError::Input(message) if message.contains("channel://")),
-        "a file path must be refused with the channel spelling: {error:?}"
+    for (lbl, c) in [
+        (
+            "kind",
+            C {
+                kind: RuntimeSourceKind::Mcp,
+                ..base_c
+            },
+        ),
+        (
+            "plugin_id",
+            C {
+                pid: "fixture-plugin-other",
+                ..base_c
+            },
+        ),
+        (
+            "plugin_digest",
+            C {
+                pdig: [3; 32],
+                ..base_c
+            },
+        ),
+        (
+            "plugin_res",
+            C {
+                pm: "plugin-two",
+                ..base_c
+            },
+        ),
+        (
+            "mcp_digest",
+            C {
+                mdig: [3; 32],
+                ..base_c
+            },
+        ),
+        (
+            "mcp_res",
+            C {
+                mm: "mcp-two",
+                ..base_c
+            },
+        ),
+        (
+            "without_mcp",
+            C {
+                mcp: false,
+                ..base_c
+            },
+        ),
+    ] {
+        assert_ne!(fp_for(c), base, "`{lbl}`");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 5. Alias and canonical reference error contracts
+// ---------------------------------------------------------------------------
+
+#[test]
+fn alias_error_contracts_reject_missing_colliding_and_invalid_names() {
+    let check = |label: &str,
+                 bundle: &str,
+                 plane: Option<AgentToolPlane>,
+                 rv: ResourceView,
+                 dyn_tool: bool,
+                 mcp: bool| {
+        let reg = reg_for(&[one(bundle, "target", rv, Vec::new())]);
+        if dyn_tool {
+            reg.refresh(|c| c.register_tool(Arc::new(StubTool::noop("dynamic_marker"))))
+                .unwrap();
+        }
+        if mcp {
+            reg.refresh(|c| c.upsert_sources(vec![mcp_ping(&[], [1; 32])]))
+                .unwrap();
+        }
+        compile_on(&bind(&reg), "target", plane)
+            .err()
+            .unwrap_or_else(|| panic!("{label}: expected compile error"))
+    };
+    let full_p = Some(AgentToolPlane::Full);
+
+    assert!(matches!(
+        check(
+            "filtered-plane",
+            "hya/alias-miss",
+            None,
+            view_with(&[], &[], &[("marker", "harness:tool/dynamic_marker")], None),
+            true,
+            false
+        ),
+        BundleError::UnknownResourceReference { .. }
+    ));
+    assert!(matches!(
+        check(
+            "deny-target",
+            "hya/alias-denied",
+            full_p,
+            view_with(
+                &[],
+                &["harness:tool/read"],
+                &[("reader", "harness:tool/read")],
+                None
+            ),
+            false,
+            false
+        ),
+        BundleError::UnknownResourceReference { .. }
+    ));
+    for (lbl, bid, allow, alias, target, exp_name, exp_bid) in [
+        (
+            "qualified-override",
+            "hya/a-qual",
+            &[][..],
+            "harness:tool/read",
+            "harness:tool/write",
+            "harness:tool/read",
+            None,
+        ),
+        (
+            "short-collide",
+            "hya/alias-collide",
+            &[][..],
+            "read",
+            "harness:tool/write",
+            "read",
+            Some("hya/alias-collide"),
+        ),
+        (
+            "same-target-short",
+            "hya/a-self",
+            &[][..],
+            "read",
+            "harness:tool/read",
+            "read",
+            None,
+        ),
+        (
+            "candidate-alias-same",
+            "hya/a-cand",
+            &[][..],
+            "patch",
+            "harness:tool/apply_patch",
+            "patch",
+            None,
+        ),
+        (
+            "filtered-stable",
+            "hya/a-filt",
+            &["harness:tool/read"][..],
+            "write",
+            "harness:tool/read",
+            "write",
+            None,
+        ),
+    ] {
+        let err = check(
+            lbl,
+            bid,
+            full_p,
+            view_with(allow, &[], &[(alias, target)], None),
+            false,
+            false,
+        );
+        assert!(
+            matches!(&err, BundleError::AliasCollision { bundle_id, name } if name == exp_name && exp_bid.is_none_or(|b| bundle_id == b)),
+            "{lbl}: got {err:?}"
+        );
+    }
+    let bad_err = check(
+        "invalid-provider",
+        "hya/a-bad",
+        full_p,
+        view_with(
+            &["harness:tool/read"],
+            &[],
+            &[("bad:name", "harness:tool/read")],
+            None,
+        ),
+        false,
+        false,
     );
+    assert!(
+        matches!(&bad_err, BundleError::InvalidManifest { detail, .. } if detail.contains("model-facing tool name `bad:name`"))
+    );
+
+    let mcp_err = check(
+        "tool-mcp-collide",
+        "hya/a-mcp",
+        full_p,
+        view_with(
+            &["harness:tool/read", "harness:mcp/mcp__fixture__ping"],
+            &[],
+            &[("mcp__fixture__ping", "harness:tool/read")],
+            None,
+        ),
+        false,
+        true,
+    );
+    assert!(matches!(
+        &mcp_err,
+        BundleError::NamespaceCollision { name, .. } | BundleError::AliasCollision { name, .. } if name == "mcp__fixture__ping"
+    ));
 }
 
 #[test]
-fn a_view_that_selects_read_keeps_the_full_read_tool() {
-    let compiled = compile_bundle_agent(
-        hya_tool_loader::builtins(),
-        agent("file-reader", view(&["harness:tool/read"], &[])),
-    )
-    .unwrap();
-    let read = compiled
-        .tool_schemas()
-        .into_iter()
-        .find(|schema| schema.name.as_str() == "read")
+fn canonical_reference_rejects_wrong_kind_and_cross_kind_ambiguity() {
+    let reg = reg_for(&[one(
+        "hya/global-ref",
+        "wrong-kind",
+        view(&["harness:skill/read"], &[]),
+        Vec::new(),
+    )]);
+    let err = compile_on(&bind(&reg), "wrong-kind", Some(AgentToolPlane::Full))
+        .err()
         .unwrap();
     assert!(
-        read.description.starts_with("Read a file"),
-        "{}",
-        read.description
+        matches!(&err, BundleError::UnknownResourceReference { reference, .. } if reference == "harness:skill/read")
     );
+
+    for (label, rv) in [
+        ("allow-short", view(&["shared"], &[])),
+        (
+            "alias-target",
+            view_with(&[], &[], &[("marker", "shared")], None),
+        ),
+    ] {
+        let reg = reg_for(&[one(
+            "hya/ambig",
+            "ambig",
+            rv,
+            vec![skill_res("hya/ambig", "shared", "LOCAL", &[])],
+        )]);
+        reg.refresh(|c| c.register_tool(Arc::new(StubTool::noop("shared"))))
+            .unwrap();
+        let err = compile_on(&bind(&reg), "ambig", Some(AgentToolPlane::Full))
+            .err()
+            .unwrap();
+        assert!(
+            matches!(&err, BundleError::NamespaceCollision { name, .. } if name == "shared"),
+            "{label}: {err:?}"
+        );
+    }
 }
 
-#[test]
-fn spawn_rights_add_task_and_archive() {
-    let compiled = compile_bundle_agent(
-        hya_tool_loader::builtins(),
-        PreparedAgent {
-            can_spawn: vec![AgentName::new("hya-scout")],
-            ..agent("narrow-lead", view(&["harness:tool/grep"], &[]))
-        },
-    )
-    .unwrap();
-    let names = schema_names(&compiled);
-    assert!(
-        names.contains("task") && names.contains("archive"),
-        "{names:?}"
-    );
-}
+// ---------------------------------------------------------------------------
+// 6. Positive aliasing, namespaces, builtin aliases, MCP & cross-kind sharing
+// ---------------------------------------------------------------------------
 
 #[test]
-fn a_default_view_without_spawn_rights_has_no_task_or_archive() {
-    let compiled = compile_bundle_agent(
-        hya_tool_loader::builtins(),
-        agent("leaf-worker", ResourceView::default()),
-    )
-    .unwrap();
-    let names = schema_names(&compiled);
-    assert!(
-        names.contains("bash") && names.contains("wait"),
-        "{names:?}"
-    );
-    assert!(
-        !names.contains("task") && !names.contains("archive"),
-        "an agent that can spawn nobody must not see task/archive: {names:?}"
-    );
-}
+fn explicit_aliases_namespace_and_candidate_alias_suppression() {
+    let reg = reg_for(&[
+        one(
+            "hya/qualified-map",
+            "q-agent",
+            view_with(
+                &[
+                    "harness:tool/read",
+                    "harness:tool/write",
+                    "bundle:hya/qualified-map/skill/probe",
+                ],
+                &[],
+                &[
+                    ("reader", "harness:tool/read"),
+                    ("book", "harness:tool/read"),
+                ],
+                Some("custom.ns"),
+            ),
+            vec![skill_res("hya/qualified-map", "probe", "LOCAL_PROBE", &[])],
+        ),
+        one(
+            "hya/view-alias-suppress",
+            "suppress-agent",
+            view_with(&[], &[], &[("applier", "harness:tool/apply_patch")], None),
+            Vec::new(),
+        ),
+    ]);
+    let b = bind(&reg);
 
-#[test]
-fn without_channel_tools_no_channel_tools_are_injected() {
-    let compiled = compile_bundle_agent(
-        hya_tool_loader::from_tool_families(&WITHOUT_CHANNEL_TOOLS),
-        agent("quiet-scout", view(&["harness:tool/grep"], &[])),
-    )
-    .unwrap();
-    let names = schema_names(&compiled);
+    let compiled = full(&b, "q-agent");
     assert_eq!(
-        names,
-        ["grep", "wait"].into_iter().map(str::to_string).collect(),
-        "only the extended-tools wait joins when the channel family is absent"
+        domain_schema_names(&compiled),
+        BTreeSet::from(["book".into(), "reader".into(), "write".into()])
+    );
+    for ok in [
+        "reader",
+        "book",
+        "write",
+        "harness:tool/read",
+        "harness:tool/write",
+    ] {
+        assert!(compiled.resolve_tool(ok).is_some(), "missing {ok}");
+    }
+    assert!(compiled.resolve_tool("read").is_none());
+    let skills: BTreeSet<&str> = compiled.skills().iter().map(|s| s.name.as_str()).collect();
+    assert!(skills.contains("probe") && skills.contains("bundle:custom.ns/skill/probe"));
+
+    // Explicit view alias suppresses preexisting candidate aliases (e.g. `patch`).
+    let suppressed = full(&b, "suppress-agent");
+    assert!(suppressed.resolve_tool("applier").is_some());
+    assert!(
+        suppressed
+            .resolve_tool("harness:tool/apply_patch")
+            .is_some()
+    );
+    assert!(
+        suppressed.resolve_tool("apply_patch").is_none()
+            && suppressed.resolve_tool("patch").is_none()
+    );
+    let names = schema_names(&suppressed);
+    assert!(names.contains("applier"));
+    assert!(
+        !names.contains("apply_patch")
+            && !names.contains("patch")
+            && !names.contains("harness:tool/apply_patch")
+    );
+    assert!(
+        names
+            .iter()
+            .all(|n| suppressed.resolve_tool(n).is_some() && !n.contains([':', '/']))
     );
 }
 
 #[test]
-fn explicit_coordination_entries_dedupe_with_the_injected_set() {
-    let compiled = compile_bundle_agent(
+fn both_planes_keep_builtin_aliases_out_of_model_schemas() {
+    let mut expected: BTreeSet<String> = hya_tool_loader::builtins()
+        .schemas()
+        .into_iter()
+        .map(|s| s.name.as_str().into())
+        .collect();
+    assert_eq!(expected.len(), 25);
+    for name in crate::coordination::SPAWN_TOOLS {
+        expected.remove(name);
+    }
+    for (id, plane) in [
+        ("full-alias", AgentToolPlane::Full),
+        ("internal-public-alias", AgentToolPlane::InternalPublic),
+    ] {
+        let reg = reg_for(&[one(
+            "hya/builtin-alias",
+            id,
+            ResourceView::default(),
+            Vec::new(),
+        )]);
+        let compiled = compile_on(&bind(&reg), id, Some(plane)).unwrap();
+        assert!(compiled.resolve_tool("apply_patch").is_some());
+        for alias in ["fetch", "search", "patch", "plan", "shell", "question"] {
+            assert!(compiled.resolve_tool(alias).is_some(), "{id}: `{alias}`");
+        }
+        let names = schema_names(&compiled);
+        assert_eq!(names, expected, "{id}");
+        assert!(!names.contains("patch") && !names.contains("shell"));
+        assert!(names.iter().all(|n| !n.contains([':', '/'])));
+    }
+}
+
+#[test]
+fn harness_mcp_plane_visibility_aliases_filtering_and_pinning() {
+    let reg = reg_for(&[
+        one(
+            "hya/mcp-full",
+            "full-mcp",
+            ResourceView::default(),
+            Vec::new(),
+        ),
+        one(
+            "hya/mcp-basic",
+            "basic-mcp",
+            ResourceView::default(),
+            Vec::new(),
+        ),
+        one(
+            "hya/mcp-allow",
+            "allow-mcp",
+            view(&["harness:mcp/mcp__fixture__ping"], &[]),
+            Vec::new(),
+        ),
+        one(
+            "hya/mcp-deny",
+            "deny-mcp",
+            view(&[], &["harness:mcp/mcp__fixture__ping"]),
+            Vec::new(),
+        ),
+    ]);
+    reg.refresh(|c| c.upsert_sources(vec![mcp_ping(&["pingy"], [7; 32])]))
+        .unwrap();
+    let b = bind(&reg);
+
+    let f = full(&b, "full-mcp");
+    assert!(f.resolve_tool("mcp__fixture__ping").is_some() && f.resolve_tool("pingy").is_some());
+    assert!(f.resolve_tool("harness:mcp/mcp__fixture__ping").is_some());
+    assert!(f.resolve_tool("harness:tool/mcp__fixture__ping").is_none());
+    let f_schemas = schema_names(&f);
+    assert!(f_schemas.contains("mcp__fixture__ping"));
+    assert!(!f_schemas.contains("pingy") && !f_schemas.contains("harness:mcp/mcp__fixture__ping"));
+    assert!(f_schemas.iter().all(|n| f.resolve_tool(n).is_some()));
+
+    let bas = basic(&b, "basic-mcp");
+    assert!(
+        bas.resolve_tool("mcp__fixture__ping").is_none()
+            && bas.resolve_tool("harness:mcp/mcp__fixture__ping").is_none()
+    );
+
+    let allow = full(&b, "allow-mcp");
+    assert!(
+        allow.resolve_tool("mcp__fixture__ping").is_some()
+            && !domain_tool_names(&allow).contains("read")
+    );
+
+    let deny = full(&b, "deny-mcp");
+    assert!(
+        deny.resolve_tool("mcp__fixture__ping").is_none() && deny.resolve_tool("read").is_some()
+    );
+
+    // Pinning: removing MCP source keeps old TurnBinding intact while fresh binding drops it.
+    reg.refresh(|c| {
+        c.remove_sources(&BTreeSet::from([RuntimeSourceId::mcp("fixture")]));
+        Ok(())
+    })
+    .unwrap();
+    assert!(
+        full(&b, "full-mcp")
+            .resolve_tool("mcp__fixture__ping")
+            .is_some()
+    );
+    assert!(
+        full(&bind(&reg), "full-mcp")
+            .resolve_tool("mcp__fixture__ping")
+            .is_none()
+    );
+}
+
+#[test]
+fn tool_or_mcp_and_skill_may_share_public_spellings_independently() {
+    let reg = reg_for(&[
+        one(
+            "hya/tool-skill-ok",
+            "tool-skill",
+            view(
+                &["harness:tool/read", "bundle:hya/tool-skill-ok/skill/read"],
+                &[],
+            ),
+            vec![skill_res(
+                "hya/tool-skill-ok",
+                "read",
+                "SKILL_READ_BODY",
+                &[],
+            )],
+        ),
+        one(
+            "hya/mcp-skill-ok",
+            "mcp-skill",
+            view(
+                &[
+                    "harness:mcp/mcp__fixture__ping",
+                    "bundle:hya/mcp-skill-ok/skill/pingy",
+                ],
+                &[],
+            ),
+            vec![skill_res(
+                "hya/mcp-skill-ok",
+                "pingy",
+                "SKILL_PINGY_BODY",
+                &[],
+            )],
+        ),
+    ]);
+    reg.refresh(|c| c.upsert_sources(vec![mcp_ping(&["pingy"], [5; 32])]))
+        .unwrap();
+    let b = bind(&reg);
+
+    for (id, shared, tool_name, body) in [
+        ("tool-skill", "read", "read", "SKILL_READ_BODY"),
+        (
+            "mcp-skill",
+            "pingy",
+            "mcp__fixture__ping",
+            "SKILL_PINGY_BODY",
+        ),
+    ] {
+        let c = full(&b, id);
+        assert_eq!(
+            c.resolve_tool(shared).unwrap().tool.name(),
+            tool_name,
+            "{id}"
+        );
+        assert!(
+            c.skills()
+                .iter()
+                .any(|s| s.name == shared && s.content.contains(body)),
+            "{id}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 7. Skill precedence, aliases, nested bundle IDs, inlining, and facade rules
+// ---------------------------------------------------------------------------
+
+#[test]
+fn local_skill_precedence_filtering_aliases_and_nested_bundle_ids() {
+    let wd = TempSkillDir::new("skill-collision", "shared", &skill_md("shared", "HARNESS"));
+    let def_reg = reg_for(&[one(
+        "hya/skill-collision",
+        "skill-agent",
+        ResourceView::default(),
+        vec![skill_res("hya/skill-collision", "shared", "LOCAL", &[])],
+    )]);
+    let def = full(&def_reg.bind_turn(wd.path()).unwrap(), "skill-agent");
+    assert!(
+        def.skills()
+            .iter()
+            .any(|s| s.name == "harness:skill/shared")
+    );
+    assert!(
+        def.skills()
+            .iter()
+            .any(|s| s.name == "shared" && s.content.contains("LOCAL"))
+    );
+
+    let filt_reg = reg_for(&[one(
+        "hya/skill-collision",
+        "skill-agent",
+        view(&["harness:skill/shared", "harness:tool/skill"], &[]),
+        vec![skill_res("hya/skill-collision", "shared", "LOCAL", &[])],
+    )]);
+    let filt = full(&filt_reg.bind_turn(wd.path()).unwrap(), "skill-agent");
+    assert_eq!(
+        filt.skills()
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["shared", "harness:skill/shared"])
+    );
+    assert!(
+        filt.skills()
+            .iter()
+            .any(|s| s.name == "shared" && s.content.contains("HARNESS"))
+    );
+
+    // PreparedResource aliases & bundle IDs with kind segments (`tool/skill/mcp`) parse structurally.
+    let nested_id = "hya/tool/skill/mcp-nest";
+    let nested_stable = format!("bundle:{nested_id}/skill/docs");
+    let nested_reg = reg_for(&[one(
+        nested_id,
+        "nested-agent",
+        view(&[&nested_stable], &[]),
+        vec![skill_res(
+            nested_id,
+            "docs",
+            "NESTED_BUNDLE_BODY",
+            &["handbook"],
+        )],
+    )]);
+    let nested = basic(&bind(&nested_reg), "nested-agent");
+    for name in ["docs", "handbook", nested_stable.as_str()] {
+        assert!(
+            nested
+                .skills()
+                .iter()
+                .any(|s| s.name == name && s.content.contains("NESTED_BUNDLE_BODY")),
+            "missing `{name}`"
+        );
+    }
+}
+
+#[test]
+fn bundle_local_skill_inlining_and_prompt_spelling_dedup() {
+    let stable = "bundle:hya/none-inline/skill/bundle-skill";
+    let reg = reg_for(&[one(
+        "hya/none-inline",
+        "none-agent",
+        view(&[stable], &[]),
+        vec![skill_res(
+            "hya/none-inline",
+            "bundle-skill",
+            "INLINE_BODY_MARKER",
+            &["bundle-skill-alias"],
+        )],
+    )]);
+    reg.refresh(|c| c.register_tool(Arc::new(StubTool::noop("dynamic_marker"))))
+        .unwrap();
+    let b = bind(&reg);
+    let pol = b.agent_resource_policy("none-agent").unwrap();
+    assert_eq!(pol.selected_bundle_skill_ids(), &[stable.to_string()]);
+
+    let c = b.compile_agent_resources(&pol).unwrap();
+    assert!(domain_tool_names(&c).is_empty() && has_mail_only_read(&c));
+    for absent in ["skill", "dynamic_marker", "bash"] {
+        assert!(c.resolve_tool(absent).is_none(), "`{absent}` leaked");
+    }
+    let section = c.skills_prompt_section().expect("inlined skill section");
+    assert!(
+        section.contains("bundle-skill")
+            && (section.contains("bundle-skill-alias") || section.contains(stable))
+    );
+    assert_eq!(section.matches("INLINE_BODY_MARKER").count(), 1);
+    assert_eq!(
+        c.skills()
+            .iter()
+            .map(|s| &s.path)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        1
+    );
+    assert!(
+        c.skills().iter().any(|s| s.name == "bundle-skill")
+            && c.skills().iter().any(|s| s.name == stable)
+    );
+}
+
+#[test]
+fn skill_facade_aliasing_and_missing_facade_rejection() {
+    let stable = "bundle:hya/facade-alias/skill/bundle-skill";
+    let reg = reg_for(&[one(
+        "hya/facade-alias",
+        "facade-alias",
+        view_with(
+            &["harness:tool/skill", stable],
+            &[],
+            &[("load_skill", "harness:tool/skill")],
+            None,
+        ),
+        vec![skill_res(
+            "hya/facade-alias",
+            "bundle-skill",
+            "SHOULD_NOT_INLINE",
+            &[],
+        )],
+    )]);
+    let c = full(&bind(&reg), "facade-alias");
+    assert!(c.resolve_tool("load_skill").is_some() && c.resolve_tool("skill").is_none());
+    let section = c.skills_prompt_section().expect("on-demand index");
+    assert!(!section.contains("SHOULD_NOT_INLINE") && section.contains("bundle-skill"));
+
+    let wd = TempSkillDir::new(
+        "no-facade",
+        "workdir-only",
+        &skill_md("workdir-only", "MUST_NOT_INLINE"),
+    );
+    let nf_reg = reg_for(&[one(
+        "hya/no-facade",
+        "no-facade",
+        view(&[], &["harness:tool/skill"]),
+        Vec::new(),
+    )]);
+    match compile_on(
+        &nf_reg.bind_turn(wd.path()).unwrap(),
+        "no-facade",
+        Some(AgentToolPlane::Full),
+    ) {
+        Err(BundleError::InvalidManifest { detail, .. }) => {
+            assert!(detail.contains("skill") || detail.contains("facade"))
+        }
+        Err(BundleError::UnknownResourceReference { .. }) => {}
+        Ok(_) => panic!("selected harness skill without facade must fail"),
+        Err(other) => panic!("expected typed facade rejection, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 8. Bundle sidecar collisions and disjoint bundle policies
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bundle_sidecar_collision_requires_provider_safe_names_for_both_targets() {
+    let bid = "hya/sidecar-map";
+    let mut bundle = one(bid, "sidecar-agent", ResourceView::default(), Vec::new());
+    bundle.tools.push(res(
+        bid,
+        "tool",
+        "echo",
+        "tools/echo.js",
+        "export default {}".into(),
+        &[],
+    ));
+    let tools = hya_tool_loader::builtins();
+    tools
+        .register_with_permission(Arc::new(StubTool::noop("echo")), ToolPermission::Tool)
+        .unwrap();
+    let b = bind(&reg_with(tools, catalog_from(&[bundle])));
+    let mut pol = b
+        .agent_resource_policy_on_plane("sidecar-agent", AgentToolPlane::Full)
+        .unwrap();
+    let bundle_echo = format!("bundle:{bid}/tool/echo");
+    let sidecar = ResolvedTool {
+        tool: Arc::new(StubTool::noop(&bundle_echo)),
+        permission: ToolPermission::Tool,
+    };
+
+    match b.compile_agent_resources_with_sidecar_tools(&pol, std::slice::from_ref(&sidecar)) {
+        Err(BundleError::InvalidManifest { detail, .. }) => {
+            assert!(
+                detail.contains("harness:tool/echo")
+                    && detail.contains("no provider-safe schema name")
+            );
+        }
+        Ok(_) => panic!("selected harness Tool must not vanish"),
+        Err(other) => panic!("unexpected {other:?}"),
+    }
+
+    Arc::make_mut(&mut pol.resource_view)
+        .aliases
+        .insert("harness_echo".into(), "harness:tool/echo".into());
+    let c = b
+        .compile_agent_resources_with_sidecar_tools(&pol, &[sidecar])
+        .unwrap();
+    let names = schema_names(&c);
+    assert!(names.contains("echo") && names.contains("harness_echo"));
+    assert!(!names.contains(&bundle_echo) && !names.contains("harness:tool/echo"));
+    assert_eq!(c.resolve_tool("echo").unwrap().tool.name(), bundle_echo);
+    assert_eq!(
+        c.resolve_tool(&bundle_echo).unwrap().tool.name(),
+        bundle_echo
+    );
+    assert_eq!(c.resolve_tool("harness_echo").unwrap().tool.name(), "echo");
+    assert_eq!(
+        c.resolve_tool("harness:tool/echo").unwrap().tool.name(),
+        "echo"
+    );
+}
+
+#[test]
+fn captured_agent_resource_policy_retains_disjoint_bundle_tool_and_hook_ids() {
+    let mk = |bid: &str, aid: &str, tool: &str, hook: &str| {
+        let tid = format!("bundle:{bid}/tool/{tool}");
+        let hid = format!("bundle:{bid}/hook/{hook}");
+        let mut ag = agent(aid, view(&[&tid], &[]));
+        ag.hook_refs = vec![hid.clone()];
+        let mut b = bundle_with_agent(bid, ag, Vec::new());
+        b.tools = vec![res(
+            bid,
+            "tool",
+            tool,
+            &format!("extensions/{tool}.js"),
+            "export default {}".into(),
+            &[],
+        )];
+        b.hooks = vec![res(
+            bid,
+            "hook",
+            hook,
+            &format!("extensions/{hook}.js"),
+            "export default {}".into(),
+            &[],
+        )];
+        (b, tid, hid)
+    };
+    let (ab, at, ah) = mk("hya/disjoint-alpha", "alpha-agent", "alpha", "event");
+    let (bb, bt, bh) = mk(
+        "hya/disjoint-beta",
+        "beta-agent",
+        "beta",
+        "tool.execute.before",
+    );
+
+    let b = bind(&reg_for(&[ab, bb]));
+    let ap = b.agent_resource_policy("alpha-agent").unwrap();
+    let bp = b.agent_resource_policy("beta-agent").unwrap();
+    assert_eq!(ap.selected_bundle_tool_ids(), std::slice::from_ref(&at));
+    assert_eq!(bp.selected_bundle_tool_ids(), std::slice::from_ref(&bt));
+    assert_eq!(ap.canonical_hook_ids(), std::slice::from_ref(&ah));
+    assert_eq!(bp.canonical_hook_ids(), std::slice::from_ref(&bh));
+
+    let sc = |name: &str| ResolvedTool {
+        tool: Arc::new(StubTool::noop(name)),
+        permission: ToolPermission::Tool,
+    };
+    let ac = b
+        .compile_agent_resources_with_sidecar_tools(&ap, &[sc(&at)])
+        .unwrap();
+    let bc = b
+        .compile_agent_resources_with_sidecar_tools(&bp, &[sc(&bt)])
+        .unwrap();
+    assert_eq!(ac.canonical_hook_ids(), &[ah]);
+    assert_eq!(bc.canonical_hook_ids(), &[bh]);
+
+    let (an, bn) = (domain_tool_names(&ac), domain_tool_names(&bc));
+    assert!(an.contains("alpha") && an.contains(at.as_str()));
+    assert!(bn.contains("beta") && bn.contains(bt.as_str()));
+    assert!(an.is_disjoint(&bn));
+}
+
+// ---------------------------------------------------------------------------
+// 9. Handle scheme claims and dispatch
+// ---------------------------------------------------------------------------
+
+#[test]
+fn plugin_scheme_claims_dispatch_within_view_and_reject_writes_or_missing_owner() {
+    let reg = reg_for(&[one(
+        "hya/scheme",
+        "scheme-agent",
+        ResourceView::default(),
+        Vec::new(),
+    )]);
+    let owner = ReferenceRecordingTool::new("scheme__query");
+    reg.refresh(|c| {
+        c.upsert_sources(vec![
+            RuntimeSource::new(
+                RuntimeSourceId::plugin("scheme-src"),
+                [0; 32],
+                Arc::new(()),
+                vec![RuntimeSourceExport::tool(
+                    "scheme__query",
+                    "scheme__query",
+                    Vec::new(),
+                    owner.clone(),
+                    ToolPermission::ReadOnly,
+                )],
+            )
+            .with_schemas(vec![SourceSchema {
+                scheme: "db".into(),
+                canonical_tool: "scheme__query".into(),
+                writable: false,
+            }]),
+        ])
+    })
+    .unwrap();
+
+    let wd = Path::new("/tmp/hya-scheme-dispatch");
+    let b = reg.bind_turn(wd).unwrap();
+    assert_eq!(
+        b.schemes().get("db").map(SchemeBinding::canonical_tool),
+        Some("scheme__query")
+    );
+    assert_eq!(
+        b.scheme_chain("db"),
+        vec![("plugin:scheme-src".into(), "scheme__query".into())]
+    );
+    assert_eq!(reg.effective_schemes().schemes.len(), 1);
+    let ctx = dispatch_ctx(wd);
+
+    let f = full(&b, "scheme-agent");
+    let out = futures::executor::block_on(
+        f.resolve_tool("read")
+            .unwrap()
+            .tool
+            .execute(&ctx, json!({"path": "db://x/y?head=2"})),
+    )
+    .unwrap();
+    assert_eq!(
+        out.get("output").and_then(Value::as_str),
+        Some("owner body")
+    );
+    assert_eq!(owner.references(), vec!["db://x/y?head=2".to_string()]);
+
+    let w_err = futures::executor::block_on(
+        f.resolve_tool("write")
+            .unwrap()
+            .tool
+            .execute(&ctx, json!({"path": "db://x/y", "content": "row"})),
+    )
+    .unwrap_err();
+    assert!(w_err.to_string().contains("db:// is read-only"), "{w_err}");
+    assert_eq!(owner.references().len(), 1);
+
+    let r = compile_on(&b, "scheme-agent", Some(AgentToolPlane::InternalPublic)).unwrap();
+    assert!(r.resolve_tool("scheme__query").is_none());
+    let m_err = futures::executor::block_on(
+        r.resolve_tool("read")
+            .unwrap()
+            .tool
+            .execute(&ctx, json!({"path": "db://x/y"})),
+    )
+    .unwrap_err();
+    assert!(
+        m_err.to_string().contains("unknown handle scheme"),
+        "{m_err}"
+    );
+    assert_eq!(owner.references().len(), 1);
+}
+
+#[test]
+fn bundle_agent_view_with_sidecar_owner_reads_registered_scheme() {
+    let mut bundle = one(
+        "hya/vecdb",
+        "vecdb-lead",
+        view(&["query", "harness:tool/read"], &[]),
+        Vec::new(),
+    );
+    bundle.tools.push(res(
+        "hya/vecdb",
+        "tool",
+        "query",
+        "extensions/runtime.js",
+        "export default {}".into(),
+        &[],
+    ));
+    let reg = reg_for(&[bundle]);
+    reg.refresh(|c| {
+        c.replace_sources_of_kind(
+            RuntimeSourceKind::Bundle,
+            vec![
+                RuntimeSource::new(
+                    RuntimeSourceId::bundle("hya/vecdb"),
+                    [7; 32],
+                    Arc::new(()),
+                    Vec::new(),
+                )
+                .with_schemas(vec![SourceSchema {
+                    scheme: "db".into(),
+                    canonical_tool: "bundle:hya/vecdb/tool/query".into(),
+                    writable: false,
+                }]),
+            ],
+        )
+    })
+    .unwrap();
+
+    let wd = Path::new("/tmp/hya-bundle-scheme-dispatch");
+    let b = reg.bind_turn(wd).unwrap();
+    let owner = ReferenceRecordingTool::new("bundle:hya/vecdb/tool/query");
+    let c = b
+        .compile_agent_resources_with_sidecar_tools(
+            &b.agent_resource_policy("vecdb-lead").unwrap(),
+            &[ResolvedTool {
+                tool: owner.clone(),
+                permission: ToolPermission::Tool,
+            }],
+        )
+        .unwrap();
+    let out = futures::executor::block_on(
+        c.resolve_tool("read")
+            .unwrap()
+            .tool
+            .execute(&dispatch_ctx(wd), json!({"path": "db://rows/42"})),
+    )
+    .unwrap();
+    assert_eq!(
+        out.get("output").and_then(Value::as_str),
+        Some("owner body")
+    );
+    assert_eq!(owner.references(), vec!["db://rows/42".to_string()]);
+}
+
+// ---------------------------------------------------------------------------
+// 10. Coordination tools injection (harness-owned, injected at startup)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn coordination_injection_matrix_for_views_spawn_rights_and_tool_families() {
+    let narrow = schema_names(
+        &compile_bundle_agent(
+            hya_tool_loader::builtins(),
+            agent("narrow-scout", view(&["harness:tool/grep"], &[])),
+        )
+        .unwrap(),
+    );
+    for ok in ["grep", "report", "wait", "send", "list_channel", "read"] {
+        assert!(narrow.contains(ok), "missing `{ok}`");
+    }
+    for absent in ["task", "archive", "bash", "glob", "edit", "write"] {
+        assert!(!narrow.contains(absent), "`{absent}` leaked");
+    }
+
+    let lead = schema_names(
+        &compile_bundle_agent(
+            hya_tool_loader::builtins(),
+            PreparedAgent {
+                can_spawn: vec![AgentName::new("hya-scout")],
+                ..agent("narrow-lead", view(&["harness:tool/grep"], &[]))
+            },
+        )
+        .unwrap(),
+    );
+    assert!(lead.contains("task") && lead.contains("archive"));
+
+    let leaf = schema_names(
+        &compile_bundle_agent(
+            hya_tool_loader::builtins(),
+            agent("leaf-worker", ResourceView::default()),
+        )
+        .unwrap(),
+    );
+    assert!(
+        leaf.contains("bash")
+            && leaf.contains("wait")
+            && !leaf.contains("task")
+            && !leaf.contains("archive")
+    );
+
+    let quiet = schema_names(
+        &compile_bundle_agent(
+            hya_tool_loader::from_tool_families(&WITHOUT_CHANNEL_TOOLS),
+            agent("quiet-scout", view(&["harness:tool/grep"], &[])),
+        )
+        .unwrap(),
+    );
+    assert_eq!(quiet, BTreeSet::from(["grep".into(), "wait".into()]));
+
+    let explicit = compile_bundle_agent(
         hya_tool_loader::builtins(),
         agent(
             "explicit-scout",
@@ -3685,87 +2164,108 @@ fn explicit_coordination_entries_dedupe_with_the_injected_set() {
         ),
     )
     .unwrap();
-    let schemas = compiled.tool_schemas();
+    let schemas = explicit.tool_schemas();
     for name in ["report", "wait", "list_channel"] {
         assert_eq!(
-            schemas
-                .iter()
-                .filter(|schema| schema.name.as_str() == name)
-                .count(),
+            schemas.iter().filter(|s| s.name.as_str() == name).count(),
             1,
-            "`{name}` must be advertised exactly once"
+            "`{name}` duplicated"
         );
     }
 }
 
 #[test]
-fn deny_removes_a_safe_coordination_tool() {
-    let compiled = compile_bundle_agent(
+fn coordination_read_injection_and_deny_rules() {
+    let read_desc = |c: &CompiledResourceView| {
+        c.tool_schemas()
+            .into_iter()
+            .find(|s| s.name.as_str() == "read")
+            .unwrap()
+            .description
+    };
+    let mail_only = compile_bundle_agent(
         hya_tool_loader::builtins(),
-        PreparedAgent {
-            can_spawn: vec![AgentName::new("hya-scout")],
-            ..agent(
-                "no-task-lead",
-                view(&["harness:tool/grep"], &["harness:tool/task", "send"]),
-            )
-        },
+        agent("mail-reader", view(&["harness:tool/grep"], &[])),
     )
     .unwrap();
-    let names = schema_names(&compiled);
+    assert!(read_desc(&mail_only).contains("channel://"));
+    let err = futures::executor::block_on(mail_only.resolve_tool("read").unwrap().tool.execute(
+        &dispatch_ctx(Path::new("/tmp/hya-coord")),
+        json!({"path": "Cargo.toml"}),
+    ))
+    .unwrap_err();
     assert!(
-        !names.contains("task") && !names.contains("send"),
-        "{names:?}"
+        matches!(&err, ToolError::Input(m) if m.contains("channel://")),
+        "{err:?}"
     );
-    assert!(
-        names.contains("archive") && names.contains("report"),
-        "{names:?}"
-    );
-}
 
-#[test]
-fn deny_of_report_is_rejected() {
-    let error = compile_bundle_agent(
+    let full_read = compile_bundle_agent(
         hya_tool_loader::builtins(),
-        agent("stuck-scout", view(&[], &["harness:tool/report"])),
+        agent("file-reader", view(&["harness:tool/read"], &[])),
     )
-    .err()
-    .expect("denying report must be rejected");
-    assert!(
-        matches!(&error, BundleError::InvalidManifest { detail, .. } if detail.contains("report")),
-        "{error:?}"
-    );
-}
+    .unwrap();
+    assert!(read_desc(&full_read).starts_with("Read a file"));
 
-#[test]
-fn deny_of_read_keeps_the_channel_mail_path() {
-    let compiled = compile_bundle_agent(
+    let denied_read = compile_bundle_agent(
         hya_tool_loader::builtins(),
         agent("no-files", view(&[], &["harness:tool/read"])),
     )
     .unwrap();
-    let read = compiled
-        .tool_schemas()
-        .into_iter()
-        .find(|schema| schema.name.as_str() == "read")
-        .expect("channel read survives a read deny");
+    assert!(read_desc(&denied_read).contains("channel://"));
+
+    let reduced = schema_names(
+        &compile_bundle_agent(
+            hya_tool_loader::builtins(),
+            PreparedAgent {
+                can_spawn: vec![AgentName::new("hya-scout")],
+                ..agent(
+                    "no-task-lead",
+                    view(&["harness:tool/grep"], &["harness:tool/task", "send"]),
+                )
+            },
+        )
+        .unwrap(),
+    );
     assert!(
-        read.description.contains("channel://"),
-        "{}",
-        read.description
+        !reduced.contains("task")
+            && !reduced.contains("send")
+            && reduced.contains("archive")
+            && reduced.contains("report")
+    );
+
+    let report_err = compile_bundle_agent(
+        hya_tool_loader::builtins(),
+        agent("stuck-scout", view(&[], &["harness:tool/report"])),
+    )
+    .err()
+    .unwrap();
+    assert!(
+        matches!(&report_err, BundleError::InvalidManifest { detail, .. } if detail.contains("report"))
     );
 }
 
 #[test]
-fn builtin_agents_keep_every_coordination_tool() {
-    let catalog = Arc::new(TestCatalog::from_prepared(&[]).unwrap());
-    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
-    let binding = registry
-        .bind_turn(&PathBuf::from("/tmp/hya-coordination-tools"))
-        .unwrap();
-    let policy = binding.agent_resource_policy("hya-main").unwrap();
-    let compiled = binding.compile_agent_resources(&policy).unwrap();
-    let names = schema_names(&compiled);
-    for expected in [
+fn builtin_agent_views_enforce_read_only_and_coordination_sets() {
+    let b = bind(&reg_for(&[]));
+    let names = |id: &str| schema_names(&basic(&b, id));
+    let writes = ["write", "edit", "apply_patch", "bash"];
+
+    let plan = names("hya-plan");
+    assert!(
+        writes.iter().all(|d| !plan.contains(*d)) && plan.contains("grep") && plan.contains("task")
+    );
+
+    let scout = names("hya-scout");
+    assert!(
+        writes
+            .into_iter()
+            .chain(["task", "archive"])
+            .all(|d| !scout.contains(d))
+    );
+    assert!(scout.contains("grep") && scout.contains("read"));
+
+    let main = names("hya-main");
+    for k in writes.into_iter().chain([
         "task",
         "archive",
         "wait",
@@ -3773,11 +2273,7 @@ fn builtin_agents_keep_every_coordination_tool() {
         "send",
         "list_channel",
         "read",
-    ] {
-        assert!(names.contains(expected), "missing `{expected}`: {names:?}");
+    ]) {
+        assert!(main.contains(k), "hya-main lacks `{k}`");
     }
-}
-
-fn skill_md(name: &str, body: &str) -> String {
-    format!("---\nname: {name}\ndescription: {name}\n---\n{body}\n")
 }

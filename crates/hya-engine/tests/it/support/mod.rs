@@ -1,19 +1,52 @@
-#![allow(dead_code, clippy::expect_used)]
+#![allow(dead_code, clippy::expect_used, clippy::unwrap_used)]
 
+use std::ffi::OsStr;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use hya_bundle::{
     AgentRole, Bundle, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, ResourceView,
 };
-use hya_engine::{AgentCatalog, RuntimeRegistry};
-use hya_proto::{AgentName, ToolName, ToolSchema};
-use hya_tool::{Tool, ToolCtx, ToolError, ToolRegistry};
+use hya_engine::{
+    AgentCatalog, AgentSpec, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
+    CommandExecuteBeforeOutcome, CreateSession, EventBus, HookDispatcher, MessageUserBeforeInput,
+    MessageUserBeforeOutcome, RuntimeRegistry, SessionEngine, TextCompleteInput,
+    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
+    ToolExecuteBeforeOutcome, ToolOutcomeNative,
+};
+use hya_proto::{
+    AgentName, Envelope, ModelRef, PartProjection, Role, SessionId, SessionKind, ToolName,
+    ToolSchema,
+};
+use hya_provider::{Provider, ProviderRouter};
+use hya_store::SessionStore;
+use hya_tool::{
+    PermissionPlane, PermissionRules, SkillDiscovery, Tool, ToolCtx, ToolError, ToolRegistry,
+};
 use serde_json::{Value, json};
 
 static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
+
+/// Zero-delay retry schedule matching [`hya_engine::kernel::ROUND_RETRY_WAITS`] length
+/// so retry/fallback integration tests run without wall-clock sleeps.
+pub const ZERO_RETRY_WAITS: [Duration; 8] = [Duration::ZERO; 8];
+
+/// Discover skills only from `workdir` and `roots` (plus bundled builtins),
+/// never reading `$HOME`, so tests never mutate process-global env vars.
+pub fn discover_local_skills(workdir: Option<&Path>, roots: &[PathBuf]) -> SkillDiscovery {
+    let project_dirs = hya_engine::catalog_scope::inert_catalog_dirs(workdir, roots);
+    let mut dirs = Vec::new();
+    dirs.extend(project_dirs.iter().map(|d| d.join(".hya/skills")));
+    dirs.extend(project_dirs.iter().map(|d| d.join(".agents/skills")));
+    let mut discovery = hya_app::skill_catalog::discover_skills_from_dirs_with_diagnostics(&dirs);
+    discovery.skills = hya_app::skill_catalog::merge_skill_catalog(discovery.skills);
+    discovery
+}
 
 /// One installed bundle per requested agent, over the compiled-in built-ins.
 ///
@@ -68,7 +101,6 @@ pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> 
             permission_modes: vec![],
         })
         .collect::<Vec<_>>();
-    let bundles = bundles.into_iter().collect::<Vec<_>>();
     let catalog = BundleCatalog::from_prepared(&bundles);
     let Ok(catalog) = catalog else {
         panic!("test catalog must be valid: {catalog:?}");
@@ -88,18 +120,153 @@ pub fn builtin_only_catalog() -> Arc<AgentCatalog> {
 
 /// Default runtime for root/main turn integration fixtures.
 ///
-/// Uses the compiled-in built-in roster only: `build` / `plan` / `general` keep
-/// `prompt = None` so root turns preserve the already composed base system
-/// prompt (AGENTS/context), and the reserved system agents stay available for
-/// exact lookup without entering any ordinary spawn roster.
+/// Uses the compiled-in built-in roster and workdir/root-only skill discovery
+/// (never reading `$HOME`) so tests stay hermetic and parallel-safe.
 pub fn test_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegistry> {
+    test_runtime_with_catalog(tools, builtin_only_catalog())
+}
+
+/// Runtime backed by a custom agent catalog and workdir/root-only skill discovery.
+pub fn test_runtime_with_catalog(
+    tools: Arc<ToolRegistry>,
+    catalog: Arc<AgentCatalog>,
+) -> Arc<RuntimeRegistry> {
     Arc::new(
-        RuntimeRegistry::from_snapshot(tools.snapshot(), builtin_only_catalog())
-            .with_skill_discovery(
-                hya_app::skill_catalog::discover,
-                hya_app::skill_catalog::builtin_skills,
-            ),
+        RuntimeRegistry::from_snapshot(tools.snapshot(), catalog).with_skill_discovery(
+            discover_local_skills,
+            hya_app::skill_catalog::builtin_skills,
+        ),
     )
+}
+
+/// Compact `SessionEngine` with in-memory SQLite, builtin tools, and zero retry backoff.
+pub async fn engine_with_provider(
+    provider: Arc<dyn Provider>,
+    rules: PermissionRules,
+) -> SessionEngine {
+    engine_with_router_and_runtime(
+        Arc::new(ProviderRouter::new().with(provider)),
+        test_runtime(Arc::new(hya_tool_loader::builtins())),
+        rules,
+    )
+    .await
+}
+
+/// Compact `SessionEngine` with custom router/runtime and zero retry backoff.
+pub async fn engine_with_router_and_runtime(
+    router: Arc<ProviderRouter>,
+    runtime: Arc<RuntimeRegistry>,
+    rules: PermissionRules,
+) -> SessionEngine {
+    let store = SessionStore::connect_memory().await.expect("memory store");
+    let (permission, _rx) = PermissionPlane::new(rules);
+    SessionEngine::new(store, router, runtime, permission, EventBus::default())
+        .with_round_retry_waits(&ZERO_RETRY_WAITS)
+}
+
+/// Create a root project session on `engine`.
+pub async fn create_root_session(
+    engine: &SessionEngine,
+    agent: &str,
+    model: &str,
+    workdir: &Path,
+) -> SessionId {
+    engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new(agent),
+            model: ModelRef::new(model),
+            workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: SessionKind::Project,
+        })
+        .await
+        .expect("create root session")
+}
+
+/// Build an ordinary `AgentSpec` for tests.
+pub fn agent_spec(name: &str, model: &str, workdir: impl Into<PathBuf>) -> AgentSpec {
+    AgentSpec {
+        name: AgentName::new(name),
+        model: ModelRef::new(model),
+        system_prompt: String::new(),
+        workdir: workdir.into(),
+        reasoning: None,
+    }
+}
+
+/// Join every assistant text part currently projected on `session`.
+pub async fn assistant_text(engine: &SessionEngine, session: SessionId) -> String {
+    let projection = engine
+        .store()
+        .read_projection(session)
+        .await
+        .expect("read projection");
+    projection
+        .session
+        .messages
+        .iter()
+        .filter(|m| m.role == Role::Assistant)
+        .flat_map(|m| &m.parts)
+        .filter_map(|p| match p {
+            PartProjection::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Poll `check` on a tight 5ms cadence until it returns `true` or `timeout` elapses.
+pub async fn poll_until<F, Fut>(timeout: Duration, mut check: F) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if check().await {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// Run a test requiring process-global state (such as `hya_tool::deadline::install`
+/// or `hya_store::bench::snapshot`) inside an isolated child invocation of the
+/// current test binary when running under `cargo test`, or directly when already
+/// isolated by `cargo nextest` or the child env marker.
+pub async fn run_isolated_subproc<F, Fut>(key: &str, exact_test_name: &str, body: F)
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let in_subproc = std::env::var_os("HYA_TEST_SUBPROC").as_deref() == Some(OsStr::new(key));
+    let in_nextest = std::env::var_os("NEXTEST_RUN_ID").is_some();
+    if in_subproc || in_nextest {
+        body().await;
+        return;
+    }
+    let exe = std::env::current_exe().expect("current test binary path");
+    let output = Command::new(exe)
+        .env("HYA_TEST_SUBPROC", key)
+        .args([
+            "--exact",
+            exact_test_name,
+            "--test-threads=1",
+            "--nocapture",
+        ])
+        .output()
+        .expect("spawn isolated test subprocess");
+    assert!(
+        output.status.success(),
+        "isolated test `{exact_test_name}` failed (status={:?})\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
 }
 
 pub struct TestDir {
@@ -122,11 +289,15 @@ impl TestDir {
     }
 
     pub fn write_skill(&self, name: &str) {
+        self.write_skill_with(name, &format!("{name} skill"), &format!("{name} body\n"));
+    }
+
+    pub fn write_skill_with(&self, name: &str, description: &str, body: &str) {
         let dir = self.path.join(".hya/skills").join(name);
         std::fs::create_dir_all(&dir).expect("create skill directory");
         std::fs::write(
             dir.join("SKILL.md"),
-            format!("---\nname: {name}\ndescription: {name} skill\n---\n{name} body\n"),
+            format!("---\nname: {name}\ndescription: {description}\n---\n{body}"),
         )
         .expect("write skill");
     }
@@ -170,6 +341,53 @@ impl Tool for MarkerTool {
 
     async fn execute(&self, _ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {
         Ok(json!({ "ok": true }))
+    }
+}
+
+/// Replaces the first tool result with `{"masked": true}` and passes subsequent results through.
+#[derive(Default)]
+pub struct MaskFirstResult(AtomicBool);
+
+#[async_trait]
+impl HookDispatcher for MaskFirstResult {
+    fn dispatch_event(&self, _envelope: &Envelope) {}
+
+    async fn command_execute_before(
+        &self,
+        input: CommandExecuteBeforeInput,
+    ) -> CommandExecuteBeforeOutcome {
+        CommandExecuteBeforeOutcome::Continue { text: input.text }
+    }
+
+    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
+        TextCompleteOutcome::Continue { text: input.text }
+    }
+
+    async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
+        MessageUserBeforeOutcome::Continue { text: input.text }
+    }
+
+    async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
+        ChatParamsOutcome::Continue {
+            request: input.request,
+        }
+    }
+
+    async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
+        ToolExecuteBeforeOutcome::Continue { input: input.input }
+    }
+
+    async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
+        ToolExecuteAfterOutcome::Continue {
+            result: if self.0.swap(true, Ordering::SeqCst) {
+                input.result
+            } else {
+                ToolOutcomeNative::Ok {
+                    output: json!({ "masked": true }),
+                    time_ms: 0,
+                }
+            },
+        }
     }
 }
 

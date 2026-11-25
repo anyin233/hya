@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use hya_proto::{MessageId, ModelRef, SessionId, ToolCallId};
 use hya_provider::{ProviderRouter, ReasoningEffort};
@@ -200,6 +201,8 @@ pub struct SessionEngine {
     runtime_owner: hya_proto::OwnerRunId,
     /// Single-active-turn registry shared by every clone of this engine.
     turn_gate: Arc<turn_gate::TurnGate>,
+    /// Per-retry backoff schedule for transient/interrupted provider rounds.
+    round_retry_waits: &'static [Duration],
     #[cfg(test)]
     mail_pre_append_gate: Option<Arc<MailPreAppendGate>>,
 }
@@ -250,6 +253,7 @@ impl Clone for SessionEngine {
             ),
             runtime_owner: self.runtime_owner,
             turn_gate: Arc::clone(&self.turn_gate),
+            round_retry_waits: self.round_retry_waits,
             #[cfg(test)]
             mail_pre_append_gate: self.mail_pre_append_gate.clone(),
         }
@@ -338,6 +342,7 @@ impl SessionEngine {
             reviver: RwLock::new(None),
             runtime_owner: hya_proto::OwnerRunId::new(),
             turn_gate: Arc::new(turn_gate::TurnGate::default()),
+            round_retry_waits: &crate::kernel::ROUND_RETRY_WAITS,
             #[cfg(test)]
             mail_pre_append_gate: None,
         };
@@ -627,6 +632,15 @@ impl SessionEngine {
     #[must_use]
     pub fn with_token_accounting(mut self, accounting: TokenAccounting) -> Self {
         self.token_accounting = accounting;
+        self
+    }
+
+    /// Override the per-retry backoff schedule for provider round retries.
+    ///
+    /// Defaults to [`crate::kernel::ROUND_RETRY_WAITS`].
+    #[must_use]
+    pub fn with_round_retry_waits(mut self, waits: &'static [Duration]) -> Self {
+        self.round_retry_waits = waits;
         self
     }
 

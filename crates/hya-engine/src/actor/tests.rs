@@ -25,7 +25,7 @@ async fn root(engine: &SessionEngine) -> SessionId {
             parent: None,
             agent: AgentName::new("hya-main"),
             model: ModelRef::new("hya/offline"),
-            workdir: ".".into(),
+            workdir: "/tmp".into(),
             project: None,
             kind: SessionKind::Project,
         })
@@ -33,11 +33,11 @@ async fn root(engine: &SessionEngine) -> SessionId {
         .unwrap()
 }
 
-fn activation_runtime(engine: &SessionEngine) -> (AgentSpec, ResolvedResidentRuntime) {
+fn runtime_for(engine: &SessionEngine) -> (AgentSpec, ResolvedResidentRuntime) {
     let agent = AgentSpec {
         name: AgentName::new("hya-scout"),
         model: ModelRef::new("hya/offline"),
-        workdir: ".".into(),
+        workdir: "/tmp".into(),
         system_prompt: String::new(),
         reasoning: None,
     };
@@ -46,112 +46,209 @@ fn activation_runtime(engine: &SessionEngine) -> (AgentSpec, ResolvedResidentRun
     (agent, (binding, Arc::from([]), resources, None))
 }
 
-async fn parked(supervisor: &ResidentSupervisor, root: SessionId) -> (SessionId, String) {
-    let agent = AgentSpec {
-        name: AgentName::new("hya-scout"),
-        model: ModelRef::new("hya/offline"),
-        workdir: ".".into(),
-        system_prompt: String::new(),
-        reasoning: None,
-    };
-    let binding = supervisor.engine.bind_runtime(&agent.workdir).unwrap();
-    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
-    let (session, handle, _) = supervisor
-        .spawn_resident_parked(
-            root,
-            agent,
-            (binding, Arc::from([]), resources, None),
-            "parked".into(),
-            None,
-            None,
+async fn parked(sup: &ResidentSupervisor, parent: SessionId) -> (SessionId, String) {
+    let (agent, rt) = runtime_for(&sup.engine);
+    let (s, h, _) = sup
+        .spawn_resident_parked(parent, agent, rt, "parked".into(), None, None)
+        .await
+        .unwrap();
+    (s, h)
+}
+
+async fn mail_h(
+    engine: &SessionEngine,
+    from: SessionId,
+    to: &str,
+    body: &str,
+) -> Result<hya_tool::MailReceipt, CoreError> {
+    engine
+        .mail_send(
+            from,
+            MailEndpoint::Handle(to.into()),
+            MailKind::Message,
+            body.into(),
         )
         .await
-        .unwrap();
-    (session, handle)
+}
+
+async fn act(
+    sup: &ResidentSupervisor,
+    root: SessionId,
+    child: SessionId,
+    body: &str,
+    guidance: &str,
+) -> Result<ActivationWaiter, CoreError> {
+    sup.activate(
+        root,
+        child,
+        runtime_for(&sup.engine),
+        body.into(),
+        Arc::from(guidance),
+        None,
+        None,
+    )
+    .await
+}
+
+async fn dm_of(engine: &SessionEngine, root: SessionId, a: &str, b: &str) -> String {
+    crate::engine::dm_channel_between(&engine.read_projection(root).await.unwrap(), a, b).unwrap()
+}
+
+async fn active_ids(engine: &SessionEngine) -> Vec<SessionId> {
+    engine.store().active_actor_ids().await.unwrap()
+}
+
+async fn archived_handles(engine: &SessionEngine, root: SessionId) -> Vec<String> {
+    engine
+        .replay(root)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| match e.event {
+            Event::AgentArchived { handle, .. } => Some(handle),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn drain_sup(sup: &ResidentSupervisor) {
+    sup.drain(FinishCause::Shutdown, DRAIN_DEADLINE).await;
+}
+
+struct PauseHook {
+    on_start: bool,
+    target: Mutex<Option<SessionId>>,
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+impl PauseHook {
+    fn chat_params() -> (Arc<Self>, Arc<Notify>, Arc<Notify>) {
+        let (e, r) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        (
+            Arc::new(Self {
+                on_start: false,
+                target: Mutex::new(None),
+                entered: e.clone(),
+                release: r.clone(),
+            }),
+            e,
+            r,
+        )
+    }
+    fn session_start() -> (Arc<Self>, Arc<Notify>, Arc<Notify>) {
+        let (e, r) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        (
+            Arc::new(Self {
+                on_start: true,
+                target: Mutex::new(None),
+                entered: e.clone(),
+                release: r.clone(),
+            }),
+            e,
+            r,
+        )
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::hooks::HookDispatcher for PauseHook {
+    fn dispatch_event(&self, _: &hya_proto::Envelope) {}
+    async fn command_execute_before(
+        &self,
+        i: crate::hooks::CommandExecuteBeforeInput,
+    ) -> crate::hooks::CommandExecuteBeforeOutcome {
+        crate::hooks::NoopHookHost.command_execute_before(i).await
+    }
+    async fn text_complete(
+        &self,
+        i: crate::hooks::TextCompleteInput,
+    ) -> crate::hooks::TextCompleteOutcome {
+        crate::hooks::NoopHookHost.text_complete(i).await
+    }
+    async fn message_user_before(
+        &self,
+        i: crate::hooks::MessageUserBeforeInput,
+    ) -> crate::hooks::MessageUserBeforeOutcome {
+        crate::hooks::NoopHookHost.message_user_before(i).await
+    }
+    async fn tool_execute_before(
+        &self,
+        i: crate::hooks::ToolExecuteBeforeInput,
+    ) -> crate::hooks::ToolExecuteBeforeOutcome {
+        crate::hooks::NoopHookHost.tool_execute_before(i).await
+    }
+    async fn tool_execute_after(
+        &self,
+        i: crate::hooks::ToolExecuteAfterInput,
+    ) -> crate::hooks::ToolExecuteAfterOutcome {
+        crate::hooks::NoopHookHost.tool_execute_after(i).await
+    }
+    async fn chat_params(
+        &self,
+        i: crate::hooks::ChatParamsInput,
+    ) -> crate::hooks::ChatParamsOutcome {
+        if !self.on_start {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+        crate::hooks::NoopHookHost.chat_params(i).await
+    }
+    async fn session_start(&self, i: SessionLifecycleInput) {
+        if self.on_start && *self.target.lock().unwrap() == Some(i.session) {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+    }
+}
+
+async fn paused_engine() -> (Arc<SessionEngine>, Arc<Notify>, Arc<Notify>) {
+    let (hook, entered, release) = PauseHook::chat_params();
+    let eng = Arc::new((*engine().await).clone().with_hooks(hook));
+    (eng, entered, release)
 }
 
 #[tokio::test]
-async fn mail_revival_reserves_the_team_before_claim_registration() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let lead_turn = engine.try_begin_turn(root).unwrap();
-    let (child, handle) = parked(&supervisor, root).await;
-    supervisor
-        .archive_member(root, &handle, "pause")
-        .await
-        .unwrap();
-    let entered = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    *supervisor.registration_pause.lock().unwrap() = Some((entered.clone(), release.clone()));
+async fn mail_revival_reserves_team_and_falls_back_from_missing_root_agent() {
+    let eng = engine().await;
+    let r = root(&eng).await;
+    let sup = ResidentSupervisor::start(eng.clone());
+    let lead = eng.try_begin_turn(r).unwrap();
+    let (child, handle) = parked(&sup, r).await;
+    sup.archive_member(r, &handle, "pause").await.unwrap();
+
+    // 1) Mail revival reserves team across retirement race before claim registration.
+    let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    *sup.registration_pause.lock().unwrap() = Some((entered.clone(), release.clone()));
     let mail = tokio::spawn({
-        let engine = engine.clone();
-        let handle = handle.clone();
-        async move {
-            engine
-                .mail_send(
-                    root,
-                    MailEndpoint::Handle(handle),
-                    MailKind::Message,
-                    "resume".into(),
-                )
-                .await
-        }
+        let (eng, h) = (eng.clone(), handle.clone());
+        async move { mail_h(&eng, r, &h, "resume").await }
     });
     entered.notified().await;
-    let team = supervisor.teams().get(&root).unwrap().clone();
-    drop(lead_turn);
-    // Force the last-main-turn retirement at the selected-team/claim-write gap.
-    supervisor.retire_team(&team);
+    let team = sup.teams().get(&r).unwrap().clone();
+    drop(lead);
+    sup.retire_team(&team);
     release.notify_one();
-    let result = mail.await.unwrap();
-    assert!(
-        result.is_ok(),
-        "revival inherited retirement cancellation: {result:?}"
-    );
-    assert!(supervisor.team_with_resident(child).is_some());
-    supervisor
-        .drain(FinishCause::UserCancel, Duration::from_secs(5))
-        .await;
-}
+    assert!(mail.await.unwrap().is_ok());
+    assert!(sup.team_with_resident(child).is_some());
 
-#[tokio::test]
-async fn cold_mail_revival_falls_back_from_missing_root_agent() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let lead_turn = engine.try_begin_turn(root).unwrap();
-    let (child, handle) = parked(&supervisor, root).await;
-    supervisor
-        .archive_member(root, &handle, "pause")
-        .await
-        .unwrap();
-    supervisor.teardown_root(root).await.unwrap();
-    drop(lead_turn);
-    engine
-        .store()
+    // 2) Cold revival after teardown falls back to TASK_AGENT_ID when root agent vanished.
+    sup.archive_member(r, &handle, "pause").await.unwrap();
+    sup.teardown_root(r).await.unwrap();
+    eng.store()
         .append_event(
-            root,
+            r,
             &Event::AgentSwitched {
-                session: root,
+                session: r,
                 agent: AgentName::new("removed-bundle-agent"),
             },
         )
         .await
         .unwrap();
-    engine
-        .mail_send(
-            root,
-            MailEndpoint::Handle(handle),
-            MailKind::Message,
-            "resume".into(),
-        )
-        .await
-        .unwrap();
-    assert!(supervisor.team_with_resident(child).is_some());
+    mail_h(&eng, r, &handle, "resume").await.unwrap();
+    assert!(sup.team_with_resident(child).is_some());
     assert_eq!(
-        engine
-            .read_projection(root)
+        eng.read_projection(r)
             .await
             .unwrap()
             .session
@@ -160,197 +257,151 @@ async fn cold_mail_revival_falls_back_from_missing_root_agent() {
             .as_str(),
         crate::TASK_AGENT_ID
     );
-    supervisor
-        .drain(FinishCause::UserCancel, Duration::from_secs(5))
+    sup.drain(FinishCause::UserCancel, Duration::from_secs(5))
         .await;
 }
 
 #[tokio::test]
-async fn concurrent_mail_revives_install_one_episode_without_waiting_for_the_winner() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let lead_turn = engine.try_begin_turn(root).unwrap();
-    let (child, handle) = parked(&supervisor, root).await;
-    supervisor
-        .archive_member(root, &handle, "pause")
-        .await
-        .unwrap();
-    let entered = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    *supervisor.registration_pause.lock().unwrap() = Some((entered.clone(), release.clone()));
+async fn concurrent_mail_revives_deduplicate_and_preserve_fast_archive() {
+    let eng = engine().await;
+    let r = root(&eng).await;
+    let sup = ResidentSupervisor::start(eng.clone());
+    let lead = eng.try_begin_turn(r).unwrap();
+    let (child, handle) = parked(&sup, r).await;
+    sup.archive_member(r, &handle, "pause").await.unwrap();
+
+    // 1) Concurrent revivals install exactly one episode without awaiting the winner.
+    let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    *sup.registration_pause.lock().unwrap() = Some((entered.clone(), release.clone()));
     let first = tokio::spawn({
-        let engine = engine.clone();
-        let handle = handle.clone();
-        async move {
-            engine
-                .mail_send(
-                    root,
-                    MailEndpoint::Handle(handle),
-                    MailKind::Message,
-                    "first caller".into(),
-                )
-                .await
-        }
+        let (eng, h) = (eng.clone(), handle.clone());
+        async move { mail_h(&eng, r, &h, "first").await }
     });
     entered.notified().await;
-    let second = engine
-        .mail_send(
-            root,
-            MailEndpoint::Handle(handle.clone()),
-            MailKind::Message,
-            "second caller".into(),
-        )
-        .await;
+    let second = mail_h(&eng, r, &handle, "second").await.unwrap();
     release.notify_one();
-    let first = tokio::time::timeout(Duration::from_secs(2), first).await;
-    assert!(second.is_ok(), "{second:?}");
-    let first = first
-        .expect("concurrent sender must not await the winning episode")
+    let first = tokio::time::timeout(Duration::from_secs(2), first)
+        .await
+        .unwrap()
         .unwrap()
         .unwrap();
-    let projection = engine.read_projection(root).await.unwrap();
+    assert_eq!((second.recipients, first.recipients), (1, 2));
+    assert_eq!(active_ids(&eng).await, vec![child]);
     assert_eq!(
-        engine.store().active_actor_ids().await.unwrap(),
-        vec![child]
-    );
-    assert_eq!(
-        engine
-            .replay(root)
+        eng.replay(r)
             .await
             .unwrap()
             .iter()
-            .filter(|envelope| matches!(envelope.event, Event::AgentRestarted { .. }))
+            .filter(|e| matches!(e.event, Event::AgentRestarted { .. }))
             .count(),
         1
     );
-    assert_eq!(projection.team.inboxes[&handle].len(), 2);
-    drop(lead_turn);
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(2))
-        .await;
     assert_eq!(
-        second.unwrap().recipients,
-        1,
-        "the winner revived one recipient"
+        eng.read_projection(r).await.unwrap().team.inboxes[&handle].len(),
+        2
     );
-    assert_eq!(
-        first.recipients, 2,
-        "the loser appended to both live DM members"
-    );
+
+    // 2) Fast archive before revival sender returns cannot be erased by late restart completion.
+    sup.archive_member(r, &handle, "first ending")
+        .await
+        .unwrap();
+    let (e2, r2) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    *sup.revive_ready_pause.lock().unwrap() = Some((e2.clone(), r2.clone()));
+    let rev = tokio::spawn({
+        let (eng, h) = (eng.clone(), handle.clone());
+        async move { mail_h(&eng, r, &h, "new episode").await }
+    });
+    e2.notified().await;
+    sup.archive_member(r, &handle, "fast archive")
+        .await
+        .unwrap();
+    r2.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), rev)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let proj = eng.read_projection(r).await.unwrap();
+    assert!(proj.team.archived.contains_key(&handle) && !proj.team.roster.contains_key(&handle));
+    let evs = eng.replay(r).await.unwrap();
+    let restarted = evs
+        .iter()
+        .rposition(|e| matches!(e.event, Event::AgentRestarted { .. }))
+        .unwrap();
+    let archived = evs
+        .iter()
+        .rposition(|e| matches!(e.event, Event::AgentArchived { .. }))
+        .unwrap();
+    assert!(restarted < archived && !active_ids(&eng).await.contains(&child));
+    drop(lead);
+    drain_sup(&sup).await;
 }
 
 #[tokio::test]
-async fn mail_revival_fast_archive_cannot_be_erased_by_a_late_restart() {
-    tokio::time::timeout(Duration::from_secs(10), async {
-        let engine = engine().await;
-        let root = root(&engine).await;
-        let supervisor = ResidentSupervisor::start(engine.clone());
-        let lead = engine.try_begin_turn(root).unwrap();
-        let (child, handle) = parked(&supervisor, root).await;
-        supervisor
-            .archive_member(root, &handle, "first ending")
-            .await
-            .unwrap();
-        let entered = Arc::new(Notify::new());
-        let release = Arc::new(Notify::new());
-        *supervisor.revive_ready_pause.lock().unwrap() = Some((entered.clone(), release.clone()));
-        let reviving = tokio::spawn({
-            let engine = engine.clone();
-            let handle = handle.clone();
-            async move {
-                engine
-                    .mail_send(
-                        root,
-                        MailEndpoint::Handle(handle),
-                        MailKind::Message,
-                        "new episode".into(),
-                    )
-                    .await
-            }
-        });
-        // Initialization is complete, but the sender has not returned yet.
-        entered.notified().await;
-        supervisor
-            .archive_member(root, &handle, "fast archive")
-            .await
-            .unwrap();
-        release.notify_one();
-        reviving.await.unwrap().unwrap();
-        let projection = engine.read_projection(root).await.unwrap();
-        assert!(projection.team.archived.contains_key(&handle));
-        assert!(!projection.team.roster.contains_key(&handle));
-        let events = engine.replay(root).await.unwrap();
-        let restarted = events
-            .iter()
-            .rposition(|envelope| matches!(envelope.event, Event::AgentRestarted { .. }))
-            .unwrap();
-        let archived = events
-            .iter()
-            .rposition(|envelope| matches!(envelope.event, Event::AgentArchived { .. }))
-            .unwrap();
-        assert!(restarted < archived);
-        assert!(
-            !engine
-                .store()
-                .active_actor_ids()
-                .await
-                .unwrap()
-                .contains(&child)
-        );
-        drop(lead);
-        supervisor
-            .drain(FinishCause::Shutdown, Duration::from_secs(2))
-            .await;
-    })
-    .await
-    .expect("fast archive must finish before the sender returns");
-}
-
-#[tokio::test]
-async fn list_channels_counts_each_incoming_message_on_its_channel() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let lead = engine.try_begin_turn(root).unwrap();
-    let (child, handle) = parked(&supervisor, root).await;
-    let projection = engine.read_projection(root).await.unwrap();
-    let team = &projection.team;
-    let dm = team.resolve_dm(&handle, "^parent").unwrap();
-    let announce = team
+async fn list_channels_and_steer_count_incoming_only_ignoring_outgoing_copy() {
+    let eng = engine().await;
+    let r = root(&eng).await;
+    let sup = ResidentSupervisor::start(eng.clone());
+    let lead = eng.try_begin_turn(r).unwrap();
+    let (child, handle) = parked(&sup, r).await;
+    let proj = eng.read_projection(r).await.unwrap();
+    let dm = proj.team.resolve_dm(&handle, "^parent").unwrap();
+    let announce = proj
+        .team
         .channels
         .iter()
-        .find(|(_, ch)| ch.kind == ChannelKind::Group && ch.members.contains(&handle))
+        .find(|(_, c)| c.kind == ChannelKind::Group && c.members.contains(&handle))
         .unwrap()
         .0
         .clone();
-    engine
-        .store()
+
+    eng.mail_send(
+        r,
+        MailEndpoint::Channel(dm.clone()),
+        MailKind::Message,
+        "outgoing directive".into(),
+    )
+    .await
+    .unwrap();
+    let policy =
+        ChannelPolicy::from_binding(&eng.bind_runtime(std::path::Path::new("/tmp")).unwrap())
+            .unwrap()
+            .snapshot_for("hya-main");
+    assert!(
+        eng.steer_mailbox_snapshot_with_policy(r, Some(policy))
+            .await
+            .drain(&eng)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let (mailbox, rx) = hya_tool::MailboxPlane::new();
+    let stop = CancellationToken::new();
+    let svc = tokio::spawn(crate::run_mailbox_service(eng.clone(), rx, stop.clone()));
+    let root_rows = mailbox.for_session(r).list_channels().await.unwrap();
+    assert!(!root_rows.is_empty() && root_rows.iter().all(|row| row.unread == 0));
+
+    let through = eng.read_projection(r).await.unwrap().team.inboxes[&handle].len() as u64;
+    eng.store()
         .append_event(
-            root,
+            r,
             &Event::MailConsumed {
-                session: root,
+                session: r,
                 handle: handle.clone(),
-                through: team
-                    .inboxes
-                    .get(&handle)
-                    .map_or(0, |rows| rows.len() as u64),
+                through,
             },
         )
         .await
         .unwrap();
-    let (mailbox, rx) = hya_tool::MailboxPlane::new();
-    let stop = CancellationToken::new();
-    let service = tokio::spawn(crate::run_mailbox_service(engine.clone(), rx, stop.clone()));
-    for (channel, group_count) in [(&dm, 0), (&announce, 1)] {
-        engine
-            .store()
+    for (ch, group_unread) in [(&dm, 0), (&announce, 1)] {
+        eng.store()
             .append_event(
-                root,
+                r,
                 &Event::MailSent {
-                    session: root,
+                    session: r,
                     from: "main".into(),
-                    to: MailEndpoint::Channel(channel.clone()),
+                    to: MailEndpoint::Channel(ch.clone()),
                     kind: MailKind::Message,
                     body: "update".into(),
                 },
@@ -358,101 +409,25 @@ async fn list_channels_counts_each_incoming_message_on_its_channel() {
             .await
             .unwrap();
         let rows = mailbox.for_session(child).list_channels().await.unwrap();
-        assert_eq!(rows.iter().find(|row| row.id == dm).unwrap().unread, 1);
+        assert_eq!(rows.iter().find(|x| x.id == dm).unwrap().unread, 1);
         assert_eq!(
-            rows.iter().find(|row| row.id == announce).unwrap().unread,
-            group_count
+            rows.iter().find(|x| x.id == announce).unwrap().unread,
+            group_unread
         );
     }
     stop.cancel();
-    service.await.unwrap();
+    svc.await.unwrap();
     drop(lead);
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(2))
-        .await;
+    drain_sup(&sup).await;
 }
 
 #[tokio::test]
-async fn list_channels_ignores_the_senders_directive_copy() {
-    outgoing_directive_reader(false).await;
-}
-
-#[tokio::test]
-async fn steer_ignores_the_senders_directive_copy() {
-    outgoing_directive_reader(true).await;
-}
-
-async fn outgoing_directive_reader(steer: bool) {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let lead = engine.try_begin_turn(root).unwrap();
-    let (_, handle) = parked(&supervisor, root).await;
-    engine
-        .mail_send(
-            root,
-            MailEndpoint::Channel(
-                engine
-                    .read_projection(root)
-                    .await
-                    .unwrap()
-                    .team
-                    .channels
-                    .iter()
-                    .find(|(_, channel)| {
-                        channel.kind == ChannelKind::Dm && channel.members.contains(&handle)
-                    })
-                    .unwrap()
-                    .0
-                    .clone(),
-            ),
-            MailKind::Message,
-            "outgoing directive".into(),
-        )
-        .await
-        .unwrap();
-    if steer {
-        let mut steer = engine
-            .steer_mailbox_snapshot_with_policy(
-                root,
-                Some(
-                    ChannelPolicy::from_binding(
-                        &engine.bind_runtime(std::path::Path::new(".")).unwrap(),
-                    )
-                    .unwrap()
-                    .snapshot_for("hya-main"),
-                ),
-            )
-            .await;
-        assert!(
-            steer.drain(&engine).await.unwrap().is_none(),
-            "outgoing copy must not steer its author"
-        );
-    } else {
-        let (mailbox, rx) = hya_tool::MailboxPlane::new();
-        let stop = CancellationToken::new();
-        let service = tokio::spawn(crate::run_mailbox_service(engine.clone(), rx, stop.clone()));
-        let rows = mailbox.for_session(root).list_channels().await.unwrap();
-        stop.cancel();
-        service.await.unwrap();
-        assert!(!rows.is_empty());
-        assert!(
-            rows.iter().all(|row| row.unread == 0),
-            "outgoing directive must not show unread: {rows:?}"
-        );
-    }
-    drop(lead);
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(2))
-        .await;
-}
-
-#[tokio::test]
-async fn mandatory_parent_delivery_requires_the_actual_parent_and_own_dm() {
-    let engine = engine().await;
-    let binding = engine.bind_runtime(std::path::Path::new(".")).unwrap();
-    let policy = ChannelPolicy::from_binding(&binding).unwrap();
-    let mut projection = hya_proto::Projection::default();
+async fn mandatory_parent_delivery_requires_actual_parent_and_own_dm() {
+    let eng = engine().await;
+    let policy =
+        ChannelPolicy::from_binding(&eng.bind_runtime(std::path::Path::new("/tmp")).unwrap())
+            .unwrap();
+    let mut proj = hya_proto::Projection::default();
     for (id, members) in [
         ("own", vec!["main/lead", "main/lead/child"]),
         ("other", vec!["main/lead", "main/lead/other"]),
@@ -461,7 +436,7 @@ async fn mandatory_parent_delivery_requires_the_actual_parent_and_own_dm() {
             vec!["main/lead", "main/lead/child", "main/lead/other"],
         ),
     ] {
-        projection.team.channels.insert(
+        proj.team.channels.insert(
             id.into(),
             hya_proto::ChannelProjection {
                 kind: ChannelKind::Dm,
@@ -470,7 +445,7 @@ async fn mandatory_parent_delivery_requires_the_actual_parent_and_own_dm() {
             },
         );
     }
-    for (sender, to, expected) in [
+    for (sender, to, want) in [
         ("main/lead", MailEndpoint::Channel("own".into()), true),
         (
             "main/lead",
@@ -492,145 +467,46 @@ async fn mandatory_parent_delivery_requires_the_actual_parent_and_own_dm() {
             false,
         ),
     ] {
-        let (kind, role) = recipient_channel_role(&projection, &to, "main/lead/child", sender);
+        let (kind, role) = recipient_channel_role(&proj, &to, "main/lead/child", sender);
         assert_eq!(
             resident_delivery_allowed(&policy, "hya-scout", kind, role),
-            expected,
-            "sender {sender}, endpoint {to:?}"
+            want,
+            "{sender} -> {to:?}"
         );
     }
 }
 
 #[tokio::test]
-async fn parked_workflow_actor_has_no_pending_directive() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let lead = engine.try_begin_turn(root).unwrap();
-    let (child, handle) = parked(&supervisor, root).await;
-    assert_eq!(supervisor.member_busy(root, child), Some(false));
-    assert!(
-        engine
-            .read_projection(child)
-            .await
-            .unwrap()
-            .session
-            .messages
-            .is_empty()
-    );
-    assert!(
-        !engine
-            .read_projection(root)
-            .await
-            .unwrap()
-            .team
-            .inboxes
-            .contains_key(&handle)
-    );
-    drop(lead);
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(2))
-        .await;
-}
-
-struct PausedParams {
-    entered: Arc<Notify>,
-    release: Arc<Notify>,
-}
-
-#[async_trait::async_trait]
-impl crate::hooks::HookDispatcher for PausedParams {
-    fn dispatch_event(&self, _: &hya_proto::Envelope) {}
-    async fn command_execute_before(
-        &self,
-        i: crate::hooks::CommandExecuteBeforeInput,
-    ) -> crate::hooks::CommandExecuteBeforeOutcome {
-        crate::hooks::NoopHookHost.command_execute_before(i).await
-    }
-    async fn text_complete(
-        &self,
-        i: crate::hooks::TextCompleteInput,
-    ) -> crate::hooks::TextCompleteOutcome {
-        crate::hooks::NoopHookHost.text_complete(i).await
-    }
-    async fn message_user_before(
-        &self,
-        i: crate::hooks::MessageUserBeforeInput,
-    ) -> crate::hooks::MessageUserBeforeOutcome {
-        crate::hooks::NoopHookHost.message_user_before(i).await
-    }
-    async fn tool_execute_before(
-        &self,
-        i: crate::hooks::ToolExecuteBeforeInput,
-    ) -> crate::hooks::ToolExecuteBeforeOutcome {
-        crate::hooks::NoopHookHost.tool_execute_before(i).await
-    }
-    async fn tool_execute_after(
-        &self,
-        i: crate::hooks::ToolExecuteAfterInput,
-    ) -> crate::hooks::ToolExecuteAfterOutcome {
-        crate::hooks::NoopHookHost.tool_execute_after(i).await
-    }
-    async fn chat_params(
-        &self,
-        input: crate::hooks::ChatParamsInput,
-    ) -> crate::hooks::ChatParamsOutcome {
-        self.entered.notify_one();
-        self.release.notified().await;
-        crate::hooks::NoopHookHost.chat_params(input).await
-    }
-}
-
-#[tokio::test]
-async fn i20_stage_activation_keeps_one_supervisor_subscription() {
-    let entered = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let engine = engine().await;
-    let engine = Arc::new((*engine).clone().with_hooks(Arc::new(PausedParams {
-        entered: entered.clone(),
-        release: release.clone(),
-    })));
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let subscribers = engine.bus().subscriber_count();
-    let binding = engine.bind_runtime(std::path::Path::new(".")).unwrap();
+async fn stage_activation_keeps_one_supervisor_subscription() {
+    let (eng, entered, release) = paused_engine().await;
+    let r = root(&eng).await;
+    let sup = ResidentSupervisor::start(eng.clone());
+    let subs = eng.bus().subscriber_count();
+    let binding = eng.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = AgentSpec {
         name: AgentName::new("hya-main"),
         model: ModelRef::new("hya/offline"),
-        workdir: ".".into(),
+        workdir: "/tmp".into(),
         system_prompt: String::new(),
         reasoning: None,
     };
-    let workflow = hya_workflow::compile(hya_workflow::WorkflowSource::new(
+    let wf = hya_workflow::compile(hya_workflow::WorkflowSource::new(
         "stage.hya.md",
-        r#"---
-kind: Workflow
-name: stage
-description: Stage completion uses the episode rather than subscribing.
-nodes:
-  run:
-    agent: hya-task
-    directive: Answer with hello.
----
-flowchart TD
-  run
-"#,
-    ))
-    .unwrap();
+        "---\nkind: Workflow\nname: stage\ndescription: stage\nnodes:\n  run:\n    agent: hya-task\n    directive: Answer with hello.\n---\nflowchart TD\n  run\n",
+    )).unwrap();
     let task = tokio::spawn({
-        let engine = engine.clone();
-        let supervisor = supervisor.clone();
+        let (eng, sup) = (eng.clone(), sup.clone());
         async move {
             crate::run_workflow(
-                engine,
-                root,
-                &workflow,
+                eng,
+                r,
+                &wf,
                 crate::WorkflowRunContext {
                     binding,
                     caller: "hya-main".into(),
                     base_agent: base,
                     inputs: BTreeMap::new(),
-                    resident_supervisor: Some(supervisor),
+                    resident_supervisor: Some(sup),
                     routing: None,
                 },
                 CancellationToken::new(),
@@ -641,185 +517,123 @@ flowchart TD
     tokio::time::timeout(Duration::from_secs(3), entered.notified())
         .await
         .unwrap();
-    let during = engine.bus().subscriber_count();
+    let during = eng.bus().subscriber_count();
     release.notify_one();
-    let report = tokio::time::timeout(Duration::from_secs(3), task)
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    supervisor
-        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
-        .await;
     assert_eq!(
-        report.status,
-        crate::WorkflowStatus::Completed,
-        "{report:?}"
+        tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .status,
+        crate::WorkflowStatus::Completed
     );
-    assert_eq!(
-        during,
-        subscribers + 1,
-        "only the normal in-turn mail steering subscription may be added"
-    );
+    drain_sup(&sup).await;
+    assert_eq!(during, subs + 1);
 }
 
 #[tokio::test]
-async fn activation_waiter_settles_reports_revives_and_ends_on_the_episode() {
-    let entered = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let engine = engine().await;
-    let engine = Arc::new((*engine).clone().with_hooks(Arc::new(PausedParams {
-        entered: entered.clone(),
-        release: release.clone(),
-    })));
-    let root = root(&engine).await;
-    let root_turn = engine.try_begin_turn(root).unwrap();
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let (child, handle) = parked(&supervisor, root).await;
-    let mut first = supervisor
-        .activate(
-            root,
-            child,
-            activation_runtime(&supervisor.engine),
-            "FIRST_ACTIVATION".into(),
-            Arc::from("first guidance"),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(3), entered.notified())
-        .await
-        .unwrap();
-    assert!(matches!(
-        first.done.try_recv(),
-        Err(oneshot::error::TryRecvError::Empty)
-    ));
+async fn activation_waiter_parked_settles_reports_revives_ends_and_records_dm_history() {
+    let (eng, entered, release) = paused_engine().await;
+    let r = root(&eng).await;
+    let root_turn = eng.try_begin_turn(r).unwrap();
+    let sup = ResidentSupervisor::start(eng.clone());
+    let (child, handle) = parked(&sup, r).await;
+
+    assert_eq!(sup.member_busy(r, child), Some(false));
+    assert!(
+        eng.read_projection(child)
+            .await
+            .unwrap()
+            .session
+            .messages
+            .is_empty()
+    );
+    assert!(
+        !eng.read_projection(r)
+            .await
+            .unwrap()
+            .team
+            .inboxes
+            .contains_key(&handle)
+    );
+
+    // 1) Settle + concurrent TurnAlreadyActive refusal.
+    let mut first = act(&sup, r, child, "ACT_0", "g0").await.unwrap();
+    entered.notified().await;
+    assert!(first.done.try_recv().is_err());
     {
-        let mut pending = Box::pin(first.wait());
-        assert!(futures::poll!(pending.as_mut()).is_pending());
+        let mut p = Box::pin(first.wait());
+        assert!(futures::poll!(p.as_mut()).is_pending());
     }
-    let refused = supervisor
-        .activate(
-            root,
-            child,
-            activation_runtime(&supervisor.engine),
-            "must not be mailed".into(),
-            Arc::from("bad guidance"),
-            None,
-            None,
-        )
-        .await;
-    assert!(matches!(refused, Err(CoreError::TurnAlreadyActive { .. })));
+    assert!(matches!(
+        act(&sup, r, child, "bad", "g").await,
+        Err(CoreError::TurnAlreadyActive { .. })
+    ));
     assert_eq!(
-        engine.read_projection(root).await.unwrap().team.inboxes[&handle].len(),
+        eng.read_projection(r).await.unwrap().team.inboxes[&handle].len(),
         1
     );
     release.notify_one();
-    let first = tokio::time::timeout(Duration::from_secs(3), first.wait())
-        .await
-        .unwrap()
-        .unwrap();
     assert!(
-        matches!(first, ActivationResult::Settled { final_text } if final_text.contains("FIRST_ACTIVATION"))
+        matches!(first.wait().await.unwrap(), ActivationResult::Settled { final_text } if final_text.contains("ACT_0"))
     );
-    let projection = engine.read_projection(root).await.unwrap();
-    assert_eq!(projection.team.roster[&handle].resident_cursor, 1);
-    assert!(projection.team.roster[&handle].resident_work.is_none());
     assert_eq!(
-        engine.store().active_actor_ids().await.unwrap(),
-        vec![child]
+        eng.read_projection(r).await.unwrap().team.roster[&handle].resident_cursor,
+        1
     );
 
-    let mut second = supervisor
-        .activate(
-            root,
-            child,
-            activation_runtime(&supervisor.engine),
-            "SECOND_ACTIVATION".into(),
-            Arc::from("second guidance"),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(3), entered.notified())
-        .await
-        .unwrap();
-    supervisor
-        .submit_report(
-            root,
-            &handle,
-            ReportOutcome::Done,
-            "terminal evidence".into(),
-        )
+    // 2) Reported activation archives and clears active claims.
+    let mut second = act(&sup, r, child, "ACT_1", "g1").await.unwrap();
+    entered.notified().await;
+    sup.submit_report(r, &handle, ReportOutcome::Done, "terminal evidence".into())
         .await
         .unwrap();
     release.notify_one();
-    let second = tokio::time::timeout(Duration::from_secs(3), second.wait())
-        .await
-        .unwrap()
-        .unwrap();
     assert_eq!(
-        second,
+        second.wait().await.unwrap(),
         ActivationResult::Reported {
             outcome: ReportOutcome::Done,
             text: "terminal evidence".into()
         }
     );
-    assert!(engine.store().active_actor_ids().await.unwrap().is_empty());
-    assert_eq!(
-        engine.read_projection(root).await.unwrap().team.archived[&handle].session,
-        child
-    );
+    assert!(active_ids(&eng).await.is_empty());
 
-    let mut third = supervisor
-        .activate(
-            root,
-            child,
-            activation_runtime(&supervisor.engine),
-            "THIRD_ACTIVATION".into(),
-            Arc::from("revived guidance"),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(3), entered.notified())
-        .await
-        .unwrap();
-    let team = supervisor.team_with_resident(child).unwrap();
-    let cancel = team.lock().residents[&child].cancel.clone();
+    // 3) Revived activation cancelled by end_member yields Ended(ArchivedByParent, Cancelled).
+    let mut third = act(&sup, r, child, "ACT_2", "g2").await.unwrap();
+    entered.notified().await;
+    let cancel = sup.team_with_resident(child).unwrap().lock().residents[&child]
+        .cancel
+        .clone();
     let ending = tokio::spawn({
-        let supervisor = supervisor.clone();
-        let handle = handle.clone();
-        async move { supervisor.end_member(root, &handle).await }
+        let (sup, h) = (sup.clone(), handle.clone());
+        async move { sup.end_member(r, &h).await }
     });
-    tokio::time::timeout(Duration::from_secs(3), cancel.cancelled())
-        .await
-        .unwrap();
+    cancel.cancelled().await;
     release.notify_one();
-    tokio::time::timeout(Duration::from_secs(3), ending)
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    let third = tokio::time::timeout(Duration::from_secs(3), third.wait())
-        .await
-        .unwrap()
-        .unwrap();
+    ending.await.unwrap().unwrap();
     assert!(matches!(
-        third,
+        third.wait().await.unwrap(),
         ActivationResult::Ended {
             reason: ArchiveReason::ArchivedByParent,
             status: MemberRunStatus::Cancelled,
             ..
         }
     ));
-    assert!(engine.store().active_actor_ids().await.unwrap().is_empty());
+
+    // All three directives were recorded in parent DM channel history.
+    let proj = eng.read_projection(r).await.unwrap();
+    let dm = crate::engine::dm_channel_between(&proj, "main", &handle).unwrap();
+    let bodies: Vec<_> = proj.team.channels[&dm]
+        .log
+        .iter()
+        .map(|i| &proj.team.mail[*i].body)
+        .filter(|b| b.starts_with("ACT_"))
+        .cloned()
+        .collect();
+    assert_eq!(bodies, ["ACT_0", "ACT_1", "ACT_2"]);
     assert_eq!(
-        engine
-            .replay(root)
+        eng.replay(r)
             .await
             .unwrap()
             .iter()
@@ -828,453 +642,92 @@ async fn activation_waiter_settles_reports_revives_and_ends_on_the_episode() {
         1
     );
     drop(root_turn);
-    supervisor
-        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
-        .await;
+    drain_sup(&sup).await;
 }
 
-async fn review_a1_rest_case(with_child: bool) {
-    let entered = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let engine = engine().await;
-    let engine = Arc::new((*engine).clone().with_hooks(Arc::new(PausedParams {
-        entered: entered.clone(),
-        release: release.clone(),
-    })));
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let _driver = supervisor.root_driver_activity(root).await.unwrap();
-    let (child, handle) = parked(&supervisor, root).await;
-    let mut events = engine.bus().subscribe();
-    let mut waiter = supervisor
-        .activate(
-            root,
-            child,
-            activation_runtime(&supervisor.engine),
-            "REVIEW_FIRST".into(),
-            Arc::from("guidance"),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-    entered.notified().await;
-    let descendant = if with_child {
-        Some(parked(&supervisor, child).await)
-    } else {
-        engine
-            .mail_send(
-                root,
-                MailEndpoint::Handle(handle.clone()),
-                MailKind::Message,
-                "REVIEW_FOLLOW_UP".into(),
-            )
-            .await
-            .unwrap();
-        None
-    };
-    release.notify_one();
-    if with_child {
-        tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                if matches!(events.recv().await.unwrap().event, Event::ResidentWorkFinished { handle: ref finished, .. } if finished == &handle) { break; }
-            }
-        }).await.unwrap();
-        let team = supervisor.team_with_resident(child).unwrap();
-        let claim = team.lock().residents[&child].claim;
-        team.settle_activation(child, claim.as_ref()).await.unwrap();
-    } else {
-        tokio::time::timeout(Duration::from_secs(3), entered.notified())
-            .await
-            .unwrap();
-    }
-    let premature = waiter.done.try_recv().is_ok();
-    let raced_next = if premature && !with_child {
-        Some(
-            supervisor
-                .activate(
-                    root,
-                    child,
-                    activation_runtime(&supervisor.engine),
-                    "REVIEW_NEXT".into(),
-                    Arc::from("next"),
-                    None,
-                    None,
-                )
-                .await
-                .err(),
-        )
-    } else {
-        None
-    };
-    if let Some((_, descendant)) = descendant {
-        supervisor.end_member(root, &descendant).await.unwrap();
-    } else {
+#[tokio::test]
+async fn activation_rest_waits_for_followup_mail_live_children_and_skips_consumed_wake() {
+    for with_child in [false, true] {
+        let (eng, entered, release) = paused_engine().await;
+        let r = root(&eng).await;
+        let sup = ResidentSupervisor::start(eng.clone());
+        let _drv = sup.root_driver_activity(r).await.unwrap();
+        let (child, handle) = parked(&sup, r).await;
+        let mut events = eng.bus().subscribe();
+        let mut waiter = act(&sup, r, child, "FIRST", "g").await.unwrap();
+        entered.notified().await;
+        let desc = if with_child {
+            Some(parked(&sup, child).await)
+        } else {
+            mail_h(&eng, r, &handle, "FOLLOW_UP").await.unwrap();
+            None
+        };
         release.notify_one();
-    }
-    if !premature {
-        let settled = tokio::time::timeout(Duration::from_secs(3), waiter.wait())
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(matches!(settled, ActivationResult::Settled { .. }));
-        let mut next = supervisor
-            .activate(
-                root,
-                child,
-                activation_runtime(&supervisor.engine),
-                "REVIEW_NEXT".into(),
-                Arc::from("next"),
-                None,
-                None,
-            )
-            .await
-            .unwrap();
+        if with_child {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while !matches!(events.recv().await.unwrap().event, Event::ResidentWorkFinished { handle: ref f, .. } if f == &handle) {}
+            }).await.unwrap();
+            let team = sup.team_with_resident(child).unwrap();
+            let claim = team.lock().residents[&child].claim;
+            team.settle_activation(child, claim.as_ref()).await.unwrap();
+        } else {
+            entered.notified().await;
+        }
+        assert!(waiter.done.try_recv().is_err(), "settled before true rest");
+        if let Some((_, d)) = desc {
+            sup.end_member(r, &d).await.unwrap();
+        } else {
+            release.notify_one();
+        }
+        assert!(matches!(
+            waiter.wait().await.unwrap(),
+            ActivationResult::Settled { .. }
+        ));
+        let mut next = act(&sup, r, child, "NEXT", "n").await.unwrap();
         entered.notified().await;
         release.notify_one();
         assert!(matches!(
-            tokio::time::timeout(Duration::from_secs(3), next.wait())
-                .await
-                .unwrap()
-                .unwrap(),
+            next.wait().await.unwrap(),
             ActivationResult::Settled { .. }
         ));
+        sup.end_member(r, &handle).await.unwrap();
+        drain_sup(&sup).await;
     }
-    supervisor.end_member(root, &handle).await.unwrap();
-    supervisor
-        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
-        .await;
-    assert!(
-        !premature,
-        "activation settled before true rest; next Stage: {raced_next:?}"
-    );
-}
 
-#[tokio::test]
-async fn review_a1_follow_up_mail_delays_settlement_and_next_stage_is_idle() {
-    review_a1_rest_case(false).await;
-}
-
-#[tokio::test]
-async fn review_a1_live_child_delays_settlement_until_its_ending() {
-    review_a1_rest_case(true).await;
-}
-
-#[tokio::test]
-async fn review_a2_activation_directives_are_in_the_parent_dm_history() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let _driver = supervisor.root_driver_activity(root).await.unwrap();
-    let (child, handle) = parked(&supervisor, root).await;
-    for index in 0..3 {
-        if index == 2 {
-            supervisor.end_member(root, &handle).await.unwrap();
-        }
-        let mut waiter = supervisor
-            .activate(
-                root,
-                child,
-                activation_runtime(&supervisor.engine),
-                format!("REVIEW_DM_{index}"),
-                Arc::from("guidance"),
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        tokio::time::timeout(Duration::from_secs(3), waiter.wait())
-            .await
-            .unwrap()
-            .unwrap();
-    }
-    let projection = engine.read_projection(root).await.unwrap();
-    let dm = crate::engine::dm_channel_between(&projection, "main", &handle).unwrap();
-    let bodies = projection.team.channels[&dm]
-        .log
-        .iter()
-        .map(|index| &projection.team.mail[*index])
-        .filter(|m| m.body.starts_with("REVIEW_DM_"))
-        .map(|m| m.body.clone())
-        .collect::<Vec<_>>();
-    let targets = engine
-        .replay(root)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter_map(|e| match e.event {
-            Event::MailSent { to, body, .. } if body.starts_with("REVIEW_DM_") => Some(to),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    supervisor.end_member(root, &handle).await.unwrap();
-    supervisor
-        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
-        .await;
-    assert_eq!(bodies, ["REVIEW_DM_0", "REVIEW_DM_1", "REVIEW_DM_2"]);
-    assert!(
-        targets
-            .iter()
-            .all(|to| to == &MailEndpoint::Channel(dm.clone()))
-    );
-}
-
-async fn review_a3_pending_case(live_revive: bool) {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let driver = supervisor.root_driver_activity(root).await.unwrap();
-    let (child, handle) = parked(&supervisor, root).await;
-    supervisor.listener_stop.cancel();
-    let listener = supervisor.listener.lock().unwrap().take().unwrap();
-    listener.await.unwrap();
-    drop(driver);
-    let mut waiter = if live_revive {
-        let (done, receiver) = oneshot::channel();
-        let projection = engine.read_projection(root).await.unwrap();
-        let dm = crate::engine::dm_channel_between(&projection, "main", &handle).unwrap();
-        supervisor
-            .revive_episode_with_activation(
-                root,
-                "main",
-                &handle,
-                dm,
-                MailKind::Message,
-                "REVIEW_PENDING".into(),
-                None,
-                None,
-                Some(WorkflowActivation {
-                    resolved: activation_runtime(&supervisor.engine),
-                    guidance: Arc::from("guidance"),
-                    route: None,
-                    done,
-                }),
-            )
-            .await
-            .unwrap();
-        ActivationWaiter { done: receiver }
-    } else {
-        supervisor
-            .activate(
-                root,
-                child,
-                activation_runtime(&supervisor.engine),
-                "REVIEW_PENDING".into(),
-                Arc::from("guidance"),
-                None,
-                None,
-            )
-            .await
-            .unwrap()
-    };
-    // This current-thread task has not yielded since the activation lease dropped.
-    // The listener is stopped, so only installation can make the work observable.
-    let busy = supervisor.member_busy(root, child);
-    let cancelled = engine.cancel_user_turn(child);
-    let team = supervisor.team_with_resident(child).unwrap();
-    let synthesis = {
-        let mut state = team.lock();
-        state.root_driver.autonomous.store(true, Ordering::Release);
-        // A new unit of unrelated completed work makes synthesis eligible.
-        state.work_seq = state.work_seq.saturating_add(1);
-        team.maybe_fire_quiescence(&mut state);
-        state.residents[&root].synth_pending
-    };
-    let held = engine.stopped_by_user(child);
-    supervisor.end_member(root, &handle).await.unwrap();
-    waiter.wait().await.unwrap();
-    supervisor
-        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
-        .await;
-    assert_eq!(
-        (busy, cancelled, held, synthesis),
-        (Some(true), true, true, false)
-    );
-}
-
-#[tokio::test]
-async fn review_a3_live_activation_is_busy_cancellable_and_not_quiescent_before_bus_delivery() {
-    review_a3_pending_case(false).await;
-}
-
-#[tokio::test]
-async fn review_a3_live_revive_activation_is_armed_before_bus_delivery() {
-    review_a3_pending_case(true).await;
-}
-
-#[tokio::test]
-async fn review_a4_workflow_cleanup_ends_descendants_before_parent() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let _driver = supervisor.root_driver_activity(root).await.unwrap();
-    let (stage, stage_handle) = parked(&supervisor, root).await;
-    let (descendant, descendant_handle) = parked(&supervisor, stage).await;
-    let (other, other_handle) = parked(&supervisor, root).await;
-    supervisor.end_member(root, &stage_handle).await.unwrap();
-    let live = engine.store().active_actor_ids().await.unwrap();
-    let order = engine
-        .replay(root)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter_map(|e| match e.event {
-            Event::AgentArchived { handle, .. } => Some(handle),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    supervisor
-        .end_member(root, &descendant_handle)
-        .await
-        .unwrap();
-    supervisor.end_member(root, &other_handle).await.unwrap();
-    supervisor
-        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
-        .await;
-    assert_eq!(
-        live,
-        [other],
-        "descendant {descendant} survived its Workflow parent"
-    );
-    assert_eq!(order, [descendant_handle, stage_handle]);
-}
-
-#[tokio::test]
-async fn review_a5_blank_activation_has_no_lease_mail_or_turn_effects() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let _driver = supervisor.root_driver_activity(root).await.unwrap();
-    let (child, handle) = parked(&supervisor, root).await;
-    let before = engine.replay(root).await.unwrap();
-    let result = supervisor
-        .activate(
-            root,
-            child,
-            activation_runtime(&supervisor.engine),
-            " \n\t ".into(),
-            Arc::from("guidance"),
-            None,
-            None,
-        )
-        .await;
-    let refused = matches!(&result, Err(CoreError::Invalid(_)));
-    let after = engine.replay(root).await.unwrap();
-    supervisor.end_member(root, &handle).await.unwrap();
-    supervisor
-        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
-        .await;
-    assert!(refused, "blank activation was accepted");
-    assert_eq!(before, after);
-}
-
-#[tokio::test]
-async fn review_a5_archive_before_activation_lock_revives_the_member() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let _driver = supervisor.root_driver_activity(root).await.unwrap();
-    let (child, handle) = parked(&supervisor, root).await;
-    let entered = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    *supervisor.activation_lock_pause.lock().unwrap() = Some((entered.clone(), release.clone()));
-    let activation = tokio::spawn({
-        let supervisor = supervisor.clone();
-        async move {
-            supervisor
-                .activate(
-                    root,
-                    child,
-                    activation_runtime(&supervisor.engine),
-                    "REVIEW_RACE".into(),
-                    Arc::from("guidance"),
-                    None,
-                    None,
-                )
-                .await
-        }
-    });
+    // Explicitly consumed trailing mail settles without another model turn.
+    let (eng, entered, release) = paused_engine().await;
+    let r = root(&eng).await;
+    let sup = ResidentSupervisor::start(eng.clone());
+    let _drv = sup.root_driver_activity(r).await.unwrap();
+    let (child, handle) = parked(&sup, r).await;
+    let mut waiter = act(&sup, r, child, "FIRST", "g").await.unwrap();
     entered.notified().await;
-    supervisor.end_member(root, &handle).await.unwrap();
-    release.notify_one();
-    let result = tokio::time::timeout(Duration::from_secs(3), activation)
-        .await
+    let dm = dm_of(&eng, r, "main", &handle).await;
+    eng.mail_send(
+        r,
+        MailEndpoint::Channel(dm.clone()),
+        MailKind::Message,
+        "already read".into(),
+    )
+    .await
+    .unwrap();
+    sup.team_with_resident(child)
         .unwrap()
-        .unwrap();
-    let succeeded = result.is_ok();
-    if let Ok(mut waiter) = result {
-        tokio::time::timeout(Duration::from_secs(3), waiter.wait())
-            .await
-            .unwrap()
-            .unwrap();
-    }
-    supervisor.end_member(root, &handle).await.unwrap();
-    supervisor
-        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
+        .on_mail("main", &MailEndpoint::Channel(dm.clone()))
         .await;
-    assert!(
-        succeeded,
-        "activation used a roster snapshot from before claim-write serialization"
-    );
-}
-
-#[tokio::test]
-async fn review_a1_consumed_trailing_wake_settles_without_another_model_turn() {
-    let entered = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let engine = engine().await;
-    let engine = Arc::new((*engine).clone().with_hooks(Arc::new(PausedParams {
-        entered: entered.clone(),
-        release: release.clone(),
-    })));
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let _driver = supervisor.root_driver_activity(root).await.unwrap();
-    let (child, handle) = parked(&supervisor, root).await;
-    let mut waiter = supervisor
-        .activate(
-            root,
-            child,
-            activation_runtime(&supervisor.engine),
-            "REVIEW_FIRST".into(),
-            Arc::from("guidance"),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-    entered.notified().await;
-    let projection = engine.read_projection(root).await.unwrap();
-    let dm = crate::engine::dm_channel_between(&projection, "main", &handle).unwrap();
-    engine
-        .mail_send(
-            root,
-            MailEndpoint::Channel(dm.clone()),
-            MailKind::Message,
-            "already read in this turn".into(),
-        )
-        .await
-        .unwrap();
-    let team = supervisor.team_with_resident(child).unwrap();
-    team.on_mail("main", &MailEndpoint::Channel(dm.clone()))
-        .await;
-    engine
-        .read_channel_history(None, child, &dm, None)
+    eng.read_channel_history(None, child, &dm, None)
         .await
         .unwrap();
     release.notify_one();
     assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(3), waiter.wait())
-            .await
-            .unwrap()
-            .unwrap(),
+        waiter.wait().await.unwrap(),
         ActivationResult::Settled { .. }
     ));
-    let starts = engine
+    let starts = eng
         .replay(child)
         .await
         .unwrap()
-        .into_iter()
+        .iter()
         .filter(|e| {
             matches!(
                 e.event,
@@ -1285,223 +738,243 @@ async fn review_a1_consumed_trailing_wake_settles_without_another_model_turn() {
             )
         })
         .count();
-    supervisor.end_member(root, &handle).await.unwrap();
-    supervisor
-        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
-        .await;
-    assert_eq!(
-        starts, 1,
-        "the retained wake was empty after explicit consumption"
-    );
+    sup.end_member(r, &handle).await.unwrap();
+    drain_sup(&sup).await;
+    assert_eq!(starts, 1);
 }
 
 #[tokio::test]
-async fn recovered_episode_does_not_queue_an_outgoing_dm_copy() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let _lead = engine.try_begin_turn(root).unwrap();
-    let child = engine
-        .create(CreateSession {
-            parent: Some(root),
-            agent: AgentName::new("hya-scout"),
-            model: ModelRef::new("hya/offline"),
-            workdir: ".".into(),
-            project: None,
-            kind: SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    engine
-        .store()
-        .append_events(
-            root,
-            vec![
-                Event::AgentRegistered {
-                    session: root,
-                    agent_session: child,
-                    handle: "scout".into(),
-                    parent: Some("main".into()),
-                    agent_type: AgentName::new("hya-scout"),
-                    mode: SubagentMode::Resident,
-                },
-                Event::ChannelCreated {
-                    session: root,
-                    channel: "DM-12345678".into(),
-                    kind: ChannelKind::Dm,
-                    unit: None,
-                    members: vec!["main".into(), "main/scout".into()],
-                },
-                Event::MailSent {
-                    session: root,
-                    from: "main/scout".into(),
-                    to: MailEndpoint::Channel("DM-12345678".into()),
-                    kind: MailKind::Message,
-                    body: "outgoing status".into(),
-                },
-            ],
-        )
-        .await
-        .unwrap();
-    engine
-        .store()
-        .try_claim_new(root, child, OwnerRunId::new())
-        .await
-        .unwrap();
-    engine
-        .store()
-        .claim_runtime_owner(supervisor.owner_run_id)
-        .unwrap();
-    let recovered = engine
-        .store()
-        .recover_claim(child, supervisor.owner_run_id)
-        .await
-        .unwrap();
-    let _child_turn = engine.try_begin_turn(child).unwrap();
-    let agent = AgentSpec {
-        name: AgentName::new("hya-scout"),
-        model: ModelRef::new("hya/offline"),
-        workdir: ".".into(),
-        system_prompt: String::new(),
-        reasoning: None,
-    };
-    let binding = engine.bind_runtime(&agent.workdir).unwrap();
-    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
-    supervisor
-        .register_recovered_resident(
-            root,
-            "main/scout".into(),
-            agent,
-            (binding, Arc::from([]), resources, None),
-            recovered,
-            ResidentRecovery::Idle,
-        )
-        .await
-        .unwrap();
-    drop(_child_turn);
-    let busy = supervisor.member_busy(root, child);
-    drop(_lead);
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(2))
-        .await;
-    assert_eq!(
-        busy,
-        Some(false),
-        "outgoing history must not owe a recovery wake"
-    );
-}
-
-struct PausedStart {
-    target: Mutex<Option<SessionId>>,
-    entered: Arc<Notify>,
-    release: Arc<Notify>,
-}
-#[async_trait::async_trait]
-impl crate::hooks::HookDispatcher for PausedStart {
-    fn dispatch_event(&self, _: &hya_proto::Envelope) {}
-    async fn command_execute_before(
-        &self,
-        i: crate::hooks::CommandExecuteBeforeInput,
-    ) -> crate::hooks::CommandExecuteBeforeOutcome {
-        crate::hooks::NoopHookHost.command_execute_before(i).await
-    }
-    async fn text_complete(
-        &self,
-        i: crate::hooks::TextCompleteInput,
-    ) -> crate::hooks::TextCompleteOutcome {
-        crate::hooks::NoopHookHost.text_complete(i).await
-    }
-    async fn message_user_before(
-        &self,
-        i: crate::hooks::MessageUserBeforeInput,
-    ) -> crate::hooks::MessageUserBeforeOutcome {
-        crate::hooks::NoopHookHost.message_user_before(i).await
-    }
-    async fn tool_execute_before(
-        &self,
-        i: crate::hooks::ToolExecuteBeforeInput,
-    ) -> crate::hooks::ToolExecuteBeforeOutcome {
-        crate::hooks::NoopHookHost.tool_execute_before(i).await
-    }
-    async fn tool_execute_after(
-        &self,
-        i: crate::hooks::ToolExecuteAfterInput,
-    ) -> crate::hooks::ToolExecuteAfterOutcome {
-        crate::hooks::NoopHookHost.tool_execute_after(i).await
-    }
-    async fn chat_params(
-        &self,
-        input: crate::hooks::ChatParamsInput,
-    ) -> crate::hooks::ChatParamsOutcome {
-        crate::hooks::NoopHookHost.chat_params(input).await
-    }
-    async fn session_start(&self, input: SessionLifecycleInput) {
-        if *self.target.lock().unwrap() == Some(input.session) {
-            self.entered.notify_one();
-            self.release.notified().await;
-        }
+async fn activation_is_armed_before_bus_delivery_for_live_and_revive() {
+    for live_revive in [false, true] {
+        let eng = engine().await;
+        let r = root(&eng).await;
+        let sup = ResidentSupervisor::start(eng.clone());
+        let drv = sup.root_driver_activity(r).await.unwrap();
+        let (child, handle) = parked(&sup, r).await;
+        sup.listener_stop.cancel();
+        let listener = sup.listener.lock().unwrap().take().unwrap();
+        listener.await.unwrap();
+        drop(drv);
+        let mut waiter = if live_revive {
+            let (done, rx) = oneshot::channel();
+            let dm = dm_of(&eng, r, "main", &handle).await;
+            sup.revive_episode_with_activation(
+                r,
+                "main",
+                &handle,
+                dm,
+                MailKind::Message,
+                "PENDING".into(),
+                None,
+                None,
+                Some(WorkflowActivation {
+                    resolved: runtime_for(&eng),
+                    guidance: Arc::from("g"),
+                    route: None,
+                    done,
+                }),
+            )
+            .await
+            .unwrap();
+            ActivationWaiter { done: rx }
+        } else {
+            act(&sup, r, child, "PENDING", "g").await.unwrap()
+        };
+        let busy = sup.member_busy(r, child);
+        let cancelled = eng.cancel_user_turn(child);
+        let team = sup.team_with_resident(child).unwrap();
+        let synthesis = {
+            let mut st = team.lock();
+            st.root_driver.autonomous.store(true, Ordering::Release);
+            st.work_seq += 1;
+            team.maybe_fire_quiescence(&mut st);
+            st.residents[&r].synth_pending
+        };
+        let held = eng.stopped_by_user(child);
+        sup.end_member(r, &handle).await.unwrap();
+        waiter.wait().await.unwrap();
+        drain_sup(&sup).await;
+        assert_eq!(
+            (busy, cancelled, held, synthesis),
+            (Some(true), true, true, false)
+        );
     }
 }
 
 #[tokio::test]
-async fn review_r5_registration_frames_precede_siblings_and_activation_mail() {
-    let hooks = Arc::new(PausedStart {
-        target: Mutex::new(None),
-        entered: Arc::new(Notify::new()),
-        release: Arc::new(Notify::new()),
+async fn activation_rejects_blank_revives_across_lock_race_and_rejects_roster_orphan() {
+    let eng = engine().await;
+    let r = root(&eng).await;
+    let sup = ResidentSupervisor::start(eng.clone());
+    eng.store().claim_runtime_owner(sup.owner_run_id).unwrap();
+    let _drv = sup.root_driver_activity(r).await.unwrap();
+    let (child, handle) = parked(&sup, r).await;
+
+    let before = eng.replay(r).await.unwrap();
+    assert!(matches!(
+        act(&sup, r, child, " \n\t ", "g").await,
+        Err(CoreError::Invalid(_))
+    ));
+    assert_eq!(eng.replay(r).await.unwrap(), before);
+
+    // Archive racing before activation lock revives cleanly.
+    let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    *sup.activation_lock_pause.lock().unwrap() = Some((entered.clone(), release.clone()));
+    let racing = tokio::spawn({
+        let sup = sup.clone();
+        async move { act(&sup, r, child, "RACE", "g").await }
     });
-    let engine = Arc::new((*engine().await).clone().with_hooks(hooks.clone()));
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let _driver = supervisor.root_driver_activity(root).await.unwrap();
+    entered.notified().await;
+    sup.end_member(r, &handle).await.unwrap();
+    release.notify_one();
+    racing.await.unwrap().unwrap().wait().await.unwrap();
+
+    // Concurrent roster orphan rejects activation before committing mail.
+    sup.end_member(r, &handle).await.unwrap();
+    let (e2, r2) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    *sup.registration_pause.lock().unwrap() = Some((e2.clone(), r2.clone()));
+    let orphan_act = tokio::spawn({
+        let sup = sup.clone();
+        async move { act(&sup, r, child, "must not commit", "").await }
+    });
+    e2.notified().await;
+    let dm = dm_of(&eng, r, "main", &handle).await;
+    eng.store()
+        .revive_episode(
+            r,
+            sup.owner_run_id,
+            u64::MAX,
+            None,
+            child,
+            "main".into(),
+            dm,
+            MailKind::Message,
+            "prior".into(),
+            hya_provider::COMPACT_CONTEXT_MARKER,
+            None,
+        )
+        .await
+        .unwrap();
+    let before_orphan = eng.replay(r).await.unwrap();
+    r2.notify_one();
+    assert!(orphan_act.await.unwrap().is_err());
+    assert_eq!(eng.replay(r).await.unwrap(), before_orphan);
+    sup.end_member(r, &handle).await.unwrap();
+    drain_sup(&sup).await;
+}
+
+#[tokio::test]
+async fn ending_fences_parent_sweeps_descendants_racing_spawn_and_roster_orphans() {
+    let eng = engine().await;
+    let r = root(&eng).await;
+    let sup = ResidentSupervisor::start(eng.clone());
+    eng.store().claim_runtime_owner(sup.owner_run_id).unwrap();
+    let _drv = sup.root_driver_activity(r).await.unwrap();
+
+    // 1) Descendant ends before parent; unrelated sibling stays live.
+    let (stage, stage_h) = parked(&sup, r).await;
+    let (_, desc_h) = parked(&sup, stage).await;
+    let (other, other_h) = parked(&sup, r).await;
+    sup.end_member(r, &stage_h).await.unwrap();
+    assert_eq!(active_ids(&eng).await, [other]);
+    assert_eq!(archived_handles(&eng, r).await, [desc_h, stage_h]);
+    sup.end_member(r, &other_h).await.unwrap();
+
+    // 2) Ending cancels parent before sweep and catches a child racing mid-ending.
+    let (parent, parent_h) = parked(&sup, r).await;
+    let lease = eng.try_begin_turn(parent).unwrap();
+    let cancel = lease.bind_cancel(&CancellationToken::new());
+    let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    *sup.ending_pause.lock().unwrap() = Some((entered.clone(), release.clone()));
+    let ending = tokio::spawn({
+        let (sup, h) = (sup.clone(), parent_h.clone());
+        async move { sup.end_member(r, &h).await }
+    });
+    entered.notified().await;
+    assert!(cancel.is_cancelled());
+    let (agent, rt, claim) = {
+        let team = sup.team_with_resident(parent).unwrap();
+        let slot = &team.lock().residents[&parent];
+        (
+            slot.agent.clone(),
+            (
+                slot.binding.clone(),
+                slot.agents.clone().unwrap(),
+                slot.resources.clone().unwrap(),
+                slot.sidecar_factory.clone(),
+            ),
+            slot.claim.unwrap(),
+        )
+    };
+    let (late, _, _) = sup
+        .spawn_resident_parked(parent, agent, rt, "racing".into(), Some(&claim), None)
+        .await
+        .unwrap();
+    drop(lease);
+    release.notify_one();
+    ending.await.unwrap().unwrap();
+    assert!(!active_ids(&eng).await.contains(&late));
+
+    // 3) Ending takes over and archives a roster-orphan descendant before its ancestor.
+    let (anc, anc_h) = parked(&sup, r).await;
+    let (orphan, orphan_h) = parked(&sup, anc).await;
+    sup.end_member(r, &orphan_h).await.unwrap();
+    let dm = dm_of(&eng, r, &anc_h, &orphan_h).await;
+    eng.store()
+        .revive_episode(
+            r,
+            sup.owner_run_id,
+            u64::MAX,
+            None,
+            orphan,
+            anc_h.clone(),
+            dm,
+            MailKind::Message,
+            "orphan".into(),
+            hya_provider::COMPACT_CONTEXT_MARKER,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(sup.team_with_resident(orphan).is_none());
+    sup.end_member(r, &anc_h).await.unwrap();
+    assert!(!active_ids(&eng).await.contains(&orphan));
+    let tail = archived_handles(&eng, r).await;
+    assert_eq!(&tail[tail.len() - 2..], &[orphan_h, anc_h]);
+    drain_sup(&sup).await;
+}
+
+#[tokio::test]
+async fn registration_frames_precede_siblings_and_activation_mail() {
+    let (hooks, entered, release) = PauseHook::session_start();
+    let eng = Arc::new((*engine().await).clone().with_hooks(hooks.clone()));
+    let r = root(&eng).await;
+    let sup = ResidentSupervisor::start(eng.clone());
+    let _drv = sup.root_driver_activity(r).await.unwrap();
     let mut prepared = Vec::new();
     for _ in 0..2 {
-        let agent = AgentSpec {
-            name: AgentName::new("hya-scout"),
-            model: ModelRef::new("hya/offline"),
-            workdir: ".".into(),
-            system_prompt: String::new(),
-            reasoning: None,
-        };
-        let binding = engine.bind_runtime(&agent.workdir).unwrap();
-        let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+        let (a, rt) = runtime_for(&eng);
         prepared.push(
-            supervisor
-                .prepare_resident(
-                    root,
-                    agent,
-                    (binding, Arc::from([]), resources, None),
-                    ResidentSpawnContext::new("parked".into(), None, None, None),
-                )
-                .await
-                .unwrap()
-                .1,
+            sup.prepare_resident(
+                r,
+                a,
+                rt,
+                ResidentSpawnContext::new("parked".into(), None, None, None),
+            )
+            .await
+            .unwrap()
+            .1,
         );
     }
     let first = prepared[0].session;
     *hooks.target.lock().unwrap() = Some(first);
-    let mut bus = engine.bus().subscribe();
-    let mut initialized = supervisor
-        .register_episodes(root, prepared, None)
-        .await
-        .unwrap();
-    hooks.entered.notified().await;
-    initialized.pop().unwrap().await.unwrap().unwrap();
-    // Parked identity is usable even while its initializer remains blocked.
-    let mut activation = supervisor
-        .activate(
-            root,
-            first,
-            activation_runtime(&supervisor.engine),
-            "work".into(),
-            Arc::from(""),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-    let before_release = engine
-        .replay(root)
+    let mut bus = eng.bus().subscribe();
+    let mut inits = sup.register_episodes(r, prepared, None).await.unwrap();
+    entered.notified().await;
+    inits.pop().unwrap().await.unwrap().unwrap();
+    let mut activation = act(&sup, r, first, "work", "").await.unwrap();
+    let expected: Vec<_> = eng
+        .replay(r)
         .await
         .unwrap()
         .into_iter()
@@ -1515,237 +988,38 @@ async fn review_r5_registration_frames_precede_siblings_and_activation_mail() {
             )
         })
         .map(|e| e.seq)
-        .collect::<Vec<_>>();
+        .collect();
     let mut observed = Vec::new();
     while let Ok(e) = bus.try_recv() {
-        if e.event.session() == Some(root) && before_release.contains(&e.seq) {
+        if e.event.session() == Some(r) && expected.contains(&e.seq) {
             observed.push(e.seq);
         }
     }
-    hooks.release.notify_one();
-    initialized.pop().unwrap().await.unwrap().unwrap();
+    release.notify_one();
+    inits.pop().unwrap().await.unwrap().unwrap();
     activation.wait().await.unwrap();
-    supervisor
-        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
-        .await;
-    assert_eq!(
-        observed, before_release,
-        "root registration must publish in commit order before activation mail, without waiting for session-start hooks"
-    );
+    drain_sup(&sup).await;
+    assert_eq!(observed, expected);
 }
 
 #[tokio::test]
-async fn review_r2_concurrent_roster_orphan_rejects_activation_before_mail() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    engine
-        .store()
-        .claim_runtime_owner(supervisor.owner_run_id)
-        .unwrap();
-    let _driver = supervisor.root_driver_activity(root).await.unwrap();
-    let (child, handle) = parked(&supervisor, root).await;
-    supervisor.end_member(root, &handle).await.unwrap();
-    let entered = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    *supervisor.registration_pause.lock().unwrap() = Some((entered.clone(), release.clone()));
-    let activation = tokio::spawn({
-        let supervisor = supervisor.clone();
-        async move {
-            supervisor
-                .activate(
-                    root,
-                    child,
-                    activation_runtime(&supervisor.engine),
-                    "must not commit".into(),
-                    Arc::from(""),
-                    None,
-                    None,
-                )
-                .await
-        }
-    });
-    entered.notified().await;
-    let projection = engine.read_projection(root).await.unwrap();
-    let dm = crate::engine::dm_channel_between(&projection, "main", &handle).unwrap();
-    // A concurrent revival committed but left no episode (e.g. failed terminal
-    // persistence). The serialized roster, not the pre-lock snapshot, is live.
-    engine
-        .store()
-        .revive_episode(
-            root,
-            supervisor.owner_run_id,
-            u64::MAX,
-            None,
-            child,
-            "main".into(),
-            dm,
-            MailKind::Message,
-            "prior revival".into(),
-            hya_provider::COMPACT_CONTEXT_MARKER,
-            None,
-        )
-        .await
-        .unwrap();
-    let before = engine.replay(root).await.unwrap();
-    release.notify_one();
-    assert!(activation.await.unwrap().is_err());
-    let after = engine.replay(root).await.unwrap();
-    supervisor.end_member(root, &handle).await.unwrap();
-    supervisor
-        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
-        .await;
-    assert_eq!(
-        before, after,
-        "rejected activation committed mail to a roster orphan"
-    );
-}
-
-#[tokio::test]
-async fn review_r1_ending_fences_parent_and_sweeps_a_racing_spawn() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let _driver = supervisor.root_driver_activity(root).await.unwrap();
-    let (stage, handle) = parked(&supervisor, root).await;
-    let lease = engine.try_begin_turn(stage).unwrap();
-    let cancel = lease.bind_cancel(&CancellationToken::new());
-    let entered = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    *supervisor.ending_pause.lock().unwrap() = Some((entered.clone(), release.clone()));
-    let ending = tokio::spawn({
-        let supervisor = supervisor.clone();
-        let handle = handle.clone();
-        async move { supervisor.end_member(root, &handle).await }
-    });
-    entered.notified().await;
-    let cancelled_before_sweep = cancel.is_cancelled();
-    // A task already in flight can still commit before its parent's claim ends.
-    let (agent, runtime, claim) = {
-        let team = supervisor.team_with_resident(stage).unwrap();
-        let state = team.lock();
-        let slot = &state.residents[&stage];
-        (
-            slot.agent.clone(),
-            (
-                slot.binding.clone(),
-                slot.agents.clone().unwrap(),
-                slot.resources.clone().unwrap(),
-                slot.sidecar_factory.clone(),
-            ),
-            slot.claim.unwrap(),
-        )
-    };
-    let (late, late_handle, _) = supervisor
-        .spawn_resident_parked(
-            stage,
-            agent,
-            runtime,
-            "racing task".into(),
-            Some(&claim),
-            None,
-        )
-        .await
-        .unwrap();
-    drop(lease);
-    release.notify_one();
-    ending.await.unwrap().unwrap();
-    let live = engine.store().active_actor_ids().await.unwrap();
-    supervisor.end_member(root, &late_handle).await.unwrap();
-    supervisor
-        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
-        .await;
-    assert!(
-        cancelled_before_sweep,
-        "parent's active turn was not cancelled before subtree cleanup"
-    );
-    assert!(
-        !live.contains(&late),
-        "a child committed during cleanup survived its parent"
-    );
-}
-
-#[tokio::test]
-async fn review_r1_ending_takes_over_a_roster_orphan_descendant() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    engine
-        .store()
-        .claim_runtime_owner(supervisor.owner_run_id)
-        .unwrap();
-    let _driver = supervisor.root_driver_activity(root).await.unwrap();
-    let (stage, handle) = parked(&supervisor, root).await;
-    let (orphan, orphan_handle) = parked(&supervisor, stage).await;
-    supervisor.end_member(root, &orphan_handle).await.unwrap();
-    let projection = engine.read_projection(root).await.unwrap();
-    let dm = crate::engine::dm_channel_between(&projection, &handle, &orphan_handle).unwrap();
-    engine
-        .store()
-        .revive_episode(
-            root,
-            supervisor.owner_run_id,
-            u64::MAX,
-            None,
-            orphan,
-            handle.clone(),
-            dm,
-            MailKind::Message,
-            "orphan".into(),
-            hya_provider::COMPACT_CONTEXT_MARKER,
-            None,
-        )
-        .await
-        .unwrap();
-    assert!(supervisor.team_with_resident(orphan).is_none());
-    supervisor.end_member(root, &handle).await.unwrap();
-    let live = engine.store().active_actor_ids().await.unwrap();
-    let order = engine
-        .replay(root)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter_map(|e| {
-            if let Event::AgentArchived { handle, .. } = e.event {
-                Some(handle)
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    supervisor.end_member(root, &orphan_handle).await.unwrap();
-    supervisor
-        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
-        .await;
-    assert!(
-        !live.contains(&orphan),
-        "roster orphan retained its active claim"
-    );
-    assert_eq!(
-        &order[1..],
-        &[orphan_handle, handle],
-        "orphan must end before its ancestor"
-    );
-}
-
-#[tokio::test]
-async fn review_r3_revival_keeps_the_preflighted_stage_spec_and_catalog() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let _driver = supervisor.root_driver_activity(root).await.unwrap();
+async fn revival_keeps_preflighted_stage_spec_and_catalog() {
+    let eng = engine().await;
+    let r = root(&eng).await;
+    let sup = ResidentSupervisor::start(eng.clone());
+    let _drv = sup.root_driver_activity(r).await.unwrap();
     let agent = AgentSpec {
         name: AgentName::new("resident"),
         model: ModelRef::new("hya/offline"),
-        workdir: ".".into(),
+        workdir: "/tmp".into(),
         system_prompt: "PINNED_STAGE_PROMPT".into(),
         reasoning: Some(hya_provider::ReasoningEffort::High),
     };
-    let binding = engine.bind_runtime(&agent.workdir).unwrap();
-    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
-    let (child, handle, _) = supervisor
+    let binding = eng.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy("resident").unwrap();
+    let (child, handle, _) = sup
         .spawn_resident_parked(
-            root,
+            r,
             agent.clone(),
             (binding.clone(), Arc::from([]), resources.clone(), None),
             "parked".into(),
@@ -1754,16 +1028,16 @@ async fn review_r3_revival_keeps_the_preflighted_stage_spec_and_catalog() {
         )
         .await
         .unwrap();
-    supervisor.end_member(root, &handle).await.unwrap();
-    let mut activation = supervisor
+    sup.end_member(r, &handle).await.unwrap();
+    let mut a1 = sup
         .activate(
-            root,
+            r,
             child,
             (
                 agent.clone(),
                 (binding.clone(), Arc::from([]), resources.clone(), None),
             ),
-            "revived stage".into(),
+            "revived".into(),
             Arc::from(""),
             None,
             None,
@@ -1771,237 +1045,145 @@ async fn review_r3_revival_keeps_the_preflighted_stage_spec_and_catalog() {
         .await
         .unwrap();
     let actual = {
-        let team = supervisor.team_with_resident(child).unwrap();
-        let state = team.lock();
-        let slot = &state.residents[&child];
-        (slot.agent.system_prompt.clone(), slot.agent.reasoning)
+        let t = sup.team_with_resident(child).unwrap();
+        let s = &t.lock().residents[&child];
+        (s.agent.system_prompt.clone(), s.agent.reasoning)
     };
-    supervisor.end_member(root, &handle).await.unwrap();
-    activation.wait().await.unwrap();
-    // Remove the custom agent from the live catalog; the next activation is
-    // still entitled to the Workflow's previously resolved runtime snapshot.
-    let catalog = crate::AgentCatalog::new(Arc::new(
+    sup.end_member(r, &handle).await.unwrap();
+    a1.wait().await.unwrap();
+
+    let empty = crate::AgentCatalog::new(Arc::new(
         hya_bundle::BundleCatalog::from_prepared(&[]).unwrap(),
     ))
     .unwrap();
-    engine
-        .runtime_registry()
-        .publish_catalog(Arc::new(catalog))
+    eng.runtime_registry()
+        .publish_catalog(Arc::new(empty))
         .unwrap();
-    let revived = supervisor
+    let revived = sup
         .activate(
-            root,
+            r,
             child,
-            (
-                agent.clone(),
-                (binding.clone(), Arc::from([]), resources.clone(), None),
-            ),
-            "pinned catalog".into(),
+            (agent.clone(), (binding, Arc::from([]), resources, None)),
+            "pinned".into(),
             Arc::from(""),
             None,
             None,
         )
         .await;
-    let kept_catalog = revived.is_ok();
-    supervisor.end_member(root, &handle).await.unwrap();
-    supervisor
-        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
-        .await;
-    assert_eq!(
-        actual,
-        (agent.system_prompt, agent.reasoning),
-        "revival rebuilt the stage from the base agent"
-    );
-    assert!(
-        kept_catalog,
-        "revival resolved a preflighted Workflow agent against the live catalog"
-    );
+    sup.end_member(r, &handle).await.unwrap();
+    drain_sup(&sup).await;
+    assert_eq!(actual, (agent.system_prompt, agent.reasoning));
+    assert!(revived.is_ok());
 }
 
 #[tokio::test]
-async fn review_r4_root_driver_survives_team_replacement() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let driver = supervisor.root_driver_activity(root).await.unwrap();
-    let previous = supervisor.teams().get(&root).unwrap().clone();
-    for done in previous.kill(Ending::Killed("team budget".into())).await {
+async fn root_driver_policy_survives_replacement_and_task_registration() {
+    let eng = engine().await;
+    let r = root(&eng).await;
+    let sup = ResidentSupervisor::start(eng.clone());
+    let drv = sup.root_driver_activity(r).await.unwrap();
+    let lease = eng.try_begin_turn(r).unwrap();
+
+    let main = sup.resolve_main_activation(r).await.unwrap();
+    let (agent, runtime) = runtime_for(&eng);
+    sup.spawn_residents_typed(
+        r,
+        vec![TaskResidentSpawn {
+            agent,
+            runtime,
+            directive: "work".into(),
+            task: TaskSpawnOrigin {
+                subagent_type: "hya-scout".into(),
+                description: "work".into(),
+                tool_call: None,
+            },
+            guidance: None,
+        }],
+        main,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        !sup.teams()
+            .get(&r)
+            .unwrap()
+            .lock()
+            .root_driver
+            .autonomous
+            .load(Ordering::Acquire)
+    );
+
+    let prev = sup.teams().get(&r).unwrap().clone();
+    for done in prev.kill(Ending::Killed("team budget".into())).await {
         await_episode(done).await.unwrap();
     }
-    let replacement = supervisor.team_for(root).await.unwrap();
+    let repl = sup.team_for(r).await.unwrap();
     {
-        let mut state = replacement.lock();
-        state.work_seq += 1;
-        replacement.maybe_fire_quiescence(&mut state);
-        assert!(
-            !state.residents[&root].synth_pending,
-            "replacement team synthesized during a root driver"
-        );
+        let mut st = repl.lock();
+        st.work_seq += 1;
+        repl.maybe_fire_quiescence(&mut st);
+        assert!(!st.residents[&r].synth_pending);
     }
-    drop(driver);
-    drop(replacement);
-    supervisor
-        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
-        .await;
+    drop(drv);
+    assert!(!repl.lock().root_driver.autonomous.load(Ordering::Acquire));
+    drop((lease, repl));
+    drain_sup(&sup).await;
 }
 
 #[tokio::test]
-async fn review_r4_task_registration_preserves_headless_root_ownership() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let driver = supervisor.root_driver_activity(root).await.unwrap();
-    let main = supervisor.resolve_main_activation(root).await.unwrap();
-    let agent = AgentSpec {
-        name: AgentName::new("hya-scout"),
-        model: ModelRef::new("hya/offline"),
-        workdir: ".".into(),
-        system_prompt: String::new(),
-        reasoning: None,
-    };
-    let binding = engine.bind_runtime(&agent.workdir).unwrap();
-    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
-    supervisor
-        .spawn_residents_typed(
-            root,
-            vec![TaskResidentSpawn {
-                agent,
-                runtime: (binding, Arc::from([]), resources, None),
-                directive: "work".into(),
-                task: TaskSpawnOrigin {
-                    subagent_type: "hya-scout".into(),
-                    description: "work".into(),
-                    tool_call: None,
-                },
-                guidance: None,
-            }],
-            main,
-            None,
-        )
-        .await
-        .unwrap();
-    let team = supervisor.teams().get(&root).unwrap().clone();
-    let autonomous = team.lock().root_driver.autonomous.load(Ordering::Acquire);
-    drop(driver);
-    supervisor
-        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
-        .await;
+async fn wait_stalls_forget_ended_episodes_deleted_callers_and_reject_late_or_revived() {
+    let eng = engine().await;
+    let (caller, other) = (root(&eng).await, root(&eng).await);
+    let sup = ResidentSupervisor::start(eng.clone());
+    let drv = sup.root_driver_activity(other).await.unwrap();
+    let (child, handle) = parked(&sup, other).await;
+    let claim = sup.member_claim(child).unwrap();
+
+    sup.record_wait_stall(caller, claim, None);
+    sup.record_wait_stall(other, claim, None);
+    eng.delete_session(caller).await.unwrap();
     assert!(
-        !autonomous,
-        "task registration transferred headless continuation ownership to the supervisor"
+        !sup.wait_stall_reported(caller, claim, None)
+            && sup.wait_stall_reported(other, claim, None)
     );
-}
 
-#[tokio::test]
-async fn review_r4_replacement_preserves_headless_policy_during_a_lead_turn() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let driver = supervisor.root_driver_activity(root).await.unwrap();
-    // run_lead acquires its root-driver guard before starting the lead's turn.
-    let lease = engine.try_begin_turn(root).unwrap();
-    let previous = supervisor.teams().get(&root).unwrap().clone();
-    for done in previous.kill(Ending::Killed("team budget".into())).await {
-        await_episode(done).await.unwrap();
-    }
-    let replacement = supervisor.team_for(root).await.unwrap();
-    drop(driver);
-    let autonomous = replacement
-        .lock()
-        .root_driver
-        .autonomous
-        .load(Ordering::Acquire);
-    drop(lease);
-    drop(replacement);
-    supervisor
-        .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
-        .await;
-    assert!(
-        !autonomous,
-        "a live headless lead turn was mistaken for autonomous continuation ownership"
-    );
-}
+    sup.end_member(other, &handle).await.unwrap();
+    assert!(!sup.wait_stall_reported(other, claim, None));
+    sup.record_wait_stall(other, claim, None);
+    assert!(!sup.wait_stall_reported(other, claim, None));
 
-#[tokio::test]
-async fn m412_drop_supervisor_releases_listener_without_shutdown() {
-    let engine = engine().await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let weak = Arc::downgrade(&supervisor);
-    let mut receiver = engine.bus().subscribe();
-    drop(supervisor);
-    assert!(
-        weak.upgrade().is_none(),
-        "listener or engine owns the supervisor"
-    );
-    let root = root(&engine).await;
-    receiver.recv().await.unwrap();
-    assert!(engine.resident_supervisor().is_none());
-    assert!(engine.session_exists(root).await.unwrap());
-}
-
-#[tokio::test]
-async fn m412_episode_end_forgets_wait_stalls() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let driver = supervisor.root_driver_activity(root).await.unwrap();
-    let (child, handle) = parked(&supervisor, root).await;
-    let claim = supervisor.member_claim(child).unwrap();
-    supervisor.record_wait_stall(root, claim, None);
-    supervisor.end_member(root, &handle).await.unwrap();
-    let retained = supervisor.wait_stall_reported(root, claim, None);
-    drop(driver);
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(5))
-        .await;
-    assert!(!retained, "ended episode retained its stall notice");
-}
-
-#[tokio::test]
-async fn m412_delete_caller_forgets_only_its_wait_stalls() {
-    let engine = engine().await;
-    let caller = root(&engine).await;
-    let other = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let driver = supervisor.root_driver_activity(other).await.unwrap();
-    let (member, _) = parked(&supervisor, other).await;
-    let claim = supervisor.member_claim(member).unwrap();
-    supervisor.record_wait_stall(caller, claim, None);
-    supervisor.record_wait_stall(other, claim, None);
-    engine.delete_session(caller).await.unwrap();
-    let retained = supervisor.wait_stall_reported(caller, claim, None);
-    assert!(supervisor.wait_stall_reported(other, claim, None));
-    drop(driver);
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(5))
-        .await;
-    assert!(!retained, "deleted caller retained its stall notice");
+    let lease = eng.try_begin_turn(child).unwrap();
+    mail_h(&eng, other, &handle, "revive").await.unwrap();
+    sup.record_wait_stall(other, claim, None);
+    assert!(!sup.wait_stall_reported(other, sup.member_claim(child).unwrap(), None));
+    eng.begin_drain(FinishCause::Shutdown);
+    drop((lease, drv));
+    drain_sup(&sup).await;
 }
 
 #[tokio::test]
 async fn resident_mail_live_and_catch_up_deliver_only_incoming_work() {
     for catch_up in [false, true] {
-        let engine = engine().await;
-        let root = root(&engine).await;
-        let supervisor = ResidentSupervisor::start(engine.clone());
-        let driver = supervisor.root_driver_activity(root).await.unwrap();
-        let (child, handle) = parked(&supervisor, root).await;
-        let lease = engine.try_begin_turn(child).unwrap();
-        let team = supervisor.team_with_resident(child).unwrap();
-        let projection = engine.read_projection_shared(root).await.unwrap();
-        let dm = projection.team.resolve_dm(&handle, "main").unwrap();
-        drop(projection);
-        let mut events = engine.bus().subscribe();
-        for (from, body, expected_pending) in [
+        let eng = engine().await;
+        let r = root(&eng).await;
+        let sup = ResidentSupervisor::start(eng.clone());
+        let drv = sup.root_driver_activity(r).await.unwrap();
+        let (child, handle) = parked(&sup, r).await;
+        let lease = eng.try_begin_turn(child).unwrap();
+        let team = sup.team_with_resident(child).unwrap();
+        let dm = dm_of(&eng, r, &handle, "main").await;
+        let mut events = eng.bus().subscribe();
+        for (from, body, want_pending) in [
             (handle.as_str(), "own mailbox post", false),
             ("main", "incoming mailbox work", true),
         ] {
-            let mut committed = engine
+            let mut committed = eng
                 .store()
                 .append_events(
-                    root,
+                    r,
                     vec![Event::MailSent {
-                        session: root,
+                        session: r,
                         from: from.into(),
                         to: MailEndpoint::Channel(dm.clone()),
                         kind: MailKind::Message,
@@ -2013,259 +1195,153 @@ async fn resident_mail_live_and_catch_up_deliver_only_incoming_work() {
             if catch_up {
                 team.enqueue(TeamEvent::Recover);
             } else {
-                supervisor.route_envelope(committed.pop().unwrap());
+                sup.route_envelope(committed.pop().unwrap());
             }
-            let (flushed, flush) = oneshot::channel();
-            team.enqueue(TeamEvent::Flush(flushed));
-            tokio::time::timeout(Duration::from_secs(5), flush)
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(team.lock().residents[&child].pending, expected_pending);
+            let (tx, rx) = oneshot::channel();
+            team.enqueue(TeamEvent::Flush(tx));
+            rx.await.unwrap();
+            assert_eq!(team.lock().residents[&child].pending, want_pending);
         }
         drop(lease);
         tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let envelope = events.recv().await.unwrap();
-                if let Event::ResidentWorkFinished {
-                    session,
-                    handle: finished,
-                    inbox_through,
-                    ..
-                } = envelope.event
-                    && session == root
-                    && finished == handle
-                {
-                    assert_eq!(inbox_through, 2);
-                    break;
-                }
-            }
-        })
-        .await
-        .unwrap();
-        let projection = engine.read_projection_shared(root).await.unwrap();
-        assert_eq!(projection.team.inboxes[&handle].len(), 2);
-        assert_eq!(projection.team.roster[&handle].resident_cursor, 2);
-        let response: String = engine
+            while !matches!(events.recv().await.unwrap().event, Event::ResidentWorkFinished { session, handle: ref f, inbox_through: 2, .. } if session == r && f == &handle) {}
+        }).await.unwrap();
+        let proj = eng.read_projection_shared(r).await.unwrap();
+        assert_eq!(
+            (
+                proj.team.inboxes[&handle].len(),
+                proj.team.roster[&handle].resident_cursor
+            ),
+            (2, 2)
+        );
+        let resp: String = eng
             .replay(child)
             .await
             .unwrap()
             .into_iter()
-            .filter_map(|envelope| match envelope.event {
+            .filter_map(|e| match e.event {
                 Event::TextDelta { delta, .. } => Some(delta),
                 _ => None,
             })
             .collect();
-        assert!(response.contains("incoming mailbox work"), "{response:?}");
-        assert!(!response.contains("own mailbox post"), "{response:?}");
-        drop(driver);
-        supervisor
-            .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
-            .await;
+        assert!(resp.contains("incoming mailbox work") && !resp.contains("own mailbox post"));
+        drop(drv);
+        drain_sup(&sup).await;
     }
 }
 
 #[tokio::test]
-async fn m412_slow_team_mail_does_not_block_another_root() {
-    let engine = engine().await;
-    let first = root(&engine).await;
-    let second = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let first_driver = supervisor.root_driver_activity(first).await.unwrap();
-    let second_driver = supervisor.root_driver_activity(second).await.unwrap();
-    let entered = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    *supervisor.mail_pause.lock().unwrap() = Some((first, entered.clone(), release.clone()));
-    let publish = |root| {
-        let engine = engine.clone();
+async fn slow_team_mail_does_not_block_another_root_and_queue_drops_payloads() {
+    let eng = engine().await;
+    let (first, second, third) = (root(&eng).await, root(&eng).await, root(&eng).await);
+    let sup = ResidentSupervisor::start(eng.clone());
+    let (d1, d2) = (
+        sup.root_driver_activity(first).await.unwrap(),
+        sup.root_driver_activity(second).await.unwrap(),
+    );
+    let (e1, r1) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    *sup.mail_pause.lock().unwrap() = Some((first, e1.clone(), r1.clone()));
+    let emit = |target| {
+        let eng = eng.clone();
         async move {
-            engine
-                .emit_for_actor(
-                    None,
-                    root,
-                    Event::MailSent {
-                        session: root,
-                        from: scope::HARNESS_HANDLE.into(),
-                        to: MailEndpoint::Handle(scope::ROOT_HANDLE.into()),
-                        kind: MailKind::Message,
-                        body: "queue".into(),
-                    },
-                )
-                .await
-                .unwrap();
+            eng.emit_for_actor(
+                None,
+                target,
+                Event::MailSent {
+                    session: target,
+                    from: scope::HARNESS_HANDLE.into(),
+                    to: MailEndpoint::Handle(scope::ROOT_HANDLE.into()),
+                    kind: MailKind::Message,
+                    body: "q".into(),
+                },
+            )
+            .await
+            .unwrap();
         }
     };
-    publish(first).await;
-    entered.notified().await;
-    // Root two must receive its wake while root one's handler is held.
-    let second_entered = Arc::new(Notify::new());
-    let second_release = Arc::new(Notify::new());
-    *supervisor.mail_pause.lock().unwrap() =
-        Some((second, second_entered.clone(), second_release.clone()));
-    publish(first).await;
-    publish(second).await;
-    let routed = tokio::time::timeout(Duration::from_secs(1), second_entered.notified()).await;
-    let first_team = supervisor.teams().get(&first).unwrap().clone();
-    let before_release = first_team.lock().messages_used;
-    let (flushed, flush) = oneshot::channel();
-    first_team.enqueue(TeamEvent::Flush(flushed));
-    release.notify_one();
-    second_release.notify_one();
-    tokio::time::timeout(Duration::from_secs(5), flush)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(before_release, 0, "a later envelope overtook held mail");
-    assert_eq!(first_team.lock().messages_used, 2, "queued mail was lost");
-    drop(first_driver);
-    drop(second_driver);
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(5))
-        .await;
-    assert!(routed.is_ok(), "slow root blocked another root's mail");
-}
-
-#[tokio::test]
-async fn m412_drain_joins_listener_and_every_team_task() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let driver = supervisor.root_driver_activity(root).await.unwrap();
-    let (child, _) = parked(&supervisor, root).await;
-    let old = supervisor.team_with_resident(child).unwrap();
-    old.kill(Ending::Killed("replace".into())).await;
-    let replacement = supervisor.team_for(root).await.unwrap();
-    drop(replacement);
-    drop(driver);
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(5))
-        .await;
+    emit(first).await;
+    e1.notified().await;
+    let (e2, r2) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    *sup.mail_pause.lock().unwrap() = Some((second, e2.clone(), r2.clone()));
+    emit(first).await;
+    emit(second).await;
     assert!(
-        supervisor.listener.lock().unwrap().is_none(),
-        "listener was not joined"
+        tokio::time::timeout(Duration::from_secs(1), e2.notified())
+            .await
+            .is_ok()
     );
-    assert!(supervisor.tasks.is_empty(), "team futures survived drain");
-    assert_eq!(supervisor.episode_count(), 0);
-    assert!(supervisor.teams().is_empty());
-}
+    let t1 = sup.teams().get(&first).unwrap().clone();
+    assert_eq!(t1.lock().messages_used, 0);
+    let (tx, rx) = oneshot::channel();
+    t1.enqueue(TeamEvent::Flush(tx));
+    r1.notify_one();
+    r2.notify_one();
+    rx.await.unwrap();
+    assert_eq!(t1.lock().messages_used, 2);
+    drop((d1, d2));
 
-#[tokio::test]
-async fn m412_last_episode_retires_team_and_removes_member_index() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let driver = supervisor.root_driver_activity(root).await.unwrap();
-    let (child, handle) = parked(&supervisor, root).await;
-    let team = supervisor.team_with_resident(child).unwrap();
-    supervisor.end_member(root, &handle).await.unwrap();
-    assert!(supervisor.team_with_resident(child).is_none());
-    drop(driver);
-    assert!(team.cancel.is_cancelled());
-    assert!(supervisor.teams().get(&root).is_none());
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(5))
-        .await;
-}
-
-#[tokio::test]
-async fn m412_registration_releases_committed_handle_reservations() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let driver = supervisor.root_driver_activity(root).await.unwrap();
-    let (agent, runtime) = activation_runtime(&engine);
-    let (_, prepared, _) = supervisor
-        .prepare_resident(
-            root,
-            agent,
-            runtime,
-            ResidentSpawnContext::new("park".into(), None, None, None),
-        )
-        .await
-        .unwrap();
-    let leaf = prepared.leaf.clone();
-    assert_eq!(engine.pending_member_names(root), 1);
-    supervisor
-        .register_episodes(root, vec![prepared], None)
-        .await
-        .unwrap();
-    let reserved = engine.pending_member_names(root);
-    let durable = engine.read_projection(root).await.unwrap();
-    assert!(crate::handle_naming::team_leaves(&durable).contains(&leaf));
-    drop(driver);
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(5))
-        .await;
-    assert_eq!(
-        reserved, 0,
-        "committed identity retained a process reservation"
+    // Blocked team queue drops large payloads and keeps only routing fields.
+    let (ev_tx, mut queue) = tokio::sync::mpsc::unbounded_channel();
+    let t3 = Arc::new(TeamActor::new(
+        third,
+        eng.clone(),
+        Arc::downgrade(&sup),
+        Arc::new(RootDriverState {
+            runs: AtomicUsize::new(0),
+            autonomous: AtomicBool::new(true),
+        }),
+        sup.tasks.clone(),
+        ev_tx,
+    ));
+    sup.teams().insert(third, t3.clone());
+    for (seq, event) in [
+        Event::TextDelta {
+            session: third,
+            message: hya_proto::MessageId::new(),
+            part: hya_proto::PartId::new(),
+            delta: "LARGE_ACTIVITY_PAYLOAD".repeat(10_000),
+        },
+        Event::MailSent {
+            session: third,
+            from: "harness".into(),
+            to: MailEndpoint::Handle("main".into()),
+            kind: MailKind::Message,
+            body: "LARGE_MAIL_PAYLOAD".repeat(10_000),
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        sup.route_envelope(hya_proto::Envelope {
+            seq: hya_proto::EventSeq(seq as u64),
+            ts_millis: 0,
+            event,
+        });
+    }
+    let (q1, q2) = (
+        format!("{:?}", queue.try_recv().unwrap()),
+        format!("{:?}", queue.try_recv().unwrap()),
     );
+    assert!(!q1.contains("LARGE_ACTIVITY_PAYLOAD") && !q2.contains("LARGE_MAIL_PAYLOAD"));
+    assert!(q1.contains(&format!("{third:?}")) && q2.contains("main"));
+    assert_eq!(t3.lock().queued_wakes, 1);
+    assert!(queue.try_recv().is_err());
+    sup.teams().remove(&third);
+    drain_sup(&sup).await;
 }
 
 #[tokio::test]
-async fn m412_cancelled_preparation_releases_handle_reservation() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let (agent, runtime) = activation_runtime(&engine);
-    let (_, prepared, _) = supervisor
-        .prepare_resident(
-            root,
-            agent,
-            runtime,
-            ResidentSpawnContext::new("park".into(), None, None, None),
-        )
-        .await
-        .unwrap();
-    assert_eq!(engine.pending_member_names(root), 1);
-    drop(prepared);
-    let reserved = engine.pending_member_names(root);
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(5))
-        .await;
-    assert_eq!(
-        reserved, 0,
-        "abandoned preparation retained its name reservation"
-    );
-}
-
-#[tokio::test]
-async fn m412_late_stall_record_cannot_retain_ended_episode() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let driver = supervisor.root_driver_activity(root).await.unwrap();
-    let (child, handle) = parked(&supervisor, root).await;
-    let claim = supervisor.member_claim(child).unwrap();
-    supervisor.end_member(root, &handle).await.unwrap();
-    supervisor.record_wait_stall(root, claim, None);
-    let retained = supervisor.wait_stall_reported(root, claim, None);
-    drop(driver);
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(5))
-        .await;
-    assert!(
-        !retained,
-        "a wait snapshot recorded an already ended episode"
-    );
-}
-
-#[tokio::test]
-async fn m412_drop_supervisor_requests_live_episode_endings_before_cancellation() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let (child, _) = parked(&supervisor, root).await;
-    let team = supervisor.team_with_resident(child).unwrap();
+async fn supervisor_drop_drain_and_last_episode_retire_cleanly() {
+    let eng = engine().await;
+    let r = root(&eng).await;
+    let sup = ResidentSupervisor::start(eng.clone());
+    let (child, _) = parked(&sup, r).await;
+    let team = sup.team_with_resident(child).unwrap();
     let done = team.lock().residents[&child].done.subscribe();
-    let weak = Arc::downgrade(&supervisor);
-    drop(supervisor);
-    assert!(weak.upgrade().is_none());
-    assert!(
-        team.lock().phase.killed(),
-        "Drop left a cancelled team without its ending owner"
-    );
-    assert!(team.lock().residents[&child].ending.is_some());
+    let weak = Arc::downgrade(&sup);
+    drop(sup);
+    assert!(weak.upgrade().is_none() && eng.resident_supervisor().is_none());
+    assert!(team.lock().phase.killed() && team.lock().residents[&child].ending.is_some());
     tokio::time::timeout(Duration::from_secs(5), await_episode(done))
         .await
         .unwrap()
@@ -2273,141 +1349,255 @@ async fn m412_drop_supervisor_requests_live_episode_endings_before_cancellation(
     team.tasks.close();
     team.tasks.wait().await;
     assert!(team.lock().residents.is_empty());
+
+    let eng2 = engine().await;
+    let r2 = root(&eng2).await;
+    let sup2 = ResidentSupervisor::start(eng2.clone());
+    let drv = sup2.root_driver_activity(r2).await.unwrap();
+    let (c2, h2) = parked(&sup2, r2).await;
+    let t2 = sup2.team_with_resident(c2).unwrap();
+    sup2.end_member(r2, &h2).await.unwrap();
+    assert!(sup2.team_with_resident(c2).is_none());
+    drop(drv);
+    assert!(t2.cancel.is_cancelled() && sup2.teams().get(&r2).is_none());
+
+    let drv2 = sup2.root_driver_activity(r2).await.unwrap();
+    let (c3, _) = parked(&sup2, r2).await;
+    sup2.team_with_resident(c3)
+        .unwrap()
+        .kill(Ending::Killed("replace".into()))
+        .await;
+    let _repl = sup2.team_for(r2).await.unwrap();
+    drop((_repl, drv2));
+    drain_sup(&sup2).await;
+    assert!(
+        sup2.listener.lock().unwrap().is_none()
+            && sup2.tasks.is_empty()
+            && sup2.episode_count() == 0
+            && sup2.teams().is_empty()
+    );
 }
 
 #[tokio::test]
-async fn o8_name_allocation_does_not_reserve_after_a_store_failure() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let mut tx = engine.store().begin_transaction().await.unwrap();
-    sqlx::query("DROP TABLE event_log")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    tx.commit().await.unwrap();
-    let reservation = engine.mint_member_leaf(root, "scout").await;
-    assert_eq!(engine.pending_member_names(root), 0);
-    assert!(matches!(reservation, Err(CoreError::Store(_))));
-}
-
-#[tokio::test]
-async fn o2_interactive_turn_release_retires_the_finished_team() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let turn = engine.try_begin_turn(root).unwrap();
-    let (child, handle) = parked(&supervisor, root).await;
-    let team = supervisor.team_with_resident(child).unwrap();
-    supervisor.end_member(root, &handle).await.unwrap();
-    engine
-        .emit_for_actor(
-            None,
-            root,
-            Event::MailSent {
-                session: root,
-                from: scope::HARNESS_HANDLE.into(),
-                to: MailEndpoint::Handle(scope::ROOT_HANDLE.into()),
-                kind: MailKind::Message,
-                body: "child ended".into(),
-            },
-        )
-        .await
-        .unwrap();
-    // Seal bus intake so a late terminal envelope cannot retire the team
-    // on behalf of the turn boundary under test.
-    supervisor.listener_stop.cancel();
-    let listener = supervisor.listener.lock().unwrap().take().unwrap();
+async fn interactive_turn_release_retires_team_and_shutdown_does_not_retain_engine() {
+    let eng = engine().await;
+    let r = root(&eng).await;
+    let sup = ResidentSupervisor::start(eng.clone());
+    let turn = eng.try_begin_turn(r).unwrap();
+    let (child, handle) = parked(&sup, r).await;
+    let team = sup.team_with_resident(child).unwrap();
+    sup.end_member(r, &handle).await.unwrap();
+    eng.emit_for_actor(
+        None,
+        r,
+        Event::MailSent {
+            session: r,
+            from: scope::HARNESS_HANDLE.into(),
+            to: MailEndpoint::Handle(scope::ROOT_HANDLE.into()),
+            kind: MailKind::Message,
+            body: "child ended".into(),
+        },
+    )
+    .await
+    .unwrap();
+    sup.listener_stop.cancel();
+    let listener = sup.listener.lock().unwrap().take().unwrap();
     listener.await.unwrap();
-    let (done, flushed) = oneshot::channel();
-    team.enqueue(TeamEvent::Flush(done));
-    flushed.await.unwrap();
+    let (tx, rx) = oneshot::channel();
+    team.enqueue(TeamEvent::Flush(tx));
+    rx.await.unwrap();
     crate::member_wait::wait_for_members(
         None,
-        &engine,
-        &supervisor,
-        root,
+        &eng,
+        &sup,
+        r,
         hya_tool::WaitSpec::parse(&serde_json::json!({"timeout_secs": 0}), true).unwrap(),
         None,
     )
     .await
     .unwrap();
-    assert!(supervisor.teams().contains_key(&root));
+    assert!(sup.teams().contains_key(&r));
     drop(turn);
-    let retired = tokio::time::timeout(Duration::from_secs(1), team.cancel.cancelled()).await;
-    if retired.is_ok() {
-        supervisor.tasks.close();
-        supervisor.tasks.wait().await;
-        assert!(supervisor.tasks.is_empty());
-        assert!(team.lock().residents.is_empty());
-    }
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(5))
-        .await;
-    assert!(retired.is_ok(), "root turn release retained its idle team");
-    assert!(supervisor.teams().is_empty());
-}
+    tokio::time::timeout(Duration::from_secs(1), team.cancel.cancelled())
+        .await
+        .unwrap();
+    sup.tasks.close();
+    sup.tasks.wait().await;
+    assert!(sup.tasks.is_empty() && team.lock().residents.is_empty() && sup.teams().is_empty());
+    drain_sup(&sup).await;
 
-#[tokio::test]
-async fn o3_turn_release_during_shutdown_cannot_retain_the_engine() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let weak = Arc::downgrade(&engine);
-    let lease = engine.try_begin_turn(root).unwrap();
-    engine.begin_drain(FinishCause::Shutdown);
-    // A current-thread runtime keeps the release task queued until we yield.
+    let eng2 = engine().await;
+    let r2 = root(&eng2).await;
+    let sup2 = ResidentSupervisor::start(eng2.clone());
+    let weak = Arc::downgrade(&eng2);
+    let lease = eng2.try_begin_turn(r2).unwrap();
+    eng2.begin_drain(FinishCause::Shutdown);
     drop(lease);
-    assert_eq!(
-        Arc::strong_count(&supervisor),
-        1,
-        "draining release queued a strong supervisor owner"
-    );
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(5))
-        .await;
-    drop(supervisor);
-    drop(engine);
+    assert_eq!(Arc::strong_count(&sup2), 1);
+    drain_sup(&sup2).await;
+    drop((sup2, eng2));
     assert!(weak.upgrade().is_none());
 }
 
 #[tokio::test]
-async fn o4_ended_staged_claim_still_recovers_its_roots_unread_mail() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let previous = ResidentSupervisor::start(engine.clone());
-    let driver = previous.root_driver_activity(root).await.unwrap();
-    let (child, handle) = parked(&previous, root).await;
-    let claim = previous.team_with_resident(child).unwrap().lock().residents[&child]
+async fn member_name_reservations_release_on_commit_cancel_and_store_failure() {
+    let eng = engine().await;
+    let r = root(&eng).await;
+    let sup = ResidentSupervisor::start(eng.clone());
+    let drv = sup.root_driver_activity(r).await.unwrap();
+
+    let (a, rt) = runtime_for(&eng);
+    let (_, cancelled, _) = sup
+        .prepare_resident(
+            r,
+            a,
+            rt,
+            ResidentSpawnContext::new("park".into(), None, None, None),
+        )
+        .await
+        .unwrap();
+    assert_eq!(eng.pending_member_names(r), 1);
+    drop(cancelled);
+    assert_eq!(eng.pending_member_names(r), 0);
+
+    let (a, rt) = runtime_for(&eng);
+    let (_, prep, _) = sup
+        .prepare_resident(
+            r,
+            a,
+            rt,
+            ResidentSpawnContext::new("park".into(), None, None, None),
+        )
+        .await
+        .unwrap();
+    let leaf = prep.leaf.clone();
+    assert_eq!(eng.pending_member_names(r), 1);
+    sup.register_episodes(r, vec![prep], None).await.unwrap();
+    assert_eq!(eng.pending_member_names(r), 0);
+    assert!(
+        crate::handle_naming::team_leaves(&eng.read_projection(r).await.unwrap()).contains(&leaf)
+    );
+    drop(drv);
+    drain_sup(&sup).await;
+
+    let eng2 = engine().await;
+    let r2 = root(&eng2).await;
+    let mut tx = eng2.store().begin_transaction().await.unwrap();
+    sqlx::query("DROP TABLE event_log")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert!(matches!(
+        eng2.mint_member_leaf(r2, "scout").await,
+        Err(CoreError::Store(_))
+    ));
+    assert_eq!(eng2.pending_member_names(r2), 0);
+}
+
+#[tokio::test]
+async fn recovered_episode_ignores_outgoing_dm_and_staged_claim_recovers_root_mail() {
+    let eng = engine().await;
+    let r = root(&eng).await;
+    let sup = ResidentSupervisor::start(eng.clone());
+    let _lead = eng.try_begin_turn(r).unwrap();
+    let child = eng
+        .create(CreateSession {
+            parent: Some(r),
+            agent: AgentName::new("hya-scout"),
+            model: ModelRef::new("hya/offline"),
+            workdir: "/tmp".into(),
+            project: None,
+            kind: SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    eng.store()
+        .append_events(
+            r,
+            vec![
+                Event::AgentRegistered {
+                    session: r,
+                    agent_session: child,
+                    handle: "scout".into(),
+                    parent: Some("main".into()),
+                    agent_type: AgentName::new("hya-scout"),
+                    mode: SubagentMode::Resident,
+                },
+                Event::ChannelCreated {
+                    session: r,
+                    channel: "DM-12345678".into(),
+                    kind: ChannelKind::Dm,
+                    unit: None,
+                    members: vec!["main".into(), "main/scout".into()],
+                },
+                Event::MailSent {
+                    session: r,
+                    from: "main/scout".into(),
+                    to: MailEndpoint::Channel("DM-12345678".into()),
+                    kind: MailKind::Message,
+                    body: "outgoing status".into(),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+    eng.store()
+        .try_claim_new(r, child, OwnerRunId::new())
+        .await
+        .unwrap();
+    eng.store().claim_runtime_owner(sup.owner_run_id).unwrap();
+    let rec = eng
+        .store()
+        .recover_claim(child, sup.owner_run_id)
+        .await
+        .unwrap();
+    let child_turn = eng.try_begin_turn(child).unwrap();
+    let (a, rt) = runtime_for(&eng);
+    sup.register_recovered_resident(r, "main/scout".into(), a, rt, rec, ResidentRecovery::Idle)
+        .await
+        .unwrap();
+    drop(child_turn);
+    assert_eq!(sup.member_busy(r, child), Some(false));
+    drop(_lead);
+    drain_sup(&sup).await;
+
+    // Ended staged recovery claim still recovers unread root mail on startup.
+    let eng2 = engine().await;
+    let r2 = root(&eng2).await;
+    let prev = ResidentSupervisor::start(eng2.clone());
+    let drv = prev.root_driver_activity(r2).await.unwrap();
+    let (c2, h2) = parked(&prev, r2).await;
+    let claim = prev.team_with_resident(c2).unwrap().lock().residents[&c2]
         .claim
         .unwrap();
-    previous.end_member(root, &handle).await.unwrap();
-    drop(driver);
-    previous.listener_stop.cancel();
-    let listener = previous.listener.lock().unwrap().take().unwrap();
+    prev.end_member(r2, &h2).await.unwrap();
+    drop(drv);
+    prev.listener_stop.cancel();
+    let listener = prev.listener.lock().unwrap().take().unwrap();
     listener.await.unwrap();
-    previous.tasks.close();
-    previous.tasks.wait().await;
-    drop(previous);
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let (agent, runtime) = activation_runtime(&engine);
-    supervisor.defer_recovered_resident(
-        root,
-        handle,
-        agent,
-        runtime,
+    prev.tasks.close();
+    prev.tasks.wait().await;
+    drop(prev);
+
+    let sup2 = ResidentSupervisor::start(eng2.clone());
+    let (a2, rt2) = runtime_for(&eng2);
+    sup2.defer_recovered_resident(
+        r2,
+        h2,
+        a2,
+        rt2,
         hya_store::RecoveredActorClaim {
             claim,
             previous_epoch: claim.epoch,
         },
         ResidentRecovery::Idle,
     );
-    // Persisted before startup; no live bus envelope can recover it for us.
-    engine
-        .store()
+    eng2.store()
         .append_event(
-            root,
+            r2,
             &Event::MailSent {
-                session: root,
+                session: r2,
                 from: scope::HARNESS_HANDLE.into(),
                 to: MailEndpoint::Handle("main".into()),
                 kind: MailKind::Message,
@@ -2416,122 +1606,12 @@ async fn o4_ended_staged_claim_still_recovers_its_roots_unread_mail() {
         )
         .await
         .unwrap();
-    assert_eq!(supervisor.start_recovered().await.unwrap(), 0);
-    supervisor.tasks.close();
-    tokio::time::timeout(Duration::from_secs(5), supervisor.tasks.wait())
+    assert_eq!(sup2.start_recovered().await.unwrap(), 0);
+    sup2.tasks.close();
+    tokio::time::timeout(Duration::from_secs(5), sup2.tasks.wait())
         .await
         .unwrap();
-    let replay = engine.replay(root).await.unwrap();
-    let recovered = replay.iter().any(|envelope| {
-        matches!(&envelope.event,
-        Event::TextDelta { delta, .. } if delta.contains("unread root mail"))
-    });
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(5))
-        .await;
-    assert!(
-        recovered,
-        "the stale claim retired its root before inbox recovery"
-    );
-}
-
-#[tokio::test]
-async fn o5_late_stall_from_an_ended_episode_does_not_mark_its_revival() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let driver = supervisor.root_driver_activity(root).await.unwrap();
-    let (child, handle) = parked(&supervisor, root).await;
-    let old_claim = supervisor
-        .team_with_resident(child)
-        .unwrap()
-        .lock()
-        .residents[&child]
-        .claim;
-    supervisor.end_member(root, &handle).await.unwrap();
-    // Hold the revived turn before its first answer, while an old wait's
-    // snapshot remains suspended before recording the stall.
-    let lease = engine.try_begin_turn(child).unwrap();
-    engine
-        .mail_send(
-            root,
-            MailEndpoint::Handle(handle),
-            MailKind::Message,
-            "revive".into(),
-        )
-        .await
-        .unwrap();
-    supervisor.record_wait_stall(root, old_claim.unwrap(), None);
-    let inherited =
-        supervisor.wait_stall_reported(root, supervisor.member_claim(child).unwrap(), None);
-    engine.begin_drain(FinishCause::Shutdown);
-    drop(lease);
-    drop(driver);
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(5))
-        .await;
-    assert!(!inherited, "revived episode inherited an old wait snapshot");
-}
-
-#[tokio::test]
-async fn o7_blocked_team_queue_retains_only_routing_fields_in_order() {
-    let engine = engine().await;
-    let root = root(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let (events, mut queue) = tokio::sync::mpsc::unbounded_channel();
-    let team = Arc::new(TeamActor::new(
-        root,
-        engine.clone(),
-        Arc::downgrade(&supervisor),
-        Arc::new(RootDriverState {
-            runs: AtomicUsize::new(0),
-            autonomous: AtomicBool::new(true),
-        }),
-        supervisor.tasks.clone(),
-        events,
-    ));
-    supervisor.teams().insert(root, team.clone());
-    // Retain the receiver without a worker, deterministically blocking consumption.
-    for (seq, event) in [
-        Event::TextDelta {
-            session: root,
-            message: hya_proto::MessageId::new(),
-            part: hya_proto::PartId::new(),
-            delta: "LARGE_ACTIVITY_PAYLOAD".repeat(100_000),
-        },
-        Event::MailSent {
-            session: root,
-            from: "harness".into(),
-            to: MailEndpoint::Handle("main".into()),
-            kind: MailKind::Message,
-            body: "LARGE_MAIL_PAYLOAD".repeat(100_000),
-        },
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        supervisor.route_envelope(hya_proto::Envelope {
-            seq: hya_proto::EventSeq(seq as u64),
-            ts_millis: 0,
-            event,
-        });
-    }
-    let first = format!("{:?}", queue.try_recv().unwrap());
-    let second = format!("{:?}", queue.try_recv().unwrap());
-    assert!(
-        !first.contains("LARGE_ACTIVITY_PAYLOAD"),
-        "activity queue retained its payload"
-    );
-    assert!(
-        !second.contains("LARGE_MAIL_PAYLOAD"),
-        "mail queue retained its body"
-    );
-    assert!(first.contains(&format!("{root:?}")));
-    assert!(second.contains("main"));
-    assert_eq!(team.lock().queued_wakes, 1);
-    assert!(queue.try_recv().is_err());
-    supervisor.teams().remove(&root);
-    supervisor
-        .drain(FinishCause::Shutdown, Duration::from_secs(5))
-        .await;
+    let ok = eng2.replay(r2).await.unwrap().iter().any(|e| matches!(&e.event, Event::TextDelta { delta, .. } if delta.contains("unread root mail")));
+    drain_sup(&sup2).await;
+    assert!(ok);
 }
