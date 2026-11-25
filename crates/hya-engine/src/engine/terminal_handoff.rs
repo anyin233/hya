@@ -170,15 +170,6 @@ terse bullets over paragraphs.";
 /// *stands* — including recent turns — and a cache-capable provider can reuse
 /// the live prefix because the request shape matches the conversation it
 /// already saw.
-#[must_use]
-#[deprecated(
-    since = "0.48.0-dev.37",
-    note = "no replacement; removed after the next release"
-)]
-pub fn handoff_request_messages(messages: &[Message], options: &SummarizeOptions) -> Vec<Message> {
-    request_messages(messages, options)
-}
-
 fn request_messages(messages: &[Message], options: &SummarizeOptions) -> Vec<Message> {
     let mut prompt = String::new();
     if let Some(previous) = options

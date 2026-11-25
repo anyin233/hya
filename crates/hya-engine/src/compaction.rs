@@ -2,8 +2,6 @@
 
 use crate::terminal_handoff::TerminalHandoffOptions;
 
-#[allow(deprecated)]
-pub use crate::terminal_handoff::handoff_request_messages;
 pub use crate::terminal_handoff::{ModelSummarizer, SummarizeOptions, Summarizer, UsageCollector};
 
 /// Compaction settings. `keep_recent` goes to the `hya/compaction` bundle as

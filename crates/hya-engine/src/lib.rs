@@ -39,7 +39,7 @@ pub mod catalog_scope;
 pub mod category;
 /// Trusted defaults and restrictive bundle policy for runtime channels.
 pub mod channel_policy;
-/// Combined compaction configuration and legacy handoff exports.
+/// Combined compaction configuration and handoff types.
 pub mod compaction;
 /// Goal-mode iteration driver, safety caps, and independent evaluators.
 pub mod completion;
@@ -80,8 +80,6 @@ pub mod title;
 pub use hya_context::tokens;
 /// User-authored workflow DAGs over the governed team primitives.
 pub mod workflow;
-/// Tmux helpers for isolated workers.
-pub mod workspace;
 
 #[cfg(test)]
 mod test_support;
@@ -129,8 +127,6 @@ pub use hooks::{
     SessionLifecycleInput, TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput,
     ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
-#[allow(deprecated)]
-pub use hooks::{CompactionResolution, resolve_compaction_decision};
 pub use lifecycle::run_lifecycle_service;
 pub use loop_mode::{
     EvidenceQuality, HookLoopPlanner, HookLoopVerifier, LoopConfig, LoopGate, LoopPlanner,
@@ -153,8 +149,6 @@ pub use runtime_registry::{
 pub use sidecar::{
     BoundSidecarFactory, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,
 };
-#[allow(deprecated)]
-pub use terminal_handoff::handoff_request_messages;
 pub use terminal_handoff::{
     ModelSummarizer, SummarizeOptions, Summarizer, TerminalHandoff, TerminalHandoffOptions,
     UsageCollector,
@@ -172,5 +166,3 @@ pub use workflow::{
     prepare_workflow_run_for_actor, run_workflow, workflow_dirs_for_workdir, workflow_project_dir,
     workflow_user_dir,
 };
-#[allow(deprecated)]
-pub use workspace::TmuxPaneManager;
