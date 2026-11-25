@@ -4,6 +4,10 @@
 mod base_tools;
 mod native_bundle;
 
+#[allow(
+    deprecated,
+    reason = "Preserve the deprecated BaseToolScheme re-export for embedders"
+)]
 pub use base_tools::{
     BaseToolAlias, BaseToolExposure, BaseToolScheme, BaseToolsPreset, base_tools_preset,
     file_operations_rule, tool_bundle_presets, tool_prompt,

@@ -28,6 +28,12 @@ registry construction reads native family packages when present, validates
 their prepared content and declared tool sets, and checks that every policy
 entry has a loaded implementation.
 
+New presets can omit `schemes` and should declare URI schemes as bundle schema
+resources. `hya_tool_loader::BaseToolScheme` and `AliasVisibility::Public` are
+deprecated. Existing `schemes` entries and `visibility: public` continue to
+parse. Use `visibility: hidden` for a compatibility alias and a canonical name
+for a spelling that should be advertised.
+
 A build tool can now stage one target-specific Rust executable into any of
 these policy sources. It adds an `extensions.rust` executable, a `kind: rust`
 process command, and one `resources.tools` declaration per canonical policy
