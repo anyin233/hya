@@ -6,7 +6,6 @@ use hya_proto::Event;
 
 #[tokio::test]
 async fn t1_11_session_list_and_resume_prompt() {
-    // Compat /session hides empty_unnamed sessions until they have activity.
     let env = E2eEnvBuilder::new()
         .scripts(vec![
             text_step("SESSION_FIRST"),
@@ -30,16 +29,21 @@ async fn t1_11_session_list_and_resume_prompt() {
         .await
         .expect("session b prompt");
 
-    let listed = env.list_sessions_compat().await.expect("list sessions");
-    let listed_text = listed.to_string();
+    let listed = env.list_sessions().await.expect("list sessions");
     assert!(
-        listed_text.contains(&session_a.to_string()),
-        "session A must appear in list; listed={listed}; {}",
+        listed
+            .sessions
+            .iter()
+            .any(|row| row.id == session_a.to_string()),
+        "session A must appear in list; listed={listed:?}; {}",
         env.diagnostics()
     );
     assert!(
-        listed_text.contains(&session_b.to_string()),
-        "session B must appear in list after activity; listed={listed}; {}",
+        listed
+            .sessions
+            .iter()
+            .any(|row| row.id == session_b.to_string()),
+        "session B must appear in list after activity; listed={listed:?}; {}",
         env.diagnostics()
     );
 

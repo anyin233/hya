@@ -129,6 +129,14 @@ impl Client {
         self.transport.ensure_project_for_path(path).await
     }
 
+    /// List sessions using the server’s default filters and page size.
+    ///
+    /// # Errors
+    /// Returns an error if the transport, server, or response decoding fails.
+    pub async fn list_sessions(&self) -> Result<pb::ListSessionsResponse, ClientError> {
+        self.transport.list_sessions(None, None).await
+    }
+
     /// `GET /v1/sessions?projectId=…` — the sessions of one Project.
     ///
     /// # Errors

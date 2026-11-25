@@ -169,6 +169,7 @@ or replay session events from Rust tooling. The session fields carry string IDs.
 
 | `Client` method | Request | Result |
 | --- | --- | --- |
+| `list_sessions` | Server default filters and page size | `ListSessionsResponse` |
 | `create_turn_request` | `&CreateTurnRequest` | `CreateTurnResponse` |
 | `wait_turn_request` | `&WaitTurnRequest` | `TurnInfo` |
 | `list_events_request` | `&ListEventsRequest` | `ListEventsResponse` |

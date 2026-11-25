@@ -862,7 +862,7 @@ async fn custom_slash_catalog_and_routes_expand_all_supported_sources() {
         "alpha beta",
     );
 
-    let v2_session = env.compat_create_session().await.expect("v2 session");
+    let v2_session = env.create_session().await.expect("v2 session");
     let v2 = command_turn(
         &env,
         v2_session,

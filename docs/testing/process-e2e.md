@@ -50,6 +50,18 @@ for a complete stdout line of the form
 and after startup. On a readiness failure the harness terminates the process
 group, reaps the backend and reports captured stderr with the relay link redacted.
 
+Use the typed harness helpers for ordinary setup and turn completion.
+`env.create_session().await?` returns a session ID. Pass it to
+`env.prompt(session, "Write a test").await?` to get the resulting v1
+`TurnInfo`. `env.list_sessions().await?` returns `ListSessionsResponse` with
+the server’s default filters. Use `env.prompt_and_wait_for_fake_request(session, text, timeout)`
+when the assertion needs a newly recorded FakeLlm request as well as turn
+completion. Use raw HTTP helpers for assertions about the wire response.
+
+Specialized foreground fixtures can call `parse_listen_url(line: &str) -> Option<&str>`
+with a complete line stripped of its terminator. It recognizes the same loopback
+readiness line as `BackendProcess`.
+
 ## Scripting FakeLlm
 
 Each completion request pops one script step:

@@ -1,4 +1,4 @@
-//! T1.13 — project AGENTS.md is layered into Compat-guided turns (context management).
+//! T1.13 — project AGENTS.md is layered into v1 prompt turns.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::time::Duration;
@@ -8,7 +8,7 @@ use hya_e2e::{E2eEnvBuilder, text_step};
 const AGENTS_MARKER: &str = "E2E_AGENTS_CONTEXT_MARKER_use_spaces";
 
 #[tokio::test]
-async fn t1_13_compat_prompt_includes_project_agents_md_in_model_request() {
+async fn t1_13_prompt_includes_project_agents_md_in_model_request() {
     let env = E2eEnvBuilder::new()
         .project_file(
             "AGENTS.md",
@@ -19,17 +19,16 @@ async fn t1_13_compat_prompt_includes_project_agents_md_in_model_request() {
         .await
         .expect("e2e env");
 
-    // Compat v2 prompt path injects discover_context_files guidance; native
-    // /sessions/:id/prompt does not.
-    let session = env.compat_create_session().await.expect("compat session");
-    let _ = env
-        .compat_prompt_and_wait(
+    let session = env.create_session().await.expect("session");
+    let turn = env
+        .prompt_and_wait_for_fake_request(
             session,
             "follow project agents guidance",
             Duration::from_secs(30),
         )
         .await
-        .expect("compat prompt");
+        .expect("prompt");
+    assert_eq!(turn.state, hya_api::v1::TurnState::Finished as i32);
 
     let requests = env.fake.requests().expect("fake requests");
     assert!(

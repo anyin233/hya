@@ -242,7 +242,7 @@ pub struct E2eEnv {
     pub backend: BackendProcess,
     /// Typed native API client pointed at [`Self::backend`].
     pub client: Client,
-    /// Raw HTTP client for Compat paths not covered by [`Self::client`].
+    /// Raw HTTP client for assertions that inspect the v1 wire response.
     pub http: reqwest::Client,
     /// Default agent name for session create helpers.
     pub agent: String,
@@ -434,9 +434,9 @@ impl E2eEnv {
         Ok(())
     }
 
-    /// List sessions via the v1 surface.
-    pub async fn list_sessions_compat(&self) -> Result<Value, E2eError> {
-        self.get_json("/v1/sessions").await
+    /// List sessions using the server’s default filters and page size.
+    pub async fn list_sessions(&self) -> Result<pb::ListSessionsResponse, E2eError> {
+        Ok(self.client.list_sessions().await?)
     }
 
     /// List configured agents via the v1 surface.
@@ -444,8 +444,7 @@ impl E2eEnv {
         self.get_json("/v1/agents").await
     }
 
-    /// Fetch the session tree (parent/children) for multi-agent layouts,
-    /// assembled from v1 parent-filtered listings.
+    /// Fetch the session tree from member edges and roster rows in the event log.
     pub async fn session_tree(&self, session: &SessionId) -> Result<Value, E2eError> {
         self.build_tree(session, 8).await
     }
@@ -465,52 +464,10 @@ impl E2eEnv {
         self.get_json(&format!("/v1/sessions/{session}/todo")).await
     }
 
-    /// Run statuses map (`session_id` → `{type: "busy"}` while running),
-    /// derived from the v1 session listing.
-    pub async fn session_statuses(&self) -> Result<Value, E2eError> {
-        let listed = self.get_json("/v1/sessions").await?;
-        let mut map = serde_json::Map::new();
-        if let Some(sessions) = listed.get("sessions").and_then(Value::as_array) {
-            for session in sessions {
-                let id = session
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let busy = session
-                    .get("busy")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                map.insert(
-                    id.to_string(),
-                    if busy {
-                        serde_json::json!({ "type": "busy" })
-                    } else {
-                        serde_json::json!({ "type": "idle" })
-                    },
-                );
-            }
-        }
-        Ok(Value::Object(map))
-    }
-
-    /// Recursively build the legacy-shaped tree from v1 parent listings,
-    /// enriched with team roster handles folded from raw envelopes.
-    async fn build_tree(&self, session: &SessionId, depth: usize) -> Result<Value, E2eError> {
-        Box::pin(self.build_tree_inner(session, depth)).await
-    }
-
-    /// Build the spawn tree from per-session member lists, mirroring the
-    /// projection run-tree semantics: each session's own `members` rows name
-    /// its spawned children, so nesting follows spawn causality even when the
-    /// resident substrate flattens projection parenting to the team root.
-    /// Iterative BFS on `&self` (no recursion), nested JSON assembled at the
-    /// end from the collected edges.
-    async fn build_tree_inner(
-        &self,
-        session: &SessionId,
-        depth_limit: usize,
-    ) -> Result<Value, E2eError> {
-        // session -> (agent, [(child, subagent_type)])
+    // Follow each spawning session’s member edges, even when projection parenting
+    // is flattened to the team root. Assemble the nested JSON after the traversal.
+    async fn build_tree(&self, session: &SessionId, depth_limit: usize) -> Result<Value, E2eError> {
+        // session -> [(child, subagent_type)]
         let mut nodes: std::collections::BTreeMap<String, Vec<(String, String)>> =
             std::collections::BTreeMap::new();
         let mut roster: std::collections::BTreeMap<String, hya_proto::projection::RosterEntry> =
@@ -563,7 +520,6 @@ impl E2eEnv {
         }
         Ok(assemble(&session.to_string(), &nodes, &mut roster))
     }
-    /// Fold the root session's raw envelopes and index team roster rows by
     /// Wait until the session is not listed as busy (v1 session listing).
     pub async fn wait_session_idle(
         &self,
@@ -572,60 +528,52 @@ impl E2eEnv {
     ) -> Result<(), E2eError> {
         let key = session.to_string();
         wait_until("session idle", timeout, || async {
-            let statuses = self.session_statuses().await?;
-            let busy = statuses
-                .get(&key)
-                .and_then(|s| s.get("type"))
-                .and_then(|t| t.as_str())
-                == Some("busy");
-            Ok(!busy)
+            let listed = self.list_sessions().await?;
+            Ok(!listed.sessions.iter().any(|row| row.id == key && row.busy))
         })
         .await
     }
 
-    /// Create a session via v1 so workdir is explicit.
-    pub async fn compat_create_session(&self) -> Result<SessionId, E2eError> {
-        let body = serde_json::json!({
-            "agent": self.agent,
-            "model": self.model,
-            "workdir": self.backend.workdir_str(),
-        });
-        let created = self.post_json("/v1/sessions", &body).await?;
-        let id = created
-            .pointer("/session/id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| E2eError::Other(format!("v1 create missing id: {created}")))?;
-        id.parse()
-            .map_err(|e| E2eError::Other(format!("parse session id {id}: {e}")))
-    }
-
-    /// v1 event-driven prompt (admit + wait terminal) with FakeLlm pacing.
-    pub async fn compat_prompt_and_wait(
+    /// Admit a typed prompt and wait for both a new FakeLlm request and the turn.
+    pub async fn prompt_and_wait_for_fake_request(
         &self,
         session: SessionId,
         text: impl Into<String>,
         timeout: Duration,
-    ) -> Result<Value, E2eError> {
-        let before = self.fake.requests().map(|r| r.len()).unwrap_or(0);
-        let body = serde_json::json!({
-            "prompt": { "text": text.into() }
-        });
+    ) -> Result<pb::TurnInfo, E2eError> {
+        let before = self.fake.requests()?.len();
         let admitted = self
-            .post_json(&format!("/v1/sessions/{session}/turns"), &body)
+            .client
+            .create_turn_request(&pb::CreateTurnRequest {
+                session: session.to_string(),
+                kind: Some(pb::create_turn_request::Kind::Prompt(pb::PromptTurn {
+                    text: text.into(),
+                    ..Default::default()
+                })),
+            })
             .await?;
-        // Wait for at least one new FakeLlm hit and the run registry to clear.
-        let wait_result = wait_until("v1 turn FakeLlm", timeout, || async {
-            let n = self.fake.requests().map(|r| r.len()).unwrap_or(0);
-            Ok(n > before)
+        let turn = admitted
+            .turn
+            .filter(|turn| !turn.id.is_empty())
+            .ok_or_else(|| E2eError::Other("create turn response missing a turn ID".into()))?;
+        let observed = wait_until("turn FakeLlm request", timeout, || async {
+            Ok(self.fake.requests()?.len() > before)
         })
         .await;
-        if wait_result.is_err() {
+        if observed.is_err() {
             let events = self.events(session, None).await;
-            eprintln!("V1TURN STALL admitted={admitted} events={events:?}");
+            eprintln!("turn {} stalled: events={events:?}", turn.id);
         }
-        wait_result?;
-        self.wait_session_idle(&session, timeout).await?;
-        Ok(admitted)
+        observed?;
+        let info = self
+            .client
+            .wait_turn_request(&pb::WaitTurnRequest {
+                session: session.to_string(),
+                turn: turn.id,
+                timeout_ms: timeout.as_millis().min(600_000) as u64,
+            })
+            .await?;
+        Ok(info)
     }
 
     /// POST `/v1/sessions/{id}/compact` (sync summarize + inject system message).
@@ -644,12 +592,6 @@ impl E2eEnv {
             return Err(E2eError::Http(format!("POST compact -> {status}: {text}")));
         }
         Ok(())
-    }
-
-    /// POST `/v1/sessions/{id}/summarize`.
-    pub async fn summarize_session_legacy(&self, session: &SessionId) -> Result<Value, E2eError> {
-        self.post_json(&format!("/v1/sessions/{session}/summarize"), &Value::Null)
-            .await
     }
 
     /// Wait until permission list is non-empty; return first request id.

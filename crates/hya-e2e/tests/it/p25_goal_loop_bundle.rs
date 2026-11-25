@@ -11,27 +11,10 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::process::Command;
 
 use hya_e2e::{E2eEnvBuilder, text_step, tool_step};
 use serde_json::{Value, json};
-
-#[expect(dead_code)]
-fn unique_root(label: &str) -> std::path::PathBuf {
-    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "hya-goal-loop-bundle-{label}-{}-{id}-{}",
-        nanos,
-        std::process::id()
-    ))
-}
 
 const MIAO_INJECTION: &str = "每一句话之前都得加上喵";
 
