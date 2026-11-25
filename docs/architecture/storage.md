@@ -179,6 +179,12 @@ The backend-owned per-Agent model preference table:
 | `provider_id` | `TEXT NOT NULL`, length 1..=1024 |
 | `model_id` | `TEXT NOT NULL`, length 1..=4096; provider-local slashes are preserved |
 
+Preference writes and row decoding require each identity and effort label to
+contain a non-whitespace character. The bounds count characters in the original
+value, and the store preserves that value verbatim. A whitespace-only identity
+in an existing Agent model row returns `StoreError::InvalidPreferenceData` on
+read. Clear operations validate only the key fields.
+
 This is an auxiliary control table, not a Session projection. It emits no
 public Event. Runtime startup claims the database owner, loads the complete map,
 and publishes one immutable snapshot before admission. A mutation validates the

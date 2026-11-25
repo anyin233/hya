@@ -10,8 +10,6 @@
 #[cfg(feature = "lifecycle-bench")]
 pub mod bench;
 
-mod agent_effort_preference;
-mod agent_model_preference;
 mod connect;
 /// Typed store errors for the session store.
 pub mod error;
@@ -19,9 +17,9 @@ mod file_blob;
 mod handoff;
 mod mailbox;
 mod materialize;
-mod model_effort_preference;
 mod paths;
 mod permission;
+mod preferences;
 mod project;
 mod projection_cache;
 mod recovery;
@@ -37,8 +35,6 @@ use hya_proto::{Envelope, Event, EventSeq, ProjectId, Projection, SessionId, now
 use projection_cache::ProjectionCache;
 use sqlx::Row;
 
-pub use agent_effort_preference::AgentEffortPreference;
-pub use agent_model_preference::AgentModelPreference;
 use connect::MemoryFallbackInfo;
 pub(crate) use connect::run_on_detached_thread;
 use runtime_owner::RuntimeOwnerState;
@@ -50,9 +46,9 @@ pub use mailbox::{
     RecoveredResidentOutcome, RecoveredResidentWork, ResidentArchive, ResidentArchiveOutcome,
     ResidentArchiveOwner,
 };
-pub use model_effort_preference::ModelEffortPreference;
 pub use paths::user_cache_dir;
 pub use permission::SavedPermission;
+pub use preferences::{AgentEffortPreference, AgentModelPreference, ModelEffortPreference};
 pub use project::{Project, ProjectSummary, normalize_project_path};
 pub use recovery::{INTERRUPTED_REASON, InterruptedTurnRecovery};
 pub use resident_claim::{EpisodeRegistration, RecoveredActorClaim, ResidentWorkPrompt};
