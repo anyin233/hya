@@ -30,7 +30,7 @@ use hya_proto::{
     PartProjection, Projection, Role, SessionId, TokenUsage, ToolSchema,
 };
 use hya_provider::{
-    CompletionRequest, EventStream, ProviderError, ProviderRouter, invalid_tool_arguments,
+    CompletionRequest, EventStream, ProviderRetryClass, ProviderRouter, invalid_tool_arguments,
 };
 use hya_store::SessionStore;
 use hya_tool::{Tool, ToolCtx, ToolError};
@@ -536,8 +536,10 @@ impl Harness for Bare<'_> {
         let Some(&wait) = ROUND_RETRY_WAITS.get(self.retries) else {
             return Ok(false);
         };
-        let retryable = error.is_retryable_before_stream()
-            || matches!(error.as_ref(), ProviderError::StreamInterrupted(_));
+        let retryable = matches!(
+            error.retry_class(),
+            ProviderRetryClass::Transient | ProviderRetryClass::InterruptedBody
+        );
         let deadline = hya_tool::deadline::current();
         if !retryable
             || self.cancel.is_cancelled()
@@ -1175,6 +1177,7 @@ fn step_finished(
 #[cfg(test)]
 mod step_error_tests {
     use super::*;
+    use hya_provider::ProviderError;
 
     #[test]
     fn step_error_summary_collapses_whitespace_and_bounds_length() {

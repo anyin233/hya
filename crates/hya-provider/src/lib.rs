@@ -144,20 +144,52 @@ pub enum ProviderError {
     },
 }
 
+/// Provider failure categories used by the HTTP opener and round harnesses.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderRetryClass {
+    /// A request transport failure, or an HTTP 429 or 5xx (also in-stream).
+    Transient,
+    /// The established HTTP body stalled or could not be read to completion.
+    InterruptedBody,
+    /// A decoder reported one of the known truncated-body diagnostics.
+    TruncatedBody,
+    /// The failure does not match any of the transient or interruption categories.
+    Terminal,
+}
+
 impl ProviderError {
     /// Whether a request that produced no event stream may be retried or failed over safely.
     #[must_use]
     pub fn is_retryable_before_stream(&self) -> bool {
+        self.retry_class() == ProviderRetryClass::Transient
+    }
+
+    /// Classify a failure so the caller can apply its own retry policy.
+    #[must_use]
+    pub fn retry_class(&self) -> ProviderRetryClass {
         match self {
-            Self::Transport(_) => true,
-            Self::HttpStatus { status, .. } => *status == 429 || (500..=599).contains(status),
+            Self::Transport(_) => ProviderRetryClass::Transient,
+            Self::HttpStatus { status, .. } if *status == 429 || (500..=599).contains(status) => {
+                ProviderRetryClass::Transient
+            }
+            Self::StreamInterrupted(_) => ProviderRetryClass::InterruptedBody,
+            Self::Decode(message) => {
+                let message = message.to_ascii_lowercase();
+                if message == "error decoding response body"
+                    || message.contains("unexpected eof")
+                    || message.contains("unexpected end of file")
+                {
+                    ProviderRetryClass::TruncatedBody
+                } else {
+                    ProviderRetryClass::Terminal
+                }
+            }
             Self::Json(_)
             | Self::Http(_)
-            | Self::StreamInterrupted(_)
+            | Self::HttpStatus { .. }
             | Self::UnknownModel(_)
             | Self::Incompatible(_)
-            | Self::Decode(_)
-            | Self::AuthExpired { .. } => false,
+            | Self::AuthExpired { .. } => ProviderRetryClass::Terminal,
         }
     }
 
@@ -419,6 +451,36 @@ mod provider_error_tests {
             );
         }
         assert!(!ProviderError::Decode("truncated".to_string()).is_retryable_before_stream());
+    }
+
+    #[test]
+    fn distinguishes_body_interruptions_from_transient_opens_and_terminal_errors() {
+        use super::ProviderRetryClass::{InterruptedBody, Terminal, TruncatedBody};
+
+        let cases = [
+            (
+                ProviderError::StreamInterrupted("connection reset".into()),
+                InterruptedBody,
+            ),
+            (
+                ProviderError::Decode("error decoding response body".into()),
+                TruncatedBody,
+            ),
+            (
+                ProviderError::Decode("JSON: unexpected EOF".into()),
+                TruncatedBody,
+            ),
+            (
+                ProviderError::Decode("unexpected end of file in JSON".into()),
+                TruncatedBody,
+            ),
+            (ProviderError::Decode("invalid schema".into()), Terminal),
+            (ProviderError::Http("unexpected EOF".into()), Terminal),
+        ];
+        for (error, class) in cases {
+            assert_eq!(error.retry_class(), class, "{error}");
+            assert!(!error.is_retryable_before_stream(), "{error}");
+        }
     }
 }
 
