@@ -193,7 +193,10 @@ test.describe("layout", () => {
 
     await term.press("Control+x")
     await term.type("/sidebar")
+    await term.waitForText("▸ /sidebar")
     await term.press("Enter")
+    await expect.poll(() => term.find("Commands")).toBeNull()
+    await term.waitForText("Message, !shell, or @file · / commands")
     expect(await term.find("mode manual")).toBeNull()
     expect(await term.find("Sessions")).toBeNull()
 
@@ -213,8 +216,12 @@ test.describe("pane focus", () => {
     await term.waitForText("END OF LONG REPLY", 20_000)
     await term.press("PageUp")
     await expect.poll(() => term.find("END OF LONG REPLY")).toBeNull()
+    const projects = (await term.find("Projects"))!
+    const projectBorder = async () => (await term.cell(projects.row, projects.col - 1))?.fg
     await term.press("Alt+ArrowRight")
+    await expect.poll(projectBorder).toBe(colors.focus)
     await term.press("Alt+ArrowLeft")
+    await expect.poll(projectBorder).toBe(colors.border)
     expect(await term.find("END OF LONG REPLY")).toBeNull()
   })
 })
