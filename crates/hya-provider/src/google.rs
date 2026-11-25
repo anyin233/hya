@@ -1,4 +1,3 @@
-use base64::Engine as _;
 use hya_proto::context::{GOOGLE_TEXT_SIGNATURE_TYPE, GOOGLE_THOUGHT_TYPE, same_model_id};
 use hya_proto::{
     Event, FinishReason, Message, MessageId, ModelRef, Part, PartId, Role, SessionId, TokenUsage,
@@ -6,29 +5,13 @@ use hya_proto::{
 };
 use serde_json::{Map, Value, json};
 
+use crate::media::google_inline_data;
+
 use crate::wire::{ToolImages, tool_input, tool_result};
 use crate::{CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort};
 
 /// Gemini generateContent request encoder + stream decoder factory.
 pub struct GoogleProtocol;
-
-const MEDIA_MIMES: &[&str] = &[
-    "image/png",
-    "image/jpeg",
-    "image/gif",
-    "image/webp",
-    "video/mp4",
-    "video/webm",
-    "video/quicktime",
-    "audio/wav",
-    "audio/mp3",
-    "audio/aiff",
-    "audio/aac",
-    "audio/ogg",
-    "audio/flac",
-];
-const MAX_MEDIA_ENCODED_BYTES: usize = 28 * 1024 * 1024;
-const MAX_MEDIA_DECODED_BYTES: usize = 20 * 1024 * 1024;
 
 fn uses_google_thinking_level(model_id: &str) -> bool {
     let bare = hya_proto::context::bare_model_id(&ModelRef::new(model_id)).to_ascii_lowercase();
@@ -220,61 +203,9 @@ fn emit_assistant(
 }
 
 fn user_parts(parts: &[Part]) -> Result<Vec<Value>, ProviderError> {
-    let (_, blocks, _) = crate::wire::user_content(
-        parts,
-        |text| json!({"text":text}),
-        |mime, data| {
-            let (mime, base64) = validate_media(mime, data)?;
-            Ok(json!({"inlineData":{"mimeType":mime,"data":base64}}))
-        },
-    )?;
+    let (_, blocks, _) =
+        crate::wire::user_content(parts, |text| json!({"text":text}), google_inline_data)?;
     Ok(blocks)
-}
-
-fn validate_media(media_type: &str, data: &str) -> Result<(String, String), ProviderError> {
-    let mime = media_type.to_ascii_lowercase();
-    if !MEDIA_MIMES.contains(&mime.as_str()) {
-        return Err(ProviderError::Incompatible(format!(
-            "Google does not support media type {media_type}"
-        )));
-    }
-    let base64 = if let Some(url) = data.strip_prefix("data:") {
-        let (header, value) = url.split_once(',').ok_or_else(|| {
-            ProviderError::Incompatible(
-                "Google media data URL must contain valid base64".to_string(),
-            )
-        })?;
-        if header.to_ascii_lowercase() != format!("{mime};base64") {
-            return Err(ProviderError::Incompatible(format!(
-                "Google media type {media_type} does not match data URL type {header}"
-            )));
-        }
-        value
-    } else {
-        data
-    };
-    if base64.len() > MAX_MEDIA_ENCODED_BYTES {
-        return Err(ProviderError::Incompatible(format!(
-            "Google media exceeds the {MAX_MEDIA_ENCODED_BYTES} byte encoded limit"
-        )));
-    }
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(base64)
-        .map_err(|_| {
-            ProviderError::Incompatible("Google media must contain valid base64".to_string())
-        })?;
-    if bytes.len() > MAX_MEDIA_DECODED_BYTES {
-        return Err(ProviderError::Incompatible(format!(
-            "Google media exceeds the {MAX_MEDIA_DECODED_BYTES} byte decoded limit"
-        )));
-    }
-    let canonical = base64::engine::general_purpose::STANDARD.encode(bytes);
-    if canonical != base64 {
-        return Err(ProviderError::Incompatible(
-            "Google media must contain canonical base64".to_string(),
-        ));
-    }
-    Ok((mime, canonical))
 }
 
 impl Protocol for GoogleProtocol {
