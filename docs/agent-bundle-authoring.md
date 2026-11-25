@@ -177,7 +177,7 @@ A public bundle source directory must contain exactly one of:
 | `bundle.yaml` | Plain YAML manifest with explicit prompt paths. |
 | `bundle.hya.md` | YAML frontmatter fenced by `---` plus an optional Markdown body. |
 
-Rules ([`prepare.rs` `parse_source`](../crates/hya-bundle/src/prepare.rs)):
+Rules ([`prepare/parse.rs` `parse_source`](../crates/hya-bundle/src/prepare/parse.rs)):
 
 - **Both present** → hard error (`source contains both bundle.yaml and bundle.hya.md`).
 - **Neither present** → `UnsupportedSource`.
