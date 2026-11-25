@@ -43,7 +43,7 @@ For visual dependency and runtime flow diagrams, see
 | `hya-*-tools` (4 crates) | [`../bundles/presets`](../bundles/presets) | Concrete Rust implementations of the 25 registry tools across `hya-base-tools`, `hya-extended-tools`, `hya-channel-tools`, and `hya-network-tools`. |
 | `hya-compaction` | [`../bundles/internal/compaction/native`](../bundles/internal/compaction/native) | The `hya/compaction` internal bundle: the `shake` and `remote` context-reduction steps the kernel runs before its own Rewrite, as a native `Rewriter`. |
 | `hya-child-io` | [`../crates/hya-child-io`](../crates/hya-child-io) | Shared bounded NDJSON framing and connection task tracking for MCP and plugin processes. |
-| `hya-mcp` | [`../crates/hya-mcp`](../crates/hya-mcp) | MCP stdio/HTTP client & manager, desired/observed/effective reconciliation, and `mcp__<server>__<tool>` bridge into `hya-tool`. |
+| `hya-mcp` | [`../crates/hya-mcp`](../crates/hya-mcp) | MCP stdio/HTTP client, per-server connection ownership, and `mcp__<server>__<tool>` bridge into `hya-tool`. |
 | `hya-plugin` | [`../crates/hya-plugin`](../crates/hya-plugin) | Out-of-process NDJSON JSON-RPC 2.0 plugin host (`PluginHost`, `PluginConn`), manifest/config loading, typed hook and bundle API calls, and tool/permission bridges. |
 | `hya-plugin-claude` | [`../crates/hya-plugin-claude`](../crates/hya-plugin-claude) | Claude Code plugin directory / marketplace importer and runtime bridge (`hya bundle install --claude`). |
 | `hya-store` | [`../crates/hya-store`](../crates/hya-store) | SQLite WAL session store (`event_log`, `session`, `project`/`project_root`, `saved_permission`, `resident_actor_claim`, `pending_resume`, `projection_snapshot`, `file_blob`). |

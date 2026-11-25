@@ -2,10 +2,9 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 
-use hya_child_io::io_tasks;
 use hya_tool::Tool;
 use serde::{Deserialize, Serialize};
 
@@ -61,23 +60,6 @@ pub enum McpStatus {
         /// Error text explaining the registration failure.
         error: String,
     },
-}
-
-/// MCP connection manager. Clone shares the same status/tool catalog so background
-/// attach can update what the HTTP API already holds.
-#[derive(Clone, Default)]
-#[deprecated(
-    since = "0.48.0-dev.37",
-    note = "use hya_mcp::prepare and retain each PreparedMcpServer"
-)]
-pub struct McpManager {
-    inner: Arc<RwLock<McpInner>>,
-}
-
-#[derive(Default)]
-struct McpInner {
-    servers: Vec<Arc<PreparedMcpServer>>,
-    status: BTreeMap<String, McpStatus>,
 }
 
 /// One connected MCP server: live client (stdio child or HTTP), namespaced
@@ -154,115 +136,6 @@ pub async fn prepare_bundle(
     );
     config.env = Some(env);
     connect_server(name, config, Some(root)).await
-}
-
-#[allow(deprecated)]
-impl McpManager {
-    fn write(&self) -> std::sync::RwLockWriteGuard<'_, McpInner> {
-        self.inner
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    fn read(&self) -> std::sync::RwLockReadGuard<'_, McpInner> {
-        self.inner
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    /// Snapshot status map for servers that are not yet connected: `connecting` or `disabled`.
-    #[must_use]
-    pub fn pending(configs: &BTreeMap<String, McpServerConfig>) -> Self {
-        let mut status = BTreeMap::new();
-        for (name, config) in configs {
-            if config.enabled == Some(false) {
-                status.insert(name.clone(), McpStatus::Disabled);
-            } else {
-                status.insert(name.clone(), McpStatus::Connecting);
-            }
-        }
-        Self {
-            inner: Arc::new(RwLock::new(McpInner {
-                servers: Vec::new(),
-                status,
-            })),
-        }
-    }
-
-    /// Connect every configured server (blocking) and return a finished manager.
-    pub async fn connect_all(configs: BTreeMap<String, McpServerConfig>) -> Self {
-        let manager = Self::pending(&configs);
-        manager.connect_all_into(configs).await;
-        manager
-    }
-
-    /// Finish connecting configured servers into this shared manager (hot-update).
-    pub async fn connect_all_into(&self, configs: BTreeMap<String, McpServerConfig>) {
-        let mut set = tokio::task::JoinSet::new();
-        for (name, config) in configs {
-            if config.enabled == Some(false) {
-                self.write().status.insert(name, McpStatus::Disabled);
-                continue;
-            }
-            let status_name = name.clone();
-            set.spawn(io_tasks::scope(io_tasks::current(), async move {
-                (status_name, connect_server(name, config, None).await)
-            }));
-        }
-        while let Some(joined) = set.join_next().await {
-            match joined {
-                Ok((name, Ok(server))) => {
-                    let mut inner = self.write();
-                    inner.status.insert(name, McpStatus::Connected);
-                    inner.servers.push(Arc::new(server));
-                }
-                Ok((name, Err(error))) => {
-                    tracing::warn!(%error, "mcp server unavailable");
-                    self.write().status.insert(
-                        name,
-                        McpStatus::Failed {
-                            error: error.to_string(),
-                        },
-                    );
-                }
-                Err(error) => tracing::warn!(%error, "mcp server task failed"),
-            }
-        }
-    }
-
-    /// Stop and join every server connection retained by this manager.
-    pub async fn shutdown(&self) {
-        let servers = self.read().servers.clone();
-        for server in servers {
-            server.shutdown().await;
-        }
-    }
-
-    /// Flatten all connected servers' tools for registry publication.
-    #[must_use]
-    pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
-        self.read()
-            .servers
-            .iter()
-            .flat_map(|server| server.tools.iter().cloned())
-            .collect()
-    }
-
-    /// Snapshot of per-server connection status (including failed/disabled).
-    #[must_use]
-    pub fn status(&self) -> BTreeMap<String, McpStatus> {
-        self.read().status.clone()
-    }
-
-    /// Flatten all connected servers' resource maps.
-    #[must_use]
-    pub fn resources(&self) -> ResourceMap {
-        self.read()
-            .servers
-            .iter()
-            .flat_map(|server| server.resources.clone())
-            .collect()
-    }
 }
 
 async fn connect_server(

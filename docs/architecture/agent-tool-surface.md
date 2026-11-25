@@ -1202,8 +1202,7 @@ failed servers contribute no new tools. A complete current-revision candidate
 is published for the next turn; an older bound turn keeps its retained source
 client and view. Only MCP tools whose input schema has `type: "object"` are
 accepted.
-([crates/hya-mcp/src/manager.rs:59-100](../../crates/hya-mcp/src/manager.rs#L59-L100),
-[crates/hya-mcp/src/manager.rs:105-140](../../crates/hya-mcp/src/manager.rs#L105-L140),
+([MCP server preparation](../../crates/hya-mcp/src/manager.rs),
 [crates/hya-mcp/src/bridge.rs:20-43](../../crates/hya-mcp/src/bridge.rs#L20-L43))
 
 The model-facing name is `mcp__{server}__{tool}`, while execution sends the
