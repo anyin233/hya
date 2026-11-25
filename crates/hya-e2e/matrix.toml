@@ -437,13 +437,13 @@ path = "crates/hya-app/tests/it/nested_spawn_tree.rs"
 id = "I.subagent"
 title = "subagent/resident core"
 track = "I"
-path = "crates/hya-engine/tests/it/subagent.rs"
+path = "crates/hya-engine/tests/it/subagent_lifecycle.rs"
 
 [[scenario]]
 id = "I.v1_api"
 title = "v1 HTTP contract integration"
 track = "I"
-path = "crates/hya-server/tests/it/v1_api.rs"
+path = "crates/hya-server/tests/it/v1_api_core.rs"
 
 [[scenario]]
 id = "I.v1_grpc_parity"
@@ -503,15 +503,15 @@ reason = "never defined — same as T1.1; the tier list it came from was not com
 
 [[retired]]
 id = "T2.10"
-reason = "the explicit swarm `join` tool was removed by ADR-0016's simplified channel plane; channel membership rules live in Track I (crates/hya-engine/tests/it/subagent.rs)"
+reason = "the explicit swarm `join` tool was removed by ADR-0016's simplified channel plane; channel membership rules live in Track I (crates/hya-engine/tests/it/subagent_lifecycle.rs)"
 
 [[retired]]
 id = "T2.11"
-reason = "the explicit swarm `leave` tool was removed by ADR-0016's simplified channel plane; channel delivery and policy denial live in Track I (crates/hya-engine/tests/it/subagent.rs) and Track P T2.25"
+reason = "the explicit swarm `leave` tool was removed by ADR-0016's simplified channel plane; channel delivery and policy denial live in Track I (crates/hya-engine/tests/it/subagent_lifecycle.rs) and Track P T2.25"
 
 [[retired]]
 id = "T2.12"
-reason = "cross-unit channel isolation is enforced and exhaustively tested in Track I (crates/hya-engine/tests/it/subagent.rs); Track P covers installed channel policy enforcement in T2.25"
+reason = "cross-unit channel isolation is enforced and exhaustively tested in Track I (crates/hya-engine/tests/it/subagent_lifecycle.rs); Track P covers installed channel policy enforcement in T2.25"
 
 [[retired]]
 id = "T2.18"

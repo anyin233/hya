@@ -144,8 +144,8 @@ replace these.
 | ID | Title | Path |
 | --- | --- | --- |
 | I.nested | Nested spawn tree | `crates/hya-app/tests/it/nested_spawn_tree.rs` |
-| I.subagent | Subagent/resident core | `crates/hya-engine/tests/it/subagent.rs` |
-| I.v1_api | v1 HTTP contract | `crates/hya-server/tests/it/v1_api.rs` |
+| I.subagent | Subagent/resident core | `crates/hya-engine/tests/it/subagent_lifecycle.rs` |
+| I.v1_api | v1 HTTP contract | `crates/hya-server/tests/it/v1_api_core.rs` |
 | I.v1_grpc_parity | v1 HTTP/gRPC parity | `crates/hya-server/tests/it/v1_grpc_parity.rs` |
 | I.bundle_cli | Bundle CLI | `crates/hya-backend/tests/it/bundle_cli.rs` |
 

@@ -151,7 +151,7 @@ methods `Any`.
 
 ## Testing
 
-- `crates/hya-server/tests/it/v1_api.rs` — v1 HTTP integration suite.
+- `crates/hya-server/tests/it/v1_api_core.rs` (and sibling `v1_*.rs` modules) — v1 HTTP integration suite.
 - `crates/hya-server/tests/it/v1_grpc_parity.rs` — dual-transport
   conformance over a real tonic listener.
 - `crates/hya-e2e` (Track P) — the process matrix drives real backends
