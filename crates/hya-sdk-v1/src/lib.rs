@@ -19,6 +19,7 @@
 
 mod client;
 mod mirror;
+mod transport;
 
 pub use client::{Client, ClientError};
 pub use mirror::V1SessionMirror;
@@ -30,6 +31,7 @@ use hya_api::v1 as pb;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use transport::{HttpTransport, encode_component};
 
 /// One failed SDK call.
 #[derive(Debug, thiserror::Error)]
@@ -53,25 +55,20 @@ pub enum SdkError {
     Stream(String),
 }
 
-/// Percent-encode one path segment or query value (RFC 3986 unreserved
-/// characters pass through).
-fn encode_component(text: &str) -> String {
-    text.bytes()
-        .map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (byte as char).to_string()
-            }
-            _ => format!("%{byte:02X}"),
-        })
-        .collect()
+impl SdkError {
+    fn from_client(error: ClientError) -> Self {
+        match error {
+            ClientError::Http(error) => Self::Http(error),
+            ClientError::Api { code, message } => Self::Api { code, message },
+            ClientError::Decode(error) => Self::StreamDecode(error),
+        }
+    }
 }
 
 /// Typed client over one hya backend's `/v1` surface.
 pub struct V1Sdk {
-    base: String,
     directory: String,
-    http: reqwest::Client,
-    request_timeout: Option<Duration>,
+    transport: HttpTransport,
 }
 
 impl V1Sdk {
@@ -79,10 +76,8 @@ impl V1Sdk {
     #[must_use]
     pub fn new(base_url: impl Into<String>, directory: impl Into<String>) -> Self {
         Self {
-            base: base_url.into(),
             directory: directory.into(),
-            http: reqwest::Client::new(),
-            request_timeout: None,
+            transport: HttpTransport::new(base_url, reqwest::Client::new(), None),
         }
     }
 
@@ -96,14 +91,13 @@ impl V1Sdk {
         base_url: impl Into<String>,
         directory: impl Into<String>,
     ) -> Result<Self, SdkError> {
+        let http = reqwest::Client::builder()
+            .no_proxy()
+            .connect_timeout(Duration::from_secs(5))
+            .build()?;
         Ok(Self {
-            base: base_url.into(),
             directory: directory.into(),
-            http: reqwest::Client::builder()
-                .no_proxy()
-                .connect_timeout(Duration::from_secs(5))
-                .build()?,
-            request_timeout: Some(Duration::from_secs(30)),
+            transport: HttpTransport::new(base_url, http, Some(Duration::from_secs(30))),
         })
     }
 
@@ -121,54 +115,10 @@ impl V1Sdk {
         query: Option<String>,
         body: Option<&Req>,
     ) -> Result<Resp, SdkError> {
-        self.call_with_timeout(method, path, query, body, self.request_timeout)
+        self.transport
+            .call(method, path, query.as_deref(), body)
             .await
-    }
-
-    async fn call_with_timeout<Req: Serialize, Resp: DeserializeOwned>(
-        &self,
-        method: reqwest::Method,
-        path: &str,
-        query: Option<String>,
-        body: Option<&Req>,
-        timeout: Option<Duration>,
-    ) -> Result<Resp, SdkError> {
-        let mut url = format!("{}{path}", self.base);
-        if let Some(query) = query {
-            url.push('?');
-            url.push_str(&query);
-        }
-        let mut request = self.http.request(method, url);
-        if let Some(timeout) = timeout {
-            request = request.timeout(timeout);
-        }
-        if let Some(body) = body {
-            request = request.json(body);
-        }
-        let response = request.send().await?;
-        let status = response.status();
-        let bytes = response.bytes().await?;
-        if !status.is_success() {
-            if let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(&bytes)
-                && let Some(error) = map.get("error")
-                && let (Some(code), Some(message)) = (
-                    error.get("code").and_then(Value::as_str),
-                    error.get("message").and_then(Value::as_str),
-                )
-            {
-                return Err(SdkError::Api {
-                    code: code.to_owned(),
-                    message: message.to_owned(),
-                });
-            }
-            return Err(SdkError::Api {
-                code: status.as_u16().to_string(),
-                message: format!("{status}: {}", String::from_utf8_lossy(&bytes))
-                    .trim_end()
-                    .to_owned(),
-            });
-        }
-        Ok(serde_json::from_slice(&bytes)?)
+            .map_err(SdkError::from_client)
     }
 
     /// `GET /v1/bootstrap` — the one-round-trip startup snapshot of the
@@ -200,9 +150,11 @@ impl V1Sdk {
         &self,
         request: pb::CreateSessionRequest,
     ) -> Result<pb::SessionInfo, SdkError> {
-        let response: pb::CreateSessionResponse = self
-            .call(reqwest::Method::POST, "/v1/sessions", None, Some(&request))
-            .await?;
+        let response = self
+            .transport
+            .create_session(&request)
+            .await
+            .map_err(SdkError::from_client)?;
         Ok(response.session.unwrap_or_default())
     }
 
@@ -231,15 +183,10 @@ impl V1Sdk {
         &self,
         page: Option<pb::PageRequest>,
     ) -> Result<pb::ListSessionsResponse, SdkError> {
-        let query = page.map(|page| {
-            format!(
-                "page.cursor={}&page.limit={}",
-                encode_component(&page.cursor),
-                page.limit
-            )
-        });
-        self.call(reqwest::Method::GET, "/v1/sessions", query, None::<&Value>)
+        self.transport
+            .list_sessions(None, page.as_ref())
             .await
+            .map_err(SdkError::from_client)
     }
 
     /// `GET /v1/sessions?projectId=…` — list the sessions (root and
@@ -252,21 +199,10 @@ impl V1Sdk {
         project: &str,
         page: Option<pb::PageRequest>,
     ) -> Result<pb::ListSessionsResponse, SdkError> {
-        let mut query = format!("projectId={}", encode_component(project));
-        if let Some(page) = page {
-            query.push_str(&format!(
-                "&page.cursor={}&page.limit={}",
-                encode_component(&page.cursor),
-                page.limit
-            ));
-        }
-        self.call(
-            reqwest::Method::GET,
-            "/v1/sessions",
-            Some(query),
-            None::<&Value>,
-        )
-        .await
+        self.transport
+            .list_sessions(Some(project), page.as_ref())
+            .await
+            .map_err(SdkError::from_client)
     }
 
     /// `GET /v1/projects` — the Projects, most recently updated first.
@@ -274,10 +210,11 @@ impl V1Sdk {
     /// # Errors
     /// Returns [`SdkError`] on transport or API failure.
     pub async fn list_projects(&self) -> Result<Vec<pb::ProjectInfo>, SdkError> {
-        let response: pb::ListProjectsResponse = self
-            .call(reqwest::Method::GET, "/v1/projects", None, None::<&Value>)
-            .await?;
-        Ok(response.projects)
+        self.transport
+            .list_projects()
+            .await
+            .map(|response| response.projects)
+            .map_err(SdkError::from_client)
     }
 
     /// `GET /v1/projects/{id}` — read one Project.
@@ -285,13 +222,10 @@ impl V1Sdk {
     /// # Errors
     /// Returns [`SdkError`] on transport or API failure (`not_found`).
     pub async fn get_project(&self, project: &str) -> Result<pb::ProjectInfo, SdkError> {
-        self.call(
-            reqwest::Method::GET,
-            &format!("/v1/projects/{}", encode_component(project)),
-            None,
-            None::<&Value>,
-        )
-        .await
+        self.transport
+            .get_project(project)
+            .await
+            .map_err(SdkError::from_client)
     }
 
     /// `POST /v1/projects` — create a Project with a name and roots.
@@ -303,12 +237,13 @@ impl V1Sdk {
         name: &str,
         roots: Vec<String>,
     ) -> Result<pb::ProjectInfo, SdkError> {
-        let request = pb::CreateProjectRequest {
-            name: name.to_owned(),
-            roots,
-        };
-        self.call(reqwest::Method::POST, "/v1/projects", None, Some(&request))
+        self.transport
+            .create_project(&pb::CreateProjectRequest {
+                name: name.to_owned(),
+                roots,
+            })
             .await
+            .map_err(SdkError::from_client)
     }
 
     /// `PATCH /v1/projects/{id}` — rename and/or replace the roots (empty
@@ -320,13 +255,10 @@ impl V1Sdk {
         &self,
         request: pb::UpdateProjectRequest,
     ) -> Result<pb::ProjectInfo, SdkError> {
-        self.call(
-            reqwest::Method::PATCH,
-            &format!("/v1/projects/{}", encode_component(&request.project)),
-            None,
-            Some(&request),
-        )
-        .await
+        self.transport
+            .update_project(&request)
+            .await
+            .map_err(SdkError::from_client)
     }
 
     /// `DELETE /v1/projects/{id}` — delete a Project (`failed_precondition`
@@ -335,15 +267,11 @@ impl V1Sdk {
     /// # Errors
     /// Returns [`SdkError`] on transport or API failure.
     pub async fn delete_project(&self, project: &str) -> Result<(), SdkError> {
-        let _: pb::DeleteProjectResponse = self
-            .call(
-                reqwest::Method::DELETE,
-                &format!("/v1/projects/{}", encode_component(project)),
-                None,
-                None::<&Value>,
-            )
-            .await?;
-        Ok(())
+        self.transport
+            .delete_project(project)
+            .await
+            .map(|_| ())
+            .map_err(SdkError::from_client)
     }
 
     /// `GET /v1/projects/resolve?path=…` — the Project containing `path`, if
@@ -352,15 +280,11 @@ impl V1Sdk {
     /// # Errors
     /// Returns [`SdkError`] on transport or API failure.
     pub async fn resolve_project(&self, path: &str) -> Result<Option<pb::ProjectInfo>, SdkError> {
-        let response: pb::ResolveProjectResponse = self
-            .call(
-                reqwest::Method::GET,
-                "/v1/projects/resolve",
-                Some(format!("path={}", encode_component(path))),
-                None::<&Value>,
-            )
-            .await?;
-        Ok(response.project)
+        self.transport
+            .resolve_project(path)
+            .await
+            .map(|response| response.project)
+            .map_err(SdkError::from_client)
     }
 
     /// `POST /v1/projects/ensure` — the Project containing `path`, or a new
@@ -372,16 +296,10 @@ impl V1Sdk {
         &self,
         path: &str,
     ) -> Result<pb::EnsureProjectForPathResponse, SdkError> {
-        let request = pb::EnsureProjectForPathRequest {
-            path: path.to_owned(),
-        };
-        self.call(
-            reqwest::Method::POST,
-            "/v1/projects/ensure",
-            None,
-            Some(&request),
-        )
-        .await
+        self.transport
+            .ensure_project_for_path(path)
+            .await
+            .map_err(SdkError::from_client)
     }
 
     /// `POST /v1/sessions/{id}/turns` — admit a prompt turn.
@@ -393,21 +311,14 @@ impl V1Sdk {
         session: &str,
         kind: pb::create_turn_request::Kind,
     ) -> Result<pb::TurnInfo, SdkError> {
-        let request = pb::CreateTurnRequest {
-            session: session.to_owned(),
-            kind: Some(kind),
-        };
-        let response: pb::CreateTurnResponse = self
-            .call(
-                reqwest::Method::POST,
-                &format!(
-                    "/v1/sessions/{session}/turns",
-                    session = encode_component(session)
-                ),
-                None,
-                Some(&request),
-            )
-            .await?;
+        let response = self
+            .transport
+            .create_turn_request(&pb::CreateTurnRequest {
+                session: session.to_owned(),
+                kind: Some(kind),
+            })
+            .await
+            .map_err(SdkError::from_client)?;
         Ok(response.turn.unwrap_or_default())
     }
 
@@ -420,17 +331,10 @@ impl V1Sdk {
         session: &str,
         text: impl Into<String>,
     ) -> Result<pb::TurnInfo, SdkError> {
-        let admitted = self
-            .create_turn(
-                session,
-                pb::create_turn_request::Kind::Prompt(pb::PromptTurn {
-                    text: text.into(),
-                    ..Default::default()
-                }),
-            )
-            .await?;
-        self.wait_turn(session, &admitted.id, Duration::from_secs(120))
+        self.transport
+            .prompt_text(session, text)
             .await
+            .map_err(SdkError::from_client)
     }
 
     /// `POST /v1/sessions/{id}/turns/{turn}/wait`.
@@ -443,19 +347,14 @@ impl V1Sdk {
         turn: &str,
         timeout: Duration,
     ) -> Result<pb::TurnInfo, SdkError> {
-        let timeout_ms = timeout.as_millis().min(600_000) as u64;
-        self.call_with_timeout(
-            reqwest::Method::POST,
-            &format!(
-                "/v1/sessions/{session}/turns/{turn}/wait",
-                session = encode_component(session),
-                turn = encode_component(turn)
-            ),
-            Some(format!("timeoutMs={timeout_ms}")),
-            None::<&Value>,
-            None,
-        )
-        .await
+        self.transport
+            .wait_turn_request(&pb::WaitTurnRequest {
+                session: session.to_owned(),
+                turn: turn.to_owned(),
+                timeout_ms: timeout.as_millis().min(600_000) as u64,
+            })
+            .await
+            .map_err(SdkError::from_client)
     }
 
     /// `GET /v1/sessions/{id}/messages` — the projected transcript.
@@ -501,16 +400,10 @@ impl V1Sdk {
         session: &str,
         since_seq: u64,
     ) -> Result<pb::ListEventsResponse, SdkError> {
-        self.call(
-            reqwest::Method::GET,
-            &format!(
-                "/v1/sessions/{session}/events",
-                session = encode_component(session)
-            ),
-            Some(format!("sinceSeq={since_seq}")),
-            None::<&Value>,
-        )
-        .await
+        self.transport
+            .replay_events(session, Some(since_seq), 0, false)
+            .await
+            .map_err(SdkError::from_client)
     }
 
     /// `GET /v1/sessions/{id}/events?includeRaw=true` — replay events after
@@ -524,16 +417,10 @@ impl V1Sdk {
         session: &str,
         since_seq: u64,
     ) -> Result<pb::ListEventsResponse, SdkError> {
-        self.call(
-            reqwest::Method::GET,
-            &format!(
-                "/v1/sessions/{session}/events",
-                session = encode_component(session)
-            ),
-            Some(format!("sinceSeq={since_seq}&includeRaw=true")),
-            None::<&Value>,
-        )
-        .await
+        self.transport
+            .replay_events(session, Some(since_seq), 0, true)
+            .await
+            .map_err(SdkError::from_client)
     }
 
     /// `PATCH /v1/sessions/{id}` — update title, model, agent, background,
@@ -658,15 +545,10 @@ impl V1Sdk {
     /// # Errors
     /// Returns [`SdkError`] on transport or API failure.
     pub async fn list_interactions(&self) -> Result<Vec<pb::Interaction>, SdkError> {
-        let response: pb::ListInteractionsResponse = self
-            .call(
-                reqwest::Method::GET,
-                "/v1/interactions",
-                None,
-                None::<&Value>,
-            )
-            .await?;
-        Ok(response.interactions)
+        self.transport
+            .list_interactions(None)
+            .await
+            .map_err(SdkError::from_client)
     }
 
     /// `POST /v1/interactions/{id}/respond` — answer one pending request.
@@ -678,22 +560,17 @@ impl V1Sdk {
         request_id: &str,
         response: pb::respond_interaction_request::Response,
     ) -> Result<bool, SdkError> {
-        let request = pb::RespondInteractionRequest {
-            request: request_id.to_owned(),
-            response: Some(response),
-        };
-        let applied: pb::RespondInteractionResponse = self
-            .call(
-                reqwest::Method::POST,
-                &format!(
-                    "/v1/interactions/{request_id}/respond",
-                    request_id = encode_component(request_id)
-                ),
-                None,
-                Some(&request),
+        self.transport
+            .respond_interaction(
+                request_id,
+                &pb::RespondInteractionRequest {
+                    request: request_id.to_owned(),
+                    response: Some(response),
+                },
             )
-            .await?;
-        Ok(applied.applied)
+            .await
+            .map(|response| response.applied)
+            .map_err(SdkError::from_client)
     }
 
     /// `GET /v1/sessions/{session}/events/stream` — one live SSE attempt.
@@ -716,12 +593,13 @@ impl V1Sdk {
         SdkError,
     > {
         let response = self
-            .http
-            .get(format!(
-                "{}/v1/sessions/{session}/events/stream?sinceSeq={since_seq}",
-                self.base,
-                session = encode_component(session),
-            ))
+            .transport
+            .request(
+                reqwest::Method::GET,
+                &format!("/v1/sessions/{}/events/stream", encode_component(session)),
+                Some(&format!("sinceSeq={since_seq}")),
+                None,
+            )
             .send()
             .await?
             .error_for_status()?;

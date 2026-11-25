@@ -176,8 +176,10 @@ or replay session events from Rust tooling. The session fields carry string IDs.
 
 Each method returns `ClientError` on failure. For example,
 `client.prompt_text(&session.id, "Summarize this session").await?` admits a
-prompt and waits up to 120 seconds. Set `ListEventsRequest.include_raw` to
-`true` to receive opaque JSON lines in `ListEventsResponse.raw_envelopes`.
+prompt and waits up to 120 seconds. `Client::prompt_text` and `V1Sdk::prompt`
+return an API error with code `invalid_response` if admission returns no turn
+ID. Set `ListEventsRequest.include_raw` to `true` to receive opaque JSON lines
+in `ListEventsResponse.raw_envelopes`.
 The internal envelope schema may change. The methods taking
 `hya_proto::SessionId` or returning `hya_proto::Envelope` are deprecated.
 
