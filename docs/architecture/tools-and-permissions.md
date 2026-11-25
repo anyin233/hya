@@ -693,12 +693,12 @@ carry session, message, and tool-call correlation.
 
 ## External Tool Sources
 
-`hya-app` prepares configured MCP and startup plugin sources, then submits their
-complete declarations to one `RuntimeReconciler`. Only `RuntimeRegistry`
-publishes the effective immutable view. MCP tools keep the external name
-`mcp__<server>__<tool>`; plugin tool names remain as declared. Both sources use
-the existing permission plane, tool result events, and projection replay as
-builtin tools. Source metadata never becomes a second dispatch registry.
+The app builds a plan from the desired MCP and configured plugin declarations.
+`RuntimeReconciler` prepares each source and submits completed candidates to
+`RuntimeRegistry`, which publishes the effective immutable view. MCP tools use
+`mcp__<server>__<tool>`, and configured plugin tools use `<plugin>__<tool>`.
+Both sources use the same permission plane, tool result events, and projection
+replay as builtin tools.
 
 ## Bundle sidecars (0.34.11)
 

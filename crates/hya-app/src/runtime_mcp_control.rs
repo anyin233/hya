@@ -8,8 +8,7 @@ use hya_mcp::{McpServerConfig, McpStatus};
 use serde_json::Value;
 
 use crate::runtime_reconcile::{
-    ObservedState, PreparedFailure, PreparedResult, ReconcileError, ReconcileOutcome,
-    ReconcilePlan, RuntimeReconciler, prepare_desired_source,
+    ObservedState, ReconcileError, ReconcileOutcome, RuntimeReconciler,
 };
 
 type ControlFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -22,86 +21,6 @@ impl RuntimeMcpControl {
     #[must_use]
     pub(crate) fn new(reconciler: Arc<RuntimeReconciler>) -> Self {
         Self { reconciler }
-    }
-
-    pub(crate) async fn reconcile_plan(
-        &self,
-        mut plan: ReconcilePlan,
-        stop: tokio_util::sync::CancellationToken,
-    ) -> Result<ReconcileOutcome, ReconcileError> {
-        if plan.is_complete() {
-            return Ok(ReconcileOutcome {
-                published_generation: None,
-            });
-        }
-        let mut set = tokio::task::JoinSet::new();
-        let mut tasks = BTreeMap::new();
-        for source in plan.sources().iter().cloned() {
-            let id = source.id().clone();
-            let handle = set.spawn(hya_child_io::io_tasks::scope(
-                self.reconciler.io_tasks.clone(),
-                async move { prepare_desired_source(source).await },
-            ));
-            tasks.insert(handle.id(), id);
-        }
-        let mut first_error = None;
-        let mut published_generation = None;
-        loop {
-            let joined = tokio::select! {
-                biased;
-                () = stop.cancelled() => {
-                    set.abort_all();
-                    while set.join_next().await.is_some() {}
-                    return Err(ReconcileError::InvalidPrepared("runtime reconciliation cancelled".to_string()));
-                }
-                joined = set.join_next_with_id() => match joined {
-                    Some(joined) => joined,
-                    None => break,
-                },
-            };
-            let result = match joined {
-                Ok((id, result)) => {
-                    tasks.remove(&id);
-                    result
-                }
-                Err(error) => {
-                    let Some(source) = tasks.remove(&error.id()) else {
-                        return Err(ReconcileError::InvalidPrepared(format!(
-                            "source preparation task {} had no source ticket",
-                            error.id()
-                        )));
-                    };
-                    PreparedResult::Failed(PreparedFailure::new(
-                        source,
-                        format!("SOURCE_PREPARE_TASK_FAILED: {error}"),
-                    ))
-                }
-            };
-            let id = result.source().clone();
-            let ticket = plan.tickets.remove(&id).ok_or_else(|| {
-                ReconcileError::InvalidPrepared(format!("missing planned ticket for {id}"))
-            })?;
-            let source_plan = ReconcilePlan {
-                tickets: BTreeMap::from([(id, ticket)]),
-                sources: Vec::new(),
-            };
-            match self.reconciler.finish_revision(&source_plan, [result]) {
-                Ok(outcome) => {
-                    if outcome.published_generation.is_some() {
-                        published_generation = outcome.published_generation;
-                    }
-                }
-                Err(error) => {
-                    first_error.get_or_insert(error);
-                }
-            }
-        }
-        match first_error {
-            Some(error) => Err(error),
-            None => Ok(ReconcileOutcome {
-                published_generation,
-            }),
-        }
     }
 
     fn mcp_status(&self) -> BTreeMap<String, McpStatus> {
@@ -180,6 +99,7 @@ impl hya_server::McpControl for RuntimeMcpControl {
                 .upsert_mcp(name, config)
                 .map_err(|error| error.to_string())?;
             match self
+                .reconciler
                 .reconcile_plan(plan, tokio_util::sync::CancellationToken::new())
                 .await
             {
@@ -205,6 +125,7 @@ impl hya_server::McpControl for RuntimeMcpControl {
                 return Ok(false);
             };
             match self
+                .reconciler
                 .reconcile_plan(plan, tokio_util::sync::CancellationToken::new())
                 .await
             {

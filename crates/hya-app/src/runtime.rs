@@ -1376,7 +1376,7 @@ async fn build_session_engine_with_mcp_defer(
         let plugin_plan = reconciler
             .replace_desired(plugin_desired.clone())
             .context("plan startup plugin reconciliation")?;
-        if let Err(error) = mcp_control
+        if let Err(error) = reconciler
             .reconcile_plan(plugin_plan, lifecycle.stop.clone())
             .await
         {
@@ -1388,10 +1388,10 @@ async fn build_session_engine_with_mcp_defer(
         let deferred_plan = reconciler
             .replace_desired(desired)
             .context("plan deferred MCP reconciliation")?;
-        let control_bg = mcp_control.clone();
+        let reconciler_bg = reconciler.clone();
         let stop = lifecycle.stop.clone();
         lifecycle.tasks.spawn(async move {
-            if let Err(error) = control_bg.reconcile_plan(deferred_plan, stop).await {
+            if let Err(error) = reconciler_bg.reconcile_plan(deferred_plan, stop).await {
                 eprintln!("hya: MCP runtime refresh rejected ({error})");
             }
         });
@@ -1401,7 +1401,7 @@ async fn build_session_engine_with_mcp_defer(
         let plan = reconciler
             .replace_desired(desired)
             .context("plan startup runtime reconciliation")?;
-        if let Err(error) = mcp_control
+        if let Err(error) = reconciler
             .reconcile_plan(plan, lifecycle.stop.clone())
             .await
         {
