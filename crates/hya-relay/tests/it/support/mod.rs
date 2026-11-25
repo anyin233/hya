@@ -4,6 +4,7 @@
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
 pub mod hops;
+pub mod memory;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;

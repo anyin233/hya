@@ -5,7 +5,9 @@
 
 use futures::{SinkExt, StreamExt};
 use hya_relay::proto::{Chunk, HostFrame, ProxyToHost, chunk, host_frame, proxy_to_host};
-use hya_relay::transport::{BoxedTransport, RelayTransport, TransportError, memory};
+use hya_relay::transport::{BoxedTransport, RelayTransport, TransportError};
+
+use super::support::memory;
 
 fn data(bytes: &[u8]) -> Chunk {
     Chunk {

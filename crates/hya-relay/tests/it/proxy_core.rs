@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use super::support::memory::{self, MemoryTransport};
 use ed25519_dalek::{Signer, SigningKey};
 use futures::{SinkExt, StreamExt};
 use hya_relay::keys::{OpenToken, Psk};
@@ -15,7 +16,6 @@ use hya_relay::proto::{
     update_open_token_signing_message,
 };
 use hya_relay::proxy::{PeerInfo, ProxyCore, ProxyLimits};
-use hya_relay::transport::memory::{self, MemoryTransport};
 use tokio::time::{Instant, timeout};
 
 type HostEnd = MemoryTransport<HostFrame, ProxyToHost>;
