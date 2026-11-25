@@ -12,7 +12,6 @@ mod project_activity;
 mod search_agent;
 mod skill;
 mod task;
-mod wait;
 mod workflow;
 
 hya_tool::export_native_tool_bundle!(|out| {
@@ -26,7 +25,7 @@ hya_tool::export_native_tool_bundle!(|out| {
         Arc::new(search_agent::SearchAgentTool),
         Arc::new(archive::ArchiveTool),
         Arc::new(plan::PlanExitTool),
-        Arc::new(wait::WaitTool),
+        Arc::new(hya_tool::lifecycle::WaitTool::new(false)),
     ];
     out.extend(tools);
 });
