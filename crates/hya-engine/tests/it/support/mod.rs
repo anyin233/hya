@@ -93,10 +93,13 @@ pub fn builtin_only_catalog() -> Arc<AgentCatalog> {
 /// prompt (AGENTS/context), and the reserved system agents stay available for
 /// exact lookup without entering any ordinary spawn roster.
 pub fn test_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegistry> {
-    Arc::new(RuntimeRegistry::from_snapshot(
-        tools.snapshot(),
-        builtin_only_catalog(),
-    ))
+    Arc::new(
+        RuntimeRegistry::from_snapshot(tools.snapshot(), builtin_only_catalog())
+            .with_skill_discovery(
+                hya_app::skill_catalog::discover,
+                hya_app::skill_catalog::builtin_skills,
+            ),
+    )
 }
 
 pub struct TestDir {

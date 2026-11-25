@@ -1250,7 +1250,14 @@ async fn build_session_engine_with_mcp_defer(
         catalog.bundles().as_ref(),
         &schema_rows,
     )?;
-    let runtime = Arc::new(RuntimeRegistry::new(registry, catalog).with_pure_skills(options.pure));
+    let runtime = Arc::new(
+        RuntimeRegistry::new(registry, catalog)
+            .with_skill_discovery(
+                crate::skill_catalog::discover,
+                crate::skill_catalog::builtin_skills,
+            )
+            .with_pure_skills(options.pure),
+    );
     if !static_sources.is_empty() {
         runtime.refresh(|candidate| {
             candidate.replace_sources_of_kind(RuntimeSourceKind::Bundle, static_sources)

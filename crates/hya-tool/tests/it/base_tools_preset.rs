@@ -222,7 +222,7 @@ fn preset_preserves_read_protection_and_permission_defaults() {
 }
 
 #[test]
-fn tool_policies_and_core_skills_come_from_runtime_loaded_bundles() {
+fn tool_policies_come_from_runtime_loaded_bundles() {
     for preset in hya_tool::tool_bundle_presets() {
         let catalog = hya_bundle::first_party_bundle(preset.identity())
             .unwrap_or_else(|error| panic!("{error}"));
@@ -233,10 +233,4 @@ fn tool_policies_and_core_skills_come_from_runtime_loaded_bundles() {
         );
         assert_eq!(preset.bundle_digest(), catalog.bundles()[0].digest());
     }
-    let skills =
-        hya_bundle::first_party_bundle("hya/core-skills").unwrap_or_else(|error| panic!("{error}"));
-    assert!(std::ptr::eq(
-        hya_tool::core_skills_preset_bytes(),
-        skills.bytes()
-    ));
 }

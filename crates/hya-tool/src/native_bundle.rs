@@ -281,6 +281,7 @@ pub fn abi_digest_v1() -> [u8; 32] {
     hash.update(include_bytes!("tool.rs"));
     hash.update(include_bytes!("deadline.rs"));
     hash.update(include_bytes!("lifecycle.rs"));
+    hash.update(include_bytes!("skill.rs"));
     hash.update(hya_tool_error::NATIVE_ABI_SOURCE);
     for source in hya_context::NATIVE_ABI_SOURCES {
         hash.update(source);

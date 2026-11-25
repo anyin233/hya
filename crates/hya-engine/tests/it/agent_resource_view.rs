@@ -245,7 +245,7 @@ fn bundle_skill_source(bundle: &Bundle) -> RuntimeSource {
         .skills
         .iter()
         .map(|resource| {
-            let parsed = hya_tool::parse_skill(&resource.content)
+            let parsed = hya_app::skill_catalog::parse_skill(&resource.content)
                 .expect("fixture Skill must contain valid frontmatter");
             let path = std::path::PathBuf::from(format!(
                 "bundle:{}/{}",
@@ -294,7 +294,12 @@ async fn agent_origin_decides_the_visible_tool_skill_and_mcp_plane() {
     });
     let calls = Arc::new(AtomicUsize::new(0));
     let (catalog, sources) = catalog();
-    let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog));
+    let runtime = Arc::new(
+        RuntimeRegistry::new(ToolRegistry::builtins(), catalog).with_skill_discovery(
+            hya_app::skill_catalog::discover,
+            hya_app::skill_catalog::builtin_skills,
+        ),
+    );
     runtime
         .refresh(|candidate| {
             candidate.upsert_sources(sources)?;

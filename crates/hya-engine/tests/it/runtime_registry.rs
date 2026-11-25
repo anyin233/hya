@@ -57,7 +57,11 @@ fn logically_unchanged_candidate_does_not_advance_generation() {
     tools
         .register(stable.clone())
         .expect("register stable marker");
-    let registry = RuntimeRegistry::new(tools, test_catalog(&[("general", AgentRole::Main, &[])]));
+    let registry = RuntimeRegistry::new(tools, test_catalog(&[("general", AgentRole::Main, &[])]))
+        .with_skill_discovery(
+            hya_app::skill_catalog::discover,
+            hya_app::skill_catalog::builtin_skills,
+        );
     let before = registry.bind_turn(workdir.path()).unwrap();
     let before_names = tool_names(&before);
 

@@ -59,7 +59,11 @@ fn catalog_publication_is_atomic_and_turn_bindings_pin_old_catalog() {
     tools
         .register_with_permission(MarkerTool::new("mcp__stable__marker"), ToolPermission::Mcp)
         .expect("register stable marker tool");
-    let registry = RuntimeRegistry::new(tools, test_catalog(&[("hya-task", AgentRole::Main, &[])]));
+    let registry = RuntimeRegistry::new(tools, test_catalog(&[("hya-task", AgentRole::Main, &[])]))
+        .with_skill_discovery(
+            hya_app::skill_catalog::discover,
+            hya_app::skill_catalog::builtin_skills,
+        );
 
     let old_binding = registry.bind_turn(workdir.path()).unwrap();
     let old_generation = old_binding.generation();
@@ -154,7 +158,11 @@ fn one_turn_cannot_mix_tool_skill_or_mcp_members_across_generations() {
     tools
         .register_with_permission(MarkerTool::new("mcp__n__lookup"), ToolPermission::Mcp)
         .expect("register generation N MCP tool");
-    let registry = RuntimeRegistry::new(tools, test_catalog(&[("hya-task", AgentRole::Main, &[])]));
+    let registry = RuntimeRegistry::new(tools, test_catalog(&[("hya-task", AgentRole::Main, &[])]))
+        .with_skill_discovery(
+            hya_app::skill_catalog::discover,
+            hya_app::skill_catalog::builtin_skills,
+        );
     let generation_n = registry.bind_turn(workdir.path()).unwrap();
 
     workdir.remove_skill("skill_n");

@@ -28,7 +28,7 @@ pub(super) fn test_runtime_registry(
                 .resources(hya_bundle::ExportKind::Skill)
                 .iter()
                 .map(|resource| {
-                    let parsed = hya_tool::parse_skill(&resource.content)
+                    let parsed = hya_app::skill_catalog::parse_skill(&resource.content)
                         .expect("test bundle Skill must contain valid frontmatter");
                     let path = PathBuf::from(format!(
                         "bundle:{}/{}",
@@ -70,7 +70,10 @@ pub(super) fn test_runtime_registry(
             })
         })
         .collect::<Vec<_>>();
-    let registry = RuntimeRegistry::new(tools, catalog);
+    let registry = RuntimeRegistry::new(tools, catalog).with_skill_discovery(
+        hya_app::skill_catalog::discover,
+        hya_app::skill_catalog::builtin_skills,
+    );
     if !sources.is_empty() {
         registry
             .refresh(|candidate| {

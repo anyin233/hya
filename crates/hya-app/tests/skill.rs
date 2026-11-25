@@ -1,12 +1,14 @@
-//! Integration tests for `hya-tool`: skill.
+//! Integration tests for `hya-app`: skill.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use hya_app::skill_catalog::{discover_skills_from_dirs, discover_skills_with_builtins};
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
     SpawnerPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
@@ -121,7 +123,7 @@ async fn skill_loads_named_skill_content_and_file_sample() {
     let tool = ToolRegistry::builtins().get("skill").unwrap();
     let ctx = ctx_with(
         vec![allow(Action::Skill, "writer")],
-        SkillPlane::new(vec![root]),
+        SkillPlane::from_snapshot(Arc::new(discover_skills_from_dirs(&[root]))),
     );
 
     // When
@@ -159,7 +161,7 @@ async fn skill_requires_skill_permission_before_loading_content() {
     let tool = ToolRegistry::builtins().get("skill").unwrap();
     let ctx = ctx_with(
         vec![deny(Action::Skill, "writer")],
-        SkillPlane::new(vec![root]),
+        SkillPlane::from_snapshot(Arc::new(discover_skills_from_dirs(&[root]))),
     );
 
     // When
@@ -173,10 +175,7 @@ async fn skill_requires_skill_permission_before_loading_content() {
 async fn skill_returns_not_found_error_for_unknown_name() {
     // Given
     let tool = ToolRegistry::builtins().get("skill").unwrap();
-    let ctx = ctx_with(
-        vec![allow(Action::Skill, "missing")],
-        SkillPlane::new(vec![]),
-    );
+    let ctx = ctx_with(vec![allow(Action::Skill, "missing")], SkillPlane::default());
 
     // When
     let result = tool.execute(&ctx, json!({ "name": "missing" })).await;
@@ -203,7 +202,10 @@ async fn skill_falls_back_to_later_root_when_first_root_has_no_match() {
     let tool = ToolRegistry::builtins().get("skill").unwrap();
     let ctx = ctx_with(
         vec![allow(Action::Skill, "writer")],
-        SkillPlane::new(vec![first_root, second_root]),
+        SkillPlane::from_snapshot(Arc::new(discover_skills_from_dirs(&[
+            first_root,
+            second_root,
+        ]))),
     );
 
     // When
@@ -247,7 +249,10 @@ async fn skill_prefers_first_matching_root_when_multiple_roots_define_same_name(
     let tool = ToolRegistry::builtins().get("skill").unwrap();
     let ctx = ctx_with(
         vec![allow(Action::Skill, "writer")],
-        SkillPlane::new(vec![first_root, second_root]),
+        SkillPlane::from_snapshot(Arc::new(discover_skills_from_dirs(&[
+            first_root,
+            second_root,
+        ]))),
     );
 
     // When
@@ -268,7 +273,7 @@ async fn skill_prefers_first_matching_root_when_multiple_roots_define_same_name(
 }
 
 #[tokio::test]
-async fn default_skill_plane_loads_from_toolctx_workdir() {
+async fn discovered_workdir_skill_is_available_to_the_tool() {
     // Given
     let home = tempdir();
     let workdir = tempdir();
@@ -284,7 +289,7 @@ async fn default_skill_plane_loads_from_toolctx_workdir() {
     let tool = ToolRegistry::builtins().get("skill").unwrap();
     let ctx = ctx_with_workdir(
         vec![allow(Action::Skill, "writer")],
-        SkillPlane::default(),
+        SkillPlane::from_snapshot(Arc::new(discover_skills_with_builtins(&workdir))),
         workdir,
     );
 
