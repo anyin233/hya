@@ -28,6 +28,23 @@ and the bound spawn and Workflow senders.
 - `EventBus` for live subscribers.
 - optional hook dispatcher for plugins.
 
+### Provider snapshots
+
+Provider refresh publishes the model routes and presentation catalog together.
+Engine clones share the current publication. Operations that need both call
+`SessionEngine::provider_snapshot() -> Arc<ProviderSnapshot>` once. The
+snapshot exposes `generation() -> u64`, `router() -> &ProviderRouter`, and
+`catalog() -> &ProviderCatalogSnapshot`. Generation starts at zero and
+increments on each `publish_provider_catalog`. For example, the app's
+provider refresh reads the current router and catalog from one snapshot
+before building and publishing the next pair.
+
+A model round retains its router from preparation through context checks,
+fallback attempts, retries, and served-route accounting. A publication
+during preflight takes effect when the next round starts. Root turns still
+refresh their resource binding at that boundary. Nested tool calls retain the
+calling tool's binding and resources.
+
 ### Publish seams
 
 Runtime events do **not** all pass through a single `emit` path. There are

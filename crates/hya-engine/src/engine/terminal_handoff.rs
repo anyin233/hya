@@ -22,6 +22,7 @@ use hya_provider::{
 };
 
 use super::SessionEngine;
+use super::models::ProviderSnapshots;
 use super::summary::{episode_messages, summary_messages};
 use crate::error::CoreError;
 
@@ -198,15 +199,32 @@ const DEFAULT_SUMMARY_MAX_TOKENS: u32 = 4_096;
 
 /// [`Summarizer`] that calls a provider model with no tools.
 pub struct ModelSummarizer {
-    providers: Arc<ProviderRouter>,
+    providers: SummarizerProviders,
     model: ModelRef,
 }
 
+enum SummarizerProviders {
+    Fixed(Arc<ProviderRouter>),
+    Live(ProviderSnapshots),
+}
+
 impl ModelSummarizer {
-    /// Route summaries through `model` via `providers`.
+    /// Route summaries through `model` using a fixed router.
     #[must_use]
     pub fn new(providers: Arc<ProviderRouter>, model: ModelRef) -> Self {
-        Self { providers, model }
+        Self {
+            providers: SummarizerProviders::Fixed(providers),
+            model,
+        }
+    }
+
+    /// Use the engine's current provider generation for each handoff request.
+    #[must_use]
+    pub fn for_engine(engine: &SessionEngine, model: ModelRef) -> Self {
+        Self {
+            providers: SummarizerProviders::Live(engine.providers.clone()),
+            model,
+        }
     }
 }
 
@@ -236,8 +254,15 @@ impl Summarizer for ModelSummarizer {
             reasoning: options.reasoning,
             headers: Default::default(),
         };
-        let stream = self
-            .providers
+        let snapshot;
+        let router = match &self.providers {
+            SummarizerProviders::Fixed(router) => router.as_ref(),
+            SummarizerProviders::Live(providers) => {
+                snapshot = providers.snapshot();
+                snapshot.router()
+            }
+        };
+        let stream = router
             .stream(request, SessionId::new(), MessageId::new())
             .await?;
         let (text, usage) = collect_text_and_usage(stream).await;

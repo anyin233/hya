@@ -200,6 +200,7 @@ impl PreparedWorkflowRun {
 fn resolve_agent(
     engine: &SessionEngine,
     ctx: &WorkflowRunContext,
+    router: &hya_provider::ProviderRouter,
     agent_id: &str,
     workflow: &str,
     role: &str,
@@ -215,11 +216,7 @@ fn resolve_agent(
         })?;
     let mut spec =
         engine.agent_spec_for_binding(&ctx.binding, &ctx.base_agent, definition.stable_id)?;
-    let router = ctx
-        .routing
-        .as_ref()
-        .map(|routing| Arc::clone(&routing.router))
-        .unwrap_or_else(|| engine.provider_router());
+
     let is_servable = |model: &ModelRef| router.resolve(model).is_some();
     spec = crate::category::apply_agent_model_preference(
         spec,
@@ -229,7 +226,7 @@ fn resolve_agent(
     );
     if let Some(routing) = ctx.routing.as_ref() {
         let member = hya_tool::SpawnMember::default();
-        let is_servable = |model: &ModelRef| routing.router.resolve(model).is_some();
+
         spec = crate::category::apply_spawn_model_policy(
             spec,
             &definition,
@@ -239,7 +236,7 @@ fn resolve_agent(
         );
     }
     let route = assignment
-        .map(|assignment| resolve_model_route(workflow, agent_id, role, assignment, &router))
+        .map(|assignment| resolve_model_route(workflow, agent_id, role, assignment, router))
         .transpose()?;
     if let Some(route) = &route {
         let selected = route.selected().ok_or_else(|| WorkflowError::Invalid {
@@ -397,6 +394,10 @@ pub async fn prepare_workflow_run_for_actor(
     let plan = workflow.plan();
     let name = workflow.definition().name();
     let wanted = worst_case_admission_units(plan.stages());
+    let router = context.routing.as_ref().map_or_else(
+        || engine.provider_router(),
+        |routing| Arc::clone(&routing.router),
+    );
 
     let mut resolved = Vec::with_capacity(plan.stages().len());
     let mut verifiers = Vec::with_capacity(plan.stages().len());
@@ -404,6 +405,7 @@ pub async fn prepare_workflow_run_for_actor(
         resolved.push(resolve_agent(
             &engine,
             &context,
+            &router,
             stage.agent(),
             name,
             "worker",
@@ -416,6 +418,7 @@ pub async fn prepare_workflow_run_for_actor(
                     resolve_agent(
                         &engine,
                         &context,
+                        &router,
                         verify.agent(),
                         name,
                         "verifier",

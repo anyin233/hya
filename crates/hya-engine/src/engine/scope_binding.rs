@@ -32,6 +32,7 @@ use async_trait::async_trait;
 use hya_proto::{
     AgentName, Event, ModelRef, ProjectId, Projection, SessionId, SessionKind, ToolSchema,
 };
+use hya_provider::ProviderRouter;
 use tokio::sync::broadcast;
 
 use super::SessionEngine;
@@ -526,6 +527,17 @@ impl SessionEngine {
         session: SessionId,
         workdir: &Path,
     ) -> Result<TurnBinding, CoreError> {
+        let router = self.provider_router();
+        self.bind_session_runtime_with_router(session, workdir, &router)
+            .await
+    }
+
+    pub(super) async fn bind_session_runtime_with_router(
+        &self,
+        session: SessionId,
+        workdir: &Path,
+        router: &ProviderRouter,
+    ) -> Result<TurnBinding, CoreError> {
         let projection = self.read_projection_shared(session).await?;
         if projection.session.id != Some(session) {
             return Err(CoreError::Invalid(format!("session not found: {session}")));
@@ -548,7 +560,7 @@ impl SessionEngine {
             .await?;
         let overrides = overrides
             .into_iter()
-            .filter(|(_, model)| self.provider_router().resolve(model).is_some())
+            .filter(|(_, model)| router.resolve(model).is_some())
             .collect::<BTreeMap<_, _>>();
         Ok(binding.with_session_agent_models(overrides))
     }

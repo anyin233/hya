@@ -675,7 +675,7 @@ mod supervisor;
 pub use recovery::{ResidentRecoveryError, recover_resident_claims};
 pub use spawn::{
     ResolveSpawnMemberCtx, ResolvedSpawnMember, resolve_main_activation_context,
-    resolve_spawn_member,
+    resolve_spawn_member, resolve_spawn_member_with_catalog,
 };
 mod team;
 

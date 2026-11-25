@@ -524,12 +524,11 @@ async fn ensure_image_input(
     session: SessionId,
     agent: &hya_engine::AgentSpec,
 ) -> Result<(), V1Error> {
-    let model = st.engine.root_turn_model(session, agent).await?;
-    let image_input = st
+    let (model, capabilities) = st
         .engine
-        .provider_router()
-        .capabilities(&model)
-        .and_then(|capabilities| capabilities.image_input);
+        .root_turn_model_with_capabilities(session, agent)
+        .await?;
+    let image_input = capabilities.and_then(|capabilities| capabilities.image_input);
     if image_input == Some(false) {
         return Err(V1Error::invalid_argument(format!(
             "model `{model}` does not accept image input; switch to a model that does or send the prompt without attachments"

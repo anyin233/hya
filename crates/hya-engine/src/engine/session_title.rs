@@ -1,7 +1,7 @@
 use hya_proto::{
     Message, MessageId, ModelRef, Part, PartId, PartProjection, Role, SessionId, UsagePurpose,
 };
-use hya_provider::CompletionRequest;
+use hya_provider::{CompletionRequest, ProviderRouter};
 
 use super::SessionEngine;
 use super::{
@@ -43,28 +43,31 @@ impl SessionEngine {
         })?;
         drop(projection);
         // Bind once from the persisted session workdir; exact-lookup only.
-        let binding = self.bind_session_runtime(session, &workdir).await?;
+        let router = self.provider_router();
+        let binding = self
+            .bind_session_runtime_with_router(session, &workdir, &router)
+            .await?;
         let definition = fixed_system_agent(&binding, FixedSystemAgent::Title)?;
         let options = summarize_options_from_definition(
             &definition,
             &self.model_categories,
             binding.agent_model_preference(definition.stable_id),
-            &|model| self.provider_router().resolve(model).is_some(),
+            &|model| router.resolve(model).is_some(),
         );
         let model = options
             .model
             .clone()
             .unwrap_or_else(|| fallback_model.clone());
         let usage = crate::UsageCollector::default();
-        let generated = self
-            .generate_title(
-                &model,
-                options.system,
-                options.reasoning,
-                &user_text,
-                &usage,
-            )
-            .await;
+        let generated = Self::generate_title(
+            &router,
+            &model,
+            options.system,
+            options.reasoning,
+            &user_text,
+            &usage,
+        )
+        .await;
         // Title generation is billed to the session it names.
         self.record_side_call_usage(None, session, UsagePurpose::Title, &usage)
             .await;
@@ -83,7 +86,7 @@ impl SessionEngine {
     }
 
     async fn generate_title(
-        &self,
+        router: &ProviderRouter,
         model: &ModelRef,
         system: Option<String>,
         reasoning: Option<hya_provider::ReasoningEffort>,
@@ -106,8 +109,7 @@ impl SessionEngine {
             reasoning,
             headers: Default::default(),
         };
-        let stream = self
-            .provider_router()
+        let stream = router
             .stream(request, SessionId::new(), MessageId::new())
             .await?;
         let (output, reported) = crate::terminal_handoff::collect_text_and_usage(stream).await;

@@ -11,8 +11,10 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use hya_bundle::BundleCatalog;
 use hya_engine::agent_catalog::AgentCatalog;
+#[cfg(test)]
+use hya_engine::resident::resolve_spawn_member;
 use hya_engine::resident::{
-    ResolveSpawnMemberCtx, resolve_main_activation_context, resolve_spawn_member,
+    ResolveSpawnMemberCtx, resolve_main_activation_context, resolve_spawn_member_with_catalog,
 };
 use hya_engine::{
     AgentSpec, BoundSidecarFactory, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest,
@@ -1024,8 +1026,8 @@ fn spawn_team_supervisor_with_environment(
                 let _ = req.reply.send(Err(SpawnError::Unavailable));
                 continue;
             };
-            let router = engine.provider_router();
-            let is_servable = |model: &ModelRef| router.resolve(model).is_some();
+            let providers = engine.provider_snapshot();
+            let is_servable = |model: &ModelRef| providers.router().resolve(model).is_some();
             // Guidance is request-scoped: one Arc cloned to every resolved member.
             let request_guidance = req.guidance.clone();
             // Scope the ctx so the non-Sync `is_servable` borrow ends before any await.
@@ -1044,7 +1046,9 @@ fn spawn_team_supervisor_with_environment(
                 req.members
                     .iter()
                     .cloned()
-                    .map(|member| resolve_spawn_member(&resolve_ctx, member))
+                    .map(|member| {
+                        resolve_spawn_member_with_catalog(&resolve_ctx, member, providers.catalog())
+                    })
                     .collect::<Result<Vec<_>, _>>()
             };
             let resolved = match resolved {
@@ -1283,8 +1287,7 @@ async fn build_session_engine_with_mcp_defer(
     let (workflow_sender, workflow_rx) = BoundWorkflowSender::with_capacity(spawn_queue_capacity);
     let (mailbox, mailbox_rx) = MailboxPlane::new();
     let (lifecycle_plane, lifecycle_rx) = LifecyclePlane::new();
-    let summarizer: Arc<dyn Summarizer> =
-        Arc::new(ModelSummarizer::new(router.clone(), agent.model.clone()));
+
     let bus = EventBus::new(crate::config::resolve_event_bus_capacity());
     let governor = SubagentGovernor::new(subagent_limits);
     let sidecar_environment = Arc::new(BundleSidecarEnvironment {
@@ -1299,6 +1302,8 @@ async fn build_session_engine_with_mcp_defer(
             return Err(error).context("load internal native rewriters at startup");
         }
     };
+    let summarizer: Arc<dyn Summarizer> =
+        Arc::new(ModelSummarizer::for_engine(&engine, agent.model.clone()));
     let engine_builder = engine
         .with_base_system_prompt(agent.system_prompt.clone())
         .with_pure_context(options.pure)

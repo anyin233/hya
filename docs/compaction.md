@@ -177,6 +177,9 @@ contains `generation: u32`, `doc: String`, and `degraded: bool`.
 It configures context reduction separately with
 `with_rewriter_keep_recent(usize)` and `with_token_accounting(TokenAccounting)`.
 For example, `compaction.summary_max_tokens: 8192` permits an 8192-token handoff.
+`ModelSummarizer::for_engine(&SessionEngine, ModelRef)` reads the current router
+for each handoff request. `ModelSummarizer::new(Arc<ProviderRouter>, ModelRef)`
+retains the supplied router for embedders that pin their route.
 The Rust `with_compaction(Arc<dyn Summarizer>, CompactionConfig)` builder remains
 available for embedders that set the handoff cap and retained tail together.
 

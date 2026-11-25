@@ -131,8 +131,9 @@ async fn bootstrap(
     let place = catalog_scope(&st, &request.directory).await?;
 
     let agents = super::catalog::agent_rows(&st, &place).await?;
-    let models = super::catalog::model_rows(&st);
-    let providers = super::catalog::provider_rows(&st, &models).await;
+    let snapshot = st.engine.provider_catalog_snapshot();
+    let models = super::catalog::model_rows(&snapshot);
+    let providers = super::catalog::provider_rows(&st, &snapshot).await;
     let commands = super::catalog::command_rows(&place);
     let skills = super::catalog::skill_rows(&place);
     let tools = super::catalog::tool_rows(&st);
@@ -153,7 +154,7 @@ async fn bootstrap(
         location: Some(location_info(place.workdir())),
         config: Some(super::convert::to_struct(st.global.config().await)),
         agents,
-        models: models.clone(),
+        models,
         providers,
         commands,
         skills,
