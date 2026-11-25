@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hya_app::skill_catalog::{discover_skills_from_dirs, discover_skills_with_builtins};
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    SpawnerPlane, ToolCtx, ToolError, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -120,7 +120,7 @@ async fn skill_loads_named_skill_content_and_file_sample() {
     )
     .unwrap();
     std::fs::write(dir.join("scripts/run.sh"), "#!/bin/sh\n").unwrap();
-    let tool = ToolRegistry::builtins().get("skill").unwrap();
+    let tool = hya_tool_loader::builtins().get("skill").unwrap();
     let ctx = ctx_with(
         vec![allow(Action::Skill, "writer")],
         SkillPlane::from_snapshot(Arc::new(discover_skills_from_dirs(&[root]))),
@@ -158,7 +158,7 @@ async fn skill_requires_skill_permission_before_loading_content() {
         "---\nname: writer\ndescription: Writes concise text\n---\nsecret body\n",
     )
     .unwrap();
-    let tool = ToolRegistry::builtins().get("skill").unwrap();
+    let tool = hya_tool_loader::builtins().get("skill").unwrap();
     let ctx = ctx_with(
         vec![deny(Action::Skill, "writer")],
         SkillPlane::from_snapshot(Arc::new(discover_skills_from_dirs(&[root]))),
@@ -174,7 +174,7 @@ async fn skill_requires_skill_permission_before_loading_content() {
 #[tokio::test]
 async fn skill_returns_not_found_error_for_unknown_name() {
     // Given
-    let tool = ToolRegistry::builtins().get("skill").unwrap();
+    let tool = hya_tool_loader::builtins().get("skill").unwrap();
     let ctx = ctx_with(vec![allow(Action::Skill, "missing")], SkillPlane::default());
 
     // When
@@ -199,7 +199,7 @@ async fn skill_falls_back_to_later_root_when_first_root_has_no_match() {
         "---\nname: writer\ndescription: Writes concise text\n---\nSecond root content.\n",
     )
     .unwrap();
-    let tool = ToolRegistry::builtins().get("skill").unwrap();
+    let tool = hya_tool_loader::builtins().get("skill").unwrap();
     let ctx = ctx_with(
         vec![allow(Action::Skill, "writer")],
         SkillPlane::from_snapshot(Arc::new(discover_skills_from_dirs(&[
@@ -246,7 +246,7 @@ async fn skill_prefers_first_matching_root_when_multiple_roots_define_same_name(
     )
     .unwrap();
 
-    let tool = ToolRegistry::builtins().get("skill").unwrap();
+    let tool = hya_tool_loader::builtins().get("skill").unwrap();
     let ctx = ctx_with(
         vec![allow(Action::Skill, "writer")],
         SkillPlane::from_snapshot(Arc::new(discover_skills_from_dirs(&[
@@ -286,7 +286,7 @@ async fn discovered_workdir_skill_is_available_to_the_tool() {
     )
     .unwrap();
 
-    let tool = ToolRegistry::builtins().get("skill").unwrap();
+    let tool = hya_tool_loader::builtins().get("skill").unwrap();
     let ctx = ctx_with_workdir(
         vec![allow(Action::Skill, "writer")],
         SkillPlane::from_snapshot(Arc::new(discover_skills_with_builtins(&workdir))),

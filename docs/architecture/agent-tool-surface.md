@@ -21,7 +21,7 @@ canonical tools contribute schemas.
 
 ## Builtin inventory
 
-`ToolRegistry::builtins()` installs **25** canonical schema names before model
+`hya_tool_loader::builtins()` installs **25** canonical schema names before model
 filtering. The inventory below is complete for that constructor. A schema marked
 **closed** rejects unknown keys; aliases resolve only at runtime and are never
 advertised.

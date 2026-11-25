@@ -32,7 +32,7 @@ use hya_provider::{
     CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError, ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use tokio_util::sync::CancellationToken;
 
 fn router_with(provider: FakeProvider) -> Arc<ProviderRouter> {
@@ -548,7 +548,7 @@ fn clamp_budget_maps_into_preflight_range() {
 
 async fn engine_with(provider: FakeProvider) -> (Arc<hya_engine::SessionEngine>, AgentSpec) {
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = Arc::new(hya_engine::SessionEngine::new(

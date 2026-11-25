@@ -578,7 +578,7 @@ mod tests {
 
     use hya_proto::{AgentName, ModelRef};
     use hya_provider::ProviderRouter;
-    use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+    use hya_tool::{PermissionPlane, PermissionRules};
 
     use super::*;
     use crate::{CreateSession, EventBus};
@@ -591,7 +591,7 @@ mod tests {
         let engine = SessionEngine::new(
             store.clone(),
             Arc::new(ProviderRouter::new()),
-            crate::test_support::runtime(ToolRegistry::builtins()),
+            crate::test_support::runtime(hya_tool_loader::builtins()),
             permission,
             EventBus::default(),
         );

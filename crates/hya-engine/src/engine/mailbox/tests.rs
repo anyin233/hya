@@ -6,7 +6,7 @@ use std::sync::Arc;
 use hya_proto::{AgentName, ModelRef, OwnerRunId};
 use hya_provider::ProviderRouter;
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 
 use hya_proto::{MailEndpoint, MailKind};
 use hya_tool::MailReceipt;
@@ -95,7 +95,7 @@ mod tests_support {
         let catalog = hya_bundle::BundleCatalog::from_prepared(&extra).expect("catalog valid");
         let catalog = crate::AgentCatalog::new(Arc::new(catalog)).expect("agent catalog valid");
         Arc::new(crate::RuntimeRegistry::new(
-            ToolRegistry::builtins(),
+            hya_tool_loader::builtins(),
             Arc::new(catalog),
         ))
     }

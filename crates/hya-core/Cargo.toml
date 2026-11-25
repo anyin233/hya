@@ -15,6 +15,7 @@ hya-bundle = { workspace = true }
 hya-proto = { workspace = true }
 hya-provider = { workspace = true }
 hya-tool = { workspace = true }
+hya-tool-loader = { workspace = true }
 hya-context = { workspace = true }
 hya-store = { workspace = true }
 tokio = { workspace = true }
@@ -30,6 +31,9 @@ tracing = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
+# Build these libraries for the native bundle and full-mode shell tests.
+hya-base-tools = { workspace = true }
+hya-compaction = { workspace = true }
 hya-provider = { workspace = true, features = ["test-support"] }
 image = { workspace = true }
 

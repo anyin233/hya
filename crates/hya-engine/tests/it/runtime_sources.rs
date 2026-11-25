@@ -10,7 +10,7 @@ use hya_bundle::AgentRole;
 use hya_engine::{
     RuntimeRefreshError, RuntimeRegistry, RuntimeSource, RuntimeSourceExport, RuntimeSourceId,
 };
-use hya_tool::{ToolPermission, ToolRegistry};
+use hya_tool::ToolPermission;
 
 use support::{MarkerTool, TestDir, test_catalog};
 
@@ -57,7 +57,7 @@ fn assert_rejected_without_generation(
 fn duplicate_source_and_canonical_alias_collisions_reject_before_generation() {
     let workdir = TestDir::new("runtime-source-collisions");
     let registry = RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         test_catalog(&[("general", AgentRole::Main, &[])]),
     );
     let duplicate_id = RuntimeSourceId::mcp("duplicate");

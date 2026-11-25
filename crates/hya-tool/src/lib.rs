@@ -12,8 +12,8 @@
 //! - **Runtime planes** — session-scoped services injected through [`ToolCtx`]:
 //!   interaction/questions, subagent spawning, skills, web search, LSP,
 //!   mailbox, and formatters.
-//! - **Native bundle loading** — all four builtin families execute from
-//!   trusted, lockstep dynamic libraries. Their implementations live in bundles.
+//! - **Native bundle ABI** — shared by the host loader and the first-party
+//!   tool families that ship lockstep dynamic libraries.
 //!
 //! Tool authors implement [`Tool`] and register with [`ToolRegistry`]. Security
 //! reviewers should start with [`PermissionPlane`], [`Action`], and
@@ -21,7 +21,6 @@
 //! tools; this crate stays free of the session engine.
 
 mod agents;
-mod base_tools;
 /// Wall-clock budget and staged notices for a headless run.
 pub mod deadline;
 mod formatter;
@@ -38,7 +37,7 @@ pub mod mailbox;
 pub mod media;
 /// Namespaced tool names (`namespace__local`) and namespaced registration.
 pub mod namespace;
-/// Lockstep native-library loading contract for first-party tool bundles.
+/// Lockstep native-library ABI for first-party bundles.
 pub mod native_bundle;
 /// Nested tool calls from inside a tool call.
 pub mod nested;
@@ -72,10 +71,6 @@ pub use workflow_plane::{
 };
 
 pub use agents::AgentDef;
-pub use base_tools::{
-    AliasVisibility, BaseToolAlias, BaseToolExposure, BaseToolScheme, BaseToolsPreset,
-    base_tools_preset, file_operations_rule, tool_bundle_presets, tool_prompt,
-};
 pub use formatter::{
     FormatterConfig, FormatterEntry, FormatterError, FormatterPlane, FormatterProvider,
     FormatterStatus,
@@ -127,7 +122,7 @@ pub use spawn::{
     SpawnRequestSendError, SpawnRequestSink, SpawnerPlane, sanitize_handle_prefix,
 };
 pub use tool::{
-    DuplicateName, NamedTool, ResolvedTool, Tool, ToolCtx, ToolError, ToolOperation,
-    ToolPermission, ToolRegistry, ToolRegistrySnapshot, ToolResultPolicy,
+    AliasVisibility, DuplicateName, NamedTool, ResolvedTool, Tool, ToolCtx, ToolError,
+    ToolOperation, ToolPermission, ToolRegistry, ToolRegistrySnapshot, ToolResultPolicy,
 };
 pub use websearch::{WebSearchConfig, WebSearchPlane, WebSearchProvider};

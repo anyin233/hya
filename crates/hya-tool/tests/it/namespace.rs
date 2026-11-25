@@ -8,8 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use hya_proto::{ToolName, ToolSchema};
 use hya_tool::{
-    DuplicateName, Tool, ToolCtx, ToolError, ToolPermission, ToolRegistry, namespace_of,
-    namespaced_name,
+    DuplicateName, Tool, ToolCtx, ToolError, ToolPermission, namespace_of, namespaced_name,
 };
 use serde_json::{Value, json};
 
@@ -71,7 +70,7 @@ fn namespaced_name_rejects_invalid_tokens() {
 
 #[test]
 fn direct_registration_allows_same_local_name_across_namespaces() {
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     registry
         .register_with_permission(Arc::new(Probe("alpha__read")), ToolPermission::Tool)
         .unwrap();
@@ -92,7 +91,7 @@ fn direct_registration_allows_same_local_name_across_namespaces() {
 
 #[test]
 fn direct_registration_uses_validated_composed_names() {
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let expected = namespaced_name("alpha", "read").unwrap();
     assert_eq!(expected, "alpha__read");
     registry

@@ -21,7 +21,7 @@ use hya_provider::{
     ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use serde_json::json;
 use std::{
     collections::BTreeMap,
@@ -144,7 +144,7 @@ async fn workflow_worker_and_verifier_deadline_notices_follow_offered_report_too
             Rule::new(Action::Tool, "glob", Mode::Allow),
             Rule::new(Action::Glob, "*", Mode::Allow),
         ]));
-        let tools = Arc::new(ToolRegistry::builtins());
+        let tools = Arc::new(hya_tool_loader::builtins());
         let runtime = if allowed {
             support::test_runtime(tools)
         } else {
@@ -158,7 +158,7 @@ async fn workflow_worker_and_verifier_deadline_notices_follow_offered_report_too
             let prepared = hya_bundle::prepare_package(source).unwrap();
             let catalog = hya_bundle::BundleCatalog::from_prepared(prepared.bundles()).unwrap();
             Arc::new(hya_engine::RuntimeRegistry::new(
-                ToolRegistry::builtins(),
+                hya_tool_loader::builtins(),
                 Arc::new(hya_engine::AgentCatalog::new(Arc::new(catalog)).unwrap()),
             ))
         };

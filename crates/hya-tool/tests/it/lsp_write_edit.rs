@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use hya_tool::{
     Action, FormatterError, FormatterPlane, FormatterProvider, InteractionPlane, LspError,
     LspPlane, LspProvider, LspRequest, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    SpawnerPlane, ToolCtx, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -150,7 +150,7 @@ async fn write_touches_lsp_after_formatter_and_returns_diagnostics() {
     }));
     let formatter = FormatterPlane::new(Arc::new(RewritingFormatter));
     let ctx = ctx_with(dir.clone(), lsp, formatter);
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     // When: write succeeds and formatter runs before LSP touch.
     let out = tool
@@ -193,7 +193,7 @@ async fn edit_touches_lsp_after_formatter_and_returns_diagnostics() {
     }));
     let formatter = FormatterPlane::new(Arc::new(RewritingFormatter));
     let ctx = ctx_with(dir.clone(), lsp, formatter);
-    let tool = ToolRegistry::builtins().get("edit").unwrap();
+    let tool = hya_tool_loader::builtins().get("edit").unwrap();
 
     // When: edit succeeds and formatter runs before LSP touch.
     let out = tool

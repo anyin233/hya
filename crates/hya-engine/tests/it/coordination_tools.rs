@@ -32,7 +32,6 @@ use hya_provider::{
 use hya_store::SessionStore;
 use hya_tool::{
     Action, LifecyclePlane, MailboxPlane, Mode, PermissionPlane, PermissionRules, Rule,
-    ToolRegistry,
 };
 use serde_json::json;
 use tokio::sync::Notify;
@@ -178,7 +177,7 @@ async fn a_narrow_bundle_member_reads_its_dm_and_reports_after_its_lead_mails_it
     let bundles = hya_bundle::BundleCatalog::from_prepared(prepared.bundles()).unwrap();
     let agents = AgentCatalog::new(Arc::new(bundles)).unwrap();
     let runtime = Arc::new(RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         Arc::new(agents),
     ));
     let provider = Arc::new(ScriptProvider::default());

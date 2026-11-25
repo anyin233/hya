@@ -4,7 +4,7 @@ use std::sync::Arc;
 use hya_proto::SessionId;
 use hya_provider::ProviderRouter;
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 
 use super::{CoreError, EventBus, SessionEngine};
 
@@ -15,7 +15,7 @@ async fn missing_native_rewriter_returns_startup_error() -> Result<(), Box<dyn s
         let engine = SessionEngine::try_new(
             SessionStore::connect_memory().await?,
             Arc::new(ProviderRouter::new()),
-            crate::test_support::runtime(ToolRegistry::from_tool_families(&[])),
+            crate::test_support::runtime(hya_tool_loader::from_tool_families(&[])),
             PermissionPlane::new(PermissionRules::default()).0,
             EventBus::default(),
         );

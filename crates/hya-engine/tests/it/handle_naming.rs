@@ -28,7 +28,7 @@ use hya_provider::{
     ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 
 struct StubProvider;
 
@@ -83,7 +83,7 @@ async fn engine_with(rng: Option<Box<dyn HandleRng>>) -> Arc<SessionEngine> {
     let engine = SessionEngine::new(
         store,
         router,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     );

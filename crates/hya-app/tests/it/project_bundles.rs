@@ -16,7 +16,7 @@ use hya_engine::{
 use hya_proto::{ModelRef, ProjectId};
 use hya_provider::ProviderRouter;
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 
 fn temp_path(suffix: &str) -> PathBuf {
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
@@ -157,7 +157,7 @@ struct Harness {
 
 async fn harness(state: &Path) -> Harness {
     let runtime = Arc::new(RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         hya_app::builtin_agent_catalog().expect("builtin agent catalog"),
     ));
     let installed = Arc::new(hya_app::InstalledBundleRefresh::new(

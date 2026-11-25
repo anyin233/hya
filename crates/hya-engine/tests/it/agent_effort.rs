@@ -9,7 +9,7 @@ use std::sync::Arc;
 use hya_engine::{AgentEffortSource, EventBus, SessionEngine};
 use hya_provider::{ProviderRouter, ReasoningEffort};
 use hya_store::{OwnerRunId, SessionStore};
-use hya_tool::{AgentDef, PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{AgentDef, PermissionPlane, PermissionRules};
 
 fn row(name: &str, authored: Option<&str>) -> AgentDef {
     AgentDef {
@@ -31,7 +31,7 @@ async fn roster_shows_runtime_over_configured_over_authored_agent_effort() {
     let engine = SessionEngine::new(
         store.clone(),
         Arc::new(ProviderRouter::new()),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     );
@@ -174,7 +174,7 @@ fn scripted_two_round_engine(
         seen,
     };
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     tools.register(Arc::new(hook_tool)).unwrap();
     let (permission, _asks) =
         PermissionPlane::new(PermissionRules::new(vec![hya_tool::Rule::new(

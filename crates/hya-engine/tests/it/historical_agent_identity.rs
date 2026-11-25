@@ -24,7 +24,7 @@ use hya_provider::{
     Capabilities, CompletionRequest, EventStream, Provider, ProviderError, ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use tokio_util::sync::CancellationToken;
 
 /// Historical id that must never be rewritten to a catalog fallback.
@@ -123,7 +123,7 @@ fn catalog_without_historical() -> Arc<AgentCatalog> {
 
 async fn engine_with(provider: Arc<CaptureProvider>) -> SessionEngine {
     let runtime = Arc::new(RuntimeRegistry::from_snapshot(
-        ToolRegistry::builtins().snapshot(),
+        hya_tool_loader::builtins().snapshot(),
         catalog_without_historical(),
     ));
     let router = Arc::new(ProviderRouter::new().with(provider));

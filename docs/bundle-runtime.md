@@ -9,6 +9,10 @@ Installation, replacement, and removal also affect subsequent root admissions.
 Raw native executables are carried by `extensions.rust` and started through the
 existing out-of-process plugin protocol.
 
+The host uses `hya-tool-loader` to discover and open native libraries and to
+read tool-family exposure policies. Libraries share the registration ABI in
+`hya-tool`.
+
 First-party in-process tool families can carry a Rust dynamic library under
 `extensions.libraries`. All four trusted tool-family presets use this form. Their
 `hya_tool_bundle_abi_v1` export must match the host's ABI digest, and
@@ -35,7 +39,7 @@ the [context-reduction steps](compaction.md) the kernel runs before its own
 Rewrite; every entry is also in
 `FIRST_PARTY_BUNDLES`). Full mode loads them once per process, when the first
 `SessionEngine` is built, with `hya_core::bundles::load_internal()`, which calls
-`hya_tool::native_bundle::load(identity)` for each: identity `hya/<name>` maps
+`hya_tool_loader::load(identity)` for each: identity `hya/<name>` maps
 to library stem `hya_<name>` and package `hya-<name>.hyabundle`, the same
 lookup and ABI check as the tool families. `hya exec --bare` loads none. An
 internal bundle exports the same `abi_v1`, `share_deadline_v1`,

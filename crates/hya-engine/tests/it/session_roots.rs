@@ -15,9 +15,7 @@ use hya_proto::{
 };
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{
-    Action, Mode, PermissionPlane, PermissionRules, Rule, Tool, ToolCtx, ToolError, ToolRegistry,
-};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, Tool, ToolCtx, ToolError};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
@@ -75,7 +73,7 @@ async fn harness(turns: usize) -> Harness {
     let router =
         Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted_turns(scripts))));
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     tools
         .register(Arc::new(RootsProbe {
             seen: Arc::clone(&seen),

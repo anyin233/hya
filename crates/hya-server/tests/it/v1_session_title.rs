@@ -28,7 +28,7 @@ use hya_provider::{
 };
 use hya_server::{AppState, router};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -154,7 +154,7 @@ fn fixture(store: SessionStore, title: Option<&str>, dir: PathBuf) -> Fixture {
     let engine = Arc::new(SessionEngine::new(
         store,
         Arc::new(ProviderRouter::new().with(Arc::new(provider))),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     ));

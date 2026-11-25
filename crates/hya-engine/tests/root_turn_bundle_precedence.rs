@@ -32,7 +32,7 @@ use hya_provider::{
     ProviderRouter, ReasoningEffort,
 };
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, ResolvedTool, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, ResolvedTool, Rule};
 use serde_json::json;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -699,7 +699,7 @@ fn write_skill(root: &Path, name: &str) {
 
 async fn engine_with(catalog: Arc<AgentCatalog>, provider: Arc<CaptureProvider>) -> SessionEngine {
     let runtime = Arc::new(
-        RuntimeRegistry::from_snapshot(ToolRegistry::builtins().snapshot(), catalog)
+        RuntimeRegistry::from_snapshot(hya_tool_loader::builtins().snapshot(), catalog)
             .with_skill_discovery(
                 hya_app::skill_catalog::discover,
                 hya_app::skill_catalog::builtin_skills,
@@ -725,7 +725,7 @@ async fn engine_with_provider(
     provider: Arc<dyn Provider>,
 ) -> SessionEngine {
     let runtime = Arc::new(
-        RuntimeRegistry::from_snapshot(ToolRegistry::builtins().snapshot(), catalog)
+        RuntimeRegistry::from_snapshot(hya_tool_loader::builtins().snapshot(), catalog)
             .with_skill_discovery(
                 hya_app::skill_catalog::discover,
                 hya_app::skill_catalog::builtin_skills,

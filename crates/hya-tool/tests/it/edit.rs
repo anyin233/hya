@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use hya_tool::{
     Action, FormatterError, FormatterPlane, FormatterProvider, InteractionPlane, LspError,
     LspPlane, LspProvider, LspRequest, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, Tool, ToolCtx, ToolError, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    SpawnerPlane, Tool, ToolCtx, ToolError, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -383,7 +383,7 @@ fn error_diagnostics(path: &Path, message: &str) -> Value {
 /// A model copies the schema's example anchors: each must be one the tool accepts.
 #[test]
 fn edit_schema_example_anchors_have_the_runtime_hash_shape() {
-    let schema = ToolRegistry::builtins().get("edit").unwrap().schema();
+    let schema = hya_tool_loader::builtins().get("edit").unwrap().schema();
     let text = format!("{} {}", schema.description, schema.input_schema);
     let mut examples = 0;
     for (index, _) in text.match_indices('#') {
@@ -411,7 +411,7 @@ fn edit_schema_example_anchors_have_the_runtime_hash_shape() {
 #[test]
 fn edit_schema_exposes_only_closed_hashline_operations() {
     // Given
-    let tool = ToolRegistry::builtins().get("edit").unwrap();
+    let tool = hya_tool_loader::builtins().get("edit").unwrap();
 
     // When
     let schema = tool.schema().input_schema;
@@ -588,7 +588,7 @@ async fn edit_applies_table_driven_hashline_operations() {
         let target = workdir.join("notes.txt");
         tokio::fs::write(&target, initial).await.unwrap();
         let ctx = ctx_with(vec![allow(Action::Edit, "*")], workdir);
-        let tool = ToolRegistry::builtins().get("edit").unwrap();
+        let tool = hya_tool_loader::builtins().get("edit").unwrap();
         let output = tool
             .execute(&ctx, input)
             .await
@@ -641,7 +641,7 @@ async fn edit_supports_replace_text_and_compatibility_dialects() {
             .await
             .unwrap();
         let ctx = ctx_with(vec![allow(Action::Edit, "*")], workdir);
-        let tool = ToolRegistry::builtins().get("edit").unwrap();
+        let tool = hya_tool_loader::builtins().get("edit").unwrap();
         tool.execute(&ctx, input)
             .await
             .unwrap_or_else(|error| panic!("{name} failed: {error}"));
@@ -763,7 +763,7 @@ async fn edit_rejects_mixed_incomplete_wrong_typed_and_unknown_fields() {
     for (name, input, code) in cases {
         let workdir = tempdir();
         let ctx = ctx_with(vec![allow(Action::Edit, "*")], workdir);
-        let tool = ToolRegistry::builtins().get("edit").unwrap();
+        let tool = hya_tool_loader::builtins().get("edit").unwrap();
         let result = tool.execute(&ctx, input).await;
         assert_input_code(result, code);
         assert!(!name.is_empty());
@@ -786,7 +786,7 @@ async fn edit_rejects_hashline_and_diff_display_prefix_payloads() {
             .await
             .unwrap();
         let ctx = ctx_with(vec![allow(Action::Edit, "*")], workdir);
-        let tool = ToolRegistry::builtins().get("edit").unwrap();
+        let tool = hya_tool_loader::builtins().get("edit").unwrap();
         let result = tool
             .execute(
                 &ctx,
@@ -886,7 +886,7 @@ async fn edit_reports_collision_conflict_range_order_and_would_empty_codes() {
             .await
             .unwrap();
         let ctx = ctx_with(vec![allow(Action::Edit, "*")], workdir);
-        let tool = ToolRegistry::builtins().get("edit").unwrap();
+        let tool = hya_tool_loader::builtins().get("edit").unwrap();
         let result = tool.execute(&ctx, input).await;
         assert_input_code(result, code);
         assert!(!name.is_empty());
@@ -903,7 +903,7 @@ async fn edit_accepts_a_fuzzy_hashline_hint_but_not_fuzzy_string_replacement() {
     tokio::fs::write(&target, "before\nprintln!(“old”)\nafter\n")
         .await
         .unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(
@@ -972,7 +972,7 @@ async fn edit_returns_bounded_warning_metadata_for_suspicious_insertions() {
             .await
             .unwrap();
         let ctx = ctx_with(vec![allow(Action::Edit, "*")], workdir);
-        let tool = ToolRegistry::builtins().get("edit").unwrap();
+        let tool = hya_tool_loader::builtins().get("edit").unwrap();
         let output = tool
             .execute(&ctx, input)
             .await
@@ -998,7 +998,7 @@ async fn edit_honors_cancellation_before_mutating_the_target() {
         LspPlane::default(),
         cancel,
     );
-    let tool = ToolRegistry::builtins().get("edit").unwrap();
+    let tool = hya_tool_loader::builtins().get("edit").unwrap();
 
     // When
     let result = tool
@@ -1028,7 +1028,7 @@ async fn edit_returns_diff_and_filediff_metadata_for_strict_operations() {
         .await
         .unwrap();
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], workdir);
-    let tool = ToolRegistry::builtins().get("edit").unwrap();
+    let tool = hya_tool_loader::builtins().get("edit").unwrap();
 
     // When
     let output = tool
@@ -1077,7 +1077,7 @@ async fn edit_omits_unbounded_display_text_when_fresh_anchor_preview_does_not_fi
     tokio::fs::write(&target, format!("{original}\n"))
         .await
         .unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(
@@ -1126,7 +1126,7 @@ async fn edit_runs_formatter_before_emitting_fresh_final_anchors() {
         workdir,
         formatter,
     );
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let old_anchor = read_anchor(read.as_ref(), &ctx, "notes.txt", 2).await;
@@ -1175,7 +1175,7 @@ async fn edit_restores_original_ending_for_mixed_formatter_output() {
         workdir,
         formatter,
     );
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let anchor = read_anchor(read.as_ref(), &ctx, "mixed.txt", 2).await;
@@ -1215,7 +1215,7 @@ async fn edit_rewrites_invalid_formatter_bytes_to_valid_utf8() {
         workdir,
         formatter,
     );
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let anchor = read_anchor(read.as_ref(), &ctx, "invalid.txt", 2).await;
@@ -1261,7 +1261,7 @@ async fn edit_metadata_describes_final_formatter_bytes_and_hard_link() {
         workdir,
         formatter,
     );
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let anchor = read_anchor(read.as_ref(), &ctx, "length.txt", 2).await;
@@ -1339,7 +1339,7 @@ async fn edit_runs_lsp_after_mutation_and_returns_diagnostics() {
         lsp,
         CancellationToken::new(),
     );
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let anchor = read_anchor(read.as_ref(), &ctx, "notes.txt", 2).await;
@@ -1378,7 +1378,7 @@ async fn edit_missing_hash_returns_only_authorized_live_context() {
         "alpha\r\nbeta\r\ngamma\r\ndelta\r\n"
     );
     std::fs::write(&target, &original).unwrap();
-    let tool = ToolRegistry::builtins().get("edit").unwrap();
+    let tool = hya_tool_loader::builtins().get("edit").unwrap();
     let input = |path: &Path, pos: &str| {
         json!({
             "path": path, "edits": [{"op":"replace", "pos":pos, "lines":["changed"]}]
@@ -1471,7 +1471,7 @@ async fn edit_requires_external_directory_permission_before_mutation() {
         ],
         workdir,
     );
-    let tool = ToolRegistry::builtins().get("edit").unwrap();
+    let tool = hya_tool_loader::builtins().get("edit").unwrap();
 
     // When
     let result = tool
@@ -1501,7 +1501,7 @@ async fn edit_preserves_an_existing_utf8_bom_on_hashline_mutation() {
         .await
         .unwrap();
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], workdir);
-    let tool = ToolRegistry::builtins().get("edit").unwrap();
+    let tool = hya_tool_loader::builtins().get("edit").unwrap();
 
     // When
     tool.execute(
@@ -1530,7 +1530,7 @@ async fn edit_matches_hashline_anchors_against_crlf_and_preserves_line_endings()
         .await
         .unwrap();
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], workdir);
-    let tool = ToolRegistry::builtins().get("edit").unwrap();
+    let tool = hya_tool_loader::builtins().get("edit").unwrap();
 
     // When
     tool.execute(
@@ -1592,7 +1592,7 @@ async fn edit_replace_text_requires_one_exact_non_empty_match() {
             .await
             .unwrap();
         let ctx = ctx_with(vec![allow(Action::Edit, "*")], workdir);
-        let tool = ToolRegistry::builtins().get("edit").unwrap();
+        let tool = hya_tool_loader::builtins().get("edit").unwrap();
         let result = tool.execute(&ctx, input).await;
         assert_input_code(result, code);
         assert!(!name.is_empty());
@@ -1607,7 +1607,7 @@ async fn edit_bounds_oversized_formatter_error_after_commit() {
     tokio::fs::write(&target, ORIGINAL_WITH_NEWLINE)
         .await
         .unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let read_ctx = ctx_with(
@@ -1654,7 +1654,7 @@ async fn edit_reconciles_formatter_error_with_cancellation_after_commit() {
     tokio::fs::write(&target, ORIGINAL_WITH_NEWLINE)
         .await
         .unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let read_ctx = ctx_with(
@@ -1755,7 +1755,7 @@ async fn edit_reconciles_lsp_cancellation_after_commit() {
         lsp,
         cancel,
     );
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let anchor = read_anchor(read.as_ref(), &ctx, "cancel-lsp.txt", 2).await;

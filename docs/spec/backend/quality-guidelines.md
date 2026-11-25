@@ -329,7 +329,7 @@ let (engine, ..) = build_session_engine(store, router, &model, mcp, plugins).awa
 #### Wrong
 
 ```rust
-let tools = Arc::new(ToolRegistry::builtins());
+let tools = Arc::new(hya_tool_loader::builtins());
 let engine = SessionEngine::new(..., tools.clone(), ...);
 tools.register(deferred_tool)?;
 ```
@@ -1256,7 +1256,7 @@ let models = snapshot.models();
   `name`, `prompt`, `category`, `model`, and `resident`. The hidden parser may
   retain `description` solely to normalize stale calls: blank/whitespace is
   `None`, while non-empty input remains available for typed rejection.
-- `ToolRegistry::builtins()` creates one `Arc<HashlineRuntime>` shared by
+- `hya_tool_loader::builtins()` creates one `Arc<HashlineRuntime>` shared by
   Read/Edit/Write/Grep and a separate Bash executor. `ToolCallRequested` is
   admitted through the existing permission plane, then produces `ToolResult`
   or `ToolError`; projection yields an SDK `ToolPart`, which is consumed by

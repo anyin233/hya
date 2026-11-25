@@ -1,10 +1,8 @@
 //! Bundle ownership contract for the remaining built-in tools.
 
-use hya_tool::ToolRegistry;
-
 #[test]
 fn every_remaining_builtin_comes_from_its_owned_bundle() {
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     for (bundle, names) in [
         (
             "hya/base-tools",

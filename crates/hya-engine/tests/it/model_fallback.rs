@@ -34,7 +34,7 @@ use hya_provider::{
     ProviderRouter, ReasoningEffort,
 };
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use tokio_util::sync::CancellationToken;
 
 /// Scripted outcome for one provider `stream()` call.
@@ -177,7 +177,7 @@ async fn fixture_with_hooks(
     let router = providers
         .into_iter()
         .fold(router, |router, provider| router.with(Arc::new(provider)));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Read,
         "/**",

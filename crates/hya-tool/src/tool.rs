@@ -11,7 +11,6 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::agents::AgentDef;
-use crate::base_tools::{AliasVisibility, tool_bundle_presets};
 use crate::formatter::FormatterPlane;
 use crate::handle::{ArtifactPlane, HandleRouter};
 use crate::interaction::InteractionPlane;
@@ -305,8 +304,19 @@ mod result_policy_tests {
 /// A live session engine consumes an immutable [`ToolRegistrySnapshot`] instead.
 /// Mutating this builder after snapshotting does not alter an effective runtime
 /// view.
+#[derive(Default)]
 pub struct ToolRegistry {
     inner: std::sync::RwLock<ToolRegistryInner>,
+}
+
+/// An alternate exported spelling and whether models see its schema.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AliasVisibility {
+    /// Dispatchable compatibility spelling omitted from advertised schemas.
+    Hidden,
+    /// Dispatchable spelling that is also advertised to models.
+    Public,
 }
 
 #[derive(Clone, Default)]
@@ -376,12 +386,6 @@ impl ResolvedTool {
 }
 
 impl ToolRegistry {
-    fn empty() -> Self {
-        Self {
-            inner: std::sync::RwLock::new(ToolRegistryInner::default()),
-        }
-    }
-
     fn write(&self) -> std::sync::RwLockWriteGuard<'_, ToolRegistryInner> {
         self.inner
             .write()
@@ -392,128 +396,6 @@ impl ToolRegistry {
         self.inner
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    /// Install the full set of canonical builtins (and their hidden aliases)
-    /// from all four trusted tool families.
-    #[must_use]
-    pub fn builtins() -> Self {
-        Self::from_tool_families(&crate::base_tools::TOOL_FAMILIES)
-    }
-
-    /// Install the builtins of a subset of the trusted tool families.
-    ///
-    /// A name two loaded families both export resolves to the entry that
-    /// declares `overrides: <the other family>` in its exposure policy (for
-    /// example channel-tools' mail-aware `wait` over extended-tools' `wait`);
-    /// when the overriding family is not loaded, the overridden tool is
-    /// installed. Load order never decides.
-    ///
-    /// # Panics
-    ///
-    /// Panics on an unknown family identity, or when a family's native
-    /// library cannot be loaded or disagrees with its bundle policy.
-    #[must_use]
-    pub fn from_tool_families(identities: &[&str]) -> Self {
-        use crate::base_tools::TOOL_FAMILIES as FAMILIES;
-
-        for identity in identities {
-            assert!(
-                FAMILIES.contains(identity),
-                "unknown tool family {identity}"
-            );
-        }
-        // Prepare every selected family before loading any native image, so
-        // the first image does not serialize its package ahead of the others.
-        let _ = crate::base_tools::tool_bundle_presets();
-        let registry = Self::empty();
-        let mut implementations: HashMap<(&'static str, String), Arc<dyn Tool>> = HashMap::new();
-        for identity in FAMILIES {
-            if !identities.contains(&identity) {
-                continue;
-            }
-            let tools = crate::native_bundle::load(identity)
-                .unwrap_or_else(|error| panic!("load {identity}: {error}"))
-                .tools;
-            let names = tools
-                .iter()
-                .map(|tool| tool.name().to_string())
-                .collect::<BTreeSet<_>>();
-            let expected = tool_bundle_presets()
-                .iter()
-                .find(|preset| preset.identity() == identity)
-                .map(|preset| {
-                    preset
-                        .tools()
-                        .iter()
-                        .map(|tool| tool.name().to_string())
-                        .collect::<BTreeSet<_>>()
-                })
-                .unwrap_or_default();
-            assert_eq!(
-                names, expected,
-                "{identity} library tool set differs from its bundle policy"
-            );
-            assert_eq!(
-                names.len(),
-                tools.len(),
-                "{identity} library declared duplicate tools"
-            );
-            implementations.extend(
-                tools
-                    .into_iter()
-                    .map(|tool| ((identity, tool.name().to_string()), tool)),
-            );
-        }
-        let loaded = tool_bundle_presets()
-            .iter()
-            .filter(|preset| identities.contains(&preset.identity()))
-            .collect::<Vec<_>>();
-        for preset in &loaded {
-            let identity = FAMILIES
-                .into_iter()
-                .find(|identity| *identity == preset.identity())
-                .unwrap_or_else(|| panic!("unknown tool family {}", preset.identity()));
-            for exposure in preset.tools() {
-                let Some(tool) = implementations.remove(&(identity, exposure.name().to_string()))
-                else {
-                    panic!(
-                        "{} declares `{}` without a Rust implementation",
-                        preset.identity(),
-                        exposure.name()
-                    );
-                };
-                if !exposure.exposed() {
-                    continue;
-                }
-                let overridden = loaded.iter().any(|other| {
-                    other
-                        .tool(exposure.name())
-                        .is_some_and(|winner| winner.overrides() == Some(identity))
-                });
-                if overridden {
-                    continue;
-                }
-                registry.insert_preset_builtin(tool, exposure, Some(identity));
-            }
-        }
-        assert!(
-            implementations.is_empty(),
-            "Rust builtin implementations are missing from tool-family presets: {:?}",
-            implementations.keys().collect::<BTreeSet<_>>()
-        );
-        for preset in &loaded {
-            for scheme in preset.schemes() {
-                assert!(
-                    registry.get(scheme.tool()).is_some(),
-                    "{} scheme `{}` names missing tool `{}`",
-                    preset.identity(),
-                    scheme.scheme(),
-                    scheme.tool()
-                );
-            }
-        }
-        registry
     }
 
     /// Freeze the current builder contents into an immutable runtime view.
@@ -676,28 +558,26 @@ impl ToolRegistry {
         schemas
     }
 
-    /// Install one built-in tool, failing loudly when the fixed builtin list
-    /// ever carries a duplicate name: a silent overwrite would shadow an
-    /// earlier tool with no diagnostic, so the registry treats it as an
-    /// invariant violation instead.
-    fn insert_preset_builtin(
+    /// Register a native builtin with its dispatch identity, origin, and aliases.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the canonical name or any alias collides with a registered name.
+    #[doc(hidden)]
+    pub fn register_builtin<'a>(
         &self,
         tool: Arc<dyn Tool>,
-        exposure: &crate::base_tools::BaseToolExposure,
-        origin: Option<&'static str>,
+        permission: ToolPermission,
+        aliases: impl IntoIterator<Item = (&'a str, AliasVisibility)>,
+        origin: &'static str,
     ) {
         let name = tool.name().to_string();
-        assert_eq!(
-            name,
-            exposure.name(),
-            "preset and implementation names differ"
-        );
         let mut inner = self.write();
         let replaced = inner.tools.insert(
             name.clone(),
             ResolvedTool {
                 tool: Arc::clone(&tool),
-                permission: exposure.permission(),
+                permission,
             },
         );
         assert!(
@@ -707,24 +587,21 @@ impl ToolRegistry {
         if let Some(identity) = builtin_dispatch_identity(&name) {
             inner.dispatch_identities.insert(name.clone(), identity);
         }
-        if let Some(origin) = origin {
-            inner.bundle_origins.insert(name.clone(), origin);
-        }
-        for alias in exposure.aliases() {
+        inner.bundle_origins.insert(name, origin);
+        for (alias, visibility) in aliases {
             let replaced = inner.aliases.insert(
-                alias.name().to_string(),
+                alias.to_string(),
                 ResolvedTool {
                     tool: Arc::clone(&tool),
-                    permission: exposure.permission(),
+                    permission,
                 },
             );
             assert!(
-                replaced.is_none() && !inner.tools.contains_key(alias.name()),
-                "duplicate tool-family preset alias `{}`",
-                alias.name()
+                replaced.is_none() && !inner.tools.contains_key(alias),
+                "duplicate tool-family preset alias `{alias}`"
             );
-            if alias.visibility() == AliasVisibility::Public {
-                inner.advertised_aliases.insert(alias.name().to_string());
+            if visibility == AliasVisibility::Public {
+                inner.advertised_aliases.insert(alias.to_string());
             }
         }
     }

@@ -20,7 +20,7 @@ use hya_provider::{
     ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
@@ -228,7 +228,7 @@ async fn stream_round_deltas_are_live_but_replay_commits_final_text_once() {
     let router = ProviderRouter::new().with(Arc::new(DelayedDeltaProvider {
         request: Arc::new(Mutex::new(None)),
     }));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
     let bus = EventBus::default();
     let engine = Arc::new(SessionEngine::new(
@@ -337,7 +337,7 @@ async fn tool_arguments_stream_live_and_late_subscribers_recover_full_input() {
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         Arc::new(ProviderRouter::new().with(Arc::new(provider))),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     ));
@@ -424,7 +424,7 @@ async fn forked_reasoning_provider_data_reaches_next_request() {
     let router = ProviderRouter::new().with(Arc::new(DelayedDeltaProvider {
         request: request.clone(),
     }));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.expect("store"),
@@ -524,7 +524,7 @@ async fn forked_reasoning_provider_data_reaches_next_request() {
 async fn partial_text_is_persisted_when_stream_fails() {
     let workdir = tempdir();
     let router = ProviderRouter::new().with(Arc::new(PartialFailureProvider));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.expect("store"),
@@ -612,7 +612,7 @@ async fn completed_text_parts_replay_in_stream_order_around_tools() {
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.expect("store"),
         Arc::new(ProviderRouter::new().with(Arc::new(provider))),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     );
@@ -661,7 +661,7 @@ async fn reasoning_deltas_are_snapshotted_once_and_replayed() {
         FakeStep::Reasoning("think one and two".to_string()),
         FakeStep::Finish(FinishReason::Stop),
     ])));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.expect("store"),

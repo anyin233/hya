@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Barrier};
 
 use hya_engine::{RuntimeRefreshError, RuntimeRegistry};
-use hya_tool::{ToolPermission, ToolRegistry};
+use hya_tool::ToolPermission;
 
 use hya_bundle::AgentRole;
 use support::{MarkerTool, TestDir, test_catalog};
@@ -24,7 +24,7 @@ fn tool_names(binding: &hya_engine::TurnBinding) -> BTreeSet<String> {
 #[test]
 fn failed_candidate_refresh_retains_generation_and_exact_registry_view() {
     let workdir = TestDir::new("failed-refresh");
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     tools
         .register(MarkerTool::new("stable"))
         .expect("register stable marker");
@@ -52,7 +52,7 @@ fn failed_candidate_refresh_retains_generation_and_exact_registry_view() {
 fn logically_unchanged_candidate_does_not_advance_generation() {
     let workdir = TestDir::new("no-op-refresh");
     workdir.write_skill("stable_skill");
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     let stable = MarkerTool::new("stable_tool");
     tools
         .register(stable.clone())
@@ -86,7 +86,7 @@ fn concurrent_publications_are_unique_monotonic_and_never_publish_a_mixed_candid
 
     let workdir = Arc::new(TestDir::new("concurrent-refresh"));
     let registry = Arc::new(RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         test_catalog(&[("general", AgentRole::Main, &[])]),
     ));
     let first = registry.bind_turn(workdir.path()).unwrap().generation();

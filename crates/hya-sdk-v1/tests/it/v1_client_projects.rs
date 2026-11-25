@@ -12,12 +12,12 @@ use hya_provider::{FakeProvider, ProviderRouter};
 use hya_sdk_v1::{Client, ClientError};
 use hya_server::{AppState, router};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 
 async fn serve() -> String {
     let providers =
         Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(Vec::new()))));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let catalog = BundleCatalog::from_prepared(&[]).expect("catalog");
     let catalog = hya_engine::AgentCatalog::new(Arc::new(catalog)).expect("agent catalog");
     let runtime = Arc::new(RuntimeRegistry::from_snapshot(

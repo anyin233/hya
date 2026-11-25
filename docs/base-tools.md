@@ -7,7 +7,8 @@ builtin tools. They record model visibility, compatibility aliases, schema
 versions, invocation permission posture, protected names, and URI-scheme
 ownership. All four families own their concrete Rust implementations and ship lockstep
 dynamic libraries inside public `.hyabundle` packages. `hya-tool` supplies the
-`Tool` interface, registry, native loader, permission model, and session planes.
+`Tool` interface, registry, native ABI, permission model, and session planes.
+`hya-tool-loader` reads the exposure policies and loads the native libraries in the host.
 
 The sources live in `bundles/presets/{base,extended,network,channel}-tools`.
 Each `bundle.yaml` identifies a `Plugin` and declares `exposure.yaml` as an inert
@@ -75,19 +76,25 @@ the engine records an error rather than a completed tool result.
 
 ## Usage
 
-Applications continue to construct builtins with `ToolRegistry::builtins()`.
+Rust hosts construct the builtin registry with `hya_tool_loader::builtins()`.
 No installation or user configuration is required. For inspection, use
 `tool_bundle_presets()` or the compatibility accessor `base_tools_preset()`:
 
 ```rust
-use hya_tool::{ToolRegistry, base_tools_preset, tool_bundle_presets};
+use hya_tool_loader::{base_tools_preset, builtins, tool_bundle_presets};
 
 let metadata = base_tools_preset();
 assert!(metadata.is_protected("read"));
-assert_eq!(tool_bundle_presets().len(), 5);
-let registry = ToolRegistry::builtins();
+assert_eq!(tool_bundle_presets().len(), 4);
+let registry = builtins();
 assert!(registry.resolve("shell").is_some());
 ```
+
+`builtins() -> ToolRegistry` loads all four tool-family libraries.
+`from_tool_families(identities: &[&str]) -> ToolRegistry` takes a subset of the
+trusted `hya/<family>-tools` identities. Both report a missing or incompatible
+library as a startup invariant failure. `ToolRegistry::default()` creates an
+empty registry for host-supplied tools.
 
 To change builtin exposure, update the owning family's `exposure.yaml` together with the tool's
 documentation and parity tests. Adding an entry does not create a tool: every
@@ -119,7 +126,7 @@ cargo run -p xtask -- package-native-tool-library \
 Use `.dylib` instead of `.so` on macOS. The command embeds the raw library
 bytes as `extensions.libraries`, adds one tool declaration per policy entry,
 and writes the public package. Release builds put that package beside the
-backend's `bin` directory in `bundles/`. There, `ToolRegistry::builtins()` inspects
+backend's `bin` directory in `bundles/`. There, `hya_tool_loader::builtins()` inspects
 the package, checks its identity and declared names, materializes the verified
 library in the private native cache (or a temporary directory when the cache
 is unavailable), checks the lockstep ABI digest, and loads its tools. Temporary
@@ -139,8 +146,8 @@ build the backend and library from the same workspace and toolchain.
 Build and package `hya-base-tools`, `hya-extended-tools`,
 `hya-network-tools`, and `hya-channel-tools` with the same command, using
 the matching `libhya_<family>_tools.so` (or `.dylib`) and
-`hya-<family>-tools.hyabundle` names. All five packages are required for
-`ToolRegistry::builtins()`. The host continues to provide session-scoped
+`hya-<family>-tools.hyabundle` names. All four packages are required for
+`hya_tool_loader::builtins()`. The host continues to provide session-scoped
 services through `ToolCtx`; each tool body and schema lives in its bundle.
 The loader enters each bundle's Tokio runtime for native future polls while
 the host runtime remains available to session planes. Bundled filesystem,
@@ -291,8 +298,8 @@ declares `{ name: task, ..., prompt: start subagents on independent tasks }`.
 `Use bash for file operations like ls, rg, find` in a round that offers at
 least one of its `tools`, which must be canonical names of the same family.
 `text` is one non-empty line. `hya/base-tools` declares it for `ls`, `glob`,
-`find`, and `grep`. `hya_tool::tool_prompt(name)` and
-`hya_tool::file_operations_rule(offered)` read both keys.
+`find`, and `grep`. `hya_tool_loader::tool_prompt(name)` and
+`hya_tool_loader::file_operations_rule(offered)` read both keys.
 
 `permission` is one of `read_only`, `task`, `tool`, `command`, or `mcp`. It
 controls invocation defaults: read-only and task calls default to allow,
@@ -320,19 +327,19 @@ both entries declare the override, and any shared alias.
 The one use today is `wait`: `hya/extended-tools` exports a `wait` that wakes
 on subagent progress only, and `hya/channel-tools` exports
 `{ name: wait, schema_version: 1, permission: read_only, overrides: hya/extended-tools }`,
-which also wakes on mail for the caller. `ToolRegistry::builtins()` loads all
+which also wakes on mail for the caller. `hya_tool_loader::builtins()` loads all
 four families, so the channel-aware `wait` is the one installed;
-`ToolRegistry::from_tool_families(&[...])` builds a registry from a subset of
+`hya_tool_loader::from_tool_families(&[...])` builds a registry from a subset of
 families (for example without `hya/channel-tools`, which installs the
 extended-tools `wait`). `builtin_bundle_origin("wait")` names the winner.
 
 ```rust
-use hya_tool::ToolRegistry;
-let registry = ToolRegistry::from_tool_families(&[
+use hya_tool_loader::{builtins, from_tool_families};
+let registry = from_tool_families(&[
     "hya/base-tools", "hya/extended-tools", "hya/network-tools",
 ]);
 assert_eq!(registry.builtin_bundle_origin("wait"), Some("hya/extended-tools"));
-assert_eq!(ToolRegistry::builtins().builtin_bundle_origin("wait"), Some("hya/channel-tools"));
+assert_eq!(builtins().builtin_bundle_origin("wait"), Some("hya/channel-tools"));
 ```
 
 `protected_names` declares names that runtime source composition must not mask.
@@ -342,8 +349,8 @@ external URI schemes.
 
 Each preset's `bundle_digest()` exposes its canonical prepared Plugin digest,
 and `prepared_catalog_bytes()` exposes its exact build-validated bytes for
-audit and replay metadata. `tool_bundle_presets()` returns all five policies in
-base, extended, network, channel, and TODO order. Each policy keeps its own
+audit and replay metadata. `tool_bundle_presets()` returns all four policies in
+base, extended, network, and channel order. Each policy keeps its own
 tool names, aliases, permissions, schemes, and protected names.
 
 The staged package adds these manifest entries without modifying the source
@@ -421,8 +428,8 @@ settings. Never copy an independently compiled trait object into the host.
 ### Usage
 
 Implement `hya_tool::Tool` for every canonical name in the selected family's
-`exposure.yaml`, and export the three functions below from a `cdylib`. A minimal
-working replacement for the TODO family is in
+`exposure.yaml`, and export the four functions below from a `cdylib`. A minimal
+working replacement for the network family is in
 `crates/hya-tool/tests/fixtures/replacement_tools.rs`. To build and try that
 fixture in a disposable layout (Linux):
 
@@ -433,7 +440,7 @@ CARGO_BUILD_JOBS=8 cargo test --locked -p hya-tool --test it native_replacement:
 
 The test copies its host into a private directory and installs the replacement
 as `libhya_network_tools.so` beside it. It constructs only `hya/network-tools` through
-`ToolRegistry::from_tool_families`, invokes `webfetch`, and checks the fixture's
+`hya_tool_loader::from_tool_families`, invokes `webfetch`, and checks the fixture's
 unique result and echoed input. A second library reports a wrong ABI digest;
 its registration aborts if called, proving rejection precedes registration.
 No shared build library is overwritten. `cargo test -p hya-tool` builds both

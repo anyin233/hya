@@ -1410,7 +1410,7 @@ mod tests {
     use hya_plugin::config::PluginSpec;
     use hya_plugin::messages::PluginKindWire;
     use hya_proto::{AgentName, ToolName, ToolSchema};
-    use hya_tool::{Tool, ToolCtx, ToolError, ToolPermission, ToolRegistry};
+    use hya_tool::{Tool, ToolCtx, ToolError, ToolPermission};
     use serde_json::{Value, json};
     use sha2::{Digest as _, Sha256};
 
@@ -1433,7 +1433,7 @@ mod tests {
             std::fs::create_dir_all(&root)?;
             std::fs::write(root.join("config.yaml"), "plugins: {}\n")?;
             let registry = Arc::new(RuntimeRegistry::new(
-                ToolRegistry::builtins(),
+                hya_tool_loader::builtins(),
                 crate::runtime::builtin_agent_catalog()?,
             ));
             let reconciler = Arc::new(RuntimeReconciler::new(registry.clone()));
@@ -2248,7 +2248,7 @@ for line in sys.stdin:
     fn hot_reload_unrelated_source_does_not_invalidate_pending_preparation() -> anyhow::Result<()> {
         let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
-            ToolRegistry::builtins(),
+            hya_tool_loader::builtins(),
             crate::runtime::builtin_agent_catalog()?,
         ));
         let reconciler = RuntimeReconciler::new(registry.clone());
@@ -2279,7 +2279,7 @@ for line in sys.stdin:
     fn hot_reload_identical_failed_source_can_retry() -> anyhow::Result<()> {
         let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
-            ToolRegistry::builtins(),
+            hya_tool_loader::builtins(),
             crate::runtime::builtin_agent_catalog()?,
         ));
         let reconciler = RuntimeReconciler::new(registry);
@@ -2315,7 +2315,7 @@ for line in sys.stdin:
     fn hot_reload_mcp_compares_remote_endpoint_and_transport() -> anyhow::Result<()> {
         let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
-            ToolRegistry::builtins(),
+            hya_tool_loader::builtins(),
             crate::runtime::builtin_agent_catalog()?,
         ));
         let reconciler = RuntimeReconciler::new(registry);
@@ -2351,7 +2351,7 @@ for line in sys.stdin:
         use hya_server::McpControl as _;
 
         let registry = Arc::new(RuntimeRegistry::new(
-            ToolRegistry::builtins(),
+            hya_tool_loader::builtins(),
             crate::runtime::builtin_agent_catalog()?,
         ));
         let control = super::RuntimeMcpControl::new(Arc::new(RuntimeReconciler::new(registry)));
@@ -2402,7 +2402,7 @@ for line in sys.stdin:
     fn stale_success_is_closed_and_cannot_publish_over_newer_ticket() -> anyhow::Result<()> {
         let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
-            ToolRegistry::builtins(),
+            hya_tool_loader::builtins(),
             crate::runtime::builtin_agent_catalog()?,
         ));
         let reconciler = RuntimeReconciler::new(registry.clone());
@@ -2451,7 +2451,7 @@ for line in sys.stdin:
     {
         let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
-            ToolRegistry::builtins(),
+            hya_tool_loader::builtins(),
             crate::runtime::builtin_agent_catalog()?,
         ));
         let reconciler = RuntimeReconciler::new(registry.clone());
@@ -2500,7 +2500,7 @@ for line in sys.stdin:
     fn source_failure_preserves_independent_successes() -> anyhow::Result<()> {
         let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
-            ToolRegistry::builtins(),
+            hya_tool_loader::builtins(),
             crate::runtime::builtin_agent_catalog()?,
         ));
         let reconciler = RuntimeReconciler::new(registry.clone());
@@ -2555,7 +2555,7 @@ for line in sys.stdin:
     fn candidate_rejection_records_failure_and_invalidates_attempt() -> anyhow::Result<()> {
         let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
-            ToolRegistry::builtins(),
+            hya_tool_loader::builtins(),
             crate::runtime::builtin_agent_catalog()?,
         ));
         let reconciler = RuntimeReconciler::new(registry.clone());
@@ -2609,7 +2609,7 @@ for line in sys.stdin:
     fn mixed_mcp_plugin_plan_publishes_each_complete_source() -> anyhow::Result<()> {
         let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
-            ToolRegistry::builtins(),
+            hya_tool_loader::builtins(),
             crate::runtime::builtin_agent_catalog()?,
         ));
         let reconciler = RuntimeReconciler::new(registry.clone());
@@ -2893,7 +2893,7 @@ for line in sys.stdin:
         };
         let bundles = BundleCatalog::from_prepared(&[bundle])?;
         let catalog = Arc::new(AgentCatalog::new(Arc::new(bundles))?);
-        let registry = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog));
+        let registry = Arc::new(RuntimeRegistry::new(hya_tool_loader::builtins(), catalog));
         let source_id = SourceId::bundle(bundle_id);
         let source = super::prepared_static_bundle_source(bundle_id, &[prepared], &valid)?
             .into_runtime_source();

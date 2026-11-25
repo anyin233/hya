@@ -11,8 +11,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hya_tool::{
     Action, Decision, InteractionPlane, LspPlane, Mode, PermissionModel, PermissionPlane,
-    PermissionRules, Resource, Rule, SkillPlane, SpawnerPlane, ToolCtx, ToolError, ToolRegistry,
-    WebSearchPlane, handle::ArtifactPlane,
+    PermissionRules, Resource, Rule, SkillPlane, SpawnerPlane, ToolCtx, ToolError, WebSearchPlane,
+    handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -108,7 +108,7 @@ async fn run(
         cancel: CancellationToken::new(),
         project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     };
-    let tool = ToolRegistry::builtins().get(tool).unwrap();
+    let tool = hya_tool_loader::builtins().get(tool).unwrap();
     let result = tokio::time::timeout(Duration::from_secs(10), tool.execute(&ctx, input))
         .await
         .expect("tool call exceeded the test guard");

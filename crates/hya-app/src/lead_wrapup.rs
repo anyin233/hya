@@ -771,7 +771,7 @@ mod tests {
             .unwrap(),
         );
         let runtime = Arc::new(hya_engine::RuntimeRegistry::new(
-            hya_tool::ToolRegistry::builtins(),
+            hya_tool_loader::builtins(),
             catalog,
         ));
         let (permission, _) = hya_tool::PermissionPlane::new(hya_tool::PermissionRules::default());

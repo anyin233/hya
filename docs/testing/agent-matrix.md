@@ -48,6 +48,7 @@ cargo test -p hya-e2e -- --test-threads=1
 | T1.21 | Custom resource conflicts fail closed | `tests/p18_custom_slash_resources.rs` | Plugin/builtin/MCP collisions publish no partial runtime generation |
 | T1.22 | Dynamic resource snapshots and reload | `tests/p18_custom_slash_resources.rs` | Skill and MCP next-Turn refresh, plugin restart boundary, and immutable old bindings |
 | T1.23 | Structured custom Tool errors recover | `tests/p18_custom_slash_resources.rs` | One terminal Tool Event, structured replay, no replay execution, and later same-Session success |
+| T1.24 | Native network tool | `tests/p02_tool_loop_fs.rs` | `webfetch` returns the loopback HTTP response in a correlated tool result |
 | T2.1 | Subagent task | `tests/p08_subagent_task.rs` | Tree children ≥ 1, `hya-task`, distinct child session |
 | T2.2 | Nested tree depth≥2 | `tests/p09_nested_subagent.rs` | Depth ≥ 2, hya-scout+hya-plan, ≥ 3 session ids |
 | T2.3 | Agent roster / roles | `tests/p10_agent_roster.rs` | `GET /v1/agents` lists hya-main + spawnable roles |
@@ -103,14 +104,12 @@ cargo test -p hya-e2e -- --test-threads=1
 
 ### Built-in tool coverage
 
-`ToolRegistry::builtins()` advertises exactly **27** canonical Tool names. The
-dispatch-only aliases `shell`, `fetch`, `search`, `todo`, `patch`, and `plan` are hidden
-from provider schemas and are not counted as canonical Tools. Track P directly
-exercises **15** canonical Tools:
-
-| Covered (15) | Not directly covered by Track P (12) |
-| --- | --- |
-| `read`, `write`, `edit`, `bash`, `question`, `skill`, `task`, `todo`, `send`, `roster`, `channels`, `join`, `leave`, `list_agents`, `workflow` | `ls`, `glob`, `find`, `grep`, `lsp`, `ask_user`, `apply_patch`, `webfetch`, `websearch`, `plan_exit`, `invalid`, `announce` |
+`hya_tool_loader::builtins()` loads the four native tool families. The
+[tool inventory](../architecture/agent-tool-surface.md) lists their registered
+names and compatibility aliases. Track P runs `write`, `read`, and `bash` from
+the base family, `task` from the extended family, `webfetch` from the network
+family, and `send` from the channel family. `todo` is a kernel tool with its
+own bare and full-mode coverage in T1.15.
 
 ### Multi-agent scenarios need per-agent FakeLlm routing
 

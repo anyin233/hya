@@ -104,7 +104,7 @@ async fn check_interrupted_route(
     let engine = SessionEngine::new(
         hya_store::SessionStore::connect_memory().await?,
         Arc::new(ProviderRouter::new().with(provider.clone())),
-        crate::test_support::runtime(hya_tool::ToolRegistry::builtins()),
+        crate::test_support::runtime(hya_tool_loader::builtins()),
         PermissionPlane::new(hya_tool::PermissionRules::default()).0,
         EventBus::default(),
     );

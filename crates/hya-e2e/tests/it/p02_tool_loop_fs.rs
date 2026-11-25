@@ -115,3 +115,44 @@ async fn t1_3_to_t1_5_write_read_bash_via_fake_tool_calls() {
         "final assistant text TOOLS_DONE expected; fake_n={fake_n}; text={text_bits:?}"
     );
 }
+
+/// T1.24 — a network-family tool returns a response from a loopback HTTP server.
+#[tokio::test]
+async fn t1_24_webfetch_returns_loopback_response() {
+    const BODY: &str = "hya-native-network-tool";
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/doc", listener.local_addr().unwrap());
+    let app = axum::Router::new().route("/doc", axum::routing::get(|| async { BODY }));
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let env = E2eEnvBuilder::new()
+        .scripts(vec![
+            tool_step("webfetch", json!({"url": url, "format": "text"})),
+            text_step("FETCH_DONE"),
+        ])
+        .build()
+        .await
+        .expect("e2e env");
+    let session = env.create_session().await.expect("session");
+    let result = env.prompt(session, "Fetch the document").await;
+    server.abort();
+    result.expect("webfetch turn");
+
+    let events = env.events(session, None).await.expect("events");
+    let call = events
+        .iter()
+        .find_map(|envelope| match &envelope.event {
+            Event::ToolCallRequested { call, name, .. } if name.as_str() == "webfetch" => {
+                Some(*call)
+            }
+            _ => None,
+        })
+        .expect("webfetch call");
+    assert!(
+        events.iter().any(|envelope| matches!(&envelope.event,
+            Event::ToolResult { call: result_call, output, .. }
+                if *result_call == call && output["status"] == 200 && output["output"] == BODY
+        )),
+        "webfetch result missing from {events:?}"
+    );
+}

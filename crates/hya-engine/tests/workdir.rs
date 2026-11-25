@@ -184,7 +184,7 @@ async fn run_turn_injects_one_ordered_skill_section_from_session_workdir_not_age
     })));
     let engine = engine(
         provider_router,
-        Arc::new(ToolRegistry::builtins()),
+        Arc::new(hya_tool_loader::builtins()),
         PermissionRules::default(),
     )
     .await;
@@ -253,7 +253,7 @@ async fn run_turn_shell_tool_uses_session_workdir_not_agent_workdir() {
     ]);
     let engine = engine(
         Arc::new(ProviderRouter::new().with(Arc::new(provider))),
-        Arc::new(ToolRegistry::builtins()),
+        Arc::new(hya_tool_loader::builtins()),
         bash_rules(),
     )
     .await;
@@ -304,7 +304,7 @@ async fn run_shell_uses_session_workdir_not_agent_workdir() {
     let _home = HomeGuard::set(&home_dir);
     let engine = engine(
         Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![])))),
-        Arc::new(ToolRegistry::builtins()),
+        Arc::new(hya_tool_loader::builtins()),
         bash_rules(),
     )
     .await;

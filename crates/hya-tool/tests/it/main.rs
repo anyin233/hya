@@ -5,7 +5,6 @@ mod apply_patch;
 mod apply_patch_formatter;
 mod apply_patch_lsp;
 mod ask_user;
-mod base_tools_preset;
 mod edit;
 mod extended_bundle;
 mod external_directory_scope;

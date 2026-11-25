@@ -22,6 +22,7 @@ hya-proto = { workspace = true }
 hya-provider = { workspace = true, features = ["test-support"] }
 hya-store = { workspace = true, features = ["lifecycle-bench"] }
 hya-tool = { workspace = true }
+hya-tool-loader = { workspace = true }
 hya-version = { workspace = true }
 pbjson-build = { workspace = true }
 prost = { workspace = true }

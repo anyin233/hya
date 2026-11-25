@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hya_tool::handle::{ArtifactPlane, ArtifactStore};
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolRegistry, WebSearchPlane,
+    SpawnerPlane, ToolCtx, WebSearchPlane,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -82,7 +82,7 @@ fn output_text(value: &Value) -> String {
 }
 
 async fn read(ctx: &ToolCtx, path: &str) -> Result<Value, hya_tool::ToolError> {
-    ToolRegistry::builtins()
+    hya_tool_loader::builtins()
         .get("read")
         .unwrap()
         .execute(ctx, json!({ "path": path }))
@@ -90,7 +90,7 @@ async fn read(ctx: &ToolCtx, path: &str) -> Result<Value, hya_tool::ToolError> {
 }
 
 async fn write(ctx: &ToolCtx, path: &str, content: &str) -> Result<Value, hya_tool::ToolError> {
-    ToolRegistry::builtins()
+    hya_tool_loader::builtins()
         .get("write")
         .unwrap()
         .execute(ctx, json!({ "path": path, "content": content }))

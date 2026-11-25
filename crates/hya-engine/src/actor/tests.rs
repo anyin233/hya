@@ -6,14 +6,14 @@ use crate::{CreateSession, EventBus};
 use hya_proto::{AgentName, ChannelKind, MailKind, ModelRef, SessionKind, SubagentMode};
 use hya_provider::{DevProvider, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 
 async fn engine() -> Arc<SessionEngine> {
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
     Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new()))),
-        crate::test_support::runtime(ToolRegistry::builtins()),
+        crate::test_support::runtime(hya_tool_loader::builtins()),
         permission,
         EventBus::default(),
     ))

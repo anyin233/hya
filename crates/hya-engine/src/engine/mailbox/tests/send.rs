@@ -78,7 +78,7 @@ async fn mail_auth_non_member_cannot_send_to_dm_through_engine_and_plane() {
         roots: vec![PathBuf::from(".")],
         cancel: tokio_util::sync::CancellationToken::new(),
     };
-    let result = ToolRegistry::builtins()
+    let result = hya_tool_loader::builtins()
         .get("send")
         .unwrap()
         .execute(

@@ -14,7 +14,7 @@ use hya_proto::{
 };
 use hya_provider::ProviderRouter;
 use hya_store::{OwnerRunId, SessionStore, StoreError};
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use sqlx::{Connection, SqliteConnection};
 
 async fn engine(store: SessionStore) -> SessionEngine {
@@ -22,7 +22,7 @@ async fn engine(store: SessionStore) -> SessionEngine {
     SessionEngine::new(
         store,
         Arc::new(ProviderRouter::new()),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     )
@@ -682,7 +682,7 @@ async fn superseded_stream_boundary(boundary: SupersededBoundary) {
         }
     }
     let dispatches = Arc::new(AtomicUsize::new(0));
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     tools.remove("bash");
     tools
         .register_with_permission(

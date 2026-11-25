@@ -23,7 +23,7 @@ use hya_provider::{
     ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -142,7 +142,7 @@ async fn root_second_round_adopts_new_hook_when_first_round_had_none() {
     .unwrap();
     let bundles = BundleCatalog::from_verified_catalogs(&[&prepared]).unwrap();
     let catalog = Arc::new(AgentCatalog::new(Arc::new(bundles)).unwrap());
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     tools.register(support::MarkerTool::new("marker")).unwrap();
     let runtime = Arc::new(RuntimeRegistry::new(tools, catalog));
     let provider = Arc::new(TwoRounds {

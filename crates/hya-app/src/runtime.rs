@@ -37,7 +37,7 @@ use hya_store::SessionStore;
 use hya_tool::{
     Action, AskRequest, InteractionPlane, InvocationPolicy, LifecyclePlane, MailboxPlane, Mode,
     PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, Rule, SpawnError,
-    ToolRegistry, WebSearchConfig, WebSearchPlane,
+    WebSearchConfig, WebSearchPlane,
 };
 #[cfg(test)]
 use sha2::{Digest, Sha256};
@@ -1218,7 +1218,7 @@ async fn build_session_engine_with_mcp_defer(
     crate::startup_trace::mark("store_recovery", None);
     let (websearch, invocation_policy, settings) = tool_config;
     let router = Arc::new(router);
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     if !settings.webfetch_enabled() {
         registry.remove("webfetch");
     }

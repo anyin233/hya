@@ -36,7 +36,6 @@ use hya_provider::{
 use hya_store::SessionStore;
 use hya_tool::{
     Action, LifecyclePlane, MailboxPlane, Mode, PermissionPlane, PermissionRules, Rule,
-    ToolRegistry,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -179,7 +178,7 @@ async fn team(provider: Arc<ScriptProvider>) -> Team {
     let bundles = hya_bundle::BundleCatalog::from_prepared(prepared.bundles()).unwrap();
     let agents = AgentCatalog::new(Arc::new(bundles)).unwrap();
     let runtime = Arc::new(RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         Arc::new(agents),
     ));
     let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::new(vec![Rule {

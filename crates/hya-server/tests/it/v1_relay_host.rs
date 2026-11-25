@@ -26,7 +26,7 @@ use hya_relay::tunnel::{NoiseStream, TunnelConfig};
 use hya_server::relay_host::RelayState;
 use hya_server::{AppState, RelayHost, RelayHostConfig, RelaySettings, ShutdownReason};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use hyper::body::Bytes;
 use hyper_util::rt::TokioIo;
 use serde_json::{Value, json};
@@ -106,7 +106,7 @@ struct Backend {
 
 async fn backend(config: RelayHostConfig) -> Backend {
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(

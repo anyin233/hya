@@ -10,10 +10,10 @@ use hya_bundle::AgentRole;
 use hya_engine::{EventBus, RuntimeRegistry, SessionEngine};
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 
 async fn engine(catalog: Arc<hya_engine::AgentCatalog>) -> SessionEngine {
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let runtime = Arc::new(RuntimeRegistry::from_snapshot(tools.snapshot(), catalog));
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());

@@ -40,7 +40,7 @@ pub fn trusted_preset_inventory() -> Result<Vec<TrustedPresetDescriptor>, Bundle
     let core_commands_bundle = single_bundle(core_commands.bundles(), "hya/core-commands")?;
     let channels = first_party_bundle(hya_engine::AGENT_CHANNELS_PRESET_ID)?;
     let channel_bundle = single_bundle(channels.bundles(), hya_engine::AGENT_CHANNELS_PRESET_ID)?;
-    let mut presets = hya_tool::tool_bundle_presets()
+    let mut presets = hya_tool_loader::tool_bundle_presets()
         .iter()
         .map(|policy| {
             let catalog = first_party_bundle(policy.identity())?;

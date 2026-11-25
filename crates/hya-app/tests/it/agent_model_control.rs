@@ -11,7 +11,7 @@ use hya_engine::{EventBus, SessionEngine};
 use hya_proto::{AgentName, ModelRef, OwnerRunId};
 use hya_provider::{DevProvider, ProviderRouter};
 use hya_store::{AgentModelPreference, SessionStore};
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 
 #[tokio::test]
 async fn control_loads_validates_persists_and_publishes_preferences() {
@@ -32,7 +32,7 @@ async fn control_loads_validates_persists_and_publishes_preferences() {
         .await
         .unwrap();
 
-    let runtime = support::test_runtime(Arc::new(ToolRegistry::builtins()), &[]);
+    let runtime = support::test_runtime(Arc::new(hya_tool_loader::builtins()), &[]);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new())));
     let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
     let engine = Arc::new(SessionEngine::new(
@@ -125,7 +125,7 @@ async fn failed_owner_fenced_mutation_keeps_the_published_snapshot() {
     store
         .claim_runtime_owner(claimed_owner)
         .expect("claim runtime owner");
-    let runtime = support::test_runtime(Arc::new(ToolRegistry::builtins()), &[]);
+    let runtime = support::test_runtime(Arc::new(hya_tool_loader::builtins()), &[]);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new())));
     let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
     let engine = Arc::new(SessionEngine::new(
@@ -164,7 +164,7 @@ async fn control_accepts_models_of_routes_the_engine_published_after_startup() {
     store
         .claim_runtime_owner(owner)
         .expect("claim runtime owner");
-    let runtime = support::test_runtime(Arc::new(ToolRegistry::builtins()), &[]);
+    let runtime = support::test_runtime(Arc::new(hya_tool_loader::builtins()), &[]);
     // Startup has no model routes; a provider is added live later.
     let startup = Arc::new(ProviderRouter::new());
     let (permission, _asks) = PermissionPlane::new(PermissionRules::new(Vec::new()));

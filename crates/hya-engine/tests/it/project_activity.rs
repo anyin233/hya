@@ -11,7 +11,7 @@ use hya_proto::{
 };
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
@@ -126,7 +126,7 @@ async fn project_activity_lists_project_peer_and_created_file_but_not_outsider_o
     let engine = SessionEngine::new(
         store,
         router,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     );

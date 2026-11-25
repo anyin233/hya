@@ -13,7 +13,7 @@ use hya_engine::{AgentSpec, CreateSession, EventBus, SessionEngine};
 use hya_proto::{AgentName, Event, FinishReason, ModelRef, SessionId, TodoItem, TodoStatus};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -35,7 +35,7 @@ fn engine(store: SessionStore, script: Vec<Vec<FakeStep>>) -> SessionEngine {
     SessionEngine::new(
         store,
         router,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     )

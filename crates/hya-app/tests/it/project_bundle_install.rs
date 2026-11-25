@@ -300,7 +300,7 @@ async fn an_installed_project_bundle_reaches_only_its_project_scope() {
     .expect("install");
 
     let runtime = Arc::new(hya_engine::RuntimeRegistry::new(
-        hya_tool::ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         hya_app::builtin_agent_catalog().unwrap(),
     ));
     let refresh = hya_app::ProjectScopeRefresh::new(Arc::new(

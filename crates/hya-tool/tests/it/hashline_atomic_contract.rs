@@ -410,7 +410,7 @@ async fn edit_follows_relative_symlink_and_preserves_link_identity() {
     tokio::fs::write(&target, "before\n").await.unwrap();
     symlink("real.txt", &link).unwrap();
 
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let ctx = ctx_with(workdir.clone());
     let anchor = read_anchor(&registry, &ctx, "relative.txt", "before").await;
     replace_anchor(&registry, &ctx, "relative.txt", &anchor, "after")
@@ -443,7 +443,7 @@ async fn edit_follows_absolute_symlink_and_preserves_link_identity() {
     tokio::fs::write(&target, "before\n").await.unwrap();
     symlink(&target, &link).unwrap();
 
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let ctx = ctx_with(workdir.clone());
     let anchor = read_anchor(&registry, &ctx, "absolute.txt", "before").await;
     replace_anchor(&registry, &ctx, "absolute.txt", &anchor, "after")
@@ -475,7 +475,7 @@ async fn edit_follows_intermediate_symlink_and_preserves_link_identity() {
     tokio::fs::write(&target, "before\n").await.unwrap();
     symlink("real", &linked_directory).unwrap();
 
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let ctx = ctx_with(workdir.clone());
     let anchor = read_anchor(&registry, &ctx, "linked/target.txt", "before").await;
     replace_anchor(&registry, &ctx, "linked/target.txt", &anchor, "after")
@@ -507,7 +507,7 @@ async fn edit_rejects_dangling_symlink_without_mutation() {
     let missing_target = workdir.join("missing.txt");
     symlink("missing.txt", &link).unwrap();
 
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let ctx = ctx_with(workdir.clone());
     let read_result = registry
         .get("read")
@@ -549,7 +549,7 @@ async fn edit_rejects_symlink_cycle_without_mutation() {
     symlink("second", &first).unwrap();
     symlink("first", &second).unwrap();
 
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let ctx = ctx_with(workdir.clone());
     let result = append_lines(&registry, &ctx, "first", &["new"]).await;
     let message = result
@@ -619,7 +619,7 @@ async fn edit_allows_forty_symlink_hops_but_rejects_forty_one() {
         symlink(next, link).unwrap();
     }
 
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let ctx = ctx_with(workdir.clone());
     let anchor = read_anchor(&registry, &ctx, "forty-0", "before").await;
     replace_anchor(&registry, &ctx, "forty-0", &anchor, "after")
@@ -668,7 +668,7 @@ async fn edit_preserves_hard_link_inode_and_content() {
     std::fs::hard_link(&target, &link).unwrap();
     let inode_before = std::fs::metadata(&target).unwrap().ino();
 
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let ctx = ctx_with(workdir.clone());
     let anchor = read_anchor(&registry, &ctx, "target.txt", "before").await;
     replace_anchor(&registry, &ctx, "target.txt", &anchor, "after")
@@ -694,7 +694,7 @@ async fn edit_preserves_existing_mode() {
     permissions.set_mode(0o640);
     std::fs::set_permissions(&target, permissions).unwrap();
 
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let ctx = ctx_with(workdir.clone());
     let anchor = read_anchor(&registry, &ctx, "mode.txt", "before").await;
     replace_anchor(&registry, &ctx, "mode.txt", &anchor, "after")
@@ -718,7 +718,7 @@ async fn edit_preserves_existing_bom_without_duplication() {
         .await
         .unwrap();
 
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let ctx = ctx_with(workdir.clone());
     let anchor = read_anchor(&registry, &ctx, "bom.txt", "beta").await;
     replace_anchor(&registry, &ctx, "bom.txt", &anchor, "BETA")
@@ -741,7 +741,7 @@ async fn edit_preserves_crlf_line_endings() {
         .await
         .unwrap();
 
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let ctx = ctx_with(workdir.clone());
     let anchor = read_anchor(&registry, &ctx, "crlf.txt", "beta").await;
     replace_anchor(&registry, &ctx, "crlf.txt", &anchor, "BETA")
@@ -764,7 +764,7 @@ async fn edit_preserves_first_mixed_line_ending_style_and_warns() {
         .await
         .unwrap();
 
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let ctx = ctx_with(workdir.clone());
     let anchor = read_anchor(&registry, &ctx, "mixed.txt", "beta").await;
     let result = replace_anchor(&registry, &ctx, "mixed.txt", &anchor, "BETA")
@@ -791,7 +791,7 @@ async fn edit_rewrites_invalid_utf8_with_warning() {
         .await
         .unwrap();
 
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let ctx = ctx_with(workdir.clone());
     let anchor = read_anchor(&registry, &ctx, "invalid.txt", "before").await;
     let result = replace_anchor(&registry, &ctx, "invalid.txt", &anchor, "after-before")
@@ -813,7 +813,7 @@ async fn edit_rewrites_invalid_utf8_with_warning() {
 async fn edit_missing_path_fails_without_creating_target_or_temp_files() {
     let workdir = tempdir();
     let target = workdir.join("missing.txt");
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let ctx = ctx_with(workdir.clone());
 
     let result = append_lines(&registry, &ctx, "missing.txt", &["created"]).await;
@@ -834,7 +834,7 @@ async fn edit_forced_formatter_failure_leaves_no_temp_files() {
     tokio::fs::write(&target, "before\n").await.unwrap();
     let formatter = FormatterPlane::new(Arc::new(FailingFormatter));
     let ctx = ctx_with_formatter(workdir.clone(), formatter);
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let anchor = read_anchor(&registry, &ctx, "formatter.txt", "before").await;
 
     let result = replace_anchor(&registry, &ctx, "formatter.txt", &anchor, "after").await;
@@ -856,7 +856,7 @@ async fn same_resolved_file_serializes_mutations_across_sessions() {
     let target = workdir.join("shared.txt");
     tokio::fs::write(&target, "root\n").await.unwrap();
     let (formatter, mut calls, max_active) = channel_formatter(None);
-    let registry = Arc::new(ToolRegistry::builtins());
+    let registry = Arc::new(hya_tool_loader::builtins());
     let ctx_a = ctx_with_formatter_session(
         workdir.clone(),
         formatter.clone(),
@@ -930,7 +930,7 @@ async fn hard_link_aliases_serialize_mutations_by_inode() {
     std::fs::hard_link(&target, &alias).unwrap();
     let inode = std::fs::metadata(&target).unwrap().ino();
     let (formatter, mut calls, max_active) = channel_formatter(None);
-    let registry = Arc::new(ToolRegistry::builtins());
+    let registry = Arc::new(hya_tool_loader::builtins());
     let ctx_a = ctx_with_formatter_session(
         workdir.clone(),
         formatter.clone(),
@@ -1007,7 +1007,7 @@ async fn read_waits_for_formatter_and_snapshots_final_bytes() {
         in_flight: b"formatter-in-flight\n",
         final_bytes: b"formatter-final\n",
     }));
-    let registry = Arc::new(ToolRegistry::builtins());
+    let registry = Arc::new(hya_tool_loader::builtins());
     let edit_ctx = ctx_with_formatter_session(
         workdir.clone(),
         formatter.clone(),
@@ -1089,7 +1089,7 @@ async fn waiting_symlink_edit_reresolves_after_retarget() {
     tokio::fs::write(&new_target, "new\n").await.unwrap();
     symlink("old.txt", &link).unwrap();
     let (formatter, mut calls, max_active) = channel_formatter(None);
-    let registry = Arc::new(ToolRegistry::builtins());
+    let registry = Arc::new(hya_tool_loader::builtins());
     let session = Some(SessionId::new());
     let first_ctx = ctx_with_formatter_session(
         workdir.clone(),
@@ -1174,7 +1174,7 @@ async fn cancelled_waiting_edit_returns_cancelled_without_commit() {
     let target = workdir.join("cancel.txt");
     tokio::fs::write(&target, "before\n").await.unwrap();
     let (formatter, mut calls, max_active) = channel_formatter(None);
-    let registry = Arc::new(ToolRegistry::builtins());
+    let registry = Arc::new(hya_tool_loader::builtins());
     let session = SessionId::new();
     let first_ctx = ctx_with_formatter_session(
         workdir.clone(),

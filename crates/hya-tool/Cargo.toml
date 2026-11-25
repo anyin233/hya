@@ -12,17 +12,14 @@ workspace = true
 
 [dependencies]
 hya-version = { workspace = true }
-hya-bundle = { workspace = true }
 hya-context = { workspace = true }
 hya-tool-error = { workspace = true }
 hya-proto = { workspace = true }
 image = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_norway = { workspace = true }
 sha2 = { workspace = true }
 async-trait = { workspace = true }
-futures = { workspace = true }
 thiserror = { workspace = true }
 libc = { workspace = true }
 tokio = { workspace = true }
@@ -31,6 +28,8 @@ regex = { workspace = true }
 time = { workspace = true }
 
 [dev-dependencies]
+futures = { workspace = true }
+hya-tool-loader = { workspace = true }
 hya-base-tools = { workspace = true }
 hya-extended-tools = { workspace = true }
 hya-channel-tools = { workspace = true }

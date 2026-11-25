@@ -14,7 +14,7 @@ use hya_provider::{
     Capabilities, CompletionRequest, EventStream, Provider, ProviderError, ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use tokio_util::sync::CancellationToken;
 
 fn tempdir() -> PathBuf {
@@ -74,7 +74,7 @@ async fn run_turn_uses_session_selected_model() {
     let router = Arc::new(ProviderRouter::new().with(Arc::new(SelectedModelProvider {
         models: models.clone(),
     })));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(

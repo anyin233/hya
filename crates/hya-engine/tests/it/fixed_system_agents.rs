@@ -25,7 +25,7 @@ use hya_provider::{
     ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use tokio_util::sync::CancellationToken;
 
 /// Compiled-in prompt for a reserved system agent.
@@ -240,7 +240,7 @@ async fn engine_with(
     with_summarizer: bool,
 ) -> SessionEngine {
     let runtime = Arc::new(RuntimeRegistry::from_snapshot(
-        ToolRegistry::builtins().snapshot(),
+        hya_tool_loader::builtins().snapshot(),
         catalog,
     ));
     let router = Arc::new(ProviderRouter::new().with(provider));

@@ -19,7 +19,7 @@ use hya_engine::{
 use hya_proto::{AgentName, Event, FinishReason, MessageId, ModelRef, SessionId};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use tokio_util::sync::CancellationToken;
 
 /// Records hook invocations and answers `compaction.before` from a scripted
@@ -193,7 +193,7 @@ async fn compacting_engine(hooks: Arc<dyn HookDispatcher>) -> Arc<SessionEngine>
         SessionEngine::new(
             store,
             router,
-            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
             perm,
             EventBus::default(),
         )
@@ -311,7 +311,7 @@ async fn session_lifecycle_hooks_fire_best_effort() {
         SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
             router,
-            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
             perm,
             EventBus::default(),
         )
@@ -353,7 +353,7 @@ async fn agent_spawn_hook_fires_on_member_registration() {
         SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
             router,
-            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
             perm,
             EventBus::default(),
         )
@@ -494,7 +494,7 @@ async fn successful_compaction_is_one_transaction() {
                 FakeStep::Finish(FinishReason::Stop),
             ]]))),
         ),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     );

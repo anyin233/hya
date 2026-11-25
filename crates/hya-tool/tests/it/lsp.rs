@@ -11,7 +11,7 @@ use hya_proto::SessionId;
 use hya_tool::{
     Action, InteractionPlane, LspError, LspOperation, LspPlane, LspProvider, LspRequest, Mode,
     PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, ToolCtx, ToolError,
-    ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -86,7 +86,7 @@ fn ctx_with(rules: Vec<Rule>, lsp: LspPlane, workdir: PathBuf) -> ToolCtx {
 #[test]
 fn lsp_schema_includes_open_code_descriptions() {
     // Given
-    let tool = ToolRegistry::builtins().get("lsp").unwrap();
+    let tool = hya_tool_loader::builtins().get("lsp").unwrap();
 
     // When
     let schema = tool.schema();
@@ -134,7 +134,7 @@ async fn lsp_calls_provider_and_returns_open_code_result_shape() {
         requests: requests.clone(),
     }));
     let ctx = ctx_with(vec![allow(Action::Lsp, "*")], lsp, workdir.clone());
-    let tool = ToolRegistry::builtins().get("lsp").unwrap();
+    let tool = hya_tool_loader::builtins().get("lsp").unwrap();
 
     // When
     let out = tool
@@ -193,7 +193,7 @@ async fn dot_workdir_and_dot_file_reach_the_lsp_provider_as_current_directory() 
         return;
     };
 
-    let tool = ToolRegistry::from_tool_families(&["hya/extended-tools"])
+    let tool = hya_tool_loader::from_tool_families(&["hya/extended-tools"])
         .get("lsp")
         .unwrap();
     // A removed cwd isolates the relative fallback without changing the test harness cwd.
@@ -239,7 +239,7 @@ async fn lsp_reports_no_server_when_no_provider_is_available() {
     let workdir = tempdir();
     std::fs::write(workdir.join("main.rs"), "fn main() {}\n").unwrap();
     let ctx = ctx_with(vec![allow(Action::Lsp, "*")], LspPlane::default(), workdir);
-    let tool = ToolRegistry::builtins().get("lsp").unwrap();
+    let tool = hya_tool_loader::builtins().get("lsp").unwrap();
 
     // When
     let result = tool
@@ -272,7 +272,7 @@ async fn lsp_requires_permission_before_calling_provider() {
         requests: requests.clone(),
     }));
     let ctx = ctx_with(vec![deny(Action::Lsp, "*")], lsp, workdir);
-    let tool = ToolRegistry::builtins().get("lsp").unwrap();
+    let tool = hya_tool_loader::builtins().get("lsp").unwrap();
 
     // When
     let result = tool

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use hya_proto::{MailEndpoint, MailKind, SessionId};
 use hya_tool::{
     InteractionPlane, LspPlane, MailReceipt, MailboxPlane, MailboxRequest, PermissionPlane,
-    PermissionRules, SkillPlane, SpawnerPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane,
+    PermissionRules, SkillPlane, SpawnerPlane, ToolCtx, ToolError, WebSearchPlane,
     handle::ArtifactPlane,
 };
 use serde_json::json;
@@ -92,7 +92,7 @@ async fn run_send(input: serde_json::Value) -> (serde_json::Value, Captured) {
     let session = SessionId::new();
     let (plane, mut seen, _service) = canned_service();
     let ctx = ctx_with(plane, session);
-    let tool = ToolRegistry::builtins().get("send").unwrap();
+    let tool = hya_tool_loader::builtins().get("send").unwrap();
     let out = tool.execute(&ctx, input).await.expect("send result");
     let captured = seen.recv().await.expect("captured request");
     (out, captured)
@@ -175,7 +175,7 @@ async fn send_rejects_empty_bodies() {
     let session = SessionId::new();
     let (plane, _seen, _service) = canned_service();
     let ctx = ctx_with(plane, session);
-    let tool = ToolRegistry::builtins().get("send").unwrap();
+    let tool = hya_tool_loader::builtins().get("send").unwrap();
     let err = tool
         .execute(&ctx, json!({ "channel": "#ops", "body": "   " }))
         .await
@@ -188,7 +188,7 @@ async fn send_rejects_empty_bodies() {
 
 #[test]
 fn send_replaces_dm_and_broadcast_in_the_registry() {
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     assert!(registry.get("send").is_some());
     assert!(registry.get("dm").is_none());
     assert!(registry.get("broadcast").is_none());

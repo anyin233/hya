@@ -16,7 +16,7 @@ use hya_provider::{
     ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 
 /// Records the probe request and replays a fixed stream outcome.
 struct RecordingProvider {
@@ -75,7 +75,7 @@ async fn engine(provider: RecordingProvider) -> SessionEngine {
     SessionEngine::new(
         store,
         Arc::new(ProviderRouter::new().with(Arc::new(provider))),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     )

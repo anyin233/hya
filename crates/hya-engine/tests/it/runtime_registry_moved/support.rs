@@ -1,4 +1,6 @@
 use super::*;
+use hya_tool::ToolRegistry;
+
 /// Test shim: wrap prepared AgentBundles as an [`AgentCatalog`] over the
 /// compiled-in built-in roster, so unit tests keep their existing shape.
 pub(super) struct TestCatalog;

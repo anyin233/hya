@@ -23,7 +23,7 @@ use hya_tool::handle::{
 use hya_tool::{
     Action, FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, Mode,
     PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, Tool, ToolCtx, ToolError,
-    ToolOperation, ToolRegistry, ToolResultPolicy, WebSearchPlane, WorkflowPlane,
+    ToolOperation, ToolResultPolicy, WebSearchPlane, WorkflowPlane,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -207,7 +207,7 @@ async fn read_dispatches_registered_scheme_to_owner_with_reference() {
         SchemeBinding::new("plugin:vecdb", "vecdb__query", false),
         owner.clone(),
     )]);
-    let inner = ToolRegistry::builtins()
+    let inner = hya_tool_loader::builtins()
         .resolve("read")
         .expect("builtins carry read");
     let read = SchemeReadTool::new(inner.tool, dispatch);
@@ -237,7 +237,7 @@ async fn write_rejects_non_writable_scheme() {
         SchemeBinding::new("plugin:vecdb", "vecdb__query", false),
         owner.clone(),
     )]);
-    let inner = ToolRegistry::builtins()
+    let inner = hya_tool_loader::builtins()
         .resolve("write")
         .expect("builtins carry write");
     let write = SchemeWriteTool::new(inner.tool, dispatch);
@@ -265,7 +265,7 @@ async fn write_dispatches_writable_scheme_to_owner() {
         SchemeBinding::new("plugin:kv", "kv__put", true),
         owner.clone(),
     )]);
-    let inner = ToolRegistry::builtins()
+    let inner = hya_tool_loader::builtins()
         .resolve("write")
         .expect("builtins carry write");
     let write = SchemeWriteTool::new(inner.tool, dispatch);
@@ -287,7 +287,7 @@ async fn unregistered_and_internal_schemes_pass_through_to_inner_tool() {
         SchemeBinding::new("plugin:vecdb", "vecdb__query", false),
         owner.clone(),
     )]);
-    let inner = ToolRegistry::builtins()
+    let inner = hya_tool_loader::builtins()
         .resolve("read")
         .expect("builtins carry read");
     let read = SchemeReadTool::new(inner.tool, dispatch);

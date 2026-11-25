@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    SpawnerPlane, ToolCtx, ToolError, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -69,7 +69,7 @@ fn ctx_with_rules(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
 #[test]
 fn read_schema_exposes_canonical_path_and_bounded_controls() {
     // Given
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
 
     // When
     let schema = tool.schema();
@@ -94,7 +94,7 @@ async fn read_accepts_captured_equal_paths_and_zero_offset() {
     tokio::fs::write(workdir.join("captured.txt"), "first\nsecond\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When
@@ -126,7 +126,7 @@ async fn read_rejects_conflicting_file_path_and_path_values() {
     tokio::fs::write(workdir.join("canonical.txt"), "canonical\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When
@@ -154,7 +154,7 @@ async fn read_resolves_one_empty_path_and_rejects_absent_empty_or_null_inputs() 
     tokio::fs::write(workdir.join("target.txt"), "content\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     for input in [
@@ -192,7 +192,7 @@ async fn read_raw_invalid_utf8_and_empty_file_results_keep_bounded_facts() {
     tokio::fs::write(workdir.join("empty.txt"), b"")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     let raw = tool
@@ -236,7 +236,7 @@ async fn read_rejects_zero_limit_as_typed_input() {
     tokio::fs::write(workdir.join("target.txt"), "content\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let result = tool
         .execute(
             &ctx_with(workdir),
@@ -253,7 +253,7 @@ async fn read_supports_file_path_offset_limit_and_open_code_display_metadata() {
     tokio::fs::write(workdir.join("notes.txt"), "alpha\nbeta\ngamma\ndelta\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir.clone());
 
     // When
@@ -302,7 +302,7 @@ async fn read_lists_directories_with_sorted_entries_and_open_code_metadata() {
     tokio::fs::write(workdir.join("dir/a.txt"), "a")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When
@@ -335,7 +335,7 @@ async fn read_rejects_offset_beyond_file_line_count() {
     tokio::fs::write(workdir.join("notes.txt"), "one\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When
@@ -366,7 +366,7 @@ async fn read_requires_external_directory_permission_for_outside_file_path() {
     let outside_dir = tempdir();
     let outside = outside_dir.join("outside.txt");
     tokio::fs::write(&outside, "secret\n").await.unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with_rules(
         vec![
             allow(Action::Read, "*"),
@@ -391,7 +391,7 @@ async fn read_strips_utf8_bom_from_file_output() {
     tokio::fs::write(workdir.join("bom.txt"), b"\xEF\xBB\xBFhello\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When
@@ -425,7 +425,7 @@ async fn read_returns_open_code_attachment_for_png_files() {
     )
     .await
     .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When
@@ -456,7 +456,7 @@ async fn read_truncated_png_reports_decode_error_without_attachment() {
         .await
         .unwrap();
     let ctx = ctx_with(workdir);
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let result = tool
         .execute(&ctx, json!({"path": "image.data"}))
         .await
@@ -483,7 +483,7 @@ async fn read_does_not_attach_an_image_over_the_attachment_budget() {
     tokio::fs::write(workdir.join("big.png"), &png)
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When
@@ -508,7 +508,7 @@ async fn read_rejects_binary_files_before_text_decoding() {
     tokio::fs::write(&target, "plain text but binary extension\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When
@@ -565,7 +565,7 @@ async fn read_authorizes_lexical_external_path_before_metadata_probe() {
         cancel: CancellationToken::new(),
         project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     };
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
 
     // When
     let result = tool

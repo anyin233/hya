@@ -13,10 +13,9 @@ use crate::support;
 use std::sync::Arc;
 
 use hya_bundle::AgentRole;
-use hya_tool::ToolRegistry;
 
 fn build(agents: &[(&str, AgentRole, &[&str])]) {
-    support::test_runtime(Arc::new(ToolRegistry::builtins()), agents);
+    support::test_runtime(Arc::new(hya_tool_loader::builtins()), agents);
 }
 
 #[test]

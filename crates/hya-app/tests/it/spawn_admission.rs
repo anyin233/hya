@@ -414,7 +414,7 @@ async fn inline_child_spawns_through_its_authorized_base_roster() {
             store,
             provider_router.clone(),
             support::test_runtime(
-                Arc::new(ToolRegistry::builtins()),
+                Arc::new(hya_tool_loader::builtins()),
                 &[
                     ("build", AgentRole::Main, &["quick"]),
                     ("general", AgentRole::Main, &[]),
@@ -711,7 +711,7 @@ async fn admission_fixture_with_store_and_gate(
             store,
             provider_router.clone(),
             support::test_runtime(
-                Arc::new(ToolRegistry::builtins()),
+                Arc::new(hya_tool_loader::builtins()),
                 &[
                     ("build", AgentRole::Main, &["quick"]),
                     ("general", AgentRole::Main, &[]),
@@ -837,7 +837,7 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
         inner: FakeProvider::scripted(vec![FakeStep::Finish(FinishReason::Stop)]),
     })));
     let runtime = support::test_runtime(
-        Arc::new(ToolRegistry::builtins()),
+        Arc::new(hya_tool_loader::builtins()),
         &[
             ("build", AgentRole::Main, &["quick"]),
             ("general", AgentRole::Main, &[]),
@@ -1076,7 +1076,7 @@ async fn guidance_spawn_fixture(
         SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
             provider_router.clone(),
-            support::test_runtime(Arc::new(ToolRegistry::builtins()), agents),
+            support::test_runtime(Arc::new(hya_tool_loader::builtins()), agents),
             permission,
             EventBus::default(),
         )
@@ -1784,7 +1784,7 @@ async fn nested_resident_main_synthesis_keeps_root_definition_and_guidance() {
         Rule::new(Action::Read, "*", Mode::Allow),
     ]));
     let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(4);
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let engine = Arc::new(
         SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
@@ -2042,7 +2042,7 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
         let catalog =
             hya_engine::AgentCatalog::new(Arc::new(catalog)).expect("missing-root agent catalog");
         Arc::new(RuntimeRegistry::from_snapshot(
-            ToolRegistry::builtins().snapshot(),
+            hya_tool_loader::builtins().snapshot(),
             Arc::new(catalog),
         ))
     };

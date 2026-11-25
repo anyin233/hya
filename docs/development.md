@@ -464,7 +464,8 @@ Use this guide when deciding where a change belongs:
 | New provider route, protocol encoder/decoder, capability preflight | `hya-provider` |
 | New registry tool implementation | Owning source under `bundles/presets/<family>-tools/native` |
 | Kernel tool implementation | `hya-core/src/kernel` |
-| Tool trait, loader, runtime plane, or permission action | `hya-tool` |
+| Tool trait, runtime plane, or permission action | `hya-tool` |
+| Host-side native library loading or tool-family exposure policy | `hya-tool-loader` |
 | Persistence, replay, migrations, usage projection | `hya-store` |
 | Turn-loop behavior, goal/loop/team/worktree runtime logic | `hya-engine` |
 | HTTP route or SSE behavior | `hya-server` |

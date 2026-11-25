@@ -24,7 +24,6 @@ use hya_store::SessionStore;
 use hya_tool::{
     Action, Decision, ExactSubject, InvocationPolicy, InvocationRule, Mode, PermissionModel,
     PermissionPlane, PermissionRules, PermissionTarget, RememberScope, Resource, Rule,
-    ToolRegistry,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -162,7 +161,7 @@ async fn model_tool_authorizes_after_lookup_and_before_hook_with_call_correlatio
         SessionEngine::new(
             store,
             router,
-            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
             permission,
             EventBus::default(),
         )
@@ -269,7 +268,7 @@ async fn hooks_fire_once_per_event_and_pass_through() {
     let path = file.to_string_lossy().into_owned();
 
     let router = Arc::new(ProviderRouter::new().with(Arc::new(read_then_finish(&path))));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Read,
         "/**",
@@ -344,7 +343,7 @@ async fn tool_after_cannot_mask_permission_denial() {
     let path = file.to_string_lossy().into_owned();
 
     let router = Arc::new(ProviderRouter::new().with(Arc::new(read_then_finish(&path))));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Read,
         "*",
@@ -435,7 +434,7 @@ async fn normal_turn_after_hook_rewrite_removes_unpublished_bash_artifact() {
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         router,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     )
@@ -554,7 +553,7 @@ async fn chat_params_carries_root_session_and_agent_for_child_sessions() {
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         router,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     )

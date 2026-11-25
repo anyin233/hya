@@ -10,8 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use hya_tool::{
     Action, FormatterError, FormatterPlane, FormatterProvider, InteractionPlane, LspPlane, Mode,
-    PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, ToolCtx, ToolRegistry,
-    WebSearchPlane, handle::ArtifactPlane,
+    PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, ToolCtx, WebSearchPlane,
+    handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -93,7 +93,7 @@ async fn write_restores_utf8_bom_after_formatter_rewrites_file() {
         .unwrap();
     let formatter = FormatterPlane::new(Arc::new(BomDroppingFormatter));
     let ctx = ctx_with_formatter(dir.clone(), formatter);
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     // When: write runs and the formatter rewrites the file.
     tool.execute(&ctx, json!({ "path": "bom.txt", "content": "new\n" }))
@@ -117,7 +117,7 @@ async fn edit_restores_utf8_bom_after_formatter_rewrites_file() {
         .unwrap();
     let formatter = FormatterPlane::new(Arc::new(BomDroppingFormatter));
     let ctx = ctx_with_formatter(dir.clone(), formatter);
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let tool = registry.get("edit").unwrap();
 
@@ -162,7 +162,7 @@ async fn apply_patch_restores_utf8_bom_after_formatter_rewrites_file() {
         .unwrap();
     let formatter = FormatterPlane::new(Arc::new(BomDroppingFormatter));
     let ctx = ctx_with_formatter(dir.clone(), formatter);
-    let tool = ToolRegistry::builtins().get("apply_patch").unwrap();
+    let tool = hya_tool_loader::builtins().get("apply_patch").unwrap();
 
     // When: apply_patch updates the file without requiring BOM in the patch body.
     tool.execute(

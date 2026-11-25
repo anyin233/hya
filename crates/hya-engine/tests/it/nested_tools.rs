@@ -179,7 +179,7 @@ fn catalog() -> Arc<AgentCatalog> {
 
 /// The builtins plus the test tools the catalog's agent allows.
 fn tools() -> ToolRegistry {
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     tools.register(Arc::new(Nester)).unwrap();
     tools.register(Arc::new(Probe)).unwrap();
     tools.register(Arc::new(Stater)).unwrap();

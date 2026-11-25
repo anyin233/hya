@@ -27,7 +27,7 @@ use hya_provider::{
 };
 use hya_server::{AppState, V1Grpc, router};
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -68,7 +68,7 @@ async fn state_with(provider: FakeProvider, workdir: PathBuf) -> (AppState, Arc<
         SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
             providers,
-            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
             perm,
             EventBus::default(),
         )

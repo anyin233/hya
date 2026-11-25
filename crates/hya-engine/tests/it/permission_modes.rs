@@ -25,7 +25,7 @@ use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
 use hya_tool::{
     AskRequest, Decision, InvocationPolicy, InvocationRule, Mode, PermissionModel, PermissionPlane,
-    PermissionRules, PermissionTarget, ToolRegistry,
+    PermissionRules, PermissionTarget,
 };
 use serde_json::json;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -155,7 +155,7 @@ async fn finished(task: tokio::task::JoinHandle<FinishReason>) -> FinishReason {
 }
 
 fn builtin_runtime() -> Arc<RuntimeRegistry> {
-    support::test_runtime(Arc::new(ToolRegistry::builtins()))
+    support::test_runtime(Arc::new(hya_tool_loader::builtins()))
 }
 
 #[tokio::test]
@@ -384,7 +384,7 @@ fn approver_runtime(seen: Arc<Mutex<Vec<PermissionApproveInput>>>) -> Arc<Runtim
     .expect("prepare Plugin");
     let bundles = BundleCatalog::from_verified_catalogs(&[&prepared]).expect("bundle catalog");
     let catalog = Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("agent catalog"));
-    let registry = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog));
+    let registry = Arc::new(RuntimeRegistry::new(hya_tool_loader::builtins(), catalog));
     registry
         .refresh(|candidate| {
             candidate.upsert_sources(vec![

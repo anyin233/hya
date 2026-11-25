@@ -8,8 +8,7 @@ use std::path::PathBuf;
 use hya_proto::SessionId;
 use hya_tool::{
     InteractionPlane, LspPlane, PermissionPlane, PermissionRules, QuestionAnswer, QuestionKind,
-    SkillPlane, SpawnerPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane,
-    handle::ArtifactPlane,
+    SkillPlane, SpawnerPlane, ToolCtx, ToolError, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -47,7 +46,7 @@ async fn ask_user_batch_returns_structured_answers() {
     let session = SessionId::new();
     let (interaction, mut rx) = InteractionPlane::new();
     let ctx = ctx_with(interaction, session);
-    let tool = ToolRegistry::builtins().get("ask_user").unwrap();
+    let tool = hya_tool_loader::builtins().get("ask_user").unwrap();
 
     // When
     let handle = tokio::spawn(async move {
@@ -124,7 +123,7 @@ async fn ask_user_supports_multiple_selection_and_allow_custom_false() {
     let session = SessionId::new();
     let (interaction, mut rx) = InteractionPlane::new();
     let ctx = ctx_with(interaction, session);
-    let tool = ToolRegistry::builtins().get("ask_user").unwrap();
+    let tool = hya_tool_loader::builtins().get("ask_user").unwrap();
 
     // When
     let handle = tokio::spawn(async move {
@@ -177,7 +176,7 @@ async fn ask_user_returns_an_error_when_a_question_is_cancelled() {
     let session = SessionId::new();
     let (interaction, mut rx) = InteractionPlane::new();
     let ctx = ctx_with(interaction, session);
-    let tool = ToolRegistry::builtins().get("ask_user").unwrap();
+    let tool = hya_tool_loader::builtins().get("ask_user").unwrap();
 
     // When
     let handle = tokio::spawn(async move {
@@ -210,7 +209,7 @@ async fn ask_user_propagates_plane_errors_instead_of_swallowing() {
     let (interaction, rx) = InteractionPlane::new();
     drop(rx);
     let ctx = ctx_with(interaction, session);
-    let tool = ToolRegistry::builtins().get("ask_user").unwrap();
+    let tool = hya_tool_loader::builtins().get("ask_user").unwrap();
 
     // When
     let result = tool
@@ -240,7 +239,7 @@ async fn ask_user_rejects_options_without_description() {
     let session = SessionId::new();
     let (interaction, _rx) = InteractionPlane::new();
     let ctx = ctx_with(interaction, session);
-    let tool = ToolRegistry::builtins().get("ask_user").unwrap();
+    let tool = hya_tool_loader::builtins().get("ask_user").unwrap();
 
     let result = tool
         .execute(
@@ -262,7 +261,7 @@ async fn ask_user_rejects_options_without_description() {
 
 #[tokio::test]
 async fn question_hidden_alias_dispatches_the_merged_tool() {
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
 
     // Canonical advertisement contains ask_user, never question.
     let canonical: Vec<String> = registry

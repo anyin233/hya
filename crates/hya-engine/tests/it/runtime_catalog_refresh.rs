@@ -17,7 +17,7 @@ use hya_engine::{
 use hya_proto::{AgentName, FinishReason, ModelRef};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use tokio_util::sync::CancellationToken;
 
 struct PublishingRefresh {
@@ -111,7 +111,10 @@ impl LoopPlanner for OneDirectivePlanner {
 async fn root_binding_refreshes_before_capture_while_plain_binding_stays_pure() {
     let old_catalog = support::builtin_only_catalog();
     let replacement = support::test_catalog(&[("installed-agent", AgentRole::Main, &[])]);
-    let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), old_catalog));
+    let runtime = Arc::new(RuntimeRegistry::new(
+        hya_tool_loader::builtins(),
+        old_catalog,
+    ));
     let refresh = Arc::new(PublishingRefresh {
         replacement,
         calls: AtomicUsize::new(0),
@@ -148,7 +151,10 @@ async fn root_binding_refreshes_before_capture_while_plain_binding_stays_pure() 
 async fn root_turn_refreshes_installed_catalog_before_agent_resolution() {
     let old_catalog = support::builtin_only_catalog();
     let replacement = support::test_catalog(&[("installed-agent", AgentRole::Main, &[])]);
-    let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), old_catalog));
+    let runtime = Arc::new(RuntimeRegistry::new(
+        hya_tool_loader::builtins(),
+        old_catalog,
+    ));
     let refresh = Arc::new(PublishingRefresh {
         replacement,
         calls: AtomicUsize::new(0),
@@ -205,7 +211,10 @@ async fn root_turn_refreshes_installed_catalog_before_agent_resolution() {
 async fn root_shell_refreshes_catalog_before_agent_resolution() {
     let old_catalog = support::builtin_only_catalog();
     let replacement = support::test_catalog(&[("installed-agent", AgentRole::Main, &[])]);
-    let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), old_catalog));
+    let runtime = Arc::new(RuntimeRegistry::new(
+        hya_tool_loader::builtins(),
+        old_catalog,
+    ));
     let refresh = Arc::new(PublishingRefresh {
         replacement,
         calls: AtomicUsize::new(0),
@@ -276,7 +285,7 @@ async fn loop_children_reuse_one_root_catalog_binding() {
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.expect("connect store"),
         Arc::new(ProviderRouter::new().with(Arc::new(provider))),
-        Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), initial)),
+        Arc::new(RuntimeRegistry::new(hya_tool_loader::builtins(), initial)),
         permission,
         EventBus::default(),
     ));

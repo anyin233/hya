@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Resource, Rule,
-    SkillPlane, SpawnerPlane, ToolCtx, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    SkillPlane, SpawnerPlane, ToolCtx, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -75,7 +75,7 @@ async fn serve_bytes(body: &'static [u8], content_type: &'static str) -> String 
 #[tokio::test]
 async fn webfetch_fetches_text_from_http_url() {
     let url = serve_once("plain body", "text/plain").await;
-    let tool = ToolRegistry::builtins().get("webfetch").unwrap();
+    let tool = hya_tool_loader::builtins().get("webfetch").unwrap();
     let ctx = ctx_with(vec![allow(Action::WebFetch, "http://127.0.0.1:*")]);
 
     let out = tool
@@ -112,7 +112,7 @@ async fn webfetch_rejects_an_oversized_chunked_body_before_eof() {
         // Keep the response open to distinguish rejecting the extra byte from waiting for EOF.
         let _ = socket.read(&mut request).await;
     });
-    let tool = ToolRegistry::builtins().get("webfetch").unwrap();
+    let tool = hya_tool_loader::builtins().get("webfetch").unwrap();
     let ctx = ctx_with(vec![allow(Action::WebFetch, "http://127.0.0.1:*")]);
     let result = tokio::time::timeout(
         Duration::from_secs(5),
@@ -129,7 +129,7 @@ async fn webfetch_rejects_an_oversized_chunked_body_before_eof() {
 #[tokio::test]
 async fn webfetch_accepts_fractional_timeout_seconds() {
     let url = serve_once("fractional timeout", "text/plain").await;
-    let tool = ToolRegistry::builtins().get("webfetch").unwrap();
+    let tool = hya_tool_loader::builtins().get("webfetch").unwrap();
     let schema = tool.schema().input_schema;
     assert_eq!(schema["properties"]["timeout"]["type"], "number");
     let ctx = ctx_with(vec![allow(Action::WebFetch, "http://127.0.0.1:*")]);
@@ -152,7 +152,7 @@ async fn webfetch_converts_html_to_readable_text_for_markdown() {
         "text/html; charset=utf-8",
     )
     .await;
-    let tool = ToolRegistry::builtins().get("webfetch").unwrap();
+    let tool = hya_tool_loader::builtins().get("webfetch").unwrap();
     let ctx = ctx_with(vec![allow(Action::WebFetch, "http://127.0.0.1:*")]);
 
     let out = tool
@@ -173,7 +173,7 @@ async fn webfetch_returns_open_code_attachment_for_images() {
         "image/png",
     )
     .await;
-    let tool = ToolRegistry::builtins().get("webfetch").unwrap();
+    let tool = hya_tool_loader::builtins().get("webfetch").unwrap();
     let ctx = ctx_with(vec![allow(Action::WebFetch, "http://127.0.0.1:*")]);
 
     let out = tool
@@ -194,7 +194,7 @@ async fn webfetch_returns_open_code_attachment_for_images() {
 #[tokio::test]
 async fn webfetch_requires_webfetch_permission() {
     let url = serve_once("blocked", "text/plain").await;
-    let tool = ToolRegistry::builtins().get("webfetch").unwrap();
+    let tool = hya_tool_loader::builtins().get("webfetch").unwrap();
     let ctx = ctx_with(vec![deny(Action::WebFetch, "*")]);
 
     let err = tool

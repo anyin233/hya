@@ -8,8 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolRegistry, ToolResultPolicy, WebSearchPlane,
-    cap_tool_output_with_policy, handle::ArtifactPlane,
+    SpawnerPlane, ToolCtx, ToolResultPolicy, WebSearchPlane, cap_tool_output_with_policy,
+    handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -70,7 +70,7 @@ async fn read_truncates_individual_lines_to_open_code_limit() {
     tokio::fs::write(workdir.join("long.txt"), format!("{long_line}\n"))
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
     let expected = format!("{}... (line truncated to 2000 chars)", "a".repeat(2000));
 
@@ -104,7 +104,7 @@ async fn read_caps_file_output_at_fifty_kilobytes() {
     tokio::fs::write(workdir.join("large.txt"), content)
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When
@@ -142,7 +142,7 @@ async fn read_escape_heavy_rows_remain_complete_after_coding_cap() {
     tokio::fs::write(workdir.join("escaped.txt"), &source)
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When

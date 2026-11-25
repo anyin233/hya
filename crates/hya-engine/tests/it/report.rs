@@ -22,7 +22,7 @@ use hya_provider::{
     ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{ChannelPolicySnapshot, PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{ChannelPolicySnapshot, PermissionPlane, PermissionRules};
 use tokio_util::sync::CancellationToken;
 
 use hya_engine::CoreError;
@@ -71,7 +71,7 @@ async fn engine() -> Arc<SessionEngine> {
     Arc::new(SessionEngine::new(
         store,
         router,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     ))
@@ -91,7 +91,7 @@ async fn engine_with_channel_restriction(channels: &str) -> Arc<SessionEngine> {
     let bundles = hya_bundle::BundleCatalog::from_prepared(prepared.bundles()).unwrap();
     let agents = hya_engine::AgentCatalog::new(Arc::new(bundles)).unwrap();
     let runtime = Arc::new(hya_engine::RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         Arc::new(agents),
     ));
     let store = SessionStore::connect_memory().await.unwrap();
@@ -240,7 +240,7 @@ async fn refused_report_is_dropped_until_the_member_reports_again() {
         SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
             Arc::new(ProviderRouter::new().with(Arc::new(StubProvider))),
-            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
             permission,
             EventBus::default(),
         )
@@ -389,7 +389,7 @@ async fn report_gate_rejects_unread_mail() {
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         Arc::new(ProviderRouter::new().with(provider.clone())),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     ));
@@ -754,7 +754,7 @@ async fn a_forced_stop_carries_prior_facts_into_the_current_episode_handoff() {
         SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
             Arc::new(ProviderRouter::new().with(Arc::new(StubProvider))),
-            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
             permission,
             EventBus::default(),
         )
@@ -1282,7 +1282,7 @@ async fn deleting_root_cancels_a_busy_member_before_archiving() {
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         Arc::new(ProviderRouter::new().with(provider.clone())),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     ));
@@ -1432,7 +1432,7 @@ async fn steer_turn_result(output: serde_json::Value, reject_event: Option<&str>
             resource_pattern: "*".to_string(),
             mode: hya_tool::Mode::Allow,
         }]));
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     tools.remove("ls");
     tools
         .register(Arc::new(OutputTool(output.clone())))
@@ -1894,7 +1894,7 @@ async fn steer_resyncs_mail_from_the_log_after_the_bus_lagged() {
     let engine = Arc::new(SessionEngine::new(
         store,
         router,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::new(4),
     ));
@@ -2515,7 +2515,7 @@ async fn failed_shutdown_archive_has_no_second_terminal_write_path() {
     let engine = Arc::new(SessionEngine::new(
         store,
         Arc::new(ProviderRouter::new().with(Arc::new(StubProvider))),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     ));
@@ -2593,7 +2593,7 @@ async fn failing_resident_turn_marks_the_member_row_failed() {
         Arc::new(SessionEngine::new(
             store.clone(),
             Arc::new(ProviderRouter::new().with(Arc::new(StubProvider))),
-            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
             permission,
             EventBus::default(),
         ))
@@ -2604,7 +2604,7 @@ async fn failing_resident_turn_marks_the_member_row_failed() {
     let engine = Arc::new(SessionEngine::new(
         store,
         Arc::new(ProviderRouter::new().with(Arc::new(FailingMembers { root }))),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     ));
@@ -2745,7 +2745,7 @@ async fn reported_episode(handoff_field: &str) -> (usize, Vec<Event>, Vec<Event>
     let bundles = hya_bundle::BundleCatalog::from_prepared(prepared.bundles()).unwrap();
     let agents = hya_engine::AgentCatalog::new(Arc::new(bundles)).unwrap();
     let runtime = Arc::new(hya_engine::RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         Arc::new(agents),
     ));
     let summary = Arc::new(CountingHandoff::default());

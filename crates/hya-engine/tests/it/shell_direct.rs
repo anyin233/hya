@@ -23,7 +23,7 @@ use hya_provider::{FakeProvider, ProviderRouter};
 use hya_store::SessionStore;
 use hya_tool::{
     Action, InvocationPolicy, Mode, PermissionModel, PermissionPlane, PermissionRules,
-    PermissionTarget, Rule, ToolRegistry,
+    PermissionTarget, Rule,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -64,7 +64,7 @@ async fn direct_shell_runs_command_and_records_tool_part() {
     let dir = tempdir();
     let _cleanup = TempDirGuard::new(&dir);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Bash,
         "**",
@@ -191,7 +191,7 @@ async fn policy_engine(
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         router,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     ));
@@ -408,7 +408,7 @@ async fn direct_shell_caps_oversized_post_hook_coding_envelope() {
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         router,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     )

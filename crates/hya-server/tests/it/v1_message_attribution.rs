@@ -24,7 +24,7 @@ use hya_provider::{
 };
 use hya_server::{AppState, router};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -93,7 +93,7 @@ impl Provider for EchoProvider {
 }
 
 async fn state() -> AppState {
-    state_on(support::test_runtime(Arc::new(ToolRegistry::builtins()))).await
+    state_on(support::test_runtime(Arc::new(hya_tool_loader::builtins()))).await
 }
 
 async fn state_on(runtime: Arc<RuntimeRegistry>) -> AppState {
@@ -315,7 +315,7 @@ async fn each_assistant_message_reports_its_own_agent_model_and_times() {
 /// `UpdateSession {model}` is the session's own choice and must run.
 #[tokio::test]
 async fn a_session_model_switch_runs_even_when_the_agent_model_is_pinned() {
-    let runtime = support::test_runtime(Arc::new(ToolRegistry::builtins()));
+    let runtime = support::test_runtime(Arc::new(hya_tool_loader::builtins()));
     runtime.publish_agent_model_configuration(AgentModelConfiguration {
         bundles: [(
             "hya/server-tests-build".to_string(),

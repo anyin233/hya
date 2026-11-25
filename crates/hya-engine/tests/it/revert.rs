@@ -20,7 +20,7 @@ use hya_provider::{
     ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -112,7 +112,7 @@ async fn fixture(dir: &Path, script: Vec<Vec<FakeStep>>) -> Fixture {
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         router,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     );
@@ -565,7 +565,7 @@ async fn revert_restores_paths_when_budget_read_exceeds_read_timeout() {
         let engine = SessionEngine::new(
             store,
             router,
-            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
             perm.clone(),
             EventBus::default(),
         );
@@ -630,7 +630,7 @@ async fn revert_restores_paths_when_budget_read_exceeds_read_timeout() {
     let engine = SessionEngine::new(
         slow_store,
         router,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     );

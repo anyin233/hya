@@ -23,7 +23,7 @@ async fn state() -> AppState {
         FakeStep::Finish(FinishReason::Stop),
     ]]);
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(

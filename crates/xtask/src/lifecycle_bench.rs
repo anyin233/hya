@@ -16,7 +16,7 @@ use hya_store::{
     SessionStore,
     bench::{Counts, snapshot},
 };
-use hya_tool::{Mode, PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{Mode, PermissionPlane, PermissionRules};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
@@ -153,7 +153,7 @@ fn runtime() -> anyhow::Result<Arc<RuntimeRegistry>> {
     }).collect::<Result<Vec<_>, _>>()?;
     let catalog = BundleCatalog::from_verified_catalogs(&packages.iter().collect::<Vec<_>>())?;
     Ok(Arc::new(RuntimeRegistry::from_snapshot(
-        ToolRegistry::builtins().snapshot(),
+        hya_tool_loader::builtins().snapshot(),
         Arc::new(hya_engine::AgentCatalog::new(Arc::new(catalog))?),
     )))
 }

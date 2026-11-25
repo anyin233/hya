@@ -9,7 +9,7 @@ use hya_bundle::{
 use hya_engine::agent_catalog::AgentCatalog;
 use hya_engine::runtime_registry::*;
 use hya_proto::{AgentName, ToolName, ToolSchema};
-use hya_tool::{SkillCatalogEntry, Tool, ToolCtx, ToolError, ToolPermission, ToolRegistry};
+use hya_tool::{SkillCatalogEntry, Tool, ToolCtx, ToolError, ToolPermission};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ fn source_name_registry_rejects_bare_plugin_tool_names() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let error = registry
         .refresh(|candidate| {
             candidate.upsert_sources(vec![RuntimeSource::new(
@@ -64,7 +64,7 @@ fn source_name_registry_groups_cross_source_duplicates() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let error = registry
         .refresh(|candidate| {
             candidate.upsert_sources(vec![
@@ -114,7 +114,7 @@ fn protected_read_alias_is_a_hard_error() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let error = registry
         .refresh(|candidate| {
             candidate.upsert_sources(vec![RuntimeSource::new(
@@ -150,7 +150,7 @@ fn masks_accessor_reports_only_contested_bare_names() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     registry
         .refresh(|candidate| {
             candidate.upsert_sources(vec![RuntimeSource::new(
@@ -231,7 +231,7 @@ agents:
     .unwrap();
     let catalog =
         Arc::new(TestCatalog::from_verified_catalogs(&[&plugin_b, &agents, &plugin_a]).unwrap());
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let empty = || -> Arc<dyn hya_engine::hooks::HookDispatcher> {
         Arc::new(hya_engine::hooks::HookChain::new(Vec::new()))
     };
@@ -328,7 +328,7 @@ fn allow_and_deny_reject_alias_spellings() {
         ])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry
         .bind_turn(Path::new("/tmp/hya-filter-alias"))
         .unwrap();
@@ -353,7 +353,7 @@ fn two_sources_claiming_one_scheme_mask_by_greater_source_id() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let exports = |name: &str| {
         vec![RuntimeSourceExport::tool(
             name,
@@ -415,7 +415,7 @@ fn foreign_tool_and_protected_scheme_claims_are_one_grouped_error() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let error = registry
         .refresh(|candidate| {
             candidate.upsert_sources(vec![
@@ -482,7 +482,7 @@ fn bundle_source_schema_claim_publishes_without_registry_exports() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     registry
         .refresh(|candidate| {
             candidate.replace_sources_of_kind(
