@@ -188,6 +188,69 @@ impl FakeLlm {
         Ok(guard.title_requests.clone())
     }
 
+    /// Append additional steps to the shared (unrouted) script queue.
+    pub fn push_scripts(
+        &self,
+        steps: impl IntoIterator<Item = ScriptStep>,
+    ) -> Result<(), E2eError> {
+        let mut guard = self
+            .shared
+            .lock()
+            .map_err(|_| E2eError::Other("fake llm mutex poisoned".into()))?;
+        guard.scripts.extend(steps);
+        Ok(())
+    }
+
+    /// Append additional steps to an existing route (or create it if absent).
+    pub fn push_route_scripts(
+        &self,
+        marker: impl Into<String>,
+        steps: impl IntoIterator<Item = ScriptStep>,
+    ) -> Result<(), E2eError> {
+        let marker = marker.into();
+        let mut guard = self
+            .shared
+            .lock()
+            .map_err(|_| E2eError::Other("fake llm mutex poisoned".into()))?;
+        if let Some(route) = guard.routes.iter_mut().find(|r| r.marker == marker) {
+            route.steps.extend(steps);
+        } else {
+            guard.routes.push(Route {
+                marker,
+                steps: steps.into_iter().collect(),
+                requests: Vec::new(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Replace any remaining steps on an existing route (or create it if absent).
+    ///
+    /// Useful when an earlier phase padded a route with extra wake steps and a
+    /// subsequent independent session on the same backend starts fresh.
+    pub fn replace_route_scripts(
+        &self,
+        marker: impl Into<String>,
+        steps: impl IntoIterator<Item = ScriptStep>,
+    ) -> Result<(), E2eError> {
+        let marker = marker.into();
+        let mut guard = self
+            .shared
+            .lock()
+            .map_err(|_| E2eError::Other("fake llm mutex poisoned".into()))?;
+        if let Some(route) = guard.routes.iter_mut().find(|r| r.marker == marker) {
+            route.steps.clear();
+            route.steps.extend(steps);
+        } else {
+            guard.routes.push(Route {
+                marker,
+                steps: steps.into_iter().collect(),
+                requests: Vec::new(),
+            });
+        }
+        Ok(())
+    }
+
     /// Pin `steps` to the agent whose **system prompt** contains `marker`.
     ///
     /// Routes are matched in registration order against the concatenated

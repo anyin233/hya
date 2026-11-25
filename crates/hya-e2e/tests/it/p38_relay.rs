@@ -70,7 +70,12 @@ fn bridge_token(url: &str) -> Option<String> {
         .unwrap()
         .iter()
         .rev()
-        .find(|(bridge, _)| url.starts_with(bridge.as_str()))
+        .find(|(bridge, _)| {
+            url == bridge.as_str()
+                || url
+                    .strip_prefix(bridge.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
         .map(|(_, token)| token.clone())
 }
 
