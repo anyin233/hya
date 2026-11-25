@@ -4,11 +4,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::Context as _;
+use hya_bundle::BundleCatalog;
 use hya_engine::{
-    AgentSpec, CatalogScope, CategoryRegistry, CompiledWorkflow, ResidentSupervisor, SessionEngine,
-    TurnBinding, WorkflowError, WorkflowRoutingContext, WorkflowRunContext, WorkflowStatus,
-    discover_workflow_files_in_root, load_workflow_file, prepare_workflow_run_for_actor,
-    workflow_project_dir, workflow_user_dir,
+    AgentCatalog, AgentSpec, CatalogScope, CategoryRegistry, CompiledWorkflow, ResidentSupervisor,
+    SessionEngine, TurnBinding, WorkflowError, WorkflowRoutingContext, WorkflowRunContext,
+    WorkflowStatus, discover_workflow_files_in_root, load_workflow_file,
+    prepare_workflow_run_for_actor, workflow_project_dir, workflow_user_dir,
 };
 use hya_proto::{
     Envelope, Event, ModelRef, OwnerRunId, SessionId, WorkflowAvailability, WorkflowCommand,
@@ -20,6 +22,8 @@ use hya_tool::ToolOperation;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
+
+use crate::{ProjectScopeRefresh, bundle_admin, first_party_catalogs};
 
 /// Bundle identity reserved for the read-only first-party Workflow catalog.
 pub const FIRST_PARTY_BUNDLE_ID: &str = "hya/plan-impl-review";
@@ -199,6 +203,76 @@ pub struct WorkflowCatalog {
 }
 
 impl WorkflowCatalog {
+    /// Inspect prepared Workflow sources for a working directory without starting a runtime.
+    ///
+    /// An existing database is opened read-only to resolve Project roots. Bundle
+    /// diagnostics are delivered in discovery order through `warn`.
+    ///
+    /// # Errors
+    /// Returns database, bundle discovery, or catalog construction errors.
+    pub async fn inspect_read_only(
+        db: &str,
+        workdir: &Path,
+        mut warn: impl FnMut(&str),
+    ) -> anyhow::Result<Self> {
+        let project = if !db.is_empty() && Path::new(db).try_exists()? {
+            hya_store::SessionStore::connect_read_only(db)
+                .await
+                .with_context(|| format!("open existing database read-only at {db}"))?
+                .resolve_project_by_path(&workdir.to_string_lossy())
+                .await?
+        } else {
+            None
+        };
+        let scope = project.map_or_else(
+            || CatalogScope::Directory(workdir.to_path_buf()),
+            |project| CatalogScope::Project {
+                id: project.id,
+                roots: project.roots.into_iter().map(PathBuf::from).collect(),
+            },
+        );
+        let registry = bundle_admin::existing_registry().await?;
+        let disabled = match &registry {
+            Some(registry) => registry.disabled_bundle_ids().await?,
+            None => BTreeSet::new(),
+        };
+        let mut installed = Vec::new();
+        if let Some(registry) = registry {
+            let snapshot = registry.snapshot().await?;
+            for row in snapshot.unreadable {
+                warn(&format!(
+                    "installed bundle {}: {}",
+                    row.bundle_id, row.error
+                ));
+            }
+            for record in snapshot.bundles {
+                installed.push(bundle_admin::decode_installed_catalog(&record)?);
+            }
+        }
+        // `use`/`run` register an unregistered directory as a one-root Project,
+        // so its own `.hya/bundles` belong to the catalog here too.
+        let roots = match &scope {
+            CatalogScope::Project { roots, .. } => roots.as_slice(),
+            CatalogScope::Directory(directory) => std::slice::from_ref(directory),
+            CatalogScope::Global => &[],
+        };
+        let (bundles, warnings) = ProjectScopeRefresh::catalog_for_roots(
+            roots,
+            &installed,
+            &first_party_catalogs()?,
+            &disabled,
+        )?;
+        for warning in warnings {
+            warn(&warning);
+        }
+        let bundles = AgentCatalog::new(Arc::new(bundles))?;
+        Self::from_bundles(
+            WorkflowCatalogRoots::for_scope(&scope, workdir),
+            bundles.bundles(),
+        )
+        .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))
+    }
+
     /// Build one catalog from explicit filesystem roots and a pinned runtime.
     ///
     /// The binding supplies the exact installed/first-party bundle snapshot;
@@ -211,6 +285,13 @@ impl WorkflowCatalog {
         roots: WorkflowCatalogRoots,
         binding: &TurnBinding,
     ) -> Result<Self, WorkflowControlError> {
+        Self::from_bundles(roots, binding.bundle_catalog())
+    }
+
+    fn from_bundles(
+        roots: WorkflowCatalogRoots,
+        bundles: &BundleCatalog,
+    ) -> Result<Self, WorkflowControlError> {
         let mut catalog = Self {
             entries: Vec::new(),
             rows: Vec::new(),
@@ -219,7 +300,7 @@ impl WorkflowCatalog {
         if let Some(user) = roots.user.as_deref() {
             catalog.append_filesystem_root(user, "user");
         }
-        for bundle in binding.bundle_catalog().bundles() {
+        for bundle in bundles.bundles() {
             let Some(prepared) = bundle.workflow() else {
                 continue;
             };
