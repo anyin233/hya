@@ -84,10 +84,10 @@ impl ProviderManager {
             return Ok(false);
         }
         let _guard = self.lock.lock().await;
-        let snapshot = self.engine.provider_catalog_snapshot();
-        let router = self.engine.provider_router();
+        let snapshot = self.engine.provider_snapshot();
         let (router, catalog) =
-            config::refresh_pending_catalogs(pending, snapshot.as_ref(), router.as_ref()).await?;
+            config::refresh_pending_catalogs(pending, snapshot.catalog(), snapshot.router())
+                .await?;
         self.engine
             .publish_provider_catalog(Arc::new(router), catalog);
         Ok(true)
@@ -99,11 +99,10 @@ impl ProviderManager {
         provider_id: &str,
         mode: DiscoverMode,
     ) -> Result<ProviderChange, ProviderControlError> {
-        let snapshot = self.engine.provider_catalog_snapshot();
-        let router = self.engine.provider_router();
+        let snapshot = self.engine.provider_snapshot();
         let ids = BTreeSet::from([provider_id.to_string()]);
         let rebuilt =
-            config::rebuild_providers(Some(&ids), mode, snapshot.as_ref(), router.as_ref())
+            config::rebuild_providers(Some(&ids), mode, snapshot.catalog(), snapshot.router())
                 .await
                 .map_err(failure)?;
         self.engine

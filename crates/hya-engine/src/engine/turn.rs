@@ -1,5 +1,5 @@
 use hya_proto::{AgentName, Event, FinishReason, MessageId, ModelRef, Role, SessionId};
-use hya_provider::{CompletionRequest, EventStream, ProviderError};
+use hya_provider::{Capabilities, CompletionRequest, EventStream, ProviderError, ProviderRouter};
 use hya_store::ActorClaim;
 use hya_tool::{Action, AgentDef, Mode, PermissionPlane, ResolvedTool, Rule};
 use std::path::PathBuf;
@@ -24,6 +24,8 @@ use crate::{AgentResourcePolicy, TurnBinding};
 
 mod harness;
 pub(super) mod messages;
+#[cfg(test)]
+mod provider_snapshot_test;
 pub(super) mod rewrite_host;
 #[cfg(test)]
 mod route_retry_test;
@@ -38,6 +40,7 @@ pub(super) fn tool_available(name: &str, interaction_available: bool) -> bool {
 }
 
 struct TurnExecution<'a> {
+    router: Arc<ProviderRouter>,
     ran_known_tool: Option<&'a mut bool>,
     binding: TurnBinding,
     resources: Arc<CompiledResourceView>,
@@ -276,6 +279,7 @@ impl SessionEngine {
     /// candidate whose attempt opened the stream), for usage attribution.
     async fn stream_with_model_fallback(
         &self,
+        router: &ProviderRouter,
         request: &CompletionRequest,
         session: SessionId,
         message: MessageId,
@@ -294,7 +298,7 @@ impl SessionEngine {
         for (index, candidate) in candidates.iter().enumerate() {
             tried.push(candidate.clone());
             match self
-                .stream_model_candidate(request, candidate, session, message)
+                .stream_model_candidate(router, request, candidate, session, message)
                 .await
             {
                 Ok(stream) => return Ok((stream, candidate.clone())),
@@ -359,7 +363,7 @@ impl SessionEngine {
             );
             tried.push(model.clone());
             match self
-                .stream_model_candidate(request, &model, session, message)
+                .stream_model_candidate(router, request, &model, session, message)
                 .await
             {
                 Ok(stream) => return Ok((stream, model)),
@@ -372,8 +376,11 @@ impl SessionEngine {
         Err(error)
     }
 
-    fn check_request_context(&self, request: &CompletionRequest) -> Result<(), ProviderError> {
-        let router = self.provider_router();
+    fn check_request_context(
+        &self,
+        router: &ProviderRouter,
+        request: &CompletionRequest,
+    ) -> Result<(), ProviderError> {
         let Some(capabilities) = router.capabilities(&request.model) else {
             return Ok(()); // The router reports unknown models through its normal path.
         };
@@ -403,6 +410,7 @@ impl SessionEngine {
     /// reasoning variant.
     async fn stream_model_candidate(
         &self,
+        router: &ProviderRouter,
         request: &CompletionRequest,
         model: &ModelRef,
         session: SessionId,
@@ -411,10 +419,8 @@ impl SessionEngine {
         let mut attempt = request.clone();
         attempt.model = model.clone();
         attempt.reasoning = messages::reasoning_for_model(&attempt.model, request.reasoning);
-        self.check_request_context(&attempt)?;
-        self.provider_router()
-            .stream(attempt, session, message)
-            .await
+        self.check_request_context(router, &attempt)?;
+        router.stream(attempt, session, message).await
     }
     /// Open one Workflow-assigned stream, starting at admission's candidate.
     ///
@@ -423,6 +429,7 @@ impl SessionEngine {
     /// Returns the stream with the selected candidate's index.
     async fn stream_with_workflow_route(
         &self,
+        router: &ProviderRouter,
         request: &CompletionRequest,
         session: SessionId,
         message: MessageId,
@@ -437,12 +444,8 @@ impl SessionEngine {
             let mut attempt = request.clone();
             attempt.model = candidate.model.clone();
             attempt.reasoning = Some(candidate.reasoning);
-            self.check_request_context(&attempt)?;
-            match self
-                .provider_router()
-                .stream(attempt, session, message)
-                .await
-            {
+            self.check_request_context(router, &attempt)?;
+            match router.stream(attempt, session, message).await {
                 Ok(stream) => {
                     if pinned.is_none() {
                         route.selected(index, pending_failure);
@@ -859,6 +862,7 @@ impl SessionEngine {
             admitted_prompt: _,
         } = request;
         self.validate_actor_claim(actor_claim).await?;
+        let router = self.provider_router();
         let mut projection = self.store.read_projection_shared(session).await?;
         let workdir = session_workdir(agent, &projection);
         // Uncomposed base spec, captured before the prepared agent shadows it
@@ -870,7 +874,7 @@ impl SessionEngine {
                     let binding = tokio::select! {
                         biased;
                         () = cancel.cancelled() => return Ok(FinishReason::Cancelled),
-                        binding = self.bind_session_runtime(session, &workdir) => binding?,
+                        binding = self.bind_session_runtime_with_router(session, &workdir, &router) => binding?,
                     };
                     if self
                         .fall_back_from_missing_agent(
@@ -1002,9 +1006,9 @@ impl SessionEngine {
                 .unwrap_or(&agent.name)
                 .clone();
             let requested_model = self.requested_turn_model(
-                &binding,
+                &router,
+                apply_default_overlays.then_some(&binding),
                 stable_id.as_str(),
-                apply_default_overlays,
                 explicit_model.as_ref(),
                 &projection,
                 &agent,
@@ -1029,6 +1033,7 @@ impl SessionEngine {
             drop(message_guard);
 
             let execution = TurnExecution {
+                router,
                 ran_known_tool,
                 binding,
                 resources,
@@ -1135,9 +1140,39 @@ impl SessionEngine {
         session: SessionId,
         agent: &AgentSpec,
     ) -> Result<ModelRef, CoreError> {
+        let router = self.provider_router();
+        self.root_turn_model_with_router(session, agent, &router)
+            .await
+    }
+
+    /// Resolve the first model and its capabilities from one provider publication.
+    ///
+    /// # Errors
+    /// Projection read or runtime binding failures.
+    pub async fn root_turn_model_with_capabilities(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+    ) -> Result<(ModelRef, Option<Capabilities>), CoreError> {
+        let router = self.provider_router();
+        let model = self
+            .root_turn_model_with_router(session, agent, &router)
+            .await?;
+        let capabilities = router.capabilities(&model);
+        Ok((model, capabilities))
+    }
+
+    async fn root_turn_model_with_router(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+        router: &ProviderRouter,
+    ) -> Result<ModelRef, CoreError> {
         let projection = self.store.read_projection_shared(session).await?;
         let workdir = session_workdir(agent, &projection);
-        let binding = self.bind_session_runtime(session, &workdir).await?;
+        let binding = self
+            .bind_session_runtime_with_router(session, &workdir, router)
+            .await?;
         let stable_id = projection
             .session
             .agent
@@ -1145,7 +1180,7 @@ impl SessionEngine {
             .unwrap_or(&agent.name)
             .as_str()
             .to_string();
-        Ok(self.requested_turn_model(&binding, &stable_id, true, None, &projection, agent))
+        Ok(self.requested_turn_model(router, Some(&binding), &stable_id, None, &projection, agent))
     }
 
     /// Model a turn round requests before `chat.params`, fallback, or routing.
@@ -1159,33 +1194,25 @@ impl SessionEngine {
     /// transcript can attribute the message before any round is served.
     fn requested_turn_model(
         &self,
-        binding: &TurnBinding,
+        router: &ProviderRouter,
+        overlays: Option<&TurnBinding>,
         stable_id: &str,
-        apply_default_overlays: bool,
         explicit_model: Option<&ModelRef>,
         projection: &hya_proto::Projection,
         agent: &AgentSpec,
     ) -> ModelRef {
-        let session_model = apply_default_overlays
-            .then(|| binding.session_agent_model(stable_id).cloned())
-            .flatten();
-        let configured_model = apply_default_overlays
-            .then(|| binding.configured_agent_model(stable_id).cloned())
-            .flatten();
-        let authored_model = apply_default_overlays
-            .then(|| {
-                binding
-                    .agent_catalog()
-                    .resolve(stable_id)
-                    .and_then(|definition| {
-                        crate::category::resolve_configured_agent_model(
-                            &definition.model_policy,
-                            &self.model_categories,
-                            &|candidate| self.provider_router().resolve(candidate).is_some(),
-                        )
-                    })
-            })
-            .flatten();
+        let session_model =
+            overlays.and_then(|binding| binding.session_agent_model(stable_id).cloned());
+        let configured_model =
+            overlays.and_then(|binding| binding.configured_agent_model(stable_id).cloned());
+        let authored_model = overlays.and_then(|binding| {
+            let definition = binding.agent_catalog().resolve(stable_id)?;
+            crate::category::resolve_configured_agent_model(
+                &definition.model_policy,
+                &self.model_categories,
+                &|candidate| router.resolve(candidate).is_some(),
+            )
+        });
         explicit_model
             .cloned()
             .or(session_model)

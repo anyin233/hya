@@ -116,8 +116,9 @@ pub use engine::{
     AgentSpec, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest, BoundWorkflowSender,
     BundleRefresh, CatalogScopeCacheConfig, CreateSession, DRAIN_DEADLINE, ForkAt, ForkError,
     MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES, MAX_SESSION_BLOB_BYTES, MODEL_PROBE_PROMPT,
-    ModelProbeReply, RevertError, RevertOutcome, RevertTarget, RuntimeCatalogRefresh,
-    SessionEngine, TurnBoundaryObserver, TurnDrainReport, TurnLease, advertise_tool, fork_cut,
+    ModelProbeReply, ProviderSnapshot, RevertError, RevertOutcome, RevertTarget,
+    RuntimeCatalogRefresh, SessionEngine, TurnBoundaryObserver, TurnDrainReport, TurnLease,
+    advertise_tool, fork_cut,
 };
 pub use error::CoreError;
 pub use hooks::{

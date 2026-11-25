@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use hya_proto::{ModelRef, SessionId};
 use hya_provider::{ProviderCatalogSnapshot, ProviderModel, ProviderRouter, ReasoningEffort};
@@ -7,6 +7,60 @@ use hya_tool::AgentDef;
 
 use super::SessionEngine;
 use crate::{CoreError, TurnBinding};
+
+/// The router and display catalog from one provider publication.
+pub struct ProviderSnapshot {
+    generation: u64,
+    router: Arc<ProviderRouter>,
+    catalog: Arc<ProviderCatalogSnapshot>,
+}
+
+impl ProviderSnapshot {
+    /// Process-local version, starting at zero and incrementing on publication.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Router for requests in this generation.
+    #[must_use]
+    pub fn router(&self) -> &ProviderRouter {
+        &self.router
+    }
+
+    /// Presentation catalog for the same generation.
+    #[must_use]
+    pub fn catalog(&self) -> &ProviderCatalogSnapshot {
+        &self.catalog
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct ProviderSnapshots(Arc<RwLock<Arc<ProviderSnapshot>>>);
+
+impl ProviderSnapshots {
+    pub(super) fn new(router: Arc<ProviderRouter>) -> Self {
+        let catalog = router.catalog_snapshot_arc().unwrap_or_else(|| {
+            Arc::new(ProviderCatalogSnapshot::build(
+                router.catalog(),
+                Vec::new(),
+                None,
+            ))
+        });
+        Self(Arc::new(RwLock::new(Arc::new(ProviderSnapshot {
+            generation: 0,
+            router,
+            catalog,
+        }))))
+    }
+
+    pub(super) fn snapshot(&self) -> Arc<ProviderSnapshot> {
+        self.0
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
 
 /// Per-turn memory of the last successful effort-preference reads. Healthy turns
 /// still read SQLite every time; only a later storage fault or timeout reuses
@@ -202,12 +256,14 @@ impl SessionEngine {
         authored: Option<ReasoningEffort>,
         binding: Option<&TurnBinding>,
     ) -> Result<crate::EffectiveEffort, CoreError> {
-        self.effective_effort_with(model, agent_id, authored, binding, None)
+        let router = self.provider_router();
+        self.effective_effort_with(&router, model, agent_id, authored, binding, None)
             .await
     }
 
     pub(super) async fn effective_effort_with(
         &self,
+        router: &ProviderRouter,
         model: &ModelRef,
         agent_id: Option<&str>,
         authored: Option<ReasoningEffort>,
@@ -260,7 +316,7 @@ impl SessionEngine {
             model,
             agent,
             preference,
-            self.provider_router().reasoning_default(model),
+            router.reasoning_default(model),
             self.global_reasoning,
             None,
         ))
@@ -278,22 +334,22 @@ impl SessionEngine {
         self.provider_catalog_snapshot().models().to_vec()
     }
 
+    /// Current provider publication. Retain it for operations using both fields.
+    #[must_use]
+    pub fn provider_snapshot(&self) -> Arc<ProviderSnapshot> {
+        self.providers.snapshot()
+    }
+
     /// Shared provider catalog snapshot including declared provider statuses.
     #[must_use]
     pub fn provider_catalog_snapshot(&self) -> Arc<ProviderCatalogSnapshot> {
-        match self.catalog.read() {
-            Ok(guard) => Arc::clone(&guard),
-            Err(poisoned) => Arc::clone(&poisoned.into_inner()),
-        }
+        Arc::clone(&self.provider_snapshot().catalog)
     }
 
     /// Shared provider router retained by this engine for request-local Workflow routes.
     #[must_use]
     pub fn provider_router(&self) -> Arc<ProviderRouter> {
-        match self.providers.read() {
-            Ok(guard) => Arc::clone(&guard),
-            Err(poisoned) => Arc::clone(&poisoned.into_inner()),
-        }
+        Arc::clone(&self.provider_snapshot().router)
     }
 
     /// Atomically replace live provider routes and the presentation catalog.
@@ -305,13 +361,15 @@ impl SessionEngine {
         providers: Arc<ProviderRouter>,
         catalog: Arc<ProviderCatalogSnapshot>,
     ) {
-        match self.providers.write() {
-            Ok(mut guard) => *guard = providers,
-            Err(poisoned) => *poisoned.into_inner() = providers,
-        }
-        match self.catalog.write() {
-            Ok(mut guard) => *guard = catalog,
-            Err(poisoned) => *poisoned.into_inner() = catalog,
-        }
+        let mut current = self
+            .providers
+            .0
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *current = Arc::new(ProviderSnapshot {
+            generation: current.generation + 1,
+            router: providers,
+            catalog,
+        });
     }
 }

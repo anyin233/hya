@@ -9,7 +9,7 @@ use crate::{
     apply_spawn_model_policy, resolve_dispatch_model,
 };
 use hya_proto::{AgentName, ModelRef, SessionId};
-use hya_provider::ReasoningEffort;
+use hya_provider::{ProviderCatalogSnapshot, ReasoningEffort};
 use hya_store::StoreError;
 use hya_tool::{MemberOutcome, SpawnError, SpawnMember};
 use std::sync::Arc;
@@ -109,8 +109,19 @@ pub fn resolve_spawn_member(
     ctx: &ResolveSpawnMemberCtx<'_>,
     member: SpawnMember,
 ) -> Result<ResolvedSpawnMember, SpawnError> {
+    let providers = ctx.engine.provider_snapshot();
+    resolve_spawn_member_with_catalog(ctx, member, providers.catalog())
+}
+
+/// Resolve a member with the catalog retained by the caller's spawn operation.
+/// Pair it with `ctx.is_servable` from the same provider publication.
+pub fn resolve_spawn_member_with_catalog(
+    ctx: &ResolveSpawnMemberCtx<'_>,
+    member: SpawnMember,
+    catalog: &ProviderCatalogSnapshot,
+) -> Result<ResolvedSpawnMember, SpawnError> {
     let definition = authorize_spawn_target(ctx.binding, ctx.allowed_agents, ctx.caller, &member)?;
-    resolve_authorized_spawn_member(ctx, member, &definition)
+    resolve_authorized_spawn_member(ctx, member, &definition, catalog)
 }
 
 /// A missing agent id is the caller's error; any other failure means the
@@ -138,17 +149,15 @@ fn spawn_error(error: CoreError) -> SpawnError {
 /// off before matching and becomes the member's `effort` unless the call
 /// also passed an explicit `effort`, which wins.
 fn resolve_member_dispatch_model(
-    ctx: &ResolveSpawnMemberCtx<'_>,
+    catalog: &ProviderCatalogSnapshot,
     mut member: SpawnMember,
 ) -> SpawnMember {
-    let catalog = ctx.engine.provider_catalog();
     let model_ids: Vec<String> = catalog
+        .models()
         .iter()
         .map(|row| format!("{}/{}", row.provider_id, row.model_id))
         .collect();
-    let provider_ids: Vec<String> = ctx
-        .engine
-        .provider_catalog_snapshot()
+    let provider_ids: Vec<String> = catalog
         .providers()
         .iter()
         .map(|state| state.provider_id.clone())
@@ -194,7 +203,7 @@ fn resolve_member_dispatch_model(
 /// or one the child's catalog row does not advertise, is rejected (`none` is
 /// always allowed). An absent or empty `effort` leaves the Agent untouched.
 fn apply_spawn_effort(
-    engine: &SessionEngine,
+    catalog: &ProviderCatalogSnapshot,
     mut agent: AgentSpec,
     effort: Option<&str>,
 ) -> Result<AgentSpec, SpawnError> {
@@ -213,13 +222,13 @@ fn apply_spawn_effort(
     };
     let parsed = ReasoningEffort::parse(label).ok_or_else(invalid)?;
     if parsed != ReasoningEffort::Off {
-        let advertised = engine
-            .provider_catalog()
-            .into_iter()
+        let advertised = catalog
+            .models()
+            .iter()
             .find(|row| {
                 base == format!("{}/{}", row.provider_id, row.model_id) || base == row.model_id
             })
-            .map(|row| row.reasoning_variants)
+            .map(|row| &row.reasoning_variants)
             .filter(|variants| !variants.is_empty());
         if let Some(variants) = advertised
             && !variants
@@ -237,6 +246,7 @@ fn resolve_authorized_spawn_member(
     ctx: &ResolveSpawnMemberCtx<'_>,
     member: SpawnMember,
     definition: &AgentDefinition<'_>,
+    catalog: &ProviderCatalogSnapshot,
 ) -> Result<ResolvedSpawnMember, SpawnError> {
     validate_unsupported_inline_agent_fields(&member)?;
     let authorized_target = hya_proto::AgentName::new(definition.stable_id);
@@ -267,10 +277,10 @@ fn resolve_authorized_spawn_member(
     // against the live catalog (exact -> substring, bare vendor ids never
     // substring-dispatch). Unresolvable requests defer to the user's
     // configured chain instead of overriding it verbatim.
-    let member = resolve_member_dispatch_model(ctx, member);
+    let member = resolve_member_dispatch_model(catalog, member);
     let agent =
         apply_spawn_model_policy(agent, definition, &member, ctx.categories, ctx.is_servable);
-    let mut agent = apply_spawn_effort(ctx.engine, agent, member.effort.as_deref())?;
+    let mut agent = apply_spawn_effort(catalog, agent, member.effort.as_deref())?;
     if let Some(inline) = member.inline_agent.as_ref() {
         if !inline.prompt.trim().is_empty() {
             agent.system_prompt = inline.prompt.clone();

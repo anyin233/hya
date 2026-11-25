@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
 use hya_proto::{Event, Message, ModelRef, Projection, SessionId};
+use hya_provider::ProviderRouter;
 use hya_store::ActorClaim;
 use hya_tool::{CompactionHooks, ModelHost, ModelWindow, SessionLog, ToolError, Transcript};
 
@@ -29,17 +30,19 @@ impl SessionEngine {
             "token_accounting": self.token_accounting.mode().as_str(),
         })
     }
+}
 
-    /// The window of `model`'s route, when it advertises one.
-    pub(in crate::engine) fn model_window(&self, model: &ModelRef) -> Option<ModelWindow> {
-        let router = self.provider_router();
-        router.capabilities(model).map(|caps| ModelWindow {
-            max_context: caps.max_context,
-            usage_reporting: caps.usage_reporting,
-            reasoning_replay: router.reasoning_replay_policy(model),
-            sends_tool_images: router.sends_tool_images(model),
-        })
-    }
+/// The window of `model`'s route, when it advertises one.
+pub(in crate::engine) fn model_window(
+    router: &ProviderRouter,
+    model: &ModelRef,
+) -> Option<ModelWindow> {
+    router.capabilities(model).map(|caps| ModelWindow {
+        max_context: caps.max_context,
+        usage_reporting: caps.usage_reporting,
+        reasoning_replay: router.reasoning_replay_policy(model),
+        sends_tool_images: router.sends_tool_images(model),
+    })
 }
 
 /// The last host error one rewrite saw, in its original type.
@@ -120,7 +123,7 @@ impl CompactionHooks for SessionEngine {
 
 /// A rewrite's side model call, the route's native compaction.
 pub(in crate::engine) struct TurnModels<'a> {
-    pub(in crate::engine) engine: &'a SessionEngine,
+    pub(in crate::engine) router: &'a ProviderRouter,
     pub(in crate::engine) errors: &'a HostErrors,
 }
 
@@ -132,8 +135,7 @@ impl ModelHost for TurnModels<'_> {
         messages: &[Message],
     ) -> Result<Option<String>, ToolError> {
         let window = self
-            .engine
-            .provider_router()
+            .router
             .compact_if_supported(model, messages, None)
             .await
             .map_err(|error| self.errors.record(error.into()))?;

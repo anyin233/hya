@@ -15,7 +15,7 @@ use hya_proto::{
     AgentName, Event, FinishReason, MessageId, ModelRef, PartProjection, Projection, SessionId,
     TokenUsage, ToolSchema,
 };
-use hya_provider::{CompletionRequest, EventStream, ProviderError};
+use hya_provider::{CompletionRequest, EventStream, ProviderError, ProviderRouter};
 use hya_store::ActorClaim;
 use hya_tool::{AgentDef, ReportLatch, RewriteCtx};
 use tokio::sync::OwnedSemaphorePermit;
@@ -29,7 +29,7 @@ use super::super::{
     session_workdir,
 };
 use super::messages::{AttachmentData, prompt_digests, system_prompt};
-use super::rewrite_host::{HostErrors, TurnLog, TurnModels, TurnTranscript};
+use super::rewrite_host::{HostErrors, TurnLog, TurnModels, TurnTranscript, model_window};
 use super::tool_gate::{TurnToolGate, can_report};
 use super::{
     RequestLineage, TurnExecution, TurnRebindInputs, workflow_failure_class,
@@ -72,6 +72,7 @@ impl SessionEngine {
         execution: TurnExecution<'_>,
     ) -> Result<FinishReason, CoreError> {
         let TurnExecution {
+            router,
             binding,
             resources,
             agents,
@@ -127,14 +128,14 @@ impl SessionEngine {
         };
         // The first round's model: the tool list depends on it.
         let model = self.requested_turn_model(
-            &binding,
+            &router,
+            apply_default_overlays.then_some(&binding),
             projection
                 .session
                 .agent
                 .as_ref()
                 .unwrap_or(&agent.name)
                 .as_str(),
-            apply_default_overlays,
             explicit_model,
             &projection,
             agent,
@@ -168,7 +169,7 @@ impl SessionEngine {
             engine: self,
             actor_claim,
         };
-        let provider = self.provider_router();
+        let provider = Arc::clone(&router);
         let scope = kernel::Scope {
             watches: &self.workspace_watches,
             store: &self.store,
@@ -205,6 +206,7 @@ impl SessionEngine {
             nested_engine: None,
             root_session_cache: None,
             rounds: 0,
+            router,
             stable_id: String::new(),
             model,
             attachments: AttachmentData::new(),
@@ -274,6 +276,8 @@ struct TurnHarness<'a> {
     root_session_cache: Option<SessionId>,
     /// Rounds collected so far.
     rounds: u32,
+    // Retained from round preparation through retries and served-route accounting.
+    router: Arc<ProviderRouter>,
     // Resolved per round in `before_round`.
     stable_id: String,
     model: ModelRef,
@@ -310,7 +314,11 @@ impl TurnHarness<'_> {
     }
 
     /// Swap in a new runtime generation when the registry has one.
-    async fn rebind(&mut self, projection: &Projection) -> Result<(), CoreError> {
+    async fn rebind(
+        &mut self,
+        projection: &Projection,
+        provider_changed: bool,
+    ) -> Result<(), CoreError> {
         let Some(inputs) = &self.rebind else {
             return Ok(());
         };
@@ -331,9 +339,17 @@ impl TurnHarness<'_> {
                 "round rebind could not refresh skills; keeping current skills"
             );
         }
-        let fresh = match engine.bind_session_runtime(session, &workdir).await {
+        let fresh = match engine
+            .bind_session_runtime_with_router(session, &workdir, &self.router)
+            .await
+        {
             Ok(fresh) if fresh.generation() != self.binding.generation() => fresh,
-            Ok(_) => return Ok(()),
+            Ok(fresh) => {
+                if provider_changed {
+                    self.binding = fresh;
+                }
+                return Ok(());
+            }
             Err(error) => {
                 tracing::warn!(
                     session = %session,
@@ -453,12 +469,15 @@ impl Harness for TurnHarness<'_> {
             .as_str()
             .to_string();
         if self.rounds > 0 {
-            self.rebind(projection).await?;
+            let router = engine.provider_router();
+            let provider_changed = !Arc::ptr_eq(&self.router, &router);
+            self.router = router;
+            self.rebind(projection, provider_changed).await?;
         }
         self.model = engine.requested_turn_model(
-            &self.binding,
+            &self.router,
+            self.apply_default_overlays.then_some(&self.binding),
             &self.stable_id,
-            self.apply_default_overlays,
             self.explicit_model,
             projection,
             self.agent,
@@ -478,9 +497,7 @@ impl Harness for TurnHarness<'_> {
                 self.depth,
             )),
             &tools,
-            engine
-                .provider_router()
-                .reasoning_replay_policy(&self.model),
+            self.router.reasoning_replay_policy(&self.model),
         );
         let errors = HostErrors::default();
         let config = engine.rewriter_config();
@@ -495,7 +512,7 @@ impl Harness for TurnHarness<'_> {
             attachments: &self.attachments,
         };
         let models = TurnModels {
-            engine,
+            router: &self.router,
             errors: &errors,
         };
         let cx = RewriteCtx {
@@ -503,7 +520,7 @@ impl Harness for TurnHarness<'_> {
             message: self.message,
             model: &self.model,
             projection,
-            window: engine.model_window(&self.model),
+            window: model_window(&self.router, &self.model),
             overhead_tokens,
             pressure: None,
             workdir: &workdir,
@@ -526,6 +543,7 @@ impl Harness for TurnHarness<'_> {
         // Agent's authored effort; the user's per-Agent choices outrank it.
         let effort = engine
             .effective_effort_with(
+                &self.router,
                 &self.model,
                 Some(&self.stable_id),
                 self.live_agent.reasoning,
@@ -614,6 +632,7 @@ impl Harness for TurnHarness<'_> {
                 (Some(route), _) => {
                     let (stream, index) = engine
                         .stream_with_workflow_route(
+                            &self.router,
                             request,
                             session,
                             message,
@@ -626,13 +645,19 @@ impl Harness for TurnHarness<'_> {
                 }
                 (None, Some(model)) => Ok((
                     engine
-                        .stream_model_candidate(request, model, session, message)
+                        .stream_model_candidate(&self.router, request, model, session, message)
                         .await?,
                     model.clone(),
                 )),
                 (None, None) => {
                     engine
-                        .stream_with_model_fallback(request, session, message, lineage)
+                        .stream_with_model_fallback(
+                            &self.router,
+                            request,
+                            session,
+                            message,
+                            lineage,
+                        )
                         .await
                 }
             }
@@ -814,16 +839,13 @@ impl Harness for TurnHarness<'_> {
         )
     }
 
-    /// Rounds open on the live router (a fallback route can be added
-    /// mid-turn); the turn's `Scope` holds the router from its start.
     fn served_route(
         &self,
         model: &ModelRef,
     ) -> Option<(hya_proto::context::ReasoningReplayPolicy, bool)> {
-        let router = self.engine.provider_router();
         Some((
-            router.reasoning_replay_policy(model),
-            router.sends_tool_images(model),
+            self.router.reasoning_replay_policy(model),
+            self.router.sends_tool_images(model),
         ))
     }
 }

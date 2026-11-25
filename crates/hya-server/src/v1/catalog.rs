@@ -11,6 +11,7 @@ use super::Json;
 
 use crate::ServerState;
 use hya_api::v1 as pb;
+use hya_provider::ProviderCatalogSnapshot;
 use serde_json::{Value, json};
 
 use super::{V1Error, catalog_scope};
@@ -461,7 +462,7 @@ async fn list_models(
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Result<Json<pb::ListModelsResponse>, V1Error> {
     let request: pb::ListModelsRequest = super::query_request(&[], &query)?;
-    let mut models = model_rows(&st);
+    let mut models = model_rows(&st.engine.provider_catalog_snapshot());
     if !request.provider_id.is_empty() {
         models.retain(|model| model.provider_id == request.provider_id);
     }
@@ -473,8 +474,7 @@ async fn list_models(
 }
 
 /// Model rows shared with the bootstrap snapshot.
-pub(crate) fn model_rows(st: &ServerState) -> Vec<pb::ModelSummary> {
-    let snapshot = st.engine.provider_catalog_snapshot();
+pub(crate) fn model_rows(snapshot: &ProviderCatalogSnapshot) -> Vec<pb::ModelSummary> {
     let auth_by_provider: std::collections::BTreeMap<String, i32> = snapshot
         .providers()
         .iter()
@@ -549,7 +549,8 @@ async fn list_providers(
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Result<Json<pb::ListProvidersResponse>, V1Error> {
     let request: pb::ListProvidersRequest = super::query_request(&[], &query)?;
-    let providers = provider_rows(&st, &model_rows(&st)).await;
+    let snapshot = st.engine.provider_catalog_snapshot();
+    let providers = provider_rows(&st, &snapshot).await;
     let (providers, page) = paginate(providers, &request.page);
     Ok(Json(pb::ListProvidersResponse {
         providers,
@@ -563,7 +564,7 @@ async fn list_providers(
 /// key, or none) unless the last model-list fetch was refused.
 pub(crate) async fn provider_rows(
     st: &ServerState,
-    models: &[pb::ModelSummary],
+    snapshot: &ProviderCatalogSnapshot,
 ) -> Vec<pb::ProviderSummary> {
     let settings = st
         .provider_control
@@ -573,7 +574,6 @@ pub(crate) async fn provider_rows(
         .into_iter()
         .map(|settings| (settings.id.clone(), settings))
         .collect::<BTreeMap<_, _>>();
-    let snapshot = st.engine.provider_catalog_snapshot();
     let mut rows = BTreeMap::new();
     for state in snapshot.providers() {
         let settings = settings.get(&state.provider_id);
@@ -638,7 +638,7 @@ pub(crate) async fn provider_rows(
                 model_count: 0,
             });
     }
-    for model in models {
+    for model in snapshot.models() {
         if let Some(row) = rows.get_mut(&model.provider_id) {
             row.model_count = row.model_count.saturating_add(1);
         }
@@ -649,12 +649,12 @@ pub(crate) async fn provider_rows(
 /// One provider's detail row with its model rows; `None` when the id is
 /// neither live nor configured.
 pub(crate) async fn provider_info(st: &ServerState, provider_id: &str) -> Option<pb::ProviderInfo> {
-    let all_models = model_rows(st);
-    let summary = provider_rows(st, &all_models)
+    let snapshot = st.engine.provider_catalog_snapshot();
+    let summary = provider_rows(st, &snapshot)
         .await
         .into_iter()
         .find(|row| row.id == provider_id)?;
-    let models = all_models
+    let models = model_rows(&snapshot)
         .into_iter()
         .filter(|model| model.provider_id == provider_id)
         .collect();

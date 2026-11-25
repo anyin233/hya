@@ -3,7 +3,7 @@ use hya_proto::{
 };
 use hya_tool::RewriteCtx;
 
-use super::turn::rewrite_host::{EpisodeTranscript, HostErrors, TurnLog, TurnModels};
+use super::turn::rewrite_host::{EpisodeTranscript, HostErrors, TurnLog, TurnModels, model_window};
 use super::{SessionEngine, projection_workdir};
 use crate::error::CoreError;
 
@@ -38,8 +38,9 @@ impl SessionEngine {
             actor_claim: None,
             errors: &errors,
         };
+        let router = self.provider_router();
         let models = TurnModels {
-            engine: self,
+            router: &router,
             errors: &errors,
         };
         // The kernel's Rewrite keeps the newest turn's user message; anchored
@@ -58,7 +59,7 @@ impl SessionEngine {
             message,
             model: &model,
             projection: &projection,
-            window: self.model_window(&model),
+            window: model_window(&router, &model),
             overhead_tokens: 0,
             pressure: None,
             workdir: &workdir,

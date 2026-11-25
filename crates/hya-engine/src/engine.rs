@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use hya_proto::{MessageId, ModelRef, SessionId, ToolCallId};
-use hya_provider::{ProviderCatalogSnapshot, ProviderRouter, ReasoningEffort};
+use hya_provider::{ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
 use hya_tool::handle::ArtifactPlane;
 use hya_tool::{
@@ -86,7 +86,8 @@ pub(crate) use agent_binding::{
 pub(crate) use mailbox::dm_channel_between;
 pub use member_control::ArchiveReviver;
 pub use model_probe::{MODEL_PROBE_PROMPT, ModelProbeReply};
-use models::TurnEffortFallback;
+pub use models::ProviderSnapshot;
+use models::{ProviderSnapshots, TurnEffortFallback};
 pub use scope_binding::RuntimeCatalogRefresh;
 pub use session_state::CreateSession;
 pub(crate) use session_state::projection_workdir;
@@ -138,14 +139,13 @@ impl MailPreAppendGate {
 /// interaction, spawn, mailbox, hooks, compaction, and governors. Turns append
 /// events to the store and publish on the bus; observers never write the log.
 ///
-/// Clone shares execution handles and snapshots the current resource bindings.
+/// Clones share execution handles and live provider publications.
 pub struct SessionEngine {
     workspace_watches: hya_core::kernel::WorkspaceWatches,
     store: SessionStore,
     base_system_prompt: String,
     pure_context: bool,
-    providers: RwLock<Arc<ProviderRouter>>,
-    catalog: RwLock<Arc<ProviderCatalogSnapshot>>,
+    providers: ProviderSnapshots,
     /// Cross-model failover plane: preferred [`ModelRef`] → its ordered
     /// candidate chain (the preferred model itself first). Empty by default,
     /// which keeps turn streaming byte-identical to a direct router call.
@@ -211,18 +211,7 @@ impl Clone for SessionEngine {
             store: self.store.clone(),
             base_system_prompt: self.base_system_prompt.clone(),
             pure_context: self.pure_context,
-            providers: RwLock::new(
-                self.providers
-                    .read()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone(),
-            ),
-            catalog: RwLock::new(
-                self.catalog
-                    .read()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone(),
-            ),
+            providers: self.providers.clone(),
             global_reasoning: self.global_reasoning,
             exclusive_tool: self.exclusive_tool.clone(),
             model_fallbacks: self.model_fallbacks.clone(),
@@ -308,20 +297,14 @@ impl SessionEngine {
         let websearch = WebSearchPlane::default();
         let formatter = FormatterPlane::default();
         let lsp = LspPlane::default();
-        let catalog = providers.catalog_snapshot_arc().unwrap_or_else(|| {
-            Arc::new(ProviderCatalogSnapshot::build(
-                providers.catalog(),
-                Vec::new(),
-                None,
-            ))
-        });
+
         let engine = Self {
             workspace_watches: Default::default(),
             store,
-            providers: RwLock::new(providers),
+            providers: ProviderSnapshots::new(providers),
             base_system_prompt: String::new(),
             pure_context: false,
-            catalog: RwLock::new(catalog),
+
             global_reasoning: None,
             exclusive_tool: None,
             model_fallbacks: HashMap::new(),
