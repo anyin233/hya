@@ -384,14 +384,22 @@ async fn i15_one_owed_wake_admits_one_coalesced_owned_prompt() {
                 && serde_json::to_string(m).unwrap().contains("COALESCE_")
         })
         .collect::<Vec<_>>();
+    let mut bus = h.engine.bus().subscribe();
     next.release();
-    h.until(h.root, |p| {
-        p.team
-            .roster
-            .get(&handle)
-            .is_some_and(|entry| entry.resident_cursor == 3)
+    // A final answer can archive the member before a projection read sees its cursor.
+    tokio::time::timeout(support::lifecycle::BOUND, async {
+        loop {
+            if matches!(
+                bus.recv().await.unwrap().event,
+                Event::ResidentWorkFinished { session, handle: finished, inbox_through: 3, .. }
+                    if session == h.root && finished == handle
+            ) {
+                break;
+            }
+        }
     })
-    .await;
+    .await
+    .unwrap();
     let requests = h
         .provider
         .captured
@@ -2085,12 +2093,25 @@ async fn a1_cancel_wakes_an_idle_episode() {
     let mut h = Harness::new().await;
     let (child, handle) = h.spawn(vec![Round::unfinished("idle before cancel")]).await;
     h.idle(child, &handle).await;
+    let mut bus = h.engine.bus().subscribe();
     h.built
         .resident_supervisor()
         .team_cancel(h.root)
         .unwrap()
         .cancel();
-    h.archived(&handle).await;
+    // Publication follows in-memory cleanup, while the stored archive can be read earlier.
+    tokio::time::timeout(support::lifecycle::BOUND, async {
+        loop {
+            if matches!(
+                bus.recv().await.unwrap().event,
+                Event::AgentArchived { child: archived, .. } if archived == child
+            ) {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
     assert_eq!(h.built.resident_supervisor().episode_count(), 0);
     assert_eq!(
         h.engine
