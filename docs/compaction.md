@@ -191,5 +191,5 @@ available for embedders that set the handoff cap and retained tail together.
 | `shake`, `remote`, `ContextStatus` | [`bundles/internal/compaction/native/src/`](../bundles/internal/compaction/native/src/) (`ladder.rs`, `evict.rs`, `config.rs`) |
 | Rewrite context, native compaction and hook services, error mapping | [`crates/hya-engine/src/engine/turn/rewrite_host.rs`](../crates/hya-engine/src/engine/turn/rewrite_host.rs), [`harness.rs`](../crates/hya-engine/src/engine/turn/harness.rs), [`summary.rs`](../crates/hya-engine/src/engine/summary.rs) |
 | Terminal handoff generation, options and summarizer | [`crates/hya-engine/src/engine/terminal_handoff.rs`](../crates/hya-engine/src/engine/terminal_handoff.rs) |
-| Config file/env resolution | [`crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs) |
+| Config file/env resolution | [`crates/hya-app/src/config/file.rs`](../crates/hya-app/src/config/file.rs) |
 | Wire events and strategies | [`crates/hya-proto/src/event.rs`](../crates/hya-proto/src/event.rs) |

@@ -6,7 +6,7 @@ hya reads its own YAML config from:
 2. `$HOME/.config/hya/config.yaml`
 
 The file is parsed strictly as YAML via `serde_norway::from_str`
-([`crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs)). JSON and
+([`crates/hya-app/src/config/file.rs`](../crates/hya-app/src/config/file.rs)). JSON and
 TOML are **not** accepted. Unknown top-level keys are ignored without warning —
 there is no `deny_unknown_fields` — so a misspelled section such as `provider:`
 instead of `providers:` is silently dropped. After editing, verify with
@@ -82,11 +82,11 @@ permission:
 ## First-Run / Offline Behavior
 
 On startup, hya tries to load `config.yaml` (see
-[`../crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs) `load()`
-and `config_path()`). `cargo build` only compiles the workspace and does not
-write user config. When a `hya` command starts and no file exists, hya
-creates the config directory and writes a starter `config.yaml` before
-resolving runtime config:
+[`config::load`](../crates/hya-app/src/config.rs) and
+[`config_path`](../crates/hya-app/src/config/file.rs)). `cargo build` only
+compiles the workspace and does not write user config. When a `hya` command
+starts and no file exists, hya creates the config directory and writes a starter
+`config.yaml` before resolving runtime config:
 
 ```yaml
 default_model: hya/offline
@@ -1071,7 +1071,7 @@ categories:
 ```
 
 Semantics ([`crates/hya-engine/src/category.rs`](../crates/hya-engine/src/category.rs),
-[`config.rs`](../crates/hya-app/src/config.rs)):
+[`config/file.rs`](../crates/hya-app/src/config/file.rs)):
 
 - Empty or whitespace-only candidates are trimmed and dropped.
 - A category whose list is entirely empty is dropped from the registry.
@@ -1196,7 +1196,7 @@ deleted with them and is not part of v1.
 ## Subagent Limits
 
 Top-level `subagents:` caps nested and parallel subagent fan-out
-([`crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs),
+([`crates/hya-app/src/config/file.rs`](../crates/hya-app/src/config/file.rs),
 [`crates/hya-engine/src/orchestrator.rs`](../crates/hya-engine/src/orchestrator.rs)).
 Every field is optional; omitted fields keep their default. Still applied while
 offline (independent loader). See also
@@ -1230,8 +1230,8 @@ Each registered Project (and each directory outside every Project) binds its
 own catalog scope: the Project's bundles and plugins on top of the installed
 ones ([Plugins](#plugins)). A scope is built at its first bind and cached;
 the top-level `catalog_scopes:` block bounds that cache
-([`crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs)
-`load_catalog_scope_cache`). Every field is optional. Read once at startup,
+([`crates/hya-app/src/config/file.rs`](../crates/hya-app/src/config/file.rs)
+`resolve_catalog_scope_cache`). Every field is optional. Read once at startup,
 also while offline.
 
 ```yaml
@@ -1435,14 +1435,14 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 | Variable | Effect | Default | Source |
 | --- | --- | --- | --- |
 | `HYA_MODEL` | Active request model when `--model` is not passed. **Wins over** the row-backed startup default. Unknown overrides stay outside the catalog and fail through normal routing when used. | Configured `default_model` when it names a resolved row, otherwise the deterministic first live row, otherwise `hya/offline`. | `crates/hya-app/src/runtime.rs`, `crates/hya-app/src/config.rs` |
-| `HYA_COMPACTION_KEEP_RECENT` | Most-recent messages and tool steps whose outputs `shake` keeps. Overrides `compaction.keep_recent`; env wins. Unparseable values ignored. | `6` | `crates/hya-engine/src/compaction.rs`, `crates/hya-app/src/config.rs` |
+| `HYA_COMPACTION_KEEP_RECENT` | Most-recent messages and tool steps whose outputs `shake` keeps. Overrides `compaction.keep_recent`; env wins. Unparseable values ignored. | `6` | `crates/hya-engine/src/compaction.rs`, `crates/hya-app/src/config/file.rs` |
 | `HYA_COMPACTION_SUMMARY_MAX_TOKENS` | Output cap for the summarizer call that writes the terminal handoff. Overrides `compaction.summary_max_tokens`; env wins. | `4096` | same |
-| `HYA_TOKEN_ACCOUNTING` | How window occupancy is measured for `ContextStatus`. `auto` believes a route's reported usage only while it advertises usage support and stays plausible against the local estimate (ratio within `[0.5, 2.0]`), otherwise estimates locally; `provider` always trusts reported usage; `estimate` always counts locally. Overrides `compaction.token_accounting`; env wins. Unrecognized values ignored. | `auto` | `crates/hya-context/src/tokens.rs`, `crates/hya-app/src/config.rs` |
+| `HYA_TOKEN_ACCOUNTING` | How window occupancy is measured for `ContextStatus`. `auto` believes a route's reported usage only while it advertises usage support and stays plausible against the local estimate (ratio within `[0.5, 2.0]`), otherwise estimates locally; `provider` always trusts reported usage; `estimate` always counts locally. Overrides `compaction.token_accounting`; env wins. Unrecognized values ignored. | `auto` | `crates/hya-context/src/tokens.rs`, `crates/hya-app/src/config/file.rs` |
 | `HYA_SUBAGENT_MAX_CONCURRENCY` | Overrides `subagents.max_concurrency`. Env wins. | `100` | same |
 | `HYA_SUBAGENT_BUDGET` | Overrides `subagents.per_run_budget` (env name drops `PER_RUN`). Env wins. | `1024` | same |
 | `HYA_SUBAGENT_TURN_BUDGET` | Overrides `subagents.per_team_turn_budget`. Env wins. | `1024` | same |
 | `HYA_SUBAGENT_MESSAGE_BUDGET` | Overrides `subagents.per_team_message_budget`. Env wins. | `1024` | same |
-| `HYA_EVENT_BUS_CAPACITY` | Live EventBus broadcast ring capacity. Must parse as `usize` **> 0** or ignored. **Env-only** (no config.yaml key). Raising it trades memory for tolerance of slow SSE consumers. | `8192` (`DEFAULT_BUS_CAPACITY`) | `crates/hya-app/src/config.rs`, `crates/hya-engine/src/bus.rs` |
+| `HYA_EVENT_BUS_CAPACITY` | Live EventBus broadcast ring capacity. Must parse as `usize` **> 0** or ignored. **Env-only** (no config.yaml key). Raising it trades memory for tolerance of slow SSE consumers. | `8192` (`DEFAULT_BUS_CAPACITY`) | `crates/hya-app/src/config/file.rs`, `crates/hya-engine/src/bus.rs` |
 | `HYA_DEFER_SIDEPLANES` | When deferred (default), MCP connect runs after the engine is built so the HTTP listener comes up without waiting on MCP handshakes — MCP tools may not be registered for the very first prompt. Set to `0`, `false`, `off`, or `no` (case-insensitive, trimmed) for await-MCP-before-listen. Any other value, empty, or unset means deferred. | deferred (on) | `crates/hya-app/src/runtime.rs` |
 | `HYA_BUN_ADAPTER_DIR` | Path to an alternate Bun extension adapter checkout (`kind: bun` plugins). | Resolution order: this env override, executable-adjacent `../lib/hya/bun-adapter`, then workspace `crates/hya-plugin-bun/adapter`. | `crates/hya-app/src/plugins.rs` |
 | `HYA_CLAUDE_ADAPTER_DIR` | Path to an alternate Claude Code adapter checkout (`kind: claude` plugins and `bundle install --claude`). | Resolution order: this env override, executable-adjacent `../lib/hya/claude-adapter`, then workspace `crates/hya-plugin-claude/adapter`. | `crates/hya-app/src/plugins.rs` |
