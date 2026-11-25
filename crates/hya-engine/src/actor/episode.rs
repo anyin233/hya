@@ -1,3 +1,4 @@
+use super::inbox::Inbox;
 use super::*;
 
 async fn initialize_episode(
@@ -664,10 +665,9 @@ impl TeamActor {
             return Ok(TurnOutcome::NotStarted);
         }
         let mut cursor = cursor;
-        let mut durable_cursor = 0;
-        if let Some(entry) = projection.team.roster.get(&handle) {
-            let durable = usize::try_from(entry.resident_cursor).unwrap_or(usize::MAX);
-            durable_cursor = durable;
+        let inbox = Inbox::new(&projection, &handle);
+        let durable_cursor = inbox.durable_cursor();
+        if let Some(durable) = durable_cursor {
             cursor = cursor.max(durable);
             let mut st = self.lock();
             if let Some(slot) = st
@@ -713,46 +713,14 @@ impl TeamActor {
                 })
                 .is_some_and(|message| Some(message.id) != resumed_prompt);
         }
-        let inbox_len = projection
-            .team
-            .inboxes
-            .get(&handle)
-            .map_or(0, |inbox| inbox.len());
+        let inbox_len = inbox.len();
         let mail_owed = resumed_prompt.is_some()
-            || projection
-                .team
-                .unread_incoming_mail(&handle, durable_cursor as u64)
-                .next()
-                .is_some();
+            || inbox.incoming(durable_cursor.unwrap_or(0)).next().is_some();
         let channel_policy = ChannelPolicy::from_binding(&binding).map_err(CoreError::bundle)?;
-        let new_mail: Vec<(String, String)> = projection
-            .team
-            .inboxes
-            .get(&handle)
-            .map(|inbox| {
-                inbox
-                    .iter()
-                    .skip(cursor)
-                    .map(|index| &projection.team.mail[*index])
-                    .filter(|message| {
-                        if message.from == handle {
-                            return false;
-                        }
-                        if message.from == scope::HARNESS_HANDLE {
-                            return true;
-                        }
-                        let (kind, role) = recipient_channel_role(
-                            &projection,
-                            &message.to,
-                            &handle,
-                            &message.from,
-                        );
-                        resident_delivery_allowed(&channel_policy, agent.name.as_str(), kind, role)
-                    })
-                    .map(|m| (m.from.clone(), m.body.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let new_mail: Vec<(String, String)> = inbox
+            .resident_mail(cursor, agent.name.as_str(), Some(&channel_policy))
+            .map(|message| (message.from.clone(), message.body.clone()))
+            .collect();
 
         drop(projection);
         if resumed_prompt.is_none() && !synth && new_mail.is_empty() {

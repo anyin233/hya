@@ -1631,6 +1631,11 @@ and inter-agent mail and channels are event-sourced (`MailSent`, `ChannelJoined`
 `ChannelLeft`) on the team-root log and folded by `hya-proto::Projection` (see
 [ADR-0001](../adr/0001-event-sourced-mailbox-and-channels.md)).
 
+Live wake, catch-up, and resident turns share the projected inbox reader in
+[`actor/inbox.rs`](../../crates/hya-engine/src/actor/inbox.rs). Live routing starts
+with a committed `MailSent` envelope, and lag recovery checks the projected inboxes
+of live slots. Explicit reads, `wait`, and steering apply their own delivery rules.
+
 Reach is **strictly vertical** ([ADR-0016](../adr/0016-channel-communication-plane.md)):
 an agent addresses only its parent and its direct reports over event-minted
 unit broadcast (`#announce-{8}`) and pair DM (`#DM-{8}`) channels; siblings are
