@@ -63,6 +63,12 @@ test.describe("startup list", () => {
     const term = await tui(hyaTui(backend), { viewport: { width: widthFor(120), height: 960 } })
     await term.waitForText(input)
     await term.waitForText(/\[Bundles\]/)
+    // /resources captures a snapshot. Wait for the live Bundles view to show the extension running.
+    await term.type("/bundles")
+    await term.press("Enter")
+    await term.waitForText(/hya\/basic-tui-components\s+\S+\s+first-party\s+active\s+JIT running/)
+    await term.press("Escape")
+    await term.waitForText(input)
     await term.type("/resources")
     await term.press("Enter")
     await term.waitForText(/^\s*\[MCP\]\s*$/m)
