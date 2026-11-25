@@ -9,7 +9,8 @@ use tokio::time::{Instant, sleep, timeout};
 
 use tokio::sync::mpsc;
 
-use super::{Inner, PeerInfo, RoomRegistration, random_bytes, shutting_down};
+use super::{Inner, PeerInfo, RoomRegistration, shutting_down};
+use crate::keys::random_bytes;
 use crate::link::RoomId;
 use crate::proto::{
     Challenge, Heartbeat, HostFrame, Incoming, OpenTokenUpdated, ProxyToHost, Register, Registered,

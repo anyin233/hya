@@ -56,14 +56,15 @@ pub use heartbeat::{DEFAULT_HEARTBEAT_INTERVAL, HeartbeatConfig, with_heartbeat}
 use self::connect::Tls;
 use self::grpc::GrpcService;
 use self::heartbeat::{IncomingFrame, OutgoingFrame};
-use crate::keys::OpenToken;
+use crate::keys::{OpenToken, random_bytes};
 use crate::link::{RelayAddress, RelayLink, RoomId, Transport, WsRoute};
 use crate::proto::{
     Accept, Chunk, HostFrame, Open, ProxyToHost, Register, RelayErrorCode, UpdateOpenToken, chunk,
     host_frame, proxy_to_host, register_signing_message, update_open_token_signing_message,
 };
-use crate::server::duplex::FinalError;
-use crate::transport::{BoxedTransport, ChunkTransport, HostControlTransport, TransportError};
+use crate::transport::{
+    BoxedTransport, ChunkTransport, FinalError, HostControlTransport, TransportError,
+};
 
 /// Default [`ClientConfig::connect_timeout`].
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -688,7 +689,7 @@ fn open_frame(room: &RoomId, token: Option<&OpenToken>) -> Chunk {
 
 /// A well-formed room id nobody registered (random key).
 fn random_room() -> RoomId {
-    RoomId::from_ed25519(&crate::proxy::random_bytes::<32>())
+    RoomId::from_ed25519(&random_bytes::<32>())
 }
 
 /// Classify the first answer to a probe; `NOT_FOUND` means the path works.

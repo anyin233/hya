@@ -49,7 +49,7 @@ use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use rand_core::{OsRng, RngCore, TryRngCore};
+use crate::keys::random_bytes;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -603,12 +603,6 @@ fn room_offline() -> RelayError {
 
 pub(crate) fn shutting_down() -> RelayError {
     RelayError::new(RelayErrorCode::Unavailable, "the proxy is shutting down")
-}
-
-pub(crate) fn random_bytes<const N: usize>() -> [u8; N] {
-    let mut bytes = [0u8; N];
-    OsRng.unwrap_err().fill_bytes(&mut bytes);
-    bytes
 }
 
 /// A fresh 128-bit stream id, lowercase hex (32 characters).

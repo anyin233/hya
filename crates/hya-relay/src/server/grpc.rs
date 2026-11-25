@@ -7,12 +7,12 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 
-use super::duplex::{Duplex, FinalError};
+use super::duplex::Duplex;
 use super::peer_of;
 use crate::proto::relay_server::Relay;
 use crate::proto::{Chunk, HostFrame, ProxyToHost};
 use crate::proxy::ProxyCore;
-use crate::transport::{BoxedTransport, TransportError};
+use crate::transport::{BoxedTransport, FinalError, TransportError};
 
 /// Outgoing frames buffered per stream before the core waits.
 const OUTGOING_CAPACITY: usize = 16;

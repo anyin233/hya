@@ -10,13 +10,19 @@
 use std::fmt;
 
 use hmac::{Hmac, Mac};
-use rand_core::{OsRng, TryRngCore};
+use rand_core::{OsRng, RngCore, TryRngCore};
 use sha2::{Digest, Sha256};
 use snow::params::DHChoice;
 use snow::resolvers::{CryptoResolver, DefaultResolver};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::link::RoomId;
+
+pub(crate) fn random_bytes<const N: usize>() -> [u8; N] {
+    let mut bytes = [0u8; N];
+    OsRng.unwrap_err().fill_bytes(&mut bytes);
+    bytes
+}
 
 /// Length of every tunnel key (X25519 keys and the PSK).
 pub const KEY_LEN: usize = 32;

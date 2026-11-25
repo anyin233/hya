@@ -28,6 +28,7 @@
 //!
 //! This crate deliberately depends on no hya runtime crate.
 
+mod binding;
 pub mod client;
 pub mod keys;
 pub mod link;

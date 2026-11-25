@@ -13,9 +13,10 @@ use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
 use super::connect::{ALPN_HTTP1, Io, Tls, connect};
 use super::{ClientConfig, ProbeFailure, ProbeFailureKind};
+use crate::binding::{NOT_FOUND_BODY, WS_CLOSE_ERROR_BASE};
 use crate::link::{RelayAddress, WsRoute};
 use crate::proto::RelayErrorCode;
-use crate::server::{NOT_FOUND_BODY, WS_CLOSE_ERROR_BASE, duplex::FinalError};
+use crate::transport::FinalError;
 use crate::transport::TransportError;
 
 /// Connect and upgrade `route` (TCP, TLS with ALPN `http/1.1`, HTTP/1.1

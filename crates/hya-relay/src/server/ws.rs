@@ -24,12 +24,12 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use super::duplex::{Duplex, FinalError};
-use super::{WS_CLOSE_ERROR_BASE, WS_CLOSE_UNSUPPORTED_DATA};
+use super::duplex::Duplex;
+use crate::binding::{WS_CLOSE_ERROR_BASE, WS_CLOSE_UNSUPPORTED_DATA};
 use crate::link::WsRoute;
 use crate::proto::{Chunk, HostFrame, ProxyToHost, RelayErrorCode};
 use crate::proxy::{PeerInfo, ProxyCore, ProxyLimits};
-use crate::transport::{BoxedTransport, TransportError};
+use crate::transport::{BoxedTransport, FinalError, TransportError};
 
 /// Frames buffered per direction between the socket and the core.
 const CAPACITY: usize = 16;
