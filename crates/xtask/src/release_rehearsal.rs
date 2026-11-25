@@ -234,7 +234,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
 /// Print the command usage without touching the repository or running tools.
 fn print_usage() {
     println!(
-        "usage: cargo xtask release-rehearsal \
+        "usage: cargo run -p xtask -- release-rehearsal \
          --version <semver> --target <target> --no-publish"
     );
 }

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "hya API v1",
-    "summary": "Generated from proto/hya/v1 by cargo xtask gen-api; do not edit by hand.",
+    "summary": "Generated from proto/hya/v1 by cargo run -p xtask -- gen-api; do not edit by hand.",
     "version": "1.0.0"
   },
   "paths": {

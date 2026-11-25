@@ -106,19 +106,6 @@ To change builtin exposure, update the owning family's `exposure.yaml` together 
 documentation and parity tests. Adding an entry does not create a tool: every
 entry must match a Rust `Tool` implementation supplied by the owning family.
 
-To stage a built native family executable, use:
-
-```sh
-cargo run -p xtask -- package-native-tool-bundle \
-  bundles/presets/network-tools target/release/hya-network-tools \
-  dist/network-tools.hyabundle
-```
-
-The command reads the family source, preserves its declared files, adds
-`native/tool-runtime` with the exact executable bytes, and writes a
-deterministic package. It does not compile the executable or install the
-package. The executable must be built for the target platform first.
-
 To build and package one trusted family implementation for the current target:
 
 ```sh
@@ -359,29 +346,9 @@ audit and replay metadata. `tool_bundle_presets()` returns all four policies in
 base, extended, network, and channel order. Each policy keeps its own
 tool names, aliases, permissions, schemes, and protected names.
 
-The staged package adds these manifest entries without modifying the source
-`bundle.yaml` on disk:
-
-```yaml
-resources:
-  tools:
-    - { id: webfetch, path: declarations/tool.json }
-extensions:
-  rust:
-    - { id: runtime, path: native/tool-runtime }
-  process:
-    kind: rust
-    command: ['${BUNDLE_ROOT}/native/tool-runtime']
-```
-
-It repeats the `resources.tools` row for each canonical tool in the family's
-`exposure.yaml`. The declaration file is `{}`; the executable's `initialize`
-reply owns the input schemas. Package preparation validates the executable's
-raw bytes, paths, and manifest closure; runtime activation checks the announced
-tool set against the declarations.
-
-The in-process library package instead adds `extensions.libraries` and no
-`extensions.process`:
+The staged library package adds `extensions.libraries` and one
+`resources.tools` entry for each canonical tool in `exposure.yaml` without
+modifying the source manifest:
 
 ```yaml
 resources:

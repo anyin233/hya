@@ -59,7 +59,7 @@ For visual dependency and runtime flow diagrams, see
 | `hya-updater` | [`../crates/hya-updater`](../crates/hya-updater) | Standalone `hya update` command surface embedding `scripts/hya-install.sh` with zero runtime-crate dependencies. |
 | `hya-backend` (`bin/hya`) | [`../crates/hya-backend`](../crates/hya-backend) | Unified `hya` CLI executable: bare `hya` daemon discovery + TUI/WebUI process orchestration, `exec`, `-p`, `loop`, `serve`, `sessions`, `tail-session`, `provider`/`login`/`oauth`/`models`, `agent`/`bundle`/`workflow`, `proxy`/`bridge`/`relay`, and `update`. |
 | `hya-e2e` | [`../crates/hya-e2e`](../crates/hya-e2e) | Track P process-level E2E harness (real `hya` + scripted FakeLlm; matrix in `crates/hya-e2e/matrix.toml`). |
-| `xtask` | [`../crates/xtask`](../crates/xtask) | Dev tooling (`cargo run -p xtask -- <task>`): `gen-api`, `gen-relay`, `matrix-check`, `package-bundle`, `package-native-tool-bundle`, `package-native-tool-library`, `stage-first-party-bundles`, `startup-bench`, `lifecycle-bench`, and `release-rehearsal`. |
+| `xtask` | [`../crates/xtask`](../crates/xtask) | Dev tooling for code generation, matrix checks, benchmarks, and package staging (`cargo run -p xtask -- --help`). |
 
 `hya_app::config` is the Rust facade for configuration. Its [file module](../crates/hya-app/src/config/file.rs)
 owns the YAML schema, paths, and bootstrap. The [provider module](../crates/hya-app/src/config/provider.rs)

@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use prost::Message;
 
-/// Entry point for `cargo xtask gen-api`.
+/// Entry point for `cargo run -p xtask -- gen-api`.
 pub fn run(_args: Vec<String>) -> Result<()> {
     let root = workspace_root()?;
     let proto_dir = root.join("proto");
@@ -531,7 +531,7 @@ fn write_api_reference(path: &Path, contract: &Contract) -> Result<()> {
     let mut out = String::new();
     out.push_str("# hya API v1 Reference\n\n");
     out.push_str(
-        "Generated from `proto/hya/v1` by `cargo xtask gen-api`; do not edit by hand.\n\
+        "Generated from `proto/hya/v1` by `cargo run -p xtask -- gen-api`; do not edit by hand.\n\
          The same contract is served over HTTP/JSON+SSE and gRPC. Every rpc lists its\n\
          HTTP binding (`method path`) and its fully-qualified gRPC method\n\
          (`hya.v1.<Service>.<Rpc>`).\n\n\
@@ -710,7 +710,7 @@ fn write_openapi(path: &Path, contract: &Contract) -> Result<()> {
         "openapi": "3.1.0",
         "info": {
             "title": "hya API v1",
-            "summary": "Generated from proto/hya/v1 by cargo xtask gen-api; do not edit by hand.",
+            "summary": "Generated from proto/hya/v1 by cargo run -p xtask -- gen-api; do not edit by hand.",
             "version": "1.0.0",
         },
         "paths": serde_json::Value::Object(paths),

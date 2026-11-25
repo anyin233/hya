@@ -43,7 +43,7 @@ struct Retired {
     reason: String,
 }
 
-/// Entry point for `cargo xtask matrix-check`.
+/// Entry point for `cargo run -p xtask -- matrix-check`.
 ///
 /// # Errors
 /// Returns an error listing every problem found; exits non-zero via `main`.

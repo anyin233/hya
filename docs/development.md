@@ -423,22 +423,19 @@ checksums, installer, and archive contents.
 ## Dev tasks (`xtask` package)
 
 `crates/xtask` is **dev-only tooling** and is not part of any shipped binary.
-There is **no** Cargo alias named `xtask` in this workspace: invoke it as
-`cargo run -p xtask -- <task> …`. The binary uses a hand-rolled positional
-dispatcher (not clap): the first positional argument selects the task and every
-remaining argument is forwarded verbatim. The currently supported tasks are
-`startup-bench`, `lifecycle-bench`, `matrix-check`, `package-bundle`, `package-native-tool-bundle`,
-`package-native-tool-library`, `stage-first-party-bundles`, `stage-release`,
-`stage-bun-programs`, `gen-api`, and `release-rehearsal`.
+Run `cargo run -p xtask -- <task> …`. The first argument selects the task
+and the remaining arguments are passed to it. Run `cargo run -p xtask -- --help`
+for the current list.
 
 | Task | Role |
 | --- | --- |
 | `gen-api` | Run `cargo run -p xtask -- gen-api` after editing `proto/hya/v1`. It regenerates Rust types (prost/tonic/pbjson), gRPC adapters, the API reference, OpenAPI, the TUI operation catalog, and the byte-for-byte proto set shipped in `packages/hya-tui/src/proto/hya/v1`. Commit the regenerated outputs. CI runs the generator and checks for drift. The task uses a vendored protoc and requires one unique `// hya.http:` mapping per RPC. |
+| `gen-relay` | Regenerates Rust and tonic bindings from `proto/hya/relay/v1`. |
+| `gen-plugin` | Regenerates plugin hook names, TypeScript payloads, and checked runtime copies. |
 | `startup-bench` | Startup latency benchmark. Honours `HYA_BACKEND_BIN` to select the binary under test. `--db <seed.db>` runs every sample against a fresh copy of an existing database and prints the `HYA_STARTUP_TRACE` phase waterfall; `--timeout-secs N` (default 30) bounds the wait for the listen line. |
 | `lifecycle-bench` | Offline app-wired task lifecycle timings and store counts. See [Lifecycle benchmark](#lifecycle-benchmark). |
 | `matrix-check` | Validates `crates/hya-e2e/matrix.toml`. See [agent-matrix.md](testing/agent-matrix.md). |
 | `package-bundle` | Validates a source directory and atomically writes the canonical deterministic public `.hyabundle` package. |
-| `package-native-tool-bundle` | Adds a built target-specific Rust executable and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
 | `package-native-tool-library` | Adds a built tool-family dynamic library and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
 | `stage-first-party-bundles` | Packages the thirteen trusted first-party bundles into a backend package's `<package-root>/bundles/` and fails if any bundle version differs from the backend release version. With `--target` and `--assets`, it also writes versioned standalone release assets. |
 | `stage-release` | Stages the backend and native libraries from `--library-dir <dir>` into a fresh `--package-root <dir>` for tagged CI and rehearsal. It adds release notices, pinned Bun, production Bun programs with precompiled TUI JSX, first-party bundles, and the Argus example. The optional `--version <semver>` defaults to the workspace version. `--target <triple>` selects the native library suffix and is required with `--assets <dir>` for standalone bundle assets. |
@@ -449,7 +446,6 @@ remaining argument is forwarded verbatim. The currently supported tasks are
 cargo run -p xtask -- matrix-check
 cargo run -p xtask -- startup-bench
 cargo run -p xtask -- package-bundle <source-dir> <output.hyabundle>
-cargo run -p xtask -- package-native-tool-bundle <tool-family-source-dir> <built-executable> <output.hyabundle>
 cargo run -p xtask -- package-native-tool-library <tool-family-source-dir> <built-library> <output.hyabundle>
 cargo run -p xtask -- stage-first-party-bundles --library-dir target/release --package-root dist/hya [--version <semver>] [--target <triple> --assets dist]
 cargo run -p xtask -- stage-release --library-dir target/"$TARGET"/release --package-root dist/hya --target "$TARGET" --assets dist

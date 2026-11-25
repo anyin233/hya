@@ -475,7 +475,7 @@ path = "crates/hya-backend/tests/it/bundle_cli.rs"
 
 # Retired ids. Every number in a T-series range must be either used above or
 # retired here, so a numbering hole can never again go untracked.
-# `cargo xtask matrix-check` enforces this.
+# `cargo run -p xtask -- matrix-check` enforces this.
 
 [[retired]]
 id = "T3.1"

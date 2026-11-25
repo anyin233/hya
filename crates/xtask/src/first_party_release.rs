@@ -38,7 +38,7 @@ pub(crate) struct StagedBundle {
 
 /// Parse `stage-first-party-bundles` arguments and stage every bundle.
 pub fn run(args: Vec<String>) -> anyhow::Result<()> {
-    let usage = "usage: cargo xtask stage-first-party-bundles --library-dir <dir> \
+    let usage = "usage: cargo run -p xtask -- stage-first-party-bundles --library-dir <dir> \
                  --package-root <dir> [--version <semver>] [--target <triple> --assets <dir>]";
     for staged in stage(&parse_options(args, usage)?)? {
         println!("{}", staged.installed.display());
