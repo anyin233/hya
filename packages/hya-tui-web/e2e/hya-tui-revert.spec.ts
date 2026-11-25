@@ -10,6 +10,7 @@ import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
 import { expect, hangStep, hyaTui, wideViewport, test, textStep, toolStep } from "./hya"
+import { startProxy } from "./proxy"
 
 // These scenarios exercise the tiled workspace (ADR-0036: the workspace preset).
 test.use({ preset: "workspace" })
@@ -53,6 +54,7 @@ test.describe("undo and redo", () => {
     await expect.poll(() => existsSync(file)).toBe(false)
     // The pending-revert line ends the transcript, in the warning color.
     await term.waitForText(/↶ \d+ messages reverted · \/redo restores them/)
+    await term.waitForText("│ write notes")
     const line = (await term.find("↶"))!
     expect((await term.cell(line.row, line.col))?.fg).toBe(warning)
     // The only "write notes" left on screen is the input.
@@ -67,7 +69,7 @@ test.describe("undo and redo", () => {
     await term.press("Enter")
     await term.waitForText("Wrote the notes.")
     await expect.poll(() => term.find("write notes")).not.toBeNull()
-    expect(await term.find("Message, !shell, or @file · / commands")).not.toBeNull()
+    await term.waitForText("Message, !shell, or @file · / commands")
     await expect.poll(() => existsSync(file)).toBe(true)
     expect(await readFile(file, "utf8")).toBe("alpha\n")
     await expect.poll(() => term.find("↶")).toBeNull()
@@ -85,7 +87,11 @@ test.describe("undo and redo", () => {
     await prompt(term, "something else")
     await term.waitForText("Second reply.", 20_000)
     await expect.poll(() => term.find("↶")).toBeNull()
-    await prompt(term, "/redo")
+    await term.waitForIdle()
+    await term.type("/redo")
+    await term.waitForText("▸ /redo")
+    await term.press("Enter")
+    await expect.poll(() => term.find("Commands")).toBeNull()
     expect(await term.find("Wrote the notes.")).toBeNull()
     expect(existsSync(file)).toBe(false)
   })
@@ -95,11 +101,13 @@ test.describe("undo while busy", () => {
   test.use({ model: { permission: "allow", steps: [hangStep(20_000)] } })
 
   test("/undo while a turn runs leaves the turn and transcript unchanged", async ({ tui, backend, fakeModel }) => {
-    const term = await tui(hyaTui(backend), { viewport: wideViewport })
+    const proxy = await startProxy(backend.url)
+    const term = await tui(hyaTui({ ...backend, url: proxy.url }), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "take your time")
     await expect.poll(() => fakeModel!.pendingHangs()).toBe(1)
     await prompt(term, "/undo")
+    await expect.poll(() => proxy.log.find((entry) => entry.method === "POST" && entry.path.endsWith("/revert"))?.status).toBe(409)
     expect(fakeModel!.pendingHangs()).toBe(1)
     expect(await term.find("↶")).toBeNull()
     await term.waitForText("take your time")
@@ -131,6 +139,7 @@ test.describe("fork", () => {
     await expect.poll(() => term.find("Second reply.")).toBeNull()
     // The sidebar names the source session.
     await term.waitForText(/Forked\s+from hysec_/)
+    await term.waitForText("│ beta question")
     const input = await term.find("│ beta question")
     expect(input).not.toBeNull()
     expect(input!.row).toBeGreaterThan((await term.find("First reply."))!.row)
@@ -141,6 +150,7 @@ test.describe("fork", () => {
     await term.waitForText("Fork at the latest message")
     await term.press("Enter")
     await expect.poll(() => term.find("Fork at the latest message")).toBeNull()
+    await term.waitForText(/▸ 3\. hysec_/)
     await term.waitForText("alpha question")
     await term.waitForText("First reply.")
     expect(await term.find("beta question")).toBeNull()

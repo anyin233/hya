@@ -5,7 +5,7 @@
 
 import { createServer, request as httpRequest, type Server } from "node:http"
 
-export type LoggedRequest = { method: string; path: string; at: number }
+export type LoggedRequest = { method: string; path: string; at: number; status?: number }
 
 export type Proxy = {
   url: string
@@ -18,11 +18,13 @@ export async function startProxy(target: string): Promise<Proxy> {
   const upstream = new URL(target)
   const log: LoggedRequest[] = []
   const server: Server = createServer((req, res) => {
-    log.push({ method: req.method ?? "GET", path: req.url ?? "/", at: Date.now() })
+    const entry: LoggedRequest = { method: req.method ?? "GET", path: req.url ?? "/", at: Date.now() }
+    log.push(entry)
     const forward = httpRequest(
       { hostname: upstream.hostname, port: upstream.port, method: req.method, path: req.url, headers: { ...req.headers, host: upstream.host } },
       (response) => {
-        res.writeHead(response.statusCode ?? 502, response.headers)
+        entry.status = response.statusCode ?? 502
+        res.writeHead(entry.status, response.headers)
         // Node holds headers until the first body write; an SSE stream must be "open" at once.
         res.flushHeaders()
         response.pipe(res)
