@@ -60,8 +60,6 @@ pub use hya_proto::WorkspaceAdapterInfo;
 pub use hya_tool::FormatterStatus;
 pub use mcp_control::McpControl;
 pub use origin::Origin;
-#[allow(deprecated)]
-pub use provider_control::valid_provider_id;
 pub use provider_control::{
     PROVIDER_CONTROL_FAILURE, PROVIDER_CONTROL_UNAVAILABLE, PROVIDER_INVALID_REQUEST,
     PROVIDER_NOT_FOUND, ProviderChange, ProviderControl, ProviderControlError,

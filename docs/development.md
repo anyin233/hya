@@ -126,7 +126,6 @@ it for connection restarts/cleanup, and `spawn(future)` / `spawn_in(tracker, fut
 return the owned `JoinHandle<F::Output>`. These helpers track completion without
 owning cancellation. The runtime waits for this barrier after stopping source
 owners, including cleanup from canceled deferred initialization.
-The old `hya_mcp::io_tasks` path remains available as a deprecated re-export.
 
 For an embedded headless root driver, hold
 `ResidentSupervisor::root_driver_activity(session: SessionId) -> Result<RootDriverActivity, CoreError>`

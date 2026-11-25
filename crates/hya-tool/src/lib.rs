@@ -52,16 +52,9 @@ pub mod process_group;
 pub mod project_activity;
 /// Project-root path boundary shared by the builtin file tools (ADR-0026).
 pub mod project_scope;
-/// The rewrite contract between the host and a native bundle, and the host
-/// services a rewriter calls.
-#[deprecated(note = "Use hya_context::rewrite instead")]
-pub use hya_context::rewrite;
 mod skill;
 /// Subagent spawn plane and request types used by the `task` tool.
 pub mod spawn;
-/// Token accounting: how much of the context window a transcript occupies.
-#[deprecated(note = "Use hya_context::tokens instead")]
-pub use hya_context::tokens;
 /// Tool trait, registry, and permission class metadata.
 pub mod tool;
 mod websearch;
@@ -75,11 +68,6 @@ pub use agents::AgentDef;
 pub use formatter::{
     FormatterConfig, FormatterEntry, FormatterError, FormatterPlane, FormatterProvider,
     FormatterStatus,
-};
-/// Deprecated compatibility exports for the native rewrite contract.
-#[deprecated(note = "Use hya_context::rewrite instead")]
-pub use hya_context::rewrite::{
-    CompactionHooks, ModelHost, ModelWindow, Pressure, RewriteCtx, Rewriter, SessionLog, Transcript,
 };
 pub use interaction::{
     InteractionError, InteractionPlane, QuestionAnswer, QuestionInfo, QuestionKind, QuestionOption,

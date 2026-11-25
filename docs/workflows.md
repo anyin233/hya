@@ -400,8 +400,7 @@ The compiler and runtime share the Workflow model types from `hya_proto`.
 revision. `WorkflowStage::model()` and `VerifySpec::model()` return
 `Option<&WorkflowModelAssignment>`. An assignment contains a string `id`, an
 optional string `reasoning`, and an ordered `Vec<WorkflowModelCandidate>`
-`fallback`. Each candidate has its own `id` and `reasoning`. The old
-`hya_workflow` type paths are deprecated aliases.
+`fallback`. Each candidate has its own `id` and `reasoning`.
 
 ```rust,ignore
 let workflow = hya_workflow::compile(hya_workflow::WorkflowSource::new("build.hya.md", source))?;

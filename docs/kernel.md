@@ -926,8 +926,7 @@ Implement `hya_context::rewrite::Rewriter` and register an `Arc` of the
 implementation through the [native bundle entry point](bundle-runtime.md).
 The host passes a `RewriteCtx` when it calls the implementation. The native ABI
 digest covers this contract and the shared `ToolError` it returns.
-The old `hya_tool::rewrite`, `hya_tool::tokens`, and root rewrite exports are
-deprecated compatibility paths.
+Use `hya_context::tokens` for token accounting.
 
 | Item | Implemented by | Purpose |
 | --- | --- | --- |

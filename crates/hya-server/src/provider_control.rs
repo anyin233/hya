@@ -245,13 +245,6 @@ impl ProviderControl for EmptyProviderControl {
     }
 }
 
-/// Validate a provider ID using the provider format rules.
-#[deprecated(note = "Use hya_provider::valid_provider_id instead")]
-#[must_use]
-pub fn valid_provider_id(provider_id: &str) -> bool {
-    hya_provider::valid_provider_id(provider_id)
-}
-
 /// Truncate a string by Unicode scalar count only when it exceeds the bound.
 fn bounded(value: String, limit: usize) -> String {
     let Some((end, _)) = value.char_indices().nth(limit) else {

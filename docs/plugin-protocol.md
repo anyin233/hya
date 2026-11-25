@@ -990,7 +990,6 @@ The shared Rust interface is `MAX_LINE_BYTES: usize = 1048576`,
 -> Result<(), FrameError>` (JSON, newline, flush).
 `FrameError` is `Io(String) | Json(String) | OversizedLine`.
 MCP maps these to `McpError`; plugins retain `PluginError`.
-The old `hya_mcp::codec` path remains available as a deprecated re-export.
 Dropping an MCP child guard terminates through `Child::start_kill` and reaps
 with `Child::wait` on the active runtime, without spawning a kill utility.
 
