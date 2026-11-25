@@ -1,38 +1,17 @@
-//! Integration tests for `hya-server`, built as one binary; each module covers one area.
+//! Integration tests for `hya-server`, built as one binary; each module covers one contract area.
 
+#[path = "support/harness.rs"]
+mod harness;
 #[path = "support/mcp.rs"]
 mod mcp_fixture;
 mod support;
 
-mod v1_agent_models_api;
-mod v1_api;
-mod v1_bundle_apis;
-mod v1_catalog_scope;
+mod v1_api_core;
+mod v1_bundles_and_skills;
 mod v1_grpc_parity;
-mod v1_host_guard;
-mod v1_interaction_stream;
-mod v1_live_stream;
-mod v1_mail_authorization;
-mod v1_member_turns;
-mod v1_message_attribution;
-mod v1_one_server;
-mod v1_permission_modes;
-mod v1_project;
-mod v1_project_sessions;
-mod v1_prompt_attachments;
-mod v1_providers_api;
-mod v1_reasoning_effort;
-mod v1_relay_host;
-mod v1_restart;
-mod v1_revert_fork;
-mod v1_saved_rules;
-mod v1_scope;
-mod v1_session_archive;
-mod v1_session_context;
-mod v1_session_ephemeral;
-mod v1_session_list_stream;
-mod v1_session_title;
-mod v1_skill_catalog;
-mod v1_status_data;
-mod v1_stream_shutdown;
-mod v1_tool_parts;
+mod v1_interactions_and_tools;
+mod v1_projects_and_scope;
+mod v1_providers_and_agents;
+mod v1_relay_and_host_guard;
+mod v1_sessions_lifecycle;
+mod v1_streaming_and_shutdown;

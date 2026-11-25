@@ -62,6 +62,7 @@ impl EnvGuard {
         unsafe { std::env::set_var(name, value) };
     }
 
+    #[allow(dead_code)]
     pub(crate) fn remove(&mut self, name: &str) {
         self.save(name);
         unsafe { std::env::remove_var(name) };

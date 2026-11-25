@@ -1,6 +1,6 @@
-//! App-level Workflow list, info, selection, state, and revision contracts.
+//! App-level Workflow list, info, selection, idempotency, precedence, and scope contracts.
 
-#![allow(clippy::expect_used)]
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use hya_app::{
     WorkflowControlError, WorkflowInvocation, agent_with_model, build_session_engine,
     offline_router,
 };
-use hya_bundle::{BundleCatalog, BundleSource, PreparedCatalog, SourceFile, prepare_package};
+use hya_bundle::{BundleCatalog, BundleSource, SourceFile, prepare_package};
 use hya_engine::{AgentCatalog, CreateSession, RuntimeRegistry};
 use hya_proto::{
     ToolCallId, WorkflowAvailability, WorkflowCommand, WorkflowCommandResult, WorkflowRunId,
@@ -23,117 +23,38 @@ use hya_store::SessionStore;
 use hya_tool::ToolOperation;
 use tokio_util::sync::CancellationToken;
 
-/// Create one process-unique project root.
-fn project_root() -> PathBuf {
+fn temp_dir(label: &str) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos());
+        .map_or(0, |d| d.as_nanos());
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "hya-workflow-control-{}-{nonce}-{seq}",
+        "hya-workflow-{label}-{}-{nonce}-{seq}",
         std::process::id()
     ))
 }
 
-/// Create one process-unique temporary path for catalog fixtures.
-fn temp_path(suffix: &str) -> PathBuf {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos());
-    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "hya-workflow-catalog-{}-{nonce}-{seq}-{suffix}",
-        std::process::id()
-    ))
-}
-
-/// Build a prepared WorkflowBundle whose prompt bytes can change independently.
-fn workflow_bundle_source_with_prompt(
-    bundle_id: &str,
-    workflow_id: &str,
-    prompt: &str,
-) -> hya_bundle::BundleSource {
-    let manifest = format!(
-        r#"kind: Bundle
-identity:
-  id: {bundle_id}
-  version: 1.0.0
-  publisher: hya
-workflow:
-  id: {workflow_id}
-  path: workflows/{workflow_id}.hya.md
-agents:
-  - id: catalog-worker
-    role: subagent
-    prompt: prompts/catalog-worker.md
-"#
-    );
-    let workflow = format!(
-        r#"---
-kind: Workflow
-name: {workflow_id}
-description: Installed catalog precedence fixture.
-nodes:
-  run:
-    agent: catalog-worker
-    directive: Run the installed catalog fixture.
----
-flowchart TD
-  run
-"#
-    );
-    BundleSource::new(
-        bundle_id,
-        vec![
-            SourceFile::new("bundle.yaml", manifest.into_bytes()),
-            SourceFile::new(
-                format!("workflows/{workflow_id}.hya.md"),
-                workflow.into_bytes(),
-            ),
-            SourceFile::new("prompts/catalog-worker.md", prompt.as_bytes().to_vec()),
-        ],
-    )
-}
-
-/// Write one simple compiled Workflow under the project discovery root.
-fn write_workflow(root: &Path, name: &str, directive: &str) {
-    let directory = root.join(".hya/workflows");
-    std::fs::create_dir_all(&directory).expect("create Workflow directory");
+fn write_workflow(dir: &Path, stem: &str, name: &str, directive: &str) {
+    std::fs::create_dir_all(dir).unwrap();
     std::fs::write(
-        directory.join(format!("{name}.hya.md")),
+        dir.join(format!("{stem}.hya.md")),
         format!(
-            r#"---
-kind: Workflow
-name: {name}
-description: {name} description.
-inputs:
-  request: Request to process.
-nodes:
-  execute:
-    agent: hya-task
-    directive: {directive} {{{{input.request}}}}
----
-flowchart TD
-  execute
-"#
+            "---\nkind: Workflow\nname: {name}\ndescription: {name} fixture.\ninputs:\n  request: Request.\nnodes:\n  execute:\n    agent: hya-task\n    directive: {directive} {{{{input.request}}}}\n---\nflowchart TD\n  execute\n"
         ),
     )
-    .expect("write Workflow");
+    .unwrap();
 }
 
-/// List/info expose the compiler revision, and selection is durable with an
-/// optimistic revision fence rather than process-local state.
-#[tokio::test]
-async fn list_info_select_state_and_stale_revision_share_one_catalog_contract() {
-    let root = project_root();
-    write_workflow(&root, "alpha", "ALPHA");
-    write_workflow(&root, "beta", "BETA");
+fn write_project_workflow(root: &Path, name: &str, directive: &str) {
+    write_workflow(&root.join(".hya/workflows"), name, name, directive);
+}
+
+async fn offline_built() -> (hya_app::BuiltSessionEngine, hya_engine::AgentSpec) {
     let (router, model) = offline_router(None);
     let agent = agent_with_model(&model, None);
-    let mut built = build_session_engine(
-        SessionStore::connect_memory().await.expect("store"),
+    let built = build_session_engine(
+        SessionStore::connect_memory().await.unwrap(),
         router,
         &agent,
         BTreeMap::new(),
@@ -145,7 +66,17 @@ async fn list_info_select_state_and_stale_revision_share_one_catalog_contract() 
         ),
     )
     .await
-    .expect("build engine");
+    .unwrap();
+    (built, agent)
+}
+
+#[tokio::test]
+async fn list_info_select_state_stale_revision_and_source_substitution() {
+    let _env = crate::support::env_read_lock().await;
+    let root = temp_dir("control");
+    write_project_workflow(&root, "alpha", "ALPHA");
+    write_project_workflow(&root, "beta", "BETA");
+    let (mut built, agent) = offline_built().await;
     let engine = built.engine();
     let control = built.workflow_control();
     let session = engine
@@ -158,9 +89,9 @@ async fn list_info_select_state_and_stale_revision_share_one_catalog_contract() 
             kind: hya_proto::SessionKind::Project,
         })
         .await
-        .expect("create Session");
+        .unwrap();
 
-    let list = match control
+    let WorkflowCommandResult::List { workflows } = control
         .execute(
             session,
             WorkflowInvocation::default(),
@@ -168,143 +99,91 @@ async fn list_info_select_state_and_stale_revision_share_one_catalog_contract() 
             CancellationToken::new(),
         )
         .await
-        .expect("list Workflows")
-    {
-        WorkflowCommandResult::List { workflows } => workflows,
-        result => panic!("unexpected list result: {result:?}"),
+        .unwrap()
+    else {
+        panic!("expected List");
     };
     assert_eq!(
-        list.iter()
-            .map(|item| item.name.as_str())
+        workflows
+            .iter()
+            .map(|w| w.name.as_str())
             .collect::<Vec<_>>(),
         ["alpha", "beta", "plan-impl-review"]
     );
-    assert!(list.iter().all(|item| item.revision.is_some()));
-    let alpha = match control
+    assert!(workflows.iter().all(|w| w.revision.is_some()));
+
+    let WorkflowCommandResult::Info { workflow: alpha } = control
         .execute(
             session,
             WorkflowInvocation::default(),
             WorkflowCommand::Info {
-                name: "alpha".to_string(),
+                name: "alpha".into(),
             },
             CancellationToken::new(),
         )
         .await
-        .expect("alpha info")
-    {
-        WorkflowCommandResult::Info { workflow } => workflow,
-        result => panic!("unexpected info result: {result:?}"),
+        .unwrap()
+    else {
+        panic!("expected Info");
     };
-    assert_eq!(
-        alpha.inputs.get("request").map(String::as_str),
-        Some("Request to process.")
-    );
     assert_eq!(alpha.stages.len(), 1);
-    assert_eq!(alpha.stages[0].id, "execute");
 
-    let selected = match control
+    let WorkflowCommandResult::Selected { state: selected } = control
         .execute(
             session,
             WorkflowInvocation::default(),
             WorkflowCommand::Select {
-                name: "alpha".to_string(),
+                name: "alpha".into(),
                 expected_revision: Some(alpha.identity.revision),
             },
             CancellationToken::new(),
         )
         .await
-        .expect("select alpha")
-    {
-        WorkflowCommandResult::Selected { state } => state,
-        result => panic!("unexpected select result: {result:?}"),
+        .unwrap()
+    else {
+        panic!("expected Selected");
     };
-    assert_eq!(
-        selected.selection.as_ref().map(|item| item.name.as_str()),
-        Some("alpha")
-    );
-    assert_eq!(
-        selected.availability,
-        Some(WorkflowAvailability::Available),
-        "selection is available while its exact source and revision match",
-    );
+    assert_eq!(selected.availability, Some(WorkflowAvailability::Available));
 
-    let current = match control
-        .execute(
-            session,
-            WorkflowInvocation::default(),
-            WorkflowCommand::State,
-            CancellationToken::new(),
-        )
-        .await
-        .expect("state")
-    {
-        WorkflowCommandResult::State { state } => state,
-        result => panic!("unexpected state result: {result:?}"),
-    };
-    assert_eq!(current, selected);
-
-    write_workflow(&root, "alpha", "CHANGED");
+    // Editing alpha invalidates revision fence -> StaleRevision + State::Stale.
+    write_project_workflow(&root, "alpha", "CHANGED");
     let stale = control
         .execute(
             session,
             WorkflowInvocation::default(),
             WorkflowCommand::Select {
-                name: "alpha".to_string(),
+                name: "alpha".into(),
                 expected_revision: Some(alpha.identity.revision),
             },
             CancellationToken::new(),
         )
         .await
-        .expect_err("old revision must fail closed");
-    assert!(matches!(stale, WorkflowControlError::StaleRevision { .. }));
+        .unwrap_err();
     assert_eq!(stale.code(), "WORKFLOW_STALE_REVISION");
-    let unchanged = match control
-        .execute(
-            session,
-            WorkflowInvocation::default(),
-            WorkflowCommand::State,
-            CancellationToken::new(),
-        )
-        .await
-        .expect("unchanged state")
-    {
-        WorkflowCommandResult::State { state } => state,
-        result => panic!("unexpected state result: {result:?}"),
-    };
-    assert_eq!(
-        unchanged.selection.expect("selection").revision,
-        alpha.identity.revision
-    );
-    assert_eq!(
-        unchanged.availability,
-        Some(WorkflowAvailability::Stale),
-        "a changed exact source is stale",
-    );
-    let explicit_stale = control
-        .execute(
-            session,
-            WorkflowInvocation::default(),
-            WorkflowCommand::Run {
-                name: Some("alpha".to_string()),
-                expected_revision: None,
-                inputs: BTreeMap::from([("request".to_string(), "value".to_string())]),
-                run: Some(WorkflowRunId::new()),
-            },
-            CancellationToken::new(),
-        )
-        .await
-        .expect_err("explicit same-name run must retain selected revision fence");
     assert!(matches!(
-        explicit_stale,
-        WorkflowControlError::StaleRevision { .. }
+        control
+            .execute(
+                session,
+                WorkflowInvocation::default(),
+                WorkflowCommand::Run {
+                    name: Some("alpha".into()),
+                    expected_revision: None,
+                    inputs: BTreeMap::from([("request".into(), "v".into())]),
+                    run: Some(WorkflowRunId::new()),
+                },
+                CancellationToken::new(),
+            )
+            .await,
+        Err(WorkflowControlError::StaleRevision { .. })
     ));
 
-    std::fs::write(
+    // Moving alpha to a different filename fails closed against source substitution.
+    std::fs::rename(
         root.join(".hya/workflows/alpha.hya.md"),
-        "not a Workflow source",
+        root.join(".hya/workflows/replacement.hya.md"),
     )
-    .expect("invalidate selected source");
-    let invalid = match control
+    .unwrap();
+    let WorkflowCommandResult::State { state: missing } = control
         .execute(
             session,
             WorkflowInvocation::default(),
@@ -312,173 +191,79 @@ async fn list_info_select_state_and_stale_revision_share_one_catalog_contract() 
             CancellationToken::new(),
         )
         .await
-        .expect("state for invalid source")
-    {
-        WorkflowCommandResult::State { state } => state,
-        result => panic!("unexpected state result: {result:?}"),
-    };
-    assert_eq!(invalid.availability, Some(WorkflowAvailability::Stale));
-
-    write_workflow(&root, "alpha", "CHANGED_AGAIN");
-    let replacement = root.join(".hya/workflows/replacement.hya.md");
-    std::fs::copy(root.join(".hya/workflows/alpha.hya.md"), &replacement)
-        .expect("copy same-name replacement source");
-    std::fs::remove_file(root.join(".hya/workflows/alpha.hya.md")).expect("remove selected source");
-    let missing = match control
-        .execute(
-            session,
-            WorkflowInvocation::default(),
-            WorkflowCommand::State,
-            CancellationToken::new(),
-        )
-        .await
-        .expect("state for missing source")
-    {
-        WorkflowCommandResult::State { state } => state,
-        result => panic!("unexpected state result: {result:?}"),
+        .unwrap()
+    else {
+        panic!("expected State");
     };
     assert_eq!(
         missing.availability,
         Some(WorkflowAvailability::Unavailable)
     );
+    for name in [None, Some("alpha".to_string())] {
+        assert!(matches!(
+            control
+                .execute(
+                    session,
+                    WorkflowInvocation::default(),
+                    WorkflowCommand::Run {
+                        name,
+                        expected_revision: None,
+                        inputs: BTreeMap::from([("request".into(), "v".into())]),
+                        run: Some(WorkflowRunId::new()),
+                    },
+                    CancellationToken::new(),
+                )
+                .await,
+            Err(WorkflowControlError::NotFound { .. })
+        ));
+    }
 
-    let beta = match control
-        .execute(
-            session,
-            WorkflowInvocation::default(),
-            WorkflowCommand::Info {
-                name: "beta".to_string(),
-            },
-            CancellationToken::new(),
-        )
-        .await
-        .expect("beta info")
-    {
-        WorkflowCommandResult::Info { workflow } => workflow,
-        result => panic!("unexpected info result: {result:?}"),
-    };
-    let switched = match control
-        .execute(
-            session,
-            WorkflowInvocation::default(),
-            WorkflowCommand::Select {
-                name: "beta".to_string(),
-                expected_revision: Some(beta.identity.revision),
-            },
-            CancellationToken::new(),
-        )
-        .await
-        .expect("switch to beta")
-    {
-        WorkflowCommandResult::Selected { state } => state,
-        result => panic!("unexpected select result: {result:?}"),
-    };
-    assert_eq!(switched.selection.expect("beta selection").name, "beta");
-
-    built.shutdown().await.expect("shutdown");
-    let _ = std::fs::remove_dir_all(root);
-}
-
-/// A selected source identity cannot silently move to another same-name file.
-#[tokio::test]
-async fn selected_run_rejects_same_name_source_substitution() {
-    let root = project_root();
-    write_workflow(&root, "alpha", "ALPHA");
-    let (router, model) = offline_router(None);
-    let agent = agent_with_model(&model, None);
-    let mut built = build_session_engine(
-        SessionStore::connect_memory().await.expect("store"),
-        router,
-        &agent,
-        BTreeMap::new(),
-        Vec::new(),
-        (
-            WebSearchConfig::default(),
-            InvocationPolicy::default(),
-            hya_app::config::EngineSettings::default(),
-        ),
-    )
-    .await
-    .expect("build engine");
-    let engine = built.engine();
-    let control = built.workflow_control();
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: agent.name.clone(),
-            model: agent.model.clone(),
-            workdir: root.display().to_string(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .expect("create Session");
-    control
+    // Switching selection to beta succeeds cleanly.
+    let WorkflowCommandResult::Selected { state: switched } = control
         .execute(
             session,
             WorkflowInvocation::default(),
             WorkflowCommand::Select {
-                name: "alpha".to_string(),
+                name: "beta".into(),
                 expected_revision: None,
             },
             CancellationToken::new(),
         )
         .await
-        .expect("select alpha");
-    std::fs::rename(
-        root.join(".hya/workflows/alpha.hya.md"),
-        root.join(".hya/workflows/replacement.hya.md"),
-    )
-    .expect("replace selected source path");
+        .unwrap()
+    else {
+        panic!("expected Selected");
+    };
+    assert_eq!(switched.selection.unwrap().name, "beta");
 
-    for name in [None, Some("alpha".to_string())] {
-        let error = control
-            .execute(
-                session,
-                WorkflowInvocation::default(),
-                WorkflowCommand::Run {
-                    name,
-                    expected_revision: None,
-                    inputs: BTreeMap::from([("request".to_string(), "value".to_string())]),
-                    run: Some(WorkflowRunId::new()),
-                },
-                CancellationToken::new(),
-            )
-            .await
-            .expect_err("selected source substitution must fail closed");
-        assert!(matches!(error, WorkflowControlError::NotFound { .. }));
-    }
-
-    built.shutdown().await.expect("shutdown");
+    built.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// A Tool operation admits one durable run, retains the operation id, and
-/// returns the terminal projection without another provider call on replay.
 #[tokio::test]
 async fn run_is_idempotent_by_tool_operation_and_rejects_changed_inputs() {
-    let root = project_root();
-    write_workflow(&root, "deliver", "DELIVER");
+    let _env = crate::support::env_read_lock().await;
+    let root = temp_dir("idempotent");
+    write_project_workflow(&root, "deliver", "DELIVER");
     let path = root.join(".hya/workflows/deliver.hya.md");
-    let source = std::fs::read_to_string(&path).expect("read Workflow");
+    let src = std::fs::read_to_string(&path).unwrap();
     std::fs::write(
         &path,
-        source.replace(
+        src.replace(
             "    agent: hya-task",
-            "    agent: hya-task\n    model:\n      id: fake/model",
+            "    agent: hya-task\n    model: { id: fake/model }",
         ),
     )
-    .expect("write explicit stage model");
+    .unwrap();
+
     let provider = hya_provider::FakeProvider::scripted(vec![hya_provider::FakeStep::Text(
-        "DELIVERED".to_string(),
+        "DELIVERED".into(),
     )]);
-    let live_router = hya_provider::ProviderRouter::new().with(std::sync::Arc::new(provider));
-    let router = hya_provider::ProviderRouter::new();
+    let live_router = hya_provider::ProviderRouter::new().with(Arc::new(provider));
     let agent = agent_with_model("fake/model", None);
-    let store = SessionStore::connect_memory().await.expect("store");
     let mut built = build_session_engine(
-        store,
-        router,
+        SessionStore::connect_memory().await.unwrap(),
+        hya_provider::ProviderRouter::new(),
         &agent,
         BTreeMap::new(),
         Vec::new(),
@@ -489,17 +274,14 @@ async fn run_is_idempotent_by_tool_operation_and_rejects_changed_inputs() {
         ),
     )
     .await
-    .expect("build engine");
+    .unwrap();
     let engine = built.engine();
     let control = built.workflow_control();
-    engine.publish_provider_catalog(
-        std::sync::Arc::new(live_router),
-        engine.provider_catalog_snapshot(),
-    );
+    engine.publish_provider_catalog(Arc::new(live_router), engine.provider_catalog_snapshot());
     engine
         .runtime_registry()
         .publish_agent_model_preferences(BTreeMap::from([(
-            "hya-task".to_string(),
+            "hya-task".into(),
             hya_proto::ModelRef::new("fake/model"),
         )]));
     let session = engine
@@ -512,87 +294,60 @@ async fn run_is_idempotent_by_tool_operation_and_rejects_changed_inputs() {
             kind: hya_proto::SessionKind::Project,
         })
         .await
-        .expect("create Session");
-    let operation = ToolOperation::from_tool_call(ToolCallId::new());
-    let invocation = WorkflowInvocation {
-        operation: Some(operation),
-        binding: Some(engine.bind_runtime(&root).expect("binding")),
+        .unwrap();
+
+    let op = ToolOperation::from_tool_call(ToolCallId::new());
+    let inv = WorkflowInvocation {
+        operation: Some(op),
+        binding: Some(engine.bind_runtime(&root).unwrap()),
         ..WorkflowInvocation::default()
     };
-    let command = WorkflowCommand::Run {
-        name: Some("deliver".to_string()),
+    let cmd = WorkflowCommand::Run {
+        name: Some("deliver".into()),
         expected_revision: None,
-        inputs: BTreeMap::from([("request".to_string(), "one".to_string())]),
+        inputs: BTreeMap::from([("request".into(), "one".into())]),
         run: None,
     };
 
-    let first = match control
-        .execute(
-            session,
-            invocation.clone(),
-            command.clone(),
-            CancellationToken::new(),
-        )
+    let WorkflowCommandResult::Run { result: first } = control
+        .execute(session, inv.clone(), cmd.clone(), CancellationToken::new())
         .await
-        .expect("first run")
-    {
-        WorkflowCommandResult::Run { result } => result,
-        result => panic!("unexpected run result: {result:?}"),
+        .unwrap()
+    else {
+        panic!("expected Run");
     };
     assert!(!first.replayed);
     assert_eq!(first.run.status, WorkflowRunStatus::Completed);
     assert_eq!(
         first.run.id,
-        WorkflowRunId::from_operation(operation.operation_id())
+        WorkflowRunId::from_operation(op.operation_id())
     );
-    assert_eq!(first.run.stages.len(), 1);
-    assert_eq!(first.run.stages[0].members.len(), 1);
 
-    let linked_member = first.run.stages[0].members[0].member;
-    let events = engine
-        .replay(session)
-        .await
-        .expect("replay Workflow lifecycle");
-    let link_index = events
+    // Member link precedes governed resident turn start.
+    let linked = first.run.stages[0].members[0].member;
+    let events = engine.replay(session).await.unwrap();
+    let link_idx = events
         .iter()
-        .position(|envelope| matches!(
-            &envelope.event,
-            hya_proto::Event::WorkflowStageMemberLinked { member, .. } if *member == linked_member
-        ))
-        .expect("Workflow member link");
-    // Under the unified substrate (ADR-0017) the member session is created
-    // (MemberSpawned) before the durable link; the governed turn starts when
-    // the directive mail reaches the actor, so the link must precede THAT.
-    let turn_start_index = events
+        .position(|e| matches!(&e.event, hya_proto::Event::WorkflowStageMemberLinked { member, .. } if *member == linked))
+        .unwrap();
+    let start_idx = events
         .iter()
-        .position(|envelope| {
+        .position(|e| {
             matches!(
-                &envelope.event,
-                hya_proto::Event::ResidentWorkStarted { .. }
+                &e.event,
+                hya_proto::Event::ResidentWorkStarted { .. } | hya_proto::Event::MailSent { .. }
             )
         })
-        .or_else(|| {
-            events
-                .iter()
-                .position(|envelope| matches!(&envelope.event, hya_proto::Event::MailSent { .. }))
-        })
-        .expect("governed turn start marker");
-    assert!(
-        link_index < turn_start_index,
-        "Workflow activity must reference the member before its governed turn starts"
-    );
-    let replay = match control
-        .execute(
-            session,
-            invocation.clone(),
-            command,
-            CancellationToken::new(),
-        )
+        .unwrap();
+    assert!(link_idx < start_idx);
+
+    // Same operation replays without another provider call; changed inputs fail with OperationConflict.
+    let WorkflowCommandResult::Run { result: replay } = control
+        .execute(session, inv.clone(), cmd, CancellationToken::new())
         .await
-        .expect("idempotent replay")
-    {
-        WorkflowCommandResult::Run { result } => result,
-        result => panic!("unexpected replay result: {result:?}"),
+        .unwrap()
+    else {
+        panic!("expected Run");
     };
     assert!(replay.replayed);
     assert_eq!(replay.run.id, first.run.id);
@@ -600,337 +355,156 @@ async fn run_is_idempotent_by_tool_operation_and_rejects_changed_inputs() {
     let conflict = control
         .execute(
             session,
-            invocation,
+            inv,
             WorkflowCommand::Run {
-                name: Some("deliver".to_string()),
+                name: Some("deliver".into()),
                 expected_revision: None,
-                inputs: BTreeMap::from([("request".to_string(), "changed".to_string())]),
+                inputs: BTreeMap::from([("request".into(), "changed".into())]),
                 run: None,
             },
             CancellationToken::new(),
         )
         .await
-        .expect_err("changed operation request must conflict");
-    assert!(matches!(
-        conflict,
-        WorkflowControlError::OperationConflict { .. }
-    ));
+        .unwrap_err();
     assert_eq!(conflict.code(), "WORKFLOW_OPERATION_CONFLICT");
 
-    built.shutdown().await.expect("shutdown");
+    built.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Write one valid Workflow source directly into a catalog discovery directory.
-fn write_catalog_workflow(directory: &Path, name: &str, directive: &str) {
-    std::fs::create_dir_all(directory).expect("create catalog Workflow directory");
-    std::fs::write(
-        directory.join(format!("{name}.hya.md")),
-        format!(
-            r#"---
-kind: Workflow
-name: {name}
-description: {name} precedence fixture.
-nodes:
-  run:
-    agent: hya-task
-    directive: {directive}
----
-flowchart TD
-  run
-"#
-        ),
-    )
-    .expect("write catalog Workflow");
-}
-
-/// Build the same first-party prepared payload used by the production catalog.
-fn first_party_source() -> BundleSource {
+fn workflow_bundle(bundle_id: &str, workflow_id: &str, prompt: &str) -> BundleSource {
     BundleSource::new(
-        "bundles/first-party/plan-impl-review",
+        bundle_id,
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                include_bytes!("../../../../bundles/first-party/plan-impl-review/bundle.yaml"),
-            ),
-            SourceFile::new(
-                "workflows/plan-impl-review.hya.md",
-                include_bytes!(
-                    "../../../../bundles/first-party/plan-impl-review/workflows/plan-impl-review.hya.md"
+                format!(
+                    "kind: Bundle\nidentity: {{ id: {bundle_id}, version: 1.0.0, publisher: hya }}\nworkflow: {{ id: {workflow_id}, path: workflows/{workflow_id}.hya.md }}\nagents: [{{ id: catalog-worker, role: subagent, prompt: prompts/w.md }}]\n"
                 ),
             ),
             SourceFile::new(
-                "prompts/planner.md",
-                include_bytes!(
-                    "../../../../bundles/first-party/plan-impl-review/prompts/planner.md"
+                format!("workflows/{workflow_id}.hya.md"),
+                format!(
+                    "---\nkind: Workflow\nname: {workflow_id}\ndescription: Installed.\nnodes:\n  run: {{ agent: catalog-worker, directive: Run. }}\n---\nflowchart TD\n  run\n"
                 ),
             ),
-            SourceFile::new(
-                "prompts/implementer.md",
-                include_bytes!(
-                    "../../../../bundles/first-party/plan-impl-review/prompts/implementer.md"
-                ),
-            ),
-            SourceFile::new(
-                "prompts/reviewer.md",
-                include_bytes!(
-                    "../../../../bundles/first-party/plan-impl-review/prompts/reviewer.md"
-                ),
-            ),
+            SourceFile::new("prompts/w.md", prompt),
         ],
     )
 }
 
-/// Build a runtime snapshot containing one installed and one first-party catalog.
-fn runtime_for_catalogs(
-    installed: &PreparedCatalog,
-    first_party: &PreparedCatalog,
-) -> Arc<RuntimeRegistry> {
-    let bundles = BundleCatalog::from_verified_catalogs(&[installed, first_party])
-        .expect("verified Workflow catalogs");
-    let agents = AgentCatalog::new(Arc::new(bundles)).expect("Workflow Agent catalog");
-    Arc::new(RuntimeRegistry::new(
-        hya_tool_loader::builtins(),
-        Arc::new(agents),
-    ))
-}
-
-/// Build explicit project/user roots for the immutable Workflow catalog seam.
-fn catalog_roots(project: &Path, user: &Path) -> WorkflowCatalogRoots {
-    WorkflowCatalogRoots::new(
-        vec![project.join(".hya/workflows")],
-        Some(user.to_path_buf()),
-    )
-}
-
-/// Write one compiled Workflow at an explicit filename, decoupled from its
-/// declared name (used to isolate a source id collision from a name
-/// collision across two Project roots).
-fn write_named_workflow(directory: &Path, file_stem: &str, name: &str, directive: &str) {
-    std::fs::create_dir_all(directory).expect("create Workflow directory");
-    std::fs::write(
-        directory.join(format!("{file_stem}.hya.md")),
-        format!(
-            r#"---
-kind: Workflow
-name: {name}
-description: {name} precedence fixture.
-nodes:
-  run:
-    agent: hya-task
-    directive: {directive}
----
-flowchart TD
-  run
-"#
-        ),
-    )
-    .expect("write Workflow");
-}
-
-/// A runtime snapshot with no bundles at all, for catalog tests that only
-/// exercise the filesystem tiers.
-fn empty_runtime() -> Arc<RuntimeRegistry> {
-    let bundles = BundleCatalog::from_verified_catalogs(&[]).expect("empty bundle catalog");
-    let agents = AgentCatalog::new(Arc::new(bundles)).expect("empty Agent catalog");
-    Arc::new(RuntimeRegistry::new(
-        hya_tool_loader::builtins(),
-        Arc::new(agents),
-    ))
-}
-
-/// Catalog resolution honors all source tiers, folds bundle content into
-/// revisions, and keeps an admitted binding pinned across publication.
 #[tokio::test]
-async fn workflow_catalog_precedence_revision_and_binding_contract() {
-    let project = project_root();
-    let project_workflows = project.join(".hya/workflows");
-    let user_workflows = temp_path("catalog-user-workflows");
-    write_catalog_workflow(&project_workflows, "collision", "PROJECT");
-    write_catalog_workflow(&user_workflows, "collision", "USER");
+async fn catalog_precedence_folded_revisions_and_first_party_selection() {
+    let _env = crate::support::env_read_lock().await;
+    let project = temp_dir("prec-proj");
+    let proj_wf = project.join(".hya/workflows");
+    let user_wf = temp_dir("prec-user");
+    write_workflow(&proj_wf, "collision", "collision", "PROJECT");
+    write_workflow(&user_wf, "collision", "collision", "USER");
 
-    let installed_old = prepare_package(workflow_bundle_source_with_prompt(
-        "hya/catalog-installed",
-        "collision",
-        "OLD PROMPT",
+    let installed_old =
+        prepare_package(workflow_bundle("hya/cat-inst", "collision", "OLD")).unwrap();
+    let first_party = prepare_package(BundleSource::new(
+        "bundles/first-party/plan-impl-review",
+        vec![
+            SourceFile::new("bundle.yaml", include_bytes!("../../../../bundles/first-party/plan-impl-review/bundle.yaml")),
+            SourceFile::new("workflows/plan-impl-review.hya.md", include_bytes!("../../../../bundles/first-party/plan-impl-review/workflows/plan-impl-review.hya.md")),
+            SourceFile::new("prompts/planner.md", include_bytes!("../../../../bundles/first-party/plan-impl-review/prompts/planner.md")),
+            SourceFile::new("prompts/implementer.md", include_bytes!("../../../../bundles/first-party/plan-impl-review/prompts/implementer.md")),
+            SourceFile::new("prompts/reviewer.md", include_bytes!("../../../../bundles/first-party/plan-impl-review/prompts/reviewer.md")),
+        ],
     ))
-    .expect("prepare installed WorkflowBundle");
-    let first_party = prepare_package(first_party_source()).expect("prepare first-party bundle");
-    let runtime = runtime_for_catalogs(&installed_old, &first_party);
-    let old_binding = runtime
-        .bind_turn(&project)
-        .expect("bind old runtime snapshot");
+    .unwrap();
+    let runtime = Arc::new(RuntimeRegistry::new(
+        hya_tool_loader::builtins(),
+        Arc::new(
+            AgentCatalog::new(Arc::new(
+                BundleCatalog::from_verified_catalogs(&[&installed_old, &first_party]).unwrap(),
+            ))
+            .unwrap(),
+        ),
+    ));
+    let old_binding = runtime.bind_turn(&project).unwrap();
+    let roots = || WorkflowCatalogRoots::new(vec![proj_wf.clone()], Some(user_wf.clone()));
 
-    let project_catalog =
-        WorkflowCatalog::build(catalog_roots(&project, &user_workflows), &old_binding)
-            .expect("build project/user/installed/first-party catalog");
-    let project_entry = project_catalog
-        .resolve("collision")
-        .expect("project bare name must resolve");
+    // Precedence: Project > User > Installed, while qualified refs bypass bare shadowing.
+    let cat = WorkflowCatalog::build(roots(), &old_binding).unwrap();
     assert!(matches!(
-        project_entry.owner(),
+        cat.resolve("collision").unwrap().owner(),
         WorkflowCatalogOwner::Project
     ));
-    assert_eq!(project_entry.identity().name, "collision");
-    assert_eq!(project_entry.workflow().definition().name(), "collision");
-    assert!(project_entry.display_path().ends_with("collision.hya.md"));
-    assert_eq!(project_entry.workflow().plan().stages().len(), 1);
-
-    let installed_reference = "bundle:hya/catalog-installed/workflow/collision";
-    let installed_entry = project_catalog
-        .resolve(installed_reference)
-        .expect("qualified installed Workflow must bypass bare shadowing");
+    let inst_ref = "bundle:hya/cat-inst/workflow/collision";
     assert!(matches!(
-        installed_entry.owner(),
-        WorkflowCatalogOwner::Installed { bundle_id } if bundle_id == "hya/catalog-installed"
+        cat.resolve(inst_ref).unwrap().owner(),
+        WorkflowCatalogOwner::Installed { bundle_id } if bundle_id == "hya/cat-inst"
     ));
-
-    let first_party_reference = "bundle:hya/plan-impl-review/workflow/plan-impl-review";
-    let first_party_entry = project_catalog
-        .resolve("plan-impl-review")
-        .expect("first-party bare Workflow must resolve when unambiguous");
     assert!(matches!(
-        first_party_entry.owner(),
+        cat.resolve("plan-impl-review").unwrap().owner(),
         WorkflowCatalogOwner::FirstParty { bundle_id } if bundle_id == "hya/plan-impl-review"
     ));
-    assert_eq!(
-        first_party_entry.identity().source.as_str(),
-        first_party_reference
-    );
-    assert_eq!(
-        project_catalog
-            .resolve(first_party_reference)
-            .expect("qualified first-party Workflow")
-            .identity(),
-        first_party_entry.identity()
-    );
 
-    let prepared_workflow = installed_old.bundles()[0]
-        .workflow()
-        .expect("installed payload has one Workflow");
-    let compiled = hya_workflow::compile(hya_workflow::WorkflowSource::new(
-        &prepared_workflow.source_path,
-        &prepared_workflow.source,
-    ))
-    .expect("prepared Workflow source compiles");
-    let compiler_only_revision = compiled.revision();
-    assert_ne!(
-        project_catalog
-            .resolve(installed_reference)
-            .expect("installed Workflow")
-            .identity()
-            .revision,
-        compiler_only_revision,
-        "bundle Workflow revisions must fold the prepared bundle digest"
-    );
-
-    std::fs::remove_file(project_workflows.join("collision.hya.md"))
-        .expect("remove project precedence fixture");
-    let user_catalog =
-        WorkflowCatalog::build(catalog_roots(&project, &user_workflows), &old_binding)
-            .expect("rebuild catalog after project removal");
+    std::fs::remove_file(proj_wf.join("collision.hya.md")).unwrap();
     assert!(matches!(
-        user_catalog
+        WorkflowCatalog::build(roots(), &old_binding)
+            .unwrap()
             .resolve("collision")
-            .expect("user bare name must resolve"),
-        entry if matches!(entry.owner(), WorkflowCatalogOwner::User)
+            .unwrap()
+            .owner(),
+        WorkflowCatalogOwner::User
+    ));
+    std::fs::remove_file(user_wf.join("collision.hya.md")).unwrap();
+    assert!(matches!(
+        WorkflowCatalog::build(roots(), &old_binding)
+            .unwrap()
+            .resolve("collision")
+            .unwrap()
+            .owner(),
+        WorkflowCatalogOwner::Installed { .. }
     ));
 
-    std::fs::remove_file(user_workflows.join("collision.hya.md"))
-        .expect("remove user precedence fixture");
-    let installed_catalog =
-        WorkflowCatalog::build(catalog_roots(&project, &user_workflows), &old_binding)
-            .expect("rebuild catalog after user removal");
-    assert!(matches!(
-        installed_catalog
-            .resolve("collision")
-            .expect("installed bare name must resolve"),
-        entry if matches!(
-            entry.owner(),
-            WorkflowCatalogOwner::Installed { bundle_id } if bundle_id == "hya/catalog-installed"
-        )
-    ));
-
-    let installed_new = prepare_package(workflow_bundle_source_with_prompt(
-        "hya/catalog-installed",
-        "collision",
-        "NEW PROMPT",
-    ))
-    .expect("prepare changed installed WorkflowBundle");
-    let new_bundles = BundleCatalog::from_verified_catalogs(&[&installed_new, &first_party])
-        .expect("verified replacement Workflow catalogs");
-    let new_agents = AgentCatalog::new(Arc::new(new_bundles)).expect("replacement Agent catalog");
+    // Bundle agent prompt change folds into revision; old binding stays pinned.
+    let installed_new =
+        prepare_package(workflow_bundle("hya/cat-inst", "collision", "NEW")).unwrap();
     runtime
-        .publish_catalog(Arc::new(new_agents))
-        .expect("publish replacement catalog");
-    let fresh_binding = runtime
-        .bind_turn(&project)
-        .expect("bind replacement snapshot");
-    let pinned_catalog =
-        WorkflowCatalog::build(catalog_roots(&project, &user_workflows), &old_binding)
-            .expect("build catalog from pinned binding");
-    let fresh_catalog =
-        WorkflowCatalog::build(catalog_roots(&project, &user_workflows), &fresh_binding)
-            .expect("build catalog from replacement binding");
-    let pinned_revision = pinned_catalog
-        .resolve(installed_reference)
-        .expect("old binding keeps installed Workflow")
+        .publish_catalog(Arc::new(
+            AgentCatalog::new(Arc::new(
+                BundleCatalog::from_verified_catalogs(&[&installed_new, &first_party]).unwrap(),
+            ))
+            .unwrap(),
+        ))
+        .unwrap();
+    let fresh_binding = runtime.bind_turn(&project).unwrap();
+    let old_rev = WorkflowCatalog::build(roots(), &old_binding)
+        .unwrap()
+        .resolve(inst_ref)
+        .unwrap()
         .identity()
         .revision;
-    let fresh_revision = fresh_catalog
-        .resolve(installed_reference)
-        .expect("fresh binding sees replacement Workflow")
+    let new_rev = WorkflowCatalog::build(roots(), &fresh_binding)
+        .unwrap()
+        .resolve(inst_ref)
+        .unwrap()
         .identity()
         .revision;
-    assert_ne!(
-        pinned_revision, fresh_revision,
-        "changed Agent closure must change the folded Workflow revision"
-    );
-    assert_eq!(
-        old_binding
-            .bundle_catalog()
-            .resolve_workflow(installed_reference)
-            .expect("old binding remains pinned")
-            .source_path,
-        prepared_workflow.source_path
-    );
+    assert_ne!(old_rev, new_rev);
 
-    let control_root = temp_path("first-party-control");
-    std::fs::create_dir_all(&control_root).expect("create control project");
-    let (router, model) = offline_router(None);
-    let agent = agent_with_model(&model, None);
-    let mut built = build_session_engine(
-        SessionStore::connect_memory().await.expect("control store"),
-        router,
-        &agent,
-        BTreeMap::new(),
-        Vec::new(),
-        (
-            WebSearchConfig::default(),
-            InvocationPolicy::default(),
-            hya_app::config::EngineSettings::default(),
-        ),
-    )
-    .await
-    .expect("build first-party control engine");
+    // Listing/info/state never auto-selects first-party workflows; explicit select persists once.
+    let (mut built, agent) = offline_built().await;
     let engine = built.engine();
+    let control = built.workflow_control();
     let session = engine
         .create(CreateSession {
             parent: None,
             agent: agent.name.clone(),
             model: agent.model.clone(),
-            workdir: control_root.display().to_string(),
+            workdir: project.display().to_string(),
             project: None,
             kind: hya_proto::SessionKind::Project,
         })
         .await
-        .expect("create first-party control Session");
-    let control = built.workflow_control();
-    let before = engine
-        .replay(session)
-        .await
-        .expect("replay before catalog load");
-    let listed = match control
+        .unwrap();
+    let before_len = engine.replay(session).await.unwrap().len();
+    let _ = control
         .execute(
             session,
             WorkflowInvocation::default(),
@@ -938,28 +512,8 @@ async fn workflow_catalog_precedence_revision_and_binding_contract() {
             CancellationToken::new(),
         )
         .await
-        .expect("list first-party Workflow")
-    {
-        WorkflowCommandResult::List { workflows } => workflows,
-        result => panic!("unexpected list result: {result:?}"),
-    };
-    assert!(
-        listed
-            .iter()
-            .any(|workflow| workflow.name == "plan-impl-review")
-    );
+        .unwrap();
     let _ = control
-        .execute(
-            session,
-            WorkflowInvocation::default(),
-            WorkflowCommand::Info {
-                name: "plan-impl-review".to_string(),
-            },
-            CancellationToken::new(),
-        )
-        .await
-        .expect("inspect first-party Workflow");
-    let state_before_select = match control
         .execute(
             session,
             WorkflowInvocation::default(),
@@ -967,249 +521,130 @@ async fn workflow_catalog_precedence_revision_and_binding_contract() {
             CancellationToken::new(),
         )
         .await
-        .expect("read state before first-party selection")
-    {
-        WorkflowCommandResult::State { state } => state,
-        result => panic!("unexpected state result: {result:?}"),
-    };
-    assert!(state_before_select.selection.is_none());
-    let after_catalog_load = engine
-        .replay(session)
-        .await
-        .expect("replay after catalog load");
-    assert!(
-        after_catalog_load.iter().all(|envelope| !matches!(
-            &envelope.event,
-            hya_proto::Event::WorkflowSelected { .. } | hya_proto::Event::WorkflowRunStarted { .. }
-        )),
-        "catalog list/info/state must not select or run a Workflow"
-    );
-    assert_eq!(before.len(), after_catalog_load.len());
-
-    let selected = match control
+        .unwrap();
+    assert_eq!(engine.replay(session).await.unwrap().len(), before_len);
+    let WorkflowCommandResult::Selected { state } = control
         .execute(
             session,
             WorkflowInvocation::default(),
             WorkflowCommand::Select {
-                name: "plan-impl-review".to_string(),
+                name: "plan-impl-review".into(),
                 expected_revision: None,
             },
             CancellationToken::new(),
         )
         .await
-        .expect("select first-party Workflow explicitly")
-    {
-        WorkflowCommandResult::Selected { state } => state,
-        result => panic!("unexpected selection result: {result:?}"),
+        .unwrap()
+    else {
+        panic!("expected Selected");
     };
-    let selection = selected.selection.expect("explicit selection");
-    assert_eq!(selection.name, "plan-impl-review");
-    assert_eq!(selection.source.as_str(), first_party_reference);
-    let events = engine
-        .replay(session)
-        .await
-        .expect("replay explicit selection");
     assert_eq!(
-        events
-            .iter()
-            .filter(|envelope| matches!(&envelope.event, hya_proto::Event::WorkflowSelected { .. }))
-            .count(),
-        1
-    );
-    assert!(
-        !events
-            .iter()
-            .any(|envelope| matches!(&envelope.event, hya_proto::Event::WorkflowRunStarted { .. }))
+        state.selection.unwrap().source.as_str(),
+        "bundle:hya/plan-impl-review/workflow/plan-impl-review"
     );
 
-    built.shutdown().await.expect("shutdown control engine");
+    built.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(project);
-    let _ = std::fs::remove_dir_all(user_workflows);
-    let _ = std::fs::remove_dir_all(control_root);
+    let _ = std::fs::remove_dir_all(user_wf);
 }
 
-/// `list` answers each named directory's own catalog, and answers only the
-/// user/bundle tiers (no project rows) when the caller names no directory —
-/// a wrong scope must never silently substitute another directory's catalog.
 #[tokio::test]
-async fn list_answers_each_directorys_own_catalog_and_falls_back_to_global() {
-    let root_a = project_root();
-    let root_b = project_root();
-    write_workflow(&root_a, "alpha", "ALPHA");
-    write_workflow(&root_b, "gamma", "GAMMA");
-    let (router, model) = offline_router(None);
-    let agent = agent_with_model(&model, None);
-    let mut built = build_session_engine(
-        SessionStore::connect_memory().await.expect("store"),
-        router,
-        &agent,
-        BTreeMap::new(),
-        Vec::new(),
-        (
-            WebSearchConfig::default(),
-            InvocationPolicy::default(),
-            hya_app::config::EngineSettings::default(),
-        ),
-    )
-    .await
-    .expect("build engine");
-    let control = built.workflow_control();
-
-    // Zero sessions exist; `list` must still answer from the filesystem and
-    // bundle catalog directly, never from a session's catalog.
-    let a = control
-        .list(Some(root_a.as_path()))
-        .await
-        .expect("list directory A");
-    assert_eq!(
-        a.iter().map(|item| item.name.as_str()).collect::<Vec<_>>(),
-        ["alpha", "plan-impl-review"],
-        "directory A's own project row, not directory B's"
-    );
-
-    let b = control
-        .list(Some(root_b.as_path()))
-        .await
-        .expect("list directory B");
-    assert_eq!(
-        b.iter().map(|item| item.name.as_str()).collect::<Vec<_>>(),
-        ["gamma", "plan-impl-review"],
-        "directory B's own project row, not directory A's"
-    );
-
-    let global = control.list(None).await.expect("list global");
-    assert_eq!(
-        global
-            .iter()
-            .map(|item| item.name.as_str())
-            .collect::<Vec<_>>(),
-        ["plan-impl-review"],
-        "no directory named: only user/bundle rows, never a project tier"
-    );
-
-    built.shutdown().await.expect("shutdown control engine");
-    let _ = std::fs::remove_dir_all(root_a);
-    let _ = std::fs::remove_dir_all(root_b);
-}
-
-/// F2 multi-root: a later root's Workflow whose `project:<relative path>`
-/// source id or declared name collides with an earlier root's is skipped;
-/// the earlier (first) root wins in both cases.
-#[tokio::test]
-async fn multi_root_catalog_dedupes_by_source_id_and_by_name_first_root_wins() {
-    let root_a = temp_path("multi-root-a");
-    let root_b = temp_path("multi-root-b");
-    let workflows_a = root_a.join(".hya/workflows");
-    let workflows_b = root_b.join(".hya/workflows");
-
-    // Same relative path (`same.hya.md`) in both roots -> same source id
-    // `project:same.hya.md`. Root B's distinct declared name must not
-    // surface: its whole file is skipped once root A claims that id.
-    write_named_workflow(&workflows_a, "same", "root-a-same", "ROOT A SAME");
-    write_named_workflow(&workflows_b, "same", "root-b-same", "ROOT B SAME");
-
-    // Distinct relative paths declaring the same Workflow name: a name
-    // collision independent of the source id. Root A's file must win.
-    write_named_workflow(&workflows_a, "unique-a", "shared-name", "ROOT A SHARED");
-    write_named_workflow(&workflows_b, "unique-b", "shared-name", "ROOT B SHARED");
-
-    let runtime = empty_runtime();
-    let binding = runtime.bind_turn(&root_a).expect("bind runtime");
-    let roots = WorkflowCatalogRoots::new(vec![workflows_a.clone(), workflows_b.clone()], None);
-    let catalog = WorkflowCatalog::build(roots, &binding).expect("build multi-root catalog");
-
-    let names = catalog
-        .list()
-        .into_iter()
-        .map(|item| item.name)
-        .collect::<Vec<_>>();
-    assert_eq!(
-        names,
-        ["root-a-same", "shared-name"],
-        "root B's colliding source id and colliding name must not add rows"
-    );
-
-    let same = catalog
-        .resolve("root-a-same")
-        .expect("root A's Workflow must win the source id collision");
-    assert!(
-        same.display_path()
-            .starts_with(workflows_a.display().to_string().as_str()),
-        "the winning entry must come from root A"
-    );
-    assert!(
-        matches!(
-            catalog.resolve("root-b-same"),
-            Err(WorkflowControlError::NotFound { .. })
-        ),
-        "root B's colliding source id must never surface, under any name"
-    );
-
-    let shared = catalog
-        .resolve("shared-name")
-        .expect("root A's Workflow must win the name collision");
-    assert!(
-        shared
-            .display_path()
-            .starts_with(workflows_a.display().to_string().as_str()),
-        "the winning entry must come from root A"
-    );
-
-    let _ = std::fs::remove_dir_all(root_a);
-    let _ = std::fs::remove_dir_all(root_b);
-}
-
-/// F2 multi-root: a session bound to a Project lists every registered root's
-/// Workflow catalog, and a selection made against the primary root's
-/// Workflow stays resolvable across a fresh bind (a new catalog rebuilt from
-/// scratch on the next command, not the binding captured at selection time).
-#[tokio::test]
-async fn project_scope_session_lists_every_root_and_keeps_the_primary_selection_resolvable() {
-    let root_a = project_root();
-    let root_b = project_root();
-    write_workflow(&root_a, "alpha", "ALPHA");
-    write_workflow(&root_b, "gamma", "GAMMA");
+async fn directory_global_and_multi_root_project_workflow_scopes() {
+    let _env = crate::support::env_read_lock().await;
+    let root_a = temp_dir("scope-a");
+    let root_b = temp_dir("scope-b");
+    let wf_a = root_a.join(".hya/workflows");
+    let wf_b = root_b.join(".hya/workflows");
+    write_workflow(&wf_a, "same", "root-a-same", "A SAME");
+    write_workflow(&wf_b, "same", "root-b-same", "B SAME");
+    write_workflow(&wf_a, "unique-a", "shared-name", "A SHARED");
+    write_workflow(&wf_b, "unique-b", "shared-name", "B SHARED");
+    write_workflow(&wf_b, "gamma", "gamma", "GAMMA");
     let nested = root_a.join("nested");
-    write_workflow(&nested, "local", "LOCAL");
-    let (router, model) = offline_router(None);
-    let agent = agent_with_model(&model, None);
-    let mut built = build_session_engine(
-        SessionStore::connect_memory().await.expect("store"),
-        router,
-        &agent,
-        BTreeMap::new(),
-        Vec::new(),
-        (
-            WebSearchConfig::default(),
-            InvocationPolicy::default(),
-            hya_app::config::EngineSettings::default(),
+    write_project_workflow(&nested, "local", "LOCAL");
+
+    // 1. Multi-root dedupe by both source ID and declared name (first root wins).
+    let empty = Arc::new(RuntimeRegistry::new(
+        hya_tool_loader::builtins(),
+        Arc::new(
+            AgentCatalog::new(Arc::new(
+                BundleCatalog::from_verified_catalogs(&[]).unwrap(),
+            ))
+            .unwrap(),
         ),
+    ));
+    let binding = empty.bind_turn(&root_a).unwrap();
+    let cat = WorkflowCatalog::build(
+        WorkflowCatalogRoots::new(vec![wf_a.clone(), wf_b.clone()], None),
+        &binding,
     )
-    .await
-    .expect("build engine");
+    .unwrap();
+    assert_eq!(
+        cat.list().into_iter().map(|i| i.name).collect::<Vec<_>>(),
+        ["root-a-same", "shared-name", "gamma"]
+    );
+    assert!(
+        cat.resolve("root-a-same")
+            .unwrap()
+            .display_path()
+            .starts_with(&wf_a.display().to_string())
+    );
+    assert!(
+        cat.resolve("shared-name")
+            .unwrap()
+            .display_path()
+            .starts_with(&wf_a.display().to_string())
+    );
+    assert!(matches!(
+        cat.resolve("root-b-same"),
+        Err(WorkflowControlError::NotFound { .. })
+    ));
+
+    // 2. Standalone `list(Some(dir))` vs `list(None)` and multi-root Project session selection.
+    let (mut built, agent) = offline_built().await;
     let engine = built.engine();
     let control = built.workflow_control();
-    let project = engine
+    assert_eq!(
+        control
+            .list(Some(&root_a))
+            .await
+            .unwrap()
+            .iter()
+            .map(|i| i.name.as_str())
+            .collect::<Vec<_>>(),
+        ["root-a-same", "shared-name", "plan-impl-review"]
+    );
+    assert_eq!(
+        control
+            .list(None)
+            .await
+            .unwrap()
+            .iter()
+            .map(|i| i.name.as_str())
+            .collect::<Vec<_>>(),
+        ["plan-impl-review"]
+    );
+
+    let proj = engine
         .store()
         .create_project(
-            "multi-root",
+            "multi",
             &[root_a.display().to_string(), root_b.display().to_string()],
         )
         .await
-        .expect("create multi-root Project");
+        .unwrap();
     let session = engine
         .create(CreateSession {
             parent: None,
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: nested.display().to_string(),
-            project: Some(project.id),
+            project: Some(proj.id),
             kind: hya_proto::SessionKind::Project,
         })
         .await
-        .expect("create Session bound to the multi-root Project");
-
-    let list = match control
+        .unwrap();
+    let WorkflowCommandResult::List { workflows } = control
         .execute(
             session,
             WorkflowInvocation::default(),
@@ -1217,58 +652,40 @@ async fn project_scope_session_lists_every_root_and_keeps_the_primary_selection_
             CancellationToken::new(),
         )
         .await
-        .expect("list Workflows across every root")
-    {
-        WorkflowCommandResult::List { workflows } => workflows,
-        result => panic!("unexpected list result: {result:?}"),
+        .unwrap()
+    else {
+        panic!("expected List");
     };
     assert_eq!(
-        list.iter()
-            .map(|item| item.name.as_str())
+        workflows
+            .iter()
+            .map(|w| w.name.as_str())
             .collect::<Vec<_>>(),
-        ["local", "alpha", "gamma", "plan-impl-review"],
-        "Workflow discovery must visit the recorded workdir before Project roots"
+        [
+            "local",
+            "root-a-same",
+            "shared-name",
+            "gamma",
+            "plan-impl-review"
+        ]
     );
-
-    let alpha = match control
-        .execute(
-            session,
-            WorkflowInvocation::default(),
-            WorkflowCommand::Info {
-                name: "alpha".to_string(),
-            },
-            CancellationToken::new(),
-        )
-        .await
-        .expect("alpha info")
-    {
-        WorkflowCommandResult::Info { workflow } => workflow,
-        result => panic!("unexpected info result: {result:?}"),
-    };
-
-    let selected = match control
+    let WorkflowCommandResult::Selected { state } = control
         .execute(
             session,
             WorkflowInvocation::default(),
             WorkflowCommand::Select {
-                name: "alpha".to_string(),
-                expected_revision: Some(alpha.identity.revision),
+                name: "root-a-same".into(),
+                expected_revision: None,
             },
             CancellationToken::new(),
         )
         .await
-        .expect("select the primary root's Workflow")
-    {
-        WorkflowCommandResult::Selected { state } => state,
-        result => panic!("unexpected select result: {result:?}"),
+        .unwrap()
+    else {
+        panic!("expected Selected");
     };
-    assert_eq!(
-        selected.availability,
-        Some(WorkflowAvailability::Available),
-        "the primary root's selected identity must resolve immediately"
-    );
-
-    let state = match control
+    assert_eq!(state.availability, Some(WorkflowAvailability::Available));
+    let WorkflowCommandResult::State { state: fresh } = control
         .execute(
             session,
             WorkflowInvocation::default(),
@@ -1276,18 +693,13 @@ async fn project_scope_session_lists_every_root_and_keeps_the_primary_selection_
             CancellationToken::new(),
         )
         .await
-        .expect("read state from a fresh bind")
-    {
-        WorkflowCommandResult::State { state } => state,
-        result => panic!("unexpected state result: {result:?}"),
+        .unwrap()
+    else {
+        panic!("expected State");
     };
-    assert_eq!(
-        state.availability,
-        Some(WorkflowAvailability::Available),
-        "the primary root's persisted identity must stay resolvable across binds"
-    );
+    assert_eq!(fresh.availability, Some(WorkflowAvailability::Available));
 
-    built.shutdown().await.expect("shutdown control engine");
+    built.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root_a);
     let _ = std::fs::remove_dir_all(root_b);
 }

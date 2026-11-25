@@ -623,3 +623,62 @@ pub(crate) async fn refresh_through_backend(
     }
     Ok(Some(refreshed))
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn suggested_id_check_id_and_protocol_labels() {
+        for (url, expected) in [
+            ("https://api.openai.com/v1", "openai"),
+            ("https://gateway.example.org/v1", "example"),
+            ("http://127.0.0.1:8080/v1", "local"),
+            ("http://localhost:11434/v1", "local"),
+            ("http://[::1]:8000/v1", "local"),
+            ("https://api.hya.dev/v1", "provider"),
+        ] {
+            assert_eq!(suggested_id(url), expected, "{url}");
+        }
+        assert!(check_id("acme-1_2").is_ok());
+        for bad in ["", "hya", "acme.3", "bad/id", "has space"] {
+            assert!(check_id(bad).is_err(), "{bad:?}");
+        }
+        for (kind, label) in [
+            ("openai", "openai-chat"),
+            ("openai-compatible", "openai-chat"),
+            ("openai-completion", "openai-chat"),
+            ("openai-response", "openai-responses"),
+            ("anthropic", "anthropic-messages"),
+            ("google", "google"),
+        ] {
+            assert_eq!(Protocol::label_for_kind(kind), label, "{kind}");
+        }
+        assert_eq!(
+            source_note(ModelCatalogSource::Overridden),
+            "  (config override)"
+        );
+        assert_eq!(
+            source_note(ModelCatalogSource::Configured),
+            "  (config only)"
+        );
+        assert_eq!(source_note(ModelCatalogSource::Discovered), "");
+        assert_eq!(source_note(ModelCatalogSource::Offline), "");
+    }
+
+    #[test]
+    fn model_summary_wraps_and_truncates_beyond_shown_limit() {
+        let short = model_summary(&["alpha", "beta"]);
+        assert_eq!(short, "  alpha, beta");
+
+        let long_names: Vec<String> = (0..25).map(|i| format!("model-name-long-{i:02}")).collect();
+        let refs: Vec<&str> = long_names.iter().map(String::as_str).collect();
+        let summary = model_summary(&refs);
+        assert!(summary.contains("model-name-long-00"), "{summary}");
+        assert!(summary.contains("model-name-long-19"), "{summary}");
+        assert!(!summary.contains("model-name-long-20"), "{summary}");
+        assert!(summary.contains("… and 5 more"), "{summary}");
+        assert!(summary.lines().count() > 3, "expected wrapping:\n{summary}");
+    }
+}

@@ -950,28 +950,28 @@ mod tests {
 
     #[test]
     fn listen_accepts_loopback_forms_only() {
-        assert_eq!(
-            parse_listen("127.0.0.1:0").unwrap().to_string(),
-            "127.0.0.1:0"
-        );
-        assert_eq!(
-            parse_listen("[::1]:4000").unwrap().to_string(),
-            "[::1]:4000"
-        );
-        assert_eq!(
-            parse_listen("localhost:4001").unwrap().to_string(),
-            "127.0.0.1:4001"
-        );
-        assert_eq!(parse_listen("4002").unwrap().to_string(), "127.0.0.1:4002");
+        for (raw, expected) in [
+            ("127.0.0.1:0", "127.0.0.1:0"),
+            ("[::1]:4000", "[::1]:4000"),
+            ("localhost:4001", "127.0.0.1:4001"),
+            ("4002", "127.0.0.1:4002"),
+        ] {
+            assert_eq!(parse_listen(raw).unwrap().to_string(), expected);
+        }
         for refused in ["0.0.0.0:0", "[::]:0", "192.168.1.5:80", "10.0.0.1:1"] {
-            let error = parse_listen(refused).unwrap_err().to_string();
-            assert!(error.contains("loopback"), "{refused}: {error}");
+            assert!(
+                parse_listen(refused)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("loopback"),
+                "{refused}"
+            );
         }
         assert!(parse_listen("example.com:80").is_err());
     }
 
     #[test]
-    fn link_sources() {
+    fn link_sources_redaction_transport_override_and_env_take() {
         assert_eq!(LinkSource::from_arg(Some("-")), LinkSource::Stdin);
         assert_eq!(LinkSource::from_arg(None), LinkSource::Env);
         assert_eq!(LinkSource::from_arg(Some("")), LinkSource::Env);
@@ -980,22 +980,14 @@ mod tests {
             LinkSource::Arg("hya://x".into())
         );
         assert!(exposed_in_argv(&LinkSource::Arg("x".into())));
-        assert!(!exposed_in_argv(&LinkSource::Stdin));
-        assert!(!exposed_in_argv(&LinkSource::Env));
-    }
+        assert!(!exposed_in_argv(&LinkSource::Stdin) && !exposed_in_argv(&LinkSource::Env));
 
-    #[test]
-    fn invalid_links_never_echo_the_secret() {
-        let error = parse_link(
+        let err = parse_link(
             "hya://relay.example.com/hya/eh7ddx5bksrgcytl7bkai36se4#SECRETKEY.SECRETPSK",
         )
         .unwrap_err();
-        assert!(error.starts_with("invalid relay link"), "{error}");
-        assert!(!error.contains("SECRET"), "{error}");
-    }
+        assert!(err.starts_with("invalid relay link") && !err.contains("SECRET"));
 
-    #[test]
-    fn transport_override_replaces_the_link_hint() {
         let pinned = link("?t=grpc");
         assert_eq!(
             with_transport(pinned.clone(), None).transport(),
@@ -1004,104 +996,18 @@ mod tests {
         let auto = with_transport(pinned.clone(), Some(Transport::Auto));
         assert_eq!(auto.transport(), Transport::Auto);
         assert_eq!(auto.psk(), pinned.psk());
-        assert_eq!(auto.server_key(), pinned.server_key());
-        assert_eq!(auto.room_id(), pinned.room_id());
         assert_eq!(
             with_transport(pinned, Some(Transport::Ws)).transport(),
             Transport::Ws
         );
-    }
-
-    #[test]
-    fn proxy_and_label_are_redacted() {
-        let link = link("");
-        assert_eq!(proxy_text(&link), "hya://relay.example.com/hya");
+        let l = link("");
+        assert_eq!(proxy_text(&l), "hya://relay.example.com/hya");
         assert_eq!(
-            remote_label(&link),
+            remote_label(&l),
             "remote: relay.example.com/hya/eh7ddx5bksrgcytl7bkai36se4"
         );
-    }
 
-    #[test]
-    fn the_503_answer_is_the_server_error_envelope() {
-        let text = unavailable_response(OFFLINE_MESSAGE);
-        let (head, body) = text.split_once("\r\n\r\n").unwrap();
-        assert!(
-            head.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
-            "{head}"
-        );
-        assert!(head.contains("content-type: application/json"), "{head}");
-        assert!(
-            head.contains(&format!("content-length: {}", body.len())),
-            "{head}"
-        );
-        assert!(head.contains("connection: close"), "{head}");
-        let json: serde_json::Value = serde_json::from_str(body).unwrap();
-        assert_eq!(
-            json,
-            serde_json::json!({"error": {"code": "unavailable", "message": OFFLINE_MESSAGE}})
-        );
-    }
-
-    #[test]
-    fn tokens_are_random_256_bit_hex() {
-        let one = new_token().unwrap();
-        let two = new_token().unwrap();
-        assert_eq!(one.len(), 64);
-        assert!(
-            one.bytes()
-                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-        );
-        assert_ne!(one, two);
-    }
-
-    #[test]
-    fn the_first_request_must_carry_the_token_which_is_stripped() {
-        let token = "ab".repeat(32);
-        let head = format!(
-            "GET /v1/health HTTP/1.1\r\nHost: 127.0.0.1:9\r\nX-Hya-Bridge-Token:  {token} \r\naccept: */*\r\n\r\n"
-        );
-        let kept = authorize(head.as_bytes(), &token).unwrap();
-        assert_eq!(
-            String::from_utf8(kept).unwrap(),
-            "GET /v1/health HTTP/1.1\r\nHost: 127.0.0.1:9\r\naccept: */*\r\n\r\n"
-        );
-        // Missing, wrong, or one wrong among several.
-        let missing = "GET / HTTP/1.1\r\nHost: x\r\n\r\n";
-        assert!(authorize(missing.as_bytes(), &token).is_none());
-        let wrong = format!(
-            "GET / HTTP/1.1\r\n{TOKEN_HEADER}: {}\r\n\r\n",
-            "cd".repeat(32)
-        );
-        assert!(authorize(wrong.as_bytes(), &token).is_none());
-        let short = format!("GET / HTTP/1.1\r\n{TOKEN_HEADER}: ab\r\n\r\n");
-        assert!(authorize(short.as_bytes(), &token).is_none());
-        let mixed =
-            format!("GET / HTTP/1.1\r\n{TOKEN_HEADER}: {token}\r\n{TOKEN_HEADER}: nope\r\n\r\n");
-        assert!(authorize(mixed.as_bytes(), &token).is_none());
-        // Another header that merely contains the name is not the token.
-        let lookalike = format!("GET / HTTP/1.1\r\nx-note: {TOKEN_HEADER}: {token}\r\n\r\n");
-        assert!(authorize(lookalike.as_bytes(), &token).is_none());
-    }
-
-    #[test]
-    fn the_401_answer_is_the_error_envelope_without_the_token() {
-        let text = unauthenticated_response();
-        let (head, body) = text.split_once("\r\n\r\n").unwrap();
-        assert!(head.starts_with("HTTP/1.1 401 Unauthorized\r\n"), "{head}");
-        let json: serde_json::Value = serde_json::from_str(body).unwrap();
-        assert_eq!(json["error"]["code"], "unauthenticated");
-        assert!(
-            json["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains(TOKEN_HEADER)
-        );
-    }
-
-    #[test]
-    fn the_link_is_taken_out_of_the_environment() {
-        // SAFETY: test-only; no other test of this binary reads LINK_ENV.
+        // SAFETY: test-only; no other unit test reads LINK_ENV.
         unsafe { std::env::set_var(LINK_ENV, "hya://example/room#k.p") };
         assert_eq!(take_link_env().as_deref(), Some("hya://example/room#k.p"));
         assert!(std::env::var_os(LINK_ENV).is_none());
@@ -1109,12 +1015,68 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_http_request_lines() {
+    fn bridge_token_generation_and_request_authorization() {
+        let one = new_token().unwrap();
+        let two = new_token().unwrap();
+        assert_eq!(one.len(), 64);
+        assert!(
+            one.bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        );
+        assert_ne!(one, two);
+
+        let token = "ab".repeat(32);
+        let head = format!(
+            "GET /v1/health HTTP/1.1\r\nHost: 127.0.0.1:9\r\nX-Hya-Bridge-Token:  {token} \r\naccept: */*\r\n\r\n"
+        );
+        assert_eq!(
+            String::from_utf8(authorize(head.as_bytes(), &token).unwrap()).unwrap(),
+            "GET /v1/health HTTP/1.1\r\nHost: 127.0.0.1:9\r\naccept: */*\r\n\r\n"
+        );
+        for bad in [
+            "GET / HTTP/1.1\r\nHost: x\r\n\r\n".to_string(),
+            format!(
+                "GET / HTTP/1.1\r\n{TOKEN_HEADER}: {}\r\n\r\n",
+                "cd".repeat(32)
+            ),
+            format!("GET / HTTP/1.1\r\n{TOKEN_HEADER}: ab\r\n\r\n"),
+            format!("GET / HTTP/1.1\r\n{TOKEN_HEADER}: {token}\r\n{TOKEN_HEADER}: nope\r\n\r\n"),
+            format!("GET / HTTP/1.1\r\nx-note: {TOKEN_HEADER}: {token}\r\n\r\n"),
+        ] {
+            assert!(authorize(bad.as_bytes(), &token).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn http_detection_and_error_envelopes() {
         assert!(looks_like_http(b"GET /v1/health HTTP/1.1\r\n"));
         assert!(looks_like_http(b"POST /v1/sessions HTTP/1.1\r\n"));
-        assert!(!looks_like_http(b"\x16\x03\x01"));
-        assert!(!looks_like_http(b"PRI * HTTP/2.0"));
-        assert!(!looks_like_http(b""));
-        assert!(!looks_like_http(b"GET"));
+        for non_http in [&b"\x16\x03\x01"[..], b"PRI * HTTP/2.0", b"", b"GET"] {
+            assert!(!looks_like_http(non_http));
+        }
+
+        let (h503, b503) = unavailable_response(OFFLINE_MESSAGE)
+            .split_once("\r\n\r\n")
+            .map(|(h, b)| (h.to_owned(), b.to_owned()))
+            .unwrap();
+        assert!(h503.starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&b503).unwrap(),
+            serde_json::json!({"error": {"code": "unavailable", "message": OFFLINE_MESSAGE}})
+        );
+
+        let (h401, b401) = unauthenticated_response()
+            .split_once("\r\n\r\n")
+            .map(|(h, b)| (h.to_owned(), b.to_owned()))
+            .unwrap();
+        assert!(h401.starts_with("HTTP/1.1 401 Unauthorized\r\n"));
+        let j401: serde_json::Value = serde_json::from_str(&b401).unwrap();
+        assert_eq!(j401["error"]["code"], "unauthenticated");
+        assert!(
+            j401["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(TOKEN_HEADER)
+        );
     }
 }

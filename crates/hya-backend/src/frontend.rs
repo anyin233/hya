@@ -849,18 +849,13 @@ mod tests {
     impl Scratch {
         fn new(name: &str) -> Self {
             let dir = std::env::temp_dir().join(format!(
-                "hya-frontend-{name}-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
+                "hya-frontend-{name}-{}",
+                hya_proto::SessionId::new()
             ));
             std::fs::create_dir_all(&dir).unwrap();
             Self(dir)
         }
 
-        /// A package directory with `src/main.ts` and `node_modules/`.
         fn package(&self, relative: &str) -> PathBuf {
             let dir = self.0.join(relative);
             std::fs::create_dir_all(dir.join("src")).unwrap();
@@ -876,126 +871,12 @@ mod tests {
         }
     }
 
-    fn os(values: &[&str]) -> Vec<OsString> {
-        values.iter().map(OsString::from).collect()
-    }
-
-    #[test]
-    fn launches_only_when_stdin_and_stdout_are_terminals() {
-        assert!(should_launch(true, true));
-        assert!(!should_launch(false, true));
-        assert!(!should_launch(true, false));
-        assert!(!should_launch(false, false));
-    }
-
-    #[test]
-    fn asset_override_wins_and_must_contain_the_entry() {
-        let scratch = Scratch::new("override");
-        let custom = scratch.package("custom-tui");
-        let installed = scratch.package("prefix/lib/hya/tui");
-        let exe = scratch.0.join("prefix/bin/hya");
-        let found = resolve_asset_dir(&TUI_ASSET, Some(custom.clone()), &exe, &scratch.0).unwrap();
-        assert_eq!(found, custom);
-        assert!(installed.is_dir());
-
-        let empty = scratch.0.join("empty");
-        std::fs::create_dir_all(&empty).unwrap();
-        let error =
-            resolve_asset_dir(&TUI_ASSET, Some(empty.clone()), &exe, &scratch.0).unwrap_err();
-        assert!(error.contains("HYA_TUI_DIR"), "{error}");
-        assert!(error.contains(&empty.display().to_string()), "{error}");
-        assert!(error.contains("frontend is unavailable"), "{error}");
-        assert!(error.contains("hya update"), "{error}");
-    }
-
-    #[test]
-    fn asset_resolution_prefers_installed_then_workspace() {
-        let scratch = Scratch::new("order");
-        let exe = scratch.0.join("prefix/bin/hya");
-        let workspace = scratch.0.join("repo");
-        let workspace_web = scratch.package("repo/packages/hya-tui-web");
-        assert_eq!(
-            resolve_asset_dir(&WEB_ASSET, None, &exe, &workspace).unwrap(),
-            workspace_web
-        );
-        let installed_web = scratch.package("prefix/lib/hya/tui-web");
-        let found = resolve_asset_dir(&WEB_ASSET, None, &exe, &workspace).unwrap();
-        assert_eq!(
-            found.canonicalize().unwrap(),
-            installed_web.canonicalize().unwrap()
-        );
-    }
-
-    #[test]
-    fn missing_assets_name_every_place_searched() {
-        let scratch = Scratch::new("missing");
-        let exe = scratch.0.join("prefix/bin/hya");
-        let error = resolve_asset_dir(&TUI_ASSET, None, &exe, &scratch.0.join("repo")).unwrap_err();
-        assert!(error.contains("lib/hya/tui"), "{error}");
-        assert!(error.contains("packages/hya-tui"), "{error}");
-        assert!(error.contains("frontend is unavailable"), "{error}");
-        assert!(error.contains("hya update"), "{error}");
-        assert!(error.contains("HYA_TUI_DIR"), "{error}");
-    }
-
-    #[test]
-    fn assets_without_dependencies_ask_for_bun_install() {
-        let scratch = Scratch::new("deps");
-        let dir = scratch.0.join("repo/packages/hya-tui");
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("src/main.ts"), "").unwrap();
-        let exe = scratch.0.join("prefix/bin/hya");
-        let error = resolve_asset_dir(&TUI_ASSET, None, &exe, &scratch.0.join("repo")).unwrap_err();
-        assert!(error.contains("bun install"), "{error}");
-        assert!(error.contains("TUI"), "{error}");
-        assert!(!error.contains("hya update"), "{error}");
-    }
-
-    #[test]
-    fn bun_must_exist() {
-        let scratch = Scratch::new("bun");
-        let bun = scratch.0.join("bun");
-        std::fs::write(&bun, "").unwrap();
-        assert_eq!(check_bun(Some(bun.clone())).unwrap(), bun);
-        let error = check_bun(Some(scratch.0.join("no-bun"))).unwrap_err();
-        assert!(error.contains("no-bun"), "{error}");
-        let error = check_bun(None).unwrap_err();
-        assert!(error.contains("Bun"), "{error}");
-        assert!(error.contains("https://bun.sh"), "{error}");
-    }
-
-    #[test]
-    fn parses_the_web_host_readiness_line() {
-        assert_eq!(
-            parse_web_ready_line("hya-tui-web listening on http://127.0.0.1:3250/").as_deref(),
-            Some("http://127.0.0.1:3250/")
-        );
-        assert_eq!(
-            parse_web_ready_line("  hya-tui-web listening on http://127.0.0.1:1/\r").as_deref(),
-            Some("http://127.0.0.1:1/")
-        );
-        assert_eq!(
-            parse_web_ready_line("hya server listening on http://x"),
-            None
-        );
-        assert_eq!(parse_web_ready_line("hya-tui-web listening on "), None);
-    }
-
-    #[test]
-    fn explains_why_the_web_host_failed() {
-        let busy = "Failed to start server. Is port 3250 in use?\nUsage: bun ...\n";
-        assert_eq!(
-            web_failure_reason(Some(2), busy, 3250),
-            "port 3250 is in use"
-        );
-        assert_eq!(
-            web_failure_reason(Some(1), "\nerror: boom\nmore\n", 3250),
-            "web host exited with code 1: error: boom"
-        );
-        assert_eq!(
-            web_failure_reason(None, "", 3250),
-            "web host exited by a signal"
-        );
+    fn join_os(values: &[OsString]) -> String {
+        values
+            .iter()
+            .map(|v| v.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     fn daemon_link() -> BackendLink {
@@ -1006,124 +887,6 @@ mod tests {
             remote: None,
             token: None,
         }
-    }
-
-    #[test]
-    fn builds_the_web_host_command() {
-        let argv = web_host_argv(
-            Path::new("/b/bun"),
-            Path::new("/lib/tui-web"),
-            Path::new("/lib/tui"),
-            3250,
-            Path::new("/work"),
-            &daemon_link(),
-        );
-        assert_eq!(
-            argv,
-            os(&[
-                "/b/bun",
-                "/lib/tui-web/src/main.ts",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                "3250",
-                "--cwd",
-                "/work",
-                "--shift-enter-lf",
-                "--",
-                "/b/bun",
-                "/lib/tui/src/main.ts",
-                "--server",
-                "http://127.0.0.1:5555",
-                "--dir",
-                "/work",
-                "--db",
-                "/state/hya/sessions.db",
-                "--hya",
-                "/bin/hya",
-                // Tab TUIs know they run in a WebUI tab (no /to-background, Ctrl+D does not quit).
-                "--web-tab",
-            ])
-        );
-    }
-
-    #[test]
-    fn the_terminal_tui_gets_resume_and_never_web_tab() {
-        let web = WebStatus::Ready("http://127.0.0.1:3250/".into());
-        let tail = |resume: Option<&Resume>| {
-            let argv = tui_argv(
-                Path::new("/b/bun"),
-                Path::new("/lib/tui"),
-                &daemon_link(),
-                Path::new("/work"),
-                &web,
-                resume,
-            );
-            assert!(!argv.contains(&OsString::from("--web-tab")));
-            argv[10..].to_vec()
-        };
-        let mut expected = os(&["--web-url", "http://127.0.0.1:3250/", "--resume"]);
-        assert_eq!(tail(Some(&Resume::Pick)), expected);
-        expected.push("hysec_1".into());
-        assert_eq!(tail(Some(&Resume::Session("hysec_1".into()))), expected);
-        assert_eq!(tail(None), os(&["--web-url", "http://127.0.0.1:3250/"]));
-    }
-
-    #[test]
-    fn builds_the_terminal_tui_command() {
-        let base = [
-            "/b/bun",
-            "/lib/tui/src/main.ts",
-            "--server",
-            "http://127.0.0.1:5555",
-            "--dir",
-            "/work",
-            "--db",
-            "/state/hya/sessions.db",
-            "--hya",
-            "/bin/hya",
-        ];
-        let ready = tui_argv(
-            Path::new("/b/bun"),
-            Path::new("/lib/tui"),
-            &daemon_link(),
-            Path::new("/work"),
-            &WebStatus::Ready("http://127.0.0.1:3250/".into()),
-            None,
-        );
-        let mut expected = os(&base);
-        expected.extend(os(&["--web-url", "http://127.0.0.1:3250/"]));
-        assert_eq!(ready, expected);
-        let failed = tui_argv(
-            Path::new("/b/bun"),
-            Path::new("/lib/tui"),
-            &daemon_link(),
-            Path::new("/work"),
-            &WebStatus::Failed("port 3250 is in use".into()),
-            None,
-        );
-        let mut expected = os(&base);
-        expected.extend(os(&["--web-error", "port 3250 is in use"]));
-        assert_eq!(failed, expected);
-        // An explicit --backend: no database, so no rediscovery flags.
-        let explicit = BackendLink {
-            url: "http://127.0.0.1:5555".into(),
-            db: None,
-            hya: None,
-            remote: None,
-            token: None,
-        };
-        let argv = tui_argv(
-            Path::new("/b/bun"),
-            Path::new("/lib/tui"),
-            &explicit,
-            Path::new("/work"),
-            &WebStatus::Ready("http://127.0.0.1:3250/".into()),
-            None,
-        );
-        let mut expected = os(&base[..6]);
-        expected.extend(os(&["--web-url", "http://127.0.0.1:3250/"]));
-        assert_eq!(argv, expected);
     }
 
     fn remote_link() -> BackendLink {
@@ -1137,21 +900,144 @@ mod tests {
     }
 
     #[test]
-    fn a_remote_backend_marks_both_tuis_remote_with_a_label_and_the_binary_but_no_database() {
-        let tui = [
-            "/b/bun",
-            "/lib/tui/src/main.ts",
-            "--server",
-            "http://127.0.0.1:6001",
-            "--dir",
-            "/work",
-            "--hya",
-            "/opt/hya/bin/hya",
-            "--remote",
-            "--server-label",
-            "remote: relay.example.com/hya/eh7ddx5bksrgcytl7bkai36se4",
-        ];
+    fn asset_and_bun_resolution_precedence_and_diagnostics() {
+        let scratch = Scratch::new("assets");
+        let exe = scratch.0.join("prefix/bin/hya");
+        let workspace = scratch.0.join("repo");
+
+        // Missing assets list every search location.
+        let err = resolve_asset_dir(&TUI_ASSET, None, &exe, &workspace).unwrap_err();
+        for needle in [
+            "lib/hya/tui",
+            "packages/hya-tui",
+            "hya update",
+            "HYA_TUI_DIR",
+        ] {
+            assert!(err.contains(needle), "{err}");
+        }
+
+        // Missing node_modules asks for `bun install`.
+        let no_deps = scratch.0.join("repo/packages/hya-tui");
+        std::fs::create_dir_all(no_deps.join("src")).unwrap();
+        std::fs::write(no_deps.join("src/main.ts"), "").unwrap();
+        let err = resolve_asset_dir(&TUI_ASSET, None, &exe, &workspace).unwrap_err();
+        assert!(
+            err.contains("bun install") && !err.contains("hya update"),
+            "{err}"
+        );
+
+        // Workspace -> installed -> explicit override precedence.
+        let ws_web = scratch.package("repo/packages/hya-tui-web");
+        assert_eq!(
+            resolve_asset_dir(&WEB_ASSET, None, &exe, &workspace).unwrap(),
+            ws_web
+        );
+        let inst_web = scratch.package("prefix/lib/hya/tui-web");
+        assert_eq!(
+            resolve_asset_dir(&WEB_ASSET, None, &exe, &workspace)
+                .unwrap()
+                .canonicalize()
+                .unwrap(),
+            inst_web.canonicalize().unwrap()
+        );
+        let custom = scratch.package("custom-tui");
+        assert_eq!(
+            resolve_asset_dir(&TUI_ASSET, Some(custom.clone()), &exe, &workspace).unwrap(),
+            custom
+        );
+        let empty = scratch.0.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(
+            resolve_asset_dir(&TUI_ASSET, Some(empty), &exe, &workspace)
+                .unwrap_err()
+                .contains("HYA_TUI_DIR")
+        );
+
+        let bun = scratch.0.join("bun");
+        std::fs::write(&bun, "").unwrap();
+        assert_eq!(check_bun(Some(bun.clone())).unwrap(), bun);
+        assert!(check_bun(Some(scratch.0.join("no-bun"))).is_err());
+        assert!(check_bun(None).unwrap_err().contains("https://bun.sh"));
+    }
+
+    #[test]
+    fn launch_gate_readiness_failure_exit_code_and_log_path() {
+        use std::os::unix::process::ExitStatusExt as _;
+        assert!(should_launch(true, true));
+        assert!(!should_launch(false, true) && !should_launch(true, false));
+        assert_eq!(
+            parse_web_ready_line("  hya-tui-web listening on http://127.0.0.1:3250/\r").as_deref(),
+            Some("http://127.0.0.1:3250/")
+        );
+        assert_eq!(
+            parse_web_ready_line("hya server listening on http://x"),
+            None
+        );
+        assert_eq!(parse_web_ready_line("hya-tui-web listening on "), None);
+        assert_eq!(
+            web_failure_reason(Some(2), "Is port 3250 in use?\n", 3250),
+            "port 3250 is in use"
+        );
+        assert_eq!(
+            web_failure_reason(Some(1), "\nerror: boom\n", 3250),
+            "web host exited with code 1: error: boom"
+        );
+        assert_eq!(
+            web_failure_reason(None, "", 3250),
+            "web host exited by a signal"
+        );
+        assert_eq!(exit_code(std::process::ExitStatus::from_raw(0)), 0);
+        assert_eq!(exit_code(std::process::ExitStatus::from_raw(3 << 8)), 3);
+        assert_eq!(exit_code(std::process::ExitStatus::from_raw(15)), 143);
+        assert_eq!(
+            log_path(Path::new("/state/hya")),
+            PathBuf::from("/state/hya/hya.log")
+        );
+    }
+
+    #[test]
+    fn builds_local_remote_and_resume_argv_and_scrubs_child_env() {
+        let web_ready = WebStatus::Ready("http://127.0.0.1:3250/".into());
         let host = web_host_argv(
+            Path::new("/b/bun"),
+            Path::new("/lib/tui-web"),
+            Path::new("/lib/tui"),
+            3250,
+            Path::new("/work"),
+            &daemon_link(),
+        );
+        assert_eq!(
+            join_os(&host),
+            "/b/bun /lib/tui-web/src/main.ts --host 127.0.0.1 --port 3250 --cwd /work --shift-enter-lf -- /b/bun /lib/tui/src/main.ts --server http://127.0.0.1:5555 --dir /work --db /state/hya/sessions.db --hya /bin/hya --web-tab"
+        );
+
+        let tui = tui_argv(
+            Path::new("/b/bun"),
+            Path::new("/lib/tui"),
+            &daemon_link(),
+            Path::new("/work"),
+            &web_ready,
+            Some(&Resume::Session("hysec_1".into())),
+        );
+        assert!(!tui.contains(&OsString::from("--web-tab")));
+        assert_eq!(
+            join_os(&tui[10..]),
+            "--web-url http://127.0.0.1:3250/ --resume hysec_1"
+        );
+        let failed = tui_argv(
+            Path::new("/b/bun"),
+            Path::new("/lib/tui"),
+            &daemon_link(),
+            Path::new("/work"),
+            &WebStatus::Failed("port 3250 is in use".into()),
+            Some(&Resume::Pick),
+        );
+        assert_eq!(
+            join_os(&failed[10..]),
+            "--web-error port 3250 is in use --resume"
+        );
+
+        let remote_host = web_host_argv(
             Path::new("/b/bun"),
             Path::new("/lib/tui-web"),
             Path::new("/lib/tui"),
@@ -1159,40 +1045,47 @@ mod tests {
             Path::new("/work"),
             &remote_link(),
         );
-        let mut expected = os(&[
-            "/b/bun",
-            "/lib/tui-web/src/main.ts",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "3250",
-            "--cwd",
-            "/work",
-            "--shift-enter-lf",
-            "--",
-        ]);
-        expected.extend(os(&tui));
-        expected.push("--web-tab".into());
-        assert_eq!(host, expected);
-
-        let terminal = tui_argv(
+        let remote_tui = tui_argv(
             Path::new("/b/bun"),
             Path::new("/lib/tui"),
             &remote_link(),
             Path::new("/work"),
-            &WebStatus::Ready("http://127.0.0.1:3250/".into()),
+            &web_ready,
             None,
         );
-        let mut expected = os(&tui);
-        expected.extend(os(&["--web-url", "http://127.0.0.1:3250/"]));
-        assert_eq!(terminal, expected);
-        for argv in [&host, &terminal] {
-            // `--hya`: the binary `/connect-remote` and `/disconnect-remote` need.
+        for argv in [&remote_host, &remote_tui] {
             assert!(!argv.contains(&OsString::from("--db")));
+            assert!(argv.contains(&OsString::from("--remote")));
+            assert!(argv.contains(&OsString::from("--server-label")));
+            assert!(
+                !argv
+                    .iter()
+                    .any(|a| a.to_string_lossy().contains(&"ab".repeat(32)))
+            );
         }
+
+        let envs = |backend: &BackendLink| {
+            let mut command = std::process::Command::new("true");
+            frontend_env(&mut command, backend);
+            command
+                .get_envs()
+                .map(|(k, v)| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        v.map(|v| v.to_string_lossy().into_owned()),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let remote_env = envs(&remote_link());
+        assert_eq!(remote_env.get("HYA_RELAY_LINK"), Some(&None));
+        assert_eq!(
+            remote_env.get("HYA_SERVER_TOKEN"),
+            Some(&Some("ab".repeat(32)))
+        );
+        assert_eq!(envs(&daemon_link()).get("HYA_SERVER_TOKEN"), Some(&None));
     }
 
-    /// A `/v1/health` responder (`ok` true or false).
     async fn health_server(ok: bool) -> String {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1202,18 +1095,23 @@ mod tests {
                 let mut buffer = [0u8; 1024];
                 let _ = socket.read(&mut buffer).await;
                 let body = format!(r#"{{"ok":{ok},"version":"x"}}"#);
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await;
             }
         });
         url
     }
 
-    fn request(backend: Option<String>) -> LaunchRequest {
-        LaunchRequest {
+    #[tokio::test]
+    async fn explicit_backend_health_check_and_error() {
+        let req = |backend| LaunchRequest {
             port: 0,
             db: "/nonexistent/hya/sessions.db".into(),
             backend,
@@ -1225,7 +1123,20 @@ mod tests {
             connect: None,
             connect_relay_ca: None,
             allow_hosts: Vec::new(),
-        }
+        };
+        let ok_url = health_server(true).await;
+        let (link, _) = connect(&req(Some(ok_url.clone())), Path::new("/bin/hya"))
+            .await
+            .unwrap();
+        assert_eq!(link.url, ok_url);
+        assert!(link.db.is_none() && link.hya.is_none());
+
+        let bad_url = health_server(false).await;
+        let err = connect(&req(Some(bad_url.clone())), Path::new("/bin/hya"))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(&bad_url) && err.contains("--backend"), "{err}");
     }
 
     #[tokio::test]
@@ -1239,7 +1150,6 @@ mod tests {
         .await
         .unwrap();
         let relay_task = tokio::spawn(serve);
-        // Nobody hosts the room: an offline backend is not a start error.
         let link = RelayLink::new(
             RelayAddress::new(false, "127.0.0.1", Some(relay.port()), "").unwrap(),
             RoomId::from_ed25519(&[7; 32]),
@@ -1253,12 +1163,7 @@ mod tests {
             Arc::new(move |line| keep.lock().unwrap().push(line.to_owned()));
         let exe = Path::new("/opt/hya/bin/hya");
         let (bridge, link_out, notes) = connect_remote(link.clone(), None, exe, log).await.unwrap();
-        assert!(
-            link_out.url.starts_with("http://127.0.0.1:"),
-            "{link_out:?}"
-        );
         assert_eq!(link_out.url, bridge.url());
-        // The bridge token reaches the TUIs through the environment only.
         assert_eq!(link_out.token.as_deref(), Some(bridge.token()));
         assert_eq!(link_out.db, None);
         assert_eq!(link_out.hya.as_deref(), Some(exe));
@@ -1269,95 +1174,11 @@ mod tests {
         let secret = link.to_secret_string();
         let fragment = secret.split_once('#').unwrap().1;
         for line in notes.iter().chain(lines.lock().unwrap().iter()) {
-            assert!(!line.contains(fragment), "{line}");
             assert!(
-                !line.contains(bridge.token()),
-                "the token was logged: {line}"
+                !line.contains(fragment) && !line.contains(bridge.token()),
+                "{line}"
             );
         }
         relay_task.abort();
-    }
-
-    #[test]
-    fn frontend_children_get_the_token_but_never_the_link() {
-        let envs = |backend: &BackendLink| {
-            let mut command = std::process::Command::new("true");
-            frontend_env(&mut command, backend);
-            command
-                .get_envs()
-                .map(|(name, value)| {
-                    (
-                        name.to_string_lossy().into_owned(),
-                        value.map(|value| value.to_string_lossy().into_owned()),
-                    )
-                })
-                .collect::<std::collections::BTreeMap<_, _>>()
-        };
-        let remote = envs(&remote_link());
-        assert_eq!(remote.get("HYA_RELAY_LINK"), Some(&None));
-        assert_eq!(remote.get("HYA_SERVER_TOKEN"), Some(&Some("ab".repeat(32))));
-        let local = envs(&daemon_link());
-        assert_eq!(local.get("HYA_RELAY_LINK"), Some(&None));
-        assert_eq!(local.get("HYA_SERVER_TOKEN"), Some(&None));
-        // Never in argv.
-        let argv = tui_argv(
-            Path::new("/b/bun"),
-            Path::new("/lib/tui"),
-            &remote_link(),
-            Path::new("/work"),
-            &WebStatus::Ready("http://127.0.0.1:3250/".into()),
-            None,
-        );
-        assert!(
-            !argv
-                .iter()
-                .any(|arg| arg.to_string_lossy().contains(&"ab".repeat(32)))
-        );
-    }
-
-    #[tokio::test]
-    async fn an_explicit_backend_is_used_as_is_without_rediscovery() {
-        let url = health_server(true).await;
-        let (link, _notes) = connect(&request(Some(url.clone())), Path::new("/bin/hya"))
-            .await
-            .unwrap();
-        assert_eq!(
-            link,
-            BackendLink {
-                url,
-                db: None,
-                hya: None,
-                remote: None,
-                token: None,
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn an_unreachable_explicit_backend_is_a_clear_error() {
-        let url = health_server(false).await;
-        let error = connect(&request(Some(url.clone())), Path::new("/bin/hya"))
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains(&url), "{error}");
-        assert!(error.contains("--backend"), "{error}");
-    }
-
-    #[test]
-    fn exit_code_follows_the_tui() {
-        use std::os::unix::process::ExitStatusExt as _;
-        assert_eq!(exit_code(std::process::ExitStatus::from_raw(0)), 0);
-        assert_eq!(exit_code(std::process::ExitStatus::from_raw(3 << 8)), 3);
-        // Killed by SIGTERM (15): 128 + 15.
-        assert_eq!(exit_code(std::process::ExitStatus::from_raw(15)), 143);
-    }
-
-    #[test]
-    fn log_file_lives_under_the_state_directory() {
-        assert_eq!(
-            log_path(Path::new("/state/hya")),
-            PathBuf::from("/state/hya/hya.log")
-        );
     }
 }

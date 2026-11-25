@@ -339,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn an_identity_is_created_once_with_mode_0600_and_loaded_back() {
+    fn identity_persists_with_0600_rotates_psk_and_redacts_debug() {
         let dir = scratch("create");
         let path = dir.join("sessions.db.relay-identity.json");
         let first = RelayIdentity::load_or_create(&path).unwrap();
@@ -349,60 +349,65 @@ mod tests {
         assert_eq!(first.room_id(), again.room_id());
         assert_eq!(first.noise().public(), again.noise().public());
         assert_eq!(first.psk().as_bytes(), again.psk().as_bytes());
-        let text = std::fs::read_to_string(&path).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(value["version"], 1);
+
+        let rotated = first.rotated().unwrap();
+        assert_eq!(first.room_id(), rotated.room_id());
+        assert_eq!(first.noise().public(), rotated.noise().public());
+        assert_ne!(first.psk().as_bytes(), rotated.psk().as_bytes());
+
+        let debug = format!("{first:?}");
+        assert!(debug.contains(first.room_id().as_str()));
+        assert!(!debug.contains(&URL_SAFE_NO_PAD.encode(first.psk().as_bytes())));
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn rotation_keeps_the_room_and_noise_key_and_changes_the_psk() {
-        let identity = RelayIdentity::generate().unwrap();
-        let rotated = identity.rotated().unwrap();
-        assert_eq!(identity.room_id(), rotated.room_id());
-        assert_eq!(identity.noise().public(), rotated.noise().public());
-        assert_ne!(identity.psk().as_bytes(), rotated.psk().as_bytes());
-    }
-
-    #[test]
-    fn a_file_accessible_by_others_or_malformed_is_refused() {
+    fn rejects_insecure_malformed_symlink_and_non_regular_files() {
         let dir = scratch("refuse");
         let path = dir.join("id.json");
         RelayIdentity::generate().unwrap().save(&path).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        let error = RelayIdentity::load(&path).unwrap_err().to_string();
-        assert!(error.contains("chmod 600"), "{error}");
+        assert!(
+            RelayIdentity::load(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("chmod 600")
+        );
         std::fs::write(&path, "{}").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let error = RelayIdentity::load(&path).unwrap_err().to_string();
-        assert!(error.contains("not a relay identity"), "{error}");
+        assert!(
+            RelayIdentity::load(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("not a relay identity")
+        );
         assert!(
             RelayIdentity::load(&dir.join("missing.json"))
                 .unwrap()
                 .is_none()
         );
-        let _ = std::fs::remove_dir_all(dir);
-    }
 
-    #[test]
-    fn a_symlinked_identity_file_is_refused() {
-        let dir = scratch("symlink");
         let real = dir.join("real.json");
         RelayIdentity::generate().unwrap().save(&real).unwrap();
         let link = dir.join("sessions.db.relay-identity.json");
         std::os::unix::fs::symlink(&real, &link).unwrap();
-        let error = RelayIdentity::load(&link).unwrap_err().to_string();
-        assert!(error.contains("symbolic link"), "{error}");
-        // `load_or_create` must not replace it with a fresh identity either.
+        assert!(
+            RelayIdentity::load(&link)
+                .unwrap_err()
+                .to_string()
+                .contains("symbolic link")
+        );
         assert!(RelayIdentity::load_or_create(&link).is_err());
-        let _ = std::fs::remove_dir_all(dir);
-    }
 
-    #[test]
-    fn a_non_regular_identity_path_is_refused() {
-        let dir = scratch("dir");
-        let error = RelayIdentity::load(&dir).unwrap_err().to_string();
-        assert!(error.contains("not a regular file"), "{error}");
+        assert!(
+            RelayIdentity::load(&dir)
+                .unwrap_err()
+                .to_string()
+                .contains("not a regular file")
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -429,13 +434,5 @@ mod tests {
             ..ok
         };
         assert!(check_file(path, &fifo, euid).is_err());
-    }
-
-    #[test]
-    fn debug_never_prints_secrets() {
-        let identity = RelayIdentity::generate().unwrap();
-        let debug = format!("{identity:?}");
-        assert!(debug.contains(identity.room_id().as_str()));
-        assert!(!debug.contains(&URL_SAFE_NO_PAD.encode(identity.psk().as_bytes())));
     }
 }

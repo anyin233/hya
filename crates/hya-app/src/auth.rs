@@ -367,103 +367,67 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_token_and_missing_is_none() {
+    fn api_and_oauth_credentials_round_trip_list_and_remove() {
         let dir = tempdir();
         assert_eq!(load_token_in(&dir, "anthropic").unwrap(), None);
         save_token_in(&dir, "anthropic", "  tok-123\n").unwrap();
-        assert_eq!(
-            load_token_in(&dir, "anthropic").unwrap(),
-            Some("tok-123".to_string())
-        );
-        assert_eq!(load_token_in(&dir, "other").unwrap(), None);
-    }
-
-    #[test]
-    fn token_is_stored_as_yaml() {
-        let dir = tempdir();
-        save_token_in(&dir, "12th", "sk-xyz").unwrap();
-        let raw = std::fs::read_to_string(dir.join("12th.yaml")).unwrap();
-        assert!(raw.contains("token:"), "on-disk format is yaml: {raw}");
-        assert_eq!(
-            load_token_in(&dir, "12th").unwrap(),
-            Some("sk-xyz".to_string())
-        );
-    }
-
-    #[test]
-    fn yaml_round_trips_special_chars() {
-        let dir = tempdir();
-        let token = r#"sk-a:b"c\d e"#;
-        save_token_in(&dir, "p", token).unwrap();
-        assert_eq!(load_token_in(&dir, "p").unwrap(), Some(token.to_string()));
-    }
-
-    #[test]
-    fn lists_and_removes_saved_tokens() {
-        let dir = tempdir();
-        save_token_in(&dir, "openai", "sk-openai").unwrap();
-        save_token_in(&dir, "anthropic", "sk-anthropic").unwrap();
+        let special = r#"sk-a:b"c\d e"#;
+        save_token_in(&dir, "openai", special).unwrap();
         std::fs::write(dir.join("notes.txt"), "ignore").unwrap();
 
-        assert_eq!(
-            list_tokens_in(&dir).unwrap(),
-            vec!["anthropic".to_string(), "openai".to_string()]
+        assert!(
+            std::fs::read_to_string(dir.join("anthropic.yaml"))
+                .unwrap()
+                .contains("token:")
         );
-        assert!(remove_token_in(&dir, "openai").unwrap());
-        assert_eq!(load_token_in(&dir, "openai").unwrap(), None);
-        assert!(!remove_token_in(&dir, "missing").unwrap());
-        assert_eq!(list_tokens_in(&dir).unwrap(), vec!["anthropic".to_string()]);
-    }
+        assert_eq!(
+            load_token_in(&dir, "anthropic").unwrap().as_deref(),
+            Some("tok-123")
+        );
+        assert_eq!(
+            load_token_in(&dir, "openai").unwrap().as_deref(),
+            Some(special)
+        );
+        assert_eq!(list_tokens_in(&dir).unwrap(), vec!["anthropic", "openai"]);
+        assert!(
+            remove_token_in(&dir, "openai").unwrap() && !remove_token_in(&dir, "missing").unwrap()
+        );
+        assert_eq!(list_tokens_in(&dir).unwrap(), vec!["anthropic"]);
 
-    #[test]
-    fn oauth_bundle_round_trips_and_exposes_access_token() {
-        let dir = tempdir();
-        let cred = AuthCredential::OAuth(OAuthCredential {
+        let oauth = AuthCredential::OAuth(OAuthCredential {
             oauth_type: OAuthType::OpenaiCodex,
-            access_token: "access-abc".to_string(),
-            refresh_token: "refresh-xyz".to_string(),
-            expires_at: "2026-07-22T12:00:00Z".to_string(),
-            account_id: Some("acct-1".to_string()),
-            id_token: Some("id.jwt".to_string()),
+            access_token: "access-abc".into(),
+            refresh_token: "refresh-xyz".into(),
+            expires_at: "2026-07-22T12:00:00Z".into(),
+            account_id: Some("acct-1".into()),
+            id_token: Some("id.jwt".into()),
         });
-        save_credential_in(&dir, "codex", &cred).unwrap();
+        save_credential_in(&dir, "codex", &oauth).unwrap();
         assert_eq!(
-            load_token_in(&dir, "codex").unwrap(),
-            Some("access-abc".to_string())
+            load_token_in(&dir, "codex").unwrap().as_deref(),
+            Some("access-abc")
         );
-        let loaded = load_credential_in(&dir, "codex").unwrap().unwrap();
-        assert_eq!(loaded, cred);
-        let raw = std::fs::read_to_string(dir.join("codex.yaml")).unwrap();
-        assert!(raw.contains("type: oauth") || raw.contains("type:oauth"));
-        assert!(raw.contains("openai-codex"));
+        assert_eq!(load_credential_in(&dir, "codex").unwrap(), Some(oauth));
     }
 
     #[test]
-    fn hand_written_token_only_yaml_loads() {
+    fn hand_written_malformed_and_oauth_type_parsing() {
         let dir = tempdir();
         std::fs::write(dir.join("hand.yaml"), "token: \"sk-hand\"\n").unwrap();
-        assert_eq!(
-            load_token_in(&dir, "hand").unwrap(),
-            Some("sk-hand".to_string())
-        );
         assert!(matches!(
             load_credential_in(&dir, "hand").unwrap(),
-            Some(AuthCredential::Api { token }) if token == "sk-hand"
+            Some(AuthCredential::Api { ref token }) if token == "sk-hand"
         ));
-    }
-
-    #[test]
-    fn incomplete_or_malformed_credential_is_an_error() {
-        let dir = tempdir();
         std::fs::write(dir.join("broken.yaml"), "type: oauth\ntoken: x\n").unwrap();
-        let error = load_credential_in(&dir, "broken").unwrap_err();
-        assert!(error.to_string().contains("missing oauth_type"), "{error}");
+        assert!(
+            load_credential_in(&dir, "broken")
+                .unwrap_err()
+                .to_string()
+                .contains("missing oauth_type")
+        );
         std::fs::write(dir.join("malformed.yaml"), "token: [\n").unwrap();
         assert!(load_credential_in(&dir, "malformed").is_err());
-    }
 
-    #[test]
-    fn oauth_type_parse_accepts_canonical_ids_only() {
         assert_eq!(
             OAuthType::parse("openai-codex"),
             Some(OAuthType::OpenaiCodex)

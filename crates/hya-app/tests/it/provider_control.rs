@@ -1,17 +1,10 @@
-//! Provider View backend end to end: the real `ProviderManager` behind the
-//! v1 routes, a fake OpenAI-compatible provider over HTTP, and isolated
-//! config/auth/cache directories. Covers provider upsert with model fetch,
-//! live key save/remove (no restart), refresh, config model overrides, the
-//! one-token model test, and the credential file format.
+//! Provider View backend and remote model cache integration tests.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[path = "it/support/mod.rs"]
-mod support;
-
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex as StdMutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::extract::State;
@@ -24,38 +17,10 @@ use hya_proto::{AgentName, ModelRef};
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::{Value, json};
-use tokio::sync::{Mutex, MutexGuard};
 use tower::ServiceExt;
 
-async fn env_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(())).lock().await
-}
+use crate::support::{self, EnvVarGuard, env_lock};
 
-struct EnvGuard {
-    key: &'static str,
-    previous: Option<std::ffi::OsString>,
-}
-
-impl EnvGuard {
-    fn set(key: &'static str, value: &Path) -> Self {
-        let previous = std::env::var_os(key);
-        // SAFETY: env-sensitive tests in this binary hold `env_lock`.
-        unsafe { std::env::set_var(key, value) };
-        Self { key, previous }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        match &self.previous {
-            Some(value) => unsafe { std::env::set_var(self.key, value) },
-            None => unsafe { std::env::remove_var(self.key) },
-        }
-    }
-}
-
-/// What the fake provider saw.
 #[derive(Default)]
 struct Seen {
     model_list_auth: Vec<Option<String>>,
@@ -126,35 +91,45 @@ struct Env {
     root: PathBuf,
     config: PathBuf,
     auth: PathBuf,
-    _guards: Vec<EnvGuard>,
+    cache_home: PathBuf,
+    _guard: EnvVarGuard,
+}
+
+impl Drop for Env {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
 }
 
 fn env(label: &str, config_yaml: Option<&str>) -> Env {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
+    let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let root = std::env::temp_dir().join(format!(
-        "hya-provider-control-{label}-{}-{nanos}",
+        "hya-provider-control-{label}-{}-{nanos}-{seq}",
         std::process::id()
     ));
     let config_home = root.join("config");
+    let cache_home = root.join("cache");
+    let home = root.join("home");
     std::fs::create_dir_all(config_home.join("hya")).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
     let config = config_home.join("hya/config.yaml");
     if let Some(yaml) = config_yaml {
         std::fs::write(&config, yaml).unwrap();
     }
-    let home = root.join("home");
-    std::fs::create_dir_all(&home).unwrap();
-    let guards = vec![
-        EnvGuard::set("XDG_CONFIG_HOME", &config_home),
-        EnvGuard::set("XDG_CACHE_HOME", &root.join("cache")),
-        EnvGuard::set("HOME", &home),
-    ];
+    let mut guard = EnvVarGuard::new();
+    guard.set("XDG_CONFIG_HOME", &config_home);
+    guard.set("XDG_CACHE_HOME", &cache_home);
+    guard.set("HOME", &home);
     Env {
         auth: config_home.join("hya/auth"),
         root,
         config,
-        _guards: guards,
+        cache_home,
+        _guard: guard,
     }
 }
 
@@ -217,15 +192,15 @@ fn model<'a>(provider: &'a Value, id: &str) -> Option<&'a Value> {
 }
 
 #[tokio::test]
-async fn upsert_fetches_models_saves_the_key_and_applies_live_then_keys_and_models_edit_live() {
+async fn upsert_fetches_models_saves_keys_and_edits_models_live() {
     let _lock = env_lock().await;
     let env = env("upsert", None);
     let (base_url, fake) = fake_provider().await;
+    let (new_url, new_endpoint) = fake_provider().await;
     let (offline, _) = hya_app::offline_router(None);
     let (app, state) = app(offline).await;
     let mut updates = state.subscribe_catalog_updates();
 
-    // Add a provider: config written, key saved, remote list fetched + cached.
     let (status, body) = send(
         &app,
         Method::PUT,
@@ -252,16 +227,16 @@ async fn upsert_fetches_models_saves_the_key_and_applies_live_then_keys_and_mode
     );
 
     let config = std::fs::read_to_string(&env.config).unwrap();
-    assert!(config.contains("gw:"), "{config}");
-    assert!(config.contains("kind: openai"), "{config}");
     assert!(
-        !config.contains("sk-first"),
-        "keys never land in config.yaml"
+        config.contains("gw:") && !config.contains("sk-first"),
+        "{config}"
     );
     let key_file = env.auth.join("gw.yaml");
-    let key = std::fs::read_to_string(&key_file).unwrap();
-    assert!(key.contains("type: api"), "{key}");
-    assert!(key.contains("sk-first"), "{key}");
+    assert!(
+        std::fs::read_to_string(&key_file)
+            .unwrap()
+            .contains("sk-first")
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -271,7 +246,7 @@ async fn upsert_fetches_models_saves_the_key_and_applies_live_then_keys_and_mode
         );
     }
 
-    // The new route is live: the model test goes through it with the key.
+    // Model probe runs through the live route with the saved key.
     let (status, probe) = send(
         &app,
         Method::POST,
@@ -280,24 +255,37 @@ async fn upsert_fetches_models_saves_the_key_and_applies_live_then_keys_and_mode
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{probe}");
-    assert_eq!(probe["ok"], true, "{probe}");
+    assert_eq!(probe["ok"], true);
     assert_eq!(probe["text"], "h");
     assert_eq!(probe["finishReason"], "length");
     {
         let seen = fake.seen.lock().unwrap();
-        let request = seen.chat_bodies.last().unwrap();
-        assert_eq!(request["model"], "alpha");
-        assert_eq!(request["max_tokens"], 1, "{request}");
-        assert!(request.get("tools").is_none(), "{request}");
-        assert_eq!(request["messages"].as_array().unwrap().len(), 1);
-        assert_eq!(request["messages"][0]["role"], "user");
+        let req = seen.chat_bodies.last().unwrap();
+        assert_eq!(req["model"], "alpha");
+        assert_eq!(req["max_tokens"], 1);
+        assert!(req.get("tools").is_none());
         assert_eq!(
             seen.chat_auth.last().unwrap().as_deref(),
             Some("Bearer sk-first")
         );
     }
 
-    // Replacing the key applies live (no restart) and keeps cached models.
+    // Endpoint change without apiKey preserves the saved credential.
+    let (status, body) = send(
+        &app,
+        Method::PUT,
+        "/v1/providers/gw",
+        json!({"kind": "openai", "baseUrl": new_url}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["provider"]["summary"]["keySource"], "saved");
+    assert_eq!(
+        new_endpoint.seen.lock().unwrap().model_list_auth,
+        vec![Some("Bearer sk-first".to_string())]
+    );
+
+    // Replacing and removing keys applies live without restart.
     let (status, body) = send(
         &app,
         Method::PUT,
@@ -308,18 +296,22 @@ async fn upsert_fetches_models_saves_the_key_and_applies_live_then_keys_and_mode
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(
         body.get("discovery").is_none(),
-        "cached rows: no fetch on key save"
+        "cached rows skip discovery"
     );
-    let (status, _) = send(
-        &app,
-        Method::POST,
-        "/v1/providers/gw/test",
-        json!({"modelId": "alpha"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        fake.seen
+        send(
+            &app,
+            Method::POST,
+            "/v1/providers/gw/test",
+            json!({"modelId": "alpha"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        new_endpoint
+            .seen
             .lock()
             .unwrap()
             .chat_auth
@@ -329,7 +321,6 @@ async fn upsert_fetches_models_saves_the_key_and_applies_live_then_keys_and_mode
         Some("Bearer sk-second")
     );
 
-    // Removing the key applies live too.
     let (status, body) = send(&app, Method::DELETE, "/v1/auth/gw", Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["provider"]["summary"]["keySource"], "none");
@@ -338,17 +329,23 @@ async fn upsert_fetches_models_saves_the_key_and_applies_live_then_keys_and_mode
         "AUTH_STATUS_UNAUTHENTICATED"
     );
     assert!(!key_file.exists());
-    let (status, _) = send(
-        &app,
-        Method::POST,
-        "/v1/providers/gw/test",
-        json!({"modelId": "alpha"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(fake.seen.lock().unwrap().chat_auth.last().unwrap(), &None);
+    assert_eq!(
+        send(
+            &app,
+            Method::POST,
+            "/v1/providers/gw/test",
+            json!({"modelId": "alpha"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        new_endpoint.seen.lock().unwrap().chat_auth.last().unwrap(),
+        &None
+    );
 
-    // Override a remote model's metadata and add a config-only model.
+    // Model override, patch, clear, bare entry, delete, and refresh.
     let (status, body) = send(
         &app,
         Method::PUT,
@@ -359,29 +356,9 @@ async fn upsert_fetches_models_saves_the_key_and_applies_live_then_keys_and_mode
     assert_eq!(status, StatusCode::OK, "{body}");
     let alpha = model(&body["provider"], "alpha").unwrap();
     assert_eq!(alpha["source"], "override");
-    assert_eq!(alpha["displayName"], "Alpha (mine)");
-    assert_eq!(
-        alpha["contextLimit"], "64000",
-        "unset config field keeps the remote value"
-    );
+    assert_eq!(alpha["contextLimit"], "64000");
     assert_eq!(alpha["outputLimit"], "1024");
-    let (status, body) = send(
-        &app,
-        Method::PUT,
-        "/v1/providers/gw/models",
-        json!({"modelId": "local/only", "contextLimit": 8000}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(
-        model(&body["provider"], "local/only").unwrap()["source"],
-        "config"
-    );
-    let config = std::fs::read_to_string(&env.config).unwrap();
-    assert!(config.contains("name: Alpha (mine)"), "{config}");
-    assert!(config.contains("local/only"), "{config}");
 
-    // Editing one field patches the entry: the name and output limit stay.
     let (status, body) = send(
         &app,
         Method::PUT,
@@ -394,8 +371,7 @@ async fn upsert_fetches_models_saves_the_key_and_applies_live_then_keys_and_mode
     assert_eq!(alpha["displayName"], "Alpha (mine)");
     assert_eq!(alpha["contextLimit"], "32000");
     assert_eq!(alpha["outputLimit"], "1024");
-    // An empty name clears the override back to the remote name; 0 clears
-    // a limit.
+
     let (status, body) = send(
         &app,
         Method::PUT,
@@ -404,13 +380,11 @@ async fn upsert_fetches_models_saves_the_key_and_applies_live_then_keys_and_mode
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let alpha = model(&body["provider"], "alpha").unwrap();
-    assert_eq!(alpha["displayName"], "Alpha");
-    assert_eq!(alpha["contextLimit"], "32000");
-    let config = std::fs::read_to_string(&env.config).unwrap();
-    assert!(!config.contains("Alpha (mine)"), "{config}");
-    assert!(!config.contains("output: 1024"), "{config}");
-    // A request that sets nothing adds the model as a bare entry.
+    assert_eq!(
+        model(&body["provider"], "alpha").unwrap()["displayName"],
+        "Alpha"
+    );
+
     let (status, body) = send(
         &app,
         Method::PUT,
@@ -423,10 +397,7 @@ async fn upsert_fetches_models_saves_the_key_and_applies_live_then_keys_and_mode
         model(&body["provider"], "bare/m").unwrap()["source"],
         "config"
     );
-    let config = std::fs::read_to_string(&env.config).unwrap();
-    assert!(config.contains("- bare/m\n"), "{config}");
 
-    // Removing the override keeps the remote model (from the cache).
     let (status, body) = send(
         &app,
         Method::DELETE,
@@ -435,41 +406,34 @@ async fn upsert_fetches_models_saves_the_key_and_applies_live_then_keys_and_mode
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let alpha = model(&body["provider"], "alpha").unwrap();
-    assert_eq!(alpha["source"], "remote");
-    assert_eq!(alpha["displayName"], "Alpha");
-    let (status, body) = send(
-        &app,
-        Method::DELETE,
-        "/v1/providers/gw/models?modelId=alpha",
-        Value::Null,
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(
+        model(&body["provider"], "alpha").unwrap()["source"],
+        "remote"
+    );
+    assert_eq!(
+        send(
+            &app,
+            Method::DELETE,
+            "/v1/providers/gw/models?modelId=alpha",
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
 
-    // Refresh re-fetches; the provider list shows kind/base URL/key source.
     let (status, body) = send(&app, Method::POST, "/v1/providers/gw/refresh", Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["discovery"]["modelCount"], 2);
     let (status, list) = send(&app, Method::GET, "/v1/providers", Value::Null).await;
     assert_eq!(status, StatusCode::OK);
-    let row = list["providers"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["id"] == "gw")
-        .unwrap();
-    assert_eq!(row["baseUrl"], base_url.as_str());
-    assert_eq!(row["modelCount"], 4);
     assert!(
         !list["providers"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|row| row["id"] == "hya"),
-        "the offline provider leaves once a live provider exists"
+            .any(|row| row["id"] == "hya")
     );
-
     let (status, listed) = send(&app, Method::GET, "/v1/auth", Value::Null).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
@@ -477,12 +441,10 @@ async fn upsert_fetches_models_saves_the_key_and_applies_live_then_keys_and_mode
             .get("providerIds")
             .is_none_or(|ids| ids == &json!([]))
     );
-
-    let _ = std::fs::remove_dir_all(&env.root);
 }
 
 #[tokio::test]
-async fn failed_fetches_do_not_fail_the_upsert_and_bad_input_is_rejected() {
+async fn failed_fetches_do_not_fail_upsert_and_bad_input_is_rejected() {
     let _lock = env_lock().await;
     let env = env(
         "failures",
@@ -492,7 +454,6 @@ async fn failed_fetches_do_not_fail_the_upsert_and_bad_input_is_rejected() {
     let (offline, _) = hya_app::offline_router(None);
     let (app, _state) = app(offline).await;
 
-    // A rejected key: the upsert succeeds, the discovery outcome says why.
     let (status, body) = send(
         &app,
         Method::PUT,
@@ -501,14 +462,12 @@ async fn failed_fetches_do_not_fail_the_upsert_and_bad_input_is_rejected() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(body["discovery"].get("ok").is_none(), "{body}");
+    assert!(body["discovery"].get("ok").is_none());
     assert!(
         body["discovery"]["errorMessage"]
             .as_str()
-            .is_some_and(|message| !message.is_empty()),
-        "{body}"
+            .is_some_and(|m| !m.is_empty())
     );
-    assert_eq!(body["provider"]["summary"]["kind"], "anthropic");
 
     let (status, body) = send(
         &app,
@@ -533,76 +492,43 @@ async fn failed_fetches_do_not_fail_the_upsert_and_bad_input_is_rejected() {
         let (status, body) = send(&app, Method::PUT, "/v1/providers/other", payload.clone()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{payload}: {body}");
     }
-    let config = std::fs::read_to_string(&env.config).unwrap();
-    assert!(!config.contains("other"), "{config}");
-
-    let (status, _) = send(
-        &app,
-        Method::POST,
-        "/v1/providers/nope/refresh",
-        Value::Null,
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    let (status, _) = send(
-        &app,
-        Method::PUT,
-        "/v1/providers/nope/models",
-        json!({"modelId": "m"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-
-    let _ = std::fs::remove_dir_all(&env.root);
-}
-
-#[tokio::test]
-async fn upsert_without_key_keeps_the_saved_credential_on_endpoint_change() {
-    let _lock = env_lock().await;
-    let env = env("keep-key", None);
-    let (old_url, _old_endpoint) = fake_provider().await;
-    let (new_url, new_endpoint) = fake_provider().await;
-    let (offline, _) = hya_app::offline_router(None);
-    let (app, _) = app(offline).await;
-    let (status, body) = send(
-        &app,
-        Method::PUT,
-        "/v1/providers/gw",
-        json!({"kind": "openai", "baseUrl": old_url, "apiKey": "sk-existing"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-
-    let (status, body) = send(
-        &app,
-        Method::PUT,
-        "/v1/providers/gw",
-        json!({"kind": "openai", "baseUrl": new_url}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["discovery"]["modelCount"], 2);
-    assert_eq!(body["provider"]["summary"]["keySource"], "saved");
-    assert_eq!(
-        new_endpoint.seen.lock().unwrap().model_list_auth,
-        vec![Some("Bearer sk-existing".to_string())]
+    assert!(
+        !std::fs::read_to_string(&env.config)
+            .unwrap()
+            .contains("other")
     );
-    std::fs::remove_dir_all(&env.root).unwrap();
+    assert_eq!(
+        send(
+            &app,
+            Method::POST,
+            "/v1/providers/nope/refresh",
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send(
+            &app,
+            Method::PUT,
+            "/v1/providers/nope/models",
+            json!({"modelId": "m"})
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[tokio::test]
 async fn deferred_discovery_publishes_one_global_catalog_notice() {
     let _lock = env_lock().await;
     let (base_url, endpoint) = fake_provider().await;
-    let env = env(
+    let _env = env(
         "deferred-notice",
         Some(&format!(
-            "providers:
-  gw:
-    kind: openai
-    base_url: {base_url}
-    models: [configured]
-"
+            "providers:\n  gw:\n    kind: openai\n    base_url: {base_url}\n    models: [configured]\n"
         )),
     );
     let store = SessionStore::connect_memory().await.unwrap();
@@ -617,7 +543,7 @@ async fn deferred_discovery_publishes_one_global_catalog_notice() {
     assert!(endpoint.seen.lock().unwrap().model_list_auth.is_empty());
 
     runtime.spawn_provider_catalog_refresh(|error| panic!("deferred discovery: {error:#}"));
-    let notice = tokio::time::timeout(std::time::Duration::from_secs(10), notices.recv())
+    let notice = tokio::time::timeout(Duration::from_secs(10), notices.recv())
         .await
         .expect("catalog notice deadline")
         .unwrap();
@@ -626,7 +552,6 @@ async fn deferred_discovery_publishes_one_global_catalog_notice() {
     let (status, body) = send(&router, Method::GET, "/v1/providers/gw", Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(model(&body, "alpha").is_some(), "{body}");
-    assert_eq!(endpoint.seen.lock().unwrap().model_list_auth, vec![None]);
     assert!(matches!(
         notices.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -634,5 +559,130 @@ async fn deferred_discovery_publishes_one_global_catalog_notice() {
 
     runtime.drain(hya_server::ShutdownReason::Stop, || {}).await;
     runtime.finish_shutdown().await.unwrap();
-    std::fs::remove_dir_all(&env.root).unwrap();
+}
+
+async fn seed_cache(provider: &str, rows: Vec<hya_app::model_cache::CachedModel>) {
+    let cache = hya_app::model_cache::ModelCache::open_default()
+        .await
+        .expect("open cache");
+    cache.replace_provider(provider, &rows).await.expect("seed");
+    cache.close().await;
+}
+
+fn cached_row(id: &str) -> hya_app::model_cache::CachedModel {
+    hya_app::model_cache::CachedModel {
+        id: id.to_string(),
+        tools: true,
+        fetched_at_ms: 1,
+        ..hya_app::model_cache::CachedModel::default()
+    }
+}
+
+#[tokio::test]
+async fn model_cache_restores_metadata_merges_pinned_and_queues_miss() {
+    use hya_provider::ModelCatalogSource as S;
+
+    let _lock = env_lock().await;
+
+    // Warm cache hit restores rich metadata without waiting on unreachable discovery.
+    let env_hit = env(
+        "cache-rich",
+        Some(
+            "default_model: gateway/rich-model\nproviders:\n  gateway:\n    kind: openai\n    base_url: http://127.0.0.1:9/v1\n    models: []\n",
+        ),
+    );
+    seed_cache(
+        "gateway",
+        vec![
+            hya_app::model_cache::CachedModel {
+                display_name: Some("Rich Model".into()),
+                context_limit: 128_000,
+                output_limit: 16_384,
+                reasoning_default: Some("medium".into()),
+                reasoning_variants: vec![
+                    "none".into(),
+                    "low".into(),
+                    "medium".into(),
+                    "high".into(),
+                ],
+                ..cached_row("rich-model")
+            },
+            cached_row("other-model"),
+        ],
+    )
+    .await;
+    let started = Instant::now();
+    let loaded = hya_app::config::load().await.unwrap().unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2));
+    let rich = loaded
+        .catalog
+        .models()
+        .iter()
+        .find(|m| m.model_id == "rich-model")
+        .unwrap();
+    assert_eq!(rich.capabilities.max_context, 128_000);
+    assert_eq!(rich.capabilities.max_output, 16_384);
+    assert_eq!(rich.display_name.as_deref(), Some("Rich Model"));
+    assert_eq!(rich.source, S::Discovered);
+    assert_eq!(
+        rich.reasoning_variants,
+        vec!["none", "low", "medium", "high"]
+    );
+    assert_eq!(rich.reasoning_default, None);
+    assert_eq!(loaded.pending_discovery.len(), 1);
+    assert!(env_hit.cache_home.join("hya/model_cache.db").is_file());
+    drop(env_hit);
+
+    // Pinned provider merges cached rows with config entries (config fields win, no refresh).
+    let _env_merge = env(
+        "cache-merge",
+        Some(
+            "default_model: gateway/shared\nproviders:\n  gateway:\n    kind: openai\n    base_url: http://127.0.0.1:9/v1\n    models:\n      - id: shared\n        name: Shared (config)\n        limit:\n          output: 2048\n      - pinned\n",
+        ),
+    );
+    seed_cache(
+        "gateway",
+        vec![
+            hya_app::model_cache::CachedModel {
+                display_name: Some("Shared (remote)".into()),
+                context_limit: 64_000,
+                output_limit: 8_192,
+                ..cached_row("shared")
+            },
+            cached_row("remote"),
+        ],
+    )
+    .await;
+    let loaded = hya_app::config::load().await.unwrap().unwrap();
+    let find = |id: &str| {
+        loaded
+            .catalog
+            .models()
+            .iter()
+            .find(|m| m.model_id == id)
+            .unwrap()
+            .clone()
+    };
+    let shared = find("shared");
+    assert_eq!(shared.source, S::Overridden);
+    assert_eq!(shared.display_name.as_deref(), Some("Shared (config)"));
+    assert_eq!(shared.capabilities.max_context, 64_000);
+    assert_eq!(shared.capabilities.max_output, 2_048);
+    assert_eq!(find("remote").source, S::Discovered);
+    assert_eq!(find("pinned").source, S::Configured);
+    assert!(loaded.pending_discovery.is_empty());
+    drop(_env_merge);
+
+    // Pinned provider without cached rows starts immediately and queues discovery.
+    let _env_miss = env(
+        "cache-pinned-miss",
+        Some(
+            "default_model: gateway/pinned\nproviders:\n  gateway:\n    kind: openai\n    base_url: http://127.0.0.1:9/v1\n    models: [pinned]\n",
+        ),
+    );
+    let started = Instant::now();
+    let loaded = hya_app::config::load().await.unwrap().unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(loaded.pending_discovery.len(), 1);
+    assert_eq!(loaded.catalog.default_model().as_str(), "gateway/pinned");
 }

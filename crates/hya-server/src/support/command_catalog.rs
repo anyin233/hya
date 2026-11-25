@@ -732,7 +732,7 @@ mod tests {
     }
 
     #[test]
-    fn expands_pi_template_forms() {
+    fn template_expansion_and_pi_quoting() {
         let expand = super::expand_template;
         assert_eq!(expand("a=$@|b=$ARGUMENTS", "x  y"), "a=x  y|b=x  y");
         assert_eq!(expand("${1:-none}/${2:-none}", "one"), "one/none");
@@ -741,15 +741,16 @@ mod tests {
         assert_eq!(expand("${@:2}", "a b c d"), "b c d");
         assert_eq!(expand("${@:2:2}", "a b c d"), "b c");
         assert_eq!(expand("${@:9}", "a b"), "");
-        // Anything else stays as written.
         assert_eq!(
             expand("${HOME} ${0:-x} ${@:0} ${@:x} $ $x ${unclosed", "a"),
             "${HOME} ${0:-x} ${@:0} ${@:x} $ $x ${unclosed"
         );
-    }
+        let arguments = "one two three four five six seven eight nine-literal-$1 ten";
+        assert_eq!(
+            expand_template("first=$1 tenth=$10 missing=$11 all=$ARGUMENTS", arguments),
+            "first=one tenth=ten missing= all=one two three four five six seven eight nine-literal-$1 ten"
+        );
 
-    #[test]
-    fn arguments_split_with_pi_quoting() {
         let split = super::split_arguments;
         assert_eq!(split("\"hello world\" tail"), ["hello world", "tail"]);
         assert_eq!(split("doesn't stop"), ["doesn't", "stop"]);
@@ -804,15 +805,5 @@ mod tests {
         let kinds = diagnostics.iter().map(|row| row.kind).collect::<Vec<_>>();
         assert_eq!(kinds, ["invalid", "reserved"]);
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn expands_full_numeric_placeholder_without_reexpanding_arguments() {
-        let arguments = "one two three four five six seven eight nine-literal-$1 ten";
-
-        assert_eq!(
-            expand_template("first=$1 tenth=$10 missing=$11 all=$ARGUMENTS", arguments),
-            "first=one tenth=ten missing= all=one two three four five six seven eight nine-literal-$1 ten"
-        );
     }
 }

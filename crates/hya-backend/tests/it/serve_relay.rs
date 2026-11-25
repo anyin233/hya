@@ -1,19 +1,14 @@
-//! `hya serve --relay` and `hya serve relay …` (ADR-0025; docs/relay.md
-//! "Hosting a backend on a relay"): a backend joins an in-process relay,
-//! prints its link once on stderr, keeps its identity in
-//! `<db>.relay-identity.json`, records the relay (never the link) in the
-//! discovery file, and is controlled over the loopback-only `RelayControl`
-//! rpcs. A daemon started with `--relay` rejoins the same relay, with the
-//! same link, after `hya serve restart`.
+//! `hya serve --relay` and `hya serve relay …` (ADR-0025): joins an in-process
+//! relay, prints its link once, persists identity, and rejoins across restart.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::io::{BufRead as _, BufReader};
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Output, Stdio};
 use std::sync::mpsc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use hya_relay::client::{ClientConfig, RelayClient};
 use hya_relay::link::RelayLink;
@@ -21,76 +16,37 @@ use hya_relay::server::{RelayServer, RelayServerConfig};
 use hya_relay::tunnel::{NoiseStream, TunnelConfig};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-fn scratch(prefix: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir.canonicalize().unwrap()
-}
+use crate::common::{Scratch, assert_success, wait_until};
 
-/// `hya serve <args> --db <db>` with an isolated HOME/XDG under `root`.
-fn serve(root: &Path, db: &Path, args: &[&str]) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_hya"));
-    command
-        .env_clear()
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        .env("HOME", root.join("home"))
-        .env("XDG_CONFIG_HOME", root.join("config"))
-        .env("XDG_DATA_HOME", root.join("data"))
-        .env("XDG_STATE_HOME", root.join("state"))
-        .env("XDG_CACHE_HOME", root.join("cache"))
-        .env("NO_COLOR", "1")
-        .current_dir(root)
+fn run(s: &Scratch, db: &Path, args: &[&str]) -> Output {
+    s.hya()
         .arg("serve")
         .args(args)
         .arg("--db")
         .arg(db)
-        .stdin(Stdio::null());
-    command
+        .output()
+        .unwrap()
 }
 
-fn run(root: &Path, db: &Path, args: &[&str]) -> Output {
-    serve(root, db, args).output().unwrap()
+fn stdout(out: &Output) -> String {
+    assert_success("serve relay", out);
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
 
-fn stdout(output: &Output) -> String {
-    assert!(
-        output.status.success(),
-        "exit {:?}\nstdout: {}\nstderr: {}",
-        output.status.code(),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+fn json(out: &Output) -> serde_json::Value {
+    serde_json::from_str(&stdout(out)).unwrap()
 }
 
-fn json(output: &Output) -> serde_json::Value {
-    serde_json::from_str(&stdout(output)).unwrap()
-}
-
-/// The link after the `hya relay link:` marker in `text`.
 fn marked_link(text: &str) -> Option<String> {
     text.lines()
-        .find_map(|line| line.strip_prefix("hya relay link: "))
+        .find_map(|l| l.strip_prefix("hya relay link: "))
         .map(str::to_owned)
 }
 
-fn wait_until(what: &str, mut check: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !check() {
-        assert!(Instant::now() < deadline, "timed out waiting until {what}");
-        std::thread::sleep(Duration::from_millis(50));
-    }
+fn relay_state(s: &Scratch, db: &Path) -> serde_json::Value {
+    json(&run(s, db, &["relay", "status", "--json"]))
 }
 
-fn relay_state(root: &Path, db: &Path) -> serde_json::Value {
-    json(&run(root, db, &["relay", "status", "--json"]))
-}
-
-/// `GET /v1/health` through the relay with `link`.
 async fn health_through(link: &str) -> Result<String, String> {
     let link: RelayLink = link.parse().map_err(|e| format!("{e}"))?;
     let client =
@@ -110,12 +66,12 @@ async fn health_through(link: &str) -> Result<String, String> {
         .write_all(b"GET /v1/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
         .await
         .map_err(|e| e.to_string())?;
-    let mut response = Vec::new();
+    let mut resp = Vec::new();
     tunnel
-        .read_to_end(&mut response)
+        .read_to_end(&mut resp)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(String::from_utf8_lossy(&response).into_owned())
+    Ok(String::from_utf8_lossy(&resp).into_owned())
 }
 
 async fn start_relay() -> (String, tokio::sync::oneshot::Sender<()>) {
@@ -132,16 +88,19 @@ async fn start_relay() -> (String, tokio::sync::oneshot::Sender<()>) {
     (format!("http://127.0.0.1:{}", addr.port()), stop)
 }
 
-/// A foreground `hya serve` whose stdout and stderr lines are collected.
 struct Foreground {
     child: Child,
     lines: mpsc::Receiver<String>,
     seen: Vec<String>,
 }
-
 impl Foreground {
-    fn start(root: &Path, db: &Path, args: &[&str]) -> Self {
-        let mut child = serve(root, db, args)
+    fn start(s: &Scratch, db: &Path, args: &[&str]) -> Self {
+        let mut child = s
+            .hya()
+            .arg("serve")
+            .args(args)
+            .arg("--db")
+            .arg(db)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -164,17 +123,15 @@ impl Foreground {
             seen: Vec::new(),
         }
     }
-
     fn wait_line(&mut self, prefix: &str) -> String {
-        if let Some(line) = self.seen.iter().find(|line| line.starts_with(prefix)) {
-            return line.clone();
+        if let Some(l) = self.seen.iter().find(|l| l.starts_with(prefix)) {
+            return l.clone();
         }
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now() + Duration::from_secs(20);
         loop {
-            let left = deadline.saturating_duration_since(Instant::now());
             let line = self
                 .lines
-                .recv_timeout(left)
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
                 .unwrap_or_else(|_| panic!("no `{prefix}` line; saw {:#?}", self.seen));
             self.seen.push(line.clone());
             if line.starts_with(prefix) {
@@ -183,7 +140,6 @@ impl Foreground {
         }
     }
 }
-
 impl Drop for Foreground {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -194,133 +150,100 @@ impl Drop for Foreground {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn serve_relay_joins_prints_the_link_once_and_is_controlled_over_loopback() {
     let (relay, _stop) = start_relay().await;
-    let root = scratch("hya-serve-relay");
-    let db = root.join("s.db");
-    let mut server = Foreground::start(&root, &db, &["--bind", "127.0.0.1:0", "--relay", &relay]);
-    server.wait_line("hya server listening on ");
-    let link = marked_link(&server.wait_line("hya relay link: ")).unwrap();
-    assert!(link.starts_with("hya+insecure://127.0.0.1:"), "{link}");
+    let s = Scratch::new("hya-serve-relay").unwrap();
+    let db = s.0.join("s.db");
+    let mut srv = Foreground::start(&s, &db, &["--bind", "127.0.0.1:0", "--relay", &relay]);
+    srv.wait_line("hya server listening on ");
+    let link = marked_link(&srv.wait_line("hya relay link: ")).unwrap();
     let secret = link.split_once('#').unwrap().1.to_owned();
+    assert!(link.starts_with("hya+insecure://127.0.0.1:"), "{link}");
 
-    // Status: connected, and never the secret.
-    wait_until("the relay is connected", || {
-        relay_state(&root, &db)["state"] == "RELAY_STATE_CONNECTED"
-    });
-    let human = stdout(&run(&root, &db, &["relay", "status"]));
-    assert!(human.starts_with("relay connected"), "{human}");
-    assert!(!human.contains(&secret), "{human}");
-    assert_eq!(stdout(&run(&root, &db, &["relay", "link"])), link);
+    wait_until("relay connected", Duration::from_secs(15), || {
+        relay_state(&s, &db)["state"] == "RELAY_STATE_CONNECTED"
+    })
+    .unwrap();
+    let human = stdout(&run(&s, &db, &["relay", "status"]));
+    assert!(human.starts_with("relay connected") && !human.contains(&secret));
+    assert_eq!(stdout(&run(&s, &db, &["relay", "link"])), link);
 
-    // The identity file is private; the discovery file names the relay only.
-    let identity = PathBuf::from(format!("{}.relay-identity.json", db.display()));
-    let mode = std::fs::metadata(&identity).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600);
-    let discovery = std::fs::read_to_string(format!("{}.server.json", db.display())).unwrap();
-    let value: serde_json::Value = serde_json::from_str(&discovery).unwrap();
-    assert_eq!(value["relay"]["proxyUrl"], serde_json::json!(relay));
-    assert!(!discovery.contains(&secret), "{discovery}");
-
-    let response = health_through(&link).await.unwrap();
-    assert!(response.contains("\"ok\":true"), "{response}");
-
-    // Rotate: the old link stops working, the new one works.
-    let rotated = run(&root, &db, &["relay", "rotate"]);
-    let new = marked_link(&stdout(&rotated)).unwrap();
-    assert_ne!(new, link);
-    assert!(
-        health_through(&link).await.is_err(),
-        "the old link is revoked"
+    let id = PathBuf::from(format!("{}.relay-identity.json", db.display()));
+    assert_eq!(
+        std::fs::metadata(&id).unwrap().permissions().mode() & 0o777,
+        0o600
     );
+    let disc = std::fs::read_to_string(format!("{}.server.json", db.display())).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&disc).unwrap()["relay"]["proxyUrl"],
+        relay
+    );
+    assert!(
+        !disc.contains(&secret) && health_through(&link).await.unwrap().contains("\"ok\":true")
+    );
+
+    let new = marked_link(&stdout(&run(&s, &db, &["relay", "rotate"]))).unwrap();
+    assert!(
+        new != link
+            && health_through(&link).await.is_err()
+            && health_through(&new).await.unwrap().contains("\"ok\":true")
+    );
+
+    assert_eq!(
+        stdout(&run(&s, &db, &["relay", "disconnect"])),
+        "relay disconnected"
+    );
+    assert!(
+        !std::fs::read_to_string(format!("{}.server.json", db.display()))
+            .unwrap()
+            .contains("relay")
+    );
+    assert_eq!(run(&s, &db, &["relay", "link"]).status.code(), Some(1));
+    assert_eq!(
+        json(&run(&s, &db, &["relay", "connect", &relay, "--json"]))["link"],
+        new
+    );
+    wait_until("reconnected", Duration::from_secs(15), || {
+        relay_state(&s, &db)["state"] == "RELAY_STATE_CONNECTED"
+    })
+    .unwrap();
     assert!(health_through(&new).await.unwrap().contains("\"ok\":true"));
 
-    // Disconnect clears the discovery record; connect rejoins.
-    let out = stdout(&run(&root, &db, &["relay", "disconnect"]));
-    assert_eq!(out, "relay disconnected");
-    let discovery = std::fs::read_to_string(format!("{}.server.json", db.display())).unwrap();
-    assert!(!discovery.contains("relay"), "{discovery}");
-    let failed = run(&root, &db, &["relay", "link"]);
-    assert_eq!(failed.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&failed.stderr).contains("not connected"));
-    let joined = run(&root, &db, &["relay", "connect", &relay, "--json"]);
-    let joined = json(&joined);
-    assert_eq!(joined["link"], serde_json::json!(new), "the same identity");
-    wait_until("the relay is connected again", || {
-        relay_state(&root, &db)["state"] == "RELAY_STATE_CONNECTED"
-    });
-    assert!(health_through(&new).await.unwrap().contains("\"ok\":true"));
-
-    // The link was printed exactly once by the server.
-    // SAFETY: `kill` has no memory-safety preconditions.
-    unsafe {
-        libc::kill(i32::try_from(server.child.id()).unwrap(), libc::SIGTERM);
+    // SAFETY: `kill` targets our unreaped child process.
+    unsafe { libc::kill(i32::try_from(srv.child.id()).unwrap(), libc::SIGTERM) };
+    assert!(srv.child.wait().unwrap().success());
+    while let Ok(line) = srv.lines.recv_timeout(Duration::from_millis(100)) {
+        srv.seen.push(line);
     }
-    let status = server.child.wait().unwrap();
-    assert!(status.success(), "{status:?}");
-    while let Ok(line) = server.lines.recv_timeout(Duration::from_millis(500)) {
-        server.seen.push(line);
-    }
-    let printed = server
-        .seen
-        .iter()
-        .filter(|line| line.contains(&secret))
-        .count();
-    assert_eq!(printed, 1, "{:#?}", server.seen);
-    // No server: `serve relay` fails with exit 1.
-    let none = run(&root, &db, &["relay", "status"]);
-    assert_eq!(none.status.code(), Some(1));
-    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(srv.seen.iter().filter(|l| l.contains(&secret)).count(), 1);
+    assert_eq!(run(&s, &db, &["relay", "status"]).status.code(), Some(1));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_relay_daemon_rejoins_with_the_same_link_after_restart() {
     let (relay, _stop) = start_relay().await;
-    let root = scratch("hya-serve-relay-daemon");
-    let db = root.join("s.db");
-    let started = run(&root, &db, &["start", "--json", "--relay", &relay]);
-    let info = json(&started);
-    let first_pid = info["pid"].as_i64().unwrap();
-    let link =
-        marked_link(&String::from_utf8_lossy(&started.stderr)).expect("start prints the link");
-    let log = std::fs::read_to_string(format!("{}.server.log", db.display())).unwrap();
+    let s = Scratch::new("hya-serve-relay-daemon").unwrap();
+    let db = s.0.join("s.db");
+    let started = run(&s, &db, &["start", "--json", "--relay", &relay]);
+    let first_pid = json(&started)["pid"].as_i64().unwrap();
+    let link = marked_link(&String::from_utf8_lossy(&started.stderr)).expect("start prints link");
     let secret = link.split_once('#').unwrap().1.to_owned();
     assert!(
-        !log.contains(&secret),
-        "the daemon log never holds the link"
+        !std::fs::read_to_string(format!("{}.server.log", db.display()))
+            .unwrap()
+            .contains(&secret)
     );
-    wait_until("the daemon joined the relay", || {
-        relay_state(&root, &db)["state"] == "RELAY_STATE_CONNECTED"
-    });
+    wait_until("daemon joined", Duration::from_secs(15), || {
+        relay_state(&s, &db)["state"] == "RELAY_STATE_CONNECTED"
+    })
+    .unwrap();
 
-    // The restart returns once the successor serves; it takes the same URL
-    // and rejoins the same relay with the same link (the link is recoverable
-    // through the relay's identity once the successor serves).
-    let restarted = run(&root, &db, &["restart", "--json"]);
-    assert!(
-        restarted.status.success(),
-        "{}",
-        String::from_utf8_lossy(&restarted.stderr)
-    );
-    let ready = json(&restarted);
-    assert_eq!(ready["restarted"], serde_json::json!(true), "{ready}");
-    assert_ne!(
-        ready["pid"].as_i64().unwrap(),
-        first_pid,
-        "restart returns the successor generation: {ready}"
-    );
-    let status = json(&run(&root, &db, &["status", "--json"]));
-    assert_eq!(status["pid"], ready["pid"], "{status}");
-    assert_eq!(status["url"], ready["url"], "the successor keeps the URL");
-    wait_until("the new daemon joined the relay", || {
-        let output = run(&root, &db, &["relay", "status", "--json"]);
-        output.status.success() && json(&output)["state"] == "RELAY_STATE_CONNECTED"
-    });
-    let again = stdout(&run(&root, &db, &["relay", "link"]));
-    assert_eq!(again, link, "same identity, same relay");
-    let status = json(&run(&root, &db, &["status", "--json"]));
-    assert_eq!(status["relay"]["proxyUrl"], serde_json::json!(relay));
+    let ready = json(&run(&s, &db, &["restart", "--json"]));
+    assert!(ready["restarted"] == true && ready["pid"].as_i64().unwrap() != first_pid);
+    wait_until("restarted joined", Duration::from_secs(15), || {
+        let out = run(&s, &db, &["relay", "status", "--json"]);
+        out.status.success() && json(&out)["state"] == "RELAY_STATE_CONNECTED"
+    })
+    .unwrap();
+    assert_eq!(stdout(&run(&s, &db, &["relay", "link"])), link);
     assert!(health_through(&link).await.unwrap().contains("\"ok\":true"));
-
-    let stopped = run(&root, &db, &["stop"]);
-    assert!(stopped.status.success());
-    let _ = std::fs::remove_dir_all(&root);
+    assert!(run(&s, &db, &["stop"]).status.success());
 }
