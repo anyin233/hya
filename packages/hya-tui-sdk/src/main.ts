@@ -94,17 +94,18 @@ async function serve(method: string, params: Params): Promise<JsonValue> {
       const ext = field(params, "ext")
       await unload(ext)
       const jit = params.jit === true
+      const deadlineMs = typeof params.deadlineMs === "number" && Number.isFinite(params.deadlineMs) && params.deadlineMs > 0 ? Math.floor(params.deadlineMs) : undefined
       if (!jit) loaded.add(ext)
       // Calls that arrive while the entry is bundled wait for it (the worker sees the load first).
       const load = bundleExtension(field(params, "entry")).then(async (script) => {
         if (!jit) {
-          await ask((seq) => ({ type: "load", seq, ext, script }))
+          await ask((seq) => ({ type: "load", seq, ext, script, ...(deadlineMs !== undefined ? { deadlineMs } : {}) }))
           return
         }
         const thread: JitThread = new JitThread(ext, {
           host: (call, hostMethod, hostParams) => askTui(ext, hostMethod, hostParams, { call, jit: thread }),
           log: (line) => log(ext, line),
-        })
+        }, deadlineMs)
         jits.set(ext, thread)
         await thread.load(script)
       })

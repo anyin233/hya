@@ -69,8 +69,12 @@ export interface ManagerOptions {
   readonly bun?: string
   readonly spawn?: Spawn
   readonly timeoutMs?: number
+  /** Per-request extension VM/JIT execution deadline (default: SDK `VM_DEADLINE_MS` = 2000 ms). */
+  readonly vmDeadlineMs?: number
   readonly restartBudget?: number
   readonly restartWindowMs?: number
+  /** Delay before restarting a failed extension (default 1000 ms). */
+  readonly restartDelayMs?: number
   /** Status-line notices (action results, failures). */
   readonly notice?: (text: string) => void
   /** Host UI callbacks: end keyboard capture (`ui.release`), close the overlay (`ui.close`), show a panel as the overlay again (`ui.open`). */
@@ -303,11 +307,24 @@ export class ExtensionManager {
 
   async stopAll(): Promise<void> {
     clearTimeout(this.contextTimer)
+    this.contextTimer = undefined
     const entries = [...this.running.values()]
     this.running.clear()
     this.bumpAll()
     await Promise.all(entries.map((entry) => this.shutdown(entry)))
     await this.stopHost()
+  }
+
+  /** Test helper: stop every extension and restore the pre-catalog initial state. */
+  async reset(): Promise<void> {
+    await this.stopAll()
+    this.loaded = false
+    this.catalogError = undefined
+    this.settledWaiters = []
+    this.context = emptyContext
+    this.formatCache.clear()
+    this.formatInflight.clear()
+    this.bumpAll()
   }
 
   private async stopHost(): Promise<void> {
@@ -769,7 +786,13 @@ export class ExtensionManager {
       host = started
       entry.isolated = this.hostIsolated
       if (this.hostWarning) entry.warnings.push(this.hostWarning)
-      await host.request("host/load", { ext, entry: join(dir, catalog.entry), permissions: catalog.permissions, jit: entry.jit })
+      await host.request("host/load", {
+        ext,
+        entry: join(dir, catalog.entry),
+        permissions: catalog.permissions,
+        jit: entry.jit,
+        ...(this.options.vmDeadlineMs !== undefined ? { deadlineMs: this.options.vmDeadlineMs } : {}),
+      })
       await this.extRequest(host, ext, "tui/initialize", { api_version: extensionApiVersion, sdk_version: sdk.version, extension_id: ext, permissions: catalog.permissions })
       const context = scopeContext(this.context, catalog.permissions)
       entry.sentContext = JSON.stringify(context)
@@ -822,7 +845,7 @@ export class ExtensionManager {
     entry.restartTimer = setTimeout(() => {
       entry.restartTimer = undefined
       if (this.running.get(entry.catalog.bundleId) === entry && entry.state === "failed") void this.start(entry)
-    }, 1_000)
+    }, this.options.restartDelayMs ?? 1_000)
   }
 
   private hostLog(ext: string | undefined, line: string): void {

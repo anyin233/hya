@@ -254,7 +254,7 @@ export default defineTuiExtension({ activate(api) {
       children.push(child)
       return child as unknown as ChildProcess
     }
-    const extensions = manager({ restartBudget: 2, spawn })
+    const extensions = manager({ restartBudget: 2, restartDelayMs: 25, spawn })
     await extensions.load([catalogRow("acme/crash", { "tui/main.ts": source }, ["tui.panel"]), catalogRow("acme/crash2", { "tui/main.ts": source }, ["tui.panel"])], local)
     expect(extensions.list().map((info) => info.state)).toEqual(["running", "running"])
     expect(children).toHaveLength(1)
@@ -273,12 +273,11 @@ export default defineTuiExtension({ activate(api) {
   test("a render past the VM deadline fails that extension (restarts within budget); the others in the host keep answering", async () => {
     const hang = `import { defineTuiExtension } from "@hya/tui-sdk"\nexport default defineTuiExtension({ activate(api) { api.registerPanel({ id: "slow", title: "Slow", render: () => { for (;;) {} } }) } })`
     const fine = `import { defineTuiExtension } from "@hya/tui-sdk"\nexport default defineTuiExtension({ activate(api) { api.registerPanel({ id: "p", title: "P", render: () => "fine" }) } })`
-    const extensions = manager({ restartBudget: 1 })
+    const extensions = manager({ restartBudget: 1, vmDeadlineMs: 100, restartDelayMs: 25 })
     await extensions.load([catalogRow("acme/hang", { "tui/main.ts": hang }, ["tui.panel"]), catalogRow("acme/fine", { "tui/main.ts": fine }, ["tui.panel"])], local)
     extensions.panelView("acme/hang#slow", 10, 2)
     extensions.panelView("acme/fine#p", 10, 2)
-    // The SDK's VM deadline is a fixed 2 s of real execution.
-    await until(() => extensions.list()[1]?.reason?.includes("exceeded its 2000 ms limit"), "deadline", 10_000)
+    await until(() => extensions.list()[1]?.reason?.includes("exceeded its 100 ms limit"), "deadline", 5_000)
     expect(extensions.list()[1]?.state).toBe("failed")
     expect(await until(() => extensions.panelView("acme/fine#p", 10, 2).node, "the other extension")).toEqual({ kind: "text", text: "fine" })
     await extensions.stopAll()
