@@ -1,7 +1,6 @@
 /** Pure text for the sidebar, pending block, and non-chat views, derived from the store. */
 import type { WebInfo } from "../cli"
 import type { Interaction, ModelSummary, SessionInfo, TodoItem, TokenUsage } from "../client"
-import { keyHelpText } from "../commands/help"
 import type { View } from "../instructions"
 import { mergeTranscript } from "./overlay"
 import { promptQueue } from "./prompts"
@@ -167,7 +166,7 @@ export function webNotice(web: WebInfo | undefined): string | undefined {
 
 const titles: Record<View, string> = {
   chat: "Chat", models: "Models", workflows: "Workflows", interactions: "Interactions",
-  api: "API commands", help: "Help", todos: "Todos", status: "Status", config: "TUI config",
+  api: "API commands", todos: "Todos", status: "Status", config: "TUI config",
 }
 
 /** `TODO_STATUS_IN_PROGRESS` → `in_progress`, etc. */
@@ -303,7 +302,6 @@ export function mainContent(state: AppState, view: View = state.view): string {
     case "interactions":
       return state.interactions.length ? state.interactions.map((item) => `${item.type} · ${item.id}\n${item.title}\n${item.detail ?? ""}\n${(item.options ?? []).join(" | ")}`).join("\n\n") : "No pending interactions."
     case "api": return state.apiOutput
-    case "help": return keyHelpText()
     case "todos": return todosText(state.todos)
     case "status": case "config": return state.statusText
   }

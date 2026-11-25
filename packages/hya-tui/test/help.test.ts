@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { mergeCommandEntries, nativeCommandSpecs } from "../src/commands"
-import { composerKeyLabel, helpGroups, helpPickerRows, helpRows, keyHelpText } from "../src/commands/help"
+import { composerKeyLabel, helpGroups, helpPickerRows, helpRows } from "../src/commands/help"
 import { composerKeyBindings, keyBindings, resolveBinding } from "../src/keys/bindings"
 import { sessionPickerActions } from "../src/commands/native"
 import { providerKeyRows } from "../src/state/providers"
@@ -66,11 +66,6 @@ test("? opens help only while the composer is empty", () => {
   expect(resolveBinding({ ...key, name: "/", sequence: "/" }, { composerEmpty: true })).toBe("openCommands")
 })
 
-test("the key help text (connection-failure view) is generated from the same rows", () => {
-  const text = keyHelpText()
-  for (const binding of keyBindings) expect(text).toContain(binding.label)
-  expect(text).toContain("Shift+Enter")
-})
 
 test("help omits removed app chords and retains mouse copy and Vim editing", () => {
   const rows = helpRows(entries)
