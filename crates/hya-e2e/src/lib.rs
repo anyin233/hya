@@ -19,6 +19,6 @@ pub use fake_llm::{
     tools_step,
 };
 pub use scenario::{
-    E2eEnv, E2eEnvBuilder, fake_requests_from, tree_children, tree_max_depth, tree_session_ids,
-    tree_subagent_types, wait_until,
+    E2eEnv, E2eEnvBuilder, fake_requests_from, load_raw_events, tree_children, tree_max_depth,
+    tree_session_ids, tree_subagent_types, wait_until,
 };

@@ -250,6 +250,37 @@ pub struct E2eEnv {
     pub model: String,
 }
 
+/// Replay the opaque raw envelope lines and decode them for Track P assertions.
+///
+/// Returns a harness error with the one-based record position if decoding fails.
+pub async fn load_raw_events(
+    client: &Client,
+    session: SessionId,
+    since_seq: Option<u64>,
+) -> Result<Vec<hya_proto::Envelope>, E2eError> {
+    let response = client
+        .list_events_request(&pb::ListEventsRequest {
+            session: session.to_string(),
+            since_seq: since_seq.unwrap_or_default(),
+            include_raw: true,
+            ..Default::default()
+        })
+        .await?;
+    response
+        .raw_envelopes
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            serde_json::from_str(line).map_err(|error| {
+                E2eError::Other(format!(
+                    "decode raw event {} for {session}: {error}",
+                    index + 1
+                ))
+            })
+        })
+        .collect()
+}
+
 impl E2eEnv {
     /// Create a session with the env's default agent and model.
     pub async fn create_session(&self) -> Result<SessionId, E2eError> {
@@ -281,7 +312,7 @@ impl E2eEnv {
         session: SessionId,
         text: impl Into<String>,
     ) -> Result<pb::TurnInfo, E2eError> {
-        Ok(self.client.prompt(session, text).await?)
+        Ok(self.client.prompt_text(&session.to_string(), text).await?)
     }
 
     /// Reopen the production backend on the same durable store and project.
@@ -297,7 +328,7 @@ impl E2eEnv {
         session: SessionId,
         since_seq: Option<u64>,
     ) -> Result<Vec<hya_proto::Envelope>, E2eError> {
-        Ok(self.client.events(session, since_seq).await?)
+        load_raw_events(&self.client, session, since_seq).await
     }
 
     /// Read a UTF-8 file relative to the temp project workdir.
@@ -589,7 +620,7 @@ impl E2eEnv {
         })
         .await;
         if wait_result.is_err() {
-            let events = self.client.events(session, None).await;
+            let events = self.events(session, None).await;
             eprintln!("V1TURN STALL admitted={admitted} events={events:?}");
         }
         wait_result?;

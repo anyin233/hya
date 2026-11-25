@@ -232,53 +232,38 @@ impl Client {
         .await
     }
 
-    /// `POST /v1/sessions/{id}/turns` — admit one prompt turn, returning
-    /// the running turn handle.
+    /// `POST /v1/sessions/{id}/turns` — admit a typed turn request.
     ///
     /// # Errors
-    /// Returns [`ClientError::Http`] or [`ClientError::Api`] on failure.
-    pub async fn create_turn(
+    /// Returns an error if the transport, server, or response decoding fails.
+    pub async fn create_turn_request(
         &self,
-        session: SessionId,
-        text: impl Into<String>,
+        request: &pb::CreateTurnRequest,
     ) -> Result<pb::CreateTurnResponse, ClientError> {
-        let request = pb::CreateTurnRequest {
-            session: session.to_string(),
-            kind: Some(pb::create_turn_request::Kind::Prompt(pb::PromptTurn {
-                text: text.into(),
-                ..Default::default()
-            })),
-        };
         self.call(
             reqwest::Method::POST,
-            &format!(
-                "/v1/sessions/{}/turns",
-                encode_component(&session.to_string())
-            ),
+            &format!("/v1/sessions/{}/turns", encode_component(&request.session)),
             None,
-            Some(&request),
+            Some(request),
         )
         .await
     }
 
-    /// `POST /v1/sessions/{id}/turns/{turn}/wait` — block until the turn
-    /// reaches a terminal state or the timeout elapses.
+    /// `POST /v1/sessions/{id}/turns/{turn}/wait` — wait for the turn.
     ///
     /// # Errors
-    /// Returns [`ClientError::Http`] or [`ClientError::Api`] on failure.
-    pub async fn wait_turn(
+    /// Returns an error if the transport, server, or response decoding fails.
+    pub async fn wait_turn_request(
         &self,
-        session: SessionId,
-        turn: &str,
-        timeout: Duration,
+        request: &pb::WaitTurnRequest,
     ) -> Result<pb::TurnInfo, ClientError> {
-        let timeout_ms = timeout.as_millis().min(600_000) as u64;
+        let timeout_ms = request.timeout_ms.min(600_000);
         self.call(
             reqwest::Method::POST,
             &format!(
                 "/v1/sessions/{}/turns/{}/wait",
-                encode_component(&session.to_string()),
-                encode_component(turn)
+                encode_component(&request.session),
+                encode_component(&request.turn)
             ),
             Some(&format!("timeoutMs={timeout_ms}")),
             None::<&Value>,
@@ -286,69 +271,159 @@ impl Client {
         .await
     }
 
-    /// Admit a prompt and wait for its terminal state (the synchronous
-    /// convenience over the event-driven model).
+    /// Admit a text prompt and wait up to 120 seconds for its terminal state.
     ///
     /// # Errors
-    /// Returns [`ClientError::Http`] or [`ClientError::Api`] on failure.
+    /// Returns an error if admission or waiting fails.
+    pub async fn prompt_text(
+        &self,
+        session: &str,
+        text: impl Into<String>,
+    ) -> Result<pb::TurnInfo, ClientError> {
+        let admitted = self
+            .create_turn_request(&pb::CreateTurnRequest {
+                session: session.to_owned(),
+                kind: Some(pb::create_turn_request::Kind::Prompt(pb::PromptTurn {
+                    text: text.into(),
+                    ..Default::default()
+                })),
+            })
+            .await?;
+        self.wait_turn_request(&pb::WaitTurnRequest {
+            session: session.to_owned(),
+            turn: admitted.turn.map(|turn| turn.id).unwrap_or_default(),
+            timeout_ms: 120_000,
+        })
+        .await
+    }
+
+    /// `GET /v1/sessions/{id}/events` — replay curated events, optionally with
+    /// opaque raw envelope JSON lines in `raw_envelopes`.
+    ///
+    /// # Errors
+    /// Returns an error if the transport, server, or response decoding fails.
+    pub async fn list_events_request(
+        &self,
+        request: &pb::ListEventsRequest,
+    ) -> Result<pb::ListEventsResponse, ClientError> {
+        self.replay_events(
+            &request.session,
+            (request.since_seq != 0).then_some(request.since_seq),
+            request.limit,
+            request.include_raw,
+        )
+        .await
+    }
+
+    async fn replay_events(
+        &self,
+        session: &str,
+        since_seq: Option<u64>,
+        limit: u32,
+        include_raw: bool,
+    ) -> Result<pb::ListEventsResponse, ClientError> {
+        let mut params = Vec::new();
+        if let Some(seq) = since_seq {
+            params.push(format!("sinceSeq={seq}"));
+        }
+        if limit != 0 {
+            params.push(format!("limit={limit}"));
+        }
+        if include_raw {
+            params.push("includeRaw=true".into());
+        }
+        let query = (!params.is_empty()).then(|| params.join("&"));
+        self.call(
+            reqwest::Method::GET,
+            &format!("/v1/sessions/{}/events", encode_component(session)),
+            query.as_deref(),
+            None::<&Value>,
+        )
+        .await
+    }
+
+    /// Admit a plain prompt using an internal session ID.
+    ///
+    /// # Errors
+    /// Returns an error if admission fails.
+    #[deprecated(note = "use Client::create_turn_request with a v1 CreateTurnRequest")]
+    pub async fn create_turn(
+        &self,
+        session: SessionId,
+        text: impl Into<String>,
+    ) -> Result<pb::CreateTurnResponse, ClientError> {
+        self.create_turn_request(&pb::CreateTurnRequest {
+            session: session.to_string(),
+            kind: Some(pb::create_turn_request::Kind::Prompt(pb::PromptTurn {
+                text: text.into(),
+                ..Default::default()
+            })),
+        })
+        .await
+    }
+
+    /// Wait for a turn using an internal session ID.
+    ///
+    /// # Errors
+    /// Returns an error if waiting fails.
+    #[deprecated(note = "use Client::wait_turn_request with a v1 WaitTurnRequest")]
+    pub async fn wait_turn(
+        &self,
+        session: SessionId,
+        turn: &str,
+        timeout: Duration,
+    ) -> Result<pb::TurnInfo, ClientError> {
+        self.wait_turn_request(&pb::WaitTurnRequest {
+            session: session.to_string(),
+            turn: turn.to_owned(),
+            timeout_ms: timeout.as_millis().min(600_000) as u64,
+        })
+        .await
+    }
+
+    /// Admit a prompt and wait for its terminal state using an internal session ID.
+    ///
+    /// # Errors
+    /// Returns an error if admission or waiting fails.
+    #[deprecated(note = "use Client::prompt_text with a string session ID")]
     pub async fn prompt(
         &self,
         session: SessionId,
         text: impl Into<String>,
     ) -> Result<pb::TurnInfo, ClientError> {
-        let admitted = self.create_turn(session, text).await?;
-        let turn = admitted.turn.map(|turn| turn.id).unwrap_or_default();
-        self.wait_turn(session, &turn, Duration::from_secs(120))
-            .await
+        self.prompt_text(&session.to_string(), text).await
     }
 
-    /// `GET /v1/sessions/{id}/events` — replay events after a watermark.
+    /// Replay events after a watermark using an internal session ID.
     ///
     /// # Errors
-    /// Returns [`ClientError::Http`] or [`ClientError::Api`] on failure.
+    /// Returns an error if replay fails.
+    #[deprecated(note = "use Client::list_events_request with a v1 ListEventsRequest")]
     pub async fn list_events(
         &self,
         session: SessionId,
         since_seq: Option<u64>,
         include_raw: bool,
     ) -> Result<pb::ListEventsResponse, ClientError> {
-        let mut query = String::new();
-        if let Some(seq) = since_seq {
-            query.push_str(&format!("sinceSeq={seq}"));
-        }
-        if include_raw {
-            if !query.is_empty() {
-                query.push('&');
-            }
-            query.push_str("includeRaw=true");
-        }
-        let query = if query.is_empty() {
-            None
-        } else {
-            Some(query.as_str())
-        };
-        self.call(
-            reqwest::Method::GET,
-            &format!(
-                "/v1/sessions/{}/events",
-                encode_component(&session.to_string())
-            ),
-            query,
-            None::<&Value>,
-        )
-        .await
+        self.replay_events(&session.to_string(), since_seq, 0, include_raw)
+            .await
     }
 
     /// Replay the raw durable envelopes for tooling and test harnesses.
     ///
     /// # Errors
-    /// Returns [`ClientError::Http`] or [`ClientError::Api`] on failure.
+    /// Returns an error if replay fails.
+    #[deprecated(
+        note = "use Client::list_events_request with include_raw and consume the opaque JSON lines"
+    )]
     pub async fn events(
         &self,
         session: SessionId,
         since_seq: Option<u64>,
     ) -> Result<Vec<Envelope>, ClientError> {
-        let response = self.list_events(session, since_seq, true).await?;
+        let response = self
+            .replay_events(&session.to_string(), since_seq, 0, true)
+            .await?;
         Ok(response
             .raw_envelopes
             .iter()

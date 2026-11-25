@@ -164,6 +164,23 @@ accepts a configured `reqwest::Client`, including bridge authentication headers.
 These calls use the same `/v1` request and response schemas documented in the
 [API reference](../protocol/api-reference.md).
 
+Use v1 request types from `hya_api::v1` to admit a turn, wait for completion
+or replay session events from Rust tooling. The session fields carry string IDs.
+
+| `Client` method | Request | Result |
+| --- | --- | --- |
+| `create_turn_request` | `&CreateTurnRequest` | `CreateTurnResponse` |
+| `wait_turn_request` | `&WaitTurnRequest` | `TurnInfo` |
+| `list_events_request` | `&ListEventsRequest` | `ListEventsResponse` |
+| `prompt_text` | `&str` session ID and prompt text | `TurnInfo` |
+
+Each method returns `ClientError` on failure. For example,
+`client.prompt_text(&session.id, "Summarize this session").await?` admits a
+prompt and waits up to 120 seconds. Set `ListEventsRequest.include_raw` to
+`true` to receive opaque JSON lines in `ListEventsResponse.raw_envelopes`.
+The internal envelope schema may change. The methods taking
+`hya_proto::SessionId` or returning `hya_proto::Envelope` are deprecated.
+
 Provider OAuth runs through the launcher auth command. The former
 `Auth.StartOauth`, `Auth.CompleteOauth`, `Process.DisposeProcess`, and
 `Process.UpgradeProcess` RPCs and HTTP routes are removed; they only returned
