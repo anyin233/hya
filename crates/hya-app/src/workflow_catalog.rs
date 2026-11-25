@@ -232,16 +232,14 @@ impl WorkflowCatalog {
         };
         let mut installed = Vec::new();
         if let Some(registry) = registry {
-            let snapshot = registry.snapshot().await?;
+            let snapshot = registry.snapshot_with_catalogs().await?;
             for row in snapshot.unreadable {
                 warn(&format!(
                     "installed bundle {}: {}",
                     row.bundle_id, row.error
                 ));
             }
-            for record in snapshot.bundles {
-                installed.push(bundle_admin::decode_installed_catalog(&record)?);
-            }
+            installed.extend(snapshot.bundles.into_iter().map(|loaded| loaded.prepared));
         }
         // `use`/`run` register an unregistered directory as a one-root Project,
         // so its own `.hya/bundles` belong to the catalog here too.

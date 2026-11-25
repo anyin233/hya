@@ -700,6 +700,7 @@ SQLite or migration error.
 | --- | --- |
 | `connect(path: &str)` | `Result<BundleRegistry, BundleRegistryError>`; opens/migrates with bounded setup-lock retries |
 | `generation()` | Current registry generation |
+| `snapshot_with_catalogs()` | `LoadedBundleRegistrySnapshot` with `generation`, `bundles` (pairs of `BundleRegistryRecord` and validated `PreparedCatalog`), and `unreadable` rows |
 | `snapshot()` | `BundleRegistrySnapshot` with `generation`, readable `bundles`, and `unreadable` rows |
 | `plan_install(reserved_agent_ids, policy, candidate)` | `BundleInstallPlan` with `action` and displaced bundle ids. Leaves the registry unchanged. |
 | `install(reserved_agent_ids, policy, candidate)` | `BundleInstallOutcome` (`Installed`, `Replaced`, or `Unchanged`, with generation) |
@@ -711,6 +712,13 @@ SQLite or migration error.
 For example, `hya bundle install ./example.hyabundle --user --yes` validates
 and installs the package in this registry. `hya bundle list --user` reads its
 current bindings and reports unreadable installed rows with a reinstall hint.
+Runtime refresh, listing, and other bundle readers use the validated catalogs
+from the snapshot.
+
+User and Project installs share reserved Agent id, downgrade, namespace, and
+content checks. User installs compare the source package digest and require a
+version bump when same-version content differs. Project installs compare the
+prepared source digest and allow same-version replacement with `--overwrite`.
 
 ## Errors
 
