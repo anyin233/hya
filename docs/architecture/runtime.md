@@ -1620,7 +1620,8 @@ The current CLI exposes both goal mode (`hya -p`) and loop mode (`hya loop --tar
 Team-related code is split across:
 
 - [`actor/`](../../crates/hya-engine/src/actor/mod.rs) (all member episodes)
-- [`mailbox.rs`](../../crates/hya-engine/src/mailbox.rs) and [`engine/mailbox.rs`](../../crates/hya-engine/src/engine/mailbox.rs)
+- [`mailbox.rs`](../../crates/hya-engine/src/mailbox.rs) (mailbox service) and [`engine/mailbox/`](../../crates/hya-engine/src/engine/mailbox/) (requests and channel/roster queries)
+- [`terminal_handoff/read_view.rs`](../../crates/hya-engine/src/engine/terminal_handoff/read_view.rs) (archived-agent search)
 - [`workspace.rs`](../../crates/hya-engine/src/workspace.rs)
 - [`category.rs`](../../crates/hya-engine/src/category.rs)
 
