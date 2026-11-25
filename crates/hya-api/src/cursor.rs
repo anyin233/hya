@@ -15,22 +15,19 @@ pub fn encode_offset(offset: u64) -> String {
 
 /// Decode an opaque cursor into a list offset.
 ///
-/// An empty cursor decodes to offset `0`. A malformed cursor is an
-/// [`InvalidCursor`](InvalidCursor) error, not a panic.
+/// An empty cursor decodes to offset `0`. Otherwise the unpadded base64url
+/// cursor must decode to exactly eight bytes.
 pub fn decode_offset(cursor: &str) -> Result<u64, InvalidCursor> {
     if cursor.is_empty() {
         return Ok(0);
     }
-    let bytes = URL_SAFE_NO_PAD.decode(cursor).map_err(|_| InvalidCursor {
-        cursor: cursor.into(),
-    })?;
-    if bytes.len() > 8 {
-        return Err(InvalidCursor {
+    let le = URL_SAFE_NO_PAD
+        .decode(cursor)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| InvalidCursor {
             cursor: cursor.into(),
-        });
-    }
-    let mut le = [0u8; 8];
-    le[..bytes.len()].copy_from_slice(&bytes);
+        })?;
     Ok(u64::from_le_bytes(le))
 }
 
@@ -67,6 +64,7 @@ mod tests {
     #[test]
     fn malformed_cursors_are_rejected() {
         assert!(decode_offset("!!!").is_err());
+        assert!(decode_offset("AA").is_err());
         assert!(decode_offset("aaaaaaaaaaaaaaa").is_err());
     }
 }

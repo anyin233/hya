@@ -64,7 +64,7 @@ async fn list_interactions(
                 .map(pb::Interaction::from),
         );
     }
-    let (interactions, page) = super::catalog::paginate(interactions, &request.page);
+    let (interactions, page) = super::catalog::paginate(interactions, &request.page)?;
     Ok(Json(pb::ListInteractionsResponse {
         interactions,
         page: Some(page),

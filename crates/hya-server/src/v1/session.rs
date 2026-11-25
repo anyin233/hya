@@ -365,7 +365,7 @@ async fn list_sessions(
         }
     }
     listed_rows.reverse();
-    let (rows, page) = super::catalog::paginate(listed_rows, &request.page);
+    let (rows, page) = super::catalog::paginate(listed_rows, &request.page)?;
     let mut sessions = Vec::with_capacity(rows.len());
     for row in rows {
         sessions.push(

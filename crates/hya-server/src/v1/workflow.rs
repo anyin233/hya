@@ -34,6 +34,7 @@ async fn list_workflows(
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Result<Json<pb::ListWorkflowsResponse>, V1Error> {
     let request: pb::ListWorkflowsRequest = super::query_request(&[], &query)?;
+    super::catalog::page_offset(request.page.as_ref())?;
     let scope = request_scope(&request.directory)?;
     let rows = st
         .workflow_control
