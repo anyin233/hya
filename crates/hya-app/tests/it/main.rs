@@ -4,6 +4,7 @@ mod support;
 
 mod agent_model_control;
 mod config_minimal_edit;
+mod formatter;
 mod installed_bundle_refresh;
 mod nested_spawn_tree;
 mod plugin_adapter;

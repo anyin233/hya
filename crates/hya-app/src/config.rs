@@ -181,7 +181,7 @@ impl EngineSettings {
         self.file.plugins.keys().cloned().collect()
     }
     pub(crate) fn formatter(&self) -> hya_tool::FormatterPlane {
-        hya_tool::FormatterPlane::new(Arc::new(hya_tool::BuiltinFormatterProvider::new(
+        hya_tool::FormatterPlane::new(Arc::new(crate::BuiltinFormatterProvider::new(
             self.file.formatter.clone().into(),
         )))
     }
