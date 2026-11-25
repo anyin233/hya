@@ -444,11 +444,6 @@ impl E2eEnv {
         self.get_json("/v1/agents").await
     }
 
-    /// Fetch the session tree from member edges and roster rows in the event log.
-    pub async fn session_tree(&self, session: &SessionId) -> Result<Value, E2eError> {
-        self.build_tree(session, 8).await
-    }
-
     /// Compat-shaped session context (projected messages for the session).
     pub async fn session_context(&self, session: &SessionId) -> Result<Value, E2eError> {
         let messages = self
@@ -464,9 +459,9 @@ impl E2eEnv {
         self.get_json(&format!("/v1/sessions/{session}/todo")).await
     }
 
-    // Follow each spawning session’s member edges, even when projection parenting
-    // is flattened to the team root. Assemble the nested JSON after the traversal.
-    async fn build_tree(&self, session: &SessionId, depth_limit: usize) -> Result<Value, E2eError> {
+    /// Fetch the nested tree from spawning-session edges and roster rows in the event log.
+    pub async fn session_tree(&self, session: &SessionId) -> Result<Value, E2eError> {
+        const DEPTH_LIMIT: usize = 8;
         // session -> [(child, subagent_type)]
         let mut nodes: std::collections::BTreeMap<String, Vec<(String, String)>> =
             std::collections::BTreeMap::new();
@@ -483,7 +478,7 @@ impl E2eEnv {
                     roster.insert(entry.session.to_string(), entry);
                 }
             }
-            if depth >= depth_limit {
+            if depth >= DEPTH_LIMIT {
                 continue;
             }
             for member in &projection.session.members {
