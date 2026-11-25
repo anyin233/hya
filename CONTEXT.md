@@ -204,18 +204,19 @@ at run time ([ADR-0032](docs/adr/0032-workflow-programs-and-the-orchestrator-age
 _Avoid_: workflow (unqualified), script, code-mode program
 
 **Observation**:
-The report of a worker that only read. An `orchestrator-scout` answer made on
-an unchanged **Workspace state** is remembered and reused for the same
-question; the reusing trace record names the session that made it.
+The report of a worker that only read. The orchestrator may reuse a scout
+answer to the same question while the calling session has the same non-null
+**Workspace state** value. The reuse trace names the session that produced it.
 _Avoid_: cache entry, memo
 
 **Workspace state**:
-The value of the `workspace.state` host capability: a SHA-256 identity of the
-Git work tree containing a session's working directory (its location, HEAD
-tree, status, and the content of status-listed files; ignored files and
-top-level `.hya/` excluded). Equal values mean the same checkout with the same
-content.
-_Avoid_: snapshot, revision
+The opaque value of the `workspace.state` host capability, formed as
+`"<session id>:<file revision>"` after reconciling observed files. The file
+revision counts `FilesObserved` and `FilesChanged` events. Equal values mean
+the same session recorded no file change between observations. If the
+working directory has no native watch, the capability returns `null` and
+cannot validate a cached answer. See [workspace file observations](docs/kernel.md#workspace-file-observations).
+_Avoid_: checkout hash, snapshot
 
 **Stage**:
 One node in a compiled Workflow DAG: target Agent, directive (`{{input.<name>}}`

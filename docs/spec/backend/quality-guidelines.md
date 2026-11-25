@@ -893,48 +893,54 @@ visible and fail closed.
 
 ### 1. Scope / Trigger
 
-- Trigger: any change to what the turn loop sends the model — compaction
-  thresholds, eviction, summarization, or token accounting.
-- Applies to `crates/hya-engine/src/compaction.rs` and the reduction block in
-  `crates/hya-engine/src/engine/turn.rs`.
+- Trigger: changes to the kernel rewrite, eviction, provider-side compaction,
+  or token accounting before a request.
+- Applies to `crates/hya-core/src/kernel/rewrite.rs`, the full-mode adapter in
+  `crates/hya-engine/src/engine/turn/harness.rs`, token accounting in
+  `crates/hya-context/src/tokens.rs`, and the `hya-compaction` native bundle.
+  Terminal handoff generation lives in
+  `crates/hya-engine/src/engine/terminal_handoff.rs`.
 
 ### 2. Contracts
 
-- **A measured token count describes the transcript at the moment it was
-  measured.** `TokenAccounting::tokens_in_use` prefers the provider-reported usage on the most
-  recent assistant message. After any request-local edit (tool-output eviction,
-  message rewriting) that number is stale: re-measuring reports no saving.
-  Carry one running count and apply each reduction as a delta instead.
-- The `shake` step (`hya/compaction`) lowers the kernel's figure by what it
-  freed. Only once a reduction changed the log does the kernel re-measure,
-  then from a local estimate of the re-read projection, never from the stale
-  reported usage.
-- Reductions never rewrite logged content. Tool-output eviction appends its
-  notices in `ContextEvicted`, so the event log stays a sufficient statistic
-  for offline reconstruction (see 0.34.15) and for the next request.
-- The threshold is 80% of `Capabilities::max_context`; a route with no window
-  reduces nothing.
+- **A measured token count describes the request it was measured against.**
+  The kernel uses the largest of the last round's reported prompt plus
+  output, the usage-anchored request count, and the local request estimate.
+  The request counts include the system prompt and offered tool schemas.
+- `shake` lowers the extension's running pressure by the estimated savings.
+  When an extension changes the log, the kernel re-reads the projection and
+  uses the local estimate. The previous provider usage measured a different
+  request.
+- Tool-output eviction appends `ContextEvicted` with the exact replacement
+  notices. The original outputs remain in the log and projection, and later
+  requests use the recorded notices.
+- The threshold is 80% of `Capabilities::max_context`. A route with no
+  advertised window has no automatic reduction trigger.
 
 ### 3. Validation & Error Matrix
 
 - Re-measuring after eviction with the stale reported usage -> saving
   invisible, the kernel rewrites anyway.
-- Eviction inside `keep_recent` -> the agent loses the result it just fetched.
+- Eviction of a completed output inside both retained tails, or of the
+  latest visible `todo` result -> the request loses context the bundle must
+  preserve.
 
 ### 4. Good/Base/Bad Cases
 
 - Good: eviction alone drops under the threshold, `ContextEvicted` is recorded,
   no kernel rewrite, and the log still holds the full tool output.
-- Base: a route reporting no usage falls back to `chars / 4` with behaviour
-  identical to before.
-- Bad: testing eviction within a single turn. Every tool part of one turn lands
-  in the **same** assistant message, which sits inside `keep_recent`; eviction is
-  a cross-turn reduction and a single-turn test will always see zero evicted.
+- Base: a route reporting no usage uses the structure-aware local estimate.
+- Bad: assuming all results in the active assistant message are protected.
+  Outputs outside the completed-step tail are eligible during the same turn,
+  and those outside the message tail are eligible even when they are within
+  the completed-step tail.
 
 ### 5. Tests Required
 
 - A regression proving unchanged behaviour when no usage is reported.
-- A cross-turn test that eviction alone avoids the kernel rewrite.
+- An eviction test for outputs outside the retained message tail, and one
+  for early tool steps inside the active assistant message.
+- A test that eviction can avoid the kernel rewrite.
 - A test that the event log retains full tool output after an evicted turn.
 
 ---

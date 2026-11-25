@@ -68,9 +68,11 @@ the same name.
 - After a reduction the model sees the user messages, the todo list and its
   own `rewrite` summary; there is no harness-written summary. The goal
   checkpoint at 60% is what asks the model to record results it still needs.
-- The `compaction.*` threshold keys, `summary_max_tokens` and
-  `method_order` are gone, with their environment variables. The parity with
-  oh-my-pi's `compaction.methodOrder` no longer holds.
+- The `compaction.*` threshold keys and `method_order` are gone, with their
+  environment variables. The parity with oh-my-pi's `compaction.methodOrder`
+  no longer holds. `compaction.summary_max_tokens` and
+  `HYA_COMPACTION_SUMMARY_MAX_TOKENS` remain as the output cap for the
+  [terminal handoff](../compaction.md#terminal-handoff) in F4.
 - Every full-mode request's system prompt changes, so request digests and
   traces are not directly comparable with runs before this change.
 - `hya-main` no longer tells the model to keep working while a todo item is
