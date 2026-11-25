@@ -162,7 +162,7 @@ fn suggested_id(base_url: &str) -> String {
             }
         })
         .collect();
-    if hya_server::valid_provider_id(&id) && id != "hya" {
+    if hya_provider::valid_provider_id(&id) && id != "hya" {
         id
     } else {
         "provider".to_string()
@@ -170,7 +170,7 @@ fn suggested_id(base_url: &str) -> String {
 }
 
 fn check_id(id: &str) -> anyhow::Result<()> {
-    if !hya_server::valid_provider_id(id) || id == "hya" {
+    if !hya_provider::valid_provider_id(id) || id == "hya" {
         anyhow::bail!(
             "invalid provider id `{id}`: use letters, digits, `-`, `_`, or `.` (not `hya`)"
         );

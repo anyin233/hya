@@ -66,6 +66,19 @@ pub use openai::{
 pub use router::ProviderRouter;
 pub use wire::invalid_tool_arguments;
 
+/// Check the provider ID format used by provider management.
+///
+/// Accepts 1 to 64 ASCII letters, digits, hyphens, or underscores.
+/// Management callers enforce any reserved names separately.
+#[must_use]
+pub fn valid_provider_id(provider_id: &str) -> bool {
+    !provider_id.is_empty()
+        && provider_id.len() <= 64
+        && provider_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
 /// Reject a request a route cannot serve before a turn starts (risk #12):
 /// tool-using turns require `streaming_tool_calls`.
 pub fn preflight(caps: &Capabilities, req: &CompletionRequest) -> Result<(), ProviderError> {

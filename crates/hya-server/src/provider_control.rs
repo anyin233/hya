@@ -245,14 +245,11 @@ impl ProviderControl for EmptyProviderControl {
     }
 }
 
-/// Validate a provider id: 1-64 ASCII letters, digits, `-`, or `_`.
+/// Validate a provider ID using the provider format rules.
+#[deprecated(note = "Use hya_provider::valid_provider_id instead")]
 #[must_use]
 pub fn valid_provider_id(provider_id: &str) -> bool {
-    !provider_id.is_empty()
-        && provider_id.len() <= 64
-        && provider_id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    hya_provider::valid_provider_id(provider_id)
 }
 
 /// Truncate a string by Unicode scalar count only when it exceeds the bound.

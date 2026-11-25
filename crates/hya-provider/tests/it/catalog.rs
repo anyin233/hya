@@ -7,6 +7,18 @@ use hya_provider::{
     ProviderModel,
 };
 
+#[test]
+fn provider_management_ids_have_one_ascii_format() {
+    use hya_provider::valid_provider_id;
+
+    for id in ["a", "Team_openai-2", "hya", &"a".repeat(64)] {
+        assert!(valid_provider_id(id), "valid ID {id:?}");
+    }
+    for id in ["", "a.b", "a/b", "a b", "é", &"a".repeat(65)] {
+        assert!(!valid_provider_id(id), "invalid ID {id:?}");
+    }
+}
+
 fn model(provider_id: &str, model_id: &str, source: ModelCatalogSource) -> ProviderModel {
     ProviderModel {
         provider_id: provider_id.to_string(),
