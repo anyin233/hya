@@ -89,3 +89,10 @@ and sends `console.*` output to stderr as `{ ext, line }`, which `/extensions`
 shows.
 
 Development: `cd packages/hya-tui-sdk && bun run typecheck && bun test`.
+
+`packages/hya-tui-sdk/src/wire.ts` defines the shared protocol constants and
+payload types, including `TuiMethodMap` for request parameters and results.
+After editing it, run `bun packages/hya-tui-sdk/scripts/copy-wire.ts` from the
+repository root to update `packages/hya-tui/src/extensions/wire.generated.ts`.
+The TUI unit suite checks that the local copy matches byte for byte. The TUI
+validates and sanitizes incoming payloads in `src/extensions/wire.ts`.

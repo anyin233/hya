@@ -1,101 +1,36 @@
-/**
- * Host side of the bundle TUI extension wire contract (api_version 1; the
- * authoring side is packages/hya-tui-sdk). Everything an extension sends is
- * untrusted: this module validates it into the host's own types. The TUI
- * ships alone (lib/hya/tui), so it keeps its own copy of the contract instead
- * of importing the SDK; test/extensions.test.ts runs the real SDK against it.
- */
+/** Host validation and normalization for the bundle TUI extension protocol. */
+import {
+  MAX_CONTRIBUTIONS, RENDER_LIMITS, REPLACEABLE_SURFACES as replaceableSurfaces,
+  type Contributions as WireContributions, type InterceptDecision, type ExtensionContext,
+  type TuiExtensionPermission as ExtensionPermission, type JsonValue, type NodeAction,
+  type RenderNode, type ReplaceableSurface, type TextStyle,
+} from "./wire.generated"
 
-export const extensionApiVersion = 1
-/** SDK contract major this host speaks. Bundle `tui.sdk` must have this major and a minor no newer than the installed SDK. */
-export const extensionSdkMajor = 1
-/** JSON-RPC error code of a request that ran past the VM deadline (SDK `DEADLINE_ERROR_CODE`). */
-export const extensionStoppedCode = -32001
+export {
+  TUI_EXTENSION_API_VERSION as extensionApiVersion,
+  TUI_EXTENSION_SDK_MAJOR as extensionSdkMajor,
+  VM_STOPPED_ERROR_CODE as extensionStoppedCode,
+  TUI_EXTENSION_PERMISSIONS as extensionPermissions,
+  REPLACEABLE_PANES as replaceablePanes,
+  REPLACEABLE_SURFACES as replaceableSurfaces,
+} from "./wire.generated"
+export type { ExtensionPermission }
+export type {
+  CommandResult, ExtensionAction, ExtensionContext, HostCommand, InterceptDecision, JsonValue,
+  KeyEvent, NodeAction, RenderNode, ReplaceablePane, ReplaceableSurface, TextStyle,
+} from "./wire.generated"
 
-export const extensionPermissions = [
-  "tui.panel", "tui.render", "tui.status_item", "tui.session.read",
-  "tui.transcript.read", "tui.workspace.read", "workspace.git.read", "tui.action",
-  "tui.sessions.read", "tui.projects.read", "tui.todos.read", "tui.status.read",
-  "tui.keys", "tui.session.control", "tui.project.control", "fs.read",
-] as const
-export type ExtensionPermission = typeof extensionPermissions[number]
-
-export const replaceablePanes = ["projects", "sessions", "todos", "context", "jobs", "status", "models", "workflows", "interactions", "api"] as const
-export type ReplaceablePane = typeof replaceablePanes[number]
-export const replaceableSurfaces = [...replaceablePanes, "context_line", "project_view"] as const
-export type ReplaceableSurface = typeof replaceableSurfaces[number]
-export interface KeyEvent { readonly name: string; readonly sequence: string; readonly ctrl: boolean; readonly shift: boolean; readonly meta: boolean }
-export interface ExtensionAction { readonly name: string; readonly data: JsonValue; readonly button: "left" | "right" }
-export type HostCommand =
-  | { readonly command: "session.open"; readonly id: string; readonly token?: string } | { readonly command: "session.menu"; readonly id: string }
-  | { readonly command: "session.new_temporary"; readonly token?: string }
-  | { readonly command: "project.switch"; readonly id: string; readonly token?: string } | { readonly command: "project.menu"; readonly id: string }
-  | { readonly command: "project.create"; readonly name: string; readonly roots: readonly string[]; readonly token?: string }
-  | { readonly command: "project.rename"; readonly id: string; readonly name: string; readonly token?: string }
-  | { readonly command: "project.set_roots"; readonly id: string; readonly roots: readonly string[]; readonly token?: string }
-  | { readonly command: "project.delete"; readonly id: string; readonly token?: string }
-  | { readonly command: "fs.complete"; readonly input: string; readonly token: string }
-  | { readonly command: "ui.release" } | { readonly command: "ui.close" } | { readonly command: "ui.open" }
-export interface CommandResult { readonly token: string; readonly ok: boolean; readonly error?: string; readonly value?: JsonValue }
-export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue }
-export interface ExtensionContext {
-  readonly terminal: { readonly columns: number; readonly rows: number }
-  readonly session?: { readonly id?: string; readonly title?: string; readonly agent?: string; readonly model?: string; readonly mode?: string; readonly workdir?: string; readonly busy: boolean }
-  readonly transcript?: readonly { readonly role: string; readonly text: string }[]
-  readonly workspace?: { readonly directory: string; readonly project?: { readonly id: string; readonly name?: string } }
-  readonly git?: { readonly branch?: string; readonly head?: string; readonly dirty: number; readonly ahead: number; readonly behind: number }
-  readonly sessions?: { readonly ready: boolean; readonly selected?: string; readonly items: readonly { readonly id: string; readonly title?: string; readonly agent: string; readonly temporary: boolean; readonly archived: boolean; readonly busy: boolean; readonly waiting: boolean; readonly parent?: string; readonly created?: number; readonly members?: readonly { readonly child: string; readonly handle?: string; readonly description?: string; readonly agent?: string }[] }[] }
-  readonly projects?: { readonly ready: boolean; readonly active?: string; readonly error?: string; readonly items: readonly { readonly id: string; readonly name: string; readonly roots: readonly string[]; readonly busy: boolean; readonly sessionCount?: number }[] }
-  readonly todos?: readonly { readonly status: "pending" | "in_progress" | "blocked" | "completed"; readonly content: string }[]
-  readonly status?: {
-    readonly ready: boolean
-    readonly vim?: { readonly normal: boolean; readonly pending?: string }
-    readonly mode: { readonly text: string; readonly tone: "strong" | "accent" | "error" }
-    readonly session?: {
-      readonly id: string; readonly title?: string; readonly agent: string; readonly forked?: string
-      readonly model: string; readonly modelShort: string; readonly messages: number; readonly workdir?: string
-      readonly context?: { readonly percent: number; readonly tokens: number; readonly limit: number }; readonly tokens?: number
-    }
-    readonly branch?: string
-    readonly todos?: { readonly done: number; readonly total: number }
-    readonly items: readonly { readonly label: string; readonly text: string; readonly priority: number }[]
-    readonly server: string
-    readonly web?: { readonly host?: string; readonly label: string }
-    readonly versions: { readonly tui: string; readonly backend?: string }
-    readonly connection: "connected" | "disconnected" | "stopped"
-  }
-}
-
-export interface TextStyle { readonly color?: string; readonly background?: string; readonly bold?: boolean; readonly italic?: boolean; readonly underline?: boolean }
-export interface NodeAction { readonly name: string; readonly data: JsonValue }
-export type RenderNode =
-  | { readonly kind: "text"; readonly text: string; readonly style?: TextStyle; readonly action?: NodeAction }
-  | { readonly kind: "row" | "column"; readonly children: readonly RenderNode[]; readonly gap?: number }
-  /** Structural container. Legacy border is accepted; the host renders a plain title without an outline. */
-  | { readonly kind: "box"; readonly children: readonly RenderNode[]; readonly title?: string; readonly border?: boolean; readonly padding?: number }
-  | { readonly kind: "table"; readonly columns: readonly string[]; readonly rows: readonly (readonly string[])[] }
-  | { readonly kind: "progress"; readonly value: number; readonly total: number; readonly label?: string }
-  | { readonly kind: "slot" }
-
-export interface PanelContribution { readonly id: string; readonly title: string; readonly placement: "sidebar" | "pane"; readonly replaces?: ReplaceableSurface; readonly refreshMs?: number; readonly keys?: true }
-export interface StatusContribution { readonly id: string; readonly label: string; readonly priority: number }
-export interface RendererContribution { readonly id: string; readonly target: "tool_call" | "composer"; readonly mode: "replace" | "decorate"; readonly priority: number }
-export interface FormatterContribution { readonly id: string; readonly priority: number }
-export interface InterceptorContribution { readonly id: string; readonly target: "submit"; readonly priority: number }
-export interface Contributions {
+export type PanelContribution = Omit<WireContributions["panels"][number], "refresh_ms"> & { readonly refreshMs?: number }
+export type StatusContribution = WireContributions["status_items"][number]
+export type RendererContribution = WireContributions["renderers"][number]
+export type FormatterContribution = WireContributions["formatters"][number]
+export type InterceptorContribution = WireContributions["interceptors"][number]
+export interface Contributions extends Omit<WireContributions, "panels" | "status_items"> {
   readonly panels: readonly PanelContribution[]
   readonly statusItems: readonly StatusContribution[]
-  readonly renderers: readonly RendererContribution[]
-  readonly formatters: readonly FormatterContribution[]
-  readonly interceptors: readonly InterceptorContribution[]
 }
 
-export type InterceptDecision =
-  | { readonly decision: "continue" }
-  | { readonly decision: "replace"; readonly text: string }
-  | { readonly decision: "block"; readonly message: string }
-
-export const renderLimits = { maxDepth: 32, maxNodes: 2_000, maxStringBytes: 32 * 1024, maxContributions: 32 } as const
+export const renderLimits = { ...RENDER_LIMITS, maxContributions: MAX_CONTRIBUTIONS } as const
 
 // CSI/OSC/other escape sequences, then remaining C0/C1 controls except tab and newline.
 const escapes = /[\u001B\u009B][[\]()#;?]*(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*)?\u0007|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-T-Zcf-nq-uy=><~]))|[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g
@@ -241,7 +176,7 @@ export function validateContributions(value: unknown, permissions: readonly Exte
   if (!value || typeof value !== "object") return "contributions must be an object"
   const raw = value as Record<string, unknown>
   const warnings: string[] = []
-  const list = (key: string): Record<string, unknown>[] | string => {
+  const list = (key: keyof WireContributions): Record<string, unknown>[] | string => {
     const items = raw[key] ?? []
     if (!Array.isArray(items) || items.length > renderLimits.maxContributions || items.some((item) => !item || typeof item !== "object")) return `contributions.${key} must be at most ${renderLimits.maxContributions} objects`
     const ids = new Set<string>()

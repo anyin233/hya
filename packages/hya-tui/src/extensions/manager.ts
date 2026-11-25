@@ -29,6 +29,7 @@ import {
   type RenderNode, type RendererContribution, type ReplaceableSurface,
 } from "./wire"
 
+import { JSONRPC_VERSION, type SurfaceRef, type ToolCallInput, type TuiMethod, type TuiMethodMap } from "./wire.generated"
 export type ExtensionState = "starting" | "running" | "failed" | "disabled" | "blocked"
 
 /** One catalog extension as `/extensions` shows it. */
@@ -53,15 +54,7 @@ export interface PanelEntry extends PanelContribution { readonly key: string; re
 /** What a view shows for a surface: a validated tree, an error, or nothing yet. */
 export interface SurfaceView { readonly node?: RenderNode; readonly error?: string }
 
-export interface ToolCallInput {
-  readonly id: string
-  readonly tool: string
-  readonly status: "pending" | "running" | "completed" | "error"
-  readonly summary: string
-  readonly input?: JsonValue
-  readonly output?: JsonValue
-  readonly error?: string
-}
+export type { ToolCallInput } from "./wire.generated"
 
 /** One renderer's tree and who answers its actions. */
 export interface HookTree { readonly node: RenderNode; readonly extension: string; readonly renderer: string }
@@ -477,7 +470,7 @@ export class ExtensionManager {
       void (async () => {
         let text = base
         for (const { entry, item } of formatters) {
-          const result = await this.call<{ text?: unknown }>(entry, "tui/format", { formatter: item.id, input: { value: (value ?? null) as JsonValue, text }, width: this.context.terminal.columns })
+          const result = await this.call(entry, "tui/format", { formatter: item.id, input: { value: (value ?? null) as JsonValue, text }, width: this.context.terminal.columns })
           const next = result && result.text !== null ? safeText(result.text) : undefined
           if (next !== undefined) text = next
         }
@@ -509,7 +502,7 @@ export class ExtensionManager {
   async action(extension: string, surface: { kind: "panel" | "renderer"; id: string }, action: NodeAction | ExtensionAction, point?: { x: number; y: number }): Promise<void> {
     const entry = this.running.get(extension)
     if (!entry || entry.state !== "running" || !entry.catalog.permissions.includes("tui.action")) return
-    const wireAction: ExtensionAction = { ...action, button: "button" in action ? action.button : "left" }
+    const wireAction: ExtensionAction = { ...action, data: action.data ?? null, button: "button" in action ? action.button : "left" }
     const result = await this.call(entry, "tui/action", { surface, action: wireAction })
     await this.handled(entry, "tui/action", result, { surface, extension, ...(point ? { point } : {}) })
   }
@@ -652,19 +645,19 @@ export class ExtensionManager {
     return { ...(replace ? { replace } : {}), decorators }
   }
 
-  private async renderSurface(entry: Running, surface: { kind: "panel" | "status" | "renderer"; id: string }, width: number, height: number, input: JsonValue | undefined, slot: "forbid" | "require"): Promise<SurfaceView> {
-    const result = await this.call<{ root?: unknown }>(entry, "tui/render", { surface, width, height, now: Date.now(), ...(input === undefined ? {} : { input }) })
+  private async renderSurface(entry: Running, surface: SurfaceRef, width: number, height: number, input: JsonValue | undefined, slot: "forbid" | "require"): Promise<SurfaceView> {
+    const result = await this.call(entry, "tui/render", { surface, width, height, now: Date.now(), ...(input === undefined ? {} : { input }) })
     if (!result || result.root === null || result.root === undefined) return {}
     const node = validateRenderNode(result.root, { slot, actions: entry.catalog.permissions.includes("tui.action") })
     return typeof node === "string" ? { error: `${entry.catalog.bundleId}: ${node}` } : { node }
   }
 
   /** One request; failures resolve `undefined` (the caller falls back) and are recorded as warnings. A timeout fails the extension. */
-  private async call<T>(entry: Running, method: string, params: unknown): Promise<T | undefined> {
+  private async call<M extends TuiMethod>(entry: Running, method: M, params: TuiMethodMap[M]["params"]): Promise<TuiMethodMap[M]["result"] | undefined> {
     const host = this.host
     if (!host || entry.state !== "running") return undefined
     try {
-      return await this.extRequest<T>(host, entry.catalog.bundleId, method, params)
+      return await this.extRequest(host, entry.catalog.bundleId, method, params)
     } catch (error) {
       if (error instanceof HostTimeoutError) this.timedOut(entry, error.message)
       else this.warn(entry, `${method}: ${error instanceof Error ? error.message : String(error)}`)
@@ -678,15 +671,15 @@ export class ExtensionManager {
    * extension restarts within its budget, so a runaway cannot keep the VM
    * thread every other extension shares.
    */
-  private async extRequest<T>(host: HostChannel, ext: string, method: string, params: unknown): Promise<T> {
-    const answer = await host.request<{ response?: { result?: unknown; error?: { code?: unknown; message?: unknown } } }>("ext/call", { ext, request: { jsonrpc: "2.0", id: ++this.requestId, method, params } })
+  private async extRequest<M extends TuiMethod>(host: HostChannel, ext: string, method: M, params: TuiMethodMap[M]["params"]): Promise<TuiMethodMap[M]["result"]> {
+    const answer = await host.request<{ response?: { result?: unknown; error?: { code?: unknown; message?: unknown } } }>("ext/call", { ext, request: { jsonrpc: JSONRPC_VERSION, id: ++this.requestId, method, params } })
     const response = answer?.response
     if (!response) throw new Error("the extension host gave no response")
     if (response.error) {
       const message = typeof response.error.message === "string" ? response.error.message : "extension error"
       throw response.error.code === extensionStoppedCode ? new HostTimeoutError(message) : new Error(message)
     }
-    return response.result as T
+    return response.result as TuiMethodMap[M]["result"]
   }
 
   private warn(entry: Running, text: string): void {
@@ -706,7 +699,7 @@ export class ExtensionManager {
     }
     if (view.json === entry.sentContext) return
     entry.sentContext = view.json
-    const result = await this.call<{ invalidate?: unknown }>(entry, "tui/context", { context: view.context })
+    const result = await this.call(entry, "tui/context", { context: view.context })
     if (result?.invalidate !== false) this.invalidate(entry)
   }
 
@@ -780,7 +773,7 @@ export class ExtensionManager {
       await this.extRequest(host, ext, "tui/initialize", { api_version: extensionApiVersion, sdk_version: sdk.version, extension_id: ext, permissions: catalog.permissions })
       const context = scopeContext(this.context, catalog.permissions)
       entry.sentContext = JSON.stringify(context)
-      const activated = await this.extRequest<{ contributions?: unknown }>(host, ext, "tui/activate", { context })
+      const activated = await this.extRequest(host, ext, "tui/activate", { context })
       const checked = validateContributions(activated?.contributions, catalog.permissions)
       if (typeof checked === "string") throw new Error(checked)
       if (superseded()) return
@@ -873,7 +866,7 @@ export class ExtensionManager {
     const entry = this.running.get(ext)
     if (entry?.state === "starting") await entry.ready
     if (!entry || entry.state !== "running") return
-    const result = await this.call<{ invalidate?: unknown; notice?: unknown }>(entry, "tui/fs_event", { watch, events })
+    const result = await this.call(entry, "tui/fs_event", { watch, events })
     const notice = safeText(result?.notice)
     if (notice) this.options.notice?.(notice.slice(0, 200))
     if (result?.invalidate === true) this.invalidate(entry)

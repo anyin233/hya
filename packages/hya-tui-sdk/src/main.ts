@@ -16,7 +16,7 @@
  * thread (src/jitThread.ts). Extension console output goes to stderr as
  * `{"ext","line"}` JSON lines.
  */
-import { encodeFrame, MAX_FRAME_BYTES, parseFrame, type JsonValue, type RpcEnvelope, type RpcId } from "./protocol"
+import { encodeFrame, JSONRPC_VERSION, MAX_FRAME_BYTES, parseFrame, type JsonValue, type RpcEnvelope, type RpcId } from "./protocol"
 import { bundleExtension } from "./host"
 import type { FromWorker, ToWorker } from "./hostMessages"
 import { JitThread } from "./jitThread"
@@ -52,7 +52,7 @@ function log(ext: string, line: string): void {
 function askTui(ext: string, method: string, params: Record<string, unknown>, target: { call: number; jit?: JitThread }): void {
   const id = `h${nextId++}`
   asked.set(id, target)
-  send({ jsonrpc: "2.0", id, method, params: { ext, ...params } as JsonValue })
+  send({ jsonrpc: JSONRPC_VERSION, id, method, params: { ext, ...params } as JsonValue })
 }
 
 worker.onmessage = (event: MessageEvent<FromWorker>) => {
@@ -170,8 +170,8 @@ function receive(frame: RpcEnvelope): void {
   // Every host method takes named parameters.
   const params: Params = typeof frame.params === "object" && frame.params !== null && !Array.isArray(frame.params) ? frame.params as Params : {}
   const served = serve(frame.method, params).then(
-    (result) => send({ jsonrpc: "2.0", id: frame.id, result }),
-    (error: unknown) => send({ jsonrpc: "2.0", id: frame.id, error: { code: -32000, message: error instanceof Error ? error.message : String(error) } }),
+    (result) => send({ jsonrpc: JSONRPC_VERSION, id: frame.id, result }),
+    (error: unknown) => send({ jsonrpc: JSONRPC_VERSION, id: frame.id, error: { code: -32000, message: error instanceof Error ? error.message : String(error) } }),
   )
   inflight.add(served)
   void served.finally(() => inflight.delete(served))
