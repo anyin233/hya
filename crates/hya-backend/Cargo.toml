@@ -16,7 +16,6 @@ workspace = true
 hya-bundle = { workspace = true }
 hya-version = { workspace = true }
 hya-api = { workspace = true }
-hya-core = { workspace = true }
 hya-engine = { workspace = true }
 hya-provider = { workspace = true }
 hya-store = { workspace = true }

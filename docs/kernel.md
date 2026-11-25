@@ -14,6 +14,20 @@ and always runs in process. Add `--time-budget <SECS>` to
 announce the budget to the model, report its progress, send WrapUp and Final
 guidance, and cap Bash calls. See the [CLI reference](cli.md#--bare).
 
+Rust hosts can use the same kernel-only runner with an open `SessionStore`.
+The async entry point is
+`hya_app::run_bare(prompt: String, model_override: Option<String>, store: &SessionStore, sink: Option<&mut BareEventSink<'_>>, cancel: &CancellationToken) -> anyhow::Result<Option<String>>`.
+For example, `run_bare("say hi".into(), None, &store, None, &cancel).await?`
+returns the final assistant step's text in the current working directory.
+
+To stream durable events, pass a `BareEventSink`, a `Send` callback with
+signature `FnMut(&hya_proto::Envelope) -> Result<(), String>`. The runner
+commits each batch before delivering its envelopes in order. A sink failure
+ends delivery and prevents future appends. With a sink, a successful run
+returns `None`. The CLI uses the callback to write and flush each `--json`
+line to stdout. A host can install the existing deadline before calling the
+runner and cancel through the token it passes in.
+
 ## Three primitives
 
 The kernel folds the event log with the shared `hya-proto` reducer.

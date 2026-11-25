@@ -12,6 +12,7 @@ pub mod agent_model_config;
 pub mod agent_model_control;
 /// Provider credential files under `~/.config/hya/auth/`.
 pub mod auth;
+mod bare;
 /// Per-bundle `config.yml` location, environment contract, and scope resolver.
 pub mod bundle_admin;
 pub mod bundle_config;
@@ -54,6 +55,7 @@ pub mod workflow_control;
 pub use agent_model_control::{
     AgentModelControlError, AgentModelIdentity, PersistentAgentModelControl,
 };
+pub use bare::{BareEventSink, run_bare};
 pub use headless::{HeadlessEvaluatorRoute, prepare_goal, prepare_loop};
 pub use hya_proto::{
     WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowInfo, WorkflowRunResult,
