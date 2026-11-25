@@ -9,7 +9,6 @@ mod base_tools_preset;
 mod edit;
 mod extended_bundle;
 mod external_directory_scope;
-mod formatter;
 mod formatter_bom;
 mod glob_grep;
 mod grep_hashline;

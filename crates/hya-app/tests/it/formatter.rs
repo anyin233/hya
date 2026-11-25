@@ -1,4 +1,4 @@
-//! Integration tests for `hya-tool`: formatter.
+//! Integration tests for `hya-app`: formatter.
 
 #![allow(clippy::unwrap_used)]
 
@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hya_tool::{BuiltinFormatterProvider, FormatterConfig, FormatterEntry, FormatterProvider};
+use hya_app::BuiltinFormatterProvider;
+use hya_tool::{FormatterConfig, FormatterEntry, FormatterProvider};
 
 fn tempdir() -> PathBuf {
     let nanos = SystemTime::now()

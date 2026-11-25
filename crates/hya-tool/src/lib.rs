@@ -25,9 +25,6 @@ mod base_tools;
 /// Wall-clock budget and staged notices for a headless run.
 pub mod deadline;
 mod formatter;
-mod formatter_catalog;
-mod formatter_command;
-mod formatter_definition;
 /// Internal resource URLs (`artifact://`, `skill://`, `local://`) for
 /// agent-owned payloads. Ordinary filesystem paths are unaffected.
 pub mod handle;
@@ -80,8 +77,8 @@ pub use base_tools::{
     base_tools_preset, file_operations_rule, tool_bundle_presets, tool_prompt,
 };
 pub use formatter::{
-    BuiltinFormatterProvider, FormatterConfig, FormatterEntry, FormatterError, FormatterPlane,
-    FormatterProvider, FormatterStatus,
+    FormatterConfig, FormatterEntry, FormatterError, FormatterPlane, FormatterProvider,
+    FormatterStatus,
 };
 /// Deprecated compatibility exports for the native rewrite contract.
 #[deprecated(note = "Use hya_context::rewrite instead")]

@@ -1912,7 +1912,7 @@ When the key is **absent**, the default is `false` (`FormatterConfig::Disabled`)
 builtin set — it does **not** replace the builtins. Writing
 `formatter: { treefmt: { … } }` keeps every available builtin **and** adds
 `treefmt`. To stop a builtin, set `disabled: true` on that name (see
-[`formatter_definition.rs`](../crates/hya-tool/src/formatter_definition.rs)).
+[`formatter_definition.rs`](../crates/hya-app/src/formatter_definition.rs)).
 
 ```yaml
 formatter: true
@@ -1958,9 +1958,9 @@ definition matches first for that path runs. Binaries that are not on `PATH`
 ### Built-in formatter set (`formatter: true`)
 
 Twenty-six builtins are defined in
-[`formatter_catalog.rs`](../crates/hya-tool/src/formatter_catalog.rs). Only
+[`formatter_catalog.rs`](../crates/hya-app/src/formatter_catalog.rs). Only
 entries whose availability probe succeeds actually run. Argv when enabled
-comes from [`formatter_command.rs`](../crates/hya-tool/src/formatter_command.rs)
+comes from [`formatter_command.rs`](../crates/hya-app/src/formatter_command.rs)
 (`$FILE` = path being formatted).
 
 | Name | Extensions | Typical argv (when enabled) | Availability notes |
@@ -1994,6 +1994,13 @@ comes from [`formatter_command.rs`](../crates/hya-tool/src/formatter_command.rs)
 
 Disable an unwanted rewrite with a map entry, for example
 `prettier: { disabled: true }` or `rustfmt: { disabled: true }`.
+
+Rust hosts can install this implementation directly with
+`FormatterPlane::new(Arc::new(hya_app::BuiltinFormatterProvider::new(config)))`.
+The constructor takes a `hya_tool::FormatterConfig`. The provider implements
+`hya_tool::FormatterProvider` to report status and format matching files.
+Replace the previous `hya_tool::BuiltinFormatterProvider` import with
+`hya_app::BuiltinFormatterProvider`.
 
 ## Language Servers
 

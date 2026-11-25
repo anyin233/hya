@@ -20,8 +20,12 @@ mod bundle_runtime;
 /// `config.yaml` load, first-run bootstrap, and Compat import.
 pub mod config;
 mod config_edit;
+mod formatter;
+mod formatter_catalog;
+mod formatter_command;
 /// Formatter plane construction from optional formatter config.
 pub mod formatter_config;
+mod formatter_definition;
 mod headless;
 mod installed_bundle_refresh;
 mod lead_wrapup;
@@ -60,6 +64,7 @@ pub use agent_model_control::{
     AgentModelControlError, AgentModelIdentity, PersistentAgentModelControl,
 };
 pub use bare::{BareEventSink, run_bare};
+pub use formatter::BuiltinFormatterProvider;
 pub use headless::{HeadlessEvaluatorRoute, prepare_goal, prepare_loop};
 pub use hya_proto::{
     WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowInfo, WorkflowRunResult,
