@@ -15,6 +15,16 @@ async function command(term: Tui, text: string) {
   await term.press("Enter")
 }
 
+async function waitForViewer(term: Tui, mode: "following" | "pinned", existing?: string): Promise<string> {
+  const title = new RegExp(`Subagent · (pane-\\d+) · ${mode}`, "g")
+  let id: string | undefined
+  await expect.poll(async () => {
+    id = Array.from((await term.text()).matchAll(title), ([, pane]) => pane).find((pane) => pane !== existing)
+    return id
+  }, { message: `Expected a ${mode} subagent viewer${existing ? ` besides ${existing}` : ""}` }).toBeDefined()
+  return id!
+}
+
 test.describe("subagent panes", () => {
   test.use({ model: { steps: [] } })
   for (const viewport of [{ width: 1100, height: 640 }, { width: 690, height: 640 }]) {
@@ -38,33 +48,33 @@ test.describe("subagent panes", () => {
       await command(term, "/layout close context")
       await command(term, "/subagents")
       await term.waitForText("Subagents")
-      await term.waitForText("Subagent · pane-9 · following")
+      const viewer = await waitForViewer(term, "following")
       await term.waitForText("inspect notes", 15_000)
       await term.press("Enter")
-      await term.waitForText("Subagent · pane-9 · pinned")
+      await term.waitForText(`Subagent · ${viewer} · pinned`)
       // The selector owns ordinary input. Typing does not alter the parent's draft.
       await term.type("zzz")
       expect(await term.find("zzz")).toBeNull()
       await command(term, "/layout focus pane-1")
       await term.type("draft42")
       await term.waitForText("draft42")
-      await command(term, "/subagents follow pane-9")
-      await term.waitForText("Subagent · pane-9 · following")
+      await command(term, `/subagents follow ${viewer}`)
+      await term.waitForText(`Subagent · ${viewer} · following`)
       await term.waitForText("draft42")
-      await command(term, "/layout focus pane-8")
+      await command(term, "/subagents")
       await term.press("Enter")
-      await term.waitForText("Subagent · pane-9 · pinned")
+      await term.waitForText(`Subagent · ${viewer} · pinned`)
       await term.press("n")
-      await term.waitForText("Subagent · pane-10 · pinned")
+      const secondViewer = await waitForViewer(term, "pinned", viewer)
       await term.attach(testInfo, `multiple-${viewport.width}`)
-      await command(term, "/layout close pane-10")
-      await expect.poll(() => term.find("Subagent · pane-10")).toBeNull()
+      await command(term, `/layout close ${secondViewer}`)
+      await expect.poll(() => term.find(`Subagent · ${secondViewer} ·`)).toBeNull()
       term = await tui(argv, { viewport })
-      await term.waitForText("Subagent · pane-9 · pinned")
+      await term.waitForText(`Subagent · ${viewer} · pinned`)
       await term.waitForText("inspect notes", 15_000)
       await command(term, "/layout close subagents")
       await command(term, "/layout close subagent-viewer")
-      await expect.poll(() => term.find("Subagent · pane-9")).toBeNull()
+      await expect.poll(() => term.find(`Subagent · ${viewer} ·`)).toBeNull()
       await term.waitForText("Parent stays here.")
     })
   }
@@ -78,11 +88,13 @@ test.describe("subagent panes", () => {
     ])
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
+    await statusSessionId(term)
     await command(term, "/layout close projects")
     await command(term, "/layout close sessions")
     await command(term, "/layout close todos")
     await command(term, "/layout close context")
     await command(term, "/subagents")
+    await term.waitForText(/Subagent · pane-\d+ · following/)
     await command(term, "/layout focus pane-1")
     await command(term, "delegate live")
     await term.waitForText("Parent live marker.", 20_000)
@@ -109,7 +121,7 @@ test.describe("subagent panes", () => {
     // The first reply confirms the parent session is open before opening its selector.
     await term.waitForText("Parent scroll marker.", 20_000)
     await command(term, "/subagents")
-    await term.waitForText("Subagent · pane-9 · following")
+    await term.waitForText(/Subagent · pane-\d+ · following/)
     await term.waitForText("child row 80.", 20_000)
     const parent = await term.find("Parent scroll marker.")
     expect(parent).not.toBeNull()
@@ -136,13 +148,12 @@ test.describe("subagent panes", () => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     for (const pane of ["projects", "sessions", "todos", "context"]) await command(term, `/layout close ${pane}`)
-    await command(term, "/subagents")
-    await command(term, "/layout focus pane-1")
     await command(term, "delegate steerable")
     await term.waitForText("Parent left it running.", 20_000)
     await expect.poll(() => fakeModel!.pendingHangs(), { timeout: 20_000 }).toBe(1)
-    await command(term, "/layout focus pane-8")
-    await term.waitForText("x interrupt · s steer")
+    // The reply confirms the TUI selected the conversation before /subagents.
+    await command(term, "/subagents")
+    await term.waitForText("▸steerable helper · running")
 
     // x: the child's turn is cancelled; the parent is untouched.
     await term.press("x")
@@ -213,12 +224,12 @@ test.describe("subagent panes", () => {
     const first = (await term.text()).includes("alpha-child-prompt") ? "alpha-child-prompt" : "beta-child-prompt"
     const second = first === "alpha-child-prompt" ? "beta-child-prompt" : "alpha-child-prompt"
     await term.press("Enter")
-    await term.waitForText("Subagent · pane-9 · pinned")
+    const firstViewer = await waitForViewer(term, "pinned")
     await term.press("ArrowDown")
     await term.waitForText(first)
     expect(await term.find(second)).toBeNull()
     await term.press("n")
-    await term.waitForText("Subagent · pane-10 · pinned")
+    await waitForViewer(term, "pinned", firstViewer)
     await term.waitForText(first)
     await term.waitForText(second)
     await term.waitForText("Parent two helpers.")
@@ -247,13 +258,13 @@ test.describe("subagent panes", () => {
         const rootId = await statusSessionId(term)
         for (const pane of ["projects", "sessions", "todos", "context"]) await command(term, `/layout close ${pane}`)
         await command(term, "/subagents")
-        await term.waitForText("Subagent · pane-9 · following")
+        const viewer = await waitForViewer(term, "following")
         await command(term, "/layout focus pane-1")
         await command(term, "delegate archive check")
         await term.waitForText("archive-child-prompt", 20_000)
-        await command(term, "/layout focus pane-8")
+        await command(term, "/subagents")
         await term.press("Enter")
-        await term.waitForText("Subagent · pane-9 · pinned")
+        await term.waitForText(`Subagent · ${viewer} · pinned`)
         await expect.poll(() => fakeModel!.pendingHangs()).toBe(1)
         const before = await api<{ members: { handle: string }[] }>(backend, "GET", `/v1/sessions/${rootId}`)
         report.channel = before.members[0]!.handle
@@ -271,7 +282,7 @@ test.describe("subagent panes", () => {
         await command(term, "/layout focus pane-1")
         await term.press("Control+a")
         expect(await term.find("helper · done · archived")).toBeNull()
-        await command(term, "/layout focus pane-8")
+        await command(term, "/subagents")
         await term.press("Control+a")
         await term.waitForText("helper · done · archived")
         await term.waitForText("archive-child-prompt")
