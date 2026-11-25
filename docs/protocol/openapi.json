@@ -117,7 +117,7 @@
     "/v1/bundles": {
       "get": {
         "operationId": "Catalog.ListBundles",
-        "summary": "Bundles of the directory's scope, as `hya bundle list` shows them:",
+        "summary": "Bundle inventory, as `hya bundle list` shows it. Includes first-party,",
         "tags": [
           "Catalog"
         ],

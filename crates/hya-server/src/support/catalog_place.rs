@@ -50,8 +50,7 @@ impl CatalogPlace {
         st: &ServerState,
         session: SessionId,
     ) -> Result<Self, CoreError> {
-        let workdir = crate::support::reference::session_workdir(st, session).await?;
-        let scope = st.engine.catalog_scope_for_session(session).await?;
+        let (scope, workdir) = st.engine.catalog_place_for_session(session).await?;
         Ok(Self {
             scope,
             workdir: Some(workdir),
@@ -78,27 +77,13 @@ impl CatalogPlace {
 
     /// The Project's roots in order; empty outside a Project.
     pub(crate) fn roots(&self) -> &[PathBuf] {
-        match &self.scope {
-            CatalogScope::Project { roots, .. } => roots,
-            CatalogScope::Global | CatalogScope::Directory(_) => &[],
-        }
+        self.scope.project_roots()
     }
 
     /// The directories of the inert disk tiers in precedence order: the
     /// workdir, then each root; each directory once.
     pub(crate) fn dirs(&self) -> Vec<&Path> {
-        let mut dirs: Vec<&Path> = Vec::new();
-        for dir in self
-            .workdir
-            .as_deref()
-            .into_iter()
-            .chain(self.roots().iter().map(PathBuf::as_path))
-        {
-            if !dirs.contains(&dir) {
-                dirs.push(dir);
-            }
-        }
-        dirs
+        hya_engine::catalog_scope::inert_catalog_dirs(self.workdir(), self.roots())
     }
 
     /// Refresh the bundle catalogs of this place now and bind the result,

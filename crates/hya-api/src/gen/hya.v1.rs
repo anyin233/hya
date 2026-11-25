@@ -1286,7 +1286,8 @@ pub struct BundleRefreshError {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListBundlesRequest {
-    /// Directory scope: its `.hya/bundles` are listed too; empty: user and first-party only.
+    /// Absolute inventory directory. Surrounding whitespace is trimmed. An
+    /// empty value lists user and first-party bundles only.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
 }
@@ -2108,10 +2109,10 @@ pub mod catalog_client {
                 .insert(GrpcMethod::new("hya.v1.Catalog", "RefreshBundles"));
             self.inner.unary(req, path, codec).await
         }
-        /// Bundles of the directory's scope, as `hya bundle list` shows them:
-        /// installed (user registry), the Project's (`<directory>/.hya/bundles`),
-        /// and first-party, each with its components, scope, and state. Empty
-        /// directory: user and first-party only.
+        /// Bundle inventory, as `hya bundle list` shows it. Includes first-party,
+        /// user registry, and bundles under the single requested directory's
+        /// `.hya/bundles`. An empty directory lists the first two tiers. Use
+        /// RefreshBundles to inspect the published multi-root Project overlay.
         ///
         /// hya.http: GET /v1/bundles
         pub async fn list_bundles(
@@ -2514,10 +2515,10 @@ pub mod catalog_server {
             tonic::Response<super::RefreshBundlesResponse>,
             tonic::Status,
         >;
-        /// Bundles of the directory's scope, as `hya bundle list` shows them:
-        /// installed (user registry), the Project's (`<directory>/.hya/bundles`),
-        /// and first-party, each with its components, scope, and state. Empty
-        /// directory: user and first-party only.
+        /// Bundle inventory, as `hya bundle list` shows it. Includes first-party,
+        /// user registry, and bundles under the single requested directory's
+        /// `.hya/bundles`. An empty directory lists the first two tiers. Use
+        /// RefreshBundles to inspect the published multi-root Project overlay.
         ///
         /// hya.http: GET /v1/bundles
         async fn list_bundles(

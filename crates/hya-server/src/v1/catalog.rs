@@ -2,6 +2,7 @@
 //! tools, permission modes, and saved permission rules.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
@@ -178,32 +179,35 @@ fn bundle_error(error: crate::BundleControlError) -> V1Error {
     }
 }
 
-/// `<directory>/.hya/bundles`, where project bundles of `directory` live (as
-/// `hya bundle --project` run there uses); `None` for an empty directory.
-fn project_bundles_dir(directory: &str) -> Option<std::path::PathBuf> {
-    (!directory.is_empty()).then(|| std::path::Path::new(directory).join(".hya/bundles"))
+/// The directory that the bundle management API inventories or modifies.
+fn project_bundles_dir(directory: &Path) -> PathBuf {
+    directory.join(".hya/bundles")
 }
 
 /// The `.hya/bundles` directory a `project` change targets.
-fn change_target(directory: &str, project: bool) -> Result<Option<std::path::PathBuf>, V1Error> {
+fn change_target(directory: &str, project: bool) -> Result<Option<PathBuf>, V1Error> {
     if !project {
         return Ok(None);
     }
-    project_bundles_dir(directory)
-        .map(Some)
-        .ok_or_else(|| V1Error::invalid_argument("a project bundle change needs a directory"))
+    if directory.is_empty() {
+        return Err(V1Error::invalid_argument(
+            "a project bundle change needs a directory",
+        ));
+    }
+    Ok(Some(project_bundles_dir(Path::new(directory))))
 }
 
-/// `ListBundles`: every bundle of the directory's scope with its components and state.
+/// `ListBundles`: inventory first-party, installed, and one directory's bundles.
 async fn list_bundles(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Result<Json<pb::ListBundlesResponse>, V1Error> {
     let request: pb::ListBundlesRequest = super::query_request(&[], &query)?;
-    catalog_scope(&st, &request.directory).await?;
+    let directory = super::request_scope(&request.directory)?;
+    let inventory_dir = directory.as_deref().map(project_bundles_dir);
     let listings = st
         .bundle_control
-        .list(project_bundles_dir(&request.directory))
+        .list(inventory_dir)
         .await
         .map_err(bundle_error)?;
     Ok(Json(pb::ListBundlesResponse {

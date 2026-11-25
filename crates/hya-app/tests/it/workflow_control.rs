@@ -1169,6 +1169,8 @@ async fn project_scope_session_lists_every_root_and_keeps_the_primary_selection_
     let root_b = project_root();
     write_workflow(&root_a, "alpha", "ALPHA");
     write_workflow(&root_b, "gamma", "GAMMA");
+    let nested = root_a.join("nested");
+    write_workflow(&nested, "local", "LOCAL");
     let (router, model) = offline_router(None);
     let agent = agent_with_model(&model, None);
     let mut built = build_session_engine(
@@ -1200,7 +1202,7 @@ async fn project_scope_session_lists_every_root_and_keeps_the_primary_selection_
             parent: None,
             agent: agent.name.clone(),
             model: agent.model.clone(),
-            workdir: root_a.display().to_string(),
+            workdir: nested.display().to_string(),
             project: Some(project.id),
             kind: hya_proto::SessionKind::Project,
         })
@@ -1224,8 +1226,8 @@ async fn project_scope_session_lists_every_root_and_keeps_the_primary_selection_
         list.iter()
             .map(|item| item.name.as_str())
             .collect::<Vec<_>>(),
-        ["alpha", "gamma", "plan-impl-review"],
-        "Project scope must merge every registered root's Workflow catalog"
+        ["local", "alpha", "gamma", "plan-impl-review"],
+        "Workflow discovery must visit the recorded workdir before Project roots"
     );
 
     let alpha = match control

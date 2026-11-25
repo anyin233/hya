@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use hya_bundle::BundleCatalog;
+use hya_engine::catalog_scope::inert_catalog_dirs;
 use hya_engine::{
     AgentCatalog, CatalogScope, CompiledWorkflow, TurnBinding, discover_workflow_files_in_root,
     load_workflow_file, workflow_project_dir, workflow_user_dir,
@@ -70,22 +71,15 @@ impl WorkflowCatalogRoots {
     /// registered root in declaration order, deduped (first root wins).
     #[must_use]
     pub fn for_scope(scope: &CatalogScope, workdir: &Path) -> Self {
-        let project = match scope {
-            CatalogScope::Global => Vec::new(),
-            CatalogScope::Directory(dir) => vec![workflow_project_dir(dir)],
-            CatalogScope::Project { roots, .. } => {
-                let mut seen = BTreeSet::new();
-                let mut project = Vec::new();
-                for candidate in std::iter::once(workdir).chain(roots.iter().map(PathBuf::as_path))
-                {
-                    let root = workflow_project_dir(candidate);
-                    if seen.insert(root.clone()) {
-                        project.push(root);
-                    }
-                }
-                project
-            }
+        let directory = match scope {
+            CatalogScope::Global => None,
+            CatalogScope::Directory(dir) => Some(dir.as_path()),
+            CatalogScope::Project { .. } => Some(workdir),
         };
+        let project = inert_catalog_dirs(directory, scope.project_roots())
+            .into_iter()
+            .map(workflow_project_dir)
+            .collect();
         Self {
             project,
             user: workflow_user_dir(),

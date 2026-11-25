@@ -217,6 +217,14 @@ request's scope and returns that refresh in `BundleChange.refresh`.
 | `UninstallBundle` | `POST /v1/bundles:uninstall` `{directory, bundleId, project}` | `hya bundle remove`; first-party bundles fail with `failed_precondition`. |
 | `SetBundleEnabled` | `POST /v1/bundles:set-enabled` `{directory, bundleId, enabled}` | `hya bundle enable\|disable`: the disabled set (`bundle_disabled` in the registry database) applies to every scope; trusted presets cannot be disabled. |
 
+`ListBundles` trims surrounding whitespace from the absolute `directory`.
+For example, `GET /v1/bundles?directory=/work/app/src` inventories
+`/work/app/src/.hya/bundles` alongside user and first-party bundles, even
+when `/work/app` is a registered root. A row's state reflects this inventory.
+`RefreshBundles` resolves the Project containing `/work/app/src` and reports
+its published bundles across all registered roots in Project order.
+A blank `directory` lists the user registry and first-party bundles.
+
 Internal bundles (`hya/compaction`) belong to the same immutable inventory as
 the trusted presets: `ListBundles` and `hya bundle list` show them with
 `scope: "first_party"`, `state: "active"`, `enabled: true`, and

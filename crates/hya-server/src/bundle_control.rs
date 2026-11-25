@@ -113,7 +113,8 @@ pub type BundleControlFuture<'a, T> = BoxFuture<'a, Result<T, BundleControlError
 /// Server-owned control port for bundle management. `project_dir` is the
 /// `.hya/bundles` directory of the request's directory, `None` without one.
 pub trait BundleControl: Send + Sync {
-    /// Every bundle: first-party, installed, and `project_dir`'s, sorted by id then scope.
+    /// List the first-party, installed, and single-directory bundle inventory,
+    /// sorted by id then scope.
     fn list(&self, project_dir: Option<PathBuf>) -> BundleControlFuture<'_, Vec<BundleListing>>;
 
     /// Install the `.hyabundle` package at `package` into the user registry,
