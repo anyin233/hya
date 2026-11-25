@@ -313,7 +313,118 @@ async fn wait_for_sync_file(ready: &Path, child: &mut tokio::process::Child, lab
     }
 }
 
+/// Fast (< 1.5 s) PR-gate smoke for T2.54:
+/// - healthy `hya exec --json` persists cleanly with empty stderr and pure JSONL matching disk replay,
+/// - healthy short writing command (`hya sessions archive`) drains cleanly with empty stderr,
+/// - strict `hya serve` fails fast on an unopenable DB without falling back to memory,
+/// - headless `hya exec` against an unopenable DB falls back in memory and reports exit durability.
 #[tokio::test]
+async fn p43_clean_exit_durability_and_strict_open_smoke() {
+    // 1. Healthy `exec --json` persists cleanly with empty stderr and exact JSONL/disk parity.
+    {
+        let fake = FakeLlm::start(vec![text_step("CLEAN_SMOKE_OK")])
+            .await
+            .expect("start fake llm");
+        let env = IsolatedRunEnv::new("smoke-clean", Some(&fake.base_url()));
+        let db = env.root.join("hya.db");
+        let output = tokio::time::timeout(
+            Duration::from_secs(15),
+            env.exec_command(&db, false, true, "healthy durability smoke")
+                .output(),
+        )
+        .await
+        .expect("clean exec timed out")
+        .expect("spawn clean exec");
+        drop(fake);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "stderr={stderr}");
+        assert!(
+            stderr.trim().is_empty(),
+            "healthy exec must emit no durability warning: {stderr}"
+        );
+        let stdout_envs = assert_pure_jsonl_with_answer(&stdout, "CLEAN_SMOKE_OK");
+        let disk_envs = assert_disk_replay_complete(&db, "CLEAN_SMOKE_OK", "smoke-clean").await;
+        assert_jsonl_matches_disk(&stdout_envs, &disk_envs, "smoke-clean");
+
+        // Healthy short writing command (`sessions archive`) drains cleanly with empty stderr.
+        let session = stdout_envs[0].event.session().expect("session id");
+        let archive = tokio::time::timeout(
+            Duration::from_secs(15),
+            env.command(&db)
+                .args(["sessions", "archive", &session.to_string()])
+                .output(),
+        )
+        .await
+        .expect("archive timed out")
+        .expect("spawn archive");
+        let archive_err = String::from_utf8_lossy(&archive.stderr);
+        assert!(archive.status.success(), "stderr={archive_err}");
+        assert!(
+            archive_err.trim().is_empty(),
+            "healthy archive must emit no warning: {archive_err}"
+        );
+        let ro = SessionStore::connect_read_only(db.to_str().unwrap())
+            .await
+            .expect("read-only reopen");
+        assert!(
+            ro.read_projection(session)
+                .await
+                .unwrap()
+                .session
+                .archived_at_millis()
+                .is_some()
+        );
+    }
+
+    // 2. Strict `hya serve` rejects an unopenable DB fast without memory fallback, while
+    // headless `hya exec` falls back in memory and prints durability notices on stderr.
+    {
+        let fake = FakeLlm::start(vec![text_step("FALLBACK_SMOKE_OK")])
+            .await
+            .expect("start fake llm");
+        let env = IsolatedRunEnv::new("smoke-unopenable", Some(&fake.base_url()));
+        let dir_db = env.root.join("db-as-directory");
+        fs::create_dir(&dir_db).expect("create dir blocker");
+
+        let fg = tokio::time::timeout(
+            Duration::from_secs(15),
+            env.command(&dir_db)
+                .args(["serve", "--bind", "127.0.0.1:0"])
+                .output(),
+        )
+        .await
+        .expect("strict serve timed out")
+        .expect("spawn strict serve");
+        let fg_stderr = String::from_utf8_lossy(&fg.stderr);
+        assert!(!fg.status.success());
+        assert!(
+            !fg_stderr.trim().is_empty() && !fg_stderr.contains("running in memory"),
+            "strict serve stderr={fg_stderr}"
+        );
+
+        let fallback = tokio::time::timeout(
+            Duration::from_secs(15),
+            env.exec_command(&dir_db, false, true, "fallback smoke")
+                .output(),
+        )
+        .await
+        .expect("fallback exec timed out")
+        .expect("spawn fallback exec");
+        drop(fake);
+        let fb_stdout = String::from_utf8_lossy(&fallback.stdout);
+        let fb_stderr = String::from_utf8_lossy(&fallback.stderr);
+        assert!(fallback.status.success(), "stderr={fb_stderr}");
+        assert_pure_jsonl_with_answer(&fb_stdout, "FALLBACK_SMOKE_OK");
+        assert!(
+            fb_stderr.contains("running in memory") && fb_stderr.contains("nothing was persisted"),
+            "fallback stderr missing durability notices: {fb_stderr}"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "nightly OS fault/soak"]
 async fn p43_external_write_lock_bare_and_full_recover_and_persist() {
     for (bare, json) in [(true, false), (true, true), (false, false), (false, true)] {
         let mode = format!("bare={bare},json={json}");
@@ -396,6 +507,7 @@ async fn p43_external_write_lock_bare_and_full_recover_and_persist() {
 }
 
 #[tokio::test]
+#[ignore = "nightly OS fault/soak"]
 async fn p43_unopenable_db_paths_run_in_memory_bare_and_full() {
     let is_non_root = unsafe { libc::geteuid() } != 0;
     for kind in ["regular-file-parent", "ro-0500-dir"] {
@@ -455,6 +567,7 @@ async fn p43_unopenable_db_paths_run_in_memory_bare_and_full() {
 }
 
 #[tokio::test]
+#[ignore = "nightly OS fault/soak"]
 async fn p43_open_stall_exceeding_open_timeout_falls_back_to_memory() {
     for bare in [true, false] {
         let mode = format!("open-stall,bare={bare}");
@@ -546,6 +659,7 @@ async fn p43_open_stall_exceeding_open_timeout_falls_back_to_memory() {
 }
 
 #[tokio::test]
+#[ignore = "nightly OS fault/soak"]
 async fn p43_replaced_db_file_halts_writer_and_completes_bare_and_full() {
     for (bare, json) in [(true, false), (true, true), (false, false), (false, true)] {
         let mode = format!("replace,bare={bare},json={json}");
@@ -734,6 +848,7 @@ async fn assert_strict_open_rejects(env: &IsolatedRunEnv, bad_db: &Path, label: 
 }
 
 #[tokio::test]
+#[ignore = "nightly OS fault/soak"]
 async fn p43_serve_shutdown_and_short_command_report_exit_durability() {
     let is_non_root = unsafe { libc::geteuid() } != 0;
 
@@ -942,6 +1057,7 @@ async fn p43_serve_shutdown_and_short_command_report_exit_durability() {
 }
 
 #[tokio::test]
+#[ignore = "nightly OS fault/soak"]
 async fn p43_signal_exit_paths_drain_store() {
     for (bare, sig, expected_code) in [
         (true, libc::SIGINT, 130),
@@ -1033,6 +1149,7 @@ async fn p43_signal_exit_paths_drain_store() {
 }
 
 #[tokio::test]
+#[ignore = "nightly OS fault/soak"]
 async fn p43_first_signal_during_exit_drain_reports_and_exits_with_signal_code() {
     for (bare, sig, expected_code) in [
         (true, libc::SIGINT, 130),

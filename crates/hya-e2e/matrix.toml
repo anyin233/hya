@@ -4,441 +4,425 @@
 id = "T0.1"
 title = "backend boots"
 track = "P"
-path = "crates/hya-e2e/tests/it/p01_session_prompt.rs"
+path = "crates/hya-e2e/tests/it/p01_core_session.rs"
 
 [[scenario]]
 id = "T1.2"
 title = "prompt + assistant text via FakeLlm"
 track = "P"
-path = "crates/hya-e2e/tests/it/p01_session_prompt.rs"
+path = "crates/hya-e2e/tests/it/p01_core_session.rs"
 
 [[scenario]]
 id = "T1.3"
 title = "multi-round tool loop"
 track = "P"
-path = "crates/hya-e2e/tests/it/p02_tool_loop_fs.rs"
+path = "crates/hya-e2e/tests/it/p01_core_session.rs"
 
 [[scenario]]
 id = "T1.4"
 title = "read/write files"
 track = "P"
-path = "crates/hya-e2e/tests/it/p02_tool_loop_fs.rs"
+path = "crates/hya-e2e/tests/it/p01_core_session.rs"
 
 [[scenario]]
 id = "T1.5"
 title = "bash tool"
 track = "P"
-path = "crates/hya-e2e/tests/it/p02_tool_loop_fs.rs"
+path = "crates/hya-e2e/tests/it/p01_core_session.rs"
 
 [[scenario]]
 id = "T1.7"
 title = "permissions ask/once/reject + yolo mode switch"
 track = "P"
-path = "crates/hya-e2e/tests/it/p03_permissions.rs"
+path = "crates/hya-e2e/tests/it/p02_permissions_and_questions.rs"
 
 [[scenario]]
 id = "T1.8"
 title = "question tool + reply"
 track = "P"
-path = "crates/hya-e2e/tests/it/p04_questions.rs"
+path = "crates/hya-e2e/tests/it/p02_permissions_and_questions.rs"
 
 [[scenario]]
 id = "T1.9"
 title = "skills load"
 track = "P"
-path = "crates/hya-e2e/tests/it/p05_skills.rs"
+path = "crates/hya-e2e/tests/it/p01_core_session.rs"
 
 [[scenario]]
 id = "T1.10"
 title = "MCP tool call"
 track = "P"
-path = "crates/hya-e2e/tests/it/p06_mcp.rs"
+path = "crates/hya-e2e/tests/it/p03_mcp_and_custom_resources.rs"
 
 [[scenario]]
 id = "T1.11"
-title = "session list + resume"
+title = "session list + resume + titling + daemon stop/start restore"
 track = "P"
-path = "crates/hya-e2e/tests/it/p07_session_lifecycle.rs"
+path = "crates/hya-e2e/tests/it/p01_core_session.rs"
 
 [[scenario]]
 id = "T1.12"
 title = "session context API multi-turn"
 track = "P"
-path = "crates/hya-e2e/tests/it/p12_context_api.rs"
+path = "crates/hya-e2e/tests/it/p01_core_session.rs"
 
 [[scenario]]
 id = "T1.13"
-title = "project AGENTS.md guidance on Compat prompt"
+title = "project AGENTS.md guidance on v1 prompt"
 track = "P"
-path = "crates/hya-e2e/tests/it/p13_project_agents_context.rs"
+path = "crates/hya-e2e/tests/it/p01_core_session.rs"
 
 [[scenario]]
 id = "T1.14"
 title = "compact and summarize context management"
 track = "P"
-path = "crates/hya-e2e/tests/it/p14_compact_summarize.rs"
+path = "crates/hya-e2e/tests/it/p01_core_session.rs"
 
 [[scenario]]
 id = "T1.15"
-title = "kernel todo and edit tools"
+title = "kernel todo, edit tools, and bare exec JSONL/stdin/tail-session"
 track = "P"
-path = "crates/hya-e2e/tests/it/p15_todo_and_edit.rs"
+path = "crates/hya-e2e/tests/it/p01_core_session.rs"
 
 [[scenario]]
 id = "T1.16"
 title = "custom slash catalog and route expansion"
 track = "P"
-path = "crates/hya-e2e/tests/it/p18_custom_slash_resources.rs"
+path = "crates/hya-e2e/tests/it/p03_mcp_and_custom_resources.rs"
 
 [[scenario]]
 id = "T1.17"
 title = "Skill-backed slash expansion and discovery order"
 track = "P"
-path = "crates/hya-e2e/tests/it/p18_custom_slash_resources.rs"
+path = "crates/hya-e2e/tests/it/p03_mcp_and_custom_resources.rs"
 
 [[scenario]]
 id = "T1.18"
 title = "custom command invokes builtin Skill Tool"
 track = "P"
-path = "crates/hya-e2e/tests/it/p18_custom_slash_resources.rs"
+path = "crates/hya-e2e/tests/it/p03_mcp_and_custom_resources.rs"
 
 [[scenario]]
 id = "T1.19"
 title = "custom command invokes plugin Tool"
 track = "P"
-path = "crates/hya-e2e/tests/it/p18_custom_slash_resources.rs"
+path = "crates/hya-e2e/tests/it/p03_mcp_and_custom_resources.rs"
 
 [[scenario]]
 id = "T1.21"
 title = "custom resource name conflicts fail closed"
 track = "P"
-path = "crates/hya-e2e/tests/it/p18_custom_slash_resources.rs"
+path = "crates/hya-e2e/tests/it/p03_mcp_and_custom_resources.rs"
 
 [[scenario]]
 id = "T1.22"
 title = "dynamic resource snapshots and reload"
 track = "P"
-path = "crates/hya-e2e/tests/it/p18_custom_slash_resources.rs"
+path = "crates/hya-e2e/tests/it/p03_mcp_and_custom_resources.rs"
 
 [[scenario]]
 id = "T1.23"
 title = "structured custom Tool errors and session recovery"
 track = "P"
-path = "crates/hya-e2e/tests/it/p18_custom_slash_resources.rs"
+path = "crates/hya-e2e/tests/it/p03_mcp_and_custom_resources.rs"
 
 [[scenario]]
 id = "T1.24"
 title = "webfetch returns a loopback HTTP response"
 track = "P"
-path = "crates/hya-e2e/tests/it/p02_tool_loop_fs.rs"
+path = "crates/hya-e2e/tests/it/p01_core_session.rs"
+
 [[scenario]]
 id = "T2.1"
-title = "subagent task spawn"
+title = "subagent task spawn (single + batch)"
 track = "P"
-path = "crates/hya-e2e/tests/it/p08_subagent_task.rs"
+path = "crates/hya-e2e/tests/it/p04_subagents_and_mailbox.rs"
 
 [[scenario]]
 id = "T2.2"
 title = "nested subagent tree depth>=2"
 track = "P"
-path = "crates/hya-e2e/tests/it/p09_nested_subagent.rs"
+path = "crates/hya-e2e/tests/it/p04_subagents_and_mailbox.rs"
 
 [[scenario]]
 id = "T2.3"
-title = "agent roster / roles API"
+title = "agent roster / roles API and private spawn refusal"
 track = "P"
-path = "crates/hya-e2e/tests/it/p10_agent_roster.rs"
+path = "crates/hya-e2e/tests/it/p04_subagents_and_mailbox.rs"
 
 [[scenario]]
 id = "T2.4"
-title = "swarm roster + list_agents from a resident"
+title = "team roster + list_channel listing from a resident lead"
 track = "P"
-path = "crates/hya-e2e/tests/it/p16_swarm_mailbox.rs"
+path = "crates/hya-e2e/tests/it/p04_subagents_and_mailbox.rs"
 
 [[scenario]]
 id = "T2.5"
-title = "swarm send delivers direct mail to a resident"
+title = "mailbox send delivers vertical DM to parent"
 track = "P"
-path = "crates/hya-e2e/tests/it/p16_swarm_mailbox.rs"
+path = "crates/hya-e2e/tests/it/p04_subagents_and_mailbox.rs"
 
 [[scenario]]
 id = "T2.6"
-title = "swarm send delivers channel mail to subscribers"
+title = "mailbox send delivers unit broadcast to live child"
 track = "P"
-path = "crates/hya-e2e/tests/it/p16_swarm_mailbox.rs"
+path = "crates/hya-e2e/tests/it/p04_subagents_and_mailbox.rs"
 
 [[scenario]]
 id = "T2.7"
 title = "hyabundle install/list/info/uninstall"
 track = "P"
-path = "crates/hya-e2e/tests/it/p11_hyabundle.rs"
+path = "crates/hya-e2e/tests/it/p06_bundle_lifecycle_and_runtime.rs"
 
 [[scenario]]
 id = "T2.8"
 title = "hyabundle spawn package agent"
 track = "P"
-path = "crates/hya-e2e/tests/it/p11_hyabundle.rs"
+path = "crates/hya-e2e/tests/it/p06_bundle_lifecycle_and_runtime.rs"
 
 [[scenario]]
 id = "T2.9"
-title = "swarm channels lists membership and message counts"
+title = "list_channel tool reports live channels and team handles"
 track = "P"
-path = "crates/hya-e2e/tests/it/p16_swarm_mailbox.rs"
-
-[[scenario]]
-id = "T2.10"
-title = "swarm join changes channel recipients"
-track = "P"
-path = "crates/hya-e2e/tests/it/p16_swarm_mailbox.rs"
-
-[[scenario]]
-id = "T2.11"
-title = "swarm leave stops channel mail (negative + controls)"
-track = "P"
-path = "crates/hya-e2e/tests/it/p16_swarm_mailbox.rs"
-
-[[scenario]]
-id = "T2.12"
-title = "cross-unit send is refused and never crosses"
-track = "P"
-path = "crates/hya-e2e/tests/it/p16_swarm_mailbox.rs"
+path = "crates/hya-e2e/tests/it/p04_subagents_and_mailbox.rs"
 
 [[scenario]]
 id = "T2.13"
 title = "user-authored Workflow runs fan-out and fan-in"
 track = "P"
-path = "crates/hya-e2e/tests/it/p17_workflow_composition.rs"
+path = "crates/hya-e2e/tests/it/p05_workflows.rs"
 
 [[scenario]]
 id = "T2.14"
 title = "Workflow stage model routing and replay"
 track = "P"
-path = "crates/hya-e2e/tests/it/p19_workflow_model_routing.rs"
+path = "crates/hya-e2e/tests/it/p05_workflows.rs"
 
 [[scenario]]
 id = "T2.15"
 title = "model catalog discovery and offline fallback"
 track = "P"
-path = "crates/hya-e2e/tests/it/p20_model_catalog_discovery.rs"
+path = "crates/hya-e2e/tests/it/p10_model_catalog_discovery.rs"
 
 [[scenario]]
 id = "T2.16"
 title = "agent model preference steers spawned subagent model"
 track = "P"
-path = "crates/hya-e2e/tests/it/p21_agent_model_preference.rs"
+path = "crates/hya-e2e/tests/it/p04_subagents_and_mailbox.rs"
 
 [[scenario]]
 id = "T2.17"
 title = "dispatch-time model resolution branches"
 track = "P"
-path = "crates/hya-e2e/tests/it/p22_dispatch_model_resolution.rs"
+path = "crates/hya-e2e/tests/it/p04_subagents_and_mailbox.rs"
 
 [[scenario]]
 id = "T2.19"
 title = "installed bundle schemas surface through CLI and runtime API"
 track = "P"
-path = "crates/hya-e2e/tests/it/p24_bundle_schemas.rs"
+path = "crates/hya-e2e/tests/it/p06_bundle_lifecycle_and_runtime.rs"
+
 [[scenario]]
 id = "T2.20"
 title = "goal-loop preset bundle serves skills and patched evaluator pollutes goal session"
 track = "P"
-path = "crates/hya-e2e/tests/it/p25_goal_loop_bundle.rs"
+path = "crates/hya-e2e/tests/it/p07_bundle_policies_and_extras.rs"
 
 [[scenario]]
 id = "T2.21"
 title = "agentless Plugin bundle installs and publishes static skill"
 track = "P"
-path = "crates/hya-e2e/tests/it/p26_plugin_bundle.rs"
+path = "crates/hya-e2e/tests/it/p06_bundle_lifecycle_and_runtime.rs"
 
 [[scenario]]
 id = "T2.22"
-title = "packaged native processes, MCP and selected hooks execute with owner scope"
+title = "packaged native processes, JS plugins, MCP, selected hooks, and live config execute with owner scope"
 track = "P"
-path = "crates/hya-e2e/tests/it/p27_bundle_process.rs"
+path = "crates/hya-e2e/tests/it/p06_bundle_lifecycle_and_runtime.rs"
 
 [[scenario]]
 id = "T2.23"
 title = "default subagent bundle worker mails its parent, reports, and archives"
 track = "P"
-path = "crates/hya-e2e/tests/it/p28_subagent_bundle.rs"
+path = "crates/hya-e2e/tests/it/p04_subagents_and_mailbox.rs"
 
 [[scenario]]
 id = "T2.24"
 title = "Claude import executes packaged hooks and skills after source removal"
 track = "P"
-path = "crates/hya-e2e/tests/it/p29_claude_bundle.rs"
+path = "crates/hya-e2e/tests/it/p06_bundle_lifecycle_and_runtime.rs"
 
 [[scenario]]
 id = "T2.25"
 title = "installed channel policy denies child sends and uninstall restores defaults"
 track = "P"
-path = "crates/hya-e2e/tests/it/p30_channel_bundle.rs"
+path = "crates/hya-e2e/tests/it/p07_bundle_policies_and_extras.rs"
 
 [[scenario]]
 id = "T2.26"
-title = "hya-extra/zvec-grep Plugin bundle MCP tool executes through fake zg on PATH"
+title = "hya-extra/zvec-grep and scout bundles execute MCP tools through fake zg on PATH"
 track = "P"
-path = "crates/hya-e2e/tests/it/p31_extra_bundles.rs"
+path = "crates/hya-e2e/tests/it/p07_bundle_policies_and_extras.rs"
 
 [[scenario]]
 id = "T2.27"
 title = "hya-extra/jev-model-router routes chat.params to the Jev-chosen tier, sticky per chain, default_tier on Jev failure"
 track = "P"
-path = "crates/hya-e2e/tests/it/p32_jev_model_router.rs"
+path = "crates/hya-e2e/tests/it/p07_bundle_policies_and_extras.rs"
 
 [[scenario]]
 id = "T2.28"
 title = "hya-extra/model-fallback consults model.fallback on a pre-stream failure, recovers on the configured chain, and gives up when no chain matches"
 track = "P"
-path = "crates/hya-e2e/tests/it/p33_model_fallback.rs"
+path = "crates/hya-e2e/tests/it/p07_bundle_policies_and_extras.rs"
 
 [[scenario]]
 id = "T2.29"
-title = "an installed bundle process registers its own API endpoints (manifest apis:): a session-scoped GET /v1/sessions/{session}/bundles/{bundle}/usage reads the session tree's usage via the request-scoped session.usage capability, a global POST under /v1/bundles/{bundle}/api/ echoes body + path params with status 201 and a session-less capability, a global PUT/GET/DELETE trio keeps process-owned state, host-side failures use bundle_api_* codes, and a kind: bun process tool call receives a capability"
+title = "installed bundle process registers session-scoped and global HTTP API endpoints with request-scoped capabilities and stable host error codes"
 track = "P"
-path = "crates/hya-e2e/tests/it/p34_bundle_apis.rs"
+path = "crates/hya-e2e/tests/it/p06_bundle_lifecycle_and_runtime.rs"
 
 [[scenario]]
 id = "T2.30"
-title = "hya-extra/token-summary Plugin bundle serves the usage session API endpoint (per-model input/cache/output tokens, thinking/visible split) for a root+subagent session tree, and its token_summary agent tool renders the same data as a Markdown table that reaches the model's follow-up request"
+title = "hya-extra/token-summary Plugin bundle serves the usage session API endpoint and renders the Markdown table tool"
 track = "P"
-path = "crates/hya-e2e/tests/it/p35_token_summary.rs"
+path = "crates/hya-e2e/tests/it/p07_bundle_policies_and_extras.rs"
 
 [[scenario]]
 id = "T2.31"
-title = "wait is woken inside the lead turn by a worker report and never repeats it; a worker that ends with a plain answer finishes with it as its report; a worker that stops without a report or an answer wakes it as stalled; archive stops a worker and mail to its handle wakes it"
+title = "wait is woken by report or plain answer without repeating; empty reply stalls; archive stops and mail wakes"
 track = "P"
-path = "crates/hya-e2e/tests/it/p36_wait_archive.rs"
+path = "crates/hya-e2e/tests/it/p04_subagents_and_mailbox.rs"
 
 [[scenario]]
 id = "T2.32"
-title = "manual mode: a session reads any root of its multi-root Project without asking; a read outside every root asks ExternalDirectory for the concrete <dir>/*; allow-always then covers a sibling session of the same Project for a sibling file in that directory, but a session of a different Project asks again"
+title = "manual mode multi-root Project scope and project-scoped ExternalDirectory allow-always"
 track = "P"
-path = "crates/hya-e2e/tests/it/p37_project_permission_scope.rs"
+path = "crates/hya-e2e/tests/it/p02_permissions_and_questions.rs"
 
 [[scenario]]
 id = "T2.33"
-title = "yolo mode auto-approves a read outside every Project root without ever raising an ExternalDirectory ask"
+title = "yolo mode auto-approves a read outside every Project root without raising ExternalDirectory"
 track = "P"
-path = "crates/hya-e2e/tests/it/p37_project_permission_scope.rs"
+path = "crates/hya-e2e/tests/it/p02_permissions_and_questions.rs"
 
 [[scenario]]
 id = "T2.34"
-title = "bash's cwd outside every Project root never raises ExternalDirectory, even in manual mode where the command itself still asks Action::Bash"
+title = "bash cwd outside every Project root never raises ExternalDirectory in manual mode"
 track = "P"
-path = "crates/hya-e2e/tests/it/p37_project_permission_scope.rs"
+path = "crates/hya-e2e/tests/it/p02_permissions_and_questions.rs"
 
 [[scenario]]
 id = "T2.35"
-title = "secure relay golden path over the pinned gRPC binding: hya proxy + hya serve --relay + hya bridge; remote Project, in-root and outside-root reads (ExternalDirectory ask answered over the bridge), session SSE, PTY WebSocket, temporary session, RelayControl refused from relay origin, rotate rejects the running bridge, shutdown sends serverStopping then 503 offline; a capture hop in front of the proxy never sees prompt, file, PTY, or PSK bytes"
+title = "secure relay golden path over pinned gRPC binding with zero-plaintext capture hop"
 track = "P"
 path = "crates/hya-e2e/tests/it/p38_relay.rs"
 
 [[scenario]]
 id = "T2.36"
-title = "the T2.35 relay golden path and capture assertions over the pinned WebSocket binding"
+title = "secure relay golden path over pinned WebSocket binding with zero-plaintext capture hop"
 track = "P"
 path = "crates/hya-e2e/tests/it/p38_relay.rs"
 
 [[scenario]]
 id = "T2.37"
-title = "relay over TLS to the proxy (rcgen certificate, --relay-ca on serve and bridge, hya:// link): health, session, and prompt through the bridge; the capture hop sees no prompt, answer, or PSK bytes"
+title = "relay over TLS to proxy with private CA and zero-plaintext capture hop"
 track = "P"
 path = "crates/hya-e2e/tests/it/p38_relay.rs"
 
 [[scenario]]
 id = "T2.38"
-title = "headless exec: a lead turn that ends while its worker is still running gets a HEADLESS RUN notice turn instead of ending the run; the lead waits, the worker reports (it is not stopped), and the lead's final answer is the run's last turn"
+title = "headless exec: live worker triggers HEADLESS RUN notice; lead waits, worker reports, final answer ends run"
 track = "P"
-path = "crates/hya-e2e/tests/it/p39_exec_live_subagents.rs"
+path = "crates/hya-e2e/tests/it/p09_exec_headless.rs"
 
 [[scenario]]
 id = "T2.39"
-title = "headless exec: two notice turns in a row that neither wait nor archive end the run with the worker still running"
+title = "headless exec: two ignored live-worker notices in a row end the run promptly"
 track = "P"
-path = "crates/hya-e2e/tests/it/p39_exec_live_subagents.rs"
+path = "crates/hya-e2e/tests/it/p09_exec_headless.rs"
 
 [[scenario]]
 id = "T2.40"
-title = "headless exec: a lead turn that ends with pending/in-progress todos gets a HEADLESS RUN notice listing them; the run ends once every item is completed or blocked"
+title = "headless exec: open todos alone do not continue the run"
 track = "P"
-path = "crates/hya-e2e/tests/it/p40_exec_headless_continuation.rs"
+path = "crates/hya-e2e/tests/it/p09_exec_headless.rs"
 
 [[scenario]]
 id = "T2.41"
-title = "headless exec: a last message announcing a next step (\"Now verify the file format:\") continues the run with the announcement quoted"
+title = "headless exec: announced next step continues the run with the announcement quoted"
 track = "P"
-path = "crates/hya-e2e/tests/it/p40_exec_headless_continuation.rs"
+path = "crates/hya-e2e/tests/it/p09_exec_headless.rs"
 
 [[scenario]]
 id = "T2.42"
-title = "headless exec: a plain summary after tool work ends the run with no notice"
+title = "headless exec: plain summary after tool work ends the run with no notice"
 track = "P"
-path = "crates/hya-e2e/tests/it/p40_exec_headless_continuation.rs"
+path = "crates/hya-e2e/tests/it/p09_exec_headless.rs"
 
 [[scenario]]
 id = "T2.43"
 title = "headless exec: two ignored announcement notices in a row end the run"
 track = "P"
-path = "crates/hya-e2e/tests/it/p40_exec_headless_continuation.rs"
+path = "crates/hya-e2e/tests/it/p09_exec_headless.rs"
 
 [[scenario]]
 id = "T2.44"
-title = "headless exec --time-budget: the opening names the budget and the FINAL header appears once across tool results and continuation notices"
+title = "headless exec --time-budget: opening names budget and FINAL header appears once across tool results and continuation notices"
 track = "P"
-path = "crates/hya-e2e/tests/it/p40_exec_headless_continuation.rs"
+path = "crates/hya-e2e/tests/it/p09_exec_headless.rs"
 
 [[scenario]]
 id = "T2.46"
 title = "headless exec --time-budget: no continuation turn starts within the grace"
 track = "P"
-path = "crates/hya-e2e/tests/it/p40_exec_headless_continuation.rs"
+path = "crates/hya-e2e/tests/it/p09_exec_headless.rs"
 
 [[scenario]]
 id = "T2.47"
 title = "headless exec corrects a spurious internal summary and resumes work"
 track = "P"
-path = "crates/hya-e2e/tests/it/p40_exec_headless_continuation.rs"
+path = "crates/hya-e2e/tests/it/p09_exec_headless.rs"
 
 [[scenario]]
 id = "T2.48"
 title = "headless exec recovers a raw DSML tool-call leak through the structured tool interface"
 track = "P"
-path = "crates/hya-e2e/tests/it/p40_exec_headless_continuation.rs"
+path = "crates/hya-e2e/tests/it/p09_exec_headless.rs"
 
 [[scenario]]
 id = "T2.49"
-title = "idle residents produce stalled waits until archived; a quiescent server team wakes its lead with a User synthesis prompt"
+title = "idle residents produce stalled waits in exec until archived; quiescent server team wakes lead with User synthesis prompt"
 track = "P"
-path = "crates/hya-e2e/tests/it/p39_exec_live_subagents.rs"
+path = "crates/hya-e2e/tests/it/p09_exec_headless.rs"
 
 [[scenario]]
 id = "T2.50"
-title = "tools.code.mode: only — the model is offered code-mode__run alone with the hidden tools described inside it; a program reads a project file through tools.read and its output and trace reach the follow-up request; a direct call of a hidden tool is refused with a message naming code-mode__run"
+title = "tools.code.mode: only offers code-mode__run with hidden tools described inside it and refuses direct hidden tool calls"
 track = "P"
-path = "crates/hya-e2e/tests/it/p41_code_mode.rs"
+path = "crates/hya-e2e/tests/it/p07_bundle_policies_and_extras.rs"
 
 [[scenario]]
 id = "T2.51"
-title = "tools.code.mode: with_tools — code-mode__run is offered next to the usual tools, a program calls them, and direct calls still work"
+title = "tools.code.mode: with_tools offers code-mode__run alongside usual tools and both execute"
 track = "P"
-path = "crates/hya-e2e/tests/it/p41_code_mode.rs"
+path = "crates/hya-e2e/tests/it/p07_bundle_policies_and_extras.rs"
 
 [[scenario]]
 id = "T2.52"
-title = "default tools.code.mode (normal) — the first-party hya/code-mode bundle publishes no tool and hya bundle list shows it disabled"
+title = "default tools.code.mode (normal) publishes no code-mode__run and lists hya/code-mode disabled"
 track = "P"
-path = "crates/hya-e2e/tests/it/p41_code_mode.rs"
+path = "crates/hya-e2e/tests/it/p07_bundle_policies_and_extras.rs"
 
 [[scenario]]
 id = "T2.53"
-title = "headless exec: a single turn whose steps outgrow the window has its old steps removed by the kernel rewrite and finishes; later requests carry the marker, the prompt and the newest steps"
+title = "headless exec: single turn outgrowing context window folds old steps via kernel Rewrite and finishes"
 track = "P"
-path = "crates/hya-e2e/tests/it/p42_exec_step_fold.rs"
+path = "crates/hya-e2e/tests/it/p09_exec_headless.rs"
 
 [[scenario]]
 id = "T2.54"
-title = "store robustness: external write locks, unopenable or stalled opens, mid-run database replacement, strict server/command open failures, signal exit drain, and exit durability reports"
+title = "store robustness: fast PR clean-exit durability & strict-open smoke + nightly #[ignore] real-OS lock/open-stall/replace/signal-drain suite"
 track = "P"
 path = "crates/hya-e2e/tests/it/p43_store_robustness.rs"
 
@@ -503,11 +487,11 @@ reason = "compat MCP route tests deleted with the Compat surface; v1 coverage is
 
 [[retired]]
 id = "I.context_api"
-reason = "compat context route tests deleted with the Compat surface; v1 transcript reads are covered by I.v1_api"
+reason = "compat context route tests deleted with the Compat surface; v1 coverage is I.v1_api"
 
 [[retired]]
 id = "I.compact_api"
-reason = "compat compact route tests deleted with the Compat surface; v1 compact is covered by the e2e matrix (p14)"
+reason = "compat compact route tests deleted with the Compat surface; v1 coverage is covered by the e2e matrix (p01_core_session)"
 
 [[retired]]
 id = "T1.1"
@@ -516,6 +500,18 @@ reason = "never defined — no scenario, PRD, or doc in this repository's histor
 [[retired]]
 id = "T1.6"
 reason = "never defined — same as T1.1; the tier list it came from was not committed, so the intent is unrecoverable"
+
+[[retired]]
+id = "T2.10"
+reason = "the explicit swarm `join` tool was removed by ADR-0016's simplified channel plane; channel membership rules live in Track I (crates/hya-engine/tests/it/subagent.rs)"
+
+[[retired]]
+id = "T2.11"
+reason = "the explicit swarm `leave` tool was removed by ADR-0016's simplified channel plane; channel delivery and policy denial live in Track I (crates/hya-engine/tests/it/subagent.rs) and Track P T2.25"
+
+[[retired]]
+id = "T2.12"
+reason = "cross-unit channel isolation is enforced and exhaustively tested in Track I (crates/hya-engine/tests/it/subagent.rs); Track P covers installed channel policy enforcement in T2.25"
 
 [[retired]]
 id = "T2.18"

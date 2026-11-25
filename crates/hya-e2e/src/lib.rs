@@ -12,7 +12,7 @@ mod scenario;
 pub use backend::{
     BackendProcess, BackendSpec, MCP_ECHO_SCRIPT_REL, McpFixture, default_backend_bin,
     materialize_public_bundle, mcp_echo_command, mcp_echo_script, parse_listen_url,
-    public_bundle_source,
+    public_bundle_source, unique_temp_dir,
 };
 pub use error::E2eError;
 pub use fake_llm::{
@@ -20,6 +20,6 @@ pub use fake_llm::{
     tools_step,
 };
 pub use scenario::{
-    E2eEnv, E2eEnvBuilder, fake_requests_from, load_raw_events, tree_children, tree_max_depth,
-    tree_session_ids, tree_subagent_types, wait_until,
+    E2eEnv, E2eEnvBuilder, HeadlessEnv, fake_requests_from, load_raw_events, tree_children,
+    tree_max_depth, tree_session_ids, tree_subagent_types, wait_until,
 };

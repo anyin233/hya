@@ -4,6 +4,7 @@ use std::io::{self, BufRead, BufReader};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -119,63 +120,74 @@ struct BackendChild {
     readers: Option<[JoinHandle<()>; 2]>,
 }
 
-impl BackendProcess {
-    /// Create temp dirs, write config/auth, spawn serve on ephemeral port.
-    pub fn start(spec: &BackendSpec) -> Result<Self, E2eError> {
-        if !spec.binary.is_file() {
-            return Err(E2eError::Backend(format!(
-                "hya binary missing at {} (run: cargo build -p hya-backend --bin hya)",
-                spec.binary.display()
-            )));
-        }
-        let root = temp_root("hya-e2e")?;
-        let project = root.join("project");
-        let home = root.join("home");
-        let xdg_config_home = root.join("config");
-        let xdg_data_home = root.join("data");
-        let xdg_state = root.join("state");
-        let xdg_cache = root.join("cache");
-        let hya_cfg = xdg_config_home.join("hya");
-        let auth_dir = hya_cfg.join("auth");
-        std::fs::create_dir_all(&project)?;
-        std::fs::create_dir_all(&home)?;
-        std::fs::create_dir_all(&auth_dir)?;
-        std::fs::create_dir_all(&xdg_data_home)?;
-        std::fs::create_dir_all(&xdg_state)?;
-        std::fs::create_dir_all(&xdg_cache)?;
-        std::fs::write(project.join("README.md"), "hya-e2e project\n")?;
+/// Materialized isolated workspace, XDG config/data/state/cache roots, and DB path.
+pub(crate) struct MaterializedRoot {
+    pub root: PathBuf,
+    pub project: PathBuf,
+    pub db: PathBuf,
+    pub xdg_config_home: PathBuf,
+    pub xdg_data_home: PathBuf,
+    pub model_ref: String,
+    pub has_mcp: bool,
+}
 
-        for (rel, body) in &spec.project_files {
-            let path = project.join(rel);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(path, body)?;
-        }
-        for (rel, body) in &spec.skill_files {
-            let path = project.join(rel);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(path, body)?;
-        }
+/// Create isolated directories, write config/auth/project fixtures, and run
+/// `preinstall_bundles` without spawning `hya serve`.
+pub(crate) fn materialize_root(spec: &BackendSpec) -> Result<MaterializedRoot, E2eError> {
+    if !spec.binary.is_file() {
+        return Err(E2eError::Backend(format!(
+            "hya binary missing at {} (run: cargo build -p hya-backend --bin hya)",
+            spec.binary.display()
+        )));
+    }
+    let root = unique_temp_dir("hya-e2e")?;
+    let project = root.join("project");
+    let home = root.join("home");
+    let xdg_config_home = root.join("config");
+    let xdg_data_home = root.join("data");
+    let xdg_state = root.join("state");
+    let xdg_cache = root.join("cache");
+    let hya_cfg = xdg_config_home.join("hya");
+    let auth_dir = hya_cfg.join("auth");
+    std::fs::create_dir_all(&project)?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::create_dir_all(&auth_dir)?;
+    std::fs::create_dir_all(&xdg_data_home)?;
+    std::fs::create_dir_all(&xdg_state)?;
+    std::fs::create_dir_all(&xdg_cache)?;
+    std::fs::write(project.join("README.md"), "hya-e2e project\n")?;
 
-        // Resolve relative MCP command paths against the project cwd so deferred
-        // or absolute-spawned children still find fixture scripts.
-        let mcp = resolve_mcp_commands(&spec.mcp, &project);
-        let model_ref = format!("{}/{}", spec.provider_id, spec.model_id);
-        let mut models = format!("    - id: {}\n", spec.model_id);
-        for model in &spec.additional_models {
-            models.push_str(&format!("    - id: {model}\n"));
+    for (rel, body) in &spec.project_files {
+        let path = project.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
         }
-        let mcp_yaml = render_mcp(&mcp);
-        let tools_yaml = spec
-            .code_mode
-            .as_ref()
-            .map(|mode| format!("tools:\n  code:\n    mode: {mode}\n"))
-            .unwrap_or_default();
-        let config = format!(
-            r#"default_model: {model_ref}
+        std::fs::write(path, body)?;
+    }
+    for (rel, body) in &spec.skill_files {
+        let path = project.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, body)?;
+    }
+
+    // Resolve relative MCP command paths against the project cwd so deferred
+    // or absolute-spawned children still find fixture scripts.
+    let mcp = resolve_mcp_commands(&spec.mcp, &project);
+    let model_ref = format!("{}/{}", spec.provider_id, spec.model_id);
+    let mut models = format!("    - id: {}\n", spec.model_id);
+    for model in &spec.additional_models {
+        models.push_str(&format!("    - id: {model}\n"));
+    }
+    let mcp_yaml = render_mcp(&mcp);
+    let tools_yaml = spec
+        .code_mode
+        .as_ref()
+        .map(|mode| format!("tools:\n  code:\n    mode: {mode}\n"))
+        .unwrap_or_default();
+    let config = format!(
+        r#"default_model: {model_ref}
 providers:
   {provider}:
     kind: openai-compatible
@@ -188,69 +200,85 @@ permission:
   model: {perm}
   rules: []
 {tools}"#,
-            model_ref = model_ref,
-            provider = spec.provider_id,
-            base = spec.fake_base_url,
-            models = models,
-            mcp = mcp_yaml,
-            perm = spec.permission_model,
-            tools = tools_yaml,
-        );
-        std::fs::write(hya_cfg.join("config.yaml"), config)?;
-        std::fs::write(
-            auth_dir.join(format!("{}.yaml", spec.provider_id)),
-            "token: e2e-test-key\n",
-        )?;
+        model_ref = model_ref,
+        provider = spec.provider_id,
+        base = spec.fake_base_url,
+        models = models,
+        mcp = mcp_yaml,
+        perm = spec.permission_model,
+        tools = tools_yaml,
+    );
+    std::fs::write(hya_cfg.join("config.yaml"), config)?;
+    std::fs::write(
+        auth_dir.join(format!("{}.yaml", spec.provider_id)),
+        "token: e2e-test-key\n",
+    )?;
 
-        for package in &spec.preinstall_bundles {
-            let output = Command::new(&spec.binary)
-                .args(["bundle", "install", "-y"])
-                .arg(package)
-                .env("XDG_DATA_HOME", &xdg_data_home)
-                .env("HOME", &home)
-                .env("XDG_CONFIG_HOME", &xdg_config_home)
-                .output()
-                .map_err(|e| E2eError::Backend(format!("preinstall bundle spawn: {e}")))?;
-            if !output.status.success() {
-                return Err(E2eError::Backend(format!(
-                    "preinstall bundle {} failed: status={} stdout={} stderr={}",
-                    package.display(),
-                    output.status,
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr),
-                )));
-            }
+    for package in &spec.preinstall_bundles {
+        let output = Command::new(&spec.binary)
+            .args(["bundle", "install", "-y"])
+            .arg(package)
+            .env("XDG_DATA_HOME", &xdg_data_home)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", &xdg_config_home)
+            .output()
+            .map_err(|e| E2eError::Backend(format!("preinstall bundle spawn: {e}")))?;
+        if !output.status.success() {
+            let _ = std::fs::remove_dir_all(&root);
+            return Err(E2eError::Backend(format!(
+                "preinstall bundle {} failed: status={} stdout={} stderr={}",
+                package.display(),
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            )));
         }
+    }
 
-        let db = root.join("sessions.db");
+    let db = root.join("sessions.db");
+    Ok(MaterializedRoot {
+        root,
+        project,
+        db,
+        xdg_config_home,
+        xdg_data_home,
+        model_ref,
+        has_mcp: !mcp.is_empty(),
+    })
+}
+
+impl BackendProcess {
+    /// Create temp dirs, write config/auth, spawn serve on ephemeral port.
+    pub fn start(spec: &BackendSpec) -> Result<Self, E2eError> {
+        let mat = materialize_root(spec)?;
         let serve = ServeOptions {
-            model_ref,
+            model_ref: mat.model_ref,
             yolo: spec.yolo,
-            has_mcp: !mcp.is_empty(),
+            has_mcp: mat.has_mcp,
             env: spec.env.clone(),
             args: spec.serve_args.clone(),
         };
         let (url, child) = serve
             .spawn(
                 &spec.binary,
-                &project,
-                &db,
-                &root,
-                &xdg_config_home,
-                &xdg_data_home,
+                &mat.project,
+                &mat.db,
+                &mat.root,
+                &mat.xdg_config_home,
+                &mat.xdg_data_home,
             )
             .inspect_err(|_| {
-                let _ = std::fs::remove_dir_all(&root);
+                let _ = std::fs::remove_dir_all(&mat.root);
             })?;
         Ok(Self {
             url,
-            project,
-            db,
-            xdg_config_home,
-            xdg_data_home,
+            project: mat.project,
+            db: mat.db,
+            xdg_config_home: mat.xdg_config_home,
+            xdg_data_home: mat.xdg_data_home,
             binary: spec.binary.clone(),
             child,
-            root,
+            root: mat.root,
             serve,
         })
     }
@@ -546,10 +574,16 @@ fn resolve_mcp_commands(mcp: &[McpFixture], project: &Path) -> Vec<McpFixture> {
         .collect()
 }
 
-fn temp_root(label: &str) -> Result<PathBuf, E2eError> {
+/// Create a fresh process- and thread-unique temporary directory under `std::env::temp_dir()`.
+///
+/// Includes a monotonic atomic counter alongside PID and timestamp so concurrent
+/// `--test-threads=N` workers never collide.
+pub fn unique_temp_dir(label: &str) -> Result<PathBuf, E2eError> {
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
+    let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
     let mut dir = std::env::temp_dir();
     dir.push(format!(
-        "{label}-{}-{}",
+        "{label}-{}-{}-{serial}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -594,21 +628,38 @@ pub fn parse_listen_url(line: &str) -> Option<&str> {
     (port != 0).then_some(url)
 }
 
-/// Resolve the backend binary: `HYA_E2E_BACKEND_BIN` if set, else the workspace
+/// Resolve the backend binary: `HYA_E2E_BACKEND_BIN`, then `HYA_BIN`, then
+/// `CARGO_TARGET_DIR/debug/hya` (when set and present), else the workspace
 /// `target/debug/hya`.
 ///
-/// The override exists so a coverage run can point the harness at an instrumented build
-/// without overwriting the normal debug binary that concurrent work is using.
+/// The overrides let CI jobs, coverage runs, and shared target directories point
+/// the harness at a prebuilt `hya` binary without mutating the workspace `target/`.
 pub fn default_backend_bin() -> PathBuf {
-    resolve_backend_bin(std::env::var_os("HYA_E2E_BACKEND_BIN"))
+    resolve_backend_bin(
+        std::env::var_os("HYA_E2E_BACKEND_BIN"),
+        std::env::var_os("HYA_BIN"),
+        std::env::var_os("CARGO_TARGET_DIR"),
+    )
 }
 
-/// Pure resolution behind [`default_backend_bin`], so the override is testable without
+/// Pure resolution behind [`default_backend_bin`], so overrides are testable without
 /// mutating the process environment (which races other tests in the same binary).
-fn resolve_backend_bin(override_bin: Option<std::ffi::OsString>) -> PathBuf {
-    if let Some(bin) = override_bin {
-        let bin = PathBuf::from(bin);
+fn resolve_backend_bin(
+    override_bin: Option<std::ffi::OsString>,
+    hya_bin: Option<std::ffi::OsString>,
+    cargo_target_dir: Option<std::ffi::OsString>,
+) -> PathBuf {
+    for candidate in [override_bin, hya_bin].into_iter().flatten() {
+        let bin = PathBuf::from(candidate);
         if !bin.as_os_str().is_empty() {
+            return bin.canonicalize().unwrap_or(bin);
+        }
+    }
+    if let Some(target_dir) = cargo_target_dir
+        && !target_dir.is_empty()
+    {
+        let bin = PathBuf::from(target_dir).join("debug/hya");
+        if bin.is_file() {
             return bin.canonicalize().unwrap_or(bin);
         }
     }
@@ -720,7 +771,7 @@ mod tests {
 
     #[test]
     fn silent_backend_times_out_and_is_reaped() {
-        let fixture = FixtureDir(temp_root("hya-e2e-silent").unwrap());
+        let fixture = FixtureDir(unique_temp_dir("hya-e2e-silent").unwrap());
         let pid_file = fixture.0.join("pid");
         let mut cmd = Command::new("/bin/sh");
         cmd.args(["-c", "echo $$ > \"$1\"; exec sleep 10", "fixture"])
@@ -773,7 +824,7 @@ mod tests {
 
     #[test]
     fn reopen_replaces_stderr_and_keeps_draining_stdout() {
-        let fixture = FixtureDir(temp_root("hya-e2e-reopen").unwrap());
+        let fixture = FixtureDir(unique_temp_dir("hya-e2e-reopen").unwrap());
         let binary = fixture.0.join("hya-fixture");
         std::fs::write(
             &binary,
@@ -823,21 +874,32 @@ exec sleep 10
     }
 
     #[test]
-    fn backend_bin_override_wins_over_the_workspace_debug_path() {
-        let resolved = resolve_backend_bin(Some("/nonexistent/instrumented/hya".into()));
+    fn backend_bin_override_wins_over_hya_bin_and_workspace_debug_path() {
+        let resolved = resolve_backend_bin(
+            Some("/nonexistent/instrumented/hya".into()),
+            Some("/nonexistent/hya-bin/hya".into()),
+            None,
+        );
 
         assert_eq!(
             resolved,
             PathBuf::from("/nonexistent/instrumented/hya"),
             "HYA_E2E_BACKEND_BIN must point the harness at an arbitrary build"
         );
+
+        let via_hya_bin = resolve_backend_bin(None, Some("/nonexistent/hya-bin/hya".into()), None);
+        assert_eq!(
+            via_hya_bin,
+            PathBuf::from("/nonexistent/hya-bin/hya"),
+            "HYA_BIN must point the harness at a prebuilt binary when HYA_E2E_BACKEND_BIN is unset"
+        );
     }
 
     #[test]
     fn empty_backend_bin_override_falls_back_to_the_workspace_debug_path() {
-        let resolved = resolve_backend_bin(Some("".into()));
+        let resolved = resolve_backend_bin(Some("".into()), Some("".into()), None);
 
-        assert_eq!(resolved, resolve_backend_bin(None));
+        assert_eq!(resolved, resolve_backend_bin(None, None, None));
     }
 
     /// The discriminator for the whole graceful-shutdown change: a backend that returned

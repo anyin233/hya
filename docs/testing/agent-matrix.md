@@ -1,10 +1,12 @@
 # Agent feature matrix
 
 Process E2E lives in `crates/hya-e2e` (**Track P**): real `hya` +
-scripted OpenAI-compatible FakeLlm, driven entirely through the `hya.v1`
-contract. Existing in-process tests remain the authority for deep engine
-semantics (**Track I**); they are indexed, not duplicated. There is no TUI
-today; former Track T is retired (see below).
+scripted OpenAI-compatible FakeLlm, driven through the `hya.v1` contract and
+headless `hya exec`. Existing in-process tests remain the authority for deep
+engine semantics (**Track I**); they are indexed, not duplicated. Track P is
+organized into 11 dense golden-path modules safe for parallel execution
+(`--test-threads=4`), with heavy real-OS storage fault/soak scenarios gated
+behind `#[ignore = "nightly OS fault/soak"]` for nightly runs.
 
 | Resource | Path |
 | --- | --- |
@@ -15,101 +17,101 @@ today; former Track T is retired (see below).
 ## How to run
 
 ```sh
-# Track P — one scenario file (local)
+# Track P — one consolidated module (local)
 cargo build -p hya-backend --bin hya
-cargo test -p hya-e2e --test it <pNN_scenario>:: -- --test-threads=1
+cargo test -p hya-e2e --test it <pNN_module>:: -- --test-threads=4
 
-# Track P — whole matrix (CI; locally only when asked)
-cargo test -p hya-e2e -- --test-threads=1
+# Track P — whole PR matrix (parallel)
+cargo test -p hya-e2e -- --test-threads=4
+
+# Track P — nightly real-OS fault/soak tier (p43)
+cargo test -p hya-e2e -- --ignored --test-threads=1
 ```
 
 ## Track P scenarios (implemented)
 
-| ID | Title | Test | Strong oracle (summary) |
+| ID | Title | Module | Strong oracle (summary) |
 | --- | --- | --- | --- |
-| T0.1 | Backend boots | `tests/p01_session_prompt.rs` | HTTP responds on serve URL |
-| T1.2 | Prompt + FakeLlm text | `tests/p01_session_prompt.rs` | Events contain scripted assistant text |
-| T1.3 | Multi-round tool loop | `tests/p02_tool_loop_fs.rs` | Sequential write → read → shell |
-| T1.4 | read/write | `tests/p02_tool_loop_fs.rs` | Disk file content |
-| T1.5 | shell | `tests/p02_tool_loop_fs.rs` | Disk file from shell |
-| T1.7 | Permissions once/reject, `yolo` mode switch | `tests/p03_permissions.rs` | File created only after `once`; switching to `yolo` unblocks the pending ask and later calls do not ask |
-| T1.8 | Questions + reply | `tests/p04_questions.rs` | Turn continues after question reply |
-| T1.9 | Skills load | `tests/p05_skills.rs` | `GET /v1/skills` lists skill; follow-up FakeLlm has body marker |
-| T1.10 | MCP tool call | `tests/p06_mcp.rs` | `/mcp` connected; follow-up has `echo:…` result |
-| T1.11 | Session list + resume | `tests/p07_session_lifecycle.rs` | `GET /v1/sessions` shows active sessions; second prompt on same id |
-| T1.12 | Session transcript read | `tests/p12_context_api.rs` | Multi-turn user/assistant text in `GET /v1/sessions/{id}/messages` |
-| T1.13 | Project AGENTS.md guidance | `tests/p13_project_agents_context.rs` | Compat-guided FakeLlm request contains AGENTS body marker |
-| T1.14 | Compact / summarize | `tests/p14_compact_summarize.rs` | Compact adds the rewrite marker with the removed user messages; follow-up turn works |
-| T1.15 | kernel todo + edit | `tests/p15_todo_and_edit.rs` | Todo route lists items, the bare model receives the rendered tool result, and edit rewrites a file |
-| T1.16 | Custom slash catalog and route expansion | `tests/p18_custom_slash_resources.rs` | Supported command sources, precedence, exact single-pass expansion, route parity, and literal fallback |
-| T1.17 | Skill-backed slash expansion | `tests/p18_custom_slash_resources.rs` | Direct Skill body admission, discovery order, no redundant `skill` call, and bootstrap cache boundaries |
-| T1.18 | Custom command invokes builtin Skill Tool | `tests/p18_custom_slash_resources.rs` | Real `skill` result reaches the next model request; typed failures recover in the same Session |
-| T1.19 | Custom command invokes plugin Tool | `tests/p18_custom_slash_resources.rs` | `remember` RPC result, permission, process death, respawn, drift rejection, and restart boundary |
-| T1.21 | Custom resource conflicts fail closed | `tests/p18_custom_slash_resources.rs` | Plugin/builtin/MCP collisions publish no partial runtime generation |
-| T1.22 | Dynamic resource snapshots and reload | `tests/p18_custom_slash_resources.rs` | Skill and MCP next-Turn refresh, plugin restart boundary, and immutable old bindings |
-| T1.23 | Structured custom Tool errors recover | `tests/p18_custom_slash_resources.rs` | One terminal Tool Event, structured replay, no replay execution, and later same-Session success |
-| T1.24 | Native network tool | `tests/p02_tool_loop_fs.rs` | `webfetch` returns the loopback HTTP response in a correlated tool result |
-| T2.1 | Subagent task | `tests/p08_subagent_task.rs` | Tree children ≥ 1, `hya-task`, distinct child session |
-| T2.2 | Nested tree depth≥2 | `tests/p09_nested_subagent.rs` | Depth ≥ 2, hya-scout+hya-plan, ≥ 3 session ids |
-| T2.3 | Agent roster / roles | `tests/p10_agent_roster.rs` | `GET /v1/agents` lists hya-main + spawnable roles |
-| T2.4 | Swarm `roster` + `list_agents` | `tests/p16_swarm_mailbox.rs` | Caller's follow-up carries the teammate's handle, type, status and **real session id** |
-| T2.5 | Swarm `send` (direct) | `tests/p16_swarm_mailbox.rs` | **Recipient's** next request contains `[mail from main/hya-task-<operator>]` … |
-| T2.6 | Swarm `send` (`#channel`) | `tests/p16_swarm_mailbox.rs` | Subscriber's next request contains the post; receipt reads `to #squad (1 recipient)` — the channel-branch count, not the direct-send constant |
-| T2.7 | Hyabundle CLI lifecycle | `tests/p11_hyabundle.rs` | install/list/info/uninstall stdout |
-| T2.8 | Hyabundle spawn agent | `tests/p11_hyabundle.rs` | Roster has package agent; events have scripted text |
-| T2.9 | Swarm `channels` | `tests/p16_swarm_mailbox.rs` | Result reports `members:["hya-task-<operator>"]` and `messages:1` the caller never supplied |
-| T2.10 | Swarm `join` | `tests/p16_swarm_mailbox.rs` | Post-join message reaches the joiner; pre-join post never does |
-| T2.11 | Swarm `leave` | `tests/p16_swarm_mailbox.rs` | Negative: departed member never sees the post, bounded by a still-subscribed member **and** a later direct ping it did see |
-| T2.12 | Cross-unit `send` refused | `tests/p16_swarm_mailbox.rs` | Two units, two levels deep: sender's follow-up carries the scope refusal AND the payload never reaches the other unit ([ADR-0016](../adr/0016-channel-communication-plane.md)) |
-| T2.13 | User-authored Workflow fan-out/fan-in | `tests/p17_workflow_composition.rs` | One discovered Workflow spawns four distinct stage Sessions, joins both parallel implementations into review, and returns the final report to the lead |
-| T2.14 | Workflow Stage model routing and replay | `tests/p19_workflow_model_routing.rs` | Preferred 503 responses advance to the declared fallback with per-candidate effort; worker, verifier, and final route outcomes survive backend close/reopen without another provider request |
-| T2.15 | model catalog discovery and offline fallback | `tests/p20_model_catalog_discovery.rs` | Explicit lists stay network-free and unwritten; empty lists rediscover anonymously each run without mutating config or a foreign OpenCode file; 401 and credentialed-forbidden catalogs surface `hya/offline` (exec prints the configuration explanation); mixed provider failure keeps the valid rows identical across CLI, `/v1/models`, `/v1/providers`, and `GET /v1/bootstrap` |
-| T2.16 | [p21_agent_model_preference.rs](../../crates/hya-e2e/tests/it/p21_agent_model_preference.rs) | v1 agent-model preference set -> spawned `hya-task` runs on the preferred model; listing reports `REMEMBERED` source | e2e (Track P) |
-| T2.17 | [p22_dispatch_model_resolution.rs](../../crates/hya-e2e/tests/it/p22_dispatch_model_resolution.rs) | exact id override; substring fallback (bare vendor ids defer); user-config tier | e2e (Track P) |
-| T2.19 | [p24_bundle_schemas.rs](../../crates/hya-e2e/tests/it/p24_bundle_schemas.rs) | installed bundle `schemas:` / `extensions.process` / `resources.mcp` declarations surface through `bundle install`, `bundle schema <id>`, `bundle info`, and — after the first bound turn — `GET /v1/runtime/schemas` (owner = bundle source, canonical tool = the owning tool's stable id) | e2e (Track P) |
-| T2.20 | [p25_goal_loop_bundle.rs](../../crates/hya-e2e/tests/it/p25_goal_loop_bundle.rs) | `hya/goal-loop` preset Skills and guide Agent; evaluator verdict reaches the next model request | e2e (Track P) |
-| T2.21 | [p26_plugin_bundle.rs](../../crates/hya-e2e/tests/it/p26_plugin_bundle.rs) | agentless Plugin installs and publishes a static Skill | e2e (Track P) |
-| T2.22 | [p27_bundle_process.rs](../../crates/hya-e2e/tests/it/p27_bundle_process.rs) | native process, JavaScript Plugin, and MCP execute from packaged files; private tools/hooks remain owner-scoped; uninstall removes new-session visibility | e2e (Track P) |
-| T2.23 | [p28_subagent_bundle.rs](../../crates/hya-e2e/tests/it/p28_subagent_bundle.rs) | default subagent bundle worker mails its parent, reports, and archives | e2e (Track P) |
-| T2.24 | [p29_claude_bundle.rs](../../crates/hya-e2e/tests/it/p29_claude_bundle.rs) | Claude directory imports into Plugin; packaged hook veto and Skill execute after source deletion; uninstall removes Skill | e2e (Track P) |
-| T2.25 | [p30_channel_bundle.rs](../../crates/hya-e2e/tests/it/p30_channel_bundle.rs) | installed channel-only bundle denies child sends without parent delivery; uninstall restores default delivery in a new session | e2e (Track P) |
-| T2.26 | [p31_extra_bundles.rs](../../crates/hya-e2e/tests/it/p31_extra_bundles.rs) | packaged `hya-extra/zvec-grep` Plugin bundle installs; a fake `zg` stdio MCP server on `PATH` answers `zvec_grep_search`, and the result reaches a full-plane `hya-main` agent's follow-up request | e2e (Track P) |
-| T2.27 | [p32_jev_model_router.rs](../../crates/hya-e2e/tests/it/p32_jev_model_router.rs) | packaged `hya-extra/jev-model-router` Bun process reads its bundle `config.yml`, asks a stub Jev endpoint once, and the provider request streams from the chosen tier model; a second turn in the same chain stays on it without another Jev call; a new chain is classified again; Jev HTTP 500 routes to `default_tier` (requires `bun` on `PATH`) | e2e (Track P) |
-| T2.28 | [p33_model_fallback.rs](../../crates/hya-e2e/tests/it/p33_model_fallback.rs) | packaged `hya-extra/model-fallback` Bun process reads its bundle `config.yml`; a session pinned to an unrouted model recovers via the configured chain's `model.fallback` retry and the turn finishes; a session pinned to a model with no matching chain entry gives up and the turn fails instead of hanging (requires `bun` on `PATH`) | e2e (Track P) |
-| T2.29 | [p34_bundle_apis.rs](../../crates/hya-e2e/tests/it/p34_bundle_apis.rs) | a packaged Plugin with a `kind: bun` `extensions.process` (a python3 fixture) declares tool `usage_probe` and five `apis:` endpoints; the tool call receives a capability (`context.describe` + `session.usage`); `GET /v1/bundle-apis` lists the endpoints with their JSON Schemas; after a turn that spawns a `hya-task` subagent with FakeLlm reporting deterministic usage, the session endpoint `GET /v1/sessions/{session}/bundles/acme%...`
-| T2.30 | [p35_token_summary.rs](../../crates/hya-e2e/tests/it/p35_token_summary.rs) | packaged `hya-extra/token-summary` Bun process bundle; after a turn that spawns a subagent via `task` with FakeLlm reporting deterministic (known-split) usage, `GET /v1/sessions/{session}/bundles/hya-extra%2Ftoken-summary/usage` returns (as the bundle's own JSON body) per-model `input`/`cache_creation`/`cache_read`/`output`/`thinking`/`visible_output`/`rounds` matching the reported usage across both sessions of the tree, with the grand total equal to the one model used; `?scope=session` narrows to the root's own rounds and `?scope=root` is the bundle's own 400; a second turn where `hya-main` calls tool `token-summary__token_summary` and the follow-up model request carries the rendered Markdown table | e2e (Track P) |
-| T2.31 | [p36_wait_archive.rs](../../crates/hya-e2e/tests/it/p36_wait_archive.rs) | the lead spawns `hya-task` and calls `wait`: the worker's `report` wakes the wait inside the lead's own turn (`Subagents finished.` plus the report reach the lead's follow-up request); a repeated `wait` on that worker returns at once as `nothing_to_wait_for` with the report under `already_finished`, and the report mail is never steered again (no `[NEW MAIL · …]` notice); a second run's worker ends its turn without a report, which wakes `wait` as `stalled` (never finished), then the lead `archive`s it (`Archived \`main/hya-task-<operator>\``; the backend runs with `HYA_HANDLE_SEED` so the script knows the handle) and `send` to its handle wakes it again (the worker's next request carries the mail) | e2e (Track P) |
-| T2.32 | [p37_project_permission_scope.rs](../../crates/hya-e2e/tests/it/p37_project_permission_scope.rs) | manual mode: a session reads any root of its multi-root Project without asking; a read outside every root asks `ExternalDirectory` for the concrete `<dir>/*` (never a global `*`); answering allow-always then lets a second session of the *same* Project read a sibling file in that directory without asking, but a session of a *different* Project asks again (ADR-0026) | e2e (Track P) |
-| T2.33 | [p37_project_permission_scope.rs](../../crates/hya-e2e/tests/it/p37_project_permission_scope.rs) | `yolo` mode auto-approves a read outside every Project root without ever raising an `ExternalDirectory` ask | e2e (Track P) |
-| T2.34 | [p37_project_permission_scope.rs](../../crates/hya-e2e/tests/it/p37_project_permission_scope.rs) | `bash`'s `cwd` outside every Project root never raises `ExternalDirectory`, even in manual mode where the command itself still asks `Action::Bash` | e2e (Track P) |
-| T2.35 | [p38_relay.rs](../../crates/hya-e2e/tests/it/p38_relay.rs) | secure relay golden path, pinned `t=grpc`: real `hya proxy`, `hya serve --relay` (FakeLlm), and `hya bridge - --json --exit-with-stdin` (link on stdin), every client request through the bridge URL only: health and bootstrap; a two-root Project created remotely and a session in it without a workdir (lands in root #1); one turn reads a file in root #2 without asking and one outside every root through an `ExternalDirectory` ask answered over the bridge (both results reach the model and the transcript); the session SSE stream shows the ask and the turn finishing; a PTY created, token-connected, and WebSocket-upgraded over the bridge echoes a marker; a temporary session; `GET /v1/relay/link` is `permission_denied` over the bridge but works on loopback; `hya serve relay rotate` makes the running bridge answer `503 unavailable` "rejected the relay link" while a new bridge with the new link works; SIGTERM delivers `serverStopping {reason: signal}` to a bridge-side SSE client, then the bridge answers `503 remote backend is offline`. A transparent TCP capture hop in front of the proxy (both `--relay` and the link point at it) records every byte: it sees the room id (control) but never the prompt, file contents, answer, PTY output, or either link's PSK (raw, base64url, fragment) | e2e (Track P) |
-| T2.36 | [p38_relay.rs](../../crates/hya-e2e/tests/it/p38_relay.rs) | T2.35 over the pinned WebSocket binding (`t=ws`), capture assertions included | e2e (Track P) |
-| T2.37 | [p38_relay.rs](../../crates/hya-e2e/tests/it/p38_relay.rs) | TLS to the proxy (`--tls-cert/--tls-key` with an rcgen self-signed certificate; `--relay-ca` on `serve` and `bridge`; `hya://` link; `t=auto`): health, a session, and a prompt through the bridge; the capture hop sees no prompt, answer, or PSK bytes | e2e (Track P) |
-| T2.38 | [p39_exec_live_subagents.rs](../../crates/hya-e2e/tests/it/p39_exec_live_subagents.rs) | headless exec: a lead turn that ends while its worker is still running gets a HEADLESS RUN notice turn instead of ending the run; the lead waits, the worker reports (it is not stopped), and the lead's final answer is the run's last turn | e2e (Track P) |
-| T2.39 | [p39_exec_live_subagents.rs](../../crates/hya-e2e/tests/it/p39_exec_live_subagents.rs) | headless exec: two notice turns in a row that neither wait nor archive end the run with the worker still running | e2e (Track P) |
-| T2.40 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/it/p40_exec_headless_continuation.rs) | headless exec: a lead turn that ends with an announced next step gets a HEADLESS RUN notice; open todos alone do not continue the run | e2e (Track P) |
-| T2.41 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/it/p40_exec_headless_continuation.rs) | headless exec: a last message announcing a next step ("Now verify the file format:") continues the run with the announcement quoted | e2e (Track P) |
-| T2.42 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/it/p40_exec_headless_continuation.rs) | headless exec: a plain summary after tool work ends the run with no notice | e2e (Track P) |
-| T2.43 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/it/p40_exec_headless_continuation.rs) | headless exec: two ignored announcement notices in a row end the run | e2e (Track P) |
-| T2.44 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/it/p40_exec_headless_continuation.rs) | headless exec --time-budget: the opening names the budget and the FINAL header appears once across tool results and continuation notices | e2e (Track P) |
-| T2.46 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/it/p40_exec_headless_continuation.rs) | headless exec --time-budget: no continuation turn starts within the grace | e2e (Track P) |
-| T2.47 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/it/p40_exec_headless_continuation.rs) | headless exec corrects a spurious internal summary and resumes work | e2e (Track P) |
-| T2.48 | [p40_exec_headless_continuation.rs](../../crates/hya-e2e/tests/it/p40_exec_headless_continuation.rs) | headless exec recovers a raw DSML tool-call leak through the structured tool interface | e2e (Track P) |
-| T2.49 | [p39_exec_live_subagents.rs](../../crates/hya-e2e/tests/it/p39_exec_live_subagents.rs) | idle residents produce stalled waits until archived; a quiescent server team wakes its lead with a User synthesis prompt | e2e (Track P) |
-| T2.50 | [p41_code_mode.rs](../../crates/hya-e2e/tests/it/p41_code_mode.rs) | `tools.code.mode: only`: the first request offers `code-mode__run` alone and its description carries a section per hidden tool (`### read`, `### bash`); a program `return await tools.read(...)` puts the file text and the trace line `#1 L1 tools.read` into the follow-up request; a direct `read` call is refused with `` `read` is not offered here: call it from a `code-mode__run` program `` | e2e (Track P) |
-| T2.51 | [p41_code_mode.rs](../../crates/hya-e2e/tests/it/p41_code_mode.rs) | `tools.code.mode: with_tools`: `code-mode__run` is offered next to `read`, `bash`, `edit`; its description lists no hidden tool; a program's nested `tools.read` and a direct `read` both deliver the file text | e2e (Track P) |
-| T2.52 | [p41_code_mode.rs](../../crates/hya-e2e/tests/it/p41_code_mode.rs) | default mode: no `code-mode__run` in the offered tools; `hya bundle list` shows `hya/code-mode` as `disabled` | e2e (Track P) |
-| T2.53 | [p42_exec_step_fold.rs](../../crates/hya-e2e/tests/it/p42_exec_step_fold.rs) | headless exec, one turn of twelve ~11k-token `bash` steps (no reasoning) against a 120k window (`keep_recent` 1): the kernel's Rewrite removes the old steps, the run exits 0 with `FINAL_ANSWER`, and the last request carries the rewrite marker, the prompt and the newest step but not `STEP_0_BEGIN` | e2e (Track P) |
-| T2.54 | [p43_store_robustness.rs](../../crates/hya-e2e/tests/it/p43_store_robustness.rs) | store robustness: external SQLite write locks recover after turn progression, unopenable/stalled opens fall back in memory for headless `exec`, mid-run database replacement halts writes and disk reads without touching the replacement file, strict server/short commands fail fast on unopenable paths, signals trigger exit drain, and stderr emits exact durability reports while `--json` stays pure JSONL | e2e (Track P) |
+| T0.1 | Backend boots | `tests/it/p01_core_session.rs` | `/v1/health` responds on serve URL |
+| T1.2 | Prompt + FakeLlm text | `tests/it/p01_core_session.rs` | Events contain scripted assistant text |
+| T1.3 | Multi-round tool loop | `tests/it/p01_core_session.rs` | Sequential write → read → edit → bash → todo → webfetch → skill |
+| T1.4 | read/write | `tests/it/p01_core_session.rs` | Disk file content + correlated `read` `ToolResult` |
+| T1.5 | bash | `tests/it/p01_core_session.rs` | Disk file from shell |
+| T1.7 | Permissions once/reject, `yolo` mode switch | `tests/it/p02_permissions_and_questions.rs` | File created only after `once`; switching to `yolo` unblocks pending ask and skips later asks |
+| T1.8 | Questions + reply (`ask_user` + `question`) | `tests/it/p02_permissions_and_questions.rs` | Both canonical tool and legacy alias continue after reply; `ask_user` + `plan_exit` offered |
+| T1.9 | Skills load | `tests/it/p01_core_session.rs` | `GET /v1/skills` lists skill; follow-up FakeLlm has body marker |
+| T1.10 | MCP tool call | `tests/it/p03_mcp_and_custom_resources.rs` | `/v1/mcp` connected with tool list; follow-up has `echo:…` result |
+| T1.11 | Session list + resume + titling + daemon stop/start restore | `tests/it/p01_core_session.rs` | `GET /v1/sessions` shows sessions; background titling runs once; `serve stop`/`start` restores interrupted tool & cancels unanswered permission; URI `--db` rejected |
+| T1.12 | Session transcript read | `tests/it/p01_core_session.rs` | Multi-turn user/assistant text in `GET /v1/sessions/{id}/messages` |
+| T1.13 | Project AGENTS.md guidance | `tests/it/p01_core_session.rs` | Guided FakeLlm request contains AGENTS body marker |
+| T1.14 | Compact / summarize | `tests/it/p01_core_session.rs` | Compact adds rewrite marker with removed user messages and evicts turn 1; `/summarize` persists marker |
+| T1.15 | Kernel todo + edit + bare exec JSONL/stdin/tail-session | `tests/it/p01_core_session.rs` | Todo route lists items, edit mutates file, `exec --bare` streams JSONL matching `tail-session` and reads stdin `-` |
+| T1.16 | Custom slash catalog and route expansion | `tests/it/p03_mcp_and_custom_resources.rs` | Supported command sources, precedence, single-pass expansion, `CommandExecuted`, explicit text bypass |
+| T1.17 | Skill-backed slash expansion | `tests/it/p03_mcp_and_custom_resources.rs` | Direct `<skill>` expansion without calling builtin `skill`, root precedence, literal fallback on removal |
+| T1.18 | Custom command invokes builtin Skill Tool | `tests/it/p03_mcp_and_custom_resources.rs` | Real `skill` result reaches follow-up request; unknown-skill structured error recovers in same session |
+| T1.19 | Custom command invokes plugin Tool | `tests/it/p03_mcp_and_custom_resources.rs` | `toolbox__remember` result, crash respawn, drift fail-closed, hot manifest reload |
+| T1.21 | Custom resource conflicts fail closed | `tests/it/p03_mcp_and_custom_resources.rs` | Qualified plugin names alongside unique bare `read`; ambiguous `__` MCP registrations fail closed |
+| T1.22 | Dynamic resource snapshots and reload | `tests/it/p03_mcp_and_custom_resources.rs` | Skill next-turn refresh with immutable old turns, MCP disconnect/connect reload, plugin manifest hot reload |
+| T1.23 | Structured custom Tool errors recover | `tests/it/p03_mcp_and_custom_resources.rs` | Single terminal `ToolError`, replay never re-executes plugin (call log oracle), same-session recovery |
+| T1.24 | Native network tool (`webfetch`) | `tests/it/p01_core_session.rs` | `webfetch` returns loopback HTTP 200 body in correlated `ToolResult` |
+| T2.1 | Subagent task (single + batch) | `tests/it/p04_subagents_and_mailbox.rs` | Tree children ≥ 1, `hya-task`, distinct child ids, DM mail events, batch 2-member result |
+| T2.2 | Nested tree depth≥2 | `tests/it/p04_subagents_and_mailbox.rs` | Depth ≥ 2, `hya-task` + `hya-plan`, ≥ 3 distinct session ids |
+| T2.3 | Agent roster / roles | `tests/it/p04_subagents_and_mailbox.rs` | `GET /v1/agents` lists `hya-main` + spawnable roles; `list_agents` hides workflow-private agents; private spawn refused |
+| T2.4 | Team roster + `list_channel` | `tests/it/p04_subagents_and_mailbox.rs` | `list_channel` follow-up surfaces live DM/group channels and team member handles |
+| T2.5 | Mailbox `send` (vertical DM) | `tests/it/p04_subagents_and_mailbox.rs` | Parent's next FakeLlm request carries worker's DM payload |
+| T2.6 | Mailbox `send` (unit broadcast) | `tests/it/p04_subagents_and_mailbox.rs` | Live child's next FakeLlm request carries lead's broadcast payload |
+| T2.7 | Hyabundle CLI lifecycle | `tests/it/p06_bundle_lifecycle_and_runtime.rs` | `bundle install/list/info/uninstall` stdout markers |
+| T2.8 | Hyabundle spawn package agent | `tests/it/p06_bundle_lifecycle_and_runtime.rs` | Roster lists installed package agent; events stream scripted text |
+| T2.9 | Mailbox `list_channel` | `tests/it/p04_subagents_and_mailbox.rs` | Follow-up carries live DM/group channels and `hya-task-*` team state |
+| T2.13 | User-authored Workflow fan-out/fan-in | `tests/it/p05_workflows.rs` | 4 distinct stage sessions, parallel impls joined into review (`<stage id="impl_a"` + `impl_b`), lead resumes |
+| T2.14 | Workflow stage model routing and replay | `tests/it/p05_workflows.rs` | 3×503 fallback with per-candidate reasoning effort; state survives `env.reopen()` with zero extra requests |
+| T2.15 | Model catalog discovery and offline fallback | `tests/it/p10_model_catalog_discovery.rs` | Pinned merge/cache, empty-list anonymous rediscovery, 401→`hya/offline` + exec explanation, mixed valid/failed/403 parity across CLI, `/v1/models`, `/v1/providers`, `/v1/bootstrap` |
+| T2.16 | Agent model preference | `tests/it/p04_subagents_and_mailbox.rs` | `PUT /v1/agent-models/hya-task` steers spawned subagent model and reports `AGENT_MODEL_SOURCE_REMEMBERED` |
+| T2.17 | Dispatch-time model resolution | `tests/it/p04_subagents_and_mailbox.rs` | Exact override, substring match, bare vendor deferral, and unspecified preference fallback |
+| T2.19 | Installed bundle schemas | `tests/it/p06_bundle_lifecycle_and_runtime.rs` | `bundle schema`, `bundle info`, `read("db://...")`, and `GET /v1/runtime/schemas` claim |
+| T2.20 | `hya/goal-loop` preset + patched evaluator | `tests/it/p07_bundle_policies_and_extras.rs` | Hidden workflow-private agents, `goal-contract` skill read, `goal.evaluate` injection reaches iteration 2 |
+| T2.21 | Agentless Plugin static skill | `tests/it/p06_bundle_lifecycle_and_runtime.rs` | Static skill loads after install and disappears after uninstall |
+| T2.22 | Packaged processes, JS plugins, MCP, hooks, live config | `tests/it/p06_bundle_lifecycle_and_runtime.rs` | Native process + MCP, owner-scoped `hook_refs`, agentless Bun JS, `chat.params` lineage, `model.fallback`, and live `config.yaml` reload on one backend PID |
+| T2.23 | Default subagent bundle worker | `tests/it/p04_subagents_and_mailbox.rs` | Worker mails parent, calls `report`, takes no model round after accepted report, inherits runtime model |
+| T2.24 | Claude import | `tests/it/p06_bundle_lifecycle_and_runtime.rs` | `--claude` import runs packaged `PreToolUse` hook and skill after source deletion; uninstall removes skill |
+| T2.25 | Installed channel policy | `tests/it/p07_bundle_policies_and_extras.rs` | Channel bundle denies child sends without parent delivery; uninstall restores default delivery |
+| T2.26 | `hya-extra/zvec-grep` and `scout` bundles | `tests/it/p07_bundle_policies_and_extras.rs` | Fake `zg` MCP server answers both `hya-main` and spawned `scout` subagent |
+| T2.27 | `hya-extra/jev-model-router` | `tests/it/p07_bundle_policies_and_extras.rs` | Routes `chat.params` to Jev-chosen tier, stays sticky per chain, falls back to `default_tier` on HTTP 500 |
+| T2.28 | `hya-extra/model-fallback` | `tests/it/p07_bundle_policies_and_extras.rs` | Recovers pre-stream `unknown_model` via configured chain and fails cleanly when no chain matches |
+| T2.29 | Bundle-declared HTTP APIs | `tests/it/p06_bundle_lifecycle_and_runtime.rs` | Session `session.usage` tree & single-session endpoints, global `POST`/`PUT`/`GET`/`DELETE`, `kind: bun` capability, `/v1/bundle-apis`, `bundle_api_*` error codes |
+| T2.30 | `hya-extra/token-summary` | `tests/it/p07_bundle_policies_and_extras.rs` | Session-tree per-model usage API (`?scope=tree`, `?scope=session`, 400 `?scope=root`) and Markdown table tool |
+| T2.31 | `wait` and `archive` lifecycle | `tests/it/p04_subagents_and_mailbox.rs` | Report & plain-answer finish wakes without re-steering; empty reply stalls; `archive` stops and `send` wakes |
+| T2.32 | Multi-root Project permission scope | `tests/it/p02_permissions_and_questions.rs` | In-root reads never ask; outside reads ask concrete `<dir>/*`; allow-always is Project-scoped |
+| T2.33 | `--yolo` bypasses `ExternalDirectory` | `tests/it/p02_permissions_and_questions.rs` | Outside-root read runs without raising any permission ask |
+| T2.34 | `bash` cwd outside roots | `tests/it/p02_permissions_and_questions.rs` | Manual mode asks `Action::Bash` only, never `ExternalDirectory` |
+| T2.35 | Secure relay golden path (`t=grpc`) | `tests/it/p38_relay.rs` | Full bridge path (health, Project, ask, SSE, PTY WS, RelayControl refusal, rotate, SIGTERM) + zero-plaintext capture hop |
+| T2.36 | Secure relay golden path (`t=ws`) | `tests/it/p38_relay.rs` | T2.35 over pinned WebSocket binding + zero-plaintext capture hop |
+| T2.37 | Secure relay over TLS | `tests/it/p38_relay.rs` | Private CA (`rcgen`), `hya://` link, prompt through bridge + zero-plaintext capture hop |
+| T2.38 | Headless exec live subagent notice | `tests/it/p09_exec_headless.rs` | Early stop gets `HEADLESS RUN —` notice; lead waits, worker reports, `--include-subagents` captures child |
+| T2.39 | Headless exec 2-notice cap (workers) | `tests/it/p09_exec_headless.rs` | Two ignored notices end the run promptly without waiting out a busy worker |
+| T2.40 | Headless exec open todos | `tests/it/p09_exec_headless.rs` | Open todos alone do not continue the run |
+| T2.41 | Headless exec announced next step | `tests/it/p09_exec_headless.rs` | Announced next step continues with the announcement quoted |
+| T2.42 | Headless exec plain summary | `tests/it/p09_exec_headless.rs` | Plain summary after tool work ends run with no notice |
+| T2.43 | Headless exec 2-notice cap (announcements) | `tests/it/p09_exec_headless.rs` | Two ignored announcement notices end the run |
+| T2.44 | Headless exec `--time-budget` | `tests/it/p09_exec_headless.rs` | Opening names budget; `HEADLESS RUN — FINAL` appears once across tool results & continuation notices |
+| T2.46 | Headless exec grace cutoff | `tests/it/p09_exec_headless.rs` | No continuation turn starts within grace |
+| T2.47 | Headless exec spurious `<summary>` recovery | `tests/it/p09_exec_headless.rs` | Spurious `<summary>` triggers correction and resumes work |
+| T2.48 | Headless exec DSML leak recovery | `tests/it/p09_exec_headless.rs` | Raw DSML tool-call leak triggers notice and recovers via structured tool call |
+| T2.49 | Idle residents: exec stall vs server quiesce | `tests/it/p09_exec_headless.rs` (+ `p04_subagents_and_mailbox.rs`) | Exec reports stalled until archived (no `TEAM QUIESCED`); server team wakes lead with User `TEAM QUIESCED` |
+| T2.50 | `tools.code.mode: only` | `tests/it/p07_bundle_policies_and_extras.rs` | Offers `code-mode__run` + kernel tools only; hidden tool docs inline; direct hidden call refused |
+| T2.51 | `tools.code.mode: with_tools` | `tests/it/p07_bundle_policies_and_extras.rs` | Offers `code-mode__run` alongside usual tools; both nested and direct `read` succeed |
+| T2.52 | Default `tools.code.mode` (`normal`) | `tests/it/p07_bundle_policies_and_extras.rs` | No `code-mode__run` offered; `hya bundle list` shows `hya/code-mode` disabled |
+| T2.53 | Headless exec single-turn step fold | `tests/it/p09_exec_headless.rs` | 12 large `bash` steps against 120k window trigger kernel Rewrite removing `STEP_0_BEGIN` |
+| T2.54 | Store robustness & exit durability | `tests/it/p43_store_robustness.rs` | Default PR smoke verifies clean JSONL/disk parity, clean archive drain, strict serve reject, and exec in-memory fallback; 7 `#[ignore = "nightly OS fault/soak"]` tests run in nightly |
 
 ### Built-in tool coverage
 
 `hya_tool_loader::builtins()` loads the four native tool families. The
 [tool inventory](../architecture/agent-tool-surface.md) lists their registered
-names and compatibility aliases. Track P runs `write`, `read`, and `bash` from
-the base family, `task` from the extended family, `webfetch` from the network
-family, and `send` from the channel family. `todo` is a kernel tool with its
-own bare and full-mode coverage in T1.15.
+names and compatibility aliases. Track P runs `write`, `read`, `edit`, and `bash`
+from the base family, `task`/`wait`/`archive`/`report` from the extended family,
+`webfetch` from the network family, and `send`/`channels` from the channel
+family. `todo` is a kernel tool with both bare and full-mode coverage in T1.15.
 
 ### Multi-agent scenarios need per-agent FakeLlm routing
 
@@ -124,8 +126,7 @@ registered, dispatch is unchanged, so single-agent scenarios are unaffected.
 Mail delivery has no HTTP surface, and only **resident** agents receive it
 (`hya-engine::resident` injects a handle's unread inbox as `[mail from …]` user
 prompts). The recipient's own next model request is therefore the only honest
-delivery oracle — see the module docs of `tests/p16_swarm_mailbox.rs` for the
-ordering rules that keep those scenarios deterministic.
+delivery oracle — see `crates/hya-e2e/tests/it/p04_subagents_and_mailbox.rs`.
 
 ## Track T scenarios (moved to `packages/hya-tui-web`)
 
@@ -148,47 +149,27 @@ replace these.
 | I.v1_grpc_parity | v1 HTTP/gRPC parity | `crates/hya-server/tests/it/v1_grpc_parity.rs` |
 | I.bundle_cli | Bundle CLI | `crates/hya-backend/tests/it/bundle_cli.rs` |
 
-The previous Compat-route index rows (permission/question, MCP, session
-context, compact APIs under `crates/hya-server/tests/compat_*.rs`) were removed
-with the deleted surface; `v1_api.rs` and `v1_grpc_parity.rs` own that coverage
-for the `hya.v1` contract.
-
 ## The registry is enforced
 
 `crates/hya-e2e/matrix.toml` is validated by
-`cargo run -p xtask -- matrix-check` (there is **no** Cargo alias named
-`xtask` in this workspace), which runs as a CI gate step. It fails on:
+`cargo run -p xtask -- matrix-check`, which runs as a CI gate step. It fails on:
 
 - a registered `path` that does not exist;
 - a duplicate or malformed id;
 - a Track P file that is registered but holds no test function;
-- a Track P test file that **no** entry references (reverse drift — an
-  unregistered scenario is as much a registry failure as a phantom row);
+- a Track P test file that **no** entry references (reverse drift);
 - a numbering hole in a `T<major>` series that is neither used nor retired.
 
-Bidirectional drift is enforced for Track P only. Track I rows are index
-pointers into other crates that are deliberately not one-to-one with registry
-rows; checking those would generate false failures.
-
-Correspondence is **file-level**: `p01` carries two ids in one function, `p02`
-carries three, `p03` has one id and two functions.
-
-### ID allocation rule
-
-- A new scenario takes the next free number in its series.
-- Retiring an id requires a `[[retired]]` entry with a real reason — not
-  "unused". If the original intent is unrecoverable, say that.
-- Both rules are enforced by `matrix-check`, so a gap cannot reappear silently.
-  `T1.1` and `T1.6` are retired on exactly those grounds: nothing in this
-  repository's history records what they were meant to cover.
+Correspondence is **file-level**: each consolidated golden-path module carries
+multiple scenario IDs.
 
 ## Adding a scenario
 
 1. Prefer extending Track I if the regression is pure engine/API shape.
-2. For product-path regressions (config, real binary, FakeLlm tool loop), add
-   `crates/hya-e2e/tests/pNN_*.rs` using `E2eEnvBuilder`.
+2. For product-path regressions (config, real binary, FakeLlm tool loop), extend
+   the matching consolidated module under `crates/hya-e2e/tests/it/` using
+   `E2eEnvBuilder` (or `build_headless()` for `hya exec` without a server).
 3. Register the ID in `matrix.toml` and this page.
 4. Keep oracles honest — see [process-e2e.md](process-e2e.md#oracle-rules-do-not-weaken).
-5. Run `cargo test -p hya-e2e --test it pNN_…:: -- --test-threads=1` and
-   `cargo run -p xtask -- matrix-check` before landing; CI runs the full crate
-   suite.
+5. Run `cargo test -p hya-e2e --test it <module>:: -- --test-threads=4` and
+   `cargo run -p xtask -- matrix-check` before landing.

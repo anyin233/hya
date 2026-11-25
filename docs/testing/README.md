@@ -57,9 +57,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --exclude hya-e2e
 ```
 
-`--exclude hya-e2e` keeps Track P out of the multi-threaded workspace run; it
-runs separately with `--test-threads=1`. Run this full gate locally only when
-asked or for a cross-cutting change that touches most crates.
+`--exclude hya-e2e` keeps Track P out of the workspace unit/integration run; it
+runs in its own CI job with `--test-threads=4` against the prebuilt `hya` binary
+(heavy real-OS storage fault/soak tests in `p43_store_robustness.rs` are marked
+`#[ignore = "nightly OS fault/soak"]` and run in the nightly workflow with
+`--ignored --test-threads=1`). Run this full gate locally only when asked or for
+a cross-cutting change that touches most crates.
 
 CI exercises both tracks in different modes, but they are not all separate
 gates: Track P is enforced; Track I remains an index-only classification within
@@ -76,7 +79,7 @@ for the agent surface you changed:
 
 ```sh
 cargo build -p hya-backend --bin hya
-cargo test -p hya-e2e --test it <pNN_scenario>:: -- --test-threads=1
+cargo test -p hya-e2e --test it <pNN_module>:: -- --test-threads=4
 ```
 
 ## Coverage
