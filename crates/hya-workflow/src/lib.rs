@@ -9,6 +9,7 @@ mod error;
 mod model;
 mod render;
 
+pub use compiler::is_valid_identifier;
 pub use error::{SourceLocation, WorkflowCompileError, WorkflowCompileErrorKind};
 pub use model::{
     CompiledWorkflow, FailurePolicy, MAX_WORKFLOW_MODEL_ID_CHARS, MAX_WORKFLOW_REASONING_CHARS,

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use hya_proto::AgentName;
-use hya_workflow::{WorkflowSource, compile};
+use hya_workflow::{WorkflowSource, compile, is_valid_identifier};
 use sha2::{Digest, Sha256};
 
 use crate::error::BundleError;
@@ -261,7 +261,7 @@ fn prepared_bundle_is_canonical(bundle: &Bundle) -> bool {
                 .collect(),
         )
         && bundle.workflow.as_ref().is_none_or(|workflow| {
-            valid_workflow_identifier(&workflow.id)
+            is_valid_identifier(&workflow.id)
                 && is_canonical_workflow_path(&workflow.source_path)
                 && is_hex_digest(&workflow.source_digest)
                 && is_hex_digest(&workflow.compiler_revision)
@@ -1583,7 +1583,7 @@ fn channels_are_canonical(
     is_strictly_sorted(channels.iter().map(|channel| channel.id.as_str()))
         && channels.iter().all(|channel| {
             kinds.insert(channel.kind)
-                && valid_workflow_identifier(&channel.id)
+                && is_valid_identifier(&channel.id)
                 && !channel.participants.is_empty()
                 && is_strictly_ordered(&channel.participants)
                 && is_strictly_ordered(&channel.capabilities)
@@ -1963,13 +1963,6 @@ fn is_canonical_workflow_path(path: &str) -> bool {
         return false;
     };
     !name.is_empty() && !name.contains('/') && name.ends_with(".hya.md")
-}
-
-fn valid_workflow_identifier(value: &str) -> bool {
-    !value.is_empty()
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
-        })
 }
 
 fn is_hex_digest(value: &str) -> bool {

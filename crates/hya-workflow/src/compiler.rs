@@ -171,7 +171,7 @@ fn validate_author(
             "frontmatter `kind` must be `Workflow`",
         ));
     }
-    if !valid_identifier(&author.name) {
+    if !is_valid_identifier(&author.name) {
         return Err(WorkflowCompileError::new(
             source,
             2,
@@ -196,7 +196,7 @@ fn validate_author(
         ));
     }
     for input in author.inputs.keys() {
-        if !valid_identifier(input) {
+        if !is_valid_identifier(input) {
             return Err(WorkflowCompileError::new(
                 source,
                 2,
@@ -211,7 +211,7 @@ fn validate_author(
             .get(id)
             .copied()
             .unwrap_or(SourcePoint { line: 2, column: 1 });
-        if !valid_identifier(id) {
+        if !is_valid_identifier(id) {
             return Err(WorkflowCompileError::new(
                 source,
                 location.line,
@@ -293,7 +293,7 @@ fn validate_author(
             ));
         }
         if let Some(actor) = node.actor.as_deref() {
-            if !valid_identifier(actor) {
+            if !is_valid_identifier(actor) {
                 return Err(WorkflowCompileError::new(
                     source,
                     location.line,
@@ -519,7 +519,7 @@ fn validate_input_template(
                 ),
             ));
         };
-        if !valid_identifier(input) || !inputs.contains_key(input) {
+        if !is_valid_identifier(input) || !inputs.contains_key(input) {
             return Err(WorkflowCompileError::new(
                 source,
                 location.line,
@@ -570,7 +570,7 @@ fn parse_graph(
             continue;
         }
         let Some(arrow_offset) = raw.find("-->") else {
-            if valid_identifier(line) {
+            if is_valid_identifier(line) {
                 record_node(
                     line,
                     SourcePoint {
@@ -681,7 +681,7 @@ fn parse_endpoint_group<'a>(
     }
     if let Some(endpoint) = endpoints
         .iter()
-        .find(|endpoint| !valid_identifier(endpoint.id))
+        .find(|endpoint| !is_valid_identifier(endpoint.id))
     {
         return Err(WorkflowCompileError::graph(
             source,
@@ -1010,7 +1010,10 @@ fn topological_levels(
     Ok(levels)
 }
 
-fn valid_identifier(value: &str) -> bool {
+/// Return whether a Workflow identifier is nonempty and uses only ASCII lowercase letters,
+/// digits, hyphens, and underscores.
+#[must_use]
+pub fn is_valid_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'

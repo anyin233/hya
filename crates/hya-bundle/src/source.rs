@@ -369,9 +369,8 @@ pub(crate) enum SourceProcessKind {
 /// Connection shape of one `resources.mcp` declaration file: the same fields
 /// as hya's `McpServerConfig` (stdio `command` argv or remote `url`).
 ///
-/// The fields beyond `command`/`url` exist to pin the accepted shape under
-/// `deny_unknown_fields`; the runtime spawn path consumes them in a later
-/// phase, so they are unread here.
+/// The other fields pin the accepted shape under `deny_unknown_fields`.
+/// Preparation preserves the raw resource text for the runtime to read.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourceMcpServer {
