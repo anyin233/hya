@@ -42,7 +42,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
-use hya_bundle::{ChannelCapability, ChannelParticipantRole, ChannelTemplateKind};
 use hya_proto::{
     ActorClaim, ArchiveReason, ChannelKind, Event, FinishCause, FinishReason, MailEndpoint,
     MemberId, MemberRunStatus, OwnerRunId, ReportOutcome, RosterStatus, SessionId, SubagentMode,
@@ -669,6 +668,7 @@ mod tests;
 
 mod ending;
 mod episode;
+mod inbox;
 mod recovery;
 mod spawn;
 mod supervisor;
@@ -685,5 +685,3 @@ pub(crate) use ending::resolve_member_target;
 use ending::stop_sidecar;
 use episode::await_episode;
 use episode::episode_task;
-use team::recipient_channel_role;
-use team::resident_delivery_allowed;

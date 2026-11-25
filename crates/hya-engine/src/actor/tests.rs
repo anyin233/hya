@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use super::inbox::{recipient_channel_role, resident_delivery_allowed};
 use super::*;
 use crate::{CreateSession, EventBus};
 use hya_proto::{AgentName, MailKind, ModelRef, SessionKind};
@@ -1975,6 +1976,93 @@ async fn m412_delete_caller_forgets_only_its_wait_stalls() {
         .drain(FinishCause::Shutdown, Duration::from_secs(5))
         .await;
     assert!(!retained, "deleted caller retained its stall notice");
+}
+
+#[tokio::test]
+async fn resident_mail_live_and_catch_up_deliver_only_incoming_work() {
+    for catch_up in [false, true] {
+        let engine = engine().await;
+        let root = root(&engine).await;
+        let supervisor = ResidentSupervisor::start(engine.clone());
+        let driver = supervisor.root_driver_activity(root).await.unwrap();
+        let (child, handle) = parked(&supervisor, root).await;
+        let lease = engine.try_begin_turn(child).unwrap();
+        let team = supervisor.team_with_resident(child).unwrap();
+        let projection = engine.read_projection_shared(root).await.unwrap();
+        let dm = projection.team.resolve_dm(&handle, "main").unwrap();
+        drop(projection);
+        let mut events = engine.bus().subscribe();
+        for (from, body, expected_pending) in [
+            (handle.as_str(), "own mailbox post", false),
+            ("main", "incoming mailbox work", true),
+        ] {
+            let mut committed = engine
+                .store()
+                .append_events(
+                    root,
+                    vec![Event::MailSent {
+                        session: root,
+                        from: from.into(),
+                        to: MailEndpoint::Channel(dm.clone()),
+                        kind: MailKind::Message,
+                        body: body.into(),
+                    }],
+                )
+                .await
+                .unwrap();
+            if catch_up {
+                team.enqueue(TeamEvent::Recover);
+            } else {
+                supervisor.route_envelope(committed.pop().unwrap());
+            }
+            let (flushed, flush) = oneshot::channel();
+            team.enqueue(TeamEvent::Flush(flushed));
+            tokio::time::timeout(Duration::from_secs(5), flush)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(team.lock().residents[&child].pending, expected_pending);
+        }
+        drop(lease);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let envelope = events.recv().await.unwrap();
+                if let Event::ResidentWorkFinished {
+                    session,
+                    handle: finished,
+                    inbox_through,
+                    ..
+                } = envelope.event
+                    && session == root
+                    && finished == handle
+                {
+                    assert_eq!(inbox_through, 2);
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let projection = engine.read_projection_shared(root).await.unwrap();
+        assert_eq!(projection.team.inboxes[&handle].len(), 2);
+        assert_eq!(projection.team.roster[&handle].resident_cursor, 2);
+        let response: String = engine
+            .replay(child)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|envelope| match envelope.event {
+                Event::TextDelta { delta, .. } => Some(delta),
+                _ => None,
+            })
+            .collect();
+        assert!(response.contains("incoming mailbox work"), "{response:?}");
+        assert!(!response.contains("own mailbox post"), "{response:?}");
+        drop(driver);
+        supervisor
+            .drain(FinishCause::Shutdown, DRAIN_DEADLINE)
+            .await;
+    }
 }
 
 #[tokio::test]

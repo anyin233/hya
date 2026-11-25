@@ -1,3 +1,4 @@
+use super::inbox::Inbox;
 use super::*;
 
 /// Current wall-clock as non-zero epoch milliseconds for a heartbeat value.
@@ -763,51 +764,20 @@ impl TeamActor {
                     .get_mut(&session)
                     .filter(|slot| slot.claim == claim)
                 {
-                    let inbox = projection
-                        .team
-                        .inboxes
-                        .get(&slot.handle)
-                        .map_or(&[][..], Vec::as_slice);
+                    let inbox = Inbox::new(&projection, &slot.handle);
                     let inbox_len = inbox.len();
-                    let durable = projection.team.roster.get(&slot.handle).map_or(0, |entry| {
-                        usize::try_from(entry.resident_cursor).unwrap_or(usize::MAX)
-                    });
-                    let cursor = slot.cursor.max(durable);
+                    let cursor = slot.cursor.max(inbox.durable_cursor().unwrap_or(0));
                     let allowed = ChannelPolicy::from_binding(&slot.binding).is_ok_and(|policy| {
                         inbox
-                            .iter()
-                            .skip(cursor)
-                            .map(|index| &projection.team.mail[*index])
-                            .any(|mail| {
-                                if mail.from == slot.handle {
-                                    return false;
-                                }
-                                if mail.from == scope::HARNESS_HANDLE {
-                                    return true;
-                                }
-                                let (kind, role) = recipient_channel_role(
-                                    &projection,
-                                    &mail.to,
-                                    &slot.handle,
-                                    &mail.from,
-                                );
-                                resident_delivery_allowed(
-                                    &policy,
-                                    slot.agent.name.as_str(),
-                                    kind,
-                                    role,
-                                )
-                            })
+                            .resident_mail(cursor, slot.agent.name.as_str(), Some(&policy))
+                            .next()
+                            .is_some()
                     });
-                    if !allowed {
-                        if !slot.pending && inbox_len > cursor {
-                            consumed.push((session, slot.claim, slot.handle.clone(), inbox_len));
-                        }
-                        continue;
-                    }
-                    if inbox_len > slot.cursor.max(durable) {
+                    if allowed {
                         slot.pending = true;
                         slot.notify.notify_one();
+                    } else if !slot.pending && inbox_len > cursor {
+                        consumed.push((session, slot.claim, slot.handle.clone(), inbox_len));
                     }
                 }
             }
@@ -856,36 +826,15 @@ impl TeamActor {
             }
             st.routing_mail.retain(|seq| *seq > projection.last_seq);
             for slot in st.residents.values_mut() {
-                let inbox = projection
-                    .team
-                    .inboxes
-                    .get(&slot.handle)
-                    .map_or(&[][..], Vec::as_slice);
+                let inbox = Inbox::new(&projection, &slot.handle);
                 if inbox.len() <= slot.cursor {
                     continue;
                 }
                 let policy = ChannelPolicy::from_binding(&slot.binding).ok();
                 let has_deliverable = inbox
-                    .iter()
-                    .skip(slot.cursor)
-                    .map(|index| &projection.team.mail[*index])
-                    .any(|message| {
-                        if message.from == slot.handle {
-                            return false;
-                        }
-                        if message.from == scope::HARNESS_HANDLE {
-                            return true;
-                        }
-                        let (kind, role) = recipient_channel_role(
-                            &projection,
-                            &message.to,
-                            &slot.handle,
-                            &message.from,
-                        );
-                        policy.as_ref().is_some_and(|policy| {
-                            resident_delivery_allowed(policy, slot.agent.name.as_str(), kind, role)
-                        })
-                    });
+                    .resident_mail(slot.cursor, slot.agent.name.as_str(), policy.as_ref())
+                    .next()
+                    .is_some();
                 if has_deliverable {
                     slot.pending = true;
                     slot.notify.notify_one();
@@ -925,63 +874,4 @@ impl TeamActor {
             supervisor.retire_team(self);
         }
     }
-}
-
-pub(super) fn recipient_channel_role(
-    projection: &hya_proto::Projection,
-    to: &MailEndpoint,
-    recipient: &str,
-    sender: &str,
-) -> (ChannelTemplateKind, Option<ChannelParticipantRole>) {
-    if let MailEndpoint::Channel(channel) = to
-        && let Some(state) = projection.team.channels.get(channel)
-        && state.kind == ChannelKind::Group
-    {
-        return (
-            ChannelTemplateKind::Unit,
-            Some(if state.unit.as_deref() == Some(recipient) {
-                ChannelParticipantRole::UnitLeader
-            } else {
-                ChannelParticipantRole::DirectReports
-            }),
-        );
-    }
-    let role = if scope::parent_path(recipient) == Some(sender) {
-        Some(ChannelParticipantRole::Child)
-    } else if scope::parent_path(sender) == Some(recipient) {
-        Some(ChannelParticipantRole::Parent)
-    } else {
-        None
-    };
-    let own_dm = match to {
-        MailEndpoint::Handle(_) => false,
-        MailEndpoint::Channel(channel) => {
-            projection.team.channels.get(channel).is_some_and(|state| {
-                state.kind == ChannelKind::Dm
-                    && state.members.len() == 2
-                    && state.members.contains(recipient)
-                    && state.members.contains(sender)
-            })
-        }
-    };
-    (ChannelTemplateKind::ParentDm, role.filter(|_| own_dm))
-}
-
-pub(super) fn resident_delivery_allowed(
-    policy: &ChannelPolicy,
-    agent: &str,
-    kind: ChannelTemplateKind,
-    role: Option<ChannelParticipantRole>,
-) -> bool {
-    let Some(role) = role else { return false };
-    // The direct parent's own DM is the member's mandatory work address.
-    if kind == ChannelTemplateKind::ParentDm && role == ChannelParticipantRole::Child {
-        return true;
-    }
-    [ChannelCapability::ResidentMail, ChannelCapability::FollowUp]
-        .into_iter()
-        .all(|capability| match kind {
-            ChannelTemplateKind::Unit => policy.allows_unit(capability, agent, role),
-            ChannelTemplateKind::ParentDm => policy.allows_parent_dm(capability, agent, role),
-        })
 }
