@@ -4,23 +4,22 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use hya_bundle::{PreparedResource, PreparedSchema};
 use hya_engine::runtime_registry::{RuntimeSourceSkill, SourceSchema};
 use hya_engine::{
     RuntimeRefreshError, RuntimeRegistry, RuntimeSource, RuntimeSourceExport, RuntimeSourceId,
     RuntimeSourceKind, RuntimeSourceOwner,
 };
-use hya_mcp::{McpServerConfig, McpStatus, PreparedMcpServer};
-use hya_plugin::PreparedPlugin;
+use hya_mcp::{McpServerConfig, McpStatus};
 use hya_plugin::config::PluginSpec;
-use hya_plugin::messages::{PluginContributionSet, SkillContribution};
 use hya_proto::ConfigGeneration;
-use hya_tool::{SkillCatalogEntry, Tool, ToolPermission};
+use hya_tool::{Tool, ToolPermission};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::plugin_adapter::PluginHostAdapter;
+#[cfg(test)]
+use crate::bundle_runtime::source::{adapt_prepared_bundle_skills, prepared_static_bundle_source};
+use crate::runtime_mcp_source::normalize_mcp;
 
 pub(crate) type SourceId = RuntimeSourceId;
 
@@ -239,7 +238,7 @@ pub(crate) struct PreparedSource {
     skills: Vec<RuntimeSourceSkill>,
     resources: BTreeMap<String, Value>,
     schemas: Vec<SourceSchema>,
-    hooks: Option<Arc<dyn hya_engine::hooks::HookDispatcher>>,
+    pub(crate) hooks: Option<Arc<dyn hya_engine::hooks::HookDispatcher>>,
 }
 
 pub(crate) struct PreparedFailure {
@@ -293,21 +292,6 @@ impl DesiredSource {
     fn into_record(self) -> (SourceId, DesiredRecord) {
         (self.id, DesiredRecord { spec: self.spec })
     }
-}
-
-fn normalize_mcp(mut spec: McpServerConfig) -> McpServerConfig {
-    spec.enabled = Some(spec.enabled != Some(false));
-    spec.env = Some(spec.env.unwrap_or_default());
-    spec.timeout_ms = Some(
-        spec.timeout_ms
-            .unwrap_or(hya_mcp::client::DEFAULT_CALL_TIMEOUT.as_millis() as u64),
-    );
-    spec.transport = Some(match (spec.url.is_some(), spec.transport.as_deref()) {
-        (false, _) => "stdio".to_string(),
-        (true, None | Some("http" | "streamable_http")) => "http".to_string(),
-        (true, Some(value)) => value.to_string(),
-    });
-    spec
 }
 
 impl DesiredSpec {
@@ -420,262 +404,6 @@ impl PreparedFailure {
             error: error.into(),
         }
     }
-}
-
-/// Convert prepared bundle Skill resources through the shared contribution seam.
-pub(crate) fn adapt_prepared_bundle_skills(
-    bundle_id: &str,
-    resources: &[PreparedResource],
-    contributions: &PluginContributionSet,
-) -> Result<Vec<SkillCatalogEntry>, ReconcileError> {
-    Ok(
-        prepared_bundle_skill_exports(bundle_id, resources, contributions)?
-            .into_iter()
-            .map(|skill| skill.entry().clone())
-            .collect(),
-    )
-}
-
-/// Prepare a static bundle source whose Skills are already validated and parsed.
-pub(crate) fn prepared_static_bundle_source(
-    bundle_id: &str,
-    resources: &[PreparedResource],
-    contributions: &PluginContributionSet,
-) -> Result<PreparedSource, ReconcileError> {
-    let skills = prepared_bundle_skill_exports(bundle_id, resources, contributions)?;
-    let declaration_digest = digest_static_bundle_skills(bundle_id, &skills);
-    Ok(PreparedSource::new(
-        SourceId::bundle(bundle_id),
-        declaration_digest,
-        Arc::new(()),
-        Vec::new(),
-    )
-    .with_skills(skills))
-}
-
-/// Resolve one prepared bundle's declared schema extensions into runtime
-/// scheme claims.
-///
-/// Bundle tools are view-scoped (sidecar activation), so the claim names the
-/// owning tool by its `bundle:{id}/tool/{local}` stable id — the spelling a
-/// bundle agent's compiled view resolves the sidecar tool under — rather than
-/// a registry export.
-pub(crate) fn bundle_schema_claims(
-    bundle_id: &str,
-    schemas: &[PreparedSchema],
-    tools: &[PreparedResource],
-) -> Result<Vec<SourceSchema>, ReconcileError> {
-    let mut claims = Vec::with_capacity(schemas.len());
-    for schema in schemas {
-        let Some(tool) = tools.iter().find(|tool| tool.local_id == schema.tool) else {
-            return Err(ReconcileError::InvalidPrepared(format!(
-                "bundle `{bundle_id}` schema `{}` references unknown tool `{}`",
-                schema.scheme, schema.tool
-            )));
-        };
-        claims.push(SourceSchema {
-            scheme: schema.scheme.clone(),
-            canonical_tool: tool.stable_id.clone(),
-            writable: schema.writable,
-        });
-    }
-    Ok(claims)
-}
-
-/// Validate and parse every prepared bundle Skill exactly once at the contribution seam.
-pub(crate) fn prepared_bundle_skill_exports(
-    bundle_id: &str,
-    resources: &[PreparedResource],
-    contributions: &PluginContributionSet,
-) -> Result<Vec<RuntimeSourceSkill>, ReconcileError> {
-    contributions.validate(bundle_id).map_err(|error| {
-        ReconcileError::InvalidPrepared(format!("Skill contribution validation failed: {error}"))
-    })?;
-
-    let mut prepared_by_id = BTreeMap::new();
-    for resource in resources {
-        let expected_stable_id = format!("bundle:{bundle_id}/skill/{}", resource.local_id);
-        if resource.stable_id != expected_stable_id {
-            return Err(ReconcileError::InvalidPrepared(format!(
-                "prepared Skill `{}` has unexpected stable id `{}`",
-                resource.local_id, resource.stable_id
-            )));
-        }
-        if prepared_by_id
-            .insert(resource.local_id.as_str(), resource)
-            .is_some()
-        {
-            return Err(ReconcileError::InvalidPrepared(format!(
-                "duplicate prepared Skill `{}`",
-                resource.local_id
-            )));
-        }
-    }
-    if !contributions.skills.is_empty() && prepared_by_id.len() != contributions.skills.len() {
-        return Err(ReconcileError::InvalidPrepared(format!(
-            "prepared Skill count {} does not match contribution count {}",
-            prepared_by_id.len(),
-            contributions.skills.len()
-        )));
-    }
-
-    let mut contribution_by_id = BTreeMap::new();
-    for contribution in &contributions.skills {
-        if contribution_by_id
-            .insert(contribution.id.as_str(), contribution)
-            .is_some()
-        {
-            return Err(ReconcileError::InvalidPrepared(format!(
-                "duplicate Skill contribution `{}`",
-                contribution.id
-            )));
-        }
-    }
-
-    let mut exports = Vec::with_capacity(resources.len());
-    for (local_id, resource) in prepared_by_id {
-        if !contributions.skills.is_empty() {
-            let Some(contribution) = contribution_by_id.get(local_id) else {
-                return Err(ReconcileError::InvalidPrepared(format!(
-                    "prepared Skill `{local_id}` is missing from contributions"
-                )));
-            };
-            if contribution.content != resource.content || contribution.digest != resource.digest {
-                return Err(ReconcileError::InvalidPrepared(format!(
-                    "Skill contribution `{local_id}` differs from prepared id/content/digest"
-                )));
-            }
-        }
-        let contribution = SkillContribution {
-            id: local_id.to_string(),
-            content: resource.content.clone(),
-            digest: resource.digest.clone(),
-        };
-        let path = PathBuf::from(format!("bundle:{bundle_id}/{}", resource.source_path));
-        let entry = parse_skill_contribution(&contribution, path)?;
-        exports.push(RuntimeSourceSkill::new(
-            resource.stable_id.clone(),
-            resource.local_id.clone(),
-            resource.aliases.clone(),
-            resource.digest.clone(),
-            resource.content.clone(),
-            entry,
-        ));
-    }
-    Ok(exports)
-}
-
-/// Parse one shared Skill contribution into runtime metadata at the declaration seam.
-fn parse_skill_contribution(
-    contribution: &SkillContribution,
-    path: PathBuf,
-) -> Result<SkillCatalogEntry, ReconcileError> {
-    let parsed = crate::skill_catalog::parse_skill(&contribution.content).ok_or_else(|| {
-        ReconcileError::InvalidPrepared(format!(
-            "Skill contribution `{}` has invalid SKILL.md frontmatter",
-            contribution.id
-        ))
-    })?;
-    if parsed.name != contribution.id {
-        return Err(ReconcileError::InvalidPrepared(format!(
-            "parsed Skill name `{}` does not match contribution id `{}`",
-            parsed.name, contribution.id
-        )));
-    }
-    let dir = path.parent().map_or_else(PathBuf::new, Path::to_path_buf);
-    Ok(SkillCatalogEntry {
-        name: parsed.name,
-        description: parsed.description,
-        content: parsed.content,
-        allowed_tools: parsed.allowed_tools,
-        model: parsed.model,
-        path,
-        dir,
-        origin: hya_tool::SkillCatalogOrigin::Virtual,
-        disable_model_invocation: parsed.disable_model_invocation,
-    })
-}
-
-/// Build deterministic declaration identity bytes for a static bundle Skill source.
-fn digest_static_bundle_skills(bundle_id: &str, skills: &[RuntimeSourceSkill]) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(b"hya:static-bundle-skill-declaration:v1\0");
-    update_bytes(&mut digest, bundle_id.as_bytes());
-    for skill in skills {
-        update_bytes(&mut digest, skill.stable_id().as_bytes());
-        update_bytes(&mut digest, skill.local_id().as_bytes());
-        update_bytes(&mut digest, skill.digest().as_bytes());
-        update_bytes(&mut digest, skill.content().as_bytes());
-    }
-    digest.finalize().into()
-}
-
-/// Prepare one dynamic plugin source through the same Skill parser and source view.
-fn prepared_plugin_source(
-    plugin: PreparedPlugin,
-    owner: Arc<PluginHostAdapter>,
-) -> Result<PreparedSource, ReconcileError> {
-    let id = SourceId::plugin(plugin.id());
-    let contributions = plugin.contributions();
-    contributions.validate(plugin.id()).map_err(|error| {
-        ReconcileError::InvalidPrepared(format!("plugin contribution validation failed: {error}"))
-    })?;
-    let skills = contributions
-        .skills
-        .iter()
-        .map(|contribution| {
-            let path = PathBuf::from(format!(
-                "plugin:{}/skills/{}/SKILL.md",
-                plugin.id(),
-                contribution.id
-            ));
-            let entry = parse_skill_contribution(contribution, path)?;
-            Ok(RuntimeSourceSkill::new(
-                format!("plugin:{}/skill/{}", plugin.id(), contribution.id),
-                contribution.id.clone(),
-                Vec::new(),
-                contribution.digest.clone(),
-                contribution.content.clone(),
-                entry,
-            ))
-        })
-        .collect::<Result<Vec<_>, ReconcileError>>()?;
-    let mut digest = Sha256::new();
-    digest.update(b"hya:plugin-declaration:v1\0");
-    update_bytes(&mut digest, plugin.canonical_declaration());
-    let declaration_digest = digest.finalize().into();
-    // Contributed tools are composed into their qualified provider-facing
-    // name by the host: `{plugin_id}__{declared local name}`. The inner tool
-    // keeps the declared name for its `tool/call` wire requests; the
-    // `NamedTool` wrapper exposes only the qualified spelling to the
-    // registry, schemas, and permission plane.
-    let exports = plugin
-        .tools()
-        .into_iter()
-        .map(|tool| {
-            let local_name = tool.name().to_string();
-            let qualified = format!("{}__{local_name}", plugin.id());
-            let exposed = owner.named_tool(qualified, tool);
-            PreparedExport::tool(local_name, Vec::new(), exposed, ToolPermission::Tool)
-        })
-        .collect();
-    Ok(PreparedSource::new(id, declaration_digest, owner, exports).with_skills(skills))
-}
-
-/// The host is retained only by its published source, alongside its tools.
-pub(crate) fn prepared_plugin_host(
-    host: hya_plugin::PluginHost,
-) -> Result<PreparedSource, ReconcileError> {
-    let plugin = host.prepared_plugins().into_iter().next().ok_or_else(|| {
-        ReconcileError::InvalidPrepared("plugin host has no prepared plugin".into())
-    })?;
-    let has_hooks = !plugin.contributions().hooks.is_empty();
-    let owner = Arc::new(PluginHostAdapter::new(Arc::new(host)));
-    let mut source = prepared_plugin_source(plugin, owner.clone())?;
-    if has_hooks {
-        source.hooks = Some(owner);
-    }
-    Ok(source)
 }
 
 impl From<PreparedSource> for PreparedResult {
@@ -1237,79 +965,9 @@ impl hya_server::McpControl for RuntimeMcpControl {
 pub(crate) async fn prepare_desired_source(source: DesiredSource) -> PreparedResult {
     let id = source.id().clone();
     match source.spec {
-        DesiredSpec::Mcp(mut config) => {
-            for value in config.env.iter_mut().flat_map(|env| env.values_mut()) {
-                match crate::config::resolve_secret(value) {
-                    Ok(resolved) => *value = resolved,
-                    Err(error) => {
-                        return PreparedFailure::new(id, format!("MCP_ENV_FAILED: {error:#}"))
-                            .into();
-                    }
-                }
-            }
-            match hya_mcp::prepare(id.configured_id().to_string(), config).await {
-                Ok(server) => PreparedResult::Ready(prepared_mcp_source(id, server)),
-                Err(error) => PreparedResult::Failed(PreparedFailure::new(
-                    id,
-                    format!("MCP_START_FAILED: {error}"),
-                )),
-            }
-        }
-        DesiredSpec::Plugin(spec) => {
-            let (host, failures) = hya_plugin::PluginHost::connect_all_observed(
-                vec![spec],
-                crate::runtime::host_info(),
-            )
-            .await;
-            let prepared = match failures.into_values().next() {
-                Some(error) => Err(format!("PLUGIN_START_FAILED: {error}")),
-                None => prepared_plugin_host(host).map_err(|error| error.to_string()),
-            };
-            match prepared {
-                Ok(source) => source.into(),
-                Err(error) => PreparedFailure::new(id, error).into(),
-            }
-        }
+        DesiredSpec::Mcp(config) => crate::runtime_mcp_source::prepare(id, config).await,
+        DesiredSpec::Plugin(spec) => crate::plugin_adapter::source::prepare(id, spec).await,
     }
-}
-
-struct McpSourceOwner(PreparedMcpServer);
-impl RuntimeSourceOwner for McpSourceOwner {
-    fn shutdown(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
-        Box::pin(self.0.shutdown())
-    }
-}
-
-fn prepared_mcp_source(id: SourceId, server: PreparedMcpServer) -> PreparedSource {
-    let tools = server.tools();
-    let resources = server.resources();
-    let owner = Arc::new(McpSourceOwner(server));
-    let declaration_digest = digest_mcp_declaration(&tools, &resources);
-    let exports = tools
-        .into_iter()
-        .map(|tool| {
-            let declared_id = tool.name().to_string();
-            PreparedExport::tool(declared_id, Vec::new(), tool, ToolPermission::Mcp)
-        })
-        .collect();
-    PreparedSource::new(id, declaration_digest, owner, exports).with_resources(resources)
-}
-
-fn digest_mcp_declaration(
-    tools: &[Arc<dyn Tool>],
-    resources: &BTreeMap<String, Value>,
-) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(b"hya:mcp-declaration:v1\0");
-    for tool in tools {
-        if let Ok(schema) = serde_json::to_vec(&tool.schema()) {
-            update_bytes(&mut digest, &schema);
-        }
-    }
-    if let Ok(encoded) = serde_json::to_vec(resources) {
-        update_bytes(&mut digest, &encoded);
-    }
-    digest.finalize().into()
 }
 
 fn trace_publication(outcome: &ReconcileOutcome) {
@@ -1388,7 +1046,7 @@ fn reject_after_unlock<T>(
     Err(error)
 }
 
-fn update_bytes(digest: &mut Sha256, value: &[u8]) {
+pub(crate) fn update_bytes(digest: &mut Sha256, value: &[u8]) {
     digest.update(value.len().to_be_bytes());
     digest.update(value);
 }

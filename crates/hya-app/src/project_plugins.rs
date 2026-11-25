@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use hya_engine::{RuntimeSource, RuntimeSourceId};
 use hya_plugin::{HostInfo, PluginHost};
 
-use crate::runtime_reconcile::prepared_plugin_host;
+use crate::plugin_adapter::source::prepared_plugin_host;
 
 /// How a [`crate::ProjectScopeRefresh`] loads project plugins.
 #[derive(Clone, Debug)]

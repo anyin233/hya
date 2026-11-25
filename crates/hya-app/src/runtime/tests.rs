@@ -3356,7 +3356,7 @@ export default {server: async () => ({
             .collect(),
         ..PluginContributionSet::default()
     };
-    let source = crate::runtime_reconcile::prepared_static_bundle_source(
+    let source = crate::bundle_runtime::source::prepared_static_bundle_source(
         "hya/materialized",
         &[selected.clone(), unselected.clone()],
         &full_contributions,

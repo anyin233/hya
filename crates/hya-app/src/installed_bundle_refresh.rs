@@ -15,7 +15,7 @@ use sha2::Digest as _;
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::bundle_config::BundleConfigResolver;
-use crate::runtime_reconcile::{bundle_schema_claims, prepared_static_bundle_source};
+use crate::bundle_runtime::source::{bundle_schema_claims, prepared_static_bundle_source};
 
 /// First-party bundles published with the runtime catalog, including workflows
 /// and the TUI extension of the built-in panes.
