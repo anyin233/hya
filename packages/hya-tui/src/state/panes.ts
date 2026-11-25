@@ -303,7 +303,6 @@ export function paneRects(root: PaneNode, rect: Rect = { left: 0, top: 0, right:
     : node.direction === direction ? node.children.reduce((sum, child) => sum + minimum(child.node, direction), 0) : Math.max(...node.children.map((child) => minimum(child.node, direction)))
   return layoutRects(root, rect, minimum)
 }
-export function paneFocusRects(root: PaneNode): Map<string, Rect> { return paneRects(root) }
 function orderedPanes(layout: PaneLayout, measured?: ReadonlyMap<string, Rect>): { id: string; rect: Rect }[] {
   const bounds = measured ?? paneRects(layout.root)
   return selectablePanes(layout.root).flatMap((pane) => { const rect = bounds.get(pane.id); return rect && rect.right > rect.left && rect.bottom > rect.top ? [{ id: pane.id, rect }] : [] })

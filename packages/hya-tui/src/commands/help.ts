@@ -237,18 +237,3 @@ export function helpPickerRows(commands: readonly CommandEntry[]): PickerRow[] {
 }
 
 export const helpPickerHint = "↑↓ scroll · type to filter (a key, a command, or a group) · Esc closes"
-
-/** Plain-text key help (the `help` view shown when the TUI cannot reach its backend). */
-export function keyHelpText(): string {
-  const lines: string[] = []
-  let group: HelpGroup | undefined
-  for (const row of helpRows([])) {
-    if (row.group !== group) {
-      group = row.group
-      lines.push(lines.length ? "" : "", group)
-    }
-    lines.push(`  ${row.keys.padEnd(26)} ${row.description}`)
-  }
-  lines.push("", "Commands", "  Type / with an empty message to open the command pane; /help lists every command.")
-  return lines.join("\n").trimStart()
-}
