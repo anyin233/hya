@@ -2,7 +2,7 @@
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
 use hya_tool::tool::obj_schema;
-use hya_tool::{ProjectActivityError, ProjectActivityRequest, Tool, ToolCtx, ToolError};
+use hya_tool::{ProjectActivityRequest, Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -45,22 +45,12 @@ impl Tool for ProjectActivityTool {
                 limit: input.limit,
                 include_self: input.include_self,
             })
-            .await
-            .map_err(map_err)?;
+            .await?;
         Ok(json!({
             "title": "Project activity",
             "sessions": result.sessions,
             "files": result.files,
             "note": result.note,
         }))
-    }
-}
-
-fn map_err(error: ProjectActivityError) -> ToolError {
-    match error {
-        ProjectActivityError::Unavailable => {
-            ToolError::Other("project activity service unavailable".to_string())
-        }
-        ProjectActivityError::Rejected(message) => ToolError::Input(message),
     }
 }

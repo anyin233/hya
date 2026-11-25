@@ -6,13 +6,12 @@ use hya_tool::{MailboxError, Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-fn map_err(err: MailboxError) -> ToolError {
-    match err {
+fn channel_error(error: MailboxError) -> ToolError {
+    match error {
         MailboxError::Unavailable => {
             ToolError::Other("mailbox is only available inside a running team".to_string())
         }
-        MailboxError::Overloaded(message) => ToolError::Overloaded(message),
-        MailboxError::Rejected(message) => ToolError::Input(message),
+        error => error.into(),
     }
 }
 
@@ -91,7 +90,7 @@ impl Tool for SendTool {
             }
             None => ctx.mailbox.send_default(input.body).await,
         }
-        .map_err(map_err)?;
+        .map_err(channel_error)?;
         let address = send_address(&receipt.to);
         Ok(json!({
             "title": format!("Sent to {address}"),
@@ -135,8 +134,8 @@ impl Tool for ListChannelTool {
     }
 
     async fn execute(&self, ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {
-        let rows = ctx.mailbox.list_channels().await.map_err(map_err)?;
-        let team = ctx.mailbox.team_status().await.map_err(map_err)?;
+        let rows = ctx.mailbox.list_channels().await.map_err(channel_error)?;
+        let team = ctx.mailbox.team_status().await.map_err(channel_error)?;
         let rendered: Vec<String> = rows
             .iter()
             .map(|row| {

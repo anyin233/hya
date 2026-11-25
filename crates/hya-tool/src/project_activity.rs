@@ -56,6 +56,15 @@ pub enum ProjectActivityError {
     Rejected(String),
 }
 
+impl From<ProjectActivityError> for crate::ToolError {
+    fn from(error: ProjectActivityError) -> Self {
+        match error {
+            ProjectActivityError::Unavailable => Self::Other(error.to_string()),
+            ProjectActivityError::Rejected(message) => Self::Input(message),
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct ProjectActivityPlane {
     tx: Option<mpsc::UnboundedSender<ProjectActivityRequestMsg>>,

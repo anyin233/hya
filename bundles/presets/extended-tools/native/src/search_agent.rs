@@ -2,7 +2,7 @@
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
 use hya_tool::tool::obj_schema;
-use hya_tool::{MailboxError, Tool, ToolCtx, ToolError};
+use hya_tool::{Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -37,11 +37,7 @@ impl Tool for SearchAgentTool {
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
         let input: SearchAgentInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        let rows = ctx
-            .mailbox
-            .search_agents(input.query)
-            .await
-            .map_err(map_err)?;
+        let rows = ctx.mailbox.search_agents(input.query).await?;
         let rendered: Vec<String> = rows
             .iter()
             .map(|row| {
@@ -76,13 +72,5 @@ impl Tool for SearchAgentTool {
                 "degraded": row.degraded,
             })).collect::<Vec<_>>(),
         }))
-    }
-}
-
-fn map_err(err: MailboxError) -> ToolError {
-    match err {
-        MailboxError::Unavailable => ToolError::Other("mailbox service unavailable".to_string()),
-        MailboxError::Overloaded(message) => ToolError::Overloaded(message),
-        MailboxError::Rejected(message) => ToolError::Input(message),
     }
 }
