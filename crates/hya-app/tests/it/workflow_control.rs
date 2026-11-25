@@ -16,8 +16,8 @@ use hya_app::{
 use hya_bundle::{BundleCatalog, BundleSource, PreparedCatalog, SourceFile, prepare_package};
 use hya_engine::{AgentCatalog, CreateSession, RuntimeRegistry};
 use hya_proto::{
-    ToolCallId, WorkflowAvailability, WorkflowCommand, WorkflowCommandResult, WorkflowRevision,
-    WorkflowRunId, WorkflowRunStatus,
+    ToolCallId, WorkflowAvailability, WorkflowCommand, WorkflowCommandResult, WorkflowRunId,
+    WorkflowRunStatus,
 };
 use hya_store::SessionStore;
 use hya_tool::ToolOperation;
@@ -813,7 +813,7 @@ async fn workflow_catalog_precedence_revision_and_binding_contract() {
         &prepared_workflow.source,
     ))
     .expect("prepared Workflow source compiles");
-    let compiler_only_revision = WorkflowRevision::from_bytes(compiled.revision().as_bytes());
+    let compiler_only_revision = compiled.revision();
     assert_ne!(
         project_catalog
             .resolve(installed_reference)

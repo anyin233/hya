@@ -12,11 +12,21 @@ mod render;
 pub use error::{SourceLocation, WorkflowCompileError, WorkflowCompileErrorKind};
 pub use model::{
     CompiledWorkflow, FailurePolicy, MAX_WORKFLOW_MODEL_ID_CHARS, MAX_WORKFLOW_REASONING_CHARS,
-    StageMode, VerifySpec, WorkflowDefinition, WorkflowLevel, WorkflowModelAssignment,
-    WorkflowModelCandidate, WorkflowPlan, WorkflowRevision, WorkflowStage,
+    StageMode, VerifySpec, WorkflowDefinition, WorkflowLevel, WorkflowPlan, WorkflowStage,
 };
 pub use render::{MAX_PREDECESSOR_OUTPUT_BYTES, RenderedStage, StageEvidence, WorkflowRenderError};
 
+/// Compatibility alias for the shared Workflow model assignment.
+#[deprecated(note = "Use hya_proto::WorkflowModelAssignment")]
+pub type WorkflowModelAssignment = hya_proto::WorkflowModelAssignment;
+
+/// Compatibility alias for the shared Workflow model candidate.
+#[deprecated(note = "Use hya_proto::WorkflowModelCandidate")]
+pub type WorkflowModelCandidate = hya_proto::WorkflowModelCandidate;
+
+/// Compatibility alias for the shared Workflow revision.
+#[deprecated(note = "Use hya_proto::WorkflowRevision")]
+pub type WorkflowRevision = hya_proto::WorkflowRevision;
 /// Borrowed Workflow document and its display identity.
 #[derive(Clone, Copy, Debug)]
 pub struct WorkflowSource<'a> {

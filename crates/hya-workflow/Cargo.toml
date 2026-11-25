@@ -11,7 +11,9 @@ version-reference = "hya"
 workspace = true
 
 [dependencies]
+hya-proto = { workspace = true }
 serde = { workspace = true }
+serde_ignored = "0.1"
 serde_norway = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }

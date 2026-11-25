@@ -386,6 +386,19 @@ run without `name` uses the Session's selected Workflow.
 path. It returns a read-only `CompiledWorkflow` with metadata, normalized
 Stages and levels, automatic join rendering, and a canonical revision.
 
+The compiler and runtime share the Workflow model types from `hya_proto`.
+`CompiledWorkflow::revision() -> WorkflowRevision` returns the canonical SHA-256
+revision. `WorkflowStage::model()` and `VerifySpec::model()` return
+`Option<&WorkflowModelAssignment>`. An assignment contains a string `id`, an
+optional string `reasoning`, and an ordered `Vec<WorkflowModelCandidate>`
+`fallback`. Each candidate has its own `id` and `reasoning`. The old
+`hya_workflow` type paths are deprecated aliases.
+
+```rust,ignore
+let workflow = hya_workflow::compile(hya_workflow::WorkflowSource::new("build.hya.md", source))?;
+let revision: hya_proto::WorkflowRevision = workflow.revision();
+let model = workflow.plan().stages()[0].model().map(|model| model.id());
+```
 `hya-engine::run_workflow` accepts only a `CompiledWorkflow` plus a resolved
 `WorkflowRunContext`. It does not parse source or rebuild the plan.
 

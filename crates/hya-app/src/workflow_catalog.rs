@@ -170,7 +170,7 @@ fn filesystem_row(path: PathBuf, root: &Path, tier: &str) -> (String, Filesystem
             identity: WorkflowIdentity {
                 source,
                 name: workflow.definition().name().to_string(),
-                revision: WorkflowRevision::from_bytes(workflow.revision().as_bytes()),
+                revision: workflow.revision(),
             },
             workflow: Arc::new(workflow),
             display_path: path.display().to_string(),
@@ -309,8 +309,7 @@ impl WorkflowCatalog {
                     workflow.definition().name()
                 )));
             }
-            let compiler_revision =
-                WorkflowRevision::from_bytes(workflow.revision().as_bytes()).to_string();
+            let compiler_revision = workflow.revision().to_string();
             if prepared.compiler_revision != compiler_revision {
                 return Err(WorkflowControlError::InvalidSource(format!(
                     "prepared Workflow `{}` compiler revision does not match current compiler",
@@ -578,32 +577,11 @@ fn workflow_info(entry: &ResolvedWorkflow) -> WorkflowInfo {
                     .collect(),
                 actor: stage.actor().map(str::to_string),
                 mode: stage.mode().to_string(),
-                worker_model: stage.model().map(workflow_model_assignment),
-                verifier_model: stage
-                    .verify()
-                    .and_then(|verify| verify.model())
-                    .map(workflow_model_assignment),
+                worker_model: stage.model().cloned(),
+                verifier_model: stage.verify().and_then(|verify| verify.model()).cloned(),
             })
             .collect(),
         path: entry.display_path().to_string(),
-    }
-}
-
-/// Convert one compiler-owned assignment into the string-based wire mirror.
-pub(super) fn workflow_model_assignment(
-    assignment: &hya_workflow::WorkflowModelAssignment,
-) -> hya_proto::WorkflowModelAssignment {
-    hya_proto::WorkflowModelAssignment {
-        id: assignment.id().to_string(),
-        reasoning: assignment.reasoning().map(str::to_string),
-        fallback: assignment
-            .fallback()
-            .iter()
-            .map(|candidate| hya_proto::WorkflowModelCandidate {
-                id: candidate.id().to_string(),
-                reasoning: candidate.reasoning().map(str::to_string),
-            })
-            .collect(),
     }
 }
 

@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use hya_proto::{ActorClaim, ModelRef, SessionId, WorkflowRunId};
+use hya_proto::{ActorClaim, ModelRef, SessionId, WorkflowModelAssignment, WorkflowRunId};
 use hya_provider::ReasoningEffort;
 use hya_tool::AgentDef;
-use hya_workflow::{CompiledWorkflow, StageMode, WorkflowModelAssignment, WorkflowStage};
+use hya_workflow::{CompiledWorkflow, StageMode, WorkflowStage};
 use tokio_util::sync::CancellationToken;
 
 use crate::AgentResourcePolicy;

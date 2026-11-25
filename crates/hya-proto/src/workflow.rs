@@ -133,6 +133,20 @@ pub struct WorkflowModelCandidate {
     pub reasoning: Option<String>,
 }
 
+impl WorkflowModelCandidate {
+    /// Base model reference without a Workflow variant suffix.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Author-provided reasoning effort label, before runtime capability parsing.
+    #[must_use]
+    pub fn reasoning(&self) -> Option<&str> {
+        self.reasoning.as_deref()
+    }
+}
+
 /// Preferred authored model plus its ordered fallback candidates.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkflowModelAssignment {
@@ -144,6 +158,26 @@ pub struct WorkflowModelAssignment {
     /// Ordered fallback tail.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fallback: Vec<WorkflowModelCandidate>,
+}
+
+impl WorkflowModelAssignment {
+    /// Preferred base model reference without a Workflow variant suffix.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Preferred author-provided reasoning effort label.
+    #[must_use]
+    pub fn reasoning(&self) -> Option<&str> {
+        self.reasoning.as_deref()
+    }
+
+    /// Ordered fallback tail after the preferred model.
+    #[must_use]
+    pub fn fallback(&self) -> &[WorkflowModelCandidate] {
+        &self.fallback
+    }
 }
 
 /// Candidate selected during Workflow admission, with canonical effort.

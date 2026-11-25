@@ -13,9 +13,10 @@ use hya_provider::ReasoningEffort;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 
+pub use hya_proto::{WorkflowModelAssignment, WorkflowModelCandidate, WorkflowRevision};
 pub use hya_workflow::{
-    CompiledWorkflow, FailurePolicy, StageMode, VerifySpec, WorkflowDefinition,
-    WorkflowModelAssignment, WorkflowModelCandidate, WorkflowPlan, WorkflowRevision, WorkflowStage,
+    CompiledWorkflow, FailurePolicy, StageMode, VerifySpec, WorkflowDefinition, WorkflowPlan,
+    WorkflowStage,
 };
 pub use run::{
     PreparedWorkflowRun, StageReport, StageStatus, WorkflowRunContext, WorkflowRunReport,
