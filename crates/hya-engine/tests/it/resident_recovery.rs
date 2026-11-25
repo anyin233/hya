@@ -855,7 +855,9 @@ async fn superseded_stream_boundary(boundary: SupersededBoundary) {
             provider_data: None,
         },
     }))
-    .unwrap();
+    // The superseded turn may already have dropped its stream: it can then
+    // write nothing either, which the assertions below still check.
+    .ok();
     drop(send);
     let ended = tokio::time::timeout(Duration::from_secs(1), async {
         while engine.turn_active(child) || supervisor.episode_count() != 0 {
