@@ -20,6 +20,7 @@ use self::source::{bundle_schema_claims, prepared_bundle_skill_exports};
 use crate::bundle_config::BundleConfigLocation;
 use crate::plugin_adapter::{PluginHostAdapter, session_usage_reader};
 
+pub mod sidecar;
 pub(crate) mod source;
 
 #[derive(Clone)]

@@ -3,7 +3,7 @@
 use crate::resident_fixture::{ResidentTurn, run_residents};
 use hya_engine::CreateSession;
 use hya_engine::resident::ResolvedSpawnMember;
-use hya_tool::{ResolvedTool, SpawnMember};
+use hya_tool::SpawnMember;
 
 /// Test shim: wrap an installed-bundle catalog as an [`AgentCatalog`] over
 /// the compiled-in built-ins.
@@ -16,10 +16,14 @@ fn agent_bundles(bundles: impl IntoIterator<Item = Bundle>) -> Vec<Bundle> {
     bundles.into_iter().collect()
 }
 
+use super::sidecar::{
+    bind_bundle_sidecar_tools, materialize_bundle_sidecar_resources, validate_bundle_sidecar_hooks,
+};
 use super::*;
 use crate::bundle_registry::{
     BundleInstallCandidate, BundleInstallOutcome, BundleRegistry, NamespaceInstallPolicy,
 };
+use crate::bundle_runtime::sidecar::environment::validate_bundle_sidecar_skills;
 use async_trait::async_trait;
 use hya_bundle::{
     AgentRole, Bundle, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent, PreparedResource,
@@ -30,6 +34,10 @@ use hya_engine::hooks::{
     ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
     ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
+use hya_engine::{SidecarEnvironment, SidecarLifecycle, SidecarStart};
+use hya_plugin::PluginContributionSet;
+use hya_plugin::config::ProcessLaunch;
+use hya_plugin::messages::{ActivationLifecycle, ActivationMetadata, PluginKindWire};
 use hya_plugin::messages::{
     HookName, HookRegistration, METHOD_TOOL_CALL, ToolCallParams, ToolInfo,
 };
@@ -6611,7 +6619,7 @@ async fn bundle_sidecar_tool_declaration_binds_canonical_captured_resource() {
         input_schema: json!({"type": "object"}),
     };
     let (host, plugin) = prepared_sidecar_plugin(&[declaration], &[]).await;
-    let bindings = super::bind_bundle_sidecar_tools(&old_binding, "worker", &plugin)
+    let bindings = bind_bundle_sidecar_tools(&old_binding, "worker", &plugin)
         .expect("bind sidecar tool declaration");
 
     assert_eq!(bindings.len(), 1);
@@ -6646,12 +6654,12 @@ async fn bundle_sidecar_tool_declarations_match_loaded_module_set() {
     };
     let (empty_host, empty) = prepared_sidecar_plugin(&[], &[]).await;
     assert!(matches!(
-        super::bind_bundle_sidecar_tools(&binding, "alpha", &empty),
+        bind_bundle_sidecar_tools(&binding, "alpha", &empty),
         Err(CoreError::Invalid(_))
     ));
     empty_host.shutdown().await.unwrap();
     let (host, plugin) = prepared_sidecar_plugin(&[echo], &[]).await;
-    let bindings = super::bind_bundle_sidecar_tools(&binding, "alpha", &plugin)
+    let bindings = bind_bundle_sidecar_tools(&binding, "alpha", &plugin)
         .expect("selected tool declaration must bind");
     assert_eq!(bindings.len(), 1);
     assert_eq!(bindings[0].tool.name(), "bundle:hya/materialized/tool/echo");
@@ -6671,7 +6679,7 @@ async fn bundle_sidecar_tool_declarations_match_loaded_module_set() {
     ];
     let (host, plugin) = prepared_sidecar_plugin(&declarations, &[]).await;
     assert!(matches!(
-        super::bind_bundle_sidecar_tools(&binding, "alpha", &plugin),
+        bind_bundle_sidecar_tools(&binding, "alpha", &plugin),
         Err(CoreError::Invalid(_))
     ));
     host.shutdown().await.unwrap();
@@ -6763,10 +6771,10 @@ async fn bundle_sidecar_hook_only_declaration_accepts_zero_tools() {
     let registrations = [HookRegistration {
         name: HookName::Event,
     }];
-    assert!(super::validate_bundle_sidecar_hooks(&binding, "worker", &registrations).is_ok());
+    assert!(validate_bundle_sidecar_hooks(&binding, "worker", &registrations).is_ok());
 
     let (host, plugin) = prepared_sidecar_plugin(&[], &registrations).await;
-    let bindings = super::bind_bundle_sidecar_tools(&binding, "worker", &plugin)
+    let bindings = bind_bundle_sidecar_tools(&binding, "worker", &plugin)
         .expect("hook-only activation accepts zero tool declarations");
     assert!(bindings.is_empty());
     host.shutdown().await.unwrap();
@@ -7134,39 +7142,6 @@ async fn catalog_scope_sweeper_evicts_idle_scopes_until_stopped() {
         .await
         .expect("the sweeper stops with its token")
         .unwrap();
-}
-
-/// Test-only notification at the adapter's completed termination boundary.
-pub(super) struct NotifySidecarHandle {
-    pub(super) inner: Box<dyn SidecarHandle>,
-    pub(super) notify: Arc<tokio::sync::Notify>,
-}
-
-#[async_trait]
-impl SidecarHandle for NotifySidecarHandle {
-    async fn ready(&mut self) -> Result<(), CoreError> {
-        self.inner.ready().await
-    }
-    async fn shutdown(&mut self) -> Result<(), CoreError> {
-        self.inner.shutdown().await
-    }
-    fn is_healthy(&self) -> bool {
-        self.inner.is_healthy()
-    }
-    fn loss_token(&self) -> Option<CancellationToken> {
-        self.inner.loss_token()
-    }
-    async fn terminate(&mut self) -> Result<(), CoreError> {
-        let result = self.inner.terminate().await;
-        self.notify.notify_one();
-        result
-    }
-    fn tool_bindings(&self) -> Arc<[ResolvedTool]> {
-        self.inner.tool_bindings()
-    }
-    fn hook_dispatcher(&self) -> Option<Arc<dyn hya_engine::hooks::HookDispatcher>> {
-        self.inner.hook_dispatcher()
-    }
 }
 
 #[tokio::test]
