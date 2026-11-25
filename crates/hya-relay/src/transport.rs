@@ -18,7 +18,9 @@ use std::pin::Pin;
 
 use futures::{Sink, Stream};
 
-use crate::proto::{Chunk, HostFrame, ProxyToHost, RelayError, RelayErrorCode};
+use crate::proto::{
+    Chunk, HostFrame, ProxyToHost, RelayError, RelayErrorCode, chunk, proxy_to_host,
+};
 
 /// Failure on a relay transport.
 #[derive(Debug, thiserror::Error)]
@@ -48,6 +50,47 @@ impl From<RelayError> for TransportError {
         TransportError::Status {
             code: error.error_code(),
             message: error.message,
+        }
+    }
+}
+
+/// Messages the proxy sends that may carry a final `RelayError`.
+pub(crate) trait FinalError: Sized {
+    /// The relay error this frame carries, if it is an `error` frame.
+    fn final_error(&self) -> Option<&RelayError>;
+
+    /// Split off the relay error of an `error` frame.
+    fn into_result(self) -> Result<Self, RelayError>;
+}
+
+impl FinalError for ProxyToHost {
+    fn final_error(&self) -> Option<&RelayError> {
+        match &self.frame {
+            Some(proxy_to_host::Frame::Error(error)) => Some(error),
+            _ => None,
+        }
+    }
+
+    fn into_result(self) -> Result<Self, RelayError> {
+        match self.frame {
+            Some(proxy_to_host::Frame::Error(error)) => Err(error),
+            frame => Ok(Self { frame }),
+        }
+    }
+}
+
+impl FinalError for Chunk {
+    fn final_error(&self) -> Option<&RelayError> {
+        match &self.frame {
+            Some(chunk::Frame::Error(error)) => Some(error),
+            _ => None,
+        }
+    }
+
+    fn into_result(self) -> Result<Self, RelayError> {
+        match self.frame {
+            Some(chunk::Frame::Error(error)) => Err(error),
+            frame => Ok(Self { frame }),
         }
     }
 }

@@ -8,7 +8,6 @@ use futures::{Sink, Stream};
 use tokio::sync::mpsc;
 use tokio_util::sync::PollSender;
 
-use crate::proto::{Chunk, ProxyToHost, RelayError, chunk, proxy_to_host};
 use crate::transport::TransportError;
 
 /// Incoming half: whatever the binding decodes from the wire.
@@ -77,46 +76,5 @@ impl<Tx: Send + 'static, Rx> Stream for Duplex<Tx, Rx> {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.incoming.as_mut().poll_next(cx)
-    }
-}
-
-/// Messages the proxy sends that may carry a final `RelayError`.
-pub(crate) trait FinalError: Sized {
-    /// The relay error this frame carries, if it is an `error` frame.
-    fn final_error(&self) -> Option<&RelayError>;
-
-    /// Split off the relay error of an `error` frame.
-    fn into_result(self) -> Result<Self, RelayError>;
-}
-
-impl FinalError for ProxyToHost {
-    fn final_error(&self) -> Option<&RelayError> {
-        match &self.frame {
-            Some(proxy_to_host::Frame::Error(error)) => Some(error),
-            _ => None,
-        }
-    }
-
-    fn into_result(self) -> Result<Self, RelayError> {
-        match self.frame {
-            Some(proxy_to_host::Frame::Error(error)) => Err(error),
-            frame => Ok(Self { frame }),
-        }
-    }
-}
-
-impl FinalError for Chunk {
-    fn final_error(&self) -> Option<&RelayError> {
-        match &self.frame {
-            Some(chunk::Frame::Error(error)) => Some(error),
-            _ => None,
-        }
-    }
-
-    fn into_result(self) -> Result<Self, RelayError> {
-        match self.frame {
-            Some(chunk::Frame::Error(error)) => Err(error),
-            frame => Ok(Self { frame }),
-        }
     }
 }
