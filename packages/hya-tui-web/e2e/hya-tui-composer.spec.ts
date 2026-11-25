@@ -57,6 +57,7 @@ test.describe("multi-line input", () => {
     await term.attach(testInfo, "multiline-input")
     await term.press("Enter")
     await term.waitForText("● hya-main · hya/offline", 20_000)
+    await term.waitForText("┃ line three")
     // One user block with the three lines, in order, on consecutive rows.
     const first = (await term.find("┃ line one"))!
     const lines = await term.lines()
@@ -85,6 +86,7 @@ test.describe("multi-line input", () => {
     await term.attach(testInfo, "multiline-narrow")
     await term.press("Enter")
     await term.waitForText("● hya-main · hya/offline", 20_000)
+    await term.waitForText("┃ line three")
     expect(await composerText(term)).toBe("")
     const first = (await term.find("┃ line one"))!
     const lines = await term.lines()
@@ -121,6 +123,7 @@ test.describe("multi-line input", () => {
     expect((await composer(term)).rows).toHaveLength(3)
     await term.press("Enter")
     await term.waitForText("● hya-main · hya/offline", 20_000)
+    await term.waitForText("┃ gamma")
     const first = (await term.find("┃ paste: alpha"))!
     expect((await term.lines())[first.row + 2]).toContain("┃ gamma")
   })
