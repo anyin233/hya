@@ -2594,7 +2594,7 @@
       },
       "Error": {
         "type": "object",
-        "description": "Stable, machine-readable error returned by every failed v1 call.  HTTP bindings render `{\"error\": {\"code\": ..., \"message\": ...}}` with the status mapped from the code; gRPC bindings carry the same code in the trailer/status details.",
+        "description": "Stable, machine-readable HTTP error payload.  HTTP bindings render this payload inside an enclosing {\"error\": ...} object. gRPC returns the corresponding canonical status and human-readable message.",
         "properties": {
           "code": {
             "type": "string"

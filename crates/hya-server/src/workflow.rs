@@ -6,11 +6,10 @@
 
 use std::collections::BTreeMap;
 
+use crate::{ApiError, ServerState};
+use hya_api::error::Code;
 use hya_api::v1::CommandTurn;
 use hya_proto::{SessionId, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery};
-
-use crate::workflow_control::WorkflowControlError;
-use crate::{ApiError, ServerState};
 
 /// Parse and, when applicable, execute one `/workflow` command.
 //
@@ -30,10 +29,10 @@ pub(crate) async fn intercept_slash(
         return Ok(None);
     };
     if st.engine.replay(session).await?.is_empty() {
-        return Err(ApiError::workflow(WorkflowControlError::new(
-            "SESSION_NOT_FOUND",
+        return Err(ApiError::new(
+            Code::SessionNotFound,
             format!("Session `{session}` was not found"),
-        )));
+        ));
     }
     let _reservation = reserve_workflow_command(st, session, &command)?;
     let arguments = request.arguments.clone();
@@ -145,11 +144,7 @@ fn required_name(name: &str) -> Result<String, ApiError> {
 }
 
 fn syntax(message: impl Into<String>) -> ApiError {
-    ApiError::structured(
-        axum::http::StatusCode::BAD_REQUEST,
-        "WORKFLOW_SYNTAX",
-        message,
-    )
+    ApiError::new(Code::WorkflowSyntax, message)
 }
 
 /// Reserve a Session for commands that can change durable Workflow state.
@@ -167,12 +162,9 @@ fn reserve_workflow_command(
     ) {
         return Ok(None);
     }
-    st.reserve_workflow_run(session).map(Some).ok_or_else(|| {
-        ApiError::workflow(WorkflowControlError::new(
-            "WORKFLOW_BUSY",
-            "another run is active",
-        ))
-    })
+    st.reserve_workflow_run(session)
+        .map(Some)
+        .ok_or_else(|| ApiError::new(Code::WorkflowBusy, "another run is active"))
 }
 
 pub(crate) async fn execute(

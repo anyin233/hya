@@ -10,7 +10,7 @@
 use std::path::Path;
 const BARE_PROVIDER: &str = "hya";
 
-use axum::http::StatusCode;
+use hya_api::error::Code;
 use hya_bundle::BundleError;
 use hya_engine::{CoreError, TurnBinding};
 use hya_proto::{AgentName, ModelRef};
@@ -100,15 +100,13 @@ async fn resolve_session_model(
             .await
             .map_err(|error| {
                 let error = crate::AgentModelControlError::new(error.code, error.message);
-                ApiError::structured(StatusCode::SERVICE_UNAVAILABLE, error.code, error.message)
+                ApiError::legacy_control(&error.code, Code::Unavailable, error.message)
             })?;
         let state = states
             .into_iter()
             .find(|state| state.agent_id == agent.as_str())
             .ok_or_else(|| {
-                ApiError::structured(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    crate::agent_model_control::AGENT_MODEL_CONTROL_FAILURE,
+                ApiError::unavailable(
                     "Agent model control returned no state for the resolved Agent",
                 )
             })?;

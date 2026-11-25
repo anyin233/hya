@@ -1686,11 +1686,11 @@ List verified, prepared frontend extension descriptors visible in a directory.
 
 ### `Error`
 
-Stable, machine-readable error returned by every failed v1 call.
+Stable, machine-readable HTTP error payload.
 
-HTTP bindings render `{"error": {"code": ..., "message": ...}}` with the
-status mapped from the code; gRPC bindings carry the same code in the
-trailer/status details.
+HTTP bindings render this payload inside an enclosing {"error": ...}
+object. gRPC returns the corresponding canonical status and human-readable
+message.
 
 | Field | Type | Description |
 |---|---|---|
