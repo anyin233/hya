@@ -33,7 +33,5 @@ extensions:
       path: native/src/task.rs
     - id: native-task-description
       path: native/src/task.txt
-    - id: native-wait
-      path: native/src/wait.rs
     - id: native-workflow
       path: native/src/workflow.rs

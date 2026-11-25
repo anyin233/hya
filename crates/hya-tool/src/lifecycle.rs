@@ -20,7 +20,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::mailbox::ChannelPolicySnapshot;
-use crate::tool::ToolError;
+use crate::tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
 
 /// One lifecycle request from a tool call to the supervisor.
 #[derive(Debug)]
@@ -166,6 +166,40 @@ impl WaitSpec {
             timeout: Duration::from_secs(timeout),
             wake_on_mail,
         })
+    }
+}
+
+/// Block until subagents finish or, when enabled, new mail arrives.
+pub struct WaitTool {
+    wake_on_mail: bool,
+}
+
+impl WaitTool {
+    /// Select whether the wait wakes on new mail as well as member progress.
+    #[must_use]
+    pub const fn new(wake_on_mail: bool) -> Self {
+        Self { wake_on_mail }
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for WaitTool {
+    fn name(&self) -> &str {
+        "wait"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        wait_tool_schema(self.wake_on_mail)
+    }
+
+    fn result_policy(&self) -> ToolResultPolicy {
+        ToolResultPolicy::SelfBudgeted
+    }
+
+    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+        let spec = WaitSpec::parse(&input, self.wake_on_mail)?;
+        let outcome = ctx.lifecycle.wait(spec, &ctx.cancel).await?;
+        Ok(outcome.to_tool_result())
     }
 }
 
