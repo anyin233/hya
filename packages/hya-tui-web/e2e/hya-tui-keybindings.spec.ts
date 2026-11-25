@@ -112,6 +112,7 @@ test("a saved multiword command runs through the registry and survives a restart
   await closeModal(term, "Keybind saved · F6")
   expect(JSON.parse(await readFile(prefs, "utf8")).keybindings).toEqual({ F6: { command: "/layout focus pane-3", scope: "workspace" } })
   await term.press("F6")
+  await term.waitForText("Sessions")
   let sessions = (await term.find("Sessions"))!
   await expect.poll(async () => (await term.cell(sessions.row, sessions.col - 1))?.fg).toBe("#73c8e8")
   await term.press("Alt+ArrowRight")
@@ -120,6 +121,7 @@ test("a saved multiword command runs through the registry and survives a restart
   term = await tui(hyaTui(backend), options)
   await term.waitForText("Message, !shell, or @file · / commands")
   await term.press("F6")
+  await term.waitForText("Sessions")
   sessions = (await term.find("Sessions"))!
   await expect.poll(async () => (await term.cell(sessions.row, sessions.col - 1))?.fg).toBe("#73c8e8")
 })
