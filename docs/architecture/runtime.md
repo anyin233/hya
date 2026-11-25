@@ -1470,6 +1470,12 @@ back to its recorded state.
 runtime hook boundary. `hya_app::plugin_adapter::PluginHostAdapter` implements it
 for configured plugins, generation-owned bundle processes and private activations.
 
+[Hook chains](../../crates/hya-engine/src/hooks/chain.rs) compose captured
+dispatchers in order. [Activation routing](../../crates/hya-engine/src/hooks/activation.rs)
+keeps the current session's dispatcher in task-local state.
+[Hook payloads](../../crates/hya-engine/src/hooks/payloads.rs) are exported
+through the same `hya_engine::hooks` module.
+
 ### `HookDispatcher` methods
 
 `PermissionPlane` calls the permission interceptor. For captured bundle and
