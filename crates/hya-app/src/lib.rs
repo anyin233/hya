@@ -21,7 +21,9 @@ pub mod config;
 mod config_edit;
 /// Formatter plane construction from optional formatter config.
 pub mod formatter_config;
+mod headless;
 mod installed_bundle_refresh;
+mod lead_wrapup;
 mod lsp;
 /// SQLite remote-model cache (`$XDG_CACHE_HOME/hya/model_cache.db`).
 pub mod model_cache;
@@ -52,6 +54,7 @@ pub mod workflow_control;
 pub use agent_model_control::{
     AgentModelControlError, AgentModelIdentity, PersistentAgentModelControl,
 };
+pub use headless::{HeadlessEvaluatorRoute, prepare_goal, prepare_loop};
 pub use hya_proto::{
     WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowInfo, WorkflowRunResult,
     WorkflowStageInfo, WorkflowSummary,
@@ -60,6 +63,7 @@ pub use hya_tool::{InvocationPolicy, WebSearchConfig};
 pub use installed_bundle_refresh::{
     InstalledBundleRefresh, bundle_registry_path, first_party_catalogs,
 };
+pub use lead_wrapup::run_headless_lead;
 pub use preset_inventory::{TrustedPresetDescriptor, trusted_preset_inventory};
 pub use project_scope::ProjectScopeRefresh;
 pub use provider_control::ProviderManager;
