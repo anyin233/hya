@@ -10,15 +10,15 @@ use hya_proto::{
 };
 use hya_tool::{
     Action, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, Mode, PermissionPlane,
-    PermissionRules, Rule, SkillPlane, SpawnerPlane, Tool, ToolCtx, ToolOperation, ToolRegistry,
-    WebSearchPlane, WorkflowHostError, WorkflowPlane, WorkflowRequest, WorkflowRequestSink,
-    WorkflowSendError, handle::ArtifactPlane,
+    PermissionRules, Rule, SkillPlane, SpawnerPlane, Tool, ToolCtx, ToolOperation, WebSearchPlane,
+    WorkflowHostError, WorkflowPlane, WorkflowRequest, WorkflowRequestSink, WorkflowSendError,
+    handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 fn workflow_tool() -> Arc<dyn Tool> {
-    ToolRegistry::builtins()
+    hya_tool_loader::builtins()
         .get("workflow")
         .expect("workflow tool")
 }

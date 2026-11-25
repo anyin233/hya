@@ -6,7 +6,7 @@ use hya_provider::{
     ProviderCatalogSnapshot, ProviderError, ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 
 use super::{RequestLineage, SessionEngine};
 use crate::EventBus;
@@ -61,7 +61,7 @@ async fn publish_during_preflight_uses_checked_router() -> Result<(), Box<dyn st
     let engine = Arc::new(SessionEngine::try_new(
         SessionStore::connect_memory().await?,
         Arc::new(ProviderRouter::new().with(original.clone())),
-        crate::test_support::runtime(ToolRegistry::from_tool_families(&[])),
+        crate::test_support::runtime(hya_tool_loader::from_tool_families(&[])),
         PermissionPlane::new(PermissionRules::default()).0,
         EventBus::default(),
     )?);
@@ -114,7 +114,7 @@ async fn handoff_uses_provider_published_after_the_first_handoff()
     let engine = SessionEngine::try_new(
         SessionStore::connect_memory().await?,
         Arc::new(ProviderRouter::new().with(original.clone())),
-        crate::test_support::runtime(ToolRegistry::from_tool_families(&[])),
+        crate::test_support::runtime(hya_tool_loader::from_tool_families(&[])),
         PermissionPlane::new(PermissionRules::default()).0,
         EventBus::default(),
     )?;

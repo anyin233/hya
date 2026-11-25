@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 use hya_bundle::AgentRole;
 use hya_engine::RuntimeRegistry;
-use hya_tool::{ToolPermission, ToolRegistry};
+use hya_tool::ToolPermission;
 
 use support::{MarkerTool, TestDir, test_catalog};
 
@@ -33,7 +33,7 @@ fn tool_publication_keeps_the_bound_agent_catalog_pinned() {
     let workdir = TestDir::new("agent-catalog-binding");
     // `general` is a built-in, so pin an installed bundle agent instead.
     let catalog = test_catalog(&[("pinned-agent", AgentRole::Main, &[])]);
-    let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let registry = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
 
     let before = registry.bind_turn(workdir.path()).unwrap();
     let before_agent = before.resolve_agent("pinned-agent").unwrap();
@@ -55,7 +55,7 @@ fn tool_publication_keeps_the_bound_agent_catalog_pinned() {
 fn catalog_publication_is_atomic_and_turn_bindings_pin_old_catalog() {
     let workdir = TestDir::new("catalog-publication");
     workdir.write_skill("stable_skill");
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     tools
         .register_with_permission(MarkerTool::new("mcp__stable__marker"), ToolPermission::Mcp)
         .expect("register stable marker tool");
@@ -98,7 +98,7 @@ fn roster_is_resolved_from_the_bound_spawn_graph() {
         ("lead", AgentRole::Main, &["worker"]),
         ("worker", AgentRole::Main, &[]),
     ]);
-    let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let registry = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let binding = registry.bind_turn(workdir.path()).unwrap();
 
     let roster = binding.spawnable_agents("lead").unwrap();
@@ -118,7 +118,7 @@ fn roster_is_resolved_from_the_bound_spawn_graph() {
 #[test]
 fn in_flight_turn_retains_generation_while_post_publish_turn_sees_next() {
     let workdir = TestDir::new("binding");
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     tools
         .register_with_permission(MarkerTool::new("generation_n"), ToolPermission::Mcp)
         .unwrap();
@@ -151,7 +151,7 @@ fn in_flight_turn_retains_generation_while_post_publish_turn_sees_next() {
 fn one_turn_cannot_mix_tool_skill_or_mcp_members_across_generations() {
     let workdir = TestDir::new("complete-view");
     workdir.write_skill("skill_n");
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     tools
         .register(MarkerTool::new("tool_n"))
         .expect("register generation N tool");

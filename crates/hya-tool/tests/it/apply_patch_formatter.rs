@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use hya_tool::{
     Action, FormatterError, FormatterPlane, FormatterProvider, FormatterStatus, InteractionPlane,
     LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, ToolCtx,
-    ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -78,7 +78,7 @@ impl FormatterProvider for RewritingFormatter {
 async fn apply_patch_runs_formatter_after_file_changes() {
     // Given: an apply_patch tool context with an injected formatter provider.
     let dir = tempdir();
-    let tool = ToolRegistry::builtins().get("apply_patch").unwrap();
+    let tool = hya_tool_loader::builtins().get("apply_patch").unwrap();
     let formatter = FormatterPlane::new(Arc::new(RewritingFormatter));
     let ctx = ctx_with_formatter(vec![allow(Action::Edit, "*")], dir.clone(), formatter);
 

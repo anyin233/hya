@@ -22,7 +22,7 @@ use hya_plugin::messages::PluginKindWire;
 use hya_proto::{ProjectId, SessionId};
 use hya_provider::ProviderRouter;
 use hya_store::SessionStore;
-use hya_tool::{Action, Decision, PermissionPlane, PermissionRules, Resource, ToolRegistry};
+use hya_tool::{Action, Decision, PermissionPlane, PermissionRules, Resource};
 
 fn temp_path(suffix: &str) -> PathBuf {
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
@@ -151,7 +151,7 @@ struct Harness {
 
 async fn harness(state: &Path) -> Harness {
     let runtime = Arc::new(RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         hya_app::builtin_agent_catalog().expect("builtin agent catalog"),
     ));
     let installed = Arc::new(hya_app::InstalledBundleRefresh::new(

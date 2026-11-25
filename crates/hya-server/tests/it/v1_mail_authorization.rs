@@ -16,7 +16,7 @@ use hya_proto::{AgentName, Event, ModelRef, SessionId, SubagentMode};
 use hya_provider::ProviderRouter;
 use hya_server::{AppState, V1Grpc, router};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -25,7 +25,7 @@ async fn fixture() -> (AppState, SessionId, SessionId) {
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         Arc::new(ProviderRouter::new()),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     ));

@@ -16,7 +16,7 @@ use hya_provider::{
     ReasoningEffort,
 };
 use hya_store::SessionStore;
-use hya_tool::{InteractionPlane, PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{InteractionPlane, PermissionPlane, PermissionRules};
 use tokio_util::sync::CancellationToken;
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -87,7 +87,7 @@ async fn completion_request(
         id: provider_id,
         requests: requests.clone(),
     })));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let (interaction, questions) = InteractionPlane::new();
@@ -151,7 +151,7 @@ async fn tool_ids(provider_id: &'static str, model: &str) -> Vec<String> {
 /// lines for them hold in full mode. Only `rewrite` and `todo` stay kernel-run.
 #[test]
 fn base_tools_replace_the_kernel_tools_under_the_same_names() {
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     for tool in hya_engine::kernel::tools::builtin() {
         let name = tool.name();
         if [

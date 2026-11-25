@@ -21,7 +21,7 @@ use hya_proto::{AgentName, FinishReason, ModelRef};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_server::{AppState, router};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -85,7 +85,7 @@ async fn nothing_reads_the_server_process_working_directory() {
         FakeStep::Finish(FinishReason::Stop),
     ]]);
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(

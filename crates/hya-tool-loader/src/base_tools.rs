@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 use hya_bundle::first_party_bundle;
 use serde::Deserialize;
 
-use crate::tool::ToolPermission;
+use hya_tool::{AliasVisibility, ToolPermission};
 
 /// Tool-family bundles in stable registry order.
 pub(crate) const TOOL_FAMILIES: [&str; 4] = [
@@ -72,16 +72,6 @@ pub struct BaseToolExposure {
     /// `- <name>: `); a tool without one is not listed.
     #[serde(default)]
     prompt: Option<String>,
-}
-
-/// An alternate exported spelling and whether models see its schema.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum AliasVisibility {
-    /// Dispatchable compatibility spelling omitted from advertised schemas.
-    Hidden,
-    /// Dispatchable spelling that is also advertised to models.
-    Public,
 }
 
 /// Alias metadata for one builtin tool.

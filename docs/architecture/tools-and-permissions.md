@@ -7,7 +7,7 @@ after permission checks pass.
 The interface crate owns the registry and session-scoped service planes.
 The 25 registry tool bodies and schemas live in four family sources
 under [`../../bundles/presets`](../../bundles/presets). They are packaged as
-lockstep Rust libraries and loaded by `ToolRegistry::builtins()`. The tools
+lockstep Rust libraries and loaded by `hya_tool_loader::builtins()`. The tools
 use session-scoped planes through `ToolCtx`; plane methods and request types
 remain in `hya-tool` so host authority stays with the session runtime.
 
@@ -25,8 +25,8 @@ remain in `hya-tool` so host authority stays with the session runtime.
   ([External directory boundary](#external-directory-boundary)).
 - `ToolRegistry`: name-to-tool map, aliases, and model-facing schemas.
 
-`ToolRegistry::builtins()` installs **25** canonical schema names before model
-filtering ([`tool.rs`](../../crates/hya-tool/src/tool.rs)). The table below is
+`hya_tool_loader::builtins()` installs **25** canonical schema names before model
+filtering ([loader](../../crates/hya-tool-loader/src/lib.rs)). The table below is
 the complete inventory. Advertised fields are the model-facing JSON schema
 `required`/`properties` keys; a schema marked **closed** rejects unknown keys.
 

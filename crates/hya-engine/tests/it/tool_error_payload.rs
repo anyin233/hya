@@ -12,7 +12,7 @@ use hya_engine::{AgentSpec, CreateSession, EventBus, SessionEngine};
 use hya_proto::{AgentName, FinishReason, ModelRef, PartProjection, Role, ToolPartState};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -46,7 +46,7 @@ async fn tool_errors_record_structured_payload_for_provider_replay() {
         vec![FakeStep::Finish(FinishReason::Stop)],
     ]);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Read,
         "/**",

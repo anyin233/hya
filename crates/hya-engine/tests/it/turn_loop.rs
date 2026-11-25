@@ -20,7 +20,7 @@ use hya_proto::{
 };
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -63,7 +63,7 @@ async fn text_tool_result_text_round_trip() {
     ]);
 
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Read,
         "/**",
@@ -197,7 +197,7 @@ async fn turn_continues_past_twenty_five_tool_rounds() {
 
     let provider = FakeProvider::scripted_turns(scripts);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(
@@ -256,7 +256,7 @@ async fn cancelled_turn_finishes_cancelled() {
         FakeStep::Finish(FinishReason::Stop),
     ]]);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(
@@ -309,7 +309,7 @@ async fn provider_usage_is_recorded_on_assistant_message_projection() {
         FakeStep::Finish(FinishReason::Stop),
     ]]);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(
@@ -407,7 +407,7 @@ async fn kernel_rewrite_persists_and_is_not_repeated_next_round() {
         .with_max_context(40_000),
     );
     let router = Arc::new(ProviderRouter::new().with(provider.clone()));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(
@@ -531,7 +531,7 @@ async fn kernel_rewrite_persists_and_is_not_repeated_next_round() {
 async fn provider_error_still_finishes_the_assistant_message() {
     let dir = tempdir();
     let router = Arc::new(ProviderRouter::new());
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(
@@ -624,7 +624,7 @@ async fn tool_output_eviction_avoids_a_rewrite_and_preserves_the_log() {
     // The rendered read fits on its own. The next turn's prompt puts the
     // request above the 20,800-token spill threshold.
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider.with_max_context(26_000))));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Read,
         "/**",
@@ -767,7 +767,7 @@ async fn request_is_identical_after_restart() {
         SessionEngine::new(
             store,
             Arc::new(ProviderRouter::new().with(provider.clone())),
-            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
             perm,
             EventBus::default(),
         )
@@ -874,7 +874,7 @@ async fn evicted_output_stays_evicted_on_later_turns_without_escalating() {
         ],
     ]);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider.with_max_context(26_000))));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Read,
         "/**",
@@ -955,7 +955,7 @@ async fn context_status_reports_round_occupancy_and_accounting_mode() {
     let engine = SessionEngine::new(
         store,
         router,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     )
@@ -1069,7 +1069,7 @@ async fn stale_tool_outputs_spill_inside_one_long_turn() {
     let engine = SessionEngine::new(
         store,
         router,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     )
@@ -1247,7 +1247,7 @@ async fn a_spill_that_is_not_enough_is_followed_by_the_kernel_rewrite() {
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         Arc::new(ProviderRouter::new().with(Arc::new(route))),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     )
@@ -1435,7 +1435,7 @@ async fn kernel_rewrite_runs_before_preflight_rejects_an_under_threshold_provide
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         Arc::new(ProviderRouter::new().with(Arc::new(route))),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     )
@@ -1560,7 +1560,7 @@ async fn a_call_with_invalid_argument_json_fails_without_running() {
         ],
     ]));
     let router = Arc::new(ProviderRouter::new().with(provider.clone()));
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     let optional = Arc::new(Optional::default());
     tools.register(optional.clone()).unwrap();
     let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![

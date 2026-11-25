@@ -17,7 +17,7 @@ use hya_proto::SessionId;
 use hya_tool::{
     Action, FormatterError, FormatterPlane, FormatterProvider, InteractionPlane, LspError,
     LspPlane, LspProvider, LspRequest, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    SpawnerPlane, ToolCtx, ToolError, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -305,7 +305,7 @@ async fn write_creates_parents_and_reports_final_metadata() {
     let directory = tempdir();
     let target = directory.join("src/generated/config.txt");
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], directory.clone());
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
     let content = "hello\n";
 
     let result = tool
@@ -331,7 +331,7 @@ async fn write_overwrites_existing_file_exactly_and_reports_existed() {
     let target = directory.join("notes.txt");
     tokio::fs::write(&target, "old bytes\n").await.unwrap();
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], directory);
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
     let content = "new bytes\nwith a second line";
 
     let result = tool
@@ -346,7 +346,7 @@ async fn write_overwrites_existing_file_exactly_and_reports_existed() {
 
 #[test]
 fn write_schema_is_closed_and_advertises_only_path_and_content() {
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
     let schema = tool.schema().input_schema;
     let properties = schema["properties"].as_object().unwrap();
 
@@ -364,7 +364,7 @@ async fn write_rejects_legacy_file_path_without_mutation() {
     let directory = tempdir();
     let target = directory.join("legacy.txt");
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], directory);
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     let result = tool
         .execute(
@@ -382,7 +382,7 @@ async fn write_strips_an_unambiguous_full_hashline_block() {
     let directory = tempdir();
     let target = directory.join("destination.txt");
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], directory.clone());
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
     let copied = "[destination.txt#ABCD]\n1#KT:alpha\n2#JB:beta\n3#KJ:gamma\n4#PX:delta";
 
     let result = tool
@@ -406,7 +406,7 @@ async fn write_preserves_ambiguous_hashline_looking_content_verbatim() {
     let directory = tempdir();
     let target = directory.join("ambiguous.txt");
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], directory.clone());
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
     let content = "[ambiguous.txt#ABCD]\n1#KT:alpha\nthis line has no rendered prefix";
 
     tool.execute(&ctx, json!({ "path": "ambiguous.txt", "content": content }))
@@ -421,7 +421,7 @@ async fn write_checks_edit_permission_before_mutating() {
     let directory = tempdir();
     let target = directory.join("blocked.txt");
     let ctx = ctx_with(vec![deny(Action::Edit, "*")], directory);
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     let result = tool
         .execute(&ctx, json!({ "path": "blocked.txt", "content": "nope\n" }))
@@ -442,7 +442,7 @@ async fn write_requires_external_directory_permission_for_outside_path() {
         ],
         directory,
     );
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     let result = tool
         .execute(
@@ -463,7 +463,7 @@ async fn write_preserves_existing_utf8_bom() {
         .await
         .unwrap();
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], directory);
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     tool.execute(&ctx, json!({ "path": "bom.txt", "content": "new\n" }))
         .await
@@ -480,7 +480,7 @@ async fn write_uses_incoming_utf8_bom_without_duplicating_it() {
     let directory = tempdir();
     let target = directory.join("incoming-bom.txt");
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], directory);
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     tool.execute(
         &ctx,
@@ -501,7 +501,7 @@ async fn write_preserves_crlf_line_endings() {
     let target = directory.join("crlf.txt");
     tokio::fs::write(&target, b"old\r\nline\r\n").await.unwrap();
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], directory);
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     tool.execute(
         &ctx,
@@ -519,7 +519,7 @@ async fn write_reports_invalid_utf8_rewrite_warning() {
     let target = directory.join("invalid.txt");
     tokio::fs::write(&target, b"old\n\xFF\n").await.unwrap();
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], directory);
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     let result = tool
         .execute(&ctx, json!({ "path": "invalid.txt", "content": "new\n" }))
@@ -538,7 +538,7 @@ async fn write_warns_for_mixed_line_endings() {
         .await
         .unwrap();
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], directory);
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     let result = tool
         .execute(
@@ -565,7 +565,7 @@ async fn write_runs_formatter_and_reports_final_preview_truth() {
         CancellationToken::new(),
         None,
     );
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     let result = tool
         .execute(&ctx, json!({ "path": "formatted.txt", "content": "raw\n" }))
@@ -595,7 +595,7 @@ async fn write_post_commit_formatter_failure_reports_changed_file() {
         CancellationToken::new(),
         None,
     );
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     let error = tool
         .execute(
@@ -623,7 +623,7 @@ async fn write_creates_mode_0600_file_and_reports_non_executable() {
     let directory = tempdir();
     let target = directory.join("new-mode.txt");
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], directory);
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     let result = tool
         .execute(&ctx, json!({ "path": "new-mode.txt", "content": "new\n" }))
@@ -649,7 +649,7 @@ async fn write_preserves_existing_mode() {
     permissions.set_mode(0o640);
     std::fs::set_permissions(&target, permissions).unwrap();
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], directory);
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     let result = tool
         .execute(
@@ -678,7 +678,7 @@ async fn write_updates_hard_link_in_place_and_reports_fact() {
     std::fs::hard_link(&target, &sibling).unwrap();
     let inode_before = std::fs::metadata(&target).unwrap().ino();
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], directory);
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     let result = tool
         .execute(&ctx, json!({ "path": "target.txt", "content": "new\n" }))
@@ -702,7 +702,7 @@ async fn write_follows_symlink_and_reports_resolved_target() {
     tokio::fs::write(&target, "old\n").await.unwrap();
     symlink("real.txt", &link).unwrap();
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], directory);
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     let result = tool
         .execute(&ctx, json!({ "path": "relative.txt", "content": "new\n" }))
@@ -734,7 +734,7 @@ async fn write_marks_shebang_executable_and_reports_fact() {
     let directory = tempdir();
     let target = directory.join("script.sh");
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], directory);
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     let result = tool
         .execute(
@@ -768,7 +768,7 @@ async fn write_touches_lsp_after_formatter_and_returns_diagnostics() {
         CancellationToken::new(),
         None,
     );
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     let result = tool
         .execute(&ctx, json!({ "path": "main.rs", "content": "raw\n" }))
@@ -796,7 +796,7 @@ async fn write_post_commit_lsp_failure_reports_changed_file() {
         CancellationToken::new(),
         None,
     );
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     let error = tool
         .execute(
@@ -830,7 +830,7 @@ async fn cancelled_write_returns_without_mutation_or_snapshot() {
         cancel,
         Some(session),
     );
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let write = registry.get("write").unwrap();
 
     let result = write
@@ -876,7 +876,7 @@ async fn write_records_snapshot_for_stale_edit_recovery() {
     let directory = tempdir();
     let target = directory.join("snapshot.txt");
     let session = SessionId::new();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let write_ctx = ctx_with_components(
         vec![allow(Action::Edit, "*")],
         directory.clone(),
@@ -942,7 +942,7 @@ async fn cancellation_after_write_commit_reconciles_final_state() {
         cancel,
         Some(session),
     );
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let write = registry.get("write").unwrap();
 
     let result = write
@@ -993,7 +993,7 @@ async fn write_bounds_result_and_display_metadata_without_losing_facts() {
     let target = directory.join("large.txt");
     let content = "x\n".repeat(30_000);
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], directory);
-    let tool = ToolRegistry::builtins().get("write").unwrap();
+    let tool = hya_tool_loader::builtins().get("write").unwrap();
 
     let result = tool
         .execute(&ctx, json!({ "path": "large.txt", "content": content }))

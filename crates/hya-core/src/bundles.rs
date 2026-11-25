@@ -1,7 +1,7 @@
 //! Loading the internal native bundles (ADR-0033, D9): the full-mode features
 //! that run outside the kernel. Bare mode never calls this.
 
-use hya_tool::native_bundle::{self, Registrations};
+use hya_tool_loader::Registrations;
 
 use crate::error::CoreError;
 
@@ -18,7 +18,7 @@ pub fn load_internal() -> Result<Registrations, CoreError> {
         rewriters: Vec::new(),
     };
     for identity in hya_bundle::INTERNAL_BUNDLES {
-        let loaded = native_bundle::load(identity).map_err(|error| CoreError::BundleRuntime {
+        let loaded = hya_tool_loader::load(identity).map_err(|error| CoreError::BundleRuntime {
             bundle_id: (*identity).to_string(),
             source: Box::new(CoreError::Invalid(error)),
         })?;

@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    SpawnerPlane, ToolCtx, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -72,7 +72,7 @@ async fn apply_patch_adds_updates_moves_and_deletes_files() {
         .await
         .unwrap();
 
-    let tool = ToolRegistry::builtins().get("apply_patch").unwrap();
+    let tool = hya_tool_loader::builtins().get("apply_patch").unwrap();
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], dir.clone());
 
     let patch = r#"*** Begin Patch
@@ -169,7 +169,7 @@ async fn apply_patch_adds_updates_moves_and_deletes_files() {
 #[tokio::test]
 async fn apply_patch_requires_edit_permission_before_writing() {
     let dir = tempdir();
-    let tool = ToolRegistry::builtins().get("apply_patch").unwrap();
+    let tool = hya_tool_loader::builtins().get("apply_patch").unwrap();
     let ctx = ctx_with(vec![deny(Action::Edit, "*")], dir.clone());
 
     let err = tool
@@ -191,7 +191,7 @@ async fn apply_patch_rejects_missing_context_without_modifying_file() {
     tokio::fs::write(dir.join("app.txt"), "actual\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("apply_patch").unwrap();
+    let tool = hya_tool_loader::builtins().get("apply_patch").unwrap();
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], dir.clone());
 
     let err = tool

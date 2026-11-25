@@ -31,7 +31,7 @@ use hya_provider::{
 use hya_store::SessionStore;
 use hya_tool::{
     Action, MemberOutcome, Mode, PermissionPlane, PermissionRules, ResolvedTool, Resource, Rule,
-    Tool, ToolCtx, ToolError, ToolPermission, ToolRegistry,
+    Tool, ToolCtx, ToolError, ToolPermission,
 };
 use serde_json::{Value, json};
 use sqlx::{Connection, SqliteConnection};
@@ -999,7 +999,7 @@ async fn assert_stopped_member_revives(
 
 async fn engine() -> (Arc<SessionEngine>, AgentSpec) {
     let router = Arc::new(ProviderRouter::new().with(Arc::new(SelectiveFakeProvider)));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = Arc::new(SessionEngine::new(
@@ -1084,7 +1084,7 @@ async fn recorded_observability_never_enters_the_parent_model_input() {
     let router = Arc::new(ProviderRouter::new().with(Arc::new(PerSessionRecorder {
         requests: requests.clone(),
     })));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = Arc::new(
@@ -1284,7 +1284,7 @@ async fn resident_member_nested_spawn_completes() {
         ],
     ]));
     let router = Arc::new(ProviderRouter::new().with(provider));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (permission, _asks) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Task,
         "*",
@@ -1423,7 +1423,7 @@ async fn governed_engine(
     provider: Arc<dyn Provider>,
 ) -> (Arc<SessionEngine>, AgentSpec) {
     let router = Arc::new(ProviderRouter::new().with(provider));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = Arc::new(
@@ -1665,7 +1665,7 @@ async fn bundle_sidecar_tool_permission_denial_prevents_dispatch() {
         turn: AtomicUsize::new(0),
     });
     let router = Arc::new(ProviderRouter::new().with(provider.clone()));
-    let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog));
+    let runtime = Arc::new(RuntimeRegistry::new(hya_tool_loader::builtins(), catalog));
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Tool,
         canonical,
@@ -1760,7 +1760,7 @@ async fn activation_bound_sidecar_hooks_mutate_tool_and_observe_only_child_event
         turn: AtomicUsize::new(0),
     });
     let router = Arc::new(ProviderRouter::new().with(provider));
-    let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog));
+    let runtime = Arc::new(RuntimeRegistry::new(hya_tool_loader::builtins(), catalog));
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Tool,
         canonical,
@@ -1920,7 +1920,7 @@ async fn plugin_hooks_reach_bundle_subagent_alongside_its_sidecar_hooks() {
         turn: AtomicUsize::new(0),
     });
     let router = Arc::new(ProviderRouter::new().with(provider));
-    let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog));
+    let runtime = Arc::new(RuntimeRegistry::new(hya_tool_loader::builtins(), catalog));
     let plugin_hooks = PluginHookProbe::default();
     runtime
         .refresh(|candidate| {
@@ -2023,7 +2023,7 @@ async fn resident_sidecar_tool_binding_reaches_captured_turn_view() {
         turn: AtomicUsize::new(0),
     });
     let router = Arc::new(ProviderRouter::new().with(provider));
-    let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog));
+    let runtime = Arc::new(RuntimeRegistry::new(hya_tool_loader::builtins(), catalog));
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Tool,
         canonical,
@@ -2217,7 +2217,7 @@ async fn resident_registration_failure_releases_claim_and_leaves_no_slot() {
     let db_path = db_dir.path().join("sessions.db");
     let db_path = db_path.to_string_lossy().into_owned();
     let router = Arc::new(ProviderRouter::new().with(Arc::new(SelectiveFakeProvider)));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect(&db_path).await.unwrap(),
@@ -2392,7 +2392,7 @@ async fn resident_direct_send_committed_before_stop_remains_unread() {
     let db_path = db_path.to_string_lossy().into_owned();
     let make_engine = |store: SessionStore, bus: EventBus| {
         let router = Arc::new(ProviderRouter::new().with(Arc::new(SelectiveFakeProvider)));
-        let tools = Arc::new(ToolRegistry::builtins());
+        let tools = Arc::new(hya_tool_loader::builtins());
         let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
         Arc::new(SessionEngine::new(
             store,
@@ -2973,7 +2973,7 @@ async fn assert_resident_hook_transport_loss(stage: HookLossStage) {
         turn: AtomicUsize::new(0),
     });
     let router = Arc::new(ProviderRouter::new().with(provider));
-    let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog));
+    let runtime = Arc::new(RuntimeRegistry::new(hya_tool_loader::builtins(), catalog));
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Tool,
         canonical,
@@ -3617,7 +3617,7 @@ async fn resident_running_loss_never_takes_over_its_claim() {
         release: release.clone(),
     });
     let router = Arc::new(ProviderRouter::new().with(provider));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
     let engine = Arc::new(
         SessionEngine::new(
@@ -3800,7 +3800,7 @@ async fn resident_running_loss_never_runs_recovery_transaction() {
         release: release.clone(),
     });
     let router = Arc::new(ProviderRouter::new().with(provider));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
     let engine = Arc::new(
         SessionEngine::new(

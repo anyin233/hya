@@ -22,7 +22,7 @@ use hya_provider::{
 };
 use hya_server::{AppState, router};
 use hya_store::{OwnerRunId, SessionStore};
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -115,7 +115,7 @@ async fn fixture_with_global(label: &str, global: Option<ReasoningEffort>) -> Fi
             Arc::new(ProviderRouter::new().with(Arc::new(EffortProvider {
                 requests: Arc::clone(&requests),
             }))),
-            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
             perm,
             EventBus::default(),
         )

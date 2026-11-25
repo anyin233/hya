@@ -7,8 +7,7 @@ use std::path::PathBuf;
 use hya_proto::SessionId;
 use hya_tool::{
     InteractionPlane, LspPlane, PermissionPlane, PermissionRules, QuestionAnswer, QuestionKind,
-    SkillPlane, SpawnerPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane,
-    handle::ArtifactPlane,
+    SkillPlane, SpawnerPlane, ToolCtx, ToolError, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -46,7 +45,7 @@ async fn plan_exit_asks_for_approval_and_reports_open_code_success_shape() {
     let session = SessionId::new();
     let (interaction, mut rx) = InteractionPlane::new();
     let ctx = ctx_with(interaction, session);
-    let tool = ToolRegistry::builtins().get("plan_exit").unwrap();
+    let tool = hya_tool_loader::builtins().get("plan_exit").unwrap();
 
     // When
     let handle = tokio::spawn(async move { tool.execute(&ctx, json!({})).await });
@@ -82,7 +81,7 @@ async fn plan_exit_rejects_when_user_declines_switching_to_build_agent() {
     let session = SessionId::new();
     let (interaction, mut rx) = InteractionPlane::new();
     let ctx = ctx_with(interaction, session);
-    let tool = ToolRegistry::builtins().get("plan_exit").unwrap();
+    let tool = hya_tool_loader::builtins().get("plan_exit").unwrap();
 
     // When
     let handle = tokio::spawn(async move { tool.execute(&ctx, json!({})).await });

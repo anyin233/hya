@@ -18,7 +18,7 @@ use hya_proto::{AgentName, FinishReason, ModelRef, SessionId};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_server::{AppState, router};
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -59,7 +59,7 @@ async fn fixture(label: &str, script: Vec<Vec<FakeStep>>) -> Fixture {
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted_turns(script)))),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     ));

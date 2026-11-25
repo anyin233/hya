@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    SpawnerPlane, ToolCtx, ToolError, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -68,7 +68,7 @@ async fn read_suggests_similar_files_when_path_is_missing() {
     let suggestion = workdir.join("config.toml");
     tokio::fs::write(&suggestion, "ok = true\n").await.unwrap();
     let missing = workdir.join("config");
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When

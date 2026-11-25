@@ -29,7 +29,7 @@ use hya_proto::{AgentName, FinishReason, ModelRef};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_server::{AppState, V1Grpc, router};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::{Value, json};
 use support::AgentFixture;
 use tower::ServiceExt;
@@ -119,7 +119,7 @@ async fn state() -> AppState {
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         providers,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     )

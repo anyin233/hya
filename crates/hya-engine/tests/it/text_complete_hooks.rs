@@ -16,7 +16,7 @@ use hya_engine::{
 use hya_proto::{AgentName, Envelope, Event, FinishReason, ModelRef, PartProjection, Role};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use tokio_util::sync::CancellationToken;
 
 struct TextCompleteHost;
@@ -82,7 +82,7 @@ async fn text_complete_replaces_assistant_text_before_projection_finishes() {
         ],
     ]);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Bash,
         "**",

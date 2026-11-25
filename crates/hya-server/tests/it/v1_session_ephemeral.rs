@@ -26,7 +26,7 @@ use hya_provider::{
 };
 use hya_server::{AppState, EphemeralGrace, router};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -95,7 +95,7 @@ fn engine_on(store: SessionStore) -> Arc<SessionEngine> {
     Arc::new(SessionEngine::new(
         store,
         providers,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     ))

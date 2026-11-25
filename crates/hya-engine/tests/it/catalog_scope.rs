@@ -14,11 +14,11 @@ use hya_engine::{
     TurnBinding,
 };
 use hya_proto::{ModelRef, ProjectId};
-use hya_tool::{ToolPermission, ToolRegistry};
+use hya_tool::ToolPermission;
 use support::{MarkerTool, TestDir, builtin_only_catalog, test_catalog};
 
 fn registry() -> RuntimeRegistry {
-    RuntimeRegistry::new(ToolRegistry::builtins(), builtin_only_catalog())
+    RuntimeRegistry::new(hya_tool_loader::builtins(), builtin_only_catalog())
 }
 
 fn project(roots: &[&TestDir]) -> CatalogScope {

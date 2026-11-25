@@ -20,7 +20,7 @@ use hya_provider::{FakeProvider, ProviderRouter};
 use hya_server::{AppState, router};
 use hya_store::SessionStore;
 use hya_tool::permission::{Action, AskRequest, Decision, RememberScope, Resource};
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 use tower::ServiceExt;
@@ -31,7 +31,7 @@ async fn base_state() -> AppState {
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         providers,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     );

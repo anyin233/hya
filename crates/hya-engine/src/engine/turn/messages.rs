@@ -48,14 +48,14 @@ pub(super) fn system_prompt(
         .iter()
         .filter_map(|schema| {
             let name = schema.name.as_str();
-            hya_tool::tool_prompt(name).map(|line| (name, line))
+            hya_tool_loader::tool_prompt(name).map(|line| (name, line))
         })
         .collect::<Vec<_>>();
     let kernel = crate::kernel::prompt::compose(
         workdir,
         offered,
         &lines,
-        hya_tool::file_operations_rule(offered),
+        hya_tool_loader::file_operations_rule(offered),
     );
     let reference = crate::prompt::team_quick_reference(offered, depth);
     [
@@ -222,8 +222,6 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    use hya_tool::ToolRegistry;
-
     fn model() -> ModelRef {
         ModelRef::new("test")
     }
@@ -255,7 +253,8 @@ mod tests {
         let catalog = AgentCatalog::new(std::sync::Arc::new(
             BundleCatalog::from_verified_catalogs(&[&prepared])?,
         ))?;
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), std::sync::Arc::new(catalog));
+        let registry =
+            RuntimeRegistry::new(hya_tool_loader::builtins(), std::sync::Arc::new(catalog));
         let binding = registry.bind_turn(std::path::Path::new("/tmp/hya-advertise"))?;
         let policy = binding.agent_resource_policy(agent)?;
         Ok(binding.compile_agent_resources(&policy)?)
@@ -293,7 +292,8 @@ mod tests {
     #[test]
     fn system_prompt_is_the_kernel_prompt_for_the_offered_tools_then_the_agents()
     -> Result<(), Box<dyn std::error::Error>> {
-        let rule = hya_tool::file_operations_rule(|_| true).ok_or("base-tools declares a rule")?;
+        let rule =
+            hya_tool_loader::file_operations_rule(|_| true).ok_or("base-tools declares a rule")?;
         let main = round_prompt("hya-main", "anthropic/claude-opus-5-5", 0)?;
         let kernel_end = main.find("</cwd>").ok_or("kernel prompt")?;
         assert!(main.starts_with("You are a coding assistant running inside hya"));
@@ -302,7 +302,7 @@ mod tests {
         );
         assert!(main[..kernel_end].contains("- bash: run a shell command\n"));
         assert!(main.contains("- todo: record the task's completion criteria"));
-        let grep = hya_tool::tool_prompt("grep").ok_or("grep has a line")?;
+        let grep = hya_tool_loader::tool_prompt("grep").ok_or("grep has a line")?;
         assert!(main.contains(&format!("- grep: {grep}\n")));
         assert!(main.contains(&format!("<rules>\n- {rule}\n")));
         assert!(!main.contains("Use bash for file operations"));
@@ -623,7 +623,7 @@ mod tests {
 
     #[test]
     fn apply_patch_is_advertised_to_gpt_family_models_only() {
-        let builtins = ToolRegistry::builtins()
+        let builtins = hya_tool_loader::builtins()
             .schemas()
             .into_iter()
             .map(|schema| schema.name.as_str().to_string())

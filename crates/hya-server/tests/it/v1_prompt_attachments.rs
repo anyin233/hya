@@ -21,7 +21,7 @@ use hya_provider::ProviderRouter;
 use hya_provider::{Capabilities, CompletionRequest, EventStream, Provider, ProviderError};
 use hya_server::{AppState, V1Grpc, router};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -96,7 +96,7 @@ async fn fixture(label: &str, image_input: Option<bool>) -> Fixture {
             requests: Arc::clone(&requests),
             image_input,
         }))),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     ));

@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    SpawnerPlane, ToolCtx, ToolError, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -108,7 +108,7 @@ async fn glob_supports_path_and_open_code_output_shape() {
     tokio::fs::write(src.join("readme.md"), "# docs\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("glob").unwrap();
+    let tool = hya_tool_loader::builtins().get("glob").unwrap();
     let ctx = ctx_with(workdir.clone());
 
     let out = tool
@@ -134,7 +134,7 @@ async fn glob_rejects_file_path_like_compat() {
     tokio::fs::write(src.join("lib.rs"), "pub fn lib() {}\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("glob").unwrap();
+    let tool = hya_tool_loader::builtins().get("glob").unwrap();
     let ctx = ctx_with(workdir.clone());
 
     let err = tool
@@ -156,7 +156,7 @@ async fn grep_supports_regex_glob_and_output_shape() {
     tokio::fs::write(src.join("notes.txt"), "fn main text file\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let ctx = ctx_with(workdir);
 
     let out = tool
@@ -188,7 +188,7 @@ async fn grep_file_target_searches_only_the_requested_file() {
     tokio::fs::write(src.join("lib.rs"), "needle in lib\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let ctx = ctx_with(workdir);
 
     let out = tool
@@ -205,7 +205,7 @@ async fn grep_file_target_searches_only_the_requested_file() {
 
 #[test]
 fn grep_schema_exposes_pinned_fields_and_bounds() {
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let schema = tool.schema().input_schema;
     let properties = schema["properties"].as_object().unwrap();
 
@@ -250,7 +250,7 @@ async fn grep_supports_literal_case_insensitive_matching() {
     tokio::fs::write(workdir.join("notes.txt"), "needle.*\nNEEDLE.*\nneedleX\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let ctx = ctx_with(workdir);
 
     let out = tool
@@ -288,7 +288,7 @@ async fn glob_requires_external_directory_permission_for_outside_path() {
             deny(Action::ExternalDirectory, "*"),
         ],
     );
-    let tool = ToolRegistry::builtins().get("glob").unwrap();
+    let tool = hya_tool_loader::builtins().get("glob").unwrap();
 
     let err = tool
         .execute(
@@ -311,7 +311,7 @@ async fn glob_supports_negated_character_classes() {
                 .await
                 .unwrap();
         }
-        let tool = ToolRegistry::builtins().get("glob").unwrap();
+        let tool = hya_tool_loader::builtins().get("glob").unwrap();
         let ctx = ctx_with(workdir);
 
         for pattern in ["[!a].txt", "[^a].txt"] {
@@ -354,7 +354,7 @@ async fn glob_rejects_over_budget_pattern() {
             .await
             .unwrap();
         let pattern = "x".repeat(MAX_GLOB_BYTES + 1);
-        let tool = ToolRegistry::builtins().get("glob").unwrap();
+        let tool = hya_tool_loader::builtins().get("glob").unwrap();
         let error = tool
             .execute(&ctx_with(workdir), json!({ "pattern": pattern }))
             .await
@@ -381,7 +381,7 @@ async fn glob_cancellation_stops_directory_work() {
         tokio::fs::write(workdir.join("nested/deeper/target.txt"), "content\n")
             .await
             .unwrap();
-        let tool = ToolRegistry::builtins().get("glob").unwrap();
+        let tool = hya_tool_loader::builtins().get("glob").unwrap();
         let ctx = ctx_with(workdir);
         ctx.cancel.cancel();
 
@@ -412,7 +412,7 @@ async fn glob_authorizes_external_path_before_metadata_probe() {
             allow(Action::ExternalDirectory, &target_pattern),
         ],
     );
-    let tool = ToolRegistry::builtins().get("glob").unwrap();
+    let tool = hya_tool_loader::builtins().get("glob").unwrap();
 
     let result = tool
         .execute(
@@ -430,7 +430,7 @@ async fn glob_authorizes_external_path_before_metadata_probe() {
 /// Exactly one result beyond the public cap sets truncation without retaining all paths.
 #[tokio::test]
 async fn glob_limit_boundary_distinguishes_exact_cap_from_cap_plus_one() {
-    let tool = ToolRegistry::builtins().get("glob").unwrap();
+    let tool = hya_tool_loader::builtins().get("glob").unwrap();
     for (count, expected_truncated) in [(100usize, false), (101usize, true)] {
         let workdir = tempdir();
         for index in 0..count {
@@ -454,7 +454,7 @@ async fn glob_limit_boundary_distinguishes_exact_cap_from_cap_plus_one() {
 #[tokio::test]
 async fn glob_rejects_unknown_and_null_fields() {
     let workdir = tempdir();
-    let tool = ToolRegistry::builtins().get("glob").unwrap();
+    let tool = hya_tool_loader::builtins().get("glob").unwrap();
     let ctx = ctx_with(workdir);
 
     for input in [

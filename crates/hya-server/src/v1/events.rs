@@ -822,13 +822,13 @@ mod fanout_tests {
     use hya_engine::{AgentCatalog, AgentSpec, EventBus, RuntimeRegistry, SessionEngine};
     use hya_proto::{AgentName, Event, ModelRef};
     use hya_provider::ProviderRouter;
-    use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+    use hya_tool::{PermissionPlane, PermissionRules};
     use std::sync::{Arc, atomic::Ordering};
 
     async fn state() -> crate::AppState {
         let catalog = hya_bundle::BundleCatalog::from_prepared(&[]).unwrap();
         let runtime = RuntimeRegistry::from_snapshot(
-            ToolRegistry::from_tool_families(&[]).snapshot(),
+            hya_tool_loader::from_tool_families(&[]).snapshot(),
             Arc::new(AgentCatalog::new(Arc::new(catalog)).unwrap()),
         );
         let (permission, _asks) = PermissionPlane::new(PermissionRules::default());

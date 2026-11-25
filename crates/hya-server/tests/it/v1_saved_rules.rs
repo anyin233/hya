@@ -21,7 +21,7 @@ use hya_tool::permission::{
     AskRequest, Invocation, InvocationPolicy, InvocationRule, Mode, PermissionModel,
     PermissionTarget,
 };
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tower::ServiceExt;
@@ -34,7 +34,7 @@ async fn state_with_plane(
     mpsc::UnboundedReceiver<AskRequest>,
 ) {
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let policy = InvocationPolicy::compile(
         PermissionModel::Default,
         vec![InvocationRule::new(

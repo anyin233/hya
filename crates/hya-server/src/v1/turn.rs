@@ -628,13 +628,13 @@ mod admission_tests {
     };
     use hya_proto::{AgentName, ModelRef};
     use hya_provider::ProviderRouter;
-    use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+    use hya_tool::{PermissionPlane, PermissionRules};
 
     #[tokio::test]
     async fn o6_empty_and_failed_restores_release_both_reservations_before_reply() {
         let catalog = hya_bundle::BundleCatalog::from_prepared(&[]).unwrap();
         let runtime = RuntimeRegistry::from_snapshot(
-            ToolRegistry::from_tool_families(&[]).snapshot(),
+            hya_tool_loader::from_tool_families(&[]).snapshot(),
             Arc::new(AgentCatalog::new(Arc::new(catalog)).unwrap()),
         );
         let (permission, _) = PermissionPlane::new(PermissionRules::default());

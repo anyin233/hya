@@ -15,7 +15,7 @@ use hya_provider::{
     ProviderRouter,
 };
 use hya_store::{SessionStore, bench};
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use tokio::sync::mpsc;
 
 struct Deltas(mpsc::UnboundedSender<u64>);
@@ -116,7 +116,7 @@ async fn actor_stream_deltas_execute_no_sql() {
     let engine = Arc::new(SessionEngine::new(
         store,
         router,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     ));

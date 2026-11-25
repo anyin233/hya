@@ -19,7 +19,7 @@ use hya_server::{
     AgentModelEffective, AgentModelIdentity, AgentModelSource, AgentModelState, AppState, router,
 };
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -147,7 +147,7 @@ fn row(preference: Option<AgentModelIdentity>) -> AgentModelState {
 }
 
 async fn app(control: Option<Arc<dyn AgentModelControl>>) -> axum::Router {
-    let runtime = support::test_runtime(Arc::new(ToolRegistry::builtins()));
+    let runtime = support::test_runtime(Arc::new(hya_tool_loader::builtins()));
     let store = SessionStore::connect_memory().await.unwrap();
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());

@@ -18,7 +18,7 @@ use hya_provider::{
     Capabilities, CompletionRequest, EventStream, Provider, ProviderError, ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use tokio_util::sync::CancellationToken;
 
 /// Build a registry mapping the four logical category names to concrete refs,
@@ -135,7 +135,7 @@ async fn four_categories_drive_four_distinct_model_calls() {
     let router = Arc::new(ProviderRouter::new().with(Arc::new(RecordingProvider {
         models: models.clone(),
     })));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = Arc::new(SessionEngine::new(

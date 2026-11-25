@@ -22,7 +22,7 @@ use support::*;
 #[test]
 fn skill_discovery_runs_outside_publication_lock() {
     let registry = RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         Arc::new(TestCatalog::from_prepared(&[]).unwrap()),
     );
     let directory = Path::new("/skill-discovery-lock-test");
@@ -59,7 +59,7 @@ fn full_view_exposes_only_catalog_confirmed_plugin_bundle_skills() {
         "agents: [{ id: private-agent, role: main }]\n",
     );
     let catalog = Arc::new(TestCatalog::from_verified_catalogs(&[&plugin, &agent]).unwrap());
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     // An unrecognized bundle source cannot opt into shared Skill visibility.
     let mut unknown = registry.active().sources[&RuntimeSourceId::bundle("acme/shared")].clone();
     unknown.id = RuntimeSourceId::bundle("acme/unknown");
@@ -127,7 +127,7 @@ fn bundled_mcp_stays_in_mcp_partition() {
     ))
     .unwrap();
     let catalog = Arc::new(TestCatalog::from_verified_catalogs(&[&prepared]).unwrap());
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     registry
         .refresh(|candidate| {
             candidate.upsert_sources(vec![RuntimeSource::new(
@@ -187,7 +187,7 @@ agents:
     ))
     .unwrap();
     let catalog = Arc::new(TestCatalog::from_verified_catalogs(&[&prepared]).unwrap());
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     registry
         .refresh(|candidate| {
             candidate.upsert_sources(vec![
@@ -257,7 +257,7 @@ agents:
     ))
     .unwrap();
     let catalog = Arc::new(TestCatalog::from_verified_catalogs(&[&prepared]).unwrap());
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     registry
         .refresh(|candidate| {
             candidate.upsert_sources(vec![RuntimeSource::new(
@@ -346,8 +346,8 @@ fn pure_registry_serves_builtin_skills_only() {
     .unwrap();
 
     let catalog = Arc::new(TestCatalog::from_prepared(&[]).unwrap());
-    let plain = test_runtime_registry(ToolRegistry::builtins(), catalog.clone());
-    let pure = test_runtime_registry(ToolRegistry::builtins(), catalog).with_pure_skills(true);
+    let plain = test_runtime_registry(hya_tool_loader::builtins(), catalog.clone());
+    let pure = test_runtime_registry(hya_tool_loader::builtins(), catalog).with_pure_skills(true);
 
     let plain_binding = plain.bind_turn(&dir).unwrap();
     let plain_names: Vec<String> = plain_binding
@@ -390,7 +390,7 @@ fn old_turn_binding_pins_tools_across_later_publication() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let workdir = PathBuf::from("/tmp/hya-resource-view-pin");
     let binding = registry.bind_turn(&workdir).unwrap();
     let policy = binding
@@ -419,7 +419,7 @@ fn old_turn_binding_pins_tools_across_later_publication() {
 #[test]
 fn binding_clones_reuse_selected_resources_across_assembly() {
     let catalog = Arc::new(TestCatalog::from_prepared(&[]).unwrap());
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let source_id = RuntimeSourceId::plugin("mask-src");
     registry
         .refresh(|candidate| {
@@ -482,7 +482,7 @@ fn alias_masking_publishes_and_compiles_bare_name_to_winner() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     registry
         .refresh(|candidate| {
             candidate.upsert_sources(vec![RuntimeSource::new(
@@ -573,7 +573,7 @@ fn cross_source_alias_mask_goes_to_greater_source_id() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let contender = |configured_id: &str, digest: [u8; 32], canonical: &str| {
         RuntimeSource::new(
             RuntimeSourceId::plugin(configured_id),
@@ -661,7 +661,7 @@ fn runtime_source_dispatch_identity_tracks_authoritative_source_semantics() {
                 )])
                 .unwrap(),
             );
-            let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+            let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
             let mut resources = BTreeMap::new();
             resources.insert("probe".to_string(), resource_value);
             registry
@@ -747,7 +747,7 @@ agents:
             panic!("runtime fingerprint verified catalog construction failed: {catalog:?}");
         };
 
-        let registry = ToolRegistry::builtins();
+        let registry = hya_tool_loader::builtins();
         let mut custom_tools = vec![
             (
                 Arc::new(FingerprintTool::new("custom_one", schema_marker)) as Arc<dyn Tool>,
@@ -961,7 +961,7 @@ agents:
         let Ok(catalog) = catalog else {
             panic!("skill fingerprint verified catalog construction failed: {catalog:?}");
         };
-        let tools = ToolRegistry::builtins().snapshot();
+        let tools = hya_tool_loader::builtins().snapshot();
         let workdir = PathBuf::from("/tmp/runtime-fingerprint-skills");
         let mut skills = BTreeMap::new();
         skills.insert(workdir.clone(), Arc::new(selected));
@@ -1150,7 +1150,7 @@ agents:
         let Ok(catalog) = catalog else {
             panic!("source fingerprint verified catalog construction failed: {catalog:?}");
         };
-        let registry = test_runtime_registry(ToolRegistry::builtins(), Arc::new(catalog));
+        let registry = test_runtime_registry(hya_tool_loader::builtins(), Arc::new(catalog));
         let mut plugin_resources = BTreeMap::new();
         plugin_resources.insert(
             "config".to_string(),
@@ -1394,7 +1394,7 @@ fn missing_and_filtered_alias_targets_fail_typed() {
         .unwrap(),
     );
     // Register after construction so basic_tools stays builtins-only.
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     registry
         .refresh(|candidate| candidate.register_tool(Arc::new(NoopTool::new("dynamic_marker"))))
         .unwrap();
@@ -1430,7 +1430,7 @@ fn deny_filtered_alias_target_fails_typed() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry
         .bind_turn(Path::new("/tmp/hya-alias-denied"))
         .unwrap();
@@ -1465,7 +1465,7 @@ fn alias_cannot_override_qualified_stable_name() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry
         .bind_turn(Path::new("/tmp/hya-alias-qualified"))
         .unwrap();
@@ -1502,7 +1502,7 @@ fn alias_collision_with_public_short_name_fails_typed() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry
         .bind_turn(Path::new("/tmp/hya-alias-collide"))
         .unwrap();
@@ -1538,7 +1538,7 @@ fn local_skill_short_name_wins_and_filtered_local_restores_harness_short() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let workdir = tempfile_skill_workdir("shared", "HARNESS");
     let binding = registry.bind_turn(&workdir).unwrap();
     let policy = binding
@@ -1586,7 +1586,7 @@ fn local_skill_short_name_wins_and_filtered_local_restores_harness_short() {
         )])
         .unwrap(),
     );
-    let filtered_registry = test_runtime_registry(ToolRegistry::builtins(), filtered_catalog);
+    let filtered_registry = test_runtime_registry(hya_tool_loader::builtins(), filtered_catalog);
     let filtered_binding = filtered_registry.bind_turn(&workdir).unwrap();
     let filtered_policy = filtered_binding
         .agent_resource_policy_on_plane("skill-agent", AgentToolPlane::Full)
@@ -1636,7 +1636,7 @@ fn model_schemas_use_explicit_aliases_and_canonical_short_names() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry
         .bind_turn(Path::new("/tmp/hya-schema-dispatch"))
         .unwrap();
@@ -1686,7 +1686,7 @@ fn a_bundle_local_allow_list_yields_no_skill_facade_and_inlines_the_skill() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     registry
         .refresh(|candidate| candidate.register_tool(Arc::new(NoopTool::new("dynamic_marker"))))
         .unwrap();
@@ -1789,7 +1789,7 @@ fn qualified_public_spellings_namespace_alias_and_dispatch() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry
         .bind_turn(Path::new("/tmp/hya-qualified-map"))
         .unwrap();
@@ -1881,7 +1881,7 @@ fn harness_mcp_is_source_owned_full_only_and_pins_with_binding() {
         ])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     registry
         .refresh(|candidate| {
             candidate.upsert_sources(vec![RuntimeSource::new(
@@ -2007,7 +2007,7 @@ fn global_canonical_reference_rejects_wrong_kind_and_cross_kind_short_ambiguity(
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), wrong_kind);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), wrong_kind);
     let binding = registry
         .bind_turn(Path::new("/tmp/hya-global-wrong-kind"))
         .unwrap();
@@ -2038,7 +2038,7 @@ fn global_canonical_reference_rejects_wrong_kind_and_cross_kind_short_ambiguity(
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), ambiguous);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), ambiguous);
     // Register a harness tool whose short name collides with the local skill.
     registry
         .refresh(|candidate| candidate.register_tool(Arc::new(NoopTool::new("shared"))))
@@ -2079,7 +2079,7 @@ fn alias_cannot_occupy_same_target_stable_spelling() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry
         .bind_turn(Path::new("/tmp/hya-alias-self"))
         .unwrap();
@@ -2125,7 +2125,7 @@ fn tool_and_skill_may_share_public_spelling_independently() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry
         .bind_turn(Path::new("/tmp/hya-cross-kind-ok"))
         .unwrap();
@@ -2173,7 +2173,7 @@ fn tool_mcp_public_name_collision_is_typed_rejected() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     registry
         .refresh(|candidate| {
             candidate.upsert_sources(vec![RuntimeSource::new(
@@ -2233,7 +2233,7 @@ fn cross_kind_ambiguous_alias_target_fails_typed() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     registry
         .refresh(|candidate| candidate.register_tool(Arc::new(NoopTool::new("shared"))))
         .unwrap();
@@ -2254,7 +2254,7 @@ fn cross_kind_ambiguous_alias_target_fails_typed() {
 
 #[test]
 fn both_planes_keep_builtin_aliases_out_of_model_schemas() {
-    let expected = ToolRegistry::builtins()
+    let expected = hya_tool_loader::builtins()
         .schemas()
         .into_iter()
         .map(|schema| schema.name.as_str().to_string())
@@ -2280,7 +2280,7 @@ fn both_planes_keep_builtin_aliases_out_of_model_schemas() {
             )])
             .unwrap(),
         );
-        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
         let binding = registry.bind_turn(Path::new(workdir)).unwrap();
         let policy = binding
             .agent_resource_policy_on_plane(agent_id, plane)
@@ -2350,7 +2350,7 @@ fn explicit_view_alias_suppresses_candidate_aliases_for_target() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry
         .bind_turn(Path::new("/tmp/hya-view-alias-suppress"))
         .unwrap();
@@ -2421,7 +2421,7 @@ fn invalid_provider_tool_alias_fails_during_resource_compile() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry
         .bind_turn(Path::new("/tmp/hya-invalid-provider-alias"))
         .unwrap();
@@ -2460,7 +2460,7 @@ fn explicit_view_alias_collides_with_candidate_alias_even_same_target() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry
         .bind_turn(Path::new("/tmp/hya-view-alias-candidate-collide"))
         .unwrap();
@@ -2511,7 +2511,7 @@ fn mcp_and_skill_may_share_public_spelling_independently() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     registry
         .refresh(|candidate| {
             candidate.upsert_sources(vec![RuntimeSource::new(
@@ -2561,7 +2561,7 @@ fn full_mcp_preserves_source_alias_under_mcp_kind() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     registry
         .refresh(|candidate| {
             candidate.upsert_sources(vec![RuntimeSource::new(
@@ -2638,7 +2638,7 @@ fn prepared_skill_alias_is_public_spelling_for_skill_plane() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry
         .bind_turn(Path::new("/tmp/hya-skill-alias"))
         .unwrap();
@@ -2676,7 +2676,7 @@ fn alias_cannot_impersonate_filtered_stable_name() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry
         .bind_turn(Path::new("/tmp/hya-filtered-stable"))
         .unwrap();
@@ -2725,7 +2725,7 @@ fn aliased_skill_facade_drives_prompt_not_public_key_skill() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry
         .bind_turn(Path::new("/tmp/hya-facade-alias"))
         .unwrap();
@@ -2781,7 +2781,7 @@ fn skill_prompt_lists_all_dispatchable_spellings_with_short_preference() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry.bind_turn(Path::new("/tmp/hya-spellings")).unwrap();
     let compiled = binding
         .compile_agent_resources(&binding.agent_resource_policy("spellings").unwrap())
@@ -2822,7 +2822,7 @@ fn selected_harness_skill_without_facade_fails_typed() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let workdir = tempfile_skill_workdir("workdir-only", "MUST_NOT_INLINE");
     let binding = registry.bind_turn(&workdir).unwrap();
     let policy = binding
@@ -2874,7 +2874,7 @@ fn bundle_id_with_kind_path_segments_parses_structurally() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry
         .bind_turn(Path::new("/tmp/hya-nested-bundle-id"))
         .unwrap();
@@ -2914,7 +2914,7 @@ fn bundle_sidecar_collision_requires_provider_safe_names_for_both_targets() {
     });
     let catalog = Arc::new(TestCatalog::from_prepared(&[bundle]).unwrap());
 
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     tools
         .register_with_permission(Arc::new(NoopTool::new("echo")), ToolPermission::Tool)
         .unwrap();
@@ -3049,7 +3049,7 @@ fn captured_agent_resource_policy_retains_disjoint_bundle_tool_and_hook_ids() {
     }];
 
     let catalog = Arc::new(TestCatalog::from_prepared(&[alpha_bundle, beta_bundle]).unwrap());
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry
         .bind_turn(Path::new("/tmp/hya-disjoint-sidecars"))
         .unwrap();
@@ -3226,7 +3226,7 @@ fn source_schema_claims_publish_and_dispatch_through_compiled_views() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let owner = ReferenceRecordingTool::new("scheme__query");
     registry
         .refresh(|candidate| {
@@ -3315,7 +3315,7 @@ fn scheme_dispatch_stays_absent_when_the_view_lacks_the_owner() {
         )])
         .unwrap(),
     );
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let owner = ReferenceRecordingTool::new("scheme__query");
     registry
         .refresh(|candidate| {
@@ -3385,7 +3385,7 @@ fn bundle_agent_view_with_sidecar_owner_reads_registered_scheme() {
         aliases: Vec::new(),
     });
     let catalog = Arc::new(TestCatalog::from_prepared(&[bundle]).unwrap());
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     registry
         .refresh(|candidate| {
             candidate.replace_sources_of_kind(
@@ -3515,7 +3515,7 @@ fn schema_names(compiled: &CompiledResourceView) -> BTreeSet<String> {
 #[test]
 fn coordination_tools_join_a_narrow_bundle_view() {
     let compiled = compile_bundle_agent(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         agent("narrow-scout", view(&["harness:tool/grep"], &[])),
     )
     .unwrap();
@@ -3534,7 +3534,7 @@ fn coordination_tools_join_a_narrow_bundle_view() {
 #[test]
 fn read_only_builtins_are_denied_write_and_shell_tools() {
     let registry = test_runtime_registry(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         Arc::new(TestCatalog::from_prepared(&[]).unwrap()),
     );
     let binding = registry
@@ -3573,7 +3573,7 @@ fn read_only_builtins_are_denied_write_and_shell_tools() {
 #[test]
 fn injected_read_serves_channel_mail_but_never_files() {
     let compiled = compile_bundle_agent(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         agent("mail-reader", view(&["harness:tool/grep"], &[])),
     )
     .unwrap();
@@ -3601,7 +3601,7 @@ fn injected_read_serves_channel_mail_but_never_files() {
 #[test]
 fn a_view_that_selects_read_keeps_the_full_read_tool() {
     let compiled = compile_bundle_agent(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         agent("file-reader", view(&["harness:tool/read"], &[])),
     )
     .unwrap();
@@ -3620,7 +3620,7 @@ fn a_view_that_selects_read_keeps_the_full_read_tool() {
 #[test]
 fn spawn_rights_add_task_and_archive() {
     let compiled = compile_bundle_agent(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         PreparedAgent {
             can_spawn: vec![AgentName::new("hya-scout")],
             ..agent("narrow-lead", view(&["harness:tool/grep"], &[]))
@@ -3637,7 +3637,7 @@ fn spawn_rights_add_task_and_archive() {
 #[test]
 fn a_default_view_without_spawn_rights_has_no_task_or_archive() {
     let compiled = compile_bundle_agent(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         agent("leaf-worker", ResourceView::default()),
     )
     .unwrap();
@@ -3655,7 +3655,7 @@ fn a_default_view_without_spawn_rights_has_no_task_or_archive() {
 #[test]
 fn without_channel_tools_no_channel_tools_are_injected() {
     let compiled = compile_bundle_agent(
-        ToolRegistry::from_tool_families(&WITHOUT_CHANNEL_TOOLS),
+        hya_tool_loader::from_tool_families(&WITHOUT_CHANNEL_TOOLS),
         agent("quiet-scout", view(&["harness:tool/grep"], &[])),
     )
     .unwrap();
@@ -3670,7 +3670,7 @@ fn without_channel_tools_no_channel_tools_are_injected() {
 #[test]
 fn explicit_coordination_entries_dedupe_with_the_injected_set() {
     let compiled = compile_bundle_agent(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         agent(
             "explicit-scout",
             view(
@@ -3701,7 +3701,7 @@ fn explicit_coordination_entries_dedupe_with_the_injected_set() {
 #[test]
 fn deny_removes_a_safe_coordination_tool() {
     let compiled = compile_bundle_agent(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         PreparedAgent {
             can_spawn: vec![AgentName::new("hya-scout")],
             ..agent(
@@ -3725,7 +3725,7 @@ fn deny_removes_a_safe_coordination_tool() {
 #[test]
 fn deny_of_report_is_rejected() {
     let error = compile_bundle_agent(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         agent("stuck-scout", view(&[], &["harness:tool/report"])),
     )
     .err()
@@ -3739,7 +3739,7 @@ fn deny_of_report_is_rejected() {
 #[test]
 fn deny_of_read_keeps_the_channel_mail_path() {
     let compiled = compile_bundle_agent(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         agent("no-files", view(&[], &["harness:tool/read"])),
     )
     .unwrap();
@@ -3758,7 +3758,7 @@ fn deny_of_read_keeps_the_channel_mail_path() {
 #[test]
 fn builtin_agents_keep_every_coordination_tool() {
     let catalog = Arc::new(TestCatalog::from_prepared(&[]).unwrap());
-    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let registry = test_runtime_registry(hya_tool_loader::builtins(), catalog);
     let binding = registry
         .bind_turn(&PathBuf::from("/tmp/hya-coordination-tools"))
         .unwrap();

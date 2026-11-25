@@ -3,9 +3,8 @@
 
 use std::collections::BTreeSet;
 
-use hya_tool::{
-    AliasVisibility, ToolPermission, ToolRegistry, base_tools_preset, tool_bundle_presets,
-};
+use hya_tool::ToolPermission;
+use hya_tool_loader::{AliasVisibility, base_tools_preset, builtins, tool_bundle_presets};
 
 #[test]
 fn base_bundle_owns_only_the_requested_foundational_tools() {
@@ -157,7 +156,7 @@ fn embedded_base_tools_preset_is_the_registry_authority() {
     expected_policy.sort_by(|left, right| left.0.cmp(right.0));
     assert_eq!(actual_policy, expected_policy);
 
-    let registry = ToolRegistry::builtins();
+    let registry = builtins();
     let actual = registry
         .schemas()
         .into_iter()
@@ -223,7 +222,7 @@ fn preset_preserves_read_protection_and_permission_defaults() {
 
 #[test]
 fn tool_policies_come_from_runtime_loaded_bundles() {
-    for preset in hya_tool::tool_bundle_presets() {
+    for preset in tool_bundle_presets() {
         let catalog = hya_bundle::first_party_bundle(preset.identity())
             .unwrap_or_else(|error| panic!("{error}"));
         assert!(

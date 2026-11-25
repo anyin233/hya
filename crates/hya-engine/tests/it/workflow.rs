@@ -28,7 +28,7 @@ use hya_provider::{
     ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, Tool, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules, Tool};
 use hya_workflow::{WorkflowSource, compile};
 use tokio_util::sync::CancellationToken;
 
@@ -341,7 +341,7 @@ async fn engine_with_limits(
     limits: SubagentLimits,
 ) -> Arc<SessionEngine> {
     let router = Arc::new(ProviderRouter::new().with(provider));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     // Install the fixture catalog so stage agents (explorer/builder/...) resolve
     // through the same AgentCatalog seam the production task path uses.
     let runtime = Arc::new(hya_engine::RuntimeRegistry::from_snapshot(
@@ -1705,7 +1705,7 @@ async fn engine_parts(
     tokio::sync::broadcast::Receiver<hya_proto::Envelope>,
 ) {
     let router = Arc::new(ProviderRouter::new().with(provider));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let runtime = Arc::new(hya_engine::RuntimeRegistry::from_snapshot(
         tools.snapshot(),
         catalog,

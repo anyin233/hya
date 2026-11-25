@@ -14,7 +14,6 @@ use hya_engine::{
     apply_agent_model_preference, resolve_configured_agent_model,
 };
 use hya_proto::ModelRef;
-use hya_tool::ToolRegistry;
 
 use support::{TestDir, builtin_only_catalog};
 
@@ -45,7 +44,7 @@ fn base() -> AgentSpec {
 #[test]
 fn turn_bindings_pin_the_published_preference_snapshot() {
     let workdir = TestDir::new("agent-model-preferences");
-    let registry = RuntimeRegistry::new(ToolRegistry::builtins(), builtin_only_catalog());
+    let registry = RuntimeRegistry::new(hya_tool_loader::builtins(), builtin_only_catalog());
     let before = registry.bind_turn(workdir.path()).unwrap();
 
     let mut first = BTreeMap::new();

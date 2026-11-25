@@ -27,7 +27,7 @@ use hya_provider::{
     ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -186,7 +186,7 @@ async fn fixture(
     let mut engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         Arc::new(router),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     );

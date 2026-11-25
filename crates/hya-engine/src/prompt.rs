@@ -266,7 +266,7 @@ mod tests {
     /// Non-tool spellings (channel URLs, sentinels, notices) are exempt.
     #[test]
     fn quick_reference_tool_tokens_resolve_in_the_registry() {
-        let registry = hya_tool::ToolRegistry::builtins();
+        let registry = hya_tool_loader::builtins();
         for depth in [0, 1] {
             let out = reference(&FULL_TOOLS, depth);
             assert!(out.starts_with("## Team quick reference"), "{out}");

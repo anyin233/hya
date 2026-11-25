@@ -785,7 +785,7 @@ mod shutdown_order_tests {
     use hya_proto::{AgentName, FinishCause, FinishReason, ModelRef, Role};
     use hya_provider::{Capabilities, CompletionRequest, EventStream, Provider, ProviderError};
     use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
-    use hya_tool::{Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+    use hya_tool::{Mode, PermissionPlane, PermissionRules, Rule};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tower::ServiceExt;
@@ -842,7 +842,7 @@ mod shutdown_order_tests {
             let engine = Arc::new(SessionEngine::new(
                 SessionStore::connect_memory().await.unwrap(),
                 Arc::new(ProviderRouter::new().with(provider.clone())),
-                super::shutdown_test_support::test_runtime(Arc::new(ToolRegistry::builtins())),
+                super::shutdown_test_support::test_runtime(Arc::new(hya_tool_loader::builtins())),
                 permission,
                 EventBus::default(),
             ));

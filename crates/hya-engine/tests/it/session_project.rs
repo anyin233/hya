@@ -12,12 +12,12 @@ use hya_engine::{CreateSession, EventBus, SessionEngine};
 use hya_proto::{AgentName, Event, ModelRef, ProjectId, SessionId, SessionKind};
 use hya_provider::ProviderRouter;
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 
 async fn engine() -> SessionEngine {
     let store = SessionStore::connect_memory().await.unwrap();
     let providers = Arc::new(ProviderRouter::new());
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
     SessionEngine::new(
         store,

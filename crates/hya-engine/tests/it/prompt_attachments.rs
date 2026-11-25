@@ -15,7 +15,7 @@ use hya_provider::{
     ProviderKind, ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpListener;
@@ -79,7 +79,7 @@ async fn compat_prompt_files_are_replayed_as_media_parts() {
     let router = Arc::new(ProviderRouter::new().with(Arc::new(RecordingProvider {
         requests: requests.clone(),
     })));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(
@@ -159,7 +159,7 @@ async fn text_file_reference_stays_file_context_with_native_guidance() {
     let router = Arc::new(ProviderRouter::new().with(Arc::new(RecordingProvider {
         requests: requests.clone(),
     })));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(
@@ -317,7 +317,7 @@ async fn image_attachment_reaches_responses_and_replays_in_order() {
     )
     .unwrap();
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(

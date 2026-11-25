@@ -165,7 +165,7 @@ mod tests {
     use hya_proto::{AgentName, ModelRef, SessionKind};
     use hya_provider::{DevProvider, ProviderRouter};
     use hya_store::SessionStore;
-    use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+    use hya_tool::{PermissionPlane, PermissionRules};
     use hya_workflow::{WorkflowSource, compile};
     use tokio_util::sync::CancellationToken;
 
@@ -175,7 +175,7 @@ mod tests {
         let engine = Arc::new(SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
             Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new()))),
-            crate::test_support::runtime(ToolRegistry::builtins()),
+            crate::test_support::runtime(hya_tool_loader::builtins()),
             permission,
             EventBus::default(),
         ));

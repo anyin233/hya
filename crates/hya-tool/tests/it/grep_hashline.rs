@@ -13,8 +13,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hya_tool::{
     Action, Decision, InteractionPlane, LspPlane, Mode, PermissionInterceptor, PermissionPlane,
-    PermissionRules, Resource, Rule, SkillPlane, SpawnerPlane, ToolCtx, ToolError, ToolRegistry,
-    WebSearchPlane, handle::ArtifactPlane,
+    PermissionRules, Resource, Rule, SkillPlane, SpawnerPlane, ToolCtx, ToolError, WebSearchPlane,
+    handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -187,7 +187,7 @@ async fn grep_regex_respects_case_mode() {
     )
     .await
     .unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let tool = registry.get("grep").unwrap();
     let ctx = ctx_with(workdir);
 
@@ -229,7 +229,7 @@ async fn grep_glob_filters_nested_files_for_directory_targets() {
     tokio::fs::write(nested.join("deep.rs"), "needle deep\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let ctx = ctx_with(workdir);
 
     let result = tool
@@ -281,7 +281,7 @@ async fn grep_honors_gitignore_and_skips_binary_and_unloadable_files() {
         .unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink("missing-target", workdir.join("unloadable.txt")).unwrap();
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let ctx = ctx_with(workdir);
 
     let result = tool
@@ -312,7 +312,7 @@ async fn grep_returns_no_matches_without_display_groups() {
     tokio::fs::write(workdir.join("empty.txt"), "nothing relevant\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let ctx = ctx_with(workdir);
 
     let result = tool
@@ -338,7 +338,7 @@ async fn grep_merges_overlapping_context_ranges_without_separator() {
     )
     .await
     .unwrap();
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let ctx = ctx_with(workdir);
 
     let result = tool
@@ -385,7 +385,7 @@ async fn grep_separates_disjoint_context_ranges() {
     tokio::fs::write(workdir.join("separate.txt"), source)
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let ctx = ctx_with(workdir);
 
     let result = tool
@@ -425,7 +425,7 @@ async fn grep_emits_deterministic_file_and_row_order() {
     tokio::fs::write(workdir.join("a.txt"), "needle-a-first\nneedle-a-second\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let ctx = ctx_with(workdir);
 
     let result = tool
@@ -461,7 +461,7 @@ async fn grep_defaults_to_workdir_zero_context_and_fifty_matches() {
     tokio::fs::write(workdir.join("default.txt"), source)
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let ctx = ctx_with(workdir);
 
     let result = tool
@@ -495,7 +495,7 @@ async fn grep_limit_boundary_distinguishes_exact_limit_from_limit_plus_one() {
     )
     .await
     .unwrap();
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let ctx = ctx_with(workdir);
 
     let exact = tool
@@ -533,7 +533,7 @@ async fn grep_limit_boundary_distinguishes_exact_limit_from_limit_plus_one() {
 #[tokio::test]
 async fn grep_rejects_unknown_fields() {
     let workdir = tempdir();
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let ctx = ctx_with(workdir);
 
     let error = tool
@@ -559,7 +559,7 @@ async fn grep_clamps_out_of_range_context_with_a_note() {
         })
         .collect();
     std::fs::write(workdir.join("notes.txt"), body).unwrap();
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let ctx = ctx_with(workdir.clone());
 
     let high = tool
@@ -609,7 +609,7 @@ async fn grep_clamps_out_of_range_context_with_a_note() {
 
 #[test]
 fn grep_schema_states_the_context_range() {
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let schema = tool.schema();
     let description = schema.input_schema["properties"]["context"]["description"]
         .as_str()
@@ -624,7 +624,7 @@ fn grep_schema_states_the_context_range() {
 #[tokio::test]
 async fn grep_rejects_zero_limit() {
     let workdir = tempdir();
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let ctx = ctx_with(workdir);
 
     let error = tool
@@ -639,7 +639,7 @@ async fn grep_rejects_zero_limit() {
 #[tokio::test]
 async fn grep_rejects_limit_above_bound() {
     let workdir = tempdir();
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let ctx = ctx_with(workdir);
 
     let error = tool
@@ -654,7 +654,7 @@ async fn grep_rejects_limit_above_bound() {
 #[tokio::test]
 async fn grep_rejects_invalid_regex() {
     let workdir = tempdir();
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let ctx = ctx_with(workdir);
 
     let error = tool
@@ -681,7 +681,7 @@ async fn grep_requires_external_directory_permission() {
             deny(Action::ExternalDirectory, "*"),
         ],
     );
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
 
     let error = tool
         .execute(
@@ -701,7 +701,7 @@ async fn grep_emits_hashline_rows_and_display_match_flags() {
     tokio::fs::write(workdir.join("display.rs"), "before\nneedle here\nafter\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let tool = hya_tool_loader::builtins().get("grep").unwrap();
     let ctx = ctx_with(workdir);
 
     let result = tool
@@ -746,7 +746,7 @@ async fn grep_cancellation_has_no_snapshot_side_effects() {
         .await
         .unwrap();
 
-    let anchor_registry = ToolRegistry::builtins();
+    let anchor_registry = hya_tool_loader::builtins();
     let anchor_read = anchor_registry.get("read").unwrap();
     let anchor_ctx = ctx_with(workdir.clone());
     let read_result = anchor_read
@@ -759,7 +759,7 @@ async fn grep_cancellation_has_no_snapshot_side_effects() {
         "needle",
     );
 
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let grep = registry.get("grep").unwrap();
     let edit = registry.get("edit").unwrap();
     let cancel = CancellationToken::new();
@@ -826,7 +826,7 @@ async fn grep_to_edit_recovers_from_actual_emitted_anchor() {
         .join("\n");
     tokio::fs::write(&target, &source).await.unwrap();
 
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let grep = registry.get("grep").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(workdir);
@@ -884,7 +884,7 @@ async fn grep_skips_over_budget_line_with_warning_and_observes_cancellation() {
             .await
             .unwrap();
 
-        let registry = ToolRegistry::builtins();
+        let registry = hya_tool_loader::builtins();
         let grep = registry.get("grep").unwrap();
         let result = grep
             .execute(&ctx_with(workdir.clone()), json!({ "pattern": "NEEDLE" }))
@@ -938,7 +938,7 @@ async fn grep_marks_over_budget_rendered_context_instead_of_silently_omitting_it
     tokio::fs::write(workdir.join("large-match.txt"), line)
         .await
         .unwrap();
-    let grep = ToolRegistry::builtins().get("grep").unwrap();
+    let grep = hya_tool_loader::builtins().get("grep").unwrap();
 
     let result = grep
         .execute(&ctx_with(workdir), json!({ "pattern": "needle" }))
@@ -970,7 +970,7 @@ async fn grep_caller_glob_supports_negated_character_classes() {
                 .await
                 .unwrap();
         }
-        let registry = ToolRegistry::builtins();
+        let registry = hya_tool_loader::builtins();
         let grep = registry.get("grep").unwrap();
         let ctx = ctx_with(workdir);
 
@@ -1009,7 +1009,7 @@ async fn grep_ignore_rules_support_negated_character_classes() {
                 .unwrap();
         }
 
-        let grep = ToolRegistry::builtins().get("grep").unwrap();
+        let grep = hya_tool_loader::builtins().get("grep").unwrap();
         let result = grep
             .execute(&ctx_with(workdir), json!({ "pattern": "needle" }))
             .await
@@ -1038,7 +1038,7 @@ async fn grep_rejects_over_budget_glob_input() {
             .await
             .unwrap();
         let glob = "x".repeat(MAX_GLOB_BYTES + 1);
-        let grep = ToolRegistry::builtins().get("grep").unwrap();
+        let grep = hya_tool_loader::builtins().get("grep").unwrap();
         let error = grep
             .execute(
                 &ctx_with(workdir),
@@ -1073,7 +1073,7 @@ async fn grep_bounds_oversized_ignore_rules_with_one_warning() {
             .await
             .unwrap();
 
-        let grep = ToolRegistry::builtins().get("grep").unwrap();
+        let grep = hya_tool_loader::builtins().get("grep").unwrap();
         let result = grep
             .execute(&ctx_with(workdir), json!({ "pattern": "needle" }))
             .await
@@ -1106,7 +1106,7 @@ async fn grep_external_permission_resource_is_file_directory_blind() {
         let outside_directory = outside.join("outside-dir");
         tokio::fs::write(&outside_file, "needle\n").await.unwrap();
         tokio::fs::create_dir(&outside_directory).await.unwrap();
-        let grep = ToolRegistry::builtins().get("grep").unwrap();
+        let grep = hya_tool_loader::builtins().get("grep").unwrap();
 
         let file_requests = Arc::new(Mutex::new(Vec::new()));
         let mut file_ctx = ctx_with_components(

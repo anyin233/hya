@@ -22,7 +22,7 @@ use hya_engine::{
 use hya_proto::{AgentName, FinishReason, ModelRef, ProjectId, SessionId, SessionKind};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::{Value, json};
 use support::TestDir;
 use tokio_util::sync::CancellationToken;
@@ -128,7 +128,7 @@ async fn harness() -> Harness {
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         router,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     )

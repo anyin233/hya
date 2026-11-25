@@ -17,7 +17,7 @@ use hya_proto::{AgentName, Event, MemberId, ModelRef, SessionId, SubagentMode};
 use hya_provider::{FakeProvider, ProviderRouter};
 
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, SpawnMember, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules, SpawnMember};
 use serde_json::Value;
 
 struct NestedSpawn {
@@ -39,7 +39,7 @@ async fn nested_spawn() -> NestedSpawn {
             SessionStore::connect_memory().await.unwrap(),
             provider_router.clone(),
             support::test_runtime(
-                Arc::new(ToolRegistry::builtins()),
+                Arc::new(hya_tool_loader::builtins()),
                 &[
                     ("build", AgentRole::Main, &["explore"]),
                     ("explore", AgentRole::Subagent, &["plan"]),

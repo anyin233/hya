@@ -22,6 +22,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+hya-tool-loader = { workspace = true }
 axum = { workspace = true }
 hya-bundle = { workspace = true }
 hya-engine = { workspace = true }

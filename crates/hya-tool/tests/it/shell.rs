@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    SpawnerPlane, ToolCtx, ToolError, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -199,7 +199,7 @@ async fn wait_for_leader_exit(leader: i32) {
 #[test]
 fn bash_schema_is_closed_and_hides_the_shell_alias() {
     // Given
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
 
     // When
     let schemas = registry.schemas();
@@ -247,7 +247,7 @@ async fn bash_executes_canonical_calls_and_hidden_shell_alias_dispatches() {
     // Given
     let dir = tempdir();
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let canonical = registry.get("bash").unwrap();
     let alias = registry.get("shell").unwrap();
 
@@ -286,7 +286,7 @@ async fn bash_accepts_env_without_disclosing_values_in_the_result() {
     // Given
     let dir = tempdir();
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let secret = "bash-secret-value-7e4c";
     let command = "test -n \"$HYA_PRIVATE_VALUE\" && printf ready";
 
@@ -315,7 +315,7 @@ async fn bash_rejects_legacy_workdir_and_other_unknown_input_keys() {
     // Given
     let dir = tempdir();
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
 
     // When
     let result = execute_with_guard(
@@ -336,7 +336,7 @@ async fn bash_uses_canonical_cwd_and_records_it_in_metadata() {
     let subdir = dir.join("subdir");
     tokio::fs::create_dir_all(&subdir).await.unwrap();
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
 
     // When
     let result = execute_with_guard(
@@ -370,7 +370,7 @@ async fn bash_uses_default_and_zero_disabled_timeouts() {
     // Given
     let dir = tempdir();
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
 
     // When
     let default_result =
@@ -405,7 +405,7 @@ async fn bash_rejects_negative_and_nonfinite_timeout_inputs() {
     // Given
     let dir = tempdir();
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
 
     // When
     let negative = execute_with_guard(
@@ -431,7 +431,7 @@ async fn bash_clamps_positive_timeout_bounds_and_reports_a_notice() {
     // Given
     let dir = tempdir();
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
 
     // When
     let lower = execute_with_guard(
@@ -485,7 +485,7 @@ async fn bash_denied_command_does_not_run_in_an_outside_cwd() {
         ],
         dir,
     );
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command = format!("printf ran > {}", shell_quote(&marker));
 
     // When
@@ -520,7 +520,7 @@ async fn bash_runs_in_a_cwd_outside_the_roots_without_an_external_directory_chec
         ],
         dir,
     );
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
 
     // When
     let result = execute_with_guard(
@@ -546,7 +546,7 @@ async fn bash_returns_structured_nonzero_exit_results() {
     // Given
     let dir = tempdir();
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command = "printf stdout; printf stderr >&2; exit 17";
 
     // When
@@ -574,7 +574,7 @@ async fn bash_timeout_returns_completed_result_and_cleans_process_group() {
     let dir = tempdir();
     let pid_path = dir.join("timeout-child.pid");
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command = format!(
         "(while :; do :; done) & child=$!; printf '%s' \"$child\" > {}; wait \"$child\"",
         shell_quote(&pid_path)
@@ -615,7 +615,7 @@ async fn bash_cancellation_returns_cancelled_and_cleans_process_group() {
     let pid_path = dir.join("cancel-child.pid");
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
     let cancel = ctx.cancel.clone();
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command = format!(
         "(while :; do :; done) & child=$!; printf '%s' \"$child\" > {}; wait \"$child\"",
         shell_quote(&pid_path)
@@ -643,7 +643,7 @@ async fn bash_captures_stdout_and_stderr_with_per_stream_order() {
     // Given
     let dir = tempdir();
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command =
         "printf 'out-1\\n'; printf 'err-1\\n' >&2; printf 'out-2\\n'; printf 'err-2\\n' >&2";
 
@@ -675,7 +675,7 @@ async fn bash_keeps_arrival_order_when_stdout_backpressure_precedes_stderr() {
     // Given
     let dir = tempdir();
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let payload_bytes = 128 * 1024;
     let marker = "stderr-after-stdout-unique";
     let command = format!(
@@ -715,7 +715,7 @@ async fn bash_decodes_invalid_utf8_lossily_without_invalid_result_bytes() {
     // Given
     let dir = tempdir();
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command = "python3 -c 'import os; os.write(1, b\"ok\\xff\\xfe\")'";
 
     // When
@@ -740,7 +740,7 @@ async fn bash_pty_observes_tty_and_non_pty_does_not_fallback() {
     // Given
     let dir = tempdir();
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command = "test -t 0 && test -t 1 && printf tty";
 
     // When
@@ -777,7 +777,7 @@ async fn bash_pty_timeout_returns_structured_result_and_cleans_process_group() {
     let dir = tempdir();
     let pid_path = dir.join("pty-timeout-child.pid");
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command = format!(
         "printf '%s' \"$$\" > {}; while :; do :; done",
         shell_quote(&pid_path)
@@ -814,7 +814,7 @@ async fn bash_pty_cancellation_returns_cancelled_and_cleans_process_group() {
     let pid_path = dir.join("pty-cancel-child.pid");
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
     let cancel = ctx.cancel.clone();
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command = format!(
         "printf '%s' \"$$\" > {}; while :; do :; done",
         shell_quote(&pid_path)
@@ -845,7 +845,7 @@ async fn bash_uses_bash_language_semantics() {
     // Given
     let dir = tempdir();
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command = "[[ alpha == a* ]] && printf bash-language";
 
     // When
@@ -870,7 +870,7 @@ async fn bash_timeout_still_applies_after_the_shell_exits_with_open_child_pipes(
     let dir = tempdir();
     let pid_path = dir.join("detached-pipe-child.pid");
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command = format!(
         "sleep 4 & child=$!; printf '%s' \"$child\" > {}",
         shell_quote(&pid_path)
@@ -987,7 +987,7 @@ async fn check_setsid_capture(pty: bool, timeout: bool, cancel: bool, output: &s
     };
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
     let cancellation = ctx.cancel.clone();
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     // Fork before setsid: the shell's exec'ed Python is already a group leader.
     // The handshake ensures the daemon owns a new session before its parent exits.
     let command = format!(
@@ -1076,7 +1076,7 @@ async fn t_h1_3_same_group_background_output_is_captured() {
         let dir = tempdir();
         let _cleanup = TempDirGuard::new(&dir);
         let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-        let tool = ToolRegistry::builtins().get("bash").unwrap();
+        let tool = hya_tool_loader::builtins().get("bash").unwrap();
         let started = std::time::Instant::now();
         let result = execute_with_guard(
             tool.as_ref(),
@@ -1145,7 +1145,7 @@ async fn bash_pty_timeout_kills_descendant_after_shell_exits() {
     let child_pid_path = dir.join("pty-detached-timeout-child.pid");
     let shell_pid_path = dir.join("pty-detached-timeout-shell.pid");
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command = format!(
         "sh -c 'trap \"\" HUP; printf \"%s\" \"$$\" > \"$1\"; sleep 30' sh {} & while [ ! -s {} ]; do :; done; printf '%s' \"$$\" > {}; exit 0",
         shell_quote(&child_pid_path),
@@ -1194,7 +1194,7 @@ async fn bash_pty_cancellation_kills_descendant_after_shell_exits() {
     let shell_pid_path = dir.join("pty-detached-cancel-shell.pid");
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
     let cancel = ctx.cancel.clone();
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command = format!(
         "sh -c 'trap \"\" HUP; printf \"%s\" \"$$\" > \"$1\"; sleep 30' sh {} & while [ ! -s {} ]; do :; done; printf '%s' \"$$\" > {}; exit 0",
         shell_quote(&child_pid_path),
@@ -1240,7 +1240,7 @@ async fn bash_spill_artifact_is_private_and_complete() {
     let dir = tempdir();
     let _cleanup = TempDirGuard::new(&dir);
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command = "python3 -c 'import sys; sys.stdout.write(\"A\" * 51201)'";
 
     // When
@@ -1275,7 +1275,7 @@ async fn bash_removes_spill_artifact_when_cancelled() {
     let artifact_root = dir.join(".hya/tool-output");
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
     let cancel = ctx.cancel.clone();
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command = format!(
         "sleep 30 & child=$!; printf '%s' \"$child\" > {}; head -c 51201 /dev/zero; wait \"$child\"",
         shell_quote(&child_pid_path)
@@ -1314,7 +1314,7 @@ async fn bash_timeout_near_inline_cap_spills_complete_output_after_notices() {
     let dir = tempdir();
     let _cleanup = TempDirGuard::new(&dir);
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command = "python3 -c 'import sys,time; sys.stdout.write(\"N\" * 51150); sys.stdout.flush(); time.sleep(3)'";
 
     // When: a clamped deadline terminates the command.
@@ -1370,7 +1370,7 @@ async fn deadline_capped_shell_child() -> Result<(), Box<dyn std::error::Error>>
     if std::env::var_os("HYA_SHELL_DEADLINE_TEST").is_none() {
         return Ok(());
     }
-    let registry = ToolRegistry::from_tool_families(&["hya/base-tools"]);
+    let registry = hya_tool_loader::from_tool_families(&["hya/base-tools"]);
     // Under 10 s left the cap is its 5 s floor, whatever half of the rest is.
     hya_tool::deadline::install(Duration::from_secs(8));
     let tool = registry.resolve("bash").unwrap();
@@ -1447,7 +1447,7 @@ async fn budgeted_shell_yield_child() -> Result<(), Box<dyn std::error::Error>> 
         return Ok(());
     }
     hya_tool::deadline::install(Duration::from_secs(50));
-    let registry = ToolRegistry::from_tool_families(&["hya/base-tools"]);
+    let registry = hya_tool_loader::from_tool_families(&["hya/base-tools"]);
     let tool = registry.resolve("bash").ok_or("bash missing")?;
     let workdir = tempdir();
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], workdir.clone());
@@ -1482,7 +1482,7 @@ async fn budgeted_shell_yield_child() -> Result<(), Box<dyn std::error::Error>> 
 #[cfg(unix)]
 #[tokio::test]
 async fn python_output_is_unbuffered_unless_overridden() -> Result<(), Box<dyn std::error::Error>> {
-    let registry = ToolRegistry::from_tool_families(&["hya/base-tools"]);
+    let registry = hya_tool_loader::from_tool_families(&["hya/base-tools"]);
     let tool = registry.resolve("bash").ok_or("bash missing")?;
     let workdir = tempdir();
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], workdir.clone());
@@ -1540,7 +1540,7 @@ async fn native_bash_shutdown_child() {
         deadline::install(Duration::from_secs(180));
     }
     let pty = mode != "pipes";
-    let tool = hya_tool::native_bundle::load("hya/base-tools")
+    let tool = hya_tool_loader::load("hya/base-tools")
         .unwrap()
         .tools
         .into_iter()

@@ -18,7 +18,7 @@ use hya_engine::{
 use hya_proto::{AgentName, Envelope, ModelRef};
 use hya_provider::ProviderRouter;
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 
 struct RewriteHook {
     suffix: &'static str,
@@ -91,7 +91,7 @@ async fn removed_plugin_hooks_leave_fresh_bindings_but_remain_live_on_old_bindin
     .expect("prepare Plugin");
     let bundles = BundleCatalog::from_verified_catalogs(&[&prepared]).expect("bundle catalog");
     let catalog = Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("agent catalog"));
-    let registry = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog));
+    let registry = Arc::new(RuntimeRegistry::new(hya_tool_loader::builtins(), catalog));
     let source_id = RuntimeSourceId::bundle("acme/rewrite");
     let starts = Arc::new(AtomicUsize::new(0));
     let ends = Arc::new(AtomicUsize::new(0));

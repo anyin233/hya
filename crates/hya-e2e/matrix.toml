@@ -127,6 +127,11 @@ track = "P"
 path = "crates/hya-e2e/tests/it/p18_custom_slash_resources.rs"
 
 [[scenario]]
+id = "T1.24"
+title = "webfetch returns a loopback HTTP response"
+track = "P"
+path = "crates/hya-e2e/tests/it/p02_tool_loop_fs.rs"
+[[scenario]]
 id = "T2.1"
 title = "subagent task spawn"
 track = "P"

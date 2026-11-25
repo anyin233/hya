@@ -28,7 +28,7 @@ use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_server::{AppState, V1Grpc, router};
 use hya_store::SessionStore;
 use hya_tool::permission::AskRequest;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tower::ServiceExt;
@@ -60,7 +60,7 @@ async fn state_with(
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         providers,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
     ));

@@ -131,7 +131,7 @@ impl RuntimeCandidate {
                 }
                 canonical_owner.insert(name.to_string(), label.clone());
                 for alias in &export.aliases {
-                    if hya_tool::tool_bundle_presets()
+                    if hya_tool_loader::tool_bundle_presets()
                         .iter()
                         .any(|preset| preset.is_protected(alias))
                     {

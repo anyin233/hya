@@ -46,8 +46,7 @@ use hya_provider::{
 use hya_tool::{
     AgentDef, FormatterPlane, InlineAgent, InteractionPlane, LspPlane, MailboxPlane, Mode,
     PermissionModel, PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, Tool,
-    ToolCtx, ToolError, ToolOperation, ToolPermission, ToolRegistry, WebSearchPlane,
-    handle::ArtifactPlane,
+    ToolCtx, ToolError, ToolOperation, ToolPermission, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -886,7 +885,7 @@ flowchart TD
         gate: Some(Arc::clone(&provider_gate)),
     })));
     let runtime = Arc::new(RuntimeRegistry::from_snapshot(
-        ToolRegistry::builtins().snapshot(),
+        hya_tool_loader::builtins().snapshot(),
         builtin_agent_catalog().unwrap(),
     ));
     let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
@@ -981,7 +980,7 @@ flowchart TD
         project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     };
     let run = tokio::spawn(async move {
-        let workflow = hya_tool::ToolRegistry::builtins()
+        let workflow = hya_tool_loader::builtins()
             .get("workflow")
             .expect("workflow tool");
         workflow
@@ -1445,7 +1444,7 @@ You are the runtime-installed agent.
 async fn engine_snapshot_rejects_builder_bypass_and_publishes_deferred_set_atomically() {
     let _env = StableEnvGuard::new();
     let (router, _model) = offline_router(None);
-    let builder = Arc::new(ToolRegistry::builtins());
+    let builder = Arc::new(hya_tool_loader::builtins());
     let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
@@ -2456,7 +2455,7 @@ fn server_base_has_no_workdir_and_direct_agents_name_the_caller_cwd() {
 /// Minimal engine whose catalog deliberately omits a recorded historical id.
 async fn engine_with_catalog(catalog: Arc<AgentCatalog>) -> SessionEngine {
     let runtime = Arc::new(RuntimeRegistry::from_snapshot(
-        ToolRegistry::builtins().snapshot(),
+        hya_tool_loader::builtins().snapshot(),
         catalog,
     ));
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
@@ -3123,7 +3122,7 @@ async fn bundle_sidecar_ignores_unsupported_workspace_adapters() {
         )]))
         .unwrap(),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let binding = runtime.bind_turn(&root).unwrap();
     let fixture = activation_sidecar_fixture("[]").replace(
             "\"workspaceAdapters\": []",
@@ -3176,7 +3175,7 @@ async fn bundle_sidecar_factory_exposes_declared_activation_hooks_after_ack() {
         BundleCatalog::from_prepared(&agent_bundles([bundle]))
             .expect("activation hook fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let turn_dir = tempdir();
     let binding = runtime
         .bind_turn(&turn_dir)
@@ -3227,7 +3226,7 @@ async fn bundle_sidecar_hook_declarations_match_captured_selected_set() {
         )]))
         .expect("selected-hooks fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let turn_dir = tempdir();
     let binding = runtime
         .bind_turn(&turn_dir)
@@ -3345,7 +3344,7 @@ export default {server: async () => ({
         BundleCatalog::from_prepared(&agent_bundles([bundle]))
             .expect("selected-skills fixture catalog"),
     ));
-    let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let registry = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let full_contributions = PluginContributionSet {
         skills: [&selected, &unselected]
             .into_iter()
@@ -3415,7 +3414,7 @@ async fn bundle_sidecar_handle_shutdown_reaps_child_and_removes_activation_stagi
         BundleCatalog::from_prepared(&agent_bundles([materialized_tool_bundle("shutdown")]))
             .expect("shutdown fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let turn_dir = tempdir();
     let binding = runtime
         .bind_turn(&turn_dir)
@@ -3492,7 +3491,7 @@ async fn bundle_sidecar_handle_drop_removes_activation_staging() {
         BundleCatalog::from_prepared(&agent_bundles([materialized_tool_bundle("drop-cleanup")]))
             .expect("drop cleanup fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let turn_dir = tempdir();
     let binding = runtime
         .bind_turn(&turn_dir)
@@ -3573,7 +3572,7 @@ async fn bundle_sidecar_factory_start_cancellation_removes_activation_staging() 
         BundleCatalog::from_prepared(&agent_bundles([materialized_tool_bundle("cancel-start")]))
             .expect("cancel-start fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let turn_dir = tempdir();
     let binding = runtime
         .bind_turn(&turn_dir)
@@ -3663,7 +3662,7 @@ async fn bundle_sidecar_handle_exposes_transport_loss_token() {
         BundleCatalog::from_prepared(&agent_bundles([materialized_tool_bundle("loss-token")]))
             .expect("loss token fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let turn_dir = tempdir();
     let binding = runtime
         .bind_turn(&turn_dir)
@@ -3786,7 +3785,7 @@ export default {
         BundleCatalog::from_prepared(prepared.bundles())
             .expect("build directory-authored Bundle catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let binding = runtime
         .bind_turn(&turn_dir)
         .expect("capture directory-authored Bundle turn binding");
@@ -3858,7 +3857,7 @@ async fn bundle_sidecar_factory_passes_materialized_extension_to_bun() {
         BundleCatalog::from_prepared(&agent_bundles([bundle]))
             .expect("Bun extension fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let turn_dir = tempdir();
     let binding = runtime
         .bind_turn(&turn_dir)
@@ -3971,7 +3970,7 @@ export default {
         BundleCatalog::from_prepared(&agent_bundles(bundles))
             .expect("disjoint Bun entrypoint fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), Arc::clone(&catalog));
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), Arc::clone(&catalog));
     let turn_dir = tempdir();
     let binding = runtime
         .bind_turn(&turn_dir)
@@ -4146,7 +4145,7 @@ extensions:
     let catalog = Arc::new(to_agent_catalog(
         BundleCatalog::from_prepared(prepared.bundles()).unwrap(),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let binding = runtime.bind_turn(&root).unwrap();
     let staging = tempdir();
     let environment = BundleSidecarEnvironment::from_command(
@@ -4298,7 +4297,7 @@ for line in sys.stdin:
     let catalog = Arc::new(to_agent_catalog(
         BundleCatalog::from_prepared(prepared.bundles()).unwrap(),
     ));
-    let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog));
+    let runtime = Arc::new(RuntimeRegistry::new(hya_tool_loader::builtins(), catalog));
     let bundle = &prepared.bundles()[0];
     let process_extension = prepared.bundle_process("test/disjoint-turns");
     let config = crate::bundle_config::bundle_config_location(
@@ -4493,7 +4492,7 @@ export default {
         BundleCatalog::from_prepared(&agent_bundles([bundle]))
             .expect("generic Bun superset fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), Arc::clone(&catalog));
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), Arc::clone(&catalog));
     let turn_dir = tempdir();
     let binding = runtime
         .bind_turn(&turn_dir)
@@ -4571,7 +4570,7 @@ async fn transient_bun_bundle_runs_harness_tool_loop_and_reaps_sidecar() {
             .await
             .expect("connect E2E store"),
         Arc::new(ProviderRouter::new().with(Arc::new(provider))),
-        Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog)),
+        Arc::new(RuntimeRegistry::new(hya_tool_loader::builtins(), catalog)),
         permission,
         EventBus::default(),
     ));
@@ -4816,7 +4815,7 @@ export default {
                 .await
                 .expect("connect root Bun hook store"),
             Arc::new(ProviderRouter::new().with(Arc::new(provider))),
-            Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog)),
+            Arc::new(RuntimeRegistry::new(hya_tool_loader::builtins(), catalog)),
             permission,
             EventBus::default(),
         )
@@ -4960,7 +4959,7 @@ export default {
             .await
             .expect("connect resident E2E store"),
         Arc::new(ProviderRouter::new().with(Arc::new(provider))),
-        Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog)),
+        Arc::new(RuntimeRegistry::new(hya_tool_loader::builtins(), catalog)),
         permission,
         EventBus::default(),
     ));
@@ -5230,7 +5229,7 @@ async fn resident_idle_sidecar_loss_restarts_before_next_mail() {
             .await
             .expect("connect resident loss store"),
         Arc::new(ProviderRouter::new().with(Arc::new(provider))),
-        Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog)),
+        Arc::new(RuntimeRegistry::new(hya_tool_loader::builtins(), catalog)),
         permission,
         EventBus::default(),
     ));
@@ -5562,7 +5561,7 @@ async fn resident_running_sidecar_loss_reports_failure_before_mail_revives_new_e
             .await
             .expect("connect resident running loss store"),
         Arc::new(ProviderRouter::new().with(Arc::new(provider))),
-        Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog)),
+        Arc::new(RuntimeRegistry::new(hya_tool_loader::builtins(), catalog)),
         permission,
         EventBus::default(),
     ));
@@ -5994,7 +5993,7 @@ async fn bundle_sidecar_rejects_task_context_hook_before_ack() {
         BundleCatalog::from_prepared(&agent_bundles([materialized_bundle("unsupported-hook")]))
             .expect("unsupported hook fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let turn_dir = tempdir();
     let binding = runtime
         .bind_turn(&turn_dir)
@@ -6050,7 +6049,7 @@ fn bundle_sidecar_duplicate_hook_declaration_is_rejected() {
             name: HookName::Event,
         },
     ];
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog_with_agents(&[]));
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog_with_agents(&[]));
     let binding = runtime
         .bind_turn(&std::env::temp_dir())
         .expect("bind duplicate hook fixture");
@@ -6282,7 +6281,7 @@ fn a_bundle_cannot_select_another_bundles_tool() {
     // this rule, the allow-driven re-resolution searched every bundle, so a
     // selector could borrow the owner's tool.
     let catalog = cross_bundle_selector_catalog("owner");
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let turn_dir = tempdir();
     let binding = runtime
         .bind_turn(&turn_dir)
@@ -6378,7 +6377,7 @@ fn sidecar_resources_materialize_from_captured_turn_binding() {
         BundleCatalog::from_prepared(&agent_bundles([materialized_bundle("new")]))
             .expect("new fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), Arc::clone(&old_catalog));
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), Arc::clone(&old_catalog));
     let turn_dir = tempdir();
     let old_binding = runtime
         .bind_turn(&turn_dir)
@@ -6428,7 +6427,7 @@ fn sidecar_materialization_uses_only_captured_agent_selected_closure() {
         BundleCatalog::from_prepared(&agent_bundles(disjoint_materialized_bundles("new")))
             .expect("new disjoint fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), Arc::clone(&old_catalog));
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), Arc::clone(&old_catalog));
     let old_turn_dir = tempdir();
     let old_binding = runtime
         .bind_turn(&old_turn_dir)
@@ -6508,7 +6507,7 @@ fn sidecar_materialization_orders_deduplicated_extensions_by_canonical_identity(
         BundleCatalog::from_prepared(&agent_bundles([bundle]))
             .expect("ordered materialization fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let turn_dir = tempdir();
     let binding = runtime
         .bind_turn(&turn_dir)
@@ -6597,7 +6596,7 @@ async fn bundle_sidecar_tool_declaration_binds_canonical_captured_resource() {
     let new_catalog = Arc::new(to_agent_catalog(
         BundleCatalog::from_prepared(&agent_bundles([new_bundle])).expect("new fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), Arc::clone(&old_catalog));
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), Arc::clone(&old_catalog));
     let turn_dir = tempdir();
     let old_binding = runtime
         .bind_turn(&turn_dir)
@@ -6635,7 +6634,7 @@ async fn bundle_sidecar_tool_declarations_match_loaded_module_set() {
         )]))
         .expect("selected-tools fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let turn_dir = tempdir();
     let binding = runtime
         .bind_turn(&turn_dir)
@@ -6699,7 +6698,7 @@ async fn bundle_sidecar_initialize_declarations_ignore_tool_and_hook_order() {
         BundleCatalog::from_prepared(&agent_bundles([bundle]))
             .expect("order-independent declaration fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let turn_dir = tempdir();
     let binding = runtime
         .bind_turn(&turn_dir)
@@ -6756,7 +6755,7 @@ async fn bundle_sidecar_hook_only_declaration_accepts_zero_tools() {
     let catalog = Arc::new(to_agent_catalog(
         BundleCatalog::from_prepared(&agent_bundles([bundle])).expect("hook-only fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let turn_dir = tempdir();
     let binding = runtime
         .bind_turn(&turn_dir)
@@ -6936,7 +6935,7 @@ fn sidecar_factory_is_scoped_to_the_selected_agent_effective_capability() {
         BundleCatalog::from_prepared(&agent_bundles([lead_bundle, worker_bundle]))
             .expect("selected-agent fixture catalog"),
     ));
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), catalog);
     let turn_dir = tempdir();
     let binding = runtime
         .bind_turn(&turn_dir)
@@ -6976,7 +6975,7 @@ fn executable_bundle_builds_bound_sidecar_factory_while_static_bundle_stays_proc
         BundleCatalog::from_prepared(&agent_bundles([materialized_bundle("executable")]))
             .expect("executable fixture catalog"),
     ));
-    let executable_runtime = RuntimeRegistry::new(ToolRegistry::builtins(), executable_catalog);
+    let executable_runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), executable_catalog);
     let executable_turn_dir = tempdir();
     let executable_binding = executable_runtime
         .bind_turn(&executable_turn_dir)
@@ -7004,7 +7003,7 @@ fn executable_bundle_builds_bound_sidecar_factory_while_static_bundle_stays_proc
         BundleCatalog::from_prepared(&agent_bundles([static_bundle]))
             .expect("static fixture catalog"),
     ));
-    let static_runtime = RuntimeRegistry::new(ToolRegistry::builtins(), static_catalog);
+    let static_runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), static_catalog);
     let static_turn_dir = tempdir();
     let static_binding = static_runtime
         .bind_turn(&static_turn_dir)
@@ -7084,7 +7083,7 @@ async fn catalog_scope_sweeper_evicts_idle_scopes_until_stopped() {
     let (router, _model) = offline_router(None);
     let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
     let runtime = Arc::new(RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         builtin_agent_catalog().unwrap(),
     ));
     let engine = Arc::new(

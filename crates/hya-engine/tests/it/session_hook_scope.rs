@@ -27,7 +27,7 @@ use hya_engine::{
 use hya_proto::{AgentName, Envelope, ModelRef, ProjectId, SessionId, SessionKind};
 use hya_provider::ProviderRouter;
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use support::TestDir;
 
 /// What one fake hook process observed, and whether it is still alive.
@@ -215,7 +215,7 @@ async fn harness(cache: Option<CatalogScopeCacheConfig>) -> Harness {
     let mut engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         Arc::new(ProviderRouter::new()),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     )

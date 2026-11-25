@@ -1,11 +1,9 @@
 //! Ownership contract for the extended built-in tool family.
 #![allow(clippy::expect_used)]
 
-use hya_tool::ToolRegistry;
-
 #[test]
 fn extended_tools_are_registered_from_their_native_bundle() {
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     for name in [
         "lsp",
         "skill",
@@ -28,7 +26,7 @@ fn extended_tools_are_registered_from_their_native_bundle() {
 /// replaces it. No hidden alias keeps the old spelling alive.
 #[test]
 fn kill_is_no_longer_a_registered_tool() {
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     assert!(registry.resolve("kill").is_none());
     let archive = registry.resolve("archive").expect("archive is registered");
     assert_eq!(archive.permission, hya_tool::ToolPermission::Task);

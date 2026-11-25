@@ -20,7 +20,7 @@ use hya_proto::{
     WorkflowRunId, WorkflowRunStatus,
 };
 use hya_store::SessionStore;
-use hya_tool::{ToolOperation, ToolRegistry};
+use hya_tool::ToolOperation;
 use tokio_util::sync::CancellationToken;
 
 /// Create one process-unique project root.
@@ -690,7 +690,7 @@ fn runtime_for_catalogs(
         .expect("verified Workflow catalogs");
     let agents = AgentCatalog::new(Arc::new(bundles)).expect("Workflow Agent catalog");
     Arc::new(RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         Arc::new(agents),
     ))
 }
@@ -734,7 +734,7 @@ fn empty_runtime() -> Arc<RuntimeRegistry> {
     let bundles = BundleCatalog::from_verified_catalogs(&[]).expect("empty bundle catalog");
     let agents = AgentCatalog::new(Arc::new(bundles)).expect("empty Agent catalog");
     Arc::new(RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         Arc::new(agents),
     ))
 }

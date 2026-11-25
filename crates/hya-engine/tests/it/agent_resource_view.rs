@@ -28,7 +28,7 @@ use hya_provider::{
 use hya_store::SessionStore;
 use hya_tool::{
     Action, Mode, PermissionPlane, PermissionRules, Rule, SkillCatalogEntry, Tool, ToolCtx,
-    ToolError, ToolRegistry,
+    ToolError,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -295,7 +295,7 @@ async fn agent_origin_decides_the_visible_tool_skill_and_mcp_plane() {
     let calls = Arc::new(AtomicUsize::new(0));
     let (catalog, sources) = catalog();
     let runtime = Arc::new(
-        RuntimeRegistry::new(ToolRegistry::builtins(), catalog).with_skill_discovery(
+        RuntimeRegistry::new(hya_tool_loader::builtins(), catalog).with_skill_discovery(
             hya_app::skill_catalog::discover,
             hya_app::skill_catalog::builtin_skills,
         ),
@@ -433,7 +433,7 @@ async fn agent_origin_decides_the_visible_tool_skill_and_mcp_plane() {
 #[tokio::test]
 async fn canonical_allow_deny_and_alias_share_schema_and_dispatch() {
     let calls = Arc::new(AtomicUsize::new(0));
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     tools
         .register(Arc::new(CountingTool {
             calls: calls.clone(),
@@ -637,7 +637,7 @@ async fn mcp_selected_public_name_dispatches_once_with_canonical_permission() {
     // Harness MCP exports live on the full plane, so only a built-in can select
     // one. `general` takes the default (unfiltered) view.
     let runtime = Arc::new(RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         support::builtin_only_catalog(),
     ));
     runtime
@@ -782,7 +782,7 @@ async fn a_bundle_agent_cannot_select_a_harness_mcp_export_or_skill() {
             permission_modes: vec![],
         };
         let runtime = Arc::new(RuntimeRegistry::new(
-            ToolRegistry::builtins(),
+            hya_tool_loader::builtins(),
             agent_catalog(bundle),
         ));
         let binding = runtime.bind_turn(workdir.path()).expect("bind turn");

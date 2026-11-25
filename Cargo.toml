@@ -19,6 +19,7 @@ hya-bundle = { path = "crates/hya-bundle" }
 hya-proto = { path = "crates/hya-proto" }
 hya-provider = { path = "crates/hya-provider", default-features = false }
 hya-tool = { path = "crates/hya-tool" }
+hya-tool-loader = { path = "crates/hya-tool-loader" }
 hya-context = { path = "crates/hya-context" }
 hya-tool-error = { path = "crates/hya-tool-error" }
 hya-base-tools = { path = "bundles/presets/base-tools/native" }

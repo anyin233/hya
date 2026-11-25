@@ -20,7 +20,7 @@ use hya_provider::{
 };
 use hya_server::{AppState, router};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{Barrier, Notify};
@@ -64,7 +64,7 @@ fn next_engine(
     SessionEngine::new(
         store.clone(),
         Arc::new(ProviderRouter::new().with(provider)),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     )
@@ -673,7 +673,7 @@ async fn restored_turn_has_guidance_and_rejects_a_concurrent_client_turn() {
         SessionEngine::new(
             store.clone(),
             Arc::new(ProviderRouter::new().with(provider.clone())),
-            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
             permission,
             EventBus::default(),
         )

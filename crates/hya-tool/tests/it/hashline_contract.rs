@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hya_proto::SessionId;
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    SpawnerPlane, ToolCtx, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -117,7 +117,7 @@ async fn read_emits_pinned_hashline_anchors_through_tool_registry() {
     tokio::fs::write(workdir.join("notes.txt"), "alpha\nbeta\ngamma\ndelta")
         .await
         .unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let tool = registry.get("read").unwrap();
     let ctx = ctx_with(workdir);
 
@@ -146,7 +146,7 @@ async fn read_does_not_render_a_synthetic_row_for_a_final_newline() {
     tokio::fs::write(workdir.join("notes.txt"), "alpha\nbeta\ngamma\ndelta\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When
@@ -172,7 +172,7 @@ async fn read_returns_clean_paged_content_and_display_metadata() {
     tokio::fs::write(&target, "alpha\nbeta\ngamma\ndelta\nepsilon\n")
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When
@@ -216,7 +216,7 @@ async fn read_paging_emits_bounded_continuation_and_metadata() {
         .collect::<Vec<_>>()
         .join("\n");
     tokio::fs::write(&target, source).await.unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When
@@ -248,7 +248,7 @@ async fn read_byte_cap_bounds_hashline_output_without_tail_content() {
     let tail = "TAIL_CONTENT_MUST_NOT_BE_INCLUDED";
     lines.push(tail.to_string());
     tokio::fs::write(&target, lines.join("\n")).await.unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When
@@ -284,7 +284,7 @@ async fn read_first_line_oversize_diagnostic_does_not_leak_content() {
     let secret = "OVERSIZE_LINE_SECRET";
     let line = format!("{secret}{}", "x".repeat(50 * 1024));
     tokio::fs::write(&target, line).await.unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When
@@ -312,7 +312,7 @@ async fn read_raw_true_omits_hashline_anchors() {
     tokio::fs::write(workdir.join("notes.txt"), "alpha\nbeta\ngamma\ndelta")
         .await
         .unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let tool = registry.get("read").unwrap();
     let ctx = ctx_with(workdir);
 
@@ -347,7 +347,7 @@ async fn read_to_edit_uses_fresh_public_anchor_chain() {
     tokio::fs::write(&target, "alpha\nbeta\ngamma\ndelta\nepsilon")
         .await
         .unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(workdir);
@@ -407,7 +407,7 @@ async fn non_raw_read_captures_newest_snapshot_for_far_stale_recovery() {
     tokio::fs::write(&target, base_lines.join("\n"))
         .await
         .unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(workdir);
@@ -476,7 +476,7 @@ async fn raw_read_does_not_seed_snapshot_for_stale_edit() {
     let target = workdir.join("raw.txt");
     let original = "alpha\nbeta\ngamma\ndelta";
     tokio::fs::write(&target, original).await.unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(workdir);
@@ -523,7 +523,7 @@ async fn stale_recovery_conflict_preserves_original_error_and_guidance() {
     let target = workdir.join("conflict.txt");
     let original = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight";
     tokio::fs::write(&target, original).await.unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(workdir);
@@ -575,7 +575,7 @@ async fn stale_recovery_without_matching_history_preserves_guidance() {
     tokio::fs::write(&other, "other-1\nother-2\nother-3\nother-4")
         .await
         .unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(workdir);
@@ -635,7 +635,7 @@ async fn exact_successful_payload_duplicate_is_rejected_without_mutation() {
     tokio::fs::write(&target, "alpha\nbeta\ngamma")
         .await
         .unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(workdir);
@@ -674,7 +674,7 @@ async fn two_soft_noops_then_noop_loop_error_preserves_file() {
     let target = workdir.join("noop.txt");
     let original = "alpha\nbeta\ngamma";
     tokio::fs::write(&target, original).await.unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(workdir);
@@ -713,7 +713,7 @@ async fn non_raw_read_resets_exact_duplicate_guard() {
     let target = workdir.join("duplicate-reset.txt");
     let marker = "INSERTED_AFTER_READ_SECRET";
     tokio::fs::write(&target, "alpha\nbeta").await.unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(workdir);
@@ -756,7 +756,7 @@ async fn non_raw_read_resets_noop_loop_guard() {
     let target = workdir.join("noop-reset.txt");
     let original = "alpha\nbeta\ngamma";
     tokio::fs::write(&target, original).await.unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(workdir);
@@ -802,7 +802,7 @@ async fn snapshots_are_isolated_by_session_workdir_and_target() {
     .unwrap();
     let session_a = SessionId::new();
     let session_b = SessionId::new();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx_a = ctx_with_session(workdir.clone(), Some(session_a));
@@ -887,7 +887,7 @@ async fn edit_replaces_the_anchored_line_with_path_and_edits() {
     tokio::fs::write(&target, "alpha\nbeta\ngamma\ndelta")
         .await
         .unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(workdir);
     // The literal anchor is copied from the pinned vector above. The test uses
@@ -921,7 +921,7 @@ async fn out_of_range_non_raw_read_preserves_duplicate_guard() {
     let workdir = tempdir();
     let target = workdir.join("duplicate-after-range.txt");
     tokio::fs::write(&target, "alpha\nbeta").await.unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(workdir);
@@ -963,7 +963,7 @@ async fn out_of_range_non_raw_read_preserves_noop_guard() {
     let target = workdir.join("noop-after-range.txt");
     let original = "alpha\nbeta\ngamma";
     tokio::fs::write(&target, original).await.unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(workdir);
@@ -1009,7 +1009,7 @@ async fn out_of_range_non_raw_read_does_not_add_recovery_history() {
     let original = original_lines.join("\n");
     tokio::fs::write(&target, &original).await.unwrap();
     tokio::fs::write(&anchor_source, &original).await.unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(workdir);
@@ -1073,7 +1073,7 @@ async fn pre_cancelled_read_returns_cancelled_without_snapshot_effects() {
     let original = original_lines.join("\n");
     tokio::fs::write(&target, &original).await.unwrap();
     tokio::fs::write(&anchor_source, &original).await.unwrap();
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let anchor_ctx = ctx_with(workdir.clone());
@@ -1137,7 +1137,7 @@ async fn oversized_raw_first_line_retains_continuation_and_offsets() {
     tokio::fs::write(&target, format!("{first_line}\nsecond-line"))
         .await
         .unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When
@@ -1169,7 +1169,7 @@ async fn near_cap_hashline_output_has_complete_metadata_and_notice() {
     let target = workdir.join("near-cap.txt");
     let line = "x".repeat(50 * 1024 - 10);
     tokio::fs::write(&target, line).await.unwrap();
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
     let ctx = ctx_with(workdir);
 
     // When

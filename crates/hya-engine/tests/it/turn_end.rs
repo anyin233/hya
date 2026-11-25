@@ -250,7 +250,7 @@ fn text_answer(session: SessionId, message: MessageId) -> EventStream {
 async fn engine_with_script() -> (Arc<SessionEngine>, AgentSpec, Arc<ScriptProvider>) {
     let provider = Arc::new(ScriptProvider::default());
     let (engine, agent) =
-        scripted_engine(provider.clone(), Arc::new(ToolRegistry::builtins())).await;
+        scripted_engine(provider.clone(), Arc::new(hya_tool_loader::builtins())).await;
     (engine, agent, provider)
 }
 
@@ -264,7 +264,7 @@ async fn engine_with_gate_tool() -> (
 ) {
     let provider = Arc::new(ScriptProvider::default());
     let gate = GatedTool::new();
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     tools
         .register(gate.clone())
         .expect("register the gated tool");
@@ -318,7 +318,7 @@ fn next_engine(engine: &SessionEngine, provider: Arc<ScriptProvider>) -> Session
     SessionEngine::new(
         engine.store().clone(),
         Arc::new(ProviderRouter::new().with(provider)),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
     )
@@ -1851,7 +1851,7 @@ async fn stop_restores_a_shell_call_after_its_shutdown_io_error() {
     let shell = Arc::new(ShutdownErrorShell {
         entered: Notify::new(),
     });
-    let tools = Arc::new(ToolRegistry::from_tool_families(&["hya/extended-tools"]));
+    let tools = Arc::new(hya_tool_loader::from_tool_families(&["hya/extended-tools"]));
     tools.register(shell.clone()).unwrap();
     let (engine, agent) = scripted_engine(Arc::new(ScriptProvider::default()), tools).await;
     let session = make_session(&engine, None, "hya-main").await;
@@ -2017,7 +2017,7 @@ async fn cancelled_shell_skips_after_hooks_and_keeps_shutdown_restore() {
     let shell = Arc::new(ShutdownErrorShell {
         entered: Notify::new(),
     });
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     tools.remove("bash");
     tools.register(shell.clone()).unwrap();
     let provider = Arc::new(ScriptProvider::default());
@@ -2211,7 +2211,7 @@ async fn completed_shell_result_survives_cancellation() {
 
 async fn completed_result_survives_cancellation(shell: bool) {
     let provider = Arc::new(ScriptProvider::default());
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let name = if shell { "bash" } else { "write" };
     tools.remove(name);
     tools.register(Arc::new(WriteAndCancel(name))).unwrap();
@@ -2285,7 +2285,7 @@ async fn authorized_tool_snapshot_starts_after_permission_pending_user_edit() {
 
 async fn permission_pending_user_edit(approve: bool) {
     let provider = Arc::new(ScriptProvider::default());
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let policy = hya_tool::InvocationPolicy::compile(
         hya_tool::PermissionModel::Default,
         vec![hya_tool::InvocationRule::new(
@@ -2439,7 +2439,7 @@ async fn sidecar_loss_flushes_resident_tool_changes() {
 
 async fn sidecar_loss_flushes_turn(hooks: bool, writing: bool) {
     let provider = Arc::new(ScriptProvider::default());
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     tools.remove("write");
     let tool = Arc::new(WriteThenWait {
         written: Notify::new(),
@@ -2555,7 +2555,7 @@ impl Tool for WriteThenWait {
 #[tokio::test]
 async fn cancel_written_tool_records_file_changes_before_finish() {
     let provider = Arc::new(ScriptProvider::default());
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     tools.remove("write");
     let tool = Arc::new(WriteThenWait {
         written: Notify::new(),

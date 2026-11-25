@@ -34,7 +34,7 @@ use hya_provider::{
 use hya_store::SessionStore;
 use hya_tool::{
     ChannelPolicySnapshot, LifecyclePlane, PermissionPlane, PermissionRules, ToolError,
-    ToolRegistry, WaitMemberState, WaitOutcome, WaitSpec, WaitWake,
+    WaitMemberState, WaitOutcome, WaitSpec, WaitWake,
 };
 use serde_json::json;
 use tokio::sync::Notify;
@@ -147,7 +147,7 @@ async fn team() -> Team {
 async fn team_with_limits(limits: hya_engine::SubagentLimits) -> Team {
     team_with_runtime(
         limits,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         "hya-main",
     )
     .await
@@ -1272,7 +1272,7 @@ async fn mail_reader_team() -> Team {
         .insert("receive".into(), "harness:tool/wait".into());
     let bundles = BundleCatalog::from_prepared(&[bundle]).unwrap();
     let catalog = Arc::new(AgentCatalog::new(Arc::new(bundles)).unwrap());
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     tools.register(Arc::new(ReadPages)).unwrap();
     team_with_runtime(
         Default::default(),

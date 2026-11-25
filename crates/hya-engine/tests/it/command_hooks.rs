@@ -15,7 +15,7 @@ use hya_engine::{
 use hya_proto::{AgentName, Envelope, Event, ModelRef, PartProjection, Role};
 use hya_provider::{DevProvider, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 
 struct CommandMutatingHost;
 
@@ -63,7 +63,7 @@ impl HookDispatcher for CommandMutatingHost {
 async fn command_execute_before_mutates_text_before_user_message_is_admitted() {
     // Given: a session engine with a command hook that appends command context.
     let router = Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new())));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Read,
         "*",

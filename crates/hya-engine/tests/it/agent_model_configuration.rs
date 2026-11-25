@@ -18,7 +18,7 @@ use hya_provider::{
     ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use tokio::sync::Mutex;
 
 use support::{TestDir, builtin_only_catalog};
@@ -76,7 +76,7 @@ async fn recording_engine() -> (SessionEngine, Arc<Mutex<Vec<ModelRef>>>) {
         SessionStore::connect_memory().await.unwrap(),
         providers,
         Arc::new(RuntimeRegistry::new(
-            ToolRegistry::builtins(),
+            hya_tool_loader::builtins(),
             builtin_only_catalog(),
         )),
         permission,
@@ -93,7 +93,7 @@ async fn engine() -> SessionEngine {
         SessionStore::connect_memory().await.unwrap(),
         providers,
         Arc::new(RuntimeRegistry::new(
-            ToolRegistry::builtins(),
+            hya_tool_loader::builtins(),
             builtin_only_catalog(),
         )),
         permission,
@@ -315,7 +315,7 @@ async fn session_override_drives_omitted_requests_but_explicit_model_stays_local
 #[test]
 fn empty_model_layers_preserve_semantic_binding_identity() {
     let dir = TestDir::new("agent-model-empty-identity");
-    let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), builtin_only_catalog());
+    let runtime = RuntimeRegistry::new(hya_tool_loader::builtins(), builtin_only_catalog());
     let baseline = runtime.bind_turn(dir.path()).unwrap();
     let empty = baseline
         .clone()

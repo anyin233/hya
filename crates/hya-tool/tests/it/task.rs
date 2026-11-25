@@ -10,7 +10,7 @@ use hya_proto::{OperationId, SessionId, ToolCallId};
 use hya_tool::{
     Action, AgentDef, InteractionPlane, LspPlane, MemberOutcome, Mode, PermissionPlane,
     PermissionRules, Rule, SkillPlane, SpawnMember, SpawnerPlane, ToolCtx, ToolError,
-    ToolOperation, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    ToolOperation, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -79,7 +79,7 @@ async fn subagent_can_spawn_nested_task() {
     let child = SessionId::new();
     let (spawner, mut rx) = SpawnerPlane::new();
     let ctx = ctx_with_parent(vec![allow(Action::Task, "explore")], spawner, child, parent);
-    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let tool = hya_tool_loader::builtins().get("task").unwrap();
 
     let handle = tokio::spawn(async move {
         tool.execute(
@@ -117,7 +117,7 @@ async fn omitted_subagent_type_selects_the_task_agent() {
     let parent = SessionId::new();
     let (spawner, mut rx) = SpawnerPlane::new();
     let ctx = ctx_with_session(vec![allow(Action::Task, "hya-task")], spawner, parent);
-    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let tool = hya_tool_loader::builtins().get("task").unwrap();
 
     let mut handle = tokio::spawn(async move {
         tool.execute(
@@ -155,7 +155,7 @@ async fn task_preserves_the_persisted_tool_call_operation_identity() {
     let (spawner, mut rx) = SpawnerPlane::new();
     let mut ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
     ctx.operation = operation;
-    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let tool = hya_tool_loader::builtins().get("task").unwrap();
 
     let handle = tokio::spawn(async move {
         tool.execute(
@@ -181,7 +181,7 @@ async fn task_preserves_the_persisted_tool_call_operation_identity() {
 
 #[test]
 fn task_schema_allows_batch_without_dummy_single_fields() {
-    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let tool = hya_tool_loader::builtins().get("task").unwrap();
     let schema = tool.schema().input_schema;
 
     assert_eq!(schema["required"], json!([]));
@@ -212,7 +212,7 @@ fn task_schema_allows_batch_without_dummy_single_fields() {
 
 #[test]
 fn task_schema_describes_inline_agent_as_request_scoped() {
-    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let tool = hya_tool_loader::builtins().get("task").unwrap();
     let schema = tool.schema().input_schema;
     let props = &schema["properties"];
 
@@ -241,7 +241,7 @@ fn task_schema_describes_inline_agent_as_request_scoped() {
 }
 #[test]
 fn task_schema_hides_unsupported_inline_description() {
-    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let tool = hya_tool_loader::builtins().get("task").unwrap();
     let schema = tool.schema().input_schema;
     let props = &schema["properties"];
 
@@ -267,7 +267,7 @@ async fn task_normalizes_empty_inline_description() {
     let parent = SessionId::new();
     let (spawner, mut rx) = SpawnerPlane::new();
     let ctx = ctx_with_session(vec![allow(Action::Task, "general")], spawner, parent);
-    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let tool = hya_tool_loader::builtins().get("task").unwrap();
 
     let handle = tokio::spawn(async move {
         tool.execute(
@@ -314,7 +314,7 @@ async fn task_foreground_result_uses_open_code_output_shape() {
     let parent = SessionId::new();
     let (spawner, mut rx) = SpawnerPlane::new();
     let ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
-    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let tool = hya_tool_loader::builtins().get("task").unwrap();
 
     let handle = tokio::spawn(async move {
         tool.execute(
@@ -364,7 +364,7 @@ async fn task_effort_reaches_the_spawn_and_the_result_names_the_child_model() {
     let parent = SessionId::new();
     let (spawner, mut rx) = SpawnerPlane::new();
     let ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
-    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let tool = hya_tool_loader::builtins().get("task").unwrap();
 
     let handle = tokio::spawn(async move {
         tool.execute(
@@ -405,7 +405,7 @@ async fn task_members_carry_their_own_effort() {
     let parent = SessionId::new();
     let (spawner, mut rx) = SpawnerPlane::new();
     let ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
-    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let tool = hya_tool_loader::builtins().get("task").unwrap();
 
     let handle = tokio::spawn(async move {
         tool.execute(
@@ -452,7 +452,7 @@ async fn task_preserves_typed_spawn_overload() {
     .expect("first request was not queued");
 
     let ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
-    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let tool = hya_tool_loader::builtins().get("task").unwrap();
     let error = tool
         .execute(
             &ctx,
@@ -476,7 +476,7 @@ async fn task_returns_immediately_with_running_handles() {
     let child = SessionId::new().to_string();
     let (spawner, mut rx) = SpawnerPlane::new();
     let ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
-    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let tool = hya_tool_loader::builtins().get("task").unwrap();
 
     let handle = tokio::spawn(async move {
         tool.execute(
@@ -517,7 +517,7 @@ async fn task_rejects_the_removed_name_parameter() {
     let parent = SessionId::new();
     let (spawner, mut rx) = SpawnerPlane::new();
     let ctx = ctx_with_session(vec![allow(Action::Task, "*")], spawner, parent);
-    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let tool = hya_tool_loader::builtins().get("task").unwrap();
     for input in [
         json!({"description": "d", "prompt": "p", "name": "scout"}),
         json!({"description": "d", "prompt": "p", "subagent_type": "explore", "name": ""}),
@@ -542,7 +542,7 @@ async fn task_rejects_the_removed_name_parameter() {
 
 #[test]
 fn task_schema_chooses_the_agent_by_subagent_type_only() {
-    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let tool = hya_tool_loader::builtins().get("task").unwrap();
     let schema = tool.schema();
     let props = &schema.input_schema["properties"];
     assert!(props.get("name").is_none(), "{props}");
@@ -566,7 +566,7 @@ async fn task_batch_preserves_context_order_and_running_or_failed_handles() {
     for field in ["tasks", "members"] {
         let (spawner, mut rx) = SpawnerPlane::new();
         let ctx = ctx_with_session(vec![allow(Action::Task, "*")], spawner, SessionId::new());
-        let tool = ToolRegistry::builtins().get("task").unwrap();
+        let tool = hya_tool_loader::builtins().get("task").unwrap();
         let mut input = json!({"context": "Shared contract", "model": "ignored"});
         input[field] = json!([
             {"description":"Inspect", "prompt":"Inspect files", "effort":"low"},
@@ -619,7 +619,7 @@ async fn task_rejects_invalid_batches_before_dispatch() {
     ] {
         let (spawner, mut rx) = SpawnerPlane::new();
         let ctx = ctx_with_session(vec![allow(Action::Task, "*")], spawner, SessionId::new());
-        let tool = ToolRegistry::builtins().get("task").unwrap();
+        let tool = hya_tool_loader::builtins().get("task").unwrap();
         assert!(matches!(
             tool.execute(&ctx, input).await,
             Err(ToolError::Input(_))
@@ -632,7 +632,7 @@ async fn task_rejects_invalid_batches_before_dispatch() {
 async fn task_one_item_batch_keeps_batch_result_shape() {
     let (spawner, mut rx) = SpawnerPlane::new();
     let ctx = ctx_with_session(vec![allow(Action::Task, "*")], spawner, SessionId::new());
-    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let tool = hya_tool_loader::builtins().get("task").unwrap();
     let handle = tokio::spawn(async move {
         tool.execute(&ctx, json!({"tasks":[{"prompt":"work"}]}))
             .await

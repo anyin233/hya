@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use hya_proto::SessionId;
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolError, ToolRegistry, WebSearchConfig, WebSearchPlane,
-    WebSearchProvider, handle::ArtifactPlane,
+    SpawnerPlane, ToolCtx, ToolError, WebSearchConfig, WebSearchPlane, WebSearchProvider,
+    handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -59,7 +59,7 @@ fn ctx_with_session(session: SessionId, rules: Vec<Rule>, websearch: WebSearchPl
 #[test]
 fn websearch_schema_includes_open_code_guidance() {
     // Given
-    let tool = ToolRegistry::builtins().get("websearch").unwrap();
+    let tool = hya_tool_loader::builtins().get("websearch").unwrap();
 
     // When
     let schema = tool.schema();
@@ -117,7 +117,7 @@ async fn websearch_calls_mcp_provider_and_returns_open_code_shape() {
     // Given
     let (url, request) =
         serve_once(r#"{"result":{"content":[{"type":"text","text":"Result A\nResult B"}]}}"#).await;
-    let tool = ToolRegistry::builtins().get("websearch").unwrap();
+    let tool = hya_tool_loader::builtins().get("websearch").unwrap();
     let ctx = ctx_with(
         vec![allow(Action::WebSearch, "rust news 2026")],
         WebSearchPlane::new(WebSearchProvider::Exa, url),
@@ -156,7 +156,7 @@ async fn websearch_calls_mcp_provider_and_returns_open_code_shape() {
 async fn websearch_parallel_includes_session_metadata() {
     // Given
     let (url, request) = serve_once(r#"{"result":{"content":[{"type":"text","text":"P"}]}}"#).await;
-    let tool = ToolRegistry::builtins().get("websearch").unwrap();
+    let tool = hya_tool_loader::builtins().get("websearch").unwrap();
     let session = SessionId::new();
     let ctx = ctx_with_session(
         session,
@@ -182,7 +182,7 @@ async fn websearch_parallel_includes_session_metadata() {
 #[tokio::test]
 async fn websearch_exa_sends_configured_key_as_query_parameter() {
     let (url, request) = serve_once(r#"{"result":{"content":[{"type":"text","text":"E"}]}}"#).await;
-    let tool = ToolRegistry::builtins().get("websearch").unwrap();
+    let tool = hya_tool_loader::builtins().get("websearch").unwrap();
     let ctx = ctx_with(
         vec![allow(Action::WebSearch, "rust")],
         WebSearchPlane::configured(WebSearchConfig {
@@ -204,7 +204,7 @@ async fn websearch_exa_sends_configured_key_as_query_parameter() {
 #[tokio::test]
 async fn websearch_parallel_sends_configured_key_as_bearer_token() {
     let (url, request) = serve_once(r#"{"result":{"content":[{"type":"text","text":"P"}]}}"#).await;
-    let tool = ToolRegistry::builtins().get("websearch").unwrap();
+    let tool = hya_tool_loader::builtins().get("websearch").unwrap();
     let ctx = ctx_with(
         vec![allow(Action::WebSearch, "rust")],
         WebSearchPlane::configured(WebSearchConfig {
@@ -228,7 +228,7 @@ async fn websearch_requires_permission_before_calling_provider() {
     // Given
     let (url, _request) =
         serve_once(r#"{"result":{"content":[{"type":"text","text":"should not call"}]}}"#).await;
-    let tool = ToolRegistry::builtins().get("websearch").unwrap();
+    let tool = hya_tool_loader::builtins().get("websearch").unwrap();
     let ctx = ctx_with(
         vec![deny(Action::WebSearch, "*")],
         WebSearchPlane::new(WebSearchProvider::Exa, url),

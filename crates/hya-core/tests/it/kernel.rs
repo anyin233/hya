@@ -2793,7 +2793,7 @@ async fn bash_group_lifetime_child() {
     );
     deadline::install(Duration::from_secs(180));
     let bash = match case.as_str() {
-        "full" => hya_tool::ToolRegistry::from_tool_families(&["hya/base-tools"])
+        "full" => hya_tool_loader::from_tool_families(&["hya/base-tools"])
             .get("bash")
             .unwrap(),
         "bare" => kernel::tools::builtin()

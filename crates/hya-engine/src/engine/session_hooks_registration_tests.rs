@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use hya_proto::{AgentName, Envelope, FinishCause, FinishReason, ModelRef, Role, SessionId};
 use hya_provider::{DevProvider, Provider, ProviderRouter};
 use hya_store::{OwnerRunId, SessionStore};
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
@@ -128,7 +128,7 @@ async fn fixture(
     AgentSpec,
     SessionId,
 ) {
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     let plugin = hya_bundle::prepare_package(hya_bundle::BundleSource::new(
         "registration-hooks",
         vec![hya_bundle::SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: test/registration-hooks, version: 1.0.0, publisher: test }\n")],

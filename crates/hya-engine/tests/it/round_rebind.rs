@@ -31,7 +31,7 @@ use hya_provider::{
     ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -230,7 +230,7 @@ fn single_agent_catalog(stable_id: &str, prompt: &str) -> Arc<AgentCatalog> {
 /// initial snapshot, so it is visible on every plane (including the
 /// internal-public bundle clamp).
 fn runtime_with_marker(catalog: Arc<AgentCatalog>) -> Arc<RuntimeRegistry> {
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     tools
         .register(support::MarkerTool::new(FIRST_ROUND_TOOL))
         .unwrap();

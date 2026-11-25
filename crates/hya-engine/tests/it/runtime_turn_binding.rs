@@ -17,7 +17,6 @@ use hya_provider::{
 use hya_store::SessionStore;
 use hya_tool::{
     Action, Mode, PermissionPlane, PermissionRules, Rule, Tool, ToolCtx, ToolError, ToolPermission,
-    ToolRegistry,
 };
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc};
@@ -115,7 +114,7 @@ async fn initial_context_survives_round_rebind_and_next_turn() {
     std::fs::write(&agents_path, "INITIAL_PROJECT_INSTRUCTIONS").unwrap();
     let old_calls = Arc::new(AtomicUsize::new(0));
     let new_calls = Arc::new(AtomicUsize::new(0));
-    let tools = ToolRegistry::builtins();
+    let tools = hya_tool_loader::builtins();
     tools
         .register_with_permission(
             Arc::new(CountingTool {

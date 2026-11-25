@@ -22,7 +22,7 @@ use http_body_util::BodyExt;
 use hya_engine::{AgentSpec, EventBus, SessionEngine};
 use hya_proto::{AgentName, ModelRef};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, MutexGuard};
 use tower::ServiceExt;
@@ -163,7 +163,7 @@ async fn app(engine_router: hya_provider::ProviderRouter) -> (axum::Router, hya_
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         Arc::new(engine_router),
-        support::test_runtime(Arc::new(ToolRegistry::builtins()), &[]),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins()), &[]),
         permission,
         EventBus::default(),
     ));

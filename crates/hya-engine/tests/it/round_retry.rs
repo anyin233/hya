@@ -21,7 +21,7 @@ use hya_provider::{
     ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -164,7 +164,7 @@ async fn fixture(
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         Arc::new(ProviderRouter::new().with(Arc::new(provider))),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         PermissionPlane::new(PermissionRules::default()).0,
         EventBus::default(),
     ));
@@ -277,7 +277,7 @@ async fn full_mode_request_replays_to_recorded_view() {
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         Arc::new(ProviderRouter::new().with(provider.clone())),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         PermissionPlane::new(PermissionRules::default()).0,
         EventBus::default(),
     );

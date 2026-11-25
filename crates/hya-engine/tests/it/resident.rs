@@ -17,11 +17,11 @@ use hya_engine::{
 use hya_proto::{AgentName, MailEndpoint, MailKind, ModelRef, Role, RosterStatus, SessionId};
 use hya_provider::{DevProvider, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 
 async fn engine_with(limits: SubagentLimits) -> (Arc<SessionEngine>, AgentSpec) {
     let router = Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new())));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = Arc::new(
@@ -531,7 +531,7 @@ async fn spawn_directive_and_followup_are_parent_dm_mail_even_under_restrictive_
     ))
     .unwrap();
     let runtime = Arc::new(hya_engine::RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         Arc::new(catalog),
     ));
     let (permission, _) = PermissionPlane::new(PermissionRules::default());

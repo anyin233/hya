@@ -64,7 +64,7 @@ async fn requested_mail_wake(registry: &ToolRegistry) -> bool {
 
 #[tokio::test]
 async fn with_channel_tools_loaded_wait_is_the_mail_aware_override() {
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     assert_eq!(
         registry.builtin_bundle_origin("wait"),
         Some("hya/channel-tools")
@@ -84,7 +84,7 @@ async fn with_channel_tools_loaded_wait_is_the_mail_aware_override() {
 
 #[tokio::test]
 async fn without_channel_tools_wait_is_the_extended_member_only_tool() {
-    let registry = ToolRegistry::from_tool_families(&WITHOUT_CHANNELS);
+    let registry = hya_tool_loader::from_tool_families(&WITHOUT_CHANNELS);
     assert!(registry.get("send").is_none(), "channel tools are absent");
     assert_eq!(
         registry.builtin_bundle_origin("wait"),
@@ -104,7 +104,7 @@ async fn without_channel_tools_wait_is_the_extended_member_only_tool() {
 
 #[test]
 fn channel_tools_alone_still_provide_the_mail_aware_wait() {
-    let registry = ToolRegistry::from_tool_families(&["hya/channel-tools"]);
+    let registry = hya_tool_loader::from_tool_families(&["hya/channel-tools"]);
     assert_eq!(
         registry.builtin_bundle_origin("wait"),
         Some("hya/channel-tools")

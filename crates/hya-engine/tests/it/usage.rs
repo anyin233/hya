@@ -13,7 +13,7 @@ use hya_engine::{AgentSpec, CreateSession, EventBus, SessionEngine};
 use hya_proto::{AgentName, FinishReason, ModelRef, TokenUsage};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use tokio_util::sync::CancellationToken;
 
 fn tempdir() -> PathBuf {
@@ -31,7 +31,7 @@ fn tempdir() -> PathBuf {
 async fn engine_with(script: Vec<FakeStep>) -> (SessionEngine, PathBuf) {
     let dir = tempdir();
     let router = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(script))));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Bash,
         "**",

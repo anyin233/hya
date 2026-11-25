@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use hya_proto::{ToolName, ToolSchema};
 use hya_tool::{
     Action, Decision, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Resource,
-    Rule, SkillPlane, SpawnerPlane, Tool, ToolCtx, ToolError, ToolPermission, ToolRegistry,
-    WebSearchPlane, handle::ArtifactPlane,
+    Rule, SkillPlane, SpawnerPlane, Tool, ToolCtx, ToolError, ToolPermission, WebSearchPlane,
+    handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -107,7 +107,7 @@ impl Tool for NamedTestTool {
 
 #[test]
 fn registry_rejects_duplicate_tool_name() {
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let result = registry.register(Arc::new(DuplicateTool));
     assert!(result.is_err());
     assert!(
@@ -123,7 +123,7 @@ fn registry_rejects_duplicate_tool_name() {
 
 #[test]
 fn builtins_expose_compat_names_and_keep_short_aliases_hidden() {
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     let visible: Vec<_> = registry
         .schemas()
         .into_iter()
@@ -163,7 +163,7 @@ fn builtins_expose_compat_names_and_keep_short_aliases_hidden() {
 
 #[test]
 fn removing_a_builtin_also_removes_its_alias() {
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
 
     registry.remove("websearch");
 
@@ -196,7 +196,7 @@ fn candidate_builder_mutation_does_not_change_a_frozen_snapshot() {
         }
     }
 
-    let registry = Arc::new(ToolRegistry::builtins());
+    let registry = Arc::new(hya_tool_loader::builtins());
     let frozen = registry.snapshot();
     assert!(registry.get("late_tool").is_none());
     registry
@@ -212,8 +212,8 @@ fn candidate_builder_mutation_does_not_change_a_frozen_snapshot() {
 
 #[test]
 fn dispatch_identity_is_stable_for_builtins_and_unavailable_for_unidentified_tools() {
-    let first = ToolRegistry::builtins().snapshot();
-    let second = ToolRegistry::builtins().snapshot();
+    let first = hya_tool_loader::builtins().snapshot();
+    let second = hya_tool_loader::builtins().snapshot();
     let mut canonical_names = first
         .canonical_tools()
         .into_iter()
@@ -232,7 +232,7 @@ fn dispatch_identity_is_stable_for_builtins_and_unavailable_for_unidentified_too
         assert_ne!(identity, [0_u8; 32]);
     }
 
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     registry
         .register_with_permission(
             Arc::new(NamedTestTool("unidentified_runtime_tool")),
@@ -248,7 +248,7 @@ fn dispatch_identity_is_stable_for_builtins_and_unavailable_for_unidentified_too
 
 #[test]
 fn explicit_dispatch_identity_is_canonical_snapshot_metadata() {
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
     registry
         .register_with_permission_and_aliases_and_dispatch_identity(
             Arc::new(NamedTestTool("identified_runtime_tool")),
@@ -278,7 +278,7 @@ fn explicit_dispatch_identity_is_canonical_snapshot_metadata() {
 
 #[test]
 fn registry_resolves_canonical_names_with_explicit_permission_metadata() {
-    let registry = ToolRegistry::builtins();
+    let registry = hya_tool_loader::builtins();
 
     for name in [
         "read",
@@ -419,7 +419,7 @@ async fn read_happy_and_denied() {
     tokio::fs::write(&file, "hi there").await.unwrap();
     let path = file.to_string_lossy().into_owned();
 
-    let reg = ToolRegistry::builtins();
+    let reg = hya_tool_loader::builtins();
     let read = reg.get("read").unwrap();
 
     let ctx = ctx_with(vec![allow(Action::Read, "/**")], dir.clone());
@@ -436,7 +436,7 @@ async fn read_happy_and_denied() {
 #[tokio::test]
 async fn write_then_glob_then_grep() {
     let dir = tempdir();
-    let reg = ToolRegistry::builtins();
+    let reg = hya_tool_loader::builtins();
     let ctx = ctx_with(
         vec![
             allow(Action::Edit, "/**"),
@@ -476,7 +476,7 @@ async fn write_then_glob_then_grep() {
 #[tokio::test]
 async fn bash_happy_and_cancelled() {
     let dir = tempdir();
-    let reg = ToolRegistry::builtins();
+    let reg = hya_tool_loader::builtins();
     let bash = reg.get("bash").unwrap();
     let shell = reg.get("shell").unwrap();
 
@@ -556,7 +556,7 @@ async fn task_tool_is_lead_only() {
         cancel: CancellationToken::new(),
         project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     };
-    let reg = ToolRegistry::builtins();
+    let reg = hya_tool_loader::builtins();
     let tool = reg.get("task").unwrap();
     let err = tool
         .execute(&ctx, json!({ "prompt": "x", "subagent_type": "quick" }))
@@ -569,7 +569,7 @@ async fn ls_lists_entries_with_type_and_size() {
     let dir = tempdir();
     tokio::fs::write(dir.join("a.txt"), "hello").await.unwrap();
     tokio::fs::create_dir_all(dir.join("sub")).await.unwrap();
-    let reg = ToolRegistry::builtins();
+    let reg = hya_tool_loader::builtins();
     let ls = reg.get("ls").unwrap();
 
     let ctx = ctx_with(vec![allow(Action::Read, "/**")], dir.clone());
@@ -609,7 +609,7 @@ async fn find_matches_glob_with_metadata() {
         .await
         .unwrap();
     tokio::fs::write(dir.join("b.txt"), "x").await.unwrap();
-    let reg = ToolRegistry::builtins();
+    let reg = hya_tool_loader::builtins();
     let find = reg.get("find").unwrap();
 
     let glob_ctx = ctx_with(vec![allow(Action::Glob, "*")], dir.clone());
@@ -646,7 +646,7 @@ async fn find_resolves_relative_path_under_workdir() {
         .await
         .unwrap();
     tokio::fs::write(dir.join("c.txt"), "ccc").await.unwrap();
-    let reg = ToolRegistry::builtins();
+    let reg = hya_tool_loader::builtins();
     let find = reg.get("find").unwrap();
     let ctx = ctx_with(vec![allow(Action::Glob, "*")], dir);
 
@@ -678,7 +678,7 @@ async fn find_accepts_absolute_path_inside_workdir() {
     tokio::fs::write(dir.join("deep/y.md"), "hello md!")
         .await
         .unwrap();
-    let reg = ToolRegistry::builtins();
+    let reg = hya_tool_loader::builtins();
     let find = reg.get("find").unwrap();
     let ctx = ctx_with(vec![allow(Action::Glob, "*")], dir.clone());
 
@@ -706,7 +706,7 @@ async fn find_rejects_absolute_path_outside_workdir() {
     tokio::fs::write(outside.join("secret.txt"), "s")
         .await
         .unwrap();
-    let reg = ToolRegistry::builtins();
+    let reg = hya_tool_loader::builtins();
     let find = reg.get("find").unwrap();
     let ctx = ctx_with(
         vec![
@@ -730,7 +730,7 @@ async fn find_rejects_absolute_path_outside_workdir() {
 #[tokio::test]
 async fn find_rejects_parent_traversal_out_of_workdir() {
     let dir = tempdir();
-    let reg = ToolRegistry::builtins();
+    let reg = hya_tool_loader::builtins();
     let find = reg.get("find").unwrap();
     let ctx = ctx_with(
         vec![

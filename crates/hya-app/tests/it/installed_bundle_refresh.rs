@@ -15,7 +15,7 @@ use hya_engine::{CreateSession, EventBus, RuntimeRegistry, RuntimeSourceId, Sess
 use hya_proto::{AgentName, ModelRef};
 use hya_provider::ProviderRouter;
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolCtx, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules, ToolCtx};
 
 fn temp_path(suffix: &str) -> PathBuf {
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
@@ -179,7 +179,7 @@ flowchart TD
 #[tokio::test]
 async fn installed_generation_refresh_publishes_only_for_new_root_bindings() {
     let runtime = Arc::new(RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         hya_app::builtin_agent_catalog().expect("builtin agent catalog"),
     ));
     let registry_path = temp_path("registry.db");
@@ -271,7 +271,7 @@ async fn installed_generation_refresh_publishes_only_for_new_root_bindings() {
 #[tokio::test]
 async fn installed_plugin_refresh_and_uninstall_preserve_old_binding_snapshot() {
     let runtime = Arc::new(RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         hya_app::builtin_agent_catalog().expect("builtin agent catalog"),
     ));
     let registry_path = temp_path("plugin-registry.db");
@@ -356,7 +356,7 @@ async fn installed_plugin_refresh_and_uninstall_preserve_old_binding_snapshot() 
 #[tokio::test]
 async fn installed_goal_loop_override_uninstall_restores_first_party_prompt() {
     let runtime = Arc::new(RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         hya_app::builtin_agent_catalog().expect("builtin agent catalog"),
     ));
     let registry_path = temp_path("goal-loop-registry.db");
@@ -409,7 +409,7 @@ async fn installed_goal_loop_override_uninstall_restores_first_party_prompt() {
 #[tokio::test]
 async fn installed_workflow_refresh_publishes_workflow_and_agent_atomically_and_pins_bindings() {
     let runtime = Arc::new(RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         hya_app::builtin_agent_catalog().expect("builtin agent catalog"),
     ));
     let registry_path = temp_path("workflow-registry.db");
@@ -549,7 +549,7 @@ agents:
 #[tokio::test]
 async fn installed_bundle_schema_declarations_publish_scheme_claims() {
     let runtime = Arc::new(RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         hya_app::builtin_agent_catalog().expect("builtin agent catalog"),
     ));
     let registry_path = temp_path("schema-registry.db");
@@ -628,7 +628,7 @@ async fn plugin_process_tools_publish_atomically_and_old_binding_survives_uninst
         .await
         .unwrap();
     let runtime = Arc::new(RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         hya_app::builtin_agent_catalog().unwrap(),
     ));
     let refresh = hya_app::InstalledBundleRefresh::new(registry_path);
@@ -695,7 +695,7 @@ async fn failed_bundle_process_start_retains_only_its_source() {
         .await
         .unwrap();
     let runtime = Arc::new(RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         hya_app::builtin_agent_catalog().unwrap(),
     ));
     let refresh = hya_app::InstalledBundleRefresh::new(registry_path);
@@ -883,7 +883,7 @@ async fn retained_bundle_hook_keeps_materialized_files_after_uninstall() {
         .await
         .unwrap();
     let runtime = RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         hya_app::builtin_agent_catalog().unwrap(),
     );
     let refresh = hya_app::InstalledBundleRefresh::new(registry_path);
@@ -957,7 +957,7 @@ async fn bundle_config_edit_restarts_the_process_at_the_next_refresh() {
         .await
         .unwrap();
     let runtime = Arc::new(RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         hya_app::builtin_agent_catalog().unwrap(),
     ));
     let config_file = root.join("config-home/hya/config.yaml");
@@ -1105,7 +1105,7 @@ async fn old_install_record_is_reported_after_publishing_readable_sources() {
     assert!(snapshot.bundles.is_empty());
     assert_eq!(snapshot.unreadable[0].bundle_id, "hya/installed-test");
     let runtime = RuntimeRegistry::new(
-        ToolRegistry::builtins(),
+        hya_tool_loader::builtins(),
         hya_app::builtin_agent_catalog().unwrap(),
     );
     let refresh = hya_app::InstalledBundleRefresh::new(registry_path);

@@ -23,7 +23,7 @@ use hya_proto::{AgentName, ModelRef, SessionId};
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_server::{AppState, V1Grpc, router};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -84,7 +84,7 @@ fn api(id: &str, method: ApiMethod, scope: ApiScope, path: &str) -> SourceApi {
 async fn state() -> AppState {
     let providers =
         Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted_turns(Vec::new()))));
-    let tools = Arc::new(ToolRegistry::builtins());
+    let tools = Arc::new(hya_tool_loader::builtins());
     let runtime = support::runtime_with_catalog(
         tools,
         &[

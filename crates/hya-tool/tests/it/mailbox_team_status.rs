@@ -13,8 +13,8 @@ use std::path::PathBuf;
 use hya_proto::{ChannelKind, SessionId};
 use hya_tool::{
     ChannelRow, InteractionPlane, LspPlane, MailboxPlane, MailboxRequest, MemberStatusRow,
-    PermissionPlane, PermissionRules, SkillPlane, SpawnerPlane, ToolCtx, ToolRegistry,
-    WebSearchPlane, handle::ArtifactPlane,
+    PermissionPlane, PermissionRules, SkillPlane, SpawnerPlane, ToolCtx, WebSearchPlane,
+    handle::ArtifactPlane,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -98,7 +98,7 @@ async fn list_channel_appends_the_team_section_with_heartbeat_freshness() {
         }],
     );
     let ctx = ctx_with(plane, session);
-    let tool = ToolRegistry::builtins().get("list_channel").unwrap();
+    let tool = hya_tool_loader::builtins().get("list_channel").unwrap();
 
     // When
     let out = tool.execute(&ctx, serde_json::json!({})).await.unwrap();
@@ -140,7 +140,7 @@ async fn list_channel_omits_the_team_section_without_children() {
         Vec::new(),
     );
     let ctx = ctx_with(plane, session);
-    let tool = ToolRegistry::builtins().get("list_channel").unwrap();
+    let tool = hya_tool_loader::builtins().get("list_channel").unwrap();
 
     // When
     let out = tool.execute(&ctx, serde_json::json!({})).await.unwrap();
@@ -168,7 +168,7 @@ async fn list_channel_renders_a_child_without_any_heartbeat_yet() {
         }],
     );
     let ctx = ctx_with(plane, session);
-    let tool = ToolRegistry::builtins().get("list_channel").unwrap();
+    let tool = hya_tool_loader::builtins().get("list_channel").unwrap();
 
     // When
     let out = tool.execute(&ctx, serde_json::json!({})).await.unwrap();
@@ -191,7 +191,7 @@ async fn a_hash_path_that_names_no_file_is_read_as_a_channel() {
     let session = SessionId::new();
     let (plane, service) = canned_service(Vec::new(), Vec::new());
     let ctx = ctx_with(plane, session);
-    let tool = ToolRegistry::builtins().get("read").unwrap();
+    let tool = hya_tool_loader::builtins().get("read").unwrap();
 
     let out = tool
         .execute(&ctx, serde_json::json!({"filePath": "#main/scout-a"}))
