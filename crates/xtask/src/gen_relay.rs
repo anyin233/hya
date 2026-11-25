@@ -13,7 +13,7 @@ use prost::Message;
 
 use crate::gen_api::{run_protoc_descriptor, workspace_root};
 
-/// Entry point for `cargo xtask gen-relay`.
+/// Entry point for `cargo run -p xtask -- gen-relay`.
 pub fn run(_args: Vec<String>) -> Result<()> {
     let root = workspace_root()?;
     let proto_dir = root.join("proto");

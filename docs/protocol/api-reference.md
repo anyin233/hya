@@ -1,6 +1,6 @@
 # hya API v1 Reference
 
-Generated from `proto/hya/v1` by `cargo xtask gen-api`; do not edit by hand.
+Generated from `proto/hya/v1` by `cargo run -p xtask -- gen-api`; do not edit by hand.
 The same contract is served over HTTP/JSON+SSE and gRPC. Every rpc lists its
 HTTP binding (`method path`) and its fully-qualified gRPC method
 (`hya.v1.<Service>.<Rpc>`).

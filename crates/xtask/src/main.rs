@@ -1,30 +1,5 @@
-//! Repository automation, run as `cargo xtask <task>`.
-//!
-//! These are maintenance tasks that need the workspace checked out, so they live
-//! here rather than in CI config or a shell script:
-//!
-//! - `startup-bench` — measure backend startup latency.
-//! - `lifecycle-bench` — measure offline task lifecycle store costs.
-//! - `matrix-check` — verify the agent test matrix in `docs/testing/` still
-//!   matches the scenarios the suites actually declare.
-//! - `package-bundle` — validate a source tree and emit deterministic public
-//!   `.hyabundle` bytes through the shared package writer.
-//! - `package-native-tool-bundle` — stage one built Rust tool-family executable
-//!   into its policy source and emit a deterministic public package.
-//!
-//! - `stage-first-party-bundles` — package the eleven trusted first-party
-//!   bundles for an installed layout and, optionally, as release assets.
-//! - `stage-release` — assemble a release package root from built inputs.
-//! - `stage-bun-programs` — stage the Bun programs for a source install.
-//! - `release-rehearsal` — validate and smoke the non-publishing release asset.
-//! - `gen-api` — regenerate the `hya.v1` contract crate and its docs from
-//!   `proto/hya/v1` (Rust codegen + API reference + OpenAPI).
-//! - `gen-plugin` — generate plugin hook names, TS payloads and checked shared runtime copies.
-//! - `gen-relay` — regenerate the `hya.relay.v1` rendezvous types in
-//!   `crates/hya-relay/src/gen/` from `proto/hya/relay/v1`.
-//!
-//! An unknown or missing task prints usage and exits successfully, so the binary
-//! is safe to invoke from a wrapper that does not know the task list.
+//! Repository automation for a workspace checkout. Run
+//! `cargo run -p xtask -- --help` to list the available tasks.
 
 mod first_party_release;
 mod gen_api;
@@ -37,34 +12,41 @@ mod release_rehearsal;
 mod release_staging;
 mod startup_bench;
 
-fn main() {
-    let mut args = std::env::args();
-    let _bin = args.next();
-    let task = args.next();
+type Task = fn(Vec<String>) -> anyhow::Result<()>;
 
-    let result = match task.as_deref() {
-        Some("package-bundle") => package_bundle::run(args.collect()),
-        Some("package-native-tool-bundle") => package_bundle::run_native(args.collect()),
-        Some("package-native-tool-library") => package_bundle::run_native_library(args.collect()),
-        Some("stage-first-party-bundles") => first_party_release::run(args.collect()),
-        Some("stage-release") => release_staging::run(args.collect()),
-        Some("stage-bun-programs") => release_staging::run_bun_programs(args.collect()),
-        Some("release-rehearsal") => release_rehearsal::run(args.collect()),
-        Some("lifecycle-bench") => lifecycle_bench::run(args.collect()),
-        Some("startup-bench") => startup_bench::run(args.collect()),
-        Some("matrix-check") => matrix_check::run(args.collect()),
-        Some("gen-api") => gen_api::run(args.collect()),
-        Some("gen-relay") => gen_relay::run(args.collect()),
-        Some("gen-plugin") => gen_plugin::run(args.collect()),
-        _ => {
-            eprintln!(
-                "usage: cargo xtask <startup-bench|lifecycle-bench|matrix-check|package-bundle|package-native-tool-bundle|package-native-tool-library|stage-first-party-bundles|stage-release|stage-bun-programs|release-rehearsal|gen-api|gen-relay|gen-plugin>"
-            );
-            Ok(())
+const TASKS: &[(&str, Task)] = &[
+    ("startup-bench", startup_bench::run),
+    ("lifecycle-bench", lifecycle_bench::run),
+    ("matrix-check", matrix_check::run),
+    ("package-bundle", package_bundle::run),
+    (
+        "package-native-tool-library",
+        package_bundle::run_native_library,
+    ),
+    ("stage-first-party-bundles", first_party_release::run),
+    ("stage-release", release_staging::run),
+    ("stage-bun-programs", release_staging::run_bun_programs),
+    ("release-rehearsal", release_rehearsal::run),
+    ("gen-api", gen_api::run),
+    ("gen-relay", gen_relay::run),
+    ("gen-plugin", gen_plugin::run),
+];
+
+fn main() {
+    let mut args = std::env::args().skip(1);
+    let task = args.next();
+    let Some((_, run)) = TASKS
+        .iter()
+        .find(|(name, _)| Some(*name) == task.as_deref())
+    else {
+        eprintln!("Usage: cargo run -p xtask -- <task> [args...]\n\nTasks:");
+        for (name, _) in TASKS {
+            eprintln!("  {name}");
         }
+        return;
     };
 
-    if let Err(error) = result {
+    if let Err(error) = run(args.collect()) {
         eprintln!("xtask: {error:#}");
         std::process::exit(1);
     }

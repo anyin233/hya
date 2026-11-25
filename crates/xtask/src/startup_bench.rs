@@ -18,7 +18,7 @@ use anyhow::{Context as _, bail};
 use serde::Deserialize;
 use serde_json::Value;
 
-/// Run `cargo xtask startup-bench …`.
+/// Run `cargo run -p xtask -- startup-bench …`.
 pub fn run(args: Vec<String>) -> anyhow::Result<()> {
     let mut mode = "backend".to_string();
     let mut runs: usize = 5;
@@ -111,7 +111,7 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
 
 fn print_help() {
     eprintln!(
-        "usage: cargo xtask startup-bench [--mode backend|parse] [--runs N] \
+        "usage: cargo run -p xtask -- startup-bench [--mode backend|parse] [--runs N] \
          [--budget-backend-ms MS] [--backend-bin PATH] [--marks-file PATH] \
          [--db SEED_DB] [--timeout-secs N]"
     );

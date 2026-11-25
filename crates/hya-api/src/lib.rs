@@ -5,7 +5,7 @@
 //!
 //! - [`v1`] — generated Rust types, clients, and servers for the `hya.v1`
 //!   protobuf services, plus canonical protojson serde implementations.
-//!   Regenerate with `cargo xtask gen-api`; the output is committed so
+//!   Regenerate with `cargo run -p xtask -- gen-api`; the output is committed so
 //!   normal builds never need `protoc`.
 //! - [`error`] — the stable error-code table mapped to HTTP statuses and
 //!   gRPC status codes.

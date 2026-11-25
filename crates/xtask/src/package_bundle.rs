@@ -20,31 +20,21 @@ struct NativeTool {
 /// Validate one source directory and atomically write canonical public package bytes.
 pub fn run(args: Vec<String>) -> anyhow::Result<()> {
     let [source, output] = args.as_slice() else {
-        bail!("usage: cargo xtask package-bundle <source-directory> <output.hyabundle>");
+        bail!("usage: cargo run -p xtask -- package-bundle <source-directory> <output.hyabundle>");
     };
     let source = BundleSource::read_directory(source)
         .with_context(|| format!("read bundle source directory {source}"))?;
     write_package(source, PathBuf::from(output))
 }
 
-/// Add a target-specific Rust executable to a policy-only tool-family source.
-pub fn run_native(args: Vec<String>) -> anyhow::Result<()> {
-    let [source, binary, output] = args.as_slice() else {
-        bail!(
-            "usage: cargo xtask package-native-tool-bundle <source-directory> <built-executable> <output.hyabundle>"
-        );
-    };
-    stage_native(source, binary, output, NativeArtifact::Process)
-}
-
 /// Add a target-specific Rust dynamic library to a policy-only tool-family source.
 pub fn run_native_library(args: Vec<String>) -> anyhow::Result<()> {
     let [source, library, output] = args.as_slice() else {
         bail!(
-            "usage: cargo xtask package-native-tool-library <source-directory> <built-library> <output.hyabundle>"
+            "usage: cargo run -p xtask -- package-native-tool-library <source-directory> <built-library> <output.hyabundle>"
         );
     };
-    stage_native(source, library, output, NativeArtifact::Library)
+    package_native_library(source.as_ref(), library.as_ref(), output.as_ref())
 }
 
 /// Package a tool-family source with its built dynamic library at `output`.
@@ -53,37 +43,7 @@ pub(crate) fn package_native_library(
     library: &std::path::Path,
     output: &std::path::Path,
 ) -> anyhow::Result<()> {
-    stage_native(
-        &source.to_string_lossy(),
-        &library.to_string_lossy(),
-        &output.to_string_lossy(),
-        NativeArtifact::Library,
-    )
-}
-
-/// Package one bundle source directory at `output`.
-pub(crate) fn package_directory(
-    source: &std::path::Path,
-    output: &std::path::Path,
-) -> anyhow::Result<()> {
-    let bundle = BundleSource::read_directory(source)
-        .with_context(|| format!("read bundle source directory {}", source.display()))?;
-    write_package(bundle, output.to_path_buf())
-}
-
-#[derive(Clone, Copy)]
-enum NativeArtifact {
-    Process,
-    Library,
-}
-
-fn stage_native(
-    source: &str,
-    binary: &str,
-    output: &str,
-    artifact: NativeArtifact,
-) -> anyhow::Result<()> {
-    let source_root = PathBuf::from(source);
+    let source_root = source;
     let manifest_path = source_root.join("bundle.yaml");
     let exposure_path = source_root.join("exposure.yaml");
     let mut manifest: Value = serde_norway::from_slice(
@@ -123,30 +83,17 @@ fn stage_native(
     {
         bail!("tool-family source already declares a native runtime");
     }
-    let binary_path = match artifact {
-        NativeArtifact::Process => {
-            extensions.insert(
-                "rust".into(),
-                json!([{"id":"runtime","path":"native/tool-runtime"}]),
-            );
-            extensions.insert(
-                "process".into(),
-                json!({"kind":"rust","command":["${BUNDLE_ROOT}/native/tool-runtime"]}),
-            );
-            "native/tool-runtime".to_string()
-        }
-        NativeArtifact::Library => {
-            let filename = std::path::Path::new(binary)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .context("native library needs a UTF-8 file name")?;
-            let path = format!("native/{filename}");
-            extensions.insert("libraries".into(), json!([{"id":"runtime","path":path}]));
-            path
-        }
-    };
-    let mut source = BundleSource::read_directory(&source_root)
-        .with_context(|| format!("read bundle source directory {source}"))?;
+    let filename = library
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("native library needs a UTF-8 file name")?;
+    let library_path = format!("native/{filename}");
+    extensions.insert(
+        "libraries".into(),
+        json!([{"id":"runtime","path":library_path}]),
+    );
+    let mut source = BundleSource::read_directory(source_root)
+        .with_context(|| format!("read bundle source directory {}", source_root.display()))?;
     if !tools.is_empty() {
         let resources = root.entry("resources").or_insert_with(|| json!({}));
         let resources = resources
@@ -172,11 +119,21 @@ fn stage_native(
             serde_norway::to_string(&manifest)?.into_bytes(),
         )
         .with_file(
-            binary_path,
-            std::fs::read(binary)
-                .with_context(|| format!("read built native artifact {binary}"))?,
+            library_path,
+            std::fs::read(library)
+                .with_context(|| format!("read built native library {}", library.display()))?,
         );
-    write_package(source, PathBuf::from(output))
+    write_package(source, output.to_path_buf())
+}
+
+/// Package one bundle source directory at `output`.
+pub(crate) fn package_directory(
+    source: &std::path::Path,
+    output: &std::path::Path,
+) -> anyhow::Result<()> {
+    let bundle = BundleSource::read_directory(source)
+        .with_context(|| format!("read bundle source directory {}", source.display()))?;
+    write_package(bundle, output.to_path_buf())
 }
 
 fn write_package(source: BundleSource, output: PathBuf) -> anyhow::Result<()> {
@@ -212,47 +169,6 @@ mod native_tests {
     use hya_bundle::inspect_public_package;
 
     use super::*;
-
-    #[test]
-    fn native_tool_package_carries_binary_and_exact_family_declarations() {
-        let root =
-            std::env::temp_dir().join(format!("hya-native-package-test-{}", std::process::id()));
-        let source = root.join("source");
-        std::fs::create_dir_all(&source).unwrap();
-        std::fs::write(source.join("bundle.yaml"), "kind: Bundle\nidentity: { id: hya/test-tools, version: 1.0.0, publisher: hya }\nnamespace: test-tools\nextensions:\n  files: [{ id: exposure, path: exposure.yaml }]\n").unwrap();
-        std::fs::write(source.join("exposure.yaml"), "schema_version: 1\nidentity: hya/test-tools\nprotected_names: []\ntools:\n  - { name: alpha, schema_version: 1, permission: read_only }\n  - { name: beta, schema_version: 1, permission: tool }\n").unwrap();
-        let binary = root.join("native-tool");
-        std::fs::write(&binary, [0xff, 0x00, 0x7f, 0x45, 0x4c, 0x46]).unwrap();
-        let package = root.join("native.hyabundle");
-        run_native(vec![
-            source.to_string_lossy().into_owned(),
-            binary.to_string_lossy().into_owned(),
-            package.to_string_lossy().into_owned(),
-        ])
-        .unwrap();
-        let catalog = inspect_public_package(&std::fs::read(&package).unwrap()).unwrap();
-        let [bundle] = catalog.bundles() else {
-            panic!("one bundle")
-        };
-        assert_eq!(
-            bundle
-                .tools()
-                .iter()
-                .map(|tool| tool.local_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["alpha", "beta"]
-        );
-        let runtime = bundle
-            .extensions()
-            .iter()
-            .find(|asset| asset.local_id == "runtime")
-            .unwrap();
-        assert_eq!(
-            runtime.source_bytes().unwrap(),
-            [0xff, 0x00, 0x7f, 0x45, 0x4c, 0x46]
-        );
-        std::fs::remove_dir_all(root).unwrap();
-    }
 
     #[test]
     fn native_tool_library_package_has_no_process_and_keeps_binary_bytes() {
