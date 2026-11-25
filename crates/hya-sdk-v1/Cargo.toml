@@ -25,7 +25,7 @@ tokio = { workspace = true }
 axum = { workspace = true }
 hya-bundle = { workspace = true }
 hya-engine = { workspace = true }
-hya-provider = { workspace = true }
+hya-provider = { workspace = true, features = ["test-support"] }
 hya-server = { workspace = true }
 hya-store = { workspace = true }
 hya-tool = { workspace = true }

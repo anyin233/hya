@@ -7,6 +7,11 @@ license.workspace = true
 [package.metadata.hya]
 version-reference = "hya"
 
+[features]
+default = ["legacy-fake-provider"]
+legacy-fake-provider = []
+test-support = []
+
 [lints]
 workspace = true
 
@@ -25,3 +30,7 @@ eventsource-stream = { workspace = true }
 httpdate = { workspace = true }
 secrecy = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+# Integration tests build the library without cfg(test).
+hya-provider = { workspace = true, features = ["test-support"] }

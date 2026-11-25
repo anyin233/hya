@@ -19,7 +19,7 @@ hya-app = { workspace = true }
 hya-bundle = { workspace = true }
 hya-engine = { workspace = true }
 hya-proto = { workspace = true }
-hya-provider = { workspace = true }
+hya-provider = { workspace = true, features = ["test-support"] }
 hya-store = { workspace = true, features = ["lifecycle-bench"] }
 hya-tool = { workspace = true }
 hya-version = { workspace = true }

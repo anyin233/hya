@@ -1413,6 +1413,7 @@ dependencies = [
  "futures",
  "httpdate",
  "hya-proto",
+ "hya-provider",
  "hya-version",
  "reqwest",
  "secrecy",
