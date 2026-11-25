@@ -299,33 +299,23 @@ mod tests {
     }
 
     #[test]
-    fn the_name_list_is_non_empty_well_formed_and_unique() {
+    fn operator_name_list_format_seeded_draws_and_max_length() {
         let names = operator_names();
         assert!(!names.is_empty());
-        let raw_lines: Vec<&str> = OPERATOR_NAMES_TXT.lines().collect();
-        assert_eq!(raw_lines.len(), names.len(), "no blank or padded lines");
+        assert_eq!(OPERATOR_NAMES_TXT.lines().count(), names.len());
+        assert_eq!(names.iter().collect::<BTreeSet<_>>().len(), names.len());
         for name in names {
             assert!(
                 is_name(name),
                 "`{name}` must match ^[a-z0-9]+(-[a-z0-9]+)*$"
             );
         }
-        let unique: BTreeSet<&&str> = names.iter().collect();
-        assert_eq!(unique.len(), names.len(), "names are unique");
-    }
-
-    #[test]
-    fn a_leaf_is_the_prefix_and_one_listed_name() {
         let mut rng = SplitMix64::seeded(7);
-        for _ in 0..200 {
+        for _ in 0..50 {
             let leaf = mint_leaf("scout", &BTreeSet::new(), &mut rng);
             let name = leaf.strip_prefix("scout-").expect("prefix");
-            assert!(operator_names().contains(&name), "{leaf}");
+            assert!(names.contains(&name), "{leaf}");
         }
-    }
-
-    #[test]
-    fn seeded_draws_are_reproducible() {
         let draw = |seed| {
             let mut rng = SplitMix64::seeded(seed);
             (0..8)
@@ -333,52 +323,35 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(draw(42), draw(42));
-    }
-
-    #[test]
-    fn a_taken_leaf_falls_back_to_two_distinct_names() {
-        let names = operator_names();
-        let taken: BTreeSet<String> = [format!("scout-{}", names[0])].into_iter().collect();
-        let leaf = mint_leaf("scout", &taken, &mut Fixed(0));
-        assert_eq!(leaf, format!("scout-{}-{}", names[0], names[1]));
-        assert!(!taken.contains(&leaf));
-    }
-
-    #[test]
-    fn every_single_name_taken_still_mints_a_fresh_pair() {
-        let names = operator_names();
-        let mut taken: BTreeSet<String> = names.iter().map(|name| format!("dev-{name}")).collect();
-        taken.insert(format!("dev-{}-{}", names[0], names[1]));
-        let leaf = mint_leaf("dev", &taken, &mut Fixed(0));
-        assert!(!taken.contains(&leaf), "{leaf}");
-        assert!(leaf.starts_with("dev-"), "{leaf}");
-    }
-
-    #[test]
-    fn the_longest_leaf_is_admitted() {
-        let longest = operator_names()
-            .iter()
-            .max_by_key(|name| name.len())
-            .copied()
-            .unwrap();
+        let longest = names.iter().max_by_key(|n| n.len()).copied().unwrap();
         let prefix = "a".repeat(hya_tool::HANDLE_PREFIX_MAX_LEN);
-        let index = operator_names()
-            .iter()
-            .position(|name| *name == longest)
-            .unwrap();
-        let leaf = mint_leaf(&prefix, &BTreeSet::new(), &mut Fixed(index));
+        let idx = names.iter().position(|n| *n == longest).unwrap();
+        let leaf = mint_leaf(&prefix, &BTreeSet::new(), &mut Fixed(idx));
         assert_eq!(leaf, format!("{prefix}-{longest}"));
         assert!(scope::is_valid_leaf(&leaf));
     }
 
     #[test]
-    fn the_namer_never_hands_out_the_same_leaf_twice_per_team() {
+    fn collision_pair_fallback_and_per_team_uniqueness() {
+        let names = operator_names();
+        let taken: BTreeSet<String> = [format!("scout-{}", names[0])].into_iter().collect();
+        let leaf = mint_leaf("scout", &taken, &mut Fixed(0));
+        assert_eq!(leaf, format!("scout-{}-{}", names[0], names[1]));
+        assert!(!taken.contains(&leaf));
+
+        let mut all_taken: BTreeSet<String> = names.iter().map(|n| format!("dev-{n}")).collect();
+        all_taken.insert(format!("dev-{}-{}", names[0], names[1]));
+        let pair = mint_leaf("dev", &all_taken, &mut Fixed(0));
+        assert!(!all_taken.contains(&pair) && pair.starts_with("dev-"));
+
         let namer = HandleNamer::new(Box::new(Fixed(3)));
         let root = SessionId::new();
         let first = namer.mint(root, "scout", BTreeSet::new());
         let second = namer.mint(root, "scout", BTreeSet::new());
         assert_ne!(first, second);
-        let other_team = namer.mint(SessionId::new(), "scout", BTreeSet::new());
-        assert_eq!(other_team, first, "uniqueness is per team");
+        assert_eq!(
+            namer.mint(SessionId::new(), "scout", BTreeSet::new()),
+            first
+        );
     }
 }

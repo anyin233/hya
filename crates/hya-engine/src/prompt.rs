@@ -233,65 +233,54 @@ mod tests {
         team_quick_reference(|name| tools.contains(&name), depth).unwrap_or_default()
     }
 
-    /// The report prohibition is main-only: the depth-0 reference carries it,
-    /// no subagent reference does, and no builtin subagent prompt may contain
-    /// the prohibition wording (subagents MUST report freely).
     #[test]
-    fn report_prohibition_is_main_only() {
+    fn team_quick_reference_rules_tool_resolution_and_filtering() {
+        let registry = hya_tool_loader::builtins();
         let main = reference(&FULL_TOOLS, 0);
-        assert!(
-            main.contains("As the main agent NEVER call `report`"),
-            "the main reference keeps the prohibition line: {main}"
-        );
         let member = reference(&FULL_TOOLS, 1);
-        assert!(!member.contains("NEVER call `report`"), "{member}");
+
+        // Main-only report prohibition; subagents report freely; guidance content holds.
+        assert!(main.contains("As the main agent NEVER call `report`"));
         assert!(
-            member.contains("Finish your task with `report`"),
-            "{member}"
+            main.contains("running acknowledges launch")
+                && main.contains("Results arrive later as mail")
+                && main.contains("call `wait` once")
+                && main.contains("do NOT poll `list_channel`")
+                && main.contains("[NEW MAIL]")
+        );
+        assert!(
+            !member.contains("NEVER call `report`")
+                && member.contains("Finish your task with `report`")
         );
         for agent in crate::builtin_agents::preset_agents() {
-            let Some(prompt) = agent.prompt.as_deref() else {
-                continue;
-            };
-            assert!(
-                !prompt.contains("NEVER call `report`"),
-                "subagent prompt `{}` must not forbid report",
-                agent.id.as_str()
-            );
-        }
-    }
-
-    /// Every tool-shaped backtick token in the team quick reference must
-    /// resolve in the CURRENT builtin registry (canonical or hidden alias).
-    /// Non-tool spellings (channel URLs, sentinels, notices) are exempt.
-    #[test]
-    fn quick_reference_tool_tokens_resolve_in_the_registry() {
-        let registry = hya_tool_loader::builtins();
-        for depth in [0, 1] {
-            let out = reference(&FULL_TOOLS, depth);
-            assert!(out.starts_with("## Team quick reference"), "{out}");
-            for token in out.split('`').skip(1).step_by(2) {
-                let token = token.trim();
-                let is_non_tool_spelling = token.is_empty()
-                    || token.contains("://")
-                    || token.starts_with('#')
-                    || token.starts_with('[')
-                    || token.starts_with('^');
-                if is_non_tool_spelling {
-                    continue;
-                }
+            if let Some(prompt) = agent.prompt.as_deref() {
                 assert!(
-                    registry.get(token).is_some(),
-                    "quick reference names `{token}` but no such tool exists"
+                    !prompt.contains("NEVER call `report`"),
+                    "{}",
+                    agent.id.as_str()
                 );
             }
         }
-    }
 
-    /// A line only appears when the request advertises the tools it teaches.
-    #[test]
-    fn quick_reference_lists_only_the_tools_the_agent_has() {
-        let member = reference(&["report", "wait", "send", "list_channel", "read"], 1);
+        // Every backtick tool token in the reference resolves in the builtin registry.
+        for out in [&main, &member] {
+            assert!(out.starts_with("## Team quick reference"));
+            for token in out.split('`').skip(1).step_by(2) {
+                let token = token.trim();
+                if token.is_empty()
+                    || token.contains("://")
+                    || token.starts_with('#')
+                    || token.starts_with('[')
+                    || token.starts_with('^')
+                {
+                    continue;
+                }
+                assert!(registry.get(token).is_some(), "unknown token `{token}`");
+            }
+        }
+
+        // Only offered tools are mentioned; no coordination tools => None.
+        let narrowed = reference(&["report", "wait", "send", "list_channel", "read"], 1);
         for present in [
             "`report`",
             "`wait`",
@@ -299,147 +288,62 @@ mod tests {
             "`list_channel`",
             "channel://",
         ] {
-            assert!(member.contains(present), "missing {present}: {member}");
+            assert!(narrowed.contains(present), "missing {present}");
         }
         for absent in ["`task`", "`archive`", "`search_agent`"] {
-            assert!(!member.contains(absent), "leaked {absent}: {member}");
+            assert!(!narrowed.contains(absent), "leaked {absent}");
         }
         let quiet = reference(&["wait", "grep"], 1);
-        assert!(
-            !quiet.contains("`send`") && !quiet.contains("channel://"),
-            "{quiet}"
-        );
-        assert_eq!(
-            team_quick_reference(|name| name == "grep", 1),
-            None,
-            "no coordination tool, no reference"
-        );
+        assert!(!quiet.contains("`send`") && !quiet.contains("channel://"));
+        assert_eq!(team_quick_reference(|name| name == "grep", 1), None);
     }
 
     #[test]
-    fn team_reference_explains_launch_and_delivery() {
-        let out = reference(&FULL_TOOLS, 0);
-        assert!(
-            out.contains("running acknowledges launch")
-                && out.contains("Results arrive later as mail"),
-            "{out}"
+    fn context_file_discovery_entries_and_rendering_order_parent_before_child() {
+        let out = render_environment_and_context(
+            &env(),
+            &[("AGENTS.md".to_string(), "Prefer spaces.".to_string())],
         );
-    }
-
-    #[test]
-    fn team_reference_teaches_wait_instead_of_polling() {
-        let out = reference(&FULL_TOOLS, 0);
-        assert!(out.contains("call `wait` once"), "{out}");
-    }
-
-    #[test]
-    fn team_reference_forbids_polling_for_mail() {
-        let out = reference(&FULL_TOOLS, 0);
-        assert!(
-            out.contains("do NOT poll `list_channel`"),
-            "the quick reference must forbid polling for mail: {out}"
-        );
-        assert!(
-            out.contains("[NEW MAIL]"),
-            "the reference must say mail arrives via [NEW MAIL] notices"
-        );
-    }
-
-    #[test]
-    fn render_environment_and_context_omits_agent_base() {
-        let ctx = vec![("AGENTS.md".to_string(), "Prefer spaces.".to_string())];
-        let out = render_environment_and_context(&env(), &ctx);
         assert!(out.starts_with("## Environment\n- platform: linux\n- date: 2026-06-21\n"));
-        assert!(out.contains("## Project context: AGENTS.md"));
-        assert!(out.contains("Prefer spaces."));
+        assert!(out.contains("## Project context: AGENTS.md") && out.contains("Prefer spaces."));
         assert!(!out.contains("You are hya"));
-    }
 
-    #[test]
-    fn context_file_entries_scope_and_size_follow_discovery() {
-        let base = std::env::temp_dir().join(format!("hya-ctx-entries-{}", std::process::id()));
-        let child = base.join("child");
-        assert!(std::fs::create_dir_all(&child).is_ok());
-        assert!(std::fs::write(base.join("AGENTS.md"), "PARENT").is_ok());
-        assert!(std::fs::write(child.join("AGENTS.md"), "CHILD!").is_ok());
-        let entries = context_file_entries(&child);
-        let base = std::fs::canonicalize(&base).unwrap_or(base);
-        let parent = entries
-            .iter()
-            .find(|entry| entry.path == base.join("AGENTS.md"));
-        let own = entries
-            .iter()
-            .find(|entry| entry.path == base.join("child/AGENTS.md"));
-        assert_eq!(
-            parent.map(|entry| (entry.scope, entry.bytes)),
-            Some(("parent", 6))
-        );
-        assert_eq!(
-            own.map(|entry| (entry.scope, entry.bytes)),
-            Some(("project", 6))
-        );
-        // Parent first, like the prompt.
-        let order: Vec<_> = entries.iter().map(|entry| entry.path.clone()).collect();
-        let at = |path: &Path| order.iter().position(|item| item == path);
-        assert!(at(&base.join("AGENTS.md")) < at(&base.join("child/AGENTS.md")));
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn discover_context_files_parent_before_child_with_project_separators() {
-        // No process-global HOME mutation. Unrelated ancestor AGENTS.md may appear;
-        // assert only the relative order of the two fixture entries.
         let root = tempdir("discover");
         let parent = root.join("proj");
         let child = parent.join("nested");
+        assert!(std::fs::create_dir_all(&child).is_ok());
+        assert!(std::fs::write(parent.join("AGENTS.md"), "PARENT_AGENTS_BODY").is_ok());
+        assert!(std::fs::write(child.join("AGENTS.md"), "CHILD_AGENTS_BODY!").is_ok());
+
+        let entries = context_file_entries(&child);
+        let parent_canon = std::fs::canonicalize(&parent).unwrap_or(parent.clone());
+        let p_entry = entries
+            .iter()
+            .find(|e| e.path == parent_canon.join("AGENTS.md"));
+        let c_entry = entries
+            .iter()
+            .find(|e| e.path == parent_canon.join("nested/AGENTS.md"));
+        assert_eq!(p_entry.map(|e| (e.scope, e.bytes)), Some(("parent", 18)));
+        assert_eq!(c_entry.map(|e| (e.scope, e.bytes)), Some(("project", 18)));
+        let order: Vec<_> = entries.iter().map(|e| e.path.clone()).collect();
         assert!(
-            std::fs::create_dir_all(&child).is_ok(),
-            "failed to create nested fixture dir: {}",
-            child.display()
-        );
-        assert!(
-            std::fs::write(parent.join("AGENTS.md"), "PARENT_AGENTS_BODY").is_ok(),
-            "failed to write parent fixture AGENTS.md under: {}",
-            parent.display()
-        );
-        assert!(
-            std::fs::write(child.join("AGENTS.md"), "CHILD_AGENTS_BODY").is_ok(),
-            "failed to write child fixture AGENTS.md under: {}",
-            child.display()
+            order
+                .iter()
+                .position(|p| p == &parent_canon.join("AGENTS.md"))
+                < order
+                    .iter()
+                    .position(|p| p == &parent_canon.join("nested/AGENTS.md"))
         );
 
         let files = discover_context_files(&child);
         let rendered = render_environment_and_context(&env(), &files);
-
-        let Some(parent_idx) = files
-            .iter()
-            .position(|(_, body)| body.contains("PARENT_AGENTS_BODY"))
-        else {
-            panic!("parent fixture AGENTS.md must be discovered: {files:?}");
-        };
-        let Some(child_idx) = files
-            .iter()
-            .position(|(_, body)| body.contains("CHILD_AGENTS_BODY"))
-        else {
-            panic!("child fixture AGENTS.md must be discovered: {files:?}");
-        };
         assert!(
-            parent_idx < child_idx,
-            "parent fixture before child among discovered files: {files:?}"
+            rendered
+                .find("PARENT_AGENTS_BODY")
+                .zip(rendered.find("CHILD_AGENTS_BODY!"))
+                .is_some_and(|(parent_pos, child_pos)| parent_pos < child_pos)
+                && rendered.matches("## Project context:").count() >= 2
         );
-        let Some(parent_pos) = rendered.find("PARENT_AGENTS_BODY") else {
-            panic!("parent body in rendered guidance: {rendered}");
-        };
-        let Some(child_pos) = rendered.find("CHILD_AGENTS_BODY") else {
-            panic!("child body in rendered guidance: {rendered}");
-        };
-        assert!(
-            parent_pos < child_pos,
-            "parent project context before child: {rendered}"
-        );
-        assert!(
-            rendered.matches("## Project context:").count() >= 2,
-            "at least one separator per fixture file: {rendered}"
-        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

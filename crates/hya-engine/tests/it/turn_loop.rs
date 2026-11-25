@@ -1,300 +1,214 @@
-//! Integration tests for `hya-engine`: turn loop.
+//! Core turn loop, streaming delta/snapshot parity, context reduction/eviction,
+//! single-active-turn serialization, and event-sourced todo projection.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use crate::support;
 
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::Ordering;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use async_trait::async_trait;
+use futures::{StreamExt, stream};
 use hya_engine::{
-    AgentSpec, CompactionConfig, CoreError, CreateSession, EventBus, SessionEngine, Summarizer,
-    TokenAccountingMode, TokenSource,
+    AgentSpec, CompactionConfig, CoreError, CreateSession, EventBus, ResidentSupervisor,
+    SessionEngine, SubagentGovernor, SubagentLimits, Summarizer, TokenAccountingMode, TokenSource,
 };
-use hya_proto::Event;
 use hya_proto::{
-    AgentName, FinishReason, Message, ModelRef, PartProjection, Role, TokenUsage, ToolPartState,
+    AgentName, Envelope, Event, FinishReason, MailEndpoint, MailKind, Message, MessageId,
+    MessageProjection, ModelRef, Part, PartId, PartProjection, Projection, Role, RosterStatus,
+    SessionId, SessionProjection, TodoItem, TodoStatus, TokenUsage, ToolPartState,
 };
-use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
+use hya_provider::{
+    Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
+    ProviderRouter,
+};
 use hya_store::SessionStore;
 use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
 use serde_json::json;
+use tokio::sync::{Barrier, Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 
-fn tempdir() -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("hya-core-test-{nanos}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+struct NoSummarizer;
+
+#[async_trait]
+impl Summarizer for NoSummarizer {
+    async fn summarize(
+        &self,
+        _messages: &[Message],
+        _options: hya_engine::SummarizeOptions,
+    ) -> Result<String, CoreError> {
+        Err(CoreError::Invalid("no summarizer in this test".into()))
+    }
+}
+
+fn rewrite_count(envelopes: &[Envelope]) -> usize {
+    envelopes
+        .iter()
+        .filter(|e| matches!(e.event, Event::ContextCompacted { .. }))
+        .count()
+}
+
+fn eviction_count(envelopes: &[Envelope]) -> usize {
+    envelopes
+        .iter()
+        .filter(|e| matches!(e.event, Event::ContextEvicted { .. }))
+        .count()
 }
 
 #[tokio::test]
-async fn text_tool_result_text_round_trip() {
-    let dir = tempdir();
-    let file = dir.join("foo.txt");
+async fn text_tool_result_text_round_trip_and_order() {
+    let dir = support::TestDir::new("turn-roundtrip");
+    let file = dir.path().join("foo.txt");
     tokio::fs::write(&file, "42 lines").await.unwrap();
     let path = file.to_string_lossy().into_owned();
-    let captured_read_input = json!({
-        "filePath": path.clone(),
-        "path": path.clone(),
-        "offset": 0,
-        "limit": 2000
-    });
+    let read_input = json!({ "filePath": path, "path": path, "offset": 0, "limit": 2000 });
 
     let provider = FakeProvider::scripted_turns(vec![
         vec![
-            FakeStep::Text("I'll read it".to_string()),
+            FakeStep::Text("I'll read it".into()),
             FakeStep::ToolCall {
-                name: "read".to_string(),
-                input: captured_read_input.clone(),
+                name: "read".into(),
+                input: read_input.clone(),
             },
             FakeStep::Finish(FinishReason::ToolCalls),
         ],
         vec![
-            FakeStep::Text("The file says 42 lines".to_string()),
+            FakeStep::Text("The file says 42 lines".into()),
             FakeStep::Finish(FinishReason::Stop),
         ],
     ]);
-
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
-    let tools = Arc::new(hya_tool_loader::builtins());
-    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
-        Action::Read,
-        "/**",
-        Mode::Allow,
-    )]));
-    let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(
-        store,
-        router,
-        support::test_runtime(tools),
-        perm,
-        EventBus::default(),
+    let engine = support::engine_with_provider(
+        Arc::new(provider),
+        PermissionRules::new(vec![Rule::new(Action::Read, "/**", Mode::Allow)]),
+    )
+    .await;
+    let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
+    engine
+        .admit_user_prompt(session, "read foo.txt".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        engine
+            .run_turn(
+                session,
+                &support::agent_spec("build", "fake", dir.path()),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap(),
+        FinishReason::Stop
     );
 
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-
-    engine
-        .admit_user_prompt(session, "read foo.txt".to_string())
-        .await
-        .unwrap();
-
-    let agent = AgentSpec {
-        name: AgentName::new("build"),
-        model: ModelRef::new("fake"),
-        system_prompt: "you are build".to_string(),
-        workdir: dir.clone(),
-        reasoning: None,
-    };
-    let finish = engine
-        .run_turn(session, &agent, CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(finish, FinishReason::Stop);
     let events = engine.store().replay(session).await.unwrap();
-    let correlated_read_result = events.iter().any(|result| {
-        let Event::ToolResult {
-            call: result_call, ..
-        } = &result.event
-        else {
+    assert!(events.iter().any(|res| {
+        let Event::ToolResult { call: res_call, .. } = &res.event else {
             return false;
         };
-        events.iter().any(|requested| {
+        events.iter().any(|req| {
             matches!(
-                &requested.event,
-                Event::ToolCallRequested {
-                    call: requested_call,
-                    name,
-                    input,
-                    ..
-                } if requested_call == result_call
-                    && name.as_str() == "read"
-                    && input == &captured_read_input
+                &req.event,
+                Event::ToolCallRequested { call, name, input, .. }
+                    if call == res_call && name.as_str() == "read" && input == &read_input
             )
         })
-    });
-    assert!(
-        correlated_read_result,
-        "expected the captured Read call to complete with a correlated ToolResult; events={events:?}"
-    );
-
-    let projection = engine.store().read_projection(session).await.unwrap();
-    let assistant = projection
+    }));
+    let proj = engine.store().read_projection(session).await.unwrap();
+    let assistant = proj
         .session
         .messages
         .iter()
         .find(|m| m.role == Role::Assistant)
-        .expect("assistant message");
-
-    let text_index = assistant
+        .unwrap();
+    let kinds: Vec<_> = assistant
         .parts
         .iter()
-        .position(
-            |part| matches!(part, PartProjection::Text { text, .. } if text == "I'll read it"),
-        )
-        .expect("text before read call");
-    let tool_index = assistant
-        .parts
-        .iter()
-        .position(|part| matches!(part, PartProjection::Tool { .. }))
-        .expect("read call");
-    assert!(
-        text_index < tool_index,
-        "the provider's text must precede its tool call in durable replay"
-    );
-
-    let completed_read = assistant.parts.iter().any(|p| {
-        matches!(
-            p,
-            PartProjection::Tool { name, state: ToolPartState::Completed { output, .. }, .. }
-                if name.as_str() == "read" && output["content"] == "42 lines"
-        )
-    });
-    assert!(completed_read, "expected a completed read tool part");
-
-    let final_text = assistant
-        .parts
-        .iter()
-        .any(|p| matches!(p, PartProjection::Text { text, .. } if text.contains("42 lines")));
-    assert!(final_text, "expected final assistant text");
+        .filter_map(|p| match p {
+            PartProjection::Text { text, .. } => Some(text.as_str()),
+            PartProjection::Tool {
+                name,
+                state: ToolPartState::Completed { output, .. },
+                ..
+            } if name.as_str() == "read" && output["content"] == "42 lines" => Some("<read>"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(kinds, ["I'll read it", "<read>", "The file says 42 lines"]);
 }
 
 #[tokio::test]
 async fn turn_continues_past_twenty_five_tool_rounds() {
-    let dir = tempdir();
-    let mut scripts = (0..26)
+    let dir = support::TestDir::new("turn-26-rounds");
+    let mut scripts: Vec<_> = (0..26)
         .map(|_| {
             vec![
                 FakeStep::ToolCall {
-                    name: "unknown".to_string(),
+                    name: "unknown".into(),
                     input: json!({}),
                 },
                 FakeStep::Finish(FinishReason::ToolCalls),
             ]
         })
-        .collect::<Vec<_>>();
-    let final_text = "continued after twenty-five tool rounds";
+        .collect();
     scripts.push(vec![
-        FakeStep::Text(final_text.to_string()),
+        FakeStep::Text("continued after twenty-five tool rounds".into()),
         FakeStep::Finish(FinishReason::Stop),
     ]);
-
-    let provider = FakeProvider::scripted_turns(scripts);
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
-    let tools = Arc::new(hya_tool_loader::builtins());
-    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
-    let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(
-        store,
-        router,
-        support::test_runtime(tools),
-        perm,
-        EventBus::default(),
+    let engine = support::engine_with_provider(
+        Arc::new(FakeProvider::scripted_turns(scripts)),
+        PermissionRules::default(),
+    )
+    .await;
+    let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
+    assert_eq!(
+        engine
+            .run_turn(
+                session,
+                &support::agent_spec("build", "fake", dir.path()),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap(),
+        FinishReason::Stop
     );
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let agent = AgentSpec {
-        name: AgentName::new("build"),
-        model: ModelRef::new("fake"),
-        system_prompt: "x".to_string(),
-        workdir: dir,
-        reasoning: None,
-    };
-
-    let finish = engine
-        .run_turn(session, &agent, CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(finish, FinishReason::Stop);
-
-    let projection = engine.store().read_projection(session).await.unwrap();
-    let assistant = projection
-        .session
-        .messages
-        .iter()
-        .find(|message| message.role == Role::Assistant)
-        .expect("assistant message");
-    assert!(
-        assistant
-            .parts
-            .iter()
-            .any(|part| matches!(part, PartProjection::Text { text, .. } if text == final_text)),
-        "expected final response after the tool rounds"
+    assert_eq!(
+        support::assistant_text(&engine, session).await,
+        "continued after twenty-five tool rounds"
     );
 }
 
 #[tokio::test]
-async fn cancelled_turn_finishes_cancelled() {
-    let dir = tempdir();
-    let provider = FakeProvider::scripted_turns(vec![vec![
-        FakeStep::Text("hi".to_string()),
-        FakeStep::Finish(FinishReason::Stop),
-    ]]);
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
-    let tools = Arc::new(hya_tool_loader::builtins());
-    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
-    let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(
-        store,
-        router,
-        support::test_runtime(tools),
-        perm,
-        EventBus::default(),
-    );
+async fn cancel_provider_error_and_usage_record_on_assistant_projection() {
+    let dir = support::TestDir::new("turn-outcomes");
 
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-
-    let agent = AgentSpec {
-        name: AgentName::new("build"),
-        model: ModelRef::new("fake"),
-        system_prompt: "x".to_string(),
-        workdir: dir,
-        reasoning: None,
-    };
+    // 1. Pre-cancelled turn finishes Cancelled.
+    let engine = support::engine_with_provider(
+        Arc::new(FakeProvider::scripted_turns(vec![vec![
+            FakeStep::Text("hi".into()),
+            FakeStep::Finish(FinishReason::Stop),
+        ]])),
+        PermissionRules::default(),
+    )
+    .await;
+    let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
     let cancel = CancellationToken::new();
     cancel.cancel();
-    let finish = engine.run_turn(session, &agent, cancel).await.unwrap();
-    assert_eq!(finish, FinishReason::Cancelled);
-}
+    assert_eq!(
+        engine
+            .run_turn(
+                session,
+                &support::agent_spec("build", "fake", dir.path()),
+                cancel
+            )
+            .await
+            .unwrap(),
+        FinishReason::Cancelled
+    );
 
-#[tokio::test]
-async fn provider_usage_is_recorded_on_assistant_message_projection() {
-    let dir = tempdir();
+    // 2. Provider usage is recorded on assistant projection.
     let usage = TokenUsage {
         input: 11,
         output: 3,
@@ -303,92 +217,72 @@ async fn provider_usage_is_recorded_on_assistant_message_projection() {
         cache_write: 0,
         reasoning_unknown: false,
     };
-    let provider = FakeProvider::scripted_turns(vec![vec![
-        FakeStep::Text("hi".to_string()),
-        FakeStep::Usage(usage),
-        FakeStep::Finish(FinishReason::Stop),
-    ]]);
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
-    let tools = Arc::new(hya_tool_loader::builtins());
-    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
-    let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(
-        store,
-        router,
-        support::test_runtime(tools),
-        perm,
-        EventBus::default(),
+    let engine = support::engine_with_provider(
+        Arc::new(FakeProvider::scripted_turns(vec![vec![
+            FakeStep::Text("hi".into()),
+            FakeStep::Usage(usage),
+            FakeStep::Finish(FinishReason::Stop),
+        ]])),
+        PermissionRules::default(),
+    )
+    .await;
+    let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
+    engine
+        .run_turn(
+            session,
+            &support::agent_spec("build", "fake", dir.path()),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let proj = engine.store().read_projection(session).await.unwrap();
+    assert_eq!(
+        proj.session
+            .messages
+            .iter()
+            .find(|m| m.role == Role::Assistant)
+            .unwrap()
+            .tokens,
+        Some(usage)
     );
 
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-
-    let agent = AgentSpec {
-        name: AgentName::new("build"),
-        model: ModelRef::new("fake"),
-        system_prompt: "x".to_string(),
-        workdir: dir,
-        reasoning: None,
-    };
-
+    // 3. Unresolved model surfaces error and still closes assistant message with Error.
+    let engine = support::engine_with_router_and_runtime(
+        Arc::new(ProviderRouter::new()),
+        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+        PermissionRules::default(),
+    )
+    .await;
+    let session = support::create_root_session(&engine, "build", "no-such-model", dir.path()).await;
     engine
-        .run_turn(session, &agent, CancellationToken::new())
+        .admit_user_prompt(session, "hello".into())
         .await
         .unwrap();
-
-    let projection = engine.store().read_projection(session).await.unwrap();
-    let assistant = projection
-        .session
-        .messages
-        .iter()
-        .find(|message| message.role == Role::Assistant)
-        .expect("assistant message");
-
-    assert_eq!(assistant.tokens, Some(usage));
+    assert!(
+        engine
+            .run_turn(
+                session,
+                &support::agent_spec("build", "no-such-model", dir.path()),
+                CancellationToken::new(),
+            )
+            .await
+            .is_err()
+    );
+    let proj = engine.store().read_projection(session).await.unwrap();
+    assert_eq!(
+        proj.session
+            .messages
+            .iter()
+            .find(|m| m.role == Role::Assistant)
+            .unwrap()
+            .finish,
+        Some(FinishReason::Error)
+    );
 }
 
-/// Context reduction never calls the summarizer; it only writes terminal
-/// handoffs, which these tests do not reach.
-struct NoSummarizer;
-
-#[async_trait::async_trait]
-impl Summarizer for NoSummarizer {
-    async fn summarize(
-        &self,
-        _messages: &[Message],
-        _options: hya_engine::SummarizeOptions,
-    ) -> Result<String, CoreError> {
-        Err(CoreError::Invalid("no summarizer in this test".to_string()))
-    }
-}
-
-/// How many kernel rewrites `envelopes` record.
-fn rewrites(envelopes: &[hya_proto::Envelope]) -> usize {
-    envelopes
-        .iter()
-        .filter(|e| matches!(e.event, Event::ContextCompacted { .. }))
-        .count()
-}
-
-/// Full mode reduces on the kernel's trigger: once the request is over 80% of
-/// the window and `shake` has nothing to spill, the kernel's own Rewrite
-/// removes the earlier turns behind a marker that repeats their user messages
-/// verbatim, and the next turn, back under the threshold, does not rewrite
-/// again.
 #[tokio::test]
-async fn kernel_rewrite_persists_and_is_not_repeated_next_round() {
-    let dir = tempdir();
-    // A 40k window (threshold 32,000): turn 1's ~40k-token answer puts turn 2
-    // over it; after the rewrite the request is the fixed prompt and tools.
+async fn kernel_rewrite_persists_and_does_not_repeat_next_turn() {
+    let dir = support::TestDir::new("turn-rewrite");
     let provider = Arc::new(
         FakeProvider::scripted_turns(vec![
             vec![
@@ -396,48 +290,23 @@ async fn kernel_rewrite_persists_and_is_not_repeated_next_round() {
                 FakeStep::Finish(FinishReason::Stop),
             ],
             vec![
-                FakeStep::Text("second".to_string()),
+                FakeStep::Text("second".into()),
                 FakeStep::Finish(FinishReason::Stop),
             ],
             vec![
-                FakeStep::Text("third".to_string()),
+                FakeStep::Text("third".into()),
                 FakeStep::Finish(FinishReason::Stop),
             ],
         ])
         .with_max_context(40_000),
     );
-    let router = Arc::new(ProviderRouter::new().with(provider.clone()));
-    let tools = Arc::new(hya_tool_loader::builtins());
-    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
-    let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(
-        store,
-        router,
-        support::test_runtime(tools),
-        perm,
-        EventBus::default(),
-    );
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let agent = AgentSpec {
-        name: AgentName::new("build"),
-        model: ModelRef::new("fake"),
-        system_prompt: "x".to_string(),
-        workdir: dir,
-        reasoning: None,
-    };
-    for prompt in ["ORIGINAL_PROMPT_0", "NEXT_PROMPT_1"] {
+    let engine = support::engine_with_provider(provider.clone(), PermissionRules::default()).await;
+    let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
+    let agent = support::agent_spec("build", "fake", dir.path());
+
+    for prompt in ["ORIGINAL_PROMPT_0", "NEXT_PROMPT_1", "THIRD_PROMPT"] {
         engine
-            .admit_user_prompt(session, prompt.to_string())
+            .admit_user_prompt(session, prompt.into())
             .await
             .unwrap();
         engine
@@ -450,7 +319,7 @@ async fn kernel_rewrite_persists_and_is_not_repeated_next_round() {
     let records: Vec<_> = envelopes
         .iter()
         .filter_map(|e| match &e.event {
-            hya_proto::Event::ContextCompacted {
+            Event::ContextCompacted {
                 message,
                 strategy,
                 from_message,
@@ -469,296 +338,79 @@ async fn kernel_rewrite_persists_and_is_not_repeated_next_round() {
             _ => None,
         })
         .collect();
-    assert_eq!(records.len(), 1, "exactly one rewrite: {records:?}");
-    let (marker_id, strategy, from_message, to_message, folded_count, threshold) = records[0];
-    assert_eq!(strategy, hya_proto::CompactionStrategy::Rewrite);
-    assert_eq!(threshold, 32_000, "records 80% of the window");
+    assert_eq!(records.len(), 1);
+    let (marker_id, strategy, from_msg, to_msg, folded_count, threshold) = records[0];
+    assert_eq!(
+        (strategy, threshold),
+        (hya_proto::CompactionStrategy::Rewrite, 32_000)
+    );
 
-    // The recorded output message is the marker, repeating the user message.
-    let projection = hya_proto::Projection::from_events(&envelopes);
-    let marker = projection
+    let proj = Projection::from_events(&envelopes);
+    let marker = proj
         .session
         .messages
         .iter()
         .find(|m| m.id == marker_id)
-        .expect("ContextCompacted.message must point at a real message");
+        .unwrap();
     assert_eq!(marker.role, Role::System);
     let marker_text: String = marker
         .parts
         .iter()
         .filter_map(|p| match p {
-            PartProjection::Text { text, .. } => Some(text.clone()),
+            PartProjection::Text { text, .. } => Some(text.as_str()),
             _ => None,
         })
         .collect();
     assert!(
-        marker_text.starts_with("HYA_COMPACTED_CONTEXT"),
-        "{marker_text}"
+        marker_text.starts_with("HYA_COMPACTED_CONTEXT")
+            && marker_text.contains("ORIGINAL_PROMPT_0")
     );
-    assert!(marker_text.contains("ORIGINAL_PROMPT_0"), "{marker_text}");
-
-    // The recorded range covers exactly `folded_count` messages.
-    let ids: Vec<_> = projection.session.messages.iter().map(|m| m.id).collect();
-    let from_idx = ids.iter().position(|id| *id == from_message).unwrap();
-    let to_idx = ids.iter().position(|id| *id == to_message).unwrap();
+    let ids: Vec<_> = proj.session.messages.iter().map(|m| m.id).collect();
+    let from_idx = ids.iter().position(|id| *id == from_msg).unwrap();
+    let to_idx = ids.iter().position(|id| *id == to_msg).unwrap();
     assert_eq!(to_idx - from_idx + 1, folded_count as usize);
 
-    // A third turn, under the threshold, keeps the context as it is.
-    engine
-        .admit_user_prompt(session, "THIRD_PROMPT".to_string())
-        .await
-        .unwrap();
-    engine
-        .run_turn(session, &agent, CancellationToken::new())
-        .await
-        .unwrap();
-    let rewrites = engine
-        .replay(session)
-        .await
-        .unwrap()
-        .iter()
-        .filter(|e| matches!(e.event, Event::ContextCompacted { .. }))
-        .count();
-    assert_eq!(rewrites, 1, "the third turn must not rewrite again");
     let requests = provider.requests();
     assert_eq!(requests.len(), 3);
-    for request in &requests[1..] {
-        assert!(!format!("{request:?}").contains("detail across the earlier turn"));
+    for req in &requests[1..] {
+        assert!(!format!("{req:?}").contains("detail across the earlier turn"));
     }
 }
 
 #[tokio::test]
-async fn provider_error_still_finishes_the_assistant_message() {
-    let dir = tempdir();
-    let router = Arc::new(ProviderRouter::new());
-    let tools = Arc::new(hya_tool_loader::builtins());
-    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
-    let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(
-        store,
-        router,
-        support::test_runtime(tools),
-        perm,
-        EventBus::default(),
-    );
-
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("no-such-model"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    engine
-        .admit_user_prompt(session, "hello".to_string())
-        .await
-        .unwrap();
-
-    let agent = AgentSpec {
-        name: AgentName::new("build"),
-        model: ModelRef::new("no-such-model"),
-        system_prompt: "x".to_string(),
-        workdir: dir,
-        reasoning: None,
-    };
-    let result = engine
-        .run_turn(session, &agent, CancellationToken::new())
-        .await;
-    assert!(result.is_err(), "an unresolved model must surface an error");
-
-    let projection = engine.store().read_projection(session).await.unwrap();
-    let assistant = projection
-        .session
-        .messages
-        .iter()
-        .find(|m| m.role == Role::Assistant)
-        .expect("assistant message exists");
-    assert_eq!(
-        assistant.finish,
-        Some(FinishReason::Error),
-        "the assistant message must be terminally finished on provider error so UI clients never hang"
-    );
-}
-
-/// E3: eviction alone must be enough to skip the kernel's rewrite, and it must
-/// not touch the event log — the full tool output stays recoverable offline.
-///
-/// A 50k window (threshold 40,000): the line-numbered Read result serializes
-/// to ~65KB of JSON (~30,100 tokens), so turn 1 (~37,000 with the fixed
-/// request material) stays under it; turn 2's ~6,600-token prompt pushes it
-/// over, and evicting turn 1's now-stale output drops it far below. Turn 1
-/// over the threshold would have the kernel rewrite its read step away.
-///
-/// Spans two turns deliberately: within one turn every tool part lands in the
-/// same assistant message, which sits inside `keep_recent`. Eviction is a
-/// cross-turn reduction.
-#[tokio::test]
-async fn tool_output_eviction_avoids_a_rewrite_and_preserves_the_log() {
-    let dir = tempdir();
-    let big_file = dir.join("big.txt");
-    let big = format!("{}\n", "R".repeat(100)).repeat(200);
-    tokio::fs::write(&big_file, &big).await.unwrap();
-    let path = big_file.to_string_lossy().into_owned();
-
-    let provider = FakeProvider::scripted_turns(vec![
-        vec![
-            FakeStep::ToolCall {
-                name: "read".to_string(),
-                input: json!({ "path": path }),
-            },
-            FakeStep::Finish(FinishReason::ToolCalls),
-        ],
-        vec![
-            FakeStep::Text("read it".to_string()),
-            FakeStep::Finish(FinishReason::Stop),
-        ],
-        vec![
-            FakeStep::Text("second turn".to_string()),
-            FakeStep::Finish(FinishReason::Stop),
-        ],
-    ]);
-    // The rendered read fits on its own. The next turn's prompt puts the
-    // request above the 20,800-token spill threshold.
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider.with_max_context(26_000))));
-    let tools = Arc::new(hya_tool_loader::builtins());
-    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
-        Action::Read,
-        "/**",
-        Mode::Allow,
-    )]));
-    let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(
-        store,
-        router,
-        support::test_runtime(tools),
-        perm,
-        EventBus::default(),
-    )
-    .with_compaction(
-        Arc::new(NoSummarizer),
-        CompactionConfig {
-            keep_recent: 1,
-            ..CompactionConfig::default()
-        },
-    );
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let agent = AgentSpec {
-        name: AgentName::new("build"),
-        model: ModelRef::new("fake"),
-        system_prompt: "x".to_string(),
-        workdir: dir,
-        reasoning: None,
-    };
-
-    // Turn 1 produces a large tool output.
-    engine
-        .admit_user_prompt(session, "read the big file".to_string())
-        .await
-        .unwrap();
-    engine
-        .run_turn(session, &agent, CancellationToken::new())
-        .await
-        .unwrap();
-    // Turn 2 sees turn 1's tool output as stale and should evict it.
-    engine
-        .admit_user_prompt(session, "now summarize ".repeat(3_000))
-        .await
-        .unwrap();
-    engine
-        .run_turn(session, &agent, CancellationToken::new())
-        .await
-        .unwrap();
-
-    let envelopes = engine.replay(session).await.unwrap();
-    let evicted: Vec<_> = envelopes
-        .iter()
-        .filter_map(|e| match &e.event {
-            hya_proto::Event::ContextEvicted {
-                evicted_parts,
-                tokens_before,
-                tokens_after,
-                ..
-            } => Some((*evicted_parts, *tokens_before, *tokens_after)),
-            _ => None,
-        })
-        .collect();
-    assert!(
-        !evicted.is_empty(),
-        "a stale large tool output over the threshold must be evicted"
-    );
-    let (parts, before, after) = evicted[0];
-    assert!(parts > 0);
-    assert!(after < before, "eviction must reduce the token count");
-    assert_eq!(
-        rewrites(&envelopes),
-        0,
-        "eviction alone was enough; the kernel must not have rewritten"
-    );
-
-    // The log is untouched: the full tool output is still recoverable.
-    let projection = hya_proto::Projection::from_events(&envelopes);
-    let logged = projection.session.messages.iter().any(|m| {
-        m.parts.iter().any(|p| {
-            matches!(
-                p,
-                PartProjection::Tool { state: ToolPartState::Completed { output, .. }, .. }
-                    if output.to_string().contains("RRRRRRRRRR")
-            )
-        })
-    });
-    assert!(
-        logged,
-        "eviction is request-local; the event log must keep full fidelity"
-    );
-}
-
-/// Invariant 1: the request is a pure function of the log. Turn 2 evicts
-/// turn 1's stale output to an artifact handle and answers with nothing, so
-/// a request after a restart sees the same transcript. A new engine over the
-/// same SQLite file must send the same bytes, eviction notice and handle
-/// included, without evicting again.
-#[tokio::test]
-async fn request_is_identical_after_restart() {
-    let dir = tempdir();
-    let big_file = dir.join("big.txt");
+async fn tool_output_eviction_avoids_rewrite_sticks_and_matches_after_restart() {
+    let dir = support::TestDir::new("turn-evict-restart");
+    let big_file = dir.path().join("big.txt");
     tokio::fs::write(&big_file, format!("{}\n", "R".repeat(100)).repeat(200))
         .await
         .unwrap();
-    // Sized as in the eviction test above: turn 2 crosses the threshold and
-    // evicting turn 1's output brings it far below.
     let provider = Arc::new(
         FakeProvider::scripted_turns(vec![
             vec![
                 FakeStep::ToolCall {
-                    name: "read".to_string(),
+                    name: "read".into(),
                     input: json!({ "path": big_file.to_string_lossy() }),
                 },
                 FakeStep::Finish(FinishReason::ToolCalls),
             ],
             vec![
-                FakeStep::Text("read it".to_string()),
+                FakeStep::Text("read it".into()),
                 FakeStep::Finish(FinishReason::Stop),
             ],
             vec![FakeStep::Finish(FinishReason::Stop)],
+            vec![
+                FakeStep::Text("restarted".into()),
+                FakeStep::Finish(FinishReason::Stop),
+            ],
+            vec![
+                FakeStep::Text("third turn".into()),
+                FakeStep::Finish(FinishReason::Stop),
+            ],
         ])
         .with_max_context(26_000),
     );
-    let db = dir.join("hya.db").to_string_lossy().into_owned();
-    let engine_over = |store: SessionStore| {
+    let db = dir.path().join("hya.db").to_string_lossy().into_owned();
+    let build_engine = |store: SessionStore| {
         let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
             Action::Read,
             "/**",
@@ -779,219 +431,92 @@ async fn request_is_identical_after_restart() {
             },
         )
     };
-    let agent = AgentSpec {
-        name: AgentName::new("build"),
-        model: ModelRef::new("fake"),
-        system_prompt: "x".to_string(),
-        workdir: dir.clone(),
-        reasoning: None,
-    };
+    let agent = support::agent_spec("build", "fake", dir.path());
 
-    let engine = engine_over(SessionStore::connect(&db).await.unwrap());
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    for prompt in [
-        "read the big file".to_string(),
-        "now summarize ".repeat(3_000),
-    ] {
+    let engine = build_engine(SessionStore::connect(&db).await.unwrap());
+    let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
+    for prompt in ["read big".to_string(), "now summarize ".repeat(3_000)] {
         engine.admit_user_prompt(session, prompt).await.unwrap();
         engine
             .run_turn(session, &agent, CancellationToken::new())
             .await
             .unwrap();
     }
-    let evictions = |envelopes: &[hya_proto::Envelope]| {
-        envelopes
+    let envelopes = engine.replay(session).await.unwrap();
+    assert_eq!(eviction_count(&envelopes), 1);
+    assert_eq!(rewrite_count(&envelopes), 0);
+    // Log keeps full fidelity even though the request evicted the stale output.
+    let proj = Projection::from_events(&envelopes);
+    assert!(
+        proj.session
+            .messages
             .iter()
-            .filter(|e| matches!(e.event, Event::ContextEvicted { .. }))
-            .count()
-    };
-    assert_eq!(evictions(&engine.replay(session).await.unwrap()), 1);
+            .any(|m| m.parts.iter().any(|p| matches!(
+                p,
+                PartProjection::Tool { state: ToolPartState::Completed { output, .. }, .. }
+                    if output.to_string().contains("RRRRRRRRRR")
+            )))
+    );
     drop(engine);
 
-    let engine = engine_over(SessionStore::connect(&db).await.unwrap());
+    // Reopened engine sends the identical evicted request without re-evicting,
+    // and a follow-up prompt stays sticky without escalating to rewrite.
+    let engine = build_engine(SessionStore::connect(&db).await.unwrap());
     engine
         .run_turn(session, &agent, CancellationToken::new())
         .await
         .unwrap();
-    assert_eq!(
-        evictions(&engine.replay(session).await.unwrap()),
-        1,
-        "the restarted engine must not evict again"
-    );
     let requests = provider.requests();
     let [.., before, after] = requests.as_slice() else {
-        panic!("expected a request before and after the restart");
+        panic!("expected requests before and after restart");
     };
     let before = format!("{before:?}");
-    assert!(
-        before.contains("artifact://"),
-        "the request sends the handle"
-    );
+    assert!(before.contains("artifact://"));
     assert_eq!(before, format!("{after:?}"));
-}
 
-/// Eviction is sticky: once a stale output was evicted, later rounds re-apply
-/// the same placeholder before measuring the request. A later turn that is
-/// under the threshold with that placeholder must neither re-run the ladder
-/// (no second `ContextEvicted`) nor escalate to the summarizer.
-#[tokio::test]
-async fn evicted_output_stays_evicted_on_later_turns_without_escalating() {
-    let dir = tempdir();
-    let big_file = dir.join("big.txt");
-    let big = format!("{}\n", "R".repeat(100)).repeat(200);
-    tokio::fs::write(&big_file, &big).await.unwrap();
-    let path = big_file.to_string_lossy().into_owned();
-
-    let provider = FakeProvider::scripted_turns(vec![
-        vec![
-            FakeStep::ToolCall {
-                name: "read".to_string(),
-                input: json!({ "path": path }),
-            },
-            FakeStep::Finish(FinishReason::ToolCalls),
-        ],
-        vec![
-            FakeStep::Text("read it".to_string()),
-            FakeStep::Finish(FinishReason::Stop),
-        ],
-        vec![
-            FakeStep::Text("second turn".to_string()),
-            FakeStep::Finish(FinishReason::Stop),
-        ],
-        vec![
-            FakeStep::Text("third turn".to_string()),
-            FakeStep::Finish(FinishReason::Stop),
-        ],
-    ]);
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider.with_max_context(26_000))));
-    let tools = Arc::new(hya_tool_loader::builtins());
-    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
-        Action::Read,
-        "/**",
-        Mode::Allow,
-    )]));
-    let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(
-        store,
-        router,
-        support::test_runtime(tools),
-        perm,
-        EventBus::default(),
-    )
-    .with_compaction(
-        Arc::new(NoSummarizer),
-        CompactionConfig {
-            keep_recent: 1,
-            ..CompactionConfig::default()
-        },
-    );
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
+    engine
+        .admit_user_prompt(session, "and once more".into())
         .await
         .unwrap();
-    let agent = AgentSpec {
-        name: AgentName::new("build"),
-        model: ModelRef::new("fake"),
-        system_prompt: "x".to_string(),
-        workdir: dir,
-        reasoning: None,
-    };
-
-    for prompt in [
-        "read the big file".to_string(),
-        "now summarize ".repeat(3_000),
-        "and once more".to_string(),
-    ] {
-        engine.admit_user_prompt(session, prompt).await.unwrap();
-        engine
-            .run_turn(session, &agent, CancellationToken::new())
-            .await
-            .unwrap();
-    }
-
-    let envelopes = engine.replay(session).await.unwrap();
-    let evictions = envelopes
-        .iter()
-        .filter(|e| matches!(e.event, hya_proto::Event::ContextEvicted { .. }))
-        .count();
-    assert_eq!(
-        evictions, 1,
-        "the third turn must re-apply the sticky placeholder, not evict again"
-    );
-    assert_eq!(
-        rewrites(&envelopes),
-        0,
-        "a re-applied eviction keeps the request under the threshold"
-    );
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+    let after_envelopes = engine.replay(session).await.unwrap();
+    assert_eq!(eviction_count(&after_envelopes), 1);
+    assert_eq!(rewrite_count(&after_envelopes), 0);
 }
 
 #[tokio::test]
 async fn context_status_reports_round_occupancy_and_accounting_mode() {
-    let dir = tempdir();
-    let provider = FakeProvider::scripted_turns(vec![vec![
-        FakeStep::Text("done".to_string()),
-        FakeStep::Finish(FinishReason::Stop),
-    ]]);
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
-    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![]));
-    let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(
-        store,
-        router,
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
-        perm,
-        EventBus::default(),
+    let dir = support::TestDir::new("turn-ctx-status");
+    let engine = support::engine_with_provider(
+        Arc::new(FakeProvider::scripted_turns(vec![vec![
+            FakeStep::Text("done".into()),
+            FakeStep::Finish(FinishReason::Stop),
+        ]])),
+        PermissionRules::default(),
     )
+    .await
     .with_compaction(Arc::new(NoSummarizer), CompactionConfig::default());
-
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
+    let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
+    engine
+        .admit_user_prompt(session, "hello".into())
         .await
         .unwrap();
     engine
-        .admit_user_prompt(session, "hello".to_string())
-        .await
-        .unwrap();
-    let agent = AgentSpec {
-        name: AgentName::new("build"),
-        model: ModelRef::new("fake"),
-        system_prompt: "you are build".to_string(),
-        workdir: dir.clone(),
-        reasoning: None,
-    };
-    engine
-        .run_turn(session, &agent, CancellationToken::new())
+        .run_turn(
+            session,
+            &support::agent_spec("build", "fake", dir.path()),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
 
     let envelopes = engine.store().replay(session).await.unwrap();
     let statuses: Vec<_> = envelopes
         .iter()
-        .filter_map(|envelope| match &envelope.event {
+        .filter_map(|e| match &e.event {
             Event::ContextStatus {
                 tokens,
                 source,
@@ -1002,166 +527,45 @@ async fn context_status_reports_round_occupancy_and_accounting_mode() {
             _ => None,
         })
         .collect();
-    assert_eq!(
-        statuses.len(),
-        1,
-        "one streaming round must report window occupancy exactly once"
-    );
+    assert_eq!(statuses.len(), 1);
     let (tokens, source, mode, threshold) = statuses[0];
-    assert!(tokens > 0, "occupancy must be a positive estimate");
-    assert_eq!(mode, TokenAccountingMode::Auto, "engine default is Auto");
+    assert!(tokens > 0);
     assert_eq!(
-        source,
-        TokenSource::Estimate,
-        "a round with no reported usage must be estimated, not provider-anchored"
+        (mode, source, threshold),
+        (TokenAccountingMode::Auto, TokenSource::Estimate, 160_000)
     );
-    assert_eq!(
-        threshold, 160_000,
-        "fake route advertises a 200k window: the kernel's 80%"
-    );
-
-    let projection = engine.store().read_projection(session).await.unwrap();
-    let folded = projection
+    let folded = engine
+        .store()
+        .read_projection(session)
+        .await
+        .unwrap()
         .session
         .context_status
-        .expect("projection folds the latest ContextStatus");
-    assert_eq!(folded.tokens, tokens);
-    assert_eq!(folded.source, source);
-    assert_eq!(folded.mode, mode);
-    assert_eq!(folded.threshold, threshold);
-}
-
-/// A long agentic turn is ONE assistant message: its stale tool outputs must
-/// be spilled mid-turn once the request crosses the threshold, keeping the most
-/// recent `keep_recent` tool outputs intact (previously nothing compacted
-/// until the turn ended, because every rung required a foldable message range).
-#[tokio::test]
-async fn stale_tool_outputs_spill_inside_one_long_turn() {
-    let dir = tempdir();
-    let big_file = dir.join("big.txt");
-    let big = format!("{}\n", "R".repeat(100)).repeat(200);
-    tokio::fs::write(&big_file, &big).await.unwrap();
-    let path = big_file.to_string_lossy().into_owned();
-    let read = || FakeStep::ToolCall {
-        name: "read".to_string(),
-        input: json!({ "path": path }),
-    };
-
-    // Three read rounds and a final answer share one turn. At a 24,000-token
-    // threshold, the fixed overhead (~7.6k) and one read's rendered text
-    // (~10k) fit. Two reads cross the threshold until the stale one is spilled.
-    let provider = FakeProvider::scripted_turns(vec![
-        vec![read(), FakeStep::Finish(FinishReason::ToolCalls)],
-        vec![read(), FakeStep::Finish(FinishReason::ToolCalls)],
-        vec![read(), FakeStep::Finish(FinishReason::ToolCalls)],
-        vec![
-            FakeStep::Text("done".to_string()),
-            FakeStep::Finish(FinishReason::Stop),
-        ],
-    ]);
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider.with_max_context(30_000))));
-    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
-        Action::Read,
-        "/**",
-        Mode::Allow,
-    )]));
-    let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(
-        store,
-        router,
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
-        perm,
-        EventBus::default(),
-    )
-    .with_compaction(
-        Arc::new(NoSummarizer),
-        CompactionConfig {
-            keep_recent: 1,
-            ..CompactionConfig::default()
-        },
-    );
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let agent = AgentSpec {
-        name: AgentName::new("build"),
-        model: ModelRef::new("fake"),
-        system_prompt: "x".to_string(),
-        workdir: dir,
-        reasoning: None,
-    };
-    engine
-        .admit_user_prompt(session, "read the big file three times".to_string())
-        .await
-        .unwrap();
-    engine
-        .run_turn(session, &agent, CancellationToken::new())
-        .await
-        .unwrap();
-
-    let envelopes = engine.replay(session).await.unwrap();
-    let assistant_messages = hya_proto::Projection::from_events(&envelopes)
-        .session
-        .messages
-        .iter()
-        .filter(|m| m.role == Role::Assistant)
-        .count();
+        .expect("context status");
     assert_eq!(
-        assistant_messages, 1,
-        "the whole turn is one assistant message"
+        (folded.tokens, folded.source, folded.mode, folded.threshold),
+        (tokens, source, mode, threshold)
     );
-    let evictions: Vec<_> = envelopes
-        .iter()
-        .filter_map(|e| match &e.event {
-            hya_proto::Event::ContextEvicted {
-                evicted_parts,
-                tokens_before,
-                tokens_after,
-                ..
-            } => Some((*evicted_parts, *tokens_before, *tokens_after)),
-            _ => None,
-        })
-        .collect();
-    assert!(
-        !evictions.is_empty(),
-        "stale tool outputs inside the running turn must be spilled"
-    );
-    for (parts, before, after) in &evictions {
-        assert!(*parts > 0);
-        assert!(after < before);
-    }
-    assert_eq!(rewrites(&envelopes), 0, "spilling was enough");
 }
 
-/// Records every request; replays reasoning as an opaque per-part provider
-/// item of `blob`'s size (Responses-shaped); the advertised window can change
-/// between turns.
 struct OpaqueReasoningRoute {
     inner: FakeProvider,
     blob: String,
-    max_context: Arc<std::sync::atomic::AtomicU32>,
-    requests: Arc<Mutex<Vec<hya_provider::CompletionRequest>>>,
+    max_context: Arc<AtomicU32>,
+    requests: Arc<Mutex<Vec<CompletionRequest>>>,
 }
 
-#[async_trait::async_trait]
-impl hya_provider::Provider for OpaqueReasoningRoute {
+#[async_trait]
+impl Provider for OpaqueReasoningRoute {
     fn id(&self) -> &str {
         "fake"
     }
 
-    fn capabilities(&self, _model: &ModelRef) -> Option<hya_provider::Capabilities> {
-        Some(hya_provider::Capabilities {
+    fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
+        Some(Capabilities {
             streaming_tool_calls: true,
             max_context: self.max_context.load(Ordering::SeqCst),
-            ..hya_provider::Capabilities::default()
+            ..Capabilities::default()
         })
     }
 
@@ -1171,11 +575,10 @@ impl hya_provider::Provider for OpaqueReasoningRoute {
 
     async fn stream(
         &self,
-        req: hya_provider::CompletionRequest,
-        session: hya_proto::SessionId,
-        message: hya_proto::MessageId,
-    ) -> Result<hya_provider::EventStream, hya_provider::ProviderError> {
-        use futures::StreamExt as _;
+        req: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
         self.requests.lock().unwrap().push(req.clone());
         let blob = self.blob.clone();
         let stream = self.inner.stream(req, session, message).await?;
@@ -1200,38 +603,82 @@ impl hya_provider::Provider for OpaqueReasoningRoute {
     }
 }
 
-/// When `shake` spills but the request is still over the threshold, the
-/// kernel rewrites in the same `before_round`, before the round is sent.
 #[tokio::test]
-async fn a_spill_that_is_not_enough_is_followed_by_the_kernel_rewrite() {
-    let dir = tempdir();
-    let big_file = dir.join("big.txt");
-    let big = format!("{}\n", "R".repeat(100)).repeat(200);
-    tokio::fs::write(&big_file, &big).await.unwrap();
+async fn stale_tool_outputs_spill_mid_turn_and_escalate_to_rewrite_when_needed() {
+    let dir = support::TestDir::new("turn-spill");
+    let big_file = dir.path().join("big.txt");
+    tokio::fs::write(&big_file, format!("{}\n", "R".repeat(100)).repeat(200))
+        .await
+        .unwrap();
     let path = big_file.to_string_lossy().into_owned();
     let read = || FakeStep::ToolCall {
-        name: "read".to_string(),
+        name: "read".into(),
         input: json!({ "path": path }),
     };
+    let read_rules = || PermissionRules::new(vec![Rule::new(Action::Read, "/**", Mode::Allow)]);
+
+    // 1. Mid-turn spilling inside one assistant message keeps rewrites at 0.
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![read(), FakeStep::Finish(FinishReason::ToolCalls)],
+        vec![read(), FakeStep::Finish(FinishReason::ToolCalls)],
+        vec![read(), FakeStep::Finish(FinishReason::ToolCalls)],
+        vec![
+            FakeStep::Text("done".into()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+    ])
+    .with_max_context(30_000);
+    let engine = support::engine_with_provider(Arc::new(provider), read_rules())
+        .await
+        .with_compaction(
+            Arc::new(NoSummarizer),
+            CompactionConfig {
+                keep_recent: 1,
+                ..CompactionConfig::default()
+            },
+        );
+    let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
+    engine
+        .admit_user_prompt(session, "read three times".into())
+        .await
+        .unwrap();
+    engine
+        .run_turn(
+            session,
+            &support::agent_spec("build", "fake", dir.path()),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let envelopes = engine.replay(session).await.unwrap();
+    assert_eq!(
+        Projection::from_events(&envelopes)
+            .session
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::Assistant)
+            .count(),
+        1
+    );
+    assert!(eviction_count(&envelopes) > 0 && rewrite_count(&envelopes) == 0);
+
+    // 2. When spilling alone is insufficient, kernel rewrites before sending the round.
     let tokenizer = hya_engine::tokens::TokenAccounting::default();
     let unit = "earlier context ".repeat(100);
     let prompt = unit.repeat(40_000 / tokenizer.tokenizer().count_text(&unit) + 1);
-
     let requests = Arc::new(Mutex::new(Vec::new()));
-    // Turn 1 runs under a window it cannot fill; turn 2 under one where
-    // spilling the oldest read is not enough.
-    let window = Arc::new(std::sync::atomic::AtomicU32::new(10_000_000));
+    let window = Arc::new(AtomicU32::new(10_000_000));
     let route = OpaqueReasoningRoute {
         inner: FakeProvider::scripted_turns(vec![
             vec![read(), FakeStep::Finish(FinishReason::ToolCalls)],
             vec![read(), FakeStep::Finish(FinishReason::ToolCalls)],
             vec![read(), FakeStep::Finish(FinishReason::ToolCalls)],
             vec![
-                FakeStep::Text("read".to_string()),
+                FakeStep::Text("read".into()),
                 FakeStep::Finish(FinishReason::Stop),
             ],
             vec![
-                FakeStep::Text("done".to_string()),
+                FakeStep::Text("done".into()),
                 FakeStep::Finish(FinishReason::Stop),
             ],
         ]),
@@ -1239,61 +686,35 @@ async fn a_spill_that_is_not_enough_is_followed_by_the_kernel_rewrite() {
         max_context: Arc::clone(&window),
         requests: Arc::clone(&requests),
     };
-    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
-        Action::Read,
-        "/**",
-        Mode::Allow,
-    )]));
-    let engine = SessionEngine::new(
-        SessionStore::connect_memory().await.unwrap(),
-        Arc::new(ProviderRouter::new().with(Arc::new(route))),
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
-        perm,
-        EventBus::default(),
-    )
-    .with_compaction(
-        Arc::new(NoSummarizer),
-        CompactionConfig {
-            keep_recent: 2,
-            ..CompactionConfig::default()
-        },
-    );
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
+    let engine = support::engine_with_provider(Arc::new(route), read_rules())
         .await
-        .unwrap();
-    let agent = AgentSpec {
-        name: AgentName::new("build"),
-        model: ModelRef::new("fake"),
-        system_prompt: "x".to_string(),
-        workdir: dir,
-        reasoning: None,
-    };
+        .with_compaction(
+            Arc::new(NoSummarizer),
+            CompactionConfig {
+                keep_recent: 2,
+                ..CompactionConfig::default()
+            },
+        );
+    let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
+    let agent = support::agent_spec("build", "fake", dir.path());
     engine.admit_user_prompt(session, prompt).await.unwrap();
     engine
         .run_turn(session, &agent, CancellationToken::new())
         .await
         .unwrap();
-    // The prompt, fixed overhead and two surviving reads total about 68k
-    // after the oldest read is spilled, still above the 64,000-token threshold.
     window.store(80_000, Ordering::SeqCst);
     engine
-        .admit_user_prompt(session, "go on".to_string())
+        .admit_user_prompt(session, "go on".into())
         .await
         .unwrap();
     engine
         .run_turn(session, &agent, CancellationToken::new())
         .await
         .unwrap();
-    let envelopes = engine.replay(session).await.unwrap();
-    let reductions: Vec<_> = envelopes
+    let reductions: Vec<_> = engine
+        .replay(session)
+        .await
+        .unwrap()
         .iter()
         .filter_map(|e| match e.event {
             Event::ContextEvicted { .. } => Some("spill"),
@@ -1307,57 +728,41 @@ async fn a_spill_that_is_not_enough_is_followed_by_the_kernel_rewrite() {
         .collect();
     assert_eq!(
         reductions,
-        ["step", "step", "step", "step", "spill", "rewrite", "step"],
-        "turn 2 spilled, then the kernel rewrote, before its round"
+        ["step", "step", "step", "step", "spill", "rewrite", "step"]
     );
-
-    let requests = requests.lock().unwrap();
-    let last = format!("{:?}", requests.last().unwrap());
-    assert!(!last.contains(&"R".repeat(100)), "turn 1 left the request");
-    assert!(last.contains("HYA_COMPACTED_CONTEXT"));
+    let last = format!("{:?}", requests.lock().unwrap().last().unwrap());
+    assert!(!last.contains(&"R".repeat(100)) && last.contains("HYA_COMPACTED_CONTEXT"));
 }
 
-/// When a provider's reported prompt size is plausible (`~0.70` of the local
-/// estimate, e.g. dense JSON/reasoning tokenization) and still sits below the
-/// threshold while the local estimate has already crossed `max_context`, the
-/// kernel must still rewrite before `check_request_context` refuses the
-/// request: its trigger counts the local estimate too.
 #[tokio::test]
-async fn kernel_rewrite_runs_before_preflight_rejects_an_under_threshold_provider_count() {
+async fn kernel_rewrite_runs_before_preflight_rejects_under_threshold_provider_count() {
     struct CompactTokenizerRoute {
         inner: OpaqueReasoningRoute,
     }
-
-    #[async_trait::async_trait]
-    impl hya_provider::Provider for CompactTokenizerRoute {
+    #[async_trait]
+    impl Provider for CompactTokenizerRoute {
         fn id(&self) -> &str {
             "fake"
         }
-
-        fn capabilities(&self, model: &ModelRef) -> Option<hya_provider::Capabilities> {
+        fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
             let mut caps = self.inner.capabilities(model)?;
             caps.usage_reporting = true;
             Some(caps)
         }
-
         fn reasoning_replay_policy(&self) -> hya_provider::ReasoningReplayPolicy {
             self.inner.reasoning_replay_policy()
         }
-
         async fn stream(
             &self,
-            req: hya_provider::CompletionRequest,
-            session: hya_proto::SessionId,
-            message: hya_proto::MessageId,
-        ) -> Result<hya_provider::EventStream, hya_provider::ProviderError> {
-            use futures::StreamExt as _;
+            req: CompletionRequest,
+            session: SessionId,
+            message: MessageId,
+        ) -> Result<EventStream, ProviderError> {
             let tokenizer = hya_engine::tokens::TokenAccounting::default();
             let estimated = tokenizer.estimate_with_reasoning_policy(
                 &req.messages,
                 hya_provider::ReasoningReplayPolicy::ProviderData,
             );
-            // Plausible (`0.68 >= 0.50`) yet stays below `0.8 * max_context`
-            // even when `estimated` just crossed `max_context`.
             let reported = (estimated * 68) / 100;
             let stream = self.inner.stream(req, session, message).await?;
             Ok(Box::pin(stream.map(move |event| match event {
@@ -1376,10 +781,7 @@ async fn kernel_rewrite_runs_before_preflight_rejects_an_under_threshold_provide
                     tokens: Some(TokenUsage {
                         input: reported as u64,
                         output: 100,
-                        reasoning: 0,
-                        cache_read: 0,
-                        cache_write: 0,
-                        reasoning_unknown: false,
+                        ..TokenUsage::default()
                     }),
                     cause,
                 }),
@@ -1388,26 +790,21 @@ async fn kernel_rewrite_runs_before_preflight_rejects_an_under_threshold_provide
         }
     }
 
-    let dir = tempdir();
-    let file = dir.join("small.txt");
+    let dir = support::TestDir::new("turn-preflight-rewrite");
+    let file = dir.path().join("small.txt");
     tokio::fs::write(&file, "ok").await.unwrap();
     let path = file.to_string_lossy().into_owned();
-
     let tokenizer = hya_engine::tokens::TokenAccounting::default();
     let unit = "lorem ipsum dolor sit amet ".repeat(100);
-    let per_unit = tokenizer.tokenizer().count_text(&unit);
-    let blob = unit.repeat(20_000 / per_unit + 1);
+    let blob = unit.repeat(20_000 / tokenizer.tokenizer().count_text(&unit) + 1);
     let item_tokens = tokenizer.tokenizer().count_text(&blob);
-    // Five items (~100k estimated) cross a 95k window while `0.68 * 80k = 54.4k`
-    // from step 4 is still well below `0.8 * 95k = 76k`.
     let max_context = u32::try_from(item_tokens * 4 + item_tokens * 3 / 4).unwrap();
-
     let mut scripts: Vec<_> = (0..6)
         .map(|step| {
             vec![
                 FakeStep::Reasoning(format!("thinking step {step}")),
                 FakeStep::ToolCall {
-                    name: "read".to_string(),
+                    name: "read".into(),
                     input: json!({ "path": path }),
                 },
                 FakeStep::Finish(FinishReason::ToolCalls),
@@ -1415,30 +812,22 @@ async fn kernel_rewrite_runs_before_preflight_rejects_an_under_threshold_provide
         })
         .collect();
     scripts.push(vec![
-        FakeStep::Text("done".to_string()),
+        FakeStep::Text("done".into()),
         FakeStep::Finish(FinishReason::Stop),
     ]);
-    let requests = Arc::new(Mutex::new(Vec::new()));
     let route = CompactTokenizerRoute {
         inner: OpaqueReasoningRoute {
             inner: FakeProvider::scripted_turns(scripts),
             blob,
-            max_context: Arc::new(std::sync::atomic::AtomicU32::new(max_context)),
-            requests: Arc::clone(&requests),
+            max_context: Arc::new(AtomicU32::new(max_context)),
+            requests: Arc::new(Mutex::new(Vec::new())),
         },
     };
-    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
-        Action::Read,
-        "/**",
-        Mode::Allow,
-    )]));
-    let engine = SessionEngine::new(
-        SessionStore::connect_memory().await.unwrap(),
-        Arc::new(ProviderRouter::new().with(Arc::new(route))),
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
-        perm,
-        EventBus::default(),
+    let engine = support::engine_with_provider(
+        Arc::new(route),
+        PermissionRules::new(vec![Rule::new(Action::Read, "/**", Mode::Allow)]),
     )
+    .await
     .with_compaction(
         Arc::new(NoSummarizer),
         CompactionConfig {
@@ -1446,189 +835,141 @@ async fn kernel_rewrite_runs_before_preflight_rejects_an_under_threshold_provide
             ..CompactionConfig::default()
         },
     );
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let agent = AgentSpec {
-        name: AgentName::new("build"),
-        model: ModelRef::new("fake"),
-        system_prompt: "x".to_string(),
-        workdir: dir,
-        reasoning: None,
-    };
+    let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
     engine
-        .admit_user_prompt(session, "work through it".to_string())
+        .admit_user_prompt(session, "work".into())
         .await
         .unwrap();
-    let finish = engine
-        .run_turn(session, &agent, CancellationToken::new())
-        .await
-        .expect("preflight-bound turn rewrites instead of failing un-compacted");
-    assert_eq!(finish, FinishReason::Stop);
-    assert!(
-        rewrites(&engine.replay(session).await.unwrap()) > 0,
-        "the kernel rewrote before preflight rejected the request"
+    assert_eq!(
+        engine
+            .run_turn(
+                session,
+                &support::agent_spec("build", "fake", dir.path()),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap(),
+        FinishReason::Stop
     );
+    assert!(rewrite_count(&engine.replay(session).await.unwrap()) > 0);
 }
 
-/// The input a provider decoder records for a call whose argument text is
-/// `args` (the stream ends at the output limit).
-fn decoded_input(args: &str) -> serde_json::Value {
+#[tokio::test]
+async fn invalid_tool_argument_json_fails_without_running() {
     use hya_provider::Protocol as _;
-    let args = serde_json::to_string(args).unwrap();
-    let mut decoder = hya_provider::OpenAiChatProtocol.decoder(
-        hya_proto::SessionId::new(),
-        hya_proto::MessageId::new(),
-        None,
-    );
-    let mut events = decoder
-        .push(&format!(
-            r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":0,"id":"c","function":{{"name":"x","arguments":{args}}}}}]}},"finish_reason":"length"}}]}}"#
-        ))
-        .unwrap();
-    events.extend(decoder.finish().unwrap());
-    events
-        .into_iter()
-        .find_map(|event| match event {
-            Event::ToolCallRequested { input, .. } => Some(input),
-            _ => None,
-        })
-        .unwrap()
-}
+    let decoded = |args: &str| {
+        let args = serde_json::to_string(args).unwrap();
+        let mut decoder =
+            hya_provider::OpenAiChatProtocol.decoder(SessionId::new(), MessageId::new(), None);
+        let mut events = decoder
+            .push(&format!(
+                r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":0,"id":"c","function":{{"name":"x","arguments":{args}}}}}]}},"finish_reason":"length"}}]}}"#
+            ))
+            .unwrap();
+        events.extend(decoder.finish().unwrap());
+        events
+            .into_iter()
+            .find_map(|e| match e {
+                Event::ToolCallRequested { input, .. } => Some(input),
+                _ => None,
+            })
+            .unwrap()
+    };
 
-/// A tool whose arguments are all optional; counts its runs.
-#[derive(Default)]
-struct Optional(std::sync::atomic::AtomicUsize);
-
-#[async_trait::async_trait]
-impl hya_tool::Tool for Optional {
-    fn name(&self) -> &str {
-        "optional"
-    }
-
-    fn schema(&self) -> hya_proto::ToolSchema {
-        hya_proto::ToolSchema {
-            name: hya_proto::ToolName::new("optional"),
-            description: "Takes only optional arguments.".to_string(),
-            input_schema: json!({"type": "object", "properties": {"note": {"type": "string"}}}),
-            output_schema: None,
+    #[derive(Default)]
+    struct Optional(AtomicUsize);
+    #[async_trait]
+    impl hya_tool::Tool for Optional {
+        fn name(&self) -> &str {
+            "optional"
+        }
+        fn schema(&self) -> hya_proto::ToolSchema {
+            hya_proto::ToolSchema {
+                name: hya_proto::ToolName::new("optional"),
+                description: "optional args".into(),
+                input_schema: json!({"type": "object", "properties": {"note": {"type": "string"}}}),
+                output_schema: None,
+            }
+        }
+        async fn execute(
+            &self,
+            _: &hya_tool::ToolCtx,
+            _: serde_json::Value,
+        ) -> Result<serde_json::Value, hya_tool::ToolError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(json!("ran"))
         }
     }
 
-    async fn execute(
-        &self,
-        _ctx: &hya_tool::ToolCtx,
-        _input: serde_json::Value,
-    ) -> Result<serde_json::Value, hya_tool::ToolError> {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        Ok(json!("ran"))
-    }
-}
-
-/// In full mode a call whose argument text is not valid JSON reaches no tool,
-/// hook or permission check: the next request carries a failed result with
-/// the parser error, and the turn goes on.
-#[tokio::test]
-async fn a_call_with_invalid_argument_json_fails_without_running() {
-    let dir = tempdir();
+    let dir = support::TestDir::new("turn-bad-json");
     let provider = Arc::new(FakeProvider::scripted_turns(vec![
         vec![
             FakeStep::ToolCall {
-                name: "read".to_string(),
-                input: decoded_input(r#"{"filePath":"a"#),
+                name: "read".into(),
+                input: decoded(r#"{"filePath":"a"#),
             },
             FakeStep::Finish(FinishReason::Length),
         ],
         vec![
             FakeStep::ToolCall {
-                name: "optional".to_string(),
-                input: decoded_input(r#"{"note":"a"}}"#),
+                name: "optional".into(),
+                input: decoded(r#"{"note":"a"}}"#),
             },
             FakeStep::Finish(FinishReason::ToolCalls),
         ],
         vec![
-            FakeStep::Text("done".to_string()),
+            FakeStep::Text("done".into()),
             FakeStep::Finish(FinishReason::Stop),
         ],
     ]));
-    let router = Arc::new(ProviderRouter::new().with(provider.clone()));
     let tools = hya_tool_loader::builtins();
     let optional = Arc::new(Optional::default());
     tools.register(optional.clone()).unwrap();
-    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![
-        Rule::new(Action::Tool, "*", Mode::Allow),
-        Rule::new(Action::Read, "/**", Mode::Allow),
-    ]));
-    let engine = SessionEngine::new(
-        SessionStore::connect_memory().await.unwrap(),
-        router,
+    let engine = support::engine_with_router_and_runtime(
+        Arc::new(ProviderRouter::new().with(provider.clone())),
         support::test_runtime(Arc::new(tools)),
-        perm,
-        EventBus::default(),
-    );
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("general"),
-            model: ModelRef::new("fake"),
-            workdir: dir.to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
+        PermissionRules::new(vec![
+            Rule::new(Action::Tool, "*", Mode::Allow),
+            Rule::new(Action::Read, "/**", Mode::Allow),
+        ]),
+    )
+    .await;
+    let session = support::create_root_session(&engine, "general", "fake", dir.path()).await;
     engine
-        .admit_user_prompt(session, "call with broken arguments".to_string())
+        .admit_user_prompt(session, "call".into())
         .await
         .unwrap();
-    let agent = AgentSpec {
-        name: AgentName::new("general"),
-        model: ModelRef::new("fake"),
-        system_prompt: String::new(),
-        workdir: dir,
-        reasoning: None,
-    };
-
-    let finish = engine
-        .run_turn(session, &agent, CancellationToken::new())
-        .await
-        .unwrap();
-
-    assert_eq!(finish, FinishReason::Stop);
+    assert_eq!(
+        engine
+            .run_turn(
+                session,
+                &support::agent_spec("general", "fake", dir.path()),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap(),
+        FinishReason::Stop
+    );
     assert_eq!(optional.0.load(Ordering::SeqCst), 0);
     let requests = provider.requests();
     assert_eq!(requests.len(), 3);
-    assert!(
-        requests[1]
-            .tools
-            .iter()
-            .any(|tool| tool.name.as_str() == "optional")
-    );
-    for (request, error) in [
+    for (request, err_msg) in [
         (
             &requests[1],
             "EOF while parsing a string at line 1 column 14",
         ),
         (&requests[2], "trailing characters at line 1 column 13"),
     ] {
-        let message = request
+        let msg = request
             .messages
             .iter()
-            .filter_map(|message| match message {
+            .filter_map(|m| match m {
                 Message::Assistant { parts, .. } => Some(parts),
                 _ => None,
             })
             .flatten()
-            .filter_map(|part| match part {
-                hya_proto::Part::Tool {
+            .filter_map(|p| match p {
+                Part::Tool {
                     state: ToolPartState::Error { message, .. },
                     ..
                 } => Some(message.as_str()),
@@ -1637,11 +978,1162 @@ async fn a_call_with_invalid_argument_json_fails_without_running() {
             .next_back()
             .unwrap();
         assert_eq!(
-            message,
+            msg,
             format!(
-                "arguments are not valid JSON: {error}. Nothing was run; call the tool \
+                "arguments are not valid JSON: {err_msg}. Nothing was run; call the tool \
                  again with its arguments as one valid JSON object."
             )
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Stream round: live deltas, snapshots, partial failure, reasoning replay
+// ---------------------------------------------------------------------------
+
+struct GatedDeltaProvider {
+    release: Arc<Notify>,
+    request: Arc<Mutex<Option<CompletionRequest>>>,
+}
+
+#[async_trait]
+impl Provider for GatedDeltaProvider {
+    fn id(&self) -> &str {
+        "gated-delta"
+    }
+    fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
+        Some(Capabilities {
+            streaming_tool_calls: true,
+            ..Capabilities::default()
+        })
+    }
+    async fn stream(
+        &self,
+        req: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        *self.request.lock().unwrap() = Some(req);
+        let part = PartId::new();
+        let events = vec![
+            Event::TextStart {
+                session,
+                message,
+                part,
+            },
+            Event::TextDelta {
+                session,
+                message,
+                part,
+                delta: "hello".into(),
+            },
+            Event::TextDelta {
+                session,
+                message,
+                part,
+                delta: " world".into(),
+            },
+            Event::TextEnd {
+                session,
+                message,
+                part,
+            },
+            Event::MessageFinished {
+                session,
+                message,
+                role: Role::Assistant,
+                finish: FinishReason::Stop,
+                tokens: None,
+                cause: None,
+            },
+        ];
+        let release = Arc::clone(&self.release);
+        Ok(Box::pin(stream::unfold(
+            (events.into_iter(), 0usize),
+            move |(mut events, index)| {
+                let release = Arc::clone(&release);
+                async move {
+                    let event = events.next()?;
+                    if index == 2 {
+                        release.notified().await;
+                    }
+                    Some((Ok(event), (events, index + 1)))
+                }
+            },
+        )))
+    }
+}
+
+struct PartialFailureProvider;
+
+#[async_trait]
+impl Provider for PartialFailureProvider {
+    fn id(&self) -> &str {
+        "partial-failure"
+    }
+    fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
+        Some(Capabilities {
+            streaming_tool_calls: true,
+            ..Capabilities::default()
+        })
+    }
+    async fn stream(
+        &self,
+        _req: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        let reasoning = PartId::new();
+        let part = PartId::new();
+        Ok(Box::pin(stream::iter([
+            Ok(Event::ReasoningStart {
+                session,
+                message,
+                part: reasoning,
+                reason: None,
+            }),
+            Ok(Event::ReasoningDelta {
+                session,
+                message,
+                part: reasoning,
+                delta: "partial thought".into(),
+            }),
+            Ok(Event::TextStart {
+                session,
+                message,
+                part,
+            }),
+            Ok(Event::TextDelta {
+                session,
+                message,
+                part,
+                delta: "partial".into(),
+            }),
+            Err(ProviderError::Decode("invalid event payload".into())),
+        ])))
+    }
+}
+
+async fn next_text_delta(live: &mut broadcast::Receiver<Envelope>, expected: &str) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Event::TextDelta { delta, .. } = live.recv().await.unwrap().event
+                && delta == expected
+            {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("live delta");
+}
+
+#[tokio::test]
+async fn stream_deltas_are_live_while_replay_commits_snapshots_once() {
+    let dir = support::TestDir::new("stream-live");
+
+    // 1. Live text deltas arrive before completion; replay commits final snapshot once.
+    let release = Arc::new(Notify::new());
+    let engine = Arc::new(
+        support::engine_with_provider(
+            Arc::new(GatedDeltaProvider {
+                release: Arc::clone(&release),
+                request: Arc::new(Mutex::new(None)),
+            }),
+            PermissionRules::default(),
+        )
+        .await,
+    );
+    let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
+    engine
+        .admit_user_prompt(session, "stream".into())
+        .await
+        .unwrap();
+    let mut live = engine.bus().subscribe();
+    let runner = engine.clone();
+    let agent = support::agent_spec("build", "fake", dir.path());
+    let turn = tokio::spawn(async move {
+        runner
+            .run_turn(session, &agent, CancellationToken::new())
+            .await
+    });
+    next_text_delta(&mut live, "hello").await;
+    assert!(!turn.is_finished());
+    release.notify_one();
+    assert_eq!(turn.await.unwrap().unwrap(), FinishReason::Stop);
+    next_text_delta(&mut live, " world").await;
+
+    let replay = engine.store().replay(session).await.unwrap();
+    let assistant_id = replay.iter().find_map(|e| match e.event {
+        Event::MessageStarted {
+            message,
+            role: Role::Assistant,
+            ..
+        } => Some(message),
+        _ => None,
+    });
+    assert_eq!(
+        support::assistant_text(&engine, session).await,
+        "hello world"
+    );
+    let durable_deltas = replay
+        .iter()
+        .filter(|e| matches!(e.event, Event::TextDelta { message, .. } if Some(message) == assistant_id))
+        .count();
+    assert!(durable_deltas <= 1);
+
+    // 2. Reasoning deltas snapshot once without durable ReasoningDelta entries.
+    let engine = support::engine_with_provider(
+        Arc::new(FakeProvider::scripted(vec![
+            FakeStep::Reasoning("think one and two".into()),
+            FakeStep::Finish(FinishReason::Stop),
+        ])),
+        PermissionRules::default(),
+    )
+    .await;
+    let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
+    engine
+        .admit_user_prompt(session, "reasoning".into())
+        .await
+        .unwrap();
+    engine
+        .run_turn(
+            session,
+            &support::agent_spec("build", "fake", dir.path()),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let replay = engine.store().replay(session).await.unwrap();
+    assert_eq!(
+        replay
+            .iter()
+            .filter(|e| matches!(
+                e.event,
+                Event::ReasoningStart { .. }
+                    | Event::ReasoningReplace { .. }
+                    | Event::ReasoningEnd { .. }
+            ))
+            .count(),
+        3
+    );
+    assert!(
+        !replay
+            .iter()
+            .any(|e| matches!(e.event, Event::ReasoningDelta { .. }))
+    );
+
+    // 3. Partial text and reasoning persist on mid-stream decode failure.
+    let engine =
+        support::engine_with_provider(Arc::new(PartialFailureProvider), PermissionRules::default())
+            .await;
+    let session =
+        support::create_root_session(&engine, "build", "partial-failure", dir.path()).await;
+    engine
+        .admit_user_prompt(session, "fail".into())
+        .await
+        .unwrap();
+    assert!(
+        engine
+            .run_turn(
+                session,
+                &support::agent_spec("build", "partial-failure", dir.path()),
+                CancellationToken::new(),
+            )
+            .await
+            .is_err()
+    );
+    let replay = engine.store().replay(session).await.unwrap();
+    let proj = Projection::from_events(&replay);
+    let assistant = proj
+        .session
+        .messages
+        .iter()
+        .find(|m| m.role == Role::Assistant)
+        .unwrap();
+    assert_eq!(assistant.finish, Some(FinishReason::Error));
+    assert!(
+        assistant
+            .parts
+            .iter()
+            .any(|p| matches!(p, PartProjection::Text { text, .. } if text == "partial"))
+    );
+    assert!(
+        assistant.parts.iter().any(
+            |p| matches!(p, PartProjection::Reasoning { text, .. } if text == "partial thought")
+        )
+    );
+}
+
+#[tokio::test]
+async fn tool_arguments_stream_live_and_late_subscribers_recover_full_input() {
+    struct GatedArgsProvider {
+        inner: FakeProvider,
+        resume: Arc<Notify>,
+    }
+    #[async_trait]
+    impl Provider for GatedArgsProvider {
+        fn id(&self) -> &str {
+            self.inner.id()
+        }
+        fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+            self.inner.capabilities(model)
+        }
+        async fn stream(
+            &self,
+            req: CompletionRequest,
+            session: SessionId,
+            message: MessageId,
+        ) -> Result<EventStream, ProviderError> {
+            let resume = Arc::clone(&self.resume);
+            let events = self.inner.stream(req, session, message).await?;
+            Ok(Box::pin(events.then(move |event| {
+                let resume = Arc::clone(&resume);
+                async move {
+                    if matches!(&event, Ok(Event::ToolCallRequested { .. })) {
+                        resume.notified().await;
+                    }
+                    event
+                }
+            })))
+        }
+    }
+
+    let dir = support::TestDir::new("stream-tool-args");
+    let path = dir.path().join("input.txt");
+    std::fs::write(&path, "content").unwrap();
+    let input = json!({ "path": path });
+    let resume = Arc::new(Notify::new());
+    let provider = GatedArgsProvider {
+        inner: FakeProvider::scripted_turns(vec![
+            vec![
+                FakeStep::ToolCall {
+                    name: "read".into(),
+                    input: input.clone(),
+                },
+                FakeStep::Finish(FinishReason::ToolCalls),
+            ],
+            vec![
+                FakeStep::Text("done".into()),
+                FakeStep::Finish(FinishReason::Stop),
+            ],
+        ]),
+        resume: Arc::clone(&resume),
+    };
+    let engine = Arc::new(
+        support::engine_with_provider(
+            Arc::new(provider),
+            PermissionRules::new(vec![Rule::new(Action::Read, "/**", Mode::Allow)]),
+        )
+        .await,
+    );
+    let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
+    engine
+        .admit_user_prompt(session, "read".into())
+        .await
+        .unwrap();
+    let mut live = engine.bus().subscribe();
+    let runner = engine.clone();
+    let agent = support::agent_spec("build", "fake", dir.path());
+    let turn = tokio::spawn(async move {
+        runner
+            .run_turn(session, &agent, CancellationToken::new())
+            .await
+    });
+    let delta = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let env = live.recv().await.unwrap();
+            if matches!(env.event, Event::ToolInputDelta { .. }) {
+                break env;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(delta.seq.0, 0);
+    assert!(
+        matches!(&delta.event, Event::ToolInputDelta { delta, .. } if delta == &input.to_string())
+    );
+    assert!(!turn.is_finished());
+
+    let mut late = engine.bus().subscribe();
+    let pending = engine.store().replay(session).await.unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .filter(|e| matches!(e.event, Event::ToolInputStart { .. }))
+            .count(),
+        1
+    );
+    assert!(!pending.iter().any(|e| matches!(
+        e.event,
+        Event::ToolInputDelta { .. } | Event::ToolCallRequested { .. }
+    )));
+    resume.notify_one();
+    assert_eq!(turn.await.unwrap().unwrap(), FinishReason::Stop);
+
+    let replay = engine.store().replay(session).await.unwrap();
+    assert!(
+        !replay
+            .iter()
+            .any(|e| matches!(e.event, Event::ToolInputDelta { .. }))
+    );
+    let find_input = |events: &[Envelope]| {
+        events.iter().find_map(|e| match &e.event {
+            Event::ToolCallRequested { input, .. } => Some(input.clone()),
+            _ => None,
+        })
+    };
+    assert_eq!(find_input(&replay), Some(input.clone()));
+    let mut late_events = Vec::new();
+    while let Ok(env) = late.try_recv() {
+        late_events.push(env);
+    }
+    assert_eq!(find_input(&late_events), Some(input));
+}
+
+#[tokio::test]
+async fn forked_reasoning_provider_data_reaches_next_request() {
+    let dir = support::TestDir::new("stream-fork-reasoning");
+    let request = Arc::new(Mutex::new(None));
+    let release = Arc::new(Notify::new());
+    release.notify_one();
+    let engine = support::engine_with_provider(
+        Arc::new(GatedDeltaProvider {
+            release,
+            request: Arc::clone(&request),
+        }),
+        PermissionRules::default(),
+    )
+    .await;
+    let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
+    let provider_data = json!({
+        "type": "reasoning",
+        "id": "rs_123",
+        "encrypted_content": "opaque",
+    });
+    let source = Projection {
+        session: SessionProjection {
+            messages: vec![MessageProjection {
+                id: MessageId::new(),
+                role: Role::Assistant,
+                agent: None,
+                model: None,
+                time_created: None,
+                time_updated: None,
+                config_generation: None,
+                last_step_start: None,
+                folded_parts: 0,
+                finish: Some(FinishReason::Stop),
+                tokens: None,
+                usage: None,
+                files: Vec::new(),
+                agents: Vec::new(),
+                parts: vec![PartProjection::Reasoning {
+                    id: PartId::new(),
+                    text: "visible summary".into(),
+                    reason: Some("high".into()),
+                    provider_data: Some(provider_data.clone()),
+                }],
+                file_changes: Vec::new(),
+                error: None,
+                cause: None,
+            }],
+            ..SessionProjection::default()
+        },
+        ..Projection::default()
+    };
+    engine
+        .copy_messages_to_session(session, &source, None)
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "continue".into())
+        .await
+        .unwrap();
+    engine
+        .run_turn(
+            session,
+            &support::agent_spec("build", "fake", dir.path()),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let captured = request.lock().unwrap();
+    let sent = captured
+        .as_ref()
+        .unwrap()
+        .messages
+        .iter()
+        .find_map(|m| match m {
+            Message::Assistant { parts, .. } => parts.iter().find_map(|p| match p {
+                Part::Reasoning { provider_data, .. } => provider_data.as_ref(),
+                _ => None,
+            }),
+            _ => None,
+        });
+    assert_eq!(sent, Some(&provider_data));
+}
+
+// ---------------------------------------------------------------------------
+// Single-active-turn serialization & deferred wakes
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct GateProvider {
+    gated: Mutex<HashSet<SessionId>>,
+    entered: Notify,
+    release: Notify,
+    streams: Mutex<HashMap<SessionId, usize>>,
+    rendezvous: Mutex<Option<(HashSet<SessionId>, Arc<Barrier>)>>,
+    rendezvous_met: AtomicBool,
+}
+
+impl GateProvider {
+    fn gate(&self, session: SessionId) {
+        self.gated.lock().unwrap().insert(session);
+    }
+
+    fn streams_for(&self, session: SessionId) -> usize {
+        self.streams
+            .lock()
+            .unwrap()
+            .get(&session)
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+#[async_trait]
+impl Provider for GateProvider {
+    fn id(&self) -> &str {
+        "hya"
+    }
+    fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+        (model.as_str() == "hya/offline").then_some(Capabilities {
+            streaming_tool_calls: true,
+            usage_reporting: true,
+            max_context: 200_000,
+            ..Capabilities::default()
+        })
+    }
+    async fn stream(
+        &self,
+        _req: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        *self.streams.lock().unwrap().entry(session).or_default() += 1;
+        if self.gated.lock().unwrap().remove(&session) {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+        let barrier = self
+            .rendezvous
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(members, _)| members.contains(&session))
+            .map(|(_, b)| Arc::clone(b));
+        if let Some(barrier) = barrier {
+            match tokio::time::timeout(Duration::from_secs(5), barrier.wait()).await {
+                Ok(_) => self.rendezvous_met.store(true, Ordering::SeqCst),
+                Err(_) => {
+                    return Err(ProviderError::Decode(
+                        "members never streamed concurrently".into(),
+                    ));
+                }
+            }
+        }
+        let events = FakeProvider::materialize(
+            &[
+                FakeStep::Text("ok".into()),
+                FakeStep::Finish(FinishReason::Stop),
+            ],
+            session,
+            message,
+        );
+        Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
+    }
+}
+
+async fn gate_engine() -> (Arc<SessionEngine>, AgentSpec, Arc<GateProvider>) {
+    let provider = Arc::new(GateProvider::default());
+    let engine = Arc::new(
+        support::engine_with_provider(provider.clone(), PermissionRules::default())
+            .await
+            .with_governor(SubagentGovernor::new(SubagentLimits::default())),
+    );
+    let agent = support::agent_spec("hya-task", "hya/offline", "/tmp");
+    (engine, agent, provider)
+}
+
+async fn make_team_session(
+    engine: &SessionEngine,
+    parent: Option<SessionId>,
+    agent: &str,
+) -> SessionId {
+    engine
+        .create(CreateSession {
+            parent,
+            agent: AgentName::new(agent),
+            model: ModelRef::new("hya/offline"),
+            workdir: "/tmp".into(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap()
+}
+
+async fn register_main(
+    supervisor: &ResidentSupervisor,
+    engine: &SessionEngine,
+    agent: &AgentSpec,
+    root: SessionId,
+) {
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let agents = engine
+        .agent_roster_for_binding(&binding, "hya-main")
+        .unwrap();
+    let resources = engine
+        .agent_resource_policy_for_binding(&binding, "hya-main")
+        .unwrap();
+    supervisor
+        .ensure_main(
+            root,
+            agent.clone(),
+            (binding, agents, resources),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+}
+
+fn max_open_assistant(events: &[Envelope], session: SessionId) -> usize {
+    let mut open = HashSet::new();
+    let mut max = 0;
+    for env in events {
+        match &env.event {
+            Event::MessageStarted {
+                session: s,
+                message,
+                role: Role::Assistant,
+                ..
+            } if *s == session => {
+                open.insert(*message);
+                max = max.max(open.len());
+            }
+            Event::MessageFinished {
+                session: s,
+                message,
+                role: Role::Assistant,
+                ..
+            } if *s == session => {
+                open.remove(message);
+            }
+            _ => {}
+        }
+    }
+    max
+}
+
+async fn has_quiesced(engine: &SessionEngine, root: SessionId) -> bool {
+    engine
+        .read_projection(root)
+        .await
+        .unwrap()
+        .session
+        .messages
+        .iter()
+        .any(|m| {
+            m.role == Role::User
+                && m.parts
+                    .iter()
+                    .any(|p| matches!(p, PartProjection::Text { text, .. } if text.contains("TEAM QUIESCED")))
+        })
+}
+
+async fn assistant_count(engine: &SessionEngine, session: SessionId, finished: bool) -> usize {
+    engine
+        .replay(session)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|e| {
+            if finished {
+                matches!(&e.event, Event::MessageFinished { session: s, role: Role::Assistant, .. } if *s == session)
+            } else {
+                matches!(&e.event, Event::MessageStarted { session: s, role: Role::Assistant, .. } if *s == session)
+            }
+        })
+        .count()
+}
+
+#[tokio::test]
+async fn quiescence_and_mail_queue_behind_leads_active_turn() {
+    for trigger_mail in [false, true] {
+        let (engine, agent, provider) = gate_engine().await;
+        let root = make_team_session(&engine, None, "hya-main").await;
+        let supervisor = ResidentSupervisor::start(engine.clone());
+        provider.gate(root);
+        engine.admit_user_prompt(root, "lead".into()).await.unwrap();
+        let lead = {
+            let e = engine.clone();
+            let a = agent.clone();
+            tokio::spawn(async move { e.run_turn(root, &a, CancellationToken::new()).await })
+        };
+        tokio::time::timeout(Duration::from_secs(5), provider.entered.notified())
+            .await
+            .unwrap();
+
+        register_main(&supervisor, &engine, &agent, root).await;
+        let scout = make_team_session(&engine, Some(root), "hya-task").await;
+        supervisor
+            .register_existing_resident(
+                root,
+                scout,
+                "scout".into(),
+                agent.clone(),
+                (!trigger_mail).then(|| "scout the repo".into()),
+            )
+            .await
+            .unwrap();
+        if trigger_mail {
+            engine
+                .mail_send(
+                    scout,
+                    MailEndpoint::Handle("main".into()),
+                    MailKind::Message,
+                    "findings".into(),
+                )
+                .await
+                .unwrap();
+        } else {
+            assert!(
+                support::poll_until(Duration::from_secs(5), || async {
+                    provider.streams_for(scout) == 1
+                        && engine
+                            .read_projection(root)
+                            .await
+                            .unwrap()
+                            .team
+                            .roster
+                            .get("main/scout")
+                            .map(|e| e.status)
+                            == Some(RosterStatus::Idle)
+                })
+                .await
+            );
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(assistant_count(&engine, root, false).await, 1);
+        assert!(!has_quiesced(&engine, root).await);
+
+        provider.release.notify_one();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), lead)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+            FinishReason::Stop
+        );
+        assert!(
+            support::poll_until(Duration::from_secs(5), || async {
+                assistant_count(&engine, root, true).await == 2
+                    && (trigger_mail || has_quiesced(&engine, root).await)
+            })
+            .await
+        );
+        let events = engine.replay(root).await.unwrap();
+        assert_eq!(max_open_assistant(&events, root), 1);
+        if !trigger_mail {
+            let first_finish = events
+                .iter()
+                .position(|e| matches!(&e.event, Event::MessageFinished { session, role: Role::Assistant, .. } if *session == root))
+                .unwrap();
+            let notice = events
+                .iter()
+                .position(|e| matches!(&e.event, Event::TextDelta { delta, .. } if delta.contains("TEAM QUIESCED")))
+                .unwrap();
+            assert!(notice > first_finish);
+        }
+    }
+}
+
+#[tokio::test]
+async fn consumed_results_suppress_redundant_synthesis_while_unseen_mail_wakes() {
+    #[derive(Clone, Copy)]
+    enum ModeCase {
+        ChannelRead,
+        Wait,
+        LateMailAfterRead,
+        OtherChannelUnseen,
+    }
+    for case in [
+        ModeCase::ChannelRead,
+        ModeCase::Wait,
+        ModeCase::LateMailAfterRead,
+        ModeCase::OtherChannelUnseen,
+    ] {
+        let (engine, agent, provider) = gate_engine().await;
+        let root = make_team_session(&engine, None, "hya-main").await;
+        let supervisor = ResidentSupervisor::start(engine.clone());
+        provider.gate(root);
+        engine.admit_user_prompt(root, "lead".into()).await.unwrap();
+        let lead = {
+            let e = engine.clone();
+            let a = agent.clone();
+            tokio::spawn(async move { e.run_turn(root, &a, CancellationToken::new()).await })
+        };
+        tokio::time::timeout(Duration::from_secs(5), provider.entered.notified())
+            .await
+            .unwrap();
+
+        register_main(&supervisor, &engine, &agent, root).await;
+        let scout = make_team_session(&engine, Some(root), "hya-task").await;
+        supervisor
+            .register_existing_resident(root, scout, "scout".into(), agent.clone(), None)
+            .await
+            .unwrap();
+        engine
+            .mail_send(
+                scout,
+                MailEndpoint::Handle("^parent".into()),
+                MailKind::Message,
+                "findings ready".into(),
+            )
+            .await
+            .unwrap();
+        if matches!(case, ModeCase::OtherChannelUnseen) {
+            let other = make_team_session(&engine, Some(root), "hya-task").await;
+            supervisor
+                .register_existing_resident(root, other, "other".into(), agent.clone(), None)
+                .await
+                .unwrap();
+            engine
+                .mail_send(
+                    other,
+                    MailEndpoint::Handle("^parent".into()),
+                    MailKind::Message,
+                    "other report".into(),
+                )
+                .await
+                .unwrap();
+        }
+        assert!(
+            support::poll_until(Duration::from_secs(2), || async {
+                hya_engine::TurnBoundaryObserver::mail_mark(supervisor.as_ref(), root).unwrap_or(0)
+                    >= if matches!(case, ModeCase::OtherChannelUnseen) {
+                        2
+                    } else {
+                        1
+                    }
+            })
+            .await
+        );
+
+        match case {
+            ModeCase::Wait => {
+                let (lifecycle, rx) = hya_tool::LifecyclePlane::new();
+                let svc = tokio::spawn(hya_engine::run_lifecycle_service(
+                    engine.clone(),
+                    supervisor.clone(),
+                    rx,
+                    CancellationToken::new(),
+                ));
+                let out = lifecycle
+                    .for_session(root)
+                    .wait(
+                        hya_tool::WaitSpec::parse(&json!({"timeout_secs": 0}), true).unwrap(),
+                        &CancellationToken::new(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(out.mail.len(), 1);
+                svc.abort();
+            }
+            _ => {
+                let read = engine
+                    .read_channel_history(None, root, "scout", None)
+                    .await
+                    .unwrap();
+                assert_eq!(read.messages[0].1, "findings ready");
+            }
+        }
+        if matches!(case, ModeCase::LateMailAfterRead) {
+            engine
+                .mail_send(
+                    scout,
+                    MailEndpoint::Handle("^parent".into()),
+                    MailKind::Message,
+                    "late".into(),
+                )
+                .await
+                .unwrap();
+            assert!(
+                support::poll_until(Duration::from_secs(2), || async {
+                    hya_engine::TurnBoundaryObserver::mail_mark(supervisor.as_ref(), root)
+                        .unwrap_or(0)
+                        >= 2
+                })
+                .await
+            );
+        }
+
+        provider.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), lead)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        if matches!(
+            case,
+            ModeCase::LateMailAfterRead | ModeCase::OtherChannelUnseen
+        ) {
+            assert!(
+                support::poll_until(Duration::from_secs(5), || async {
+                    provider.streams_for(root) == 2
+                })
+                .await
+            );
+        } else {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            assert!(provider.streams_for(root) <= 1 && !has_quiesced(&engine, root).await);
+        }
+    }
+
+    // Outgoing directive on another DM does not retain synthesis once incoming mail is read.
+    let (engine, agent, provider) = gate_engine().await;
+    let root = make_team_session(&engine, None, "hya-main").await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let lease = engine.try_begin_turn(root).unwrap();
+    register_main(&supervisor, &engine, &agent, root).await;
+    let scout = make_team_session(&engine, Some(root), "hya-task").await;
+    let other = make_team_session(&engine, Some(root), "hya-task").await;
+    supervisor
+        .register_existing_resident(root, scout, "scout".into(), agent.clone(), None)
+        .await
+        .unwrap();
+    supervisor
+        .register_existing_resident(root, other, "other".into(), agent.clone(), None)
+        .await
+        .unwrap();
+    let other_dm = engine
+        .read_projection(root)
+        .await
+        .unwrap()
+        .team
+        .channels
+        .iter()
+        .find(|(_, c)| c.kind == hya_proto::ChannelKind::Dm && c.members.contains("main/other"))
+        .unwrap()
+        .0
+        .clone();
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Channel(other_dm),
+            MailKind::Message,
+            "outgoing".into(),
+        )
+        .await
+        .unwrap();
+    engine
+        .mail_send(
+            scout,
+            MailEndpoint::Handle("^parent".into()),
+            MailKind::Message,
+            "incoming".into(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        support::poll_until(Duration::from_secs(2), || async {
+            hya_engine::TurnBoundaryObserver::mail_mark(supervisor.as_ref(), root).unwrap_or(0) >= 2
+        })
+        .await
+    );
+    engine
+        .read_channel_history(None, root, "scout", None)
+        .await
+        .unwrap();
+    drop(lease);
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    assert!(!has_quiesced(&engine, root).await && provider.streams_for(root) == 0);
+    supervisor
+        .drain(hya_proto::FinishCause::Shutdown, Duration::from_secs(2))
+        .await;
+}
+
+#[tokio::test]
+async fn concurrent_turns_serialize_queued_cancel_claim_error_and_sibling_concurrency() {
+    // 1. Duplicate try_begin_turn is typed TurnAlreadyActive; distinct sessions stay independent.
+    let (engine, agent, provider) = gate_engine().await;
+    let root = make_team_session(&engine, None, "hya-main").await;
+    let other = make_team_session(&engine, None, "hya-main").await;
+    let lease = engine.try_begin_turn(root).unwrap();
+    assert!(
+        matches!(engine.try_begin_turn(root), Err(CoreError::TurnAlreadyActive { session }) if session == root)
+    );
+    drop(engine.try_begin_turn(other).unwrap());
+    drop(lease);
+    assert!(!engine.turn_active(root));
+
+    // 2. Concurrent run_turn serializes; a queued turn can be cancelled before starting.
+    provider.gate(root);
+    engine
+        .admit_user_prompt(root, "first".into())
+        .await
+        .unwrap();
+    let first = {
+        let (e, a) = (engine.clone(), agent.clone());
+        tokio::spawn(async move { e.run_turn(root, &a, CancellationToken::new()).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), provider.entered.notified())
+        .await
+        .unwrap();
+    let second = {
+        let (e, a) = (engine.clone(), agent.clone());
+        tokio::spawn(async move { e.run_turn(root, &a, CancellationToken::new()).await })
+    };
+    let cancel = CancellationToken::new();
+    let cancelled = {
+        let (e, a, c) = (engine.clone(), agent.clone(), cancel.clone());
+        tokio::spawn(async move { e.run_turn(root, &a, c).await })
+    };
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(provider.streams_for(root), 1);
+    cancel.cancel();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), cancelled)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap(),
+        FinishReason::Cancelled
+    );
+    provider.release.notify_one();
+    for task in [first, second] {
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+            FinishReason::Stop
+        );
+    }
+    let events = engine.replay(root).await.unwrap();
+    assert_eq!(assistant_count(&engine, root, false).await, 2);
+    assert_eq!(max_open_assistant(&events, root), 1);
+
+    // 3. Separate member sessions stream concurrently.
+    let (engine, agent, provider) = gate_engine().await;
+    let root = make_team_session(&engine, None, "hya-main").await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    register_main(&supervisor, &engine, &agent, root).await;
+    let a = make_team_session(&engine, Some(root), "hya-task").await;
+    let b = make_team_session(&engine, Some(root), "hya-task").await;
+    *provider.rendezvous.lock().unwrap() = Some((HashSet::from([a, b]), Arc::new(Barrier::new(2))));
+    for (s, h) in [(a, "worker-a"), (b, "worker-b")] {
+        supervisor
+            .register_existing_resident(root, s, h.into(), agent.clone(), Some("work".into()))
+            .await
+            .unwrap();
+    }
+    assert!(
+        support::poll_until(Duration::from_secs(5), || async {
+            let team = engine.read_projection(root).await.unwrap().team;
+            team.roster.get("main/worker-a").map(|e| e.status) == Some(RosterStatus::Idle)
+                && team.roster.get("main/worker-b").map(|e| e.status) == Some(RosterStatus::Idle)
+        })
+        .await
+    );
+    assert!(provider.rendezvous_met.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn todo_list_survives_restart_and_builds_on_prior_state() {
+    let dir = support::TestDir::new("turn-todo");
+    let store = SessionStore::connect_memory().await.unwrap();
+    let call_todo = |input: serde_json::Value| {
+        vec![
+            vec![
+                FakeStep::ToolCall {
+                    name: "todo".into(),
+                    input,
+                },
+                FakeStep::Finish(FinishReason::ToolCalls),
+            ],
+            vec![
+                FakeStep::Text("ok".into()),
+                FakeStep::Finish(FinishReason::Stop),
+            ],
+        ]
+    };
+    let make_engine = |script: Vec<Vec<FakeStep>>| {
+        let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+        SessionEngine::new(
+            store.clone(),
+            Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted_turns(script)))),
+            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+            perm,
+            EventBus::default(),
+        )
+    };
+    async fn run(engine: &SessionEngine, session: SessionId, workdir: &Path) {
+        let agent = support::agent_spec("build", "fake", workdir);
+        engine
+            .admit_user_prompt(session, "go".into())
+            .await
+            .unwrap();
+        engine
+            .run_turn(session, &agent, CancellationToken::new())
+            .await
+            .unwrap();
+    }
+
+    let first = make_engine(call_todo(json!({"ops": [
+        {"op": "add", "content": "first"},
+        {"op": "add", "content": "second"}
+    ]})));
+    let session = support::create_root_session(&first, "build", "fake", dir.path()).await;
+    run(&first, session, dir.path()).await;
+    drop(first);
+
+    let second = make_engine(call_todo(
+        json!({"ops": [{"op": "status", "id": "2", "status": "completed"}]}),
+    ));
+    run(&second, session, dir.path()).await;
+
+    let proj = store.read_projection(session).await.unwrap();
+    assert_eq!(
+        proj.session.todos,
+        Some(vec![
+            TodoItem {
+                id: "1".into(),
+                content: "first".into(),
+                status: TodoStatus::Pending
+            },
+            TodoItem {
+                id: "2".into(),
+                content: "second".into(),
+                status: TodoStatus::Completed
+            },
+        ])
+    );
+    assert_eq!(
+        store
+            .replay(session)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e.event, Event::TodosUpdated { .. }))
+            .count(),
+        2
+    );
 }

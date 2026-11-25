@@ -367,63 +367,25 @@ mod dispatch_tests {
     }
 
     #[test]
-    fn branch1_exact_valid_id_overrides_directly() {
+    fn resolve_dispatch_model_matches_exact_and_non_vendor_substrings() {
         let (models, providers) = catalog();
-        assert_eq!(
-            resolve_dispatch_model("fake/pref-target", &models, &providers)
-                .map(|model| model.to_string()),
-            Some("fake/pref-target".to_string())
-        );
-    }
-
-    #[test]
-    fn branch2_substring_dispatches_first_stable_match() {
-        let (models, providers) = catalog();
-        // "target" is a substring of override-target and pref-target; the
-        // stable sort puts override-target first.
-        assert_eq!(
-            resolve_dispatch_model("target", &models, &providers).map(|model| model.to_string()),
-            Some("fake/override-target".to_string())
-        );
-        assert_eq!(
-            resolve_dispatch_model("sonnet", &models, &providers).map(|model| model.to_string()),
-            Some("anthropic/claude-sonnet".to_string())
-        );
-    }
-
-    #[test]
-    fn branch2_disabled_for_bare_vendor_ids() {
-        let (models, providers) = catalog();
-        assert_eq!(resolve_dispatch_model("fake", &models, &providers), None);
-        assert_eq!(
-            resolve_dispatch_model("anthropic", &models, &providers),
-            None
-        );
-        // A bare vendor id that is NOT a substring of any id also stays None.
-        assert_eq!(
-            resolve_dispatch_model("deepseek", &models, &providers),
-            None
-        );
-    }
-
-    #[test]
-    fn branch3_no_request_or_no_match_defers_to_user_config() {
-        let (models, providers) = catalog();
-        assert_eq!(resolve_dispatch_model("", &models, &providers), None);
-        assert_eq!(resolve_dispatch_model("   ", &models, &providers), None);
-        assert_eq!(
-            resolve_dispatch_model("nonexistent-xyz", &models, &providers),
-            None
-        );
-    }
-
-    #[test]
-    fn bare_model_id_that_is_a_substring_still_dispatches() {
-        let (models, providers) = catalog();
-        // "model" is not a provider id and is a substring of fake/model.
-        assert_eq!(
-            resolve_dispatch_model("model", &models, &providers).map(|model| model.to_string()),
-            Some("fake/model".to_string())
-        );
+        for (query, expected) in [
+            ("fake/pref-target", Some("fake/pref-target")),
+            ("target", Some("fake/override-target")),
+            ("sonnet", Some("anthropic/claude-sonnet")),
+            ("model", Some("fake/model")),
+            ("fake", None),
+            ("anthropic", None),
+            ("deepseek", None),
+            ("", None),
+            ("   ", None),
+            ("nonexistent-xyz", None),
+        ] {
+            assert_eq!(
+                resolve_dispatch_model(query, &models, &providers).map(|m| m.to_string()),
+                expected.map(str::to_string),
+                "query={query:?}"
+            );
+        }
     }
 }

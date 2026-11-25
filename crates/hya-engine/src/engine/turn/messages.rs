@@ -324,8 +324,8 @@ mod tests {
     }
 
     #[test]
-    fn advertise_limits_model_schemas_and_keeps_the_executable_view()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn advertise_filtering_aliases_and_validation() -> Result<(), Box<dyn std::error::Error>> {
+        // Explicit advertise limits schemas while keeping executable view; report stays at depth >= 1.
         let resources = bundle_advertise_view(
             "advertise: [bash]\n    resource_view: { allow: ['harness:tool/bash', 'harness:tool/read'] }",
         )?;
@@ -334,117 +334,158 @@ mod tests {
             (1, vec!["bash", "report"]),
             (crate::MAX_SUBAGENT_DEPTH, vec!["bash", "report"]),
         ] {
-            let mut names = filtered_tool_schemas(&resources, true, depth, None, &model())
+            let mut names: Vec<_> = filtered_tool_schemas(&resources, true, depth, None, &model())
                 .into_iter()
-                .map(|schema| schema.name.to_string())
-                .collect::<Vec<_>>();
+                .map(|s| s.name.to_string())
+                .collect();
             names.sort();
             assert_eq!(names, expected, "depth {depth}");
         }
         for name in ["bash", "read", "wait", "task", "archive", "report"] {
-            assert!(
-                resources.resolve_tool(name).is_some(),
-                "{name} stays executable"
-            );
+            assert!(resources.resolve_tool(name).is_some(), "{name}");
         }
-        for schema in resources.tool_schemas() {
-            assert!(resources.resolve_tool(schema.name.as_str()).is_some());
-        }
-        Ok(())
-    }
 
-    #[test]
-    fn advertise_uses_the_views_public_tool_names() -> Result<(), Box<dyn std::error::Error>> {
-        let resources = bundle_advertise_view(
+        // Public aliases work in advertise; missing/empty advertise preserves depth filtering.
+        let aliased = bundle_advertise_view(
             "advertise: [run]\n    resource_view: { allow: ['harness:tool/bash'], aliases: { run: 'harness:tool/bash' } }",
         )?;
-        let names = filtered_tool_schemas(&resources, true, 0, None, &model())
+        let names: Vec<_> = filtered_tool_schemas(&aliased, true, 0, None, &model())
             .into_iter()
-            .map(|schema| schema.name.to_string())
-            .collect::<Vec<_>>();
+            .map(|s| s.name.to_string())
+            .collect();
         assert_eq!(names, ["run"]);
-        assert!(resources.resolve_tool("run").is_some());
-        assert!(resources.resolve_tool("wait").is_some());
+        for fields in ["", "advertise: []"] {
+            let view = bundle_advertise_view(fields)?;
+            for depth in [0, 1, crate::MAX_SUBAGENT_DEPTH] {
+                let expected: BTreeSet<_> = view
+                    .tool_schemas()
+                    .into_iter()
+                    .filter(|s| advertise_tool_at_depth(s.name.as_str(), depth, &model()))
+                    .map(|s| s.name.to_string())
+                    .collect();
+                let actual: BTreeSet<_> = filtered_tool_schemas(&view, true, depth, None, &model())
+                    .into_iter()
+                    .map(|s| s.name.to_string())
+                    .collect();
+                assert_eq!(actual, expected);
+            }
+        }
+
+        // Unknown/excluded advertise entries and reserved kernel tool aliases fail compile.
+        for name in ["missing-tool", "write"] {
+            let Err(err) = bundle_advertise_view(&format!(
+                "advertise: [{name}]\n    resource_view: {{ allow: ['harness:tool/bash'] }}"
+            )) else {
+                panic!("{name} must fail");
+            };
+            assert!(
+                err.downcast_ref::<hya_bundle::BundleError>()
+                    .is_some_and(|e| matches!(e, hya_bundle::BundleError::InvalidManifest { .. }))
+            );
+            assert!(err.to_string().contains("selective-agent") && err.to_string().contains(name));
+        }
+        for reserved in ["rewrite", "todo"] {
+            let Err(err) = bundle_advertise_view(&format!(
+                "resource_view: {{ allow: ['harness:tool/bash'], aliases: {{ {reserved}: 'harness:tool/bash' }} }}"
+            )) else {
+                panic!("{reserved} must fail");
+            };
+            assert!(
+                err.to_string()
+                    .contains(&format!("`{reserved}` is reserved"))
+            );
+        }
         Ok(())
     }
 
     #[test]
-    fn exclusive_tool_is_offered_alone_and_describes_the_hidden_tools()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn exclusive_tool_and_headless_human_tool_filtering() -> Result<(), Box<dyn std::error::Error>>
+    {
         let resources = bundle_advertise_view(
             "resource_view: { allow: ['harness:tool/bash', 'harness:tool/read'] }",
         )?;
         for (depth, expected) in [(0, vec!["bash"]), (1, vec!["bash", "report"])] {
             let offered = filtered_tool_schemas(&resources, true, depth, Some("bash"), &model());
-            let mut names = offered
-                .iter()
-                .map(|schema| schema.name.as_str())
-                .collect::<Vec<_>>();
+            let mut names: Vec<_> = offered.iter().map(|s| s.name.as_str()).collect();
             names.sort_unstable();
-            assert_eq!(names, expected, "depth {depth}");
+            assert_eq!(names, expected);
             let bash = offered
                 .iter()
-                .find(|schema| schema.name.as_str() == "bash")
-                .ok_or("bash is offered")?;
-            let read = resources
-                .resolve_tool("read")
-                .ok_or("read stays executable")?
-                .tool
-                .schema();
-            assert!(bash.description.contains("\n\n### read\n"));
-            assert!(bash.description.contains(&read.input_schema.to_string()));
-            assert!(!bash.description.contains("### bash"));
-            assert!(!bash.description.contains("### report"));
+                .find(|s| s.name.as_str() == "bash")
+                .ok_or("bash")?;
+            let read = resources.resolve_tool("read").ok_or("read")?.tool.schema();
+            assert!(
+                bash.description.contains("\n\n### read\n")
+                    && bash.description.contains(&read.input_schema.to_string())
+                    && !bash.description.contains("### bash")
+                    && !bash.description.contains("### report")
+            );
         }
-        Ok(())
-    }
+        assert_eq!(
+            hidden_behind(
+                &filtered_tool_schemas(&resources, true, 0, Some("bash"), &model()),
+                Some("bash"),
+                "read"
+            ),
+            Some("bash")
+        );
+        assert_eq!(
+            hidden_behind(
+                &filtered_tool_schemas(&resources, true, 1, Some("bash"), &model()),
+                Some("bash"),
+                "report"
+            ),
+            None
+        );
+        assert_eq!(
+            hidden_behind(
+                &filtered_tool_schemas(&resources, true, 0, Some("absent"), &model()),
+                Some("absent"),
+                "read"
+            ),
+            None
+        );
 
-    #[test]
-    fn headless_surface_omits_human_tools_and_their_exclusive_descriptions()
-    -> Result<(), Box<dyn std::error::Error>> {
+        // Exclusive tool outside offered set changes nothing.
+        for fields in [
+            "resource_view: { allow: ['harness:tool/read'] }",
+            "advertise: [read]\n    resource_view: { allow: ['harness:tool/bash', 'harness:tool/read'] }",
+        ] {
+            let view = bundle_advertise_view(fields)?;
+            assert_eq!(
+                filtered_tool_schemas(&view, true, 0, Some("bash"), &model()),
+                filtered_tool_schemas(&view, true, 0, None, &model())
+            );
+        }
+
+        // Headless surface omits human tools (canonical or aliased) from schemas and exclusive docs.
         for aliases in [
             "",
             ", aliases: { ask: 'harness:tool/ask_user', approve: 'harness:tool/plan_exit' }",
         ] {
-            let resources = bundle_advertise_view(&format!(
+            let view = bundle_advertise_view(&format!(
                 "resource_view: {{ allow: ['harness:tool/bash', 'harness:tool/ask_user', 'harness:tool/plan_exit']{aliases} }}"
             ))?;
-            let human_tools = if aliases.is_empty() {
+            let human = if aliases.is_empty() {
                 ["ask_user", "plan_exit"]
             } else {
                 ["ask", "approve"]
             };
-            for depth in [0, 1, crate::MAX_SUBAGENT_DEPTH] {
-                for interactive in [false, true] {
-                    let offered =
-                        filtered_tool_schemas(&resources, interactive, depth, None, &model());
-                    for name in human_tools {
-                        assert_eq!(
-                            offered.iter().any(|tool| tool.name.as_str() == name),
-                            interactive
-                        );
-                        assert!(
-                            resources.resolve_tool(name).is_some(),
-                            "dispatch is unchanged"
-                        );
-                    }
-                    let exclusive = filtered_tool_schemas(
-                        &resources,
-                        interactive,
-                        depth,
-                        Some("bash"),
-                        &model(),
+            for interactive in [false, true] {
+                let offered = filtered_tool_schemas(&view, interactive, 0, None, &model());
+                let exclusive =
+                    filtered_tool_schemas(&view, interactive, 0, Some("bash"), &model());
+                let bash = exclusive
+                    .iter()
+                    .find(|t| t.name.as_str() == "bash")
+                    .ok_or("bash")?;
+                for name in human {
+                    assert_eq!(offered.iter().any(|t| t.name.as_str() == name), interactive);
+                    assert_eq!(
+                        bash.description.contains(&format!("### {name}\n")),
+                        interactive
                     );
-                    let bash = exclusive
-                        .iter()
-                        .find(|tool| tool.name.as_str() == "bash")
-                        .ok_or("bash is offered")?;
-                    for name in human_tools {
-                        assert_eq!(
-                            bash.description.contains(&format!("### {name}\n")),
-                            interactive
-                        );
-                    }
+                    assert!(view.resolve_tool(name).is_some());
                 }
             }
         }
@@ -452,152 +493,30 @@ mod tests {
     }
 
     #[test]
-    fn a_hidden_tool_names_the_exclusive_tool_it_is_behind()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let resources = bundle_advertise_view(
-            "resource_view: { allow: ['harness:tool/bash', 'harness:tool/read'] }",
-        )?;
-        let offered =
-            |depth, exclusive| filtered_tool_schemas(&resources, true, depth, exclusive, &model());
-        assert_eq!(
-            hidden_behind(&offered(0, Some("bash")), Some("bash"), "read"),
-            Some("bash")
-        );
-        assert_eq!(
-            hidden_behind(&offered(0, Some("bash")), Some("bash"), "bash"),
-            None
-        );
-        assert_eq!(
-            hidden_behind(&offered(1, Some("bash")), Some("bash"), "report"),
-            None
-        );
-        assert_eq!(hidden_behind(&offered(0, None), None, "read"), None);
-        assert_eq!(
-            hidden_behind(&offered(0, Some("absent")), Some("absent"), "read"),
-            None
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn exclusive_tool_outside_the_offered_set_changes_nothing()
-    -> Result<(), Box<dyn std::error::Error>> {
-        for (fields, exclusive) in [
-            ("resource_view: { allow: ['harness:tool/read'] }", "bash"),
-            (
-                "advertise: [read]\n    resource_view: { allow: ['harness:tool/bash', 'harness:tool/read'] }",
-                "bash",
-            ),
-        ] {
-            let resources = bundle_advertise_view(fields)?;
-            assert_eq!(
-                filtered_tool_schemas(&resources, true, 0, Some(exclusive), &model()),
-                filtered_tool_schemas(&resources, true, 0, None, &model()),
-                "{fields}"
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn missing_and_empty_advertise_preserve_depth_filtering()
-    -> Result<(), Box<dyn std::error::Error>> {
-        for fields in ["", "advertise: []"] {
-            let resources = bundle_advertise_view(fields)?;
-            for depth in [0, 1, crate::MAX_SUBAGENT_DEPTH] {
-                let expected = resources
-                    .tool_schemas()
-                    .into_iter()
-                    .filter(|schema| advertise_tool_at_depth(schema.name.as_str(), depth, &model()))
-                    .map(|schema| schema.name.to_string())
-                    .collect::<BTreeSet<_>>();
-                let actual = filtered_tool_schemas(&resources, true, depth, None, &model())
-                    .into_iter()
-                    .map(|schema| schema.name.to_string())
-                    .collect::<BTreeSet<_>>();
-                assert_eq!(actual, expected);
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn advertise_rejects_unknown_or_excluded_tools() {
-        for name in ["missing-tool", "write"] {
-            let result = bundle_advertise_view(&format!(
-                "advertise: [{name}]\n    resource_view: {{ allow: ['harness:tool/bash'] }}"
-            ));
-            let Err(error) = result else {
-                panic!("{name} must not compile");
-            };
-            assert!(
-                error
-                    .downcast_ref::<hya_bundle::BundleError>()
-                    .is_some_and(|error| matches!(
-                        error,
-                        hya_bundle::BundleError::InvalidManifest { .. }
-                    ))
-            );
-            let message = error.to_string();
-            assert!(
-                message.contains("selective-agent") && message.contains(name),
-                "{message}"
-            );
-        }
-    }
-
-    /// The kernel loop handles `rewrite` and `todo` calls by name, so no other
-    /// tool may be offered under either name.
-    #[test]
-    fn a_tool_cannot_be_offered_under_a_kernel_tool_name() {
-        for name in ["rewrite", "todo"] {
-            let Err(error) = bundle_advertise_view(&format!(
-                "resource_view: {{ allow: ['harness:tool/bash'], aliases: {{ {name}: 'harness:tool/bash' }} }}"
-            )) else {
-                panic!("an alias named {name} must not compile");
-            };
-            let message = error.to_string();
-            assert!(
-                message.contains(&format!("`{name}` is reserved")),
-                "{message}"
-            );
-        }
-    }
-
-    /// Pin explicit overrides, the unsuffixed default, and no silent
-    /// inheritance for an invalid variant.
-    #[test]
-    fn model_variant_overrides_preserves_default_and_rejects_invalid_variants() {
+    fn reasoning_variants_depth_cap_and_gpt_apply_patch_rules() {
         let default = Some(ReasoningEffort::Low);
-
         assert_eq!(
             reasoning_for_model(&ModelRef::new("fallback#high"), default),
-            Some(ReasoningEffort::High),
+            Some(ReasoningEffort::High)
         );
         assert_eq!(
             reasoning_for_model(&ModelRef::new("fallback"), default),
-            default,
+            default
         );
         assert_eq!(
             reasoning_for_model(&ModelRef::new("fallback#unknown"), default),
-            None,
+            None
         );
-    }
 
-    #[test]
-    fn orchestration_tools_disappear_at_the_depth_cap() {
-        // Above the cap everything normal is advertised.
         assert!(advertise_tool_at_depth("task", 1, &model()));
         assert!(advertise_tool_at_depth("archive", 0, &model()));
-        // At the hardcoded cap (ADR-0015) the orchestration plane vanishes…
         for name in ORCHESTRATION_TOOLS {
-            assert!(
-                !advertise_tool_at_depth(name, crate::MAX_SUBAGENT_DEPTH, &model()),
-                "{name} must not be advertised at depth {}",
-                crate::MAX_SUBAGENT_DEPTH
-            );
+            assert!(!advertise_tool_at_depth(
+                name,
+                crate::MAX_SUBAGENT_DEPTH,
+                &model()
+            ));
         }
-        // …while communication and coding tools stay.
         assert!(advertise_tool_at_depth(
             "send",
             crate::MAX_SUBAGENT_DEPTH,
@@ -608,26 +527,19 @@ mod tests {
             crate::MAX_SUBAGENT_DEPTH,
             &model()
         ));
-        // report belongs to subagents only: hidden at depth 0, present at
-        // every subagent depth including the cap.
-        assert!(
-            !advertise_tool_at_depth("report", 0, &model()),
-            "the main agent must never see the report schema"
-        );
+        assert!(!advertise_tool_at_depth("report", 0, &model()));
         assert!(advertise_tool_at_depth("report", 1, &model()));
-        assert!(
-            advertise_tool_at_depth("report", crate::MAX_SUBAGENT_DEPTH, &model()),
-            "subagents at the depth cap still report to finish their episode"
-        );
-    }
+        assert!(advertise_tool_at_depth(
+            "report",
+            crate::MAX_SUBAGENT_DEPTH,
+            &model()
+        ));
 
-    #[test]
-    fn apply_patch_is_advertised_to_gpt_family_models_only() {
-        let builtins = hya_tool_loader::builtins()
+        let builtins: BTreeSet<_> = hya_tool_loader::builtins()
             .schemas()
             .into_iter()
-            .map(|schema| schema.name.as_str().to_string())
-            .collect::<BTreeSet<_>>();
+            .map(|s| s.name.to_string())
+            .collect();
         assert_eq!(builtins.len(), 25);
         for (model, gpt) in [
             ("openai/gpt-5.5", true),
@@ -643,7 +555,7 @@ mod tests {
                 assert_eq!(
                     advertise_tool(name, &model),
                     name != "apply_patch" || gpt,
-                    "{name} for {model:?}"
+                    "{name} {model:?}"
                 );
             }
         }
