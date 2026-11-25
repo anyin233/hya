@@ -4,8 +4,7 @@
 
 use hya_workflow::{
     FailurePolicy, MAX_WORKFLOW_MODEL_ID_CHARS, MAX_WORKFLOW_REASONING_CHARS,
-    WorkflowCompileErrorKind, WorkflowModelAssignment, WorkflowModelCandidate, WorkflowSource,
-    compile,
+    WorkflowCompileErrorKind, WorkflowSource, compile,
 };
 
 const LINEAR_WORKFLOW: &str = r#"---
@@ -73,7 +72,7 @@ fn linear_document_compiles_to_exact_normalized_plan() {
             .collect::<Vec<_>>(),
         [["plan"], ["impl"], ["review"]]
     );
-    assert_eq!(plan.stages()[0].predecessor_indices(), &[]);
+    assert!(plan.stages()[0].predecessor_indices().is_empty());
     assert_eq!(plan.stages()[1].predecessor_indices(), &[0]);
     assert_eq!(plan.stages()[2].predecessor_indices(), &[1]);
     assert_eq!(plan.stages()[0].title(), Some("Produce plan"));
@@ -295,11 +294,24 @@ flowchart TD
   worker --> loop
 "#;
 
-/// Public model-route values remain importable without reaching into private modules.
+/// Legacy imports use the same types returned by the compiler and consumed by the runtime.
 #[test]
+#[allow(
+    deprecated,
+    reason = "verify the published compiler aliases still work"
+)]
 fn model_route_values_are_public() {
-    let _candidate: Option<WorkflowModelCandidate> = None;
-    let _assignment: Option<WorkflowModelAssignment> = None;
+    let compiled = compile(WorkflowSource::new("routed.hya.md", MODEL_ROUTED_WORKFLOW)).unwrap();
+    let revision: hya_workflow::WorkflowRevision = compiled.revision();
+    let assignment: &hya_workflow::WorkflowModelAssignment =
+        compiled.plan().stages()[0].model().unwrap();
+    let candidate: &hya_workflow::WorkflowModelCandidate = &assignment.fallback()[0];
+
+    assert_eq!(
+        revision,
+        hya_proto::WorkflowRevision::from_bytes(revision.as_bytes())
+    );
+    assert_eq!(candidate.id(), "fallback-model");
 }
 
 /// Worker and verifier model blocks retain declaration order and effort values.
@@ -454,10 +466,15 @@ fn model_route_fields_are_bounded_before_runtime() {
 /// Unknown keys inside a model assignment fail the existing frontmatter gate.
 #[test]
 fn unknown_nested_model_key_is_rejected() {
-    let source = duplicate_model_route_source("id: model\nunexpected: value");
-    let error = compile(WorkflowSource::new("unknown-model-key.hya.md", &source)).unwrap_err();
-    assert_eq!(error.kind(), WorkflowCompileErrorKind::Frontmatter);
-    assert!(error.message().contains("unknown field"), "{error}");
+    for route in [
+        "id: model\nunexpected: value",
+        "id: model\nfallback:\n  - id: fallback\n    unexpected: value",
+    ] {
+        let source = duplicate_model_route_source(route);
+        let error = compile(WorkflowSource::new("unknown-model-key.hya.md", &source)).unwrap_err();
+        assert_eq!(error.kind(), WorkflowCompileErrorKind::Frontmatter);
+        assert!(error.message().contains("unknown field"), "{error}");
+    }
 }
 
 /// Unknown non-empty effort labels remain available for runtime capability checks.

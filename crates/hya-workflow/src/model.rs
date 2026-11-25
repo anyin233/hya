@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use hya_proto::{WorkflowModelAssignment, WorkflowRevision};
 use serde::Deserialize;
 /// Maximum Unicode scalar values in a Workflow route model id.
 pub const MAX_WORKFLOW_MODEL_ID_CHARS: usize = 256;
@@ -83,60 +84,27 @@ impl std::fmt::Display for StageMode {
     }
 }
 
-/// One model candidate in a Workflow assignment's ordered fallback chain.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowModelCandidate {
-    pub(crate) id: String,
-    #[serde(default)]
-    pub(crate) reasoning: Option<String>,
+// Workflow YAML rejects typos in model assignments while the shared wire types
+// continue to accept additive fields in older readers.
+pub(crate) fn deserialize_model_assignment<'de, D>(
+    deserializer: D,
+) -> Result<Option<WorkflowModelAssignment>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut unknown_field = None;
+    let assignment = serde_ignored::deserialize(deserializer, |path| {
+        if unknown_field.is_none() {
+            unknown_field = Some(path.to_string());
+        }
+    })?;
+    if let Some(path) = unknown_field {
+        return Err(serde::de::Error::custom(format_args!(
+            "unknown field `{path}`"
+        )));
+    }
+    Ok(assignment)
 }
-
-impl WorkflowModelCandidate {
-    /// Base model reference without a Workflow variant suffix.
-    #[must_use]
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    /// Author-provided reasoning effort label, before runtime capability parsing.
-    #[must_use]
-    pub fn reasoning(&self) -> Option<&str> {
-        self.reasoning.as_deref()
-    }
-}
-
-/// Preferred model and ordered fallback candidates for one Workflow role.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowModelAssignment {
-    pub(crate) id: String,
-    #[serde(default)]
-    pub(crate) reasoning: Option<String>,
-    #[serde(default)]
-    pub(crate) fallback: Vec<WorkflowModelCandidate>,
-}
-
-impl WorkflowModelAssignment {
-    /// Preferred base model reference without a Workflow variant suffix.
-    #[must_use]
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    /// Preferred author-provided reasoning effort label.
-    #[must_use]
-    pub fn reasoning(&self) -> Option<&str> {
-        self.reasoning.as_deref()
-    }
-
-    /// Ordered fallback tail after the preferred model.
-    #[must_use]
-    pub fn fallback(&self) -> &[WorkflowModelCandidate] {
-        &self.fallback
-    }
-}
-
 /// Independent verifier contract for one loop Stage.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -145,7 +113,7 @@ pub struct VerifySpec {
     pub(crate) until: String,
     #[serde(default = "default_max_iterations")]
     pub(crate) max_iterations: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_model_assignment")]
     pub(crate) model: Option<WorkflowModelAssignment>,
 }
 
@@ -293,27 +261,6 @@ impl WorkflowPlan {
     #[must_use]
     pub fn stage_index(&self, id: &str) -> Option<usize> {
         self.stages.iter().position(|stage| stage.id == id)
-    }
-}
-
-/// Domain-separated digest of one normalized compiled Workflow.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct WorkflowRevision(pub(crate) [u8; 32]);
-
-impl WorkflowRevision {
-    /// Raw SHA-256 revision bytes.
-    #[must_use]
-    pub const fn as_bytes(self) -> [u8; 32] {
-        self.0
-    }
-}
-
-impl std::fmt::Display for WorkflowRevision {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for byte in self.0 {
-            write!(formatter, "{byte:02x}")?;
-        }
-        Ok(())
     }
 }
 

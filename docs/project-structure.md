@@ -143,3 +143,4 @@ Loaded from `bundles/presets/*`, `bundles/first-party/*`, and `bundles/internal/
 Lower crates never depend on `hya-backend` or frontend packages; `hya-relay` and
 `hya-updater` have zero dependencies on runtime crates (`hya-core`, `hya-app`,
 `hya-store`).
+`hya-workflow` uses `hya-proto` for compiled Workflow revisions and model assignments.

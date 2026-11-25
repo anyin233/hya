@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use hya_proto::{WorkflowModelAssignment, WorkflowModelCandidate, WorkflowRevision};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -9,7 +10,7 @@ use crate::WorkflowSource;
 use crate::error::WorkflowCompileError;
 use crate::model::{
     CompiledWorkflow, FailurePolicy, StageMode, VerifySpec, WorkflowDefinition, WorkflowLevel,
-    WorkflowModelAssignment, WorkflowModelCandidate, WorkflowPlan, WorkflowRevision, WorkflowStage,
+    WorkflowPlan, WorkflowStage, deserialize_model_assignment,
 };
 
 #[derive(Deserialize)]
@@ -36,7 +37,7 @@ struct AuthorNode {
     mode: StageMode,
     #[serde(default)]
     verify: Option<VerifySpec>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_model_assignment")]
     model: Option<WorkflowModelAssignment>,
     #[serde(default)]
     actor: Option<String>,
@@ -927,7 +928,7 @@ fn canonical_revision(definition: &WorkflowDefinition, plan: &WorkflowPlan) -> W
             );
         }
     }
-    WorkflowRevision(hash.finalize().into())
+    WorkflowRevision::from_bytes(hash.finalize().into())
 }
 
 /// Hash one optional assignment, retaining effort presence and fallback order.

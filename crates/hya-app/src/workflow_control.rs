@@ -20,7 +20,6 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::workflow_catalog::workflow_model_assignment;
 pub use crate::workflow_catalog::{
     FIRST_PARTY_BUNDLE_ID, ResolvedWorkflow, WorkflowCatalog, WorkflowCatalogOwner,
     WorkflowCatalogRoots,
@@ -1059,14 +1058,11 @@ fn workflow_stage_plan(
             agent: hya_proto::AgentName::new(stage.agent()),
             mode: stage.mode().to_string(),
             level: stage.level(),
-            worker_model: stage.model().map(workflow_model_assignment),
+            worker_model: stage.model().cloned(),
             selected_worker_model: prepared
                 .worker_route(index)
                 .and_then(workflow_selected_candidate),
-            verifier_model: stage
-                .verify()
-                .and_then(|verify| verify.model())
-                .map(workflow_model_assignment),
+            verifier_model: stage.verify().and_then(|verify| verify.model()).cloned(),
             selected_verifier_model: prepared
                 .verifier_route(index)
                 .and_then(workflow_selected_candidate),
