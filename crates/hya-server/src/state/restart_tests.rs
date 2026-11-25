@@ -1,7 +1,7 @@
 //! Restart regressions that pause turn admission at the spawn boundary.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[path = "../../tests/it/v1_restart/fixture.rs"]
+#[path = "../../tests/it/support/restart_fixture.rs"]
 mod fixture;
 
 use self::fixture::*;
@@ -71,7 +71,7 @@ async fn stop_while_a_run_is_reserved_waits_for_it_and_nothing_is_admitted() {
     );
     let mut stop =
         tokio::spawn(async move { state.stop_for_restart(Duration::from_secs(2)).await });
-    let returned_early = tokio::time::timeout(Duration::from_millis(50), &mut stop).await;
+    let returned_early = tokio::time::timeout(Duration::from_millis(20), &mut stop).await;
     assert!(
         returned_early.is_err(),
         "stop returned while a reserved server run was still held"

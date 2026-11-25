@@ -112,17 +112,19 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn closed_resolves_after_close_and_at_once_later() {
+    async fn closed_resolves_after_close_and_first_reason_wins() {
         let shutdown = StreamShutdown::default();
+        assert_eq!(shutdown.reason(), None);
         let waiting = tokio::spawn(shutdown.closed());
         tokio::task::yield_now().await;
         assert!(!waiting.is_finished());
         assert!(!shutdown.is_closing());
-        shutdown.close(ShutdownReason::Stop);
+        shutdown.close(ShutdownReason::Restart);
+        shutdown.close(ShutdownReason::Signal);
         assert!(waiting.await.is_ok());
         assert!(shutdown.is_closing());
         shutdown.closed().await;
-        assert_eq!(shutdown.reason(), Some(ShutdownReason::Stop));
+        assert_eq!(shutdown.reason(), Some(ShutdownReason::Restart));
     }
 
     #[test]

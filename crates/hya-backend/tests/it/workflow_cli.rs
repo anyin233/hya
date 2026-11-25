@@ -1,767 +1,217 @@
-//! Integration tests for `hya workflow run`: the CLI run path.
-//!
-//! These tests execute REAL `workflow run` processes against the offline dev
-//! provider. The dev provider echoes each member's directive back as its final
-//! assistant text, so a joining stage's report proves exactly which upstream
-//! sections were rendered into its directive — the end-to-end fan-in contract.
+//! Real-binary integration tests for `hya workflow`: offline fan-in run,
+//! cross-process durable Session handoff, and the shipped Argus WorkflowBundle.
+//! Pure input/revision parsing, output formatting, and read-only catalog scope
+//! resolution live in `src/workflow_cmd.rs` unit tests.
 
-use std::ffi::OsString;
 use std::fs;
-use std::path::PathBuf;
-use std::process::{Command, Output};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
+use std::process::Output;
 
 use hya_bundle::{BundleSource, write_public_package};
+use serde_json::Value;
 
-/// Fan-out level of two branches joined by one downstream Stage.
-const FAN_JOIN_WORKFLOW: &str = r#"---
-kind: Workflow
-name: fan-join
-description: Two parallel branches joined into one merge Stage.
-inputs:
-  topic: Subject every branch studies.
-nodes:
-  branch-a:
-    agent: hya-scout
-    directive: alpha branch on {{input.topic}}
-  branch-b:
-    agent: hya-task
-    directive: beta branch on {{input.topic}}
-  merge:
-    agent: hya-task
-    directive: MERGED REPORT
----
-flowchart TD
-  branch-a & branch-b --> merge
-"#;
+use crate::common::{Scratch, TestResult, assert_success, combined_text};
 
-const SINGLE_INPUT_WORKFLOW: &str = r#"---
-kind: Workflow
-name: echo-input
-description: One Stage whose directive embeds the required input.
-inputs:
-  v: Any value, including equals signs.
-nodes:
-  capture:
-    agent: hya-task
-    directive: captured={{input.v}}
----
-flowchart TD
-  capture
-"#;
+const FAN_JOIN_WF: &str = "---\nkind: Workflow\nname: fan-join\ndescription: Two parallel branches joined.\ninputs:\n  topic: Subject.\nnodes:\n  branch-a: { agent: hya-scout, directive: 'alpha {{input.topic}}' }\n  branch-b: { agent: hya-task, directive: 'beta {{input.topic}}' }\n  merge: { agent: hya-task, directive: MERGED REPORT }\n---\nflowchart TD\n  branch-a & branch-b --> merge\n";
+const ECHO_WF: &str = "---\nkind: Workflow\nname: echo-input\ndescription: Echo.\ninputs:\n  v: Any value.\nnodes:\n  capture: { agent: hya-task, directive: 'captured={{input.v}}' }\n---\nflowchart TD\n  capture\n";
+const ROUTED_WF: &str = "---\nkind: Workflow\nname: routed\ndescription: Routed.\nnodes:\n  execute: { agent: hya-task, directive: Execute, model: { id: hya/offline } }\n---\nflowchart TD\n  execute\n";
 
-const ROUTED_WORKFLOW: &str = r#"---
-kind: Workflow
-name: routed
-description: One Stage with an explicit offline model route.
-nodes:
-  execute:
-    agent: hya-task
-    directive: Execute through the routed model.
-    model:
-      id: hya/offline
----
-flowchart TD
-  execute
-"#;
-
-struct IsolatedEnv {
-    root: PathBuf,
-    home: PathBuf,
-    xdg_config: PathBuf,
-    hya_config: PathBuf,
-    workdir: PathBuf,
-    path: Option<OsString>,
+fn write_wf(s: &Scratch, file: &str, body: &str) -> Result<(), std::io::Error> {
+    let dir = s.0.join(".hya/workflows");
+    fs::create_dir_all(&dir)?;
+    fs::write(dir.join(file), body)
 }
 
-impl IsolatedEnv {
-    /// Fully isolated HOME/config/workdir so runs never touch developer state.
-    fn new(prefix: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let serial = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "hya-workflow-cli-{prefix}-{}-{nanos}-{serial}",
-            std::process::id()
-        ));
-        let home = root.join("home");
-        let xdg_config = root.join("xdg-config");
-        let hya_config = root.join("hya-config");
-        let workdir = root.join("workdir");
-        std::fs::create_dir_all(&home)?;
-        std::fs::create_dir_all(&xdg_config)?;
-        std::fs::create_dir_all(&hya_config)?;
-        std::fs::create_dir_all(workdir.join(".hya").join("workflows"))?;
-        Ok(Self {
-            root,
-            home,
-            xdg_config,
-            hya_config,
-            workdir,
-            path: std::env::var_os("PATH"),
-        })
+fn wf(s: &Scratch, db: Option<&Path>, args: &[&str]) -> Result<Output, std::io::Error> {
+    let mut cmd = s.hya();
+    if let Some(db) = db {
+        cmd.arg("--db").arg(db);
+    }
+    cmd.arg("workflow").args(args).output()
+}
+
+fn wf_json(
+    label: &str,
+    s: &Scratch,
+    db: Option<&Path>,
+    args: &[&str],
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let out = wf(s, db, args)?;
+    assert_success(label, &out);
+    Ok(serde_json::from_slice(&out.stdout)?)
+}
+
+#[test]
+fn cli_run_fan_join_routed_models_and_read_only_catalog() -> TestResult {
+    let s = Scratch::new("hya-wf-run")?;
+    write_wf(&s, "fan-join.hya.md", FAN_JOIN_WF)?;
+    write_wf(&s, "routed.hya.md", ROUTED_WF)?;
+    let db = s.0.join("sessions.db");
+
+    // Malformed runtime config must not affect read-only catalog inspection or create a DB.
+    let cfg = s.0.join("config/hya");
+    fs::create_dir_all(&cfg)?;
+    fs::write(cfg.join("config.yaml"), "providers: [\n")?;
+    let info = wf(&s, Some(&db), &["info", "routed"])?;
+    assert_success("info routed", &info);
+    assert!(
+        String::from_utf8(info.stdout)?.contains("worker model: hya/offline reasoning=default")
+            && info.stderr.is_empty()
+            && !db.exists()
+    );
+    fs::remove_file(cfg.join("config.yaml"))?;
+
+    let fan = wf(&s, None, &["run", "fan-join", "--input", "topic=engines"])?;
+    assert_success("run fan-join", &fan);
+    let fan_out = String::from_utf8(fan.stdout)?;
+    for needle in [
+        "workflow fan-join: completed",
+        "\n  branch-a [completed] agent=hya-scout members=1",
+        "\n  branch-b [completed] agent=hya-task members=1",
+        "\n  merge [completed] agent=hya-task members=1",
+    ] {
+        assert!(fan_out.contains(needle), "missing {needle:?}:\n{fan_out}");
     }
 
-    fn write_workflow(&self, file_name: &str, body: &str) -> Result<(), std::io::Error> {
-        fs::write(
-            self.workdir.join(".hya").join("workflows").join(file_name),
-            body,
-        )
-    }
+    let routed = wf(&s, None, &["run", "routed"])?;
+    assert_success("run routed", &routed);
+    let r_out = String::from_utf8(routed.stdout)?;
+    assert!(
+        r_out.contains("selected worker model: #0 hya/offline reasoning=none")
+            && r_out.contains("route outcome: role=worker iteration=0 step=0 candidate=#0 model=hya/offline reasoning=none class=none"),
+        "{r_out}"
+    );
+    Ok(())
 }
 
-impl Drop for IsolatedEnv {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
-    }
-}
+#[test]
+fn cli_use_run_and_state_share_durable_session_and_reject_bad_inputs() -> TestResult {
+    let s = Scratch::new("hya-wf-session")?;
+    write_wf(&s, "echo-input.hya.md", ECHO_WF)?;
+    write_wf(&s, "fan-join.hya.md", FAN_JOIN_WF)?;
+    let db = s.0.join("sessions.db");
 
-/// Return the repository root that owns the shipped WorkflowBundle examples.
-fn repository_root() -> Result<PathBuf, std::io::Error> {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(std::path::Path::parent)
-        .map(std::path::Path::to_path_buf)
-        .ok_or_else(|| std::io::Error::other("hya-backend must live under <repository>/crates"))
-}
-
-fn workflow_command(env: &IsolatedEnv) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_hya"));
-    command.env_clear();
-    if let Some(path) = &env.path {
-        command.env("PATH", path);
-    }
-    command
-        .env("HOME", &env.home)
-        .env("XDG_CONFIG_HOME", &env.xdg_config)
-        .env("HYA_CONFIG_HOME", &env.hya_config)
-        .env("NO_COLOR", "1")
-        .current_dir(&env.workdir);
-    command
-}
-
-fn combined_text(output: &Output) -> String {
-    format!(
-        "stdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
-}
-
-fn write_catalog_bundle(root: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-    let dir = root.join(".hya/bundles/catalog");
-    fs::create_dir_all(dir.join("workflows"))?;
-    fs::write(
-        dir.join("bundle.yaml"),
-        "kind: Bundle\nidentity: {id: test/catalog, version: 1.0.0, publisher: test}\nagents: [{id: catalog-worker, role: subagent}]\nworkflow: {id: echo-input, path: workflows/echo-input.hya.md}\n",
+    let missing = wf(&s, Some(&db), &["run", "echo-input"])?;
+    assert!(
+        !missing.status.success()
+            && combined_text(&missing).contains("required Workflow input `v` was not provided")
+    );
+    let unknown = wf(
+        &s,
+        Some(&db),
+        &["run", "echo-input", "--input", "v=ok", "--input", "ghost=1"],
     )?;
-    fs::write(
-        dir.join("workflows/echo-input.hya.md"),
-        SINGLE_INPUT_WORKFLOW.replace("hya-task", "catalog-worker"),
+    assert!(
+        !unknown.status.success()
+            && combined_text(&unknown).contains("Workflow input `ghost` is not declared")
+    );
+
+    let init = wf(
+        &s,
+        Some(&db),
+        &["run", "echo-input", "--input", "v=a=b=c&d=e", "--json"],
     )?;
-    Ok(())
-}
+    assert_success("initial run", &init);
+    assert!(!String::from_utf8(init.stdout)?.contains("a=b=c&d=e"));
 
-/// Inspection must resolve the exact identity accepted by a real run, without
-/// writing or locking the existing database.
-fn assert_catalog_matches_run(
-    env: &IsolatedEnv,
-    cwd: &std::path::Path,
-    warning: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let db = env.root.join("sessions.db");
-    let before = fs::read(&db)?;
-    let mut identity = None;
-    for args in [
-        vec!["workflow", "list", "--json"],
-        vec!["workflow", "info", "echo-input", "--json"],
-    ] {
-        let output = workflow_command(env)
-            .current_dir(cwd)
-            .arg("--db")
-            .arg(&db)
-            .args(args)
-            .output()?;
-        assert!(output.status.success(), "{}", combined_text(&output));
-        if let Some(warning) = warning {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(
-                stderr.contains("warning") && stderr.contains(warning),
-                "{stderr}"
-            );
-        }
-        let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-        let found = if value["kind"] == "list" {
-            value["workflows"]
-                .as_array()
-                .and_then(|rows| rows.iter().find(|row| row["name"] == "echo-input"))
-                .map(|row| serde_json::json!({"name": row["name"], "source": row["source"], "revision": row["revision"]}))
-        } else {
-            Some(value["workflow"]["identity"].clone())
-        };
-        assert!(found.is_some(), "missing echo-input: {value}");
-        if let Some(identity) = &identity {
-            assert_eq!(found.as_ref(), Some(identity));
-        }
-        identity = found;
-    }
-    assert_eq!(fs::read(&db)?, before, "inspection modified the database");
-    assert!(!env.hya_config.join("config.yaml").exists());
-    assert!(!PathBuf::from(format!("{}.lock", db.display())).exists());
-    assert!(!PathBuf::from(format!("{}.runtime-owner.lock", db.display())).exists());
-    let run = workflow_command(env)
-        .current_dir(cwd)
-        .arg("--db")
-        .arg(&db)
-        .args([
-            "workflow",
-            "run",
-            "echo-input",
-            "--input",
-            "v=scope",
-            "--json",
-        ])
-        .output()?;
-    assert!(run.status.success(), "{}", combined_text(&run));
-    let result: serde_json::Value = serde_json::from_slice(&run.stdout)?;
-    assert_eq!(
-        Some(&result["result"]["run"]["workflow"]),
-        identity.as_ref()
-    );
-    assert_eq!(result["result"]["run"]["status"], "completed");
-    Ok(())
-}
-
-async fn register_project(
-    env: &IsolatedEnv,
-    roots: &[PathBuf],
-) -> Result<(), Box<dyn std::error::Error>> {
-    let db = env.root.join("sessions.db");
-    let store = hya_store::SessionStore::connect(&db.to_string_lossy()).await?;
-    store
-        .create_project(
-            "catalog",
-            &roots
-                .iter()
-                .map(|root| root.to_string_lossy().into_owned())
-                .collect::<Vec<_>>(),
-        )
-        .await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn cli_catalog_matches_run_from_project_subdirectory()
--> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("catalog-subdirectory")?;
-    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
-    let cwd = env.workdir.join("src/nested");
-    fs::create_dir_all(&cwd)?;
-    register_project(&env, std::slice::from_ref(&env.workdir)).await?;
-    assert_catalog_matches_run(&env, &cwd, None)
-}
-
-#[tokio::test]
-async fn cli_catalog_matches_run_in_an_unregistered_directory()
--> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("catalog-unregistered")?;
-    write_catalog_bundle(&env.workdir)?;
-    // The database exists but holds no Project for this directory.
-    let db = env.root.join("sessions.db");
-    drop(hya_store::SessionStore::connect(&db.to_string_lossy()).await?);
-    assert_catalog_matches_run(&env, &env.workdir, None)
-}
-
-#[tokio::test]
-async fn cli_catalog_matches_run_from_second_project_root() -> Result<(), Box<dyn std::error::Error>>
-{
-    let env = IsolatedEnv::new("catalog-second-root")?;
-    let other = env.root.join("other");
-    write_catalog_bundle(&other)?;
-    register_project(&env, &[env.workdir.clone(), other]).await?;
-    assert_catalog_matches_run(&env, &env.workdir, None)
-}
-
-#[tokio::test]
-async fn cli_catalog_matches_run_beside_malformed_project_bundle()
--> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("catalog-malformed")?;
-    write_catalog_bundle(&env.workdir)?;
-    let broken = env.workdir.join(".hya/bundles/broken");
-    fs::create_dir_all(&broken)?;
-    fs::write(broken.join("bundle.yaml"), "kind: [\n")?;
-    register_project(&env, std::slice::from_ref(&env.workdir)).await?;
-    assert_catalog_matches_run(&env, &env.workdir, Some("broken"))
-}
-
-#[tokio::test]
-async fn cli_catalog_matches_run_with_unreadable_registry_row()
--> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("catalog-unreadable")?;
-    write_catalog_bundle(&env.workdir)?;
-    let source = BundleSource::read_directory(env.workdir.join(".hya/bundles/catalog"))?;
-    let package = env.root.join("catalog.hyabundle");
-    fs::write(&package, write_public_package(&source)?)?;
-    let installed = workflow_command(&env)
-        .args(["bundle", "install", "-y"])
-        .arg(package)
-        .output()?;
-    assert!(installed.status.success(), "{}", combined_text(&installed));
-    fs::remove_dir_all(env.workdir.join(".hya/bundles"))?;
-    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
-    let registry = env.home.join(".local/share/hya/bundles/registry.sqlite3");
-    let corrupted = Command::new("python3").args(["-c", "import sqlite3,sys\nwith sqlite3.connect(sys.argv[1]) as db:\n db.execute(\"UPDATE installed_bundle SET prepared_bytes=x'00' WHERE bundle_id='test/catalog'\")"]).arg(registry).output()?;
-    assert!(corrupted.status.success(), "{}", combined_text(&corrupted));
-    register_project(&env, std::slice::from_ref(&env.workdir)).await?;
-    assert_catalog_matches_run(&env, &env.workdir, Some("test/catalog"))
-}
-
-#[test]
-fn cli_run_reports_durable_fan_out_and_join_projection() -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("fan-join")?;
-    env.write_workflow("fan-join.hya.md", FAN_JOIN_WORKFLOW)?;
-
-    let output = workflow_command(&env)
-        .args(["workflow", "run", "fan-join", "--input", "topic=engines"])
-        .output()?;
-    assert!(
-        output.status.success(),
-        "workflow run must exit 0: {}",
-        combined_text(&output)
-    );
-    let stdout = String::from_utf8(output.stdout)?;
-
-    assert!(
-        stdout.contains("workflow fan-join: completed"),
-        "missing overall status header:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("\n  branch-a [completed] agent=hya-scout members=1"),
-        "branch-a Stage row missing:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("\n  branch-b [completed] agent=hya-task members=1"),
-        "branch-b Stage row missing:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("\n  merge [completed] agent=hya-task members=1"),
-        "merge Stage row missing:\n{stdout}"
-    );
-    Ok(())
-}
-
-#[test]
-fn cli_info_and_run_print_requested_selected_and_outcome_routes()
--> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("routed-model")?;
-    env.write_workflow("routed.hya.md", ROUTED_WORKFLOW)?;
-
-    let info = workflow_command(&env)
-        .args(["workflow", "info", "routed"])
-        .output()?;
-    assert!(
-        info.status.success(),
-        "workflow info must exit 0: {}",
-        combined_text(&info)
-    );
-    let info_stdout = String::from_utf8(info.stdout)?;
-    assert!(
-        info_stdout.contains("worker model: hya/offline reasoning=default"),
-        "requested route missing from workflow info:\n{info_stdout}"
-    );
-
-    let run = workflow_command(&env)
-        .args(["workflow", "run", "routed"])
-        .output()?;
-    assert!(
-        run.status.success(),
-        "model-routed workflow run must exit 0: {}",
-        combined_text(&run)
-    );
-    let run_stdout = String::from_utf8(run.stdout)?;
-    for expected in [
-        "worker model: hya/offline reasoning=default",
-        "selected worker model: #0 hya/offline reasoning=none",
-        "route outcome: role=worker iteration=0 step=0 candidate=#0 model=hya/offline reasoning=none class=none",
-    ] {
-        assert!(
-            run_stdout.contains(expected),
-            "model-routed workflow output missing `{expected}`:\n{run_stdout}"
-        );
-    }
-    assert!(!run_stdout.contains("provider response"));
-    Ok(())
-}
-
-#[test]
-fn cli_rejects_missing_declared_input_before_any_spawn() -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("missing-input")?;
-    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
-
-    let output = workflow_command(&env)
-        .args(["workflow", "run", "echo-input"])
-        .output()?;
-    assert!(
-        !output.status.success(),
-        "run without the declared input must fail:\n{}",
-        combined_text(&output)
-    );
-    let text = combined_text(&output);
-    assert!(
-        text.contains("required Workflow input `v` was not provided"),
-        "missing-input error not reported clearly:\n{text}"
-    );
-    Ok(())
-}
-
-#[test]
-fn cli_parses_input_values_containing_equals_signs() -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("equals-value")?;
-    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
-
-    let output = workflow_command(&env)
-        .args([
-            "workflow",
-            "run",
-            "echo-input",
-            "--input",
-            "v=a=b=c&d=e",
-            "--json",
-        ])
-        .output()?;
-    assert!(
-        output.status.success(),
-        "k=v parsing with '=' inside the value must succeed: {}",
-        combined_text(&output)
-    );
-
-    // The shared durable result proves the CLI accepted the value and completed
-    // without echoing raw input values into lifecycle state.
-    let stdout = String::from_utf8(output.stdout)?;
-    let value: serde_json::Value = serde_json::from_str(&stdout)?;
-    assert_eq!(value["kind"], "run");
-    assert_eq!(value["result"]["run"]["status"], "completed");
-    assert_eq!(value["result"]["run"]["stages"][0]["status"], "completed");
-    assert!(
-        !stdout.contains("a=b=c&d=e"),
-        "raw Workflow inputs must not enter durable result state: {stdout}"
-    );
-    Ok(())
-}
-
-#[test]
-fn cli_rejects_undeclared_input_keys_before_any_spawn() -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("unknown-input")?;
-    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
-
-    let output = workflow_command(&env)
-        .args([
-            "workflow",
-            "run",
-            "echo-input",
-            "--input",
-            "v=ok",
-            "--input",
-            "ghost=surprise",
-        ])
-        .output()?;
-    assert!(
-        !output.status.success(),
-        "undeclared input key must fail the run:\n{}",
-        combined_text(&output)
-    );
-    let text = combined_text(&output);
-    assert!(
-        text.contains("Workflow input `ghost` is not declared"),
-        "undeclared input error unclear:\n{text}"
-    );
-    Ok(())
-}
-
-/// The shipped Argus source packages, installs, resolves, and runs through public CLI paths.
-#[test]
-fn cli_installs_and_runs_shipped_argus_workflowbundle() -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("argus-example")?;
-    let source =
-        BundleSource::read_directory(repository_root()?.join("bundles/examples/argus-example"))?;
-    let package = env.root.join("hya-argus-example.hyabundle");
-    fs::write(&package, write_public_package(&source)?)?;
-
-    let installed = workflow_command(&env)
-        .args(["bundle", "install", "-y"])
-        .arg(&package)
-        .output()?;
-    assert!(
-        installed.status.success(),
-        "Argus package install must succeed: {}",
-        combined_text(&installed)
-    );
-
-    let info = workflow_command(&env)
-        .args(["workflow", "info", "argus", "--json"])
-        .output()?;
-    assert!(info.status.success(), "{}", combined_text(&info));
-    let info: serde_json::Value = serde_json::from_slice(&info.stdout)?;
-
-    let run = workflow_command(&env)
-        .args([
-            "workflow",
-            "run",
-            "argus",
-            "--input",
-            "request=verify-the-shipped-example",
-            "--json",
-        ])
-        .output()?;
-    assert!(
-        run.status.success(),
-        "installed Argus Workflow must complete: {}",
-        combined_text(&run)
-    );
-    let result: serde_json::Value = serde_json::from_slice(&run.stdout)?;
-    assert_eq!(result["kind"], "run");
-    assert_eq!(result["result"]["run"]["workflow"]["name"], "argus");
-    assert_eq!(
-        result["result"]["run"]["workflow"], info["workflow"]["identity"],
-        "catalog-only inspection and execution must resolve the same installed identity"
-    );
-    assert_eq!(result["result"]["run"]["status"], "completed");
-    assert_eq!(
-        result["result"]["run"]["stages"].as_array().map(Vec::len),
-        Some(10)
-    );
-    Ok(())
-}
-
-/// Selection without an owning Session must fail instead of creating unreachable state.
-#[test]
-fn cli_use_requires_an_existing_session() -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("use-requires-session")?;
-    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
-
-    let output = workflow_command(&env)
-        .args(["workflow", "use", "echo-input"])
-        .output()?;
-    assert!(
-        !output.status.success(),
-        "workflow use without --session must fail:\n{}",
-        combined_text(&output)
-    );
-    assert!(
-        combined_text(&output).contains("--session"),
-        "missing Session error must name --session: {}",
-        combined_text(&output)
-    );
-    Ok(())
-}
-
-/// Read-only catalog commands must not create durable Session rows, and
-/// duplicate input keys must fail before an owning Session is created.
-#[test]
-fn cli_read_only_commands_and_duplicate_inputs_leave_the_database_unchanged()
--> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("read-only-and-duplicate-inputs")?;
-    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
-    let db = env.root.join("sessions.db");
-
-    for args in [
-        vec!["workflow", "list"],
-        vec!["workflow", "info", "echo-input"],
-    ] {
-        let output = workflow_command(&env)
-            .arg("--db")
-            .arg(&db)
-            .args(args)
-            .output()?;
-        assert!(
-            output.status.success(),
-            "read-only Workflow command failed: {}",
-            combined_text(&output)
-        );
-    }
-    assert!(
-        !env.hya_config.join("config.yaml").exists(),
-        "catalog inspection must not bootstrap runtime configuration"
-    );
-    assert!(
-        !env.root
-            .join("home/.local/share/hya/bundles/registry.sqlite3")
-            .exists(),
-        "catalog inspection must not create a bundle registry"
-    );
-    let duplicate = workflow_command(&env)
-        .arg("--db")
-        .arg(&db)
-        .args([
-            "workflow",
-            "run",
-            "echo-input",
-            "--input",
-            "v=first",
-            "--input",
-            "v=second",
-        ])
-        .output()?;
-    assert!(
-        !duplicate.status.success(),
-        "duplicate Workflow input was accepted"
-    );
-    assert!(combined_text(&duplicate).contains("duplicate --input key `v`"));
-
-    assert!(
-        !db.exists(),
-        "catalog reads or rejected input created a database"
-    );
-    Ok(())
-}
-
-#[test]
-fn cli_catalog_inspection_ignores_runtime_configuration() -> Result<(), Box<dyn std::error::Error>>
-{
-    let env = IsolatedEnv::new("catalog-only")?;
-    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
-    let config = env.hya_config.join("config.yaml");
-    // Runtime resolution would report this malformed config and fall back offline.
-    fs::write(&config, "providers: [\n")?;
-    for args in [
-        vec!["workflow", "list", "--json"],
-        vec!["workflow", "info", "echo-input", "--json"],
-    ] {
-        let output = workflow_command(&env).args(args).output()?;
-        assert!(output.status.success(), "{}", combined_text(&output));
-        let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-        assert!(matches!(value["kind"].as_str(), Some("list" | "info")));
-        assert!(output.stderr.is_empty(), "{}", combined_text(&output));
-    }
-    assert_eq!(fs::read_to_string(config)?, "providers: [\n");
-    Ok(())
-}
-
-/// A nameless run has no durable selection unless an owning Session is supplied.
-#[test]
-fn cli_run_without_name_or_session_fails_before_creating_state()
--> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("run-requires-name-or-session")?;
-    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
-    let db = env.root.join("sessions.db");
-
-    let output = workflow_command(&env)
-        .arg("--db")
-        .arg(&db)
-        .args(["workflow", "run", "--input", "v=value"])
-        .output()?;
-    assert!(
-        !output.status.success(),
-        "nameless Workflow run without --session must fail:\n{}",
-        combined_text(&output)
-    );
-    assert!(
-        combined_text(&output).contains("requires NAME unless --session"),
-        "missing binding error was unclear: {}",
-        combined_text(&output)
-    );
-    assert!(
-        !db.exists(),
-        "rejected nameless run created durable Session state"
-    );
-    Ok(())
-}
-/// Separate CLI processes must select and read Workflow state in one durable Session.
-#[test]
-fn cli_use_and_state_share_an_existing_session_across_processes()
--> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("durable-session")?;
-    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
-    env.write_workflow("fan-join.hya.md", FAN_JOIN_WORKFLOW)?;
-    let db = env.root.join("sessions.db");
-
-    let initial = workflow_command(&env)
-        .arg("--db")
-        .arg(&db)
-        .args(["workflow", "run", "echo-input", "--input", "v=seed"])
-        .output()?;
-    assert!(
-        initial.status.success(),
-        "initial Workflow run must create a durable Session: {}",
-        combined_text(&initial)
-    );
-    let sessions = workflow_command(&env)
-        .args(["sessions", "--db"])
-        .arg(&db)
-        .output()?;
-    assert!(
-        sessions.status.success(),
-        "Session listing must succeed: {}",
-        combined_text(&sessions)
-    );
-    let sessions_stdout = String::from_utf8(sessions.stdout)?;
-    let roots = sessions_stdout
+    let sess_out = s.hya().args(["sessions", "--db"]).arg(&db).output()?;
+    assert_success("sessions", &sess_out);
+    let sess_text = String::from_utf8(sess_out.stdout)?;
+    let session = sess_text
         .lines()
-        .filter(|line| line.starts_with("hysec_"))
-        .filter_map(|line| line.split_whitespace().next())
-        .collect::<Vec<_>>();
-    assert_eq!(roots.len(), 1, "only the Workflow root should be listed");
-    let session = roots[0];
+        .find(|l| l.starts_with("hysec_"))
+        .and_then(|l| l.split_whitespace().next())
+        .ok_or("missing root session")?;
 
-    let selected = workflow_command(&env)
-        .arg("--db")
-        .arg(&db)
-        .args([
-            "workflow",
+    assert_eq!(
+        wf_json(
             "use",
-            "fan-join",
-            "--session",
-            session,
-            "--json",
-        ])
-        .output()?;
-    assert!(
-        selected.status.success(),
-        "Workflow selection must bind to the existing Session: {}",
-        combined_text(&selected)
+            &s,
+            Some(&db),
+            &["use", "fan-join", "--session", session, "--json"]
+        )?["state"]["selection"]["name"],
+        "fan-join"
     );
-    let selected_json: serde_json::Value = serde_json::from_slice(&selected.stdout)?;
-    assert_eq!(selected_json["state"]["selection"]["name"], "fan-join");
-
-    let selected_run = workflow_command(&env)
-        .arg("--db")
-        .arg(&db)
-        .args([
-            "workflow",
+    let run = wf_json(
+        "run",
+        &s,
+        Some(&db),
+        &[
             "run",
             "--session",
             session,
             "--input",
             "topic=durable",
             "--json",
-        ])
-        .output()?;
-    assert!(
-        selected_run.status.success(),
-        "Workflow run must use the existing Session selection: {}",
-        combined_text(&selected_run)
-    );
-    let selected_run_json: serde_json::Value = serde_json::from_slice(&selected_run.stdout)?;
+        ],
+    )?;
     assert_eq!(
-        selected_run_json["result"]["run"]["workflow"]["name"],
-        "fan-join"
+        (
+            &run["result"]["run"]["workflow"]["name"],
+            &run["result"]["run"]["status"]
+        ),
+        (&Value::from("fan-join"), &Value::from("completed"))
     );
-    assert_eq!(selected_run_json["result"]["run"]["status"], "completed");
+    let st = wf_json(
+        "state",
+        &s,
+        Some(&db),
+        &["state", "--session", session, "--json"],
+    )?;
+    assert_eq!(
+        (
+            &st["state"]["selection"]["name"],
+            &st["state"]["run"]["workflow"]["name"]
+        ),
+        (&Value::from("fan-join"), &Value::from("fan-join"))
+    );
+    Ok(())
+}
 
-    let state = workflow_command(&env)
-        .arg("--db")
-        .arg(&db)
-        .args(["workflow", "state", "--session", session, "--json"])
-        .output()?;
-    assert!(
-        state.status.success(),
-        "separate Workflow state process must replay the Session: {}",
-        combined_text(&state)
+#[test]
+fn cli_installs_and_runs_shipped_argus_workflowbundle() -> TestResult {
+    let s = Scratch::new("hya-wf-argus")?;
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("repo")?
+        .to_path_buf();
+    let pkg = s.0.join("hya-argus-example.hyabundle");
+    fs::write(
+        &pkg,
+        write_public_package(&BundleSource::read_directory(
+            repo.join("bundles/examples/argus-example"),
+        )?)?,
+    )?;
+    assert_success(
+        "install argus",
+        &s.hya()
+            .args(["bundle", "install", "-y"])
+            .arg(&pkg)
+            .output()?,
     );
-    let state_json: serde_json::Value = serde_json::from_slice(&state.stdout)?;
-    assert_eq!(state_json["kind"], "state");
-    assert_eq!(state_json["state"]["selection"]["name"], "fan-join");
-    assert_eq!(state_json["state"]["run"]["workflow"]["name"], "fan-join");
+
+    let info = wf_json("info argus", &s, None, &["info", "argus", "--json"])?;
+    let res = wf_json(
+        "run argus",
+        &s,
+        None,
+        &[
+            "run",
+            "argus",
+            "--input",
+            "request=verify-shipped",
+            "--json",
+        ],
+    )?;
+    assert_eq!(
+        res["result"]["run"]["workflow"],
+        info["workflow"]["identity"]
+    );
+    assert_eq!(res["result"]["run"]["status"], "completed");
+    assert_eq!(
+        res["result"]["run"]["stages"].as_array().map(Vec::len),
+        Some(10)
+    );
     Ok(())
 }

@@ -84,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn model_lines_list_provider_model_ids() {
+    fn model_lines_and_verbose_rows_filter_format_and_reject_unknown_provider() {
         let models = vec![
             model("openai", "gpt-5.5", ModelCatalogSource::Configured),
             model(
@@ -93,22 +93,22 @@ mod tests {
                 ModelCatalogSource::Discovered,
             ),
         ];
-
         assert_eq!(
             super::model_lines(&models, None),
             Ok(vec![
-                "anthropic/claude-sonnet-4-6".to_string(),
-                "openai/gpt-5.5".to_string(),
+                "anthropic/claude-sonnet-4-6".into(),
+                "openai/gpt-5.5".into()
             ])
         );
         assert_eq!(
             super::model_lines(&models, Some("openai")),
-            Ok(vec!["openai/gpt-5.5".to_string()])
+            Ok(vec!["openai/gpt-5.5".into()])
         );
-    }
+        assert_eq!(
+            super::model_lines(&models, Some("missing")),
+            Err("Provider not found: missing".to_string())
+        );
 
-    #[test]
-    fn verbose_line_names_the_source_and_metadata() {
         let mut row = model("gw", "vendor/m", ModelCatalogSource::Overridden);
         row.display_name = Some("Vendor M".to_string());
         row.capabilities.max_context = 64_000;
@@ -117,33 +117,25 @@ mod tests {
         assert_eq!(
             super::verbose_line("gw", "vendor/m", Some(&row)),
             serde_json::json!({
-                "id": "vendor/m",
-                "provider": "gw",
-                "source": "override",
-                "name": "Vendor M",
-                "context": 64000,
-                "output": 4096,
-                "reasoning": false,
+                "id": "vendor/m", "provider": "gw", "source": "override",
+                "name": "Vendor M", "context": 64000, "output": 4096, "reasoning": false,
             })
         );
-        let remote = model("gw", "r", ModelCatalogSource::Discovered);
         assert_eq!(
-            super::verbose_line("gw", "r", Some(&remote))["source"],
+            super::verbose_line(
+                "gw",
+                "r",
+                Some(&model("gw", "r", ModelCatalogSource::Discovered))
+            )["source"],
             "remote"
         );
-        let config = model("gw", "c", ModelCatalogSource::Configured);
         assert_eq!(
-            super::verbose_line("gw", "c", Some(&config))["source"],
+            super::verbose_line(
+                "gw",
+                "c",
+                Some(&model("gw", "c", ModelCatalogSource::Configured))
+            )["source"],
             "config"
-        );
-    }
-
-    #[test]
-    fn model_lines_rejects_missing_provider_without_fallback_row() {
-        let models = vec![model("openai", "gpt-5.5", ModelCatalogSource::Configured)];
-        assert_eq!(
-            super::model_lines(&models, Some("missing")),
-            Err("Provider not found: missing".to_string())
         );
     }
 }

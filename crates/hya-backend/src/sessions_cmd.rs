@@ -53,6 +53,12 @@ pub(crate) async fn run(
 }
 
 async fn list(db: &str, listing: Listing) -> anyhow::Result<()> {
+    print!("{}", render_list(db, listing).await?);
+    Ok(())
+}
+
+async fn render_list(db: &str, listing: Listing) -> anyhow::Result<String> {
+    use std::fmt::Write as _;
     // A read never persists projection snapshots: another process (the
     // database's server) may own it.
     let store = hya_store::SessionStore::connect_read_only(db)
@@ -65,6 +71,7 @@ async fn list(db: &str, listing: Listing) -> anyhow::Result<()> {
             .cmp(&left.started_millis)
             .then_with(|| left.session.cmp(&right.session))
     });
+    let mut out = String::new();
     let mut shown = 0usize;
     for row in sessions {
         let projection = store
@@ -82,7 +89,8 @@ async fn list(db: &str, listing: Listing) -> anyhow::Result<()> {
         }
         shown += 1;
         let archived = archived_at.map_or_else(String::new, |ms| format!("  archived_ms={ms}"));
-        println!(
+        let _ = writeln!(
+            out,
             "{}  events={}  started_ms={}{archived}",
             row.session, row.events, row.started_millis
         );
@@ -92,9 +100,9 @@ async fn list(db: &str, listing: Listing) -> anyhow::Result<()> {
             Listing::Archived => "no archived sessions",
             Listing::Active | Listing::All => "no sessions",
         };
-        println!("{what} found in {db}");
+        let _ = writeln!(out, "{what} found in {db}");
     }
-    Ok(())
+    Ok(out)
 }
 
 async fn set_archived(db: &str, id: &str, archived: bool) -> anyhow::Result<()> {
@@ -162,4 +170,103 @@ async fn update_through_server(
             error => anyhow::Error::new(error).context(format!("reach the hya server at {url}")),
         })?;
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use hya_proto::{AgentName, Event, ModelRef};
+    use hya_store::SessionStore;
+
+    use super::*;
+
+    fn listed_ids(rendered: &str) -> Vec<String> {
+        rendered
+            .lines()
+            .filter(|line| line.starts_with("hysec_"))
+            .filter_map(|line| line.split_whitespace().next().map(str::to_owned))
+            .collect()
+    }
+
+    async fn seed(store: &SessionStore, parent: Option<SessionId>) -> SessionId {
+        let session = SessionId::new();
+        store
+            .append_event(
+                session,
+                &Event::SessionCreated {
+                    session,
+                    parent,
+                    agent: AgentName::new("hya-main"),
+                    model: ModelRef::new("fake"),
+                    workdir: "/tmp".into(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
+                },
+            )
+            .await
+            .unwrap();
+        session
+    }
+
+    #[tokio::test]
+    async fn render_list_filters_archived_children_and_orders_by_creation_then_id() {
+        let dir = std::env::temp_dir().join(format!("hya-sessions-unit-{}", SessionId::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("sessions.db");
+        let db_str = db.to_str().unwrap();
+
+        let store = SessionStore::connect(db_str).await.unwrap();
+        let empty = render_list(db_str, Listing::Active).await.unwrap();
+        assert_eq!(empty, format!("no sessions found in {db_str}\n"));
+        assert_eq!(
+            render_list(db_str, Listing::Archived).await.unwrap(),
+            format!("no archived sessions found in {db_str}\n")
+        );
+
+        let kept = seed(&store, None).await;
+        let parked = seed(&store, None).await;
+        let child = seed(&store, Some(parked)).await;
+        let parked_proj = store.read_projection_shared(parked).await.unwrap();
+        let archive_event = session_archive_event(&parked_proj, true, 1_700_000_000_000)
+            .unwrap()
+            .unwrap();
+        drop(parked_proj);
+        store.append_event(parked, &archive_event).await.unwrap();
+        // Updating `kept` keeps its creation timestamp ordering intact.
+        store
+            .append_event(
+                kept,
+                &Event::SessionTitled {
+                    session: kept,
+                    title: "updated".into(),
+                },
+            )
+            .await
+            .unwrap();
+        drop(store);
+
+        assert_eq!(
+            listed_ids(&render_list(db_str, Listing::Active).await.unwrap()),
+            vec![kept.to_string()]
+        );
+        let archived = render_list(db_str, Listing::Archived).await.unwrap();
+        assert_eq!(listed_ids(&archived), vec![parked.to_string()]);
+        assert!(archived.contains("archived_ms=1700000000000"), "{archived}");
+        let all = listed_ids(&render_list(db_str, Listing::All).await.unwrap());
+        assert!(
+            all.contains(&kept.to_string())
+                && all.contains(&parked.to_string())
+                && all.contains(&child.to_string()),
+            "{all:?}"
+        );
+
+        let missing = dir.join("does-not-exist.db");
+        assert!(
+            render_list(missing.to_str().unwrap(), Listing::Active)
+                .await
+                .is_err()
+        );
+        assert!(!missing.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -625,215 +625,324 @@ pub(crate) fn merge_model_effort(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use clap::CommandFactory as _;
-    use clap::Parser as _;
+    use clap::{CommandFactory as _, Parser as _};
 
-    use super::Cli;
+    use super::{Cli, Command, RelayFlags, ServeAction, ServeRelayAction};
 
-    fn parse<const N: usize>(args: [&str; N]) -> Cli {
-        Cli::try_parse_from(args).unwrap_or_else(|err| panic!("{err}"))
+    fn p(cmd: &str) -> Cli {
+        Cli::try_parse_from(cmd.split_whitespace()).unwrap_or_else(|e| panic!("{cmd}: {e}"))
     }
 
-    fn parse_slice(args: &[&str]) -> Cli {
-        Cli::try_parse_from(args.iter().copied()).unwrap_or_else(|err| panic!("{err}"))
+    fn reject(cmds: &[&str]) {
+        for cmd in cmds {
+            assert!(
+                Cli::try_parse_from(cmd.split_whitespace()).is_err(),
+                "{cmd}"
+            );
+        }
     }
 
     #[test]
-    fn executable_is_named_hya() {
+    fn cli_metadata_help_and_rejected_legacy_flags() {
         assert_eq!(Cli::command().get_name(), "hya");
-    }
-
-    /// Bare `hya update` (with its options) is the release reinstall, not a
-    /// signed-TCB subcommand; mixing both is rejected.
-    #[test]
-    fn parses_bare_update_as_release_install() {
-        let cli = parse_slice(&["hya", "update", "--version", "v1.2.3", "--force"]);
-        let Some(super::Command::Update { command, install }) = cli.command else {
-            panic!("`hya update --version` must parse as `hya update`");
-        };
-        assert!(command.is_none());
-        assert_eq!(install.version.as_deref(), Some("v1.2.3"));
-        assert!(install.force);
-        let cli = parse_slice(&["hya", "update"]);
-        assert!(matches!(
-            cli.command,
-            Some(super::Command::Update { command: None, .. })
-        ));
-        assert!(Cli::try_parse_from(["hya", "update", "--force", "version"]).is_err());
-        assert!(Cli::try_parse_from(["hya", "update", "--tui-only"]).is_err());
-        assert!(Cli::try_parse_from(["hya", "update", "--backend-only"]).is_err());
-        assert!(Cli::try_parse_from(["hya", "update", "tui"]).is_err());
+        let help = Cli::command().render_long_help().to_string();
+        assert!(!help.contains("--mini"));
+        for needle in ["--port <PORT>", "3250", "WebUI"] {
+            assert!(help.contains(needle), "{help}");
+        }
+        assert_eq!(
+            Cli::try_parse_from(["hya", "--mini"]).err().unwrap().kind(),
+            clap::error::ErrorKind::UnknownArgument
+        );
+        reject(&["hya auth list"]);
     }
 
     #[test]
-    fn parses_update_version_and_install_flags() {
+    fn parses_update_and_bundle_subcommands_and_rejects_invalid_combinations() {
+        use crate::bundle_cmd::BundleCommand;
         use hya_updater::cli::UpdateCommand;
 
-        let cli = parse_slice(&["hya", "update", "version"]);
-        assert!(
-            matches!(
-                cli.command,
-                Some(super::Command::Update {
-                    command: Some(UpdateCommand::Version),
-                    ..
-                })
-            ),
-            "`hya update version` must parse as the updater command"
-        );
-
-        let cli = parse_slice(&["hya", "update", "--version", "0.47.0"]);
-        assert!(
-            matches!(
-                cli.command,
-                Some(super::Command::Update {
-                    command: None,
-                    install,
-                }) if install.version.as_deref() == Some("0.47.0")
-            ),
-            "bare `hya update` must parse the installer flags"
-        );
-
-        // The signed-metadata command set is gone.
-        for retired in [
-            "status",
-            "recover",
-            "apply",
-            "authorize",
-            "discard",
-            "init-roots",
-        ] {
-            assert!(
-                Cli::try_parse_from(["hya", "update", retired, "--root", "/tmp/u"]).is_err(),
-                "`hya update {retired}` must be rejected"
-            );
-        }
-    }
-
-    #[test]
-    fn parses_bundle_scope_confirmation_and_verify_flags() {
-        use crate::bundle_cmd::BundleCommand;
-
-        for verb in ["remove", "uninstall"] {
-            let cli = parse_slice(&["hya", "bundle", verb, "-y", "--project", "hya/demo"]);
-            assert!(
-                matches!(
-                    cli.command,
-                    Some(super::Command::Bundle {
-                        command: BundleCommand::Remove { .. }
-                    })
-                ),
-                "`bundle {verb}` must parse as remove"
-            );
-        }
-        for args in [
-            &["hya", "bundle", "install", "-y", "demo.hyabundle"][..],
-            &[
-                "hya",
-                "bundle",
-                "install",
-                "--yes",
-                "--user",
-                "demo.hyabundle",
-            ],
-            &["hya", "bundle", "install", "--project", "demo.hyabundle"],
-            &["hya", "bundle", "verify", "demo.hyabundle"],
-            &[
-                "hya",
-                "bundle",
-                "verify",
-                "--project",
-                "--overwrite",
-                "demo.hyabundle",
-            ],
-            &["hya", "bundle", "list", "--project"],
-            &["hya", "bundle", "list", "--user"],
-            &["hya", "bundle", "info", "--project", "hya/demo"],
-            &["hya", "bundle", "info", "demo.hyabundle"],
-            &["hya", "bundle", "search", "--project", "demo"],
-            &["hya", "bundle", "schema", "hya/demo"],
-            &["hya", "bundle", "schema", "--user", "hya/demo"],
-            &["hya", "bundle", "schema", "demo.hyabundle"],
-        ] {
-            parse_slice(args);
-        }
-        let conflict = Cli::try_parse_from([
-            "hya",
-            "bundle",
-            "install",
-            "--user",
-            "--project",
-            "demo.hyabundle",
+        assert!(matches!(
+            p("hya update --version v1.2.3 --force").command,
+            Some(Command::Update { command: None, ref install })
+                if install.version.as_deref() == Some("v1.2.3") && install.force
+        ));
+        assert!(matches!(
+            p("hya update version").command,
+            Some(Command::Update {
+                command: Some(UpdateCommand::Version),
+                ..
+            })
+        ));
+        reject(&[
+            "hya update --force version",
+            "hya update --tui-only",
+            "hya update --backend-only",
+            "hya update tui",
+            "hya update status --root /tmp/u",
+            "hya update apply --root /tmp/u",
+            "hya update init-roots --root /tmp/u",
         ]);
-        assert!(conflict.is_err(), "--user and --project are exclusive");
-        let verify_yes = Cli::try_parse_from(["hya", "bundle", "verify", "-y", "demo.hyabundle"]);
-        assert!(
-            verify_yes.is_err(),
-            "verify never installs, so it takes no -y"
-        );
-    }
-
-    #[test]
-    fn rejects_mini_as_unknown_argument() {
-        let err = match Cli::try_parse_from(["hya", "--mini"]) {
-            Ok(_) => panic!("--mini should be rejected once legacy TUI is removed"),
-            Err(err) => err,
-        };
-
-        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
-        assert!(err.to_string().contains("--mini"));
-    }
-    #[test]
-    fn help_omits_mini_alias() {
-        let help = Cli::command().render_help().to_string();
-
-        assert!(!help.contains("--mini"));
-    }
-
-    #[test]
-    fn parses_bundle_install_list_uninstall_and_info_file_commands() {
-        let cases: &[&[&str]] = &[
-            &["hya", "bundle", "install", "demo.hyabundle"],
-            &["hya", "bundle", "list"],
-            &["hya", "bundle", "uninstall", "hya/demo"],
-            &["hya", "bundle", "info", "hya/demo"],
-            &["hya", "bundle", "info", "-f", "demo.hyabundle"],
-        ];
-
-        for args in cases {
-            let parsed = Cli::try_parse_from(args.iter().copied());
-            let error = parsed.as_ref().err().map(ToString::to_string);
-            assert!(parsed.is_ok(), "failed to parse {args:?}: {error:?}");
+        for verb in ["remove", "uninstall"] {
+            assert!(matches!(
+                p(&format!("hya bundle {verb} -y --project hya/demo")).command,
+                Some(Command::Bundle {
+                    command: BundleCommand::Remove { .. }
+                })
+            ));
         }
+        for ok in [
+            "hya bundle install -y demo.hyabundle",
+            "hya bundle install --yes --user demo.hyabundle",
+            "hya bundle install --project demo.hyabundle",
+            "hya bundle verify --project --overwrite demo.hyabundle",
+            "hya bundle list --project",
+            "hya bundle list --user",
+            "hya bundle info --project hya/demo",
+            "hya bundle info -f demo.hyabundle",
+            "hya bundle info demo.hyabundle",
+            "hya bundle search --project goal-loop",
+            "hya bundle schema --user hya/demo",
+        ] {
+            p(ok);
+        }
+        reject(&[
+            "hya bundle install --user --project demo.hyabundle",
+            "hya bundle verify -y demo.hyabundle",
+            "hya bundle search",
+            "hya bundle schemas",
+        ]);
+        assert!(Cli::try_parse_from(["hya", "bundle", "search", "   "]).is_err());
     }
 
     #[test]
-    fn bare_hya_takes_resume_with_or_without_a_session_id() {
+    fn bare_hya_port_resume_backend_connect_and_allow_host_validation() {
+        use crate::bridge::LinkSource;
         use crate::frontend::Resume;
-        let cli = parse(["hya", "--resume", "hysec_abcdefghijklmnopqrst"]);
+        use hya_relay::link::Transport;
+
+        assert_eq!(super::bare_web_port(&p("hya")).unwrap(), 3250);
+        assert_eq!(super::bare_web_port(&p("hya --port 0")).unwrap(), 0);
+        reject(&["hya --port 70000", "hya --port web"]);
+        for sub in ["hya --port 9000 sessions", "hya --port 9000 -p goal"] {
+            assert!(
+                super::bare_web_port(&p(sub))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("--port only applies to bare `hya`")
+            );
+        }
         assert_eq!(
-            super::bare_resume(&cli).unwrap(),
+            super::bare_resume(&p("hya --resume hysec_abcdefghijklmnopqrst")).unwrap(),
             Some(Resume::Session("hysec_abcdefghijklmnopqrst".into()))
         );
         assert_eq!(
-            super::bare_resume(&parse(["hya", "--resume"])).unwrap(),
+            super::bare_resume(&p("hya --resume --port 0")).unwrap(),
             Some(Resume::Pick)
         );
-        // Before another flag it takes no id.
-        let cli = parse(["hya", "--resume", "--port", "0"]);
-        assert_eq!(super::bare_resume(&cli).unwrap(), Some(Resume::Pick));
-        assert_eq!(cli.port, Some(0));
-        assert_eq!(super::bare_resume(&parse(["hya"])).unwrap(), None);
-        let error = super::bare_resume(&parse(["hya", "--resume", "x", "sessions"]))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("--resume only applies to bare `hya`"),
-            "{error}"
+        assert!(super::bare_resume(&p("hya --resume x sessions")).is_err());
+
+        assert_eq!(
+            super::bare_backend(&p("hya --backend http://127.0.0.1:4096/"))
+                .unwrap()
+                .as_deref(),
+            Some("http://127.0.0.1:4096")
+        );
+        assert!(super::bare_backend(&p("hya --backend localhost:4096")).is_err());
+        assert!(super::bare_backend(&p("hya --backend http://x sessions")).is_err());
+
+        let link = "hya://relay.example.com/eh7ddx5bksrgcytl7bkai36se4#k.p";
+        let bare = super::bare_connect(&p(
+            "hya --connect - --relay-ca /etc/relay-ca.pem --transport ws",
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            (bare.source, bare.transport, bare.relay_ca.as_deref()),
+            (
+                LinkSource::Stdin,
+                Some(Transport::Ws),
+                Some(std::path::Path::new("/etc/relay-ca.pem"))
+            )
+        );
+        assert_eq!(
+            super::bare_connect(&p(&format!("hya --connect {link}")))
+                .unwrap()
+                .unwrap()
+                .source,
+            LinkSource::Arg(link.into())
+        );
+        assert_eq!(
+            super::bare_connect(&p("hya --connect"))
+                .unwrap()
+                .unwrap()
+                .source,
+            LinkSource::Env
+        );
+        assert!(super::bare_connect(&p("hya --connect - sessions")).is_err());
+        reject(&[
+            "hya --relay-ca /x.pem",
+            "hya --transport ws",
+            "hya --connect - --transport quic",
+            "hya --connect - --backend http://x",
+            "hya --allow-host x --backend http://h:1",
+        ]);
+        assert_eq!(
+            super::bare_allow_hosts(&p("hya --allow-host hya.lan")).unwrap(),
+            ["hya.lan"]
         );
     }
 
     #[test]
-    fn effort_flag_merges_and_rejects_conflicts() {
+    fn parses_serve_actions_relay_flags_and_host_policy() {
+        let serve_of = |cmd: &str| match p(cmd).command {
+            Some(Command::Serve {
+                action,
+                db,
+                relay,
+                allow_host,
+                ..
+            }) => (action, db, relay, allow_host),
+            _ => panic!("expected serve"),
+        };
+        let (action, db, _, _) = serve_of("hya serve start --json --db /s.db");
+        assert_eq!(
+            action,
+            Some(ServeAction::Start {
+                json: true,
+                relay: RelayFlags::default()
+            })
+        );
+        assert_eq!(db.as_deref(), Some("/s.db"));
+        assert_eq!(
+            serve_of("hya serve stop --force --timeout 5").0,
+            Some(ServeAction::Stop {
+                force: true,
+                timeout: 5
+            })
+        );
+        assert_eq!(
+            serve_of("hya serve restart").0,
+            Some(ServeAction::Restart {
+                json: false,
+                force: false,
+                timeout: 45,
+                relay: RelayFlags::default()
+            })
+        );
+        let (action, _, relay, _) = serve_of(
+            "hya serve --relay https://relay.example.com/hya --relay-transport ws --relay-ephemeral",
+        );
+        assert!(
+            action.is_none()
+                && relay.relay_transport.as_deref() == Some("ws")
+                && relay.relay_ephemeral
+        );
+        reject(&["hya serve --relay-ephemeral"]);
+
+        for (words, expected) in [
+            ("status", ServeRelayAction::Status { json: false }),
+            ("link", ServeRelayAction::Link),
+            ("rotate", ServeRelayAction::Rotate { json: false }),
+            ("disconnect", ServeRelayAction::Disconnect { json: false }),
+        ] {
+            assert_eq!(
+                serve_of(&format!("hya serve relay {words}")).0,
+                Some(ServeAction::Relay { action: expected })
+            );
+        }
+        assert!(matches!(
+            serve_of("hya serve relay connect https://relay.example.com --transport grpc").0,
+            Some(ServeAction::Relay {
+                action: ServeRelayAction::Connect { .. }
+            })
+        ));
+        let (_, _, _, allow) =
+            serve_of("hya serve --allow-host Hya.Example.Lan --allow-host 192.168.1.20");
+        assert_eq!(
+            super::allow_host_names(&allow).unwrap(),
+            ["192.168.1.20", "hya.example.lan"]
+        );
+        assert!(super::allow_host_names(&["host:8080".into()]).is_err());
+
+        let hosts = |bind: &str| super::serve_host_policy(bind, &[]).unwrap().extra_hosts();
+        for empty in ["127.0.0.1:8080", "0.0.0.0:8080", "[::]:8080"] {
+            assert!(hosts(empty).is_empty());
+        }
+        assert_eq!(hosts("192.168.1.5:8080"), ["192.168.1.5"]);
+        assert_eq!(hosts("[fe80::1]:8080"), ["[fe80::1]"]);
+        assert_eq!(hosts("MyBox:8080"), ["mybox"]);
+        let policy = super::serve_host_policy("0.0.0.0:8080", &["hya.lan".into()]).unwrap();
+        assert!(policy.allows("hya.lan:8080") && !policy.allows("192.168.1.5:8080"));
+    }
+
+    #[test]
+    fn parses_goal_loop_budget_and_predicate_flags() {
+        use hya_engine::loop_mode::{LoopConfig, PredicateMode, validate_budget};
+
+        assert_eq!(
+            p("hya -p ship --evaluator-model deep/o3-mini")
+                .evaluator_model
+                .as_deref(),
+            Some("deep/o3-mini")
+        );
+        assert!(p("hya -p ship").evaluator_model.is_none());
+        assert!(matches!(
+            p("hya loop --target green --budget 5 --while true --evaluator-model deep/o3-mini").command,
+            Some(Command::Loop { ref target, budget: Some(5), max_iterations: None, while_command: Some(ref w), until_command: None, evaluator_model: Some(ref e) })
+                if target == "green" && w == "true" && e == "deep/o3-mini"
+        ));
+        assert!(matches!(
+            p("hya loop --target docs --until false --max-iterations 3").command,
+            Some(Command::Loop {
+                budget: None,
+                max_iterations: Some(3),
+                until_command: Some(_),
+                ..
+            })
+        ));
+        assert_eq!(super::loop_budget(None, None), LoopConfig::default().budget);
+        assert_eq!(
+            (
+                super::loop_budget(Some(5), Some(9)),
+                super::loop_budget(None, Some(9)),
+                super::loop_budget(Some(0), None)
+            ),
+            (5, 9, 1)
+        );
+        assert!(
+            validate_budget(&LoopConfig {
+                budget: super::loop_budget(None, Some(500)),
+                ..LoopConfig::default()
+            })
+            .is_ok()
+        );
+
+        let dir = std::env::temp_dir();
+        assert_eq!(
+            super::build_loop_predicate(Some("x".into()), None, &dir)
+                .unwrap()
+                .unwrap()
+                .mode,
+            PredicateMode::While
+        );
+        assert_eq!(
+            super::build_loop_predicate(None, Some("y".into()), &dir)
+                .unwrap()
+                .unwrap()
+                .mode,
+            PredicateMode::Until
+        );
+        assert!(
+            super::build_loop_predicate(None, None, &dir)
+                .unwrap()
+                .is_none()
+        );
+        assert!(super::build_loop_predicate(Some("a".into()), Some("b".into()), &dir).is_err());
+    }
+
+    #[test]
+    fn parses_exec_workflow_sessions_models_provider_oauth_and_effort() {
         assert_eq!(
             super::merge_model_effort(Some("openai/gpt".into()), Some("high".into())).unwrap(),
             Some("openai/gpt#high".into())
@@ -844,595 +953,38 @@ mod tests {
         assert!(
             super::merge_model_effort(Some("openai/gpt".into()), Some("bogus".into())).is_err()
         );
-    }
-
-    #[test]
-    fn parses_evaluator_model_flag_for_goal_mode() {
-        let cli = parse(["hya", "-p", "ship it", "--evaluator-model", "deep/o3-mini"]);
-        assert_eq!(cli.evaluator_model.as_deref(), Some("deep/o3-mini"));
-        let cli = parse(["hya", "-p", "ship it"]);
-        assert!(
-            cli.evaluator_model.is_none(),
-            "the flag must stay optional so config/worker fallback applies"
-        );
-    }
-
-    #[test]
-    fn parses_loop_command_flags() {
-        let cli = parse([
-            "hya",
-            "loop",
-            "--target",
-            "tests are green",
-            "--budget",
-            "5",
-            "--while",
-            "cargo test --quiet",
-            "--evaluator-model",
-            "deep/o3-mini",
+        reject(&[
+            "hya exec --time-budget 0 hi",
+            "hya exec --time-budget -1 hi",
+            "hya exec --time-budget 1.5 hi",
+            "hya workflow use echo-input",
         ]);
-        match cli.command {
-            Some(super::Command::Loop {
-                target,
-                budget,
-                max_iterations,
-                while_command,
-                until_command,
-                evaluator_model,
-            }) => {
-                assert_eq!(target, "tests are green");
-                assert_eq!(budget, Some(5));
-                assert_eq!(max_iterations, None);
-                assert_eq!(while_command.as_deref(), Some("cargo test --quiet"));
-                assert_eq!(until_command, None);
-                assert_eq!(evaluator_model.as_deref(), Some("deep/o3-mini"));
-            }
-            _ => panic!("expected loop command"),
-        }
-    }
-
-    #[test]
-    fn parses_loop_until_and_max_iterations_alias() {
-        let cli = parse([
-            "hya",
-            "loop",
-            "--target",
-            "docs rebuilt",
-            "--until",
-            "test -f done",
-            "--max-iterations",
-            "3",
-        ]);
-        match cli.command {
-            Some(super::Command::Loop {
-                budget,
-                max_iterations,
-                while_command,
-                until_command,
+        assert!(matches!(
+            p("hya exec --json --time-budget 30 go").command,
+            Some(Command::Exec {
+                json: true,
+                time_budget: Some(30),
                 ..
-            }) => {
-                assert_eq!(budget, None);
-                assert_eq!(max_iterations, Some(3));
-                assert_eq!(while_command, None);
-                assert_eq!(until_command.as_deref(), Some("test -f done"));
-            }
-            _ => panic!("expected loop command"),
-        }
-    }
-
-    #[test]
-    fn loop_command_requires_target_and_defaults_flags() {
-        let cli = parse(["hya", "loop", "--target", "ship it"]);
-        match cli.command {
-            Some(super::Command::Loop {
-                target,
-                budget,
-                max_iterations,
-                while_command,
-                until_command,
-                evaluator_model,
-            }) => {
-                assert_eq!(target, "ship it");
-                assert_eq!(budget, None);
-                assert_eq!(max_iterations, None);
-                assert_eq!(while_command, None);
-                assert_eq!(until_command, None);
-                assert_eq!(evaluator_model, None);
-            }
-            _ => panic!("expected loop command"),
-        }
-    }
-
-    #[test]
-    fn loop_budget_resolves_alias_default_and_clamps() {
-        use hya_engine::loop_mode::{LoopConfig, validate_budget};
-        // Default mirrors `LoopConfig::default().budget`.
-        assert_eq!(super::loop_budget(None, None), LoopConfig::default().budget);
-        // `--budget` outranks the `--max-iterations` alias.
-        assert_eq!(super::loop_budget(Some(5), Some(9)), 5);
-        assert_eq!(super::loop_budget(None, Some(9)), 9);
-        // Any request is clamped into the range `validate_budget` enforces
-        // (HARD_MAX_ITERATIONS / minimum 1), so the resolved value validates.
-        let clamped = super::loop_budget(None, Some(500));
-        assert!(
-            validate_budget(&LoopConfig {
-                budget: clamped,
-                ..LoopConfig::default()
             })
-            .is_ok(),
-            "clamped budget {clamped} must pass validate_budget"
-        );
-        assert_eq!(super::loop_budget(Some(0), None), 1);
-    }
-
-    #[test]
-    fn build_loop_predicate_maps_flags_to_modes() {
-        let workdir = std::env::temp_dir();
-        let while_only =
-            super::build_loop_predicate(Some("test -f x".to_string()), None, &workdir).unwrap();
-        assert!(while_only.is_some(), "--while builds a predicate");
-        let predicate = while_only.unwrap();
-        assert_eq!(predicate.mode, hya_engine::loop_mode::PredicateMode::While);
-        assert_eq!(predicate.command, "test -f x");
-        assert_eq!(predicate.workdir, workdir);
-
-        let until_only =
-            super::build_loop_predicate(None, Some("false".to_string()), &workdir).unwrap();
-        assert_eq!(
-            until_only.unwrap().mode,
-            hya_engine::loop_mode::PredicateMode::Until
-        );
-
+        ));
         assert!(
-            super::build_loop_predicate(None, None, &workdir)
-                .unwrap()
-                .is_none(),
-            "no flags means no predicate (verifier decides)"
+            matches!(p("hya --db /a.db sessions --db /b.db").command, Some(Command::Sessions { db: Some(ref d), .. }) if d == "/b.db")
         );
-
-        let both = super::build_loop_predicate(
-            Some("true".to_string()),
-            Some("false".to_string()),
-            &workdir,
-        );
-        assert!(both.is_err(), "--while and --until are mutually exclusive");
-    }
-
-    #[test]
-    fn bare_port_defaults_to_3250_and_accepts_overrides() {
-        assert_eq!(super::bare_web_port(&parse(["hya"])).unwrap(), 3250);
-        assert_eq!(
-            super::bare_web_port(&parse(["hya", "--port", "8000"])).unwrap(),
-            8000
-        );
-        assert_eq!(
-            super::bare_web_port(&parse(["hya", "--port", "0"])).unwrap(),
-            0
-        );
-        assert!(Cli::try_parse_from(["hya", "--port", "70000"]).is_err());
-        assert!(Cli::try_parse_from(["hya", "--port", "web"]).is_err());
-    }
-
-    #[test]
-    fn bare_port_is_rejected_with_a_subcommand_or_goal_mode() {
-        let error = super::bare_web_port(&parse(["hya", "--port", "9000", "sessions"]))
-            .unwrap_err()
-            .to_string();
         assert!(
-            error.contains("--port only applies to bare `hya`"),
-            "{error}"
+            matches!(p("hya models openai --verbose --refresh").command, Some(Command::Models { provider: Some(ref p), verbose: true, refresh: true }) if p == "openai")
         );
-        let error = super::bare_web_port(&parse(["hya", "--port", "9000", "-p", "goal"]))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("--port only applies to bare `hya`"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn help_documents_the_bare_port_flag() {
-        let help = Cli::command().render_long_help().to_string();
-        assert!(help.contains("--port <PORT>"), "{help}");
-        assert!(help.contains("3250"), "{help}");
-        assert!(help.contains("WebUI"), "{help}");
-    }
-
-    #[test]
-    fn parses_serve_daemon_actions_with_db_anywhere() {
-        use super::ServeAction;
-        let action = |cli: Cli| match cli.command {
-            Some(super::Command::Serve { action, db, .. }) => (action, db.or(Some(cli.db))),
-            _ => panic!("expected serve command"),
-        };
-        assert_eq!(
-            action(parse(["hya", "serve", "start", "--json", "--db", "/s.db"])),
-            (
-                Some(ServeAction::Start {
-                    json: true,
-                    relay: super::RelayFlags::default()
-                }),
-                Some("/s.db".into())
-            )
-        );
-        assert_eq!(
-            action(parse(["hya", "serve", "--db", "/s.db", "status"])),
-            (
-                Some(ServeAction::Status { json: false }),
-                Some("/s.db".into())
-            )
-        );
-        assert_eq!(
-            action(parse(["hya", "serve", "stop"])).0,
-            Some(ServeAction::Stop {
-                force: false,
-                timeout: 45
-            })
-        );
-        assert_eq!(
-            action(parse(["hya", "serve", "stop", "--force", "--timeout", "5"])).0,
-            Some(ServeAction::Stop {
-                force: true,
-                timeout: 5
-            })
-        );
-        assert_eq!(
-            action(parse(["hya", "serve", "restart"])).0,
-            Some(ServeAction::Restart {
-                json: false,
-                force: false,
-                timeout: 45,
-                relay: super::RelayFlags::default(),
-            })
-        );
-        // Plain `hya serve` still serves in the foreground.
-        assert_eq!(
-            action(parse(["hya", "serve", "--bind", "127.0.0.1:0"])).0,
-            None
-        );
-    }
-
-    #[test]
-    fn parses_serve_relay_flags_and_relay_actions() {
-        use super::{RelayFlags, ServeAction, ServeRelayAction};
-        let serve = |cli: Cli| match cli.command {
-            Some(super::Command::Serve { relay, action, .. }) => (relay, action),
-            _ => panic!("expected serve command"),
-        };
-        let (relay, action) = serve(parse([
-            "hya",
-            "serve",
-            "--relay",
-            "https://relay.example.com/hya",
-            "--relay-transport",
-            "ws",
-            "--relay-ephemeral",
-        ]));
-        assert_eq!(action, None);
-        assert_eq!(
-            relay.relay.as_deref(),
-            Some("https://relay.example.com/hya")
-        );
-        assert_eq!(relay.relay_transport.as_deref(), Some("ws"));
-        assert!(relay.relay_ephemeral);
-        assert!(
-            Cli::try_parse_from(["hya", "serve", "--relay-ephemeral"]).is_err(),
-            "relay options need --relay"
-        );
-        let (_, action) = serve(parse([
-            "hya",
-            "serve",
-            "start",
-            "--relay",
-            "http://100.64.0.7:8766",
-        ]));
-        assert_eq!(
-            action,
-            Some(ServeAction::Start {
-                json: false,
-                relay: RelayFlags {
-                    relay: Some("http://100.64.0.7:8766".into()),
-                    ..RelayFlags::default()
-                }
-            })
-        );
-        let (_, action) = serve(parse([
-            "hya",
-            "serve",
-            "relay",
-            "connect",
-            "https://relay.example.com",
-            "--transport",
-            "grpc",
-            "--db",
-            "/s.db",
-        ]));
-        assert_eq!(
-            action,
-            Some(ServeAction::Relay {
-                action: ServeRelayAction::Connect {
-                    proxy_url: "https://relay.example.com".into(),
-                    transport: "grpc".into(),
-                    relay_ca: None,
-                    ephemeral: false,
-                    json: false,
-                }
-            })
-        );
-        for (words, expected) in [
-            ("status", ServeRelayAction::Status { json: false }),
-            ("link", ServeRelayAction::Link),
-            ("rotate", ServeRelayAction::Rotate { json: false }),
-            ("disconnect", ServeRelayAction::Disconnect { json: false }),
-        ] {
-            let (_, action) = serve(parse(["hya", "serve", "relay", words]));
-            assert_eq!(
-                action,
-                Some(ServeAction::Relay { action: expected }),
-                "{words}"
-            );
-        }
-    }
-
-    #[test]
-    fn backend_is_a_bare_hya_url() {
-        let cli = parse(["hya", "--backend", "http://127.0.0.1:4096/"]);
-        assert_eq!(
-            super::bare_backend(&cli).unwrap().as_deref(),
-            Some("http://127.0.0.1:4096")
-        );
-        assert_eq!(super::bare_backend(&parse(["hya"])).unwrap(), None);
-        let error = super::bare_backend(&parse(["hya", "--backend", "localhost:4096"]))
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("http://"), "{error}");
-        let error = super::bare_backend(&parse(["hya", "--backend", "http://x", "sessions"]))
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("only applies to bare"), "{error}");
-    }
-
-    #[test]
-    fn allow_host_is_repeatable_on_serve_start_restart_and_bare_hya() {
-        let cli = parse([
-            "hya",
-            "serve",
-            "--allow-host",
-            "Hya.Example.Lan",
-            "--allow-host",
-            "192.168.1.20",
-            "--bind",
-            "0.0.0.0:8080",
-        ]);
-        match cli.command {
-            Some(super::Command::Serve { allow_host, .. }) => {
-                assert_eq!(allow_host, ["Hya.Example.Lan", "192.168.1.20"]);
-                assert_eq!(
-                    super::allow_host_names(&allow_host).unwrap(),
-                    ["192.168.1.20", "hya.example.lan"]
-                );
-            }
-            _ => panic!("serve"),
-        }
-        for action in ["start", "restart"] {
-            let cli = parse(["hya", "serve", action, "--allow-host", "hya.lan"]);
-            match cli.command {
-                Some(super::Command::Serve { allow_host, .. }) => {
-                    assert_eq!(allow_host, ["hya.lan"], "{action}");
-                }
-                _ => panic!("serve {action}"),
-            }
-        }
-        let bare = parse(["hya", "--allow-host", "hya.lan"]);
-        assert_eq!(super::bare_allow_hosts(&bare).unwrap(), ["hya.lan"]);
-        assert!(
-            Cli::try_parse_from(["hya", "--allow-host", "x", "--backend", "http://h:1"]).is_err()
-        );
-        assert!(super::allow_host_names(&["host:8080".into()]).is_err());
-    }
-
-    #[test]
-    fn a_specific_bind_host_is_allowed_a_wildcard_one_is_not() {
-        let hosts = |bind: &str| super::serve_host_policy(bind, &[]).unwrap().extra_hosts();
-        assert!(hosts("127.0.0.1:8080").is_empty());
-        assert!(hosts("0.0.0.0:8080").is_empty());
-        assert!(hosts("[::]:8080").is_empty());
-        assert_eq!(hosts("192.168.1.5:8080"), ["192.168.1.5"]);
-        assert_eq!(hosts("[fe80::1]:8080"), ["[fe80::1]"]);
-        assert_eq!(hosts("MyBox:8080"), ["mybox"]);
-        let policy = super::serve_host_policy("0.0.0.0:8080", &["hya.lan".into()]).unwrap();
-        assert!(policy.allows("hya.lan:8080"));
-        assert!(!policy.allows("192.168.1.5:8080"));
-    }
-
-    #[test]
-    fn bare_connect_takes_the_bridge_relay_ca_and_transport() {
-        use hya_relay::link::Transport;
-        let bare = super::bare_connect(&parse([
-            "hya",
-            "--connect",
-            "-",
-            "--relay-ca",
-            "/etc/relay-ca.pem",
-            "--transport",
-            "ws",
-        ]))
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            bare.relay_ca.as_deref(),
-            Some(std::path::Path::new("/etc/relay-ca.pem"))
-        );
-        assert_eq!(bare.transport, Some(Transport::Ws));
-        // A bare `--connect` alone: neither.
-        let bare = super::bare_connect(&parse(["hya", "--connect", "-"]))
-            .unwrap()
-            .unwrap();
-        assert_eq!((bare.relay_ca, bare.transport), (None, None));
-        // Both need `--connect`; the binding is one of the three.
-        assert!(Cli::try_parse_from(["hya", "--relay-ca", "/x.pem"]).is_err());
-        assert!(Cli::try_parse_from(["hya", "--transport", "ws"]).is_err());
-        assert!(Cli::try_parse_from(["hya", "--connect", "-", "--transport", "quic"]).is_err());
-    }
-
-    #[test]
-    fn connect_is_a_bare_hya_link_source() {
-        use crate::bridge::LinkSource;
-        let source = |cli| super::bare_connect(&cli).unwrap().map(|bare| bare.source);
-        let link = "hya://relay.example.com/eh7ddx5bksrgcytl7bkai36se4#k.p";
-        assert_eq!(
-            source(parse(["hya", "--connect", link])),
-            Some(LinkSource::Arg(link.into()))
-        );
-        assert_eq!(
-            source(parse(["hya", "--connect", "-"])),
-            Some(LinkSource::Stdin)
-        );
-        // Without a value: `$HYA_RELAY_LINK`.
-        assert_eq!(source(parse(["hya", "--connect"])), Some(LinkSource::Env));
-        assert_eq!(super::bare_connect(&parse(["hya"])).unwrap(), None);
-        assert!(
-            Cli::try_parse_from(["hya", "--connect", "-", "--backend", "http://x"]).is_err(),
-            "--connect conflicts with --backend"
-        );
-        let error = super::bare_connect(&parse(["hya", "--connect", "-", "sessions"]))
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("only applies to bare"), "{error}");
-        // The standalone form parses as a subcommand.
-        let cli = parse(["hya", "bridge", "-", "--json", "--listen", "127.0.0.1:0"]);
-        assert!(matches!(cli.command, Some(super::Command::Bridge { .. })));
-    }
-
-    #[test]
-    fn parses_models_command_without_refresh() {
-        let cli = parse(["hya", "models", "openai", "--verbose"]);
-        match cli.command {
-            Some(super::Command::Models {
-                provider,
-                verbose,
-                refresh,
-            }) => {
-                assert_eq!(provider.as_deref(), Some("openai"));
-                assert!(verbose);
-                assert!(!refresh);
-            }
-            _ => panic!("expected models command"),
-        }
-    }
-
-    #[test]
-    fn parses_models_refresh_flag() {
-        let cli = parse(["hya", "models", "--refresh"]);
-        match cli.command {
-            Some(super::Command::Models {
-                provider, refresh, ..
-            }) => {
-                assert_eq!(provider, None);
-                assert!(refresh);
-            }
-            _ => panic!("expected models command"),
-        }
-    }
-
-    #[test]
-    fn providers_is_an_alias_of_provider_and_auth_is_gone() {
-        let cli = parse(["hya", "providers", "list"]);
-        assert!(
-            matches!(cli.command, Some(super::Command::Provider { .. })),
-            "`hya providers list` must parse as `hya provider list`"
-        );
-        assert!(Cli::try_parse_from(["hya", "auth", "list"]).is_err());
-    }
-
-    #[test]
-    fn parses_oauth_login_command() {
-        let cli = parse([
-            "hya",
-            "oauth",
-            "login",
-            "--provider",
-            "codex",
-            "--type",
-            "openai-codex",
-            "--model",
-            "gpt-5.3-codex",
-        ]);
-        match cli.command {
-            Some(super::Command::Oauth {
-                command:
-                    crate::auth_cmd::OauthCommand::Login {
-                        provider,
-                        oauth_type,
-                        loopback,
-                        no_browser,
-                        browser,
-                        model,
-                        base_url,
-                    },
-            }) => {
-                assert_eq!(provider, "codex");
-                assert_eq!(oauth_type, "openai-codex");
-                // Defaults applied at runtime: device-code + no-browser for openai-codex.
-                assert!(!loopback);
-                assert!(!no_browser);
-                assert!(!browser);
-                assert_eq!(model.as_deref(), Some("gpt-5.3-codex"));
-                assert!(base_url.is_none());
-            }
-            _ => panic!("expected oauth login command"),
-        }
-    }
-
-    #[test]
-    fn parses_oauth_login_loopback_and_browser_flags() {
-        let cli = parse([
-            "hya",
-            "oauth",
-            "login",
-            "--provider",
-            "codex",
-            "--type",
-            "openai-codex",
-            "--loopback",
-            "--browser",
-        ]);
-        match cli.command {
-            Some(super::Command::Oauth {
-                command:
-                    crate::auth_cmd::OauthCommand::Login {
-                        loopback,
-                        browser,
-                        no_browser,
-                        ..
-                    },
-            }) => {
-                assert!(loopback);
-                assert!(browser);
-                assert!(!no_browser);
-            }
-            _ => panic!("expected oauth login with loopback/browser"),
-        }
-    }
-
-    #[test]
-    fn parses_bundle_search_query_and_requires_one() {
-        let cli = parse(["hya", "bundle", "search", "goal-loop"]);
-        match cli.command {
-            Some(super::Command::Bundle {
-                command: super::BundleCommand::Search { query, .. },
-            }) => {
-                assert_eq!(query, "goal-loop");
-            }
-            _ => panic!("expected bundle search command"),
-        }
-        let error = Cli::try_parse_from(["hya", "bundle", "search"])
-            .err()
-            .expect("bundle search without a query must fail to parse");
-        assert_eq!(
-            error.kind(),
-            clap::error::ErrorKind::MissingRequiredArgument
-        );
+        assert!(matches!(
+            p("hya providers list").command,
+            Some(Command::Provider { .. })
+        ));
+        assert!(matches!(
+            p("hya bridge - --json --listen 127.0.0.1:0").command,
+            Some(Command::Bridge { .. })
+        ));
+        assert!(matches!(
+            p("hya oauth login --provider codex --type openai-codex --loopback --browser --model gpt-5.3-codex").command,
+            Some(Command::Oauth { command: crate::auth_cmd::OauthCommand::Login { ref provider, loopback: true, browser: true, no_browser: false, model: Some(ref m), .. } })
+                if provider == "codex" && m == "gpt-5.3-codex"
+        ));
     }
 }

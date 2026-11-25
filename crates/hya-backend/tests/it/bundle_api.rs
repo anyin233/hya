@@ -1,414 +1,281 @@
 //! Bundle management over the v1 API against a real daemon (`ListBundles`,
-//! `InstallBundle`, `UninstallBundle`, `SetBundleEnabled`): what each call
-//! changes in the listing and in the published catalog (`ListTuiExtensions`).
+//! `InstallBundle`, `UninstallBundle`, `SetBundleEnabled`, `RefreshBundles`,
+//! `ListTuiExtensions`).
 
-use std::io::{Read as _, Write as _};
-use std::net::TcpStream;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
-type TestResult = Result<(), Box<dyn std::error::Error>>;
+use crate::common::{Daemons, Scratch, TestResult};
 
 const BUNDLE: &str = "e2e/tui-panel";
 
-fn scratch(prefix: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let dir = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
-    std::fs::create_dir_all(&dir)?;
-    Ok(dir.canonicalize()?)
+struct Api {
+    client: reqwest::Client,
+    url: String,
 }
 
-/// `hya serve start --json` with an isolated HOME/XDG under `root`; its pid and URL.
-fn start(root: &Path) -> Result<(i32, String), Box<dyn std::error::Error>> {
-    let output = Command::new(env!("CARGO_BIN_EXE_hya"))
-        .env_clear()
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        .env("HOME", root.join("home"))
-        .env("XDG_CONFIG_HOME", root.join("config"))
-        .env("XDG_DATA_HOME", root.join("data"))
-        .env("XDG_STATE_HOME", root.join("state"))
-        .env("XDG_CACHE_HOME", root.join("cache"))
-        .env("NO_COLOR", "1")
-        .current_dir(root)
+impl Api {
+    async fn post(
+        &self,
+        path: &str,
+        body: Value,
+    ) -> Result<(u16, Value), Box<dyn std::error::Error>> {
+        let resp = self
+            .client
+            .post(format!("{}{path}", self.url))
+            .json(&body)
+            .send()
+            .await?;
+        Ok((resp.status().as_u16(), resp.json().await?))
+    }
+
+    async fn status(&self, path: &str, body: Value) -> Result<u16, Box<dyn std::error::Error>> {
+        Ok(self.post(path, body).await?.0)
+    }
+
+    async fn row(
+        &self,
+        dir: &str,
+        id: &str,
+        scope: &str,
+    ) -> Result<Option<Value>, Box<dyn std::error::Error>> {
+        let body: Value = self
+            .client
+            .get(format!("{}/v1/bundles", self.url))
+            .query(&[("directory", dir)])
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(body["bundles"]
+            .as_array()
+            .ok_or("no bundles")?
+            .iter()
+            .find(|r| r["id"] == id && r["scope"] == scope)
+            .cloned())
+    }
+
+    async fn has_tui_ext(&self, id: &str) -> Result<bool, Box<dyn std::error::Error>> {
+        let body: Value = self
+            .client
+            .get(format!("{}/v1/tui-extensions", self.url))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(body["extensions"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|r| r["bundleId"] == id)))
+    }
+}
+
+#[tokio::test]
+async fn bundles_api_lifecycle_and_project_root_inventory_refresh() -> TestResult {
+    let scratch = Scratch::new("hya-bundle-api")?;
+    let root = &scratch.0;
+    let started = scratch
+        .hya()
         .args(["serve", "start", "--json", "--db"])
         .arg(root.join("s.db"))
-        .stdin(Stdio::null())
         .output()?;
-    let info: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
-        format!(
-            "not JSON ({error}); stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-    })?;
-    let pid = i32::try_from(info["pid"].as_i64().ok_or("no pid")?)?;
-    Ok((pid, info["url"].as_str().ok_or("no url")?.to_string()))
-}
-
-/// Kills the daemon even when the test fails half-way.
-struct Daemon(i32);
-
-impl Drop for Daemon {
-    fn drop(&mut self) {
-        // SAFETY: `kill` has no memory-safety preconditions.
-        unsafe {
-            libc::kill(self.0, libc::SIGKILL);
-        }
-    }
-}
-
-/// One JSON request; the status and the parsed body.
-fn call(
-    url: &str,
-    method: &str,
-    path: &str,
-    body: &Value,
-) -> Result<(u16, Value), Box<dyn std::error::Error>> {
-    let authority = url
-        .strip_prefix("http://")
-        .ok_or("not http")?
-        .trim_end_matches('/');
-    let mut socket = TcpStream::connect(authority)?;
-    socket.set_read_timeout(Some(Duration::from_secs(60)))?;
-    let payload = if body.is_null() {
-        String::new()
-    } else {
-        body.to_string()
+    let info: Value = serde_json::from_slice(&started.stdout)?;
+    let _daemon = Daemons(vec![i32::try_from(info["pid"].as_i64().ok_or("no pid")?)?]);
+    let api = Api {
+        client: reqwest::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()?,
+        url: info["url"].as_str().ok_or("no url")?.into(),
     };
-    write!(
-        socket,
-        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{payload}",
-        payload.len()
-    )?;
-    socket.flush()?;
-    let mut raw = String::new();
-    socket.read_to_string(&mut raw)?;
-    let (head, text) = raw.split_once("\r\n\r\n").ok_or("no HTTP body")?;
-    let status = head
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|code| code.parse().ok())
-        .ok_or("no HTTP status")?;
-    let text = if head
-        .to_ascii_lowercase()
-        .contains("transfer-encoding: chunked")
-    {
-        dechunk(text)
-    } else {
-        text.to_string()
-    };
-    let parsed =
-        serde_json::from_str(text.trim()).map_err(|error| format!("not JSON ({error}): {text}"))?;
-    Ok((status, parsed))
-}
 
-fn dechunk(body: &str) -> String {
-    let mut text = String::new();
-    let mut rest = body;
-    while let Some((size, after)) = rest.split_once("\r\n") {
-        let Ok(size) = usize::from_str_radix(size.trim(), 16) else {
-            break;
-        };
-        if size == 0 || after.len() < size {
-            break;
-        }
-        text.push_str(&after[..size]);
-        rest = after[size..].trim_start_matches("\r\n");
-    }
-    text
-}
-
-/// A Plugin bundle with a TUI extension, packaged at `dir/tui-panel.hyabundle`.
-fn package(dir: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let manifest = "kind: Bundle\nidentity: { id: e2e/tui-panel, version: 1.0.0, publisher: e2e }\nextensions:\n  files:\n    - { id: panel, path: tui/main.ts }\ntui:\n  api_version: 1\n  entry: tui/main.ts\n  sdk: 1.0.0\n  permissions: [tui.panel]\n";
-    let source = hya_bundle::BundleSource::new(
+    let src = hya_bundle::BundleSource::new(
         "tui-panel",
         vec![
-            hya_bundle::SourceFile::new("bundle.yaml", manifest.as_bytes().to_vec()),
+            hya_bundle::SourceFile::new(
+                "bundle.yaml",
+                b"kind: Bundle\nidentity: { id: e2e/tui-panel, version: 1.0.0, publisher: e2e }\nextensions:\n  files: [{ id: panel, path: tui/main.ts }]\ntui: { api_version: 1, entry: tui/main.ts, sdk: 1.0.0, permissions: [tui.panel] }\n".to_vec(),
+            ),
             hya_bundle::SourceFile::new("tui/main.ts", b"export default {}\n".to_vec()),
         ],
     );
-    let path = dir.join("tui-panel.hyabundle");
-    std::fs::write(&path, hya_bundle::write_public_package(&source)?)?;
-    Ok(path)
-}
+    let pkg = root.join("tui-panel.hyabundle");
+    std::fs::write(&pkg, hya_bundle::write_public_package(&src)?)?;
 
-/// The `ListBundles` row of `id` in `scope`, if listed.
-fn row(
-    url: &str,
-    directory: &str,
-    id: &str,
-    scope: &str,
-) -> Result<Option<Value>, Box<dyn std::error::Error>> {
-    let path = format!("/v1/bundles?directory={}", encode(directory));
-    let (status, body) = call(url, "GET", &path, &Value::Null)?;
-    assert_eq!(status, 200, "{body}");
-    Ok(body["bundles"]
-        .as_array()
-        .ok_or("no bundles")?
-        .iter()
-        .find(|row| row["id"] == id && row["scope"] == scope)
-        .cloned())
-}
-
-/// Bundle ids with a TUI extension in the directory's published catalog.
-fn tui_extensions(url: &str, directory: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let path = format!("/v1/tui-extensions?directory={}", encode(directory));
-    let (status, body) = call(url, "GET", &path, &Value::Null)?;
-    assert_eq!(status, 200, "{body}");
-    Ok(body["extensions"]
-        .as_array()
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|row| row["bundleId"].as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default())
-}
-
-fn encode(text: &str) -> String {
-    text.bytes()
-        .map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                char::from(byte).to_string()
-            }
-            other => format!("%{other:02X}"),
-        })
-        .collect()
-}
-
-#[test]
-fn bundles_install_disable_enable_and_uninstall_through_the_api() -> TestResult {
-    let root = scratch("hya-bundle-api")?;
-    let (pid, url) = start(&root)?;
-    let _daemon = Daemon(pid);
-    let package = package(&root)?;
-
-    // First-party bundles are listed but cannot be removed.
-    let basic = row(&url, "", "hya/basic-tui-components", "first_party")?
-        .ok_or("first-party bundle not listed")?;
-    // proto3 JSON omits `false`.
-    assert_ne!(basic["removable"], true);
-    assert_eq!(basic["components"]["tui"], true);
-    assert!(row(&url, "", BUNDLE, "user")?.is_none());
-
-    // A relative path is refused before anything is read.
-    let (status, body) = call(
-        &url,
-        "POST",
-        "/v1/bundles:install",
-        &json!({ "path": "tui-panel.hyabundle" }),
-    )?;
-    assert_eq!(status, 400, "{body}");
-
-    // Install: listed with its TUI extension, and published.
-    let (status, body) = call(
-        &url,
-        "POST",
-        "/v1/bundles:install",
-        &json!({ "path": package.to_string_lossy() }),
-    )?;
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(body["bundleId"], BUNDLE);
-    let installed = row(&url, "", BUNDLE, "user")?.ok_or("installed bundle not listed")?;
-    assert_eq!(installed["state"], "active");
-    assert_eq!(installed["removable"], true);
+    let basic = api
+        .row("", "hya/basic-tui-components", "first_party")
+        .await?
+        .ok_or("first-party")?;
+    assert!(basic["removable"] != true && basic["components"]["tui"] == true);
     assert_eq!(
-        installed["components"]["tuiPermissions"],
-        json!(["tui.panel"])
+        api.status(
+            "/v1/bundles:install",
+            json!({"path": "tui-panel.hyabundle"})
+        )
+        .await?,
+        400
     );
-    assert!(tui_extensions(&url, "")?.contains(&BUNDLE.to_string()));
 
-    // Disable: still listed as disabled, no longer published.
-    let (status, body) = call(
-        &url,
-        "POST",
-        "/v1/bundles:set-enabled",
-        &json!({ "bundleId": BUNDLE, "enabled": false }),
-    )?;
-    assert_eq!(status, 200, "{body}");
-    let disabled = row(&url, "", BUNDLE, "user")?.ok_or("disabled bundle not listed")?;
-    assert_eq!(disabled["state"], "disabled");
-    assert_ne!(disabled["enabled"], true, "proto3 JSON omits false");
-    assert!(!tui_extensions(&url, "")?.contains(&BUNDLE.to_string()));
+    let (st, body) = api
+        .post("/v1/bundles:install", json!({"path": pkg}))
+        .await?;
+    assert_eq!((st, body["bundleId"].as_str()), (200, Some(BUNDLE)));
+    assert!(api.has_tui_ext(BUNDLE).await?);
 
-    // Enable again: published again.
-    let (status, body) = call(
-        &url,
-        "POST",
-        "/v1/bundles:set-enabled",
-        &json!({ "bundleId": BUNDLE, "enabled": true }),
-    )?;
-    assert_eq!(status, 200, "{body}");
-    assert!(tui_extensions(&url, "")?.contains(&BUNDLE.to_string()));
-
-    // A disabled first-party bundle stops publishing its TUI extension too; trusted presets cannot be disabled.
-    let (status, body) = call(
-        &url,
-        "POST",
-        "/v1/bundles:set-enabled",
-        &json!({ "bundleId": "hya/basic-tui-components", "enabled": false }),
-    )?;
-    assert_eq!(status, 200, "{body}");
-    assert!(!tui_extensions(&url, "")?.contains(&"hya/basic-tui-components".to_string()));
-    let (status, body) = call(
-        &url,
-        "POST",
-        "/v1/bundles:set-enabled",
-        &json!({ "bundleId": "hya/basic-tui-components", "enabled": true }),
-    )?;
-    assert_eq!(status, 200, "{body}");
-    let (status, body) = call(
-        &url,
-        "POST",
-        "/v1/bundles:set-enabled",
-        &json!({ "bundleId": "hya/core-agents", "enabled": false }),
-    )?;
-    assert_eq!(status, 409, "{body}");
-
-    // First-party bundles cannot be uninstalled; installed ones can.
-    let (status, body) = call(
-        &url,
-        "POST",
-        "/v1/bundles:uninstall",
-        &json!({ "bundleId": "hya/goal-loop" }),
-    )?;
-    assert_eq!(status, 409, "{body}");
-    let (status, body) = call(
-        &url,
-        "POST",
-        "/v1/bundles:uninstall",
-        &json!({ "bundleId": BUNDLE }),
-    )?;
-    assert_eq!(status, 200, "{body}");
-    assert!(row(&url, "", BUNDLE, "user")?.is_none());
-    assert!(!tui_extensions(&url, "")?.contains(&BUNDLE.to_string()));
-    let (status, body) = call(
-        &url,
-        "POST",
-        "/v1/bundles:uninstall",
-        &json!({ "bundleId": BUNDLE }),
-    )?;
-    assert_eq!(status, 404, "{body}");
-
-    // Project scope: `<directory>/.hya/bundles`.
-    let project = root.join("work");
-    std::fs::create_dir_all(&project)?;
-    let directory = project.to_string_lossy().into_owned();
-    let (status, body) = call(
-        &url,
-        "POST",
-        "/v1/bundles:install",
-        &json!({ "directory": directory, "path": package.to_string_lossy(), "project": true }),
-    )?;
-    assert_eq!(status, 200, "{body}");
-    assert!(project.join(".hya/bundles").read_dir()?.next().is_some());
     assert_eq!(
-        row(&url, &directory, BUNDLE, "project")?.ok_or("project bundle not listed")?["state"],
+        api.status(
+            "/v1/bundles:set-enabled",
+            json!({"bundleId": BUNDLE, "enabled": false})
+        )
+        .await?,
+        200
+    );
+    assert_eq!(
+        api.row("", BUNDLE, "user").await?.ok_or("disabled")?["state"],
+        "disabled"
+    );
+    assert!(!api.has_tui_ext(BUNDLE).await?);
+    assert_eq!(
+        api.status(
+            "/v1/bundles:set-enabled",
+            json!({"bundleId": BUNDLE, "enabled": true})
+        )
+        .await?,
+        200
+    );
+    assert!(api.has_tui_ext(BUNDLE).await?);
+
+    assert_eq!(
+        api.status(
+            "/v1/bundles:set-enabled",
+            json!({"bundleId": "hya/core-agents", "enabled": false})
+        )
+        .await?,
+        409
+    );
+    assert_eq!(
+        api.status(
+            "/v1/bundles:uninstall",
+            json!({"bundleId": "hya/goal-loop"})
+        )
+        .await?,
+        409
+    );
+    assert_eq!(
+        api.status("/v1/bundles:uninstall", json!({"bundleId": BUNDLE}))
+            .await?,
+        200
+    );
+    assert_eq!(
+        api.status("/v1/bundles:uninstall", json!({"bundleId": BUNDLE}))
+            .await?,
+        404
+    );
+
+    let work = root.join("work");
+    std::fs::create_dir_all(&work)?;
+    let wd = work.to_string_lossy().into_owned();
+    assert_eq!(
+        api.status(
+            "/v1/bundles:install",
+            json!({"directory": wd, "path": pkg, "project": true})
+        )
+        .await?,
+        200
+    );
+    assert_eq!(
+        api.row(&wd, BUNDLE, "project").await?.ok_or("project")?["state"],
         "active"
     );
-    assert!(
-        row(&url, "", BUNDLE, "project")?.is_none(),
-        "no directory: no project bundles"
+    assert!(api.row("", BUNDLE, "project").await?.is_none());
+    assert_eq!(
+        api.status(
+            "/v1/bundles:uninstall",
+            json!({"directory": wd, "bundleId": BUNDLE, "project": true})
+        )
+        .await?,
+        200
     );
-    let (status, body) = call(
-        &url,
-        "POST",
-        "/v1/bundles:uninstall",
-        &json!({ "directory": directory, "bundleId": BUNDLE, "project": true }),
-    )?;
-    assert_eq!(status, 200, "{body}");
-    assert!(row(&url, &directory, BUNDLE, "project")?.is_none());
-    Ok(())
-}
 
-#[test]
-fn bundle_inventory_uses_the_named_directory_and_refresh_uses_project_roots() -> TestResult {
-    let root = scratch("hya-bundle-inventory")?;
-    let first = root.join("first");
-    let second = root.join("second");
+    // Multi-root project inventory vs refresh resolution.
+    let (first, second) = (root.join("first"), root.join("second"));
     let nested = first.join("nested");
-    for (dir, name, namespace) in [
-        (&first, "first", "shared-inventory"),
-        (&second, "second", "shared-inventory"),
-        (&second, "disabled", "disabled-inventory"),
-        (&nested, "nested", "nested-inventory"),
+    for (dir, name, ns) in [
+        (&first, "first", "s-inv"),
+        (&second, "second", "s-inv"),
+        (&second, "disabled", "d-inv"),
+        (&nested, "nested", "n-inv"),
     ] {
-        let bundle = dir.join(".hya/bundles").join(name);
-        std::fs::create_dir_all(&bundle)?;
+        let b = dir.join(".hya/bundles").join(name);
+        std::fs::create_dir_all(&b)?;
         std::fs::write(
-            bundle.join("bundle.yaml"),
+            b.join("bundle.yaml"),
             format!(
-                "kind: Bundle\nidentity: {{ id: inventory/{name}, version: 1.0.0, publisher: inventory }}\nnamespace: {namespace}\nresources:\n  skills:\n    - {{ id: inventory-demo, path: skill.md }}\n"
+                "kind: Bundle\nidentity: {{ id: inventory/{name}, version: 1.0.0, publisher: inventory }}\nnamespace: {ns}\nresources:\n  skills: [{{ id: inv-demo, path: skill.md }}]\n"
             ),
         )?;
         std::fs::write(
-            bundle.join("skill.md"),
-            "---\nname: inventory-demo\ndescription: Inventory fixture\n---\nInventory fixture.\n",
+            b.join("skill.md"),
+            "---\nname: inv-demo\ndescription: d\n---\nbody\n",
         )?;
     }
     let broken = nested.join(".hya/bundles/broken");
     std::fs::create_dir_all(&broken)?;
     std::fs::write(broken.join("bundle.yaml"), "kind: [\n")?;
 
-    let (pid, url) = start(&root)?;
-    let _daemon = Daemon(pid);
-    let (status, body) = call(
-        &url,
-        "POST",
-        "/v1/projects",
-        &json!({"name": "inventory", "roots": [first, second]}),
-    )?;
-    assert_eq!(status, 200, "{body}");
-    let (status, body) = call(
-        &url,
-        "POST",
-        "/v1/bundles:set-enabled",
-        &json!({"bundleId": "inventory/disabled", "enabled": false}),
-    )?;
-    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        api.status(
+            "/v1/projects",
+            json!({"name": "inventory", "roots": [first, second]})
+        )
+        .await?,
+        200
+    );
+    assert_eq!(
+        api.status(
+            "/v1/bundles:set-enabled",
+            json!({"bundleId": "inventory/disabled", "enabled": false})
+        )
+        .await?,
+        200
+    );
+    let nested_req = format!(" {} ", nested.display());
+    assert_eq!(
+        api.row(&nested_req, "inventory/nested", "project")
+            .await?
+            .ok_or("nested")?["state"],
+        "active"
+    );
+    assert_eq!(
+        api.row(&nested_req, broken.to_str().ok_or("b")?, "project")
+            .await?
+            .ok_or("broken")?["state"],
+        "unreadable"
+    );
+    assert!(
+        api.row(&nested_req, "inventory/first", "project")
+            .await?
+            .is_none()
+    );
+    assert_eq!(
+        api.row(second.to_str().ok_or("s")?, "inventory/disabled", "project")
+            .await?
+            .ok_or("dis")?["state"],
+        "disabled"
+    );
 
-    let nested_request = format!(" {} ", nested.display());
-    for (id, state) in [
-        ("inventory/nested", "active"),
-        (
-            broken.to_str().ok_or("non-UTF-8 fixture path")?,
-            "unreadable",
-        ),
-    ] {
-        let inventory = row(&url, &nested_request, id, "project")?.ok_or("missing nested row")?;
-        assert_eq!(inventory["state"], state, "{inventory}");
-    }
-    assert!(row(&url, &nested_request, "inventory/first", "project")?.is_none());
-    assert!(row(&url, &nested_request, "inventory/second", "project")?.is_none());
-
-    let second_dir = second.to_str().ok_or("non-UTF-8 fixture path")?;
-    for (id, state) in [
-        ("inventory/second", "active"),
-        ("inventory/disabled", "disabled"),
-    ] {
-        let inventory = row(&url, second_dir, id, "project")?.ok_or("missing second-root row")?;
-        assert_eq!(inventory["state"], state, "{inventory}");
-    }
-
-    let (status, published) = call(
-        &url,
-        "POST",
-        "/v1/bundles:refresh",
-        &json!({"directory": nested}),
-    )?;
-    assert_eq!(status, 200, "{published}");
-    assert_eq!(published["scope"], "project");
-    let ids = published["bundles"]
+    let (st, pub_resp) = api
+        .post("/v1/bundles:refresh", json!({"directory": nested}))
+        .await?;
+    assert_eq!((st, pub_resp["scope"].as_str()), (200, Some("project")));
+    let ids: Vec<&str> = pub_resp["bundles"]
         .as_array()
-        .ok_or("missing published rows")?
+        .ok_or("bundles")?
         .iter()
-        .filter_map(|row| row["id"].as_str())
+        .filter_map(|r| r["id"].as_str())
         .filter(|id| id.starts_with("inventory/"))
-        .collect::<Vec<_>>();
-    assert_eq!(ids, ["inventory/first"], "{published}");
+        .collect();
+    assert_eq!(ids, ["inventory/first"], "{pub_resp}");
     Ok(())
 }

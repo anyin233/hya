@@ -374,6 +374,14 @@ mod tests {
         }
     }
 
+    fn child(seq: u64, id: SessionId, parent: SessionId) -> Envelope {
+        let mut created = envelope(seq, id);
+        if let Event::SessionCreated { parent: field, .. } = &mut created.event {
+            *field = Some(parent);
+        }
+        created
+    }
+
     #[derive(Clone, Default)]
     struct SharedBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 
@@ -401,58 +409,54 @@ mod tests {
         }
     }
 
+    struct CleanDir(std::path::PathBuf);
+    impl Drop for CleanDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn lock_wal_reads(db: &std::path::Path) -> std::io::Result<std::fs::File> {
+        use std::os::fd::AsRawFd as _;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(format!("{}-shm", db.display()))?;
+        let lock = libc::flock {
+            l_type: libc::F_WRLCK as _,
+            l_whence: libc::SEEK_SET as _,
+            l_start: 120,
+            l_len: 8,
+            l_pid: 0,
+        };
+        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_OFD_SETLK, &lock) } < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(file)
+    }
+
     #[test]
-    fn printer_filters_session_durable_seq_and_deduplicates() {
+    fn printer_filters_deduplicates_and_handles_out_of_order_seq() {
         let session = SessionId::new();
         let other = SessionId::new();
-        let mut printer = JsonStreamPrinter::new(Vec::new(), StreamScope::Single(session));
+        let mut printer =
+            JsonStreamPrinter::new(SharedBuf::default(), StreamScope::Single(session));
 
         assert!(!printer.print(&envelope(0, session)).unwrap());
         assert!(!printer.print(&envelope(1, other)).unwrap());
+        assert!(printer.print(&envelope(3, session)).unwrap());
         assert!(printer.print(&envelope(1, session)).unwrap());
-        // Duplicates are dropped regardless of arrival order.
-        assert!(!printer.print(&envelope(1, session)).unwrap());
-        assert!(printer.print(&envelope(3, session)).unwrap());
-
-        let written = String::from_utf8(printer.out).unwrap();
-        let lines: Vec<&str> = written.lines().collect();
-        assert_eq!(lines.len(), 2, "only the two eligible envelopes print");
-        for line in &lines {
-            let parsed: Envelope = serde_json::from_str(line).unwrap();
-            assert_eq!(parsed.event.session(), Some(session));
-        }
-        assert!(lines[0].contains("\"seq\":1"));
-        assert!(lines[1].contains("\"seq\":3"));
-    }
-
-    #[test]
-    fn printer_handles_out_of_order_arrival_from_concurrent_writers() {
-        let session = SessionId::new();
-        let mut printer = JsonStreamPrinter::new(Vec::new(), StreamScope::Single(session));
-        // Concurrent writers (turn loop, resident batches, mailbox) can
-        // publish a higher seq before a lower one; both must print.
-        assert!(printer.print(&envelope(3, session)).unwrap());
-        assert!(printer.print(&envelope(2, session)).unwrap());
         assert!(!printer.print(&envelope(3, session)).unwrap());
-        let written = String::from_utf8(printer.out).unwrap();
-        assert_eq!(written.lines().count(), 2);
-    }
-
-    fn child(seq: u64, id: SessionId, parent: SessionId) -> Envelope {
-        let mut created = envelope(seq, id);
-        if let Event::SessionCreated { parent: field, .. } = &mut created.event {
-            *field = Some(parent);
-        }
-        created
+        assert!(!printer.print(&envelope(1, session)).unwrap());
+        assert_eq!(printer.out.seqs(), vec![3, 1]);
     }
 
     #[tokio::test]
-    async fn tree_stream_prints_descendants_in_arrival_order() -> anyhow::Result<()> {
-        let [root, member, grandchild, other] = std::array::from_fn(|_| SessionId::new());
+    async fn tree_stream_orders_descendants_and_recovers_missed_via_lag_and_final_replay()
+    -> anyhow::Result<()> {
+        let [root, member, grandchild, other, old] = std::array::from_fn(|_| SessionId::new());
         let store = SessionStore::connect_memory().await?;
-        // An unrelated root existed before subscription. Only its conflicting
-        // create arrives live. A second unrelated root is observed live first.
-        let old = SessionId::new();
         for (id, e) in [
             (root, envelope(1, root)),
             (member, child(2, member, root)),
@@ -488,12 +492,8 @@ mod tests {
         )
         .await?;
         assert_eq!(out.seqs(), [1, 2, 3, 6, 4]);
-        Ok(())
-    }
 
-    #[tokio::test]
-    async fn tree_lag_and_final_replay_recover_missed_descendants() -> anyhow::Result<()> {
-        let [root, member, grandchild] = std::array::from_fn(|_| SessionId::new());
+        // Tree lag + final replay recover missed descendants.
         let (tx, rx) = broadcast::channel(1);
         tx.send(child(2, member, root))?;
         tx.send(title(4, member))?;
@@ -532,257 +532,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_prints_live_frames_in_order_and_stops_on_done() {
-        let session = SessionId::new();
-        let bus = broadcast::channel::<Envelope>(16);
-        let (done_tx, done_rx) = oneshot::channel::<()>();
-
-        for seq in 1..=4_u64 {
-            let _ = bus.0.send(envelope(seq, session));
-        }
-        let _ = bus.0.send(envelope(5, SessionId::new()));
-        let _ = done_tx.send(());
-
-        let replay_calls = std::cell::Cell::new(0);
-        let printer = stream_until_done(
-            bus.1,
-            StreamScope::Single(session),
-            done_rx,
-            |pass| {
-                assert_eq!(pass, ReplayPass::Initial);
-                replay_calls.set(replay_calls.get() + 1);
-                async { Ok(Vec::new()) }
-            },
-            Vec::new(),
-        )
-        .await
-        .unwrap();
-
-        let written = String::from_utf8(printer.out).unwrap();
-        let seqs: Vec<u64> = written
-            .lines()
-            .map(|line| serde_json::from_str::<Envelope>(line).unwrap().seq.0)
-            .collect();
-        assert_eq!(seqs, vec![1, 2, 3, 4], "foreign sessions are filtered");
-        assert_eq!(replay_calls.get(), 1, "only the initial catch-up ran");
-    }
-
-    #[tokio::test]
-    async fn initial_catch_up_prints_pre_subscription_envelopes_in_order() {
-        let session = SessionId::new();
-        let (tx, rx) = broadcast::channel::<Envelope>(16);
-        let (done_tx, done_rx) = oneshot::channel::<()>();
-
-        // seq 1 was persisted before the subscription existed; seq 2 arrives
-        // live on the bus.
-        let catch_up = vec![envelope(1, session)];
-        let _ = tx.send(envelope(2, session));
-        let _ = done_tx.send(());
-
-        let mut calls = 0;
-        let printer = stream_until_done(
-            rx,
-            StreamScope::Single(session),
-            done_rx,
-            |pass| {
-                calls += 1;
-                let envelopes = match pass {
-                    ReplayPass::Initial => catch_up.clone(),
-                    ReplayPass::Lag => Vec::new(),
-                };
-                async move { Ok(envelopes) }
-            },
-            Vec::new(),
-        )
-        .await
-        .unwrap();
-
-        let written = String::from_utf8(printer.out).unwrap();
-        let seqs: Vec<u64> = written
-            .lines()
-            .map(|line| serde_json::from_str::<Envelope>(line).unwrap().seq.0)
-            .collect();
-        assert_eq!(seqs, vec![1, 2], "catch-up precedes live frames");
-    }
-
-    #[tokio::test]
-    async fn lagged_receiver_resyncs_through_replay() {
-        let session = SessionId::new();
-        // Capacity 1: any burst lags a slow receiver.
-        let (tx, rx) = broadcast::channel::<Envelope>(1);
-        let (done_tx, done_rx) = oneshot::channel::<()>();
-        let mut done_tx = Some(done_tx);
-
-        tx.send(envelope(2, session)).unwrap();
-        tx.send(envelope(3, session)).unwrap();
-
-        let replay_calls = std::cell::Cell::new(0);
-        let printer = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            stream_until_done(
-                rx,
-                StreamScope::Single(session),
-                done_rx,
-                |pass| {
-                    let call = replay_calls.get() + 1;
-                    replay_calls.set(call);
-                    let envelopes = match pass {
-                        ReplayPass::Initial => vec![envelope(1, session)],
-                        ReplayPass::Lag => {
-                            if let Some(done) = done_tx.take() {
-                                let _ = done.send(());
-                            }
-                            vec![
-                                envelope(1, session),
-                                envelope(2, session),
-                                envelope(3, session),
-                            ]
-                        }
-                    };
-                    async move { Ok(envelopes) }
-                },
-                Vec::new(),
-            ),
-        )
-        .await
-        .expect("lag replay must run and trigger done")
-        .unwrap();
-
-        let written = String::from_utf8(printer.out).unwrap();
-        let seqs: Vec<u64> = written
-            .lines()
-            .map(|line| serde_json::from_str::<Envelope>(line).unwrap().seq.0)
-            .collect();
-        assert_eq!(
-            replay_calls.get(),
-            2,
-            "must run startup catch-up plus lag replay"
-        );
-        assert_eq!(
-            seqs,
-            vec![1, 2, 3],
-            "replay recovers everything missed in order"
-        );
-    }
-
-    #[tokio::test]
-    async fn lag_replay_recovers_delayed_lower_sequence_after_live_high() {
-        let session = SessionId::new();
-        let (tx, rx) = broadcast::channel(1);
-        let (done_tx, done_rx) = oneshot::channel();
-        let mut done_tx = Some(done_tx);
-        let mut calls = 0_usize;
-        let mut writes = 0_usize;
-        struct NotifyWrite<'a> {
-            out: SharedBuf,
-            hook: &'a mut dyn FnMut(),
-        }
-        impl std::io::Write for NotifyWrite<'_> {
-            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                let n = self.out.write(bytes)?;
-                if bytes.ends_with(b"\n") {
-                    (self.hook)();
-                }
-                Ok(n)
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                self.out.flush()
-            }
-        }
-        let out = SharedBuf::default();
-        let mut hook = || {
-            writes += 1;
-            if writes == 1 {
-                // Simulate delayed seq 2 broadcast and a burst seq 4 that lags seq 2.
-                let _ = tx.send(title(2, session));
-                let _ = tx.send(title(4, session));
-            }
-        };
-        let _ = tx.send(title(3, session));
-        let printer = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            stream_until_done(
-                rx,
-                StreamScope::Single(session),
-                done_rx,
-                |pass| {
-                    calls += 1;
-                    let disk = match pass {
-                        ReplayPass::Initial => Vec::new(),
-                        ReplayPass::Lag => {
-                            if let Some(done) = done_tx.take() {
-                                let _ = done.send(());
-                            }
-                            vec![title(2, session), title(3, session), title(4, session)]
-                        }
-                    };
-                    std::future::ready(Ok(disk))
-                },
-                NotifyWrite {
-                    out: out.clone(),
-                    hook: &mut hook,
-                },
-            ),
-        )
-        .await
-        .expect("lag replay must run and trigger done")
-        .unwrap();
-
-        assert_eq!(
-            calls, 2,
-            "must recover through lag replay before finalization"
-        );
-        assert_eq!(
-            out.seqs(),
-            vec![3, 2, 4],
-            "lag replay must recover [2, 4] after live 3 before finalization"
-        );
-
-        let mut stderr = Vec::new();
-        finish_json_stream(
-            printer,
-            || {
-                std::future::ready(Ok(vec![
-                    title(2, session),
-                    title(3, session),
-                    title(4, session),
-                ]))
-            },
-            &mut stderr,
-        )
-        .await
-        .unwrap();
-        assert!(stderr.is_empty());
-        assert_eq!(out.seqs(), vec![3, 2, 4]);
-    }
-
-    #[tokio::test]
-    async fn final_replay_emits_unbroadcast_row_without_lag() {
+    async fn single_stream_catch_up_live_lag_resync_and_final_unbroadcast_replay() {
         let session = SessionId::new();
         let (tx, rx) = broadcast::channel(8);
         let (done_tx, done_rx) = oneshot::channel();
-        let _ = tx.send(title(3, session));
+        tx.send(title(3, session)).unwrap();
+        tx.send(title(9, SessionId::new())).unwrap();
         let _ = done_tx.send(());
 
         let out = SharedBuf::default();
+        let mut init_calls = 0;
         let printer = stream_until_done(
             rx,
             StreamScope::Single(session),
             done_rx,
             |pass| {
                 assert_eq!(pass, ReplayPass::Initial);
+                init_calls += 1;
                 std::future::ready(Ok(vec![title(1, session)]))
             },
             out.clone(),
         )
         .await
         .unwrap();
-        let mut final_called = false;
+        assert_eq!(init_calls, 1);
         let mut stderr = Vec::new();
         finish_json_stream(
             printer,
             || {
-                final_called = true;
                 std::future::ready(Ok(vec![
                     title(1, session),
                     title(2, session),
@@ -793,499 +570,260 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(final_called, "final replay must always run at stream end");
-        assert!(stderr.is_empty());
-        let mut seqs = out.seqs();
-        seqs.sort_unstable();
-        assert_eq!(
-            seqs,
-            vec![1, 2, 3],
-            "unbroadcast seq 2 must be printed once"
-        );
-    }
+        assert!(stderr.is_empty() && out.seqs() == vec![1, 3, 2]);
 
-    #[tokio::test]
-    async fn final_replay_storage_fault_and_timeout_warn_once_and_preserve_stdout() {
-        struct CleanDir(std::path::PathBuf);
-        impl Drop for CleanDir {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
+        // Burst lag recovers delayed lower sequence after live high.
+        struct NotifyWrite<'a> {
+            out: SharedBuf,
+            hook: &'a mut dyn FnMut(),
+        }
+        impl std::io::Write for NotifyWrite<'_> {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                let n = self.out.write(b)?;
+                if b.ends_with(b"\n") {
+                    (self.hook)();
+                }
+                Ok(n)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.out.flush()
             }
         }
-        let _dir =
-            CleanDir(std::env::temp_dir().join(format!("hya-exec-stream-{}", SessionId::new())));
-        std::fs::create_dir_all(&_dir.0).unwrap();
-        let db = _dir.0.join("hya.db");
-
-        let session = SessionId::new();
-        let store = SessionStore::connect_with_write_timeout(
-            db.to_str().unwrap(),
-            std::time::Duration::from_millis(40),
-        )
-        .await
-        .unwrap();
-        let (seq1, ts1) = store
-            .append_event(session, &envelope(1, session).event)
-            .await
-            .unwrap();
-        // Warm `read_pool` on a separate store handle too for unlinked cold failure below.
-        let cold_store = SessionStore::connect(db.to_str().unwrap()).await.unwrap();
-        // Verify initial healthy replay sees seq 1.
-        assert_eq!(bounded_replay(&store, session).await.unwrap().len(), 1);
-
-        // 1. StorageTimeout when replay stalls past `read_timeout` (Linux OFD shm lock).
-        #[cfg(target_os = "linux")]
-        {
-            struct ShmWriteLock(std::fs::File);
-            impl Drop for ShmWriteLock {
-                fn drop(&mut self) {
-                    use std::os::unix::io::AsRawFd;
-                    let lock = libc::flock {
-                        l_type: libc::F_UNLCK as libc::c_short,
-                        l_whence: libc::SEEK_SET as libc::c_short,
-                        l_start: 120,
-                        l_len: 8,
-                        l_pid: 0,
-                    };
-                    unsafe { libc::fcntl(self.0.as_raw_fd(), libc::F_OFD_SETLK, &lock) };
-                }
+        let (tx, rx) = broadcast::channel(1);
+        let (done_tx, done_rx) = oneshot::channel();
+        let (mut done_tx, mut calls, mut writes) = (Some(done_tx), 0_usize, 0_usize);
+        let out = SharedBuf::default();
+        let mut hook = || {
+            writes += 1;
+            if writes == 1 {
+                let _ = tx.send(title(2, session));
+                let _ = tx.send(title(4, session));
             }
-            let shm_path = format!("{}-shm", db.display());
-            let shm = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&shm_path)
-                .unwrap();
-            {
-                use std::os::unix::io::AsRawFd;
-                let lock = libc::flock {
-                    l_type: libc::F_WRLCK as libc::c_short,
-                    l_whence: libc::SEEK_SET as libc::c_short,
-                    l_start: 120,
-                    l_len: 8,
-                    l_pid: 0,
-                };
-                assert_eq!(
-                    unsafe { libc::fcntl(shm.as_raw_fd(), libc::F_OFD_SETLK, &lock) },
-                    0
-                );
-            }
-            let _shm_guard = ShmWriteLock(shm);
-
-            let (tx, rx) = broadcast::channel::<Envelope>(8);
-            let (done_tx, done_rx) = oneshot::channel::<()>();
-            let _ = tx.send(Envelope {
-                seq: seq1,
-                ts_millis: ts1,
-                event: envelope(1, session).event,
-            });
-            let _ = tx.send(title(2, session));
-            let _ = done_tx.send(());
-
-            let out = SharedBuf::default();
-            let printer = stream_until_done(
+        };
+        let _ = tx.send(title(3, session));
+        let disk = vec![title(2, session), title(3, session), title(4, session)];
+        let printer = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            stream_until_done(
                 rx,
                 StreamScope::Single(session),
                 done_rx,
                 |pass| {
-                    assert_eq!(pass, ReplayPass::Initial);
-                    async { Ok(Vec::new()) }
+                    calls += 1;
+                    let rows = match pass {
+                        ReplayPass::Initial => Vec::new(),
+                        ReplayPass::Lag => {
+                            if let Some(d) = done_tx.take() {
+                                let _ = d.send(());
+                            }
+                            disk.clone()
+                        }
+                    };
+                    std::future::ready(Ok(rows))
+                },
+                NotifyWrite {
+                    out: out.clone(),
+                    hook: &mut hook,
+                },
+            ),
+        )
+        .await
+        .expect("lag replay triggers done")
+        .unwrap();
+        assert_eq!((calls, out.seqs()), (2, vec![3, 2, 4]));
+        let mut stderr = Vec::new();
+        finish_json_stream(
+            printer,
+            || std::future::ready(Ok(disk.clone())),
+            &mut stderr,
+        )
+        .await
+        .unwrap();
+        assert!(stderr.is_empty() && out.seqs() == vec![3, 2, 4]);
+    }
+
+    #[tokio::test]
+    async fn lag_and_final_storage_faults_warn_once_and_flush_before_stderr() {
+        let timeout_err = |op: &'static str| StoreError::StorageTimeout {
+            operation: op,
+            timeout: std::time::Duration::from_secs(5),
+        };
+        for (final_op, expected) in [(None, vec![1, 3, 2]), (Some("final-replay"), vec![1, 3])] {
+            let s = SessionId::new();
+            let (bus, rx) = broadcast::channel(1);
+            let (done, completed) = oneshot::channel();
+            let mut done = Some(done);
+            let out = SharedBuf::default();
+            bus.send(title(2, s)).unwrap();
+            bus.send(title(3, s)).unwrap();
+            let printer = stream_until_done(
+                rx,
+                StreamScope::Single(s),
+                completed,
+                |pass| {
+                    std::future::ready(match pass {
+                        ReplayPass::Initial => Ok(vec![title(1, s)]),
+                        ReplayPass::Lag => {
+                            done.take().unwrap().send(()).unwrap();
+                            Err(timeout_err("lag-replay"))
+                        }
+                    })
                 },
                 out.clone(),
             )
             .await
             .unwrap();
-
             let mut stderr = Vec::new();
-            tokio::time::timeout(
-                std::time::Duration::from_millis(400),
-                finish_json_stream(printer, || bounded_replay(&store, session), &mut stderr),
+            finish_json_stream(
+                printer,
+                || {
+                    std::future::ready(match final_op {
+                        Some(op) => Err(timeout_err(op)),
+                        None => Ok(vec![title(1, s), title(2, s), title(3, s)]),
+                    })
+                },
+                &mut stderr,
             )
             .await
-            .expect("stalled final replay must be bounded by READ_TIMEOUT")
-            .expect("stalled final replay must warn once and preserve run result");
-
+            .unwrap();
             let warn = String::from_utf8(stderr).unwrap();
-            assert_eq!(warn.lines().count(), 1, "expected 1 warning, got: {warn:?}");
-            assert!(
-                warn.contains("incomplete") && warn.contains("timeout"),
-                "unexpected warning: {warn:?}"
-            );
-            assert_eq!(out.seqs(), vec![1, 2], "stdout stays pure JSONL");
+            assert_eq!((out.seqs(), warn.lines().count()), (expected, 1));
+            assert!(warn.contains("incomplete") && warn.contains("lag-replay"));
         }
 
-        // 2. Storage I/O failure (`SQLITE_CANTOPEN`) on cold unlinked store -> warn once and succeed.
-        drop(store);
-        std::fs::remove_file(&db).unwrap();
-        let (tx, rx) = broadcast::channel::<Envelope>(8);
-        let (done_tx, done_rx) = oneshot::channel::<()>();
-        let _ = tx.send(Envelope {
-            seq: seq1,
-            ts_millis: ts1,
-            event: envelope(1, session).event,
-        });
-        let _ = done_tx.send(());
-        let out = SharedBuf::default();
-        let printer = stream_until_done(
-            rx,
-            StreamScope::Single(session),
-            done_rx,
-            |pass| {
-                assert_eq!(pass, ReplayPass::Initial);
-                async { Ok(Vec::new()) }
-            },
-            out.clone(),
-        )
-        .await
-        .unwrap();
-        let mut stderr = Vec::new();
-        finish_json_stream(
-            printer,
-            || bounded_replay(&cold_store, session),
-            &mut stderr,
-        )
-        .await
-        .expect("storage read fault at final replay must warn once and succeed");
-        let warn = String::from_utf8(stderr).unwrap();
-        assert_eq!(warn.lines().count(), 1, "expected 1 warning, got: {warn:?}");
-        assert!(warn.contains("incomplete"));
-        assert_eq!(out.seqs(), vec![1]);
-
-        // 3. Non-storage errors (e.g. corrupt key / JSON decode) still propagate.
-        let printer = JsonStreamPrinter::new(Vec::new(), StreamScope::Single(session));
-        let mut stderr = Vec::new();
+        // Flush order + logical error propagation still emits prior lag warning and flushes stdout.
+        struct OrderWriter(
+            std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
+            &'static str,
+            &'static str,
+        );
+        impl std::io::Write for OrderWriter {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().push(self.1);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.0.lock().unwrap().push(self.2);
+                Ok(())
+            }
+        }
+        let s = SessionId::new();
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut printer = JsonStreamPrinter::new(
+            std::io::BufWriter::new(OrderWriter(events.clone(), "out-w", "out-f")),
+            StreamScope::Single(s),
+        );
+        printer.print(&title(1, s)).unwrap();
+        printer.first_lag_fault = Some("lag timeout".into());
         let err = finish_json_stream(
             printer,
             || async { Err(StoreError::SessionKeyData("corrupt key".into())) },
-            &mut stderr,
+            OrderWriter(events.clone(), "err-w", "err-f"),
         )
         .await
         .unwrap_err();
-        assert!(stderr.is_empty());
         assert!(err.to_string().contains("corrupt key"));
-    }
-
-    async fn lag_fault_then_finish(
-        lag_op: &'static str,
-        final_op: Option<&'static str>,
-    ) -> (Vec<u64>, String) {
-        let session = SessionId::new();
-        let (bus, receiver) = broadcast::channel(1);
-        let (done, completed) = oneshot::channel();
-        let mut done = Some(done);
-        let out = SharedBuf::default();
-        bus.send(title(2, session)).unwrap();
-        bus.send(title(3, session)).unwrap();
-        let mut replays = 0;
-        let printer = stream_until_done(
-            receiver,
-            StreamScope::Single(session),
-            completed,
-            |pass| {
-                replays += 1;
-                std::future::ready(match pass {
-                    ReplayPass::Initial => Ok(vec![title(1, session)]),
-                    ReplayPass::Lag => {
-                        done.take().unwrap().send(()).unwrap();
-                        Err(StoreError::StorageTimeout {
-                            operation: lag_op,
-                            timeout: std::time::Duration::from_secs(5),
-                        })
-                    }
-                })
-            },
-            out.clone(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(replays, 2, "the lag replay must execute");
-        let mut stderr = Vec::new();
-        finish_json_stream(
-            printer,
-            || {
-                std::future::ready(match final_op {
-                    Some(op) => Err(StoreError::StorageTimeout {
-                        operation: op,
-                        timeout: std::time::Duration::from_secs(5),
-                    }),
-                    None => Ok(vec![
-                        title(1, session),
-                        title(2, session),
-                        title(3, session),
-                    ]),
-                })
-            },
-            &mut stderr,
-        )
-        .await
-        .unwrap();
-        (out.seqs(), String::from_utf8(stderr).unwrap())
-    }
-
-    #[tokio::test]
-    async fn lag_fault_then_final_replay_success_warns_once() {
-        let (seqs, stderr) = lag_fault_then_finish("lag-replay", None).await;
-        println!("lag timed out, final succeeded: stdout seqs={seqs:?}, stderr={stderr:?}");
-        assert_eq!(seqs, vec![1, 3, 2]);
-        assert_eq!(stderr.lines().count(), 1);
-        assert!(stderr.contains("incomplete") && stderr.contains("lag-replay"));
-    }
-
-    #[tokio::test]
-    async fn lag_and_final_replay_faults_warn_once() {
-        let (seqs, stderr) = lag_fault_then_finish("lag-replay", Some("final-replay")).await;
-        println!("lag and final timed out: stdout seqs={seqs:?}, stderr={stderr:?}");
-        assert_eq!(seqs, vec![1, 3]);
-        assert_eq!(stderr.lines().count(), 1);
-        assert!(stderr.contains("incomplete") && stderr.contains("lag-replay"));
-    }
-
-    #[cfg(target_os = "linux")]
-    fn lock_wal_reads(db: &std::path::Path) -> std::io::Result<std::fs::File> {
-        use std::os::fd::AsRawFd as _;
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(format!("{}-shm", db.display()))?;
-        let lock = libc::flock {
-            l_type: libc::F_WRLCK as _,
-            l_whence: libc::SEEK_SET as _,
-            l_start: 120,
-            l_len: 8,
-            l_pid: 0,
-        };
-        // An OFD lock is released when its file is dropped.
-        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_OFD_SETLK, &lock) } < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(file)
-    }
-
-    #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn child_live_frame_retries_ancestry_after_storage_timeout() -> anyhow::Result<()> {
-        let [root, parent, member] = std::array::from_fn(|_| SessionId::new());
-        let dir = std::env::temp_dir().join(format!("hya-tree-retry-{root}"));
-        std::fs::create_dir(&dir)?;
-        let db = dir.join("tree.db");
-        let store = SessionStore::connect_with_timeouts(
-            db.to_str().ok_or_else(|| anyhow::anyhow!("db path"))?,
-            std::time::Duration::from_secs(5),
-            std::time::Duration::from_millis(80),
-        )
-        .await?;
-        let created = child(3, member, parent);
-        for env in [envelope(1, root), child(2, parent, root), created.clone()] {
-            store
-                .append_event(
-                    env.event
-                        .session()
-                        .ok_or_else(|| anyhow::anyhow!("session"))?,
-                    &env.event,
-                )
-                .await?;
-        }
-        assert_eq!(store.replay_page(member, 0, 1).await?.len(), 1);
-        let (tx, mut rx) = broadcast::channel(8);
-        let mut printer =
-            JsonStreamPrinter::new(SharedBuf::default(), StreamScope::tree(root, store));
-        let lock = lock_wal_reads(&db)?;
-        tx.send(created)?;
-        printer.live(&rx.recv().await?).await?;
+        let rec = events.lock().unwrap().clone();
         assert!(
-            printer
-                .first_lag_fault
-                .as_deref()
-                .is_some_and(|msg| msg.contains("timeout"))
+            rec.iter().position(|t| *t == "out-f") < rec.iter().position(|t| *t == "err-w"),
+            "{rec:?}"
         );
-        drop(lock);
-        tx.send(title(4, member))?;
-        printer.live(&rx.recv().await?).await?;
-        assert_eq!(printer.out.seqs(), [4]);
-        drop(printer);
-        std::fs::remove_dir_all(dir)?;
-        Ok(())
     }
 
-    #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn replay_for_pass_bounds_only_lag_with_read_timeout() -> anyhow::Result<()> {
-        struct CleanDir(std::path::PathBuf);
-        impl Drop for CleanDir {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
+    async fn sqlite_replay_timeouts_unlinked_faults_and_tree_ancestry_retry() -> anyhow::Result<()>
+    {
         let _dir =
-            CleanDir(std::env::temp_dir().join(format!("hya-exec-pass-{}", SessionId::new())));
-        std::fs::create_dir_all(&_dir.0).unwrap();
+            CleanDir(std::env::temp_dir().join(format!("hya-exec-stream-{}", SessionId::new())));
+        std::fs::create_dir_all(&_dir.0)?;
         let db = _dir.0.join("hya.db");
+        let [root, parent, member] = std::array::from_fn(|_| SessionId::new());
         let store = SessionStore::connect_with_timeouts(
             db.to_str().unwrap(),
             std::time::Duration::from_secs(5),
             std::time::Duration::from_millis(40),
         )
-        .await
-        .unwrap();
-        let session = SessionId::new();
-        store
-            .append_event(session, &envelope(1, session).event)
-            .await
-            .unwrap();
-        // Warm `read_pool` on healthy disk first.
-        assert_eq!(store.replay(session).await.unwrap().len(), 1);
-
-        // Stall 90ms (> 40ms read_timeout, << 5s write_timeout): Initial waits and succeeds.
-        let lock = lock_wal_reads(&db)?;
-        let unlocker = std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(90));
-            drop(lock);
-        });
-        let started = std::time::Instant::now();
-        let initial = StreamScope::Single(session)
-            .replay(&store, ReplayPass::Initial)
-            .await
-            .expect("initial healthy replay must wait past 40ms read_timeout");
-        let elapsed = started.elapsed();
-        unlocker.join().unwrap();
-        assert!(
-            elapsed >= std::time::Duration::from_millis(70),
-            "initial replay did not observe stall: elapsed={elapsed:?}"
-        );
-        assert_eq!(initial.len(), 1);
-
-        // Held stall (> 40ms): Lag cuts off at read_timeout.
-        let _held = lock_wal_reads(&db)?;
-        let lag = StreamScope::Single(session)
-            .replay(&store, ReplayPass::Lag)
-            .await
-            .expect_err("lag replay is fallback-guarded and cuts off at read_timeout");
-        assert!(matches!(
-            lag,
-            StoreError::StorageTimeout {
-                operation: "replay",
-                ..
-            }
-        ));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn lag_warning_and_stdout_flush_still_emit_when_final_replay_fails_logically() {
-        let session = SessionId::new();
-        let (tx, rx) = broadcast::channel(1);
-        tx.send(envelope(1, session)).unwrap();
-        tx.send(envelope(2, session)).unwrap();
-        let (_done_tx, done_rx) = oneshot::channel();
-        let out = SharedBuf::default();
-        let stream_task = tokio::spawn({
-            let out = out.clone();
-            async move {
-                stream_until_done(
-                    rx,
-                    StreamScope::Single(session),
-                    done_rx,
-                    |pass| async move {
-                        match pass {
-                            ReplayPass::Initial => Ok(Vec::new()),
-                            ReplayPass::Lag => Err(StoreError::StorageTimeout {
-                                operation: "replay",
-                                timeout: std::time::Duration::from_millis(50),
-                            }),
-                        }
-                    },
-                    std::io::BufWriter::new(out),
-                )
-                .await
-            }
-        });
-        tx.send(title(3, session)).unwrap();
-        drop(tx);
-        let printer = stream_task.await.unwrap().unwrap();
-        let mut stderr = Vec::new();
-        let logical = StoreError::SessionKeyData("corrupt key in final replay".into());
-        let res = finish_json_stream(printer, || async move { Err(logical) }, &mut stderr).await;
-        let err = res.expect_err("non-storage final error must still propagate");
-        assert!(
-            err.to_string().contains("corrupt key in final replay"),
-            "{err}"
-        );
-        let stderr_text = String::from_utf8(stderr).unwrap();
-        assert!(
-            stderr_text.contains("warning: json replay unavailable"),
-            "lag warning must still be emitted to stderr: {stderr_text:?}"
-        );
-        let stdout_text = String::from_utf8(out.0.lock().unwrap().clone()).unwrap();
-        assert!(
-            stdout_text.contains("title-3"),
-            "live streamed stdout must still be flushed: {stdout_text:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn finish_json_stream_flushes_stdout_before_writing_warning() {
-        struct OrderWriter {
-            events: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
-            write_tag: &'static str,
-            flush_tag: &'static str,
+        .await?;
+        let created = child(3, member, parent);
+        for env in [envelope(1, root), child(2, parent, root), created.clone()] {
+            store
+                .append_event(env.event.session().unwrap(), &env.event)
+                .await?;
         }
-        impl std::io::Write for OrderWriter {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.events.lock().unwrap().push(self.write_tag);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                self.events.lock().unwrap().push(self.flush_tag);
-                Ok(())
-            }
-        }
+        let cold_store = SessionStore::connect(db.to_str().unwrap()).await?;
+        assert_eq!(bounded_replay(&store, root).await?.len(), 1);
+        assert_eq!(store.replay_page(member, 0, 1).await?.len(), 1);
 
-        let session = SessionId::new();
-        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let mut printer = JsonStreamPrinter::new(
-            std::io::BufWriter::new(OrderWriter {
-                events: std::sync::Arc::clone(&events),
-                write_tag: "stdout-write",
-                flush_tag: "stdout-flush",
-            }),
-            StreamScope::Single(session),
-        );
-        printer.print(&title(1, session)).unwrap();
-        assert!(
-            events.lock().unwrap().is_empty(),
-            "buffered stdout must not flush before finish_json_stream"
-        );
+        #[cfg(target_os = "linux")]
+        {
+            let lock = lock_wal_reads(&db)?;
+            let unlocker = std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(80));
+                drop(lock);
+            });
+            let started = std::time::Instant::now();
+            let initial = StreamScope::Single(root)
+                .replay(&store, ReplayPass::Initial)
+                .await?;
+            unlocker.join().unwrap();
+            assert!(
+                started.elapsed() >= std::time::Duration::from_millis(60) && initial.len() == 1
+            );
 
-        let err_writer = OrderWriter {
-            events: std::sync::Arc::clone(&events),
-            write_tag: "stderr-write",
-            flush_tag: "stderr-flush",
-        };
-        finish_json_stream(
-            printer,
-            || async {
-                Err(StoreError::StorageTimeout {
+            let held = lock_wal_reads(&db)?;
+            assert!(matches!(
+                StreamScope::Single(root)
+                    .replay(&store, ReplayPass::Lag)
+                    .await
+                    .unwrap_err(),
+                StoreError::StorageTimeout {
                     operation: "replay",
-                    timeout: std::time::Duration::from_secs(5),
-                })
-            },
-            err_writer,
-        )
-        .await
-        .unwrap();
+                    ..
+                }
+            ));
 
-        let recorded = events.lock().unwrap().clone();
-        let flush_idx = recorded
-            .iter()
-            .position(|tag| *tag == "stdout-flush")
-            .expect("stdout must flush");
-        let warn_idx = recorded
-            .iter()
-            .position(|tag| *tag == "stderr-write")
-            .expect("warning must write to stderr");
-        assert!(
-            flush_idx < warn_idx,
-            "stdout flush must precede stderr warning write: {recorded:?}"
-        );
+            let out = SharedBuf::default();
+            let mut printer = JsonStreamPrinter::new(out.clone(), StreamScope::Single(root));
+            printer.print(&envelope(1, root))?;
+            let mut stderr = Vec::new();
+            tokio::time::timeout(
+                std::time::Duration::from_millis(400),
+                finish_json_stream(printer, || bounded_replay(&store, root), &mut stderr),
+            )
+            .await
+            .expect("bounded by READ_TIMEOUT")?;
+            let warn = String::from_utf8(stderr)?;
+            assert!(
+                warn.lines().count() == 1
+                    && warn.contains("incomplete")
+                    && warn.contains("timeout")
+                    && out.seqs() == [1]
+            );
+
+            let mut tp = JsonStreamPrinter::new(
+                SharedBuf::default(),
+                StreamScope::tree(root, store.clone()),
+            );
+            tp.live(&created).await?;
+            assert!(
+                tp.first_lag_fault
+                    .as_deref()
+                    .is_some_and(|m| m.contains("timeout"))
+            );
+            drop(held);
+            tp.live(&title(4, member)).await?;
+            assert_eq!(tp.out.seqs(), [4]);
+        }
+
+        drop(store);
+        std::fs::remove_file(&db)?;
+        let out = SharedBuf::default();
+        let mut printer = JsonStreamPrinter::new(out.clone(), StreamScope::Single(root));
+        printer.print(&envelope(1, root))?;
+        let mut stderr = Vec::new();
+        finish_json_stream(printer, || bounded_replay(&cold_store, root), &mut stderr).await?;
+        let warn = String::from_utf8(stderr)?;
+        assert!(warn.lines().count() == 1 && warn.contains("incomplete") && out.seqs() == [1]);
+        Ok(())
     }
 }

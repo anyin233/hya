@@ -1,8 +1,6 @@
-//! Integration tests for `hya-app`: nested spawn tree.
+//! Integration tests for `hya-app`: nested spawn tree and root roster registration.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
-
-use crate::support;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,29 +13,53 @@ use hya_engine::{
 };
 use hya_proto::{AgentName, Event, MemberId, ModelRef, SessionId, SubagentMode};
 use hya_provider::{FakeProvider, ProviderRouter};
-
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, SpawnMember};
-use serde_json::Value;
 
-struct NestedSpawn {
-    engine: Arc<SessionEngine>,
-    _tasks: hya_app::RuntimeTaskOwner,
-    root: SessionId,
-    child: SessionId,
-    grandchild: SessionId,
+use crate::support;
+
+async fn spawn_one(
+    engine: &SessionEngine,
+    spawn_sender: &BoundSpawnSender,
+    parent: SessionId,
+    caller: &str,
+    agent_type: &str,
+) -> SessionId {
+    let binding = engine.bind_runtime(&std::env::temp_dir()).unwrap();
+    let agents = engine.agent_roster_for_binding(&binding, caller).unwrap();
+    let outcomes = tokio::time::timeout(
+        Duration::from_secs(5),
+        spawn_sender
+            .for_binding(&binding)
+            .for_session_with_agents(parent, agents)
+            .spawn(
+                hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
+                vec![SpawnMember {
+                    description: format!("spawn {agent_type}"),
+                    prompt: format!("run {agent_type}"),
+                    subagent_type: agent_type.to_string(),
+                    ..SpawnMember::default()
+                }],
+                Default::default(),
+            ),
+    )
+    .await
+    .expect("spawn timed out")
+    .expect("spawn failed");
+    outcomes[0].session.parse().expect("valid child session")
 }
 
-async fn nested_spawn() -> NestedSpawn {
+#[tokio::test]
+async fn nested_spawn_reaches_root_tree_and_registers_two_generations_in_roster() {
     let provider_router = Arc::new(ProviderRouter::new().with(Arc::new(
         support::IdentityFakeProvider::new(FakeProvider::scripted(Vec::new())),
     )));
-    let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
     let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(1);
     let engine = Arc::new(
         SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
-            provider_router.clone(),
+            provider_router,
             support::test_runtime(
                 Arc::new(hya_tool_loader::builtins()),
                 &[
@@ -60,7 +82,7 @@ async fn nested_spawn() -> NestedSpawn {
         reasoning: None,
     };
     let resident = ResidentSupervisor::start(engine.clone());
-    let tasks = spawn_team_supervisor(
+    let _tasks = spawn_team_supervisor(
         spawn_rx,
         engine.clone(),
         agent.clone(),
@@ -84,28 +106,25 @@ async fn nested_spawn() -> NestedSpawn {
 
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let root_projection = engine.read_projection(root).await.unwrap();
-            let child_projection = engine.read_projection(child).await.unwrap();
-            let root_has_child = root_projection
+            let root_proj = engine.read_projection(root).await.unwrap();
+            let child_proj = engine.read_projection(child).await.unwrap();
+            let linked = root_proj
                 .session
                 .members
                 .iter()
-                .any(|member| member.child == Some(child));
-            let child_has_grandchild = child_projection
-                .session
-                .members
-                .iter()
-                .any(|member| member.child == Some(grandchild));
-            // Both residents must also have parked: the roster assertions
-            // compare separate projection reads, so a turn still running
-            // would flip `busy` → `idle` between them.
-            let settled = root_projection.team.roster.len() >= 2
-                && root_projection
+                .any(|m| m.child == Some(child))
+                && child_proj
+                    .session
+                    .members
+                    .iter()
+                    .any(|m| m.child == Some(grandchild));
+            let settled = root_proj.team.roster.len() >= 2
+                && root_proj
                     .team
                     .roster
                     .values()
-                    .all(|entry| entry.status == hya_proto::RosterStatus::Idle);
-            if root_has_child && child_has_grandchild && settled {
+                    .all(|e| e.status == hya_proto::RosterStatus::Idle);
+            if linked && settled {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -114,6 +133,7 @@ async fn nested_spawn() -> NestedSpawn {
     .await
     .expect("nested spawn projection timed out");
 
+    // Pending (unlinked) member row does not disrupt descendant roster lookup.
     engine
         .store()
         .append_event(
@@ -132,129 +152,26 @@ async fn nested_spawn() -> NestedSpawn {
         .await
         .unwrap();
 
-    NestedSpawn {
-        engine,
-        _tasks: tasks,
-        root,
-        child,
-        grandchild,
-    }
-}
-
-async fn spawn_one(
-    engine: &SessionEngine,
-    spawn_sender: &BoundSpawnSender,
-    parent: SessionId,
-    caller: &str,
-    agent_type: &str,
-) -> SessionId {
-    let binding = engine.bind_runtime(&std::env::temp_dir()).unwrap();
-    let agents = engine.agent_roster_for_binding(&binding, caller).unwrap();
-    let spawner = spawn_sender.for_binding(&binding);
-    let outcomes = tokio::time::timeout(
-        Duration::from_secs(5),
-        spawner.for_session_with_agents(parent, agents).spawn(
-            hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-            vec![SpawnMember {
-                description: format!("spawn {agent_type}"),
-                prompt: format!("run {agent_type}"),
-                subagent_type: agent_type.to_string(),
-                ..SpawnMember::default()
-            }],
-            Default::default(),
-        ),
-    )
-    .await
-    .expect("spawn timed out")
-    .expect("spawn failed");
-    outcomes[0].session.parse().expect("valid child session")
-}
-
-/// Build the legacy tree shape from projections: each descendant node
-/// carries its roster entry from the root projection's team state.
-async fn tree(fixture: &NestedSpawn) -> Value {
-    let root_projection = fixture.engine.read_projection(fixture.root).await.unwrap();
-    let roster: std::collections::BTreeMap<String, serde_json::Value> = root_projection
-        .team
-        .roster
-        .values()
-        .map(|entry| {
-            (
-                entry.session.to_string(),
-                serde_json::to_value(entry).unwrap(),
-            )
-        })
-        .collect();
-
-    // Direct children of the root from its projection events: roster rows
-    // whose parent path resolves to the root's own team scope.
-    let child = serde_json::json!({
-        "session": fixture.child.to_string(),
-        "roster": roster.get(&fixture.child.to_string()),
-    });
-    let grandchild = serde_json::json!({
-        "session": fixture.grandchild.to_string(),
-        "roster": roster.get(&fixture.grandchild.to_string()),
-    });
-    let mut child = child;
-    child["children"] = serde_json::json!([grandchild]);
-    serde_json::json!({
-        "session": fixture.root.to_string(),
-        "children": [child],
-    })
-}
-
-#[tokio::test]
-async fn nested_spawn_reaches_root_tree() {
-    let fixture = nested_spawn().await;
-    let tree = tree(&fixture).await;
-
-    assert_eq!(tree["session"], fixture.root.to_string());
-    assert_eq!(tree["children"][0]["session"], fixture.child.to_string());
-    assert_eq!(
-        tree["children"][0]["children"][0]["session"],
-        fixture.grandchild.to_string()
-    );
-}
-
-#[tokio::test]
-async fn nested_spawn_registers_two_generations_in_root_roster() {
-    let fixture = nested_spawn().await;
-    let projection = fixture.engine.read_projection(fixture.root).await.unwrap();
+    let projection = engine.read_projection(root).await.unwrap();
     for (session, agent_type) in [
-        (fixture.child, AgentName::new("explore")),
-        (fixture.grandchild, AgentName::new("plan")),
+        (child, AgentName::new("explore")),
+        (grandchild, AgentName::new("plan")),
     ] {
         let entry = projection
             .team
             .roster
             .values()
-            .find(|entry| entry.session == session)
+            .find(|e| e.session == session)
             .expect("descendant roster entry");
         assert!(!entry.handle.is_empty());
         assert_eq!(entry.agent_type, agent_type);
         assert_eq!(entry.mode, SubagentMode::Resident);
     }
-}
-
-#[tokio::test]
-async fn tree_endpoint_attaches_roster_to_child_and_grandchild() {
-    let fixture = nested_spawn().await;
-    let projection = fixture.engine.read_projection(fixture.root).await.unwrap();
-    let tree = tree(&fixture).await;
-
-    assert!(tree.get("roster").is_none());
-
-    for (session, node) in [
-        (fixture.child, &tree["children"][0]),
-        (fixture.grandchild, &tree["children"][0]["children"][0]),
-    ] {
-        let entry = projection
+    assert!(
+        projection
             .team
             .roster
             .values()
-            .find(|entry| entry.session == session)
-            .expect("descendant roster entry");
-        assert_eq!(node["roster"], serde_json::to_value(entry).unwrap());
-    }
+            .all(|e| e.session != root || e.handle == "main")
+    );
 }

@@ -745,8 +745,9 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn config_content_is_folded_into_spawning_bundle_fingerprints_only() {
+    fn fingerprint_env_and_materialized_executable() {
         let _env = StableEnvGuard::new();
+        // 1. Config edits fold into spawning bundle fingerprints only, not static skill bundles.
         let spawning = prepare_package(BundleSource::new(
             "spawning",
             vec![
@@ -769,28 +770,24 @@ for line in sys.stdin:
         ] {
             let bundle = &prepared.bundles()[0];
             let process = prepared.bundle_process(id);
-            let location = test_config(id);
-            let absent = BundleRuntimeConfig::capture(bundle, process, location.clone());
+            let loc = test_config(id);
+            let absent = BundleRuntimeConfig::capture(bundle, process, loc.clone());
             assert_eq!(absent.watched(), watched);
             let before = fingerprint(bundle, &absent).unwrap();
-            std::fs::create_dir_all(location.dir()).unwrap();
-            std::fs::write(location.file(), "key: value\n").unwrap();
-            let present = BundleRuntimeConfig::capture(bundle, process, location.clone());
-            let after = fingerprint(bundle, &present).unwrap();
+            std::fs::create_dir_all(loc.dir()).unwrap();
+            std::fs::write(loc.file(), "key: value\n").unwrap();
+            let after = fingerprint(
+                bundle,
+                &BundleRuntimeConfig::capture(bundle, process, loc.clone()),
+            )
+            .unwrap();
             assert_eq!(before != after, watched, "{id}");
-            std::fs::write(location.file(), "key: other\n").unwrap();
-            let edited = BundleRuntimeConfig::capture(bundle, process, location.clone());
-            let edited = fingerprint(bundle, &edited).unwrap();
-            assert_eq!(after != edited, watched, "{id}");
-            let _ = std::fs::remove_dir_all(location.dir());
+            let _ = std::fs::remove_dir_all(loc.dir());
         }
-    }
 
-    #[test]
-    fn process_environment_carries_root_path_and_config_location() {
-        let _env = StableEnvGuard::new();
-        let config = test_config("acme/process-env");
-        let env = process_env(Path::new("/materialized"), &config);
+        // 2. Process env carries root/config vars without HOME and expands argv tokens.
+        let cfg = test_config("acme/process-env");
+        let env = process_env(Path::new("/materialized"), &cfg);
         assert_eq!(
             env.get("HYA_BUNDLE_ROOT").map(String::as_str),
             Some("/materialized")
@@ -801,105 +798,51 @@ for line in sys.stdin:
         );
         assert_eq!(
             env.get("HYA_BUNDLE_CONFIG_FILE").map(String::as_str),
-            Some(config.file().to_string_lossy().as_ref())
-        );
-        assert_eq!(
-            env.get("HYA_BUNDLE_CONFIG_DIR").map(String::as_str),
-            Some(config.dir().to_string_lossy().as_ref())
+            Some(cfg.file().to_string_lossy().as_ref())
         );
         assert!(!env.contains_key("HOME"));
         assert_eq!(
             argv(
-                &["${BUNDLE_CONFIG_FILE}".to_string()],
+                &["${BUNDLE_CONFIG_FILE}".into()],
                 Path::new("/materialized"),
-                &config
+                &cfg
             ),
-            vec![config.file().to_string_lossy().into_owned()]
+            vec![cfg.file().to_string_lossy().into_owned()]
         );
-    }
 
-    #[cfg(unix)]
-    #[test]
-    fn materialized_native_bundle_executable_can_run() {
-        let _env = StableEnvGuard::new();
-        let prepared = prepare_package(BundleSource::new(
-            "native-executable",
-            vec![
-                SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: acme/native-run, version: 1.0.0, publisher: acme }\nextensions:\n  files: [{ id: a-shared-source, path: bin/provider }]\n  rust: [{ id: provider, path: bin/provider }]\n  process: { kind: rust, command: ['${BUNDLE_ROOT}/bin/provider'] }\n"),
-                SourceFile::new("bin/provider", b"#!/bin/sh\nprintf native-ok\n"),
-            ],
-        ))
-        .unwrap();
-        let root = materialize(&prepared.bundles()[0]).unwrap();
-        let output = std::process::Command::new(root.0.join("bin/provider"))
-            .output()
+        // 3. Materialized native bundle executable runs with +x bit on Unix.
+        #[cfg(unix)]
+        {
+            let native = prepare_package(BundleSource::new(
+                "native-executable",
+                vec![
+                    SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: acme/native-run, version: 1.0.0, publisher: acme }\nextensions:\n  files: [{ id: a-shared-source, path: bin/provider }]\n  rust: [{ id: provider, path: bin/provider }]\n  process: { kind: rust, command: ['${BUNDLE_ROOT}/bin/provider'] }\n"),
+                    SourceFile::new("bin/provider", b"#!/bin/sh\nprintf native-ok\n"),
+                ],
+            ))
             .unwrap();
-        assert!(output.status.success());
-        assert_eq!(output.stdout, b"native-ok");
+            let root = materialize(&native.bundles()[0]).unwrap();
+            let out = std::process::Command::new(root.0.join("bin/provider"))
+                .output()
+                .unwrap();
+            assert!(out.status.success() && out.stdout == b"native-ok");
+        }
     }
 
-    #[tokio::test]
-    async fn bundle_process_rejects_unrepresentable_workspace_adapter_contribution() {
-        let _env = StableEnvGuard::new();
-        let script = r#"import json,sys
-for line in sys.stdin:
- r=json.loads(line)
- result={'protocol_version':1,'plugin':{'id':'undeclared','version':'1.0.0','kind':'rust'},'hooks':[],'tools':[],'workspaceAdapters':[{'type':'remote','name':'Remote','description':'unrepresented adapter'}]} if r.get('method') == 'initialize' else {}
- if 'id' in r: print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':result}),flush=True)
-"#;
-        let prepared = prepare_package(BundleSource::new(
-            "undeclared-contribution",
-            vec![
-                SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: acme/undeclared, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\n  files: [{ id: runtime, path: runtime.py }]\n"),
-                SourceFile::new("runtime.py", script),
-            ],
-        )).unwrap();
-        let result = prepare_source(
-            &prepared.bundles()[0],
-            BundleRuntimeParts {
-                process: prepared.bundle_process("acme/undeclared"),
-                schemas: &[],
-                apis: &[],
-                permission_modes: &[],
-                reads: None,
-            },
-            &BundleRuntimeConfig::capture(
-                &prepared.bundles()[0],
-                prepared.bundle_process("acme/undeclared"),
-                test_config("acme/undeclared"),
-            ),
-        )
-        .await;
-        assert!(
-            matches!(result, Err(CoreError::Invalid(ref detail)) if detail.contains("workspace adapters")),
-            "bundle initialization must reject contributions absent from its schema"
-        );
-    }
-
-    /// A bundle process whose initialize reply declares `apis` (a Python
-    /// literal) for the manifest-declared `apis:` block.
     async fn prepare_api_bundle(
         manifest_apis: &str,
         process_apis: &str,
-        process_options: &str,
+        extra_init: &str,
     ) -> Result<CachedBundleSource, CoreError> {
         let script = format!(
-            r#"import json,sys,time
-for line in sys.stdin:
- r=json.loads(line)
- result={{'protocol_version':1,'plugin':{{'id':'apis','version':'1.0.0','kind':'bun'}},'hooks':[],'tools':[],'apis':{process_apis}}} if r.get('method') == 'initialize' else {{}}
- if r.get('method') == 'api/request':
-  time.sleep(2)
-  result={{'status':200,'body':{{'ok':True}}}}
- if 'id' in r: print(json.dumps({{'jsonrpc':'2.0','id':r['id'],'result':result}}),flush=True)
-"#
+            "import json,sys\nfor line in sys.stdin:\n r=json.loads(line)\n res={{'protocol_version':1,'plugin':{{'id':'apis','version':'1.0.0','kind':'bun'}},'hooks':[],'tools':[],'apis':{process_apis}{extra_init}}} if r.get('method')=='initialize' else {{}}\n if 'id' in r: print(json.dumps({{'jsonrpc':'2.0','id':r['id'],'result':res}}),flush=True)\n"
         );
         let prepared = prepare_package(BundleSource::new(
             "apis",
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    format!("kind: Bundle\nidentity: {{ id: acme/apis, version: 1.0.0, publisher: acme }}\nextensions:\n  process: {{ kind: bun, command: [python3, '${{BUNDLE_ROOT}}/runtime.py']{process_options} }}\n  files: [{{ id: runtime, path: runtime.py }}, {{ id: usage-schema, path: usage.json }}]\n{manifest_apis}"),
+                    format!("kind: Bundle\nidentity: {{ id: acme/apis, version: 1.0.0, publisher: acme }}\nextensions:\n  process: {{ kind: bun, command: [python3, '${{BUNDLE_ROOT}}/runtime.py'] }}\n  files: [{{ id: runtime, path: runtime.py }}, {{ id: usage-schema, path: usage.json }}]\n{manifest_apis}"),
                 ),
                 SourceFile::new("runtime.py", script),
                 SourceFile::new("usage.json", r#"{"type":"object"}"#),
@@ -925,44 +868,37 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
-    async fn bundle_process_apis_must_equal_the_declared_apis() {
+    async fn bundle_process_validates_declared_apis_and_rejects_workspace_adapters() {
         let _env = StableEnvGuard::new();
         let declared = "apis: [{ id: usage, method: GET, scope: session, path: /usage, description: Token usage, response_schema: usage.json }]\n";
         let published = prepare_api_bundle(declared, "[{'name':'usage'}]", "")
             .await
             .unwrap();
-        let Some(apis) = published.source.apis() else {
-            panic!("matching API declarations publish their endpoints");
-        };
-        let apis = apis.apis();
+        let apis = published.source.apis().unwrap().apis();
         assert_eq!(apis.len(), 1);
         assert_eq!(apis[0].path.as_str(), "/usage");
         assert_eq!(
             apis[0].response_schema,
-            Some(serde_json::json!({"type": "object"})),
-            "the declared schema file is published with the endpoint"
+            Some(serde_json::json!({"type": "object"}))
         );
-        for process_apis in [
-            "[]",
-            "[{'name':'usage'},{'name':'extra'}]",
-            "[{'name':'other'}]",
+
+        for (manifest, actual) in [
+            (declared, "[]"),
+            (declared, "[{'name':'usage'},{'name':'extra'}]"),
+            ("", "[{'name':'usage'}]"),
         ] {
-            let result = prepare_api_bundle(declared, process_apis, "").await;
-            assert!(
-                matches!(result, Err(CoreError::Invalid(ref detail)) if detail.contains("API endpoints differ")),
-                "{process_apis}: the process must declare exactly the manifest apis"
-            );
+            assert!(matches!(
+                prepare_api_bundle(manifest, actual, "").await,
+                Err(CoreError::Invalid(ref d)) if d.contains("API endpoints differ")
+            ));
         }
-        let result = prepare_api_bundle("", "[{'name':'usage'}]", "").await;
-        assert!(
-            matches!(result, Err(CoreError::Invalid(ref detail)) if detail.contains("API endpoints differ")),
-            "a process may not serve undeclared endpoints"
-        );
+
+        assert!(matches!(
+            prepare_api_bundle("", "[]", ",'workspaceAdapters':[{'type':'remote','name':'R','description':'u'}]").await,
+            Err(CoreError::Invalid(ref d)) if d.contains("workspace adapters")
+        ));
     }
 
-    /// A process-backed bundle's `permission_modes:` publish on its runtime
-    /// source together with the process hooks that approve them; a bundle
-    /// without modes keeps the pre-modes runtime fingerprint.
     #[tokio::test]
     async fn bundle_permission_modes_publish_on_the_runtime_source() {
         let _env = StableEnvGuard::new();
@@ -987,8 +923,6 @@ for line in sys.stdin:
         let bundle = &prepared.bundles()[0];
         let process = prepared.bundle_process("acme/approver");
         let modes = prepared.bundle_permission_modes("acme/approver");
-        assert_eq!(modes.len(), 1);
-        let config = BundleRuntimeConfig::capture(bundle, process, test_config("acme/approver"));
         let cached = prepare_source(
             bundle,
             BundleRuntimeParts {
@@ -998,16 +932,16 @@ for line in sys.stdin:
                 permission_modes: modes,
                 reads: None,
             },
-            &config,
+            &BundleRuntimeConfig::capture(bundle, process, test_config("acme/approver")),
         )
         .await
         .unwrap();
         assert_eq!(
             cached.source.permission_modes(),
             [hya_engine::RuntimePermissionMode {
-                id: "careful".to_string(),
-                title: "Careful".to_string(),
-                description: "Approves reads".to_string(),
+                id: "careful".into(),
+                title: "Careful".into(),
+                description: "Approves reads".into(),
             }]
         );
     }

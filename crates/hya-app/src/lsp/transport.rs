@@ -16,7 +16,10 @@ use tokio_util::sync::CancellationToken;
 use super::config::ServerConfig;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(not(test))]
 const DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const DIAGNOSTIC_TIMEOUT: Duration = Duration::from_millis(80);
 const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 type Reply = oneshot::Sender<Result<Value, String>>;
 

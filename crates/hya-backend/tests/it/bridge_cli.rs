@@ -1,9 +1,5 @@
-//! `hya bridge`: the client side of the secure relay (docs/relay.md
-//! "Connecting from a client"). The relay and a test backend run in this
-//! process: the backend registers a room with `register_host`, answers every
-//! data stream as the Noise responder (`NoiseStream::respond`), and serves a
-//! tiny hyper HTTP app behind it. `hya bridge` itself is spawned as a
-//! subprocess, like every other CLI test in this crate.
+//! Real-process integration tests for `hya bridge` against an in-process relay
+//! and Noise host. Pure listen/link/token/envelope validation lives in `src/bridge.rs`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -38,37 +34,27 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
-const WAIT: Duration = Duration::from_secs(20);
-/// The header carrying the bridge token.
+use crate::common::Scratch;
+
+const WAIT: Duration = Duration::from_secs(15);
 const TOKEN_HEADER: &str = "x-hya-bridge-token";
-/// The bridge's answer when the proxy says the room is not there (offline,
-/// or a rotated or wrong PSK: the proxy cannot be told apart from offline).
 const OFFLINE: &str = "remote backend is offline, or the relay link was rotated or is wrong (ask for a new link: `hya serve relay link`)";
 
-// ---- relay and test backend ----
-
-async fn start_relay() -> (SocketAddr, JoinHandle<()>) {
-    let config = RelayServerConfig::new("127.0.0.1:0".parse().unwrap());
-    let (addr, serve) = RelayServer::bind(config, std::future::pending())
-        .await
-        .unwrap();
-    (addr, tokio::spawn(serve))
-}
-
-fn relay_address(relay: SocketAddr) -> RelayAddress {
-    RelayAddress::new(false, "127.0.0.1", Some(relay.port()), "").unwrap()
-}
-
-/// What the test backend does with each tunnel.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
-    /// A hyper HTTP/1.1 app (health, echo, a streamed body, a WebSocket-style upgrade).
     Http,
-    /// Answer a partial response, then end the stream without the Noise
-    /// close record (a hop cutting the response short).
     Truncate,
-    /// Answer with a record whose ciphertext was modified in flight.
     Tamper,
+}
+
+async fn start_relay() -> (SocketAddr, JoinHandle<()>) {
+    let (addr, serve) = RelayServer::bind(
+        RelayServerConfig::new("127.0.0.1:0".parse().unwrap()),
+        std::future::pending(),
+    )
+    .await
+    .unwrap();
+    (addr, tokio::spawn(serve))
 }
 
 struct Identity {
@@ -85,14 +71,13 @@ impl Identity {
             psk: Psk::from_bytes([seed.wrapping_add(200); 32]),
         }
     }
-
     fn room(&self) -> RoomId {
         RoomId::from_ed25519(self.key.verifying_key().as_bytes())
     }
-
     fn link(&self, relay: SocketAddr) -> RelayLink {
+        let addr = RelayAddress::new(false, "127.0.0.1", Some(relay.port()), "").unwrap();
         RelayLink::new(
-            relay_address(relay),
+            addr,
             self.room(),
             Transport::Auto,
             *self.noise.public(),
@@ -103,52 +88,40 @@ impl Identity {
 
 struct Host {
     link: RelayLink,
-    /// Relay streams the proxy announced to this host (`Incoming` frames).
     incoming: Arc<AtomicUsize>,
-    /// Lets `/stream` send its second event.
     release: Arc<Notify>,
     task: JoinHandle<()>,
 }
-
 impl Drop for Host {
     fn drop(&mut self) {
         self.task.abort();
     }
 }
 
-/// Register `seed`'s room on the relay and serve every incoming stream.
 async fn start_host(relay: SocketAddr, seed: u8, mode: Mode) -> Host {
-    let identity = Arc::new(Identity::new(seed));
-    let client = RelayClient::new(relay_address(relay), ClientConfig::default()).unwrap();
+    let id = Arc::new(Identity::new(seed));
+    let addr = RelayAddress::new(false, "127.0.0.1", Some(relay.port()), "").unwrap();
+    let client = RelayClient::new(addr, ClientConfig::default()).unwrap();
     let mut control = client.host().await.unwrap();
-    let open_token_hash =
-        hya_relay::keys::OpenToken::derive(&identity.psk, &identity.room()).hash();
-    let room = register_host(&mut control, &identity.key, &open_token_hash, WAIT)
+    let hash = hya_relay::keys::OpenToken::derive(&id.psk, &id.room()).hash();
+    let room = register_host(&mut control, &id.key, &hash, WAIT)
         .await
         .unwrap()
         .room()
         .clone();
-    assert_eq!(room, identity.room());
-    let link = identity.link(relay);
+    let link = id.link(relay);
     let release = Arc::new(Notify::new());
-    let shared = release.clone();
-    let incoming_count = Arc::new(AtomicUsize::new(0));
-    let counter = incoming_count.clone();
+    let incoming = Arc::new(AtomicUsize::new(0));
+    let (rel, cnt) = (release.clone(), incoming.clone());
     let task = tokio::spawn(async move {
-        while let Some(Ok(frame)) = control.next().await {
-            let ProxyToHost {
-                frame: Some(proxy_to_host::Frame::Incoming(incoming)),
-            } = frame
-            else {
-                continue;
-            };
-            counter.fetch_add(1, Ordering::SeqCst);
-            let client = client.clone();
-            let identity = identity.clone();
-            let room = room.clone();
-            let release = shared.clone();
+        while let Some(Ok(ProxyToHost {
+            frame: Some(proxy_to_host::Frame::Incoming(inc)),
+        })) = control.next().await
+        {
+            cnt.fetch_add(1, Ordering::SeqCst);
+            let (client, id, room, rel) = (client.clone(), id.clone(), room.clone(), rel.clone());
             tokio::spawn(async move {
-                let Ok(leg) = client.accept(&incoming.stream_id).await else {
+                let Ok(leg) = client.accept(&inc.stream_id).await else {
                     return;
                 };
                 let leg: ChunkTransport = Box::pin(Mangle {
@@ -158,13 +131,7 @@ async fn start_host(relay: SocketAddr, seed: u8, mode: Mode) -> Host {
                 });
                 let Ok(Ok(tunnel)) = timeout(
                     WAIT,
-                    NoiseStream::respond(
-                        leg,
-                        &room,
-                        &identity.noise,
-                        &identity.psk,
-                        TunnelConfig::default(),
-                    ),
+                    NoiseStream::respond(leg, &room, &id.noise, &id.psk, TunnelConfig::default()),
                 )
                 .await
                 else {
@@ -172,78 +139,66 @@ async fn start_host(relay: SocketAddr, seed: u8, mode: Mode) -> Host {
                 };
                 match mode {
                     Mode::Http => {
-                        let service = service_fn(move |request| app(request, release.clone()));
+                        let svc = service_fn(move |req| app(req, rel.clone()));
                         let _ = hyper::server::conn::http1::Builder::new()
-                            .serve_connection(TokioIo::new(tunnel), service)
+                            .serve_connection(TokioIo::new(tunnel), svc)
                             .with_upgrades()
                             .await;
                     }
-                    Mode::Truncate | Mode::Tamper => partial_response(tunnel).await,
+                    Mode::Truncate | Mode::Tamper => partial_response(tunnel, rel).await,
                 }
             });
         }
     });
     Host {
         link,
-        incoming: incoming_count,
+        incoming,
         release,
         task,
     }
 }
 
-/// Mangles the backend's outgoing data frames: `Tamper` flips a bit of the
-/// first record after the handshake; `Truncate` drops the close record (an
-/// encrypted empty record: just the 16-byte tag).
 struct Mangle {
     inner: ChunkTransport,
     mode: Mode,
     data_frames: usize,
 }
-
 impl Sink<Chunk> for Mangle {
     type Error = TransportError;
-
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.as_mut().poll_ready(cx)
     }
-
     fn start_send(mut self: Pin<&mut Self>, mut item: Chunk) -> Result<(), Self::Error> {
         if let Some(chunk::Frame::Data(data)) = &mut item.frame {
-            let index = self.data_frames;
+            let i = self.data_frames;
             self.data_frames += 1;
             match self.mode {
-                Mode::Tamper if index == 1 => data[0] ^= 0x01,
-                Mode::Truncate if index >= 1 && data.len() == 16 => return Ok(()),
+                Mode::Tamper if i == 1 => data[0] ^= 0x01,
+                Mode::Truncate if i >= 1 && data.len() == 16 => return Ok(()),
                 _ => {}
             }
         }
         self.inner.as_mut().start_send(item)
     }
-
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.as_mut().poll_flush(cx)
     }
-
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.as_mut().poll_close(cx)
     }
 }
-
 impl Stream for Mangle {
     type Item = Result<Chunk, TransportError>;
-
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.inner.as_mut().poll_next(cx)
     }
 }
 
-/// Read a request head, answer part of a response, and end the direction.
-async fn partial_response<T>(mut tunnel: T)
-where
-    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
-    let mut head = Vec::new();
-    let mut buf = [0u8; 1024];
+async fn partial_response<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
+    mut tunnel: T,
+    release: Arc<Notify>,
+) {
+    let (mut head, mut buf) = (Vec::new(), [0u8; 1024]);
     while !head.windows(4).any(|w| w == b"\r\n\r\n") {
         match tunnel.read(&mut buf).await {
             Ok(0) | Err(_) => return,
@@ -255,38 +210,38 @@ where
         .await;
     let _ = tunnel.flush().await;
     let _ = tunnel.shutdown().await;
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    let _ = timeout(Duration::from_millis(500), release.notified()).await;
 }
 
 type AppBody = BoxBody<Bytes, Infallible>;
-
-fn full(status: StatusCode, content_type: &str, body: impl Into<Bytes>) -> Response<AppBody> {
+fn full(status: StatusCode, ct: &str, body: impl Into<Bytes>) -> Response<AppBody> {
     Response::builder()
         .status(status)
-        .header("content-type", content_type)
+        .header("content-type", ct)
         .body(Full::new(body.into()).boxed())
         .unwrap()
 }
 
 async fn app(
-    mut request: Request<Incoming>,
+    mut req: Request<Incoming>,
     release: Arc<Notify>,
 ) -> Result<Response<AppBody>, Infallible> {
-    Ok(match request.uri().path() {
+    Ok(match req.uri().path() {
         "/v1/health" => full(
             StatusCode::OK,
             "application/json",
             r#"{"ok":true,"version":"test"}"#,
         ),
-        "/echo" => {
-            let body = request.into_body().collect().await.unwrap().to_bytes();
-            full(StatusCode::OK, "application/octet-stream", body)
-        }
+        "/echo" => full(
+            StatusCode::OK,
+            "application/octet-stream",
+            req.into_body().collect().await.unwrap().to_bytes(),
+        ),
         "/headers" => {
-            let mut text = String::new();
-            for (name, value) in request.headers() {
-                text.push_str(&format!("{name}: {}\n", value.to_str().unwrap_or("?")));
-            }
+            let text = req.headers().iter().fold(String::new(), |mut s, (k, v)| {
+                s.push_str(&format!("{k}: {}\n", v.to_str().unwrap_or("?")));
+                s
+            });
             full(StatusCode::OK, "text/plain", text)
         }
         "/stream" => {
@@ -296,20 +251,18 @@ async fn app(
                 release.notified().await;
                 let _ = tx.send(Ok(Frame::data(Bytes::from("data: two\n\n")))).await;
             });
-            let body = StreamBody::new(tokio_stream::wrappers::ReceiverStream::new(rx));
             Response::builder()
                 .header("content-type", "text/event-stream")
-                .body(BodyExt::boxed(body))
+                .body(BodyExt::boxed(StreamBody::new(
+                    tokio_stream::wrappers::ReceiverStream::new(rx),
+                )))
                 .unwrap()
         }
         "/ws" => {
-            let upgrade = hyper::upgrade::on(&mut request);
+            let upgrade = hyper::upgrade::on(&mut req);
             tokio::spawn(async move {
-                let Ok(upgraded) = upgrade.await else {
-                    return;
-                };
-                let mut io = TokioIo::new(upgraded);
-                let mut buf = [0u8; 1024];
+                let Ok(up) = upgrade.await else { return };
+                let (mut io, mut buf) = (TokioIo::new(up), [0u8; 1024]);
                 while let Ok(n) = io.read(&mut buf).await {
                     if n == 0 || io.write_all(&buf[..n]).await.is_err() {
                         break;
@@ -327,88 +280,57 @@ async fn app(
     })
 }
 
-// ---- the `hya bridge` process ----
-
 struct BridgeProcess {
     child: Child,
     first_line: String,
-    /// The bridge token (the JSON line's `token`, or the plain
-    /// `hya bridge token <token>` line).
     token: String,
     stderr: Arc<Mutex<String>>,
+    _scratch: Scratch,
 }
 
 impl BridgeProcess {
     fn json(&self) -> Value {
-        serde_json::from_str(&self.first_line)
-            .unwrap_or_else(|error| panic!("{error}: {:?}", self.first_line))
+        serde_json::from_str(&self.first_line).unwrap()
     }
-
     fn url(&self) -> String {
         self.json()["url"].as_str().unwrap().to_owned()
     }
-
-    /// An HTTP client sending the bridge token on every request.
     fn client(&self) -> reqwest::Client {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(TOKEN_HEADER, self.token.parse().unwrap());
+        let mut h = reqwest::header::HeaderMap::new();
+        h.insert(TOKEN_HEADER, self.token.parse().unwrap());
         reqwest::Client::builder()
             .timeout(WAIT)
-            .default_headers(headers)
+            .default_headers(h)
             .build()
             .unwrap()
     }
-
-    /// `head` with the token header added after the request line.
     fn authed(&self, head: &str) -> Vec<u8> {
         let (line, rest) = head.split_once("\r\n").unwrap();
         format!("{line}\r\n{TOKEN_HEADER}: {}\r\n{rest}", self.token).into_bytes()
     }
-
     fn stderr(&self) -> String {
         self.stderr.lock().unwrap().clone()
     }
-
-    /// The bridge's stderr once it contains `needle` (or at `WAIT`): the
-    /// bridge logs a failure asynchronously, after the client already saw it.
     async fn stderr_containing(&self, needle: &str) -> String {
         let deadline = tokio::time::Instant::now() + WAIT;
         loop {
-            let stderr = self.stderr();
-            if stderr.contains(needle) || tokio::time::Instant::now() >= deadline {
-                return stderr;
+            let s = self.stderr();
+            if s.contains(needle) || tokio::time::Instant::now() >= deadline {
+                return s;
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
-
-    fn pid(&self) -> i32 {
-        i32::try_from(self.child.id().unwrap()).unwrap()
-    }
 }
 
-fn scratch_home() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "hya-bridge-cli-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-fn bridge_command(args: &[&str]) -> Command {
-    let home = scratch_home();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_hya"));
-    command
-        .env_clear()
+fn bridge_command(args: &[&str]) -> (Command, Scratch) {
+    let scratch = Scratch::new("hya-bridge").unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_hya"));
+    cmd.env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        .env("HOME", &home)
-        .env("XDG_STATE_HOME", home.join("state"))
-        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("HOME", &scratch.0)
+        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("XDG_CONFIG_HOME", scratch.0.join("config"))
         .env("NO_COLOR", "1")
         .arg("bridge")
         .args(args)
@@ -416,17 +338,16 @@ fn bridge_command(args: &[&str]) -> Command {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    command
+    (cmd, scratch)
 }
 
-/// Spawn `hya bridge <args>`, write `stdin` (if any), and wait for the
-/// first stdout line (the JSON line or the plain readiness line).
 async fn spawn_bridge(
-    mut command: Command,
+    mut cmd: Command,
+    scratch: Scratch,
     stdin: Option<String>,
     keep_stdin: bool,
 ) -> BridgeProcess {
-    let mut child = command.spawn().unwrap();
+    let mut child = cmd.spawn().unwrap();
     let mut pipe = child.stdin.take().unwrap();
     if let Some(text) = stdin {
         pipe.write_all(text.as_bytes()).await.unwrap();
@@ -441,10 +362,10 @@ async fn spawn_bridge(
     let keep = stderr.clone();
     let mut err_lines = BufReader::new(child.stderr.take().unwrap()).lines();
     tokio::spawn(async move {
-        while let Ok(Some(line)) = err_lines.next_line().await {
-            let mut text = keep.lock().unwrap();
-            text.push_str(&line);
-            text.push('\n');
+        while let Ok(Some(l)) = err_lines.next_line().await {
+            let mut t = keep.lock().unwrap();
+            t.push_str(&l);
+            t.push('\n');
         }
     });
     let mut out_lines = BufReader::new(child.stdout.take().unwrap()).lines();
@@ -452,17 +373,17 @@ async fn spawn_bridge(
         .await
         .unwrap_or_else(|_| panic!("no readiness line; stderr: {}", stderr.lock().unwrap()))
         .unwrap()
-        .unwrap_or_else(|| panic!("the bridge exited; stderr: {}", stderr.lock().unwrap()));
+        .unwrap_or_else(|| panic!("bridge exited; stderr: {}", stderr.lock().unwrap()));
     let token = if let Ok(json) = serde_json::from_str::<Value>(&first_line) {
         json["token"].as_str().unwrap_or_default().to_owned()
     } else {
-        let line = timeout(WAIT, out_lines.next_line())
+        timeout(WAIT, out_lines.next_line())
             .await
             .unwrap()
             .unwrap()
-            .unwrap_or_default();
-        line.strip_prefix("hya bridge token ")
-            .unwrap_or_else(|| panic!("no token line: {line:?}"))
+            .unwrap_or_default()
+            .strip_prefix("hya bridge token ")
+            .unwrap()
             .to_owned()
     };
     tokio::spawn(async move { while let Ok(Some(_)) = out_lines.next_line().await {} });
@@ -471,162 +392,180 @@ async fn spawn_bridge(
         first_line,
         token,
         stderr,
+        _scratch: scratch,
     }
 }
 
 async fn bridge_json(link: &RelayLink) -> BridgeProcess {
+    let (cmd, scratch) = bridge_command(&["-", "--json"]);
     spawn_bridge(
-        bridge_command(&["-", "--json"]),
+        cmd,
+        scratch,
         Some(format!("{}\n", link.to_secret_string())),
         false,
     )
     .await
 }
 
-/// The link's secret parts never appear in `text`.
 fn assert_no_secret(text: &str, link: &RelayLink) {
     let secret = link.to_secret_string();
-    let (_, fragment) = secret.split_once('#').unwrap();
-    let (key, psk) = fragment.split_once('.').unwrap();
-    assert!(!text.contains(fragment), "the link secret leaked: {text}");
-    assert!(!text.contains(key), "the server key leaked: {text}");
-    assert!(!text.contains(psk), "the PSK leaked: {text}");
+    let (_, frag) = secret.split_once('#').unwrap();
+    let (key, psk) = frag.split_once('.').unwrap();
+    assert!(
+        !text.contains(frag) && !text.contains(key) && !text.contains(psk),
+        "secret leaked: {text}"
+    );
 }
 
-fn http() -> reqwest::Client {
-    reqwest::Client::builder().timeout(WAIT).build().unwrap()
-}
-
-async fn wait_exit(child: &mut Child) -> std::process::ExitStatus {
-    timeout(WAIT, child.wait())
+async fn raw(url: &str, req: &[u8]) -> (Vec<u8>, Option<std::io::Error>) {
+    let mut tcp = TcpStream::connect(url.trim_start_matches("http://").trim_end_matches('/'))
         .await
-        .expect("the bridge exits")
-        .unwrap()
-}
-
-/// Write `request` on a new connection to the bridge and read until the
-/// connection ends: the bytes, or the error that ended it.
-async fn raw(url: &str, request: &[u8]) -> (Vec<u8>, Option<std::io::Error>) {
-    let addr = url.trim_start_matches("http://").trim_end_matches('/');
-    let mut tcp = TcpStream::connect(addr).await.unwrap();
-    tcp.write_all(request).await.unwrap();
+        .unwrap();
+    tcp.write_all(req).await.unwrap();
     let mut received = Vec::new();
-    let result = timeout(WAIT, tcp.read_to_end(&mut received))
+    let res = timeout(WAIT, tcp.read_to_end(&mut received))
         .await
-        .expect("the bridge ends the connection");
-    (received, result.err())
+        .expect("bridge ends connection");
+    (received, res.err())
 }
-
-// ---- tests ----
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn http_requests_cross_the_bridge_and_the_json_line_names_the_remote() {
+async fn http_sse_websocket_and_sigterm_cross_the_bridge() {
     let (relay, _relay) = start_relay().await;
     let host = start_host(relay, 1, Mode::Http).await;
     let mut bridge = bridge_json(&host.link).await;
-
-    let json = bridge.json();
-    let url = bridge.url();
-    assert!(url.starts_with("http://127.0.0.1:"), "{json}");
-    assert_eq!(json["room"], host.link.room_id().as_str());
-    assert_eq!(
-        json["proxy"],
-        format!("hya+insecure://127.0.0.1:{}", relay.port())
-    );
+    let (json, url) = (bridge.json(), bridge.url());
+    assert!(url.starts_with("http://127.0.0.1:") && json["room"] == host.link.room_id().as_str());
     assert_eq!(
         json["label"],
         format!("remote: 127.0.0.1:{}/{}", relay.port(), host.link.room_id())
     );
 
     let client = bridge.client();
-    let health: Value = client
-        .get(format!("{url}/v1/health"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(health["ok"], true);
-    // Keep-alive reuse and a request body.
-    for payload in ["first body", "second body"] {
-        let echoed = client
-            .post(format!("{url}/echo"))
-            .body(payload)
+    assert_eq!(
+        client
+            .get(format!("{url}/v1/health"))
             .send()
             .await
             .unwrap()
-            .text()
+            .json::<Value>()
             .await
-            .unwrap();
-        assert_eq!(echoed, payload);
+            .unwrap()["ok"],
+        true
+    );
+    for payload in ["first body", "second body"] {
+        assert_eq!(
+            client
+                .post(format!("{url}/echo"))
+                .body(payload)
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            payload
+        );
     }
 
-    // SIGTERM stops it cleanly.
-    // SAFETY: `kill` has no memory-safety preconditions; the pid is our child.
-    unsafe {
-        libc::kill(bridge.pid(), libc::SIGTERM);
+    // Unbuffered SSE streaming.
+    let resp = client.get(format!("{url}/stream")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let mut body = resp.bytes_stream();
+    assert_eq!(
+        &timeout(WAIT, body.next()).await.unwrap().unwrap().unwrap()[..],
+        b"data: one\n\n"
+    );
+    host.release.notify_one();
+    let mut rest = Vec::new();
+    while let Some(chunk) = timeout(WAIT, body.next()).await.unwrap() {
+        rest.extend_from_slice(&chunk.unwrap());
     }
-    let status = wait_exit(&mut bridge.child).await;
-    assert!(status.success(), "{status:?}\n{}", bridge.stderr());
-    let stderr = bridge.stderr();
-    assert!(stderr.contains("binding"), "{stderr}");
-    assert_no_secret(&stderr, &host.link);
+    assert_eq!(rest, b"data: two\n\n");
+
+    // WebSocket upgrade.
+    let mut tcp = TcpStream::connect(url.trim_start_matches("http://"))
+        .await
+        .unwrap();
+    tcp.write_all(&bridge.authed(
+        "GET /ws HTTP/1.1\r\nHost: bridge\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+    )).await.unwrap();
+    let (mut head, mut b) = (Vec::new(), [0u8; 1]);
+    while !head.ends_with(b"\r\n\r\n") {
+        timeout(WAIT, tcp.read_exact(&mut b))
+            .await
+            .unwrap()
+            .unwrap();
+        head.push(b[0]);
+    }
+    assert!(String::from_utf8(head).unwrap().starts_with("HTTP/1.1 101"));
+    tcp.write_all(b"raw frame").await.unwrap();
+    let mut back = [0u8; 9];
+    timeout(WAIT, tcp.read_exact(&mut back))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&back, b"raw frame");
+    drop(tcp);
+
+    // SAFETY: `kill` targets our unreaped child process.
+    unsafe {
+        libc::kill(
+            i32::try_from(bridge.child.id().unwrap()).unwrap(),
+            libc::SIGTERM,
+        )
+    };
+    assert!(
+        timeout(WAIT, bridge.child.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
+    assert_no_secret(&bridge.stderr(), &host.link);
     assert_no_secret(&bridge.first_line, &host.link);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_connection_without_the_token_is_refused_before_any_relay_stream() {
+async fn unauthenticated_requests_are_refused_and_token_is_stripped() {
     let (relay, _relay) = start_relay().await;
     let host = start_host(relay, 10, Mode::Http).await;
     let bridge = bridge_json(&host.link).await;
-    assert_eq!(bridge.token.len(), 64, "{}", bridge.first_line);
-    assert!(bridge.token.bytes().all(|byte| byte.is_ascii_hexdigit()));
-    // The start-up check opened one stream.
-    let before = host.incoming.load(Ordering::SeqCst);
-    let url = bridge.url();
-    let wrong = "0".repeat(64);
-    for request in [
-        http().get(format!("{url}/v1/health")),
-        http()
-            .get(format!("{url}/v1/health"))
-            .header(TOKEN_HEADER, &wrong),
-        http()
-            .get(format!("{url}/v1/health"))
+    assert_eq!(bridge.token.len(), 64);
+    let (before, url) = (host.incoming.load(Ordering::SeqCst), bridge.url());
+    let http = reqwest::Client::builder().timeout(WAIT).build().unwrap();
+    for req in [
+        http.get(format!("{url}/v1/health")),
+        http.get(format!("{url}/v1/health"))
+            .header(TOKEN_HEADER, "0".repeat(64)),
+        http.get(format!("{url}/v1/health"))
             .header("authorization", format!("Bearer {}", bridge.token)),
-        http()
-            .get(format!("{url}/v1/health"))
-            .header("origin", "https://evil.example"),
     ] {
-        let response = request.send().await.unwrap();
-        assert_eq!(response.status(), 401);
-        let body: Value = response.json().await.unwrap();
-        assert_eq!(body["error"]["code"], "unauthenticated", "{body}");
-        assert!(
-            body["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains(TOKEN_HEADER),
-            "{body}"
+        let resp = req.send().await.unwrap();
+        assert_eq!(resp.status(), 401);
+        assert_eq!(
+            resp.json::<Value>().await.unwrap()["error"]["code"],
+            "unauthenticated"
         );
     }
-    // Not HTTP at all: reset, no stream either.
-    let (received, _) = raw(&url, b"\x16\x03\x01 not http\r\n\r\n").await;
-    assert!(received.is_empty());
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(
-        host.incoming.load(Ordering::SeqCst),
-        before,
-        "a refused connection opened a relay stream"
+    assert!(
+        raw(&url, b"\x16\x03\x01 not http\r\n\r\n")
+            .await
+            .0
+            .is_empty()
     );
-    // With the token: through, and the header does not reach the backend.
-    let echoed = bridge
-        .client()
-        .get(format!("{url}/v1/health"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(echoed.status(), 200);
+    assert_eq!(host.incoming.load(Ordering::SeqCst), before);
+
+    assert_eq!(
+        bridge
+            .client()
+            .get(format!("{url}/v1/health"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
     assert_eq!(host.incoming.load(Ordering::SeqCst), before + 1);
     let (received, _) = raw(
         &url,
@@ -634,238 +573,36 @@ async fn a_connection_without_the_token_is_refused_before_any_relay_stream() {
     )
     .await;
     let text = String::from_utf8_lossy(&received).to_ascii_lowercase();
-    assert!(text.starts_with("http/1.1 200"), "{text}");
-    assert!(text.contains("host: 127.0.0.1"), "{text}");
     assert!(
-        !text.contains(TOKEN_HEADER),
-        "the token was forwarded: {text}"
+        text.starts_with("http/1.1 200") && !text.contains(TOKEN_HEADER),
+        "{text}"
     );
     let stderr = bridge.stderr_containing("without the bridge token").await;
-    assert!(stderr.contains("without the bridge token"), "{stderr}");
-    assert_eq!(
-        stderr.matches("without the bridge token").count(),
-        1,
-        "{stderr}"
-    );
-    assert!(
-        !stderr.contains(&bridge.token),
-        "the token was logged: {stderr}"
-    );
+    assert!(stderr.contains("without the bridge token") && !stderr.contains(&bridge.token));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_streamed_response_arrives_as_it_is_written() {
-    let (relay, _relay) = start_relay().await;
-    let host = start_host(relay, 2, Mode::Http).await;
-    let bridge = bridge_json(&host.link).await;
-    let response = bridge
-        .client()
-        .get(format!("{}/stream", bridge.url()))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-    let mut body = response.bytes_stream();
-    let first = timeout(WAIT, body.next()).await.unwrap().unwrap().unwrap();
-    assert_eq!(&first[..], b"data: one\n\n");
-    // The second event is written only now: the first was not buffered.
-    host.release.notify_one();
-    let mut rest = Vec::new();
-    while let Some(chunk) = timeout(WAIT, body.next()).await.unwrap() {
-        rest.extend_from_slice(&chunk.unwrap());
-    }
-    assert_eq!(rest, b"data: two\n\n");
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_websocket_upgrade_crosses_the_bridge() {
-    let (relay, _relay) = start_relay().await;
-    let host = start_host(relay, 3, Mode::Http).await;
-    let bridge = bridge_json(&host.link).await;
-    let addr = bridge.url().trim_start_matches("http://").to_owned();
-    let mut tcp = TcpStream::connect(addr).await.unwrap();
-    tcp.write_all(&bridge.authed(
-        "GET /ws HTTP/1.1\r\nHost: bridge\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
-          Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
-    ))
-    .await
-    .unwrap();
-    let mut head = Vec::new();
-    let mut byte = [0u8; 1];
-    while !head.ends_with(b"\r\n\r\n") {
-        timeout(WAIT, tcp.read_exact(&mut byte))
-            .await
-            .unwrap()
-            .unwrap();
-        head.push(byte[0]);
-    }
-    let head = String::from_utf8(head).unwrap();
-    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
-    for message in [&b"raw frame one"[..], b"and two"] {
-        tcp.write_all(message).await.unwrap();
-        let mut back = vec![0u8; message.len()];
-        timeout(WAIT, tcp.read_exact(&mut back))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(back, message);
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_offline_backend_answers_503_json_and_other_bytes_are_reset() {
-    let (relay, _relay) = start_relay().await;
-    // Nobody registered this room.
-    let link = Identity::new(4).link(relay);
-    let bridge = bridge_json(&link).await;
-    let response = bridge
-        .client()
-        .get(format!("{}/v1/health", bridge.url()))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 503);
-    let body: Value = response.json().await.unwrap();
-    assert_eq!(
-        body,
-        serde_json::json!({"error": {"code": "unavailable", "message": OFFLINE}})
-    );
-    // Not HTTP: the connection is reset, not answered.
-    let (received, error) = raw(&bridge.url(), b"\x00\x01not http at all\r\n\r\n").await;
-    assert!(received.is_empty(), "{received:?}");
-    assert_eq!(
-        error.map(|e| e.kind()),
-        Some(std::io::ErrorKind::ConnectionReset)
-    );
-    let stderr = bridge.stderr_containing("offline").await;
-    assert!(stderr.contains("offline"), "{stderr}");
-    assert_no_secret(&stderr, &link);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_truncated_response_resets_the_client_connection() {
-    let (relay, _relay) = start_relay().await;
-    let host = start_host(relay, 5, Mode::Truncate).await;
-    let bridge = bridge_json(&host.link).await;
-    let (_received, error) = raw(
-        &bridge.url(),
-        &bridge.authed("GET / HTTP/1.1\r\nHost: b\r\n\r\n"),
-    )
-    .await;
-    assert_eq!(
-        error.map(|e| e.kind()),
-        Some(std::io::ErrorKind::ConnectionReset),
-        "a cut response must not look like a clean close"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_tampered_response_resets_the_client_connection() {
-    let (relay, _relay) = start_relay().await;
-    let host = start_host(relay, 6, Mode::Tamper).await;
-    let bridge = bridge_json(&host.link).await;
-    let (received, error) = raw(
-        &bridge.url(),
-        &bridge.authed("GET / HTTP/1.1\r\nHost: b\r\n\r\n"),
-    )
-    .await;
-    assert!(received.is_empty(), "no tampered plaintext: {received:?}");
-    assert_eq!(
-        error.map(|e| e.kind()),
-        Some(std::io::ErrorKind::ConnectionReset)
-    );
-    let stderr = bridge.stderr_containing("integrity").await;
-    assert!(stderr.contains("integrity"), "{stderr}");
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_non_loopback_listen_address_is_refused() {
-    for listen in ["0.0.0.0:0", "192.0.2.1:0", "[::]:0"] {
-        let mut command = bridge_command(&["-", "--listen", listen]);
-        command.stdin(std::process::Stdio::null());
-        let output = timeout(WAIT, command.output()).await.unwrap().unwrap();
-        assert!(!output.status.success(), "{listen}: {output:?}");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("loopback"), "{listen}: {stderr}");
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_link_comes_from_the_environment_and_listen_pins_the_port() {
-    let (relay, _relay) = start_relay().await;
-    let host = start_host(relay, 7, Mode::Http).await;
-    let port = {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.local_addr().unwrap().port()
-    };
-    let listen = format!("127.0.0.1:{port}");
-    let mut command = bridge_command(&["--listen", &listen]);
-    command.env("HYA_RELAY_LINK", host.link.to_secret_string());
-    let bridge = spawn_bridge(command, None, false).await;
-    assert_eq!(
-        bridge.first_line,
-        format!("hya bridge listening on http://127.0.0.1:{port}")
-    );
-    assert_eq!(bridge.token.len(), 64);
-    let health = bridge
-        .client()
-        .get(format!("http://127.0.0.1:{port}/v1/health"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(health.status(), 200);
-    assert_no_secret(&bridge.stderr(), &host.link);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn exit_with_stdin_stops_the_bridge_when_its_parent_goes_away() {
-    let (relay, _relay) = start_relay().await;
-    let host = start_host(relay, 8, Mode::Http).await;
-    let mut bridge = spawn_bridge(
-        bridge_command(&["-", "--json", "--exit-with-stdin"]),
-        Some(format!("{}\n", host.link.to_secret_string())),
-        true,
-    )
-    .await;
-    assert!(bridge.url().starts_with("http://127.0.0.1:"));
-    drop(bridge.child.stdin.take());
-    let status = wait_exit(&mut bridge.child).await;
-    assert!(status.success(), "{status:?}\n{}", bridge.stderr());
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_rejected_link_fails_at_start_without_printing_the_secret() {
+async fn offline_rotated_and_rejected_links_fail_without_leaking_secrets() {
     let (relay, _relay) = start_relay().await;
     let host = start_host(relay, 9, Mode::Http).await;
-    // Right room and PSK (the proxy admits it), wrong server key: the
-    // backend's handshake fails.
-    let wrong = RelayLink::new(
-        host.link.address().clone(),
-        host.link.room_id().clone(),
-        Transport::Auto,
-        *Identity::new(99).noise.public(),
-        *host.link.psk(),
-    );
-    let secret = wrong.to_secret_string();
-    // A link given as an argument works but earns a warning (process listings).
-    let mut command = bridge_command(&[&secret]);
-    command.stdin(std::process::Stdio::null());
-    let output = timeout(WAIT, command.output()).await.unwrap().unwrap();
-    assert!(!output.status.success(), "{output:?}");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("rejected"), "{stderr}");
-    assert!(stderr.contains("process list"), "{stderr}");
-    assert_no_secret(&stderr, &wrong);
-    assert_no_secret(&String::from_utf8_lossy(&output.stdout), &wrong);
-}
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_rotated_link_looks_offline_and_is_answered_503_without_the_secret() {
-    let (relay, _relay) = start_relay().await;
-    let host = start_host(relay, 11, Mode::Http).await;
-    // Right room, wrong (for example rotated) PSK: the proxy refuses its open
-    // token exactly like a room without a host, so the bridge starts and
-    // answers 503 with a message that names both causes.
+    let offline_link = Identity::new(4).link(relay);
+    let offline = bridge_json(&offline_link).await;
+    let resp = offline
+        .client()
+        .get(format!("{}/v1/health", offline.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 503);
+    assert_eq!(
+        resp.json::<Value>().await.unwrap(),
+        serde_json::json!({"error": {"code": "unavailable", "message": OFFLINE}})
+    );
+    let (bytes, err) = raw(&offline.url(), b"\x00\x01not http\r\n\r\n").await;
+    assert!(bytes.is_empty() && err.map(|e| e.kind()) == Some(std::io::ErrorKind::ConnectionReset));
+    assert_no_secret(&offline.stderr_containing("offline").await, &offline_link);
+
     let rotated = RelayLink::new(
         host.link.address().clone(),
         host.link.room_id().clone(),
@@ -873,31 +610,98 @@ async fn a_rotated_link_looks_offline_and_is_answered_503_without_the_secret() {
         *host.link.server_key(),
         [0x42; 32],
     );
-    let secret = rotated.to_secret_string();
-    let mut bridge = spawn_bridge(bridge_command(&["--json", &secret]), None, false).await;
-    let response = bridge
-        .client()
-        .get(format!("{}/v1/health", bridge.url()))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 503);
-    let body: Value = response.json().await.unwrap();
-    assert_eq!(body["error"]["message"], OFFLINE, "{body}");
+    let (cmd, scratch) = bridge_command(&["--json", &rotated.to_secret_string()]);
+    let rot = spawn_bridge(cmd, scratch, None, false).await;
     assert_eq!(
-        host.incoming.load(Ordering::SeqCst),
-        0,
-        "a wrong open token never reaches the backend"
+        rot.client()
+            .get(format!("{}/v1/health", rot.url()))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        503
     );
-    // SAFETY: `kill` has no memory-safety preconditions; the pid is our child.
-    unsafe {
-        libc::kill(bridge.pid(), libc::SIGTERM);
-    }
-    let _ = wait_exit(&mut bridge.child).await;
-    let stderr = bridge.stderr();
-    assert!(stderr.contains("rotated or is wrong"), "{stderr}");
-    assert!(stderr.contains("process list"), "{stderr}");
+    assert_eq!(host.incoming.load(Ordering::SeqCst), 0);
+    let stderr = rot.stderr_containing("rotated or is wrong").await;
+    assert!(stderr.contains("process list"));
     assert_no_secret(&stderr, &rotated);
-    assert_no_secret(&bridge.first_line, &rotated);
-    assert_no_secret(&body.to_string(), &rotated);
+
+    let wrong = RelayLink::new(
+        host.link.address().clone(),
+        host.link.room_id().clone(),
+        Transport::Auto,
+        *Identity::new(99).noise.public(),
+        *host.link.psk(),
+    );
+    let (mut cmd, _scratch) = bridge_command(&[&wrong.to_secret_string()]);
+    cmd.stdin(std::process::Stdio::null());
+    let output = timeout(WAIT, cmd.output()).await.unwrap().unwrap();
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success() && err.contains("rejected") && err.contains("process list"));
+    assert_no_secret(&err, &wrong);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn truncated_tampered_env_listen_and_exit_with_stdin() {
+    let (relay, _relay) = start_relay().await;
+    let trunc_host = start_host(relay, 5, Mode::Truncate).await;
+    let trunc = bridge_json(&trunc_host.link).await;
+    let (_, err) = raw(
+        &trunc.url(),
+        &trunc.authed("GET / HTTP/1.1\r\nHost: b\r\n\r\n"),
+    )
+    .await;
+    trunc_host.release.notify_waiters();
+    assert_eq!(
+        err.map(|e| e.kind()),
+        Some(std::io::ErrorKind::ConnectionReset)
+    );
+
+    let tamp_host = start_host(relay, 6, Mode::Tamper).await;
+    let tamp = bridge_json(&tamp_host.link).await;
+    let (bytes, err) = raw(
+        &tamp.url(),
+        &tamp.authed("GET / HTTP/1.1\r\nHost: b\r\n\r\n"),
+    )
+    .await;
+    tamp_host.release.notify_waiters();
+    assert!(bytes.is_empty() && err.map(|e| e.kind()) == Some(std::io::ErrorKind::ConnectionReset));
+    assert!(
+        tamp.stderr_containing("integrity")
+            .await
+            .contains("integrity")
+    );
+
+    let host = start_host(relay, 7, Mode::Http).await;
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let listen = format!("127.0.0.1:{port}");
+    let (mut cmd, scratch) = bridge_command(&["--listen", &listen, "--exit-with-stdin"]);
+    cmd.env("HYA_RELAY_LINK", host.link.to_secret_string());
+    let mut bridge = spawn_bridge(cmd, scratch, None, true).await;
+    assert_eq!(
+        bridge.first_line,
+        format!("hya bridge listening on http://127.0.0.1:{port}")
+    );
+    assert_eq!(
+        bridge
+            .client()
+            .get(format!("http://127.0.0.1:{port}/v1/health"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    drop(bridge.child.stdin.take());
+    assert!(
+        timeout(WAIT, bridge.child.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
 }

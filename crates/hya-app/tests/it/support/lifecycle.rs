@@ -20,7 +20,7 @@ use hya_provider::{
     ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{PermissionModel, Tool, ToolCtx, ToolError};
+use hya_tool::PermissionModel;
 use serde_json::{Value, json};
 use sqlx::{Connection, SqliteConnection};
 use tokio::sync::{Semaphore, broadcast};
@@ -272,28 +272,6 @@ impl Provider for ScriptedProvider {
     }
 }
 
-/// Ignores cancellation deliberately. Releasing it writes the observable file
-/// only if production still owns and polls the tool future.
-pub struct BlockingWrite {
-    pub gate: Arc<Gate>,
-    pub path: PathBuf,
-}
-
-#[async_trait]
-impl Tool for BlockingWrite {
-    fn name(&self) -> &str {
-        "m4__blocking_write"
-    }
-    fn schema(&self) -> hya_proto::ToolSchema {
-        hya_tool::tool::obj_schema(self.name(), "Lifecycle test control point", json!({}), &[])
-    }
-    async fn execute(&self, _: &ToolCtx, _: Value) -> Result<Value, ToolError> {
-        self.gate.block().await;
-        std::fs::write(&self.path, "completed")?;
-        Ok(json!({"output": "completed"}))
-    }
-}
-
 pub struct Harness {
     pub built: BuiltSessionEngine,
     pub engine: Arc<SessionEngine>,
@@ -305,13 +283,9 @@ pub struct Harness {
 
 impl Harness {
     pub async fn new() -> Self {
-        Self::with_plugins(Vec::new()).await
-    }
-
-    pub async fn with_plugins(plugins: Vec<hya_plugin::config::PluginSpec>) -> Self {
         let dir = std::env::temp_dir().join(format!("hya-m4-{}", SessionId::new()));
         std::fs::create_dir(&dir).unwrap();
-        Self::open(dir, None, plugins).await
+        Self::open(dir, None, Vec::new()).await
     }
 
     pub async fn open(
@@ -623,16 +597,6 @@ impl Harness {
         sqlx::query(&format!("CREATE TRIGGER m4_reject BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = '{tag}' BEGIN SELECT RAISE(ABORT, 'M4 injected {tag}'); END")).execute(&mut db).await.unwrap();
     }
 
-    pub async fn reject_wake_prompt(&self, child: SessionId) {
-        let mut db = SqliteConnection::connect(&format!(
-            "sqlite://{}",
-            self.dir.join("events.db").display()
-        ))
-        .await
-        .unwrap();
-        sqlx::query(&format!("CREATE TRIGGER m4_reject BEFORE INSERT ON event_log WHEN CAST(NEW.session_id AS TEXT) = '{child}' AND json_extract(NEW.payload, '$.type') = 'message_started' AND json_extract(NEW.payload, '$.role') = 'user' BEGIN SELECT RAISE(ABORT, 'M4 injected wake admission'); END")).execute(&mut db).await.unwrap();
-    }
-
     pub async fn heal(&self) {
         let mut db = SqliteConnection::connect(&format!(
             "sqlite://{}",
@@ -894,149 +858,6 @@ pub async fn crashed_team(test: &str) -> Harness {
     Harness::open(dir, Some(root), Vec::new()).await
 }
 
-/// An actual stdio plugin connects to this local socket from session.start.
-/// Its handshake supplies an observable arrival; the response releases the
-/// hook. No file polling, sleep, or in-process replacement of hook dispatch.
-pub struct BlockingPlugin {
-    pub gate: Arc<Gate>,
-    pub spec: hya_plugin::config::PluginSpec,
-    armed: Arc<Mutex<Option<String>>>,
-    stop: CancellationToken,
-    server: Option<tokio::task::JoinHandle<()>>,
-}
-
-impl BlockingPlugin {
-    pub async fn new() -> Self {
-        Self::for_hook("session.start").await
-    }
-
-    pub async fn for_hook(hook: &str) -> Self {
-        assert!(matches!(
-            hook,
-            "session.start" | "chat.params" | "tool.execute.after" | "message.user.before"
-        ));
-        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let gate = Arc::new(Gate::default());
-        let armed = Arc::new(Mutex::new(None::<String>));
-        let stop = CancellationToken::new();
-        let server = tokio::spawn({
-            let gate = gate.clone();
-            let armed = armed.clone();
-            let stop = stop.clone();
-            async move {
-                let mut calls = tokio::task::JoinSet::new();
-                loop {
-                    tokio::select! {
-                        () = stop.cancelled() => break,
-                        result = calls.join_next(), if !calls.is_empty() => { result.unwrap().unwrap(); }
-                        accepted = listener.accept() => {
-                            let (socket, _) = accepted.unwrap();
-                            let gate = gate.clone();
-                            let armed = armed.clone();
-                            let stop = stop.clone();
-                            calls.spawn(async move {
-                                let mut socket = BufReader::new(socket);
-                                let mut line = String::new();
-                                socket.read_line(&mut line).await.unwrap();
-                                let params: Value = serde_json::from_str(&line).unwrap();
-                                if params["lifetime"] == true {
-                                    stop.cancelled().await;
-                                    socket.write_all(b"exit\n").await.unwrap();
-                                    socket.read_to_end(&mut Vec::new()).await.unwrap();
-                                    return;
-                                }
-                                let block = {
-                                    let mut target = armed.lock().unwrap();
-                                    if target.as_deref().is_some_and(|target| target == "*" || params["session"].as_str() == Some(target)) {
-                                        target.take();
-                                        true
-                                    } else { false }
-                                };
-                                if block { gate.block().await; }
-                                socket.write_all(b"release\n").await.unwrap();
-                            });
-                        }
-                    }
-                }
-                while let Some(result) = calls.join_next().await {
-                    result.unwrap();
-                }
-            }
-        });
-        let script = format!(
-            r#"import json,os,socket,sys,threading
-output=threading.Lock()
-control=socket.create_connection(('127.0.0.1',{port}))
-control.sendall((json.dumps({{'lifetime':True,'pid':os.getpid()}})+'\n').encode())
-def lifetime():
- control.recv(1024)
- os._exit(0)
-threading.Thread(target=lifetime,daemon=True).start()
-def handle(r):
- m=r.get('method')
- p=r.get('params') or {{}}
- if m=='initialize':
-  result={{'protocol_version':1,'plugin':{{'id':'m4-hook','version':'1.0.0','kind':'rust'}},'hooks':[{{'name':'{hook}'}}],'tools':[]}}
- elif m=='hook/{hook}':
-  with socket.create_connection(('127.0.0.1',{port})) as s:
-   s.sendall((json.dumps(p)+'\n').encode())
-   s.recv(1024)
-  if m=='hook/chat.params': result={{'outcome':'continue','request':p['request']}}
-  elif m=='hook/tool.execute.after': result={{'outcome':'continue','result':p['result']}}
-  elif m=='hook/message.user.before': result={{'outcome':'continue','text':p['text']}}
-  else: result={{}}
- else: result={{}}
- if 'id' in r:
-  with output: print(json.dumps({{'jsonrpc':'2.0','id':r['id'],'result':result}}),flush=True)
-for line in sys.stdin: threading.Thread(target=handle,args=(json.loads(line),),daemon=True).start()
-"#
-        );
-        let spec = hya_plugin::config::PluginSpec {
-            id: "m4-hook".into(),
-            kind: hya_plugin::messages::PluginKindWire::Rust,
-            command: vec!["python3".into(), "-u".into(), "-c".into(), script],
-            timeout_ms: Some(30_000),
-            env: BTreeMap::new(),
-            plugin_dir: None,
-            launch: hya_plugin::config::ProcessLaunch::default(),
-        };
-        Self {
-            gate,
-            spec,
-            armed,
-            stop,
-            server: Some(server),
-        }
-    }
-
-    pub fn arm(&self) {
-        *self.armed.lock().unwrap() = Some("*".into());
-    }
-
-    pub fn arm_session(&self, session: SessionId) {
-        *self.armed.lock().unwrap() = Some(session.to_string());
-    }
-
-    pub async fn shutdown(mut self) {
-        let server = self.server.take().unwrap();
-        self.stop.cancel();
-        tokio::time::timeout(BOUND, server)
-            .await
-            .expect("test plugin did not exit")
-            .unwrap();
-    }
-}
-
-impl Drop for BlockingPlugin {
-    fn drop(&mut self) {
-        if let Some(server) = &self.server {
-            server.abort();
-        }
-    }
-}
-
 /// The public installed-Bundle route supplies a real executable sidecar.
 pub async fn install_sidecar_bundle() {
     // Bundle processes have a cleared environment, including PATH.
@@ -1249,42 +1070,6 @@ impl SidecarControl {
             if let Err(error) = ended {
                 assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
             }
-        }
-    }
-}
-
-/// Faults are confined to the public opaque sidecar contract.
-pub struct EndingSidecar {
-    pub stopping: Arc<Gate>,
-    pub fail: bool,
-}
-
-#[async_trait]
-impl hya_engine::BoundSidecarFactory for EndingSidecar {
-    async fn start(
-        &self,
-        _: hya_engine::SidecarStart,
-    ) -> Result<Box<dyn hya_engine::SidecarHandle>, hya_engine::CoreError> {
-        Ok(Box::new(Self {
-            stopping: self.stopping.clone(),
-            fail: self.fail,
-        }))
-    }
-}
-
-#[async_trait]
-impl hya_engine::SidecarHandle for EndingSidecar {
-    async fn ready(&mut self) -> Result<(), hya_engine::CoreError> {
-        Ok(())
-    }
-    async fn shutdown(&mut self) -> Result<(), hya_engine::CoreError> {
-        self.stopping.block().await;
-        if self.fail {
-            Err(hya_engine::CoreError::Invalid(
-                "M4 terminate failure".into(),
-            ))
-        } else {
-            Ok(())
         }
     }
 }

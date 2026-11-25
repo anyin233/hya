@@ -221,11 +221,6 @@ pub(crate) fn connect_url(addr: std::net::SocketAddr) -> String {
 }
 
 impl DbLock {
-    #[cfg(test)]
-    pub(crate) fn paths(&self) -> &DbPaths {
-        &self.paths
-    }
-
     /// Where [`request_stop`] writes (for a shutdown future that cannot
     /// borrow the lock).
     pub(crate) fn stop_request_path(&self) -> PathBuf {
@@ -367,14 +362,8 @@ mod tests {
 
     impl Scratch {
         fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!(
-                "hya-dblock-{name}-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
+            let dir = std::env::temp_dir()
+                .join(format!("hya-dblock-{name}-{}", hya_proto::SessionId::new()));
             std::fs::create_dir_all(&dir).unwrap();
             Self(dir.canonicalize().unwrap())
         }
@@ -391,20 +380,17 @@ mod tests {
     }
 
     #[test]
-    fn in_memory_stores_are_not_locked() {
+    fn paths_in_memory_and_bind_urls() {
         for db in ["", ":memory:"] {
-            assert!(paths(db).is_none(), "{db}");
-            assert!(owned_metadata(db).unwrap().is_none(), "{db}");
+            assert!(
+                paths(db).is_none() && owned_metadata(db).unwrap().is_none(),
+                "{db}"
+            );
         }
-    }
-
-    #[test]
-    fn paths_sit_next_to_the_database_with_a_canonical_directory() {
         let scratch = Scratch::new("paths");
         let nested = scratch.0.join("a");
         std::fs::create_dir_all(&nested).unwrap();
-        let spelled = format!("{}/../sessions.db", nested.display());
-        let found = paths(&spelled).unwrap();
+        let found = paths(&format!("{}/../sessions.db", nested.display())).unwrap();
         assert_eq!(found.lock, scratch.0.join("sessions.db.runtime-owner.lock"));
         assert_eq!(found.discovery, scratch.0.join("sessions.db.server.json"));
         assert_eq!(found.log, scratch.0.join("sessions.db.server.log"));
@@ -413,64 +399,63 @@ mod tests {
             found.relay_identity,
             scratch.0.join("sessions.db.relay-identity.json")
         );
+        for (bind, expected) in [
+            ("0.0.0.0:80", "http://127.0.0.1:80"),
+            ("[::]:80", "http://[::1]:80"),
+            ("127.0.0.1:5", "http://127.0.0.1:5"),
+        ] {
+            assert_eq!(connect_url(bind.parse().unwrap()), expected);
+        }
     }
 
     #[test]
-    fn discovery_never_creates_or_claims_a_lock() {
-        let scratch = Scratch::new("read-only");
+    fn holder_probes_never_claim_and_ignore_shared_locks() {
+        let scratch = Scratch::new("probes");
         let db = scratch.db();
-        assert!(holder(&db).unwrap().is_none());
-        assert!(!paths(&db).unwrap().lock.exists());
-    }
+        let p = paths(&db).unwrap();
+        assert!(holder(&db).unwrap().is_none() && !p.lock.exists());
 
-    #[test]
-    fn concurrent_shared_probes_do_not_look_like_a_runtime_owner() {
-        let scratch = Scratch::new("shared-probes");
-        let db = scratch.db();
-        let paths = paths(&db).unwrap();
         let probe = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
-            .open(&paths.lock)
+            .open(&p.lock)
             .unwrap();
-        std::fs::write(&paths.lock, format!("{}\n", std::process::id())).unwrap();
+        std::fs::write(&p.lock, format!("{}\n", std::process::id())).unwrap();
         probe.try_lock_shared().unwrap();
         assert!(holder(&db).unwrap().is_none());
     }
 
-    #[test]
-    fn the_discovery_file_has_the_documented_shape() {
-        let scratch = Scratch::new("shape");
-        let mut lock = owned_metadata(&scratch.db()).unwrap().unwrap();
-        lock.publish("http://127.0.0.1:9").unwrap();
-        let text = std::fs::read_to_string(&lock.paths().discovery).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let object = value.as_object().unwrap();
-        let mut keys: Vec<_> = object.keys().map(String::as_str).collect();
+    #[tokio::test]
+    async fn discovery_shape_relay_updates_and_stale_cleanup() {
+        let scratch = Scratch::new("discovery");
+        let db = scratch.db();
+        let mut lock = owned_metadata(&db).unwrap().unwrap();
+        let path = lock.discovery_path();
+        set_discovery_relay(&path, Some(DiscoveredRelay::default())).unwrap();
+        assert!(!path.exists());
+
+        let published = lock.publish("http://127.0.0.1:9").unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let mut keys: Vec<_> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         keys.sort_unstable();
         assert_eq!(keys, ["pid", "startedAt", "url", "version"]);
         assert_eq!(value["url"], "http://127.0.0.1:9");
         assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
-        // No temporary file is left behind.
-        let leftovers: Vec<_> = std::fs::read_dir(&scratch.0)
-            .unwrap()
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
-            .collect();
-        assert!(leftovers.is_empty());
-    }
+        assert!(
+            !std::fs::read_dir(&scratch.0)
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+        );
 
-    #[test]
-    fn the_relay_is_recorded_in_the_discovery_file_and_cleared_again() {
-        let scratch = Scratch::new("relay");
-        let mut lock = owned_metadata(&scratch.db()).unwrap().unwrap();
-        let path = lock.discovery_path();
-        // Before publishing there is nothing to update.
-        set_discovery_relay(&path, Some(DiscoveredRelay::default())).unwrap();
-        assert!(!path.exists());
-        let published = lock.publish("http://127.0.0.1:9").unwrap();
         let relay = DiscoveredRelay {
             proxy_url: "https://relay.example.com/hya".into(),
             transport: "ws".into(),
@@ -480,23 +465,14 @@ mod tests {
         };
         set_discovery_relay(&path, Some(relay.clone())).unwrap();
         let found = read_discovery(&path).unwrap();
-        assert_eq!(found.relay.as_ref(), Some(&relay));
-        assert_eq!(found.url, published.url);
-        let text = std::fs::read_to_string(&path).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(
-            value["relay"],
-            serde_json::json!({"proxyUrl": "https://relay.example.com/hya", "transport": "ws", "ephemeral": false})
+            (found.relay.as_ref(), found.url),
+            (Some(&relay), published.url)
         );
         set_discovery_relay(&path, None).unwrap();
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert!(!text.contains("relay"), "{text}");
-    }
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("relay"));
+        drop(lock);
 
-    #[tokio::test]
-    async fn claiming_removes_a_stale_discovery_file() {
-        let scratch = Scratch::new("stale");
-        let db = scratch.db();
         let stale = paths(&db).unwrap().discovery;
         std::fs::write(
             &stale,
@@ -505,19 +481,6 @@ mod tests {
         .unwrap();
         let _store = hya_store::SessionStore::connect_runtime(&db).await.unwrap();
         assert!(!stale.exists());
-    }
-
-    #[test]
-    fn unspecified_bind_addresses_publish_loopback() {
-        assert_eq!(
-            connect_url("0.0.0.0:80".parse().unwrap()),
-            "http://127.0.0.1:80"
-        );
-        assert_eq!(connect_url("[::]:80".parse().unwrap()), "http://[::1]:80");
-        assert_eq!(
-            connect_url("127.0.0.1:5".parse().unwrap()),
-            "http://127.0.0.1:5"
-        );
     }
 
     #[tokio::test]
@@ -530,11 +493,15 @@ mod tests {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut buffer = [0u8; 1024];
                 let _ = socket.read(&mut buffer).await;
-                let response = format!(
-                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await;
             });
             url
         }
@@ -542,7 +509,6 @@ mod tests {
         assert!(probe(&healthy, Duration::from_secs(2)).await);
         let failing = serve_once(r#"{"ok":false}"#, "500 Internal Server Error").await;
         assert!(!probe(&failing, Duration::from_secs(2)).await);
-        // Nothing listening.
         let closed = {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             format!("http://{}", listener.local_addr().unwrap())

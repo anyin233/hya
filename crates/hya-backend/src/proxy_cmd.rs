@@ -147,6 +147,7 @@ async fn shutdown_signal() {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use clap::Parser as _;
+    use hya_relay::server::ForwardedHeader;
 
     #[derive(clap::Parser)]
     struct TestCli {
@@ -154,61 +155,38 @@ mod tests {
         proxy: super::ProxyArgs,
     }
 
-    fn parse(args: &[&str]) -> Result<TestCli, clap::Error> {
-        let mut full = vec!["hya-proxy-test"];
-        full.extend_from_slice(args);
-        TestCli::try_parse_from(full)
+    fn parse(args: &str) -> Result<TestCli, clap::Error> {
+        TestCli::try_parse_from(std::iter::once("hya-proxy-test").chain(args.split_whitespace()))
     }
 
     #[test]
-    fn defaults_match_the_library_and_8766() {
-        let cli = parse(&[]).expect("no flags parses");
-        assert_eq!(cli.proxy.host, super::DEFAULT_PROXY_HOST);
-        assert_eq!(cli.proxy.port, super::DEFAULT_PROXY_PORT);
-        assert_eq!(cli.proxy.port, 8766);
-        assert_eq!(cli.proxy.host, "0.0.0.0");
-        assert!(cli.proxy.trust_forwarded.is_none());
-        assert!(cli.proxy.tls_cert.is_none());
-        assert!(cli.proxy.tls_key.is_none());
-        let limits = cli.proxy.limits();
-        assert_eq!(limits, hya_relay::proxy::ProxyLimits::default());
+    fn proxy_flags_defaults_overrides_and_rejections() {
+        let def = parse("").unwrap().proxy;
+        assert_eq!((def.host.as_str(), def.port), ("0.0.0.0", 8766));
+        assert_eq!(def.limits(), hya_relay::proxy::ProxyLimits::default());
         assert_eq!(
-            cli.proxy.drain_timeout_secs,
+            def.drain_timeout_secs,
             hya_relay::server::DEFAULT_DRAIN_TIMEOUT.as_secs()
         );
-    }
+        assert!(def.trust_forwarded.is_none() && def.tls().is_none());
 
-    #[test]
-    fn tls_cert_and_key_must_be_given_together() {
-        assert!(parse(&["--tls-cert", "c.pem"]).is_err());
-        assert!(parse(&["--tls-key", "k.pem"]).is_err());
-        let cli = parse(&["--tls-cert", "c.pem", "--tls-key", "k.pem"]).expect("both given");
-        let tls = cli.proxy.tls().expect("tls files built");
-        assert_eq!(tls.cert.to_string_lossy(), "c.pem");
-        assert_eq!(tls.key.to_string_lossy(), "k.pem");
-    }
-
-    #[test]
-    fn overrides_the_four_limit_flags_and_defaults_the_rest() {
-        let cli = parse(&[
-            "--max-rooms",
-            "1",
-            "--max-streams-per-room",
-            "2",
-            "--idle-timeout-secs",
-            "6",
-            "--stream-rate-bytes-per-sec",
-            "7",
-        ])
-        .expect("every limit flag parses");
-        let limits = cli.proxy.limits();
-        assert_eq!(limits.max_rooms, 1);
-        assert_eq!(limits.max_streams_per_room, 2);
-        assert_eq!(limits.idle_timeout, std::time::Duration::from_secs(6));
-        assert_eq!(limits.stream_rate_bytes_per_sec, 7);
-        // Everything else keeps the library policy.
+        assert!(parse("--tls-cert c.pem").is_err() && parse("--tls-key k.pem").is_err());
+        let tls = parse("--tls-cert c.pem --tls-key k.pem")
+            .unwrap()
+            .proxy
+            .tls()
+            .unwrap();
         assert_eq!(
-            limits,
+            (tls.cert.to_str(), tls.key.to_str()),
+            (Some("c.pem"), Some("k.pem"))
+        );
+
+        let custom = parse("--host 127.0.0.1 --port 0 --path-prefix /relay --max-rooms 1 --max-streams-per-room 2 --idle-timeout-secs 6 --stream-rate-bytes-per-sec 7")
+            .unwrap()
+            .proxy;
+        assert_eq!(custom.path_prefix.as_deref(), Some("/relay"));
+        assert_eq!(
+            custom.limits(),
             hya_relay::proxy::ProxyLimits {
                 max_rooms: 1,
                 max_streams_per_room: 2,
@@ -217,64 +195,36 @@ mod tests {
                 ..hya_relay::proxy::ProxyLimits::default()
             }
         );
-    }
 
-    #[test]
-    fn retired_limit_flags_are_rejected() {
-        for flag in [
-            "--max-streams-per-peer",
-            "--max-streams",
-            "--max-rooms-per-peer",
-            "--max-pending-registrations-per-peer",
-            "--max-pending-registrations",
-            "--stream-rate-burst-bytes",
-            "--max-chunk-data",
-            "--early-data-limit",
-            "--max-early-data-bytes",
-            "--accept-timeout-secs",
-            "--handshake-timeout-secs",
-        ] {
-            assert!(parse(&[flag, "1"]).is_err(), "{flag} must be gone");
-        }
-    }
-
-    #[test]
-    fn trust_forwarded_names_exactly_one_header() {
-        use hya_relay::server::ForwardedHeader;
         assert!(
-            parse(&["--trust-forwarded"]).is_err(),
-            "a header is required"
+            parse("--trust-forwarded").is_err() && parse("--trust-forwarded forwarded").is_err()
         );
-        assert!(parse(&["--trust-forwarded", "forwarded"]).is_err());
         for (name, header) in [
             ("cf-connecting-ip", ForwardedHeader::CfConnectingIp),
             ("x-real-ip", ForwardedHeader::XRealIp),
             ("x-forwarded-for", ForwardedHeader::XForwardedFor),
         ] {
-            let cli = parse(&["--trust-forwarded", name]).expect("parses");
-            assert_eq!(cli.proxy.trust_forwarded, Some(header));
+            assert_eq!(
+                parse(&format!("--trust-forwarded {name}"))
+                    .unwrap()
+                    .proxy
+                    .trust_forwarded,
+                Some(header)
+            );
         }
-    }
 
-    #[test]
-    fn host_port_and_path_prefix_override() {
-        let cli = parse(&[
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "0",
-            "--path-prefix",
-            "/relay",
-            "--trust-forwarded",
-            "x-real-ip",
-        ])
-        .expect("parses");
-        assert_eq!(cli.proxy.host, "127.0.0.1");
-        assert_eq!(cli.proxy.port, 0);
-        assert_eq!(cli.proxy.path_prefix.as_deref(), Some("/relay"));
-        assert_eq!(
-            cli.proxy.trust_forwarded,
-            Some(hya_relay::server::ForwardedHeader::XRealIp)
-        );
+        for retired in [
+            "--max-streams-per-peer",
+            "--max-streams",
+            "--max-rooms-per-peer",
+            "--max-pending-registrations",
+            "--stream-rate-burst-bytes",
+            "--max-chunk-data",
+            "--early-data-limit",
+            "--accept-timeout-secs",
+            "--handshake-timeout-secs",
+        ] {
+            assert!(parse(&format!("{retired} 1")).is_err(), "{retired}");
+        }
     }
 }

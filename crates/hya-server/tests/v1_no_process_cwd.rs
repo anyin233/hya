@@ -146,7 +146,7 @@ async fn nothing_reads_the_server_process_working_directory() {
         if text.contains("from the") {
             break;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
     assert!(text.contains("from the session workdir"), "{text}");
     assert!(!text.contains("from the process cwd"), "{text}");

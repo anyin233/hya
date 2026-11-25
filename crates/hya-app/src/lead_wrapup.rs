@@ -656,52 +656,341 @@ mod tests {
     }
 
     #[test]
-    fn imminent_starts_announce_work_but_completed_steps_do_not() {
-        for text in [
+    fn narration_announcements_steps_truncation_empty_and_spurious_summary() {
+        for announcing in [
             "I'll start by examining the config file.",
             "I’ll start by reading config.yaml.",
             "I will begin by running tests.",
             "First, I'll check the logs.",
             "我先查看配置文件。",
+            "Line-length issues are pre-existing. Now let me look at the docs:",
+            "下一步：",
+            "LMDB 已构建，数据正确。现在我来检查 solver 生命周期。",
+            "Found it: N=208 worked by coincidence. Let me fix.",
+            "All edits are in, **now let me** run the checks.",
+            "Now let me check:\n\n---\n\n______",
         ] {
-            assert!(announces_next_step(text), "{text}");
+            assert!(announces_next_step(announcing), "{announcing}");
         }
-        for text in [
+        let long = format!("{} Let me run the tests.", "word ".repeat(100));
+        for complete in [
             "我先后运行了单元测试和集成测试，全部通过。",
-            "我先前已验证输出。",
             "I started by examining the config file and wrote the output.",
             "First, I checked the logs; all tests pass.",
             "Let me know if you need anything else.",
+            "如需调整请告诉我。",
+            "Changed files:\n- a.rs\n- b.rs",
+            "Done.\n\n---",
+            "",
+            "The best moves are in /app/move.txt:\n\n```\ne2e4\n```",
+            long.as_str(),
         ] {
-            assert!(!announces_next_step(text), "{text}");
+            assert!(!announces_next_step(complete), "{complete:?}");
         }
+
+        // Only a tool-free final step counts; reasoning-only final step does not reuse prior text.
+        let mut proj = with_messages(vec![
+            message(Role::User, vec![text("do it")]),
+            message(
+                Role::Assistant,
+                vec![text("Now let me check:"), tool("bash")],
+            ),
+        ]);
+        let id = proj.session.messages[1].id;
+        apply_step(&mut proj, id, 1);
+        proj.session.messages[1]
+            .parts
+            .extend([text("Done."), text("Changed files: a.txt.")]);
+        assert_eq!(
+            final_step_text(&proj).as_deref(),
+            Some("Done.\nChanged files: a.txt.")
+        );
+        assert_eq!(narration(&proj, FinishReason::Stop), None);
+
+        let mut reasoning_only =
+            with_messages(vec![message(Role::Assistant, vec![text("Now verify:")])]);
+        let rid = reasoning_only.session.messages[0].id;
+        apply_step(&mut reasoning_only, rid, 1);
+        reasoning_only.session.messages[0]
+            .parts
+            .push(PartProjection::Reasoning {
+                id: PartId::new(),
+                text: "thinking".into(),
+                reason: None,
+                provider_data: None,
+            });
+        assert_eq!(
+            narration(&reasoning_only, FinishReason::Stop),
+            Some(Narration::Empty)
+        );
+        assert_eq!(
+            narration(
+                &with_messages(vec![message(
+                    Role::Assistant,
+                    vec![tool("bash"), text("</invoke>")]
+                )]),
+                FinishReason::Stop
+            ),
+            None
+        );
+
+        // Truncated, empty, spurious summary, and progress detection.
+        assert_eq!(
+            narration(
+                &with_messages(vec![message(Role::Assistant, vec![text("All good.")])]),
+                FinishReason::Length
+            ),
+            Some(Narration::Truncated)
+        );
+        for parts in [vec![], vec![text("")], vec![text(" \n")]] {
+            assert_eq!(
+                narration(
+                    &with_messages(vec![message(Role::Assistant, parts)]),
+                    FinishReason::Stop
+                ),
+                Some(Narration::Empty)
+            );
+        }
+        assert_eq!(
+            narration(
+                &with_messages(vec![message(
+                    Role::Assistant,
+                    vec![text(
+                        "<analysis>Remaining work</analysis>\n<summary>Continue.</summary>  "
+                    )],
+                )]),
+                FinishReason::Stop,
+            ),
+            Some(Narration::SpuriousSummary)
+        );
+        assert_eq!(
+            narration(
+                &with_messages(vec![message(
+                    Role::Assistant,
+                    vec![text("<summary>Result.</summary>")]
+                )]),
+                FinishReason::Stop
+            ),
+            None
+        );
+
+        let notice = message(Role::System, vec![text("HEADLESS RUN")]);
+        let nid = notice.id;
+        assert!(called_any_tool(
+            &with_messages(vec![
+                notice.clone(),
+                message(Role::Assistant, vec![tool("bash"), text("ok")])
+            ]),
+            nid
+        ));
+        assert!(!called_any_tool(
+            &with_messages(vec![
+                message(Role::Assistant, vec![tool("bash")]),
+                notice,
+                message(Role::Assistant, vec![text("ok")])
+            ]),
+            nid
+        ));
     }
 
     #[test]
-    fn l1_unread_root_mail_holds_exec_open_until_consumed() {
-        let mut projection = Projection::default();
+    fn dsml_and_xml_tool_markup_leak_matrix() {
+        let long_xml = format!(
+            "<result><name>write</name><parameter name=\"content\">{}</parameter></result>",
+            "多行内容\n".repeat(200)
+        );
+        for leak in [
+            "｜DSML｜ calls>",
+            "</｜DSML｜ invoke>",
+            "<｜dsml｜ invoke>",
+            "<result><name>bash</name><parameter name=\"command\">pwd</parameter></result>",
+            "<invoke>pwd</invoke>",
+            "<tool_call>pwd</tool_call>",
+            "<function_calls>pwd</function_calls>",
+            "calls>",
+            "```xml\n｜DSML｜ calls>",
+            "~~~xml\n</invoke>",
+            "`<parameter name=\"command\">pwd</result>",
+            "<tool_calls>",
+            "</tool_calls>",
+            " calls>",
+            "<calls>",
+            "```safe```\n</tool_call>",
+            long_xml.as_str(),
+        ] {
+            assert!(
+                matches!(
+                    narration(
+                        &with_messages(vec![message(Role::Assistant, vec![text(leak)])]),
+                        FinishReason::Stop
+                    ),
+                    Some(Narration::MalformedToolMarkup(_))
+                ),
+                "{leak}"
+            );
+        }
+        for safe in [
+            "Example:\n```xml\n｜DSML｜ calls>\n</｜DSML｜ invoke>\n```\nDone.",
+            "Example:\n~~~xml\n｜DSML｜ calls>\n~~~\nDone.",
+            "Example:\n~~~xml\n<parameter name=\"x\">value</result>\n~~~\nDone.",
+            "Used `｜DSML｜ calls>` and ``</｜DSML｜ invoke>`` as examples.",
+            "The tags are `<parameter name=\"x\">` and `</result>`.",
+            "Example `<parameter name=\"x\">value` ends with </result>",
+            "Vec<Calls> syscalls> callbacks> Unicode字calls>",
+            "<parameter name=\"x\">value</result>\n\nDone. The format is documented.",
+            "```foo```\n\n```\n<parameter name=\"x\">example</result>\n```\n\nDone.",
+            "Ran it via a tool call instead of DSML markup.",
+        ] {
+            assert_eq!(malformed_tool_markup(safe), None, "{safe}");
+        }
+        assert_eq!(
+            narration(
+                &with_messages(vec![message(
+                    Role::Assistant,
+                    vec![text("｜DSML｜ calls>"), tool("bash")]
+                )]),
+                FinishReason::Stop
+            ),
+            None
+        );
+        let notice = Pending::of(
+            &with_messages(vec![message(
+                Role::Assistant,
+                vec![text("｜DSML｜ calls>")],
+            )]),
+            FinishReason::Stop,
+        )
+        .notice(None, false);
+        assert!(notice.contains("(DSML)") && !notice.contains("｜DSML｜"));
+    }
+
+    #[test]
+    fn pending_holds_for_unread_mail_live_roster_and_active_workflow_only() {
+        // 1. Unread root mail holds exec open until cursor advances.
+        let mut proj = Projection::default();
         let root = roster(scope::ROOT_HANDLE, RosterStatus::Idle);
-        projection.team.roster.insert(root.handle.clone(), root);
-        projection.team.mail.push(hya_proto::MailMessage {
+        proj.team.roster.insert(root.handle.clone(), root);
+        proj.team.mail.push(hya_proto::MailMessage {
             from: "main/worker".into(),
             to: hya_proto::MailEndpoint::Handle(scope::ROOT_HANDLE.into()),
             kind: hya_proto::MailKind::Message,
             body: "result".into(),
         });
-        projection
-            .team
-            .inboxes
-            .insert(scope::ROOT_HANDLE.into(), vec![0]);
-        let pending = Pending::of(&projection, FinishReason::Stop);
+        proj.team.inboxes.insert(scope::ROOT_HANDLE.into(), vec![0]);
+        let pending = Pending::of(&proj, FinishReason::Stop);
         assert!(!pending.is_empty());
         assert!(pending.notice(None, false).contains("1 unread message"));
-        projection
-            .team
+        proj.team
             .roster
             .get_mut(scope::ROOT_HANDLE)
             .unwrap()
             .resident_cursor = 1;
-        assert!(Pending::of(&projection, FinishReason::Stop).is_empty());
+        assert!(Pending::of(&proj, FinishReason::Stop).is_empty());
+
+        // 2. Late-stage archive guidance & terminal roster entries & workflow actor parking.
+        let mut p2 = Projection::default();
+        let worker = roster("main/worker", RosterStatus::Idle);
+        p2.team.roster.insert(worker.handle.clone(), worker);
+        let late = Pending::of(&p2, FinishReason::Stop).notice(None, true);
+        assert!(late.contains("`archive` the subagents whose work you cannot integrate"));
+        assert!(!late.contains("HEADLESS RUN — FINAL"));
+        for status in [RosterStatus::Done, RosterStatus::Failed] {
+            let entry = roster("main/worker", status);
+            p2.team.roster.insert(entry.handle.clone(), entry);
+            assert!(live_subagents(&p2).is_empty(), "{status:?}");
+        }
+
+        let mut p3 = Projection::default();
+        let stage_worker = roster("main/stage", RosterStatus::Idle);
+        let member = hya_proto::MemberId::new();
+        p3.session.members.push(
+            serde_json::from_value(serde_json::json!({
+                "member": member, "child": stage_worker.session, "subagent_type": "worker",
+                "description": "stage", "depth": 1, "status": "done"
+            }))
+            .unwrap(),
+        );
+        p3.team
+            .roster
+            .insert(stage_worker.handle.clone(), stage_worker);
+        let run = serde_json::json!({
+            "id": hya_proto::WorkflowRunId::new(),
+            "workflow": {"source": "test", "name": "test", "revision": "00".repeat(32)},
+            "request_hash": "test", "owner": hya_proto::OwnerRunId::new(),
+            "status": "completed", "stages": [{
+                "id": "stage", "agent": "worker", "mode": "once", "level": 0,
+                "status": "completed", "members": [{"member": member, "role": "worker", "iteration": 0}]
+            }]
+        });
+        p3.session.workflow =
+            Some(serde_json::from_value(serde_json::json!({"run": run})).unwrap());
+        assert!(live_subagents(&p3).is_empty());
+        p3.session
+            .workflow
+            .as_mut()
+            .unwrap()
+            .run
+            .as_mut()
+            .unwrap()
+            .status = hya_proto::WorkflowRunStatus::Running;
+        assert_eq!(live_subagents(&p3).len(), 1);
+
+        // Open todos do not hold runs open.
+        let mut p4 = with_messages(vec![message(
+            Role::Assistant,
+            vec![text("Now let me run it:")],
+        )]);
+        p4.session.todos = Some(vec![todo("3", TodoStatus::Pending)]);
+        let notice = Pending::of(&p4, FinishReason::Stop).notice(None, false);
+        assert!(
+            notice.starts_with("HEADLESS RUN")
+                && notice.contains("\"Now let me run it:\"")
+                && !notice.contains("todo")
+        );
+    }
+
+    /// U10: replay over the final texts of passing recorded trials (`testdata/final_texts.jsonl`).
+    #[test]
+    fn u10_recorded_passing_trials_hit_only_real_announcements() {
+        const REVIEWED: &[&str] = &[
+            "hf-model-inference__8VgFzpc",
+            "filter-js-from-html__DCN2Crn",
+            "circuit-fibsqrt__NWKfq2H",
+            "fix-git__FQXnjv8",
+            "kv-store-grpc__eNbzmBn",
+            "kv-store-grpc__46b88ds",
+            "merge-diff-arc-agi-task__KLnZG3a",
+            "model-extraction-relu-logits__WoxXbPL",
+        ];
+        let corpus = include_str!("../testdata/final_texts.jsonl");
+        let mut passing = 0;
+        let mut unexpected = Vec::new();
+        let mut hit = Vec::new();
+        for line in corpus.lines().filter(|l| !l.trim().is_empty()) {
+            let row: serde_json::Value = serde_json::from_str(line).unwrap();
+            passing += 1;
+            let trial = row["trial"].as_str().unwrap();
+            let text = row["text"].as_str().unwrap();
+            let projection = with_messages(vec![message(Role::Assistant, vec![self::text(text)])]);
+            assert!(
+                !matches!(
+                    narration(&projection, FinishReason::Stop),
+                    Some(Narration::MalformedToolMarkup(_) | Narration::SpuriousSummary)
+                ),
+                "{trial}"
+            );
+            if announces_next_step(text) {
+                let leaf = trial.rsplit('/').next().unwrap_or(trial);
+                if REVIEWED.contains(&leaf) {
+                    hit.push(leaf.to_string());
+                } else {
+                    unexpected.push(format!("{trial}: {text}"));
+                }
+            }
+        }
+        assert_eq!(passing, 135);
+        assert!(unexpected.is_empty(), "{}", unexpected.join("\n---\n"));
+        assert_eq!(hit.len(), REVIEWED.len());
     }
 
     #[tokio::test]
@@ -833,10 +1122,9 @@ mod tests {
                 .session
                 .messages
                 .iter()
-                .filter(|message| message.role == Role::Assistant)
+                .filter(|m| m.role == Role::Assistant)
                 .count(),
-            1,
-            "own directive must not cause headless continuation notices"
+            1
         );
         supervisor
             .drain(
@@ -844,445 +1132,6 @@ mod tests {
                 std::time::Duration::from_secs(2),
             )
             .await;
-    }
-
-    #[test]
-    fn l6_late_stage_archive_guidance_does_not_need_a_new_header() {
-        let mut projection = Projection::default();
-        let worker = roster("main/worker", RosterStatus::Idle);
-        projection.team.roster.insert(worker.handle.clone(), worker);
-        let notice = Pending::of(&projection, FinishReason::Stop).notice(None, true);
-        assert!(notice.contains("`archive` the subagents whose work you cannot integrate"));
-        assert!(!notice.contains("HEADLESS RUN — FINAL"));
-    }
-
-    #[test]
-    fn l4_terminal_roster_entries_do_not_hold_exec_open() {
-        let mut projection = Projection::default();
-        for status in [RosterStatus::Done, RosterStatus::Failed] {
-            let entry = roster("main/worker", status);
-            projection.team.roster.insert(entry.handle.clone(), entry);
-            assert!(live_subagents(&projection).is_empty(), "{status:?}");
-        }
-    }
-
-    #[test]
-    fn l4_finished_workflow_actors_are_parked_not_pending() {
-        let mut projection = Projection::default();
-        let worker = roster("main/stage", RosterStatus::Idle);
-        let member = hya_proto::MemberId::new();
-        projection.session.members.push(
-            serde_json::from_value(serde_json::json!({
-                "member": member, "child": worker.session, "subagent_type": "worker",
-                "description": "stage", "depth": 1, "status": "done"
-            }))
-            .expect("member fixture"),
-        );
-        projection.team.roster.insert(worker.handle.clone(), worker);
-        let run = serde_json::json!({
-            "id": hya_proto::WorkflowRunId::new(),
-            "workflow": {"source": "test", "name": "test", "revision": "00".repeat(32)},
-            "request_hash": "test", "owner": hya_proto::OwnerRunId::new(),
-            "status": "completed", "stages": [{
-                "id": "stage", "agent": "worker", "mode": "once", "level": 0,
-                "status": "completed", "members": [{"member": member, "role": "worker", "iteration": 0}]
-            }]
-        });
-        projection.session.workflow = Some(
-            serde_json::from_value(serde_json::json!({"run": run})).expect("workflow fixture"),
-        );
-        assert!(live_subagents(&projection).is_empty());
-        projection
-            .session
-            .workflow
-            .as_mut()
-            .unwrap()
-            .run
-            .as_mut()
-            .unwrap()
-            .status = hya_proto::WorkflowRunStatus::Running;
-        assert_eq!(
-            live_subagents(&projection).len(),
-            1,
-            "an active workflow still owns work"
-        );
-    }
-
-    #[test]
-    fn u3_a_trailing_colon_announces() {
-        for text in [
-            // python-statemachine (hya-v11)
-            "Line-length issues are pre-existing. Now let me look at the docs structure to add a page:",
-            // circuit-fibsqrt hya-fh11-a1
-            "Max fan-out is 102 (cap 10000) ✓. Now verify the file format, output-signal placement, and convergence timing:",
-            // cargo-flight-dispatch local tb4
-            "Reviewer verdict: **correct**, no P0/P1/P2. Let me read the full report and address its single P3:",
-            // mvcc-lsm-compaction local tb4
-            "The fix works. Now let me validate it thoroughly with a randomized differential check against a no-compaction oracle (in /tmp, exploratory) to make sure the compaction rules never lose anything a reader can observe:",
-            "下一步：",
-        ] {
-            assert!(announces_next_step(text), "{text}");
-        }
-    }
-
-    #[test]
-    fn u4_a_short_last_paragraph_leading_with_an_action_announces() {
-        for text in [
-            // caffe-cifar-10 hya-fh11
-            "LMDB 已构建，计算出的均值（125.31、122.95、113.87）与官方 CIFAR-10 均值完全一致——数据正确。现在我来检查 solver 生命周期，以便准确制定配置。",
-            // circuit-fibsqrt hya-fh11
-            "Found it: the two bits of each input pair are swapped (`rem_new[0]` should be `n[30]`, `rem_new[1]` should be `n[31]`). N=208 worked by coincidence. Let me fix.",
-            // cargo-flight-dispatch hya-fh11-a3
-            "Now let me write an independent verifier that recomputes everything from the data with different formula formulations (vector-based ground speed, law-of-cosines distances) and checks the output.",
-            "All edits are in, **now let me** run the checks.",
-        ] {
-            assert!(announces_next_step(text), "{text}");
-        }
-    }
-
-    #[test]
-    fn u5_a_reply_ending_in_a_fenced_block_is_complete() {
-        for text in [
-            // chess-best-move hya-flash-02 (reward 1)
-            "The best moves are written to /app/move.txt, one per line:\n\n```\ne2e4\ng1f3\n```",
-            // feal-linear-cryptanalysis hya-fh11-a1 (reward 1)
-            "Recovered all four round keys; the plaintexts are in /app/plaintexts.txt:\n\n```\n0x1234\n```\n",
-        ] {
-            assert!(!announces_next_step(text), "{text}");
-        }
-    }
-
-    #[test]
-    fn u6_summaries_and_handbacks_do_not_announce() {
-        for text in [
-            "Changed files:\n- a.rs\n- b.rs",
-            "All tests pass.",
-            "Let me know if you need anything else.",
-            "如需调整请告诉我。",
-            "Done. The v1.2 build is installed and the service is running.",
-            "",
-        ] {
-            assert!(!announces_next_step(text), "{text:?}");
-        }
-    }
-
-    #[test]
-    fn u6_a_long_last_paragraph_does_not_announce() {
-        let long = format!("{} Let me run the tests.", "word ".repeat(100));
-        assert!(!announces_next_step(&long));
-    }
-
-    #[test]
-    fn u7_only_a_tool_free_last_step_counts() {
-        let row = message(
-            Role::Assistant,
-            vec![text("Now let me check the file:"), tool("bash")],
-        );
-        let id = row.id;
-        let mut projection = with_messages(vec![message(Role::User, vec![text("do it")]), row]);
-        apply_step(&mut projection, id, 1);
-        projection.session.messages[1]
-            .parts
-            .extend([text("Done."), text("Changed files: a.txt.")]);
-        assert_eq!(
-            final_step_text(&projection).as_deref(),
-            Some("Done.\nChanged files: a.txt.")
-        );
-        assert_eq!(narration(&projection, FinishReason::Stop), None);
-
-        let row = message(Role::Assistant, vec![tool("bash")]);
-        let id = row.id;
-        let mut announced = with_messages(vec![row]);
-        apply_step(&mut announced, id, 1);
-        announced.session.messages[0]
-            .parts
-            .push(text("Now let me verify the output:"));
-        assert_eq!(
-            narration(&announced, FinishReason::Stop),
-            Some(Narration::Announces(
-                "Now let me verify the output:".to_string()
-            ))
-        );
-    }
-
-    #[test]
-    fn u8_a_length_finish_is_truncated() {
-        let projection = with_messages(vec![message(Role::Assistant, vec![text("All good.")])]);
-        assert_eq!(
-            narration(&projection, FinishReason::Length),
-            Some(Narration::Truncated)
-        );
-    }
-
-    #[test]
-    fn u9_progress_is_any_tool_call_after_the_notice() {
-        let notice = message(Role::System, vec![text("HEADLESS RUN")]);
-        let id = notice.id;
-        let acted = with_messages(vec![
-            message(Role::Assistant, vec![text("Let me check:")]),
-            notice.clone(),
-            message(Role::Assistant, vec![tool("bash"), text("ok")]),
-        ]);
-        assert!(called_any_tool(&acted, id));
-        let ignored = with_messages(vec![
-            message(Role::Assistant, vec![tool("bash")]),
-            notice,
-            message(Role::Assistant, vec![text("ok")]),
-        ]);
-        assert!(!called_any_tool(&ignored, id));
-    }
-
-    #[test]
-    fn notice_lists_every_reason_in_order() {
-        let mut projection = with_messages(vec![message(
-            Role::Assistant,
-            vec![text("Now let me run it:")],
-        )]);
-        projection.session.todos = Some(vec![todo("3", TodoStatus::Pending)]);
-        let notice = Pending::of(&projection, FinishReason::Stop).notice(None, false);
-        assert!(notice.starts_with("HEADLESS RUN"));
-        assert!(notice.contains("\"Now let me run it:\""));
-        // g takes no part in stop decisions: open todos add no reason.
-        assert!(!notice.contains("todo"));
-    }
-
-    /// U10: replay over the final texts of passing recorded trials
-    /// (`testdata/final_texts.jsonl`). The rule hits only these, each read
-    /// by hand: a real announcement the run happened to survive.
-    #[test]
-    fn u10_recorded_passing_trials_hit_only_real_announcements() {
-        const REVIEWED: &[&str] = &[
-            "hf-model-inference__8VgFzpc",
-            "filter-js-from-html__DCN2Crn",
-            "circuit-fibsqrt__NWKfq2H",
-            "fix-git__FQXnjv8",
-            "kv-store-grpc__eNbzmBn",
-            "kv-store-grpc__46b88ds",
-            "merge-diff-arc-agi-task__KLnZG3a",
-            "model-extraction-relu-logits__WoxXbPL",
-        ];
-        let corpus = include_str!("../testdata/final_texts.jsonl");
-        let mut passing = 0;
-        let mut unexpected = Vec::new();
-        let mut hit = Vec::new();
-        for line in corpus.lines().filter(|line| !line.trim().is_empty()) {
-            let row: serde_json::Value = serde_json::from_str(line).expect("corpus row");
-            passing += 1;
-            let trial = row["trial"].as_str().expect("trial");
-            let text = row["text"].as_str().expect("text");
-            let projection = with_messages(vec![message(Role::Assistant, vec![self::text(text)])]);
-            assert!(
-                !matches!(
-                    narration(&projection, FinishReason::Stop),
-                    Some(Narration::MalformedToolMarkup(_) | Narration::SpuriousSummary)
-                ),
-                "{trial}"
-            );
-            if announces_next_step(text) {
-                let leaf = trial.rsplit('/').next().unwrap_or(trial);
-                if REVIEWED.contains(&leaf) {
-                    hit.push(leaf.to_string());
-                } else {
-                    unexpected.push(format!("{trial}: {text}"));
-                }
-            }
-        }
-        assert_eq!(passing, 135, "corpus size");
-        assert!(unexpected.is_empty(), "{}", unexpected.join("\n---\n"));
-        assert_eq!(hit.len(), REVIEWED.len());
-    }
-    #[test]
-    fn u11_dsml_and_xml_tool_leaks_are_caught() {
-        for leak in [
-            "｜DSML｜ calls>",
-            "</｜DSML｜ invoke>",
-            "<｜dsml｜ invoke>",
-            "<result><name>bash</name><parameter name=\"command\">pwd</parameter></result>",
-            "<invoke>pwd</invoke>",
-            "<tool_call>pwd</tool_call>",
-            "<function_calls>pwd</function_calls>",
-            "calls>",
-        ] {
-            let projection = with_messages(vec![message(Role::Assistant, vec![text(leak)])]);
-            assert!(
-                matches!(
-                    narration(&projection, FinishReason::Stop),
-                    Some(Narration::MalformedToolMarkup(_))
-                ),
-                "{leak}"
-            );
-        }
-        for summary in [
-            "Example:\n\n```xml\n<result><parameter name=\"x\">1</parameter></result>\n```\n\nDone. The XML format is documented.",
-            "Example:\n```xml\n<invoke>pwd</invoke>\n```",
-        ] {
-            let projection = with_messages(vec![message(Role::Assistant, vec![text(summary)])]);
-            assert_eq!(
-                narration(&projection, FinishReason::Stop),
-                None,
-                "{summary}"
-            );
-        }
-        let executed = with_messages(vec![message(
-            Role::Assistant,
-            vec![text("｜DSML｜ calls>"), tool("bash")],
-        )]);
-        assert_eq!(narration(&executed, FinishReason::Stop), None);
-        assert!(announces_next_step("Now let me check:\n\n---\n\n______"));
-        assert!(!announces_next_step("Done.\n\n---"));
-    }
-
-    /// A provider can end a step with one token and no content (seen as
-    /// `finish=stop`, 1 output token): that is not a delivery.
-    #[test]
-    fn u13_an_empty_last_step_is_not_a_final_answer() {
-        for parts in [vec![], vec![text("")], vec![text(" \n")]] {
-            let projection = with_messages(vec![message(Role::Assistant, parts)]);
-            assert_eq!(
-                narration(&projection, FinishReason::Stop),
-                Some(Narration::Empty)
-            );
-        }
-        let answered = with_messages(vec![message(Role::Assistant, vec![text("Done.")])]);
-        assert_eq!(narration(&answered, FinishReason::Stop), None);
-    }
-
-    #[test]
-    fn u12_spurious_compaction_summary_is_caught() {
-        let projection = with_messages(vec![message(
-            Role::Assistant,
-            vec![text(
-                "<analysis>Remaining work</analysis>\n<summary>Continue checking.</summary>  ",
-            )],
-        )]);
-        assert_eq!(
-            narration(&projection, FinishReason::Stop),
-            Some(Narration::SpuriousSummary)
-        );
-        let normal = with_messages(vec![message(
-            Role::Assistant,
-            vec![text("<summary>User-facing result.</summary>")],
-        )]);
-        assert_eq!(narration(&normal, FinishReason::Stop), None);
-    }
-    #[test]
-    fn l2_long_parameter_values_still_detect_a_result_suffix() {
-        for ending in ["</result>", "</parameter></result>"] {
-            let leak = format!(
-                "<result><name>write</name><parameter name=\"content\">{}{}",
-                "多行内容\n".repeat(200),
-                ending
-            );
-            assert!(malformed_tool_markup(&leak).is_some(), "{ending}");
-        }
-    }
-
-    #[test]
-    fn l3_dsml_examples_in_closed_backtick_fences_are_not_leaks() {
-        assert_eq!(
-            malformed_tool_markup(
-                "Example:\n```xml\n｜DSML｜ calls>\n</｜DSML｜ invoke>\n```\nDone."
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn l3_dsml_examples_in_closed_tilde_fences_are_not_leaks() {
-        assert_eq!(
-            malformed_tool_markup("Example:\n~~~xml\n｜DSML｜ calls>\n~~~\nDone."),
-            None
-        );
-    }
-
-    #[test]
-    fn l3_xml_examples_in_closed_tilde_fences_are_not_leaks() {
-        assert_eq!(
-            malformed_tool_markup(
-                "Example:\n~~~xml\n<parameter name=\"x\">value</result>\n~~~\nDone."
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn l3_inline_dsml_examples_are_not_leaks() {
-        for text in [
-            "Used `｜DSML｜ calls>` as the example.",
-            "Used ``</｜DSML｜ invoke>`` as the example.",
-        ] {
-            assert_eq!(malformed_tool_markup(text), None, "{text}");
-        }
-    }
-
-    #[test]
-    fn l3_inline_xml_examples_are_not_leaks() {
-        for text in [
-            "The tags are `<parameter name=\"x\">` and `</result>`.",
-            "Example: ``<parameter name=\"x\">`value`</result>``",
-            "Example `<parameter name=\"x\">value` ends with </result>",
-        ] {
-            assert_eq!(malformed_tool_markup(text), None, "{text}");
-        }
-    }
-
-    #[test]
-    fn l3_ordinary_calls_word_endings_are_not_leaks() {
-        for text in ["Vec<Calls>", "syscalls>", "callbacks>", "Unicode字calls>"] {
-            assert_eq!(malformed_tool_markup(text), None, "{text}");
-        }
-    }
-
-    #[test]
-    fn l3_parameter_result_pair_must_end_the_output() {
-        assert_eq!(
-            malformed_tool_markup(
-                "<parameter name=\"x\">value</result>\n\nDone. The format is documented."
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn l3_a_single_line_backtick_span_does_not_open_a_fence() {
-        assert_eq!(
-            malformed_tool_markup(
-                "```foo```\n\n```\n<parameter name=\"x\">example</result>\n```\n\nDone."
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn l3_notice_names_dsml_without_repeating_the_glyph_sequence() {
-        let projection = with_messages(vec![message(
-            Role::Assistant,
-            vec![text("｜DSML｜ calls>")],
-        )]);
-        let notice = Pending::of(&projection, FinishReason::Stop).notice(None, false);
-        assert!(notice.contains("(DSML)"));
-        assert!(!notice.contains("｜DSML｜"));
-        assert_eq!(
-            malformed_tool_markup("Ran it via a tool call instead of DSML markup."),
-            None
-        );
-    }
-
-    #[test]
-    fn l3_unclosed_code_and_tool_call_tag_suffixes_still_detect_leaks() {
-        for leak in [
-            "```xml\n｜DSML｜ calls>",
-            "~~~xml\n</invoke>",
-            "`<parameter name=\"command\">pwd</result>",
-            "<tool_calls>",
-            "</tool_calls>",
-            " calls>",
-            "<calls>",
-            "\n<result><parameter name=\"command\">pwd</result>  ",
-            "```safe```\n</tool_call>",
-        ] {
-            assert!(malformed_tool_markup(leak).is_some(), "{leak}");
-        }
     }
 
     fn apply_step(projection: &mut Projection, message: MessageId, step: u32) {
@@ -1296,36 +1145,5 @@ mod tests {
                 view: None,
             },
         });
-    }
-
-    #[test]
-    fn l5_a_reasoning_only_last_step_does_not_reuse_previous_text() {
-        let row = message(Role::Assistant, vec![text("Now verify the file:")]);
-        let id = row.id;
-        let mut projection = with_messages(vec![row]);
-        apply_step(&mut projection, id, 1);
-        projection.session.messages[0]
-            .parts
-            .push(PartProjection::Reasoning {
-                id: PartId::new(),
-                text: "thinking".into(),
-                reason: None,
-                provider_data: None,
-            });
-        assert_eq!(final_step_text(&projection).as_deref(), Some(""));
-        assert_eq!(
-            narration(&projection, FinishReason::Stop),
-            Some(Narration::Empty)
-        );
-    }
-
-    #[test]
-    fn l5_a_step_with_tool_then_text_is_not_checked_as_narration() {
-        let projection = with_messages(vec![message(
-            Role::Assistant,
-            vec![tool("bash"), text("</invoke>")],
-        )]);
-        assert_eq!(final_step_text(&projection), None);
-        assert_eq!(narration(&projection, FinishReason::Stop), None);
     }
 }

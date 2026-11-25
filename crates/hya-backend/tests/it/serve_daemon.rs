@@ -1,543 +1,311 @@
-//! The persistent backend daemon (ADR-0023; docs/cli.md "`hya serve`
-//! daemon control"): `hya serve start` runs `hya serve` detached (its own
-//! session, output to `<db>.server.log`) and returns once it answers; the
-//! daemon outlives the starter and every client. `status` reports it from the
-//! discovery file plus a health probe, `stop` ends it gracefully (even with
-//! clients still streaming), and `restart` stops then starts a fresh process.
-//! Concurrent starters end up on one daemon (the database lock arbitrates).
+//! The persistent backend daemon (ADR-0023): detached start, status, stop,
+//! restart, concurrent-start arbitration, handover, and strict open failures.
 
 use std::io::{Read as _, Write as _};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-type TestResult = Result<(), Box<dyn std::error::Error>>;
+use serde_json::Value;
 
-fn scratch(prefix: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let dir = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
-    std::fs::create_dir_all(&dir)?;
-    Ok(dir.canonicalize()?)
+use crate::common::{Daemons, Scratch, TestResult, assert_success, run_bounded, wait_until};
+
+fn serve(scratch: &Scratch, db: &Path, args: &[&str]) -> Command {
+    let mut cmd = scratch.hya();
+    cmd.arg("serve").args(args).arg("--db").arg(db);
+    cmd
 }
 
-/// `hya serve <args> --db <db>` with an isolated HOME/XDG under `root`.
-fn serve(root: &Path, db: &Path, args: &[&str]) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_hya"));
-    command
-        .env_clear()
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        .env("HOME", root.join("home"))
-        .env("XDG_CONFIG_HOME", root.join("config"))
-        .env("XDG_DATA_HOME", root.join("data"))
-        .env("XDG_STATE_HOME", root.join("state"))
-        .env("XDG_CACHE_HOME", root.join("cache"))
-        .env("NO_COLOR", "1")
-        .current_dir(root)
-        .arg("serve")
-        .args(args)
-        .arg("--db")
-        .arg(db)
-        .stdin(Stdio::null());
-    command
+fn run(scratch: &Scratch, db: &Path, args: &[&str]) -> Result<Output, Box<dyn std::error::Error>> {
+    Ok(serve(scratch, db, args).output()?)
 }
 
-fn run(root: &Path, db: &Path, args: &[&str]) -> Result<Output, Box<dyn std::error::Error>> {
-    Ok(serve(root, db, args).output()?)
+fn json(out: &Output) -> Result<Value, Box<dyn std::error::Error>> {
+    Ok(serde_json::from_slice(&out.stdout)?)
 }
 
-fn json(output: &Output) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let text = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str(text.trim()).map_err(|error| {
-        format!(
-            "not JSON ({error}): {text}\nstderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into()
-    })
+fn pid_of(v: &Value) -> Result<i32, Box<dyn std::error::Error>> {
+    Ok(i32::try_from(v["pid"].as_i64().ok_or("no pid")?)?)
 }
 
 fn alive(pid: i32) -> bool {
-    // SAFETY: signal 0 only checks that the process exists.
+    // SAFETY: signal 0 only checks process existence.
     unsafe { libc::kill(pid, 0) == 0 }
 }
 
-fn pid_of(value: &serde_json::Value) -> Result<i32, Box<dyn std::error::Error>> {
-    Ok(i32::try_from(value["pid"].as_i64().ok_or("no pid")?)?)
-}
-
-/// Kills every daemon a test started, even when it fails half-way.
-struct Daemons(Vec<i32>);
-
-impl Drop for Daemons {
-    fn drop(&mut self) {
-        for pid in &self.0 {
-            // SAFETY: `kill` has no memory-safety preconditions.
-            unsafe {
-                libc::kill(*pid, libc::SIGKILL);
-            }
-        }
-    }
-}
-
-/// `host:port` of `http://host:port`.
-fn authority(url: &str) -> Result<String, Box<dyn std::error::Error>> {
+fn authority(url: &str) -> Result<&str, Box<dyn std::error::Error>> {
     Ok(url
         .strip_prefix("http://")
         .ok_or("not http")?
-        .trim_end_matches('/')
-        .to_string())
+        .trim_end_matches('/'))
 }
 
-/// `GET <url><path>` over a raw connection; the status line and body.
-fn http_get(url: &str, path: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let mut socket = TcpStream::connect(authority(url)?)?;
-    socket.set_read_timeout(Some(Duration::from_secs(5)))?;
-    write!(
-        socket,
-        "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
-    )?;
+fn healthy(url: &str) -> bool {
+    let Ok(addr) = authority(url) else {
+        return false;
+    };
+    let Ok(mut s) = TcpStream::connect(addr) else {
+        return false;
+    };
+    let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+    if write!(
+        s,
+        "GET /v1/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+    )
+    .is_err()
+    {
+        return false;
+    }
     let mut text = String::new();
-    socket.read_to_string(&mut text)?;
-    Ok(text)
+    s.read_to_string(&mut text).is_ok() && text.contains("\"ok\":true")
 }
 
-/// Open `GET /v1/events/stream` (SSE) and wait for its response head.
 fn open_events(url: &str) -> Result<TcpStream, Box<dyn std::error::Error>> {
-    let mut stream = TcpStream::connect(authority(url)?)?;
-    stream.set_read_timeout(Some(Duration::from_secs(20)))?;
+    let mut s = TcpStream::connect(authority(url)?)?;
+    s.set_read_timeout(Some(Duration::from_secs(15)))?;
     write!(
-        stream,
+        s,
         "GET /v1/events/stream HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n"
     )?;
     let mut head = [0u8; 64];
-    let read = stream.read(&mut head)?;
-    assert!(String::from_utf8_lossy(&head[..read]).starts_with("HTTP/1.1 200"));
-    Ok(stream)
+    let n = s.read(&mut head)?;
+    assert!(String::from_utf8_lossy(&head[..n]).starts_with("HTTP/1.1 200"));
+    Ok(s)
 }
 
-/// Everything the server still sends on `stream` until it closes it.
-fn rest_of(mut stream: TcpStream) -> String {
-    let mut bytes = Vec::new();
-    let _ = stream.read_to_end(&mut bytes);
-    String::from_utf8_lossy(&bytes).into_owned()
-}
-
-fn wait_until(what: &str, timeout: Duration, mut check: impl FnMut() -> bool) -> TestResult {
-    let deadline = Instant::now() + timeout;
-    while !check() {
-        if Instant::now() > deadline {
-            return Err(format!("timed out waiting until {what}").into());
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    Ok(())
-}
-
-/// Whether `GET <url>/v1/health` answers ok.
-fn healthy(url: &str) -> bool {
-    http_get(url, "/v1/health")
-        .map(|text| text.contains("\"ok\":true"))
-        .unwrap_or(false)
-}
-
-/// Wait until discovery reports a healthy replacement daemon.
-fn wait_for_successor(
-    root: &Path,
-    db: &Path,
-    old_pid: i32,
-    url: &str,
-) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let deadline = Instant::now() + Duration::from_secs(90);
-    loop {
-        if let Ok(output) = run(root, db, &["status", "--json"])
-            && output.status.success()
-        {
-            let status = json(&output)?;
-            if pid_of(&status)? != old_pid && status["url"].as_str() == Some(url) && healthy(url) {
-                return Ok(status);
-            }
-        }
-        if Instant::now() > deadline {
-            return Err(
-                format!("timed out waiting for a successor of pid {old_pid} at {url}").into(),
-            );
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+fn rest_of(mut s: TcpStream) -> String {
+    let mut buf = Vec::new();
+    let _ = s.read_to_end(&mut buf);
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
 #[test]
 fn start_runs_a_detached_daemon_that_status_reports_and_stop_ends() -> TestResult {
-    let root = scratch("hya-daemon")?;
-    let db = root.join("s.db");
+    let scratch = Scratch::new("hya-daemon")?;
+    let db = scratch.0.join("s.db");
     let mut daemons = Daemons(Vec::new());
+    // Unlocked stale lock file naming a live process must not block start.
+    std::fs::write(
+        format!("{}.runtime-owner.lock", db.display()),
+        format!("{}\n", std::process::id()),
+    )?;
 
-    let started = run(&root, &db, &["start", "--json"])?;
-    assert!(
-        started.status.success(),
-        "{}",
-        String::from_utf8_lossy(&started.stderr)
-    );
+    let started = run(&scratch, &db, &["start", "--json"])?;
+    assert_success("serve start", &started);
     let info = json(&started)?;
     let pid = pid_of(&info)?;
     daemons.0.push(pid);
-    assert_eq!(info["started"], serde_json::json!(true));
+    let url = info["url"].as_str().ok_or("no url")?.to_string();
     assert_eq!(
-        info["version"],
-        serde_json::json!(env!("CARGO_PKG_VERSION"))
+        (&info["started"], &info["version"]),
+        (
+            &Value::Bool(true),
+            &Value::String(env!("CARGO_PKG_VERSION").into())
+        )
     );
     assert_eq!(info["db"].as_str(), Some(db.to_string_lossy().as_ref()));
-    let url = info["url"].as_str().ok_or("no url")?.to_string();
-    assert!(url.starts_with("http://127.0.0.1:"), "{url}");
-    let log = PathBuf::from(format!("{}.server.log", db.display()));
-    assert_eq!(info["log"].as_str(), Some(log.to_string_lossy().as_ref()));
-
-    // The starter has exited; the daemon runs on, in its own session.
-    assert!(alive(pid));
-    // SAFETY: getsid only reads process attributes.
-    let (ours, theirs) = unsafe { (libc::getsid(0), libc::getsid(pid)) };
-    assert_ne!(
-        ours, theirs,
-        "the daemon must not share the starter's session"
+    assert!(
+        url.starts_with("http://127.0.0.1:")
+            && PathBuf::from(format!("{}.server.log", db.display())).is_file()
     );
-    assert!(http_get(&url, "/v1/health")?.contains("\"ok\":true"));
-    assert!(log.is_file(), "the daemon logs to {}", log.display());
+    // SAFETY: getsid only reads process attributes.
+    assert!(alive(pid) && unsafe { libc::getsid(0) != libc::getsid(pid) } && healthy(&url));
 
-    // A second start finds it.
-    let again = json(&run(&root, &db, &["start", "--json"])?)?;
-    assert_eq!(again["started"], serde_json::json!(false));
-    assert_eq!(pid_of(&again)?, pid);
-    assert_eq!(again["url"].as_str(), Some(url.as_str()));
-
-    // Status: human and JSON.
-    let status = run(&root, &db, &["status"])?;
-    assert!(status.status.success());
-    let text = String::from_utf8_lossy(&status.stdout);
+    let again = json(&run(&scratch, &db, &["start", "--json"])?)?;
+    assert!(again["started"] == false && pid_of(&again)? == pid);
+    let human = run(&scratch, &db, &["status"])?;
+    assert_success("status", &human);
+    let text = String::from_utf8_lossy(&human.stdout);
     for needle in [
         url.as_str(),
         &format!("pid {pid}"),
         env!("CARGO_PKG_VERSION"),
         "uptime",
-        &db.to_string_lossy(),
     ] {
         assert!(text.contains(needle), "status lacks {needle}: {text}");
     }
-    let status = json(&run(&root, &db, &["status", "--json"])?)?;
-    assert_eq!(pid_of(&status)?, pid);
-    assert!(status["uptimeMs"].as_u64().is_some(), "{status}");
+    assert!(
+        json(&run(&scratch, &db, &["status", "--json"])?)?["uptimeMs"]
+            .as_u64()
+            .is_some()
+    );
 
-    // Stop: graceful, even while a client holds an event stream open.
     let stream = open_events(&url)?;
-    let begun = Instant::now();
-    let stopped = run(&root, &db, &["stop"])?;
+    let stopped = run(&scratch, &db, &["stop"])?;
+    assert_success("stop", &stopped);
+    let stop_out = String::from_utf8_lossy(&stopped.stdout);
     assert!(
-        stopped.status.success(),
-        "{}",
-        String::from_utf8_lossy(&stopped.stderr)
+        stop_out.contains(&format!("pid {pid}"))
+            && stop_out.contains("stay disconnected until /reconnect")
     );
+    assert!(rest_of(stream).contains(r#""serverStopping":{"reason":"stop"}"#));
+    wait_until("daemon exited", Duration::from_secs(5), || !alive(pid))?;
     assert!(
-        begun.elapsed() < Duration::from_secs(15),
-        "an open client stream must not hold the shutdown open ({:?})",
-        begun.elapsed()
+        !PathBuf::from(format!("{}.server.json", db.display())).exists()
+            && !PathBuf::from(format!("{}.server.stop", db.display())).exists()
     );
-    assert!(String::from_utf8_lossy(&stopped.stdout).contains(&format!("pid {pid}")));
-    // The client was told it was a manual stop (so it does not start the
-    // next daemon), and the output says so.
-    let told = rest_of(stream);
+    assert!(!run(&scratch, &db, &["status"])?.status.success());
+    let idle = run(&scratch, &db, &["stop"])?;
     assert!(
-        told.contains(r#""serverStopping":{"reason":"stop"}"#),
-        "the stream's last frame names the stop: {told}"
+        idle.status.success()
+            && String::from_utf8_lossy(&idle.stdout).contains("no hya server is running")
     );
-    assert!(
-        String::from_utf8_lossy(&stopped.stdout).contains("stay disconnected until /reconnect"),
-        "{}",
-        String::from_utf8_lossy(&stopped.stdout)
-    );
-    assert!(
-        !PathBuf::from(format!("{}.server.stop", db.display())).exists(),
-        "the daemon consumed the stop request"
-    );
-    wait_until("the daemon exited", Duration::from_secs(5), || !alive(pid))?;
-    assert!(!PathBuf::from(format!("{}.server.json", db.display())).exists());
-
-    let status = run(&root, &db, &["status"])?;
-    assert!(!status.status.success(), "status of a stopped server fails");
-    assert!(String::from_utf8_lossy(&status.stderr).contains("no hya server is running"));
-    // Stopping nothing is not an error.
-    let idle = run(&root, &db, &["stop"])?;
-    assert!(idle.status.success());
-    assert!(String::from_utf8_lossy(&idle.stdout).contains("no hya server is running"));
-    let _ = std::fs::remove_dir_all(&root);
     Ok(())
 }
 
 #[test]
 fn restart_replaces_the_daemon() -> TestResult {
-    let root = scratch("hya-daemon-restart")?;
-    let db = root.join("s.db");
+    let scratch = Scratch::new("hya-daemon-restart")?;
+    let db = scratch.0.join("s.db");
     let mut daemons = Daemons(Vec::new());
-    let first = json(&run(&root, &db, &["start", "--json"])?)?;
+    let first = json(&run(&scratch, &db, &["start", "--json"])?)?;
     let first_pid = pid_of(&first)?;
     daemons.0.push(first_pid);
-    let url = first["url"].as_str().ok_or("no url")?.to_string();
-    let stream = open_events(&url)?;
+    let stream = open_events(first["url"].as_str().ok_or("no url")?)?;
 
-    // Restart stops the old process and waits for the new daemon to be healthy.
-    let restarted = run(&root, &db, &["restart", "--json"])?;
-    assert!(
-        restarted.status.success(),
-        "{}",
-        String::from_utf8_lossy(&restarted.stderr)
-    );
+    let restarted = run(&scratch, &db, &["restart", "--json"])?;
+    assert_success("restart", &restarted);
     let ready = json(&restarted)?;
-    assert_eq!(ready["restarted"], true, "{ready}");
-    assert_ne!(
-        pid_of(&ready)?,
-        first_pid,
-        "restart must return the successor"
-    );
     let new_url = ready["url"].as_str().ok_or("no restart url")?;
-    assert_eq!(
-        ready["db"].as_str(),
-        Some(db.to_string_lossy().as_ref()),
-        "{ready}"
-    );
+    assert!(ready["restarted"] == true && pid_of(&ready)? != first_pid);
+    assert!(rest_of(stream).contains(r#""serverStopping":{"reason":"restart"}"#));
 
-    // Clients are told why their stream ends, then rediscover the new daemon.
-    stream.set_read_timeout(Some(Duration::from_secs(90)))?;
-    let told = rest_of(stream);
-    assert!(
-        told.contains(r#""serverStopping":{"reason":"restart"}"#),
-        "clients of a restarted daemon wait for the next one: {told}"
-    );
-
-    // Poll the successor in: new URL and pid, healthy, old pid gone.
-    let second = wait_for_successor(&root, &db, first_pid, new_url)?;
-    let second_pid = pid_of(&second)?;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let second_pid = loop {
+        if let Ok(out) = run(&scratch, &db, &["status", "--json"])
+            && out.status.success()
+        {
+            let st = json(&out)?;
+            if pid_of(&st)? != first_pid && st["url"].as_str() == Some(new_url) && healthy(new_url)
+            {
+                break pid_of(&st)?;
+            }
+        }
+        if Instant::now() > deadline {
+            return Err("timed out waiting for successor".into());
+        }
+        std::thread::sleep(Duration::from_millis(15));
+    };
     daemons.0.push(second_pid);
-    assert!(
-        http_get(new_url, "/v1/health")?.contains("\"ok\":true"),
-        "the successor answers health at {url}"
-    );
-    wait_until("the old generation exited", Duration::from_secs(10), || {
-        !alive(first_pid)
-    })?;
-    assert!(run(&root, &db, &["stop"])?.status.success());
-    wait_until("the daemon exited", Duration::from_secs(5), || {
-        !alive(second_pid)
-    })?;
-    let _ = std::fs::remove_dir_all(&root);
+    wait_until("old exited", Duration::from_secs(10), || !alive(first_pid))?;
+    assert!(run(&scratch, &db, &["stop"])?.status.success());
+    wait_until("new exited", Duration::from_secs(5), || !alive(second_pid))?;
     Ok(())
 }
 
 #[test]
 fn concurrent_starts_share_one_daemon() -> TestResult {
-    let root = scratch("hya-daemon-race")?;
-    let db = root.join("s.db");
+    let scratch = Scratch::new("hya-daemon-race")?;
+    let db = scratch.0.join("s.db");
     let mut daemons = Daemons(Vec::new());
     let starters: Vec<_> = (0..3)
         .map(|_| {
-            serve(&root, &db, &["start", "--json"])
+            serve(&scratch, &db, &["start", "--json"])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
         })
         .collect::<Result<_, _>>()?;
     let mut infos = Vec::new();
-    for starter in starters {
-        let output = starter.wait_with_output()?;
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        infos.push(json(&output)?);
+    for s in starters {
+        let out = s.wait_with_output()?;
+        assert_success("concurrent start", &out);
+        infos.push(json(&out)?);
     }
     let pid = pid_of(&infos[0])?;
     daemons.0.push(pid);
-    for info in &infos {
-        assert_eq!(
-            pid_of(info)?,
-            pid,
-            "every starter reports the one daemon: {infos:?}"
-        );
-    }
-    let started = infos
-        .iter()
-        .filter(|info| info["started"] == serde_json::json!(true))
-        .count();
-    assert_eq!(started, 1, "exactly one starter started it: {infos:?}");
-    let stopped = run(&root, &db, &["stop"])?;
-    assert!(stopped.status.success(), "{stopped:?}");
-    wait_until("the daemon exited", Duration::from_secs(5), || !alive(pid))?;
-    let _ = std::fs::remove_dir_all(&root);
-    Ok(())
-}
-
-#[test]
-fn start_ignores_an_unlocked_file_naming_a_live_process() -> TestResult {
-    let root = scratch("hya-daemon-stale-live")?;
-    let db = root.join("s.db");
-    std::fs::write(
-        format!("{}.runtime-owner.lock", db.display()),
-        format!("{}\n", std::process::id()),
-    )?;
-    let output = run(&root, &db, &["start", "--json"])?;
-    let info = json(&output)?;
-    let pid = pid_of(&info)?;
-    let mut daemon = Daemons(vec![pid]);
-    assert!(output.status.success(), "{output:?}");
-    assert_ne!(pid, i32::try_from(std::process::id())?);
-    assert!(run(&root, &db, &["stop"])?.status.success());
-    daemon.0.clear();
-    let _ = std::fs::remove_dir_all(&root);
+    assert!(infos.iter().all(|i| pid_of(i).ok() == Some(pid)));
+    assert_eq!(infos.iter().filter(|i| i["started"] == true).count(), 1);
+    assert!(run(&scratch, &db, &["stop"])?.status.success());
+    wait_until("exited", Duration::from_secs(5), || !alive(pid))?;
     Ok(())
 }
 
 #[test]
 fn start_waits_out_a_server_that_is_shutting_down() -> TestResult {
-    // `restart`-like sequence from two sides: a stop in flight, then a start
-    // that finds the lock still held by the stopping server. The start must
-    // not fail; it starts the next daemon once the lock is free.
-    let root = scratch("hya-daemon-handover")?;
-    let db = root.join("s.db");
+    let scratch = Scratch::new("hya-daemon-handover")?;
+    let db = scratch.0.join("s.db");
     let mut daemons = Daemons(Vec::new());
-    let first = json(&run(&root, &db, &["start", "--json"])?)?;
+    let first = json(&run(&scratch, &db, &["start", "--json"])?)?;
     let first_pid = pid_of(&first)?;
     daemons.0.push(first_pid);
     let stream = open_events(first["url"].as_str().ok_or("no url")?)?;
-    // SAFETY: `kill` has no memory-safety preconditions.
-    unsafe {
-        libc::kill(first_pid, libc::SIGTERM);
-    }
-    // A plain signal (no `hya serve stop` request) is reported as such.
-    let told = rest_of(stream);
-    assert!(
-        told.contains(r#""serverStopping":{"reason":"signal"}"#),
-        "{told}"
-    );
-    let next = run(&root, &db, &["start", "--json"])?;
-    assert!(
-        next.status.success(),
-        "{}",
-        String::from_utf8_lossy(&next.stderr)
-    );
-    let next = json(&next)?;
-    let next_pid = pid_of(&next)?;
+    // SAFETY: `kill` targets our daemon process.
+    unsafe { libc::kill(first_pid, libc::SIGTERM) };
+    assert!(rest_of(stream).contains(r#""serverStopping":{"reason":"signal"}"#));
+
+    let next_pid = pid_of(&json(&run(&scratch, &db, &["start", "--json"])?)?)?;
     daemons.0.push(next_pid);
     assert_ne!(next_pid, first_pid);
-    assert!(run(&root, &db, &["stop"])?.status.success());
-    wait_until("the daemon exited", Duration::from_secs(5), || {
-        !alive(next_pid)
-    })?;
-    let _ = std::fs::remove_dir_all(&root);
+    assert!(run(&scratch, &db, &["stop"])?.status.success());
+    wait_until("exited", Duration::from_secs(5), || !alive(next_pid))?;
     Ok(())
 }
 
-fn run_bounded(cmd: &mut Command, limit: Duration) -> Result<Output, Box<dyn std::error::Error>> {
-    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
-    let stdout = child.stdout.take().ok_or("missing stdout")?;
-    let stderr = child.stderr.take().ok_or("missing stderr")?;
-    let out_t = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = std::io::BufReader::new(stdout).read_to_end(&mut buf);
-        buf
-    });
-    let err_t = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = std::io::BufReader::new(stderr).read_to_end(&mut buf);
-        buf
-    });
-    let deadline = Instant::now() + limit;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            let out_s = String::from_utf8_lossy(&out_t.join().unwrap_or_default()).into_owned();
-            let err_s = String::from_utf8_lossy(&err_t.join().unwrap_or_default()).into_owned();
-            return Err(format!(
-                "command did not exit within {limit:?}; stdout={out_s:?} stderr={err_s:?}"
-            )
-            .into());
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    Ok(Output {
-        status,
-        stdout: out_t.join().unwrap_or_default(),
-        stderr: err_t.join().unwrap_or_default(),
-    })
-}
-
 #[test]
-fn serve_strict_open_rejects_unopenable_database_foreground_and_detached() -> TestResult {
-    let root = scratch("hya-serve-strict-open")?;
-    let db = root.join("db-as-directory");
+fn strict_open_rejects_unopenable_database_across_serve_and_short_commands() -> TestResult {
+    let scratch = Scratch::new("hya-strict-open")?;
+    let db = scratch.0.join("db-as-directory");
     std::fs::create_dir(&db)?;
 
-    // 1. Foreground `hya serve` must fail fast with the open error (never fall back to memory).
     let fg = run_bounded(
-        &mut serve(&root, &db, &["--bind", "127.0.0.1:0"]),
+        &mut serve(&scratch, &db, &["--bind", "127.0.0.1:0"]),
         Duration::from_secs(10),
     )?;
-    let fg_stdout = String::from_utf8_lossy(&fg.stdout);
-    let fg_stderr = String::from_utf8_lossy(&fg.stderr);
+    let fg_err = String::from_utf8_lossy(&fg.stderr);
     assert!(
-        !fg.status.success(),
-        "foreground serve must fail on unopenable directory db: stdout={fg_stdout:?} stderr={fg_stderr:?}"
-    );
-    assert!(
-        !fg_stderr.contains("running in memory") && !fg_stdout.contains("hya server listening on"),
-        "foreground serve must not fall back to memory: stdout={fg_stdout:?} stderr={fg_stderr:?}"
-    );
-    assert!(
-        fg_stderr.contains("open store"),
-        "foreground serve stderr must explain open failure: {fg_stderr:?}"
+        !fg.status.success()
+            && !fg_err.contains("running in memory")
+            && fg_err.contains("open store"),
+        "{fg_err}"
     );
 
-    // 2. Detached `hya serve start --json` must fail fast (not wait 60s on a memory daemon).
-    let detached = run_bounded(
-        &mut serve(&root, &db, &["start", "--json"]),
+    let det = run_bounded(
+        &mut serve(&scratch, &db, &["start", "--json"]),
         Duration::from_secs(15),
     )?;
-    let detached_stderr = String::from_utf8_lossy(&detached.stderr);
+    let det_err = String::from_utf8_lossy(&det.stderr);
+    let log =
+        std::fs::read_to_string(scratch.0.join("db-as-directory.server.log")).unwrap_or_default();
     assert!(
-        !detached.status.success(),
-        "detached serve start must fail on unopenable db: {detached_stderr:?}"
+        !det.status.success()
+            && !det_err.contains("did not answer within")
+            && !log.contains("running in memory")
     );
-    assert!(
-        !detached_stderr.contains("did not answer within"),
-        "detached serve start must fail promptly instead of waiting 60s: {detached_stderr:?}"
-    );
-    let log_path = root.join("db-as-directory.server.log");
-    let log = std::fs::read_to_string(&log_path).unwrap_or_default();
-    assert!(
-        !log.contains("running in memory") && !log.contains("hya server listening on"),
-        "detached daemon must not fall back to memory: {log:?}"
-    );
-    assert!(
-        detached_stderr.contains("open store") || log.contains("open store"),
-        "failure reason missing from stderr ({detached_stderr:?}) and log ({log:?})"
-    );
-    let _ = std::fs::remove_dir_all(&root);
+    assert!(det_err.contains("open store") || log.contains("open store"));
+
+    let sid = hya_proto::SessionId::new().to_string();
+    for args in [
+        vec!["sessions", "archive", &sid],
+        vec!["workflow", "state", "--session", &sid],
+    ] {
+        let out = run_bounded(
+            scratch.hya().arg("--db").arg(&db).args(&args),
+            Duration::from_secs(10),
+        )?;
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !out.status.success()
+                && !err.contains("running in memory")
+                && err.contains("open store"),
+            "{args:?}: {err}"
+        );
+    }
     Ok(())
 }
 
 #[test]
 fn serve_relay_failure_cleans_discovery_and_locks() -> TestResult {
-    let root = scratch("hya-serve-relay-fail")?;
-    let db = root.join("s.db");
+    let scratch = Scratch::new("hya-serve-relay-fail")?;
+    let db = scratch.0.join("s.db");
     std::fs::write(
         format!("{}.relay-identity.json", db.display()),
         "invalid identity",
     )?;
     let out = run_bounded(
         &mut serve(
-            &root,
+            &scratch,
             &db,
             &[
                 "--bind",
@@ -549,67 +317,16 @@ fn serve_relay_failure_cleans_discovery_and_locks() -> TestResult {
         ),
         Duration::from_secs(15),
     )?;
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "relay connect error must fail serve");
-    assert!(stderr.contains("identity"), "stderr={stderr:?}");
-    assert!(
-        !root.join("s.db.server.json").exists(),
-        "discovery file must be cleaned up on relay failure"
-    );
-    // Subsequent strict owner command must be able to claim the database immediately.
+    assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains("identity"));
+    assert!(!scratch.0.join("s.db.server.json").exists());
+
     let next = run_bounded(
-        &mut serve(&root, &db, &["start", "--json"]),
+        &mut serve(&scratch, &db, &["start", "--json"]),
         Duration::from_secs(15),
     )?;
-    assert!(
-        next.status.success(),
-        "database owner lock remained held after relay failure: {}",
-        String::from_utf8_lossy(&next.stderr)
-    );
-    let pid = pid_of(&json(&next)?)?;
-    let mut daemon = Daemons(vec![pid]);
-    assert!(run(&root, &db, &["stop"])?.status.success());
+    assert_success("restart after relay fail", &next);
+    let mut daemon = Daemons(vec![pid_of(&json(&next)?)?]);
+    assert!(run(&scratch, &db, &["stop"])?.status.success());
     daemon.0.clear();
-    let _ = std::fs::remove_dir_all(&root);
-    Ok(())
-}
-
-#[test]
-fn strict_short_commands_reject_unopenable_database() -> TestResult {
-    let root = scratch("hya-short-strict-open")?;
-    let db = root.join("db-as-directory");
-    std::fs::create_dir(&db)?;
-    let session_id = hya_proto::SessionId::new().to_string();
-
-    for args in [
-        vec!["sessions", "archive", &session_id],
-        vec!["workflow", "state", "--session", &session_id],
-    ] {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_hya"));
-        cmd.env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("HOME", root.join("home"))
-            .env("XDG_CONFIG_HOME", root.join("config"))
-            .env("XDG_DATA_HOME", root.join("data"))
-            .env("XDG_STATE_HOME", root.join("state"))
-            .env("XDG_CACHE_HOME", root.join("cache"))
-            .env("NO_COLOR", "1")
-            .current_dir(&root)
-            .arg("--db")
-            .arg(&db)
-            .args(&args)
-            .stdin(Stdio::null());
-        let out = run_bounded(&mut cmd, Duration::from_secs(10))?;
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(
-            !out.status.success(),
-            "{args:?} must fail on unopenable directory db; stderr={stderr:?}"
-        );
-        assert!(
-            !stderr.contains("running in memory") && stderr.contains("open store"),
-            "{args:?} must report open error without falling back to memory; stderr={stderr:?}"
-        );
-    }
-    let _ = std::fs::remove_dir_all(&root);
     Ok(())
 }

@@ -1,4 +1,6 @@
-//! Bundle registry generations and installed-candidate resolution.
+//! Bundle registry generations, conflict/policy checks, uninstall, and concurrency.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -12,43 +14,42 @@ use sqlx::{Connection, SqliteConnection};
 
 fn temp_db() -> String {
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-    let elapsed = SystemTime::now().duration_since(UNIX_EPOCH);
-    let Ok(elapsed) = elapsed else {
-        panic!("system clock predates the Unix epoch");
-    };
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir()
         .join(format!(
-            "hya-bundle-registry-{}-{}-{id}.db",
-            elapsed.as_nanos(),
+            "hya-bundle-registry-{nanos}-{}-{id}.db",
             std::process::id()
         ))
         .to_string_lossy()
         .into_owned()
 }
 
-fn installed_candidate(
+fn agent_candidate(
+    bundle_id: &str,
+    agent_id: &str,
+    namespace: Option<&str>,
     version: &str,
-    description: &str,
-    prompt: &str,
     source_digest: [u8; 32],
     installed_at: i64,
 ) -> BundleInstallCandidate {
-    let source = format!(
-        "---\nkind: Bundle\nidentity:\n  id: hya/installed-package\n  version: {version}\n  publisher: hya\nagents:\n  - id: installed-package-lead\n    description: {description}\n    role: main\n---\n{prompt}\n"
+    let ns = namespace
+        .map(|value| format!("namespace: {value}\n"))
+        .unwrap_or_default();
+    let manifest = format!(
+        "kind: Bundle\nidentity:\n  id: {bundle_id}\n  version: {version}\n  publisher: hya\n{ns}agents:\n  - id: {agent_id}\n    role: main\n    prompt: prompts/lead.md\n"
     );
     let prepared = prepare_package(BundleSource::new(
-        "installed-package",
-        vec![SourceFile::new("bundle.hya.md", source.into_bytes())],
-    ));
-    let Ok(prepared) = prepared else {
-        panic!("installed package preparation failed: {prepared:?}");
-    };
-    let [bundle] = prepared.bundles() else {
-        panic!("expected exactly one prepared bundle");
-    };
-    assert_eq!(bundle.identity().id, "hya/installed-package");
-    assert_eq!(bundle.identity().version, version);
+        bundle_id,
+        vec![
+            SourceFile::new("bundle.yaml", manifest.into_bytes()),
+            SourceFile::new("prompts/lead.md", b"Lead.\n".to_vec()),
+        ],
+    ))
+    .unwrap();
     BundleInstallCandidate {
         source_digest,
         prepared_digest: prepared.digest().to_owned(),
@@ -57,7 +58,6 @@ fn installed_candidate(
     }
 }
 
-/// Build one two-Agent WorkflowBundle install candidate.
 fn workflow_candidate(source_digest: [u8; 32]) -> BundleInstallCandidate {
     let prepared = prepare_package(BundleSource::new(
         "workflow-installed",
@@ -65,20 +65,11 @@ fn workflow_candidate(source_digest: [u8; 32]) -> BundleInstallCandidate {
             SourceFile::new(
                 "bundle.yaml",
                 br#"kind: Bundle
-identity:
-  id: hya/workflow-installed
-  version: 1.0.0
-  publisher: hya
-workflow:
-  id: release
-  path: workflows/release.hya.md
+identity: { id: hya/workflow-installed, version: 1.0.0, publisher: hya }
+workflow: { id: release, path: workflows/release.hya.md }
 agents:
-  - id: workflow-planner
-    role: subagent
-    prompt: prompts/planner.md
-  - id: workflow-reviewer
-    role: subagent
-    prompt: prompts/reviewer.md
+  - { id: workflow-planner, role: subagent, prompt: prompts/planner.md }
+  - { id: workflow-reviewer, role: subagent, prompt: prompts/reviewer.md }
 "#,
             ),
             SourceFile::new(
@@ -88,12 +79,8 @@ kind: Workflow
 name: release
 description: Plan and review one release.
 nodes:
-  plan:
-    agent: workflow-planner
-    directive: Plan the release.
-  review:
-    agent: workflow-reviewer
-    directive: Review the release.
+  plan: { agent: workflow-planner, directive: Plan the release. }
+  review: { agent: workflow-reviewer, directive: Review the release. }
 ---
 flowchart TD
   plan --> review
@@ -102,10 +89,8 @@ flowchart TD
             SourceFile::new("prompts/planner.md", b"Plan carefully.\n".as_slice()),
             SourceFile::new("prompts/reviewer.md", b"Review carefully.\n".as_slice()),
         ],
-    ));
-    let Ok(prepared) = prepared else {
-        panic!("WorkflowBundle preparation failed: {prepared:?}");
-    };
+    ))
+    .unwrap();
     BundleInstallCandidate {
         source_digest,
         prepared_digest: prepared.digest().to_owned(),
@@ -114,888 +99,308 @@ flowchart TD
     }
 }
 
-/// One registry transaction installs one Workflow and its complete Agent closure.
 #[tokio::test]
-async fn workflow_bundle_installs_as_one_row_and_one_generation() {
-    let path = temp_db();
-    let registry = BundleRegistry::connect(&path).await;
-    let Ok(registry) = registry else {
-        panic!("bundle registry connection failed: {registry:?}");
-    };
+async fn install_plan_idempotency_conflict_upgrade_and_downgrade_lifecycle() {
+    let registry = BundleRegistry::connect(&temp_db()).await.unwrap();
+    let deny = NamespaceInstallPolicy::DenyConflicts;
+    let overwrite = NamespaceInstallPolicy::OverwriteConflicts;
 
-    let installed = registry
-        .install(
-            &[],
-            NamespaceInstallPolicy::DenyConflicts,
-            workflow_candidate([0x91; 32]),
-        )
-        .await;
-    let Ok(installed) = installed else {
-        panic!("WorkflowBundle install failed: {installed:?}");
-    };
-    assert_eq!(installed, BundleInstallOutcome::Installed { generation: 1 });
+    let empty = registry.snapshot().await.unwrap();
+    assert_eq!(empty.generation, 0);
+    assert!(empty.bundles.is_empty());
 
-    let snapshot = registry.snapshot_with_catalogs().await;
-    let Ok(snapshot) = snapshot else {
-        panic!("bundle registry snapshot failed: {snapshot:?}");
-    };
-    assert_eq!(snapshot.generation, 1);
-    let [loaded] = snapshot.bundles.as_slice() else {
-        panic!("WorkflowBundle install must write exactly one registry row");
-    };
-    let record = &loaded.record;
-    assert_eq!(record.bundle_id, "hya/workflow-installed");
-    assert_eq!(loaded.prepared.digest(), record.prepared_digest);
-    let bundle = &loaded.prepared.bundles()[0];
-    assert_eq!(bundle.identity().id, record.bundle_id);
+    let v1 = agent_candidate("hya/pkg", "pkg-lead", Some("pkg"), "1.0.0", [0x11; 32], 100);
+    let plan = registry.plan_install(&[], deny, &v1).await.unwrap();
+    assert_eq!(plan.action, BundleInstallAction::Install);
+    assert!(plan.displaced.is_empty());
+    assert_eq!(registry.snapshot().await.unwrap().generation, 0);
+
+    // Install + idempotent repeat.
     assert_eq!(
-        bundle.workflow().map(|workflow| workflow.id.as_str()),
-        Some("release")
+        registry.install(&[], deny, v1.clone()).await.unwrap(),
+        BundleInstallOutcome::Installed { generation: 1 }
     );
-    assert_eq!(bundle.agents().len(), 2);
-    let document = serde_json::from_slice::<serde_json::Value>(&record.prepared_bytes);
-    let Ok(document) = document else {
-        panic!("stored prepared WorkflowBundle was not JSON: {document:?}");
-    };
-    assert_eq!(document["workflow"]["id"], "release");
-    assert_eq!(document["agents"].as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        registry.plan_install(&[], deny, &v1).await.unwrap().action,
+        BundleInstallAction::Unchanged
+    );
+    assert_eq!(
+        registry.install(&[], deny, v1.clone()).await.unwrap(),
+        BundleInstallOutcome::Unchanged { generation: 1 }
+    );
+
+    // Same version, different digest -> content conflict without mutation.
+    let v1_mutated = agent_candidate("hya/pkg", "pkg-lead", Some("pkg"), "1.0.0", [0x22; 32], 101);
+    assert!(matches!(
+        registry.install(&[], deny, v1_mutated).await,
+        Err(BundleRegistryError::BundleContentConflict { ref bundle_id, ref version })
+            if bundle_id == "hya/pkg" && version == "1.0.0"
+    ));
+    assert_eq!(registry.snapshot().await.unwrap().generation, 1);
+
+    // Reserved agent rejection leaves state intact.
+    let v2 = agent_candidate("hya/pkg", "pkg-lead", Some("pkg"), "2.0.0", [0x33; 32], 102);
+    assert!(matches!(
+        registry.plan_install(&["pkg-lead"], deny, &v2).await,
+        Err(BundleRegistryError::BundleAgentIdReserved { ref agent_id, .. })
+            if agent_id == "pkg-lead"
+    ));
+
+    // Plan and apply upgrade.
+    assert_eq!(
+        registry.plan_install(&[], deny, &v2).await.unwrap().action,
+        BundleInstallAction::Replace {
+            installed_version: "1.0.0".into(),
+        }
+    );
+    assert_eq!(
+        registry.install(&[], deny, v2).await.unwrap(),
+        BundleInstallOutcome::Replaced { generation: 2 }
+    );
+    let snap = registry.snapshot().await.unwrap();
+    assert_eq!(snap.generation, 2);
+    assert_eq!(snap.bundles[0].version, "2.0.0");
+
+    // Downgrade requires explicit overwrite.
+    let v0 = agent_candidate("hya/pkg", "pkg-lead", Some("pkg"), "0.9.0", [0x44; 32], 103);
+    assert!(matches!(
+        registry.install(&[], deny, v0.clone()).await,
+        Err(BundleRegistryError::BundleDowngradeRequired {
+            ref bundle_id,
+            ref installed_version,
+            ref incoming_version,
+        }) if bundle_id == "hya/pkg" && installed_version == "2.0.0" && incoming_version == "0.9.0"
+    ));
+    assert!(registry.plan_install(&[], overwrite, &v0).await.is_ok());
+    assert_eq!(
+        registry.install(&[], overwrite, v0).await.unwrap(),
+        BundleInstallOutcome::Replaced { generation: 3 }
+    );
 }
 
-/// A reserved id anywhere in a Workflow Agent closure rejects the full transaction.
 #[tokio::test]
-async fn workflow_bundle_reserved_agent_preserves_empty_registry() {
-    let path = temp_db();
-    let registry = BundleRegistry::connect(&path).await;
-    let Ok(registry) = registry else {
-        panic!("bundle registry connection failed: {registry:?}");
-    };
+async fn namespace_conflicts_duplicate_agents_and_distinct_namespaces() {
+    let registry = BundleRegistry::connect(&temp_db()).await.unwrap();
+    let deny = NamespaceInstallPolicy::DenyConflicts;
+    let overwrite = NamespaceInstallPolicy::OverwriteConflicts;
 
-    let rejected = registry
-        .install(
-            &["workflow-reviewer"],
-            NamespaceInstallPolicy::DenyConflicts,
-            workflow_candidate([0x92; 32]),
-        )
-        .await;
+    let first = agent_candidate(
+        "hya/acme-tools",
+        "acme-lead",
+        Some("acme"),
+        "1.0.0",
+        [1; 32],
+        10,
+    );
+    registry.install(&[], deny, first).await.unwrap();
+
+    // Duplicate stable agent ID from a different bundle fails without mutating incumbent.
+    let dup_agent = agent_candidate("hya/dup", "acme-lead", Some("other"), "1.0.0", [2; 32], 11);
     assert!(matches!(
-        rejected,
+        registry.install(&[], deny, dup_agent).await,
+        Err(BundleRegistryError::Bundle(BundleError::DuplicateStableAgentId { ref stable_id }))
+            if stable_id == "acme-lead"
+    ));
+
+    // Cross-bundle namespace collision fails under DenyConflicts, displaces incumbent under Overwrite.
+    let rival = agent_candidate(
+        "hya/rival",
+        "rival-lead",
+        Some("acme"),
+        "1.0.0",
+        [3; 32],
+        12,
+    );
+    assert!(matches!(
+        registry.install(&[], deny, rival.clone()).await,
+        Err(BundleRegistryError::NamespaceConflict {
+            ref namespace,
+            ref existing_bundle_id,
+            ref incoming_bundle_id,
+        }) if namespace == "acme"
+            && existing_bundle_id == "hya/acme-tools"
+            && incoming_bundle_id == "hya/rival"
+    ));
+    let plan = registry.plan_install(&[], overwrite, &rival).await.unwrap();
+    assert_eq!(plan.action, BundleInstallAction::Install);
+    assert_eq!(plan.displaced, vec!["hya/acme-tools".to_string()]);
+    assert!(matches!(
+        registry.install(&[], overwrite, rival).await.unwrap(),
+        BundleInstallOutcome::Installed { .. }
+    ));
+
+    // Distinct namespace installs alongside cleanly.
+    let second = agent_candidate("hya/two", "two-lead", Some("two"), "1.0.0", [4; 32], 13);
+    registry.install(&[], deny, second).await.unwrap();
+    let ids: Vec<_> = registry
+        .snapshot()
+        .await
+        .unwrap()
+        .bundles
+        .into_iter()
+        .map(|b| b.bundle_id)
+        .collect();
+    assert!(ids.contains(&"hya/rival".to_string()));
+    assert!(ids.contains(&"hya/two".to_string()));
+    assert!(!ids.contains(&"hya/acme-tools".to_string()));
+}
+
+#[tokio::test]
+async fn workflow_bundle_install_and_reserved_agent_rejection() {
+    let registry = BundleRegistry::connect(&temp_db()).await.unwrap();
+    let deny = NamespaceInstallPolicy::DenyConflicts;
+
+    // Reserved agent anywhere in the workflow's closure rejects the whole install.
+    assert!(matches!(
+        registry
+            .install(&["workflow-reviewer"], deny, workflow_candidate([0x92; 32]))
+            .await,
         Err(BundleRegistryError::BundleAgentIdReserved { ref agent_id, .. })
             if agent_id == "workflow-reviewer"
     ));
-    let snapshot = registry.snapshot().await;
-    let Ok(snapshot) = snapshot else {
-        panic!("bundle registry snapshot failed: {snapshot:?}");
+    assert_eq!(registry.snapshot().await.unwrap().generation, 0);
+
+    // Valid install stores one row with workflow + both agents.
+    assert_eq!(
+        registry
+            .install(&[], deny, workflow_candidate([0x91; 32]))
+            .await
+            .unwrap(),
+        BundleInstallOutcome::Installed { generation: 1 }
+    );
+    let snapshot = registry.snapshot_with_catalogs().await.unwrap();
+    assert_eq!(snapshot.generation, 1);
+    let [loaded] = snapshot.bundles.as_slice() else {
+        panic!("expected one workflow bundle row");
     };
-    assert_eq!(snapshot.generation, 0);
-    assert!(snapshot.bundles.is_empty());
+    let bundle = &loaded.prepared.bundles()[0];
+    assert_eq!(bundle.workflow().map(|w| w.id.as_str()), Some("release"));
+    assert_eq!(bundle.agents().len(), 2);
 }
 
 #[tokio::test]
-async fn bundle_registry_initializes_empty_at_generation_zero() {
-    let path = temp_db();
-    let registry = BundleRegistry::connect(&path).await;
-    let Ok(registry) = registry else {
-        panic!("bundle registry connection failed: {registry:?}");
-    };
-    let snapshot = registry.snapshot().await;
-    let Ok(snapshot) = snapshot else {
-        panic!("bundle registry snapshot failed: {snapshot:?}");
-    };
+async fn uninstall_and_disabled_bundle_set_advance_generation() {
+    let registry = BundleRegistry::connect(&temp_db()).await.unwrap();
+    assert!(matches!(
+        registry.uninstall("hya/missing").await,
+        Err(BundleRegistryError::BundleNotFound { ref bundle_id }) if bundle_id == "hya/missing"
+    ));
 
-    assert_eq!(snapshot.generation, 0);
-    assert!(snapshot.bundles.is_empty());
+    let candidate = agent_candidate("hya/pkg", "pkg-lead", None, "1.0.0", [0x55; 32], 10);
+    registry
+        .install(&[], NamespaceInstallPolicy::DenyConflicts, candidate)
+        .await
+        .unwrap();
+    assert_eq!(
+        registry.uninstall("hya/pkg").await.unwrap(),
+        BundleUninstallOutcome::Removed { generation: 2 }
+    );
+    assert!(registry.snapshot().await.unwrap().bundles.is_empty());
+
+    // Disabling is idempotent and advances generation only on state change.
+    assert!(registry.disabled_bundle_ids().await.unwrap().is_empty());
+    assert_eq!(
+        registry
+            .set_bundle_enabled("hya/example", false)
+            .await
+            .unwrap(),
+        3
+    );
+    assert_eq!(
+        registry
+            .disabled_bundle_ids()
+            .await
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>(),
+        vec!["hya/example".to_string()]
+    );
+    assert_eq!(
+        registry
+            .set_bundle_enabled("hya/example", false)
+            .await
+            .unwrap(),
+        3
+    );
+    assert_eq!(
+        registry
+            .set_bundle_enabled("hya/example", true)
+            .await
+            .unwrap(),
+        4
+    );
+    assert!(registry.disabled_bundle_ids().await.unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn corrupted_prepared_blob_is_an_unreadable_snapshot_row() {
+async fn corrupted_prepared_blob_is_reported_as_unreadable_snapshot_row() {
     let path = temp_db();
-    let registry = BundleRegistry::connect(&path).await;
-    let Ok(registry) = registry else {
-        panic!("bundle registry connection failed: {registry:?}");
-    };
-    let install = registry
+    let registry = BundleRegistry::connect(&path).await.unwrap();
+    registry
         .install(
             &[],
             NamespaceInstallPolicy::DenyConflicts,
-            installed_candidate(
-                "1.0.0",
-                "installed package",
-                "You are the installed package lead.",
-                [0x88; 32],
-                1_725_000_008,
-            ),
+            agent_candidate("hya/pkg", "pkg-lead", None, "1.0.0", [0x88; 32], 10),
         )
-        .await;
-    let Ok(install) = install else {
-        panic!("bundle install failed: {install:?}");
-    };
-    assert_eq!(install, BundleInstallOutcome::Installed { generation: 1 });
+        .await
+        .unwrap();
 
-    let connection = SqliteConnection::connect(&format!("sqlite://{path}")).await;
-    let Ok(mut connection) = connection else {
-        panic!("direct SQLite connection failed: {connection:?}");
-    };
+    let mut conn = SqliteConnection::connect(&format!("sqlite://{path}"))
+        .await
+        .unwrap();
     let update = sqlx::query("UPDATE installed_bundle SET prepared_bytes = ? WHERE bundle_id = ?")
         .bind(vec![0_u8])
-        .bind("hya/installed-package")
-        .execute(&mut connection)
-        .await;
-    let Ok(update) = update else {
-        panic!("prepared blob corruption update failed: {update:?}");
-    };
+        .bind("hya/pkg")
+        .execute(&mut conn)
+        .await
+        .unwrap();
     assert_eq!(update.rows_affected(), 1);
+    assert_eq!(registry.generation().await.unwrap(), 1);
 
-    let generation = registry.generation().await;
-    let Ok(generation) = generation else {
-        panic!("bundle registry generation failed: {generation:?}");
-    };
-    assert_eq!(generation, 1);
-
-    let snapshot = registry.snapshot_with_catalogs().await;
-    let Ok(snapshot) = snapshot else {
-        panic!("one corrupt row must not reject the snapshot: {snapshot:?}");
-    };
+    let snapshot = registry.snapshot_with_catalogs().await.unwrap();
     assert!(snapshot.bundles.is_empty());
     let [row] = snapshot.unreadable.as_slice() else {
         panic!("expected one unreadable row: {snapshot:?}");
     };
-    assert_eq!(row.bundle_id, "hya/installed-package");
-    assert_eq!(row.version, "1.0.0");
-    assert_eq!(row.publisher, "hya");
-    assert!(row.error.contains("digest"), "{}", row.error);
-    assert!(row.error.contains("please reinstall"), "{}", row.error);
+    assert_eq!(row.bundle_id, "hya/pkg");
+    assert!(row.error.contains("digest") && row.error.contains("please reinstall"));
 }
 
 #[tokio::test]
-async fn same_source_digest_install_is_idempotent_without_generation_advance() {
-    let prepared = prepare_package(BundleSource::new(
-        "installed-package",
-        vec![SourceFile::new(
-            "bundle.hya.md",
-            br#"---
-kind: Bundle
-identity:
-  id: hya/installed-package
-  version: 1.0.0
-  publisher: hya
-agents:
-  - id: installed-package-lead
-    role: main
----
-You are the installed package lead.
-"#,
-        )],
-    ));
-    let Ok(prepared) = prepared else {
-        panic!("installed package preparation failed: {prepared:?}");
-    };
-    let [bundle] = prepared.bundles() else {
-        panic!("expected exactly one prepared bundle");
-    };
-    let candidate = BundleInstallCandidate {
-        source_digest: [0x11; 32],
-        prepared_digest: prepared.digest().to_owned(),
-        prepared_bytes: prepared.bytes().to_vec(),
-        installed_at: 1_725_000_000,
-    };
-
+async fn writer_busy_and_concurrent_registry_opens() {
+    // 1. Held write lock returns BundleRegistryBusy without mutation.
     let path = temp_db();
-    let registry = BundleRegistry::connect(&path).await;
-    let Ok(registry) = registry else {
-        panic!("bundle registry connection failed: {registry:?}");
-    };
-
-    let first = registry
+    let registry = BundleRegistry::connect(&path).await.unwrap();
+    let mut writer = SqliteConnection::connect(&format!("sqlite://{path}"))
+        .await
+        .unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut writer)
+        .await
+        .unwrap();
+    let result = registry
         .install(
             &[],
             NamespaceInstallPolicy::DenyConflicts,
-            candidate.clone(),
+            agent_candidate("hya/pkg", "pkg-lead", None, "1.0.0", [0x44; 32], 10),
         )
         .await;
-    let Ok(first) = first else {
-        panic!("first bundle install failed: {first:?}");
-    };
-    assert_eq!(first, BundleInstallOutcome::Installed { generation: 1 });
-
-    let second = registry
-        .install(
-            &[],
-            NamespaceInstallPolicy::DenyConflicts,
-            candidate.clone(),
-        )
-        .await;
-    let Ok(second) = second else {
-        panic!("second bundle install failed: {second:?}");
-    };
-    assert_eq!(second, BundleInstallOutcome::Unchanged { generation: 1 });
-
-    let snapshot = registry.snapshot().await;
-    let Ok(snapshot) = snapshot else {
-        panic!("bundle registry snapshot failed: {snapshot:?}");
-    };
-    assert_eq!(snapshot.generation, 1);
-    let [record] = snapshot.bundles.as_slice() else {
-        panic!("expected exactly one installed bundle");
-    };
-    assert_eq!(record.bundle_id, bundle.identity().id);
-    assert_eq!(record.version, bundle.identity().version);
-    assert_eq!(record.publisher, bundle.identity().publisher);
-    assert_eq!(record.source_digest, [0x11; 32]);
-    assert_eq!(record.prepared_digest, prepared.digest());
-    assert_eq!(record.prepared_bytes.as_slice(), prepared.bytes());
-    assert_eq!(record.installed_at, 1_725_000_000);
-}
-
-#[tokio::test]
-async fn same_version_different_source_digest_is_content_conflict_without_mutation() {
-    let first_candidate = installed_candidate(
-        "1.0.0",
-        "first installed package",
-        "You are the first installed package lead.",
-        [0x11; 32],
-        1_725_000_000,
-    );
-    let first_prepared_digest = first_candidate.prepared_digest.clone();
-    let first_prepared_bytes = first_candidate.prepared_bytes.clone();
-    let path = temp_db();
-    let registry = BundleRegistry::connect(&path).await;
-    let Ok(registry) = registry else {
-        panic!("bundle registry connection failed: {registry:?}");
-    };
-
-    let first = registry
-        .install(&[], NamespaceInstallPolicy::DenyConflicts, first_candidate)
-        .await;
-    let Ok(first) = first else {
-        panic!("first bundle install failed: {first:?}");
-    };
-    assert_eq!(first, BundleInstallOutcome::Installed { generation: 1 });
-
-    let second_candidate = installed_candidate(
-        "1.0.0",
-        "second installed package",
-        "You are the second installed package lead.",
-        [0x22; 32],
-        1_725_000_001,
-    );
-    let second = registry
-        .install(&[], NamespaceInstallPolicy::DenyConflicts, second_candidate)
-        .await;
+    sqlx::query("ROLLBACK").execute(&mut writer).await.unwrap();
     assert!(matches!(
-        second,
-        Err(BundleRegistryError::BundleContentConflict {
-            bundle_id,
-            version,
-        }) if bundle_id == "hya/installed-package" && version == "1.0.0"
-    ));
-
-    let snapshot = registry.snapshot().await;
-    let Ok(snapshot) = snapshot else {
-        panic!("bundle registry snapshot failed: {snapshot:?}");
-    };
-    assert_eq!(snapshot.generation, 1);
-    let [record] = snapshot.bundles.as_slice() else {
-        panic!("expected exactly one installed bundle");
-    };
-    assert_eq!(record.bundle_id, "hya/installed-package");
-    assert_eq!(record.version, "1.0.0");
-    assert_eq!(record.source_digest, [0x11; 32]);
-    assert_eq!(record.prepared_digest, first_prepared_digest);
-    assert_eq!(record.prepared_bytes, first_prepared_bytes);
-    assert_eq!(record.installed_at, 1_725_000_000);
-}
-
-#[tokio::test]
-async fn different_version_replaces_atomically_and_advances_generation_once() {
-    let version_one = installed_candidate(
-        "1.0.0",
-        "version one installed package",
-        "You are the version one installed package lead.",
-        [0x11; 32],
-        1_725_000_000,
-    );
-    let path = temp_db();
-    let registry = BundleRegistry::connect(&path).await;
-    let Ok(registry) = registry else {
-        panic!("bundle registry connection failed: {registry:?}");
-    };
-
-    let first = registry
-        .install(&[], NamespaceInstallPolicy::DenyConflicts, version_one)
-        .await;
-    let Ok(first) = first else {
-        panic!("first bundle install failed: {first:?}");
-    };
-    assert_eq!(first, BundleInstallOutcome::Installed { generation: 1 });
-
-    let version_two = installed_candidate(
-        "2.0.0",
-        "version two installed package",
-        "You are the version two installed package lead.",
-        [0x22; 32],
-        1_725_000_002,
-    );
-    let replacement_digest = version_two.prepared_digest.clone();
-    let replacement_bytes = version_two.prepared_bytes.clone();
-    let second = registry
-        .install(&[], NamespaceInstallPolicy::DenyConflicts, version_two)
-        .await;
-    let Ok(second) = second else {
-        panic!("replacement bundle install failed: {second:?}");
-    };
-    assert_eq!(second, BundleInstallOutcome::Replaced { generation: 2 });
-
-    let snapshot = registry.snapshot().await;
-    let Ok(snapshot) = snapshot else {
-        panic!("bundle registry snapshot failed: {snapshot:?}");
-    };
-    assert_eq!(snapshot.generation, 2);
-    let [record] = snapshot.bundles.as_slice() else {
-        panic!("expected exactly one installed bundle");
-    };
-    assert_eq!(record.bundle_id, "hya/installed-package");
-    assert_eq!(record.version, "2.0.0");
-    assert_eq!(record.source_digest, [0x22; 32]);
-    assert_eq!(record.prepared_digest, replacement_digest);
-    assert_eq!(record.prepared_bytes, replacement_bytes);
-    assert_eq!(record.installed_at, 1_725_000_002);
-}
-
-#[tokio::test]
-async fn conflicting_agent_id_install_preserves_old_row_and_generation() {
-    // Two installed bundles may not export the same agent id. The clash is
-    // found while revalidating the whole installed catalog, and the row that
-    // was already there must survive untouched.
-    let old_candidate = installed_candidate(
-        "1.0.0",
-        "version one installed package",
-        "You are the version one installed package lead.",
-        [0x66; 32],
-        1_725_000_006,
-    );
-    let old_digest = old_candidate.prepared_digest.clone();
-    let old_bytes = old_candidate.prepared_bytes.clone();
-    let old_installed_at = old_candidate.installed_at;
-    let path = temp_db();
-    let registry = BundleRegistry::connect(&path).await;
-    let Ok(registry) = registry else {
-        panic!("bundle registry connection failed: {registry:?}");
-    };
-
-    let first = registry
-        .install(&[], NamespaceInstallPolicy::DenyConflicts, old_candidate)
-        .await;
-    let Ok(first) = first else {
-        panic!("first bundle install failed: {first:?}");
-    };
-    assert_eq!(first, BundleInstallOutcome::Installed { generation: 1 });
-
-    let conflicting = prepare_package(BundleSource::new(
-        "replacement-conflict",
-        vec![SourceFile::new(
-            "bundle.hya.md",
-            br#"---
-kind: Bundle
-identity:
-  id: hya/replacement-conflict
-  version: 1.0.0
-  publisher: hya
-agents:
-  - id: installed-package-lead
-    description: conflicting lead
-    role: main
----
-You are the conflicting lead.
-"#,
-        )],
-    ));
-    let Ok(conflicting) = conflicting else {
-        panic!("conflicting package preparation failed: {conflicting:?}");
-    };
-
-    let replacement = registry
-        .install(
-            &[],
-            NamespaceInstallPolicy::DenyConflicts,
-            BundleInstallCandidate {
-                source_digest: [0x77; 32],
-                prepared_digest: conflicting.digest().to_owned(),
-                prepared_bytes: conflicting.bytes().to_vec(),
-                installed_at: 1_725_000_007,
-            },
-        )
-        .await;
-    assert!(matches!(
-        replacement,
-        Err(BundleRegistryError::Bundle(BundleError::DuplicateStableAgentId { stable_id }))
-            if stable_id == "installed-package-lead"
-    ));
-
-    let snapshot = registry.snapshot().await;
-    let Ok(snapshot) = snapshot else {
-        panic!("bundle registry snapshot failed: {snapshot:?}");
-    };
-    assert_eq!(snapshot.generation, 1);
-    let [record] = snapshot.bundles.as_slice() else {
-        panic!("expected exactly one installed bundle");
-    };
-    assert_eq!(record.bundle_id, "hya/installed-package");
-    assert_eq!(record.version, "1.0.0");
-    assert_eq!(record.source_digest, [0x66; 32]);
-    assert_eq!(record.prepared_digest, old_digest);
-    assert_eq!(record.prepared_bytes, old_bytes);
-    assert_eq!(record.installed_at, old_installed_at);
-}
-
-#[tokio::test]
-async fn reserved_builtin_agent_id_is_rejected_and_registry_is_unchanged() {
-    // Built-in agents are compiled in, so a bundle may not claim one of their
-    // ids. Rejecting at install shows the operator the failure immediately,
-    // rather than at the next catalog publish.
-    let candidate = installed_candidate(
-        "1.0.0",
-        "installed package",
-        "You are the installed package lead.",
-        [0x33; 32],
-        1_725_000_003,
-    );
-    let path = temp_db();
-    let registry = BundleRegistry::connect(&path).await;
-    let Ok(registry) = registry else {
-        panic!("bundle registry connection failed: {registry:?}");
-    };
-
-    let install = registry
-        .install(
-            &["installed-package-lead"],
-            NamespaceInstallPolicy::DenyConflicts,
-            candidate,
-        )
-        .await;
-    assert!(matches!(
-        install,
-        Err(BundleRegistryError::BundleAgentIdReserved { ref agent_id, .. })
-            if agent_id == "installed-package-lead"
-    ));
-
-    let snapshot = registry.snapshot().await;
-    let Ok(snapshot) = snapshot else {
-        panic!("bundle registry snapshot failed: {snapshot:?}");
-    };
-    assert_eq!(snapshot.generation, 0);
-    assert!(snapshot.bundles.is_empty());
-}
-
-#[tokio::test]
-async fn concurrent_registry_opens_complete_migrations_and_read_the_same_generation() {
-    // Exercise independent first-open races, not only an already migrated DB.
-    for _ in 0..8 {
-        let path = temp_db();
-        let opened =
-            futures::future::join_all((0..16).map(|_| BundleRegistry::connect(&path))).await;
-        for registry in opened {
-            let registry =
-                registry.unwrap_or_else(|error| panic!("concurrent registry open: {error}"));
-            let snapshot = registry
-                .snapshot()
-                .await
-                .unwrap_or_else(|error| panic!("read opened registry: {error}"));
-            assert_eq!(snapshot.generation, 0);
-            assert!(snapshot.bundles.is_empty());
-        }
-    }
-}
-
-#[tokio::test]
-async fn writer_busy_fails_immediately_without_registry_mutation() {
-    let path = temp_db();
-    let registry = BundleRegistry::connect(&path).await;
-    let Ok(registry) = registry else {
-        panic!("bundle registry connection failed: {registry:?}");
-    };
-    let writer = SqliteConnection::connect(&format!("sqlite://{path}")).await;
-    let Ok(mut writer) = writer else {
-        panic!("writer connection failed: {writer:?}");
-    };
-    let lock = sqlx::query("BEGIN IMMEDIATE").execute(&mut writer).await;
-    let Ok(_) = lock else {
-        panic!("writer lock acquisition failed: {lock:?}");
-    };
-
-    let install = registry
-        .install(
-            &[],
-            NamespaceInstallPolicy::DenyConflicts,
-            installed_candidate(
-                "1.0.0",
-                "installed package",
-                "You are the installed package lead.",
-                [0x44; 32],
-                1_725_000_004,
-            ),
-        )
-        .await;
-
-    let rollback = sqlx::query("ROLLBACK").execute(&mut writer).await;
-    let Ok(_) = rollback else {
-        panic!("writer lock rollback failed: {rollback:?}");
-    };
-    assert!(matches!(
-        install,
+        result,
         Err(BundleRegistryError::BundleRegistryBusy)
     ));
+    assert_eq!(registry.snapshot().await.unwrap().generation, 0);
 
-    let snapshot = registry.snapshot().await;
-    let Ok(snapshot) = snapshot else {
-        panic!("bundle registry snapshot failed: {snapshot:?}");
-    };
-    assert_eq!(snapshot.generation, 0);
-    assert!(snapshot.bundles.is_empty());
-}
-
-#[tokio::test]
-async fn uninstall_removes_active_bundle_and_advances_generation_once() {
-    let path = temp_db();
-    let registry = BundleRegistry::connect(&path).await;
-    let Ok(registry) = registry else {
-        panic!("bundle registry connection failed: {registry:?}");
-    };
-    let installed = registry
-        .install(
-            &[],
-            NamespaceInstallPolicy::DenyConflicts,
-            installed_candidate(
-                "1.0.0",
-                "installed package",
-                "You are the installed package lead.",
-                [0x55; 32],
-                1_725_000_005,
-            ),
-        )
-        .await;
-    let Ok(installed) = installed else {
-        panic!("bundle install failed: {installed:?}");
-    };
-    assert_eq!(installed, BundleInstallOutcome::Installed { generation: 1 });
-
-    let before_uninstall = registry.snapshot().await;
-    let Ok(before_uninstall) = before_uninstall else {
-        panic!("bundle registry snapshot failed: {before_uninstall:?}");
-    };
-    assert_eq!(before_uninstall.generation, 1);
-    assert_eq!(before_uninstall.bundles.len(), 1);
-
-    let removed = registry.uninstall("hya/installed-package").await;
-    let Ok(removed) = removed else {
-        panic!("bundle uninstall failed: {removed:?}");
-    };
-    assert_eq!(removed, BundleUninstallOutcome::Removed { generation: 2 });
-
-    let snapshot = registry.snapshot().await;
-    let Ok(snapshot) = snapshot else {
-        panic!("bundle registry snapshot failed: {snapshot:?}");
-    };
-    assert_eq!(snapshot.generation, 2);
-    assert!(snapshot.bundles.is_empty());
-}
-
-#[tokio::test]
-async fn uninstall_unknown_bundle_is_typed_not_found_without_generation_change() {
-    let path = temp_db();
-    let registry = BundleRegistry::connect(&path).await;
-    let Ok(registry) = registry else {
-        panic!("bundle registry connection failed: {registry:?}");
-    };
-
-    let uninstall = registry.uninstall("hya/not-installed").await;
-    assert!(matches!(
-        uninstall,
-        Err(BundleRegistryError::BundleNotFound { bundle_id }) if bundle_id == "hya/not-installed"
-    ));
-
-    let snapshot = registry.snapshot().await;
-    let Ok(snapshot) = snapshot else {
-        panic!("bundle registry snapshot failed: {snapshot:?}");
-    };
-    assert_eq!(snapshot.generation, 0);
-    assert!(snapshot.bundles.is_empty());
-}
-
-#[tokio::test]
-async fn uninstall_of_a_never_installed_bundle_is_typed_not_found() {
-    // There are no built-in bundles any more, so every uninstall target is
-    // either an installed row or simply absent.
-    let path = temp_db();
-    let registry = BundleRegistry::connect(&path).await;
-    let Ok(registry) = registry else {
-        panic!("bundle registry connection failed: {registry:?}");
-    };
-
-    let uninstall = registry.uninstall("hya/builtin-only").await;
-    assert!(matches!(
-        uninstall,
-        Err(BundleRegistryError::BundleNotFound { bundle_id }) if bundle_id == "hya/builtin-only"
-    ));
-
-    let snapshot = registry.snapshot().await;
-    let Ok(snapshot) = snapshot else {
-        panic!("bundle registry snapshot failed: {snapshot:?}");
-    };
-    assert_eq!(snapshot.generation, 0);
-    assert!(snapshot.bundles.is_empty());
-}
-
-/// Build one AgentBundle candidate with explicit identity and namespace.
-fn namespaced_candidate(
-    bundle_id: &str,
-    namespace: Option<&str>,
-    version: &str,
-    source_digest: [u8; 32],
-) -> BundleInstallCandidate {
-    let namespace_line = namespace
-        .map(|value| format!("namespace: {value}\n"))
-        .unwrap_or_default();
-    let manifest = format!(
-        "kind: Bundle\nidentity:\n  id: {bundle_id}\n  version: {version}\n  publisher: hya\n{namespace_line}\nagents:\n  - id: {bundle_id}-lead\n    role: main\n    prompt: prompts/lead.md\n"
-    );
-    let prepared = prepare_package(BundleSource::new(
-        bundle_id,
-        vec![
-            SourceFile::new("bundle.yaml", manifest.into_bytes()),
-            SourceFile::new("prompts/lead.md", b"Lead.\n".to_vec()),
-        ],
-    ));
-    let Ok(prepared) = prepared else {
-        panic!("namespaced package preparation failed: {prepared:?}");
-    };
-    BundleInstallCandidate {
-        source_digest,
-        prepared_digest: prepared.digest().to_owned(),
-        prepared_bytes: prepared.bytes().to_vec(),
-        installed_at: 1_725_000_020,
-    }
-}
-
-#[tokio::test]
-async fn same_bundle_upgrade_installs_but_downgrade_requires_overwrite() {
-    let Ok(registry) = BundleRegistry::connect(&temp_db()).await else {
-        panic!("bundle registry connection failed");
-    };
-    let newer = namespaced_candidate("hya/acme", None, "1.1.0", [1_u8; 32]);
-    let older = namespaced_candidate("hya/acme", None, "1.0.0", [2_u8; 32]);
-
-    let outcome = registry
-        .install(&[], NamespaceInstallPolicy::DenyConflicts, newer)
-        .await
-        .unwrap_or_else(|error| panic!("upgrade installs: {error:?}"));
-    assert!(matches!(outcome, BundleInstallOutcome::Installed { .. }));
-    let result = registry
-        .install(&[], NamespaceInstallPolicy::DenyConflicts, older)
-        .await;
-    let Err(err) = result else {
-        panic!("downgrade must require explicit overwrite");
-    };
-    let BundleRegistryError::BundleDowngradeRequired {
-        bundle_id,
-        installed_version,
-        incoming_version,
-    } = err
-    else {
-        panic!("downgrade must require explicit overwrite");
-    };
-    assert_eq!(bundle_id, "hya/acme");
-    assert_eq!(installed_version, "1.1.0");
-    assert_eq!(incoming_version, "1.0.0");
-
-    let older = namespaced_candidate("hya/acme", None, "1.0.0", [2_u8; 32]);
-    let outcome = registry
-        .install(&[], NamespaceInstallPolicy::OverwriteConflicts, older)
-        .await
-        .unwrap_or_else(|error| panic!("overwrite accepts downgrade: {error:?}"));
-    assert!(matches!(outcome, BundleInstallOutcome::Replaced { .. }));
-}
-
-#[tokio::test]
-async fn cross_bundle_namespace_conflict_requires_explicit_overwrite() {
-    let Ok(registry) = BundleRegistry::connect(&temp_db()).await else {
-        panic!("bundle registry connection failed");
-    };
-    let first = namespaced_candidate("hya/acme-tools", Some("acme"), "1.0.0", [3_u8; 32]);
-    let second = namespaced_candidate("hya/other", Some("acme"), "1.0.0", [4_u8; 32]);
-
-    let outcome = registry
-        .install(&[], NamespaceInstallPolicy::DenyConflicts, first)
-        .await
-        .unwrap_or_else(|error| panic!("first installs: {error:?}"));
-    assert!(matches!(outcome, BundleInstallOutcome::Installed { .. }));
-    let result = registry
-        .install(&[], NamespaceInstallPolicy::DenyConflicts, second)
-        .await;
-    let Err(err) = result else {
-        panic!("namespace conflict must be reported");
-    };
-    let BundleRegistryError::NamespaceConflict {
-        namespace,
-        existing_bundle_id,
-        incoming_bundle_id,
-    } = err
-    else {
-        panic!("namespace conflict must be reported");
-    };
-    assert_eq!(namespace, "acme");
-    assert_eq!(existing_bundle_id, "hya/acme-tools");
-    assert_eq!(incoming_bundle_id, "hya/other");
-
-    let second = namespaced_candidate("hya/other", Some("acme"), "1.0.0", [4_u8; 32]);
-    let outcome = registry
-        .install(&[], NamespaceInstallPolicy::OverwriteConflicts, second)
-        .await
-        .unwrap_or_else(|error| panic!("overwrite resolves the conflict: {error:?}"));
-    assert!(matches!(outcome, BundleInstallOutcome::Installed { .. }));
-
-    let snapshot = registry
-        .snapshot()
-        .await
-        .unwrap_or_else(|error| panic!("snapshot: {error:?}"));
-    let ids: Vec<&str> = snapshot
-        .bundles
-        .iter()
-        .map(|record| record.bundle_id.as_str())
-        .collect();
-    assert!(ids.contains(&"hya/other"));
-    assert!(
-        !ids.contains(&"hya/acme-tools"),
-        "incumbent namespace owner is replaced: {ids:?}"
-    );
-}
-
-#[tokio::test]
-async fn distinct_namespaces_install_independently() {
-    let Ok(registry) = BundleRegistry::connect(&temp_db()).await else {
-        panic!("bundle registry connection failed");
-    };
-    let one = namespaced_candidate("hya/one", Some("one"), "1.0.0", [5_u8; 32]);
-    let two = namespaced_candidate("hya/two", Some("two"), "1.0.0", [6_u8; 32]);
-    registry
-        .install(&[], NamespaceInstallPolicy::DenyConflicts, one)
-        .await
-        .unwrap_or_else(|error| panic!("one installs: {error:?}"));
-    registry
-        .install(&[], NamespaceInstallPolicy::DenyConflicts, two)
-        .await
-        .unwrap_or_else(|error| panic!("two installs: {error:?}"));
-    let snapshot = registry
-        .snapshot()
-        .await
-        .unwrap_or_else(|error| panic!("snapshot: {error:?}"));
-    assert_eq!(snapshot.bundles.len(), 2);
-}
-
-#[tokio::test]
-async fn plan_install_reports_the_install_outcome_without_mutation() {
-    let Ok(registry) = BundleRegistry::connect(&temp_db()).await else {
-        panic!("bundle registry connection failed");
-    };
-    let deny = NamespaceInstallPolicy::DenyConflicts;
-    let overwrite = NamespaceInstallPolicy::OverwriteConflicts;
-    let v1 = namespaced_candidate("hya/plan", Some("plan"), "1.0.0", [7_u8; 32]);
-
-    let plan = registry
-        .plan_install(&[], deny, &v1)
-        .await
-        .unwrap_or_else(|error| panic!("plan on empty registry: {error:?}"));
-    assert_eq!(plan.action, BundleInstallAction::Install);
-    assert!(plan.displaced.is_empty());
-    let snapshot = registry
-        .snapshot()
-        .await
-        .unwrap_or_else(|e| panic!("{e:?}"));
-    assert_eq!(snapshot.generation, 0, "planning must not install");
-    assert!(snapshot.bundles.is_empty());
-
-    registry
-        .install(&[], deny, v1.clone())
-        .await
-        .unwrap_or_else(|error| panic!("install v1: {error:?}"));
-    let plan = registry
-        .plan_install(&[], deny, &v1)
-        .await
-        .unwrap_or_else(|error| panic!("plan same content: {error:?}"));
-    assert_eq!(plan.action, BundleInstallAction::Unchanged);
-
-    let v2 = namespaced_candidate("hya/plan", Some("plan"), "2.0.0", [8_u8; 32]);
-    let plan = registry
-        .plan_install(&[], deny, &v2)
-        .await
-        .unwrap_or_else(|error| panic!("plan upgrade: {error:?}"));
-    assert_eq!(
-        plan.action,
-        BundleInstallAction::Replace {
-            installed_version: "1.0.0".to_string()
+    // 2. Concurrent first-open races complete migrations cleanly.
+    for _ in 0..2 {
+        let fresh = temp_db();
+        let opened =
+            futures::future::join_all((0..8).map(|_| BundleRegistry::connect(&fresh))).await;
+        for reg in opened {
+            let snap = reg.unwrap().snapshot().await.unwrap();
+            assert_eq!(snap.generation, 0);
+            assert!(snap.bundles.is_empty());
         }
-    );
-
-    let v0 = namespaced_candidate("hya/plan", Some("plan"), "0.9.0", [9_u8; 32]);
-    assert!(matches!(
-        registry.plan_install(&[], deny, &v0).await,
-        Err(BundleRegistryError::BundleDowngradeRequired { .. })
-    ));
-    assert!(registry.plan_install(&[], overwrite, &v0).await.is_ok());
-
-    let rival = namespaced_candidate("hya/rival", Some("plan"), "1.0.0", [10_u8; 32]);
-    assert!(matches!(
-        registry.plan_install(&[], deny, &rival).await,
-        Err(BundleRegistryError::NamespaceConflict { .. })
-    ));
-    let plan = registry
-        .plan_install(&[], overwrite, &rival)
-        .await
-        .unwrap_or_else(|error| panic!("plan namespace overwrite: {error:?}"));
-    assert_eq!(plan.action, BundleInstallAction::Install);
-    assert_eq!(plan.displaced, vec!["hya/plan".to_string()]);
-
-    assert!(matches!(
-        registry.plan_install(&["hya/plan-lead"], deny, &v2).await,
-        Err(BundleRegistryError::BundleAgentIdReserved { .. })
-    ));
-
-    let snapshot = registry
-        .snapshot()
-        .await
-        .unwrap_or_else(|e| panic!("{e:?}"));
-    assert_eq!(
-        snapshot.generation, 1,
-        "planning never advances the generation"
-    );
-    assert_eq!(snapshot.bundles.len(), 1);
-    assert_eq!(snapshot.bundles[0].version, "1.0.0");
-}
-
-/// Disabling is idempotent and only a change advances the registry generation
-/// (what a running daemon's refresh watches).
-#[tokio::test]
-async fn disabled_bundle_set_persists_and_advances_generation() {
-    let registry = &BundleRegistry::connect(&temp_db())
-        .await
-        .unwrap_or_else(|e| panic!("{e:?}"));
-    let disabled = || async {
-        registry
-            .disabled_bundle_ids()
-            .await
-            .unwrap_or_else(|e| panic!("{e:?}"))
-            .into_iter()
-            .collect::<Vec<_>>()
-    };
-    let set = |enabled| async move {
-        registry
-            .set_bundle_enabled("hya/example", enabled)
-            .await
-            .unwrap_or_else(|e| panic!("{e:?}"))
-    };
-    assert!(disabled().await.is_empty());
-    assert_eq!(set(false).await, 1);
-    assert_eq!(disabled().await, vec!["hya/example".to_string()]);
-    assert_eq!(set(false).await, 1, "disabling again changes nothing");
-    assert_eq!(set(true).await, 2);
-    assert!(disabled().await.is_empty());
+    }
 }

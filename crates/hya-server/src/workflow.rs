@@ -197,9 +197,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parser_handles_all_workflow_slash_forms() {
+    fn parse_slash_handles_valid_unrelated_and_invalid_forms() {
         assert!(matches!(
             parse_slash("workflow", "list"),
+            Ok(Some(WorkflowCommand::List))
+        ));
+        assert!(matches!(
+            parse_slash("/workflow", "list"),
             Ok(Some(WorkflowCommand::List))
         ));
         assert!(matches!(
@@ -221,22 +225,14 @@ mod tests {
                     && inputs.get("request") == Some(&"build".to_string())
                     && inputs.get("mode") == Some(&"fast".to_string())
         ));
-    }
-
-    #[test]
-    fn parser_leaves_unrelated_commands_untouched() {
         assert!(matches!(parse_slash("compact", ""), Ok(None)));
-        assert!(matches!(
-            parse_slash("/workflow", "list"),
-            Ok(Some(WorkflowCommand::List))
-        ));
-    }
-
-    #[test]
-    fn parser_rejects_invalid_workflow_syntax() {
-        assert!(parse_slash("workflow", "").is_err());
-        assert!(parse_slash("workflow", "list extra").is_err());
-        assert!(parse_slash("workflow", "run plan request=").is_err());
-        assert!(parse_slash("workflow", "run plan request=one request=two").is_err());
+        for invalid in [
+            "",
+            "list extra",
+            "run plan request=",
+            "run plan request=one request=two",
+        ] {
+            assert!(parse_slash("workflow", invalid).is_err(), "{invalid}");
+        }
     }
 }
