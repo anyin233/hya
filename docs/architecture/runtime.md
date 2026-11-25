@@ -516,15 +516,15 @@ For each `ToolCallRequested` collected in the round, in order:
 6. **Re-validate the actor claim at the dispatch boundary** — a stale resident
    cannot dispatch a tool even if it passed validation at round start.
 7. Execute the tool.
-8. **`tool.execute.after` hooks** — may rewrite the outcome (unless the error
-   was a permission denial, which is preserved).
-9. Re-check activation-hook health after the after-hook batch.
-10. `cap_tool_output` on success so one oversized result cannot blow the next
-    model context window.
-11. Emit `ToolResult` or `ToolError`, then `FilesChanged` when the call
-    changed files ([File snapshots and revert](#file-snapshots-and-revert);
-    the prior state is captured after the before-hooks, ahead of the
-    permission check).
+8. Publish any `FilesChanged` event recorded for the call. File capture starts
+   after authorization ([File snapshots and revert](#file-snapshots-and-revert)).
+9. Run **`tool.execute.after` hooks**, which may rewrite the outcome. Permission
+   denials retain their original error.
+10. Re-check activation-hook health after the after-hook batch.
+11. Cap successful output before it enters the next model context window.
+12. Commit `ToolResult` or `ToolError`, its file observations, and any mail
+    acknowledgement in one transaction under the actor claim, if one exists.
+    Publish the envelopes in commit order, then notify the mail consumer.
 
 Formatter/LSP post-edit work for file mutations runs through the tool planes
 when configured (inside tool execution, not as a separate round step).
