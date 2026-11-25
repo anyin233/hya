@@ -74,74 +74,12 @@ pub(crate) enum WorkflowCliCommand {
     },
 }
 
-/// Inspect prepared data only: no providers, native tools, MCP or plugin processes.
 async fn catalog(db: &str) -> anyhow::Result<hya_app::WorkflowCatalog> {
-    use hya_app::{WorkflowCatalog, WorkflowCatalogRoots, bundle_admin};
-    use hya_engine::{AgentCatalog, CatalogScope, RuntimeRegistry};
-    use std::collections::BTreeSet;
-    use std::sync::Arc;
-
     let workdir = std::env::current_dir().context("resolve current directory")?;
-    let project = if !db.is_empty() && std::path::Path::new(db).try_exists()? {
-        hya_store::SessionStore::connect_read_only(db)
-            .await
-            .with_context(|| format!("open existing database read-only at {db}"))?
-            .resolve_project_by_path(&workdir.to_string_lossy())
-            .await?
-    } else {
-        None
-    };
-    let scope = project.map_or_else(
-        || CatalogScope::Directory(workdir.clone()),
-        |project| CatalogScope::Project {
-            id: project.id,
-            roots: project
-                .roots
-                .into_iter()
-                .map(std::path::PathBuf::from)
-                .collect(),
-        },
-    );
-    let registry = bundle_admin::existing_registry().await?;
-    let disabled = match &registry {
-        Some(registry) => registry.disabled_bundle_ids().await?,
-        None => BTreeSet::new(),
-    };
-    let mut installed = Vec::new();
-    if let Some(registry) = registry {
-        let snapshot = registry.snapshot().await?;
-        for row in snapshot.unreadable {
-            eprintln!("warning: installed bundle {}: {}", row.bundle_id, row.error);
-        }
-        for record in snapshot.bundles {
-            installed.push(bundle_admin::decode_installed_catalog(&record)?);
-        }
-    }
-    // `use`/`run` register an unregistered directory as a one-root Project,
-    // so its own `.hya/bundles` belong to the catalog here too.
-    let roots = match &scope {
-        CatalogScope::Project { roots, .. } => roots.as_slice(),
-        CatalogScope::Directory(directory) => std::slice::from_ref(directory),
-        CatalogScope::Global => &[],
-    };
-    let (bundles, warnings) = hya_app::ProjectScopeRefresh::catalog_for_roots(
-        roots,
-        &installed,
-        &hya_app::first_party_catalogs()?,
-        &disabled,
-    )?;
-    for warning in warnings {
+    hya_app::WorkflowCatalog::inspect_read_only(db, &workdir, |warning| {
         eprintln!("warning: {warning}");
-    }
-    let agents = AgentCatalog::new(Arc::new(bundles))?;
-    let registry = RuntimeRegistry::new(
-        hya_tool::ToolRegistry::from_tool_families(&[]),
-        Arc::new(agents),
-    )
-    .with_pure_skills(true);
-    let binding = registry.bind_scoped(&scope, &workdir)?;
-    WorkflowCatalog::build(WorkflowCatalogRoots::for_scope(&scope, &workdir), &binding)
-        .map_err(control_error)
+    })
+    .await
 }
 
 /// Run one CLI Workflow command through `WorkflowControl::execute`.

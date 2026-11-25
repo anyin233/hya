@@ -300,6 +300,13 @@ For example, `hya --db sessions.db workflow list --json` from `src/` includes
 Workflows in the containing registered Project's other roots.
 The `--json` results remain the shared `WorkflowCommandResult`
 variants `List { workflows: WorkflowSummary[] }` and `Info { workflow: WorkflowInfo }`.
+
+Rust hosts can call
+`hya_app::WorkflowCatalog::inspect_read_only(db: &str, workdir: &Path, warn: impl FnMut(&str)) -> anyhow::Result<WorkflowCatalog>`
+asynchronously to load the same catalog. Use `catalog.list()` for its summaries or
+`catalog.info("plan-impl-review")` for a compiled Workflow's details. The
+callback receives each bundle diagnostic, and the host controls where it appears.
+
 `use` persists an exact source/revision identity
 in an existing Session and therefore requires `--session`. `state` also requires
 `--session` and replays that Session from the selected database.
