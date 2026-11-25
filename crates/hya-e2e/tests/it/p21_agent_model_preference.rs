@@ -73,6 +73,14 @@ async fn t2_16_agent_model_preference_steers_spawned_subagent_model() {
         .await
         .expect("task prompt");
 
+    // The child episode runs asynchronously after the parent's turn.
+    env.wait_route_contains(
+        "MARKER_PREFERRED_CHILD",
+        "MARKER_PREFERRED_CHILD",
+        std::time::Duration::from_secs(30),
+    )
+    .await
+    .expect("the preferred child episode must run");
     let child_requests = env
         .fake
         .route_requests("MARKER_PREFERRED_CHILD")
