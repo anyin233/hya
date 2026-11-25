@@ -31,6 +31,7 @@ enum Item {
     EmptyReasoning,
     BilledReasoning,
     Text(&'static str),
+    ToolInputStart,
     Tool,
     Error,
     Interrupted,
@@ -120,6 +121,13 @@ impl Provider for ScriptedProvider {
                         .into_iter()
                         .map(Ok),
                 ),
+                Item::ToolInputStart => out.push(Ok(Event::ToolInputStart {
+                    session,
+                    message,
+                    part: PartId::new(),
+                    call: ToolCallId::new(),
+                    name: ToolName::new("bash"),
+                })),
                 Item::Tool => out.push(Ok(Event::ToolCallRequested {
                     session,
                     message,
@@ -352,32 +360,59 @@ async fn full_mode_request_replays_to_recorded_view() {
 }
 
 #[tokio::test]
-async fn interrupted_partial_text_is_deleted_before_retry() -> Result<(), CoreError> {
+async fn interrupted_body_is_retried_before_text() -> Result<(), CoreError> {
+    for mut first in [vec![], vec![Item::Text("")], vec![Item::ToolInputStart]] {
+        let has_part = !first.is_empty();
+        first.push(Item::Interrupted);
+        let (engine, agent, session, opens) =
+            fixture(vec![first, vec![Item::Text("final answer")]]).await;
+        assert_eq!(
+            engine
+                .run_turn(session, &agent, CancellationToken::new())
+                .await?,
+            FinishReason::Stop
+        );
+        assert_eq!(*opens.lock().unwrap(), 2);
+        let events = engine.replay(session).await?;
+        let attempts: Vec<_> = events
+            .iter()
+            .filter_map(|entry| match &entry.event {
+                Event::StepStarted { view, .. } => view.as_ref(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(attempts[0], attempts[1]);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|entry| matches!(entry.event, Event::PartDeleted { .. }))
+                .count(),
+            usize::from(has_part)
+        );
+        assert!(events.iter().any(|entry| matches!(&entry.event,
+            Event::TextReplace { text, .. } if text == "final answer")));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn interrupted_body_after_text_preserves_it_without_retry() -> Result<(), CoreError> {
     let (engine, agent, session, opens) = fixture(vec![
         vec![Item::Text("partial"), Item::Interrupted],
-        vec![Item::Text("final answer")],
+        vec![Item::Text("second attempt")],
     ])
     .await;
-    assert_eq!(
-        engine
-            .run_turn(session, &agent, CancellationToken::new())
-            .await?,
-        FinishReason::Stop
-    );
-    assert_eq!(*opens.lock().unwrap_or_else(|e| e.into_inner()), 2);
-    let events = engine.store().replay(session).await?;
-    let deleted = events
-        .iter()
-        .position(|e| matches!(e.event, Event::PartDeleted { .. }));
-    let retry = events
-        .iter()
-        .rposition(|e| matches!(e.event, Event::StepStarted { .. }));
+    let result = engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await;
     assert!(
-        deleted
-            .zip(retry)
-            .is_some_and(|(deleted, retry)| deleted < retry)
+        matches!(result, Err(CoreError::Provider(ref error))
+        if matches!(error.as_ref(), ProviderError::StreamInterrupted(_))),
+        "{result:?}"
     );
-    let projection = Projection::from_events(&events);
+    assert_eq!(*opens.lock().unwrap(), 1);
+    let projection = engine.read_projection(session).await?;
     let assistant_texts: Vec<_> = projection
         .session
         .messages
@@ -389,7 +424,7 @@ async fn interrupted_partial_text_is_deleted_before_retry() -> Result<(), CoreEr
             _ => None,
         })
         .collect();
-    assert_eq!(assistant_texts, ["final answer"]);
+    assert_eq!(assistant_texts, ["partial"]);
     Ok(())
 }
 
@@ -548,12 +583,14 @@ async fn cancellation_during_backoff_is_prompt() -> Result<(), Box<dyn std::erro
 
 #[tokio::test]
 async fn does_not_retry_after_tool_call() {
-    let (engine, agent, session, opens) = fixture(vec![vec![Item::Tool, Item::Error]]).await;
-    assert!(
-        engine
-            .run_turn(session, &agent, CancellationToken::new())
-            .await
-            .is_err()
-    );
-    assert_eq!(*opens.lock().unwrap(), 1);
+    for error in [Item::Interrupted, Item::Error] {
+        let (engine, agent, session, opens) = fixture(vec![vec![Item::Tool, error]]).await;
+        assert!(matches!(
+            engine
+                .run_turn(session, &agent, CancellationToken::new())
+                .await,
+            Err(CoreError::Provider(_))
+        ));
+        assert_eq!(*opens.lock().unwrap(), 1);
+    }
 }

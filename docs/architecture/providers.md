@@ -154,7 +154,7 @@ leaves `reasoning_request` false.
 | --- | --- | --- | --- |
 | `Json` | `json: …` | Serde failure while encoding a body or parsing a stream frame. | No dedicated entry; inspect the JSON payload and stream frames. |
 | `Http(String)` | `http: …` | Unclassified in-stream provider error frame, SSE UTF-8 or parser error, invalid request header name/value, or client build failure. | Check the provider payload, base URL, and headers. |
-| `StreamInterrupted(String)` | `http: …` | An established SSE stream hit the frame-idle deadline or failed while reading the HTTP body. | Check the connection and provider. Bare mode may retry the round, also after partial output, when the wait fits and the run stays active; a break after the stream's final frame completes the round instead. See [When a bare round fails](../kernel.md#when-a-bare-round-fails). |
+| `StreamInterrupted(String)` | `http: …` | An established SSE stream hit the frame-idle deadline or failed while reading the HTTP body. | Check the connection and provider. Full mode can retry before assistant text or a completed tool call. Bare mode can also retry after partial output. A break after the final frame completes the round. See [Provider round retry](runtime.md#provider-round-retry) and [When a bare round fails](../kernel.md#when-a-bare-round-fails). |
 | `Transport(String)` | `transport: …` | Request transport failed before an event stream was returned. | Check provider reachability and connection health. This class is eligible for bounded retry/failover before stream ownership passes to the caller. |
 | `HttpStatus { status, message, retry_after }` | `http status <code>: …` | Upstream returned a non-success response before the stream began, or a classified in-stream error frame (message starts with `in-stream error`; see [In-stream error frames](#in-stream-error-frames)). | HTTP 429 and 5xx are retryable; other statuses fail immediately. `Retry-After` (or an in-band `retry_after` hint), when valid, is retained as a bounded delay. |
 | `UnknownModel(String)` | `unknown provider for model: …` | No route's `capabilities()` returned `Some` for the ref. | [`../troubleshooting.md`](../troubleshooting.md) — *unknown provider for model*. |
@@ -242,7 +242,7 @@ installs a plane mapping each preferred `ModelRef` to its ordered candidate
 chain, populated from configured `categories:` entries when the app runtime
 builds the engine. Members resolved onto a category candidate — including a
 servability pick that is not the configured preference — carry the forward
-suffix of their chain. If a serving stream fails before a tool request, its retry uses the same model. Billed usage remains attributed to the serving model for each attempt. Cancelling the retry wait ends the turn as cancelled.
+suffix of their chain. A round retry after the stream opens uses the same serving model. Billed usage remains attributed to the serving model for each attempt. Cancelling the retry wait ends the turn as cancelled.
 
 **When it advances.** Only while no `EventStream` exists. If the preferred
 model fails with an error classified by `is_retryable_before_stream()`, or no
@@ -262,10 +262,9 @@ reasoning variant. A model already tried this round is refused. A round makes
 at most eight attempts, counting the chain. Workflow-routed turns keep their
 declared candidate list and never ask the hook.
 
-**Shared no-replay boundary.** Both levels stop recovering at the same line:
-once a provider returns an event stream, model selection is final. A mid-stream
-SSE error is delivered once to the turn, unchanged, and is never retried,
-replayed, or failed over onto another model.
+**Stream ownership.** Once a provider returns an event stream, model selection
+is final for that round. An eligible failure can restart the round on the
+same model under the engine's [retry policy](runtime.md#provider-round-retry).
 
 ### Provider-level replay versus engine round retry
 

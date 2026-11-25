@@ -98,7 +98,7 @@ pub struct Failure {
     pub step_started: bool,
     /// The model had requested a tool call.
     pub saw_tool_call: bool,
-    /// The model had produced text.
+    /// The round had streamed nonempty assistant text.
     pub saw_text: bool,
 }
 
@@ -146,6 +146,7 @@ struct Drained {
     finish: Option<FinishReason>,
     tokens: Option<TokenUsage>,
     saw_text: bool,
+    saw_text_part: bool,
     saw_tool_start: bool,
     saw_reasoning: bool,
     deadline_cut: Option<DeadlineCut>,
@@ -234,7 +235,7 @@ async fn drain(
     // byte is never cut, and a stream that keeps reasoning still meets it.
     let mut checkpoint: Option<ReasoningTimer> = None;
     loop {
-        let reasoning_only = !(drained.saw_text || drained.saw_tool_start);
+        let reasoning_only = !(drained.saw_text_part || drained.saw_tool_start);
         let item = tokio::select! {
             biased;
             () = cancel.cancelled() => {
@@ -299,14 +300,15 @@ async fn drain(
                 }
             }
             Event::TextStart { part, .. } => {
-                drained.saw_text = true;
+                drained.saw_text_part = true;
                 drained.text.0.push((part, String::new()));
                 emit.live(event);
             }
             Event::TextDelta {
                 part, ref delta, ..
             } => {
-                drained.saw_text = true;
+                drained.saw_text_part = true;
+                drained.saw_text |= !delta.is_empty();
                 drained.text.append(part, delta);
                 emit.live(event);
             }
@@ -320,6 +322,7 @@ async fn drain(
                         .complete(session, message, part, body.clone())
                         .await
                 {
+                    drained.saw_text |= !replacement.is_empty();
                     emit.live(Event::TextReplace {
                         session,
                         message,
@@ -345,7 +348,7 @@ async fn drain(
                 if !(delta.is_empty()
                     || drained.finish.is_some()
                     || drained.saw_reasoning
-                    || drained.saw_text
+                    || drained.saw_text_part
                     || drained.saw_tool_start)
                 {
                     drained.saw_reasoning = true;
