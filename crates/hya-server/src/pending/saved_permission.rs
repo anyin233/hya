@@ -12,7 +12,6 @@ pub(crate) struct SavedPermissions {
 
 impl SavedPermissions {
     #[must_use]
-    #[allow(dead_code)]
     pub(crate) fn new(store: SessionStore) -> Self {
         Self { store }
     }

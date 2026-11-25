@@ -58,7 +58,6 @@ impl QuestionRequests {
     }
 
     #[must_use]
-    #[allow(dead_code)]
     pub(crate) fn spawn(
         mut rx: mpsc::UnboundedReceiver<QuestionRequest>,
         tasks: &crate::RuntimeTaskOwner,
@@ -84,8 +83,7 @@ impl QuestionRequests {
         requests
     }
 
-    /// Pending-plane bridge retained for the interaction event stream.
-    #[allow(dead_code)]
+    /// Subscribe to live v1 interaction events.
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<Value> {
         self.events.subscribe()
     }
@@ -95,8 +93,6 @@ impl QuestionRequests {
         self.events.receiver_count()
     }
 
-    /// Pending-plane bridge retained for the interaction event stream.
-    #[allow(dead_code)]
     pub(crate) async fn list(&self) -> Vec<QuestionRequestView> {
         self.inner
             .lock()
@@ -106,7 +102,6 @@ impl QuestionRequests {
             .collect()
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn reply(
         &self,
         session: SessionId,
@@ -128,7 +123,6 @@ impl QuestionRequests {
         ok
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn reject(&self, session: SessionId, id: &str) -> bool {
         let entry = self.take(session, id).await;
         let Some(entry) = entry else {

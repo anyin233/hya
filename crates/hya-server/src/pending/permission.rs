@@ -86,7 +86,6 @@ pub(crate) enum PermissionReply {
 
 impl PermissionRequests {
     #[must_use]
-    #[allow(dead_code)]
     pub(crate) fn new(store: SessionStore) -> Self {
         let (events, _) = broadcast::channel(256);
         Self {
@@ -100,7 +99,6 @@ impl PermissionRequests {
     }
 
     #[must_use]
-    #[allow(dead_code)]
     pub(crate) fn spawn(
         mut rx: mpsc::UnboundedReceiver<AskRequest>,
         store: SessionStore,
@@ -151,8 +149,7 @@ impl PermissionRequests {
         requests
     }
 
-    /// Pending-plane bridge retained for the interaction event stream.
-    #[allow(dead_code)]
+    /// Subscribe to live v1 interaction events.
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<Value> {
         self.events.subscribe()
     }
@@ -168,8 +165,6 @@ impl PermissionRequests {
             .send(permission_replied_event(session, id, reply));
     }
 
-    /// Pending-plane bridge retained for the interaction event stream.
-    #[allow(dead_code)]
     pub(crate) async fn list(&self) -> Vec<PermissionRequestView> {
         self.inner
             .lock()
@@ -179,8 +174,6 @@ impl PermissionRequests {
             .collect()
     }
 
-    /// Pending-plane bridge retained for the interaction event stream.
-    #[allow(dead_code)]
     pub(crate) async fn list_legacy(&self) -> Vec<LegacyPermissionRequestView> {
         self.inner
             .lock()
@@ -194,7 +187,6 @@ impl PermissionRequests {
             .collect()
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn reply(
         &self,
         session: SessionId,
@@ -230,46 +222,6 @@ impl PermissionRequests {
         }
         if ok {
             self.publish_replied(Some(session), id, reply);
-        }
-        Ok(ok)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) async fn reply_any(
-        &self,
-        id: &str,
-        reply: PermissionReply,
-        message: Option<String>,
-    ) -> Result<bool, StoreError> {
-        let (entry, related) = {
-            let mut pending = self.inner.lock().await;
-            let Some(entry) = pending.get(id) else {
-                return Ok(false);
-            };
-            let action = entry.action;
-            let remember = entry.remember.clone();
-            let session = entry.session;
-            let entry = pending.remove(id);
-            let related = session.map_or_else(Vec::new, |session| {
-                take_related_for_reply(&mut pending, session, reply, &remember, action)
-            });
-            (entry, related)
-        };
-        let Some(entry) = entry else {
-            return Ok(false);
-        };
-        let save_action = entry.action;
-        let save_remember = entry.remember.clone();
-        let replied_session = entry.session;
-        let ok = entry.reply.send(decision(reply, message)).is_ok();
-        if ok && matches!(reply, PermissionReply::Always) {
-            self.saved.remember(id, save_action, &save_remember).await?;
-        }
-        for item in related {
-            let _sent = item.reply.send(related_decision(reply));
-        }
-        if ok {
-            self.publish_replied(replied_session, id, reply);
         }
         Ok(ok)
     }
