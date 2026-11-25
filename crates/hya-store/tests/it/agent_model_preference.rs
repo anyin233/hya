@@ -180,3 +180,67 @@ async fn concurrent_disjoint_preferences_are_not_lost() {
         vec![build, general]
     );
 }
+
+#[tokio::test]
+async fn preferences_reject_blank_identities_and_preserve_nonblank_values() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let owner = OwnerRunId::new();
+    store.claim_runtime_owner(owner).unwrap();
+
+    for (candidate, invalid_field) in [
+        (preference(" \t", "hya", "offline"), "agent_id"),
+        (preference("build", " \t", "offline"), "provider_id"),
+        (preference("build", "hya", " \t"), "model_id"),
+    ] {
+        let error = store
+            .upsert_agent_model_preference(owner, &candidate)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, StoreError::InvalidPreferenceData { field, .. } if field == invalid_field)
+        );
+    }
+    let blank_agent = AgentName::new(" \t");
+    assert!(matches!(
+        store
+            .remove_agent_model_preference(owner, &blank_agent)
+            .await,
+        Err(StoreError::InvalidPreferenceData {
+            field: "agent_id",
+            ..
+        })
+    ));
+
+    let exact = preference(" build ", " hya ", " offline ");
+    store
+        .upsert_agent_model_preference(owner, &exact)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.list_agent_model_preferences().await.unwrap(),
+        vec![exact]
+    );
+}
+
+#[tokio::test]
+async fn preferences_reject_legacy_rows_with_blank_identities() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let mut tx = store.begin_transaction().await.unwrap();
+    sqlx::query(
+        "INSERT INTO agent_model_preference (agent_id, provider_id, model_id) VALUES (?, ?, ?)",
+    )
+    .bind("build")
+    .bind(" \t")
+    .bind("offline")
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert!(matches!(
+        store.list_agent_model_preferences().await,
+        Err(StoreError::InvalidPreferenceData {
+            field: "provider_id",
+            ..
+        })
+    ));
+}

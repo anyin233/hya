@@ -71,3 +71,37 @@ async fn agent_effort_preferences_upsert_clear_and_require_the_owner() {
         "a non-owner write must not land"
     );
 }
+
+#[tokio::test]
+async fn effort_clear_validates_keys_and_accepts_absent_rows() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let owner = OwnerRunId::new();
+    store.claim_runtime_owner(owner).unwrap();
+
+    for (result, invalid_field) in [
+        (
+            store.clear_agent_effort_preference(owner, " \t").await,
+            "agent_id",
+        ),
+        (
+            store
+                .clear_model_effort_preference(owner, " \t", "offline")
+                .await,
+            "provider_id",
+        ),
+        (
+            store
+                .clear_model_effort_preference(owner, "hya", " \t")
+                .await,
+            "model_id",
+        ),
+    ] {
+        assert!(
+            matches!(result, Err(StoreError::InvalidPreferenceData { field, .. }) if field == invalid_field)
+        );
+    }
+    store
+        .clear_model_effort_preference(owner, "hya", "offline")
+        .await
+        .unwrap();
+}
