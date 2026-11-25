@@ -25,7 +25,6 @@ libc = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 regex = { workspace = true }
-time = { workspace = true }
 
 [dev-dependencies]
 futures = { workspace = true }

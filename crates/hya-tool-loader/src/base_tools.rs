@@ -209,7 +209,7 @@ fn validate_policy(policy: &ExposurePolicy, identity: &str) -> Result<(), String
 }
 
 fn load_presets() -> Result<Vec<BaseToolsPreset>, String> {
-    // These five independent packages include native binaries. Validate them
+    // These four independent packages include native binaries. Validate them
     // concurrently, then retain the declared family order for policy resolution.
     let presets = std::thread::scope(|scope| {
         let workers = TOOL_FAMILIES
