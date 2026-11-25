@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use hya_proto::{ToolName, ToolSchema};
+use hya_proto::ToolSchema;
+use hya_tool::tool::obj_schema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -42,31 +43,26 @@ impl Tool for WebFetchTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: ToolName::new("webfetch"),
-            description: "Fetch content from an HTTP(S) URL as text, markdown, or raw HTML."
-                .to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "The URL to fetch content from"
-                    },
-                    "format": {
-                        "type": "string",
-                        "enum": ["text", "markdown", "html"],
-                        "description": "The output format. Defaults to markdown."
-                    },
-                    "timeout": {
-                        "type": "number",
-                        "description": "Optional timeout in seconds, capped at 120."
-                    }
+        obj_schema(
+            "webfetch",
+            "Fetch content from an HTTP(S) URL as text, markdown, or raw HTML.",
+            json!({
+                "url": {
+                    "type": "string",
+                    "description": "The URL to fetch content from"
                 },
-                "required": ["url"]
+                "format": {
+                    "type": "string",
+                    "enum": ["text", "markdown", "html"],
+                    "description": "The output format. Defaults to markdown."
+                },
+                "timeout": {
+                    "type": "number",
+                    "description": "Optional timeout in seconds, capped at 120."
+                }
             }),
-            output_schema: None,
-        }
+            &["url"],
+        )
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {

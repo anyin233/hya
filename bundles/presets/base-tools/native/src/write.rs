@@ -1,13 +1,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::closed_obj_schema;
 use crate::hashline::{
     HashlineMutation, HashlineRuntime, MAX_READ_BYTES, MutationBeginError, MutationText,
     MutationWriteError, append_bounded_notices, bound_output,
 };
 use crate::lsp_post_edit;
 use async_trait::async_trait;
-use hya_proto::{ToolName, ToolSchema};
+use hya_proto::ToolSchema;
 use hya_tool::handle::{HandleError, HandleRef};
 use hya_tool::path::{absolutize, display_path, normalize, resolve_file};
 use hya_tool::{Action, Resource};
@@ -50,27 +51,21 @@ impl Tool for WriteTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: ToolName::new("write"),
-            description: concat!(
+        closed_obj_schema(
+            "write",
+            concat!(
                 "Write content to a file (creating parent dirs).\n\n",
                 "`path` also accepts `local://<name>` to stash an agent scratch payload ",
                 "outside the transcript; pass that handle around and `read` it back when ",
                 "the body is actually needed. `artifact://` and `skill://` are read-only. ",
                 "An ordinary filesystem path is written exactly as it always was."
-            )
-            .to_string(),
-            input_schema: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "path": { "type": "string" },
-                    "content": { "type": "string" }
-                },
-                "required": ["path", "content"]
+            ),
+            json!({
+                "path": { "type": "string" },
+                "content": { "type": "string" }
             }),
-            output_schema: None,
-        }
+            &["path", "content"],
+        )
     }
 
     fn result_policy(&self) -> ToolResultPolicy {

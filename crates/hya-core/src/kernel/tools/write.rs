@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
+use hya_tool::tool::obj_schema;
 use hya_tool::{Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -19,17 +20,14 @@ impl Tool for Write {
     }
 
     fn schema(&self) -> ToolSchema {
-        super::schema(
+        obj_schema(
             "write",
             "Create or overwrite a file, creating parent directories.",
             json!({
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "File path, relative to the working directory or absolute"},
-                    "content": {"type": "string", "description": "Full new file content"},
-                },
-                "required": ["path", "content"],
+                "path": {"type": "string", "description": "File path, relative to the working directory or absolute"},
+                "content": {"type": "string", "description": "Full new file content"},
             }),
+            &["path", "content"],
         )
     }
 

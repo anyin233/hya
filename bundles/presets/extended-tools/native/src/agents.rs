@@ -1,6 +1,7 @@
 //! Agent discovery tool implementation.
 use async_trait::async_trait;
-use hya_proto::{ToolName, ToolSchema};
+use hya_proto::ToolSchema;
+use hya_tool::tool::obj_schema;
 use hya_tool::{Tool, ToolCtx, ToolError};
 use serde_json::{Value, json};
 
@@ -13,16 +14,12 @@ impl Tool for ListAgentsTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: ToolName::new("list_agents"),
-            description: "List the agent definitions available to spawn via the `task` tool. Returns each agent's name (the `subagent_type` to pass to `task`), description, logical model category, mode, and default thinking effort (`effort`; none means the model's default). Pass `effort` to `task` to override it for one spawn. Use this when the available roster is unknown, then put independent assignments in one task tasks[] batch; set subagent_type and effort per item.".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {},
-                "required": []
-            }),
-            output_schema: None,
-        }
+        obj_schema(
+            "list_agents",
+            "List the agent definitions available to spawn via the `task` tool. Returns each agent's name (the `subagent_type` to pass to `task`), description, logical model category, mode, and default thinking effort (`effort`; none means the model's default). Pass `effort` to `task` to override it for one spawn. Use this when the available roster is unknown, then put independent assignments in one task tasks[] batch; set subagent_type and effort per item.",
+            json!({}),
+            &[],
+        )
     }
 
     async fn execute(&self, ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {

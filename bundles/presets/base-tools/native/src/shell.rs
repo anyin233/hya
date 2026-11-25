@@ -8,8 +8,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
 use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
 
+use crate::closed_obj_schema;
 use async_trait::async_trait;
-use hya_proto::{ToolName, ToolSchema};
+use hya_proto::ToolSchema;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::io::AsyncReadExt;
@@ -350,30 +351,25 @@ impl Tool for ShellTool {
 
     /// Return the closed Oh My Pi-compatible Bash input schema.
     fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: ToolName::new("bash"),
-            description: "Run a Bash command in the working directory.".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "command": { "type": "string" },
-                    "env": {
-                        "type": "object",
-                        "additionalProperties": { "type": "string" }
-                    },
-                    "timeout": {
-                        "type": "number",
-                        "minimum": 0,
-                        "description": "Timeout in seconds. Defaults to 300 seconds; finite values are clamped to 1-3600 seconds, and 0 disables the requested timeout. Under a run time budget, waits are capped at budget/10 (minimum 5 seconds). On Unix a non-PTY command still running then yields stillRunning with live output and exit paths; the end-of-budget cap stops it."
-                    },
-                    "cwd": { "type": "string" },
-                    "pty": { "type": "boolean" }
+        closed_obj_schema(
+            "bash",
+            "Run a Bash command in the working directory.",
+            json!({
+                "command": { "type": "string" },
+                "env": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
                 },
-                "required": ["command"]
+                "timeout": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Timeout in seconds. Defaults to 300 seconds; finite values are clamped to 1-3600 seconds, and 0 disables the requested timeout. Under a run time budget, waits are capped at budget/10 (minimum 5 seconds). On Unix a non-PTY command still running then yields stillRunning with live output and exit paths; the end-of-budget cap stops it."
+                },
+                "cwd": { "type": "string" },
+                "pty": { "type": "boolean" }
             }),
-            output_schema: None,
-        }
+            &["command"],
+        )
     }
 
     /// Preserve the structured coding result envelope through persistence.

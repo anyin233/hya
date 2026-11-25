@@ -4,7 +4,8 @@
 //! dispatchable as a hidden registry alias (same batch input shape).
 
 use async_trait::async_trait;
-use hya_proto::{ToolName, ToolSchema};
+use hya_proto::ToolSchema;
+use hya_tool::tool::obj_schema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -48,43 +49,39 @@ impl Tool for AskUserTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: ToolName::new("ask_user"),
-            description: "Ask the user one or more questions and wait for their answers. Each question needs a short header; give options with label+description for a choice (multiple for multi-select, allow_custom to permit write-ins), or omit options for free text.".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "questions": {
-                        "type": "array",
-                        "minItems": 1,
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "question": { "type": "string" },
-                                "header": { "type": "string" },
-                                "options": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "label": { "type": "string" },
-                                            "description": { "type": "string" }
-                                        },
-                                        "required": ["label", "description"]
-                                    }
-                                },
-                                "multiple": { "type": "boolean" },
-                                "allow_custom": { "type": "boolean" },
-                                "default": { "type": "string" }
+        obj_schema(
+            "ask_user",
+            "Ask the user one or more questions and wait for their answers. Each question needs a short header; give options with label+description for a choice (multiple for multi-select, allow_custom to permit write-ins), or omit options for free text.",
+            json!({
+                "questions": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "question": { "type": "string" },
+                            "header": { "type": "string" },
+                            "options": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "label": { "type": "string" },
+                                        "description": { "type": "string" }
+                                    },
+                                    "required": ["label", "description"]
+                                }
                             },
-                            "required": ["question", "header", "options"]
-                        }
+                            "multiple": { "type": "boolean" },
+                            "allow_custom": { "type": "boolean" },
+                            "default": { "type": "string" }
+                        },
+                        "required": ["question", "header", "options"]
                     }
-                },
-                "required": ["questions"]
+                }
             }),
-            output_schema: None,
-        }
+            &["questions"],
+        )
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {

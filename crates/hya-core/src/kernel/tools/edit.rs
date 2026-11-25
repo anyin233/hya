@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
 use hya_tool::literal_span::{UniqueSpanError, find_unique_span};
+use hya_tool::tool::obj_schema;
 use hya_tool::{Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -21,18 +22,15 @@ impl Tool for Edit {
     }
 
     fn schema(&self) -> ToolSchema {
-        super::schema(
+        obj_schema(
             "edit",
             "Replace the one occurrence of `old` in a file with `new`.",
             json!({
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "File path, relative to the working directory or absolute"},
-                    "old": {"type": "string", "description": "Exact text to replace; must occur exactly once"},
-                    "new": {"type": "string", "description": "Replacement text"},
-                },
-                "required": ["path", "old", "new"],
+                "path": {"type": "string", "description": "File path, relative to the working directory or absolute"},
+                "old": {"type": "string", "description": "Exact text to replace; must occur exactly once"},
+                "new": {"type": "string", "description": "Replacement text"},
             }),
+            &["path", "old", "new"],
         )
     }
 

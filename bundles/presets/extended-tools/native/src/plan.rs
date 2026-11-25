@@ -1,5 +1,6 @@
 use async_trait::async_trait;
-use hya_proto::{ToolName, ToolSchema};
+use hya_proto::ToolSchema;
+use hya_tool::tool::obj_schema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -18,17 +19,12 @@ impl Tool for PlanExitTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: ToolName::new("plan_exit"),
-            description: "Exit plan mode after asking the user to approve switching to build mode."
-                .to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {},
-                "required": []
-            }),
-            output_schema: None,
-        }
+        obj_schema(
+            "plan_exit",
+            "Exit plan mode after asking the user to approve switching to build mode.",
+            json!({}),
+            &[],
+        )
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {

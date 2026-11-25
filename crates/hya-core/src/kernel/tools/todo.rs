@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use hya_proto::{TodoItem, TodoStatus, ToolSchema};
+use hya_tool::tool::obj_schema;
 use hya_tool::{Tool, ToolCtx, ToolError};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
@@ -177,41 +178,39 @@ impl Tool for Todo {
         let status = json!({
             "type": "string", "enum": ["pending", "in_progress", "blocked", "completed"]
         });
-        super::schema(
+        let mut schema = obj_schema(
             super::TODO,
             "Record checkable completion criteria (such as \"tests pass\") and results needed after earlier context is removed. The list survives rewrites verbatim. Write it when the task is clear, update statuses as they change, and leave correct items as written. Add takes content and optional status (pending by default). Edit and status both take an id and content, status, or both. Remove takes an id. Operations apply atomically in order and return the full list with ids. Pass empty ops to read it. Examples: {\"ops\":[{\"op\":\"add\",\"content\":\"tests pass\"}]}, {\"ops\":[{\"op\":\"status\",\"id\":\"#1\",\"status\":\"completed\"}]}, {\"ops\":[{\"op\":\"remove\",\"id\":\"#1\"}]}.",
             json!({
-                "type": "object",
-                "properties": {
-                    "ops": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "oneOf": [
-                                {
-                                    "properties": {"op": {"const": "add"}, "content": content, "status": status},
-                                    "required": ["op", "content"],
-                                    "additionalProperties": false
-                                },
-                                {
-                                    "properties": {"op": {"enum": ["edit", "status"]}, "id": id, "content": content, "status": status},
-                                    "required": ["op", "id"],
-                                    "anyOf": [{"required": ["content"]}, {"required": ["status"]}],
-                                    "additionalProperties": false
-                                },
-                                {
-                                    "properties": {"op": {"const": "remove"}, "id": id},
-                                    "required": ["op", "id"],
-                                    "additionalProperties": false
-                                }
-                            ]
-                        }
+                "ops": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "oneOf": [
+                            {
+                                "properties": {"op": {"const": "add"}, "content": content, "status": status},
+                                "required": ["op", "content"],
+                                "additionalProperties": false
+                            },
+                            {
+                                "properties": {"op": {"enum": ["edit", "status"]}, "id": id, "content": content, "status": status},
+                                "required": ["op", "id"],
+                                "anyOf": [{"required": ["content"]}, {"required": ["status"]}],
+                                "additionalProperties": false
+                            },
+                            {
+                                "properties": {"op": {"const": "remove"}, "id": id},
+                                "required": ["op", "id"],
+                                "additionalProperties": false
+                            }
+                        ]
                     }
-                },
-                "required": ["ops"],
-                "additionalProperties": false
+                }
             }),
-        )
+            &["ops"],
+        );
+        schema.input_schema["additionalProperties"] = json!(false);
+        schema
     }
 
     async fn execute(&self, _ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {

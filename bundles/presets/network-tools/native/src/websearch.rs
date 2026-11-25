@@ -1,6 +1,7 @@
 //! Web search tool implementation.
 use async_trait::async_trait;
-use hya_proto::{SessionId, ToolName, ToolSchema};
+use hya_proto::{SessionId, ToolSchema};
+use hya_tool::tool::obj_schema;
 use hya_tool::{Action, Resource, Tool, ToolCtx, ToolError, WebSearchConfig, WebSearchProvider};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -48,23 +49,19 @@ impl Tool for WebSearchTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: ToolName::new("websearch"),
-            description: include_str!("websearch.txt")
+        obj_schema(
+            "websearch",
+            &include_str!("websearch.txt")
                 .replace("{{year}}", &OffsetDateTime::now_utc().year().to_string()),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string", "description": "Websearch query" },
-                    "numResults": { "type": "number", "description": "Number of search results to return (default: 8)" },
-                    "livecrawl": { "type": "string", "enum": ["fallback", "preferred"], "description": "Live crawl mode - 'fallback': use live crawling as backup if cached content unavailable, 'preferred': prioritize live crawling (default: 'fallback')" },
-                    "type": { "type": "string", "enum": ["auto", "fast", "deep"], "description": "Search type - 'auto': balanced search (default), 'fast': quick results, 'deep': comprehensive search" },
-                    "contextMaxCharacters": { "type": "number", "description": "Maximum characters for context string optimized for LLMs (default: 10000)" }
-                },
-                "required": ["query"]
+            json!({
+                "query": { "type": "string", "description": "Websearch query" },
+                "numResults": { "type": "number", "description": "Number of search results to return (default: 8)" },
+                "livecrawl": { "type": "string", "enum": ["fallback", "preferred"], "description": "Live crawl mode - 'fallback': use live crawling as backup if cached content unavailable, 'preferred': prioritize live crawling (default: 'fallback')" },
+                "type": { "type": "string", "enum": ["auto", "fast", "deep"], "description": "Search type - 'auto': balanced search (default), 'fast': quick results, 'deep': comprehensive search" },
+                "contextMaxCharacters": { "type": "number", "description": "Maximum characters for context string optimized for LLMs (default: 10000)" }
             }),
-            output_schema: None,
-        }
+            &["query"],
+        )
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
