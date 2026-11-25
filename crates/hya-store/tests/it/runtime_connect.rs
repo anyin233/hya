@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use hya_proto::{AgentName, Event, ModelRef, SessionId, SessionKind};
-use hya_store::{OwnerRunId, SessionStore, database_paths};
+use hya_store::{OwnerRunId, SessionStore, database_paths, validate_database_arg};
 use sqlx::Connection as _;
 
 struct Scratch(PathBuf);
@@ -289,4 +289,19 @@ async fn punctuation_in_plain_paths_is_literal_for_runtime_and_read_only() {
     assert!(std::path::Path::new(path).exists());
     let reader = SessionStore::connect_read_only(path).await.unwrap();
     assert_eq!(reader.replay(session).await.unwrap().len(), 1);
+}
+
+#[test]
+fn validate_database_arg_is_lexical_and_rejects_uris() {
+    assert!(validate_database_arg("").is_ok());
+    assert!(validate_database_arg(":memory:").is_ok());
+    assert!(validate_database_arg("/nonexistent/unlikely/path/hya.db").is_ok());
+    assert_eq!(
+        validate_database_arg("file:hya.db").unwrap_err().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+    assert_eq!(
+        validate_database_arg("sqlite:hya.db").unwrap_err().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
 }

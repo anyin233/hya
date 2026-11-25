@@ -5,7 +5,7 @@
 use hya_proto::{
     Event, EventSeq, FinishReason, MessageId, PartId, PartProjection, Projection, Role, SessionId,
 };
-use hya_store::SessionStore;
+use hya_store::{SessionStore, StoreError};
 
 #[tokio::test]
 async fn migration_applies_and_projection_is_correct() {
@@ -380,4 +380,12 @@ async fn delete_session_at_cascades_only_after_root_check() {
     assert!(store.delete_session_at(root, grown).await.unwrap());
     assert!(!store.session_exists(root).await.unwrap());
     assert!(!store.session_exists(child).await.unwrap());
+}
+
+#[test]
+fn commit_task_panic_maps_to_non_storage_error() {
+    let err = StoreError::from(sqlx::Error::Protocol(
+        "commit task failed: task panicked".into(),
+    ));
+    assert!(!err.is_storage_fault(), "{err}");
 }

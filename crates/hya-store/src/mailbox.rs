@@ -319,14 +319,7 @@ impl SessionStore {
         let claim = match owner {
             ResidentArchiveOwner::Claim(claim) => claim,
             ResidentArchiveOwner::Takeover => {
-                let owner_run_id = self
-                    .runtime_owner
-                    .claim
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .as_ref()
-                    .map(|claim| claim.owner)
-                    .ok_or(StoreError::RuntimeOwnerClaimRequired)?;
+                let owner_run_id = self.runtime_owner.current_owner()?;
                 self.require_runtime_owner(owner_run_id)?;
                 if archive.check_gate {
                     return Err(StoreError::ActorClaimData(
