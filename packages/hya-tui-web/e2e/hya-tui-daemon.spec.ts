@@ -90,6 +90,7 @@ test.describe("backend daemon", () => {
     await term.attach(testInfo, "stopped")
     // Prompts are refused while stopped (and the stream keeps retrying meanwhile).
     await prompt(term, "lost prompt")
+    await expect.poll(() => term.find("lost prompt")).toBeNull()
     expect(await daemonStatus(workspace)).toBeUndefined()
     // Discovery is removed before the old process finishes shutting down.
     // Wait for process exit too; a replacement daemon would keep this nonempty.
