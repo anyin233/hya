@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use hya_proto::{Event, MessageId, SessionId, ToolCallId, ToolSchema};
+use hya_proto::{MessageId, SessionId, ToolCallId, ToolSchema};
 use hya_store::ActorClaim;
 use hya_tool::{AgentDef, ReportLatch, ToolCtx, ToolError};
 use tokio::sync::Mutex;
@@ -119,18 +119,12 @@ impl TurnToolGate<'_> {
                 Ok(input) => tc.input = input,
                 Err(reason) => {
                     let message_text = format!("blocked by plugin: {reason}");
+                    let value = tool_error_message_value("blocked", &message_text);
                     engine
                         .emit_for_actor(
                             actor_claim,
                             session,
-                            Event::ToolError {
-                                session,
-                                message,
-                                part: tc.part,
-                                call: tc.call,
-                                value: Some(tool_error_message_value("blocked", &message_text)),
-                                message_text,
-                            },
+                            tc.error_event(session, message, message_text, Some(value)),
                         )
                         .await?;
                     return Ok(());
@@ -244,7 +238,10 @@ impl TurnToolGate<'_> {
                             ))
                             .await;
                             engine.validate_actor_claim(actor_claim).await?;
-                            resolved.tool.execute(&ctx, tc.input).await
+                            resolved
+                                .tool
+                                .execute(&ctx, std::mem::take(&mut tc.input))
+                                .await
                         }
                         Err(error) => Err(error),
                     };
@@ -374,28 +371,14 @@ impl TurnToolGate<'_> {
                 }
                 let retains_artifact = artifact_guard.retained_by(&output);
                 (
-                    Event::ToolResult {
-                        session,
-                        message,
-                        part: tc.part,
-                        call: tc.call,
-                        output,
-                        time_ms,
-                    },
+                    tc.result_event(session, message, output, time_ms),
                     retains_artifact,
                 )
             }
             Err(e) => {
                 artifact_guard.discard()?;
                 (
-                    Event::ToolError {
-                        session,
-                        message,
-                        part: tc.part,
-                        call: tc.call,
-                        value: Some(tool_error_value(&e)),
-                        message_text: e.to_string(),
-                    },
+                    tc.error_event(session, message, e.to_string(), Some(tool_error_value(&e))),
                     false,
                 )
             }
