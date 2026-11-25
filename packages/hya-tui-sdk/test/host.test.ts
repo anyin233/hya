@@ -12,7 +12,7 @@ const request = async (vm: ExtensionVm, method: string, params: unknown) => {
 const render = (vm: ExtensionVm, id: string) => request(vm, "tui/render", { surface: { kind: "panel", id }, width: 40, height: 5 });
 
 async function probeVm(hostCall?: HostCall): Promise<ExtensionVm> {
-  const vm = await ExtensionVm.create(await bundleExtension(fixture("probe.ts")), { memoryBytes: 32 * 1024 * 1024, deadlineMs: 300, log: () => undefined, ...(hostCall ? { hostCall } : {}) });
+  const vm = await ExtensionVm.create(await bundleExtension(fixture("probe.ts")), { memoryBytes: 32 * 1024 * 1024, deadlineMs: 80, log: () => undefined, ...(hostCall ? { hostCall } : {}) });
   expect((await request(vm, "tui/initialize", { api_version: 1, permissions: ["fs.read"] })).result).toEqual({ api_version: 1, sdk_version: "1.0.0" });
   await request(vm, "tui/activate", { context: { terminal: { columns: 80, rows: 24 } } });
   return vm;
@@ -30,7 +30,7 @@ describe("extension VM", () => {
   test("a runaway handler is stopped at the deadline; the VM then refuses every request", async () => {
     const runaway = await probeVm();
     const started = Date.now();
-    expect((await render(runaway, "loop")).error).toEqual({ code: VM_STOPPED_ERROR_CODE, message: "extension exceeded its 300 ms limit" });
+    expect((await render(runaway, "loop")).error).toEqual({ code: VM_STOPPED_ERROR_CODE, message: "extension exceeded its 80 ms limit" });
     expect(Date.now() - started).toBeLessThan(2_000);
     expect((await render(runaway, "probe")).error?.code).toBe(VM_STOPPED_ERROR_CODE);
     runaway.dispose();
@@ -50,10 +50,10 @@ describe("extension VM", () => {
 
 test("api.fs resolves through the host; waiting for it does not count against the deadline", async () => {
   const calls: string[] = [];
-  // The host answers after longer than the VM's 300 ms deadline: only VM execution is limited.
+  // The host answers after longer than the VM's 80 ms deadline: only VM execution is limited.
   const vm = await probeVm(async (method, params) => {
     calls.push(`${method} ${String(params.path)}`);
-    await Bun.sleep(400);
+    await Bun.sleep(150);
     return { text: "file body" };
   });
   try {

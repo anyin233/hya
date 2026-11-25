@@ -34,6 +34,7 @@ self.onmessage = (event: MessageEvent<ToWorker>) => {
         try {
           vms.get(message.ext)?.dispose()
           vms.set(message.ext, await ExtensionVm.create(message.script, {
+            ...(message.deadlineMs !== undefined ? { deadlineMs: message.deadlineMs } : {}),
             log: (line) => post({ type: "log", ext: message.ext, line }),
             hostCall: (method, params) => {
               const call = nextCall++

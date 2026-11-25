@@ -1,7 +1,7 @@
 /** Messages between the shared host's main thread (src/main.ts) and its VM worker (src/worker.ts). */
 
 export type ToWorker =
-  | { readonly type: "load"; readonly seq: number; readonly ext: string; readonly script: string }
+  | { readonly type: "load"; readonly seq: number; readonly ext: string; readonly script: string; readonly deadlineMs?: number }
   | { readonly type: "unload"; readonly seq: number; readonly ext: string }
   /** `request`: the extension JSON-RPC request frame, as JSON text. */
   | { readonly type: "call"; readonly seq: number; readonly ext: string; readonly id: string | number; readonly request: string }

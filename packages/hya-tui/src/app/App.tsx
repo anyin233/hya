@@ -25,6 +25,7 @@ export function App() {
   const { store, controller, server } = useApp()
   const size = useTerminalDimensions()
   const renderer = useRenderer()
+  renderer.setMaxListeners(64)
   useSelectionHandler((selection: Selection) => {
     const text = selection.getSelectedText()
     if (!text) return
