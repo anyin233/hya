@@ -64,10 +64,29 @@ impl SessionEngine {
             }
             None => self.store.append_events(session, events).await?,
         };
+        self.publish_envelopes(envelopes);
+        Ok(())
+    }
+
+    pub(super) async fn emit_tool_result_with_mail(
+        &self,
+        actor_claim: Option<&ActorClaim>,
+        session: SessionId,
+        events: Vec<Event>,
+        acknowledgement: Option<Event>,
+    ) -> Result<(), CoreError> {
+        let envelopes = self
+            .store
+            .commit_tool_result_with_mail(actor_claim, session, events, acknowledgement)
+            .await?;
+        self.publish_envelopes(envelopes);
+        Ok(())
+    }
+
+    fn publish_envelopes(&self, envelopes: Vec<Envelope>) {
         for envelope in envelopes {
             self.publish_envelope(envelope);
         }
-        Ok(())
     }
 
     /// Append one `UsageRecorded` side-call record per call drained from `usage`.

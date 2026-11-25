@@ -396,13 +396,9 @@ impl TurnToolGate<'_> {
             false,
             stamps_by_path.into_values().collect(),
         ));
-        let envelopes = engine
-            .store
-            .commit_tool_result_with_mail(actor_claim, session, events, acknowledgement)
+        engine
+            .emit_tool_result_with_mail(actor_claim, session, events, acknowledgement)
             .await?;
-        for envelope in envelopes {
-            engine.publish_envelope(envelope);
-        }
         engine.notify_mail_consumed(session, mail_mark, consumed_incoming);
         if retains_artifact {
             artifact_guard.disarm();
