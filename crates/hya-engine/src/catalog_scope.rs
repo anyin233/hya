@@ -8,8 +8,8 @@
 //! dropped by [`ScopeKey`]; the registry composes each scope snapshot lazily
 //! and rebuilds it when the base generation moves.
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hya_proto::{ModelRef, ProjectId};
@@ -64,6 +64,28 @@ impl CatalogScope {
             Self::Project { roots, .. } => roots,
         }
     }
+
+    /// The registered Project roots. Directory and global scopes have none.
+    #[must_use]
+    pub fn project_roots(&self) -> &[PathBuf] {
+        match self {
+            Self::Project { roots, .. } => roots,
+            Self::Global | Self::Directory(_) => &[],
+        }
+    }
+}
+
+/// Workdir-first order for inert catalog discovery. Keep each directory once,
+/// then preserve the registered roots' order. Live Project sources use only
+/// the registered roots.
+#[must_use]
+pub fn inert_catalog_dirs<'a>(workdir: Option<&'a Path>, roots: &'a [PathBuf]) -> Vec<&'a Path> {
+    let mut seen = HashSet::new();
+    workdir
+        .into_iter()
+        .chain(roots.iter().map(PathBuf::as_path))
+        .filter(|directory| seen.insert(*directory))
+        .collect()
 }
 
 /// Identity of one scope overlay in the registry.

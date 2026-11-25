@@ -324,3 +324,91 @@ fn bundles_install_disable_enable_and_uninstall_through_the_api() -> TestResult 
     assert!(row(&url, &directory, BUNDLE, "project")?.is_none());
     Ok(())
 }
+
+#[test]
+fn bundle_inventory_uses_the_named_directory_and_refresh_uses_project_roots() -> TestResult {
+    let root = scratch("hya-bundle-inventory")?;
+    let first = root.join("first");
+    let second = root.join("second");
+    let nested = first.join("nested");
+    for (dir, name, namespace) in [
+        (&first, "first", "shared-inventory"),
+        (&second, "second", "shared-inventory"),
+        (&second, "disabled", "disabled-inventory"),
+        (&nested, "nested", "nested-inventory"),
+    ] {
+        let bundle = dir.join(".hya/bundles").join(name);
+        std::fs::create_dir_all(&bundle)?;
+        std::fs::write(
+            bundle.join("bundle.yaml"),
+            format!(
+                "kind: Bundle\nidentity: {{ id: inventory/{name}, version: 1.0.0, publisher: inventory }}\nnamespace: {namespace}\nresources:\n  skills:\n    - {{ id: inventory-demo, path: skill.md }}\n"
+            ),
+        )?;
+        std::fs::write(
+            bundle.join("skill.md"),
+            "---\nname: inventory-demo\ndescription: Inventory fixture\n---\nInventory fixture.\n",
+        )?;
+    }
+    let broken = nested.join(".hya/bundles/broken");
+    std::fs::create_dir_all(&broken)?;
+    std::fs::write(broken.join("bundle.yaml"), "kind: [\n")?;
+
+    let (pid, url) = start(&root)?;
+    let _daemon = Daemon(pid);
+    let (status, body) = call(
+        &url,
+        "POST",
+        "/v1/projects",
+        &json!({"name": "inventory", "roots": [first, second]}),
+    )?;
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = call(
+        &url,
+        "POST",
+        "/v1/bundles:set-enabled",
+        &json!({"bundleId": "inventory/disabled", "enabled": false}),
+    )?;
+    assert_eq!(status, 200, "{body}");
+
+    let nested_request = format!(" {} ", nested.display());
+    for (id, state) in [
+        ("inventory/nested", "active"),
+        (
+            broken.to_str().ok_or("non-UTF-8 fixture path")?,
+            "unreadable",
+        ),
+    ] {
+        let inventory = row(&url, &nested_request, id, "project")?.ok_or("missing nested row")?;
+        assert_eq!(inventory["state"], state, "{inventory}");
+    }
+    assert!(row(&url, &nested_request, "inventory/first", "project")?.is_none());
+    assert!(row(&url, &nested_request, "inventory/second", "project")?.is_none());
+
+    let second_dir = second.to_str().ok_or("non-UTF-8 fixture path")?;
+    for (id, state) in [
+        ("inventory/second", "active"),
+        ("inventory/disabled", "disabled"),
+    ] {
+        let inventory = row(&url, second_dir, id, "project")?.ok_or("missing second-root row")?;
+        assert_eq!(inventory["state"], state, "{inventory}");
+    }
+
+    let (status, published) = call(
+        &url,
+        "POST",
+        "/v1/bundles:refresh",
+        &json!({"directory": nested}),
+    )?;
+    assert_eq!(status, 200, "{published}");
+    assert_eq!(published["scope"], "project");
+    let ids = published["bundles"]
+        .as_array()
+        .ok_or("missing published rows")?
+        .iter()
+        .filter_map(|row| row["id"].as_str())
+        .filter(|id| id.starts_with("inventory/"))
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["inventory/first"], "{published}");
+    Ok(())
+}

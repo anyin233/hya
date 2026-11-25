@@ -224,10 +224,10 @@ does not start) keeps the previous one and is reported in `errors`.
 
 ### `Catalog.ListBundles`
 
-Bundles of the directory's scope, as `hya bundle list` shows them:
-installed (user registry), the Project's (`<directory>/.hya/bundles`),
-and first-party, each with its components, scope, and state. Empty
-directory: user and first-party only.
+Bundle inventory, as `hya bundle list` shows it. Includes first-party,
+user registry, and bundles under the single requested directory's
+`.hya/bundles`. An empty directory lists the first two tiers. Use
+RefreshBundles to inspect the published multi-root Project overlay.
 
 
 ### `Catalog.InstallBundle`
@@ -1369,7 +1369,7 @@ Provider detail with its model rows.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope: its `.hya/bundles` are listed too; empty: user and first-party only. |
+| `directory` (1) | `string` | Absolute inventory directory. Surrounding whitespace is trimmed. An empty value lists user and first-party bundles only. |
 
 ### `ListBundlesResponse`
 

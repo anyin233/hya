@@ -104,11 +104,23 @@ impl SessionEngine {
         &self,
         session: SessionId,
     ) -> Result<CatalogScope, CoreError> {
+        Ok(self.catalog_place_for_session(session).await?.0)
+    }
+
+    /// Resolve the catalog scope and recorded workdir from one Session projection.
+    ///
+    /// # Errors
+    /// Returns store errors, or `CoreError::Invalid` when the session or its workdir is missing.
+    pub async fn catalog_place_for_session(
+        &self,
+        session: SessionId,
+    ) -> Result<(CatalogScope, PathBuf), CoreError> {
         let projection = self.read_projection_shared(session).await?;
         let workdir = session_workdir(session, &projection)?;
-        Ok(self
+        let scope = self
             .scope_for_projection(session, &projection, &workdir)
-            .await)
+            .await;
+        Ok((scope, workdir))
     }
 
     /// The catalog scope of a catalog read for `dir`: the registered
@@ -263,11 +275,7 @@ impl SessionEngine {
         &self,
         session: SessionId,
     ) -> Result<TurnBinding, CoreError> {
-        let projection = self.read_projection_shared(session).await?;
-        let workdir = session_workdir(session, &projection)?;
-        let scope = self
-            .scope_for_projection(session, &projection, &workdir)
-            .await;
+        let (scope, workdir) = self.catalog_place_for_session(session).await?;
         self.bind_scope_runtime_lenient(&scope, &workdir).await
     }
 
@@ -315,7 +323,7 @@ impl SessionEngine {
             .runtime
             .bind_scoped_with_skills(scope, workdir, || {
                 self.runtime
-                    .discover_skills(directory, scope_roots(scope))
+                    .discover_skills(directory, scope.project_roots())
                     .skills
             })
             .map_err(CoreError::runtime_refresh)?;
@@ -419,14 +427,6 @@ impl SessionEngine {
             self.runtime.drop_scope(&key);
             self.release_scope_session_hooks(&key);
         }
-    }
-}
-
-/// Extra skill roots of `scope` beyond the workdir: a Project's roots.
-fn scope_roots(scope: &CatalogScope) -> &[PathBuf] {
-    match scope {
-        CatalogScope::Project { roots, .. } => roots,
-        CatalogScope::Global | CatalogScope::Directory(_) => &[],
     }
 }
 

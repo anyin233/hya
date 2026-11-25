@@ -733,7 +733,19 @@ async fn a_command_turn_expands_from_every_root_of_the_sessions_project() {
     let app = router(state().await);
     let f = fixture("expand");
     create_project(&app, &[&f.a, &f.b]).await;
-    let session = create_session(&app, Some(&f.a)).await;
+    let nested = subdir(&f.a, "nested");
+    write_command(&nested, "dup", "nested command");
+    write_skill(&nested, "shared", "nested skill");
+    let session = create_session(&app, Some(&nested)).await;
+    let commands = get(&app, &format!("/v1/commands?session={session}")).await;
+    let commands = rows(&commands, "commands", "template");
+    assert_eq!(field_of(&commands, "dup"), Some("nested command"));
+    assert_eq!(field_of(&commands, "from-a"), Some("a command"));
+    assert_eq!(field_of(&commands, "from-b"), Some("b command"));
+    let skills = get(&app, &format!("/v1/skills?session={session}")).await;
+    let skills = rows(&skills, "skills", "description");
+    assert_eq!(field_of(&skills, "shared"), Some("nested skill"));
+    assert_eq!(field_of(&skills, "beta"), Some("beta skill"));
     let (status, turn) = send(
         &app,
         Method::POST,

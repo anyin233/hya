@@ -609,9 +609,10 @@ fn listing(
     }
 }
 
-/// Every bundle: trusted presets and first-party bundles, the user
-/// registry's, and `project_dir`'s, mirroring the runtime layering (project
-/// over user over first-party, by id or namespace). Sorted by id, then scope.
+/// The administrative inventory of trusted and first-party bundles, the user
+/// registry, and the contents of one optional `project_dir` (`.hya/bundles`).
+/// States and shadowing are computed from these rows. The published catalog
+/// can include other Project roots or retained generations. Sorted by id then scope.
 ///
 /// # Errors
 /// The registry or the shipped bundles cannot be read.
