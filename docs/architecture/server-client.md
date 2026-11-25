@@ -181,8 +181,7 @@ prompt and waits up to 120 seconds. `Client::prompt_text` and `V1Sdk::prompt`
 return an API error with code `invalid_response` if admission returns no turn
 ID. Set `ListEventsRequest.include_raw` to `true` to receive opaque JSON lines
 in `ListEventsResponse.raw_envelopes`.
-The internal envelope schema may change. The methods taking
-`hya_proto::SessionId` or returning `hya_proto::Envelope` are deprecated.
+The internal envelope schema may change.
 
 Provider OAuth runs through the launcher auth command. The former
 `Auth.StartOauth`, `Auth.CompleteOauth`, `Process.DisposeProcess`, and

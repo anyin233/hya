@@ -2,8 +2,6 @@
 
 use crate::transport::HttpTransport;
 use hya_api::v1 as pb;
-use hya_proto::{Envelope, SessionId};
-use std::time::Duration;
 
 /// Failure from a client HTTP call.
 #[derive(thiserror::Error, Debug)]
@@ -192,97 +190,6 @@ impl Client {
         request: &pb::ListEventsRequest,
     ) -> Result<pb::ListEventsResponse, ClientError> {
         self.transport.list_events_request(request).await
-    }
-
-    /// Admit a plain prompt using an internal session ID.
-    ///
-    /// # Errors
-    /// Returns an error if admission fails.
-    #[deprecated(note = "use Client::create_turn_request with a v1 CreateTurnRequest")]
-    pub async fn create_turn(
-        &self,
-        session: SessionId,
-        text: impl Into<String>,
-    ) -> Result<pb::CreateTurnResponse, ClientError> {
-        self.create_turn_request(&pb::CreateTurnRequest {
-            session: session.to_string(),
-            kind: Some(pb::create_turn_request::Kind::Prompt(pb::PromptTurn {
-                text: text.into(),
-                ..Default::default()
-            })),
-        })
-        .await
-    }
-
-    /// Wait for a turn using an internal session ID.
-    ///
-    /// # Errors
-    /// Returns an error if waiting fails.
-    #[deprecated(note = "use Client::wait_turn_request with a v1 WaitTurnRequest")]
-    pub async fn wait_turn(
-        &self,
-        session: SessionId,
-        turn: &str,
-        timeout: Duration,
-    ) -> Result<pb::TurnInfo, ClientError> {
-        self.wait_turn_request(&pb::WaitTurnRequest {
-            session: session.to_string(),
-            turn: turn.to_owned(),
-            timeout_ms: timeout.as_millis().min(600_000) as u64,
-        })
-        .await
-    }
-
-    /// Admit a prompt and wait for its terminal state using an internal session ID.
-    ///
-    /// # Errors
-    /// Returns an error if admission or waiting fails.
-    #[deprecated(note = "use Client::prompt_text with a string session ID")]
-    pub async fn prompt(
-        &self,
-        session: SessionId,
-        text: impl Into<String>,
-    ) -> Result<pb::TurnInfo, ClientError> {
-        self.prompt_text(&session.to_string(), text).await
-    }
-
-    /// Replay events after a watermark using an internal session ID.
-    ///
-    /// # Errors
-    /// Returns an error if replay fails.
-    #[deprecated(note = "use Client::list_events_request with a v1 ListEventsRequest")]
-    pub async fn list_events(
-        &self,
-        session: SessionId,
-        since_seq: Option<u64>,
-        include_raw: bool,
-    ) -> Result<pb::ListEventsResponse, ClientError> {
-        self.transport
-            .replay_events(&session.to_string(), since_seq, 0, include_raw)
-            .await
-    }
-
-    /// Replay the raw durable envelopes for tooling and test harnesses.
-    ///
-    /// # Errors
-    /// Returns an error if replay fails.
-    #[deprecated(
-        note = "use Client::list_events_request with include_raw and consume the opaque JSON lines"
-    )]
-    pub async fn events(
-        &self,
-        session: SessionId,
-        since_seq: Option<u64>,
-    ) -> Result<Vec<Envelope>, ClientError> {
-        let response = self
-            .transport
-            .replay_events(&session.to_string(), since_seq, 0, true)
-            .await?;
-        Ok(response
-            .raw_envelopes
-            .iter()
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect())
     }
 
     /// `GET /v1/interactions` — list pending permission/question requests.
