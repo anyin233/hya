@@ -97,18 +97,31 @@ async fn session_turn_and_interaction_path_segments_are_encoded() {
         client.get_project(session),
         format!("/v1/projects/{encoded_session}")
     );
-    let typed_session = hya_proto::SessionId::new();
-    let root = format!("/v1/sessions/{typed_session}");
     path!(
-        client.create_turn(typed_session, "hello"),
+        client.create_turn_request(&pb::CreateTurnRequest {
+            session: session.into(),
+            kind: Some(pb::create_turn_request::Kind::Prompt(pb::PromptTurn {
+                text: "hello".into(),
+                ..Default::default()
+            })),
+        }),
         format!("{root}/turns")
     );
     path!(
-        client.wait_turn(typed_session, turn, Duration::from_millis(1)),
+        client.wait_turn_request(&pb::WaitTurnRequest {
+            session: session.into(),
+            turn: turn.into(),
+            timeout_ms: 1,
+        }),
         format!("{root}/turns/{encoded_turn}/wait")
     );
     path!(
-        client.list_events(typed_session, None, true),
+        client.list_events_request(&pb::ListEventsRequest {
+            session: session.into(),
+            since_seq: 3,
+            limit: 10,
+            include_raw: true,
+        }),
         format!("{root}/events")
     );
     server.abort();

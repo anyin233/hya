@@ -162,7 +162,8 @@ async fn stop_start_cancels_an_unanswered_permission_without_tool_success() {
 }
 
 async fn check_stop_start_restore(unanswered_permission: bool) {
-    use hya_e2e::{tool_step, wait_until};
+    use hya_api::v1 as pb;
+    use hya_e2e::{load_raw_events, tool_step, wait_until};
     use hya_proto::{FinishCause, Role};
     use serde_json::json;
     use std::time::Duration;
@@ -177,7 +178,13 @@ async fn check_stop_start_restore(unanswered_permission: bool) {
         .build().await.unwrap();
     let session = env.create_session().await.unwrap();
     env.client
-        .create_turn(session, "work until complete")
+        .create_turn_request(&pb::CreateTurnRequest {
+            session: session.to_string(),
+            kind: Some(pb::create_turn_request::Kind::Prompt(pb::PromptTurn {
+                text: "work until complete".into(),
+                ..Default::default()
+            })),
+        })
         .await
         .unwrap();
     let permission = if unanswered_permission {
@@ -228,7 +235,7 @@ async fn check_stop_start_restore(unanswered_permission: bool) {
         "restored turn completes",
         Duration::from_secs(30),
         || async {
-            Ok(client.events(session, None).await.unwrap().iter().any(|e| {
+            Ok(load_raw_events(&client, session, None).await.unwrap().iter().any(|e| {
                 matches!(&e.event,
             Event::TextDelta { delta, .. } | Event::TextReplace { text: delta, .. } if delta.contains("RESTORE_COMPLETED"))
             }))
@@ -238,12 +245,12 @@ async fn check_stop_start_restore(unanswered_permission: bool) {
     if let Err(error) = restored {
         panic!(
             "{error}; events={:?}; request_count={}; daemon log={}",
-            client.events(session, None).await.unwrap(),
+            load_raw_events(&client, session, None).await.unwrap(),
             env.fake_requests().unwrap().len(),
             std::fs::read_to_string(format!("{db}.server.log")).unwrap()
         );
     }
-    let events = client.events(session, None).await.unwrap();
+    let events = load_raw_events(&client, session, None).await.unwrap();
     assert!(events.iter().any(|e| matches!(
         e.event,
         Event::MessageFinished {
@@ -296,7 +303,7 @@ async fn check_stop_start_restore(unanswered_permission: bool) {
     // Starting an already running daemon must not inject another restore.
     let again = env.backend.cli(&args).unwrap();
     assert!(again.status.success());
-    assert_eq!(client.events(session, None).await.unwrap().iter().filter(|e| matches!(&e.event,
+    assert_eq!(load_raw_events(&client, session, None).await.unwrap().iter().filter(|e| matches!(&e.event,
         Event::TextDelta { delta, .. } if delta.contains("Your previous turn was interrupted by a restart."))).count(), 1);
 }
 
