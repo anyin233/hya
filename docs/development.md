@@ -110,7 +110,7 @@ reverse capability handlers, event delivery, and MCP stdio/classic SSE readers
 are joined by those owners. Streamable HTTP
 requests run in the caller's future. For example, an embedder that calls
 `hya_mcp::prepare(name, config).await?` must later await `server.shutdown()`
-before dropping its resources. `McpManager` is deprecated. Use
+before dropping its resources. Use
 `prepare(name: String, config: McpServerConfig) -> Result<PreparedMcpServer, McpError>`
 and retain each prepared server while its tools and resources are published.
 Runtime sources implement

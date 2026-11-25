@@ -34,6 +34,4 @@ pub mod protocol;
 mod resource;
 
 pub use client::{McpClient, McpError};
-#[allow(deprecated)]
-pub use manager::McpManager;
 pub use manager::{McpServerConfig, McpStatus, PreparedMcpServer, prepare, prepare_bundle};
