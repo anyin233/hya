@@ -128,8 +128,12 @@ nested fields, for example `page: { limit: 1, cursor: "" }` for the first
 page of `ListSessions`. Pass the response's `page.nextCursor` unchanged as
 `page.cursor` for the next request. Both transports return the same items
 and `PageInfo` (`nextCursor: string`, `hasMore: bool`). An empty next cursor
-means the list is exhausted. RPCs without `PageRequest` retain their own
-request contract; `ListEvents` uses `limit` and `sinceSeq`/`nextSeq`.
+means the list is exhausted. A malformed non-empty cursor returns HTTP 400
+with the `invalid_argument` error code or gRPC `InvalidArgument`. An offset
+past the end of the list returns an empty page with `hasMore` false.
+`ListWorkflows` validates its cursor and returns its full catalog in one
+response. RPCs without `PageRequest` retain their own request contract.
+`ListEvents` uses `limit` and `sinceSeq`/`nextSeq`.
 
 ## Errors
 

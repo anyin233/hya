@@ -140,6 +140,62 @@ fn normalize(value: &Value) -> Value {
 }
 
 #[tokio::test]
+async fn malformed_pagination_cursors_are_rejected_on_both_transports() {
+    let app_state = state().await;
+    let app = router(app_state.clone());
+    let address = grpc_endpoint(app_state).await;
+    let channel = tonic::transport::Channel::from_shared(format!("http://{address}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let mut sessions = pb::session_client::SessionClient::new(channel.clone());
+    let mut workflows = pb::workflow_client::WorkflowClient::new(channel);
+
+    for (cursor, query_cursor) in [("!", "%21"), ("AA", "AA"), ("AAAAAAAAAAAA", "AAAAAAAAAAAA")] {
+        let page = Some(pb::PageRequest {
+            cursor: cursor.into(),
+            limit: 1,
+        });
+        let grpc_sessions = sessions
+            .list_sessions(pb::ListSessionsRequest {
+                page: page.clone(),
+                ..Default::default()
+            })
+            .await
+            .map(|_| tonic::Code::Ok)
+            .unwrap_or_else(|error| error.code());
+        let grpc_workflows = workflows
+            .list_workflows(pb::ListWorkflowsRequest {
+                page,
+                ..Default::default()
+            })
+            .await
+            .map(|_| tonic::Code::Ok)
+            .unwrap_or_else(|error| error.code());
+
+        for (path, grpc_code) in [
+            ("/v1/sessions", grpc_sessions),
+            ("/v1/workflows", grpc_workflows),
+        ] {
+            let (http_status, body) = http_json(
+                &app,
+                Method::GET,
+                &format!("{path}?page.limit=1&page.cursor={query_cursor}"),
+                Value::Null,
+            )
+            .await;
+            assert_eq!(
+                (http_status, grpc_code),
+                (StatusCode::BAD_REQUEST, tonic::Code::InvalidArgument),
+                "{path}, cursor {cursor:?}: {body}"
+            );
+            assert_eq!(body["error"]["code"], "invalid_argument");
+        }
+    }
+}
+
+#[tokio::test]
 async fn http_and_grpc_answers_match_across_representative_calls() {
     let app_state = state().await;
     let app = router(app_state.clone());

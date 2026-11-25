@@ -121,7 +121,7 @@ async fn list_projects(
     for summary in &summaries {
         infos.push(project_info(&st, &summary.project, Some(summary.session_count)).await?);
     }
-    let (projects, page) = super::catalog::paginate(infos, &request.page);
+    let (projects, page) = super::catalog::paginate(infos, &request.page)?;
     Ok(Json(pb::ListProjectsResponse {
         projects,
         page: Some(page),

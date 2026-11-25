@@ -40,7 +40,7 @@ async fn list_messages(
         return Err(V1Error::session_not_found(&request.session));
     }
     let (messages, page) =
-        super::catalog::paginate(projection.session.messages.iter().collect(), &request.page);
+        super::catalog::paginate(projection.session.messages.iter().collect(), &request.page)?;
     let messages = messages
         .into_iter()
         .map(|message| {

@@ -377,7 +377,7 @@ async fn list_agents(
     let request: pb::ListAgentsRequest = super::query_request(&[], &query)?;
     let place = catalog_scope(&st, &request.directory).await?;
     let agents = agent_rows(&st, &place).await?;
-    Ok(Json(paginated_agents(agents, &request.page)))
+    Ok(Json(paginated_agents(agents, &request.page)?))
 }
 
 /// Agent rows shared with the bootstrap snapshot.
@@ -416,20 +416,26 @@ pub(crate) fn model_ref(reference: &str) -> Option<pb::ModelRef> {
 fn paginated_agents(
     agents: Vec<pb::AgentSummary>,
     page: &Option<pb::PageRequest>,
-) -> pb::ListAgentsResponse {
-    let (agents, info) = paginate(agents, page);
-    pb::ListAgentsResponse {
+) -> Result<pb::ListAgentsResponse, V1Error> {
+    let (agents, info) = paginate(agents, page)?;
+    Ok(pb::ListAgentsResponse {
         agents,
         page: Some(info),
-    }
+    })
+}
+
+pub(crate) fn page_offset(page: Option<&pb::PageRequest>) -> Result<u64, V1Error> {
+    let cursor = page.map_or("", |page| page.cursor.as_str());
+    hya_api::cursor::decode_offset(cursor)
+        .map_err(|_| V1Error::invalid_argument("invalid pagination cursor"))
 }
 
 /// Apply cursor pagination over a fully materialized page.
-pub(crate) fn paginate<T>(rows: Vec<T>, page: &Option<pb::PageRequest>) -> (Vec<T>, pb::PageInfo) {
-    let offset = page
-        .as_ref()
-        .and_then(|page| hya_api::cursor::decode_offset(&page.cursor).ok())
-        .unwrap_or(0);
+pub(crate) fn paginate<T>(
+    rows: Vec<T>,
+    page: &Option<pb::PageRequest>,
+) -> Result<(Vec<T>, pb::PageInfo), V1Error> {
+    let offset = page_offset(page.as_ref())?;
     let limit = page.as_ref().map_or(50, |page| {
         if page.limit == 0 {
             50
@@ -438,23 +444,23 @@ pub(crate) fn paginate<T>(rows: Vec<T>, page: &Option<pb::PageRequest>) -> (Vec<
         }
     });
     let total = rows.len();
+    let offset = usize::try_from(offset).unwrap_or(usize::MAX).min(total);
     let rows = rows
         .into_iter()
-        .skip((offset as usize).min(total))
+        .skip(offset)
         .take(limit)
         .collect::<Vec<_>>();
-    let taken = rows.len();
-    let next_offset = offset.saturating_add(taken as u64);
-    let has_more = (next_offset as usize) < total;
+    let next_offset = offset + rows.len();
+    let has_more = next_offset < total;
     let info = pb::PageInfo {
         next_cursor: if has_more {
-            hya_api::cursor::encode_offset(next_offset)
+            hya_api::cursor::encode_offset(next_offset as u64)
         } else {
             String::new()
         },
         has_more,
     };
-    (rows, info)
+    Ok((rows, info))
 }
 
 async fn list_models(
@@ -466,7 +472,7 @@ async fn list_models(
     if !request.provider_id.is_empty() {
         models.retain(|model| model.provider_id == request.provider_id);
     }
-    let (models, page) = paginate(models, &request.page);
+    let (models, page) = paginate(models, &request.page)?;
     Ok(Json(pb::ListModelsResponse {
         models,
         page: Some(page),
@@ -551,7 +557,7 @@ async fn list_providers(
     let request: pb::ListProvidersRequest = super::query_request(&[], &query)?;
     let snapshot = st.engine.provider_catalog_snapshot();
     let providers = provider_rows(&st, &snapshot).await;
-    let (providers, page) = paginate(providers, &request.page);
+    let (providers, page) = paginate(providers, &request.page)?;
     Ok(Json(pb::ListProvidersResponse {
         providers,
         page: Some(page),
@@ -714,7 +720,7 @@ async fn list_commands(
             message: diagnostic.message.clone(),
         })
         .collect();
-    let (commands, page) = paginate(command_summaries(listing.commands), &request.page);
+    let (commands, page) = paginate(command_summaries(listing.commands), &request.page)?;
     Ok(Json(pb::ListCommandsResponse {
         commands,
         page: Some(page),
@@ -772,7 +778,7 @@ async fn list_skills(
             message: diagnostic.message.clone(),
         })
         .collect();
-    let (skills, page) = paginate(skill_summaries(listing.skills), &request.page);
+    let (skills, page) = paginate(skill_summaries(listing.skills), &request.page)?;
     Ok(Json(pb::ListSkillsResponse {
         skills,
         page: Some(page),
@@ -806,7 +812,7 @@ async fn list_tools(
 ) -> Result<Json<pb::ListToolsResponse>, V1Error> {
     let request: pb::ListToolsRequest = super::query_request(&[], &query)?;
     let tools = tool_rows(&st);
-    let (tools, page) = paginate(tools, &request.page);
+    let (tools, page) = paginate(tools, &request.page)?;
     Ok(Json(pb::ListToolsResponse {
         tools,
         page: Some(page),
@@ -899,7 +905,7 @@ async fn list_saved_rules(
 ) -> Result<Json<pb::ListSavedRulesResponse>, V1Error> {
     let request: pb::ListSavedRulesRequest = super::query_request(&[], &query)?;
     let rules = saved_rule_rows(&st).await;
-    let (rules, page) = paginate(rules, &request.page);
+    let (rules, page) = paginate(rules, &request.page)?;
     Ok(Json(pb::ListSavedRulesResponse {
         rules,
         page: Some(page),
@@ -961,12 +967,15 @@ mod pagination_regression {
             (2, vec![2, 3], true),
             (4, vec![4], false),
             (5, vec![], false),
+            (u64::MAX, vec![], false),
         ] {
             let request = Some(pb::PageRequest {
                 cursor: hya_api::cursor::encode_offset(offset),
                 limit: 2,
             });
-            let (rows, page) = paginate((0..5).collect(), &request);
+            let Ok((rows, page)) = paginate((0..5).collect(), &request) else {
+                panic!("server-generated cursor for offset {offset} rejected");
+            };
             assert_eq!(rows, expected);
             assert_eq!(page.has_more, more);
             assert_eq!(
