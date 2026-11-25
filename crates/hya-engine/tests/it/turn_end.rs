@@ -2331,6 +2331,16 @@ async fn permission_pending_user_edit(approve: bool) {
         .unwrap()
         .unwrap();
     assert_eq!(ask.action, hya_tool::Action::Tool, "{:?}", ask.resource);
+    let call = ask
+        .call_id
+        .expect("permission is correlated to the tool call");
+    let pending = engine.replay(session).await.unwrap();
+    assert!(matches!(
+        tool_event_order(&pending).as_slice(),
+        [Event::ToolInputStart { call: started, .. },
+         Event::ToolCallRequested { call: requested, .. },
+         Event::StepFinished { .. }] if *started == call && *requested == call
+    ));
     tokio::fs::write(dir.path().join("partial.txt"), "user edit")
         .await
         .unwrap();
@@ -2350,6 +2360,12 @@ async fn permission_pending_user_edit(approve: bool) {
     );
     let events = engine.replay(session).await.unwrap();
     if approve {
+        assert!(matches!(
+            tool_event_order(&events).as_slice(),
+            [Event::ToolInputStart { .. }, Event::ToolCallRequested { .. },
+             Event::StepFinished { .. }, Event::ToolResult { call: result, .. }]
+                if *result == call
+        ));
         let before = events
             .iter()
             .find_map(|e| match &e.event {
@@ -2552,6 +2568,25 @@ impl Tool for WriteThenWait {
     }
 }
 
+fn tool_event_order(log: &[Envelope]) -> Vec<&Event> {
+    log.iter()
+        .map(|entry| &entry.event)
+        .filter(|event| {
+            matches!(
+                event,
+                Event::ToolInputStart { .. }
+                    | Event::ToolCallRequested { .. }
+                    | Event::StepFinished {
+                        finish: FinishReason::ToolCalls,
+                        ..
+                    }
+                    | Event::ToolResult { .. }
+                    | Event::ToolError { .. }
+            )
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn cancel_written_tool_records_file_changes_before_finish() {
     let provider = Arc::new(ScriptProvider::default());
@@ -2592,6 +2627,15 @@ async fn cancel_written_tool_records_file_changes_before_finish() {
     engine.cancel_turn(session, FinishCause::UserCancel);
     assert_eq!(turn.await.unwrap().unwrap(), FinishReason::Cancelled);
     let replay = engine.replay(session).await.unwrap();
+    assert!(matches!(
+        tool_event_order(&replay).as_slice(),
+        [Event::ToolInputStart { call, .. },
+         Event::ToolCallRequested { call: requested, .. },
+         Event::StepFinished { .. },
+         Event::ToolError { call: result, message_text, value: Some(value), .. }]
+            if call == requested && call == result && message_text == "cancelled"
+                && value["error"]["type"] == "cancelled"
+    ));
     let files = replay
         .iter()
         .position(|e| matches!(e.event, Event::FilesChanged { .. }))
