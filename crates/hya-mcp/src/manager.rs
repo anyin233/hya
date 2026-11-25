@@ -1,4 +1,4 @@
-//! Multi-server MCP lifecycle: config, prepare, status map, and tool aggregation.
+//! MCP server configuration, preparation and connection status.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -66,6 +66,10 @@ pub enum McpStatus {
 /// MCP connection manager. Clone shares the same status/tool catalog so background
 /// attach can update what the HTTP API already holds.
 #[derive(Clone, Default)]
+#[deprecated(
+    since = "0.48.0-dev.37",
+    note = "use hya_mcp::prepare and retain each PreparedMcpServer"
+)]
 pub struct McpManager {
     inner: Arc<RwLock<McpInner>>,
 }
@@ -126,8 +130,7 @@ impl PreparedMcpServer {
 
 /// Spawn, initialize, list tools/resources, and return a ready [`PreparedMcpServer`].
 ///
-/// `name` is the config id used in tool namespaces. Equivalent to the path used
-/// inside [`McpManager::connect_all_into`] for a single server.
+/// `name` is the config id used in tool namespaces.
 pub async fn prepare(name: String, config: McpServerConfig) -> Result<PreparedMcpServer, McpError> {
     connect_server(name, config, None).await
 }
@@ -153,6 +156,7 @@ pub async fn prepare_bundle(
     connect_server(name, config, Some(root)).await
 }
 
+#[allow(deprecated)]
 impl McpManager {
     fn write(&self) -> std::sync::RwLockWriteGuard<'_, McpInner> {
         self.inner
@@ -456,13 +460,11 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn shutdown_closes_servers_even_with_retained_clients() {
-        let manager = McpManager::connect_all(BTreeMap::from([(
-            "owned".into(),
-            server_config(server_command()),
-        )]))
-        .await;
-        let client = manager.read().servers[0]._client.clone();
-        tokio::time::timeout(std::time::Duration::from_secs(5), manager.shutdown())
+        let server = prepare("owned".into(), server_config(server_command()))
+            .await
+            .unwrap();
+        let client = server._client.clone();
+        tokio::time::timeout(std::time::Duration::from_secs(5), server.shutdown())
             .await
             .unwrap();
         assert!(matches!(
@@ -471,37 +473,9 @@ for line in sys.stdin:
                 .await,
             Err(McpError::Closed)
         ));
-        tokio::time::timeout(std::time::Duration::from_secs(5), manager.shutdown())
+        tokio::time::timeout(std::time::Duration::from_secs(5), server.shutdown())
             .await
             .unwrap();
-    }
-
-    #[tokio::test]
-    async fn one_failed_server_does_not_abort_others() {
-        let mut configs = BTreeMap::new();
-        configs.insert(
-            "bad".to_string(),
-            McpServerConfig {
-                command: vec!["definitely-not-hya-mcp".to_string()],
-                ..McpServerConfig::default()
-            },
-        );
-        configs.insert(
-            "good".to_string(),
-            McpServerConfig {
-                command: server_command(),
-                timeout_ms: Some(1000),
-                ..McpServerConfig::default()
-            },
-        );
-
-        let manager = McpManager::connect_all(configs).await;
-        let names: Vec<String> = manager
-            .tools()
-            .into_iter()
-            .map(|tool| tool.name().to_string())
-            .collect();
-        assert_eq!(names, vec!["mcp__good__ping".to_string()]);
     }
 
     #[tokio::test]
@@ -557,143 +531,48 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
-    async fn reports_connected_disabled_and_failed_status() {
-        let mut configs = BTreeMap::new();
-        configs.insert(
-            "good".to_string(),
-            McpServerConfig {
-                command: server_command(),
-                timeout_ms: Some(1000),
-                ..McpServerConfig::default()
-            },
-        );
-        configs.insert(
-            "off".to_string(),
-            McpServerConfig {
-                enabled: Some(false),
-                command: vec!["unused".into()],
-                ..McpServerConfig::default()
-            },
-        );
-        configs.insert(
-            "bad".to_string(),
-            McpServerConfig {
-                command: vec!["definitely-not-hya-mcp".to_string()],
-                ..McpServerConfig::default()
-            },
-        );
-
-        let manager = McpManager::connect_all(configs).await;
-        let status = serde_json::to_value(manager.status()).unwrap();
-        assert_eq!(status["good"], json!({"status": "connected"}));
-        assert_eq!(status["off"], json!({"status": "disabled"}));
-        assert_eq!(status["bad"]["status"], "failed");
-    }
-
-    #[tokio::test]
-    async fn pending_marks_enabled_servers_connecting() {
-        let mut configs = BTreeMap::new();
-        configs.insert(
-            "slow".to_string(),
-            McpServerConfig {
-                command: vec!["sleep".into(), "30".into()],
-                ..McpServerConfig::default()
-            },
-        );
-        configs.insert(
-            "off".to_string(),
-            McpServerConfig {
-                enabled: Some(false),
-                command: vec!["unused".into()],
-                ..McpServerConfig::default()
-            },
-        );
-        let manager = McpManager::pending(&configs);
-        assert_eq!(manager.status().get("slow"), Some(&McpStatus::Connecting));
-        assert_eq!(manager.status().get("off"), Some(&McpStatus::Disabled));
-        assert!(manager.tools().is_empty());
-    }
-
-    #[tokio::test]
-    async fn connect_all_into_hot_updates_shared_manager() {
-        let mut configs = BTreeMap::new();
-        configs.insert("good".to_string(), server_config(server_command()));
-        let manager = McpManager::pending(&configs);
-        assert_eq!(manager.status().get("good"), Some(&McpStatus::Connecting));
-        manager.connect_all_into(configs).await;
-        assert_eq!(manager.status().get("good"), Some(&McpStatus::Connected));
-        assert_eq!(manager.tools()[0].name(), "mcp__good__ping");
-    }
-
-    #[tokio::test]
-    async fn collects_connected_server_resources() {
-        // resources load is best-effort; just ensure connect succeeds
-        let mut configs = BTreeMap::new();
-        configs.insert("good".to_string(), server_config(server_command()));
-        let manager = McpManager::connect_all(configs).await;
-        let _ = manager.resources();
-        assert_eq!(manager.status().get("good"), Some(&McpStatus::Connected));
-    }
-
-    #[tokio::test]
-    async fn connect_all_exposes_callable_namespaced_tool_after_successful_initialize() {
-        let mut configs = BTreeMap::new();
-        configs.insert("good".to_string(), server_config(server_command()));
-
-        let manager = McpManager::connect_all(configs).await;
-        let tool = manager.tools().into_iter().next().unwrap();
+    async fn prepare_exposes_callable_namespaced_tool() {
+        let server = prepare("good".into(), server_config(server_command()))
+            .await
+            .unwrap();
+        let tool = server.tools().into_iter().next().unwrap();
         assert_eq!(tool.name(), "mcp__good__ping");
         let out = tool
             .execute(&ctx_allowing_mcp("mcp__good__ping"), json!({}))
             .await
             .unwrap();
-        assert!(out.is_object() || out.is_string() || out.is_boolean() || !out.is_null());
+        assert!(!out.is_null());
     }
 
     #[tokio::test]
-    async fn connect_all_marks_server_failed_when_initialize_rpc_errors_but_keeps_others_connected()
-    {
-        let mut configs = BTreeMap::new();
-        configs.insert(
-            "bad".to_string(),
+    async fn prepare_returns_initialize_error() {
+        let result = prepare(
+            "bad".into(),
             server_config(server_command_initialize_error()),
-        );
-        configs.insert("good".to_string(), server_config(server_command()));
-        let manager = McpManager::connect_all(configs).await;
-        let status = manager.status();
-        assert!(matches!(
-            status.get("bad"),
-            Some(McpStatus::Failed { error }) if !error.is_empty()
-        ));
-        assert_eq!(status.get("good"), Some(&McpStatus::Connected));
+        )
+        .await;
+        assert!(matches!(result, Err(error) if error.to_string().contains("init failed")));
     }
 
     #[tokio::test]
-    async fn connect_all_marks_server_failed_when_tools_list_rpc_errors_but_keeps_others_connected()
-    {
-        let mut configs = BTreeMap::new();
-        configs.insert(
-            "bad".to_string(),
+    async fn prepare_returns_tools_list_error() {
+        let result = prepare(
+            "bad".into(),
             server_config(server_command_tools_list_error()),
-        );
-        configs.insert("good".to_string(), server_config(server_command()));
-        let manager = McpManager::connect_all(configs).await;
-        let status = manager.status();
-        assert!(matches!(
-            status.get("bad"),
-            Some(McpStatus::Failed { error }) if error.contains("tools failed")
-        ));
-        assert_eq!(status.get("good"), Some(&McpStatus::Connected));
+        )
+        .await;
+        assert!(matches!(result, Err(error) if error.to_string().contains("tools failed")));
     }
 
     #[tokio::test]
-    async fn connect_all_keeps_connected_status_when_resources_list_errors() {
-        let mut configs = BTreeMap::new();
-        configs.insert(
-            "good".to_string(),
+    async fn prepare_keeps_tools_when_resources_list_errors() {
+        let server = prepare(
+            "good".into(),
             server_config(server_command_resources_error()),
-        );
-        let manager = McpManager::connect_all(configs).await;
-        assert_eq!(manager.status().get("good"), Some(&McpStatus::Connected));
+        )
+        .await
+        .unwrap();
+        assert_eq!(server.tools()[0].name(), "mcp__good__ping");
+        assert!(server.resources().is_empty());
     }
 }

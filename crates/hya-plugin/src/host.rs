@@ -1,8 +1,7 @@
 //! `PluginHost` — spawns every configured plugin, preserves declared load
 //! order, runs the hook chains the bridges drive, and supervises each child:
 //! a crash (EOF mid-call) marks the plugin `Dead`, the next call respawns it,
-//! and exceeding the restart budget moves it to `Disabled`. Generalizes
-//! `hya_mcp::manager::McpManager`.
+//! and exceeding the restart budget moves it to `Disabled`.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;

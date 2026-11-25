@@ -3,7 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use hya_mcp::{McpManager, McpServerConfig, McpStatus};
+use hya_mcp::{McpServerConfig, McpStatus, PreparedMcpServer, prepare};
 use hya_server::McpControl;
 use serde_json::Value;
 use tokio::sync::RwLock;
@@ -13,7 +13,7 @@ type ControlFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 #[derive(Default)]
 pub struct TestMcpControl {
     configs: RwLock<BTreeMap<String, McpServerConfig>>,
-    managers: RwLock<BTreeMap<String, Arc<McpManager>>>,
+    servers: RwLock<BTreeMap<String, PreparedMcpServer>>,
     status: RwLock<BTreeMap<String, McpStatus>>,
 }
 
@@ -31,21 +31,26 @@ impl TestMcpControl {
             .write()
             .await
             .insert(name.clone(), config.clone());
-        if config.enabled == Some(false) {
-            self.managers.write().await.remove(&name);
-            self.status.write().await.insert(name, McpStatus::Disabled);
-            return;
+        let (server, status) = if config.enabled == Some(false) {
+            (None, McpStatus::Disabled)
+        } else {
+            match prepare(name.clone(), config).await {
+                Ok(server) => (Some(server), McpStatus::Connected),
+                Err(error) => (
+                    None,
+                    McpStatus::Failed {
+                        error: error.to_string(),
+                    },
+                ),
+            }
+        };
+        let mut servers = self.servers.write().await;
+        if let Some(server) = server {
+            servers.insert(name.clone(), server);
+        } else {
+            servers.remove(&name);
         }
-        let manager =
-            Arc::new(McpManager::connect_all(BTreeMap::from([(name.clone(), config)])).await);
-        let status = manager
-            .status()
-            .get(&name)
-            .cloned()
-            .unwrap_or_else(|| McpStatus::Failed {
-                error: "test MCP manager returned no status".to_string(),
-            });
-        self.managers.write().await.insert(name.clone(), manager);
+        drop(servers);
         self.status.write().await.insert(name, status);
     }
 }
@@ -79,11 +84,11 @@ impl McpControl for TestMcpControl {
 
     fn resources(&self) -> ControlFuture<'_, BTreeMap<String, Value>> {
         Box::pin(async move {
-            self.managers
+            self.servers
                 .read()
                 .await
                 .values()
-                .flat_map(|manager| manager.resources())
+                .flat_map(PreparedMcpServer::resources)
                 .collect()
         })
     }

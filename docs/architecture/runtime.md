@@ -756,7 +756,8 @@ first turn. A refresh rejected by the reconciler is non-fatal and only prints
 #### MCP resources
 
 Beyond tools, hya performs a best-effort `resources/list` per connected MCP
-server and exposes the result through `McpManager::resources()`. Each entry is
+server. The published runtime snapshot retains each `PreparedMcpServer` and
+exposes its `resources()` map alongside its tools. Each entry is
 keyed `<sanitized server>:<sanitized resource name>`, where sanitizing keeps
 ASCII alphanumerics, `_`, and `-`, and replaces every other character with
 `_`. Each value carries a `client` field naming the owning server.

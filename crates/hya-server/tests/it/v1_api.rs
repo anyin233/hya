@@ -535,6 +535,33 @@ fn decode_b64(body: &Value) -> Vec<u8> {
 }
 
 #[tokio::test]
+async fn v1_mcp_reports_disabled_and_failed_preparations() {
+    let control = crate::mcp_fixture::TestMcpControl::new(std::collections::BTreeMap::from([
+        (
+            "disabled".into(),
+            hya_mcp::McpServerConfig {
+                enabled: Some(false),
+                ..Default::default()
+            },
+        ),
+        ("failed".into(), hya_mcp::McpServerConfig::default()),
+    ]))
+    .await;
+    let app = router(state().await.with_mcp_control(control));
+    let (status, body) = send(app, Method::GET, "/v1/mcp", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["servers"][0]["name"], "disabled");
+    assert_eq!(body["servers"][0]["state"], "MCP_SERVER_STATE_DISCONNECTED");
+    assert_eq!(body["servers"][1]["name"], "failed");
+    assert_eq!(body["servers"][1]["state"], "MCP_SERVER_STATE_FAILED");
+    assert!(
+        body["servers"][1]["error"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty())
+    );
+}
+
+#[tokio::test]
 async fn v1_project_vcs_mcp_and_workflow_catalog_answer() {
     let app = router(state().await);
     let root = std::env::temp_dir().join(format!(

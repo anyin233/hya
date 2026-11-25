@@ -1,5 +1,7 @@
 //! Integration tests for `hya-server`, built as one binary; each module covers one area.
 
+#[path = "support/mcp.rs"]
+mod mcp_fixture;
 mod support;
 
 mod v1_agent_models_api;

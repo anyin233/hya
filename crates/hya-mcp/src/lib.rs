@@ -6,9 +6,8 @@
 //! `mcp__{server}__{tool}`. The model only sees those namespaced tools; permission
 //! checks use `Action::Mcp` on the namespaced command string.
 //!
-//! Typical flow: parse [`McpServerConfig`] maps → [`prepare`] / [`McpManager::connect_all`]
-//! → take [`McpManager::tools`] into the runtime registry. Deferred startup can hold
-//! a [`McpManager::pending`] status map while connections finish in the background.
+//! Prepare each named server using [`prepare`]. Keep the returned
+//! [`PreparedMcpServer`] alive while its tools and resources are published.
 //! Packaged bundles use [`prepare_bundle`] to isolate environment and cwd while
 //! keeping ordinary configured MCP startup behavior unchanged.
 
@@ -28,13 +27,13 @@ mod http;
 pub mod io_tasks {
     pub use hya_child_io::io_tasks::*;
 }
-/// Multi-server manager, config, prepare entry, and status snapshots.
+/// Server configuration, preparation and connection status.
 pub mod manager;
 /// Wire types for JSON-RPC and MCP tools/list / tools/call payloads.
 pub mod protocol;
 mod resource;
 
 pub use client::{McpClient, McpError};
-pub use manager::{
-    McpManager, McpServerConfig, McpStatus, PreparedMcpServer, prepare, prepare_bundle,
-};
+#[allow(deprecated)]
+pub use manager::McpManager;
+pub use manager::{McpServerConfig, McpStatus, PreparedMcpServer, prepare, prepare_bundle};

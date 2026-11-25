@@ -105,12 +105,15 @@ or wire schemas change.
 Connection owners expose explicit completion boundaries too:
 `PluginClient::shutdown(&self) -> ()`, `PreparedPlugin::shutdown(&self) ->
 Result<(), PluginError>`, `McpClient::shutdown(&self) -> ()`,
-`PreparedMcpServer::shutdown(&self) -> ()`, and `McpManager::shutdown(&self) -> ()`
-are async methods. Plugin stdout, reverse capability handlers, event delivery,
-and MCP stdio/classic SSE readers are joined by those owners. Streamable HTTP
+and `PreparedMcpServer::shutdown(&self) -> ()` are async methods. Plugin stdout,
+reverse capability handlers, event delivery, and MCP stdio/classic SSE readers
+are joined by those owners. Streamable HTTP
 requests run in the caller's future. For example, an embedder that calls
 `hya_mcp::prepare(name, config).await?` must later await `server.shutdown()`
-before dropping its resources. Runtime sources implement
+before dropping its resources. `McpManager` is deprecated. Use
+`prepare(name: String, config: McpServerConfig) -> Result<PreparedMcpServer, McpError>`
+and retain each prepared server while its tools and resources are published.
+Runtime sources implement
 `RuntimeSourceOwner::shutdown(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>`;
 static owners do no work. A custom registry embedder calls
 `registry.shutdown_sources().await` after stopping preparation and draining its
