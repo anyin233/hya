@@ -44,11 +44,11 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 
 use crate::agent_model_control::PersistentAgentModelControl;
+use crate::bundle_runtime::source::adapt_prepared_bundle_skills;
 use crate::config;
 use crate::plugin_adapter::PluginHostAdapter;
 use crate::runtime_reconcile::{
     DesiredSource, RuntimeExtensionsRefresh, RuntimeMcpControl, RuntimeReconciler, SourceId,
-    adapt_prepared_bundle_skills,
 };
 use crate::{InstalledBundleRefresh, bundle_registry_path, plugins};
 

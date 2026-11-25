@@ -51,6 +51,7 @@ mod project_scope;
 pub mod provider_control;
 /// Runtime assembly: store, engine, team supervisor, and [`HyaRuntime`].
 pub mod runtime;
+mod runtime_mcp_source;
 mod runtime_reconcile;
 /// Filesystem and trusted builtin skill discovery for full-mode hosts.
 pub mod skill_catalog;

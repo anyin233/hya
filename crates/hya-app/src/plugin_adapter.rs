@@ -16,6 +16,7 @@ use hya_tool::{NamedTool, Tool, ToolCtx, ToolError, ToolResultPolicy};
 use serde_json::Value;
 
 mod hooks;
+pub(crate) mod source;
 
 /// Engine hook, bundle API, and source ownership adapters over an ordered plugin host.
 pub struct PluginHostAdapter {

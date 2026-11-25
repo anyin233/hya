@@ -16,9 +16,11 @@ use hya_plugin::{PluginContributionSet, PluginHost, SkillContribution};
 use hya_tool::{NamedTool, Tool, ToolPermission};
 use sha2::{Digest, Sha256};
 
+use self::source::{bundle_schema_claims, prepared_bundle_skill_exports};
 use crate::bundle_config::BundleConfigLocation;
 use crate::plugin_adapter::{PluginHostAdapter, session_usage_reader};
-use crate::runtime_reconcile::{bundle_schema_claims, prepared_bundle_skill_exports};
+
+pub(crate) mod source;
 
 #[derive(Clone)]
 pub(crate) struct CachedBundleSource {
