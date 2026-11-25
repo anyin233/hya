@@ -45,7 +45,7 @@ pub(super) struct FileConfig {
     /// Bounded nested/parallel subagent caps. Absent → defaults; per-field env
     /// overrides (`HYA_SUBAGENT_*`) win over file values.
     #[serde(default)]
-    pub(super) subagents: Option<SubagentLimitsFile>,
+    subagents: Option<SubagentLimitsFile>,
     /// Logical model categories: each maps a name (e.g. `deep`) to an ordered
     /// list of concrete `provider/model` refs (first = preferred, rest =
     /// failover). Absent → no categories (agents fall back to their own model).
@@ -61,7 +61,7 @@ pub(super) struct FileConfig {
     /// Goal-mode settings (`goal:` block). Absent → the worker's current model
     /// judges; the `--evaluator-model` CLI flag outranks this value.
     #[serde(default)]
-    pub(super) goal: Option<GoalFile>,
+    goal: Option<GoalFile>,
     /// Default replay budget for every provider route. Per-provider `retry:`
     /// blocks override individual fields; `HYA_PROVIDER_RETRY_*` env vars win
     /// over both. Absent → [`hya_provider::RetryConfig`] defaults.
@@ -70,7 +70,7 @@ pub(super) struct FileConfig {
     /// Per-Project catalog scope cache limits (`catalog_scopes:` block).
     /// Absent → [`hya_engine::CatalogScopeCacheConfig`] defaults.
     #[serde(default)]
-    pub(super) catalog_scopes: Option<CatalogScopesFile>,
+    catalog_scopes: Option<CatalogScopesFile>,
 }
 
 /// Immutable on-disk startup settings shared with the engine builder.
@@ -140,7 +140,7 @@ impl EngineSettings {
 /// their project plugin and bundle processes) stay cached, and for how long
 /// an unbound scope is kept.
 #[derive(Debug, Default, Deserialize)]
-pub(super) struct CatalogScopesFile {
+struct CatalogScopesFile {
     /// Most cached scopes; the least recently bound beyond it are dropped.
     #[serde(default)]
     max: Option<usize>,
@@ -156,7 +156,7 @@ pub(super) struct ToolsConfig {
     #[serde(default)]
     pub(super) websearch: WebSearchConfig,
     #[serde(default)]
-    pub(super) code: CodeToolConfig,
+    code: CodeToolConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -180,9 +180,9 @@ impl Default for WebFetchConfig {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct CodeToolConfig {
+struct CodeToolConfig {
     #[serde(default)]
-    pub(super) mode: CodeMode,
+    mode: CodeMode,
 }
 
 /// `tools.code.mode`: whether built-in agents get the code-mode tool, a tool
@@ -260,7 +260,7 @@ impl From<PermissionModeConfig> for Mode {
 /// Recursion depth is deliberately absent: it is the hardcoded engine
 /// constant `MAX_SUBAGENT_DEPTH` (ADR-0015), not a config knob.
 #[derive(Debug, Default, Deserialize)]
-pub(super) struct SubagentLimitsFile {
+struct SubagentLimitsFile {
     #[serde(default)]
     max_concurrency: Option<usize>,
     #[serde(default)]
@@ -428,7 +428,7 @@ pub(super) fn resolve_mcp(file: &FileConfig) -> anyhow::Result<BTreeMap<String, 
 /// Resolve subagent caps from an optional file block, then apply per-field
 /// `HYA_SUBAGENT_*` env overrides (env wins). Unset file fields and unparseable
 /// env values fall back to the [`SubagentLimits`] default.
-pub(super) fn resolve_subagent_limits(file: Option<&SubagentLimitsFile>) -> SubagentLimits {
+fn resolve_subagent_limits(file: Option<&SubagentLimitsFile>) -> SubagentLimits {
     let defaults = SubagentLimits::default();
     let mut limits = SubagentLimits {
         max_concurrency: file
@@ -484,7 +484,7 @@ pub fn resolve_event_bus_capacity() -> usize {
 /// Build a [`CategoryRegistry`] from the file's `categories:` block. Each entry
 /// is an ordered candidate list; empty lists are dropped since a category with
 /// no concrete refs cannot resolve to anything servable.
-pub(super) fn resolve_categories(file: &FileConfig) -> CategoryRegistry {
+fn resolve_categories(file: &FileConfig) -> CategoryRegistry {
     let mut entries = std::collections::HashMap::new();
     for (name, candidates) in &file.categories {
         if let Some(entry) = CategoryEntry::from_candidates(candidates) {
@@ -496,7 +496,7 @@ pub(super) fn resolve_categories(file: &FileConfig) -> CategoryRegistry {
 
 /// Resolve the catalog scope cache limits from an optional file block;
 /// absent fields keep the defaults (32 scopes, 30 minutes idle).
-pub(super) fn resolve_catalog_scope_cache(
+fn resolve_catalog_scope_cache(
     file: Option<&CatalogScopesFile>,
 ) -> hya_engine::CatalogScopeCacheConfig {
     let defaults = hya_engine::CatalogScopeCacheConfig::default();
@@ -555,7 +555,7 @@ pub struct ContextSettings {
 /// Unset file fields and unparseable values fall back to the engine default
 /// rather than to a guess: an unrecognized accounting mode keeps whatever the
 /// file asked for, and an unparseable number keeps the default.
-pub(super) fn resolve_context_settings(file: Option<&CompactionFile>) -> ContextSettings {
+fn resolve_context_settings(file: Option<&CompactionFile>) -> ContextSettings {
     let defaults = CompactionConfig::default();
     let mut settings = ContextSettings {
         compaction: CompactionConfig {
@@ -591,11 +591,11 @@ pub(super) fn resolve_context_settings(file: Option<&CompactionFile>) -> Context
 
 /// File shape of the `goal:` block of `~/.config/hya/config.yaml`.
 #[derive(Clone, Debug, Default, Deserialize)]
-pub(super) struct GoalFile {
+struct GoalFile {
     /// `provider/model` ref that judges goal mode when no `--evaluator-model`
     /// flag is given. Absent/blank → the worker's current model.
     #[serde(default)]
-    pub(super) evaluator_model: Option<String>,
+    evaluator_model: Option<String>,
 }
 
 /// Goal-mode settings resolved from config. There are no env overrides for
@@ -608,7 +608,7 @@ pub struct GoalSettings {
 }
 
 impl GoalSettings {
-    pub(super) fn from_block(block: Option<GoalFile>) -> Self {
+    fn from_block(block: Option<GoalFile>) -> Self {
         Self {
             evaluator_model: block
                 .and_then(|goal| goal.evaluator_model)
@@ -633,3 +633,6 @@ pub fn resolve_evaluator_model<'a>(
         .or_else(|| non_empty(config_value))
         .unwrap_or(worker_current)
 }
+
+#[cfg(test)]
+mod tests;

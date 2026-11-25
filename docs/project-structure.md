@@ -59,6 +59,12 @@ For visual dependency and runtime flow diagrams, see
 | `hya-e2e` | [`../crates/hya-e2e`](../crates/hya-e2e) | Track P process-level E2E harness (real `hya` + scripted FakeLlm; matrix in `crates/hya-e2e/matrix.toml`). |
 | `xtask` | [`../crates/xtask`](../crates/xtask) | Dev tooling (`cargo run -p xtask -- <task>`): `gen-api`, `gen-relay`, `matrix-check`, `package-bundle`, `package-native-tool-bundle`, `package-native-tool-library`, `stage-first-party-bundles`, `startup-bench`, `lifecycle-bench`, and `release-rehearsal`. |
 
+`hya_app::config` is the Rust facade for configuration. Its [file module](../crates/hya-app/src/config/file.rs)
+owns the YAML schema, paths, and bootstrap. The [provider module](../crates/hya-app/src/config/provider.rs)
+resolves provider declarations and builds routes. The [edit module](../crates/hya-app/src/config/edit.rs)
+implements YAML mutations and declaration queries. The [catalog module](../crates/hya-app/src/config/catalog.rs)
+handles discovery, cache writes, and startup and live catalog assembly.
+
 ## Canonical Builtin Tool Surface (25 Registry Tools and 2 Kernel Tools)
 
 `ToolRegistry::builtins()` loads the four trusted first-party tool-family bundles

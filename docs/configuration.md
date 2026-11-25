@@ -82,7 +82,7 @@ permission:
 ## First-Run / Offline Behavior
 
 On startup, hya tries to load `config.yaml` (see
-[`config::load`](../crates/hya-app/src/config.rs) and
+[`config::load`](../crates/hya-app/src/config/catalog.rs) and
 [`config_path`](../crates/hya-app/src/config/file.rs)). `cargo build` only
 compiles the workspace and does not write user config. When a `hya` command
 starts and no file exists, hya creates the config directory and writes a starter
@@ -1434,7 +1434,7 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 
 | Variable | Effect | Default | Source |
 | --- | --- | --- | --- |
-| `HYA_MODEL` | Active request model when `--model` is not passed. **Wins over** the row-backed startup default. Unknown overrides stay outside the catalog and fail through normal routing when used. | Configured `default_model` when it names a resolved row, otherwise the deterministic first live row, otherwise `hya/offline`. | `crates/hya-app/src/runtime.rs`, `crates/hya-app/src/config.rs` |
+| `HYA_MODEL` | Active request model when `--model` is not passed. **Wins over** the row-backed startup default. Unknown overrides stay outside the catalog and fail through normal routing when used. | Configured `default_model` when it names a resolved row, otherwise the deterministic first live row, otherwise `hya/offline`. | `crates/hya-app/src/runtime.rs`, `crates/hya-app/src/config/catalog.rs` |
 | `HYA_COMPACTION_KEEP_RECENT` | Most-recent messages and tool steps whose outputs `shake` keeps. Overrides `compaction.keep_recent`; env wins. Unparseable values ignored. | `6` | `crates/hya-engine/src/compaction.rs`, `crates/hya-app/src/config/file.rs` |
 | `HYA_COMPACTION_SUMMARY_MAX_TOKENS` | Output cap for the summarizer call that writes the terminal handoff. Overrides `compaction.summary_max_tokens`; env wins. | `4096` | same |
 | `HYA_TOKEN_ACCOUNTING` | How window occupancy is measured for `ContextStatus`. `auto` believes a route's reported usage only while it advertises usage support and stays plausible against the local estimate (ratio within `[0.5, 2.0]`), otherwise estimates locally; `provider` always trusts reported usage; `estimate` always counts locally. Overrides `compaction.token_accounting`; env wins. Unrecognized values ignored. | `auto` | `crates/hya-context/src/tokens.rs`, `crates/hya-app/src/config/file.rs` |
