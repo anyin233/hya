@@ -275,8 +275,8 @@ test.describe("subagent panes", () => {
         expect(await term.find("archive-child-prompt")).toBeNull()
         type Session = { id: string; parent?: string; busy?: boolean; members?: { child: string; handle: string; archived?: boolean }[] }
         const read = () => api<Session>(backend, "GET", `/v1/sessions/${rootId}`)
+        await expect.poll(async () => (await read()).members?.[0]?.archived).toBe(true)
         const snapshot = await read()
-        expect(snapshot.members?.[0]?.archived).toBe(true)
         wake.channel = snapshot.members![0]!.handle
         // The archive key belongs to the selector, never the composer.
         await command(term, "/layout focus pane-1")
