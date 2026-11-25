@@ -812,8 +812,10 @@ Gemini (`ProviderKind::Google`, `ReasoningReplayPolicy::GoogleThought`):
 - a `data:<mime>;base64,<payload>` URL whose declared MIME in the header must
   match the part's declared MIME type (case-insensitive)
 
-Non-canonical base64 (decoded then re-encoded differs) is rejected. Valid media
-is sent as `inlineData: { mimeType, data }`.
+The shared media validator checks canonical standard base64 and counts decoded
+bytes in fixed-size chunks. Gemini sends valid input as
+`inlineData: { mimeType, data }`, with the normalized MIME type and the original
+base64 payload.
 
 ### Decoder and finish reasons
 

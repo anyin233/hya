@@ -2010,10 +2010,18 @@ async fn http_provider_google_uses_google_thought_policy_and_gemini3_thinking_le
         system: Some("sys".to_string()),
         messages: vec![Message::User {
             id: MessageId::new(),
-            parts: vec![Part::Text {
-                id: PartId::new(),
-                text: "hi".to_string(),
-            }],
+            parts: vec![
+                Part::Text {
+                    id: PartId::new(),
+                    text: "hi".to_string(),
+                },
+                Part::Media {
+                    id: PartId::new(),
+                    media_type: "AuDio/WAV".to_string(),
+                    data: "data:AUDIO/wav;BASE64,Zg==".to_string(),
+                    filename: None,
+                },
+            ],
         }],
         tools: Vec::new(),
         temperature: None,
@@ -2041,6 +2049,11 @@ async fn http_provider_google_uses_google_thought_policy_and_gemini3_thinking_le
         "POST /v1beta/models/gemini-3-pro-preview:streamGenerateContent?alt=sse HTTP/1.1\r\n"
     ));
     let body: Value = serde_json::from_str(&captured.body).unwrap();
+    assert!(
+        captured
+            .body
+            .contains(r#"{"inlineData":{"mimeType":"audio/wav","data":"Zg=="}}"#)
+    );
     assert_eq!(
         body["generationConfig"]["thinkingConfig"],
         json!({"thinkingLevel": "medium", "includeThoughts": true})
