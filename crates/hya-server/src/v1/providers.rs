@@ -14,13 +14,12 @@ use super::Json;
 use axum::extract::{Path as AxumPath, Query, State};
 use hya_api::v1 as pb;
 use hya_proto::{FinishReason, ModelRef};
-use hya_provider::{ProviderError, ProviderKind};
+use hya_provider::{ProviderError, ProviderKind, valid_provider_id};
 
 use crate::ServerState;
 use crate::provider_control::{
     PROVIDER_CONTROL_UNAVAILABLE, PROVIDER_INVALID_REQUEST, PROVIDER_NOT_FOUND, ProviderChange,
     ProviderControlError, ProviderDiscoveryReport, ProviderModelOverride, ProviderUpsert,
-    valid_provider_id,
 };
 
 use super::V1Error;

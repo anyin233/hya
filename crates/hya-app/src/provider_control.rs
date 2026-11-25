@@ -192,7 +192,7 @@ impl ProviderControl for ProviderManager {
         request: ProviderUpsert,
     ) -> ProviderControlFuture<'_, ProviderChange> {
         Box::pin(async move {
-            if !hya_server::valid_provider_id(&request.id) || request.id == "hya" {
+            if !hya_provider::valid_provider_id(&request.id) || request.id == "hya" {
                 return Err(invalid(format!("invalid provider id `{}`", request.id)));
             }
             if !config::PROVIDER_KIND_LABELS.contains(&request.kind.as_str()) {

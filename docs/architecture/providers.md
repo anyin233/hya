@@ -361,6 +361,13 @@ Six `ProviderKind` values (not three):
 Five auth styles: **Bearer**, **CodexSession**, **GrokSession**, **Anthropic**,
 **Google**.
 
+`hya_provider::valid_provider_id(provider_id: &str) -> bool` checks the provider ID format shared by the app, HTTP API, and CLI. It accepts 1 to 64 ASCII letters, digits, hyphens, or underscores. The app and CLI enforce the `hya` reservation separately. Rust callers can migrate from the deprecated `hya_server::valid_provider_id` to the provider function with the same signature.
+
+```rust
+assert!(hya_provider::valid_provider_id("team_openai-2"));
+assert!(!hya_provider::valid_provider_id("team.openai"));
+```
+
 ### Client policy and security
 
 - **Redirects disabled** (`Policy::none`) so an `x-api-key` (or other secret
