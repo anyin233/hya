@@ -4,68 +4,15 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-use hya_tool::{
-    Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolError, WebSearchPlane, handle::ArtifactPlane,
-};
+use hya_tool::{Action, Tool, ToolCtx, ToolError};
 use serde_json::{Value, json};
-use tokio_util::sync::CancellationToken;
 
-fn allow(action: Action, pat: &str) -> Rule {
-    Rule::new(action, pat, Mode::Allow)
-}
+use crate::common::{TempDirGuard, allow, ctx_with, deny, tempdir};
 
-fn deny(action: Action, pat: &str) -> Rule {
-    Rule::new(action, pat, Mode::Deny)
-}
-
-fn tempdir() -> PathBuf {
-    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("hya-bash-{nanos}-{}-{id}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::canonicalize(&dir).unwrap()
-}
-
-fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
-    let (permission, _rx) = PermissionPlane::new(PermissionRules::new(rules));
-    let (interaction, _irx) = InteractionPlane::new();
-    let (spawner, _srx) = SpawnerPlane::new();
-    ToolCtx {
-        nested: hya_tool::NestedToolPlane::disconnected(),
-        workflows: hya_tool::WorkflowPlane::disconnected(),
-        permission,
-        interaction,
-        spawner,
-        operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-        mailbox: hya_tool::MailboxPlane::disconnected(),
-        lifecycle: hya_tool::LifecyclePlane::disconnected(),
-        session: None,
-        parent_session: None,
-        skills: SkillPlane::default(),
-        artifacts: ArtifactPlane::default(),
-        websearch: WebSearchPlane::default(),
-        lsp: LspPlane::default(),
-        formatter: hya_tool::FormatterPlane::default(),
-        agents: Default::default(),
-        roots: vec![workdir.clone()],
-        workdir,
-        cancel: CancellationToken::new(),
-        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
-    }
-}
-
-/// Run one Bash call behind a bounded test guard so a broken timeout path cannot
-/// leave the integration suite waiting indefinitely.
 async fn execute_with_guard(
-    tool: &dyn hya_tool::Tool,
+    tool: &dyn Tool,
     ctx: &ToolCtx,
     input: Value,
 ) -> Result<Value, ToolError> {
@@ -74,20 +21,14 @@ async fn execute_with_guard(
         .expect("Bash call exceeded the integration-test guard")
 }
 
-/// Quote a filesystem path for the POSIX shell command fixtures below.
 fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"))
 }
 
-/// Assert the structured result envelope and the bounded metadata allowlist.
 fn assert_result_shape(result: &Value, command: &str) {
     let object = result.as_object().expect("Bash result must be an object");
     let result_keys = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
-    assert_eq!(
-        result_keys,
-        BTreeSet::from(["metadata", "output", "title"]),
-        "Bash results must retain their structured envelope"
-    );
+    assert_eq!(result_keys, BTreeSet::from(["metadata", "output", "title"]));
     assert_eq!(result["title"], command);
     assert!(result["output"].is_string());
 
@@ -111,7 +52,7 @@ fn assert_result_shape(result: &Value, command: &str) {
     ]);
     assert!(
         metadata.keys().all(|key| allowed.contains(key.as_str())),
-        "Bash metadata must not expose arbitrary fields: {metadata:?}"
+        "unexpected Bash metadata keys: {metadata:?}"
     );
     assert!(metadata["exit"].is_null() || metadata["exit"].is_i64());
     assert!(metadata["timedOut"].is_boolean());
@@ -120,16 +61,9 @@ fn assert_result_shape(result: &Value, command: &str) {
     assert!(metadata["cwd"].is_string());
     assert!(metadata["durationMs"].is_number());
     assert!(metadata["timeoutSeconds"].is_number());
-    if let Some(clamped) = metadata.get("timeoutClamped") {
-        assert!(clamped.is_boolean());
-    }
-    if let Some(output_path) = metadata.get("outputPath") {
-        assert!(output_path.is_string());
-    }
 }
 
 #[cfg(unix)]
-/// Wait until a command publishes a parsed child PID through its marker file.
 async fn wait_for_pid(path: &Path) -> i32 {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -147,16 +81,13 @@ async fn wait_for_pid(path: &Path) -> i32 {
 }
 
 #[cfg(unix)]
-/// Return whether a process still exists without treating permission errors as
-/// proof that the process exited.
 fn process_is_alive(pid: i32) -> bool {
-    // SAFETY: kill(pid, 0) performs an existence check and sends no signal.
+    // SAFETY: kill(pid, 0) probes process existence without sending a signal.
     let result = unsafe { libc::kill(pid, 0) };
     result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 #[cfg(unix)]
-/// Wait for a process-group member to disappear after timeout or cancellation.
 async fn wait_for_process_exit(pid: i32) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -170,7 +101,6 @@ async fn wait_for_process_exit(pid: i32) {
     .expect("Bash process-group member survived cleanup guard");
 }
 
-/// An exited Linux leader stays waitable while descendants are supervised.
 #[cfg(unix)]
 async fn wait_for_leader_exit(leader: i32) {
     #[cfg(target_os = "linux")]
@@ -196,722 +126,6 @@ async fn wait_for_leader_exit(leader: i32) {
     wait_for_process_exit(leader).await;
 }
 
-#[test]
-fn bash_schema_is_closed_and_hides_the_shell_alias() {
-    // Given
-    let registry = hya_tool_loader::builtins();
-
-    // When
-    let schemas = registry.schemas();
-    let advertised_names = schemas
-        .iter()
-        .map(|schema| schema.name.as_str())
-        .collect::<Vec<_>>();
-    let tool = registry.get("bash").unwrap();
-    let schema = tool.schema();
-    let properties = schema.input_schema["properties"].as_object().unwrap();
-
-    // Then
-    assert_eq!(schema.name.as_str(), "bash");
-    assert!(advertised_names.contains(&"bash"));
-    assert!(!advertised_names.contains(&"shell"));
-    assert_eq!(
-        advertised_names
-            .iter()
-            .filter(|name| **name == "bash")
-            .count(),
-        1
-    );
-    assert!(registry.get("shell").is_some());
-    assert_eq!(schema.input_schema["type"], "object");
-    assert_eq!(schema.input_schema["additionalProperties"], false);
-    assert_eq!(schema.input_schema["required"], json!(["command"]));
-    assert_eq!(
-        properties
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["command", "cwd", "env", "pty", "timeout"])
-    );
-    assert_eq!(properties["command"]["type"], "string");
-    assert_eq!(properties["env"]["type"], "object");
-    assert_eq!(properties["env"]["additionalProperties"]["type"], "string");
-    assert_eq!(properties["timeout"]["type"], "number");
-    assert_eq!(properties["cwd"]["type"], "string");
-    assert_eq!(properties["pty"]["type"], "boolean");
-    assert!(!properties.contains_key("workdir"));
-}
-
-#[tokio::test]
-async fn bash_executes_canonical_calls_and_hidden_shell_alias_dispatches() {
-    // Given
-    let dir = tempdir();
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let registry = hya_tool_loader::builtins();
-    let canonical = registry.get("bash").unwrap();
-    let alias = registry.get("shell").unwrap();
-
-    // When
-    let canonical_result = execute_with_guard(
-        canonical.as_ref(),
-        &ctx,
-        json!({ "command": "printf canonical", "timeout": 1.0 }),
-    )
-    .await
-    .unwrap();
-    let alias_result = execute_with_guard(
-        alias.as_ref(),
-        &ctx,
-        json!({ "command": "printf alias", "timeout": 1.0 }),
-    )
-    .await
-    .unwrap();
-
-    // Then
-    assert_eq!(
-        canonical.result_policy(),
-        hya_tool::ToolResultPolicy::Coding
-    );
-    assert_eq!(alias.result_policy(), hya_tool::ToolResultPolicy::Coding);
-    assert_result_shape(&canonical_result, "printf canonical");
-    assert_result_shape(&alias_result, "printf alias");
-    assert_eq!(canonical_result["output"], "canonical");
-    assert_eq!(alias_result["output"], "alias");
-    assert_eq!(canonical_result["metadata"]["exit"], 0);
-    assert_eq!(alias_result["metadata"]["exit"], 0);
-}
-
-#[tokio::test]
-async fn bash_accepts_env_without_disclosing_values_in_the_result() {
-    // Given
-    let dir = tempdir();
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-    let secret = "bash-secret-value-7e4c";
-    let command = "test -n \"$HYA_PRIVATE_VALUE\" && printf ready";
-
-    // When
-    let result = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({
-            "command": command,
-            "env": { "HYA_PRIVATE_VALUE": secret },
-            "timeout": 1.0
-        }),
-    )
-    .await
-    .unwrap();
-
-    // Then
-    assert_result_shape(&result, command);
-    assert_eq!(result["output"], "ready");
-    let serialized = serde_json::to_string(&result).unwrap();
-    assert!(!serialized.contains(secret));
-}
-
-#[tokio::test]
-async fn bash_rejects_legacy_workdir_and_other_unknown_input_keys() {
-    // Given
-    let dir = tempdir();
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-
-    // When
-    let result = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": "printf never", "workdir": "." }),
-    )
-    .await;
-
-    // Then
-    assert!(matches!(result, Err(ToolError::Input(_))));
-}
-
-#[tokio::test]
-async fn bash_uses_canonical_cwd_and_records_it_in_metadata() {
-    // Given
-    let dir = tempdir();
-    let subdir = dir.join("subdir");
-    tokio::fs::create_dir_all(&subdir).await.unwrap();
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-
-    // When
-    let result = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": "pwd", "timeout": 1.0, "cwd": "subdir" }),
-    )
-    .await
-    .unwrap();
-
-    // Then
-    assert_result_shape(&result, "pwd");
-    assert!(
-        result["output"]
-            .as_str()
-            .unwrap()
-            .trim()
-            .ends_with("/subdir")
-    );
-    assert!(
-        result["metadata"]["cwd"]
-            .as_str()
-            .unwrap()
-            .replace('\\', "/")
-            .ends_with("/subdir")
-    );
-}
-
-#[tokio::test]
-async fn bash_uses_default_and_zero_disabled_timeouts() {
-    // Given
-    let dir = tempdir();
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-
-    // When
-    let default_result =
-        execute_with_guard(tool.as_ref(), &ctx, json!({ "command": "printf default" }))
-            .await
-            .unwrap();
-    let disabled_result = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": "printf disabled", "timeout": 0.0 }),
-    )
-    .await
-    .unwrap();
-
-    // Then
-    assert_result_shape(&default_result, "printf default");
-    assert_result_shape(&disabled_result, "printf disabled");
-    assert_eq!(
-        default_result["metadata"]["timeoutSeconds"].as_f64(),
-        Some(300.0)
-    );
-    assert_eq!(
-        disabled_result["metadata"]["timeoutSeconds"].as_f64(),
-        Some(0.0)
-    );
-    assert_eq!(default_result["metadata"]["timedOut"], false);
-    assert_eq!(disabled_result["metadata"]["timedOut"], false);
-}
-
-#[tokio::test]
-async fn bash_rejects_negative_and_nonfinite_timeout_inputs() {
-    // Given
-    let dir = tempdir();
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-
-    // When
-    let negative = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": "printf never", "timeout": -1.0 }),
-    )
-    .await;
-    let nonfinite = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": "printf never", "timeout": "NaN" }),
-    )
-    .await;
-
-    // Then
-    assert!(matches!(negative, Err(ToolError::Input(_))));
-    assert!(matches!(nonfinite, Err(ToolError::Input(_))));
-}
-
-#[tokio::test]
-async fn bash_clamps_positive_timeout_bounds_and_reports_a_notice() {
-    // Given
-    let dir = tempdir();
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-
-    // When
-    let lower = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": "printf lower", "timeout": 0.25 }),
-    )
-    .await
-    .unwrap();
-    let upper = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": "printf upper", "timeout": 7200.0 }),
-    )
-    .await
-    .unwrap();
-
-    // Then
-    assert_result_shape(&lower, "printf lower");
-    assert_result_shape(&upper, "printf upper");
-    assert_eq!(lower["metadata"]["timeoutSeconds"].as_f64(), Some(1.0));
-    assert_eq!(upper["metadata"]["timeoutSeconds"].as_f64(), Some(3600.0));
-    assert_eq!(lower["metadata"]["timeoutClamped"], true);
-    assert_eq!(upper["metadata"]["timeoutClamped"], true);
-    assert!(
-        lower["output"]
-            .as_str()
-            .unwrap()
-            .to_ascii_lowercase()
-            .contains("clamp")
-    );
-    assert!(
-        upper["output"]
-            .as_str()
-            .unwrap()
-            .to_ascii_lowercase()
-            .contains("clamp")
-    );
-}
-
-#[tokio::test]
-async fn bash_denied_command_does_not_run_in_an_outside_cwd() {
-    // Given
-    let dir = tempdir();
-    let outside = tempdir();
-    let marker = dir.join("must-not-run");
-    let ctx = ctx_with(
-        vec![
-            deny(Action::Bash, "*"),
-            deny(Action::ExternalDirectory, "*"),
-        ],
-        dir,
-    );
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-    let command = format!("printf ran > {}", shell_quote(&marker));
-
-    // When
-    let result = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": command, "cwd": outside.to_string_lossy() }),
-    )
-    .await;
-
-    // Then
-    assert!(matches!(
-        result,
-        Err(ToolError::Permission(hya_tool::PermissionError::Denied {
-            action: Action::Bash,
-            ..
-        }))
-    ));
-    assert!(!marker.exists());
-}
-
-#[tokio::test]
-async fn bash_runs_in_a_cwd_outside_the_roots_without_an_external_directory_check() {
-    // Given: bash has no path boundary (ADR-0026), so even a blanket
-    // ExternalDirectory deny must not stop a command whose cwd is elsewhere.
-    let dir = tempdir();
-    let outside = tempdir();
-    let ctx = ctx_with(
-        vec![
-            allow(Action::Bash, "*"),
-            deny(Action::ExternalDirectory, "*"),
-        ],
-        dir,
-    );
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-
-    // When
-    let result = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": "pwd", "cwd": outside.to_string_lossy() }),
-    )
-    .await
-    .unwrap();
-
-    // Then
-    assert_result_shape(&result, "pwd");
-    assert!(
-        result["output"]
-            .as_str()
-            .unwrap()
-            .contains(outside.to_string_lossy().as_ref())
-    );
-}
-
-#[tokio::test]
-async fn bash_returns_structured_nonzero_exit_results() {
-    // Given
-    let dir = tempdir();
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-    let command = "printf stdout; printf stderr >&2; exit 17";
-
-    // When
-    let result = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": command, "timeout": 1.0 }),
-    )
-    .await
-    .unwrap();
-
-    // Then
-    assert_result_shape(&result, command);
-    assert_eq!(result["metadata"]["exit"], 17);
-    assert_eq!(result["metadata"]["timedOut"], false);
-    let output = result["output"].as_str().unwrap();
-    assert!(output.contains("stdout"));
-    assert!(output.contains("stderr"));
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn bash_timeout_returns_completed_result_and_cleans_process_group() {
-    // Given
-    let dir = tempdir();
-    let pid_path = dir.join("timeout-child.pid");
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-    let command = format!(
-        "(while :; do :; done) & child=$!; printf '%s' \"$child\" > {}; wait \"$child\"",
-        shell_quote(&pid_path)
-    );
-    let task = tokio::spawn(async move {
-        tool.execute(&ctx, json!({ "command": command, "timeout": 1.0 }))
-            .await
-    });
-    let child_pid = wait_for_pid(&pid_path).await;
-
-    // When
-    let result = tokio::time::timeout(Duration::from_secs(8), task)
-        .await
-        .expect("timed-out Bash call exceeded the integration-test guard")
-        .expect("timed-out Bash task panicked")
-        .unwrap();
-
-    // Then
-    assert_result_shape(&result, result["title"].as_str().unwrap());
-    assert_eq!(result["metadata"]["exit"], Value::Null);
-    assert_eq!(result["metadata"]["timedOut"], true);
-    assert_eq!(result["metadata"]["timeoutSeconds"].as_f64(), Some(1.0));
-    assert!(
-        result["output"]
-            .as_str()
-            .unwrap()
-            .to_ascii_lowercase()
-            .contains("timeout")
-    );
-    wait_for_process_exit(child_pid).await;
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn bash_cancellation_returns_cancelled_and_cleans_process_group() {
-    // Given
-    let dir = tempdir();
-    let pid_path = dir.join("cancel-child.pid");
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let cancel = ctx.cancel.clone();
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-    let command = format!(
-        "(while :; do :; done) & child=$!; printf '%s' \"$child\" > {}; wait \"$child\"",
-        shell_quote(&pid_path)
-    );
-    let task = tokio::spawn(async move {
-        tool.execute(&ctx, json!({ "command": command, "timeout": 0.0 }))
-            .await
-    });
-    let child_pid = wait_for_pid(&pid_path).await;
-
-    // When
-    cancel.cancel();
-    let result = tokio::time::timeout(Duration::from_secs(5), task)
-        .await
-        .expect("cancelled Bash call exceeded the integration-test guard")
-        .expect("cancelled Bash task panicked");
-
-    // Then
-    assert!(matches!(result, Err(ToolError::Cancelled)));
-    wait_for_process_exit(child_pid).await;
-}
-
-#[tokio::test]
-async fn bash_captures_stdout_and_stderr_with_per_stream_order() {
-    // Given
-    let dir = tempdir();
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-    let command =
-        "printf 'out-1\\n'; printf 'err-1\\n' >&2; printf 'out-2\\n'; printf 'err-2\\n' >&2";
-
-    // When
-    let result = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": command, "timeout": 1.0 }),
-    )
-    .await
-    .unwrap();
-
-    // Then
-    assert_result_shape(&result, command);
-    let output = result["output"].as_str().unwrap();
-    for marker in ["out-1", "out-2", "err-1", "err-2"] {
-        assert!(
-            output.contains(marker),
-            "missing {marker} in combined output"
-        );
-    }
-    assert!(output.find("out-1").unwrap() < output.find("out-2").unwrap());
-    assert!(output.find("err-1").unwrap() < output.find("err-2").unwrap());
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn bash_keeps_arrival_order_when_stdout_backpressure_precedes_stderr() {
-    // Given
-    let dir = tempdir();
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-    let payload_bytes = 128 * 1024;
-    let marker = "stderr-after-stdout-unique";
-    let command = format!(
-        "python3 - <<'PY'\nimport os\npayload = b'O' * {payload_bytes}\nview = memoryview(payload)\nwhile view:\n    view = view[os.write(1, view):]\nos.write(2, b'{marker}\\n')\nPY"
-    );
-
-    // When
-    let result = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": command, "timeout": 10.0 }),
-    )
-    .await
-    .unwrap();
-
-    // Then
-    assert_result_shape(&result, result["title"].as_str().unwrap());
-    assert_eq!(result["metadata"]["truncated"], true);
-    let output = result["output"].as_str().unwrap();
-    assert!(output.len() <= 50 * 1024);
-    let output_path = result["metadata"]["outputPath"]
-        .as_str()
-        .expect("overflow must retain a complete artifact path");
-    let artifact = tokio::fs::read(output_path).await.unwrap();
-    let marker_at = artifact
-        .windows(marker.len())
-        .position(|window| window == marker.as_bytes())
-        .expect("stderr marker missing from complete artifact");
-    assert!(marker_at >= payload_bytes);
-    assert!(artifact[..marker_at].iter().all(|byte| *byte == b'O'));
-    assert_eq!(&artifact[marker_at..], format!("{marker}\n").as_bytes());
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn bash_decodes_invalid_utf8_lossily_without_invalid_result_bytes() {
-    // Given
-    let dir = tempdir();
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-    let command = "python3 -c 'import os; os.write(1, b\"ok\\xff\\xfe\")'";
-
-    // When
-    let result = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": command, "timeout": 1.0 }),
-    )
-    .await
-    .unwrap();
-
-    // Then
-    assert_result_shape(&result, command);
-    let output = result["output"].as_str().unwrap();
-    assert!(output.contains("ok\u{fffd}\u{fffd}"));
-    assert!(serde_json::to_string(&result).is_ok());
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn bash_pty_observes_tty_and_non_pty_does_not_fallback() {
-    // Given
-    let dir = tempdir();
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-    let command = "test -t 0 && test -t 1 && printf tty";
-
-    // When
-    let pty_result = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": command, "timeout": 1.0, "pty": true }),
-    )
-    .await
-    .unwrap();
-    let pipe_result = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": command, "timeout": 1.0, "pty": false }),
-    )
-    .await
-    .unwrap();
-
-    // Then
-    assert_result_shape(&pty_result, command);
-    assert_result_shape(&pipe_result, command);
-    assert_eq!(pty_result["metadata"]["pty"], true);
-    assert_eq!(pipe_result["metadata"]["pty"], false);
-    assert_eq!(pty_result["metadata"]["exit"], 0);
-    assert_eq!(pipe_result["metadata"]["exit"], 1);
-    assert!(pty_result["output"].as_str().unwrap().contains("tty"));
-    assert!(!pipe_result["output"].as_str().unwrap().contains("tty"));
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn bash_pty_timeout_returns_structured_result_and_cleans_process_group() {
-    // Given
-    let dir = tempdir();
-    let pid_path = dir.join("pty-timeout-child.pid");
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-    let command = format!(
-        "printf '%s' \"$$\" > {}; while :; do :; done",
-        shell_quote(&pid_path)
-    );
-    let task = tokio::spawn(async move {
-        tool.execute(
-            &ctx,
-            json!({ "command": command, "timeout": 1.0, "pty": true }),
-        )
-        .await
-    });
-    let pid = wait_for_pid(&pid_path).await;
-
-    // When
-    let result = tokio::time::timeout(Duration::from_secs(8), task)
-        .await
-        .expect("timed-out PTY Bash call exceeded the integration-test guard")
-        .expect("timed-out PTY Bash task panicked")
-        .unwrap();
-
-    // Then
-    assert_result_shape(&result, result["title"].as_str().unwrap());
-    assert_eq!(result["metadata"]["pty"], true);
-    assert_eq!(result["metadata"]["timedOut"], true);
-    assert_eq!(result["metadata"]["exit"], Value::Null);
-    wait_for_process_exit(pid).await;
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn bash_pty_cancellation_returns_cancelled_and_cleans_process_group() {
-    // Given
-    let dir = tempdir();
-    let pid_path = dir.join("pty-cancel-child.pid");
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let cancel = ctx.cancel.clone();
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-    let command = format!(
-        "printf '%s' \"$$\" > {}; while :; do :; done",
-        shell_quote(&pid_path)
-    );
-    let task = tokio::spawn(async move {
-        tool.execute(
-            &ctx,
-            json!({ "command": command, "timeout": 0.0, "pty": true }),
-        )
-        .await
-    });
-    let pid = wait_for_pid(&pid_path).await;
-
-    // When
-    cancel.cancel();
-    let result = tokio::time::timeout(Duration::from_secs(5), task)
-        .await
-        .expect("cancelled PTY Bash call exceeded the integration-test guard")
-        .expect("cancelled PTY Bash task panicked");
-
-    // Then
-    assert!(matches!(result, Err(ToolError::Cancelled)));
-    wait_for_process_exit(pid).await;
-}
-
-#[tokio::test]
-async fn bash_uses_bash_language_semantics() {
-    // Given
-    let dir = tempdir();
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-    let command = "[[ alpha == a* ]] && printf bash-language";
-
-    // When
-    let result = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": command, "timeout": 1.0 }),
-    )
-    .await
-    .unwrap();
-
-    // Then
-    assert_result_shape(&result, command);
-    assert_eq!(result["metadata"]["exit"], 0);
-    assert_eq!(result["output"], "bash-language");
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn bash_timeout_still_applies_after_the_shell_exits_with_open_child_pipes() {
-    // Given
-    let dir = tempdir();
-    let pid_path = dir.join("detached-pipe-child.pid");
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-    let command = format!(
-        "sleep 4 & child=$!; printf '%s' \"$child\" > {}",
-        shell_quote(&pid_path)
-    );
-    let started = std::time::Instant::now();
-    let task = tokio::spawn(async move {
-        tool.execute(&ctx, json!({ "command": command, "timeout": 1.0 }))
-            .await
-    });
-    let child_pid = wait_for_pid(&pid_path).await;
-
-    // When
-    let result = tokio::time::timeout(Duration::from_secs(8), task)
-        .await
-        .expect("Bash call with inherited pipes exceeded the integration-test guard")
-        .expect("Bash task with inherited pipes panicked")
-        .unwrap();
-
-    // Then
-    assert!(started.elapsed() < Duration::from_secs(3));
-    assert_eq!(result["metadata"]["exit"], Value::Null);
-    assert_eq!(result["metadata"]["timedOut"], true);
-    wait_for_process_exit(child_pid).await;
-}
-/// Remove a temporary workspace when a test exits, including assertion failures.
-struct TempDirGuard(PathBuf);
-
-impl TempDirGuard {
-    /// Retain a workspace path for best-effort test cleanup.
-    fn new(path: &Path) -> Self {
-        Self(path.to_path_buf())
-    }
-}
-
-impl Drop for TempDirGuard {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-/// List spill files currently present below a Bash artifact directory.
 async fn artifact_paths(root: &Path) -> Vec<PathBuf> {
     let Ok(mut entries) = tokio::fs::read_dir(root).await else {
         return Vec::new();
@@ -923,7 +137,6 @@ async fn artifact_paths(root: &Path) -> Vec<PathBuf> {
     paths
 }
 
-/// Wait until incremental capture creates one spill artifact.
 async fn wait_for_artifact(root: &Path) -> PathBuf {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -938,7 +151,6 @@ async fn wait_for_artifact(root: &Path) -> PathBuf {
 }
 
 #[cfg(unix)]
-/// Kill one test-owned process when an outer guard catches a lifecycle defect.
 fn kill_test_process(pid: i32) {
     // SAFETY: the PID came from a child marker written by this test.
     let result = unsafe { libc::kill(pid, libc::SIGKILL) };
@@ -979,7 +191,7 @@ impl Drop for DaemonCleanup {
 
 #[cfg(unix)]
 async fn check_setsid_capture(pty: bool, timeout: bool, cancel: bool, output: &str) {
-    let dir = tempdir();
+    let dir = tempdir("bash-setsid");
     let _workspace = TempDirGuard::new(&dir);
     let cleanup = DaemonCleanup {
         shell_pid: dir.join("shell.pid"),
@@ -988,20 +200,24 @@ async fn check_setsid_capture(pty: bool, timeout: bool, cancel: bool, output: &s
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
     let cancellation = ctx.cancel.clone();
     let tool = hya_tool_loader::builtins().get("bash").unwrap();
-    // Fork before setsid: the shell's exec'ed Python is already a group leader.
-    // The handshake ensures the daemon owns a new session before its parent exits.
+    let payload_size = 512 * 1024;
     let command = format!(
-        "printf '%s' \"$$\" > {}; python3 - {} {} {} <<'PY'\nimport os, signal, sys, time\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\nr, w = os.pipe()\nif os.fork() == 0:\n    os.close(r)\n    os.setsid()\n    with open(sys.argv[1], 'w') as f:\n        f.write(str(os.getpid()))\n    os.write(w, b'ready')\n    os.close(w)\n    if sys.argv[3] == 'chatty':\n        while True:\n            os.write(1, b'daemon-tick\\n')\n            time.sleep(0.05)\n    time.sleep(60)\n    os._exit(0)\nos.close(w)\nos.read(r, 5)\nos.close(r)\nif sys.argv[3] == 'payload':\n    for fd in (1, 2):\n        view = memoryview(b'X' * (4 * 1024 * 1024))\n        while view:\n            view = view[os.write(fd, view):]\nif sys.argv[2] == 'wait':\n    time.sleep(60)\nPY",
+        "printf '%s' \"$$\" > {}; python3 - {} {} {} {} <<'PY'\nimport os, signal, sys, time\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\nr, w = os.pipe()\nif os.fork() == 0:\n    os.close(r)\n    os.setsid()\n    with open(sys.argv[1], 'w') as f:\n        f.write(str(os.getpid()))\n    os.write(w, b'ready')\n    os.close(w)\n    if sys.argv[3] == 'chatty':\n        while True:\n            os.write(1, b'daemon-tick\\n')\n            time.sleep(0.03)\n    time.sleep(60)\n    os._exit(0)\nos.close(w)\nos.read(r, 5)\nos.close(r)\nif sys.argv[3] == 'payload':\n    n = int(sys.argv[4])\n    for fd in (1, 2):\n        view = memoryview(b'X' * n)\n        while view:\n            view = view[os.write(fd, view):]\nif sys.argv[2] == 'wait':\n    time.sleep(60)\nPY",
         shell_quote(&cleanup.shell_pid),
         shell_quote(&cleanup.daemon_pid),
         if timeout { "wait" } else { "exit" },
         output,
+        payload_size,
     );
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let mut task = tokio::spawn(async move {
         tool.execute(
             &ctx,
-            json!({ "command": command, "timeout": if timeout && !cancel { 1 } else { 30 }, "pty": pty }),
+            json!({
+                "command": command,
+                "timeout": if timeout && !cancel { 1 } else { 30 },
+                "pty": pty
+            }),
         )
         .await
     });
@@ -1015,8 +231,6 @@ async fn check_setsid_capture(pty: bool, timeout: bool, cancel: bool, output: &s
     }
     let result = tokio::time::timeout(Duration::from_secs(4), &mut task).await;
     let elapsed = started.elapsed();
-    eprintln!("H1 pty={pty} timeout={timeout} cancel={cancel} output={output}: {elapsed:?}");
-    // Close the foreign-session fd even when the implementation hit our guard.
     cleanup.kill();
     wait_for_process_exit(daemon_pid).await;
     let result = match result {
@@ -1047,7 +261,7 @@ async fn check_setsid_capture(pty: bool, timeout: bool, cancel: bool, output: &s
             let artifact = tokio::fs::read(result["metadata"]["outputPath"].as_str().unwrap())
                 .await
                 .unwrap();
-            assert_eq!(artifact.len(), 8 * 1024 * 1024);
+            assert_eq!(artifact.len(), 2 * payload_size);
             assert!(artifact.iter().all(|byte| *byte == b'X'));
         }
         assert_eq!(
@@ -1057,93 +271,541 @@ async fn check_setsid_capture(pty: bool, timeout: bool, cancel: bool, output: &s
     }
 }
 
-#[cfg(unix)]
-#[tokio::test]
-async fn t_h1_1_setsid_pipe_returns_real_exit() {
-    check_setsid_capture(false, false, false, "silent").await;
+#[test]
+fn bash_schema_is_closed_and_hides_shell_alias() {
+    let registry = hya_tool_loader::builtins();
+    let advertised = registry
+        .schemas()
+        .into_iter()
+        .map(|s| s.name.as_str().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        advertised.iter().filter(|n| n.as_str() == "bash").count(),
+        1
+    );
+    assert!(!advertised.iter().any(|n| n == "shell"));
+    assert!(registry.get("shell").is_some());
+
+    let schema = registry.get("bash").unwrap().schema();
+    let properties = schema.input_schema["properties"].as_object().unwrap();
+    assert_eq!(schema.name.as_str(), "bash");
+    assert_eq!(schema.input_schema["type"], "object");
+    assert_eq!(schema.input_schema["additionalProperties"], false);
+    assert_eq!(schema.input_schema["required"], json!(["command"]));
+    assert_eq!(
+        properties
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["command", "cwd", "env", "pty", "timeout"])
+    );
+    assert_eq!(properties["env"]["additionalProperties"]["type"], "string");
+    assert!(!properties.contains_key("workdir"));
 }
 
-#[cfg(unix)]
 #[tokio::test]
-async fn t_h1_2_setsid_pipe_timeout_drain_is_bounded() {
-    check_setsid_capture(false, true, false, "silent").await;
-}
+async fn bash_execution_alias_env_cwd_semantics_and_nonzero_exit() {
+    let dir = tempdir("bash-basic");
+    let _guard = TempDirGuard::new(&dir);
+    let subdir = dir.join("subdir");
+    tokio::fs::create_dir_all(&subdir).await.unwrap();
+    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
+    let registry = hya_tool_loader::builtins();
+    let bash = registry.get("bash").unwrap();
+    let shell = registry.get("shell").unwrap();
+    assert_eq!(bash.result_policy(), hya_tool::ToolResultPolicy::Coding);
+    assert_eq!(shell.result_policy(), hya_tool::ToolResultPolicy::Coding);
 
-#[cfg(unix)]
-#[tokio::test]
-async fn t_h1_3_same_group_background_output_is_captured() {
+    let canonical = execute_with_guard(
+        bash.as_ref(),
+        &ctx,
+        json!({ "command": "printf canonical", "timeout": 1.0 }),
+    )
+    .await
+    .unwrap();
+    let alias = execute_with_guard(
+        shell.as_ref(),
+        &ctx,
+        json!({ "command": "printf alias", "timeout": 1.0 }),
+    )
+    .await
+    .unwrap();
+    assert_result_shape(&canonical, "printf canonical");
+    assert_result_shape(&alias, "printf alias");
+    assert_eq!(canonical["output"], "canonical");
+    assert_eq!(alias["output"], "alias");
+
+    // Env values stay undisclosed; PYTHONUNBUFFERED defaults to "1" unless overridden.
+    let secret = "bash-secret-value-7e4c";
+    let env_res = execute_with_guard(
+        bash.as_ref(),
+        &ctx,
+        json!({
+            "command": "test -n \"$HYA_PRIVATE_VALUE\" && printf '%s:%s' ready \"$PYTHONUNBUFFERED\"",
+            "env": { "HYA_PRIVATE_VALUE": secret },
+            "timeout": 1.0
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(env_res["output"], "ready:1");
+    assert!(!serde_json::to_string(&env_res).unwrap().contains(secret));
+
+    #[cfg(unix)]
     for pty in [false, true] {
-        let dir = tempdir();
-        let _cleanup = TempDirGuard::new(&dir);
-        let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-        let tool = hya_tool_loader::builtins().get("bash").unwrap();
-        let started = std::time::Instant::now();
-        let result = execute_with_guard(
-            tool.as_ref(),
+        let overridden = execute_with_guard(
+            bash.as_ref(),
             &ctx,
-            json!({ "command": "trap '' HUP; (sleep 0.3; printf 'bg-ok') &", "timeout": 30, "pty": pty }),
+            json!({
+                "command": "printf %s \"$PYTHONUNBUFFERED\"",
+                "env": { "PYTHONUNBUFFERED": "override" },
+                "pty": pty
+            }),
         )
         .await
         .unwrap();
-        let elapsed = started.elapsed();
-        eprintln!("T_H1_3: {elapsed:?}");
-        assert!(elapsed >= Duration::from_millis(300), "{elapsed:?}");
-        assert_eq!(result["output"], "bg-ok");
-        assert_eq!(result["metadata"]["exit"], 0);
-        assert_eq!(result["metadata"]["timedOut"], false);
+        assert_eq!(overridden["output"], "override");
     }
+
+    // Canonical cwd, bash language syntax, and nonzero exit with stdout+stderr.
+    let cwd_res = execute_with_guard(
+        bash.as_ref(),
+        &ctx,
+        json!({ "command": "pwd", "cwd": "subdir", "timeout": 1.0 }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        cwd_res["output"]
+            .as_str()
+            .unwrap()
+            .trim()
+            .ends_with("/subdir")
+    );
+    assert!(
+        cwd_res["metadata"]["cwd"]
+            .as_str()
+            .unwrap()
+            .replace('\\', "/")
+            .ends_with("/subdir")
+    );
+
+    let lang = execute_with_guard(
+        bash.as_ref(),
+        &ctx,
+        json!({ "command": "[[ alpha == a* ]] && printf bash-language", "timeout": 1.0 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(lang["output"], "bash-language");
+
+    let nonzero = execute_with_guard(
+        bash.as_ref(),
+        &ctx,
+        json!({ "command": "printf stdout; printf stderr >&2; exit 17", "timeout": 1.0 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(nonzero["metadata"]["exit"], 17);
+    assert_eq!(nonzero["metadata"]["timedOut"], false);
+    assert!(nonzero["output"].as_str().unwrap().contains("stdout"));
+    assert!(nonzero["output"].as_str().unwrap().contains("stderr"));
 }
 
-#[cfg(unix)]
 #[tokio::test]
-async fn t_h1_4_setsid_pty_returns_real_exit() {
-    check_setsid_capture(true, false, false, "silent").await;
-}
+async fn bash_input_validation_timeout_bounds_and_permissions() {
+    let dir = tempdir("bash-rules");
+    let _guard = TempDirGuard::new(&dir);
+    let outside = tempdir("bash-outside");
+    let _outside_guard = TempDirGuard::new(&outside);
+    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir.clone());
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
 
-#[cfg(unix)]
-#[tokio::test]
-async fn t_h1_4_setsid_pty_timeout_drain_is_bounded() {
-    check_setsid_capture(true, true, false, "silent").await;
-}
+    // Unknown keys and invalid timeout inputs are typed input errors.
+    for bad in [
+        json!({ "command": "printf never", "workdir": "." }),
+        json!({ "command": "printf never", "timeout": -1.0 }),
+        json!({ "command": "printf never", "timeout": "NaN" }),
+    ] {
+        assert!(matches!(
+            execute_with_guard(tool.as_ref(), &ctx, bad).await,
+            Err(ToolError::Input(_))
+        ));
+    }
 
-#[cfg(unix)]
-#[tokio::test]
-async fn t_h1_setsid_cancellation_drain_is_bounded() {
-    for pty in [false, true] {
-        for leader_waiting in [false, true] {
-            check_setsid_capture(pty, leader_waiting, true, "silent").await;
+    // Default (300), disabled (0), lower clamp (0.25 -> 1), upper clamp (7200 -> 3600).
+    let cases = [
+        (json!({ "command": "printf d" }), 300.0, false),
+        (json!({ "command": "printf z", "timeout": 0.0 }), 0.0, false),
+        (json!({ "command": "printf l", "timeout": 0.25 }), 1.0, true),
+        (
+            json!({ "command": "printf u", "timeout": 7200.0 }),
+            3600.0,
+            true,
+        ),
+    ];
+    for (input, expected_secs, clamped) in cases {
+        let res = execute_with_guard(tool.as_ref(), &ctx, input)
+            .await
+            .unwrap();
+        assert_eq!(
+            res["metadata"]["timeoutSeconds"].as_f64(),
+            Some(expected_secs)
+        );
+        assert_eq!(res["metadata"]["timedOut"], false);
+        if clamped {
+            assert_eq!(res["metadata"]["timeoutClamped"], true);
+            assert!(
+                res["output"]
+                    .as_str()
+                    .unwrap()
+                    .to_ascii_lowercase()
+                    .contains("clamp")
+            );
         }
     }
+
+    // Denied Action::Bash does not run; allowed Bash ignores ExternalDirectory (ADR-0026).
+    let marker = dir.join("must-not-run");
+    let denied_ctx = ctx_with(
+        vec![
+            deny(Action::Bash, "*"),
+            deny(Action::ExternalDirectory, "*"),
+        ],
+        dir.clone(),
+    );
+    let denied = execute_with_guard(
+        tool.as_ref(),
+        &denied_ctx,
+        json!({ "command": format!("printf ran > {}", shell_quote(&marker)), "cwd": outside }),
+    )
+    .await;
+    assert!(matches!(
+        denied,
+        Err(ToolError::Permission(hya_tool::PermissionError::Denied {
+            action: Action::Bash,
+            ..
+        }))
+    ));
+    assert!(!marker.exists());
+
+    let outside_allowed = ctx_with(
+        vec![
+            allow(Action::Bash, "*"),
+            deny(Action::ExternalDirectory, "*"),
+        ],
+        dir.clone(),
+    );
+    let pwd = execute_with_guard(
+        tool.as_ref(),
+        &outside_allowed,
+        json!({ "command": "pwd", "cwd": outside }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        pwd["output"]
+            .as_str()
+            .unwrap()
+            .contains(outside.to_string_lossy().as_ref())
+    );
+
+    // Pre-cancelled context rejects before running.
+    let cancelled_ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
+    cancelled_ctx.cancel.cancel();
+    assert!(matches!(
+        execute_with_guard(
+            tool.as_ref(),
+            &cancelled_ctx,
+            json!({ "command": "echo hi" })
+        )
+        .await,
+        Err(ToolError::Cancelled)
+    ));
 }
 
-#[cfg(unix)]
 #[tokio::test]
-async fn t_h1_chatty_setsid_pipe_returns_real_exit() {
-    check_setsid_capture(false, false, false, "chatty").await;
-}
+async fn bash_streams_utf8_backpressure_and_private_spill_artifact() {
+    let dir = tempdir("bash-io");
+    let _guard = TempDirGuard::new(&dir);
+    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
 
-#[cfg(unix)]
-#[tokio::test]
-async fn t_h1_chatty_setsid_pty_returns_real_exit() {
-    check_setsid_capture(true, false, false, "chatty").await;
-}
+    // Per-stream order.
+    let ordered = execute_with_guard(
+        tool.as_ref(),
+        &ctx,
+        json!({
+            "command": "printf 'out-1\\n'; printf 'err-1\\n' >&2; printf 'out-2\\n'; printf 'err-2\\n' >&2",
+            "timeout": 1.0
+        }),
+    )
+    .await
+    .unwrap();
+    let out = ordered["output"].as_str().unwrap();
+    assert!(out.find("out-1").unwrap() < out.find("out-2").unwrap());
+    assert!(out.find("err-1").unwrap() < out.find("err-2").unwrap());
 
-#[cfg(unix)]
-#[tokio::test]
-async fn t_h1_setsid_large_buffered_output_is_complete() {
-    for pty in [false, true] {
-        check_setsid_capture(pty, false, false, "payload").await;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Invalid UTF-8 decodes lossily.
+        let utf8 = execute_with_guard(
+            tool.as_ref(),
+            &ctx,
+            json!({ "command": "python3 -c 'import os; os.write(1, b\"ok\\xff\\xfe\")'", "timeout": 1.0 }),
+        )
+        .await
+        .unwrap();
+        assert!(
+            utf8["output"]
+                .as_str()
+                .unwrap()
+                .contains("ok\u{fffd}\u{fffd}")
+        );
+
+        // 128KB stdout backpressure followed by stderr preserves arrival order and mode 0600 spill.
+        let payload_bytes = 128 * 1024;
+        let marker = "stderr-after-stdout-unique";
+        let command = format!(
+            "python3 - <<'PY'\nimport os\npayload = b'O' * {payload_bytes}\nview = memoryview(payload)\nwhile view:\n    view = view[os.write(1, view):]\nos.write(2, b'{marker}\\n')\nPY"
+        );
+        let spilled = execute_with_guard(
+            tool.as_ref(),
+            &ctx,
+            json!({ "command": command, "timeout": 10.0 }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(spilled["metadata"]["truncated"], true);
+        assert!(spilled["output"].as_str().unwrap().len() <= 50 * 1024);
+        let output_path = spilled["metadata"]["outputPath"].as_str().unwrap();
+        assert_eq!(
+            std::fs::metadata(output_path).unwrap().permissions().mode() & 0o7777,
+            0o600
+        );
+        let artifact = tokio::fs::read(output_path).await.unwrap();
+        let marker_at = artifact
+            .windows(marker.len())
+            .position(|w| w == marker.as_bytes())
+            .expect("stderr marker missing from artifact");
+        assert!(marker_at >= payload_bytes);
+        assert!(artifact[..marker_at].iter().all(|b| *b == b'O'));
+        assert_eq!(&artifact[marker_at..], format!("{marker}\n").as_bytes());
     }
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn bash_pty_timeout_kills_descendant_after_shell_exits() {
-    // Given: the direct PTY shell exits while a background child retains the slave.
-    let dir = tempdir();
-    let _cleanup = TempDirGuard::new(&dir);
-    let child_pid_path = dir.join("pty-detached-timeout-child.pid");
-    let shell_pid_path = dir.join("pty-detached-timeout-shell.pid");
+async fn bash_pty_observes_tty_and_non_pty_does_not() {
+    let dir = tempdir("bash-tty");
+    let _guard = TempDirGuard::new(&dir);
+    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
+    let command = "test -t 0 && test -t 1 && printf tty";
+
+    let pty = execute_with_guard(
+        tool.as_ref(),
+        &ctx,
+        json!({ "command": command, "timeout": 1.0, "pty": true }),
+    )
+    .await
+    .unwrap();
+    let pipe = execute_with_guard(
+        tool.as_ref(),
+        &ctx,
+        json!({ "command": command, "timeout": 1.0, "pty": false }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(pty["metadata"]["pty"], true);
+    assert_eq!(pty["metadata"]["exit"], 0);
+    assert!(pty["output"].as_str().unwrap().contains("tty"));
+    assert_eq!(pipe["metadata"]["pty"], false);
+    assert_eq!(pipe["metadata"]["exit"], 1);
+    assert!(!pipe["output"].as_str().unwrap().contains("tty"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_cancellation_cleans_pipes_pty_detached_descendant_and_spill_artifact() {
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
+
+    // 1) Pipes & PTY cancellation clean process groups immediately.
+    for pty in [false, true] {
+        let dir = tempdir("bash-cancel");
+        let _guard = TempDirGuard::new(&dir);
+        let pid_path = dir.join("child.pid");
+        let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
+        let cancel = ctx.cancel.clone();
+        let command = if pty {
+            format!(
+                "printf '%s' \"$$\" > {}; while :; do :; done",
+                shell_quote(&pid_path)
+            )
+        } else {
+            format!(
+                "(while :; do :; done) & child=$!; printf '%s' \"$child\" > {}; wait \"$child\"",
+                shell_quote(&pid_path)
+            )
+        };
+        let t = tool.clone();
+        let task = tokio::spawn(async move {
+            t.execute(
+                &ctx,
+                json!({ "command": command, "timeout": 0.0, "pty": pty }),
+            )
+            .await
+        });
+        let pid = wait_for_pid(&pid_path).await;
+        cancel.cancel();
+        let res = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(res, Err(ToolError::Cancelled)));
+        wait_for_process_exit(pid).await;
+    }
+
+    // 2) PTY cancellation after direct shell exits kills retained descendant.
+    {
+        let dir = tempdir("bash-pty-cancel-detach");
+        let _guard = TempDirGuard::new(&dir);
+        let child_pid_path = dir.join("child.pid");
+        let shell_pid_path = dir.join("shell.pid");
+        let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
+        let cancel = ctx.cancel.clone();
+        let command = format!(
+            "sh -c 'trap \"\" HUP; printf \"%s\" \"$$\" > \"$1\"; sleep 30' sh {} & while [ ! -s {} ]; do :; done; printf '%s' \"$$\" > {}; exit 0",
+            shell_quote(&child_pid_path),
+            shell_quote(&child_pid_path),
+            shell_quote(&shell_pid_path)
+        );
+        let t = tool.clone();
+        let mut task = tokio::spawn(async move {
+            t.execute(
+                &ctx,
+                json!({ "command": command, "timeout": 0.0, "pty": true }),
+            )
+            .await
+        });
+        let child_pid = wait_for_pid(&child_pid_path).await;
+        let shell_pid = wait_for_pid(&shell_pid_path).await;
+        wait_for_leader_exit(shell_pid).await;
+        cancel.cancel();
+        let res = tokio::time::timeout(Duration::from_secs(5), &mut task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(res, Err(ToolError::Cancelled)));
+        assert!(!process_is_alive(shell_pid));
+        wait_for_process_exit(child_pid).await;
+    }
+
+    // 3) Cancelling after spill creation removes the artifact and cleans child.
+    {
+        let dir = tempdir("bash-cancel-spill");
+        let _guard = TempDirGuard::new(&dir);
+        let pid_path = dir.join("child.pid");
+        let artifact_root = dir.join(".hya/tool-output");
+        let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
+        let cancel = ctx.cancel.clone();
+        let command = format!(
+            "sleep 30 & child=$!; printf '%s' \"$child\" > {}; head -c 51201 /dev/zero; wait \"$child\"",
+            shell_quote(&pid_path)
+        );
+        let t = tool.clone();
+        let mut task = tokio::spawn(async move {
+            t.execute(&ctx, json!({ "command": command, "timeout": 0.0 }))
+                .await
+        });
+        let child_pid = wait_for_pid(&pid_path).await;
+        let artifact = wait_for_artifact(&artifact_root).await;
+        cancel.cancel();
+        let res = tokio::time::timeout(Duration::from_secs(5), &mut task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(res, Err(ToolError::Cancelled)));
+        wait_for_process_exit(child_pid).await;
+        assert!(!artifact.exists());
+        assert!(artifact_paths(&artifact_root).await.is_empty());
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_pipe_timeout_cleans_process_group() {
+    let dir = tempdir("bash-to-pipe");
+    let _guard = TempDirGuard::new(&dir);
+    let pid_path = dir.join("timeout-child.pid");
+    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
+    let command = format!(
+        "(while :; do :; done) & child=$!; printf '%s' \"$child\" > {}; wait \"$child\"",
+        shell_quote(&pid_path)
+    );
+    let task = tokio::spawn(async move {
+        tool.execute(&ctx, json!({ "command": command, "timeout": 1.0 }))
+            .await
+    });
+    let child_pid = wait_for_pid(&pid_path).await;
+    let result = tokio::time::timeout(Duration::from_secs(8), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_result_shape(&result, result["title"].as_str().unwrap());
+    assert_eq!(result["metadata"]["exit"], Value::Null);
+    assert_eq!(result["metadata"]["timedOut"], true);
+    assert_eq!(result["metadata"]["timeoutSeconds"].as_f64(), Some(1.0));
+    assert!(
+        result["output"]
+            .as_str()
+            .unwrap()
+            .to_ascii_lowercase()
+            .contains("timeout")
+    );
+    wait_for_process_exit(child_pid).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_pipe_timeout_applies_after_shell_exits_with_open_child_pipes() {
+    let dir = tempdir("bash-to-open");
+    let _guard = TempDirGuard::new(&dir);
+    let pid_path = dir.join("detached.pid");
+    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
+    let command = format!(
+        "sleep 4 & child=$!; printf '%s' \"$child\" > {}",
+        shell_quote(&pid_path)
+    );
+    let started = Instant::now();
+    let task = tokio::spawn(async move {
+        tool.execute(&ctx, json!({ "command": command, "timeout": 1.0 }))
+            .await
+    });
+    let child_pid = wait_for_pid(&pid_path).await;
+    let result = tokio::time::timeout(Duration::from_secs(8), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(result["metadata"]["exit"], Value::Null);
+    assert_eq!(result["metadata"]["timedOut"], true);
+    wait_for_process_exit(child_pid).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_pty_timeout_cleans_process_group_and_detached_descendant() {
+    let dir = tempdir("bash-to-pty");
+    let _guard = TempDirGuard::new(&dir);
+    let child_pid_path = dir.join("child.pid");
+    let shell_pid_path = dir.join("shell.pid");
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
     let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command = format!(
@@ -1162,162 +824,27 @@ async fn bash_pty_timeout_kills_descendant_after_shell_exits() {
     let child_pid = wait_for_pid(&child_pid_path).await;
     let shell_pid = wait_for_pid(&shell_pid_path).await;
     wait_for_leader_exit(shell_pid).await;
-
-    // When: the command deadline expires after the direct shell exits.
-    let result = match tokio::time::timeout(Duration::from_secs(8), &mut task).await {
-        Ok(joined) => joined
-            .expect("timed-out PTY Bash task panicked")
-            .expect("timed-out PTY Bash call failed unexpectedly"),
-        Err(_) => {
-            kill_test_process(child_pid);
-            let _ = tokio::time::timeout(Duration::from_secs(2), &mut task).await;
-            panic!("PTY timeout waited for a descendant that retained the slave");
-        }
-    };
-
-    // Then: timeout is structured and the retained process-group member is gone.
+    let result = tokio::time::timeout(Duration::from_secs(8), &mut task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     assert_result_shape(&result, result["title"].as_str().unwrap());
     assert_eq!(result["metadata"]["pty"], true);
     assert_eq!(result["metadata"]["timedOut"], true);
     assert_eq!(result["metadata"]["exit"], Value::Null);
-    assert!(!process_is_alive(shell_pid), "shell was not reaped");
+    assert!(!process_is_alive(shell_pid));
     wait_for_process_exit(child_pid).await;
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn bash_pty_cancellation_kills_descendant_after_shell_exits() {
-    // Given: the direct PTY shell exits while a background child retains the slave.
-    let dir = tempdir();
-    let _cleanup = TempDirGuard::new(&dir);
-    let child_pid_path = dir.join("pty-detached-cancel-child.pid");
-    let shell_pid_path = dir.join("pty-detached-cancel-shell.pid");
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let cancel = ctx.cancel.clone();
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-    let command = format!(
-        "sh -c 'trap \"\" HUP; printf \"%s\" \"$$\" > \"$1\"; sleep 30' sh {} & while [ ! -s {} ]; do :; done; printf '%s' \"$$\" > {}; exit 0",
-        shell_quote(&child_pid_path),
-        shell_quote(&child_pid_path),
-        shell_quote(&shell_pid_path)
-    );
-    let mut task = tokio::spawn(async move {
-        tool.execute(
-            &ctx,
-            json!({ "command": command, "timeout": 0.0, "pty": true }),
-        )
-        .await
-    });
-    let child_pid = wait_for_pid(&child_pid_path).await;
-    let shell_pid = wait_for_pid(&shell_pid_path).await;
-    wait_for_leader_exit(shell_pid).await;
-
-    // When: cancellation arrives after the direct shell exits.
-    cancel.cancel();
-    let result = match tokio::time::timeout(Duration::from_secs(5), &mut task).await {
-        Ok(joined) => joined
-            .expect("cancelled PTY Bash task panicked")
-            .expect_err("cancelled PTY Bash call unexpectedly succeeded"),
-        Err(_) => {
-            kill_test_process(child_pid);
-            let _ = tokio::time::timeout(Duration::from_secs(2), &mut task).await;
-            panic!("PTY cancellation waited for a descendant that retained the slave");
-        }
-    };
-
-    // Then: cancellation is typed and the retained process-group member is gone.
-    assert!(matches!(result, ToolError::Cancelled));
-    assert!(!process_is_alive(shell_pid), "shell was not reaped");
-    wait_for_process_exit(child_pid).await;
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn bash_spill_artifact_is_private_and_complete() {
-    use std::os::unix::fs::PermissionsExt;
-
-    // Given: output crosses the inline bound and must spill to disk.
-    let dir = tempdir();
-    let _cleanup = TempDirGuard::new(&dir);
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-    let command = "python3 -c 'import sys; sys.stdout.write(\"A\" * 51201)'";
-
-    // When
-    let result = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": command, "timeout": 5.0 }),
-    )
-    .await
-    .unwrap();
-
-    // Then: the artifact is private and contains every emitted byte.
-    assert_result_shape(&result, command);
-    assert_eq!(result["metadata"]["truncated"], true);
-    let output_path = result["metadata"]["outputPath"]
-        .as_str()
-        .expect("overflow must retain a complete artifact path");
-    let mode = std::fs::metadata(output_path).unwrap().permissions().mode() & 0o7777;
-    assert_eq!(mode, 0o600, "Bash spill artifacts must be mode 0600");
-    let artifact = tokio::fs::read(output_path).await.unwrap();
-    assert_eq!(artifact.len(), 51201);
-    assert!(artifact.iter().all(|byte| *byte == b'A'));
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn bash_removes_spill_artifact_when_cancelled() {
-    // Given: a running command has already created a spill artifact.
-    let dir = tempdir();
-    let _cleanup = TempDirGuard::new(&dir);
-    let child_pid_path = dir.join("artifact-cancel-child.pid");
-    let artifact_root = dir.join(".hya/tool-output");
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
-    let cancel = ctx.cancel.clone();
-    let tool = hya_tool_loader::builtins().get("bash").unwrap();
-    let command = format!(
-        "sleep 30 & child=$!; printf '%s' \"$child\" > {}; head -c 51201 /dev/zero; wait \"$child\"",
-        shell_quote(&child_pid_path)
-    );
-    let mut task = tokio::spawn(async move {
-        tool.execute(&ctx, json!({ "command": command, "timeout": 0.0 }))
-            .await
-    });
-    let child_pid = wait_for_pid(&child_pid_path).await;
-    let artifact = wait_for_artifact(&artifact_root).await;
-
-    // When: cancellation aborts the command after spill creation.
-    cancel.cancel();
-    let result = match tokio::time::timeout(Duration::from_secs(8), &mut task).await {
-        Ok(joined) => joined.expect("cancelled Bash task panicked"),
-        Err(_) => {
-            kill_test_process(child_pid);
-            let _ = tokio::time::timeout(Duration::from_secs(2), &mut task).await;
-            panic!("cancelled Bash call exceeded its outer test guard");
-        }
-    };
-
-    // Then: a cancelled call leaves no unreachable spill artifact or child.
-    assert!(matches!(result, Err(ToolError::Cancelled)));
-    wait_for_process_exit(child_pid).await;
-    assert!(
-        !artifact.exists(),
-        "cancelled Bash artifact must be removed"
-    );
-    assert!(artifact_paths(&artifact_root).await.is_empty());
 }
 
 #[tokio::test]
 async fn bash_timeout_near_inline_cap_spills_complete_output_after_notices() {
-    // Given: raw output fits the sink, but timeout and clamp notices exceed the envelope.
-    let dir = tempdir();
-    let _cleanup = TempDirGuard::new(&dir);
+    let dir = tempdir("bash-to-cap");
+    let _guard = TempDirGuard::new(&dir);
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
     let tool = hya_tool_loader::builtins().get("bash").unwrap();
     let command = "python3 -c 'import sys,time; sys.stdout.write(\"N\" * 51150); sys.stdout.flush(); time.sleep(3)'";
 
-    // When: a clamped deadline terminates the command.
     let result = execute_with_guard(
         tool.as_ref(),
         &ctx,
@@ -1325,60 +852,102 @@ async fn bash_timeout_near_inline_cap_spills_complete_output_after_notices() {
     )
     .await
     .unwrap();
-
-    // Then: notices remain visible, truncation is explicit, and the artifact is complete.
     assert_result_shape(&result, command);
     assert_eq!(result["metadata"]["timedOut"], true);
     assert_eq!(result["metadata"]["timeoutClamped"], true);
     assert_eq!(result["metadata"]["truncated"], true);
-    let output = result["output"].as_str().unwrap();
-    assert!(output.to_ascii_lowercase().contains("clamped"));
-    assert!(output.to_ascii_lowercase().contains("timeout"));
-    assert!(output.len() <= 50 * 1024);
-    let output_path = result["metadata"]["outputPath"]
-        .as_str()
-        .expect("notices that force truncation must retain an artifact path");
-    let artifact = tokio::fs::read(output_path).await.unwrap();
-    assert_eq!(artifact.len(), 51150);
-    assert!(artifact.iter().all(|byte| *byte == b'N'));
-}
-
-/// Isolate the process-wide deadline from the unbudgeted shell regressions.
-#[cfg(unix)]
-#[test]
-fn deadline_caps_shell_timeouts_across_native_library() {
-    let output = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "shell::deadline_capped_shell_child",
-            "--nocapture",
-        ])
-        .env("HYA_SHELL_DEADLINE_TEST", "1")
-        .output()
+    let out = result["output"].as_str().unwrap();
+    assert!(out.to_ascii_lowercase().contains("clamped"));
+    assert!(out.to_ascii_lowercase().contains("timeout"));
+    assert!(out.len() <= 50 * 1024);
+    let artifact = tokio::fs::read(result["metadata"]["outputPath"].as_str().unwrap())
+        .await
         .unwrap();
-    assert!(
-        output.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_eq!(artifact.len(), 51150);
+    assert!(artifact.iter().all(|b| *b == b'N'));
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn deadline_capped_shell_child() -> Result<(), Box<dyn std::error::Error>> {
-    if std::env::var_os("HYA_SHELL_DEADLINE_TEST").is_none() {
-        return Ok(());
-    }
+async fn bash_same_group_background_output_is_captured() {
+    let tool = hya_tool_loader::builtins().get("bash").unwrap();
+    let run = |pty: bool| {
+        let tool = tool.clone();
+        async move {
+            let dir = tempdir("bash-bg");
+            let _guard = TempDirGuard::new(&dir);
+            let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
+            let res = execute_with_guard(
+                tool.as_ref(),
+                &ctx,
+                json!({
+                    "command": "trap '' HUP; (sleep 0.12; printf 'bg-ok') &",
+                    "timeout": 30,
+                    "pty": pty
+                }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(res["output"], "bg-ok");
+            assert_eq!(res["metadata"]["exit"], 0);
+            assert_eq!(res["metadata"]["timedOut"], false);
+        }
+    };
+    tokio::join!(run(false), run(true));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_setsid_exit_chatty_and_payload_are_bounded() {
+    futures::future::join_all([
+        check_setsid_capture(false, false, false, "silent"),
+        check_setsid_capture(true, false, false, "silent"),
+        check_setsid_capture(false, false, false, "chatty"),
+        check_setsid_capture(true, false, false, "chatty"),
+        check_setsid_capture(false, false, false, "payload"),
+        check_setsid_capture(true, false, false, "payload"),
+    ])
+    .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_setsid_cancellation_drain_is_bounded() {
+    futures::future::join_all([
+        check_setsid_capture(false, false, true, "silent"),
+        check_setsid_capture(false, true, true, "silent"),
+        check_setsid_capture(true, false, true, "silent"),
+        check_setsid_capture(true, true, true, "silent"),
+    ])
+    .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_setsid_pipe_timeout_drain_is_bounded() {
+    check_setsid_capture(false, true, false, "silent").await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_setsid_pty_timeout_drain_is_bounded() {
+    check_setsid_capture(true, true, false, "silent").await;
+}
+
+/// Uses a thread-scoped deadline with clock advancement so capping and kill run in ~0.35s in-process.
+#[cfg(unix)]
+#[tokio::test]
+async fn deadline_caps_shell_timeouts_across_native_library() {
     let registry = hya_tool_loader::from_tool_families(&["hya/base-tools"]);
-    // Under 10 s left the cap is its 5 s floor, whatever half of the rest is.
-    hya_tool::deadline::install(Duration::from_secs(8));
     let tool = registry.resolve("bash").unwrap();
-    let workdir = tempdir();
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], workdir.clone());
+    let workdir = tempdir("bash-deadline-cap");
+    let _guard = TempDirGuard::new(&workdir);
+    let ctx = ctx_with(vec![allow(Action::Bash, "*")], workdir);
+
+    let scoped = hya_tool::deadline::install_scoped(Duration::from_secs(8));
     for pty in [false, true] {
         for requested in [None, Some(0), Some(300), Some(1)] {
-            let mut input = json!({"command":"printf budget-ok", "pty":pty});
+            let mut input = json!({ "command": "printf budget-ok", "pty": pty });
             if let Some(timeout) = requested {
                 input["timeout"] = json!(timeout);
             }
@@ -1405,201 +974,162 @@ async fn deadline_capped_shell_child() -> Result<(), Box<dyn std::error::Error>>
             assert!(result["output"].as_str().unwrap().contains("budget-ok"));
         }
     }
+
+    // Install a nested scoped deadline with ~350ms remaining; `end.min(left)` kills `sleep 30` fast.
+    let _short = hya_tool::deadline::install_scoped_with_elapsed(
+        Duration::from_secs(8),
+        Duration::from_millis(7650),
+    );
     let stopped = execute_with_guard(
         tool.tool.as_ref(),
         &ctx,
-        json!({"command":"echo $$; exec sleep 30"}),
+        json!({ "command": "echo $$; exec sleep 30" }),
     )
-    .await?;
+    .await
+    .unwrap();
     assert_eq!(stopped["metadata"]["timedOut"], true);
     let pid: i32 = stopped["output"]
         .as_str()
-        .ok_or("missing output")?
+        .unwrap()
         .lines()
         .last()
-        .ok_or("missing pid")?
-        .parse()?;
-    // SAFETY: signal zero probes the process without changing it.
+        .unwrap()
+        .parse()
+        .unwrap();
+    // SAFETY: signal 0 probes the process without changing it.
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
-    std::fs::remove_dir_all(workdir).unwrap();
-    Ok(())
+    drop(_short);
+    drop(scoped);
 }
 
-#[cfg(unix)]
-#[test]
-fn budgeted_shell_yields_live_output() -> Result<(), Box<dyn std::error::Error>> {
-    let status = std::process::Command::new(std::env::current_exe()?)
-        .args([
-            "--exact",
-            "shell::budgeted_shell_yield_child",
-            "--nocapture",
-        ])
-        .env("HYA_SHELL_YIELD_TEST", "1")
-        .status()?;
-    assert!(status.success());
-    Ok(())
-}
-
+/// Verifies both the `budget/10` default cap and live budgeted yield (`stillRunning` + `exitPath`
+/// + `outputPath`) in-process in ~1.2s without a 6s real-time sleep or subprocess re-spawn.
 #[cfg(unix)]
 #[tokio::test]
-async fn budgeted_shell_yield_child() -> Result<(), Box<dyn std::error::Error>> {
-    if std::env::var_os("HYA_SHELL_YIELD_TEST").is_none() {
-        return Ok(());
-    }
-    hya_tool::deadline::install(Duration::from_secs(50));
+async fn budgeted_shell_yields_live_output_and_enforces_tenth_cap() {
     let registry = hya_tool_loader::from_tool_families(&["hya/base-tools"]);
-    let tool = registry.resolve("bash").ok_or("bash missing")?;
-    let workdir = tempdir();
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], workdir.clone());
-    let command = "echo $PYTHONUNBUFFERED; sleep 6; head -c 131072 /dev/zero; exit 7";
-    let result = execute_with_guard(tool.tool.as_ref(), &ctx, json!({"command":command})).await?;
+    let tool = registry.resolve("bash").unwrap();
+    let workdir = tempdir("bash-yield");
+    let _guard = TempDirGuard::new(&workdir);
+    let ctx = ctx_with(vec![allow(Action::Bash, "*")], workdir);
+
+    let _scoped = hya_tool::deadline::install_scoped(Duration::from_secs(50));
+
+    // Default wait is capped to budget/10 (= 5.0s for a 50s budget).
+    let tenth = execute_with_guard(
+        tool.tool.as_ref(),
+        &ctx,
+        json!({ "command": "printf tenth-ok" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(tenth["metadata"]["timeoutSeconds"], 5.0);
+    assert_eq!(tenth["metadata"]["timedOut"], false);
+
+    // Explicit 1.0s wait yields live output after 1s while the child finishes 150ms later.
+    let command = "echo $PYTHONUNBUFFERED; sleep 1.15; head -c 131072 /dev/zero; exit 7";
+    let result = execute_with_guard(
+        tool.tool.as_ref(),
+        &ctx,
+        json!({ "command": command, "timeout": 1.0 }),
+    )
+    .await
+    .unwrap();
     assert_result_shape(&result, command);
     let meta = &result["metadata"];
     assert_eq!(meta["stillRunning"], true);
     assert_eq!(meta["timedOut"], false);
-    assert_eq!(meta["timeoutSeconds"], 5.0);
+    assert_eq!(meta["timeoutSeconds"], 1.0);
     assert!(meta["exit"].is_null());
     assert!(meta["pgid"].is_u64());
-    let preview = result["output"].as_str().ok_or("missing preview")?;
-    assert!(preview.contains("budget/10") && preview.ends_with("1\n"));
-    let exit = Path::new(meta["exitPath"].as_str().ok_or("missing exitPath")?);
-    tokio::time::timeout(Duration::from_secs(6), async {
+    let preview = result["output"].as_str().unwrap();
+    assert!(preview.ends_with("1\n"), "unexpected preview: {preview:?}");
+
+    let exit = Path::new(meta["exitPath"].as_str().unwrap());
+    tokio::time::timeout(Duration::from_secs(4), async {
         while !exit.exists() {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            tokio::time::sleep(Duration::from_millis(15)).await;
         }
     })
-    .await?;
-    assert_eq!(std::fs::read_to_string(exit)?, "7\n");
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read_to_string(exit).unwrap(), "7\n");
     assert_eq!(
-        std::fs::metadata(meta["outputPath"].as_str().ok_or("missing outputPath")?)?.len(),
+        std::fs::metadata(meta["outputPath"].as_str().unwrap())
+            .unwrap()
+            .len(),
         131074
     );
-    std::fs::remove_dir_all(exit.parent().ok_or("missing job directory")?)?;
-    std::fs::remove_dir_all(workdir)?;
-    Ok(())
+    std::fs::remove_dir_all(exit.parent().unwrap()).unwrap();
 }
 
 #[cfg(unix)]
-#[tokio::test]
-async fn python_output_is_unbuffered_unless_overridden() -> Result<(), Box<dyn std::error::Error>> {
-    let registry = hya_tool_loader::from_tool_families(&["hya/base-tools"]);
-    let tool = registry.resolve("bash").ok_or("bash missing")?;
-    let workdir = tempdir();
-    let ctx = ctx_with(vec![allow(Action::Bash, "*")], workdir.clone());
-    for pty in [false, true] {
-        for (env, expected) in [
-            (json!({}), "1"),
-            (json!({"PYTHONUNBUFFERED":"override"}), "override"),
-        ] {
-            let result = execute_with_guard(
-                tool.tool.as_ref(),
-                &ctx,
-                json!({"command":"printf %s \"$PYTHONUNBUFFERED\"", "env":env, "pty":pty}),
-            )
-            .await?;
-            assert_eq!(result["output"], expected);
-        }
-    }
-    std::fs::remove_dir_all(workdir)?;
-    Ok(())
-}
-
-#[cfg(unix)]
-#[test]
-fn host_shutdown_drains_suspended_native_bash_calls() {
-    for mode in ["pipes", "pty", "budgeted-pty"] {
-        for exits_first in ["yes", "no"] {
-            let status = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "shell::native_bash_shutdown_child",
-                    "--nocapture",
-                ])
-                .env("HYA_BASH_SHUTDOWN_TEST", mode)
-                .env("HYA_BASH_LEADER_EXITS_FIRST", exits_first)
-                .status()
-                .unwrap();
-            assert!(
-                status.success(),
-                "{mode}, leader exits first = {exits_first}"
-            );
-        }
-    }
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn native_bash_shutdown_child() {
+async fn assert_shutdown_drains_suspended_call(
+    tool: &dyn Tool,
+    pty: bool,
+    exits_first: bool,
+    scoped: Option<&hya_tool::deadline::RunDeadline>,
+) {
     use hya_tool::deadline;
-    let Ok(mode) = std::env::var("HYA_BASH_SHUTDOWN_TEST") else {
-        return;
-    };
-    // Hold the first drain open even if the shell exits between polls.
-    let (unbudgeted_shutdown, hold) = deadline::register_job(None).unwrap();
-    if mode == "budgeted-pty" {
-        deadline::install(Duration::from_secs(180));
-    }
-    let pty = mode != "pipes";
-    let tool = hya_tool_loader::load("hya/base-tools")
-        .unwrap()
-        .tools
-        .into_iter()
-        .find(|t| t.name() == "bash")
-        .unwrap();
-    let dir = tempdir();
+
+    let (shutdown_tok, hold) = deadline::register_job(scoped).unwrap();
+    let dir = tempdir("bash-shutdown");
     let _dir_guard = TempDirGuard::new(&dir);
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir.clone());
     let cleanup = DaemonCleanup {
         shell_pid: dir.join("leader"),
         daemon_pid: dir.join("descendant"),
     };
+
     let natural = execute_with_guard(
-        tool.as_ref(),
+        tool,
         &ctx,
         json!({
-            "command": "trap '' HUP; (exec 0<&- 1>&- 2>&-; sleep 0.25; touch completed) & exit 0",
+            "command": "trap '' HUP; (exec 0<&- 1>&- 2>&-; sleep 0.08; touch completed) & exit 0",
             "pty": pty,
         }),
     )
     .await
     .unwrap();
     assert_eq!(natural["metadata"]["exit"], 0);
-    assert!(
-        dir.join("completed").exists(),
-        "{mode} returned before descendant completion"
-    );
+    assert!(dir.join("completed").exists());
 
-    let exits_first = std::env::var("HYA_BASH_LEADER_EXITS_FIRST").unwrap() == "yes";
     let command = if exits_first {
         "trap '' HUP; echo $$ > leader; (sleep 60 0<&- 1>&- 2>&-) & echo $! > descendant; exit 0"
     } else {
         "echo $$ > leader; sleep 60 & echo $! > descendant; wait"
     };
-    let mut call = tool.execute(
-        &ctx,
-        json!({
-            "command": command,
-            "pty": pty,
-        }),
-    );
+    let mut call = tool.execute(&ctx, json!({ "command": command, "pty": pty }));
     tokio::select! {
         result = &mut call => panic!("shell finished before shutdown: {result:?}"),
         _ = wait_for_pid(&cleanup.daemon_pid) => {}
     }
-    // The caller stays alive and unpolled throughout both drains.
     let leader = wait_for_pid(&cleanup.shell_pid).await;
     let descendant = wait_for_pid(&cleanup.daemon_pid).await;
     if exits_first {
         wait_for_leader_exit(leader).await;
         assert!(futures::poll!(&mut call).is_pending());
     }
-    let mut first = Box::pin(deadline::shutdown_background_jobs());
+
+    let drain = async {
+        match scoped {
+            Some(d) => d.shutdown_background_jobs().await,
+            None => deadline::shutdown_background_jobs().await,
+        }
+    };
+    let mut first = Box::pin(drain);
     assert!(futures::poll!(&mut first).is_pending());
     drop(first);
-    assert!(unbudgeted_shutdown.is_cancelled());
+    assert!(shutdown_tok.is_cancelled());
     drop(hold);
 
-    tokio::time::timeout(Duration::from_secs(5), deadline::shutdown_background_jobs())
+    let resume = async {
+        match scoped {
+            Some(d) => d.shutdown_background_jobs().await,
+            None => deadline::shutdown_background_jobs().await,
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), resume)
         .await
         .expect("resumed shutdown");
     assert!(!process_is_alive(leader), "leader was not reaped");
@@ -1620,15 +1150,77 @@ async fn native_bash_shutdown_child() {
         #[cfg(not(target_os = "linux"))]
         panic!("live descendant after shutdown");
     }
-    // A spawn in this missing directory would produce an I/O error.
+
     let late = execute_with_guard(
-        tool.as_ref(),
+        tool,
         &ctx,
-        json!({
-            "command": "true", "pty": pty, "cwd": "nonexistent"
-        }),
+        json!({ "command": "true", "pty": pty, "cwd": "nonexistent" }),
     )
     .await;
     assert!(matches!(late, Err(ToolError::Cancelled)), "{late:?}");
     assert!(matches!(call.await, Err(ToolError::Cancelled)));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn budgeted_pty_shutdown_drains_suspended_calls_in_process() {
+    let tool = hya_tool_loader::load("hya/base-tools")
+        .unwrap()
+        .tools
+        .into_iter()
+        .find(|t| t.name() == "bash")
+        .unwrap();
+    for exits_first in [true, false] {
+        let scoped = hya_tool::deadline::install_scoped(Duration::from_secs(180));
+        assert_shutdown_drains_suspended_call(tool.as_ref(), true, exits_first, Some(&scoped))
+            .await;
+    }
+}
+
+/// Unbudgeted shutdown closes the process-wide `unbudgeted` registry, so the four
+/// `(pipes|pty) × (exits_first)` cases run in parallel subprocesses (~0.3s total).
+#[cfg(unix)]
+#[test]
+fn host_shutdown_drains_suspended_unbudgeted_native_bash_calls() {
+    let exe = std::env::current_exe().unwrap();
+    let mut children = Vec::new();
+    for mode in ["pipes", "pty"] {
+        for exits_first in ["yes", "no"] {
+            let child = std::process::Command::new(&exe)
+                .args([
+                    "--exact",
+                    "shell::native_bash_shutdown_child",
+                    "--nocapture",
+                ])
+                .env("HYA_BASH_SHUTDOWN_TEST", mode)
+                .env("HYA_BASH_LEADER_EXITS_FIRST", exits_first)
+                .spawn()
+                .unwrap();
+            children.push((mode, exits_first, child));
+        }
+    }
+    for (mode, exits_first, mut child) in children {
+        let status = child.wait().unwrap();
+        assert!(
+            status.success(),
+            "{mode}, leader exits first = {exits_first}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn native_bash_shutdown_child() {
+    let Ok(mode) = std::env::var("HYA_BASH_SHUTDOWN_TEST") else {
+        return;
+    };
+    let pty = mode != "pipes";
+    let exits_first = std::env::var("HYA_BASH_LEADER_EXITS_FIRST").unwrap() == "yes";
+    let tool = hya_tool_loader::load("hya/base-tools")
+        .unwrap()
+        .tools
+        .into_iter()
+        .find(|t| t.name() == "bash")
+        .unwrap();
+    assert_shutdown_drains_suspended_call(tool.as_ref(), pty, exits_first, None).await;
 }

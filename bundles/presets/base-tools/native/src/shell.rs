@@ -1578,7 +1578,7 @@ mod tests {
         let cwd = Path::new(".");
         let deadline = RunDeadline::new(tokio::time::Instant::now(), Duration::from_secs(60));
         let run = execute_budgeted_file(
-            "(sleep 0.2; echo bg-ok) &",
+            "(sleep 0.08; echo bg-ok) &",
             BTreeMap::new(),
             cwd,
             cwd.into(),
@@ -1590,7 +1590,7 @@ mod tests {
         assert!(matches!(run.completion, Completion::Finished(Some(0))));
         assert_eq!(run.output.inline, b"bg-ok\n");
         let run = execute_budgeted_file(
-            "sleep .1 & exit 7",
+            "sleep .05 & exit 7",
             BTreeMap::new(),
             cwd,
             cwd.into(),
@@ -1638,13 +1638,16 @@ mod tests {
     #[tokio::test]
     async fn budgeted_shell_tracks_descendants_that_close_inherited_fds() -> Result<(), ToolError> {
         let cwd = Path::new(".");
-        for (seconds, cancel_job) in [("0.25", false), ("60", true), ("60", false)] {
+        for (seconds, cancel_job) in [("0.08", false), ("60", true), ("60", false)] {
             let deadline = RunDeadline::new(tokio::time::Instant::now(), Duration::from_secs(180));
             let cancel = CancellationToken::new();
             let command = format!(
                 r#"python3 -c 'import subprocess; print(subprocess.Popen(["sleep", "{seconds}"]).pid)'"#
             );
-            let timeout = timeout_settings(Some(1.0))?;
+            let mut timeout = timeout_settings(Some(2.0))?;
+            if seconds == "60" {
+                timeout.duration = Some(Duration::from_millis(150));
+            }
             let run = execute_budgeted_file(
                 &command,
                 BTreeMap::new(),
@@ -1718,9 +1721,10 @@ mod tests {
         ] {
             let cancel = CancellationToken::new();
             let cwd = Path::new(".");
-            let deadline = RunDeadline::new(tokio::time::Instant::now(), Duration::from_secs(2));
+            let deadline =
+                RunDeadline::new(tokio::time::Instant::now(), Duration::from_millis(350));
             let mut timeout = timeout_settings(Some(1.0))?;
-            timeout.duration = Some(Duration::from_millis(100));
+            timeout.duration = Some(Duration::from_millis(80));
             let run = execute_budgeted_file(
                 command,
                 BTreeMap::new(),
