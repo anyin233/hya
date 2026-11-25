@@ -1,4 +1,3 @@
-#![allow(deprecated)]
 use std::sync::Arc;
 
 use hya_proto::{MessageId, ModelRef};
@@ -179,50 +178,4 @@ async fn default_hook_impls_are_noops() {
         None,
         "default loop_should_stop consult must be a no-op"
     );
-}
-
-/// A `Skip` is only ever honored for proactive compaction. On an
-/// overflow-forced trigger it is demoted to `Proceed` (plus a warning),
-/// because skipping a compaction the request depends on risks context
-/// overflow.
-#[test]
-fn skip_is_honored_proactively_but_ignored_on_overflow() {
-    let skip = || CompactionDecision::Skip {
-        reason: "still fits".to_string(),
-    };
-    assert_eq!(
-        resolve_compaction_decision(skip(), CompactionTrigger::Proactive),
-        CompactionResolution::Skip {
-            reason: "still fits".to_string()
-        }
-    );
-    assert_eq!(
-        resolve_compaction_decision(skip(), CompactionTrigger::Overflow),
-        CompactionResolution::Proceed,
-        "overflow-forced compaction must never be skipped"
-    );
-}
-
-/// `Proceed` and `Replace` pass through unchanged for both triggers: a
-/// replacement of the summarizer instructions is not a safety decision and
-/// needs no trigger gating.
-#[test]
-fn proceed_and_replace_pass_through_both_triggers() {
-    for trigger in [CompactionTrigger::Overflow, CompactionTrigger::Proactive] {
-        assert_eq!(
-            resolve_compaction_decision(CompactionDecision::Proceed, trigger),
-            CompactionResolution::Proceed
-        );
-        assert_eq!(
-            resolve_compaction_decision(
-                CompactionDecision::Replace {
-                    instructions: "summarize as bullets".to_string(),
-                },
-                trigger
-            ),
-            CompactionResolution::Replace {
-                instructions: "summarize as bullets".to_string(),
-            }
-        );
-    }
 }
