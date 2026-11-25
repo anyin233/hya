@@ -6,10 +6,15 @@ use crate::error::CoreError;
 /// Opens a tmux pane per member for human observability. tmux is NOT the source
 /// of truth — it tails the member session. Degrades with a clear error if tmux
 /// is unavailable.
+#[deprecated(
+    since = "0.48.0-dev.37",
+    note = "no replacement; removed after the next release"
+)]
 pub struct TmuxPaneManager {
     session: String,
 }
 
+#[allow(deprecated)]
 impl TmuxPaneManager {
     #[must_use]
     /// Construct a manager for the given root/session context.

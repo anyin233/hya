@@ -94,9 +94,7 @@ pub trait HookDispatcher: Send + Sync {
     /// Consulted before the engine compacts context.
     ///
     /// Implementors should be fail-open by construction: the engine additionally
-    /// ignores a [`CompactionDecision::Skip`] on an overflow-forced trigger (see
-    /// [`resolve_compaction_decision`]), so a skip can never push a request out
-    /// over its window.
+    /// ignores a [`CompactionDecision::Skip`] on an overflow-forced trigger.
     async fn compaction_before(&self, input: CompactionBeforeInput) -> CompactionDecision {
         let _ = input;
         CompactionDecision::Proceed

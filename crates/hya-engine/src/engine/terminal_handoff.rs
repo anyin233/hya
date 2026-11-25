@@ -171,7 +171,15 @@ terse bullets over paragraphs.";
 /// the live prefix because the request shape matches the conversation it
 /// already saw.
 #[must_use]
+#[deprecated(
+    since = "0.48.0-dev.37",
+    note = "no replacement; removed after the next release"
+)]
 pub fn handoff_request_messages(messages: &[Message], options: &SummarizeOptions) -> Vec<Message> {
+    request_messages(messages, options)
+}
+
+fn request_messages(messages: &[Message], options: &SummarizeOptions) -> Vec<Message> {
     let mut prompt = String::new();
     if let Some(previous) = options
         .previous_summary
@@ -239,7 +247,7 @@ impl Summarizer for ModelSummarizer {
         // The transcript itself plus one trailing prompt, so the model reads
         // the session verbatim (and a cache-capable provider reuses the
         // prefix).
-        let request_messages = handoff_request_messages(messages, &options);
+        let request_messages = request_messages(messages, &options);
         let model = options.model.unwrap_or_else(|| self.model.clone());
         let request = CompletionRequest {
             model: model.clone(),
@@ -513,7 +521,7 @@ mod tests {
             previous_summary: Some("PRIOR".to_string()),
             ..SummarizeOptions::default()
         };
-        let out = handoff_request_messages(&msgs, &options);
+        let out = request_messages(&msgs, &options);
         assert_eq!(out.len(), msgs.len() + 1);
         assert_eq!(out[0].id(), msgs[0].id(), "transcript is verbatim");
         assert_eq!(out[1].id(), msgs[1].id());
