@@ -20,6 +20,9 @@ use crate::support;
 use crate::workflow_control::{EmptyWorkflowControl, WorkflowControl};
 use crate::{pending, runs};
 
+#[cfg(test)]
+mod restart_tests;
+
 /// Holds the session engine, process agent base, permission/question queues,
 /// MCP and Workflow control handles, workspace adapters, and formatter status.
 /// The router wraps this into internal `ServerState`. The run registry and the
@@ -48,6 +51,7 @@ pub struct AppState {
     pure_guidance: bool,
     auto_title: bool,
     runs: runs::RunRegistry,
+    #[cfg(test)]
     turn_spawn_barrier: Option<(hya_proto::SessionId, Arc<tokio::sync::Barrier>)>,
     session_list: SessionListHub,
     relay: RelayHost,
@@ -61,6 +65,7 @@ pub struct AppState {
     server: Arc<std::sync::OnceLock<ServerState>>,
     /// How many server states (each with its own background drivers) were
     /// built from this state's lineage.
+    #[cfg(test)]
     server_builds: Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -105,8 +110,8 @@ impl AppState {
 
     /// Pause a reserved run before its turn task spawns (nothing admitted
     /// yet), for lifecycle regression tests.
-    #[doc(hidden)]
-    pub fn with_turn_spawn_barrier(
+    #[cfg(test)]
+    pub(crate) fn with_turn_spawn_barrier(
         mut self,
         session: hya_proto::SessionId,
         barrier: Arc<tokio::sync::Barrier>,
@@ -142,6 +147,7 @@ impl AppState {
             pure_guidance: false,
             auto_title: false,
             runs: runs::RunRegistry::default(),
+            #[cfg(test)]
             turn_spawn_barrier: None,
             session_list: SessionListHub::default(),
             relay: RelayHost::default(),
@@ -149,6 +155,7 @@ impl AppState {
             ephemeral_grace: crate::EphemeralGrace::default(),
             watchers: crate::ephemeral::SessionWatchers::default(),
             server: Arc::default(),
+            #[cfg(test)]
             server_builds: Arc::default(),
         }
     }
@@ -160,6 +167,7 @@ impl AppState {
     pub(crate) fn server_state(&self) -> ServerState {
         self.server
             .get_or_init(|| {
+                #[cfg(test)]
                 self.server_builds
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let state = ServerState::new(self.clone());
@@ -173,9 +181,9 @@ impl AppState {
     /// (reclaim driver, Project busy watcher, session-list tracker,
     /// ephemeral reaper) — were built from this state and its clones. A
     /// server that serves HTTP and gRPC from one state reports 1.
-    #[doc(hidden)]
     #[must_use]
-    pub fn server_builds(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn server_builds(&self) -> usize {
         self.server_builds.load(std::sync::atomic::Ordering::SeqCst)
     }
 
@@ -384,6 +392,7 @@ pub(crate) struct ServerState {
     pub(crate) engine: Arc<SessionEngine>,
     pub(crate) agent: Arc<AgentSpec>,
     pub(crate) runs: runs::RunRegistry,
+    #[cfg(test)]
     pub(crate) turn_spawn_barrier: Option<(hya_proto::SessionId, Arc<tokio::sync::Barrier>)>,
     pub(crate) permission_requests: pending::PermissionRequests,
     pub(crate) question_requests: pending::QuestionRequests,
@@ -422,6 +431,7 @@ impl ServerState {
             engine: app.engine,
             agent: app.agent,
             runs: app.runs,
+            #[cfg(test)]
             turn_spawn_barrier: app.turn_spawn_barrier,
             permission_requests: app.permission_requests,
             question_requests: app.question_requests,
