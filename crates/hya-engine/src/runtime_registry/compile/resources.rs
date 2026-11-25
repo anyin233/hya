@@ -49,7 +49,7 @@ pub struct AgentResourcePolicy {
     bundle_id: Option<String>,
     plane: AgentToolPlane,
     // Keep policies compact inside turn and resident activation enums.
-    pub(super) resource_view: Box<ResourceView>,
+    pub(super) resource_view: Arc<ResourceView>,
     advertise: BTreeSet<String>,
     /// Whether the agent may spawn anyone (a non-empty effective spawn set);
     /// decides the `task`/`archive` coordination tools.
@@ -108,6 +108,17 @@ impl AgentResourcePolicy {
     }
 }
 
+#[derive(Default)]
+pub(in crate::runtime_registry) struct ResourceSelections {
+    agents: Mutex<BTreeMap<String, Arc<SelectedResources>>>,
+}
+
+struct SelectedResources {
+    policy: AgentResourcePolicy,
+    partitions: CandidatePartitions,
+    ids: SelectedIds,
+}
+
 /// Immutable per-turn/child resource map compiled once from a retained
 /// [`TurnBinding`] and bound agent policy. Schema visibility, skill exposure,
 /// and dispatch share this map; there is no registry fallback.
@@ -128,6 +139,15 @@ impl TurnBinding {
         &self,
         stable_id: &str,
     ) -> Result<AgentResourcePolicy, BundleError> {
+        let mut selections = self
+            .place
+            .resource_selections
+            .agents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(selection) = selections.get(stable_id) {
+            return Ok(selection.policy.clone());
+        }
         let definition = self.snapshot.catalog.require(stable_id)?;
         let plane = AgentToolPlane::for_origin(&definition.origin);
         let bundle_id = definition.origin.bundle_id().map(str::to_string);
@@ -170,43 +190,48 @@ impl TurnBinding {
             agent_id: stable_id.to_string(),
             bundle_id,
             plane,
-            resource_view: Box::new(resource_view),
+            resource_view: Arc::new(resource_view),
             advertise: advertise.into_iter().collect(),
             spawn_rights,
             selected_bundle_tool_ids: Arc::new(Vec::new()),
             selected_bundle_skill_ids: Arc::new(Vec::new()),
             canonical_hook_ids: Arc::from(hook_refs),
         };
-        {
-            let partitions = self.collect_resource_candidates(&policy)?;
-            let selected = select_candidates_globally(&policy, &partitions)?;
-            policy.selected_bundle_tool_ids = Arc::new(
-                selected
-                    .tool
-                    .iter()
-                    .filter(|id| {
-                        partitions
-                            .tool
-                            .get(*id)
-                            .is_some_and(ResourceCandidate::is_bundle_local)
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            );
-            policy.selected_bundle_skill_ids = Arc::new(
-                selected
-                    .skill
-                    .iter()
-                    .filter(|id| {
-                        partitions
-                            .skill
-                            .get(*id)
-                            .is_some_and(ResourceCandidate::is_bundle_local)
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            );
-        }
+        let (partitions, selected) = self.select_resources(&policy)?;
+        policy.selected_bundle_tool_ids = Arc::new(
+            selected
+                .tool
+                .iter()
+                .filter(|id| {
+                    partitions
+                        .tool
+                        .get(*id)
+                        .is_some_and(ResourceCandidate::is_bundle_local)
+                })
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        policy.selected_bundle_skill_ids = Arc::new(
+            selected
+                .skill
+                .iter()
+                .filter(|id| {
+                    partitions
+                        .skill
+                        .get(*id)
+                        .is_some_and(ResourceCandidate::is_bundle_local)
+                })
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        selections.insert(
+            stable_id.to_string(),
+            Arc::new(SelectedResources {
+                policy: policy.clone(),
+                partitions,
+                ids: selected,
+            }),
+        );
         Ok(policy)
     }
 
@@ -254,7 +279,7 @@ impl TurnBinding {
             agent_id: stable_id.to_string(),
             bundle_id,
             plane,
-            resource_view: Box::new(resource_view),
+            resource_view: Arc::new(resource_view),
             advertise: advertise.into_iter().collect(),
             spawn_rights: self
                 .snapshot
@@ -286,15 +311,19 @@ impl TurnBinding {
             // Process extensions already own the complete declared executable surface.
             return Ok(false);
         }
-        let partitions = self.collect_resource_candidates(&policy)?;
-        let selected = select_candidates_globally(&policy, &partitions)?;
-        let selected_bundle_tool = selected.tool.iter().any(|id| {
-            partitions
-                .tool
-                .get(id)
-                .is_some_and(ResourceCandidate::is_bundle_local)
-        });
-        Ok(selected_bundle_tool || !policy.canonical_hook_ids.is_empty())
+        Ok(
+            !policy.selected_bundle_tool_ids().is_empty()
+                || !policy.canonical_hook_ids().is_empty(),
+        )
+    }
+
+    fn select_resources(
+        &self,
+        policy: &AgentResourcePolicy,
+    ) -> Result<(CandidatePartitions, SelectedIds), BundleError> {
+        let partitions = self.collect_resource_candidates(policy)?;
+        let selected = select_candidates_globally(policy, &partitions)?;
+        Ok((partitions, selected))
     }
 
     pub(crate) fn compile_agent_resources(
@@ -327,10 +356,25 @@ impl TurnBinding {
             }
         }
 
-        let partitions = self.collect_resource_candidates(policy)?;
-        let selected = select_candidates_globally(policy, &partitions)?;
-
-        let view_aliases = resolve_view_aliases(policy, &partitions, &selected, view)?;
+        let cached = self
+            .place
+            .resource_selections
+            .agents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&policy.agent_id)
+            .filter(|selection| Arc::ptr_eq(&selection.policy.resource_view, &policy.resource_view))
+            .cloned();
+        // A caller can supply a policy captured by a different binding.
+        let fresh;
+        let (partitions, selected) = match cached.as_deref() {
+            Some(selection) => (&selection.partitions, &selection.ids),
+            None => {
+                fresh = self.select_resources(policy)?;
+                (&fresh.0, &fresh.1)
+            }
+        };
+        let view_aliases = resolve_view_aliases(policy, partitions, selected, view)?;
         let tool_view_aliases = aliases_for_kind("tool", &view_aliases);
         let skill_view_aliases = aliases_for_kind("skill", &view_aliases);
         let mcp_view_aliases = aliases_for_kind("mcp", &view_aliases);
