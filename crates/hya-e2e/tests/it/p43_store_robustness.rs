@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use hya_e2e::{FakeLlm, ScriptStep, default_backend_bin, text_step, tool_step};
+use hya_e2e::{FakeLlm, ScriptStep, default_backend_bin, parse_listen_url, text_step, tool_step};
 use hya_proto::{
     AgentName, Envelope, Event, ModelRef, PartProjection, Projection, Role, SessionId, SessionKind,
 };
@@ -786,10 +786,10 @@ async fn p43_serve_shutdown_and_short_command_report_exit_durability() {
         let stdout_handle = std::thread::spawn(move || {
             let mut tx = Some(ready_tx);
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if let Some(url) = line.strip_prefix("hya server listening on ")
+                if let Some(url) = parse_listen_url(&line)
                     && let Some(sender) = tx.take()
                 {
-                    let _ = sender.send(url.trim().to_string());
+                    let _ = sender.send(url.to_owned());
                 }
             }
         });

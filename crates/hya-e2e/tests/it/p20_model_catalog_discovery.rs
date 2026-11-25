@@ -13,7 +13,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::routing::get;
 use axum::{Json, Router};
-use hya_e2e::default_backend_bin;
+use hya_e2e::{default_backend_bin, parse_listen_url};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpListener;
@@ -156,7 +156,7 @@ async fn start_backend(binary: &Path, root: &Path) -> RunningBackend {
     let mut lines = BufReader::new(stdout).lines();
     let url = tokio::time::timeout(Duration::from_secs(30), async {
         while let Some(line) = lines.next_line().await.unwrap() {
-            if let Some(url) = line.strip_prefix("hya server listening on ") {
+            if let Some(url) = parse_listen_url(&line) {
                 return url.to_string();
             }
         }

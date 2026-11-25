@@ -89,7 +89,7 @@ async fn t1_14_legacy_summarize_persists_summary_metadata_path() {
     let _ = env.prompt(session, "legacy summarize B").await.expect("b");
 
     let result = env
-        .summarize_session_legacy(&session)
+        .post_json(&format!("/v1/sessions/{session}/summarize"), &Value::Null)
         .await
         .expect("legacy summarize");
     // v1 returns the marker message id.

@@ -587,7 +587,8 @@ fn forward_stdout(mut stdout: impl BufRead, ready: mpsc::Sender<io::Result<Strin
     }
 }
 
-fn parse_listen_url(line: &str) -> Option<&str> {
+/// Extract the loopback URL from a complete foreground backend readiness line.
+pub fn parse_listen_url(line: &str) -> Option<&str> {
     let url = line.strip_prefix(LISTEN_PREFIX)?;
     let port = url.strip_prefix("http://127.0.0.1:")?.parse::<u16>().ok()?;
     (port != 0).then_some(url)
