@@ -1387,10 +1387,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hya-plugin-bun"
-version = "0.0.0"
-
-[[package]]
 name = "hya-plugin-claude"
 version = "0.0.0"
 dependencies = [

@@ -8,15 +8,3 @@
 //! `hya bundle install --claude`.
 
 pub mod emit;
-
-/// Historical adapter version constant.
-#[deprecated(note = "Query the adapter entry point with --version")]
-pub const CLAUDE_ADAPTER_VERSION: &str = "1.0.0";
-
-/// Historical constant for the Claude plugin implementation kind.
-#[deprecated(note = "Use PluginKindWire::Claude from hya-plugin for host configuration")]
-pub const CLAUDE_PLUGIN_KIND: &str = "claude";
-
-/// Historical constant for the Claude Code plugin manifest filename.
-#[deprecated(note = "The Claude adapter owns plugin manifest discovery")]
-pub const PLUGIN_MANIFEST_FILE: &str = "plugin.json";
