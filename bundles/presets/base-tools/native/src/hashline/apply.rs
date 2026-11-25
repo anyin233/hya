@@ -10,6 +10,7 @@
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
+use hya_tool::literal_span::{UniqueSpanError, find_unique_span};
 use serde_json::{Map, Value};
 
 use super::HashlineError;
@@ -1115,46 +1116,36 @@ fn find_exact_unique_text_match(
     content: &str,
     old_text: &str,
 ) -> Result<(usize, usize), HashlineError> {
-    if old_text.is_empty() {
-        return Err(error(
-            "E_BAD_OP",
-            "replace_text requires non-empty oldText.",
-        ));
-    }
-    if old_text.len() > content.len() {
-        return Err(no_exact_match_error(content, old_text));
-    }
-    let Some(first_relative) = content.find(old_text) else {
-        return Err(no_exact_match_error(content, old_text));
-    };
-    let first = first_relative;
-    let next_character_len = content[first..].chars().next().map_or(0, char::len_utf8);
-    let from = first.saturating_add(next_character_len);
-    if from <= content.len().saturating_sub(old_text.len())
-        && let Some(second_relative) = content[from..].find(old_text)
-    {
-        let second = from.saturating_add(second_relative);
-        let first_line = line_number_at(content, first);
-        let second_line = line_number_at(content, second);
-        if second.saturating_sub(first) < old_text.len() {
+    let (first, second) = match find_unique_span(content, old_text) {
+        Ok(span) => return Ok((span.start, span.end)),
+        Err(UniqueSpanError::Empty) => {
             return Err(error(
-                "E_MULTI_MATCH",
-                format!(
-                    "replace_text found overlapping exact matches at line {first_line} and \
-line {second_line}; re-read and use hashline edits (op \"replace\" with pos/end anchors) to target one location."
-                ),
+                "E_BAD_OP",
+                "replace_text requires non-empty oldText.",
             ));
         }
+        Err(UniqueSpanError::Missing) => return Err(no_exact_match_error(content, old_text)),
+        Err(UniqueSpanError::Multiple { first, second }) => (first, second),
+    };
+    let first_line = line_number_at(content, first);
+    let second_line = line_number_at(content, second);
+    if second - first < old_text.len() {
         return Err(error(
             "E_MULTI_MATCH",
             format!(
-                "replace_text found multiple exact matches in the current file, at least at \
-line {first_line} and line {second_line}. Make oldText longer/more specific to make it unique, \
-or re-read and use hashline edits (op \"replace\" with pos/end anchors) to target one location."
+                "replace_text found overlapping exact matches at line {first_line} and \
+line {second_line}; re-read and use hashline edits (op \"replace\" with pos/end anchors) to target one location."
             ),
         ));
     }
-    Ok((first, first.saturating_add(old_text.len())))
+    Err(error(
+        "E_MULTI_MATCH",
+        format!(
+            "replace_text found multiple exact matches in the current file, at least at \
+line {first_line} and line {second_line}. Make oldText longer/more specific to make it unique, \
+or re-read and use hashline edits (op \"replace\" with pos/end anchors) to target one location."
+        ),
+    ))
 }
 
 /// Compute the logical insertion boundary of one append/prepend operation.
@@ -1826,6 +1817,30 @@ mod tests {
         assert_eq!(error.code, "E_MULTI_MATCH");
         assert!(error.message.contains("line 1"), "{}", error.message);
         assert!(error.message.contains("line 3"), "{}", error.message);
+    }
+
+    #[test]
+    fn literal_edit_rejects_empty_old_text() {
+        let parsed = request(json!({
+            "path": "x",
+            "edits": [{"op": "replace_text", "oldText": "", "newText": "y"}]
+        }));
+        let error = apply_hashline_edits("", &parsed).unwrap_err();
+        assert_eq!(error.code, "E_BAD_OP");
+        assert_eq!(error.message, "replace_text requires non-empty oldText.");
+    }
+
+    #[test]
+    fn literal_edit_rejects_overlapping_matches() {
+        for (content, old_text) in [("aaa", "aa"), ("ééé", "éé")] {
+            let parsed = request(json!({
+                "path": "x",
+                "edits": [{"op": "replace_text", "oldText": old_text, "newText": "y"}]
+            }));
+            let error = apply_hashline_edits(content, &parsed).unwrap_err();
+            assert_eq!(error.code, "E_MULTI_MATCH");
+            assert!(error.message.contains("overlapping exact matches"));
+        }
     }
 
     #[test]
