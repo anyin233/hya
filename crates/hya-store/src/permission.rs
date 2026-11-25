@@ -1,5 +1,6 @@
 //! Durable “allow always” permission rows used by the permission plane.
 
+use hya_proto::now_millis;
 use sqlx::Row;
 
 use crate::{SessionStore, StoreError};
@@ -33,7 +34,7 @@ impl SessionStore {
         .bind(&entry.project_id)
         .bind(&entry.action)
         .bind(&entry.resource)
-        .bind(entry.time_created_ms.unwrap_or_else(now_ms))
+        .bind(entry.time_created_ms.unwrap_or_else(now_millis))
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -97,12 +98,4 @@ fn saved_permission(row: sqlx::sqlite::SqliteRow) -> Result<SavedPermission, Sto
         resource: row.try_get("resource")?,
         time_created_ms: row.try_get("time_created")?,
     })
-}
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
-        .unwrap_or_default()
 }
