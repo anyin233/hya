@@ -164,6 +164,8 @@ test.describe("edit permission prompt", () => {
     await prompt(term, "edit the poem")
     await promptShown(term)
     await term.waitForText(/edit .*poem\.txt/)
+    await term.waitForText("│ - two")
+    await term.waitForText("│ + TWO")
     const removed = await at(term, "│ - two")
     expect((await term.cell(removed.row, removed.col + 2))?.fg).toBe(colors.remove)
     const added = await at(term, "│ + TWO")
@@ -190,6 +192,7 @@ test.describe("queued asks", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "run both")
     await term.waitForText("Permission · 1 of 2", 20_000)
+    await term.waitForText(/\$ echo (parent|child)-ask/)
     await term.attach(testInfo, "queued")
     const first = /\$ echo (parent|child)-ask/.exec(await term.text())![1]
     const other = first === "parent" ? "child" : "parent"
@@ -385,7 +388,7 @@ test.describe("asks of other sessions", () => {
       await term.press("1")
       await term.waitForText("Elsewhere done.", 20_000)
       await promptGone(term)
-      expect(await term.find("Pending (")).toBeNull()
+      await expect.poll(() => term.find("Pending (")).toBeNull()
     })
   }
 })
