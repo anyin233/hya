@@ -782,7 +782,6 @@ type ToolsBySession = Arc<Mutex<Vec<(SessionId, Vec<String>)>>>;
 
 /// Captures every provider request system prompt for guidance propagation proofs.
 struct CaptureSystemsProvider {
-    systems: Arc<Mutex<Vec<String>>>,
     /// Session-scoped captures for root-vs-child proofs.
     by_session: Arc<Mutex<Vec<(SessionId, String)>>>,
     /// Session-scoped tool names for resource-policy proofs on main synthesis.
@@ -816,7 +815,6 @@ impl Provider for CaptureSystemsProvider {
             .iter()
             .map(|t| t.name.as_str().to_string())
             .collect();
-        self.systems.lock().unwrap().push(system.clone());
         self.by_session.lock().unwrap().push((session, system));
         self.tools_by_session
             .lock()
@@ -831,11 +829,9 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
     const OLD_QUICK_PROMPT: &str = "quick prompt";
     const NEW_CATALOG_CHILD_PROMPT: &str = "NEW_CATALOG_CHILD_PROMPT";
 
-    let systems = Arc::new(Mutex::new(Vec::new()));
     let by_session = Arc::new(Mutex::new(Vec::new()));
     let tools_by_session = Arc::new(Mutex::new(Vec::new()));
     let router = Arc::new(ProviderRouter::new().with(Arc::new(CaptureSystemsProvider {
-        systems,
         by_session: by_session.clone(),
         tools_by_session,
         inner: FakeProvider::scripted(vec![FakeStep::Finish(FinishReason::Stop)]),
@@ -1035,19 +1031,38 @@ struct GuidanceSpawnFixture {
     /// Parent/base AgentSpec used for `run_turn` (same workdir as session).
     agent: AgentSpec,
     agents: Arc<[AgentDef]>,
-    systems: Arc<Mutex<Vec<String>>>,
     by_session: Arc<Mutex<Vec<(SessionId, String)>>>,
+}
+
+impl GuidanceSpawnFixture {
+    async fn wait_for_systems(&self, session: SessionId, count: usize) -> Vec<String> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                {
+                    let captures = self.by_session.lock().unwrap();
+                    let systems = captures
+                        .iter()
+                        .filter(|(id, _)| *id == session)
+                        .map(|(_, system)| system);
+                    if systems.clone().count() >= count {
+                        return systems.cloned().collect();
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("session {session} did not reach {count} provider requests"))
+    }
 }
 
 async fn guidance_spawn_fixture(
     agents: &[(&str, AgentRole, &[&str])],
     scripted: FakeProvider,
 ) -> GuidanceSpawnFixture {
-    let systems = Arc::new(Mutex::new(Vec::new()));
     let by_session = Arc::new(Mutex::new(Vec::new()));
     let tools_by_session = Arc::new(Mutex::new(Vec::new()));
     let provider_router = Arc::new(ProviderRouter::new().with(Arc::new(CaptureSystemsProvider {
-        systems: systems.clone(),
         by_session: by_session.clone(),
         tools_by_session,
         inner: scripted,
@@ -1108,7 +1123,6 @@ async fn guidance_spawn_fixture(
         parent,
         agent,
         agents: roster,
-        systems,
         by_session,
     }
 }
@@ -1172,11 +1186,8 @@ async fn task_child_uses_triggering_guidance_and_records_project_context_once() 
     assert_eq!(outcomes[0].status, "running", "{outcomes:?}");
     wait_member_turn_done(&fixture.engine, &outcomes[0].session).await;
 
-    let systems = fixture.systems.lock().unwrap().clone();
-    assert!(
-        systems.len() >= 2,
-        "child must run multiple provider rounds: {systems:?}"
-    );
+    let child = outcomes[0].session.parse().unwrap();
+    let systems = fixture.wait_for_systems(child, 2).await;
     for system in &systems {
         assert!(
             system.contains(TRIGGER_GUIDANCE),
@@ -1201,7 +1212,7 @@ async fn resident_activations_reuse_in_process_triggering_guidance() {
             ("general", AgentRole::Main, &[]),
             ("quick", AgentRole::Subagent, &[]),
         ],
-        FakeProvider::scripted(Vec::new()),
+        FakeProvider::scripted(vec![FakeStep::Finish(FinishReason::Stop)]),
     )
     .await;
 
@@ -1233,50 +1244,28 @@ async fn resident_activations_reuse_in_process_triggering_guidance() {
     let child: SessionId = outcomes[0].session.parse().unwrap();
     let handle = outcomes[0].member.clone();
 
-    // Wait for first activation (initial directive).
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if !fixture.systems.lock().unwrap().is_empty() {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("first resident activation");
-
-    // Mutate the original source and a disk file after spawn; neither may leak.
+    // The child records its own context before its first provider request.
+    fixture.wait_for_systems(child, 1).await;
     source.push_str(POST_SPAWN_MUTATION);
     let child_proj = fixture.engine.read_projection(child).await.unwrap();
-    if let Some(wd) = child_proj.session.workdir.as_deref() {
-        let _ = std::fs::write(PathBuf::from(wd).join("AGENTS.md"), POST_SPAWN_MUTATION);
-    }
+    let workdir = child_proj.session.workdir.expect("child workdir");
+    let agents_file = PathBuf::from(workdir).join("AGENTS.md");
+    std::fs::write(agents_file, POST_SPAWN_MUTATION).unwrap();
 
     // Second activation via mail.
     fixture
         .engine
         .mail_send(
             fixture.parent,
-            MailEndpoint::Handle(handle.clone()),
+            MailEndpoint::Handle(handle),
             MailKind::Message,
             "second wake".to_string(),
         )
         .await
         .unwrap();
 
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if fixture.systems.lock().unwrap().len() >= 2 {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("second resident activation");
-
-    let systems = fixture.systems.lock().unwrap().clone();
-    assert!(systems.len() >= 2, "expected >=2 activations: {systems:?}");
+    // Quiescence can also wake the root, which records its own context.
+    let systems = fixture.wait_for_systems(child, 2).await;
     for system in &systems {
         assert!(
             system.contains(TRIGGER_GUIDANCE),
@@ -1342,11 +1331,21 @@ async fn nested_spawn_inherits_same_immutable_guidance() {
     assert_eq!(outcomes[0].status, "running", "{outcomes:?}");
     wait_member_turn_done(&fixture.engine, &outcomes[0].session).await;
 
-    let systems = fixture.systems.lock().unwrap().clone();
-    assert!(
-        systems.len() >= 2,
-        "child and grandchild must each call provider: {systems:?}"
-    );
+    let child = outcomes[0].session.parse().unwrap();
+    let projection = fixture
+        .engine
+        .read_projection(fixture.parent)
+        .await
+        .unwrap();
+    let grandchild = projection
+        .team
+        .roster
+        .values()
+        .find(|entry| entry.agent_type.as_str() == "plan")
+        .expect("nested plan registered in the roster")
+        .session;
+    let mut systems = fixture.wait_for_systems(child, 1).await;
+    systems.extend(fixture.wait_for_systems(grandchild, 1).await);
     for system in &systems {
         assert!(
             system.contains(TRIGGER_GUIDANCE),
@@ -1396,16 +1395,7 @@ async fn resident_guidance_is_ephemeral_not_persisted_in_events() {
         .expect("resident spawn");
     let child: SessionId = outcomes[0].session.parse().unwrap();
 
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if !fixture.systems.lock().unwrap().is_empty() {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("resident activation");
+    let systems = fixture.wait_for_systems(child, 1).await;
 
     let parent_events = fixture.engine.replay(fixture.parent).await.unwrap();
     let child_events = fixture.engine.replay(child).await.unwrap();
@@ -1415,7 +1405,6 @@ async fn resident_guidance_is_ephemeral_not_persisted_in_events() {
         "guidance must not be written into durable events: {blob}"
     );
     // Activation still used the in-process Arc.
-    let systems = fixture.systems.lock().unwrap().clone();
     assert!(
         systems.iter().any(|s| s.contains(TRIGGER_GUIDANCE)),
         "in-process activation must still apply guidance: {systems:?}"
@@ -1483,7 +1472,7 @@ async fn batch_invalid_member_with_guidance_has_zero_durable_side_effects() {
         "no durable parent events on batch auth failure even when guidance is present"
     );
     assert!(
-        fixture.systems.lock().unwrap().is_empty(),
+        fixture.by_session.lock().unwrap().is_empty(),
         "no provider rounds when batch fails before admission"
     );
 }
@@ -1783,11 +1772,9 @@ fn nested_root_divergence_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegist
 /// and inherited guidance — never the nested caller's.
 #[tokio::test]
 async fn nested_resident_main_synthesis_keeps_root_definition_and_guidance() {
-    let systems = Arc::new(Mutex::new(Vec::new()));
     let by_session = Arc::new(Mutex::new(Vec::new()));
     let tools_by_session = Arc::new(Mutex::new(Vec::new()));
     let provider_router = Arc::new(ProviderRouter::new().with(Arc::new(CaptureSystemsProvider {
-        systems: systems.clone(),
         by_session: by_session.clone(),
         tools_by_session: tools_by_session.clone(),
         inner: FakeProvider::scripted(Vec::new()),
@@ -1984,11 +1971,9 @@ async fn nested_resident_main_synthesis_keeps_root_definition_and_guidance() {
 /// the batch contains a resident member (no admission row, no child session/event).
 #[tokio::test]
 async fn missing_root_definition_fails_before_admission_for_resident_batch() {
-    let systems = Arc::new(Mutex::new(Vec::new()));
     let by_session = Arc::new(Mutex::new(Vec::new()));
     let tools_by_session = Arc::new(Mutex::new(Vec::new()));
     let provider_router = Arc::new(ProviderRouter::new().with(Arc::new(CaptureSystemsProvider {
-        systems: systems.clone(),
         by_session: by_session.clone(),
         tools_by_session: tools_by_session.clone(),
         inner: FakeProvider::scripted(Vec::new()),
@@ -2167,7 +2152,7 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
         "no durable nested events"
     );
     assert!(
-        systems.lock().unwrap().is_empty(),
+        by_session.lock().unwrap().is_empty(),
         "no provider rounds when root resolution fails before admission"
     );
 }
