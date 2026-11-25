@@ -187,7 +187,7 @@ pub enum Event {
         /// New model reference.
         model: ModelRef,
     },
-    /// Free-form status ping; reducer no-op (compat `session.status` bridge).
+    /// Historical `session.status` ping. Decoded for replay and never emitted.
     SessionStatus {
         /// Session this event belongs to.
         session: SessionId,
@@ -746,7 +746,8 @@ pub enum Event {
         /// Message body text.
         body: String,
     },
-    /// Retained wire variant; membership is folded only from `ChannelCreated`.
+    /// Historical channel join. Decoded for replay and never emitted.
+    /// Membership is folded from `ChannelCreated`.
     ChannelJoined {
         /// Team-root log session.
         session: SessionId,
@@ -1199,15 +1200,15 @@ pub struct EvictedPart {
 pub enum CompactionStrategy {
     /// Provider-native compaction (OpenAI `/responses/compact`).
     Native,
-    /// Local model summarizer fallback.
-    #[default]
+    /// Historical local model summarizer fallback. Decoded for replay and never emitted.
     LocalSummarizer,
-    /// Local deterministic dense archive of the folded prefix, no model call.
+    /// Historical deterministic archive of the folded prefix. Decoded for replay and never emitted.
     SnapCompact,
-    /// Model-written handoff document over the verbatim transcript.
+    /// Historical model-written handoff document. Decoded for replay and never emitted.
     Handoff,
     /// Kernel rewrite: whole steps before the current one are removed and
     /// replaced by a summary, initiated by the harness or the model.
+    #[default]
     Rewrite,
 }
 

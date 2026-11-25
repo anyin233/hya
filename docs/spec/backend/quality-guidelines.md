@@ -782,8 +782,8 @@ const lifecycle = resolveLifecyclePresentation(node)
 - New fields use `#[serde(default)]` plus `skip_serializing_if` so an empty value
   never reaches the wire. Precedent: `MemberSpawned.agent_type`, `.mode`,
   `.directive`, `.tool_call`.
-- `Event::Unknown` carries `#[serde(other)]`: an older binary folds newer variants
-  instead of failing to replay.
+- `Event` is a closed, internally tagged enum. Keep historical variants decodable
+  for stored logs. An unrecognized event tag fails replay with `StoreError::EventDecode`.
 
 ### 3. Contracts
 

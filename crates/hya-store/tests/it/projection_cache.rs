@@ -329,6 +329,70 @@ async fn real_database_cached_reads_equal_full_replay() {
     );
 }
 
+#[tokio::test]
+async fn legacy_envelopes_decode_and_replay_from_sqlite() {
+    use hya_proto::{Envelope, MessageId};
+    use serde_json::json;
+
+    let db = TempDb::new();
+    let store = SessionStore::connect(&db.0).await.unwrap();
+    let session = SessionId::new();
+    let user = MessageId::new();
+    let assistant = MessageId::new();
+    let markers = [MessageId::new(), MessageId::new(), MessageId::new()];
+    let mut payloads = vec![
+        json!({"type": "session_titled", "session": session, "title": "legacy"}),
+        json!({"type": "session_status", "session": session, "status": {"type": "busy"}}),
+        json!({"type": "channel_joined", "session": session, "channel": "build", "member": "reviewer"}),
+        json!({"type": "message_started", "session": session, "message": user, "role": "user"}),
+        json!({"type": "message_started", "session": session, "message": assistant, "role": "assistant"}),
+    ];
+    for (strategy, marker) in ["local_summarizer", "snap_compact", "handoff"]
+        .into_iter()
+        .zip(markers)
+    {
+        payloads.push(json!({
+            "type": "message_started", "session": session, "message": marker, "role": "system"
+        }));
+        payloads.push(json!({
+            "type": "context_compacted", "session": session, "message": marker,
+            "strategy": strategy, "from_message": user, "to_message": user,
+            "folded_count": 1, "input_tokens_est": 100, "threshold": 75
+        }));
+    }
+
+    let pool = raw_pool(&db.0).await;
+    let mut envelopes = Vec::new();
+    for (seq, event) in (1_i64..).zip(payloads) {
+        let envelope: Envelope = serde_json::from_value(json!({
+            "seq": seq, "ts_millis": seq, "event": event
+        }))
+        .unwrap();
+        sqlx::query("INSERT INTO event_log (seq, session_id, payload, ts) VALUES (?, ?, ?, ?)")
+            .bind(seq)
+            .bind(session.storage_key())
+            .bind(event.to_string())
+            .bind(seq)
+            .execute(&pool)
+            .await
+            .unwrap();
+        envelopes.push(envelope);
+    }
+    assert_eq!(store.replay(session).await.unwrap(), envelopes);
+    let projection = store.read_projection(session).await.unwrap();
+    assert_eq!(projection, Projection::from_events(&envelopes));
+    assert!(projection.team.channels.is_empty());
+    assert_eq!(
+        projection
+            .session
+            .messages
+            .iter()
+            .map(|row| row.id)
+            .collect::<Vec<_>>(),
+        [user, markers[2], markers[1], markers[0], assistant]
+    );
+}
+
 /// Unique cached values advance in place; retained shared snapshots stay immutable.
 #[tokio::test]
 async fn shared_snapshots_are_isolated_while_unique_cache_advances_in_place() {

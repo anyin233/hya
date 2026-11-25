@@ -3,6 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 /// One discovered workspace adapter (Compat project/workspace surface).
+#[deprecated(
+    note = "Workspace adapter contributions are unsupported and retained for compatibility"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceAdapterInfo {
     /// Adapter kind discriminator on the wire (`type` JSON key).
