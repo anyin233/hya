@@ -7,9 +7,10 @@ use axum::extract::{Path as AxumPath, Query, State};
 use axum::routing::{get, post};
 
 use super::Json;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::ServerState;
+use crate::pending::{PermissionRequestView, QuestionRequestView};
 use hya_api::v1 as pb;
 use hya_api::v1::respond_interaction_request::Response;
 use hya_proto::SessionId;
@@ -43,28 +44,25 @@ async fn list_interactions(
         .ok()
         .filter(|kind| *kind != pb::InteractionType::Unspecified);
 
-    for view in st.permission_requests.list_legacy().await {
-        let entry = serde_json::to_value(&view).unwrap_or(Value::Null);
-        if let Some(want) = want_session
-            && field(&entry, "sessionID") != want.to_string()
-        {
-            continue;
-        }
-        if matches_type(want_type, pb::InteractionType::Permission) {
-            interactions.push(super::events::permission_interaction(&entry));
-        }
+    if matches_type(want_type, pb::InteractionType::Permission) {
+        interactions.extend(
+            st.permission_requests
+                .list()
+                .await
+                .into_iter()
+                .filter(|view| want_session.is_none_or(|want| view.session == Some(want)))
+                .map(pb::Interaction::from),
+        );
     }
-    for view in st.question_requests.list().await {
-        let entry = serde_json::to_value(&view).unwrap_or(Value::Null);
-        let session_id = field(&entry, "sessionID");
-        if let Some(want) = want_session
-            && session_id != want.to_string()
-        {
-            continue;
-        }
-        if matches_type(want_type, pb::InteractionType::Question) {
-            interactions.push(super::events::question_interaction(&entry));
-        }
+    if matches_type(want_type, pb::InteractionType::Question) {
+        interactions.extend(
+            st.question_requests
+                .list()
+                .await
+                .into_iter()
+                .filter(|view| want_session.is_none_or(|want| view.session == want))
+                .map(pb::Interaction::from),
+        );
     }
     let (interactions, page) = super::catalog::paginate(interactions, &request.page);
     Ok(Json(pb::ListInteractionsResponse {
@@ -84,25 +82,11 @@ async fn respond_interaction(
 ) -> Result<Json<pb::RespondInteractionResponse>, V1Error> {
     match request.response {
         Some(Response::Permission(permission)) => {
-            let view = st
+            let session = st
                 .permission_requests
-                .list()
+                .session_for(&id)
                 .await
-                .into_iter()
-                .find(|view| {
-                    let entry = serde_json::to_value(view).unwrap_or(Value::Null);
-                    field(&entry, "id") == id
-                });
-            let Some(view) = view else {
-                return Err(V1Error::new(
-                    hya_api::error::Code::NotFound,
-                    format!("interaction not found: {id}"),
-                ));
-            };
-            let entry = serde_json::to_value(&view).unwrap_or(Value::Null);
-            let session = field(&entry, "sessionID")
-                .parse::<SessionId>()
-                .map_err(|_| V1Error::internal("pending permission has no session"))?;
+                .ok_or_else(|| interaction_not_found(&id))?;
             let reply = if permission.allowed {
                 if permission.persist {
                     crate::pending::PermissionReply::Always
@@ -120,21 +104,11 @@ async fn respond_interaction(
             Ok(Json(pb::RespondInteractionResponse { applied }))
         }
         Some(Response::Question(question)) => {
-            let views = st.question_requests.list().await;
-            let found = views.iter().find(|view| {
-                let entry = serde_json::to_value(view).unwrap_or(Value::Null);
-                field(&entry, "id") == id
-            });
-            let Some(found) = found else {
-                return Err(V1Error::new(
-                    hya_api::error::Code::NotFound,
-                    format!("interaction not found: {id}"),
-                ));
-            };
-            let entry = serde_json::to_value(found).unwrap_or(Value::Null);
-            let session = field(&entry, "sessionID")
-                .parse::<SessionId>()
-                .map_err(|_| V1Error::internal("pending question has no session"))?;
+            let session = st
+                .question_requests
+                .session_for(&id)
+                .await
+                .ok_or_else(|| interaction_not_found(&id))?;
             let applied = if question.rejected {
                 st.question_requests.reject(session, &id).await
             } else {
@@ -148,10 +122,77 @@ async fn respond_interaction(
     }
 }
 
-fn field(entry: &Value, name: &str) -> String {
-    entry
-        .get(name)
-        .and_then(|value| value.as_str())
-        .map(str::to_owned)
-        .unwrap_or_default()
+fn interaction_not_found(id: &str) -> V1Error {
+    V1Error::new(
+        hya_api::error::Code::NotFound,
+        format!("interaction not found: {id}"),
+    )
+}
+
+impl From<PermissionRequestView> for pb::Interaction {
+    fn from(view: PermissionRequestView) -> Self {
+        let title = format!("{} {}", view.action, view.resource)
+            .trim()
+            .to_owned();
+        let mut payload = serde_json::Map::from_iter([
+            ("action".into(), Value::String(view.action)),
+            ("resource".into(), Value::String(view.resource)),
+            ("always".into(), json!(view.always)),
+        ]);
+        if let Some(message) = view.message_id {
+            payload.insert("messageId".into(), Value::String(message.to_string()));
+        }
+        if let Some(call) = view.call_id {
+            payload.insert("callId".into(), Value::String(call.to_string()));
+        }
+        if let Some(tool) = view.tool {
+            if !tool.name.is_empty() {
+                payload.insert("tool".into(), Value::String(tool.name));
+            }
+            payload.insert("input".into(), tool.input);
+        }
+        Self {
+            id: view.id,
+            session: view
+                .session
+                .map(|session| session.to_string())
+                .unwrap_or_default(),
+            r#type: pb::InteractionType::Permission as i32,
+            title,
+            payload: Some(super::convert::to_struct(Value::Object(payload))),
+            ..Self::default()
+        }
+    }
+}
+
+impl From<QuestionRequestView> for pb::Interaction {
+    fn from(view: QuestionRequestView) -> Self {
+        let (title, detail, options) = view
+            .questions
+            .first()
+            .map(|first| {
+                (
+                    first.question.clone(),
+                    first.header.clone(),
+                    first
+                        .options
+                        .iter()
+                        .map(|option| option.label.clone())
+                        .collect(),
+                )
+            })
+            .unwrap_or_default();
+        Self {
+            id: view.id,
+            session: view.session.to_string(),
+            r#type: pb::InteractionType::Question as i32,
+            title,
+            detail,
+            options,
+            payload: Some(super::convert::to_struct(
+                json!({ "questions": view.questions }),
+            )),
+            time_created: None,
+        }
+    }
 }

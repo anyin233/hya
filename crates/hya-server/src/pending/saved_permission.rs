@@ -175,7 +175,10 @@ mod tests {
             task.await.unwrap().unwrap();
             return false;
         };
-        let id = event["properties"]["id"].as_str().unwrap().to_string();
+        let crate::pending::PendingEvent::PermissionRequested(view) = event else {
+            panic!("expected a permission request");
+        };
+        let id = view.id;
         assert!(requests.reply(session, &id, reply, None).await.unwrap());
         let _result = task.await.unwrap();
         true

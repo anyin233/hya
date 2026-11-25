@@ -5,16 +5,17 @@ use std::sync::Arc;
 use hya_proto::{Envelope, Event, MessageId, PartProjection, SessionId, ToolCallId, ToolPartState};
 use hya_store::{SessionStore, StoreError};
 use hya_tool::{Action, AskRequest, Decision, RememberScope, Resource};
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 
+use super::PendingEvent;
 use super::saved_permission::{SavedPermissions, action_name, install, uninstall};
 
 #[derive(Clone)]
 pub(crate) struct PermissionRequests {
     inner: Arc<Mutex<BTreeMap<String, PendingPermission>>>,
     saved: SavedPermissions,
-    events: broadcast::Sender<Value>,
+    events: broadcast::Sender<PendingEvent>,
     store: SessionStore,
     #[cfg(test)]
     bridge_waiting: Arc<tokio::sync::Notify>,
@@ -35,48 +36,22 @@ struct PendingPermission {
 
 /// The tool call a permission ask is about, as recorded on its tool part.
 #[derive(Clone)]
-struct ToolCallArgs {
-    name: String,
-    input: Value,
+pub(crate) struct ToolCallArgs {
+    pub(crate) name: String,
+    pub(crate) input: Value,
 }
 
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone)]
 pub(crate) struct PermissionRequestView {
-    id: String,
-    #[serde(rename = "sessionID")]
-    session_id: String,
-    action: String,
-    resources: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    save: Option<Vec<String>>,
+    pub(crate) id: String,
+    pub(crate) session: Option<SessionId>,
+    pub(crate) action: String,
+    pub(crate) resource: String,
+    pub(crate) always: Vec<String>,
+    pub(crate) message_id: Option<MessageId>,
+    pub(crate) call_id: Option<ToolCallId>,
+    pub(crate) tool: Option<ToolCallArgs>,
 }
-
-#[derive(Clone, serde::Serialize)]
-pub(crate) struct LegacyPermissionRequestView {
-    id: String,
-    #[serde(rename = "sessionID")]
-    session_id: String,
-    permission: String,
-    patterns: Vec<String>,
-    metadata: Value,
-    always: Vec<String>,
-    tool: PermissionToolView,
-}
-
-#[derive(Clone, serde::Serialize)]
-struct PermissionToolView {
-    #[serde(rename = "messageID")]
-    message_id: String,
-    #[serde(rename = "callID")]
-    call_id: String,
-    /// Tool name of the correlated call, when known.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
-    /// Parsed arguments of the correlated call, when known.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    input: Option<Value>,
-}
-
 #[derive(Clone, Copy)]
 pub(crate) enum PermissionReply {
     Once,
@@ -140,7 +115,7 @@ impl PermissionRequests {
                     let _sent = entry.reply.send(Decision::AllowOnce);
                     continue;
                 }
-                let asked = permission_asked_event(&request_id, &entry);
+                let asked = PendingEvent::PermissionRequested(permission_view(&request_id, &entry));
                 pending.insert(request_id, entry);
                 drop(pending);
                 let _published = events.send(asked);
@@ -150,7 +125,7 @@ impl PermissionRequests {
     }
 
     /// Subscribe to live v1 interaction events.
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<Value> {
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<PendingEvent> {
         self.events.subscribe()
     }
 
@@ -159,10 +134,11 @@ impl PermissionRequests {
         self.events.receiver_count()
     }
 
-    fn publish_replied(&self, session: Option<SessionId>, id: &str, reply: PermissionReply) {
-        let _published = self
-            .events
-            .send(permission_replied_event(session, id, reply));
+    fn publish_resolved(&self, session: Option<SessionId>, id: &str) {
+        let _published = self.events.send(PendingEvent::Resolved {
+            session,
+            id: id.to_owned(),
+        });
     }
 
     pub(crate) async fn list(&self) -> Vec<PermissionRequestView> {
@@ -170,23 +146,23 @@ impl PermissionRequests {
             .lock()
             .await
             .iter()
-            .filter_map(|(id, entry)| permission_view(id, entry))
+            .filter(|(_, entry)| entry.session.is_some())
+            .map(|(id, entry)| permission_view(id, entry))
             .collect()
     }
 
-    pub(crate) async fn list_legacy(&self) -> Vec<LegacyPermissionRequestView> {
+    pub(crate) async fn session_for(&self, id: &str) -> Option<SessionId> {
+        self.inner.lock().await.get(id)?.session
+    }
+
+    pub(crate) async fn count(&self) -> usize {
         self.inner
             .lock()
             .await
-            .iter()
-            .filter_map(|(id, entry)| {
-                entry
-                    .session
-                    .map(|session| legacy_permission_view(id, entry, session.to_string()))
-            })
-            .collect()
+            .values()
+            .filter(|entry| entry.session.is_some())
+            .count()
     }
-
     pub(crate) async fn reply(
         &self,
         session: SessionId,
@@ -221,7 +197,7 @@ impl PermissionRequests {
             let _sent = item.reply.send(related_decision(reply));
         }
         if ok {
-            self.publish_replied(Some(session), id, reply);
+            self.publish_resolved(Some(session), id);
         }
         Ok(ok)
     }
@@ -248,7 +224,7 @@ impl PermissionRequests {
         for (id, entry) in taken {
             if entry.reply.send(Decision::AllowOnce).is_ok() {
                 allowed += 1;
-                self.publish_replied(entry.session, &id, PermissionReply::Once);
+                self.publish_resolved(entry.session, &id);
             }
         }
         allowed
@@ -365,58 +341,16 @@ fn take_related(
         .collect()
 }
 
-fn permission_view(id: &str, entry: &PendingPermission) -> Option<PermissionRequestView> {
-    Some(PermissionRequestView {
-        id: id.to_string(),
-        session_id: entry.session?.to_string(),
+fn permission_view(id: &str, entry: &PendingPermission) -> PermissionRequestView {
+    PermissionRequestView {
+        id: id.to_owned(),
+        session: entry.session,
         action: action_name(entry.action),
-        resources: vec![entry.resource.pattern()],
-        save: Some(vec![entry.remember.pattern().to_string()]),
-    })
-}
-
-fn legacy_permission_view(
-    id: &str,
-    entry: &PendingPermission,
-    session_id: String,
-) -> LegacyPermissionRequestView {
-    legacy_permission_view_from_fields(
-        id,
-        session_id,
-        (entry.message_id, entry.call_id, entry.tool.as_ref()),
-        entry.action,
-        &entry.resource,
-        &entry.remember,
-    )
-}
-
-fn legacy_permission_view_from_fields(
-    id: &str,
-    session_id: String,
-    (message_id, call_id, tool): (Option<MessageId>, Option<ToolCallId>, Option<&ToolCallArgs>),
-    action: Action,
-    resource: &Resource,
-    remember: &RememberScope,
-) -> LegacyPermissionRequestView {
-    LegacyPermissionRequestView {
-        id: id.to_string(),
-        session_id,
-        permission: action_name(action),
-        patterns: vec![resource.pattern()],
-        metadata: json!({}),
-        always: vec![remember.pattern().to_string()],
-        tool: PermissionToolView {
-            message_id: message_id
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
-            call_id: call_id
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
-            name: tool.map(|tool| tool.name.clone()),
-            input: tool.map(|tool| tool.input.clone()),
-        },
+        resource: entry.resource.pattern(),
+        always: vec![entry.remember.pattern().to_owned()],
+        message_id: entry.message_id,
+        call_id: entry.call_id,
+        tool: entry.tool.clone(),
     }
 }
 
@@ -536,48 +470,6 @@ fn input_mentions_resource(input: &Value, resource: &str) -> bool {
     }
 }
 
-fn permission_asked_event(request_id: &str, entry: &PendingPermission) -> Value {
-    let session = entry
-        .session
-        .map(|session| session.to_string())
-        .unwrap_or_default();
-    permission_asked_event_from_view(
-        request_id,
-        legacy_permission_view(request_id, entry, session),
-    )
-}
-
-fn permission_asked_event_from_view(
-    request_id: &str,
-    properties: LegacyPermissionRequestView,
-) -> Value {
-    json!({
-        "id": format!("evt_hya_perm_{request_id}"),
-        "type": "permission.asked",
-        "properties": properties,
-    })
-}
-
-fn permission_replied_event(session: Option<SessionId>, id: &str, reply: PermissionReply) -> Value {
-    json!({
-        "id": format!("evt_hya_perm_reply_{id}"),
-        "type": "permission.replied",
-        "properties": {
-            "sessionID": session.map(|session| session.to_string()).unwrap_or_default(),
-            "requestID": id,
-            "reply": reply_name(reply),
-        },
-    })
-}
-
-fn reply_name(reply: PermissionReply) -> &'static str {
-    match reply {
-        PermissionReply::Once => "once",
-        PermissionReply::Always => "always",
-        PermissionReply::Reject => "reject",
-    }
-}
-
 fn decision(reply: PermissionReply, message: Option<String>) -> Decision {
     match reply {
         PermissionReply::Once => Decision::AllowOnce,
@@ -601,7 +493,7 @@ mod tests {
     use hya_tool::{ExactSubject, PermissionTarget, RememberScope};
 
     #[test]
-    fn permission_asked_event_includes_tool_correlation_when_available() {
+    fn permission_view_includes_tool_correlation_when_available() {
         let message = MessageId::new();
         let call = ToolCallId::new();
         let (reply, _rx) = tokio::sync::oneshot::channel();
@@ -617,13 +509,9 @@ mod tests {
             reply,
         };
 
-        let event = permission_asked_event(&request_id, &entry);
-
-        assert_eq!(
-            event["properties"]["tool"]["messageID"],
-            message.to_string()
-        );
-        assert_eq!(event["properties"]["tool"]["callID"], call.to_string());
+        let view = permission_view(&request_id, &entry);
+        assert_eq!(view.message_id, Some(message));
+        assert_eq!(view.call_id, Some(call));
     }
 
     #[test]
@@ -661,11 +549,7 @@ mod tests {
 
         let exact = pending(session, "write", write);
         assert_eq!(
-            permission_view("id", &exact).and_then(|view| view.save),
-            Some(vec!["write".to_string()])
-        );
-        assert_eq!(
-            legacy_permission_view("id", &exact, session.to_string()).always,
+            permission_view("id", &exact).always,
             vec!["write".to_string()]
         );
     }
@@ -778,7 +662,7 @@ mod shutdown_order_tests {
                 vec![
                     FakeStep::ToolCall {
                         name: "bash".into(),
-                        input: json!({"command":"true"}),
+                        input: serde_json::json!({"command":"true"}),
                     },
                     FakeStep::Finish(FinishReason::ToolCalls),
                 ],

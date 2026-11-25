@@ -140,7 +140,7 @@ async fn frames_until(
 async fn permission_asks_and_resolutions_stream_as_interaction_frames() {
     let (ask_tx, ask_rx) = mpsc::unbounded_channel::<AskRequest>();
     let state = base_state().await.with_permission_requests(ask_rx);
-    let app = router(state);
+    let app = router(state.clone());
 
     // Open the global stream first, then push an ask through the bridge.
     let stream_app = app.clone();
@@ -159,12 +159,15 @@ async fn permission_asks_and_resolutions_stream_as_interaction_frames() {
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     let request_id = PermissionRequestId::new();
     let id = request_id.to_string();
+    let session = SessionId::new();
+    let message = hya_proto::MessageId::new();
+    let call = hya_proto::ToolCallId::new();
     ask_tx
         .send(AskRequest {
             id: request_id,
-            session: Some(SessionId::new()),
-            message_id: None,
-            call_id: None,
+            session: Some(session),
+            message_id: Some(message),
+            call_id: Some(call),
             action: Action::Bash,
             resource: Resource::Command("printf hi > file".to_string()),
             remember: RememberScope::LegacyAction,
@@ -173,18 +176,46 @@ async fn permission_asks_and_resolutions_stream_as_interaction_frames() {
         .expect("ask should flow through the bridge");
 
     let frames = collector.await.expect("collector task");
-    let asked = frames
+    let event = frames
         .iter()
-        .find_map(|frame| frame["event"]["permissionRequested"].as_object().cloned())
+        .map(|frame| &frame["event"])
+        .find(|event| event["permissionRequested"].is_object())
         .expect("a permissionRequested frame must arrive");
-    assert_eq!(asked["request"].as_str().unwrap(), id);
-    let interaction = &asked["interaction"];
-    assert_eq!(interaction["type"], json!("INTERACTION_TYPE_PERMISSION"));
-    assert!(
-        interaction["title"]
-            .as_str()
-            .is_some_and(|title| title.contains("bash")),
-        "title should carry the action: {interaction}"
+    assert!(event.get("seq").is_none(), "{event}");
+    assert_eq!(event["session"], json!(session.to_string()));
+    let asked = &event["permissionRequested"];
+    assert_eq!(asked["request"], json!(id));
+    let expected = json!({
+        "id": id,
+        "session": session.to_string(),
+        "type": "INTERACTION_TYPE_PERMISSION",
+        "title": "bash printf hi > file",
+        "payload": {
+            "action": "bash",
+            "resource": "printf hi > file",
+            "always": ["*"],
+            "messageId": message.to_string(),
+            "callId": call.to_string(),
+        },
+    });
+    assert_eq!(asked["interaction"], expected);
+
+    let (status, listed) = get_json(&app, &format!("/v1/interactions?session={session}")).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["interactions"], json!([expected]));
+
+    use hya_api::v1 as pb;
+    let listed = pb::interactions_client::InteractionsClient::new(grpc_channel(state).await)
+        .list_interactions(pb::ListInteractionsRequest {
+            session: session.to_string(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        serde_json::to_value(listed.interactions).unwrap(),
+        json!([expected])
     );
 
     // Subscribe for the resolution before replying (broadcast is

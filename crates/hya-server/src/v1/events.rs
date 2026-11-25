@@ -20,6 +20,7 @@ use tokio_stream::Stream;
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::ServerState;
+use crate::pending::PendingEvent;
 use hya_api::v1 as pb;
 use hya_proto::SessionId;
 
@@ -272,8 +273,8 @@ impl<T: Clone> Source<T> {
 
 struct Sources {
     bus: Source<hya_proto::Envelope>,
-    permissions: Source<Value>,
-    questions: Source<Value>,
+    permissions: Source<PendingEvent>,
+    questions: Source<PendingEvent>,
     catalogs: Source<Value>,
     projects: Source<()>,
     sessions: Source<crate::session_list::SessionListNotice>,
@@ -360,14 +361,12 @@ pub(crate) fn spawn_frame_hub(st: &ServerState) {
                     Err(RecvError::Closed) => break,
                 },
                 (index, received) = sources.permissions.recv(&mut permission_wake) => {
-                    let Ok(value) = received else { continue };
-                    let Some(frame) = interaction_frame(&value) else { continue };
-                    (1, index, Audience::Interaction, pb::StreamFrame { frame: Some(frame) })
+                    let Ok(event) = received else { continue };
+                    (1, index, Audience::Interaction, interaction_frame(event))
                 },
                 (index, received) = sources.questions.recv(&mut question_wake) => {
-                    let Ok(value) = received else { continue };
-                    let Some(frame) = interaction_frame(&value) else { continue };
-                    (2, index, Audience::Interaction, pb::StreamFrame { frame: Some(frame) })
+                    let Ok(event) = received else { continue };
+                    (2, index, Audience::Interaction, interaction_frame(event))
                 },
                 (index, received) = sources.catalogs.recv(&mut catalog_wake) => {
                     let Ok(notice) = received else { continue };
@@ -608,58 +607,6 @@ fn process_notice_frame(payload: pb::stream_event::Payload) -> pb::StreamFrame {
     }
 }
 
-/// Wire view of one pending permission ask from its `permission.asked`
-/// properties (the same view the listing serializes). The payload names the
-/// decision (`action`, `resource`, `always`) and, when the ask is correlated
-/// with a tool call, the call (`messageId`, `callId`, `tool`, `input`).
-pub(crate) fn permission_interaction(properties: &Value) -> pb::Interaction {
-    let patterns: Vec<&str> = properties
-        .get("patterns")
-        .and_then(Value::as_array)
-        .map(|rows| rows.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
-    let action = field_str(properties, "permission");
-    let resource = patterns.join(" ");
-    let mut payload = serde_json::Map::new();
-    payload.insert("action".into(), Value::String(action.clone()));
-    payload.insert("resource".into(), Value::String(resource.clone()));
-    if let Some(always) = properties.get("always").filter(|always| always.is_array()) {
-        payload.insert("always".into(), always.clone());
-    }
-    if let Some(tool) = properties.get("tool") {
-        for (from, to) in [
-            ("messageID", "messageId"),
-            ("callID", "callId"),
-            ("name", "tool"),
-        ] {
-            if let Some(text) = tool
-                .get(from)
-                .and_then(Value::as_str)
-                .filter(|text| !text.is_empty())
-            {
-                payload.insert(to.into(), Value::String(text.to_owned()));
-            }
-        }
-        if let Some(input) = tool.get("input") {
-            payload.insert("input".into(), input.clone());
-        }
-    }
-    let session = field_str(properties, "sessionID");
-    pb::Interaction {
-        id: field_str(properties, "id"),
-        session: session
-            .parse::<SessionId>()
-            .map(|id| id.to_string())
-            .unwrap_or(session),
-        r#type: pb::InteractionType::Permission as i32,
-        title: format!("{action} {resource}").trim().to_owned(),
-        detail: String::new(),
-        options: Vec::new(),
-        payload: Some(super::convert::to_struct(Value::Object(payload))),
-        time_created: None,
-    }
-}
-
 /// Longest parent chain walked when matching a descendant's frame; subagent
 /// trees are far shallower (two layers below the lead).
 const MAX_LINEAGE_HOPS: usize = 32;
@@ -712,95 +659,46 @@ async fn is_descendant(
     false
 }
 
-/// Wire view of one pending question from its `question.asked` properties
-/// (the same view the listing serializes). The first question fills
-/// `title`, `detail` (its header), and `options` (its labels); `payload`
-/// carries every question as `{questions: [{question, header, options:
-/// [{label, description}], multiple?, custom?}]}`.
-pub(crate) fn question_interaction(properties: &Value) -> pb::Interaction {
-    let first = properties
-        .pointer("/questions/0")
-        .cloned()
-        .unwrap_or(Value::Null);
-    let options: Vec<String> = first
-        .get("options")
-        .and_then(Value::as_array)
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|row| row.get("label").and_then(Value::as_str).map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    let questions = properties
-        .get("questions")
-        .filter(|questions| questions.is_array())
-        .cloned()
-        .unwrap_or_else(|| Value::Array(Vec::new()));
-    let mut payload = serde_json::Map::new();
-    payload.insert("questions".into(), questions);
-    pb::Interaction {
-        id: field_str(properties, "id"),
-        session: field_str(properties, "sessionID"),
-        r#type: pb::InteractionType::Question as i32,
-        title: field_str(&first, "question"),
-        detail: field_str(&first, "header"),
-        options,
-        payload: Some(super::convert::to_struct(Value::Object(payload))),
-        time_created: None,
-    }
-}
+/// Pending requests and resolutions are live-only and have no log sequence.
+fn interaction_frame(event: PendingEvent) -> pb::StreamFrame {
+    use pb::stream_event::Payload;
 
-/// Map one pending-plane broadcast value onto a live frame.
-fn interaction_frame(value: &serde_json::Value) -> Option<pb::stream_frame::Frame> {
-    let kind = value
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let properties = value.get("properties")?;
-    let frame_session = field_str(properties, "sessionID");
-    let event = match kind {
-        "permission.asked" => {
-            let interaction = permission_interaction(properties);
-            pb::stream_event::Payload::PermissionRequested(pb::PermissionRequested {
-                request: interaction.id.clone(),
-                interaction: Some(interaction),
-            })
+    let (session, payload) = match event {
+        PendingEvent::PermissionRequested(view) => {
+            let interaction = pb::Interaction::from(view);
+            (
+                interaction.session.clone(),
+                Payload::PermissionRequested(pb::PermissionRequested {
+                    request: interaction.id.clone(),
+                    interaction: Some(interaction),
+                }),
+            )
         }
-        "question.asked" => {
-            let interaction = question_interaction(properties);
-            pb::stream_event::Payload::QuestionRequested(pb::QuestionRequested {
-                request: interaction.id.clone(),
-                interaction: Some(interaction),
-            })
+        PendingEvent::QuestionRequested(view) => {
+            let interaction = pb::Interaction::from(view);
+            (
+                interaction.session.clone(),
+                Payload::QuestionRequested(pb::QuestionRequested {
+                    request: interaction.id.clone(),
+                    interaction: Some(interaction),
+                }),
+            )
         }
-        "permission.replied" | "question.replied" | "question.rejected" => {
-            pb::stream_event::Payload::InteractionResolved(pb::InteractionResolved {
-                request: field_str(properties, "requestID"),
-            })
-        }
-        _ => return None,
+        PendingEvent::Resolved { session, id } => (
+            session
+                .map(|session| session.to_string())
+                .unwrap_or_default(),
+            Payload::InteractionResolved(pb::InteractionResolved { request: id }),
+        ),
     };
-    Some(pb::stream_frame::Frame::Event(pb::StreamEvent {
-        seq: 0,
-        session: frame_session.clone(),
-        time_recorded: super::convert::timestamp(now_millis()),
-        payload: Some(event),
-    }))
-}
-
-fn field_str(value: &serde_json::Value, name: &str) -> String {
-    value
-        .get(name)
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .unwrap_or_default()
-}
-
-fn now_millis() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as i64)
-        .unwrap_or(0)
+    pb::StreamFrame {
+        frame: Some(pb::stream_frame::Frame::Event(pb::StreamEvent {
+            seq: 0,
+            session,
+            time_recorded: now_timestamp(),
+            payload: Some(payload),
+        })),
+    }
 }
 
 fn counted_stream_event(

@@ -1720,7 +1720,7 @@ impl HyaRuntime {
         self.runtime.finish_shutdown().await
     }
 
-    /// Axum router with native and Compat routes (from [`hya_server::router`]).
+    /// Axum router for the v1 HTTP surface (from [`hya_server::router`]).
     pub fn router(&self) -> &axum::Router {
         &self.router
     }
