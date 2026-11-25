@@ -31,6 +31,7 @@ pub mod handle;
 pub mod interaction;
 /// Subagent lifecycle requests (`report`, `archive`, `wait`) to the supervisor.
 pub mod lifecycle;
+pub mod literal_span;
 mod lsp_plane;
 /// Team mailbox requests and the mailbox plane used by send/channel tools.
 pub mod mailbox;

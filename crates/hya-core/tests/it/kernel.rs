@@ -2138,6 +2138,35 @@ async fn read_returns_text_verbatim() {
     assert_eq!(result, json!({"output": text}));
 }
 
+async fn assert_literal_edit_rejected(content: &str, old: &str, reason: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("text.txt");
+    std::fs::write(&path, content).unwrap();
+    let edit = kernel::tools::builtin()
+        .into_iter()
+        .find(|tool| tool.name() == "edit")
+        .unwrap();
+    let ctx = tool_ctx(dir.path(), &CancellationToken::new());
+    let err = edit
+        .execute(&ctx, json!({"path": "text.txt", "old": old, "new": "x"}))
+        .await
+        .expect_err("invalid literal edit must be rejected");
+
+    assert!(matches!(err, ToolError::Input(message) if message.contains(reason)));
+    assert_eq!(std::fs::read_to_string(path).unwrap(), content);
+}
+
+#[tokio::test]
+async fn literal_edit_rejects_empty_old_text() {
+    assert_literal_edit_rejected("", "", "non-empty").await;
+}
+
+#[tokio::test]
+async fn literal_edit_rejects_overlapping_matches() {
+    assert_literal_edit_rejected("aaa", "aa", "overlapping").await;
+    assert_literal_edit_rejected("ééé", "éé", "overlapping").await;
+}
+
 fn encoded_test_image(format: image::ImageFormat) -> Vec<u8> {
     let image = image::RgbImage::from_pixel(2, 2, image::Rgb([255, 0, 0]));
     let mut encoded = std::io::Cursor::new(Vec::new());

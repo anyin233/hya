@@ -430,9 +430,10 @@ Bare and full `read` use the same image decoder and attachment budget.
 Missing files and invalid UTF-8 in non-image files return
 `ToolError`.
 `write` creates parent directories and returns the byte count; I/O errors
-return `ToolError`. `edit` requires exactly one occurrence of `old`; zero or
-multiple matches return `ToolError` stating the count. Identical `old` and `new`
-return `ToolError::Input` without writing the file.
+return `ToolError`. `edit` requires non-empty `old` text that occurs exactly once.
+Zero matches, multiple matches (including overlaps), and identical `old` and
+`new` values return `ToolError::Input` without writing the file. For example,
+`{"path":"notes.txt","old":"aa","new":"x"}` is rejected if `notes.txt` contains `aaa`.
 
 `rewrite` keeps its `summary` in the call input in the current step. It does
 not store a second copy or turn the summary into an observation. `<n>` is the

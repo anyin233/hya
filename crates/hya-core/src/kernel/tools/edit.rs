@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
+use hya_tool::literal_span::{UniqueSpanError, find_unique_span};
 use hya_tool::{Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -43,14 +44,29 @@ impl Tool for Edit {
             ));
         }
         let file = super::resolve(&ctx.workdir, &path);
-        let text = tokio::fs::read_to_string(&file).await?;
-        let count = text.matches(old.as_str()).count();
-        if count != 1 {
-            return Err(ToolError::Input(format!(
+        let mut text = tokio::fs::read_to_string(&file).await?;
+        let span = find_unique_span(&text, &old).map_err(|error| {
+            let count = match error {
+                UniqueSpanError::Empty => {
+                    return ToolError::Input("`old` must be non-empty".into());
+                }
+                UniqueSpanError::Missing => 0,
+                UniqueSpanError::Multiple { .. } => {
+                    let count = text.matches(old.as_str()).count();
+                    if count == 1 {
+                        return ToolError::Input(format!(
+                            "`old` has overlapping matches in {path}; it must occur exactly once"
+                        ));
+                    }
+                    count
+                }
+            };
+            ToolError::Input(format!(
                 "`old` occurs {count} times in {path}; it must occur exactly once"
-            )));
-        }
-        tokio::fs::write(&file, text.replacen(old.as_str(), &new, 1)).await?;
+            ))
+        })?;
+        text.replace_range(span, &new);
+        tokio::fs::write(&file, text).await?;
         Ok(json!({"replaced": 1}))
     }
 }
