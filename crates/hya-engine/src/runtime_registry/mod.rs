@@ -22,13 +22,13 @@ use thiserror::Error;
 use tokio::sync::watch;
 
 mod compile;
+mod fingerprint;
 mod prompt;
 mod sources;
 
 use compile::BindingPlace;
 pub use compile::{AgentResourcePolicy, AgentToolPlane, TurnBinding};
 pub(crate) use compile::{BoundAgentHook, CompiledResourceView};
-use sources::*;
 pub use sources::{
     RuntimeCandidate, RuntimeSource, RuntimeSourceExport, RuntimeSourceId, RuntimeSourceKind,
     RuntimeSourceManifest, RuntimeSourceOwner, RuntimeSourceSkill, SourceSchema,
