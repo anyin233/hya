@@ -164,6 +164,12 @@ The engine discards the `bool` after success (`let _ = refresh…await?`), calls
 that scope (see "Scope resolution and the scope cache" below). Implementors own
 MCP/plugin discovery I/O; the engine only rebinds after a successful refresh.
 
+Each captured binding selects an agent's tool, Skill, and MCP candidates on
+first use. Binding clones reuse that selection for resource policy, sidecar
+capability checks, and final assembly. Assembly resolves dispatch aliases and
+adds the sidecar tools supplied for that activation. A fresh binding selects
+from its own snapshot and workdir.
+
 ## Session Creation
 
 `create` mints a `SessionId` and emits `Event::SessionCreated` with:

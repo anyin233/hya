@@ -378,6 +378,7 @@ impl RuntimeRegistry {
                 scope: scope.clone(),
                 project_bundle_dirs,
                 bundle_efforts,
+                resource_selections: Default::default(),
             }),
         })
     }

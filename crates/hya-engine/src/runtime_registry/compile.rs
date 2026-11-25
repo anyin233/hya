@@ -27,6 +27,7 @@ pub(super) struct BindingPlace {
     pub(super) scope: CatalogScope,
     pub(super) project_bundle_dirs: Arc<BTreeMap<String, PathBuf>>,
     pub(super) bundle_efforts: Arc<BTreeMap<String, BTreeMap<String, ReasoningEffort>>>,
+    pub(super) resource_selections: resources::ResourceSelections,
 }
 
 #[cfg(test)]
@@ -37,6 +38,7 @@ impl BindingPlace {
             scope,
             project_bundle_dirs: Arc::new(BTreeMap::new()),
             bundle_efforts: Arc::new(BTreeMap::new()),
+            resource_selections: Default::default(),
         })
     }
 }

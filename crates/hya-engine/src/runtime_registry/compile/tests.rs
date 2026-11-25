@@ -417,6 +417,62 @@ fn old_turn_binding_pins_tools_across_later_publication() {
 }
 
 #[test]
+fn binding_clones_reuse_selected_resources_across_assembly() {
+    let catalog = Arc::new(TestCatalog::from_prepared(&[]).unwrap());
+    let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+    let source_id = RuntimeSourceId::plugin("mask-src");
+    registry
+        .refresh(|candidate| {
+            candidate.upsert_sources(vec![RuntimeSource::new(
+                source_id.clone(),
+                [14; 32],
+                Arc::new(()),
+                vec![RuntimeSourceExport::tool(
+                    "fast",
+                    "mask__fast",
+                    vec!["bash".to_string()],
+                    Arc::new(NoopTool::new("mask__fast")),
+                    ToolPermission::Tool,
+                )],
+            )])
+        })
+        .unwrap();
+    let workdir = Path::new("/tmp/hya-reuse-bound-selection");
+    let binding = registry.bind_turn(workdir).unwrap();
+    let retained = binding.clone();
+    let policy = binding.agent_resource_policy("hya-main").unwrap();
+    let before = binding.compile_agent_resources(&policy).unwrap();
+    let masked_bash = before.resolve_tool("bash").unwrap().tool;
+    assert!(before.resolve_tool("harness:tool/mask__fast").is_some());
+
+    registry
+        .refresh(|candidate| {
+            candidate.remove_sources(&BTreeSet::from([source_id]));
+            Ok(())
+        })
+        .unwrap();
+    let fresh = registry.bind_turn(workdir).unwrap();
+    let fresh_policy = fresh.agent_resource_policy("hya-main").unwrap();
+    let fresh_view = fresh.compile_agent_resources(&fresh_policy).unwrap();
+    assert!(fresh_view.resolve_tool("harness:tool/mask__fast").is_none());
+    assert!(fresh_view.resolve_tool("harness:tool/bash").is_some());
+    let foreign_policy_view = fresh.compile_agent_resources(&policy).unwrap();
+    assert!(
+        foreign_policy_view
+            .resolve_tool("harness:tool/mask__fast")
+            .is_none()
+    );
+
+    let retained_policy = retained.agent_resource_policy("hya-main").unwrap();
+    let after = retained.compile_agent_resources(&retained_policy).unwrap();
+    assert!(after.resolve_tool("harness:tool/mask__fast").is_some());
+    assert!(Arc::ptr_eq(
+        &masked_bash,
+        &after.resolve_tool("bash").unwrap().tool
+    ));
+}
+
+#[test]
 fn alias_masking_publishes_and_compiles_bare_name_to_winner() {
     let catalog = Arc::new(
         TestCatalog::from_prepared(&[bundle_with_agent(
@@ -2885,8 +2941,7 @@ fn bundle_sidecar_collision_requires_provider_safe_names_for_both_targets() {
         Err(other) => panic!("expected provider-safe schema rejection, got {other:?}"),
     }
 
-    policy
-        .resource_view
+    Arc::make_mut(&mut policy.resource_view)
         .aliases
         .insert("harness_echo".to_string(), "harness:tool/echo".to_string());
     let compiled = binding
