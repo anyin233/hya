@@ -8,11 +8,13 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use futures::StreamExt as _;
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use secrecy::SecretString;
 use serde_json::Value;
 use thiserror::Error;
 
 use crate::ProviderKind;
+use crate::auth::{ANTHROPIC_VERSION, AuthStyle};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
@@ -103,18 +105,30 @@ impl CatalogAuth {
         }
     }
 
-    fn presence(&self) -> AuthPresence {
-        let credentialed = match self {
-            Self::None => false,
-            Self::ApiKey(key) => !key.is_empty(),
-            Self::Bearer { token, .. } | Self::Grok { token, .. } => {
-                token.as_deref().is_some_and(|token| !token.is_empty())
+    fn into_style(self, kind: ProviderKind) -> AuthStyle {
+        match self {
+            Self::None if kind == ProviderKind::Anthropic => AuthStyle::Anthropic(None),
+            Self::None => AuthStyle::Bearer(None),
+            Self::ApiKey(key) if kind == ProviderKind::Anthropic => {
+                AuthStyle::Anthropic(Some(SecretString::new(key)))
             }
-        };
-        if credentialed {
-            AuthPresence::Credentialed
-        } else {
-            AuthPresence::Unauthenticated
+            Self::ApiKey(key) => AuthStyle::Google(Some(SecretString::new(key))),
+            Self::Bearer { token, account_id } if kind == ProviderKind::OpenAiCodex => {
+                AuthStyle::CodexSession {
+                    token: token.map(SecretString::new),
+                    account_id,
+                }
+            }
+            Self::Bearer { token, .. } => AuthStyle::Bearer(token.map(SecretString::new)),
+            Self::Grok {
+                token,
+                client_version,
+                client_identifier,
+            } => AuthStyle::GrokSession {
+                token: token.map(SecretString::new),
+                client_version,
+                client_identifier,
+            },
         }
     }
 }
@@ -503,7 +517,12 @@ pub enum ProviderDiscoveryOutcome {
 
 /// Discover models from one declared provider using bounded HTTP semantics.
 pub async fn discover_models(request: CatalogDiscoveryRequest) -> ProviderDiscoveryOutcome {
-    let auth = request.auth.presence();
+    let auth_style = request.auth.into_style(request.kind);
+    let auth = if auth_style.credential().is_some() {
+        AuthPresence::Credentialed
+    } else {
+        AuthPresence::Unauthenticated
+    };
     let endpoint = match models_endpoint(&request.base_url, request.kind) {
         Ok(endpoint) => endpoint,
         Err(error) => return ProviderDiscoveryOutcome::Failed { error },
@@ -530,7 +549,7 @@ pub async fn discover_models(request: CatalogDiscoveryRequest) -> ProviderDiscov
             Ok(url) => url,
             Err(error) => return ProviderDiscoveryOutcome::Failed { error },
         };
-        let response = match send_page(&client, &url, request.kind, &request.auth).await {
+        let response = match send_page(&client, &url, request.kind, &auth_style).await {
             Ok(response) => response,
             Err(error) => {
                 return classify_failure(error, auth);
@@ -677,7 +696,7 @@ async fn send_page(
     client: &reqwest::Client,
     url: &reqwest::Url,
     kind: ProviderKind,
-    auth: &CatalogAuth,
+    auth: &AuthStyle,
 ) -> Result<Vec<u8>, CatalogFailure> {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -733,68 +752,14 @@ async fn send_page(
 fn apply_auth_headers(
     headers: &mut HeaderMap,
     kind: ProviderKind,
-    auth: &CatalogAuth,
+    auth: &AuthStyle,
 ) -> Result<(), CatalogFailure> {
-    match auth {
-        CatalogAuth::None => {}
-        CatalogAuth::ApiKey(key) if !key.is_empty() => {
-            let name = if kind == ProviderKind::Anthropic {
-                "x-api-key"
-            } else {
-                "x-goog-api-key"
-            };
-            let mut value = HeaderValue::from_str(key).map_err(|_| CatalogFailure::UnsafeUrl)?;
-            value.set_sensitive(true);
-            headers.insert(HeaderName::from_static(name), value);
-        }
-        CatalogAuth::Bearer {
-            token: Some(token),
-            account_id,
-        } if !token.is_empty() => {
-            let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
-                .map_err(|_| CatalogFailure::UnsafeUrl)?;
-            value.set_sensitive(true);
-            headers.insert(AUTHORIZATION, value);
-            if kind == ProviderKind::OpenAiCodex
-                && let Some(account_id) = account_id.as_deref().filter(|id| !id.is_empty())
-            {
-                let mut value =
-                    HeaderValue::from_str(account_id).map_err(|_| CatalogFailure::UnsafeUrl)?;
-                value.set_sensitive(true);
-                headers.insert(HeaderName::from_static("chatgpt-account-id"), value);
-            }
-        }
-        CatalogAuth::Grok {
-            token,
-            client_version,
-            client_identifier,
-        } => {
-            if let Some(token) = token.as_deref().filter(|token| !token.is_empty()) {
-                let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
-                    .map_err(|_| CatalogFailure::UnsafeUrl)?;
-                value.set_sensitive(true);
-                headers.insert(AUTHORIZATION, value);
-                headers.insert(
-                    HeaderName::from_static("x-xai-token-auth"),
-                    HeaderValue::from_static("xai-grok-cli"),
-                );
-            }
-            let version =
-                HeaderValue::from_str(client_version).map_err(|_| CatalogFailure::UnsafeUrl)?;
-            let identifier =
-                HeaderValue::from_str(client_identifier).map_err(|_| CatalogFailure::UnsafeUrl)?;
-            headers.insert(HeaderName::from_static("x-grok-client-version"), version);
-            headers.insert(
-                HeaderName::from_static("x-grok-client-identifier"),
-                identifier,
-            );
-        }
-        CatalogAuth::ApiKey(_) | CatalogAuth::Bearer { .. } => {}
-    }
-    if kind == ProviderKind::Anthropic {
+    auth.apply_headers(headers, auth.credential(), false, None)
+        .map_err(|_| CatalogFailure::UnsafeUrl)?;
+    if kind == ProviderKind::Anthropic && !matches!(auth, AuthStyle::Anthropic(_)) {
         headers.insert(
-            HeaderName::from_static("anthropic-version"),
-            HeaderValue::from_static("2023-06-01"),
+            "anthropic-version",
+            HeaderValue::from_static(ANTHROPIC_VERSION),
         );
     }
     if kind == ProviderKind::OpenAiCodex {
@@ -862,13 +827,13 @@ mod tests {
         apply_auth_headers(
             &mut headers,
             ProviderKind::OpenAiCodex,
-            &CatalogAuth::Bearer {
+            &AuthStyle::CodexSession {
                 token: None,
                 account_id: Some("must-not-leak".to_string()),
             },
         )
         .unwrap();
-        assert!(!headers.contains_key(AUTHORIZATION));
+        assert!(!headers.contains_key("authorization"));
         assert!(!headers.contains_key("chatgpt-account-id"));
         assert_eq!(headers["openai-beta"], "responses=experimental");
         assert_eq!(headers["user-agent"], "codex_cli_rs");

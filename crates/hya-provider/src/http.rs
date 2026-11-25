@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use hya_proto::{Event, Message, MessageId, ModelRef, SessionId};
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, RETRY_AFTER};
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, RETRY_AFTER};
 use secrecy::{ExposeSecret as _, SecretString};
 use serde_json::{Value, json};
 use tokio::{
@@ -22,6 +22,7 @@ mod output_limit_tests;
 mod stream;
 
 use crate::anthropic::{AnthropicMessagesProtocol, add_prompt_cache_breakpoints};
+use crate::auth::{ANTHROPIC_VERSION, AuthStyle, request_header_value};
 use crate::google::GoogleProtocol;
 use crate::openai::{
     GrokBuildProtocol, OpenAiChatProtocol, OpenAiResponsesProtocol, encode_input_items_for_model,
@@ -163,27 +164,6 @@ pub type BearerResolver = Arc<dyn Fn() -> Result<String, ProviderError> + Send +
 /// the credential unchanged, the original status error surfaces unchanged.
 pub type AuthRefresher = Arc<dyn Fn(&str) -> Result<(), ProviderError> + Send + Sync>;
 
-#[derive(Clone)]
-enum AuthStyle {
-    Bearer(Option<SecretString>),
-    /// ChatGPT Codex OAuth: optional Bearer JWT plus optional account id header.
-    CodexSession {
-        token: Option<SecretString>,
-        account_id: Option<String>,
-    },
-    /// Grok Build session with optional auth and non-secret client headers.
-    GrokSession {
-        token: Option<SecretString>,
-        client_version: String,
-        client_identifier: String,
-    },
-    Anthropic {
-        key: Option<SecretString>,
-        version: String,
-    },
-    Google(Option<SecretString>),
-}
-
 #[derive(Default)]
 struct RouteModel {
     served: bool,
@@ -213,20 +193,6 @@ pub struct HttpProvider {
     kind: ProviderKind,
     catalog_source: ModelCatalogSource,
     stream_idle_timeout: Duration,
-}
-
-fn sensitive(value: &str) -> Result<HeaderValue, ProviderError> {
-    let mut header = HeaderValue::from_str(value)
-        .map_err(|_| ProviderError::Http("invalid auth header value".to_string()))?;
-    header.set_sensitive(true);
-    Ok(header)
-}
-
-fn request_header_value(value: &str) -> Result<HeaderValue, ProviderError> {
-    let mut header = HeaderValue::from_str(value)
-        .map_err(|_| ProviderError::Http("invalid request header value".to_string()))?;
-    header.set_sensitive(true);
-    Ok(header)
 }
 
 /// Per-model token limits attached to an HTTP route.
@@ -285,10 +251,7 @@ impl HttpProvider {
             ProviderKind::Anthropic => (
                 Arc::new(AnthropicMessagesProtocol),
                 format!("{base}/messages"),
-                AuthStyle::Anthropic {
-                    key,
-                    version: "2023-06-01".to_string(),
-                },
+                AuthStyle::Anthropic(key),
             ),
             ProviderKind::Google => (
                 Arc::new(GoogleProtocol),
@@ -358,12 +321,7 @@ impl HttpProvider {
         if self.kind != ProviderKind::OpenAiCodex {
             return self;
         }
-        let token = match &self.core.auth {
-            AuthStyle::Bearer(key)
-            | AuthStyle::CodexSession { token: key, .. }
-            | AuthStyle::GrokSession { token: key, .. } => key.clone(),
-            AuthStyle::Anthropic { key, .. } | AuthStyle::Google(key) => key.clone(),
-        };
+        let token = self.core.auth.secret().cloned();
         self.core.auth = AuthStyle::CodexSession { token, account_id };
         self
     }
@@ -380,12 +338,7 @@ impl HttpProvider {
         if self.kind != ProviderKind::GrokBuild {
             return self;
         }
-        let token = match &self.core.auth {
-            AuthStyle::Bearer(key)
-            | AuthStyle::CodexSession { token: key, .. }
-            | AuthStyle::GrokSession { token: key, .. } => key.clone(),
-            AuthStyle::Anthropic { key, .. } | AuthStyle::Google(key) => key.clone(),
-        };
+        let token = self.core.auth.secret().cloned();
         self.core.auth = AuthStyle::GrokSession {
             token,
             client_version: client_version.into(),
@@ -568,31 +521,14 @@ impl HttpProvider {
 }
 
 impl RouteCore {
-    fn resolve_bearer(
-        &self,
-        fallback: Option<&SecretString>,
-    ) -> Result<Option<String>, ProviderError> {
-        if let Some(resolver) = &self.bearer_resolver {
+    /// Credential material this route authenticates with right now.
+    fn active_credential(&self) -> Result<Option<String>, ProviderError> {
+        if self.auth.is_bearer()
+            && let Some(resolver) = &self.bearer_resolver
+        {
             return resolver().map(|token| (!token.is_empty()).then_some(token));
         }
-        Ok(fallback
-            .map(|value| value.expose_secret().clone())
-            .filter(|token| !token.is_empty()))
-    }
-
-    /// Credential material this route authenticates with right now, honoring
-    /// the bearer resolver when present. Feeds the forced-refresh hook so the
-    /// caller can detect rotations that happened underneath a failing request.
-    fn active_credential(&self) -> Result<Option<String>, ProviderError> {
-        match &self.auth {
-            AuthStyle::Bearer(key)
-            | AuthStyle::CodexSession { token: key, .. }
-            | AuthStyle::GrokSession { token: key, .. } => self.resolve_bearer(key.as_ref()),
-            AuthStyle::Anthropic { key, .. } | AuthStyle::Google(key) => Ok(key
-                .as_ref()
-                .map(|value| value.expose_secret().clone())
-                .filter(|token| !token.is_empty())),
-        }
+        Ok(self.auth.credential().map(str::to_owned))
     }
 
     fn auth_headers(
@@ -600,81 +536,19 @@ impl RouteCore {
         model_override: Option<&str>,
     ) -> Result<(HeaderMap, Option<String>), ProviderError> {
         let mut headers = HeaderMap::new();
-        let refresh_credential = match &self.auth {
-            AuthStyle::Bearer(key) => {
-                let token = self.resolve_bearer(key.as_ref())?;
-                if let Some(token) = token.as_deref() {
-                    headers.insert(AUTHORIZATION, sensitive(&format!("Bearer {token}"))?);
-                }
-                token
-            }
-            AuthStyle::CodexSession { token, account_id } => {
-                let token = self.resolve_bearer(token.as_ref())?;
-                if let Some(token) = token.as_deref() {
-                    headers.insert(AUTHORIZATION, sensitive(&format!("Bearer {token}"))?);
-                    if let Some(account_id) = account_id.as_deref().filter(|s| !s.is_empty()) {
-                        headers.insert(
-                            HeaderName::from_static("chatgpt-account-id"),
-                            sensitive(account_id)?,
-                        );
-                    }
-                }
-                token
-            }
-            AuthStyle::GrokSession {
-                token,
-                client_version,
-                client_identifier,
-            } => {
-                let token = self.resolve_bearer(token.as_ref())?;
-                if let Some(token) = token.as_deref() {
-                    headers.insert(AUTHORIZATION, sensitive(&format!("Bearer {token}"))?);
-                    headers.insert(
-                        HeaderName::from_static("x-xai-token-auth"),
-                        sensitive("xai-grok-cli")?,
-                    );
-                }
-                headers.insert(
-                    HeaderName::from_static("x-grok-client-version"),
-                    request_header_value(client_version)?,
-                );
-                headers.insert(
-                    HeaderName::from_static("x-grok-client-identifier"),
-                    request_header_value(client_identifier)?,
-                );
-                if let Some(model) = model_override {
-                    headers.insert(
-                        HeaderName::from_static("x-grok-model-override"),
-                        request_header_value(model)?,
-                    );
-                }
-                token
-            }
-            AuthStyle::Anthropic { key, version } => {
-                if let Some(key) = key.as_ref() {
-                    headers.insert(
-                        HeaderName::from_static("x-api-key"),
-                        sensitive(key.expose_secret())?,
-                    );
-                }
-                headers.insert(
-                    HeaderName::from_static("anthropic-version"),
-                    HeaderValue::from_str(version)
-                        .map_err(|_| ProviderError::Http("invalid version header".to_string()))?,
-                );
-                None
-            }
-            AuthStyle::Google(key) => {
-                if let Some(key) = key.as_ref() {
-                    headers.insert(
-                        HeaderName::from_static("x-goog-api-key"),
-                        sensitive(key.expose_secret())?,
-                    );
-                }
-                None
-            }
+        let bearer = if self.auth.is_bearer() {
+            self.active_credential()?
+        } else {
+            None
         };
-        Ok((headers, refresh_credential))
+        let credential = if self.auth.is_bearer() {
+            bearer.as_deref()
+        } else {
+            self.auth.credential()
+        };
+        self.auth
+            .apply_headers(&mut headers, credential, true, model_override)?;
+        Ok((headers, bearer))
     }
 
     fn request_headers(
@@ -1052,13 +926,13 @@ fn append_auth_identity(output: &mut Vec<u8>, auth: &AuthStyle) -> Option<()> {
             append_identity_bytes(output, client_version.as_bytes())?;
             append_identity_bytes(output, client_identifier.as_bytes())?;
         }
-        AuthStyle::Anthropic { key, version } => {
+        AuthStyle::Anthropic(key) => {
             append_identity_bytes(output, b"anthropic")?;
             output.push(u8::from(
                 key.as_ref()
                     .is_some_and(|value| !value.expose_secret().is_empty()),
             ));
-            append_identity_bytes(output, version.as_bytes())?;
+            append_identity_bytes(output, ANTHROPIC_VERSION.as_bytes())?;
         }
         AuthStyle::Google(key) => {
             append_identity_bytes(output, b"google")?;
