@@ -386,6 +386,10 @@ run without `name` uses the Session's selected Workflow.
 path. It returns a read-only `CompiledWorkflow` with metadata, normalized
 Stages and levels, automatic join rendering, and a canonical revision.
 
+`hya_workflow::is_valid_identifier(value: &str) -> bool` checks Workflow
+identifiers and prepared channel IDs. It accepts nonempty ASCII lowercase
+letters, digits, hyphens, and underscores, such as `build_stage-2`.
+
 The compiler and runtime share the Workflow model types from `hya_proto`.
 `CompiledWorkflow::revision() -> WorkflowRevision` returns the canonical SHA-256
 revision. `WorkflowStage::model()` and `VerifySpec::model()` return
