@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 use crate::error::PluginError;
 
 /// Re-export of the workspace-adapter metadata shape returned at initialize.
+#[allow(deprecated, reason = "retain the plugin compatibility path")]
 pub use hya_proto::WorkspaceAdapterInfo;
 
 /// Host/plugin protocol major version; initialize must negotiate this value (`1`).
@@ -178,6 +179,7 @@ pub struct SkillContribution {
 /// The complete typed contribution surface returned by plugin initialization.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(deprecated, reason = "decode legacy workspace adapter contributions")]
 pub struct PluginContributionSet {
     /// Hooks this plugin implements (only these are dispatched).
     #[serde(default)]
@@ -188,7 +190,7 @@ pub struct PluginContributionSet {
     /// Skills this plugin exposes to the runtime.
     #[serde(default)]
     pub skills: Vec<SkillContribution>,
-    /// Workspace adapters aggregated for `GET /experimental/workspace/adapter`.
+    /// Historical workspace adapter declarations retained for initialize compatibility.
     #[serde(default, rename = "workspaceAdapters")]
     pub workspace_adapters: Vec<WorkspaceAdapterInfo>,
     /// API endpoints this process answers over `api/request`.
@@ -204,6 +206,7 @@ impl PluginContributionSet {
     ///
     /// The plugin id is included in every failure so callers can report which
     /// initialize handshake was rejected without parsing an untyped payload.
+    #[allow(deprecated, reason = "validate legacy workspace adapter contributions")]
     pub fn validate(&self, plugin: &str) -> Result<(), PluginError> {
         let mut tool_ids = BTreeSet::new();
         let mut exported_ids = BTreeSet::new();
@@ -410,6 +413,7 @@ pub struct InitializeResult {
 /// Strict flattened wire helper for decoding an initialize result.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(deprecated, reason = "decode legacy workspace adapter contributions")]
 struct InitializeResultWire {
     /// Protocol version the plugin accepts.
     protocol_version: u32,

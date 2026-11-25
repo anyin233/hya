@@ -55,6 +55,7 @@ pub use bundle_control::{
 };
 pub use ephemeral::EphemeralGrace;
 pub use host::{GrpcHostGuard, GrpcHostLayer, HostPolicy, LOOPBACK_HOSTS};
+#[allow(deprecated, reason = "retain the public compatibility path")]
 pub use hya_proto::WorkspaceAdapterInfo;
 pub use hya_tool::FormatterStatus;
 pub use mcp_control::McpControl;

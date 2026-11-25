@@ -74,6 +74,7 @@ pub use workflow::{
     WorkflowRunResult, WorkflowRunStatus, WorkflowSourceId, WorkflowStageInfo, WorkflowStagePlan,
     WorkflowStageProjection, WorkflowStageStatus, WorkflowSummary,
 };
+#[allow(deprecated, reason = "retain the public compatibility path")]
 pub use workspace::WorkspaceAdapterInfo;
 
 /// Unix-epoch milliseconds. Used for `Envelope.ts_millis` and DB timestamps.

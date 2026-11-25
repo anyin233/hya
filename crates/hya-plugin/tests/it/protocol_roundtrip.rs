@@ -1,6 +1,7 @@
 //! Integration tests for `hya-plugin`: protocol roundtrip.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(deprecated, reason = "exercise legacy adapter contributions")]
 
 use hya_plugin::PluginError;
 use hya_plugin::messages::{

@@ -496,6 +496,10 @@ fn validate_initialize(
     init.contributions.validate(&spec.id)
 }
 
+#[allow(
+    deprecated,
+    reason = "preserve legacy adapter declaration canonicalization"
+)]
 fn canonical_initialize(init: &crate::messages::InitializeResult) -> Result<Vec<u8>, PluginError> {
     let mut declaration = init.clone();
     declaration
@@ -765,6 +769,7 @@ impl PluginHost {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
+    #![allow(deprecated, reason = "exercise legacy adapter contributions")]
 
     use std::future::{Future, poll_fn};
     use std::task::Poll;
