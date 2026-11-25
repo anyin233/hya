@@ -182,6 +182,16 @@ pub enum MailboxError {
     Rejected(String),
 }
 
+impl From<MailboxError> for crate::ToolError {
+    fn from(error: MailboxError) -> Self {
+        match error {
+            MailboxError::Unavailable => Self::Other(error.to_string()),
+            MailboxError::Overloaded(message) => Self::Overloaded(message),
+            MailboxError::Rejected(message) => Self::Input(message),
+        }
+    }
+}
+
 /// Channel handle to the mailbox service, scoped to the acting session.
 ///
 /// A default/`disconnected` plane has no channel; its operations return
