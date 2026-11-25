@@ -45,7 +45,7 @@ fn pre_project_session_created_json_still_decodes() {
 }
 
 #[test]
-fn session_created_round_trips_project_and_kind() {
+fn session_created_round_trips_and_folds_project_and_kind() {
     let session = SessionId::new();
     let project = ProjectId::from_uuid(Uuid::from_u128(7));
     let event = Event::SessionCreated {
@@ -61,6 +61,9 @@ fn session_created_round_trips_project_and_kind() {
     assert_eq!(value["kind"], "project");
     let back: Event = serde_json::from_value(value).unwrap();
     assert_eq!(back, event);
+    let folded = Projection::from_events(&[env(1, back)]);
+    assert_eq!(folded.session.project, Some(project));
+    assert_eq!(folded.session.kind, SessionKind::Project);
 
     let temporary = Event::SessionCreated {
         session,
@@ -73,40 +76,9 @@ fn session_created_round_trips_project_and_kind() {
     };
     let value = serde_json::to_value(&temporary).unwrap();
     assert_eq!(value["kind"], "temporary");
-    assert_eq!(serde_json::from_value::<Event>(value).unwrap(), temporary);
-}
-
-#[test]
-fn projection_folds_project_and_kind() {
-    let session = SessionId::new();
-    let project = ProjectId::new();
-    let folded = Projection::from_events(&[env(
-        1,
-        Event::SessionCreated {
-            session,
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake/model"),
-            workdir: "/repo/sub".to_string(),
-            project: Some(project),
-            kind: SessionKind::Project,
-        },
-    )]);
-    assert_eq!(folded.session.project, Some(project));
-    assert_eq!(folded.session.kind, SessionKind::Project);
-
-    let temp = Projection::from_events(&[env(
-        1,
-        Event::SessionCreated {
-            session,
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("fake/model"),
-            workdir: "/scratch".to_string(),
-            project: None,
-            kind: SessionKind::Temporary,
-        },
-    )]);
+    let temp_back: Event = serde_json::from_value(value).unwrap();
+    assert_eq!(temp_back, temporary);
+    let temp = Projection::from_events(&[env(1, temp_back)]);
     assert_eq!(temp.session.project, None);
     assert_eq!(temp.session.kind, SessionKind::Temporary);
 }

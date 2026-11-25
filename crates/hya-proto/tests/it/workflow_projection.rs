@@ -401,13 +401,9 @@ fn workflow_stage_routes_round_trip_with_canonical_selected_effort() {
         "selected_worker_model": {"index": 0, "id": "primary"}
     });
     assert!(serde_json::from_value::<WorkflowStagePlan>(missing_selected_effort).is_err());
-}
 
-/// Route outcomes carry bounded role/step/index/model/effort/class fields.
-#[test]
-fn workflow_route_outcome_round_trips_with_required_effort() {
     let session = SessionId::new();
-    let event = Event::WorkflowStageRouteOutcome {
+    let outcome = Event::WorkflowStageRouteOutcome {
         session,
         run: WorkflowRunId::new(),
         stage: "route".to_string(),
@@ -420,12 +416,12 @@ fn workflow_route_outcome_round_trips_with_required_effort() {
         reasoning: "none".to_string(),
         failure_class: WorkflowRouteFailureClass::None,
     };
-    let encoded = serde_json::to_string(&event).expect("encode route outcome");
-    assert!(encoded.contains("workflow_stage_route_outcome"));
-    assert!(encoded.contains("\"reasoning\":\"none\""));
-    let decoded: Event = serde_json::from_str(&encoded).expect("decode route outcome");
-    assert_eq!(decoded, event);
-    assert_eq!(event.session(), Some(session));
+    let wire = serde_json::to_string(&outcome).expect("encode route outcome");
+    assert!(wire.contains("workflow_stage_route_outcome"));
+    assert!(wire.contains("\"reasoning\":\"none\""));
+    let decoded_outcome: Event = serde_json::from_str(&wire).expect("decode route outcome");
+    assert_eq!(decoded_outcome, outcome);
+    assert_eq!(outcome.session(), Some(session));
 }
 
 /// Route outcomes append only while their Stage is active and deduplicate by
@@ -578,63 +574,4 @@ fn old_workflow_json_reencodes_without_empty_route_fields() {
         serde_json::to_value(projection).expect("encode old projection"),
         old_projection
     );
-}
-
-/// Duplicate route keys are idempotent and late/terminal outcomes are ignored.
-#[test]
-fn route_outcomes_fold_only_for_running_stage_and_dedupe_keys() {
-    let session = SessionId::new();
-    let run = WorkflowRunId::new();
-    let member = MemberId::new();
-    let outcome = |model: &str| Event::WorkflowStageRouteOutcome {
-        session,
-        run,
-        stage: "route".to_string(),
-        member,
-        role: WorkflowMemberRole::Worker,
-        iteration: 0,
-        step: 1,
-        candidate_index: 0,
-        model: model.into(),
-        reasoning: "none".to_string(),
-        failure_class: WorkflowRouteFailureClass::None,
-    };
-    let projection = Projection::from_events(&[
-        envelope(
-            1,
-            Event::WorkflowRunStarted {
-                session,
-                run,
-                workflow: identity("routes", 1),
-                request_hash: "hash".to_string(),
-                owner: OwnerRunId::new(),
-                stages: vec![stage("route", 0)],
-            },
-        ),
-        envelope(
-            2,
-            Event::WorkflowStageStarted {
-                session,
-                run,
-                stage: "route".to_string(),
-            },
-        ),
-        envelope(3, outcome("first")),
-        envelope(4, outcome("duplicate")),
-        envelope(
-            5,
-            Event::WorkflowStageFinished {
-                session,
-                run,
-                stage: "route".to_string(),
-                status: WorkflowStageStatus::Completed,
-            },
-        ),
-        envelope(6, outcome("late")),
-    ]);
-    let workflow = projection.session.workflow.expect("Workflow projection");
-    let run = workflow.run.expect("Workflow run projection");
-    let stage = &run.stages[0];
-    assert_eq!(stage.route_outcomes.len(), 1);
-    assert_eq!(stage.route_outcomes[0].model.as_str(), "first");
 }

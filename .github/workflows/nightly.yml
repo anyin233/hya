@@ -1,0 +1,48 @@
+name: nightly
+
+on:
+  schedule:
+    # Run daily at 04:17 UTC (staggered off the hour and after release cache refresh).
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # Rust >= 1.90 defaults to bundled rust-lld on x86_64-unknown-linux-gnu.
+  RUSTFLAGS: "-D warnings"
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-bun
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: taiki-e/install-action@893d6ee8d714b6c7dfe2bcd94e5759e9a7958a7e # v2.90.10
+        with:
+          tool: nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+      - name: build hya binary
+        id: build
+        run: cargo build --locked -p hya-backend --bin hya
+      - name: hya-relay ignored soak tests
+        if: ${{ !cancelled() }}
+        run: cargo nextest run --profile nightly --run-ignored=only --no-tests=warn -p hya-relay
+      - name: hya-e2e ignored OS fault and soak tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          HYA_E2E_BACKEND_BIN: ${{ github.workspace }}/target/debug/hya
+        run: cargo nextest run --profile nightly --run-ignored=only --no-tests=warn --test-threads=1 -p hya-e2e

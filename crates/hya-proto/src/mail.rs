@@ -161,26 +161,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn endpoint_parse_distinguishes_handle_and_channel() {
-        assert_eq!(
-            MailEndpoint::parse("reviewer-3"),
-            MailEndpoint::Handle("reviewer-3".to_string())
-        );
-        assert_eq!(
-            MailEndpoint::parse(" #build "),
-            MailEndpoint::Channel("build".to_string())
-        );
-    }
-
-    #[test]
-    fn endpoint_round_trips_through_json() {
-        for endpoint in [
-            MailEndpoint::Handle("main".to_string()),
-            MailEndpoint::Channel("build".to_string()),
-        ] {
-            let json = serde_json::to_string(&endpoint).unwrap();
+    fn endpoint_parse_and_json_round_trip() {
+        let cases = [
+            ("reviewer-3", MailEndpoint::Handle("reviewer-3".to_string())),
+            (" #build ", MailEndpoint::Channel("build".to_string())),
+        ];
+        for (raw, expected) in cases {
+            assert_eq!(MailEndpoint::parse(raw), expected);
+            let json = serde_json::to_string(&expected).unwrap();
             let back: MailEndpoint = serde_json::from_str(&json).unwrap();
-            assert_eq!(endpoint, back);
+            assert_eq!(expected, back);
         }
     }
 
