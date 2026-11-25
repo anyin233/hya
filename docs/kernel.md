@@ -513,11 +513,13 @@ path, Unix nanoseconds and byte size. Absence produces two nulls for a known
 path. Replay replaces that path's entry in `session.files` and counts every
 `FilesObserved` and `FilesChanged` event as the session's file revision. The
 [`workspace.state`](plugin-protocol.md#request-scoped-host-capabilities) host
-capability reconciles the watch outside a round and returns that revision,
-so a bundle tool can tell whether W changed. An event can
-invalidate an unchanged stamp, for example an equal-length rewrite that
-restores the old modification time. Consumers tracking freshness should
-follow the event sequence. Notifications coalesce intermediate operations. A transient file that vanishes
+capability reconciles the watch outside a round and returns
+`"<session id>:<file revision>"`. A bundle can compare non-null values within
+one session to check whether W changed. The capability returns `null` when
+there is no native watch. An event can invalidate an unchanged stamp, for
+example an equal-length rewrite that restores the old modification time.
+Consumers tracking freshness should follow the event sequence. Notifications
+coalesce intermediate operations. A transient file that vanishes
 before reconciliation may leave no observable state.
 
 Tool observations carry `external: false`. Bare mode stamps explicit read,
@@ -609,12 +611,14 @@ it.
 The estimate also counts the notice when the tool-result size cap drops an
 attachment. The provider validates image data when encoding the request.
 
-When `used > threshold`, the kernel runs its extensions (none in bare mode),
-re-estimates the request from the re-read projection when one changed the log,
-and rewrites when the request is still over the threshold. Without an
-advertised window, an oversized-request provider error surfaces unchanged. Harness rewrites use the same removal range as model rewrites, and
-record `used` and `threshold` as `input_tokens_est` and `threshold`; a model
-rewrite records the last round's usage. See
+The kernel calls its extensions before every round. Bare mode supplies no
+extensions. In full mode, `hya/compaction` attempts reduction when
+`used > threshold`. If an extension changed the transcript, the kernel
+re-reads the projection and measures it with the local estimate. When the
+request is still over the threshold, the kernel rewrites before the next
+step, folding all existing steps in the active assistant message. A model
+rewrite keeps the step that called it and uses the last recorded round for
+pressure. With no advertised window, automatic reduction has no trigger. See
 [Compaction](compaction.md#before-each-round) for the full sequence.
 
 Known limitation: image attachments in removed user messages are not kept
@@ -878,7 +882,8 @@ not select the kernel alone.
 ## How full mode runs on the kernel
 
 Full mode is the `hya-engine` crate (`SessionEngine` and everything behind
-the server and CLI); the kernel and `CoreError` are all of `hya-core`.
+the server and CLI). `hya-core` owns the kernel, the internal bundle entry
+point, and `CoreError`.
 Full-mode turns run the same kernel loop as `--bare`; there is no second
 round loop. Each round reads the projection, lets the harness rewrite it,
 builds the request with `kernel::request` from the resulting view,
@@ -887,7 +892,7 @@ plugs into that loop at fixed points:
 
 | Point | Bare mode | Full mode |
 | --- | --- | --- |
-| Before the round (`Harness::before_round`) | `kernel::before_round` with no extensions: the 80% Rewrite, then the goal checkpoint | Re-validate the actor claim, rebind a Root turn to a new runtime generation, resolve the round's model, then `kernel::before_round` with the internal bundles' extensions (`hya/compaction`: [`shake` and `remote`](compaction.md)) |
+| Before the round (`Harness::before_round`) | `kernel::before_round` with no extensions: the 80% Rewrite, or the goal checkpoint if no rewrite changed the log | Re-validate the actor claim, rebind a Root turn to a new runtime generation, resolve the round's model, then `kernel::before_round` with the internal bundles' extensions (`hya/compaction`: [`shake` and `remote`](compaction.md)) |
 | Request | Kernel prompt and six tools | The agent's system prompt, filtered tool schemas plus `rewrite` and `todo`, and reasoning effort, then the `chat.params` hook |
 | Opening the stream | The given model | Cross-model fallback or the Workflow route, under a governor stream permit |
 | Failed round | Retried up to eight times after 5, 10, 20, 40, 60, 60, 60, and 60 s on a transient error opening or reading the stream, or a stream interruption, when the wait fits before Final, also after partial output; the failed attempt's parts are deleted from the message before the wait ([When a bare round fails](#when-a-bare-round-fails)) | Eligible transport and HTTP 429/5xx errors retry before a completed tool call. Body interruptions also require that no assistant text has streamed. See [Provider round retry](architecture/runtime.md#provider-round-retry) for budgets and replay. |
@@ -950,10 +955,11 @@ the bundle ID and the loader diagnostic, so a full-mode startup such as
 `hya exec --pure "hello"` exits with an error if `hya/compaction` cannot load.
 Existing Rust embedders can still use `SessionEngine::new`, which panics on
 that error. Full mode's `config` is the
-engine's `keep_recent` and token-accounting mode, as JSON. A host failure
-reaches the kernel or an extension as a `ToolError`; the host keeps the
-original `CoreError` and a failed reduction ends the turn with it (for
-example a stale actor claim).
+engine's `keep_recent` and token-accounting mode, as JSON. The terminal handoff
+summarizer and its output cap are configured separately by `hya-app` (see
+[Terminal handoff](compaction.md#terminal-handoff)). When a host failure
+propagates through the rewrite contract as a `ToolError`, the engine returns
+the original `CoreError`, for example a stale actor claim.
 Token estimation (`hya_context::tokens`) is shared by host and bundles, and the
 reasoning replay policy and compacted-context markers it and the request
 encoders read are in `hya_proto::context`.

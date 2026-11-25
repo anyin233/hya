@@ -1227,7 +1227,8 @@ section records the runtime contracts.
 `CompactionConfig` fields: `keep_recent` (default `6`, the tail `shake`
 keeps) and `summary_max_tokens` (default `4_096`, the terminal handoff's
 output cap). The threshold is fixed at 80% of the route's advertised
-`max_context`; without a window nothing is reduced.
+`max_context`. A route with no advertised window has no automatic reduction
+trigger.
 
 `SummarizeOptions` fields for summarizer calls: `system`, `model`,
 `reasoning`, `previous_summary` (the handoff this one updates),
@@ -1257,9 +1258,10 @@ Estimates are local estimates, not a provider tokenizer guarantee.
 
 Before each round, over the threshold:
 
-1. `shake` evicts stale completed tool outputs to `artifact://` handles
-   (logged in `ContextEvicted.parts`, idempotent, `keep_recent` protected; a
-   512-byte floor keeps bodies that cost more to reference than to keep).
+1. `shake` replaces completed outputs outside either retained tail with
+   notices from `ContextEvicted.parts`. Successful spills include an
+   `artifact://` handle. Outputs below 512 bytes and failed spills get a
+   rerun notice.
 2. Still over, `remote` calls `ProviderRouter::compact_if_supported` on the
    round's model (only `openai-response`, `openai-codex`, and `grok-build`
    advertise `/responses/compact`) and persists the folded items behind
@@ -1270,9 +1272,10 @@ Before each round, over the threshold:
    Rewrite removes everything before the current step
    (`ContextCompacted { strategy: rewrite }`).
 
-The bundle records `ContextStatus` every round. `/compact` and the v1
-`SummarizeSession` rpc (`engine/summary.rs`) try `remote`, then the kernel's
-Rewrite anchored on the newest assistant message, and return the marker.
+The bundle records `ContextStatus` every round. The TUI's `/summarize` and
+the v1 `SummarizeSession` and `CompactSession` RPCs
+(`engine/summary.rs`) try `remote`, then the kernel's Rewrite anchored on
+the newest assistant message, and return the marker.
 
 ## Session Titles
 

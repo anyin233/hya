@@ -14,7 +14,7 @@ steps that are cheaper or more faithful than the kernel's Rewrite:
 
 | Step | What it does | Model call | Wire record |
 | --- | --- | --- | --- |
-| `shake` | Moves stale completed tool-output bodies to durable storage (`artifact://` handles), leaving the calls, inputs, and reasoning in place. Lossless: the body stays retrievable by reading the handle. | no | `ContextEvicted` |
+| `shake` | Replaces stale completed tool-output bodies in the request with notices, leaving the calls, inputs, and reasoning in place. Bodies spilled to durable storage can be read through their `artifact://` handles. | no | `ContextEvicted` |
 | `remote` | Asks the route to fold its own context window (OpenAI Responses `/responses/compact`; `openai-response`, `openai-codex`, and `grok-build` routes). | provider-side | `ContextCompacted { strategy: native }` |
 
 `hya exec --bare` loads no bundle, so its reduction is the kernel's Rewrite
@@ -26,10 +26,11 @@ alone.
    `used = max(last round's prompt + output, usage-anchored count of the request, local estimate of the request)`
    (the request counts include the system prompt and offered tool schemas)
    and `threshold = max_context * 8 / 10`. A route that advertises no window
-   gives no pressure: nothing is reduced. The request counts include tool
-   results that arrived after the last round, and the local estimate is what
-   full mode's pre-send check measures, so a request that would fail that
-   check is reduced first. A completed tool result is counted as it is sent.
+   gives no pressure for automatic reduction. The request counts include tool
+   results that arrived after the last round. Reduction precedes the
+   [final request window check](architecture/runtime.md#final-request-window-check),
+   which also measures changes made by `chat.params` and the selected route.
+   A completed tool result is counted as it is sent.
    The estimate uses the string output when available and the full JSON
    otherwise. A tool image is planned for sending only in the request after
    the round that read it, up to 2 MiB per round in call order (the first
@@ -62,10 +63,11 @@ any other route the kernel removes everything before the current step.
 ## `shake`
 
 `shake` evicts a completed tool output when it lies outside the last
-`keep_recent` messages (older turns) or outside the last `keep_recent`
-completed tool steps. The step tail applies inside the active assistant
-message too, so one long turn sheds its early outputs mid-turn. It leaves the
-newest visible `todo` result in place.
+`keep_recent` messages preceding the active assistant message or outside the
+last `keep_recent` completed, not-yet-evicted tool steps. The active assistant
+message gets an extra slot in the message tail. The step tail still applies
+inside that message, so one long turn sheds its early outputs mid-turn. It
+leaves the newest visible `todo` result in place.
 
 Shake is sticky: `ContextEvicted` logs each evicted part with the exact
 notice that replaces its output, and the projection keeps that notice beside
@@ -76,9 +78,10 @@ parts are added. The notice retains an appended `--- [NEW MAIL ...]` steer
 notice verbatim, so consumed mail remains visible to the model. With the
 session's artifact store the eviction is a *move*: the notice reads
 `[tool output moved to artifact://… ]` and `read` resolves the handle back to
-the full bytes. A body smaller than the notice replacing it is not spilled.
-The tool part keeps its full output in the log and the projection; clients
-see the full output, and only model requests send the notice.
+the full bytes. Bodies shorter than 512 bytes and bodies the store fails to
+spill use a notice suggesting the model rerun the tool. The tool part keeps
+its full output in the log and the projection. Clients see the full output,
+and only model requests send the notice.
 
 ## `remote`
 
@@ -98,12 +101,13 @@ leaves the reduction to the kernel's Rewrite.
 `rewrite_now` runs in order and the first that changes the log ends it; the
 `hya/compaction` bundle tries `remote` only. Otherwise the kernel's Rewrite
 runs, anchored on the session's newest assistant message: it keeps that
-turn's user message and removes the rest. No model writes a summary. The
-call returns the marker's message id, and fails with `nothing to summarize`
-when the session has no assistant message or nothing left to remove. The
-fold records `threshold: 0`, which marks it manual (`CompactionApplied.manual`
-on the v1 stream); `CompactSession` answers with the recorded strategy,
-`native` or `rewrite`.
+turn's user message and folds the earlier visible messages and that
+assistant message's existing steps. Manual reduction uses the provider
+fold or kernel marker described above. The call returns the marker's message
+id, and fails with `nothing to summarize` when the session has no assistant
+message or nothing left to remove. The fold records `threshold: 0`, which
+marks it manual (`CompactionApplied.manual` on the v1 stream).
+`CompactSession` answers with the recorded strategy, `native` or `rewrite`.
 
 It acquires the session turn lease before reading history and holds it
 through the atomic marker commit, so a request during a running turn queues
@@ -133,9 +137,9 @@ it. The threshold is fixed at 80% of the window. See
   `step_cut { through_part, kept_head }`. Logs also carry the strategies of
   removed reductions (`local_summarizer`, `snap_compact`, `handoff`); they
   replay unchanged.
-- `ContextEvicted`: recorded whenever `shake` saved tokens, including when
-  the kernel rewrote afterwards. Its payload contains `session`,
-  `evicted_parts`, `parts`, `tokens_before`, `tokens_after`, and
+- `ContextEvicted`: recorded whenever `shake` replaces at least one output,
+  including when the kernel rewrites afterwards. Its payload contains
+  `session`, `evicted_parts`, `parts`, `tokens_before`, `tokens_after`, and
   `threshold`. `parts` lists `{ part, notice }` for each evicted tool part:
   `notice` is the exact text requests send instead of the output, so the log
   alone reproduces the request. Logs written before `parts` decode it as
@@ -154,22 +158,22 @@ actor-fence errors fail the turn.
 
 The kernel dispatches `compaction.before` (trigger `overflow`, with the
 tokens in use) once per round before its extensions when the request is over
-the threshold, and `compaction.after` once its own Rewrite committed;
-`remote` dispatches `compaction.after` when it committed a fold. The reply of
-`compaction.before` is ignored: an overflow cannot be skipped, and no
-summarizer prompt exists to replace. See
-[Plugin protocol](plugin-protocol.md).
+the threshold. It dispatches `compaction.after` once its own Rewrite commits.
+The automatic `remote` step also dispatches `compaction.after` after committing
+a fold. Both hooks apply to reductions before a round. The host ignores the
+`compaction.before` reply. See [Plugin protocol](plugin-protocol.md).
 
 ## Terminal handoff
 
 `SessionEngine::terminal_handoff(SessionId) -> Result<TerminalHandoff, CoreError>`
-writes the state document an archived subagent carries into its next episode
-(ADR-0015). It is the only user of the engine's summarizer: the model reads
-the ended episode verbatim plus one trailing state-handoff prompt, capped by
-`summary_max_tokens`, and the call is billed to the session as
-`compaction` usage. It queues for the turn lease; admission errors propagate,
-while summarizer failures produce the degraded document. The returned value
-contains `generation: u32`, `doc: String`, and `degraded: bool`.
+generates the state document an archived subagent carries into its next
+episode (ADR-0015). The engine's handoff summarizer sends the ended episode
+with one trailing state-handoff prompt, including the previous handoff when
+available. `summary_max_tokens` caps its output, and reported usage is billed
+to the session as `compaction`. The method queues for the turn lease and
+propagates admission errors. When the transcript is unavailable or the
+summarizer is absent or fails, the engine generates a degraded document. The
+returned value contains `generation: u32`, `doc: String`, and `degraded: bool`.
 
 `hya-app` builds the model summarizer and passes `summary_max_tokens` as
 `TerminalHandoffOptions { max_output_tokens: u32 }` to
