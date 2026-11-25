@@ -324,9 +324,13 @@ remains `unavailable`; a selected source whose revision changed remains `stale`.
 Both conditions require explicit reselection. hya never substitutes another
 same-name source for the selected identity.
 
-`hya_app::WorkflowControl` is the shared list, info, select, run, and state seam
-for CLI, Agent tool, native command, HTTP, SDK, and in-process transports. Only
-the core executor runs the compiled plan.
+`hya_app::WorkflowControl` serves session-bound list, info, select, run, and
+state through the Agent tool, native commands, HTTP, and direct callers. The
+core executor runs the compiled plan. `hya_app::workflow_catalog::WorkflowCatalog`
+owns source precedence, identities, and list and info views. CLI `hya workflow list`
+and `hya workflow info` also use its read-only inspection API. See the
+[CLI reference](cli.md#workflow-commands) for an example and the API signature.
+The crate-root and `hya_app::workflow_control` catalog imports remain available.
 
 ## Native Session commands
 
