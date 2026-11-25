@@ -1,11 +1,12 @@
-# 0.48.0-dev.37
+# 0.48.0-dev.38
 
-- **Full mode retries an interrupted response before any output.** When a model's HTTP body is interrupted before any assistant text or completed tool call was streamed, full mode now retries the round (as bare mode already did), within its own retry budget and backoff. Provider failures are classified once in `hya-provider` and both modes use that classification.
-- **Stricter literal edits in bare mode.** Bare `edit` and full-mode `replace_text` share one unique-span finder: empty search text and overlapping matches (for example `aa` in `aaa`) are rejected as ambiguous in both modes.
-- **Malformed pagination cursors are rejected.** A cursor that does not decode now returns HTTP 400 `invalid_argument` / gRPC `InvalidArgument` instead of silently restarting at the first page. The v1 error-code mapping has one typed boundary shared by HTTP and gRPC.
-- **Bundle listing.** `ListBundles` trims the requested directory and inventories that directory's `.hya/bundles`; `RefreshBundles` reports the published multi-root Project catalog.
-- **SDK.** `hya-sdk-v1` gains DTO-based methods for admitting turns, waiting and replay; both public clients share one HTTP transport, prompt helpers return `invalid_response` when admission returns no turn ID, and `Client::list_sessions()` returns the typed listing. The `SessionId`/`Envelope` signatures are deprecated.
-- **Shipped `/init` template** describes how hya discovers `AGENTS.md`; contributor docs, counts and the architecture overview match the code again.
-- **Deprecated (removed after this release):** the engine exports `TmuxPaneManager`, `resolve_compaction_decision`, `CompactionResolution` and `handoff_request_messages`; `hya_version::FRONTEND_VERSION` (use `VERSION`); the relay's public in-memory transport; the updater's `RELEASE_INSTALLER` and `install_prefix`; `hya_mcp::McpManager` (use `prepare` and `PreparedMcpServer`); `BaseToolScheme` and `AliasVisibility::Public`. Legacy event variants and compaction strategies stay decodable but are never emitted; the default compaction strategy is `Rewrite`. The developer-only `xtask package-native-tool-bundle` task is retired.
-- **Internal restructuring without behaviour change.** Shared tool-outcome-to-event conversion between bare and full mode and one envelope publication loop in the engine; typed pending views in the server; `AppState` owns server cancellation; `hya-workflow` uses the hya-proto Workflow model types; one `WaitTool` for extended and channel tools; module splits of `projection.rs`, `prepare.rs` and the hya-app runtime (source adapters, hot reload, MCP control, bundle activation, plan execution on `RuntimeReconciler`).
-- **Tests.** Several timing races in the terminal suite and in resident, MCP, kernel and engine tests were fixed by waiting on the state the test needs.
+- **Removed public Rust items deprecated in 0.48.0-dev.36 and 0.48.0-dev.37.** No runtime, wire or CLI behaviour changes; Rust embedders that still use these paths must move to the replacements named in the earlier release notes:
+  - `hya-engine`: `TmuxPaneManager`, `resolve_compaction_decision`, `CompactionResolution`, and the public re-export of `handoff_request_messages`;
+  - `hya-version`: `FRONTEND_VERSION` (use `VERSION`);
+  - the Rust adapter identity constants `BUN_ADAPTER_VERSION`, `CLAUDE_ADAPTER_VERSION`, `CLAUDE_PLUGIN_KIND` and `PLUGIN_MANIFEST_FILE`; the `hya-plugin-bun` Rust crate is gone, while the Bun adapter stays at `crates/hya-plugin-bun/adapter` and ships as `lib/hya/bun-adapter`;
+  - `hya-relay`: the public in-memory transport;
+  - `hya-updater`: `RELEASE_INSTALLER` and `install_prefix`;
+  - `hya-mcp`: `McpManager` (use `prepare` and `PreparedMcpServer`) and the `codec`/`io_tasks` re-exports (use `hya-child-io`);
+  - `hya-tool`: the token accounting and rewrite re-exports (use `hya-context`);
+  - `hya-workflow`: the old Workflow model type aliases (use the `hya-proto` types); `hya-server`: `valid_provider_id` (use `hya_provider::valid_provider_id`);
+  - `hya-sdk-v1`: the methods taking `SessionId` or returning `Envelope` (use the DTO-based methods).
