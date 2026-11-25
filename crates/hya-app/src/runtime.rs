@@ -48,7 +48,8 @@ use crate::bundle_runtime::source::adapt_prepared_bundle_skills;
 use crate::config;
 use crate::plugin_adapter::PluginHostAdapter;
 use crate::runtime_extensions_refresh::RuntimeExtensionsRefresh;
-use crate::runtime_reconcile::{DesiredSource, RuntimeMcpControl, RuntimeReconciler, SourceId};
+use crate::runtime_mcp_control::RuntimeMcpControl;
+use crate::runtime_reconcile::{DesiredSource, RuntimeReconciler, SourceId};
 use crate::{InstalledBundleRefresh, bundle_registry_path, plugins};
 
 /// Catalog materialization and export validation for Bundle sidecars.
