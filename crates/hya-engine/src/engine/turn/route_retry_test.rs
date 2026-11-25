@@ -47,8 +47,14 @@ impl Provider for DisconnectingProvider {
             return Ok(Box::pin(futures::stream::iter(text("recovered primary"))));
         }
         if calls.len() == 2 {
-            let partial =
-                text("partial").chain([Err(ProviderError::StreamInterrupted("EOF".into()))]);
+            let partial = FakeProvider::materialize(
+                &[FakeStep::Reasoning("thinking".into())],
+                session,
+                message,
+            )
+            .into_iter()
+            .map(Ok)
+            .chain([Err(ProviderError::StreamInterrupted("EOF".into()))]);
             // collect drops the interrupted stream immediately before persisting
             // StepFinished. Cancelling on drop places the signal before failed().
             let guard = self

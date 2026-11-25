@@ -4,8 +4,8 @@
 //! runs the kernel's context reduction with the internal bundles' extensions
 //! (`hya/compaction`); the request carries the agent's prompt,
 //! tools, and effort through `chat.params`; streams open through model
-//! fallback or the Workflow route under a governor permit; a round that
-//! failed before any output is retried; an accepted `report` ends the turn.
+//! fallback or the Workflow route under a governor permit. The harness applies
+//! the provider round retry policy. An accepted `report` ends the turn.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -696,7 +696,7 @@ impl Harness for TurnHarness<'_> {
         let deadline = hya_tool::deadline::current();
         if let Some(&wait) = kernel::ROUND_RETRY_WAITS.get(self.retries)
             && !failure.saw_tool_call
-            && is_retryable_round_error(&failure.error)
+            && is_retryable_round_error(failure)
             && !self.cancel.is_cancelled()
             && deadline.is_none_or(|d| d.remaining().saturating_sub(d.final_window()) > wait)
         {
@@ -851,14 +851,15 @@ impl Harness for TurnHarness<'_> {
     }
 }
 
-fn is_retryable_round_error(error: &CoreError) -> bool {
-    let CoreError::Provider(error) = error else {
+fn is_retryable_round_error(failure: &Failure) -> bool {
+    let CoreError::Provider(error) = &failure.error else {
         return false;
     };
-    matches!(
-        error.retry_class(),
-        ProviderRetryClass::Transient
-            | ProviderRetryClass::InterruptedBody
-            | ProviderRetryClass::TruncatedBody
-    )
+    match error.retry_class() {
+        ProviderRetryClass::Transient => true,
+        ProviderRetryClass::InterruptedBody | ProviderRetryClass::TruncatedBody => {
+            !failure.saw_text
+        }
+        ProviderRetryClass::Terminal => false,
+    }
 }

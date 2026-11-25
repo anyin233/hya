@@ -460,14 +460,23 @@ cancellation is observed, or execution returns an error.
 
 ### Provider round retry
 
-Direct full-mode turns retry transient provider open errors and interruptions
-during a stream until the first tool request. Eligible errors include transport
-failures, HTTP 429/5xx, interrupted streams and truncated response-body
-diagnostics. Workflow routes finalize an open error immediately and can retry
-an interrupted stream before a tool request. A started attempt closes with
-`StepFinished { finish: error }`. Its partial parts are removed with
-`PartDeleted` before waiting 5, 10, 20, 40, 60, 60, 60 and 60 seconds on
-successive retries. Cancellation and the run's Final window bound the waits.
+Direct full-mode turns retry transient transport and HTTP 429/5xx failures
+until a complete tool call arrives. An HTTP body interruption, including the
+known truncated-body decode errors, is eligible only before the model streams
+nonempty assistant text or a complete tool call. Reasoning, an empty text
+part, and an unfinished tool call can still be retried. A Workflow finalizes
+an initial open error immediately. Once a stream opens, a retry sends the same
+request to the serving model, or to the same Workflow candidate.
+
+A started attempt closes with `StepFinished { finish: error }`. On a retry,
+`PartDeleted` removes its partial parts before the wait. The eight successive
+waits are 5, 10, 20, 40, 60, 60, 60 and 60 seconds. Cancellation and the run's
+Final window bound the waits.
+
+For example, during `hya exec "summarize this repo"`, if the HTTP body breaks
+while the model is still reasoning, the engine can wait five seconds and
+send the same request again. If the model has streamed some of its answer
+when the body breaks, the turn records the failure and preserves that text.
 
 When the final model step contains reasoning only or reaches its length limit
 without an answer, the engine appends a system notice asking for a tool call
