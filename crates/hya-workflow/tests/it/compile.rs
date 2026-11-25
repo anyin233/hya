@@ -294,18 +294,14 @@ flowchart TD
   worker --> loop
 "#;
 
-/// Legacy imports use the same types returned by the compiler and consumed by the runtime.
+/// The compiler returns the shared Workflow model types.
 #[test]
-#[allow(
-    deprecated,
-    reason = "verify the published compiler aliases still work"
-)]
 fn model_route_values_are_public() {
     let compiled = compile(WorkflowSource::new("routed.hya.md", MODEL_ROUTED_WORKFLOW)).unwrap();
-    let revision: hya_workflow::WorkflowRevision = compiled.revision();
-    let assignment: &hya_workflow::WorkflowModelAssignment =
+    let revision: hya_proto::WorkflowRevision = compiled.revision();
+    let assignment: &hya_proto::WorkflowModelAssignment =
         compiled.plan().stages()[0].model().unwrap();
-    let candidate: &hya_workflow::WorkflowModelCandidate = &assignment.fallback()[0];
+    let candidate: &hya_proto::WorkflowModelCandidate = &assignment.fallback()[0];
 
     assert_eq!(
         revision,

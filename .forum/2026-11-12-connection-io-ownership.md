@@ -31,7 +31,7 @@ does not own the resident bus listener or server-created tasks.
 # What about initialization canceled before publication?
 
 The same RuntimeTaskOwner has a connection I/O completion tracker. Preparation
-carries it through `hya_mcp::io_tasks::scope`; connection guards capture it for
+carries it through `hya_child_io::io_tasks::scope`; connection guards capture it for
 restarts and drop reapers. This is passive completion tracking, not another
 connection/process owner. Built shutdown waits after source termination, so
 aborted deferred preparation cannot leave an unjoined stdout/SSE task. The
