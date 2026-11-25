@@ -21,7 +21,6 @@ mod db_lock;
 mod db_writer;
 mod exec_stream;
 mod frontend;
-mod lead_wrapup;
 mod models_cmd;
 mod prompt;
 mod provider_cmd;
@@ -39,18 +38,14 @@ mod workflow_cmd;
 pub use hya_app::{auth, config, formatter_config, permission, plugins};
 
 use std::io::{Read as _, Write as _};
-use std::sync::Arc;
 
 use anyhow::Context as _;
 use clap::Parser;
-use hya_engine::completion::{PluginGoalEvaluator, render_transcript};
-use hya_engine::hooks::HookDispatcher;
-use hya_engine::loop_mode::{LoopConfig, ModelLoopPlanner, ModelLoopVerifier, run_loop};
-use hya_engine::{
-    GoalEvaluator, HookChain, HookLoopPlanner, HookLoopVerifier, ModelGoalEvaluator, RunOutcome,
-    SafetyCaps, TurnBinding, run_goal,
-};
-use hya_proto::{ModelRef, ProjectId, SessionId};
+use hya_app::{HeadlessEvaluatorRoute, prepare_goal, prepare_loop, run_headless_lead};
+use hya_engine::RunOutcome;
+use hya_engine::completion::render_transcript;
+use hya_engine::loop_mode::LoopConfig;
+use hya_proto::{ProjectId, SessionId};
 use hya_store::SessionStore;
 use tokio_util::sync::CancellationToken;
 
@@ -252,30 +247,19 @@ async fn cmd_exec(
         });
         let cancel = CancellationToken::new();
         let resident_supervisor = built.resident_supervisor();
-        let engine_for_turn = engine.clone();
-        let cancel_for_turn = cancel.clone();
-        let (turn, stop) = run_until_stopped(built, &mut signals, &cancel, async move {
-            let prompt = engine_for_turn
-                .admit_user_prompt(session, prompt)
-                .await
-                .context("admit prompt")?;
-            if let Some(deadline) = hya_tool::deadline::current() {
-                engine_for_turn
-                    .inject_system_message(session, deadline.opening())
-                    .await
-                    .context("announce the time budget")?;
-            }
-            lead_wrapup::run_lead(
-                &engine_for_turn,
+        let (turn, stop) = run_until_stopped(
+            built,
+            &mut signals,
+            &cancel,
+            run_headless_lead(
+                &engine,
                 &resident_supervisor,
                 session,
                 agent,
-                cancel_for_turn,
+                cancel.clone(),
                 prompt,
-            )
-            .await
-            .context("run turn")
-        })
+            ),
+        )
         .await;
         hya_tool::deadline::shutdown_background_jobs().await;
         // End of the run: nothing may keep streaming after `exec` returns. Every
@@ -368,65 +352,23 @@ async fn cmd_goal(
     .await?;
     let (outcome, stop) = headless
         .run(async move |headless| {
-            let engine = headless.built.engine();
-            let session = headless.session;
-            let agent = headless.agent.clone();
-            let evaluator_router = headless.evaluator_router.clone();
-            let evaluator_model = config::resolve_evaluator_model(
-                evaluator_model_flag.as_deref(),
-                None,
-                &headless.evaluator_model,
-            )
-            .to_string();
-            let binding = engine
-                .bind_root_runtime(&agent.workdir)
-                .await
-                .context("bind goal evaluator resources")?;
-            let built = &mut headless.built;
-            // Selection point (design §4.5): a registered `goal.evaluate` hook
-            // provider outranks the built-in evaluator. The probe is the trait
-            // capability probe (default false), so any dispatcher without the hook —
-            // or a selection that cannot confirm registration — fails open to the D7
-            // model evaluator instead of erroring startup.
-            let fallback: Arc<dyn GoalEvaluator> = Arc::new(
-                ModelGoalEvaluator::new(
-                    Arc::new(evaluator_router),
-                    ModelRef::new(&evaluator_model),
-                )
-                .with_system_prompt(
-                    binding
-                        .bundle_skill_content("hya/goal-loop", "evaluator-prompt")
-                        .map(skill_prompt_body)
-                        .unwrap_or("You are an independent goal verifier. No tools."),
-                ),
-            );
-            let dispatcher = goal_loop_hook_chain(&binding, agent.name.as_str());
-            let evaluator: Arc<dyn GoalEvaluator> = if dispatcher.has_goal_evaluate() {
-                Arc::new(PluginGoalEvaluator::new(dispatcher).with_fallback(Arc::clone(&fallback)))
-            } else {
-                fallback
-            };
-            let caps = SafetyCaps {
-                max_iterations,
-                ..SafetyCaps::default()
-            };
             let cancel = CancellationToken::new();
-            let signals_ref = &mut signals;
-            let (outcome, stop) = run_until_stopped(
-                built,
-                signals_ref,
-                &cancel,
-                run_goal(
-                    engine.clone(),
-                    session,
-                    agent,
-                    goal,
-                    evaluator,
-                    caps,
-                    cancel.clone(),
-                ),
+            let work = prepare_goal(
+                headless.built.engine(),
+                headless.session,
+                headless.agent.clone(),
+                HeadlessEvaluatorRoute {
+                    router: &headless.evaluator_router,
+                    model_override: evaluator_model_flag.as_deref(),
+                    default_model: &headless.evaluator_model,
+                },
+                goal,
+                max_iterations,
+                cancel.clone(),
             )
-            .await;
+            .await?;
+            let (outcome, stop) =
+                run_until_stopped(&headless.built, &mut signals, &cancel, work).await;
             Ok((outcome, stop))
         })
         .await?;
@@ -464,69 +406,33 @@ async fn cmd_loop(
     .await?;
     let (outcome, stop) = headless
         .run(async move |headless| {
-            let engine = headless.built.engine();
-            let session = headless.session;
-            let agent = headless.agent.clone();
-            let evaluator_router = headless.evaluator_router.clone();
-            let evaluator_model = config::resolve_evaluator_model(
-                evaluator_model_flag.as_deref(),
-                None,
-                &headless.evaluator_model,
-            )
-            .to_string();
-            let binding = engine
-                .bind_root_runtime(&agent.workdir)
-                .await
-                .context("bind loop evaluator resources")?;
-            let built = &mut headless.built;
-            let predicate = cli_args::build_loop_predicate(while_command, until_command, &agent.workdir)
-                .map_err(anyhow::Error::msg)
-                .context("resolve loop condition")?;
-            let loop_config = LoopConfig {
-                budget: cli_args::loop_budget(budget, max_iterations),
-                predicate,
-                ..LoopConfig::default()
-            };
-            // The engine-supplied `loop.should_stop` consult: registered plugin
-            // providers may force a legitimate stop; without registrations the
-            // dispatcher answers `None` and the gate falls through untouched.
-            let evaluator_dispatcher = goal_loop_hook_chain(&binding, agent.name.as_str());
-            let verifier_fallback: Arc<dyn hya_engine::LoopVerifier> = Arc::new(
-                ModelLoopVerifier::new(Arc::new(evaluator_router.clone()), ModelRef::new(&evaluator_model))
-                    .with_system_prompt(binding.bundle_skill_content("hya/goal-loop", "loop-verifier-prompt").map(skill_prompt_body).unwrap_or("You are an independent loop verifier. You have no stake in the work and no tools.")),
-            );
-            let planner_fallback: Arc<dyn hya_engine::LoopPlanner> = Arc::new(
-                ModelLoopPlanner::new(Arc::new(evaluator_router), ModelRef::new(&evaluator_model))
-                    .with_system_prompt(
-                        binding
-                            .bundle_skill_content("hya/goal-loop", "loop-planner-prompt")
-                            .map(skill_prompt_body)
-                            .unwrap_or("You are an independent loop planner. No tools."),
-                    ),
-            );
-            let should_stop = Arc::clone(&evaluator_dispatcher);
             let cancel = CancellationToken::new();
-            let signals_ref = &mut signals;
-            let (outcome, stop) = run_until_stopped(
-                built,
-                signals_ref,
-                &cancel,
-                run_loop(
-                    engine.clone(),
-                    session,
-                    agent,
-                    target,
-                    Arc::new(HookLoopVerifier::new(
-                        Arc::clone(&evaluator_dispatcher),
-                        verifier_fallback,
-                    )),
-                    Arc::new(HookLoopPlanner::new(evaluator_dispatcher, planner_fallback)),
-                    loop_config,
-                    cancel.clone(),
-                    Some(should_stop),
-                ),
+            let work = prepare_loop(
+                headless.built.engine(),
+                headless.session,
+                headless.agent.clone(),
+                HeadlessEvaluatorRoute {
+                    router: &headless.evaluator_router,
+                    model_override: evaluator_model_flag.as_deref(),
+                    default_model: &headless.evaluator_model,
+                },
+                target,
+                |workdir| {
+                    let predicate =
+                        cli_args::build_loop_predicate(while_command, until_command, workdir)
+                            .map_err(anyhow::Error::msg)
+                            .context("resolve loop condition")?;
+                    Ok(LoopConfig {
+                        budget: cli_args::loop_budget(budget, max_iterations),
+                        predicate,
+                        ..LoopConfig::default()
+                    })
+                },
+                cancel.clone(),
             )
-            .await;
+            .await?;
+            let (outcome, stop) =
+                run_until_stopped(&headless.built, &mut signals, &cancel, work).await;
             Ok((outcome, stop))
         })
         .await?;
@@ -540,61 +446,6 @@ async fn cmd_loop(
         anyhow::bail!("loop ended on a broken condition; not a success");
     }
     Ok(())
-}
-
-fn skill_prompt_body(content: &str) -> &str {
-    content
-        .strip_prefix("---\n")
-        .and_then(|rest| rest.split_once("\n---\n").map(|(_, body)| body.trim()))
-        .unwrap_or(content)
-}
-
-fn goal_loop_hook_chain(binding: &TurnBinding, stable_agent_id: &str) -> Arc<dyn HookDispatcher> {
-    let active_is_goal_loop = binding
-        .resolve_agent(stable_agent_id)
-        .is_some_and(|agent| agent.origin.bundle_id() == Some("hya/goal-loop"));
-    // The goal-loop owner is appended unfiltered below; retain global/plugin hooks.
-    let selected = binding.bundle_hooks_for_agent(if active_is_goal_loop {
-        hya_engine::MAIN_AGENT_ID
-    } else {
-        stable_agent_id
-    });
-    let agentless = binding
-        .bundle_catalog()
-        .bundles()
-        .iter()
-        .filter(|bundle| {
-            (bundle.agents().is_empty() && bundle.workflow().is_none())
-                && bundle.identity().id != "hya/goal-loop"
-        })
-        .filter_map(|bundle| binding.bundle_hooks(&bundle.identity().id))
-        .collect();
-    Arc::new(HookChain::new(ordered_evaluator_hooks(
-        binding.global_plugin_hooks(),
-        agentless,
-        selected,
-        binding.bundle_hooks("hya/goal-loop"),
-    )))
-}
-
-fn ordered_evaluator_hooks(
-    global: Vec<Arc<dyn HookDispatcher>>,
-    agentless: Vec<Arc<dyn HookDispatcher>>,
-    selected: Vec<Arc<dyn HookDispatcher>>,
-    intelligent: Option<Arc<dyn HookDispatcher>>,
-) -> Vec<Arc<dyn HookDispatcher>> {
-    let mut hooks = Vec::new();
-    for hook in global
-        .into_iter()
-        .chain(agentless)
-        .chain(selected)
-        .chain(intelligent)
-    {
-        if !hooks.iter().any(|existing| Arc::ptr_eq(existing, &hook)) {
-            hooks.push(hook);
-        }
-    }
-    hooks
 }
 
 async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
@@ -931,27 +782,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use crate::stop_signals::StopSignal;
-    use hya_engine::hooks::NoopHookHost;
-    use hya_proto::FinishCause;
-
-    #[test]
-    fn evaluator_hook_order_is_global_agentless_selected_intelligent_and_deduplicated() {
-        let global: Arc<dyn HookDispatcher> = Arc::new(NoopHookHost);
-        let agentless: Arc<dyn HookDispatcher> = Arc::new(NoopHookHost);
-        let selected: Arc<dyn HookDispatcher> = Arc::new(NoopHookHost);
-        let intelligent: Arc<dyn HookDispatcher> = Arc::new(NoopHookHost);
-        let ordered = ordered_evaluator_hooks(
-            vec![Arc::clone(&global)],
-            vec![Arc::clone(&agentless)],
-            vec![Arc::clone(&selected), Arc::clone(&intelligent)],
-            Some(Arc::clone(&intelligent)),
-        );
-        assert_eq!(ordered.len(), 4);
-        assert!(Arc::ptr_eq(&ordered[0], &global));
-        assert!(Arc::ptr_eq(&ordered[1], &agentless));
-        assert!(Arc::ptr_eq(&ordered[2], &selected));
-        assert!(Arc::ptr_eq(&ordered[3], &intelligent));
-    }
+    use hya_proto::{FinishCause, ModelRef};
+    use std::sync::Arc;
 
     struct InterruptProvider(tokio::sync::mpsc::UnboundedSender<SessionId>);
 

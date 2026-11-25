@@ -1531,6 +1531,29 @@ and event dispatch. If it reports unhealthy while a tool call is in flight, the 
 turn is cancelled rather than silently continuing without the sidecar's hooks
 (see [Activation-hook health gate](#activation-hook-health-gate)).
 
+## Headless driver setup
+
+The CLI uses `hya_app::prepare_goal` and `hya_app::prepare_loop` to bind an
+independent evaluator, or a verifier and planner, to a headless session. Pass
+an owned `Arc<SessionEngine>`, `SessionId`, `AgentSpec`, and
+`HeadlessEvaluatorRoute { router: &ProviderRouter, model_override: Option<&str>, default_model: &str }`.
+Both functions take the target `String` and a `CancellationToken`. Goal
+setup also takes `max_iterations: u32`. Loop setup takes a configuration
+callback `FnOnce(&Path) -> anyhow::Result<LoopConfig>` that receives the
+agent's workdir after evaluator resources are bound.
+
+For example, start a session with the built runtime, then call
+`prepare_goal(engine, session, agent, route, goal, 6, cancel.clone()).await?`.
+The result is a driver future yielding `Result<RunOutcome, CoreError>`.
+Drive it under the host's cancellation and shutdown policy. Resource-binding
+and configuration errors are returned during setup.
+
+For `hya exec`, the app also owns prompt admission and lead continuation.
+`run_headless_lead(&SessionEngine, &ResidentSupervisor, SessionId, &AgentSpec, CancellationToken, String)`
+is async and returns `anyhow::Result<FinishReason>`. It announces any installed
+time budget and drives continuation notices through the existing lead loop.
+The CLI installs the process deadline and handles signals and output.
+
 ## Goal Mode
 
 Goal mode lives in [`completion.rs`](../../crates/hya-engine/src/completion.rs).

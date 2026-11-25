@@ -7,6 +7,7 @@
 //! In a budgeted run the deadline bounds this: past the grace no turn starts,
 //! and in the final window one ignored notice ends the run.
 
+use anyhow::Context as _;
 use hya_engine::{AgentSpec, CoreError, ResidentSupervisor, SessionEngine};
 use hya_proto::{
     FinishReason, MessageId, PartProjection, Projection, Role, RosterEntry, RosterStatus,
@@ -26,11 +27,38 @@ const MAX_ANNOUNCEMENT_CHARS: usize = 400;
 /// Characters of the announcing paragraph quoted back in the notice.
 const QUOTE_CHARS: usize = 200;
 
+/// Admit the prompt and run the headless lead through its continuation notices.
+///
+/// # Errors
+/// Returns an error if prompt admission, a deadline notice, or the turn fails.
+pub async fn run_headless_lead(
+    engine: &SessionEngine,
+    supervisor: &ResidentSupervisor,
+    session: SessionId,
+    agent: &AgentSpec,
+    cancel: CancellationToken,
+    prompt: String,
+) -> anyhow::Result<FinishReason> {
+    let prompt = engine
+        .admit_user_prompt(session, prompt)
+        .await
+        .context("admit prompt")?;
+    if let Some(deadline) = hya_tool::deadline::current() {
+        engine
+            .inject_system_message(session, deadline.opening())
+            .await
+            .context("announce the time budget")?;
+    }
+    run_lead(engine, supervisor, session, agent, cancel, prompt)
+        .await
+        .context("run turn")
+}
+
 /// Run the lead's turn, then one more turn per notice while it ends with
 /// [`Pending`] work (bounded by [`MAX_IGNORED_NOTICES`], and by `deadline`
 /// or else [`MAX_NOTICES_WITHOUT_BUDGET`]). Returns the last turn's finish;
 /// a cancelled or failed turn ends the run at once.
-pub(crate) async fn run_lead(
+async fn run_lead(
     engine: &SessionEngine,
     supervisor: &ResidentSupervisor,
     session: SessionId,
@@ -72,14 +100,17 @@ pub(crate) async fn run_lead(
                     row.role == Role::System
                         && row.parts.iter().any(|part| {
                             matches!(part, PartProjection::Text { text, .. }
-                        if hya_core::kernel::is_completion_check(text))
+                        if hya_engine::kernel::is_completion_check(text))
                         })
                 })
                 && !cancel.is_cancelled()
             {
                 completion_checked = true;
                 engine
-                    .inject_system_message(session, hya_core::kernel::COMPLETION_CHECK.to_string())
+                    .inject_system_message(
+                        session,
+                        hya_engine::kernel::COMPLETION_CHECK.to_string(),
+                    )
                     .await?;
                 ignored = 0;
                 last_notice = None;
