@@ -597,18 +597,26 @@ mapping when fields are added and turns back into a string when none remain;
 `reasoning` can be set but only cleared by removing the entry). Removing the
 override calls `DELETE /v1/providers/{id}/models?modelId=…`. Adding a
 provider calls `PUT /v1/providers/{id}`, which writes `kind` and `base_url`
-(a new provider gets `models: []`) and saves the key to `auth/<id>.yaml`.
+(a new provider gets `models: []`). A non-empty `apiKey` replaces the saved
+credential in `auth/<id>.yaml`. An omitted or blank `apiKey` keeps it.
 An edit that would make the config invalid is rejected and leaves the file
 unchanged. Every change applies to the running server immediately. See
 [How hya edits `config.yaml`](#how-hya-edits-configyaml) for what the writers
 change in the file text. Routes and schemas: [Protocol guide — Providers and
 keys](protocol/README.md#providers-and-keys).
 
-From the command line, `hya provider add` does the same as `PUT
-/v1/providers/{id}`: it writes the `kind` and `base_url`, saves the key, and
-fills the model cache. It also fetches the model list before anything is
-written. `hya provider remove` deletes `providers.<id>`, its key, and its
-cached models. See [`hya provider`](cli.md#hya-provider).
+`hya provider add` probes the model list before saving the declaration and
+cache. A non-empty key replaces the saved credential. To replace `gateway`
+and clear the saved credential, pass an empty `--api-key`:
+
+```sh
+hya provider add --name gateway --base-url https://new.example/v1 \
+  --protocol openai-chat --api-key '' --yes
+```
+
+If the probe fails, confirm the prompt to save anyway. `hya provider remove`
+deletes `providers.<id>`, its key, and its cached models. See
+[`hya provider`](cli.md#hya-provider).
 
 ### How hya edits `config.yaml`
 

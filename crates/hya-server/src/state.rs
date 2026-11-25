@@ -347,7 +347,7 @@ impl AppState {
     /// session, SSE and gRPC) delivers it as a live `catalogUpdated` frame
     /// with an empty `projectId`.
     pub fn notify_catalog_updated(&self) {
-        let _ = self.catalog_updates.send(catalog_notice(None));
+        publish_catalog_updated(&self.catalog_updates, None);
     }
 
     /// Subscribe to provider-catalog refresh notifications.
@@ -452,6 +452,10 @@ impl ServerState {
         future: impl std::future::Future<Output = ()> + Send + 'static,
     ) {
         crate::runtime_tasks::spawn_cancellable(&self.tasks, &self.stop, future);
+    }
+
+    pub(crate) fn notify_catalog_updated(&self) {
+        publish_catalog_updated(&self.catalog_updates, None);
     }
 
     /// Publish a Project-list change as a live `projectsUpdated` frame.
@@ -582,12 +586,15 @@ impl ServerState {
 
 /// A `catalog.updated` notice; `project` names the Project whose catalog
 /// tier changed (`properties.projectId`), `None` a global change.
-pub(crate) fn catalog_notice(project: Option<hya_proto::ProjectId>) -> Value {
+pub(crate) fn publish_catalog_updated(
+    sender: &broadcast::Sender<Value>,
+    project: Option<hya_proto::ProjectId>,
+) {
     let properties = match project {
         Some(project) => serde_json::json!({ "projectId": project.to_string() }),
         None => serde_json::json!({}),
     };
-    serde_json::json!({
+    let notice = serde_json::json!({
         "id": format!(
             "catalog-{}",
             std::time::SystemTime::now()
@@ -597,5 +604,6 @@ pub(crate) fn catalog_notice(project: Option<hya_proto::ProjectId>) -> Value {
         ),
         "type": "catalog.updated",
         "properties": properties
-    })
+    });
+    let _ = sender.send(notice);
 }

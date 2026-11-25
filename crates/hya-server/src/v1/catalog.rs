@@ -123,7 +123,7 @@ async fn refresh_scope(
         })
         .collect();
     if refreshed.changed {
-        super::providers::notify_catalog_updated(st);
+        st.notify_catalog_updated();
     }
     Ok(pb::RefreshBundlesResponse {
         scope: match place.scope() {

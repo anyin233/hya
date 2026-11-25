@@ -62,7 +62,7 @@ async fn set_provider_auth(
         .set_key(provider_id.clone(), token)
         .await
         .map_err(map_control_error)?;
-    super::providers::notify_catalog_updated(&st);
+    st.notify_catalog_updated();
     Ok(Json(pb::SetProviderAuthResponse {
         status: pb::AuthStatus::Credentialed as i32,
         provider: if change.configured {
@@ -84,7 +84,7 @@ async fn remove_provider_auth(
         .remove_key(provider_id.clone())
         .await
         .map_err(map_control_error)?;
-    super::providers::notify_catalog_updated(&st);
+    st.notify_catalog_updated();
     Ok(Json(pb::RemoveProviderAuthResponse {
         provider: if change.configured {
             super::catalog::provider_info(&st, &provider_id).await

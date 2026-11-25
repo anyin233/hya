@@ -555,3 +555,84 @@ async fn failed_fetches_do_not_fail_the_upsert_and_bad_input_is_rejected() {
 
     let _ = std::fs::remove_dir_all(&env.root);
 }
+
+#[tokio::test]
+async fn upsert_without_key_keeps_the_saved_credential_on_endpoint_change() {
+    let _lock = env_lock().await;
+    let env = env("keep-key", None);
+    let (old_url, _old_endpoint) = fake_provider().await;
+    let (new_url, new_endpoint) = fake_provider().await;
+    let (offline, _) = hya_app::offline_router(None);
+    let (app, _) = app(offline).await;
+    let (status, body) = send(
+        &app,
+        Method::PUT,
+        "/v1/providers/gw",
+        json!({"kind": "openai", "baseUrl": old_url, "apiKey": "sk-existing"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, body) = send(
+        &app,
+        Method::PUT,
+        "/v1/providers/gw",
+        json!({"kind": "openai", "baseUrl": new_url}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["discovery"]["modelCount"], 2);
+    assert_eq!(body["provider"]["summary"]["keySource"], "saved");
+    assert_eq!(
+        new_endpoint.seen.lock().unwrap().model_list_auth,
+        vec![Some("Bearer sk-existing".to_string())]
+    );
+    std::fs::remove_dir_all(&env.root).unwrap();
+}
+
+#[tokio::test]
+async fn deferred_discovery_publishes_one_global_catalog_notice() {
+    let _lock = env_lock().await;
+    let (base_url, endpoint) = fake_provider().await;
+    let env = env(
+        "deferred-notice",
+        Some(&format!(
+            "providers:
+  gw:
+    kind: openai
+    base_url: {base_url}
+    models: [configured]
+"
+        )),
+    );
+    let store = SessionStore::connect_memory().await.unwrap();
+    let config = hya_app::resolve_runtime(None).await;
+    let mut runtime = hya_app::ServerEngine::build(store, config)
+        .await
+        .unwrap()
+        .assemble(hya_server::HostPolicy::loopback())
+        .unwrap();
+    let mut notices = runtime.app_state().subscribe_catalog_updates();
+    let router = hya_server::router(runtime.app_state().clone());
+    assert!(endpoint.seen.lock().unwrap().model_list_auth.is_empty());
+
+    runtime.spawn_provider_catalog_refresh(|error| panic!("deferred discovery: {error:#}"));
+    let notice = tokio::time::timeout(std::time::Duration::from_secs(10), notices.recv())
+        .await
+        .expect("catalog notice deadline")
+        .unwrap();
+    assert_eq!(notice["type"], "catalog.updated");
+    assert_eq!(notice["properties"], json!({}));
+    let (status, body) = send(&router, Method::GET, "/v1/providers/gw", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(model(&body, "alpha").is_some(), "{body}");
+    assert_eq!(endpoint.seen.lock().unwrap().model_list_auth, vec![None]);
+    assert!(matches!(
+        notices.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+    ));
+
+    runtime.drain(hya_server::ShutdownReason::Stop, || {}).await;
+    runtime.finish_shutdown().await.unwrap();
+    std::fs::remove_dir_all(&env.root).unwrap();
+}

@@ -1610,24 +1610,11 @@ impl ServerRuntime {
             return;
         }
         let manager = self.provider_manager.clone();
-        let catalog_updates = self.state.catalog_updates_sender();
+        let state = self.state.clone();
         tokio::spawn(async move {
             match manager.refresh_pending(pending).await {
                 Ok(false) => {}
-                Ok(true) => {
-                    let payload = serde_json::json!({
-                        "id": format!(
-                            "catalog-{}",
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|duration| duration.as_millis())
-                                .unwrap_or(0)
-                        ),
-                        "type": "catalog.updated",
-                        "properties": {}
-                    });
-                    let _ = catalog_updates.send(payload);
-                }
+                Ok(true) => state.notify_catalog_updated(),
                 Err(error) => report_error(error),
             }
         });
