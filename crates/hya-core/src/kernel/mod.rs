@@ -1139,22 +1139,8 @@ fn tool_event(
     time_ms: u64,
 ) -> Event {
     match outcome {
-        Ok(output) => Event::ToolResult {
-            session,
-            message,
-            part: call.part,
-            call: call.call,
-            output,
-            time_ms,
-        },
-        Err(message_text) => Event::ToolError {
-            session,
-            message,
-            part: call.part,
-            call: call.call,
-            message_text,
-            value: None,
-        },
+        Ok(output) => call.result_event(session, message, output, time_ms),
+        Err(message_text) => call.error_event(session, message, message_text, None),
     }
 }
 

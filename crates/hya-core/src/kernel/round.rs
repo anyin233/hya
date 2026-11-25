@@ -28,6 +28,46 @@ pub struct ToolCall {
     pub input: serde_json::Value,
 }
 
+impl ToolCall {
+    /// Pair a successful outcome with the call that produced it.
+    #[must_use]
+    pub fn result_event(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        output: serde_json::Value,
+        time_ms: u64,
+    ) -> Event {
+        Event::ToolResult {
+            session,
+            message,
+            part: self.part,
+            call: self.call,
+            output,
+            time_ms,
+        }
+    }
+
+    /// Pair a failed outcome with this call, including any structured error supplied by the host.
+    #[must_use]
+    pub fn error_event(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        message_text: String,
+        value: Option<serde_json::Value>,
+    ) -> Event {
+        Event::ToolError {
+            session,
+            message,
+            part: self.part,
+            call: self.call,
+            message_text,
+            value,
+        }
+    }
+}
+
 /// What a completed round asks for next.
 pub struct Round {
     /// Calls to run, in stream order.

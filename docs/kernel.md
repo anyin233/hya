@@ -897,6 +897,12 @@ plugs into that loop at fixed points:
 The kernel offers and handles the model's `rewrite` and `todo` calls in both
 modes. `shake`'s `ContextEvicted` events store the exact notice for each
 evicted part, which the projection renders during replay.
+
+Both tool gates use `kernel::ToolCall::result_event(session, message, output,
+time_ms)` and `error_event(session, message, message_text, value)` to build the
+terminal event with the same part and call IDs as the model request. Full mode
+supplies the structured error `value`; bare mode leaves it empty.
+
 `TurnBindingRecorded` records the runtime generation and the pre-hook
 system prompt and tool list digests at turn start and whenever those
 digests change. `StepStarted.view` fingerprints the request content after
