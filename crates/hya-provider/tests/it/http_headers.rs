@@ -2259,6 +2259,46 @@ async fn http_provider_anthropic_sends_thinking_binding_beta_only_when_block_bin
 }
 
 #[tokio::test]
+async fn grok_compaction_preserves_proxy_headers_and_body() {
+    let response = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 13\r\nconnection: close\r\n\r\n{\"output\":[]}";
+    let (base_url, _, requests) = start_scripted_server(vec![response.into()]).await;
+    let provider = HttpProvider::new(
+        "grok",
+        ProviderKind::GrokBuild,
+        &format!("{base_url}/v1/"),
+        Some("GrokToken".into()),
+        ["grok-4.5".into()],
+    )
+    .unwrap()
+    .with_grok_session_auth("1.2.3", "TestClient");
+
+    provider
+        .compact_responses(&ModelRef::new("grok/grok-4.5"), &[], Some("summary"))
+        .await
+        .unwrap();
+
+    let requests = requests.lock().unwrap();
+    let request = &requests[0];
+    assert!(
+        request
+            .raw
+            .starts_with("POST /v1/responses/compact HTTP/1.1\r\n")
+    );
+    for expected in [
+        "authorization: Bearer GrokToken",
+        "x-xai-token-auth: xai-grok-cli",
+        "x-grok-client-version: 1.2.3",
+        "x-grok-client-identifier: TestClient",
+        "x-grok-model-override: grok-4.5",
+    ] {
+        assert!(request.headers.lines().any(|line| line == expected));
+    }
+    assert_eq!(
+        request.body,
+        r#"{"model":"grok-4.5","input":[{"role":"system","content":"summary"}]}"#
+    );
+}
+#[tokio::test]
 async fn responses_compact_bounds_multibyte_http_error() {
     let body = "界".repeat(600);
     let response = format!(

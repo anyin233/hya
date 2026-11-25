@@ -1,5 +1,6 @@
 use hya_proto::{Message, MessageId, Part, SessionId};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 use crate::media::anthropic_image_source;
 use crate::wire::{ToolImages, tool_input, tool_result};
@@ -10,6 +11,28 @@ mod decoder;
 pub use decoder::AnthropicDecoder;
 
 const MAX_PROMPT_CACHE_BREAKPOINTS: usize = 4;
+
+fn merge_anthropic_beta(headers: &mut BTreeMap<String, String>, token: &str) {
+    let existing_key = headers
+        .keys()
+        .find(|k| k.eq_ignore_ascii_case("anthropic-beta"))
+        .cloned();
+    if let Some(key) = existing_key {
+        let current = headers.get(&key).map(String::as_str).unwrap_or("");
+        if current.split(',').map(str::trim).any(|item| item == token) {
+            return;
+        }
+        let trimmed = current.trim().trim_end_matches(',').trim();
+        let updated = if trimmed.is_empty() {
+            token.to_string()
+        } else {
+            format!("{trimmed}, {token}")
+        };
+        headers.insert(key, updated);
+    } else {
+        headers.insert("anthropic-beta".to_string(), token.to_string());
+    }
+}
 
 /// Add Anthropic ephemeral prompt-cache breakpoints to an encoded request.
 pub(crate) fn add_prompt_cache_breakpoints(body: &mut Value) {
@@ -95,6 +118,35 @@ fn uses_anthropic_adaptive_thinking(model_id: &str) -> bool {
 }
 
 impl Protocol for AnthropicMessagesProtocol {
+    fn endpoint_url(&self, base: &str, _model: &str) -> String {
+        format!("{base}/messages")
+    }
+
+    fn reasoning_replay_policy(&self) -> crate::ReasoningReplayPolicy {
+        crate::ReasoningReplayPolicy::SignedCurrentTurn
+    }
+
+    fn reasoning_variant_labels(&self) -> &'static [&'static str] {
+        &["low", "medium", "high", "xhigh", "max"]
+    }
+
+    fn supports_prompt_cache(&self) -> bool {
+        true
+    }
+
+    fn post_encode(
+        &self,
+        body: &mut Value,
+        headers: &mut BTreeMap<String, String>,
+        prompt_caching: bool,
+    ) {
+        if prompt_caching {
+            add_prompt_cache_breakpoints(body);
+        }
+        if body.pointer("/thinking/block_binding").is_some() {
+            merge_anthropic_beta(headers, THINKING_BINDING_BETA);
+        }
+    }
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
         self.encode_for_model(req, None, false)
     }

@@ -15,6 +15,25 @@ pub struct OpenAiResponsesProtocol;
 pub(crate) struct GrokBuildProtocol;
 
 impl Protocol for GrokBuildProtocol {
+    fn endpoint_url(&self, base: &str, model: &str) -> String {
+        OpenAiResponsesProtocol.endpoint_url(base, model)
+    }
+
+    fn compact_endpoint(&self, base: &str) -> Option<String> {
+        OpenAiResponsesProtocol.compact_endpoint(base)
+    }
+
+    fn reasoning_replay_policy(&self) -> crate::ReasoningReplayPolicy {
+        OpenAiResponsesProtocol.reasoning_replay_policy()
+    }
+
+    fn reasoning_variant_labels(&self) -> &'static [&'static str] {
+        &["low", "medium", "high"]
+    }
+
+    fn session_model_override<'a>(&self, model: &'a str) -> Option<&'a str> {
+        Some(model)
+    }
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
         self.encode_for_model(req, None, false)
     }
@@ -41,6 +60,21 @@ impl Protocol for GrokBuildProtocol {
 }
 
 impl Protocol for OpenAiResponsesProtocol {
+    fn endpoint_url(&self, base: &str, _model: &str) -> String {
+        format!("{base}/responses")
+    }
+
+    fn compact_endpoint(&self, base: &str) -> Option<String> {
+        Some(format!("{base}/responses/compact"))
+    }
+
+    fn reasoning_replay_policy(&self) -> crate::ReasoningReplayPolicy {
+        crate::ReasoningReplayPolicy::ProviderData
+    }
+
+    fn reasoning_variant_labels(&self) -> &'static [&'static str] {
+        &["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+    }
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
         self.encode_for_model(req, None, false)
     }

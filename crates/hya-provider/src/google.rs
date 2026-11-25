@@ -278,6 +278,21 @@ fn validate_media(media_type: &str, data: &str) -> Result<(String, String), Prov
 }
 
 impl Protocol for GoogleProtocol {
+    fn endpoint_url(&self, base: &str, model: &str) -> String {
+        format!("{base}/v1beta/models/{model}:streamGenerateContent?alt=sse")
+    }
+
+    fn reasoning_replay_policy(&self) -> crate::ReasoningReplayPolicy {
+        crate::ReasoningReplayPolicy::GoogleThought
+    }
+
+    fn reasoning_variant_labels(&self) -> &'static [&'static str] {
+        &["minimal", "low", "medium", "high", "max"]
+    }
+
+    fn supports_tool_images(&self) -> bool {
+        false
+    }
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
         let mut contents: Vec<Value> = Vec::new();
         for m in &req.messages {

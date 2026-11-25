@@ -46,7 +46,7 @@ trait Protocol {
         output_limit: Option<u32>,
         images: bool,
     ) -> Result<serde_json::Value, ProviderError>;
-    fn decoder(&self, session: SessionId, message: MessageId) -> Box<dyn Decoder>;
+    fn decoder(&self, session: SessionId, message: MessageId, reasoning: Option<ReasoningEffort>) -> Box<dyn Decoder>;
 }
 
 trait Decoder {
@@ -63,6 +63,21 @@ Anthropic, OpenAI Chat, and OpenAI Responses use `images` for
 [tool-result images](#tool-result-images). `encode` is `encode_for_model` with
 no limit and no images. `decoder` returns a fresh stateful decoder.
 Each `push`/`finish` returns a batch of canonical `Event`s (may be empty).
+
+The HTTP route delegates wire-specific decisions to the protocol. Default methods let existing implementations retain their encoder and decoder.
+
+| Method | Default |
+| --- | --- |
+| `endpoint_url(&self, base: &str, model: &str) -> String` | Use the supplied base URL. |
+| `compact_endpoint(&self, base: &str) -> Option<String>` | Return `None`. |
+| `post_encode(&self, body: &mut Value, headers: &mut BTreeMap<String, String>, prompt_caching: bool)` | Leave the body and headers as provided. |
+| `supports_prompt_cache(&self) -> bool` | Return `false`. |
+| `session_model_override<'a>(&self, model: &'a str) -> Option<&'a str>` | Return `None`. |
+| `supports_tool_images(&self) -> bool` | Allow tool-result images when the model accepts image input. |
+| `reasoning_replay_policy(&self) -> ReasoningReplayPolicy` | Return `None`. |
+| `reasoning_variant_labels(&self) -> &'static [&'static str]` | Return an empty list. |
+
+For example, Gemini builds the streaming URL from the bare model ID. Anthropic adds cache breakpoints when enabled and merges the thinking beta header when the encoded body contains a block-binding control.
 
 ### DeepSeek thinking with tools over OpenAI Chat
 

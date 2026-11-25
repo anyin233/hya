@@ -21,7 +21,7 @@ use tokio_stream::wrappers::ReceiverStream;
 mod output_limit_tests;
 mod stream;
 
-use crate::anthropic::{AnthropicMessagesProtocol, add_prompt_cache_breakpoints};
+use crate::anthropic::AnthropicMessagesProtocol;
 use crate::auth::{ANTHROPIC_VERSION, AuthStyle, request_header_value};
 use crate::google::GoogleProtocol;
 use crate::openai::{
@@ -127,23 +127,21 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
-    /// Static default reasoning labels used without allocating during capability checks.
-    fn reasoning_variant_labels(self) -> &'static [&'static str] {
+    fn protocol(self) -> &'static dyn Protocol {
         match self {
-            ProviderKind::Anthropic => &["low", "medium", "high", "xhigh", "max"],
-            ProviderKind::OpenAiCompatible => &["minimal", "low", "medium", "high", "xhigh"],
-            ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex => {
-                &["none", "minimal", "low", "medium", "high", "xhigh", "max"]
-            }
-            ProviderKind::GrokBuild => &["low", "medium", "high"],
-            ProviderKind::Google => &["minimal", "low", "medium", "high", "max"],
+            Self::OpenAiCompatible => &OpenAiChatProtocol,
+            Self::OpenAiResponse | Self::OpenAiCodex => &OpenAiResponsesProtocol,
+            Self::GrokBuild => &GrokBuildProtocol,
+            Self::Anthropic => &AnthropicMessagesProtocol,
+            Self::Google => &GoogleProtocol,
         }
     }
 
     /// Default reasoning-variant menu when a model has no per-model override.
     #[must_use]
     pub fn reasoning_variants(self) -> Vec<String> {
-        self.reasoning_variant_labels()
+        self.protocol()
+            .reasoning_variant_labels()
             .iter()
             .map(|level| (*level).to_string())
             .collect()
@@ -184,10 +182,9 @@ pub struct HttpProvider {
     /// Whether Anthropic prompt-cache breakpoints are enabled on this route.
     prompt_caching: bool,
     id: String,
-    protocol: Arc<dyn Protocol>,
+    protocol: &'static dyn Protocol,
     core: RouteCore,
-    endpoint: String,
-    google_base: Option<String>,
+    base_url: String,
     models: BTreeMap<String, RouteModel>,
     caps: Capabilities,
     kind: ProviderKind,
@@ -232,38 +229,13 @@ impl HttpProvider {
         let key = api_key
             .filter(|value| !value.is_empty())
             .map(SecretString::new);
-        let (protocol, endpoint, auth): (Arc<dyn Protocol>, String, AuthStyle) = match kind {
-            ProviderKind::OpenAiCompatible => (
-                Arc::new(OpenAiChatProtocol),
-                format!("{base}/chat/completions"),
-                AuthStyle::Bearer(key),
-            ),
-            ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex => (
-                Arc::new(OpenAiResponsesProtocol),
-                format!("{base}/responses"),
-                AuthStyle::Bearer(key),
-            ),
-            ProviderKind::GrokBuild => (
-                Arc::new(GrokBuildProtocol),
-                format!("{base}/responses"),
-                AuthStyle::Bearer(key),
-            ),
-            ProviderKind::Anthropic => (
-                Arc::new(AnthropicMessagesProtocol),
-                format!("{base}/messages"),
-                AuthStyle::Anthropic(key),
-            ),
-            ProviderKind::Google => (
-                Arc::new(GoogleProtocol),
-                String::new(),
-                AuthStyle::Google(key),
-            ),
+        let protocol = kind.protocol();
+        let auth = match kind {
+            ProviderKind::Anthropic => AuthStyle::Anthropic(key),
+            ProviderKind::Google => AuthStyle::Google(key),
+            _ => AuthStyle::Bearer(key),
         };
-        let google_base = if kind == ProviderKind::Google {
-            Some(base.to_string())
-        } else {
-            None
-        };
+        let prompt_caching = protocol.supports_prompt_cache();
         Ok(Self {
             id: id.into(),
             protocol,
@@ -275,8 +247,7 @@ impl HttpProvider {
                 response_header_timeout: RESPONSE_HEADER_TIMEOUT,
                 retry: RetryConfig::default(),
             },
-            endpoint,
-            google_base,
+            base_url: base.to_owned(),
             models: models
                 .into_iter()
                 .map(|id| {
@@ -291,12 +262,12 @@ impl HttpProvider {
                 .collect(),
             kind,
             catalog_source: ModelCatalogSource::Configured,
-            prompt_caching: kind == ProviderKind::Anthropic,
+            prompt_caching,
             caps: Capabilities {
                 streaming_tool_calls: true,
                 usage_reporting: true,
                 reasoning_request: true,
-                prompt_caching: kind == ProviderKind::Anthropic,
+                prompt_caching,
                 max_context: 200_000,
                 max_output: 0,
                 ..Capabilities::default()
@@ -308,7 +279,7 @@ impl HttpProvider {
     /// Enable or disable Anthropic prompt-cache breakpoints for this route.
     #[must_use]
     pub fn with_prompt_cache(mut self, enabled: bool) -> Self {
-        self.prompt_caching = enabled && self.kind == ProviderKind::Anthropic;
+        self.prompt_caching = enabled && self.protocol.supports_prompt_cache();
         self.caps.prompt_caching = self.prompt_caching;
         self
     }
@@ -676,26 +647,6 @@ impl RouteCore {
 }
 
 impl HttpProvider {
-    /// Whether this route speaks the Responses wire and has `/responses/compact`.
-    fn supports_responses_compact(&self) -> bool {
-        matches!(
-            self.kind,
-            ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex | ProviderKind::GrokBuild
-        )
-    }
-
-    fn compact_endpoint(&self) -> Option<String> {
-        if !self.supports_responses_compact() {
-            return None;
-        }
-        // endpoint is `{base}/responses` for create; compact sits alongside it.
-        Some(if self.endpoint.ends_with("/responses") {
-            format!("{}/compact", self.endpoint)
-        } else {
-            format!("{}/responses/compact", self.endpoint.trim_end_matches('/'))
-        })
-    }
-
     /// The protocol this route speaks.
     ///
     /// A provider whose model entries override `kind` is partitioned into one
@@ -763,13 +714,8 @@ impl HttpProvider {
             req.max_output_tokens = Some(req.max_output_tokens.map_or(limit, |max| max.min(limit)));
         }
         let mut body = self.protocol.encode_for_model(&req, output_limit, images)?;
-        if self.prompt_caching {
-            add_prompt_cache_breakpoints(&mut body);
-        }
-        if self.kind == ProviderKind::Anthropic && body.pointer("/thinking/block_binding").is_some()
-        {
-            merge_anthropic_beta(&mut req.headers, crate::anthropic::THINKING_BINDING_BETA);
-        }
+        self.protocol
+            .post_encode(&mut body, &mut req.headers, self.prompt_caching);
         Ok((req, body))
     }
 
@@ -802,8 +748,15 @@ impl HttpProvider {
         append_identity_bytes(&mut identity, hya_version::BACKEND_VERSION.as_bytes())?;
         append_identity_bytes(&mut identity, self.id.as_bytes())?;
         append_identity_bytes(&mut identity, provider_kind_identity(self.kind))?;
-        append_identity_bytes(&mut identity, self.endpoint.as_bytes())?;
-        append_identity_optional_bytes(&mut identity, self.google_base.as_deref())?;
+        // Preserve the v1 representation for model-specific Gemini URLs.
+        if self.kind == ProviderKind::Google {
+            append_identity_bytes(&mut identity, b"")?;
+            append_identity_optional_bytes(&mut identity, Some(&self.base_url))?;
+        } else {
+            let endpoint = self.protocol.endpoint_url(&self.base_url, "");
+            append_identity_bytes(&mut identity, endpoint.as_bytes())?;
+            append_identity_optional_bytes(&mut identity, None)?;
+        }
 
         append_identity_count(&mut identity, self.models.len())?;
         for (model, row) in &self.models {
@@ -858,28 +811,6 @@ impl HttpProvider {
             None => identity.push(0),
         }
         Some(identity)
-    }
-}
-
-fn merge_anthropic_beta(headers: &mut BTreeMap<String, String>, token: &str) {
-    let existing_key = headers
-        .keys()
-        .find(|k| k.eq_ignore_ascii_case("anthropic-beta"))
-        .cloned();
-    if let Some(key) = existing_key {
-        let current = headers.get(&key).map(String::as_str).unwrap_or("");
-        if current.split(',').map(str::trim).any(|item| item == token) {
-            return;
-        }
-        let trimmed = current.trim().trim_end_matches(',').trim();
-        let updated = if trimmed.is_empty() {
-            token.to_string()
-        } else {
-            format!("{trimmed}, {token}")
-        };
-        headers.insert(key, updated);
-    } else {
-        headers.insert("anthropic-beta".to_string(), token.to_string());
     }
 }
 
@@ -1005,18 +936,11 @@ impl Provider for HttpProvider {
     }
 
     fn sends_tool_images(&self, caps: &Capabilities) -> bool {
-        self.kind != ProviderKind::Google && caps.image_input == Some(true)
+        self.protocol.supports_tool_images() && caps.image_input == Some(true)
     }
 
     fn reasoning_replay_policy(&self) -> crate::ReasoningReplayPolicy {
-        match self.kind {
-            ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex | ProviderKind::GrokBuild => {
-                crate::ReasoningReplayPolicy::ProviderData
-            }
-            ProviderKind::Anthropic => crate::ReasoningReplayPolicy::SignedCurrentTurn,
-            ProviderKind::OpenAiCompatible => crate::ReasoningReplayPolicy::ReasoningContent,
-            ProviderKind::Google => crate::ReasoningReplayPolicy::GoogleThought,
-        }
+        self.protocol.reasoning_replay_policy()
     }
 
     fn reasoning_default(&self, model: &ModelRef) -> Option<ReasoningEffort> {
@@ -1047,7 +971,7 @@ impl Provider for HttpProvider {
             );
         }
         Some(
-            self.kind
+            self.protocol
                 .reasoning_variant_labels()
                 .iter()
                 .any(|variant| ReasoningEffort::parse(variant) == Some(effort)),
@@ -1090,15 +1014,10 @@ impl Provider for HttpProvider {
         message: MessageId,
     ) -> Result<EventStream, ProviderError> {
         let (req, body) = self.prepare_request(req)?;
-        let url = match &self.google_base {
-            Some(base) => format!(
-                "{base}/v1beta/models/{}:streamGenerateContent?alt=sse",
-                req.model.as_str()
-            ),
-            None => self.endpoint.clone(),
-        };
-        let model_override =
-            matches!(self.core.auth, AuthStyle::GrokSession { .. }).then_some(req.model.as_str());
+        let url = self
+            .protocol
+            .endpoint_url(&self.base_url, req.model.as_str());
+        let model_override = self.protocol.session_model_override(req.model.as_str());
         let resp = self
             .core
             .send_request(
@@ -1124,7 +1043,7 @@ impl Provider for HttpProvider {
         messages: &[Message],
         system: Option<&str>,
     ) -> Result<Option<CompactedWindow>, ProviderError> {
-        let Some(url) = self.compact_endpoint() else {
+        let Some(url) = self.protocol.compact_endpoint(&self.base_url) else {
             return Ok(None);
         };
         let model_id = self
@@ -1145,8 +1064,7 @@ impl Provider for HttpProvider {
             "model": model_id,
             "input": input,
         });
-        let model_override =
-            matches!(self.core.auth, AuthStyle::GrokSession { .. }).then_some(model_id.as_str());
+        let model_override = self.protocol.session_model_override(model_id.as_str());
         let resp = self
             .core
             .send_request(&url, &body, &BTreeMap::new(), model_override, 1)
