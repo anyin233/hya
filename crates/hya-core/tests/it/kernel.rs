@@ -505,6 +505,31 @@ fn assert_paired(log: &[Event]) {
     assert!(open.is_empty(), "calls {open:?} have no result");
 }
 
+fn tool_round(name: &str, input: serde_json::Value) -> Vec<FakeStep> {
+    let mut steps = call(name, input);
+    steps.push(FakeStep::Finish(FinishReason::ToolCalls));
+    steps
+}
+
+// A step finishes when the model round ends, before the tool runs.
+fn tool_event_order(log: &[Event]) -> Vec<&Event> {
+    log.iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::ToolInputStart { .. }
+                    | Event::ToolCallRequested { .. }
+                    | Event::StepFinished {
+                        finish: FinishReason::ToolCalls,
+                        ..
+                    }
+                    | Event::ToolResult { .. }
+                    | Event::ToolError { .. }
+            )
+        })
+        .collect()
+}
+
 fn tool_errors(log: &[Event]) -> Vec<&str> {
     log.iter()
         .filter_map(|event| match event {
@@ -537,8 +562,8 @@ async fn a1_tool_results_pair_with_calls() {
     let fx = fixture(
         "a1",
         FakeProvider::scripted_turns(vec![
-            call("write", json!({"path": "out/a.txt", "content": "hello"})),
-            call("bash", json!({"command": "cat out/a.txt"})),
+            tool_round("write", json!({"path": "out/a.txt", "content": "hello"})),
+            tool_round("bash", json!({"command": "cat out/a.txt"})),
             text("done"),
         ]),
     )
@@ -547,6 +572,19 @@ async fn a1_tool_results_pair_with_calls() {
     assert_eq!(finish.unwrap(), FinishReason::Stop);
     let log = fx.log().await;
     assert_paired(&log);
+    assert!(matches!(
+        tool_event_order(&log).as_slice(),
+        [Event::ToolInputStart { call: first, .. },
+         Event::ToolCallRequested { call: first_request, .. },
+         Event::StepFinished { step: 0, .. },
+         Event::ToolResult { call: first_result, .. },
+         Event::ToolInputStart { call: second, .. },
+         Event::ToolCallRequested { call: second_request, .. },
+         Event::StepFinished { step: 1, .. },
+         Event::ToolResult { call: second_result, .. }]
+            if first == first_request && first == first_result
+                && second == second_request && second == second_result
+    ));
     let outputs: Vec<_> = log
         .iter()
         .filter_map(|event| match event {
@@ -2386,7 +2424,7 @@ async fn large_image_result_stays_below_rewrite_pressure() {
 async fn a3_cancel_is_an_observation() {
     let fx = fixture(
         "a3",
-        FakeProvider::scripted_turns(vec![call(
+        FakeProvider::scripted_turns(vec![tool_round(
             "bash",
             json!({"command": "sleep 30 & echo $! > pid; wait"}),
         )]),
@@ -2414,6 +2452,14 @@ async fn a3_cancel_is_an_observation() {
     let log = fx.log().await;
     assert_paired(&log);
     assert_eq!(tool_errors(&log), vec!["cancelled"]);
+    assert!(matches!(
+        tool_event_order(&log).as_slice(),
+        [Event::ToolInputStart { call, .. },
+         Event::ToolCallRequested { call: request, .. },
+         Event::StepFinished { step: 0, .. },
+         Event::ToolError { call: result, value: None, .. }]
+            if call == request && call == result
+    ));
     let pid = std::fs::read_to_string(&pid_file).unwrap();
     let pid = pid.trim();
     let mut alive = true;
