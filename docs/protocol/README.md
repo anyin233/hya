@@ -133,11 +133,14 @@ request contract; `ListEvents` uses `limit` and `sinceSeq`/`nextSeq`.
 
 ## Errors
 
-Every failure renders:
+HTTP renders the stable error code and message in a JSON envelope:
 
 ```json
 { "error": { "code": "session_not_found", "message": "session not found: hysec_..." } }
 ```
+
+gRPC returns the canonical status and the human-readable message. Clients
+can branch on the gRPC status, such as `NotFound` for the session error above.
 
 Stable codes and their HTTP status / gRPC code:
 

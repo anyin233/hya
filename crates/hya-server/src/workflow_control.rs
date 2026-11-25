@@ -34,6 +34,23 @@ impl WorkflowControlError {
             message: message.into().chars().take(2_048).collect(),
         }
     }
+
+    /// Construct a Workflow failure while retaining the legacy port spelling.
+    #[must_use]
+    pub fn from_code(code: hya_api::error::Code, message: impl Into<String>) -> Self {
+        Self::new(Self::legacy_code(code), message)
+    }
+
+    /// Convert a typed Workflow, session, or internal error to its legacy spelling.
+    #[must_use]
+    pub const fn legacy_code(code: hya_api::error::Code) -> &'static str {
+        use hya_api::error::Code;
+        match code {
+            Code::SessionNotFound => "SESSION_NOT_FOUND",
+            Code::Internal => "WORKFLOW_INTERNAL",
+            code => code.as_str(),
+        }
+    }
 }
 
 impl std::fmt::Display for WorkflowControlError {

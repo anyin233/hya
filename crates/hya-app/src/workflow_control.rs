@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use hya_api::error::Code;
 use hya_engine::{
     AgentSpec, CategoryRegistry, CompiledWorkflow, ResidentSupervisor, SessionEngine, TurnBinding,
     WorkflowError, WorkflowRoutingContext, WorkflowRunContext, WorkflowStatus,
@@ -89,25 +90,35 @@ pub enum WorkflowControlError {
 }
 
 impl WorkflowControlError {
-    /// Machine-stable error code for HTTP, native, tool, and SDK adapters.
+    /// Machine-stable error code for native, tool, and CLI adapters.
     #[must_use]
     pub const fn code(&self) -> &'static str {
+        hya_server::WorkflowControlError::legacy_code(self.v1_code())
+    }
+
+    const fn v1_code(&self) -> Code {
         match self {
-            Self::NotFound { .. } => "WORKFLOW_NOT_FOUND",
-            Self::InvalidSource(_) => "WORKFLOW_INVALID_SOURCE",
-            Self::StaleRevision { .. } => "WORKFLOW_STALE_REVISION",
-            Self::SessionNotFound { .. } => "SESSION_NOT_FOUND",
-            Self::MissingSelection { .. } => "WORKFLOW_NOT_SELECTED",
-            Self::InvalidInput(_) => "WORKFLOW_INVALID_INPUT",
-            Self::Unauthorized(_) => "WORKFLOW_UNAUTHORIZED",
-            Self::Busy { .. } => "WORKFLOW_BUSY",
-            Self::RuntimeUnavailable => "WORKFLOW_RUNTIME_UNAVAILABLE",
-            Self::OperationConflict { .. } => "WORKFLOW_OPERATION_CONFLICT",
+            Self::NotFound { .. } => Code::WorkflowNotFound,
+            Self::InvalidSource(_) => Code::WorkflowInvalidSource,
+            Self::StaleRevision { .. } => Code::WorkflowStaleRevision,
+            Self::SessionNotFound { .. } => Code::SessionNotFound,
+            Self::MissingSelection { .. } => Code::WorkflowNotSelected,
+            Self::InvalidInput(_) => Code::WorkflowInvalidInput,
+            Self::Unauthorized(_) => Code::WorkflowUnauthorized,
+            Self::Busy { .. } => Code::WorkflowBusy,
+            Self::RuntimeUnavailable => Code::WorkflowRuntimeUnavailable,
+            Self::OperationConflict { .. } => Code::WorkflowOperationConflict,
             Self::Core(hya_engine::CoreError::Store(hya_store::StoreError::CapacityExceeded {
                 ..
-            })) => "WORKFLOW_OVERLOADED",
-            Self::Execution(_) | Self::Core(_) => "WORKFLOW_INTERNAL",
+            })) => Code::WorkflowOverloaded,
+            Self::Execution(_) | Self::Core(_) => Code::Internal,
         }
+    }
+}
+
+impl From<WorkflowControlError> for hya_server::WorkflowControlError {
+    fn from(error: WorkflowControlError) -> Self {
+        Self::from_code(error.v1_code(), error.to_string())
     }
 }
 /// Invocation metadata retained while a caller crosses the Workflow control seam.

@@ -806,7 +806,7 @@ impl hya_server::WorkflowControl for crate::WorkflowControl {
                 tokio_util::sync::CancellationToken::new(),
             )
             .await
-            .map_err(|error| hya_server::WorkflowControlError::new(error.code(), error.to_string()))
+            .map_err(Into::into)
         })
     }
 
@@ -818,9 +818,7 @@ impl hya_server::WorkflowControl for crate::WorkflowControl {
         Box::pin(async move {
             crate::WorkflowControl::decorate(self, session, state)
                 .await
-                .map_err(|error| {
-                    hya_server::WorkflowControlError::new(error.code(), error.to_string())
-                })
+                .map_err(Into::into)
         })
     }
 
@@ -834,9 +832,7 @@ impl hya_server::WorkflowControl for crate::WorkflowControl {
         Box::pin(async move {
             crate::WorkflowControl::list(self, scope.as_deref())
                 .await
-                .map_err(|error| {
-                    hya_server::WorkflowControlError::new(error.code(), error.to_string())
-                })
+                .map_err(Into::into)
         })
     }
 
@@ -850,11 +846,7 @@ impl hya_server::WorkflowControl for crate::WorkflowControl {
         &self,
         session: SessionId,
     ) -> futures::future::BoxFuture<'_, Result<(), hya_server::WorkflowControlError>> {
-        Box::pin(async move {
-            self.wait_run_idle(session).await.map_err(|error| {
-                hya_server::WorkflowControlError::new(error.code(), error.to_string())
-            })
-        })
+        Box::pin(async move { self.wait_run_idle(session).await.map_err(Into::into) })
     }
 
     fn cancel(&self, session: SessionId) -> bool {

@@ -144,32 +144,17 @@ pub struct ApiError {
 pub(crate) type V1Error = ApiError;
 
 impl ApiError {
-    pub(crate) fn structured(
-        status: StatusCode,
-        code: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        let code = match code.into().as_str() {
-            "WORKFLOW_SYNTAX" => Code::WorkflowSyntax,
-            "WORKFLOW_INVALID_INPUT" => Code::WorkflowInvalidInput,
-            "WORKFLOW_INVALID_SOURCE" => Code::WorkflowInvalidSource,
-            "WORKFLOW_NOT_FOUND" => Code::WorkflowNotFound,
-            "WORKFLOW_NOT_SELECTED" => Code::WorkflowNotSelected,
-            "WORKFLOW_UNAUTHORIZED" => Code::WorkflowUnauthorized,
-            "WORKFLOW_BUSY" => Code::WorkflowBusy,
-            "WORKFLOW_OPERATION_CONFLICT" => Code::WorkflowOperationConflict,
-            "WORKFLOW_STALE_REVISION" => Code::WorkflowStaleRevision,
-            "WORKFLOW_RUNTIME_UNAVAILABLE" => Code::WorkflowRuntimeUnavailable,
-            "WORKFLOW_OVERLOADED" => Code::WorkflowOverloaded,
+    pub(crate) fn legacy_control(code: &str, fallback: Code, message: String) -> Self {
+        let code = match code {
             "SESSION_NOT_FOUND" => Code::SessionNotFound,
-            _ if status == StatusCode::SERVICE_UNAVAILABLE => Code::Unavailable,
-            _ => Code::Internal,
+            code if code.starts_with("WORKFLOW_") => Code::from_wire(code).unwrap_or(fallback),
+            _ => fallback,
         };
         Self::new(code, message)
     }
 
     pub(crate) fn workflow(error: crate::WorkflowControlError) -> Self {
-        Self::structured(StatusCode::INTERNAL_SERVER_ERROR, error.code, error.message)
+        Self::legacy_control(&error.code, Code::Internal, error.message)
     }
 
     pub(crate) fn text(&self) -> &str {
@@ -433,26 +418,103 @@ mod tests {
 mod workflow_error_regression {
     use super::*;
 
-    #[test]
-    fn workflow_failures_use_the_shared_transport_table() {
-        for (code, status) in [
-            ("WORKFLOW_SYNTAX", 400),
-            ("WORKFLOW_INVALID_INPUT", 422),
-            ("WORKFLOW_INVALID_SOURCE", 422),
-            ("WORKFLOW_NOT_FOUND", 404),
-            ("WORKFLOW_NOT_SELECTED", 404),
-            ("SESSION_NOT_FOUND", 404),
-            ("WORKFLOW_UNAUTHORIZED", 403),
-            ("WORKFLOW_BUSY", 409),
-            ("WORKFLOW_OPERATION_CONFLICT", 409),
-            ("WORKFLOW_STALE_REVISION", 409),
-            ("WORKFLOW_RUNTIME_UNAVAILABLE", 503),
-            ("WORKFLOW_OVERLOADED", 503),
-            ("WORKFLOW_INTERNAL", 500),
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn workflow_failures_use_the_shared_transport_table() {
+        use tonic::Code as Grpc;
+
+        for (legacy_code, wire_code, status, grpc) in [
+            (
+                "WORKFLOW_SYNTAX",
+                "WORKFLOW_SYNTAX",
+                400,
+                Grpc::InvalidArgument,
+            ),
+            (
+                "WORKFLOW_INVALID_INPUT",
+                "WORKFLOW_INVALID_INPUT",
+                422,
+                Grpc::InvalidArgument,
+            ),
+            (
+                "WORKFLOW_INVALID_SOURCE",
+                "WORKFLOW_INVALID_SOURCE",
+                422,
+                Grpc::InvalidArgument,
+            ),
+            (
+                "WORKFLOW_NOT_FOUND",
+                "WORKFLOW_NOT_FOUND",
+                404,
+                Grpc::NotFound,
+            ),
+            (
+                "WORKFLOW_NOT_SELECTED",
+                "WORKFLOW_NOT_SELECTED",
+                404,
+                Grpc::NotFound,
+            ),
+            (
+                "SESSION_NOT_FOUND",
+                "session_not_found",
+                404,
+                Grpc::NotFound,
+            ),
+            (
+                "WORKFLOW_UNAUTHORIZED",
+                "WORKFLOW_UNAUTHORIZED",
+                403,
+                Grpc::PermissionDenied,
+            ),
+            (
+                "WORKFLOW_BUSY",
+                "WORKFLOW_BUSY",
+                409,
+                Grpc::FailedPrecondition,
+            ),
+            (
+                "WORKFLOW_OPERATION_CONFLICT",
+                "WORKFLOW_OPERATION_CONFLICT",
+                409,
+                Grpc::FailedPrecondition,
+            ),
+            (
+                "WORKFLOW_STALE_REVISION",
+                "WORKFLOW_STALE_REVISION",
+                409,
+                Grpc::FailedPrecondition,
+            ),
+            (
+                "WORKFLOW_RUNTIME_UNAVAILABLE",
+                "WORKFLOW_RUNTIME_UNAVAILABLE",
+                503,
+                Grpc::Unavailable,
+            ),
+            (
+                "WORKFLOW_OVERLOADED",
+                "WORKFLOW_OVERLOADED",
+                503,
+                Grpc::ResourceExhausted,
+            ),
+            ("WORKFLOW_INTERNAL", "internal", 500, Grpc::Internal),
+            ("unknown", "internal", 500, Grpc::Internal),
         ] {
-            let error = ApiError::workflow(crate::WorkflowControlError::new(code, "failure"));
-            assert_eq!(error.grpc_status().code(), error.code.grpc_code());
-            assert_eq!(error.into_response().status().as_u16(), status, "{code}");
+            let error =
+                ApiError::workflow(crate::WorkflowControlError::new(legacy_code, "failure"));
+            let grpc_status = error.grpc_status();
+            assert_eq!(grpc_status.code(), grpc, "{legacy_code}");
+            assert_eq!(grpc_status.message(), "failure");
+            assert!(grpc_status.details().is_empty());
+
+            let response = error.into_response();
+            assert_eq!(response.status().as_u16(), status, "{legacy_code}");
+            let body = axum::body::to_bytes(response.into_body(), 1_024)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                json!({"error": {"code": wire_code, "message": "failure"}}),
+            );
         }
     }
 }

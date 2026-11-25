@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::pin::Pin;
 
 use axum::body::Body;
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::HeaderValue;
 use futures::StreamExt;
 use hya_api::v1 as pb;
 use serde::Serialize;
@@ -26,6 +26,24 @@ use crate::{AppState, Origin};
 pub struct V1Grpc {
     state: crate::ServerState,
     router: axum::Router,
+}
+
+#[cfg(test)]
+#[test]
+fn error_response_status_and_fallback_are_stable() {
+    use tonic::Code;
+
+    V1Grpc::assert_error_body(
+        br#"{"error":{"code":"WORKFLOW_OVERLOADED","message":"busy"}}"#,
+        Code::ResourceExhausted,
+        "busy",
+    );
+    V1Grpc::assert_error_body(
+        br#"{"error":{"code":"unknown","message":"legacy error"}}"#,
+        Code::Internal,
+        "legacy error",
+    );
+    V1Grpc::assert_error_body(b"plain response", Code::Internal, "plain response");
 }
 
 impl V1Grpc {
@@ -80,31 +98,27 @@ impl V1Grpc {
             .prepare()
     }
 
-    fn status_from_error_body(status: StatusCode, body: &[u8]) -> Status {
-        let code = serde_json::from_slice::<Value>(body)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("error")
-                    .and_then(|error| error.get("code"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-            .unwrap_or_default();
-        let message = serde_json::from_slice::<Value>(body)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("error")
-                    .and_then(|error| error.get("message"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-            .unwrap_or_else(|| String::from_utf8_lossy(body).into_owned());
-        let tonic_code = hya_api::error::Code::from_wire(&code)
-            .map_or(tonic::Code::Internal, |code| code.grpc_code());
-        let _ = status;
-        Status::new(tonic_code, message)
+    fn status_from_error_body(body: &[u8]) -> Status {
+        let value = serde_json::from_slice::<Value>(body).ok();
+        let error = value.as_ref().and_then(|value| value.get("error"));
+        let code = error
+            .and_then(|error| error.get("code"))
+            .and_then(Value::as_str)
+            .and_then(hya_api::error::Code::from_wire)
+            .unwrap_or(hya_api::error::Code::Internal);
+        let message = error
+            .and_then(|error| error.get("message"))
+            .and_then(Value::as_str)
+            .map_or_else(|| String::from_utf8_lossy(body).into_owned(), str::to_owned);
+        Status::new(code.grpc_code(), message)
+    }
+
+    #[cfg(test)]
+    fn assert_error_body(body: &[u8], code: tonic::Code, message: &str) {
+        let status = Self::status_from_error_body(body);
+        assert_eq!(status.code(), code);
+        assert_eq!(status.message(), message);
+        assert!(status.details().is_empty());
     }
 
     /// Call the `/v1` router in process with `request` as protojson,
@@ -152,7 +166,7 @@ impl V1Grpc {
             .await
             .map_err(|error| Status::internal(format!("read body: {error}")))?;
         if !status.is_success() {
-            return Err(Self::status_from_error_body(status, &bytes));
+            return Err(Self::status_from_error_body(&bytes));
         }
         serde_json::from_slice(&bytes)
             .map_err(|error| Status::internal(format!("decode response: {error}")))

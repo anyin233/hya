@@ -1,141 +1,100 @@
 //! Stable error model shared by the HTTP and gRPC v1 bindings.
 //!
-//! Every failed v1 call surfaces one stable code from [`Code`]. The two
-//! bindings render the same code identically:
-//!
-//! - HTTP: `{"error": {"code": ..., "message": ...}}` with the status from
-//!   [`Code::http_status`].
-//! - gRPC: a `tonic::Status` with the code from [`Code::grpc_code`] and the
-//!   stable string carried in the message/details.
+//! HTTP exposes the stable string in the JSON error envelope and uses
+//! [Code::http_status] for its status. gRPC uses [Code::grpc_code] and
+//! sends the human-readable diagnostic.
 
 use std::fmt;
 
-/// Stable machine-readable error code for the v1 contract.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Code {
+macro_rules! wire_codes {
+    ($($(#[$attr:meta])* $variant:ident => $wire:literal),+ $(,)?) => {
+        /// Stable machine-readable error code for the v1 contract.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum Code {
+            $($(#[$attr])* $variant),+
+        }
+
+        impl Code {
+            /// Stable wire string for the code.
+            #[must_use]
+            pub const fn as_str(&self) -> &'static str {
+                match self {
+                    $(Self::$variant => $wire),+
+                }
+            }
+
+            /// Look up a stable wire code shared by transport adapters.
+            #[must_use]
+            pub fn from_wire(value: &str) -> Option<Self> {
+                match value {
+                    $($wire => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+wire_codes! {
     /// Request body or parameters are invalid.
-    InvalidArgument,
+    InvalidArgument => "invalid_argument",
     /// Workflow command syntax is invalid.
-    WorkflowSyntax,
+    WorkflowSyntax => "WORKFLOW_SYNTAX",
     /// Workflow inputs or source fail validation.
-    WorkflowInvalidInput,
+    WorkflowInvalidInput => "WORKFLOW_INVALID_INPUT",
     /// Workflow source fails validation.
-    WorkflowInvalidSource,
+    WorkflowInvalidSource => "WORKFLOW_INVALID_SOURCE",
     /// Requested Workflow is missing.
-    WorkflowNotFound,
+    WorkflowNotFound => "WORKFLOW_NOT_FOUND",
     /// No Workflow is selected.
-    WorkflowNotSelected,
+    WorkflowNotSelected => "WORKFLOW_NOT_SELECTED",
     /// Workflow access is denied.
-    WorkflowUnauthorized,
+    WorkflowUnauthorized => "WORKFLOW_UNAUTHORIZED",
     /// Workflow admission is busy.
-    WorkflowBusy,
+    WorkflowBusy => "WORKFLOW_BUSY",
     /// Workflow operation conflicts with a prior operation.
-    WorkflowOperationConflict,
+    WorkflowOperationConflict => "WORKFLOW_OPERATION_CONFLICT",
     /// Workflow revision is stale.
-    WorkflowStaleRevision,
+    WorkflowStaleRevision => "WORKFLOW_STALE_REVISION",
     /// Workflow runtime is unavailable.
-    WorkflowRuntimeUnavailable,
+    WorkflowRuntimeUnavailable => "WORKFLOW_RUNTIME_UNAVAILABLE",
     /// Workflow live capacity is currently exhausted.
-    WorkflowOverloaded,
+    WorkflowOverloaded => "WORKFLOW_OVERLOADED",
     /// Requested resource does not exist.
-    NotFound,
+    NotFound => "not_found",
     /// Session id does not exist (or was deleted).
-    SessionNotFound,
+    SessionNotFound => "session_not_found",
     /// Caller is not authorized for the operation.
-    PermissionDenied,
+    PermissionDenied => "permission_denied",
     /// Another run already owns the session's single admission slot.
-    SessionBusy,
+    SessionBusy => "session_busy",
     /// The operation is refused in the resource's current state (for
     /// example deleting a Project that still has live sessions).
-    FailedPrecondition,
+    FailedPrecondition => "failed_precondition",
     /// The operation conflicts with the current state (stale revisions,
     /// idempotency replays, terminal rewrites).
-    Conflict,
+    Conflict => "conflict",
     /// A required runtime capability is not configured (for example no
     /// summarizer for compact/summarize).
-    Unavailable,
+    Unavailable => "unavailable",
     /// Unhandled internal failure.
-    Internal,
+    Internal => "internal",
     /// No published bundle endpoint matches the request (unknown bundle, a
     /// bundle without endpoints, or no template of the scope matches the
     /// path under any method).
-    BundleApiNotFound,
+    BundleApiNotFound => "bundle_api_not_found",
     /// The path matches a bundle endpoint of the scope, but not under the
     /// requested method.
-    BundleApiMethodNotAllowed,
+    BundleApiMethodNotAllowed => "bundle_api_method_not_allowed",
     /// The bundle API request is malformed (non-JSON or oversized body, bad
     /// path escape, unknown method, unparsable query).
-    BundleApiBadRequest,
+    BundleApiBadRequest => "bundle_api_bad_request",
     /// The bundle process failed, timed out, or answered malformed data
     /// while serving an endpoint.
-    BundleApiFailed,
+    BundleApiFailed => "bundle_api_failed",
 }
 
 impl Code {
-    /// Stable wire string for the code.
-    #[must_use]
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::InvalidArgument => "invalid_argument",
-            Self::WorkflowSyntax => "WORKFLOW_SYNTAX",
-            Self::WorkflowInvalidInput => "WORKFLOW_INVALID_INPUT",
-            Self::WorkflowInvalidSource => "WORKFLOW_INVALID_SOURCE",
-            Self::WorkflowNotFound => "WORKFLOW_NOT_FOUND",
-            Self::WorkflowNotSelected => "WORKFLOW_NOT_SELECTED",
-            Self::WorkflowUnauthorized => "WORKFLOW_UNAUTHORIZED",
-            Self::WorkflowBusy => "WORKFLOW_BUSY",
-            Self::WorkflowOperationConflict => "WORKFLOW_OPERATION_CONFLICT",
-            Self::WorkflowStaleRevision => "WORKFLOW_STALE_REVISION",
-            Self::WorkflowRuntimeUnavailable => "WORKFLOW_RUNTIME_UNAVAILABLE",
-            Self::WorkflowOverloaded => "WORKFLOW_OVERLOADED",
-
-            Self::NotFound => "not_found",
-            Self::SessionNotFound => "session_not_found",
-            Self::PermissionDenied => "permission_denied",
-            Self::SessionBusy => "session_busy",
-            Self::FailedPrecondition => "failed_precondition",
-            Self::Conflict => "conflict",
-            Self::Unavailable => "unavailable",
-            Self::Internal => "internal",
-            Self::BundleApiNotFound => "bundle_api_not_found",
-            Self::BundleApiMethodNotAllowed => "bundle_api_method_not_allowed",
-            Self::BundleApiBadRequest => "bundle_api_bad_request",
-            Self::BundleApiFailed => "bundle_api_failed",
-        }
-    }
-
-    /// Look up a stable wire code shared by transport adapters.
-    #[must_use]
-    pub fn from_wire(value: &str) -> Option<Self> {
-        match value {
-            "invalid_argument" => Some(Self::InvalidArgument),
-            "WORKFLOW_SYNTAX" => Some(Self::WorkflowSyntax),
-            "WORKFLOW_INVALID_INPUT" => Some(Self::WorkflowInvalidInput),
-            "WORKFLOW_INVALID_SOURCE" => Some(Self::WorkflowInvalidSource),
-            "WORKFLOW_NOT_FOUND" => Some(Self::WorkflowNotFound),
-            "WORKFLOW_NOT_SELECTED" => Some(Self::WorkflowNotSelected),
-            "WORKFLOW_UNAUTHORIZED" => Some(Self::WorkflowUnauthorized),
-            "WORKFLOW_BUSY" => Some(Self::WorkflowBusy),
-            "WORKFLOW_OPERATION_CONFLICT" => Some(Self::WorkflowOperationConflict),
-            "WORKFLOW_STALE_REVISION" => Some(Self::WorkflowStaleRevision),
-            "WORKFLOW_RUNTIME_UNAVAILABLE" => Some(Self::WorkflowRuntimeUnavailable),
-            "WORKFLOW_OVERLOADED" => Some(Self::WorkflowOverloaded),
-            "not_found" => Some(Self::NotFound),
-            "session_not_found" => Some(Self::SessionNotFound),
-            "permission_denied" => Some(Self::PermissionDenied),
-            "session_busy" => Some(Self::SessionBusy),
-            "failed_precondition" => Some(Self::FailedPrecondition),
-            "conflict" => Some(Self::Conflict),
-            "unavailable" => Some(Self::Unavailable),
-            "internal" => Some(Self::Internal),
-            "bundle_api_not_found" => Some(Self::BundleApiNotFound),
-            "bundle_api_method_not_allowed" => Some(Self::BundleApiMethodNotAllowed),
-            "bundle_api_bad_request" => Some(Self::BundleApiBadRequest),
-            "bundle_api_failed" => Some(Self::BundleApiFailed),
-            _ => None,
-        }
-    }
-
     /// Canonical HTTP status for the code.
     #[must_use]
     pub fn http_status(&self) -> u16 {
@@ -199,6 +158,49 @@ impl fmt::Display for Code {
 #[cfg(test)]
 mod tests {
     use super::Code;
+
+    #[test]
+    fn stable_wire_codes_round_trip() {
+        for (code, name) in [
+            (Code::InvalidArgument, "invalid_argument"),
+            (Code::WorkflowSyntax, "WORKFLOW_SYNTAX"),
+            (Code::WorkflowInvalidInput, "WORKFLOW_INVALID_INPUT"),
+            (Code::WorkflowInvalidSource, "WORKFLOW_INVALID_SOURCE"),
+            (Code::WorkflowNotFound, "WORKFLOW_NOT_FOUND"),
+            (Code::WorkflowNotSelected, "WORKFLOW_NOT_SELECTED"),
+            (Code::WorkflowUnauthorized, "WORKFLOW_UNAUTHORIZED"),
+            (Code::WorkflowBusy, "WORKFLOW_BUSY"),
+            (
+                Code::WorkflowOperationConflict,
+                "WORKFLOW_OPERATION_CONFLICT",
+            ),
+            (Code::WorkflowStaleRevision, "WORKFLOW_STALE_REVISION"),
+            (
+                Code::WorkflowRuntimeUnavailable,
+                "WORKFLOW_RUNTIME_UNAVAILABLE",
+            ),
+            (Code::WorkflowOverloaded, "WORKFLOW_OVERLOADED"),
+            (Code::NotFound, "not_found"),
+            (Code::SessionNotFound, "session_not_found"),
+            (Code::PermissionDenied, "permission_denied"),
+            (Code::SessionBusy, "session_busy"),
+            (Code::FailedPrecondition, "failed_precondition"),
+            (Code::Conflict, "conflict"),
+            (Code::Unavailable, "unavailable"),
+            (Code::Internal, "internal"),
+            (Code::BundleApiNotFound, "bundle_api_not_found"),
+            (
+                Code::BundleApiMethodNotAllowed,
+                "bundle_api_method_not_allowed",
+            ),
+            (Code::BundleApiBadRequest, "bundle_api_bad_request"),
+            (Code::BundleApiFailed, "bundle_api_failed"),
+        ] {
+            assert_eq!(code.as_str(), name);
+            assert_eq!(Code::from_wire(name), Some(code));
+        }
+        assert_eq!(Code::from_wire("unknown"), None);
+    }
 
     #[test]
     fn codes_map_consistently_across_transports() {
