@@ -5,11 +5,11 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use super::support::memory::{MemoryTransport, pair};
 use futures::{SinkExt, StreamExt};
 use hya_relay::keys::{Psk, StaticKeypair};
 use hya_relay::link::{RelayAddress, RelayLink, RoomId, Transport};
 use hya_relay::proto::{Chunk, Close, Heartbeat, Open, RelayError, RelayErrorCode, chunk};
-use hya_relay::transport::memory::{MemoryTransport, pair};
 use hya_relay::tunnel::{MAX_RECORD_PLAINTEXT, NoiseStream, TunnelConfig, TunnelError};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

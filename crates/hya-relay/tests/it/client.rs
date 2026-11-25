@@ -8,6 +8,7 @@ use crate::support;
 
 use std::time::Duration;
 
+use super::support::memory::{self, MemoryTransport};
 use futures::{SinkExt, StreamExt};
 use hya_relay::client::{
     Backoff, Binding, ChoiceReason, ClientConfig, ClientError, HeartbeatConfig, ProbeFailureKind,
@@ -15,7 +16,6 @@ use hya_relay::client::{
 };
 use hya_relay::link::{RelayAddress, RoomId, Transport};
 use hya_relay::proto::{Chunk, Close, Heartbeat, RelayErrorCode, chunk};
-use hya_relay::transport::memory::{self, MemoryTransport};
 use hya_relay::transport::{ChunkTransport, TransportError};
 use tokio::time::{Instant, timeout};
 

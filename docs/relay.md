@@ -971,9 +971,10 @@ the local direction (half-close); sending after the peer is gone fails with
 `Status{code, message}` (a gRPC status or a WebSocket `RelayError`),
 `Decode`, `Transport`.
 
-`hya_relay::transport::memory::pair(capacity)` returns a connected in-memory
-pair for tests; `MemoryTransport::inject_error` delivers a failure to the
-peer.
+`hya_relay::transport::memory` is deprecated and scheduled for removal after
+the next release. The relay integration suite uses its own in-memory pair under
+`crates/hya-relay/tests/it/support/`. A Rust embedder can supply any transport
+that implements the sink and stream contract above.
 
 ### Tunnel encryption
 

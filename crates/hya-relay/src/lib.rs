@@ -11,7 +11,7 @@
 //!   the output is committed so normal builds never need `protoc`.
 //! - [`transport`] — [`transport::RelayTransport`], the bidirectional message
 //!   stream the relay state machines are written against, independent of the
-//!   gRPC or WebSocket binding, plus an in-memory pair for tests.
+//!   gRPC or WebSocket binding.
 //! - [`link`] — [`link::RelayLink`], the `hya://` relay link (the client
 //!   credential), and [`link::RoomId`] derivation.
 //! - [`proxy`] — [`proxy::ProxyCore`], the binding-independent proxy state

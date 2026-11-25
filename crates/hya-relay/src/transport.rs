@@ -79,6 +79,10 @@ pub type ProxyControlTransport = BoxedTransport<ProxyToHost, HostFrame>;
 /// Either end of a data stream (`Accept` or `Open`).
 pub type ChunkTransport = BoxedTransport<Chunk, Chunk>;
 
+#[deprecated(
+    since = "0.48.0-dev.37",
+    note = "no replacement; removed after the next release"
+)]
 pub mod memory {
     //! An in-memory [`RelayTransport`](super::RelayTransport) pair for tests.
 
