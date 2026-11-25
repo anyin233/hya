@@ -134,8 +134,8 @@ async fn bootstrap(
     let snapshot = st.engine.provider_catalog_snapshot();
     let models = super::catalog::model_rows(&snapshot);
     let providers = super::catalog::provider_rows(&st, &snapshot).await;
-    let commands = super::catalog::command_rows(&place);
-    let skills = super::catalog::skill_rows(&place);
+    let commands = super::catalog::command_rows(&st, &place);
+    let skills = super::catalog::skill_rows(&st, &place);
     let tools = super::catalog::tool_rows(&st);
     // What a full-mode session here reads into its initial context (`--pure` reads none).
     let context_files = match place.workdir() {

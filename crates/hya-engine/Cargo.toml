@@ -36,6 +36,7 @@ tracing = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
+hya-app = { workspace = true }
 hya-store = { workspace = true, features = ["lifecycle-bench"] }
 hya-base-tools = { workspace = true }
 hya-extended-tools = { workspace = true }

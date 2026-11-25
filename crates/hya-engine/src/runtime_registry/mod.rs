@@ -9,8 +9,8 @@ use crate::catalog_scope::{CatalogScope, ScopeKey, ScopeOverlay};
 use hya_proto::{ConfigGeneration, ModelRef, ToolName, ToolSchema};
 use hya_provider::ReasoningEffort;
 use hya_tool::{
-    DuplicateName, NamedTool, PermissionPlane, ResolvedTool, SkillCatalogEntry, SkillPlane, Tool,
-    ToolPermission, ToolRegistry, ToolRegistrySnapshot, discover_skills_with_builtins,
+    DuplicateName, NamedTool, PermissionPlane, ResolvedTool, SkillCatalogEntry, SkillDiscovery,
+    SkillPlane, Tool, ToolPermission, ToolRegistry, ToolRegistrySnapshot,
     handle::{
         SchemeBinding, SchemeDispatch, SchemeHandler, SchemeReadTool, SchemeRegistry,
         SchemeWriteTool,
@@ -46,6 +46,8 @@ pub struct AgentModelConfiguration {
     /// Stable bundle id to Agent id to configured model.
     pub bundles: BTreeMap<String, BTreeMap<String, ModelRef>>,
 }
+
+type SkillDiscover = fn(Option<&Path>, &[PathBuf]) -> SkillDiscovery;
 
 type AgentModelPreferenceSnapshot = Arc<BTreeMap<String, ModelRef>>;
 type AgentModelConfigurationSnapshot = Arc<AgentModelConfiguration>;
@@ -101,6 +103,8 @@ pub struct RuntimeRegistry {
     /// `--pure`: bind_turn keeps the embedded builtin skills only and never
     /// reads external skill directories.
     pure_skills: bool,
+    discover_skills: SkillDiscover,
+    builtin_skills: fn() -> Vec<SkillCatalogEntry>,
     source_owners: Mutex<Vec<Weak<dyn RuntimeSourceOwner>>>,
 }
 
@@ -182,6 +186,25 @@ impl RuntimeRegistry {
         self
     }
 
+    /// Supply discovery for full-mode catalogs and the builtins for pure turns.
+    /// The callback receives the workdir (if any) and additional Project roots.
+    #[must_use]
+    pub fn with_skill_discovery(
+        mut self,
+        discover: SkillDiscover,
+        builtin_skills: fn() -> Vec<SkillCatalogEntry>,
+    ) -> Self {
+        self.discover_skills = discover;
+        self.builtin_skills = builtin_skills;
+        self
+    }
+
+    /// Discover skills and diagnostics for an unbound catalog listing.
+    #[must_use]
+    pub fn discover_skills(&self, workdir: Option<&Path>, roots: &[PathBuf]) -> SkillDiscovery {
+        (self.discover_skills)(workdir, roots)
+    }
+
     /// Start a registry from a frozen tool snapshot.
     #[must_use]
     pub fn from_snapshot(tools: ToolRegistrySnapshot, catalog: Arc<AgentCatalog>) -> Self {
@@ -204,6 +227,8 @@ impl RuntimeRegistry {
             )),
             agent_effort_configuration: watch::Sender::new(Arc::new(BTreeMap::new())),
             pure_skills: false,
+            discover_skills: |_, _| SkillDiscovery::default(),
+            builtin_skills: Vec::new,
             source_owners: Mutex::new(Vec::new()),
         }
     }
@@ -265,15 +290,10 @@ impl RuntimeRegistry {
         scope: &CatalogScope,
         workdir: &Path,
     ) -> Result<TurnBinding, RuntimeRefreshError> {
-        if workdir.as_os_str().is_empty() {
-            self.bind_scoped_with_skills(
-                scope,
-                workdir,
-                hya_tool::discover_user_skills_with_builtins,
-            )
-        } else {
-            self.bind_scoped_with_skills(scope, workdir, || discover_skills_with_builtins(workdir))
-        }
+        let directory = (!workdir.as_os_str().is_empty()).then_some(workdir);
+        self.bind_scoped_with_skills(scope, workdir, || {
+            self.discover_skills(directory, &[]).skills
+        })
     }
 
     /// [`Self::bind_scoped`] with caller-supplied skill discovery for
@@ -290,7 +310,7 @@ impl RuntimeRegistry {
         discover: impl FnOnce() -> Vec<SkillCatalogEntry>,
     ) -> Result<TurnBinding, RuntimeRefreshError> {
         let discovered = if self.pure_skills {
-            hya_tool::merge_skill_catalog(Vec::new())
+            (self.builtin_skills)()
         } else {
             discover()
         };
@@ -524,6 +544,7 @@ impl RuntimeRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let current = self.active();
         let mut candidate = RuntimeCandidate::from_snapshot(&current);
+        candidate.discover_skills = Some(self.discover_skills);
         if let Err(error) = build(&mut candidate) {
             drop(last_generation);
             return Err(error);

@@ -113,13 +113,13 @@ pub(crate) struct CommandListing {
 /// skill. The global view (no directory) has the builtins, the user's
 /// commands, and user skills, with `${path}` left unexpanded since there is
 /// no directory to name.
-pub(crate) fn list(place: &CatalogPlace) -> Vec<CommandInfo> {
-    listing(place).commands
+pub(crate) fn list(st: &crate::ServerState, place: &CatalogPlace) -> Vec<CommandInfo> {
+    listing(st, place).commands
 }
 
 /// [`list`] with the diagnostics of the command files it skipped.
-pub(crate) fn listing(place: &CatalogPlace) -> CommandListing {
-    listing_with_skills(place, crate::support::skill_catalog::list(place))
+pub(crate) fn listing(st: &crate::ServerState, place: &CatalogPlace) -> CommandListing {
+    listing_with_skills(place, crate::support::skill_catalog::list(st, place))
 }
 
 /// [`listing`] with `skills` as the `skill:<name>` rows (a session's own
@@ -223,12 +223,13 @@ enum Expansion {
 }
 
 /// Expand `command` against the catalog of `place`.
-pub(crate) fn expand_prompt(
+fn expand_prompt(
+    st: &crate::ServerState,
     place: &CatalogPlace,
     command: &str,
     arguments: &str,
 ) -> Option<String> {
-    expand_in(list(place), command, arguments)
+    expand_in(list(st, place), command, arguments)
 }
 
 /// Expand `command` against the catalog `session`'s turns see
@@ -242,7 +243,7 @@ pub(crate) async fn expand_session_prompt(
     arguments: &str,
 ) -> Option<String> {
     if !command.starts_with(SKILL_COMMAND_PREFIX) {
-        return expand_prompt(place, command, arguments);
+        return expand_prompt(st, place, command, arguments);
     }
     let skills = crate::support::skill_catalog::session_listing(st, session, place)
         .await
@@ -622,7 +623,8 @@ mod tests {
                 .map(|asset| asset.content.replace("${path}", "/work"))
                 .unwrap_or_else(|| panic!("missing {id} asset"))
         };
-        let commands = super::list(&super::CatalogPlace::directory_for_tests("/work"));
+        let place = super::CatalogPlace::directory_for_tests("/work");
+        let commands = super::listing_with_skills(&place, Vec::new()).commands;
         for (name, id, subtask) in [("init", "init", None), ("review", "review", Some(true))] {
             let command = commands
                 .iter()
@@ -676,7 +678,18 @@ mod tests {
         write(".hya/commands/greet.md", "COMMAND $ARGUMENTS\n");
         write(".hya/commands/skill:greet.md", "RESERVED\n");
         let place = super::CatalogPlace::directory_for_tests(&dir.to_string_lossy());
-        let commands = super::list(&place);
+        let skills = hya_app::skill_catalog::discover(place.workdir(), place.roots())
+            .skills
+            .into_iter()
+            .map(|skill| crate::support::skill_catalog::info(skill, &place))
+            .collect();
+        let commands = super::listing_with_skills(&place, skills).commands;
+        let expand = |name, arguments| {
+            commands
+                .iter()
+                .find(|row| row.name == name)
+                .and_then(|row| row.expand(arguments))
+        };
         let named = |name: &str| commands.iter().filter(|row| row.name == name).count();
         assert_eq!(named("greet"), 1);
         assert_eq!(
@@ -692,7 +705,7 @@ mod tests {
         assert_eq!(skill.argument_hint.as_deref(), Some("[request]"));
         let skill_dir = dir.join(".hya/skills/greet");
         assert_eq!(
-            super::expand_prompt(&place, "skill:greet", "bob").as_deref(),
+            expand("skill:greet", "bob").as_deref(),
             Some(
                 format!(
                     "<skill name=\"greet\" location=\"{}\">\nReferences are relative to {}.\n\nSay hello.\n</skill>\n\nbob",
@@ -702,12 +715,9 @@ mod tests {
                 .as_str()
             )
         );
-        assert_eq!(
-            super::expand_prompt(&place, "greet", "bob").as_deref(),
-            Some("COMMAND bob")
-        );
+        assert_eq!(expand("greet", "bob").as_deref(), Some("COMMAND bob"));
         // A built-in skill expands without a reference line.
-        let builtin = super::expand_prompt(&place, "skill:secure-self-update", "")
+        let builtin = expand("skill:secure-self-update", "")
             .unwrap_or_else(|| panic!("missing built-in skill"));
         assert!(
             builtin.starts_with(
@@ -717,7 +727,7 @@ mod tests {
         );
         assert!(!builtin.contains("References are relative to"), "{builtin}");
         // Client-side rows never expand.
-        assert_eq!(super::expand_prompt(&place, "clear", ""), None);
+        assert_eq!(expand("clear", ""), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

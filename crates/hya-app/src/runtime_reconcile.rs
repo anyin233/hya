@@ -15,7 +15,7 @@ use hya_plugin::PreparedPlugin;
 use hya_plugin::config::PluginSpec;
 use hya_plugin::messages::{PluginContributionSet, SkillContribution};
 use hya_proto::ConfigGeneration;
-use hya_tool::{SkillCatalogEntry, Tool, ToolPermission, parse_skill};
+use hya_tool::{SkillCatalogEntry, Tool, ToolPermission};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -570,7 +570,7 @@ fn parse_skill_contribution(
     contribution: &SkillContribution,
     path: PathBuf,
 ) -> Result<SkillCatalogEntry, ReconcileError> {
-    let parsed = parse_skill(&contribution.content).ok_or_else(|| {
+    let parsed = crate::skill_catalog::parse_skill(&contribution.content).ok_or_else(|| {
         ReconcileError::InvalidPrepared(format!(
             "Skill contribution `{}` has invalid SKILL.md frontmatter",
             contribution.id

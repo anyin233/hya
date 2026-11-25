@@ -7,6 +7,7 @@ pub(super) const RUNTIME_SEMANTIC_FINGERPRINT_DOMAIN_V2: &[u8] =
 /// through [`RuntimeRegistry::refresh`].
 pub struct RuntimeCandidate {
     pub(super) catalog: Arc<AgentCatalog>,
+    pub(super) discover_skills: Option<SkillDiscover>,
     pub(super) tools: ToolRegistry,
     pub(super) skills: BTreeMap<PathBuf, Arc<Vec<SkillCatalogEntry>>>,
     pub(super) sources: BTreeMap<RuntimeSourceId, RuntimeSource>,
@@ -132,6 +133,7 @@ impl RuntimeCandidate {
             catalog,
             tools,
             skills,
+            discover_skills: _,
             sources,
             masks,
             schemes,
@@ -151,6 +153,7 @@ impl RuntimeCandidate {
     pub(super) fn from_snapshot(snapshot: &RuntimeSnapshot) -> Self {
         Self {
             catalog: Arc::clone(&snapshot.catalog),
+            discover_skills: None,
             tools: ToolRegistry::from_snapshot(&snapshot.tools),
             skills: snapshot.skills.clone(),
             sources: snapshot.sources.clone(),
@@ -186,9 +189,11 @@ impl RuntimeCandidate {
         }
     }
 
-    /// Rediscover skills for `workdir` into this candidate.
+    /// Rediscover skills for `workdir` through the registry's configured source.
     pub fn refresh_skills(&mut self, workdir: &Path) {
-        self.replace_skills(workdir, discover_skills_with_builtins(workdir));
+        if let Some(discover) = self.discover_skills {
+            self.replace_skills(workdir, discover(Some(workdir), &[]).skills);
+        }
     }
 
     /// Validate every contributed source export name against the naming rules

@@ -7,8 +7,8 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hya_tool::SkillPlane;
 use hya_tool::handle::{ArtifactId, HandleError, HandleRef, HandleRouter};
+use hya_tool::{SkillCatalogEntry, SkillCatalogOrigin, SkillPlane};
 
 fn tempdir(tag: &str) -> PathBuf {
     let nanos = SystemTime::now()
@@ -224,14 +224,18 @@ fn write_target_refuses_a_symlink_escaping_the_scratch_root() {
 fn skill_scheme_resolves_a_catalog_body() {
     let dir = tempdir("skill");
     let skill_dir = dir.join("skills/code-review");
-    std::fs::create_dir_all(&skill_dir).unwrap();
-    std::fs::write(
-        skill_dir.join("SKILL.md"),
-        "---\nname: code-review\ndescription: Review a diff\n---\nLook for unhandled errors.\n",
-    )
-    .unwrap();
-
-    let router = HandleRouter::new(&dir).with_skills(SkillPlane::new(vec![dir.join("skills")]));
+    let skills = SkillPlane::from_snapshot(std::sync::Arc::new(vec![SkillCatalogEntry {
+        name: "code-review".to_string(),
+        description: "Review a diff".to_string(),
+        content: "Look for unhandled errors.\n".to_string(),
+        allowed_tools: Vec::new(),
+        model: None,
+        path: skill_dir.join("SKILL.md"),
+        dir: skill_dir,
+        origin: SkillCatalogOrigin::Filesystem,
+        disable_model_invocation: false,
+    }]));
+    let router = HandleRouter::new(&dir).with_skills(skills);
     let content = router
         .resolve(&"skill://code-review".parse().unwrap())
         .unwrap();

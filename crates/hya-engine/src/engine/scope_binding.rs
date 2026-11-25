@@ -176,8 +176,8 @@ impl SessionEngine {
     /// is configured), then bind `scope` for a turn in `workdir`.
     ///
     /// Skills are discovered for `workdir` plus, for a Project, every root
-    /// in order (`hya_tool::discover_skills_for_roots_with_builtins`); an
-    /// empty `workdir` discovers user skills only.
+    /// in order through the registry's skill discovery callback. An empty
+    /// `workdir` discovers user and builtin skills.
     ///
     /// # Errors
     /// Returns bind failures; preparation failures retain the published sources.
@@ -310,21 +310,15 @@ impl SessionEngine {
         scope: &CatalogScope,
         workdir: &Path,
     ) -> Result<TurnBinding, CoreError> {
-        let binding = if workdir.as_os_str().is_empty() {
-            self.runtime
-                .bind_scoped_with_skills(
-                    scope,
-                    workdir,
-                    hya_tool::discover_user_skills_with_builtins,
-                )
-                .map_err(CoreError::runtime_refresh)?
-        } else {
-            self.runtime
-                .bind_scoped_with_skills(scope, workdir, || {
-                    hya_tool::discover_skills_for_roots_with_builtins(workdir, scope_roots(scope))
-                })
-                .map_err(CoreError::runtime_refresh)?
-        };
+        let directory = (!workdir.as_os_str().is_empty()).then_some(workdir);
+        let binding = self
+            .runtime
+            .bind_scoped_with_skills(scope, workdir, || {
+                self.runtime
+                    .discover_skills(directory, scope_roots(scope))
+                    .skills
+            })
+            .map_err(CoreError::runtime_refresh)?;
         self.touch_catalog_scope(scope.key());
         Ok(binding)
     }

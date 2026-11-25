@@ -702,7 +702,7 @@ async fn list_commands(
         }
         None => {
             let place = catalog_scope(&st, &request.directory).await?;
-            crate::support::command_catalog::listing(&place)
+            crate::support::command_catalog::listing(&st, &place)
         }
     };
     let diagnostics = listing
@@ -723,8 +723,8 @@ async fn list_commands(
 }
 
 /// Command rows shared with the bootstrap snapshot.
-pub(crate) fn command_rows(place: &CatalogPlace) -> Vec<pb::CommandSummary> {
-    command_summaries(crate::support::command_catalog::list(place))
+pub(crate) fn command_rows(st: &ServerState, place: &CatalogPlace) -> Vec<pb::CommandSummary> {
+    command_summaries(crate::support::command_catalog::list(st, place))
 }
 
 fn command_summaries(
@@ -760,7 +760,7 @@ async fn list_skills(
         }
         None => {
             let place = catalog_scope(&st, &request.directory).await?;
-            crate::support::skill_catalog::listing(&place)
+            crate::support::skill_catalog::listing(&st, &place)
         }
     };
     let diagnostics = listing
@@ -782,8 +782,8 @@ async fn list_skills(
 
 /// Skill rows shared with the bootstrap snapshot; the global view lists
 /// user skills and builtins only.
-pub(crate) fn skill_rows(place: &CatalogPlace) -> Vec<pb::SkillSummary> {
-    skill_summaries(crate::support::skill_catalog::list(place))
+pub(crate) fn skill_rows(st: &ServerState, place: &CatalogPlace) -> Vec<pb::SkillSummary> {
+    skill_summaries(crate::support::skill_catalog::list(st, place))
 }
 
 fn skill_summaries(rows: Vec<crate::support::skill_catalog::SkillInfo>) -> Vec<pb::SkillSummary> {

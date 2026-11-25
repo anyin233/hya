@@ -698,10 +698,13 @@ fn write_skill(root: &Path, name: &str) {
 }
 
 async fn engine_with(catalog: Arc<AgentCatalog>, provider: Arc<CaptureProvider>) -> SessionEngine {
-    let runtime = Arc::new(RuntimeRegistry::from_snapshot(
-        ToolRegistry::builtins().snapshot(),
-        catalog,
-    ));
+    let runtime = Arc::new(
+        RuntimeRegistry::from_snapshot(ToolRegistry::builtins().snapshot(), catalog)
+            .with_skill_discovery(
+                hya_app::skill_catalog::discover,
+                hya_app::skill_catalog::builtin_skills,
+            ),
+    );
     let router = Arc::new(ProviderRouter::new().with(provider));
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Bash,
@@ -721,10 +724,13 @@ async fn engine_with_provider(
     catalog: Arc<AgentCatalog>,
     provider: Arc<dyn Provider>,
 ) -> SessionEngine {
-    let runtime = Arc::new(RuntimeRegistry::from_snapshot(
-        ToolRegistry::builtins().snapshot(),
-        catalog,
-    ));
+    let runtime = Arc::new(
+        RuntimeRegistry::from_snapshot(ToolRegistry::builtins().snapshot(), catalog)
+            .with_skill_discovery(
+                hya_app::skill_catalog::discover,
+                hya_app::skill_catalog::builtin_skills,
+            ),
+    );
     let router = Arc::new(ProviderRouter::new().with(provider));
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Bash,

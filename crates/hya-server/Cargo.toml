@@ -46,6 +46,7 @@ tower-http = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+hya-app = { workspace = true }
 async-trait = { workspace = true }
 tower = { workspace = true }
 http-body-util = "0.1"

@@ -1,4 +1,4 @@
-//! Integration tests for `hya-tool`: skill catalog.
+//! Integration tests for `hya-app`: skill catalog.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -49,7 +49,7 @@ fn tempdir() -> PathBuf {
         .as_nanos();
     let serial = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
-        "hya-tool-skill-catalog-test-{nanos}-{serial}-{}",
+        "hya-app-skill-catalog-test-{nanos}-{serial}-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();
@@ -71,7 +71,7 @@ fn skill_dirs_start_with_hya_project_then_hya_config_then_external_fallbacks() {
     let workdir = tempdir();
     let _home = HomeGuard::set(&home);
 
-    let dirs = hya_tool::skill_dirs_for_workdir(&workdir);
+    let dirs = hya_app::skill_catalog::skill_dirs_for_workdir(&workdir);
 
     assert_eq!(dirs[0], workdir.join(".hya/skills"));
     assert_eq!(dirs[1], home.join(".config/hya/skills"));
@@ -118,7 +118,7 @@ fn discover_skills_preserves_root_order_and_first_name_wins() {
         "home body",
     );
 
-    let skills = hya_tool::discover_skills(&workdir);
+    let skills = hya_app::skill_catalog::discover_skills(&workdir);
 
     let names = skills
         .iter()
@@ -142,7 +142,7 @@ fn merged_builtin_catalog_preserves_native_override_precedence() {
         "native authoring body",
     );
 
-    let skills = hya_tool::discover_skills_with_builtins(&workdir);
+    let skills = hya_app::skill_catalog::discover_skills_with_builtins(&workdir);
     let authoring = skills
         .iter()
         .filter(|skill| skill.name == "agent-bundle-authoring")

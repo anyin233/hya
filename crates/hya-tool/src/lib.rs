@@ -60,7 +60,6 @@ pub mod project_scope;
 #[deprecated(note = "Use hya_context::rewrite instead")]
 pub use hya_context::rewrite;
 mod skill;
-mod skill_catalog;
 /// Subagent spawn plane and request types used by the `task` tool.
 pub mod spawn;
 /// Token accounting: how much of the context window a transcript occupies.
@@ -121,17 +120,10 @@ pub use project_activity::{
     ProjectActivityRequestMsg, ProjectActivityResult, ProjectActivitySession,
 };
 pub use project_scope::ProjectScope;
-pub use skill::{SkillError, SkillInfo, SkillPlane};
-pub use skill_catalog::{
+pub use skill::{
     MAX_SKILL_DESCRIPTION_CHARS, MAX_SKILL_NAME_CHARS, ParsedSkill, SkillCatalogEntry,
-    SkillCatalogOrigin, SkillDiagnostic, SkillDiagnosticKind, SkillDiscovery, SkillParseError,
-    builtin_skills, core_skills_preset_bytes, discover_skills,
-    discover_skills_for_roots_with_builtins, discover_skills_for_roots_with_diagnostics,
-    discover_skills_from_dirs, discover_skills_from_dirs_with_diagnostics,
-    discover_skills_with_builtins, discover_user_skills_with_builtins,
-    discover_user_skills_with_diagnostics, is_embedded_skill, merge_skill_catalog, parse_skill,
-    parse_skill_checked, skill_dirs_for, skill_dirs_for_workdir, skill_name_problem,
-    skills_section, user_skill_dirs,
+    SkillCatalogOrigin, SkillDiagnostic, SkillDiagnosticKind, SkillDiscovery, SkillError,
+    SkillInfo, SkillParseError, SkillPlane, is_embedded_skill, skill_name_problem, skills_section,
 };
 pub use spawn::{
     HANDLE_PREFIX_MAX_LEN, InlineAgent, MemberOutcome, SpawnError, SpawnMember, SpawnRequest,

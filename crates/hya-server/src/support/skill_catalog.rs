@@ -1,7 +1,4 @@
-use hya_tool::{
-    SkillCatalogEntry, SkillCatalogOrigin, SkillDiagnostic,
-    discover_skills_for_roots_with_diagnostics, discover_user_skills_with_diagnostics,
-};
+use hya_tool::{SkillCatalogEntry, SkillCatalogOrigin, SkillDiagnostic};
 use std::path::{Path, PathBuf};
 
 use hya_proto::SessionId;
@@ -113,12 +110,11 @@ pub(crate) fn info(skill: SkillCatalogEntry, place: &CatalogPlace) -> SkillInfo 
 /// Skills visible at `place`: its directory first, then each Project root
 /// in order (first wins); the global view lists user skills and builtins.
 /// With the diagnostics of the skill files skipped or warned about.
-pub(crate) fn listing(place: &CatalogPlace) -> SkillListing {
-    let discovery = place
-        .workdir()
-        .map_or_else(discover_user_skills_with_diagnostics, |workdir| {
-            discover_skills_for_roots_with_diagnostics(workdir, place.roots())
-        });
+pub(crate) fn listing(st: &ServerState, place: &CatalogPlace) -> SkillListing {
+    let discovery = st
+        .engine
+        .runtime_registry()
+        .discover_skills(place.workdir(), place.roots());
     SkillListing {
         skills: discovery
             .skills
@@ -130,8 +126,8 @@ pub(crate) fn listing(place: &CatalogPlace) -> SkillListing {
 }
 
 /// [`listing`] without the diagnostics.
-pub(crate) fn list(place: &CatalogPlace) -> Vec<SkillInfo> {
-    listing(place).skills
+pub(crate) fn list(st: &ServerState, place: &CatalogPlace) -> Vec<SkillInfo> {
+    listing(st, place).skills
 }
 
 /// What `session`'s agent can load (`ListSkills` with `session`, and the
@@ -144,7 +140,7 @@ pub(crate) async fn session_listing(
     session: SessionId,
     place: &CatalogPlace,
 ) -> SkillListing {
-    let mut listing = listing(place);
+    let mut listing = listing(st, place);
     match st.engine.session_skill_catalog(session).await {
         Ok(entries) => {
             for entry in entries {
