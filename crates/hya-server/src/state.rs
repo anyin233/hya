@@ -1,4 +1,4 @@
-//! Shared HTTP application state for native and Compat routes.
+//! Shared application state for the v1 HTTP and gRPC bindings.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,9 +22,9 @@ use crate::{pending, runs};
 
 /// Holds the session engine, process agent base, permission/question queues,
 /// MCP and Workflow control handles, workspace adapters, and formatter status.
-/// The router wraps this into internal `ServerState` (Compat process-local
-/// state). The run registry and the session-list hub live here, so every
-/// router and gRPC binding built from one `AppState` shares them.
+/// The router wraps this into internal `ServerState`. The run registry and the
+/// session-list hub live here, so each router and gRPC binding built from one
+/// `AppState` shares them.
 #[derive(Clone)]
 pub struct AppState {
     pub(crate) tasks: Arc<crate::RuntimeTaskOwner>,
@@ -297,7 +297,7 @@ impl AppState {
     /// Number of process-local permission and question requests still awaiting
     /// a client reply.
     pub(crate) async fn pending_interactions(&self) -> usize {
-        self.permission_requests.list().await.len() + self.question_requests.list().await.len()
+        self.permission_requests.count().await + self.question_requests.count().await
     }
     /// Attach the user-question receiver and start the pending-question bridge.
     #[must_use]
@@ -306,7 +306,7 @@ impl AppState {
         self.reconfigured()
     }
 
-    /// Install the app-owned MCP control handle for Compat MCP routes.
+    /// Install the app-owned MCP control handle for v1 MCP routes.
     #[must_use]
     pub fn with_mcp_control(mut self, control: Arc<dyn McpControl>) -> Self {
         self.mcp_control = control;
@@ -336,7 +336,7 @@ impl AppState {
         self.reconfigured()
     }
 
-    /// Install the app-owned Workflow control handle for native and Compat routes.
+    /// Install the app-owned Workflow control handle for v1 Workflow routes.
     #[must_use]
     pub fn with_workflow_control(mut self, control: Arc<dyn WorkflowControl>) -> Self {
         self.workflow_control = control;

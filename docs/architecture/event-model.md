@@ -410,17 +410,17 @@ but `Projection::apply_event` ignores them:
 These are **not** `Event` enum variants. `hya-server` parks `AskRequest`s in a
 per-server pending map
 ([`pending/permission.rs`](../../crates/hya-server/src/pending/permission.rs)).
-Over the wire, clients see this plane only through the v1 Interactions service:
-`GET /v1/interactions` lists pending permission/question requests as
-`Interaction` summaries, and `POST /v1/interactions/{id}/respond` answers one
-(idempotent — `applied` is `false` on replay). Saved `always` rules are listed
-and deleted through the same service.
+`GET /v1/interactions` lists pending permission and question requests as
+`Interaction` summaries. `POST /v1/interactions/{id}/respond` answers one and
+returns `applied`. A missing request returns `NOT_FOUND`. If the request
+closes between lookup and reply, `applied` is `false`. The Permissions service
+lists and deletes saved `always` rules.
 
-Internally the plane still builds legacy Compat-shaped `permission.asked` /
-`permission.replied` JSON frames and keeps a broadcast bridge for a future
-interaction event stream; nothing on the current HTTP surface subscribes to
-them.
-
+The pending maps publish typed request and resolution notices to the server's
+live frame hub. The v1 HTTP and gRPC listings share the same interaction
+conversion as `permissionRequested` and `questionRequested` on SSE and gRPC.
+Resolved requests emit `interactionResolved`. All three notices carry sequence
+zero and are available only to live subscribers.
 **Fan-out when answering one request**
 (`take_related_for_reply` in
 [`permission.rs`](../../crates/hya-server/src/pending/permission.rs)):
