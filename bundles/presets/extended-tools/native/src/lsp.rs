@@ -1,5 +1,6 @@
 use async_trait::async_trait;
-use hya_proto::{ToolName, ToolSchema};
+use hya_proto::ToolSchema;
+use hya_tool::tool::obj_schema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -28,26 +29,22 @@ impl Tool for LspTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: ToolName::new("lsp"),
-            description: include_str!("lsp.txt").to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "operation": {
-                        "type": "string",
-                        "enum": ["goToDefinition", "findReferences", "hover", "documentSymbol", "workspaceSymbol", "goToImplementation", "prepareCallHierarchy", "incomingCalls", "outgoingCalls"],
-                        "description": "The LSP operation to perform"
-                    },
-                    "filePath": { "type": "string", "description": "The absolute or relative path to the file" },
-                    "line": { "type": "integer", "minimum": 1, "description": "The line number (1-based, as shown in editors)" },
-                    "character": { "type": "integer", "minimum": 1, "description": "The character offset (1-based, as shown in editors)" },
-                    "query": { "type": "string", "description": "Search query for workspaceSymbol. Empty string requests all symbols." }
+        obj_schema(
+            "lsp",
+            include_str!("lsp.txt"),
+            json!({
+                "operation": {
+                    "type": "string",
+                    "enum": ["goToDefinition", "findReferences", "hover", "documentSymbol", "workspaceSymbol", "goToImplementation", "prepareCallHierarchy", "incomingCalls", "outgoingCalls"],
+                    "description": "The LSP operation to perform"
                 },
-                "required": ["operation", "filePath", "line", "character"]
+                "filePath": { "type": "string", "description": "The absolute or relative path to the file" },
+                "line": { "type": "integer", "minimum": 1, "description": "The line number (1-based, as shown in editors)" },
+                "character": { "type": "integer", "minimum": 1, "description": "The character offset (1-based, as shown in editors)" },
+                "query": { "type": "string", "description": "Search query for workspaceSymbol. Empty string requests all symbols." }
             }),
-            output_schema: None,
-        }
+            &["operation", "filePath", "line", "character"],
+        )
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {

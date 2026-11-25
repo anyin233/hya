@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::tool::obj_schema;
 use hya_proto::{ActorClaim, ReportOutcome, SessionId, ToolSchema};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -212,35 +213,31 @@ pub fn wait_tool_schema(wake_on_mail: bool) -> ToolSchema {
     } else {
         "Block until your subagents finish — a subagent finishes only when it reports (calls `report`, or ends its turn with a final answer, which is delivered as a `done` report) or is archived, never merely by going idle — up to a timeout. Returns why it woke (`members`, `stalled`, `timeout`, or `nothing_to_wait_for`), the targets that finished during this call with their reports, targets that had already finished before this call (`already_finished`), and the ones still running. `stalled` means a subagent ended its turn without delivering a result (no answer, a cut-off answer, or unread mail or live subagents of its own) and has nothing queued: it will not continue until you mail it (or `archive` it). A subagent listed `stopped by the user` was stopped by the user: do not try to restart it; tell the user what you need instead. Use it instead of polling or sleeping. Cancelling your turn aborts the wait."
     };
-    ToolSchema {
-        name: hya_proto::ToolName::new("wait"),
-        description: format!(
+    obj_schema(
+        "wait",
+        &format!(
             "Launch independent siblings together in one task tasks[] batch before waiting. Continue useful independent work first; wait when blocked on reports. {description}"
         ),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "targets": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Subagents to wait for: handles as returned by `task` (e.g. `main/hya-worker-exusiai`, or the leaf `hya-worker-exusiai`) or session ids. Omit to wait for all of your live direct subagents."
-                },
-                "mode": {
-                    "type": "string",
-                    "enum": ["all", "any"],
-                    "description": "`all` (default): return when every target finished (reported or archived); `any`: return when the first one finished during this call."
-                },
-                "timeout_secs": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": WAIT_MAX_TIMEOUT_SECS,
-                    "description": "Give up after this many seconds (default 600, max 1800). 0 returns the current state at once without blocking."
-                }
+        json!({
+            "targets": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Subagents to wait for: handles as returned by `task` (e.g. `main/hya-worker-exusiai`, or the leaf `hya-worker-exusiai`) or session ids. Omit to wait for all of your live direct subagents."
             },
-            "required": []
+            "mode": {
+                "type": "string",
+                "enum": ["all", "any"],
+                "description": "`all` (default): return when every target finished (reported or archived); `any`: return when the first one finished during this call."
+            },
+            "timeout_secs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": WAIT_MAX_TIMEOUT_SECS,
+                "description": "Give up after this many seconds (default 600, max 1800). 0 returns the current state at once without blocking."
+            }
         }),
-        output_schema: None,
-    }
+        &[],
+    )
 }
 
 /// Why a `wait` returned.

@@ -4,8 +4,9 @@ mod parse;
 use std::path::{Component, Path, PathBuf};
 
 use async_trait::async_trait;
-use hya_proto::{ToolName, ToolSchema};
+use hya_proto::ToolSchema;
 use hya_tool::path::{display_path, normalize};
+use hya_tool::tool::obj_schema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -30,21 +31,17 @@ impl Tool for ApplyPatchTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: ToolName::new("apply_patch"),
-            description: "Apply an Compat-style patch envelope to files.".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "patchText": {
-                        "type": "string",
-                        "description": "The full patch text that describes all changes to be made"
-                    }
-                },
-                "required": ["patchText"]
+        obj_schema(
+            "apply_patch",
+            "Apply an Compat-style patch envelope to files.",
+            json!({
+                "patchText": {
+                    "type": "string",
+                    "description": "The full patch text that describes all changes to be made"
+                }
             }),
-            output_schema: None,
-        }
+            &["patchText"],
+        )
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {

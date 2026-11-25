@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hya_proto::ToolSchema;
 use hya_tool::media::{max_image_attachment_bytes, sniff_image_mime, validate_image_decode};
+use hya_tool::tool::obj_schema;
 use hya_tool::{Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -20,14 +21,11 @@ impl Tool for Read {
     }
 
     fn schema(&self) -> ToolSchema {
-        super::schema(
+        obj_schema(
             "read",
             "Read a UTF-8 text file or an image (PNG, JPEG, GIF, WebP). An image, when it is attached, is shown to you in the next step only; read it again to see it again.",
-            json!({
-                "type": "object",
-                "properties": {"path": {"type": "string", "description": "File path, relative to the working directory or absolute"}},
-                "required": ["path"],
-            }),
+            json!({"path": {"type": "string", "description": "File path, relative to the working directory or absolute"}}),
+            &["path"],
         )
     }
 

@@ -14,7 +14,7 @@ mod write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use hya_proto::{ToolName, ToolSchema};
+use hya_proto::ToolSchema;
 use hya_tool::{Tool, ToolError};
 use serde::de::DeserializeOwned;
 
@@ -44,15 +44,6 @@ pub fn rewrite_schema() -> ToolSchema {
 /// Schema of the `todo` tool for full-mode requests.
 pub fn todo_schema() -> ToolSchema {
     todo::Todo.schema()
-}
-
-fn schema(name: &str, description: &str, input_schema: serde_json::Value) -> ToolSchema {
-    ToolSchema {
-        name: ToolName::new(name),
-        description: description.to_string(),
-        input_schema,
-        output_schema: None,
-    }
 }
 
 pub(super) fn args<T: DeserializeOwned>(input: serde_json::Value) -> Result<T, ToolError> {

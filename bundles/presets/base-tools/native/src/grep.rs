@@ -12,8 +12,9 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::closed_obj_schema;
 use async_trait::async_trait;
-use hya_proto::{ToolName, ToolSchema};
+use hya_proto::ToolSchema;
 use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -103,51 +104,46 @@ impl Tool for GrepTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: ToolName::new("grep"),
-            description: "Search file contents with a regex or literal pattern.".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "pattern": {
-                        "type": "string",
-                        "description": "Search pattern (regex unless literal is true). Uses Rust `regex` crate syntax: no look-around ((?=...), (?!...), (?<=...), (?<!...)) and no backreferences (\\1) are supported. Escape literal ( ) [ ] { } . + * ? | ^ $ with a backslash, or set literal: true to search for the exact text instead."
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "File or directory to search; defaults to the workdir"
-                    },
-                    "glob": {
-                        "type": "string",
-                        "maxLength": MAX_GLOB_BYTES,
-                        "description": "File path filter, for example **/*.rs; a directory name matches files under that directory"
-                    },
-                    "ignoreCase": {
-                        "type": "boolean",
-                        "description": "Match without regard to letter case"
-                    },
-                    "literal": {
-                        "type": "boolean",
-                        "description": "Treat the pattern as literal text"
-                    },
-                    "context": {
-                        "type": "integer",
-                        "minimum": 0,
-                        "maximum": 5,
-                        "description": "Number of context lines around each match (0–5, default 0); values outside the range are clamped and the result says so"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 200,
-                        "description": "Maximum matched lines to return"
-                    }
+        closed_obj_schema(
+            "grep",
+            "Search file contents with a regex or literal pattern.",
+            json!({
+                "pattern": {
+                    "type": "string",
+                    "description": "Search pattern (regex unless literal is true). Uses Rust `regex` crate syntax: no look-around ((?=...), (?!...), (?<=...), (?<!...)) and no backreferences (\\1) are supported. Escape literal ( ) [ ] { } . + * ? | ^ $ with a backslash, or set literal: true to search for the exact text instead."
                 },
-                "required": ["pattern"]
+                "path": {
+                    "type": "string",
+                    "description": "File or directory to search; defaults to the workdir"
+                },
+                "glob": {
+                    "type": "string",
+                    "maxLength": MAX_GLOB_BYTES,
+                    "description": "File path filter, for example **/*.rs; a directory name matches files under that directory"
+                },
+                "ignoreCase": {
+                    "type": "boolean",
+                    "description": "Match without regard to letter case"
+                },
+                "literal": {
+                    "type": "boolean",
+                    "description": "Treat the pattern as literal text"
+                },
+                "context": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 5,
+                    "description": "Number of context lines around each match (0–5, default 0); values outside the range are clamped and the result says so"
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description": "Maximum matched lines to return"
+                }
             }),
-            output_schema: None,
-        }
+            &["pattern"],
+        )
     }
     fn result_policy(&self) -> ToolResultPolicy {
         ToolResultPolicy::Coding

@@ -9,6 +9,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
 use hya_tool::process_group::{BudgetGroup, GroupOutcome};
+use hya_tool::tool::obj_schema;
 use hya_tool::{Tool, ToolCtx, ToolError, deadline};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -54,17 +55,14 @@ impl Tool for Bash {
     }
 
     fn schema(&self) -> ToolSchema {
-        super::schema(
+        obj_schema(
             "bash",
             "Run a shell command in the working directory with `bash -c` if Bash is on PATH, otherwise with `sh -c`. Returns combined stdout and stderr followed by one status line: `[exit code: N]`, `[still running: …]`, `[stopped: …]`, or `[not started: …]`. For output over 30,000 bytes, `output` shows the first 10,000 and last 20,000 bytes and names the file that holds all of it. `timeout` is how long this call waits. With a run time budget, one call waits at most a tenth of the budget. A command still running then is not stopped: the call returns what it has printed so far, and the command keeps running in the background, with its further output going to a file named in the result. Yielded commands are stopped when the run ends. Without a budget, a job started with `&` can outlive its shell; redirect its output to a file to keep it. If the end-of-budget cap ends the wait, Bash stops the command.",
             json!({
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string", "description": "Shell command"},
-                    "timeout": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_SECS, "description": "Seconds this call waits for the command. Default 300. With a run time budget, one call waits at most a tenth of the budget. A command still running then keeps running in the background, unless the end-of-budget cap ends the wait."},
-                },
-                "required": ["command"],
+                "command": {"type": "string", "description": "Shell command"},
+                "timeout": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_SECS, "description": "Seconds this call waits for the command. Default 300. With a run time budget, one call waits at most a tenth of the budget. A command still running then keeps running in the background, unless the end-of-budget cap ends the wait."},
             }),
+            &["command"],
         )
     }
 

@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::closed_obj_schema;
 use async_trait::async_trait;
-use hya_proto::{ToolName, ToolSchema};
+use hya_proto::ToolSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -62,9 +63,9 @@ impl Tool for ReadTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: ToolName::new("read"),
-            description: concat!(
+        closed_obj_schema(
+            "read",
+            concat!(
                 "Read a file or directory's contents.\n\n",
                 "`path` also accepts an internal handle naming an agent-owned resource: ",
                 "`artifact://<id>` for tool output spilled out of the transcript, ",
@@ -76,21 +77,15 @@ impl Tool for ReadTool {
                 "`?grep=<pattern>`, or `?q=<.dotted.path>` against a JSON body.\n\n",
                 "Handles are a separate namespace from the workspace — an ordinary ",
                 "filesystem path is read exactly as it always was."
-            )
-            .to_string(),
-            input_schema: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "path": { "type": "string" },
-                    "offset": { "type": "integer", "minimum": 1 },
-                    "limit": { "type": "integer", "minimum": 1 },
-                    "raw": { "type": "boolean" }
-                },
-                "required": ["path"]
+            ),
+            json!({
+                "path": { "type": "string" },
+                "offset": { "type": "integer", "minimum": 1 },
+                "limit": { "type": "integer", "minimum": 1 },
+                "raw": { "type": "boolean" }
             }),
-            output_schema: None,
-        }
+            &["path"],
+        )
     }
     fn result_policy(&self) -> ToolResultPolicy {
         ToolResultPolicy::Coding

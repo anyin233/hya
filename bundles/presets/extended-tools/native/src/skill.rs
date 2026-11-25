@@ -1,6 +1,7 @@
 //! Skill tool implementation.
 use async_trait::async_trait;
-use hya_proto::{ToolName, ToolSchema};
+use hya_proto::ToolSchema;
+use hya_tool::tool::obj_schema;
 use hya_tool::{Action, Resource, SkillCatalogOrigin, Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -22,21 +23,17 @@ impl Tool for SkillTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: ToolName::new("skill"),
-            description: "Load a specialized skill listed in the system prompt.".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "The name of the skill from available_skills"
-                    }
-                },
-                "required": ["name"]
+        obj_schema(
+            "skill",
+            "Load a specialized skill listed in the system prompt.",
+            json!({
+                "name": {
+                    "type": "string",
+                    "description": "The name of the skill from available_skills"
+                }
             }),
-            output_schema: None,
-        }
+            &["name"],
+        )
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {

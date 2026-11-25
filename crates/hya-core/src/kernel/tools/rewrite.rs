@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
+use hya_tool::tool::obj_schema;
 use hya_tool::{Tool, ToolCtx, ToolError};
 use serde_json::{Value, json};
 
@@ -24,14 +25,11 @@ impl Tool for Rewrite {
     }
 
     fn schema(&self) -> ToolSchema {
-        super::schema(
+        obj_schema(
             super::REWRITE,
             "Remove everything before this call from the conversation. The summary stays, as your own text.",
-            json!({
-                "type": "object",
-                "properties": {"summary": {"type": "string", "description": "What a later correction would need: the task, what was checked and how, what failed and why, what is still open"}},
-                "required": ["summary"],
-            }),
+            json!({"summary": {"type": "string", "description": "What a later correction would need: the task, what was checked and how, what failed and why, what is still open"}}),
+            &["summary"],
         )
     }
 
