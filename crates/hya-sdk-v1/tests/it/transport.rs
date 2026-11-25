@@ -3,7 +3,7 @@
 
 use axum::{Router, extract::OriginalUri, http::StatusCode};
 use hya_api::v1 as pb;
-use hya_sdk_v1::{Client, SdkError, V1Sdk};
+use hya_sdk_v1::{Client, ClientError, SdkError, V1Sdk};
 use std::time::Duration;
 
 async fn serve(app: Router) -> (String, tokio::task::JoinHandle<()>) {
@@ -153,4 +153,33 @@ async fn unstructured_errors_include_http_status() {
         );
         server.abort();
     }
+}
+
+#[tokio::test]
+async fn prompt_rejects_admission_without_a_turn_id_before_waiting() {
+    let (requests, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let app = Router::new().fallback(move |uri: OriginalUri| {
+        requests.send(uri.0.path().to_owned()).unwrap();
+        async { axum::Json(serde_json::json!({"turn": {}})) }
+    });
+    let (base, server) = serve(app).await;
+
+    let client_error = Client::new(&base)
+        .prompt_text("test", "hi")
+        .await
+        .unwrap_err();
+    let sdk_error = V1Sdk::new(&base, "")
+        .prompt("test", "hi")
+        .await
+        .unwrap_err();
+    assert!(matches!(client_error, ClientError::Api { code, .. } if code == "invalid_response"));
+    assert!(matches!(sdk_error, SdkError::Api { code, .. } if code == "invalid_response"));
+    for _ in 0..2 {
+        assert_eq!(received.try_recv().unwrap(), "/v1/sessions/test/turns");
+    }
+    assert!(
+        received.try_recv().is_err(),
+        "prompt must never send an invalid wait request"
+    );
+    server.abort();
 }

@@ -1,9 +1,8 @@
 //! Typed tooling and process-harness HTTP calls.
 
-use crate::encode_component;
+use crate::transport::HttpTransport;
 use hya_api::v1 as pb;
 use hya_proto::{Envelope, SessionId};
-use serde_json::Value;
 use std::time::Duration;
 
 /// Failure from a client HTTP call.
@@ -27,18 +26,14 @@ pub enum ClientError {
 
 /// Thin HTTP client bound to a server base URL (no directory header).
 pub struct Client {
-    base: String,
-    http: reqwest::Client,
+    transport: HttpTransport,
 }
 
 impl Client {
     /// Build a client targeting `base_url` (e.g. `http://127.0.0.1:8080`).
     #[must_use]
     pub fn new(base_url: impl Into<String>) -> Self {
-        Self {
-            base: base_url.into(),
-            http: reqwest::Client::new(),
-        }
+        Self::with_http_client(base_url, reqwest::Client::new())
     }
 
     /// Build a client targeting `base_url` that sends every request through
@@ -47,51 +42,8 @@ impl Client {
     #[must_use]
     pub fn with_http_client(base_url: impl Into<String>, http: reqwest::Client) -> Self {
         Self {
-            base: base_url.into(),
-            http,
+            transport: HttpTransport::new(base_url, http, None),
         }
-    }
-
-    async fn call<Req: serde::Serialize, Resp: serde::de::DeserializeOwned>(
-        &self,
-        method: reqwest::Method,
-        path: &str,
-        query: Option<&str>,
-        body: Option<&Req>,
-    ) -> Result<Resp, ClientError> {
-        let mut url = format!("{}{path}", self.base);
-        if let Some(query) = query {
-            url.push('?');
-            url.push_str(query);
-        }
-        let mut request = self.http.request(method, url);
-        if let Some(body) = body {
-            request = request.json(body);
-        }
-        let response = request.send().await?;
-        let status = response.status();
-        let bytes = response.bytes().await?;
-        if !status.is_success() {
-            if let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(&bytes)
-                && let Some(error) = map.get("error")
-                && let (Some(code), Some(message)) = (
-                    error.get("code").and_then(Value::as_str),
-                    error.get("message").and_then(Value::as_str),
-                )
-            {
-                return Err(ClientError::Api {
-                    code: code.to_owned(),
-                    message: message.to_owned(),
-                });
-            }
-            return Err(ClientError::Api {
-                code: status.as_u16().to_string(),
-                message: format!("{status}: {}", String::from_utf8_lossy(&bytes))
-                    .trim_end()
-                    .to_owned(),
-            });
-        }
-        Ok(serde_json::from_slice(&bytes)?)
     }
 
     /// `POST /v1/sessions` — create a session.
@@ -102,8 +54,7 @@ impl Client {
         &self,
         req: &pb::CreateSessionRequest,
     ) -> Result<pb::CreateSessionResponse, ClientError> {
-        self.call(reqwest::Method::POST, "/v1/sessions", None, Some(req))
-            .await
+        self.transport.create_session(req).await
     }
 
     /// `GET /v1/projects` — list the Projects.
@@ -111,8 +62,7 @@ impl Client {
     /// # Errors
     /// Returns [`ClientError::Http`] or [`ClientError::Api`] on failure.
     pub async fn list_projects(&self) -> Result<pb::ListProjectsResponse, ClientError> {
-        self.call(reqwest::Method::GET, "/v1/projects", None, None::<&Value>)
-            .await
+        self.transport.list_projects().await
     }
 
     /// `GET /v1/projects/{id}` — read one Project.
@@ -120,13 +70,7 @@ impl Client {
     /// # Errors
     /// Returns [`ClientError::Http`] or [`ClientError::Api`] on failure.
     pub async fn get_project(&self, project: &str) -> Result<pb::ProjectInfo, ClientError> {
-        self.call(
-            reqwest::Method::GET,
-            &format!("/v1/projects/{}", encode_component(project)),
-            None,
-            None::<&Value>,
-        )
-        .await
+        self.transport.get_project(project).await
     }
 
     /// `POST /v1/projects` — create a Project.
@@ -137,8 +81,7 @@ impl Client {
         &self,
         req: &pb::CreateProjectRequest,
     ) -> Result<pb::ProjectInfo, ClientError> {
-        self.call(reqwest::Method::POST, "/v1/projects", None, Some(req))
-            .await
+        self.transport.create_project(req).await
     }
 
     /// `PATCH /v1/projects/{id}` — rename and/or replace the roots.
@@ -149,13 +92,7 @@ impl Client {
         &self,
         req: &pb::UpdateProjectRequest,
     ) -> Result<pb::ProjectInfo, ClientError> {
-        self.call(
-            reqwest::Method::PATCH,
-            &format!("/v1/projects/{}", encode_component(&req.project)),
-            None,
-            Some(req),
-        )
-        .await
+        self.transport.update_project(req).await
     }
 
     /// `DELETE /v1/projects/{id}` — delete a Project.
@@ -166,13 +103,7 @@ impl Client {
         &self,
         project: &str,
     ) -> Result<pb::DeleteProjectResponse, ClientError> {
-        self.call(
-            reqwest::Method::DELETE,
-            &format!("/v1/projects/{}", encode_component(project)),
-            None,
-            None::<&Value>,
-        )
-        .await
+        self.transport.delete_project(project).await
     }
 
     /// `GET /v1/projects/resolve?path=…` — the Project containing `path`.
@@ -183,14 +114,7 @@ impl Client {
         &self,
         path: &str,
     ) -> Result<pb::ResolveProjectResponse, ClientError> {
-        let query = format!("path={}", encode_component(path));
-        self.call(
-            reqwest::Method::GET,
-            "/v1/projects/resolve",
-            Some(&query),
-            None::<&Value>,
-        )
-        .await
+        self.transport.resolve_project(path).await
     }
 
     /// `POST /v1/projects/ensure` — the Project containing `path`, or a new
@@ -202,16 +126,7 @@ impl Client {
         &self,
         path: &str,
     ) -> Result<pb::EnsureProjectForPathResponse, ClientError> {
-        let req = pb::EnsureProjectForPathRequest {
-            path: path.to_owned(),
-        };
-        self.call(
-            reqwest::Method::POST,
-            "/v1/projects/ensure",
-            None,
-            Some(&req),
-        )
-        .await
+        self.transport.ensure_project_for_path(path).await
     }
 
     /// `GET /v1/sessions?projectId=…` — the sessions of one Project.
@@ -222,14 +137,7 @@ impl Client {
         &self,
         project: &str,
     ) -> Result<pb::ListSessionsResponse, ClientError> {
-        let query = format!("projectId={}", encode_component(project));
-        self.call(
-            reqwest::Method::GET,
-            "/v1/sessions",
-            Some(&query),
-            None::<&Value>,
-        )
-        .await
+        self.transport.list_sessions(Some(project), None).await
     }
 
     /// `POST /v1/sessions/{id}/turns` — admit a typed turn request.
@@ -240,13 +148,7 @@ impl Client {
         &self,
         request: &pb::CreateTurnRequest,
     ) -> Result<pb::CreateTurnResponse, ClientError> {
-        self.call(
-            reqwest::Method::POST,
-            &format!("/v1/sessions/{}/turns", encode_component(&request.session)),
-            None,
-            Some(request),
-        )
-        .await
+        self.transport.create_turn_request(request).await
     }
 
     /// `POST /v1/sessions/{id}/turns/{turn}/wait` — wait for the turn.
@@ -257,18 +159,7 @@ impl Client {
         &self,
         request: &pb::WaitTurnRequest,
     ) -> Result<pb::TurnInfo, ClientError> {
-        let timeout_ms = request.timeout_ms.min(600_000);
-        self.call(
-            reqwest::Method::POST,
-            &format!(
-                "/v1/sessions/{}/turns/{}/wait",
-                encode_component(&request.session),
-                encode_component(&request.turn)
-            ),
-            Some(&format!("timeoutMs={timeout_ms}")),
-            None::<&Value>,
-        )
-        .await
+        self.transport.wait_turn_request(request).await
     }
 
     /// Admit a text prompt and wait up to 120 seconds for its terminal state.
@@ -280,21 +171,7 @@ impl Client {
         session: &str,
         text: impl Into<String>,
     ) -> Result<pb::TurnInfo, ClientError> {
-        let admitted = self
-            .create_turn_request(&pb::CreateTurnRequest {
-                session: session.to_owned(),
-                kind: Some(pb::create_turn_request::Kind::Prompt(pb::PromptTurn {
-                    text: text.into(),
-                    ..Default::default()
-                })),
-            })
-            .await?;
-        self.wait_turn_request(&pb::WaitTurnRequest {
-            session: session.to_owned(),
-            turn: admitted.turn.map(|turn| turn.id).unwrap_or_default(),
-            timeout_ms: 120_000,
-        })
-        .await
+        self.transport.prompt_text(session, text).await
     }
 
     /// `GET /v1/sessions/{id}/events` — replay curated events, optionally with
@@ -306,40 +183,7 @@ impl Client {
         &self,
         request: &pb::ListEventsRequest,
     ) -> Result<pb::ListEventsResponse, ClientError> {
-        self.replay_events(
-            &request.session,
-            (request.since_seq != 0).then_some(request.since_seq),
-            request.limit,
-            request.include_raw,
-        )
-        .await
-    }
-
-    async fn replay_events(
-        &self,
-        session: &str,
-        since_seq: Option<u64>,
-        limit: u32,
-        include_raw: bool,
-    ) -> Result<pb::ListEventsResponse, ClientError> {
-        let mut params = Vec::new();
-        if let Some(seq) = since_seq {
-            params.push(format!("sinceSeq={seq}"));
-        }
-        if limit != 0 {
-            params.push(format!("limit={limit}"));
-        }
-        if include_raw {
-            params.push("includeRaw=true".into());
-        }
-        let query = (!params.is_empty()).then(|| params.join("&"));
-        self.call(
-            reqwest::Method::GET,
-            &format!("/v1/sessions/{}/events", encode_component(session)),
-            query.as_deref(),
-            None::<&Value>,
-        )
-        .await
+        self.transport.list_events_request(request).await
     }
 
     /// Admit a plain prompt using an internal session ID.
@@ -405,7 +249,8 @@ impl Client {
         since_seq: Option<u64>,
         include_raw: bool,
     ) -> Result<pb::ListEventsResponse, ClientError> {
-        self.replay_events(&session.to_string(), since_seq, 0, include_raw)
+        self.transport
+            .replay_events(&session.to_string(), since_seq, 0, include_raw)
             .await
     }
 
@@ -422,6 +267,7 @@ impl Client {
         since_seq: Option<u64>,
     ) -> Result<Vec<Envelope>, ClientError> {
         let response = self
+            .transport
             .replay_events(&session.to_string(), since_seq, 0, true)
             .await?;
         Ok(response
@@ -439,20 +285,7 @@ impl Client {
         &self,
         kind: Option<pb::InteractionType>,
     ) -> Result<Vec<pb::Interaction>, ClientError> {
-        let query = kind.map(|kind| match kind {
-            pb::InteractionType::Permission => "type=PERMISSION",
-            pb::InteractionType::Question => "type=QUESTION",
-            _ => "",
-        });
-        let response: pb::ListInteractionsResponse = self
-            .call(
-                reqwest::Method::GET,
-                "/v1/interactions",
-                query,
-                None::<&Value>,
-            )
-            .await?;
-        Ok(response.interactions)
+        self.transport.list_interactions(kind).await
     }
 
     /// `POST /v1/interactions/{id}/respond` — answer one pending request.
@@ -464,12 +297,6 @@ impl Client {
         id: &str,
         response: &pb::RespondInteractionRequest,
     ) -> Result<pb::RespondInteractionResponse, ClientError> {
-        self.call(
-            reqwest::Method::POST,
-            &format!("/v1/interactions/{}/respond", encode_component(id)),
-            None,
-            Some(response),
-        )
-        .await
+        self.transport.respond_interaction(id, response).await
     }
 }
