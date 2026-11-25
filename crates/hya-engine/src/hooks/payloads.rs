@@ -266,8 +266,7 @@ pub enum ToolExecuteAfterOutcome {
 pub enum CompactionTrigger {
     /// The transcript is over its resolved window threshold. Compaction must
     /// not be blocked: sending the request un-compacted risks context
-    /// overflow, so a `Skip` is demoted to a warning (see
-    /// [`resolve_compaction_decision`]).
+    /// overflow, so a `Skip` is demoted to a warning.
     Overflow,
     /// Pre-emptive compaction while still under the threshold. A `Skip` may be
     /// honored.
@@ -343,6 +342,10 @@ pub enum GoalEvaluateReply {
 /// A `compaction_before` decision resolved against its trigger: what the engine
 /// should actually do.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[deprecated(
+    since = "0.48.0-dev.37",
+    note = "no replacement; removed after the next release"
+)]
 pub enum CompactionResolution {
     /// Run the built-in compaction ladder.
     Proceed,
@@ -368,6 +371,11 @@ pub enum CompactionResolution {
 /// fit, so no hook may block it. `Proceed` and `Replace` pass through for both
 /// triggers.
 #[must_use]
+#[deprecated(
+    since = "0.48.0-dev.37",
+    note = "no replacement; removed after the next release"
+)]
+#[allow(deprecated)]
 pub fn resolve_compaction_decision(
     decision: CompactionDecision,
     trigger: CompactionTrigger,

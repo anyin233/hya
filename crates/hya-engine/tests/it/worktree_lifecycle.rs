@@ -1,6 +1,6 @@
 //! Integration tests for `hya-engine`: tmux capability.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, deprecated)]
 
 use std::path::Path;
 

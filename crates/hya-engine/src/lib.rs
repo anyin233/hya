@@ -124,12 +124,13 @@ pub use error::CoreError;
 pub use hooks::{
     AgentSpawnInput, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
     CommandExecuteBeforeOutcome, CompactionAfterInput, CompactionBeforeInput, CompactionDecision,
-    CompactionResolution, CompactionTrigger, HookChain, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome,
-    NoopHookHost, SessionLifecycleInput, TextCompleteInput, TextCompleteOutcome,
-    ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, ToolOutcomeNative, resolve_compaction_decision,
+    CompactionTrigger, HookChain, HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome,
+    ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome, NoopHookHost,
+    SessionLifecycleInput, TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput,
+    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
+#[allow(deprecated)]
+pub use hooks::{CompactionResolution, resolve_compaction_decision};
 pub use lifecycle::run_lifecycle_service;
 pub use loop_mode::{
     EvidenceQuality, HookLoopPlanner, HookLoopVerifier, LoopConfig, LoopGate, LoopPlanner,
@@ -152,9 +153,11 @@ pub use runtime_registry::{
 pub use sidecar::{
     BoundSidecarFactory, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,
 };
+#[allow(deprecated)]
+pub use terminal_handoff::handoff_request_messages;
 pub use terminal_handoff::{
     ModelSummarizer, SummarizeOptions, Summarizer, TerminalHandoff, TerminalHandoffOptions,
-    UsageCollector, handoff_request_messages,
+    UsageCollector,
 };
 pub use tokens::{
     CalibratedTokenizer, TokenAccounting, TokenAccountingMode, TokenCount, TokenSource, Tokenizer,
@@ -169,4 +172,5 @@ pub use workflow::{
     prepare_workflow_run_for_actor, run_workflow, workflow_dirs_for_workdir, workflow_project_dir,
     workflow_user_dir,
 };
+#[allow(deprecated)]
 pub use workspace::TmuxPaneManager;

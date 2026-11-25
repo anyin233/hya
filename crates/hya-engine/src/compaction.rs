@@ -2,9 +2,9 @@
 
 use crate::terminal_handoff::TerminalHandoffOptions;
 
-pub use crate::terminal_handoff::{
-    ModelSummarizer, SummarizeOptions, Summarizer, UsageCollector, handoff_request_messages,
-};
+#[allow(deprecated)]
+pub use crate::terminal_handoff::handoff_request_messages;
+pub use crate::terminal_handoff::{ModelSummarizer, SummarizeOptions, Summarizer, UsageCollector};
 
 /// Compaction settings. `keep_recent` goes to the `hya/compaction` bundle as
 /// JSON; `summary_max_tokens` caps the terminal handoff.

@@ -187,6 +187,12 @@ retains the supplied router for embedders that pin their route.
 The Rust `with_compaction(Arc<dyn Summarizer>, CompactionConfig)` builder remains
 available for embedders that set the handoff cap and retained tail together.
 
+## Rust API deprecations
+
+`hya_engine::resolve_compaction_decision`, `CompactionResolution`, and
+`handoff_request_messages` are deprecated and scheduled for removal after the
+next release. For terminal handoffs, call `Summarizer::summarize` with the
+transcript and `SummarizeOptions` to request a summary.
 ## Source map
 
 | Concern | Location |
