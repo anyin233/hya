@@ -38,7 +38,7 @@ export function RenderTree(props: { node: RenderNode; host?: TreeHost; inRow?: b
           fg={themed(node.style?.color) ?? (link ? colors.link : colors.fg)}
           {...(node.style?.background ? { bg: themed(node.style.background) } : {})}
           attributes={(node.style?.bold ? TextAttributes.BOLD : 0) | (node.style?.italic ? TextAttributes.ITALIC : 0) | (node.style?.underline || link ? TextAttributes.UNDERLINE : 0)}
-          {...(action && onAction ? { onMouseDown: (event: { button: number; x: number; y: number; stopPropagation(): void }) => { if (event.button === 0 || event.button === 2) { event.stopPropagation(); onAction({ ...action, button: event.button === 2 ? "right" : "left" }, { x: event.x, y: event.y }) } } } : {})}
+          {...(action && onAction ? { onMouseDown: (event: { button: number; x: number; y: number; stopPropagation(): void }) => { if (event.button === 0 || event.button === 2) { event.stopPropagation(); onAction({ ...action, data: action.data ?? null, button: event.button === 2 ? "right" : "left" }, { x: event.x, y: event.y }) } } } : {})}
         >{node.text}</text>
       )
     }

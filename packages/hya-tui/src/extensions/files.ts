@@ -9,6 +9,7 @@
 import { watch as watchPath, type FSWatcher } from "node:fs"
 import { readdir, readFile, realpath, stat } from "node:fs/promises"
 import { isAbsolute, join, relative, resolve, sep } from "node:path"
+import type { FsEvent } from "./wire.generated"
 
 export const maxReadBytes = 1024 * 1024
 export const maxListEntries = 2_000
@@ -16,7 +17,7 @@ export const maxWatches = 16
 export const watchBatchMs = 100
 export const maxBatchEvents = 100
 
-export interface FsEvent { readonly path: string; readonly kind: "change" | "rename" | "closed" }
+export type { FsEvent } from "./wire.generated"
 type EntryKind = "file" | "dir" | "other"
 
 interface Watch {

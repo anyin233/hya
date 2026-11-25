@@ -4,8 +4,9 @@ import {
   type JsonValue, type KeyEvent, type PanelPlacement, type ReplaceableSurface, type RpcEnvelope, type SurfaceRef, type ToolCallInput, type TuiResponse,
 } from "./protocol";
 import type { RenderNode } from "./render";
+import type { FsEvent } from "./wire";
 
-export interface FsEvent { readonly path: string; readonly kind: "change" | "rename" | "closed" }
+export type { FsEvent } from "./wire";
 export interface FsEntry { readonly name: string; readonly kind: "file" | "dir" | "other" }
 export interface FsStat { readonly kind: "file" | "dir" | "other"; readonly size: number; readonly mtime: number }
 export interface TuiFsApi {

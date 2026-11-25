@@ -8,6 +8,7 @@
  * is one child lifetime.
  */
 
+import { JSONRPC_VERSION, MAX_FRAME_BYTES } from "./wire.generated"
 export interface ChildProcess {
   stdin: { write(chunk: string): unknown; end(): unknown }
   stdout: AsyncIterable<Uint8Array>
@@ -59,7 +60,7 @@ export class HostChannel {
 
   constructor(private readonly options: HostChannelOptions) {
     this.timeoutMs = options.timeoutMs ?? 5_000
-    this.maxLineBytes = options.maxLineBytes ?? 2 * 1024 * 1024
+    this.maxLineBytes = options.maxLineBytes ?? MAX_FRAME_BYTES
     this.maxPending = options.maxPending ?? 512
     this.child = (options.spawn ?? defaultSpawn)(options.argv)
     void this.readStdout()
@@ -81,7 +82,7 @@ export class HostChannel {
       reject(new HostTimeoutError(`${method} timed out after ${timeoutMs} ms`))
     }, timeoutMs)
     this.pending.set(id, { resolve: (value) => resolve(value as T), reject, timer, method })
-    this.write({ jsonrpc: "2.0", id, method, params })
+    this.write({ jsonrpc: JSONRPC_VERSION, id, method, params })
     return promise
   }
 
@@ -166,15 +167,15 @@ export class HostChannel {
     if (line.length > this.maxLineBytes) return this.fail(`frame exceeds ${this.maxLineBytes} bytes`)
     let message: unknown
     try { message = JSON.parse(line) } catch { return this.fail("sent invalid JSON") }
-    if (!message || typeof message !== "object" || !("jsonrpc" in message) || message.jsonrpc !== "2.0" || !("id" in message)) return this.fail("sent a malformed JSON-RPC frame")
+    if (!message || typeof message !== "object" || !("jsonrpc" in message) || message.jsonrpc !== JSONRPC_VERSION || !("id" in message)) return this.fail("sent a malformed JSON-RPC frame")
     const id = message.id
     if ("method" in message) {
       // The host asks (an extension's api.fs): answer, success or failure.
       const method = typeof message.method === "string" ? message.method : ""
       const params = "params" in message && message.params && typeof message.params === "object" && !Array.isArray(message.params) ? message.params as Readonly<Record<string, unknown>> : {}
       void this.options.serve(method, params).then(
-        (result) => this.write({ jsonrpc: "2.0", id, result: result ?? null }),
-        (error: unknown) => this.write({ jsonrpc: "2.0", id, error: { code: -32000, message: error instanceof Error ? error.message : String(error) } }),
+        (result) => this.write({ jsonrpc: JSONRPC_VERSION, id, result: result ?? null }),
+        (error: unknown) => this.write({ jsonrpc: JSONRPC_VERSION, id, error: { code: -32000, message: error instanceof Error ? error.message : String(error) } }),
       )
       return
     }
