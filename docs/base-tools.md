@@ -427,11 +427,15 @@ settings. Never copy an independently compiled trait object into the host.
 
 ### Usage
 
-Implement `hya_tool::Tool` for every canonical name in the selected family's
-`exposure.yaml`, and export the four functions below from a `cdylib`. A minimal
-working replacement for the network family is in
-`crates/hya-tool/tests/fixtures/replacement_tools.rs`. To build and try that
-fixture in a disposable layout (Linux):
+Implement `hya_tool::Tool` for every canonical name in the selected family’s
+`exposure.yaml`. Invoke `hya_tool::export_native_tool_bundle!(|out| { ... });`
+once in the `cdylib`. The block receives `&mut Vec<Arc<dyn hya_tool::Tool>>`
+and appends the tools in registration order. The macro exports the four v1
+symbols listed below. The [network family](../bundles/presets/network-tools/native/src/lib.rs)
+shows a two-tool registration.
+
+The network replacement fixture in `crates/hya-tool/tests/fixtures/replacement_tools.rs`
+implements the symbols explicitly. Build and try it in a disposable Linux layout.
 
 ```sh
 CARGO_BUILD_JOBS=8 cargo build --locked -p hya-tool --examples

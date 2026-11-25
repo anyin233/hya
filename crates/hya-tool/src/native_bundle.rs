@@ -106,3 +106,68 @@ pub struct Registrations {
 pub fn deadline_cell_v1() -> *const std::ffi::c_void {
     std::ptr::from_ref(crate::deadline::cell()).cast()
 }
+
+/// Export the four lockstep v1 symbols for a native tool family.
+///
+/// Invoke once per library. The registration block takes a mutable vector
+/// of shared tool implementations and appends the tools in registration order.
+#[macro_export]
+macro_rules! export_native_tool_bundle {
+    (|$out:ident| $register:block) => {
+        /// Report the lockstep Rust tool ABI before any Rust object crosses the library boundary.
+        ///
+        /// # Safety
+        ///
+        /// `out` must point to a writable array of at least 32 bytes, or be null.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn hya_tool_bundle_abi_v1(out: *mut u8) {
+            if out.is_null() {
+                return;
+            }
+            let digest = $crate::native_bundle::abi_digest_v1();
+            // SAFETY: the caller supplies a writable 32-byte output array.
+            unsafe { ::std::ptr::copy_nonoverlapping(digest.as_ptr(), out, digest.len()) };
+        }
+
+        /// Register this bundle's concrete tools with the host's tool registry loader.
+        ///
+        /// # Safety
+        ///
+        /// `out` must point to a live `Vec<Arc<dyn Tool>>` built with the matching
+        /// hya-tool ABI, or be null.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn hya_tool_bundle_register_v1(
+            out: *mut ::std::vec::Vec<::std::sync::Arc<dyn $crate::Tool>>,
+        ) {
+            // SAFETY: the host calls this only after the ABI digest matches.
+            if let Some($out) = unsafe { out.as_mut() } $register
+        }
+
+        /// Poll one native tool future while this library's Tokio runtime TLS is entered.
+        ///
+        /// # Safety
+        ///
+        /// `handle` and `state` must remain valid throughout the synchronous callback;
+        /// the handle must come from the matching host Tokio build.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn hya_tool_bundle_with_runtime_v1(
+            handle: *const ::std::ffi::c_void,
+            callback: unsafe extern "C" fn(*mut ::std::ffi::c_void),
+            state: *mut ::std::ffi::c_void,
+        ) {
+            // SAFETY: the checked host ABI guarantees the live handle and callback.
+            unsafe { $crate::native_bundle::with_runtime_v1(handle, callback, state) };
+        }
+
+        /// Read the host's run deadline from this library's copy of `hya-tool`.
+        ///
+        /// # Safety
+        ///
+        /// `cell` must be the host's deadline cell from the matching lockstep build.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn hya_tool_bundle_share_deadline_v1(cell: *const ::std::ffi::c_void) {
+            // SAFETY: the checked host passes its 'static cell.
+            unsafe { $crate::native_bundle::share_deadline_v1(cell) };
+        }
+    };
+}
