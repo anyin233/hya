@@ -54,7 +54,7 @@
   <text x="44" y="244" fill="#34d399" font-size="11" font-weight="700" letter-spacing="0.08em">2. PERSISTENT BACKEND DAEMON &amp; CONSOLIDATED hya.v1 CONTRACT (hya-server · hya-api · hya-relay)</text>
 
   <rect x="44" y="254" width="750" height="52" rx="8" fill="#0f172a" stroke="#34d399" stroke-width="1.2"/>
-  <text x="60" y="275" fill="#f1f5f9" font-size="13" font-weight="600">Single-Port Dual Router: /v1 HTTP/JSON + SSE + WebSocket &amp; V1Grpc (18 Services · 107 RPCs)</text>
+  <text x="60" y="275" fill="#f1f5f9" font-size="13" font-weight="600">Single-Port Dual Router: /v1 HTTP/JSON + SSE + WebSocket &amp; V1Grpc (18 Services · 108 RPCs)</text>
   <text x="60" y="294" fill="#94a3b8" font-size="11">Detached daemon (&lt;db&gt;.runtime-owner.lock + .server.json) · Host allowlist guard · Ephemeral session reaper · No server cwd</text>
 
   <rect x="810" y="254" width="306" height="52" rx="8" fill="#0f172a" stroke="#a78bfa" stroke-width="1.2"/>
