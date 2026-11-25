@@ -319,6 +319,12 @@ and drives every Stage, loop worker and verifier through resident episode
 activations. The server and SDK decorate replayed state with runtime-only source
 availability and Agent activity; neither owns another reducer or scheduler.
 
+The engine's [`workflow/run.rs`](../../crates/hya-engine/src/workflow/run.rs)
+exports the run interface. The `run` modules own
+[route and admission preflight](../../crates/hya-engine/src/workflow/run/preflight.rs),
+[DAG scheduling and event persistence](../../crates/hya-engine/src/workflow/run/scheduling.rs),
+and [resident Stage execution, loops, and verifiers](../../crates/hya-engine/src/workflow/run/stage.rs).
+
 Run admission and Workflow selection use actor-fenced store transactions. A
 file-backed runtime holds an exclusive owner claim before recovery. Startup
 appends one `Interrupted` terminal event for each prior nonterminal run and
