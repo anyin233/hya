@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use hya_engine::RuntimeRegistry;
 
-use crate::runtime_reconcile::{RuntimeMcpControl, RuntimeReconciler};
+use crate::runtime_mcp_control::RuntimeMcpControl;
+use crate::runtime_reconcile::RuntimeReconciler;
 
 /// Refresh config plugins at the same bind/explicit-refresh boundary as bundles.
 pub(crate) struct RuntimeExtensionsRefresh {
