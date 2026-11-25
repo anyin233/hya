@@ -126,7 +126,7 @@ async fn save_agent_model_configuration(
         .save_configuration(binding.clone(), agent_id, model, st.agent.model.clone())
         .await
         .map_err(map_control_error)?;
-    super::providers::notify_catalog_updated(&st);
+    st.notify_catalog_updated();
     Ok(Json(
         with_agent_effort(&st, &binding, state_row(&row)).await?,
     ))
@@ -315,7 +315,7 @@ async fn set_model_effort_preference(
         .map_err(map_control_error)?;
     // Every session on this model may now resolve another effort: clients
     // re-read their session rows on this live frame.
-    super::providers::notify_catalog_updated(&st);
+    st.notify_catalog_updated();
     let row = st
         .agent_model_control
         .list_model_effort_preferences()
@@ -378,6 +378,6 @@ async fn set_agent_effort(
         )
         .await
         .map_err(map_control_error)?;
-    super::providers::notify_catalog_updated(&st);
+    st.notify_catalog_updated();
     Ok(Json(pb::AgentEffort { agent_id, effort }))
 }

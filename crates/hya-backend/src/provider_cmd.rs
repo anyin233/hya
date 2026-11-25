@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Context as _;
 use clap::{Args, Subcommand, ValueEnum};
+use hya_app::provider_control::{SavedProviderKey, persist_provider_upsert};
 use hya_app::{auth, config, model_cache};
 use hya_provider::ModelCatalogSource;
 
@@ -366,18 +367,17 @@ async fn add(args: AddArgs, db: &str) -> anyhow::Result<()> {
     };
 
     let config_path = config::active_config_path();
-    config::upsert_provider_entry(&config_path, &id, protocol.kind(), &base_url)
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
-    match &api_key {
-        Some(key) => {
-            auth::save_token(&id, key).with_context(|| format!("save the key of `{id}`"))?
-        }
-        // A replaced provider without a key must not keep the old endpoint's key.
-        None => {
-            auth::remove_token(&id).with_context(|| format!("remove the old key of `{id}`"))?;
-        }
-    }
-    config::store_discovery(&id, &discovery).await;
+    persist_provider_upsert(
+        &config_path,
+        &id,
+        protocol.kind(),
+        &base_url,
+        api_key
+            .as_deref()
+            .map_or(SavedProviderKey::Remove, SavedProviderKey::Set),
+        Some(&discovery),
+    )
+    .await?;
 
     println!(
         "Saved provider `{id}` ({}, {base_url}) to {}",

@@ -138,7 +138,7 @@ fn spawn_catalog_scope_notices(state: &ServerState) {
                 Ok(_) | Err(RecvError::Lagged(_)) => None,
                 Err(RecvError::Closed) => break,
             };
-            let _ = notices.send(crate::state::catalog_notice(project));
+            crate::state::publish_catalog_updated(&notices, project);
         }
     });
 }

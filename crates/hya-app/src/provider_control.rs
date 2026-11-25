@@ -10,8 +10,10 @@
 //! concurrent rebuilds never lose each other's routes.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use hya_engine::SessionEngine;
 use hya_server::{
     PROVIDER_CONTROL_FAILURE, PROVIDER_INVALID_REQUEST, PROVIDER_NOT_FOUND, ProviderChange,
@@ -46,9 +48,58 @@ fn edit_error(error: ConfigEditError) -> ProviderControlError {
     }
 }
 
-/// Validate an `http(s)://host…` base URL.
-fn check_base_url(base_url: &str) -> Result<(), ProviderControlError> {
-    config::validate_base_url(base_url).map_err(invalid)
+/// How a provider upsert changes its separately saved credential.
+pub enum SavedProviderKey<'a> {
+    /// Leave the current credential in place.
+    Keep,
+    /// Save this API key, replacing any saved credential.
+    Set(&'a str),
+    /// Remove the saved credential, if any.
+    Remove,
+}
+
+/// Persist a provider declaration, its saved credential, and any preflight
+/// discovery result. A live server upsert passes no preflight result and
+/// discovers after saving. The CLI can reuse the result shown before saving.
+///
+/// # Errors
+/// Returns config edit or credential file failures. If a credential update
+/// fails, the earlier config edit has already been written.
+pub async fn persist_provider_upsert(
+    config_path: &Path,
+    id: &str,
+    kind: &str,
+    base_url: &str,
+    key: SavedProviderKey<'_>,
+    discovery: Option<&config::DiscoveryResult>,
+) -> Result<(), ConfigEditError> {
+    if !hya_provider::valid_provider_id(id) || id == "hya" {
+        return Err(ConfigEditError::Invalid(format!(
+            "invalid provider id `{id}`"
+        )));
+    }
+    if !config::PROVIDER_KIND_LABELS.contains(&kind) {
+        return Err(ConfigEditError::Invalid(format!(
+            "unknown provider kind `{kind}` (expected one of {})",
+            config::PROVIDER_KIND_LABELS.join(", ")
+        )));
+    }
+    config::validate_base_url(base_url).map_err(ConfigEditError::Invalid)?;
+    config::upsert_provider_entry(config_path, id, kind, base_url)?;
+    match key {
+        SavedProviderKey::Keep => {}
+        SavedProviderKey::Set(key) => {
+            crate::auth::save_token(id, key).with_context(|| format!("save the key of `{id}`"))?;
+        }
+        SavedProviderKey::Remove => {
+            crate::auth::remove_token(id)
+                .with_context(|| format!("remove the old key of `{id}`"))?;
+        }
+    }
+    if let Some(discovery) = discovery {
+        config::store_discovery(id, discovery).await;
+    }
+    Ok(())
 }
 
 fn report(discovery: &config::DiscoveryResult) -> ProviderDiscoveryReport {
@@ -192,28 +243,20 @@ impl ProviderControl for ProviderManager {
         request: ProviderUpsert,
     ) -> ProviderControlFuture<'_, ProviderChange> {
         Box::pin(async move {
-            if !hya_provider::valid_provider_id(&request.id) || request.id == "hya" {
-                return Err(invalid(format!("invalid provider id `{}`", request.id)));
-            }
-            if !config::PROVIDER_KIND_LABELS.contains(&request.kind.as_str()) {
-                return Err(invalid(format!(
-                    "unknown provider kind `{}` (expected one of {})",
-                    request.kind,
-                    config::PROVIDER_KIND_LABELS.join(", ")
-                )));
-            }
-            check_base_url(&request.base_url)?;
             let _guard = self.lock.lock().await;
-            config::upsert_provider_entry(
+            persist_provider_upsert(
                 &config::active_config_path(),
                 &request.id,
                 &request.kind,
                 &request.base_url,
+                request
+                    .api_key
+                    .as_deref()
+                    .map_or(SavedProviderKey::Keep, SavedProviderKey::Set),
+                None,
             )
+            .await
             .map_err(edit_error)?;
-            if let Some(key) = request.api_key.as_deref() {
-                crate::auth::save_token(&request.id, key).map_err(failure)?;
-            }
             self.rebuild(&request.id, DiscoverMode::Always).await
         })
     }

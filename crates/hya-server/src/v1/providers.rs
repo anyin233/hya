@@ -75,27 +75,11 @@ async fn update_response(
     provider_id: &str,
     change: &ProviderChange,
 ) -> pb::ProviderUpdate {
-    notify_catalog_updated(st);
+    st.notify_catalog_updated();
     pb::ProviderUpdate {
         provider: super::catalog::provider_info(st, provider_id).await,
         discovery: change.discovery.as_ref().map(discovery_outcome),
     }
-}
-
-/// Emit a catalog change; v1 streams deliver it as a live `catalogUpdated` frame.
-pub(crate) fn notify_catalog_updated(st: &ServerState) {
-    let payload = serde_json::json!({
-        "id": format!(
-            "catalog-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_millis())
-                .unwrap_or(0)
-        ),
-        "type": "catalog.updated",
-        "properties": {}
-    });
-    let _ = st.catalog_updates.send(payload);
 }
 
 pub(crate) async fn upsert_provider(

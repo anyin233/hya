@@ -577,7 +577,7 @@ fn server_stopping_frame(reason: crate::streams::ShutdownReason) -> pb::StreamFr
 }
 
 /// The live-only, process-wide `catalogUpdated` frame of one
-/// `catalog.updated` notice (`crate::state::catalog_notice`): `projectId`
+/// `catalog.updated` notice (`crate::state::publish_catalog_updated`): `projectId`
 /// names the Project whose catalog changed, empty for a global change.
 fn catalog_updated_frame(notice: &serde_json::Value) -> pb::StreamFrame {
     let project_id = notice["properties"]["projectId"]

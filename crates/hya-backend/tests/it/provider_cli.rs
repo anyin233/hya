@@ -298,6 +298,36 @@ fn add_writes_nothing_when_the_endpoint_rejects_the_key() -> TestResult {
     )?;
     assert!(good.status.success(), "{}", text(&good));
     assert!(config(&root).contains("kind: openai"), "{}", config(&root));
+    let key_file = root.join("config/hya/auth/good.yaml");
+    assert!(fs::read_to_string(&key_file)?.contains("sk-good"));
+
+    let replacement = FakeModels::start("sk-new")?;
+    let updated = provider(
+        &root,
+        &[
+            "add",
+            "--name",
+            "good",
+            "--base-url",
+            &replacement.base,
+            "--protocol",
+            "openai-chat",
+            "--api-key",
+            "",
+            "--yes",
+        ],
+        "y\n",
+    )?;
+    assert!(updated.status.success(), "{}", text(&updated));
+    assert!(config(&root).contains(&replacement.base));
+    assert!(!key_file.exists());
+    assert_eq!(replacement.fetches(), 1);
+    assert!(
+        replacement
+            .requests()
+            .iter()
+            .all(|head| !head.to_ascii_lowercase().contains("authorization:"))
+    );
 
     fs::remove_dir_all(root)?;
     Ok(())
