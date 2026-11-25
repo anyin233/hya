@@ -1,6 +1,197 @@
 use super::inbox::Inbox;
 use super::*;
 
+/// Injected when the team quiesces so the main agent synthesizes autonomously.
+const SYNTHESIS_DIRECTIVE: &str = "TEAM QUIESCED — every team member is idle and no mail is in flight. \
+Review the team's results (roster, channels, and your inbox) and produce the final synthesized answer. \
+If more work is genuinely required, delegate it; otherwise conclude.";
+
+/// Per-slot activity, tracked in-memory (the durable mirror is `RosterStatus`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SlotStatus {
+    Idle,
+    Busy,
+}
+
+/// Completion of one explicitly armed resident activation.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ActivationResult {
+    Settled {
+        final_text: String,
+    },
+    Reported {
+        outcome: ReportOutcome,
+        text: String,
+    },
+    Ended {
+        reason: ArchiveReason,
+        status: MemberRunStatus,
+        note: String,
+    },
+}
+
+/// A single activation's completion; cancelling a wait leaves the episode owned.
+pub(crate) struct ActivationWaiter {
+    pub(super) done: oneshot::Receiver<Result<ActivationResult, CoreError>>,
+}
+
+impl ActivationWaiter {
+    pub(crate) async fn wait(&mut self) -> Result<ActivationResult, CoreError> {
+        (&mut self.done).await.map_err(|_| {
+            CoreError::Invalid("episode exited without its activation result".into())
+        })?
+    }
+}
+
+pub(super) struct ActivationCompletion {
+    pub(super) boundary: usize,
+    pub(super) done: oneshot::Sender<Result<ActivationResult, CoreError>>,
+}
+
+pub(super) struct WorkflowActivation {
+    pub(super) resolved: (AgentSpec, ResolvedResidentRuntime),
+    pub(super) guidance: Arc<str>,
+    pub(super) route: Option<WorkflowTurnRoute>,
+    pub(super) done: oneshot::Sender<Result<ActivationResult, CoreError>>,
+}
+
+/// One resident (or the main actor) inside a team.
+pub(super) struct Episode {
+    pub(super) handle: String,
+    pub(super) agent: AgentSpec,
+    /// Immutable runtime snapshot retained for every activation of this slot.
+    pub(super) binding: TurnBinding,
+    pub(super) agents: Option<Arc<[AgentDef]>>,
+    pub(super) resources: Option<AgentResourcePolicy>,
+    /// In-process activation guidance. Workflow actors replace this only while
+    /// idle, before durable mail wakes the next Stage. Recovery invents none.
+    pub(super) guidance: Option<Arc<str>>,
+    /// Fixed request-local route for Workflow resident activations.
+    pub(super) route: Option<WorkflowTurnRoute>,
+    pub(super) activation: Option<ActivationCompletion>,
+    /// Opaque request-scoped sidecar factory, retained only in memory.
+    pub(super) sidecar_factory: Option<Arc<dyn BoundSidecarFactory>>,
+    pub(super) is_main: bool,
+    pub(super) status: SlotStatus,
+    /// New mail has arrived and a turn is owed.
+    pub(super) pending: bool,
+    /// (Main only) a synthesis directive is owed on the next turn.
+    pub(super) synth_pending: bool,
+    /// Present for resident subagents; the main/root actor remains transient.
+    pub(super) claim: Option<ActorClaim>,
+    /// Slot-local cancellation, inherited from the team's cancellation token.
+    pub(super) cancel: CancellationToken,
+    pub(super) ending: Option<Ending>,
+    pub(super) done: EpisodeCompletion,
+    /// Accepted-but-not-yet-executed terminal report (ADR-0015).
+    pub(super) report: Option<PendingReport>,
+    /// The user cancelled this slot's or an ancestor's turn: the harness
+    /// starts no turn on it (owed work stays queued) until the user acts on
+    /// it again with a prompt or a steer.
+    pub(super) user_stopped: bool,
+    /// How many of this handle's inbox messages have already been injected.
+    pub(super) cursor: usize,
+    /// Epoch-ms of the last engine activity observed on the bus for this
+    /// actor. Harness truth only; drives heartbeat values, never scheduling.
+    pub(super) last_activity: Option<u64>,
+    /// When the harness last emitted an `AgentHeartbeat` for this slot; the
+    /// 30-second throttle window anchors here.
+    pub(super) last_heartbeat_emit: Option<Instant>,
+    pub(super) notify: Arc<Notify>,
+}
+
+impl Episode {
+    pub(super) fn request_end(
+        &mut self,
+        engine: &SessionEngine,
+        session: SessionId,
+        ending: Ending,
+    ) -> watch::Receiver<Option<Result<(), CoreError>>> {
+        let done = self.done.subscribe();
+        if self.ending.is_none() {
+            if !self.is_main {
+                engine.cancel_turn(session, ending.cause());
+            }
+            self.ending = Some(ending);
+            self.report = None;
+            self.cancel.cancel();
+            self.notify.notify_one();
+        }
+        done
+    }
+
+    /// Whether this slot owes a turn (mail, a synthesis directive, or its initial
+    /// directive). The single source of truth for "is there work?" under the lock.
+    pub(super) fn has_work(&self) -> bool {
+        self.ending.is_none() && (self.pending || self.synth_pending)
+    }
+}
+
+pub(super) type EpisodeDone = watch::Receiver<Option<Result<(), CoreError>>>;
+type EpisodeCompletion = watch::Sender<Option<Result<(), CoreError>>>;
+
+/// Everything one turn needs, snapshotted atomically under the team lock so the
+/// (long, unlocked) turn runs against a stable plan.
+pub(super) struct RunPlan {
+    pub(super) agent: AgentSpec,
+    pub(super) binding: TurnBinding,
+    pub(super) agents: Option<Arc<[AgentDef]>>,
+    pub(super) resources: Option<AgentResourcePolicy>,
+    pub(super) guidance: Option<Arc<str>>,
+    pub(super) route: Option<WorkflowTurnRoute>,
+    pub(super) sidecar_factory: Option<Arc<dyn BoundSidecarFactory>>,
+    pub(super) handle: String,
+    pub(super) is_main: bool,
+    /// Inbox messages before this index are already injected.
+    pub(super) cursor: usize,
+    /// (Main only) inject the synthesis directive before the turn.
+    pub(super) synth: bool,
+    pub(super) claim: Option<ActorClaim>,
+    pub(super) cancel: CancellationToken,
+    /// The session's single-active-turn claim, taken atomically with the
+    /// decision to run and held until the turn ends.
+    pub(super) lease: TurnLease,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TurnOutcome {
+    NotStarted,
+    Finished {
+        inbox_through: u64,
+    },
+    Cancelled {
+        cause: Option<FinishCause>,
+        mail_owed: bool,
+    },
+}
+
+/// What a resident task should do next, decided atomically under the team lock.
+pub(super) enum Action {
+    /// Run exactly one turn per the snapshotted [`RunPlan`].
+    Run(Box<RunPlan>),
+    /// No work owed; the slot just transitioned to idle (`became_idle` gates the
+    /// roster activity emission so it fires once per idle transition).
+    Idle {
+        handle: String,
+        claim: Option<ActorClaim>,
+        became_idle: bool,
+    },
+    /// The episode task runs the requested ending after its current turn.
+    End(Ending),
+}
+
+/// The resident actor loop for one session: park at zero cost, then run turns
+/// (with follow-ups for mail that arrived mid-turn) until it owes none, then park
+/// again. Exits when the team is killed or the supervisor is dropped.
+pub(super) struct EpisodeInit {
+    pub(super) binding: TurnBinding,
+    pub(super) agent: hya_proto::AgentName,
+    pub(super) parent: SessionId,
+    pub(super) envelopes: Vec<hya_proto::Envelope>,
+    pub(super) published: oneshot::Receiver<()>,
+    pub(super) ready: oneshot::Sender<Result<(), CoreError>>,
+}
+
 async fn initialize_episode(
     team: &TeamActor,
     claim: &ActorClaim,
@@ -952,193 +1143,4 @@ impl TeamActor {
             }
         })
     }
-
-    pub(super) async fn settle_activation(
-        &self,
-        session: SessionId,
-        claim: Option<&ActorClaim>,
-    ) -> Result<(), CoreError> {
-        let eligible = |slot: &Episode| {
-            slot.claim.as_ref() == claim
-                && slot.status == SlotStatus::Idle
-                && !slot.has_work()
-                && !slot.user_stopped
-                && slot.ending.is_none()
-                && slot.report.is_none()
-                && slot
-                    .activation
-                    .as_ref()
-                    .is_some_and(|activation| slot.cursor >= activation.boundary)
-        };
-        if !self.lock().residents.get(&session).is_some_and(eligible) {
-            return Ok(());
-        }
-        let final_text = last_assistant_text(&*self.engine.read_projection_shared(session).await?);
-        let root = self.engine.read_projection_shared(self.root).await?;
-        let mut state = self.lock();
-        if let Some(slot) = state
-            .residents
-            .get_mut(&session)
-            .filter(|slot| eligible(slot))
-            .filter(|slot| {
-                root.team.roster.get(&slot.handle).is_some_and(|entry| {
-                    entry.resident_work.is_none()
-                        && slot.activation.as_ref().is_some_and(|activation| {
-                            entry.resident_cursor >= activation.boundary as u64
-                        })
-                        && root
-                            .team
-                            .unread_incoming_mail(&slot.handle, entry.resident_cursor)
-                            .next()
-                            .is_none()
-                        && !root
-                            .team
-                            .roster
-                            .keys()
-                            .any(|path| scope::parent_path(path) == Some(slot.handle.as_str()))
-                })
-            })
-        {
-            slot.route = None;
-            if let Some(activation) = slot.activation.take() {
-                let _ = activation
-                    .done
-                    .send(Ok(ActivationResult::Settled { final_text }));
-            }
-        }
-        Ok(())
-    }
-
-    /// A member whose turn ended normally with a text answer, no accepted
-    /// report and nothing queued for it reports that answer (outcome `done`)
-    /// through the same pending-report path as the `report` tool. Called
-    /// before the slot goes idle, so a parent's `wait` never sees a stall in
-    /// between. Unread mail or live children (the report gate), an empty
-    /// answer, or a Workflow activation (which settles on its final text)
-    /// leave the member idle as before.
-    async fn report_final_answer(
-        &self,
-        session: SessionId,
-        claim: Option<&ActorClaim>,
-        handle: &str,
-    ) -> Result<(), CoreError> {
-        let eligible = |slot: &Episode| {
-            slot.claim.as_ref() == claim
-                && !slot.is_main
-                && !slot.user_stopped
-                && slot.ending.is_none()
-                && slot.report.is_none()
-                && slot.activation.is_none()
-        };
-        if !self.lock().residents.get(&session).is_some_and(eligible) {
-            return Ok(());
-        }
-        let answer = last_assistant_text(&*self.engine.read_projection_shared(session).await?);
-        let answer = answer.trim();
-        if answer.is_empty() {
-            return Ok(());
-        }
-        match super::ending::report_gate_projection(&self.engine, self.root, handle).await {
-            Ok(_) => {}
-            Err(CoreError::Invalid(_)) => return Ok(()),
-            Err(error) => return Err(error),
-        }
-        if let Some(slot) = self
-            .lock()
-            .residents
-            .get_mut(&session)
-            .filter(|slot| eligible(slot))
-        {
-            slot.report = Some(PendingReport {
-                outcome: ReportOutcome::Done,
-                report: answer.to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    fn pending_report(
-        &self,
-        session: SessionId,
-        claim: Option<&ActorClaim>,
-    ) -> Option<PendingReport> {
-        self.lock()
-            .residents
-            .get(&session)
-            .filter(|slot| slot.claim.as_ref() == claim && slot.ending.is_none())
-            .and_then(|slot| slot.report.clone())
-    }
-
-    pub(super) fn take_episode(
-        &self,
-        session: SessionId,
-        claim: Option<&ActorClaim>,
-    ) -> Option<Episode> {
-        let done = {
-            let mut state = self.lock();
-            let std::collections::hash_map::Entry::Occupied(entry) = state.residents.entry(session)
-            else {
-                return None;
-            };
-            if entry.get().claim.as_ref() != claim {
-                return None;
-            }
-            let slot = entry.remove();
-            if slot.status == SlotStatus::Busy {
-                state.busy = state.busy.saturating_sub(1);
-            }
-            if state.main_session == Some(session) {
-                state.main_session = None;
-            }
-            self.maybe_fire_quiescence(&mut state);
-            slot
-        };
-        self.wake_activated_parent(&done.handle);
-        self.forget_episode(session, claim);
-        Some(done)
-    }
-
-    pub(super) fn wake_activated_parent(&self, child: &str) {
-        if let Some(parent) = scope::parent_path(child)
-            && let Some(slot) = self
-                .lock()
-                .residents
-                .values()
-                .find(|slot| slot.handle == parent && slot.activation.is_some())
-        {
-            slot.notify.notify_one();
-        }
-    }
-
-    fn complete_episode(
-        &self,
-        session: SessionId,
-        claim: Option<&ActorClaim>,
-        result: Result<(), CoreError>,
-    ) {
-        if let Some(slot) = self.take_episode(session, claim) {
-            slot.done.send_replace(Some(result));
-        }
-    }
-}
-
-/// The text parts of the session's last assistant message ("" when none).
-fn last_assistant_text(projection: &hya_proto::Projection) -> String {
-    projection
-        .session
-        .messages
-        .iter()
-        .rev()
-        .find(|message| message.role == hya_proto::Role::Assistant)
-        .map(|message| {
-            message
-                .parts
-                .iter()
-                .filter_map(|part| match part {
-                    hya_proto::PartProjection::Text { text, .. } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<String>()
-        })
-        .unwrap_or_default()
 }

@@ -3,7 +3,7 @@
 use super::inbox::{recipient_channel_role, resident_delivery_allowed};
 use super::*;
 use crate::{CreateSession, EventBus};
-use hya_proto::{AgentName, MailKind, ModelRef, SessionKind};
+use hya_proto::{AgentName, ChannelKind, MailKind, ModelRef, SessionKind, SubagentMode};
 use hya_provider::{DevProvider, ProviderRouter};
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};

@@ -1625,11 +1625,15 @@ Team-related code is split across:
 - [`workspace.rs`](../../crates/hya-engine/src/workspace.rs)
 - [`category.rs`](../../crates/hya-engine/src/category.rs)
 
-There is no `team.rs` and no in-memory `TeamControlPlane`. Every spawned subagent
-is an episodic resident actor ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)),
-and inter-agent mail and channels are event-sourced (`MailSent`, `ChannelJoined`,
-`ChannelLeft`) on the team-root log and folded by `hya-proto::Projection` (see
-[ADR-0001](../adr/0001-event-sourced-mailbox-and-channels.md)).
+[`actor/team.rs`](../../crates/hya-engine/src/actor/team.rs) owns the live team
+state, and [`actor/team_mail.rs`](../../crates/hya-engine/src/actor/team_mail.rs)
+handles mail routing and catch-up. Resident registration and revival live in
+[`actor/spawn.rs`](../../crates/hya-engine/src/actor/spawn.rs) and
+[`actor/recovery.rs`](../../crates/hya-engine/src/actor/recovery.rs). Every
+spawned subagent is an episodic resident actor
+([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)). Inter-agent mail
+and channels are event-sourced on the team-root log and folded by
+`hya_proto::Projection` ([ADR-0001](../adr/0001-event-sourced-mailbox-and-channels.md)).
 
 Live wake, catch-up, and resident turns share the projected inbox reader in
 [`actor/inbox.rs`](../../crates/hya-engine/src/actor/inbox.rs). Live routing starts
