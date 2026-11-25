@@ -102,52 +102,6 @@ fn data_len(frame: &Chunk) -> Option<usize> {
     }
 }
 
-#[tokio::test]
-async fn round_trip_both_directions() {
-    let keys = keys();
-    let (client, host) = pair::<Chunk, Chunk>(8);
-    let (mut i, mut r) = connect(&keys, client, host, TunnelConfig::default()).await;
-
-    i.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
-    i.flush().await.unwrap();
-    let mut buf = [0u8; 18];
-    r.read_exact(&mut buf).await.unwrap();
-    assert_eq!(&buf, b"GET / HTTP/1.1\r\n\r\n");
-
-    r.write_all(b"HTTP/1.1 200 OK\r\n").await.unwrap();
-    r.flush().await.unwrap();
-    let mut buf = [0u8; 17];
-    i.read_exact(&mut buf).await.unwrap();
-    assert_eq!(&buf, b"HTTP/1.1 200 OK\r\n");
-}
-
-#[tokio::test]
-async fn initiate_link_uses_link_keys_and_room() {
-    let keys = keys();
-    let address = RelayAddress::parse_proxy_url("https://relay.example.com").unwrap();
-    let link = RelayLink::new(
-        address,
-        keys.room.clone(),
-        Transport::Auto,
-        *keys.server.public(),
-        *keys.psk.as_bytes(),
-    );
-    let (client, host) = pair::<Chunk, Chunk>(8);
-    let config = TunnelConfig::default();
-    let (i, r) = tokio::join!(
-        NoiseStream::initiate_link(client, &link, config),
-        NoiseStream::respond(host, &keys.room, &keys.server, &keys.psk, config),
-    );
-    let (mut i, mut r) = (i.unwrap(), r.unwrap());
-    i.write_all(b"ping").await.unwrap();
-    i.flush().await.unwrap();
-    let mut buf = [0u8; 4];
-    r.read_exact(&mut buf).await.unwrap();
-    assert_eq!(&buf, b"ping");
-}
-
-/// Run a handshake where the client uses `client_*` parameters, returning
-/// both results and the number of data frames that reached the host.
 async fn mismatched_handshake(
     keys: &Keys,
     client_room: &RoomId,
@@ -176,34 +130,162 @@ async fn mismatched_handshake(
     (i, r, frames)
 }
 
-#[tokio::test]
-async fn wrong_psk_fails_on_responder_before_app_data() {
+async fn bidirectional_chunked_round_trip(payload_len: usize) {
     let keys = keys();
-    let wrong = Psk::generate().unwrap();
-    let (i, r, frames) =
-        mismatched_handshake(&keys, &keys.room, keys.server.public(), &wrong).await;
-    assert!(matches!(r, Err(TunnelError::Handshake(_))), "{r:?}");
-    assert!(i.is_err(), "initiator must not complete: {:?}", i.is_ok());
-    // Only the first handshake message ever reached the host.
-    assert_eq!(frames, 1);
+    let (client, host) = pair::<Chunk, Chunk>(4);
+    let config = TunnelConfig::default()
+        .with_max_record_plaintext(1000)
+        .unwrap();
+    let (i, r) = connect(&keys, client, host, config).await;
+
+    let payload: Vec<u8> = (0..payload_len as u32)
+        .map(|n| (n.wrapping_mul(2_654_435_761) >> 13) as u8)
+        .collect();
+    let reversed: Vec<u8> = payload.iter().rev().copied().collect();
+
+    let (mut i_read, mut i_write) = tokio::io::split(i);
+    let (mut r_read, mut r_write) = tokio::io::split(r);
+
+    let send_i = {
+        let payload = payload.clone();
+        async move {
+            i_write.write_all(&payload).await.unwrap();
+            i_write.shutdown().await.unwrap();
+        }
+    };
+    let send_r = {
+        let reversed = reversed.clone();
+        async move {
+            r_write.write_all(&reversed).await.unwrap();
+            r_write.shutdown().await.unwrap();
+        }
+    };
+    let recv_r = async move {
+        let mut got = Vec::new();
+        r_read.read_to_end(&mut got).await.unwrap();
+        got
+    };
+    let recv_i = async move {
+        let mut got = Vec::new();
+        i_read.read_to_end(&mut got).await.unwrap();
+        got
+    };
+    let ((), (), at_host, at_client) = tokio::time::timeout(Duration::from_secs(60), async {
+        tokio::join!(send_i, send_r, recv_r, recv_i)
+    })
+    .await
+    .expect("chunked transfer stalled");
+    assert!(at_host == payload, "host payload mismatch");
+    assert!(at_client == reversed, "client payload mismatch");
 }
 
 #[tokio::test]
-async fn wrong_server_key_fails() {
+async fn round_trip_both_directions_and_initiate_link() {
     let keys = keys();
-    let other = StaticKeypair::generate().unwrap();
-    let (i, r, _) = mismatched_handshake(&keys, &keys.room, other.public(), &keys.psk).await;
-    assert!(matches!(r, Err(TunnelError::Handshake(_))), "{r:?}");
-    assert!(i.is_err());
+    let (client, host) = pair::<Chunk, Chunk>(8);
+    let (mut i, mut r) = connect(&keys, client, host, TunnelConfig::default()).await;
+
+    i.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
+    i.flush().await.unwrap();
+    let mut buf = [0u8; 18];
+    r.read_exact(&mut buf).await.unwrap();
+    assert_eq!(&buf, b"GET / HTTP/1.1\r\n\r\n");
+
+    r.write_all(b"HTTP/1.1 200 OK\r\n").await.unwrap();
+    r.flush().await.unwrap();
+    let mut buf = [0u8; 17];
+    i.read_exact(&mut buf).await.unwrap();
+    assert_eq!(&buf, b"HTTP/1.1 200 OK\r\n");
+
+    // initiate_link uses the link's keys and room.
+    let address = RelayAddress::parse_proxy_url("https://relay.example.com").unwrap();
+    let link = RelayLink::new(
+        address,
+        keys.room.clone(),
+        Transport::Auto,
+        *keys.server.public(),
+        *keys.psk.as_bytes(),
+    );
+    let (client, host) = pair::<Chunk, Chunk>(8);
+    let config = TunnelConfig::default();
+    let (i, r) = tokio::join!(
+        NoiseStream::initiate_link(client, &link, config),
+        NoiseStream::respond(host, &keys.room, &keys.server, &keys.psk, config),
+    );
+    let (mut i, mut r) = (i.unwrap(), r.unwrap());
+    i.write_all(b"ping").await.unwrap();
+    i.flush().await.unwrap();
+    let mut buf = [0u8; 4];
+    r.read_exact(&mut buf).await.unwrap();
+    assert_eq!(&buf, b"ping");
 }
 
 #[tokio::test]
-async fn room_prologue_mismatch_fails() {
+async fn handshake_rejects_mismatched_credentials_prologue_and_early_close() {
     let keys = keys();
+    let wrong_psk = Psk::generate().unwrap();
+    let other_key = StaticKeypair::generate().unwrap();
     let other_room = room(9);
-    let (i, r, _) = mismatched_handshake(&keys, &other_room, keys.server.public(), &keys.psk).await;
-    assert!(matches!(r, Err(TunnelError::Handshake(_))), "{r:?}");
-    assert!(i.is_err());
+
+    for (label, client_room, server_key, psk, check_single_frame) in [
+        (
+            "wrong psk",
+            &keys.room,
+            keys.server.public(),
+            &wrong_psk,
+            true,
+        ),
+        (
+            "wrong server key",
+            &keys.room,
+            other_key.public(),
+            &keys.psk,
+            false,
+        ),
+        (
+            "wrong room prologue",
+            &other_room,
+            keys.server.public(),
+            &keys.psk,
+            false,
+        ),
+    ] {
+        let (i, r, frames) = mismatched_handshake(&keys, client_room, server_key, psk).await;
+        assert!(
+            matches!(r, Err(TunnelError::Handshake(_))),
+            "{label}: {r:?}"
+        );
+        assert!(i.is_err(), "{label}: initiator must not complete");
+        if check_single_frame {
+            assert_eq!(frames, 1, "{label}: only handshake msg1 should reach host");
+        }
+    }
+
+    // Peer closing before completing handshake fails initiator after msg1.
+    let (client, mut host) = pair::<Chunk, Chunk>(8);
+    let driver = tokio::spawn(async move {
+        let first = host.next().await;
+        host.send(Chunk {
+            frame: Some(chunk::Frame::Close(Close {})),
+        })
+        .await
+        .unwrap();
+        first
+    });
+    let result = NoiseStream::initiate(
+        client,
+        &keys.room,
+        keys.server.public(),
+        &keys.psk,
+        TunnelConfig::default(),
+    )
+    .await;
+    assert!(matches!(result, Err(TunnelError::Handshake(_))));
+    let first = driver.await.unwrap().unwrap().unwrap();
+    assert!(
+        data_len(&first).is_some(),
+        "initiator sends msg1 immediately"
+    );
 }
 
 #[tokio::test]
@@ -252,53 +334,15 @@ async fn tampered_ciphertext_is_fatal_without_partial_plaintext() {
 }
 
 #[tokio::test]
+async fn chunked_round_trip_with_small_records_both_directions() {
+    // 256 KiB at 1000-byte records exercises 263+ chunked AEAD frames each way.
+    bidirectional_chunked_round_trip(256 * 1024).await;
+}
+
+#[tokio::test]
+#[ignore = "nightly soak"]
 async fn five_mib_round_trip_with_small_records_both_directions() {
-    let keys = keys();
-    let (client, host) = pair::<Chunk, Chunk>(4);
-    let config = TunnelConfig::default()
-        .with_max_record_plaintext(1000)
-        .unwrap();
-    let (i, r) = connect(&keys, client, host, config).await;
-
-    let payload: Vec<u8> = (0..5 * 1024 * 1024u32)
-        .map(|n| (n.wrapping_mul(2_654_435_761) >> 13) as u8)
-        .collect();
-    let reversed: Vec<u8> = payload.iter().rev().copied().collect();
-
-    let (mut i_read, mut i_write) = tokio::io::split(i);
-    let (mut r_read, mut r_write) = tokio::io::split(r);
-
-    let send_i = {
-        let payload = payload.clone();
-        async move {
-            i_write.write_all(&payload).await.unwrap();
-            i_write.shutdown().await.unwrap();
-        }
-    };
-    let send_r = {
-        let reversed = reversed.clone();
-        async move {
-            r_write.write_all(&reversed).await.unwrap();
-            r_write.shutdown().await.unwrap();
-        }
-    };
-    let recv_r = async move {
-        let mut got = Vec::new();
-        r_read.read_to_end(&mut got).await.unwrap();
-        got
-    };
-    let recv_i = async move {
-        let mut got = Vec::new();
-        i_read.read_to_end(&mut got).await.unwrap();
-        got
-    };
-    let ((), (), at_host, at_client) = tokio::time::timeout(Duration::from_secs(60), async {
-        tokio::join!(send_i, send_r, recv_r, recv_i)
-    })
-    .await
-    .expect("5 MiB transfer stalled");
-    assert!(at_host == payload, "host payload mismatch");
-    assert!(at_client == reversed, "client payload mismatch");
+    bidirectional_chunked_round_trip(5 * 1024 * 1024).await;
 }
 
 #[tokio::test]
@@ -360,11 +404,9 @@ async fn writer_blocks_when_transport_is_full() {
         .unwrap();
     let (mut i, mut r) = connect(&keys, client, host, config).await;
 
-    // The responder is not reading, so the channel fills up and the writer
-    // must stop accepting bytes instead of buffering them.
     let block = vec![0x5a; record];
     let mut accepted = 0usize;
-    while let Ok(n) = tokio::time::timeout(Duration::from_millis(100), i.write(&block)).await {
+    while let Ok(n) = tokio::time::timeout(Duration::from_millis(30), i.write(&block)).await {
         accepted += n.unwrap();
         assert!(
             accepted <= record * (capacity + 2),
@@ -373,7 +415,6 @@ async fn writer_blocks_when_transport_is_full() {
     }
     assert!(accepted >= record, "writer never made progress");
 
-    // Draining the responder unblocks the writer.
     let reader = tokio::spawn(async move {
         let mut got = Vec::new();
         r.read_to_end(&mut got).await.unwrap();
@@ -432,8 +473,6 @@ async fn heartbeats_and_unknown_frames_are_transparent_and_probes_get_pongs() {
     i.read_to_end(&mut got).await.unwrap();
     assert_eq!(got, b"world");
 
-    // Both endpoints answered probes (the pong travels back toward the
-    // side that the probe impersonated).
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let seen = pongs.lock().unwrap().clone();
@@ -483,38 +522,8 @@ async fn relay_error_frame_surfaces_code() {
     }
 }
 
-#[tokio::test]
-async fn handshake_fails_when_peer_closes_first() {
-    let keys = keys();
-    let (client, host) = pair::<Chunk, Chunk>(8);
-    let mut host = host;
-    let driver = tokio::spawn(async move {
-        let first = host.next().await;
-        host.send(Chunk {
-            frame: Some(chunk::Frame::Close(Close {})),
-        })
-        .await
-        .unwrap();
-        first
-    });
-    let result = NoiseStream::initiate(
-        client,
-        &keys.room,
-        keys.server.public(),
-        &keys.psk,
-        TunnelConfig::default(),
-    )
-    .await;
-    assert!(matches!(result, Err(TunnelError::Handshake(_))));
-    let first = driver.await.unwrap().unwrap().unwrap();
-    assert!(
-        data_len(&first).is_some(),
-        "initiator sends msg1 immediately"
-    );
-}
-
 #[test]
-fn record_size_is_validated() {
+fn config_record_size_and_key_redaction_invariants() {
     assert!(
         TunnelConfig::default()
             .with_max_record_plaintext(0)
@@ -531,10 +540,7 @@ fn record_size_is_validated() {
         .unwrap();
     assert_eq!(config.max_record_plaintext(), MAX_RECORD_PLAINTEXT);
     assert_eq!(TunnelConfig::default().max_record_plaintext(), 16 * 1024);
-}
 
-#[test]
-fn static_keypair_derives_public_from_secret_and_redacts() {
     let pair = StaticKeypair::generate().unwrap();
     let again = StaticKeypair::from_secret(*pair.secret()).unwrap();
     assert_eq!(pair.public(), again.public());

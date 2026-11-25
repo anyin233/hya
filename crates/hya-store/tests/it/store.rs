@@ -1,4 +1,4 @@
-//! Migrations, idempotent replay by sequence, and session-scoped projection.
+//! Migrations, idempotent replay by sequence, session-scoped projection, and deletion cascades.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -7,23 +7,27 @@ use hya_proto::{
 };
 use hya_store::{SessionStore, StoreError};
 
+fn created(session: SessionId, parent: Option<SessionId>) -> Event {
+    Event::SessionCreated {
+        session,
+        parent,
+        agent: "build".into(),
+        model: "fake".into(),
+        workdir: "/tmp".into(),
+        project: None,
+        kind: hya_proto::SessionKind::Project,
+    }
+}
+
 #[tokio::test]
-async fn migration_applies_and_projection_is_correct() {
+async fn migration_projection_and_idempotent_reducer() {
     let store = SessionStore::connect_memory().await.unwrap();
     let s = SessionId::new();
     let m = MessageId::new();
     let p = PartId::new();
 
-    let events = [
-        Event::SessionCreated {
-            session: s,
-            parent: None,
-            agent: "build".into(),
-            model: "fake".into(),
-            workdir: "/tmp".into(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        },
+    for e in [
+        created(s, None),
         Event::MessageStarted {
             session: s,
             message: m,
@@ -56,231 +60,84 @@ async fn migration_applies_and_projection_is_correct() {
             tokens: None,
             cause: None,
         },
-    ];
-    for e in &events {
-        store.append_event(s, e).await.unwrap();
+    ] {
+        store.append_event(s, &e).await.unwrap();
     }
 
     let envs = store.replay(s).await.unwrap();
     assert_eq!(envs.len(), 6);
-    assert_eq!(envs[0].seq, EventSeq(1));
-    assert_eq!(envs[5].seq, EventSeq(6));
+    assert_eq!((envs[0].seq, envs[5].seq), (EventSeq(1), EventSeq(6)));
 
     let proj = store.read_projection(s).await.unwrap();
     assert_eq!(proj.session.id, Some(s));
     assert_eq!(proj.session.messages.len(), 1);
-    let msg = &proj.session.messages[0];
-    assert_eq!(msg.finish, Some(FinishReason::Stop));
-    assert_eq!(msg.parts.len(), 1);
-    match &msg.parts[0] {
-        PartProjection::Text { text, .. } => assert_eq!(text, "Hello world"),
-        other => panic!("expected text part, got {other:?}"),
-    }
-
+    assert_eq!(proj.session.messages[0].finish, Some(FinishReason::Stop));
+    assert!(matches!(
+        &proj.session.messages[0].parts[0],
+        PartProjection::Text { text, .. } if text == "Hello world"
+    ));
     assert_eq!(Projection::from_events(&envs), proj);
+
+    // Reducer is idempotent when re-applying the same seq.
+    let mut idemp = Projection::default();
+    idemp.apply(&envs[0]);
+    let once = idemp.clone();
+    idemp.apply(&envs[0]);
+    assert_eq!(idemp, once);
 }
 
 #[tokio::test]
-async fn reducer_is_idempotent_by_seq() {
-    let s = SessionId::new();
-    let env = hya_proto::Envelope {
-        seq: EventSeq(1),
-        ts_millis: 0,
-        event: Event::SessionTitled {
-            session: s,
-            title: "t".into(),
-        },
-    };
-    let mut proj = Projection::default();
-    proj.apply(&env);
-    let once = proj.clone();
-    proj.apply(&env);
-    assert_eq!(proj, once);
-}
-
-#[tokio::test]
-async fn replay_is_session_scoped() {
+async fn replay_list_and_session_info_are_scoped_and_handle_hysec_ids() {
     let store = SessionStore::connect_memory().await.unwrap();
     let a = SessionId::new();
     let b = SessionId::new();
-    store
-        .append_event(
-            a,
-            &Event::SessionTitled {
-                session: a,
-                title: "a".into(),
-            },
-        )
-        .await
-        .unwrap();
-    store
-        .append_event(
-            b,
-            &Event::SessionTitled {
-                session: b,
-                title: "b".into(),
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(store.replay(a).await.unwrap().len(), 1);
-    assert_eq!(store.replay(b).await.unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn list_sessions_returns_each_session_with_count() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let a = SessionId::new();
-    let b = SessionId::new();
-    for s in [a, b] {
-        store
-            .append_event(
-                s,
-                &Event::SessionTitled {
-                    session: s,
-                    title: "one".into(),
-                },
-            )
-            .await
-            .unwrap();
-        store
-            .append_event(
-                s,
-                &Event::SessionTitled {
-                    session: s,
-                    title: "two".into(),
-                },
-            )
-            .await
-            .unwrap();
+    for (s, titles) in [(a, ["a1", "a2"].as_slice()), (b, ["b1"].as_slice())] {
+        for title in titles {
+            store
+                .append_event(
+                    s,
+                    &Event::SessionTitled {
+                        session: s,
+                        title: (*title).into(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
     }
+    assert_eq!(store.replay(a).await.unwrap().len(), 2);
+    assert_eq!(store.replay(b).await.unwrap().len(), 1);
+
     let sessions = store.list_sessions().await.unwrap();
     assert_eq!(sessions.len(), 2);
-    let ids: Vec<SessionId> = sessions.iter().map(|s| s.session).collect();
-    assert!(ids.contains(&a) && ids.contains(&b));
-    let info_a = sessions.iter().find(|s| s.session == a).unwrap();
+    let info_a = sessions.iter().find(|s| s.session == a).unwrap().clone();
     assert_eq!(info_a.events, 2);
-}
+    assert_eq!(store.session_info(a).await.unwrap(), Some(info_a));
+    assert_eq!(store.session_info(SessionId::new()).await.unwrap(), None);
 
-#[tokio::test]
-async fn hysec_session_round_trips_through_replay_list_and_delete() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let session: SessionId = "hysec_ABCDEFGHIJKLMNOPQRST".parse().unwrap();
-    let event = Event::SessionCreated {
-        session,
-        parent: None,
-        agent: "build".into(),
-        model: "fake".into(),
-        workdir: "/tmp".into(),
-        project: None,
-        kind: hya_proto::SessionKind::Project,
-    };
-
-    let (seq, ts) = store.append_event(session, &event).await.unwrap();
-    let envelopes = store.replay(session).await.unwrap();
-    let sessions = store.list_sessions().await.unwrap();
-    let listed = sessions
-        .iter()
-        .find(|info| info.session == session)
-        .unwrap();
-
-    assert_eq!(seq, EventSeq(1));
+    // `hysec_` session IDs round-trip through append, replay, list, and delete.
+    let hysec: SessionId = "hysec_ABCDEFGHIJKLMNOPQRST".parse().unwrap();
+    let ev = created(hysec, None);
+    let (seq, ts) = store.append_event(hysec, &ev).await.unwrap();
+    let envelopes = store.replay(hysec).await.unwrap();
     assert_eq!(envelopes.len(), 1);
-    assert_eq!(envelopes[0].event, event);
-    assert_eq!(envelopes[0].ts_millis, ts);
-    assert_eq!(listed.events, 1);
-    assert!(store.delete_session(session).await.unwrap());
-    assert!(store.replay(session).await.unwrap().is_empty());
+    assert_eq!((envelopes[0].seq, envelopes[0].ts_millis), (seq, ts));
+    assert_eq!(envelopes[0].event, ev);
+    assert_eq!(store.session_info(hysec).await.unwrap().unwrap().events, 1);
+    assert!(store.delete_session(hysec).await.unwrap());
+    assert!(store.replay(hysec).await.unwrap().is_empty());
     assert!(
         store
             .list_sessions()
             .await
             .unwrap()
             .iter()
-            .all(|info| info.session != session)
+            .all(|info| info.session != hysec)
     );
 }
 
 #[tokio::test]
-async fn session_info_matches_the_listed_row() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let listed = SessionId::new();
-    let other = SessionId::new();
-    for (session, title) in [(listed, "a"), (other, "b"), (listed, "c")] {
-        store
-            .append_event(
-                session,
-                &Event::SessionTitled {
-                    session,
-                    title: title.into(),
-                },
-            )
-            .await
-            .unwrap();
-    }
-    let row = store
-        .list_sessions()
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|row| row.session == listed)
-        .unwrap();
-    assert_eq!(store.session_info(listed).await.unwrap(), Some(row));
-    assert_eq!(store.session_info(SessionId::new()).await.unwrap(), None);
-}
-
-/// `delete_session_at` deletes only a log that did not grow past the
-/// sequence the caller checked (the server's drop of an unused ephemeral
-/// session: a write that lands after the check keeps the session).
-#[tokio::test]
-async fn delete_session_at_keeps_a_log_that_grew_since_the_check() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let session = SessionId::new();
-    let other = SessionId::new();
-    let created = Event::SessionCreated {
-        session,
-        parent: None,
-        agent: "build".into(),
-        model: "fake".into(),
-        workdir: "/tmp".into(),
-        project: None,
-        kind: hya_proto::SessionKind::Project,
-    };
-    let (checked, _) = store.append_event(session, &created).await.unwrap();
-    // Another session's writes move the global sequence, not this log's.
-    store
-        .append_event(
-            other,
-            &Event::SessionTitled {
-                session: other,
-                title: "other".into(),
-            },
-        )
-        .await
-        .unwrap();
-    let (grown, _) = store
-        .append_event(
-            session,
-            &Event::SessionTitled {
-                session,
-                title: "renamed".into(),
-            },
-        )
-        .await
-        .unwrap();
-
-    assert!(!store.delete_session_at(session, checked).await.unwrap());
-    assert_eq!(store.replay(session).await.unwrap().len(), 2);
-    assert!(store.delete_session_at(session, grown).await.unwrap());
-    assert!(store.replay(session).await.unwrap().is_empty());
-    assert!(!store.session_exists(session).await.unwrap());
-    // A missing session is not deleted twice.
-    assert!(!store.delete_session_at(session, grown).await.unwrap());
-    assert_eq!(store.replay(other).await.unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn deleting_session_deletes_all_descendants_but_not_unrelated_sessions() {
+async fn delete_session_cascades_descendants_without_touching_unrelated_sessions() {
     let store = SessionStore::connect_memory().await.unwrap();
     let root = SessionId::new();
     let child = SessionId::new();
@@ -294,18 +151,7 @@ async fn deleting_session_deletes_all_descendants_but_not_unrelated_sessions() {
         (unrelated, None),
     ] {
         store
-            .append_event(
-                session,
-                &Event::SessionCreated {
-                    session,
-                    parent,
-                    agent: "build".into(),
-                    model: "fake".into(),
-                    workdir: "/tmp".into(),
-                    project: None,
-                    kind: hya_proto::SessionKind::Project,
-                },
-            )
+            .append_event(session, &created(session, parent))
             .await
             .unwrap();
     }
@@ -319,7 +165,6 @@ async fn deleting_session_deletes_all_descendants_but_not_unrelated_sessions() {
     );
 
     assert!(store.delete_session(root).await.unwrap());
-
     for deleted in [root, child, grandchild] {
         assert!(!store.session_exists(deleted).await.unwrap());
         assert!(store.replay(deleted).await.unwrap().is_empty());
@@ -333,31 +178,25 @@ async fn deleting_session_deletes_all_descendants_but_not_unrelated_sessions() {
 }
 
 #[tokio::test]
-async fn delete_session_at_cascades_only_after_root_check() {
+async fn delete_session_at_guards_root_growth_and_cascades_children() {
     let store = SessionStore::connect_memory().await.unwrap();
     let root = SessionId::new();
     let child = SessionId::new();
-    let root_created = Event::SessionCreated {
-        session: root,
-        parent: None,
-        agent: "build".into(),
-        model: "fake".into(),
-        workdir: "/tmp".into(),
-        project: None,
-        kind: hya_proto::SessionKind::Project,
-    };
-    let (checked, _) = store.append_event(root, &root_created).await.unwrap();
+    let other = SessionId::new();
+    let (checked, _) = store
+        .append_event(root, &created(root, None))
+        .await
+        .unwrap();
+    store
+        .append_event(child, &created(child, Some(root)))
+        .await
+        .unwrap();
     store
         .append_event(
-            child,
-            &Event::SessionCreated {
-                session: child,
-                parent: Some(root),
-                agent: "worker".into(),
-                model: "fake".into(),
-                workdir: "/tmp".into(),
-                project: None,
-                kind: hya_proto::SessionKind::Project,
+            other,
+            &Event::SessionTitled {
+                session: other,
+                title: "other".into(),
             },
         )
         .await
@@ -380,6 +219,8 @@ async fn delete_session_at_cascades_only_after_root_check() {
     assert!(store.delete_session_at(root, grown).await.unwrap());
     assert!(!store.session_exists(root).await.unwrap());
     assert!(!store.session_exists(child).await.unwrap());
+    assert!(!store.delete_session_at(root, grown).await.unwrap());
+    assert_eq!(store.replay(other).await.unwrap().len(), 1);
 }
 
 #[test]

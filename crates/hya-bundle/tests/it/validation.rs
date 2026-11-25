@@ -1,9 +1,12 @@
-//! Manifest validation: alias collisions and `can_spawn` resolution across the catalog.
+//! Manifest validation: aliases, `can_spawn`, executable/hook rules, removed keys, and namespaces.
+
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use hya_bundle::{
     BundleCatalog, BundleError, BundleSource, ExportKind, PreparedCatalog, SourceFile,
     prepare_package,
 };
+use sha2::{Digest, Sha256};
 
 fn agent_source(root: &str, bundle_id: &str, stable_id: &str, can_spawn: &[&str]) -> BundleSource {
     let can_spawn = if can_spawn.is_empty() {
@@ -11,219 +14,17 @@ fn agent_source(root: &str, bundle_id: &str, stable_id: &str, can_spawn: &[&str]
     } else {
         can_spawn
             .iter()
-            .map(|target| format!("      - {target}"))
+            .map(|t| format!("      - {t}"))
             .collect::<Vec<_>>()
             .join("\n")
     };
     let manifest = format!(
-        r#"kind: Bundle
-identity:
-  id: {bundle_id}
-  version: 1.0.0
-  publisher: hya
-agents:
-  - id: {stable_id}
-    role: main
-    can_spawn:
-{can_spawn}
-"#,
+        "kind: Bundle\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\nagents:\n  - id: {stable_id}\n    role: main\n    can_spawn:\n{can_spawn}\n"
     );
     BundleSource::new(
         root,
         vec![SourceFile::new("bundle.yaml", manifest.into_bytes())],
     )
-}
-
-#[test]
-fn resource_view_alias_cannot_occupy_a_bundle_local_short_name() {
-    let manifest = br#"kind: Bundle
-identity:
-  id: hya/test
-  version: 1.0.0
-  publisher: hya
-resources:
-  skills:
-    - id: local-docs
-      path: resources/skills/local-docs.md
-agents:
-  - id: lead
-    role: main
-    resource_view:
-      aliases:
-        local-docs: bundle:hya/test/skill/local-docs
-"#;
-    let result = prepare_package(BundleSource::new(
-        "alias-conflict",
-        vec![
-            SourceFile::new("bundle.yaml", manifest.as_slice()),
-            SourceFile::new(
-                "resources/skills/local-docs.md",
-                b"# Local docs\n".as_slice(),
-            ),
-        ],
-    ));
-
-    let Err(error) = result else {
-        panic!("alias conflict was accepted");
-    };
-    assert_eq!(
-        error,
-        BundleError::AliasCollision {
-            bundle_id: "hya/test".to_string(),
-            name: "local-docs".to_string(),
-        }
-    );
-}
-
-#[test]
-fn can_spawn_targets_are_recorded_verbatim_and_resolved_later() {
-    // Bundles install independently, so prepare cannot know whether a target
-    // exists. It sorts and dedupes the list; AgentCatalog resolves it at spawn.
-    let prepared = prepare_package(agent_source(
-        "alpha",
-        "hya/alpha",
-        "alpha-lead",
-        &["missing-agent", "beta-worker", "missing-agent"],
-    ));
-    let Ok(prepared) = prepared else {
-        panic!("unresolved can_spawn target must still prepare: {prepared:?}");
-    };
-    let lead = &prepared.bundles()[0].agents()[0];
-    assert_eq!(
-        lead.can_spawn
-            .iter()
-            .map(|agent| agent.as_str())
-            .collect::<Vec<_>>(),
-        ["beta-worker", "missing-agent"],
-        "can_spawn is sorted and deduped, never resolved"
-    );
-}
-
-#[test]
-fn stable_agent_id_cannot_shadow_a_qualified_catalog_id() {
-    let intruder = prepare_package(agent_source(
-        "alpha",
-        "hya/alpha",
-        "bundle:hya/beta/agent/beta-worker",
-        &[],
-    ));
-    let Ok(intruder) = intruder else {
-        panic!("intruder package must prepare on its own: {intruder:?}");
-    };
-    let beta = prepare_package(agent_source("beta", "hya/beta", "beta-worker", &[]));
-    let Ok(beta) = beta else {
-        panic!("beta package must prepare: {beta:?}");
-    };
-    // The clash only exists once both bundles are in one catalog.
-    let result =
-        BundleCatalog::from_prepared(&[intruder.bundles(), beta.bundles()].concat()).map(|_| ());
-    assert_eq!(
-        result.err(),
-        Some(BundleError::NamespaceCollision {
-            bundle_id: "hya/beta".to_string(),
-            name: "bundle:hya/beta/agent/beta-worker".to_string(),
-        })
-    );
-}
-
-#[test]
-fn unsupported_resource_profile_is_rejected_as_a_feature_not_ignored() {
-    let manifest = br#"kind: Bundle
-identity:
-  id: hya/profile
-  version: 1.0.0
-  publisher: hya
-agents:
-  - id: lead
-    role: main
-    resource_profile:
-      max_depth: 2
-      per_team_turn_budget: 8
-"#;
-    let result = prepare_package(BundleSource::new(
-        "resource-profile",
-        vec![SourceFile::new("bundle.yaml", manifest.as_slice())],
-    ));
-    let Err(error) = result else {
-        panic!("unsupported resource profile was accepted");
-    };
-    assert_eq!(
-        error,
-        BundleError::UnsupportedBundleFeature {
-            bundle_id: "hya/profile".to_string(),
-            feature: "agent.resource_profile".to_string(),
-        }
-    );
-}
-
-#[test]
-fn resource_view_targets_must_name_this_bundle_s_own_resources() {
-    // A bundle agent's plane admits only its OWN bundle resources, so a
-    // `bundle:<other>/...` reference cannot resolve — at prepare or at runtime.
-    let alpha = br#"kind: Bundle
-identity:
-  id: hya/alpha
-  version: 1.0.0
-  publisher: hya
-agents:
-  - id: alpha-lead
-    role: main
-    resource_view:
-      aliases:
-        beta-docs: bundle:hya/beta/skill/docs
-"#;
-    let invalid = prepare_package(BundleSource::new(
-        "alpha",
-        vec![SourceFile::new("bundle.yaml", alpha.as_slice())],
-    ));
-    let Err(error) = invalid else {
-        panic!("cross-bundle resource reference was accepted");
-    };
-    assert_eq!(
-        error,
-        BundleError::UnknownResourceReference {
-            bundle_id: "hya/alpha".to_string(),
-            kind: "resource".to_string(),
-            reference: "bundle:hya/beta/skill/docs".to_string(),
-        }
-    );
-}
-
-#[test]
-fn resolved_resource_view_references_are_canonicalized_after_lookup() {
-    let manifest = br#"kind: Bundle
-identity:
-  id: hya/canonical-view
-  version: 1.0.0
-  publisher: hya
-resources:
-  skills:
-    - id: docs
-      path: resources/skills/docs.md
-agents:
-  - id: canonical-lead
-    role: main
-    resource_view:
-      allow:
-        - docs
-        - bundle:hya/canonical-view/skill/docs
-      deny:
-        - docs
-"#;
-    let prepared = prepare_package(BundleSource::new(
-        "canonical-view",
-        vec![
-            SourceFile::new("bundle.yaml", manifest.as_slice()),
-            SourceFile::new("resources/skills/docs.md", b"# Docs\n".as_slice()),
-        ],
-    ));
-    let Ok(prepared) = prepared else {
-        panic!("valid resource view failed: {prepared:?}");
-    };
-
-    let view = &prepared.bundles()[0].agents()[0].resource_view;
-    assert_eq!(view.allow, ["bundle:hya/canonical-view/skill/docs"]);
-    assert_eq!(view.deny, ["bundle:hya/canonical-view/skill/docs"]);
 }
 
 fn minimal_manifest(extra: &str) -> Vec<u8> {
@@ -232,22 +33,165 @@ fn minimal_manifest(extra: &str) -> Vec<u8> {
         .map(|line| format!("  {line}\n"))
         .collect::<String>();
     format!(
-        r#"kind: Bundle
-identity:
-  id: hya/minimal
-  version: 1.0.0
-  publisher: hya
-agents:
-  - id: minimal-lead
-    role: main
-{extra}"#,
+        "kind: Bundle\nidentity:\n  id: hya/minimal\n  version: 1.0.0\n  publisher: hya\nagents:\n  - id: minimal-lead\n    role: main\n{extra}"
     )
     .into_bytes()
 }
 
+fn namespace_source(namespace: Option<&str>, id: &str) -> BundleSource {
+    let ns_line = namespace
+        .map(|v| format!("namespace: {v}\n"))
+        .unwrap_or_default();
+    let manifest = format!(
+        "kind: Bundle\nidentity:\n  id: {id}\n  version: 1.0.0\n  publisher: hya\n{ns_line}agents:\n  - id: lead\n    role: main\n    prompt: prompts/lead.md\n"
+    );
+    BundleSource::new(
+        "ns-test",
+        vec![
+            SourceFile::new("bundle.yaml", manifest.into_bytes()),
+            SourceFile::new("prompts/lead.md", b"You are the lead.\n".as_slice()),
+        ],
+    )
+}
+
 #[test]
-fn invalid_schema_references_and_executable_features_fail_typed() {
-    for unsupported_field in [
+fn resource_view_aliases_cross_bundle_rejection_and_canonicalization() {
+    // Alias cannot collide with a bundle-local short name.
+    let collision = prepare_package(BundleSource::new(
+        "alias-conflict",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                b"kind: Bundle\nidentity: { id: hya/test, version: 1.0.0, publisher: hya }\nresources:\n  skills: [{ id: local-docs, path: resources/skills/local-docs.md }]\nagents:\n  - id: lead\n    role: main\n    resource_view:\n      aliases:\n        local-docs: bundle:hya/test/skill/local-docs\n".as_slice(),
+            ),
+            SourceFile::new("resources/skills/local-docs.md", b"# Local\n".as_slice()),
+        ],
+    ));
+    assert_eq!(
+        collision.err(),
+        Some(BundleError::AliasCollision {
+            bundle_id: "hya/test".into(),
+            name: "local-docs".into(),
+        })
+    );
+
+    // Cross-bundle resource reference rejected.
+    let cross = prepare_package(BundleSource::new(
+        "alpha",
+        vec![SourceFile::new(
+            "bundle.yaml",
+            b"kind: Bundle\nidentity: { id: hya/alpha, version: 1.0.0, publisher: hya }\nagents:\n  - id: alpha-lead\n    role: main\n    resource_view:\n      aliases:\n        beta-docs: bundle:hya/beta/skill/docs\n".as_slice(),
+        )],
+    ));
+    assert_eq!(
+        cross.err(),
+        Some(BundleError::UnknownResourceReference {
+            bundle_id: "hya/alpha".into(),
+            kind: "resource".into(),
+            reference: "bundle:hya/beta/skill/docs".into(),
+        })
+    );
+
+    // Local & qualified allow/deny entries canonicalize & deduplicate.
+    let canon = prepare_package(BundleSource::new(
+        "canonical-view",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                b"kind: Bundle\nidentity: { id: hya/canonical-view, version: 1.0.0, publisher: hya }\nresources:\n  skills: [{ id: docs, path: resources/skills/docs.md }]\nagents:\n  - id: canonical-lead\n    role: main\n    resource_view:\n      allow: [docs, bundle:hya/canonical-view/skill/docs]\n      deny: [docs]\n".as_slice(),
+            ),
+            SourceFile::new("resources/skills/docs.md", b"# Docs\n".as_slice()),
+        ],
+    ))
+    .expect("canonical view");
+    let view = &canon.bundles()[0].agents()[0].resource_view;
+    assert_eq!(view.allow, ["bundle:hya/canonical-view/skill/docs"]);
+    assert_eq!(view.deny, ["bundle:hya/canonical-view/skill/docs"]);
+}
+
+#[test]
+fn can_spawn_verbatim_sorting_catalog_id_shadowing_and_duplicates() {
+    let prepared = prepare_package(agent_source(
+        "alpha",
+        "hya/alpha",
+        "alpha-lead",
+        &["missing-agent", "beta-worker", "missing-agent"],
+    ))
+    .expect("unresolved can_spawn prepares");
+    assert_eq!(
+        prepared.bundles()[0].agents()[0]
+            .can_spawn
+            .iter()
+            .map(|a| a.as_str())
+            .collect::<Vec<_>>(),
+        ["beta-worker", "missing-agent"]
+    );
+
+    // Stable agent id cannot shadow another bundle's qualified catalog id.
+    let intruder = prepare_package(agent_source(
+        "alpha",
+        "hya/alpha",
+        "bundle:hya/beta/agent/beta-worker",
+        &[],
+    ))
+    .expect("intruder prepares alone");
+    let beta = prepare_package(agent_source("beta", "hya/beta", "beta-worker", &[])).expect("beta");
+    assert_eq!(
+        BundleCatalog::from_prepared(&[intruder.bundles(), beta.bundles()].concat()).err(),
+        Some(BundleError::NamespaceCollision {
+            bundle_id: "hya/beta".into(),
+            name: "bundle:hya/beta/agent/beta-worker".into(),
+        })
+    );
+
+    // Duplicate stable agent id across bundles, wrong kind, and parent source path.
+    let a = prepare_package(agent_source("a", "hya/a", "same", &[])).expect("a");
+    let b = prepare_package(agent_source("b", "hya/b", "same", &[])).expect("b");
+    assert_eq!(
+        BundleCatalog::from_prepared(&[a.bundles(), b.bundles()].concat()).err(),
+        Some(BundleError::DuplicateStableAgentId {
+            stable_id: "same".into()
+        })
+    );
+    let wrong_kind = String::from_utf8(minimal_manifest(""))
+        .unwrap()
+        .replace("kind: Bundle", "kind: UnsupportedBundle");
+    assert!(matches!(
+        prepare_package(BundleSource::new(
+            "wrong-kind",
+            vec![SourceFile::new("bundle.yaml", wrong_kind.into_bytes())],
+        )),
+        Err(BundleError::WrongKind { .. })
+    ));
+    assert!(matches!(
+        prepare_package(BundleSource::new(
+            "parent-path",
+            vec![SourceFile::new("../bundle.yaml", minimal_manifest(""))],
+        )),
+        Err(BundleError::InvalidSourcePath { .. })
+    ));
+}
+
+#[test]
+fn unsupported_features_unknown_fields_and_missing_references_fail_typed() {
+    // Unsupported resource_profile.
+    assert_eq!(
+        prepare_package(BundleSource::new(
+            "resource-profile",
+            vec![SourceFile::new(
+                "bundle.yaml",
+                b"kind: Bundle\nidentity: { id: hya/profile, version: 1.0.0, publisher: hya }\nagents:\n  - id: lead\n    role: main\n    resource_profile: { max_depth: 2, per_team_turn_budget: 8 }\n".as_slice(),
+            )],
+        ))
+        .err(),
+        Some(BundleError::UnsupportedBundleFeature {
+            bundle_id: "hya/profile".into(),
+            feature: "agent.resource_profile".into(),
+        })
+    );
+
+    // Unknown/removed agent and source-schema fields.
+    for fragment in [
         "  hidden: true\n",
         "  temperature: 0.2\n",
         "  top_p: 0.8\n",
@@ -259,59 +203,6 @@ fn invalid_schema_references_and_executable_features_fail_typed() {
         "  permission: {}\n",
         "  tools: {}\n",
         "  readonly: true\n",
-    ] {
-        let unknown = prepare_package(BundleSource::new(
-            "unknown-field",
-            vec![SourceFile::new(
-                "bundle.yaml",
-                minimal_manifest(unsupported_field),
-            )],
-        ));
-        assert!(
-            matches!(unknown, Err(BundleError::InvalidManifest { .. })),
-            "field was silently accepted: {unsupported_field}"
-        );
-    }
-
-    let missing = prepare_package(BundleSource::new(
-        "missing-prompt",
-        vec![SourceFile::new(
-            "bundle.yaml",
-            minimal_manifest("  prompt: prompts/missing.md\n"),
-        )],
-    ));
-    assert_eq!(
-        missing.err(),
-        Some(BundleError::MissingReference {
-            bundle_id: "hya/minimal".to_string(),
-            path: "prompts/missing.md".to_string(),
-        })
-    );
-
-    let base_manifest = String::from_utf8(minimal_manifest(""));
-    let Ok(base_manifest) = base_manifest else {
-        panic!("fixture is not UTF-8");
-    };
-    // `resources.mcp` is now declarable (each entry validated against the
-    // `McpServerConfig` shape); `extensions.rust` stays reserved.
-    let declaration = "extensions:\n  rust:\n    - id: runtime\n      path: extensions/runtime\n";
-    let manifest = base_manifest.replace("agents:\n", &format!("{declaration}\nagents:\n"));
-    let result = prepare_package(BundleSource::new(
-        "extensions.rust",
-        vec![SourceFile::new("bundle.yaml", manifest.into_bytes())],
-    ));
-    assert_eq!(
-        result.err(),
-        Some(BundleError::UnsupportedBundleFeature {
-            bundle_id: "hya/minimal".to_string(),
-            feature: "extensions.rust".to_string(),
-        })
-    );
-}
-
-#[test]
-fn helper_dependency_and_import_fields_are_rejected_by_source_schema() {
-    for fragment in [
         "resources:\n  files: []\n",
         "resources:\n  helpers: []\n",
         "resources:\n  dependencies: []\n",
@@ -319,247 +210,178 @@ fn helper_dependency_and_import_fields_are_rejected_by_source_schema() {
         "dependencies: []\n",
         "imports: []\n",
     ] {
-        let result = prepare_package(BundleSource::new(
-            "source-schema",
-            vec![SourceFile::new("bundle.yaml", minimal_manifest(fragment))],
-        ));
         assert!(
-            matches!(result, Err(BundleError::InvalidManifest { .. })),
-            "schema fragment was accepted: {fragment:?}"
+            matches!(
+                prepare_package(BundleSource::new(
+                    "unknown-field",
+                    vec![SourceFile::new("bundle.yaml", minimal_manifest(fragment))],
+                )),
+                Err(BundleError::InvalidManifest { .. })
+            ),
+            "field silently accepted: {fragment:?}"
         );
     }
-}
 
-#[test]
-fn executable_resource_requires_exact_path_extension_join() {
-    let manifest = |tool_path: &str, extension_path: &str| {
-        format!(
-            r#"kind: Bundle
-identity:
-  id: hya/executable
-  version: 1.0.0
-  publisher: hya
-resources:
-  tools:
-    - id: echo
-      path: {tool_path}
-extensions:
-  js:
-    - id: runtime
-      path: {extension_path}
-agents:
-  - id: lead
-    role: main
-    resource_view:
-      allow:
-        - echo
-"#,
-        )
-    };
-    let content = b"export const runtime = true;\n".to_vec();
-
-    let positive = prepare_package(BundleSource::new(
-        "exact-path-extension-join-positive",
-        vec![
-            SourceFile::new(
-                "bundle.yaml",
-                manifest("extensions/runtime.js", "extensions/runtime.js").into_bytes(),
-            ),
-            SourceFile::new("extensions/runtime.js", content.clone()),
-        ],
-    ));
-    let Ok(prepared) = positive else {
-        panic!("exact-path resource reuse was rejected: {positive:?}");
-    };
-    let bundle = &prepared.bundles()[0];
-    let tool = &bundle.tools()[0];
-    let extension = &bundle.extensions()[0];
-    assert_eq!(tool.source_path, "extensions/runtime.js");
-    assert_eq!(extension.source_path, "extensions/runtime.js");
-    assert_eq!(tool.content, extension.content);
-    assert_eq!(tool.digest, extension.digest);
-
-    let negative = prepare_package(BundleSource::new(
-        "exact-path-extension-join-negative",
-        vec![
-            SourceFile::new(
-                "bundle.yaml",
-                manifest("tools/echo.js", "extensions/runtime.js").into_bytes(),
-            ),
-            SourceFile::new("tools/echo.js", content.clone()),
-            SourceFile::new("extensions/runtime.js", content),
-        ],
-    ));
-    let Err(BundleError::UnsupportedBundleFeature { bundle_id, .. }) = negative else {
-        panic!("non-extension tool path was accepted: {negative:?}");
-    };
-    assert_eq!(bundle_id, "hya/executable");
-}
-
-#[test]
-fn executable_resource_rejects_ambiguous_extension_path_join() {
-    let manifest = br#"kind: Bundle
-identity:
-  id: hya/executable
-  version: 1.0.0
-  publisher: hya
-resources:
-  tools:
-    - id: echo
-      path: extensions/runtime.js
-extensions:
-  js:
-    - id: runtime-a
-      path: extensions/runtime.js
-    - id: runtime-b
-      path: extensions/runtime.js
-agents:
-  - id: lead
-    role: main
-    resource_view:
-      allow:
-        - echo
-"#;
-    let result = prepare_package(BundleSource::new(
-        "ambiguous-extension-path-join",
-        vec![
-            SourceFile::new("bundle.yaml", manifest.as_slice()),
-            SourceFile::new(
-                "extensions/runtime.js",
-                b"export const runtime = true;\n".as_slice(),
-            ),
-        ],
-    ));
-
+    // Missing prompt reference.
     assert_eq!(
-        result.err(),
+        prepare_package(BundleSource::new(
+            "missing-prompt",
+            vec![SourceFile::new(
+                "bundle.yaml",
+                minimal_manifest("  prompt: prompts/missing.md\n"),
+            )],
+        ))
+        .err(),
+        Some(BundleError::MissingReference {
+            bundle_id: "hya/minimal".into(),
+            path: "prompts/missing.md".into(),
+        })
+    );
+
+    // Reserved extensions.rust without extensions.process.
+    let manifest = String::from_utf8(minimal_manifest("")).unwrap().replace(
+        "agents:\n",
+        "extensions:\n  rust:\n    - id: runtime\n      path: extensions/runtime\nagents:\n",
+    );
+    assert_eq!(
+        prepare_package(BundleSource::new(
+            "extensions.rust",
+            vec![SourceFile::new("bundle.yaml", manifest.into_bytes())],
+        ))
+        .err(),
         Some(BundleError::UnsupportedBundleFeature {
-            bundle_id: "hya/executable".to_string(),
-            feature: "ambiguous executable resource:bundle:hya/executable/tool/echo".to_string(),
+            bundle_id: "hya/minimal".into(),
+            feature: "extensions.rust".into(),
         })
     );
 }
 
 #[test]
-fn unreachable_extension_is_rejected_during_prepare() {
-    let manifest = br#"kind: Bundle
-identity:
-  id: hya/executable
-  version: 1.0.0
-  publisher: hya
-extensions:
-  js:
-    - id: runtime
-      path: extensions/runtime.js
-agents:
-  - id: lead
-    role: main
-"#;
-    let result = prepare_package(BundleSource::new(
-        "unreachable-extension",
+fn executable_resource_extension_join_ambiguity_and_reachability() {
+    let manifest = |tool_path: &str, ext_block: &str| {
+        format!(
+            "kind: Bundle\nidentity: {{ id: hya/executable, version: 1.0.0, publisher: hya }}\nresources:\n  tools: [{{ id: echo, path: {tool_path} }}]\nextensions:\n  js:\n{ext_block}\nagents:\n  - id: lead\n    role: main\n    resource_view:\n      allow: [echo]\n"
+        )
+    };
+    let js = b"export const runtime = true;\n".as_slice();
+
+    // Positive exact-path join.
+    let ok = prepare_package(BundleSource::new(
+        "join-ok",
         vec![
-            SourceFile::new("bundle.yaml", manifest.as_slice()),
             SourceFile::new(
-                "extensions/runtime.js",
-                b"export const runtime = true;\n".as_slice(),
+                "bundle.yaml",
+                manifest(
+                    "extensions/runtime.js",
+                    "    - { id: runtime, path: extensions/runtime.js }",
+                ),
             ),
+            SourceFile::new("extensions/runtime.js", js),
+        ],
+    ))
+    .expect("exact-path join");
+    assert_eq!(
+        ok.bundles()[0].tools()[0].digest,
+        ok.bundles()[0].extensions()[0].digest
+    );
+
+    // Mismatched path rejected.
+    let mismatch = prepare_package(BundleSource::new(
+        "join-mismatch",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                manifest(
+                    "tools/echo.js",
+                    "    - { id: runtime, path: extensions/runtime.js }",
+                ),
+            ),
+            SourceFile::new("tools/echo.js", js),
+            SourceFile::new("extensions/runtime.js", js),
         ],
     ));
+    assert!(matches!(
+        mismatch,
+        Err(BundleError::UnsupportedBundleFeature { bundle_id, .. }) if bundle_id == "hya/executable"
+    ));
 
+    // Ambiguous duplicate extension paths rejected.
+    let ambiguous = prepare_package(BundleSource::new(
+        "join-ambiguous",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                manifest(
+                    "extensions/runtime.js",
+                    "    - { id: runtime-a, path: extensions/runtime.js }\n    - { id: runtime-b, path: extensions/runtime.js }",
+                ),
+            ),
+            SourceFile::new("extensions/runtime.js", js),
+        ],
+    ));
     assert_eq!(
-        result.err(),
+        ambiguous.err(),
         Some(BundleError::UnsupportedBundleFeature {
-            bundle_id: "hya/executable".to_string(),
-            feature: "unreachable extension:bundle:hya/executable/extension/runtime".to_string(),
+            bundle_id: "hya/executable".into(),
+            feature: "ambiguous executable resource:bundle:hya/executable/tool/echo".into(),
+        })
+    );
+
+    // Unreachable extension rejected.
+    let unreachable = prepare_package(BundleSource::new(
+        "unreachable-ext",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                b"kind: Bundle\nidentity: { id: hya/executable, version: 1.0.0, publisher: hya }\nextensions:\n  js: [{ id: runtime, path: extensions/runtime.js }]\nagents: [{ id: lead, role: main }]\n".as_slice(),
+            ),
+            SourceFile::new("extensions/runtime.js", js),
+        ],
+    ));
+    assert_eq!(
+        unreachable.err(),
+        Some(BundleError::UnsupportedBundleFeature {
+            bundle_id: "hya/executable".into(),
+            feature: "unreachable extension:bundle:hya/executable/extension/runtime".into(),
         })
     );
 }
 
 #[test]
 fn js_bundle_resources_prepare_decode_and_resolve_canonically() {
-    let manifest = br#"kind: Bundle
-identity:
-  id: hya/executable
-  version: 1.0.0
-  publisher: hya
-resources:
-  tools:
-    - id: echo
-      path: extensions/runtime.js
-      aliases:
-        - say
-  hooks:
-    - id: event
-      path: extensions/runtime.js
-extensions:
-  js:
-    - id: runtime
-      path: extensions/runtime.js
-agents:
-  - id: lead
-    role: main
-    resource_view:
-      allow:
-        - echo
-    hook_refs:
-      - bundle:hya/executable/hook/event
-"#;
     let prepared = prepare_package(BundleSource::new(
         "js-resources",
         vec![
-            SourceFile::new("bundle.yaml", manifest.as_slice()),
             SourceFile::new(
-                "extensions/runtime.js",
-                b"export const runtime = true;\n".as_slice(),
+                "bundle.yaml",
+                b"kind: Bundle\nidentity: { id: hya/executable, version: 1.0.0, publisher: hya }\nresources:\n  tools: [{ id: echo, path: extensions/runtime.js, aliases: [say] }]\n  hooks: [{ id: event, path: extensions/runtime.js }]\nextensions:\n  js: [{ id: runtime, path: extensions/runtime.js }]\nagents:\n  - id: lead\n    role: main\n    resource_view:\n      allow: [echo]\n    hook_refs: [bundle:hya/executable/hook/event]\n".as_slice(),
             ),
+            SourceFile::new("extensions/runtime.js", b"export const runtime = true;\n".as_slice()),
         ],
-    ));
-    let Ok(prepared) = prepared else {
-        panic!("JavaScript bundle resources were rejected: {prepared:?}");
-    };
-
+    ))
+    .expect("JS resources prepare");
     let bundle = &prepared.bundles()[0];
     let tool = &bundle.tools()[0];
-    assert_eq!(tool.stable_id, "bundle:hya/executable/tool/echo");
-    assert_eq!(tool.source_path, "extensions/runtime.js");
-    assert_eq!(tool.content, "export const runtime = true;\n");
-    assert_eq!(tool.aliases, ["say"]);
-    assert!(!tool.digest.is_empty());
-
     let hook = &bundle.hooks()[0];
+    let ext = &bundle.extensions()[0];
+    assert_eq!(tool.stable_id, "bundle:hya/executable/tool/echo");
+    assert_eq!(tool.aliases, ["say"]);
     assert_eq!(hook.stable_id, "bundle:hya/executable/hook/event");
-    assert_eq!(hook.source_path, "extensions/runtime.js");
-    assert_eq!(hook.content, "export const runtime = true;\n");
-    assert!(hook.aliases.is_empty());
-    assert_eq!(hook.digest, tool.digest);
-
-    let extension = &bundle.extensions()[0];
+    assert_eq!(ext.stable_id, "bundle:hya/executable/extension/runtime");
+    assert_eq!(tool.digest, hook.digest);
+    assert_eq!(tool.digest, ext.digest);
     assert_eq!(
-        extension.stable_id,
-        "bundle:hya/executable/extension/runtime"
-    );
-    assert_eq!(extension.source_path, "extensions/runtime.js");
-    assert_eq!(extension.content, "export const runtime = true;\n");
-    assert!(extension.aliases.is_empty());
-    assert_eq!(extension.digest, tool.digest);
-
-    let agent = &bundle.agents()[0];
-    assert_eq!(
-        agent.resource_view.allow,
+        bundle.agents()[0].resource_view.allow,
         ["bundle:hya/executable/tool/echo"]
     );
-    assert_eq!(agent.hook_refs, ["bundle:hya/executable/hook/event"]);
+    assert_eq!(
+        bundle.agents()[0].hook_refs,
+        ["bundle:hya/executable/hook/event"]
+    );
 
-    let decoded = PreparedCatalog::decode(prepared.bytes(), prepared.digest());
-    let Ok(decoded) = decoded else {
-        panic!("prepared JavaScript bundle failed to decode: {decoded:?}");
-    };
+    let decoded = PreparedCatalog::decode(prepared.bytes(), prepared.digest()).expect("decode");
     assert_eq!(decoded.bundles(), prepared.bundles());
-
-    let catalog = BundleCatalog::from_prepared(prepared.bundles());
-    let Ok(catalog) = catalog else {
-        panic!("prepared JavaScript bundle failed catalog validation: {catalog:?}");
-    };
+    let catalog = BundleCatalog::from_prepared(prepared.bundles()).expect("catalog");
     assert_eq!(
         catalog.resolve_resource("hya/executable", ExportKind::Tool, "say"),
         Ok(tool)
@@ -568,142 +390,62 @@ agents:
         catalog.resolve_resource(
             "hya/executable",
             ExportKind::Hook,
-            "bundle:hya/executable/hook/event",
+            "bundle:hya/executable/hook/event"
         ),
         Ok(hook)
     );
     assert_eq!(
         catalog.resolve_resource("hya/executable", ExportKind::Extension, "runtime"),
-        Ok(extension)
+        Ok(ext)
     );
 }
 
 #[test]
-fn hook_local_ids_are_limited_to_supported_protocol_names() {
-    let prepare_hook = |local_id: &str, source_path: &str| {
+fn hook_local_ids_limit_protocol_names_even_when_unreferenced() {
+    let prep = |local_id: &str, referenced: bool| {
+        let refs = if referenced {
+            format!("    hook_refs: [{local_id}]\n")
+        } else {
+            String::new()
+        };
         let manifest = format!(
-            r#"kind: Bundle
-identity:
-  id: hya/executable
-  version: 1.0.0
-  publisher: hya
-resources:
-  hooks:
-    - id: {local_id}
-      path: {source_path}
-extensions:
-  js:
-    - id: runtime
-      path: extensions/runtime.js
-agents:
-  - id: lead
-    role: main
-    hook_refs:
-      - {local_id}
-"#,
+            "kind: Bundle\nidentity: {{ id: hya/executable, version: 1.0.0, publisher: hya }}\nresources:\n  hooks: [{{ id: {local_id}, path: extensions/runtime.js }}]\nextensions:\n  js: [{{ id: runtime, path: extensions/runtime.js }}]\nagents:\n  - id: lead\n    role: main\n{refs}"
         );
         prepare_package(BundleSource::new(
-            format!("hook-local-id-{local_id}"),
+            format!("hook-{local_id}"),
             vec![
                 SourceFile::new("bundle.yaml", manifest.into_bytes()),
-                SourceFile::new(source_path, b"export default {};\n".to_vec()),
+                SourceFile::new("extensions/runtime.js", b"export default {};\n".as_slice()),
             ],
         ))
     };
-
-    for (local_id, source_path) in [
-        ("event", "extensions/runtime.js"),
-        ("tool.execute.before", "extensions/runtime.js"),
-        ("tool.execute.after", "extensions/runtime.js"),
-    ] {
-        let prepared = prepare_hook(local_id, source_path);
-        let Ok(prepared) = prepared else {
-            panic!("supported hook local ID `{local_id}` was rejected: {prepared:?}");
-        };
-        let agent = &prepared.bundles()[0].agents()[0];
+    for local_id in ["event", "tool.execute.before", "tool.execute.after"] {
+        let prepared = prep(local_id, true).expect("supported hook");
         assert_eq!(
-            agent.hook_refs,
+            prepared.bundles()[0].agents()[0].hook_refs,
             [format!("bundle:hya/executable/hook/{local_id}")]
         );
     }
-
-    let unsupported = prepare_hook("audit", "extensions/runtime.js");
-    assert_eq!(
-        unsupported.err(),
-        Some(BundleError::UnsupportedBundleFeature {
-            bundle_id: "hya/executable".to_string(),
-            feature: "hook:audit".to_string(),
-        })
-    );
+    for referenced in [true, false] {
+        assert_eq!(
+            prep("audit", referenced).err(),
+            Some(BundleError::UnsupportedBundleFeature {
+                bundle_id: "hya/executable".into(),
+                feature: "hook:audit".into(),
+            })
+        );
+    }
 }
 
 #[test]
-fn unreferenced_unsupported_hook_local_id_is_rejected_before_publication() {
-    let manifest = br#"kind: Bundle
-identity:
-  id: hya/unreferenced-hook
-  version: 1.0.0
-  publisher: hya
-resources:
-  hooks:
-    - id: audit
-      path: extensions/runtime.js
-extensions:
-  js:
-    - id: runtime
-      path: extensions/runtime.js
-agents:
-  - id: lead
-    role: main
-"#;
-    let result = prepare_package(BundleSource::new(
-        "unreferenced-hook",
-        vec![
-            SourceFile::new("bundle.yaml", manifest.as_slice()),
-            SourceFile::new(
-                "extensions/runtime.js",
-                b"export const runtime = true;\n".as_slice(),
-            ),
-        ],
-    ));
-
-    assert_eq!(
-        result.err(),
-        Some(BundleError::UnsupportedBundleFeature {
-            bundle_id: "hya/unreferenced-hook".to_string(),
-            feature: "hook:audit".to_string(),
-        })
-    );
-}
-
-#[test]
-fn hook_refs_are_canonicalized_from_local_alias_and_stable_spellings() {
+fn hook_refs_canonicalization_cross_kind_ambiguity_and_duplicates() {
+    // Local, alias, and stable spellings all canonicalize to the stable id.
     for hook_ref in ["event", "notify", "bundle:hya/executable/hook/event"] {
         let manifest = format!(
-            r#"kind: Bundle
-identity:
-  id: hya/executable
-  version: 1.0.0
-  publisher: hya
-resources:
-  hooks:
-    - id: event
-      path: extensions/runtime.js
-      aliases:
-        - notify
-extensions:
-  js:
-    - id: runtime
-      path: extensions/runtime.js
-agents:
-  - id: lead
-    role: main
-    hook_refs:
-      - {hook_ref}
-"#,
+            "kind: Bundle\nidentity: {{ id: hya/executable, version: 1.0.0, publisher: hya }}\nresources:\n  hooks: [{{ id: event, path: extensions/runtime.js, aliases: [notify] }}]\nextensions:\n  js: [{{ id: runtime, path: extensions/runtime.js }}]\nagents:\n  - id: lead\n    role: main\n    hook_refs: [{hook_ref}]\n"
         );
         let prepared = prepare_package(BundleSource::new(
-            format!("hook-ref-{hook_ref}"),
+            "hook-ref",
             vec![
                 SourceFile::new("bundle.yaml", manifest.into_bytes()),
                 SourceFile::new(
@@ -711,324 +453,160 @@ agents:
                     b"export const event = true;\n".as_slice(),
                 ),
             ],
-        ));
-        let Ok(prepared) = prepared else {
-            panic!("hook reference `{hook_ref}` was rejected: {prepared:?}");
-        };
-        let agent = &prepared.bundles()[0].agents()[0];
-        assert_eq!(agent.hook_refs, ["bundle:hya/executable/hook/event"]);
+        ))
+        .expect("hook ref");
+        assert_eq!(
+            prepared.bundles()[0].agents()[0].hook_refs,
+            ["bundle:hya/executable/hook/event"]
+        );
     }
-}
 
-#[test]
-fn unqualified_hook_ref_is_rejected_when_short_name_is_cross_kind_ambiguous() {
-    let manifest = br#"kind: Bundle
-identity:
-  id: hya/executable
-  version: 1.0.0
-  publisher: hya
-resources:
-  tools:
-    - id: shared
-      path: extensions/runtime.js
-  hooks:
-    - id: event
-      path: extensions/runtime.js
-      aliases:
-        - shared
-extensions:
-  js:
-    - id: runtime
-      path: extensions/runtime.js
-agents:
-  - id: lead
-    role: main
-    hook_refs:
-      - shared
-"#;
-    let result = prepare_package(BundleSource::new(
-        "ambiguous-hook-ref",
-        vec![
-            SourceFile::new("bundle.yaml", manifest.as_slice()),
-            SourceFile::new(
-                "extensions/runtime.js",
-                b"export const shared = true;\n".as_slice(),
-            ),
-        ],
-    ));
-    let Err(error) = result else {
-        panic!("ambiguous unqualified hook reference was accepted");
-    };
+    // Duplicate hook_refs rejected after canonicalization.
+    for [first, second] in [
+        ["event", "event"],
+        ["event", "notify"],
+        ["notify", "bundle:hya/executable/hook/event"],
+    ] {
+        let manifest = format!(
+            "kind: Bundle\nidentity: {{ id: hya/executable, version: 1.0.0, publisher: hya }}\nresources:\n  hooks: [{{ id: event, path: extensions/runtime.js, aliases: [notify] }}]\nextensions:\n  js: [{{ id: runtime, path: extensions/runtime.js }}]\nagents:\n  - id: lead\n    role: main\n    hook_refs: [{first}, {second}]\n"
+        );
+        assert_eq!(
+            prepare_package(BundleSource::new(
+                "dup-hook",
+                vec![
+                    SourceFile::new("bundle.yaml", manifest.into_bytes()),
+                    SourceFile::new(
+                        "extensions/runtime.js",
+                        b"export const event = true;\n".as_slice()
+                    ),
+                ],
+            ))
+            .err(),
+            Some(BundleError::AliasCollision {
+                bundle_id: "hya/executable".into(),
+                name: "bundle:hya/executable/hook/event".into(),
+            })
+        );
+    }
+
+    // Cross-kind ambiguous short name rejected as AliasCollision.
     assert_eq!(
-        error,
-        BundleError::AliasCollision {
-            bundle_id: "hya/executable".to_string(),
-            name: "shared".to_string(),
-        }
+        prepare_package(BundleSource::new(
+            "ambiguous-hook",
+            vec![
+                SourceFile::new(
+                    "bundle.yaml",
+                    b"kind: Bundle\nidentity: { id: hya/executable, version: 1.0.0, publisher: hya }\nresources:\n  tools: [{ id: shared, path: extensions/runtime.js }]\n  hooks: [{ id: event, path: extensions/runtime.js, aliases: [shared] }]\nextensions:\n  js: [{ id: runtime, path: extensions/runtime.js }]\nagents: [{ id: lead, role: main, hook_refs: [shared] }]\n".as_slice(),
+                ),
+                SourceFile::new("extensions/runtime.js", b"export const shared = true;\n".as_slice()),
+            ],
+        ))
+        .err(),
+        Some(BundleError::AliasCollision {
+            bundle_id: "hya/executable".into(),
+            name: "shared".into(),
+        })
     );
 }
 
 #[test]
-fn hook_refs_reject_unknown_and_wrong_kind_as_hook_references() {
-    let unknown_local = br#"kind: Bundle
-identity:
-  id: hya/executable
-  version: 1.0.0
-  publisher: hya
-resources:
-  hooks:
-    - id: event
-      path: extensions/runtime.js
-extensions:
-  js:
-    - id: runtime
-      path: extensions/runtime.js
-agents:
-  - id: lead
-    role: main
-    hook_refs:
-      - missing
-"#;
-    let unknown_local_result = prepare_package(BundleSource::new(
-        "unknown-local-hook",
+fn hook_refs_reject_unknown_wrong_kind_and_harness_prefixed() {
+    let err_unknown = prepare_package(BundleSource::new(
+        "unknown-hook",
         vec![
-            SourceFile::new("bundle.yaml", unknown_local.as_slice()),
+            SourceFile::new(
+                "bundle.yaml",
+                b"kind: Bundle\nidentity: { id: hya/executable, version: 1.0.0, publisher: hya }\nresources:\n  hooks: [{ id: event, path: extensions/runtime.js }]\nextensions:\n  js: [{ id: runtime, path: extensions/runtime.js }]\nagents: [{ id: lead, role: main, hook_refs: [missing] }]\n".as_slice(),
+            ),
             SourceFile::new("extensions/runtime.js", b"export default {};\n".as_slice()),
         ],
     ));
     assert_eq!(
-        unknown_local_result.err(),
+        err_unknown.err(),
         Some(BundleError::UnknownResourceReference {
-            bundle_id: "hya/executable".to_string(),
-            kind: "hook".to_string(),
-            reference: "missing".to_string(),
+            bundle_id: "hya/executable".into(),
+            kind: "hook".into(),
+            reference: "missing".into(),
         })
     );
 
-    let wrong_kind = br#"kind: Bundle
-identity:
-  id: hya/executable
-  version: 1.0.0
-  publisher: hya
-resources:
-  tools:
-    - id: echo
-      path: extensions/runtime.js
-extensions:
-  js:
-    - id: runtime
-      path: extensions/runtime.js
-agents:
-  - id: lead
-    role: main
-    hook_refs:
-      - bundle:hya/executable/tool/echo
-"#;
-    let wrong_kind_result = prepare_package(BundleSource::new(
+    let err_kind = prepare_package(BundleSource::new(
         "wrong-kind-hook",
         vec![
-            SourceFile::new("bundle.yaml", wrong_kind.as_slice()),
+            SourceFile::new(
+                "bundle.yaml",
+                b"kind: Bundle\nidentity: { id: hya/executable, version: 1.0.0, publisher: hya }\nresources:\n  tools: [{ id: echo, path: extensions/runtime.js }]\nextensions:\n  js: [{ id: runtime, path: extensions/runtime.js }]\nagents: [{ id: lead, role: main, hook_refs: [bundle:hya/executable/tool/echo] }]\n".as_slice(),
+            ),
             SourceFile::new("extensions/runtime.js", b"export default {};\n".as_slice()),
         ],
     ));
     assert_eq!(
-        wrong_kind_result.err(),
+        err_kind.err(),
         Some(BundleError::UnknownResourceReference {
-            bundle_id: "hya/executable".to_string(),
-            kind: "hook".to_string(),
-            reference: "bundle:hya/executable/tool/echo".to_string(),
+            bundle_id: "hya/executable".into(),
+            kind: "hook".into(),
+            reference: "bundle:hya/executable/tool/echo".into(),
         })
     );
-}
 
-#[test]
-fn harness_prefixed_hook_refs_are_rejected_as_unknown_bundle_hooks() {
-    for (index, raw_hook_ref) in [
+    for raw_ref in [
         "harness:hook/event",
         "harness:hook/tool.execute.before",
         "harness:hook/tool.execute.after",
         "harness:hook/unknown",
         "harness:hook/",
         "harness:hook",
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    ] {
         let manifest = format!(
-            r#"kind: Bundle
-identity:
-  id: hya/executable
-  version: 1.0.0
-  publisher: hya
-agents:
-  - id: lead
-    role: main
-    hook_refs:
-      - "{raw_hook_ref}"
-"#,
+            "kind: Bundle\nidentity: {{ id: hya/executable, version: 1.0.0, publisher: hya }}\nagents: [{{ id: lead, role: main, hook_refs: [\"{raw_ref}\"] }}]\n"
         );
-        let result = prepare_package(BundleSource::new(
-            format!("harness-hook-ref-{index}"),
-            vec![SourceFile::new("bundle.yaml", manifest.into_bytes())],
-        ));
         assert_eq!(
-            result.err(),
+            prepare_package(BundleSource::new(
+                "harness-hook",
+                vec![SourceFile::new("bundle.yaml", manifest.into_bytes())],
+            ))
+            .err(),
             Some(BundleError::UnknownResourceReference {
-                bundle_id: "hya/executable".to_string(),
-                kind: "hook".to_string(),
-                reference: raw_hook_ref.to_string(),
+                bundle_id: "hya/executable".into(),
+                kind: "hook".into(),
+                reference: raw_ref.into(),
             })
         );
     }
-}
-
-#[test]
-fn harness_prefixed_hook_resource_view_reference_is_rejected() {
-    let result = prepare_package(BundleSource::new(
-        "harness-resource-view-ref",
-        vec![SourceFile::new(
-            "bundle.yaml",
-            minimal_manifest("  resource_view:\n    allow:\n      - harness:hook/event\n"),
-        )],
-    ));
 
     assert_eq!(
-        result.err(),
+        prepare_package(BundleSource::new(
+            "harness-rv",
+            vec![SourceFile::new(
+                "bundle.yaml",
+                minimal_manifest("  resource_view:\n    allow:\n      - harness:hook/event\n"),
+            )],
+        ))
+        .err(),
         Some(BundleError::UnknownResourceReference {
-            bundle_id: "hya/minimal".to_string(),
-            kind: "resource".to_string(),
-            reference: "harness:hook/event".to_string(),
+            bundle_id: "hya/minimal".into(),
+            kind: "resource".into(),
+            reference: "harness:hook/event".into(),
         })
     );
 }
 
 #[test]
-fn duplicate_hook_refs_are_rejected_after_canonicalization() {
-    for (index, hook_refs) in [
-        ["event", "event"],
-        ["event", "notify"],
-        ["notify", "bundle:hya/executable/hook/event"],
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let [first, second] = hook_refs;
-        let manifest = format!(
-            r#"kind: Bundle
-identity:
-  id: hya/executable
-  version: 1.0.0
-  publisher: hya
-resources:
-  hooks:
-    - id: event
-      path: extensions/runtime.js
-      aliases:
-        - notify
-extensions:
-  js:
-    - id: runtime
-      path: extensions/runtime.js
-agents:
-  - id: lead
-    role: main
-    hook_refs:
-      - {first}
-      - {second}
-"#,
-        );
-        let result = prepare_package(BundleSource::new(
-            format!("duplicate-hook-refs-{index}"),
-            vec![
-                SourceFile::new("bundle.yaml", manifest.into_bytes()),
-                SourceFile::new(
-                    "extensions/runtime.js",
-                    b"export const event = true;\n".as_slice(),
-                ),
-            ],
-        ));
-        assert_eq!(
-            result.err(),
-            Some(BundleError::AliasCollision {
-                bundle_id: "hya/executable".to_string(),
-                name: "bundle:hya/executable/hook/event".to_string(),
-            })
-        );
-    }
-}
-
-#[test]
-fn duplicate_stable_ids_wrong_kind_and_parent_paths_are_rejected() {
-    // Two independently prepared packages may each carry `same`; the clash is
-    // detected when they meet in one catalog.
-    let first = prepare_package(agent_source("a", "hya/a", "same", &[]));
-    let Ok(first) = first else {
-        panic!("first package must prepare: {first:?}");
-    };
-    let second = prepare_package(agent_source("b", "hya/b", "same", &[]));
-    let Ok(second) = second else {
-        panic!("second package must prepare: {second:?}");
-    };
-    let duplicate =
-        BundleCatalog::from_prepared(&[first.bundles(), second.bundles()].concat()).map(|_| ());
-    assert_eq!(
-        duplicate.err(),
-        Some(BundleError::DuplicateStableAgentId {
-            stable_id: "same".to_string(),
-        })
-    );
-
-    let wrong_kind = String::from_utf8(minimal_manifest(""))
-        .map(|manifest| manifest.replace("kind: Bundle", "kind: UnsupportedBundle"));
-    let Ok(wrong_kind) = wrong_kind else {
-        panic!("fixture is not UTF-8");
-    };
-    let wrong_kind = prepare_package(BundleSource::new(
-        "wrong-kind",
-        vec![SourceFile::new("bundle.yaml", wrong_kind.into_bytes())],
-    ));
-    assert!(matches!(wrong_kind, Err(BundleError::WrongKind { .. })));
-
-    let parent = prepare_package(BundleSource::new(
-        "parent-path",
-        vec![SourceFile::new("../bundle.yaml", minimal_manifest(""))],
-    ));
-    assert!(matches!(parent, Err(BundleError::InvalidSourcePath { .. })));
-}
-
-/// `spawn_lifecycle` was removed in 0.41.0 (every subagent is a resident
-/// actor). Each manifest kind that declares agents rejects it by name.
-#[test]
-fn spawn_lifecycle_is_a_removed_manifest_key_in_every_agent_manifest() {
-    let agent_bundle = r#"kind: Bundle
-identity: { id: acme/solo, version: 1.0.0, publisher: acme }
-agents:
-  - id: solo
-    role: subagent
-    spawn_lifecycle: transient
-"#;
-    let agent_set = r#"kind: Bundle
-identity: { id: acme/set, version: 1.0.0, publisher: acme }
-agents:
-  - id: worker
-    role: subagent
-    spawn_lifecycle: resident
-"#;
-    let workflow = r#"kind: Bundle
-identity: { id: acme/flow, version: 1.0.0, publisher: acme }
-workflow:
-  id: flow
-  path: workflows/flow.hya.md
-agents:
-  - id: flow-worker
-    role: subagent
-    spawn_lifecycle: transient
-"#;
+fn spawn_lifecycle_removed_and_old_v3_catalog_requires_reinstall() {
     let flow = "---\nkind: Workflow\nname: flow\ndescription: One stage.\nnodes:\n  work:\n    agent: flow-worker\n    directive: Work.\n---\nflowchart TD\n  work\n";
     for (name, manifest) in [
-        ("agent", agent_bundle),
-        ("agent-set", agent_set),
-        ("workflow", workflow),
+        (
+            "agent",
+            "kind: Bundle\nidentity: { id: acme/solo, version: 1.0.0, publisher: acme }\nagents: [{ id: solo, role: subagent, spawn_lifecycle: transient }]\n",
+        ),
+        (
+            "agent-set",
+            "kind: Bundle\nidentity: { id: acme/set, version: 1.0.0, publisher: acme }\nagents: [{ id: worker, role: subagent, spawn_lifecycle: resident }]\n",
+        ),
+        (
+            "workflow",
+            "kind: Bundle\nidentity: { id: acme/flow, version: 1.0.0, publisher: acme }\nworkflow: { id: flow, path: workflows/flow.hya.md }\nagents: [{ id: flow-worker, role: subagent, spawn_lifecycle: transient }]\n",
+        ),
     ] {
         let mut files = vec![SourceFile::new("bundle.yaml", manifest.as_bytes().to_vec())];
         if name == "workflow" {
@@ -1037,43 +615,74 @@ agents:
                 flow.as_bytes().to_vec(),
             ));
         }
-        let result = prepare_package(BundleSource::new(name, files));
-        match result {
-            Err(error @ BundleError::RemovedManifestKey { .. }) => {
-                let BundleError::RemovedManifestKey { ref key, .. } = error else {
-                    unreachable!();
-                };
-                assert_eq!(key, "spawn_lifecycle", "{name}");
-                let text = error.to_string();
-                assert!(
-                    text.contains("spawn_lifecycle") && text.contains("resident"),
-                    "{name}: the error must name the key and say what replaces it: {text}"
-                );
-            }
-            other => panic!("{name}: spawn_lifecycle must be rejected by name, got {other:?}"),
-        }
+        let err =
+            prepare_package(BundleSource::new(name, files)).expect_err("spawn_lifecycle rejected");
+        assert!(
+            matches!(&err, BundleError::RemovedManifestKey { key, .. } if key == "spawn_lifecycle")
+        );
+        let text = err.to_string();
+        assert!(
+            text.contains("spawn_lifecycle") && text.contains("resident"),
+            "{name}: {text}"
+        );
     }
+
+    let prepared = prepare_package(agent_source("old", "acme/old", "old-lead", &[])).expect("prep");
+    let mut doc: serde_json::Value = serde_json::from_slice(prepared.bytes()).expect("JSON");
+    doc["format_version"] = serde_json::json!(3);
+    doc["agents"][0]["spawn_lifecycle"] = serde_json::json!("transient");
+    let bytes = serde_json::to_vec(&doc).expect("encode");
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    let err = PreparedCatalog::decode(&bytes, &digest).expect_err("v3 rejected");
+    assert_eq!(err, BundleError::UnsupportedPreparedFormat { found: 3 });
+    assert!(err.to_string().contains("please reinstall"));
 }
 
-/// Old install records are rejected before their obsolete agent fields are decoded.
 #[test]
-fn old_prepared_catalog_requires_reinstall() {
-    use sha2::{Digest, Sha256};
+fn namespace_defaults_explicit_empty_and_workflow_resolution() {
+    for (ns, expected) in [
+        (None, "acme-tools"),
+        (Some("acme"), "acme"),
+        (Some(""), "acme-tools"),
+    ] {
+        let cat = prepare_package(namespace_source(ns, "hya/acme-tools")).expect("prepare");
+        assert_eq!(cat.bundles()[0].namespace.as_deref(), Some(expected));
+    }
 
-    let prepared = prepare_package(agent_source("old", "acme/old", "old-lead", &[]))
-        .unwrap_or_else(|error| panic!("fixture must prepare: {error:?}"));
-    let mut document: serde_json::Value = serde_json::from_slice(prepared.bytes())
-        .unwrap_or_else(|error| panic!("fixture JSON: {error}"));
-    document["format_version"] = serde_json::json!(3);
-    document["agents"][0]["spawn_lifecycle"] = serde_json::json!("transient");
-    let bytes = serde_json::to_vec(&document).unwrap_or_default();
-    let digest = Sha256::digest(&bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let error = PreparedCatalog::decode(&bytes, &digest)
-        .err()
-        .unwrap_or_else(|| panic!("old install record decoded"));
-    assert_eq!(error, BundleError::UnsupportedPreparedFormat { found: 3 });
-    assert!(error.to_string().contains("please reinstall"));
+    let wf = prepare_package(BundleSource::new(
+        "ns-flow",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                b"kind: Bundle\nidentity: { id: hya/flow-pack, version: 1.0.0, publisher: hya }\nnamespace: flow\nworkflow: { id: demo, path: workflows/demo.hya.md }\nagents: [{ id: worker, role: subagent, prompt: prompts/worker.md }]\n".as_slice(),
+            ),
+            SourceFile::new(
+                "workflows/demo.hya.md",
+                b"---\nkind: Workflow\nname: demo\ndescription: demo\nnodes:\n  execute:\n    agent: worker\n    directive: Work.\n---\nflowchart TD\n  execute\n".as_slice(),
+            ),
+            SourceFile::new("prompts/worker.md", b"Work.\n".as_slice()),
+        ],
+    ))
+    .expect("workflow namespace");
+    assert_eq!(wf.bundles()[0].namespace.as_deref(), Some("flow"));
+}
+
+#[test]
+fn namespace_rejects_invalid_reserved_and_invalid_default_tokens() {
+    for bad in ["bad__ns", "has.dot", "has/slash", "has space", "__lead"] {
+        assert!(matches!(
+            prepare_package(namespace_source(Some(bad), "hya/acme-tools")),
+            Err(BundleError::InvalidNamespace { namespace, .. }) if namespace == bad
+        ));
+    }
+    for reserved in ["mcp", "harness", "builtin", "plugin"] {
+        assert!(matches!(
+            prepare_package(namespace_source(Some(reserved), "hya/acme-tools")),
+            Err(BundleError::InvalidNamespace { .. })
+        ));
+    }
+    assert!(matches!(
+        prepare_package(namespace_source(None, "hya/my.tool")),
+        Err(BundleError::InvalidNamespace { .. })
+    ));
 }

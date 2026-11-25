@@ -99,6 +99,7 @@ def dispatch_tool(name, args):
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    disable_nagle_algorithm = True
     stateless = False
     malformed = False
     fail5xx = False

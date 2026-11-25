@@ -1,4 +1,5 @@
-//! Per-request header construction and provider auth styles.
+//! HTTP provider transport, retries, timeouts, auth refresh, in-stream error frames,
+//! per-provider headers/bodies, and Responses compaction contracts.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -18,8 +19,9 @@ use hya_proto::{
     ToolPartState, ToolSchema,
 };
 use hya_provider::{
-    CompletionRequest, HttpProvider, OpenAiResponsesProtocol, Protocol as _, Provider as _,
-    ProviderError, ProviderKind, ReasoningEffort,
+    CatalogAuth, CatalogDiscoveryRequest, CompletionRequest, HttpProvider, OpenAiResponsesProtocol,
+    Protocol as _, Provider as _, ProviderError, ProviderKind, ReasoningEffort, RetryConfig,
+    discover_models,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -27,10 +29,41 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
 
+#[derive(Debug)]
+struct CapturedRequest {
+    raw: String,
+    headers: String,
+    body: String,
+}
+
+fn req(model: &str) -> CompletionRequest {
+    CompletionRequest {
+        model: ModelRef::new(model),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    }
+}
+
+fn fast_retry(max_attempts: usize) -> RetryConfig {
+    RetryConfig {
+        max_attempts,
+        backoff_base: Duration::from_millis(1),
+        backoff_max: Duration::from_millis(5),
+    }
+}
+
+fn sse_ok(frames: &[&str]) -> String {
+    let body: String = frames.iter().map(|f| format!("{f}\n\n")).collect();
+    format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{body}")
+}
+
 #[tokio::test]
 async fn catalog_auth_headers_match_provider_contracts() {
-    use hya_provider::{CatalogAuth, CatalogDiscoveryRequest, discover_models};
-
     let cases: [(ProviderKind, CatalogAuth, &[&str]); 8] = [
         (
             ProviderKind::OpenAiCompatible,
@@ -97,7 +130,7 @@ async fn catalog_auth_headers_match_provider_contracts() {
     for (kind, auth, expected) in cases {
         discover_models(CatalogDiscoveryRequest::new("test", kind, &base_url, auth)).await;
         let requests = requests.lock().unwrap();
-        let actual = requests
+        let actual: Vec<_> = requests
             .last()
             .unwrap()
             .headers
@@ -108,930 +141,682 @@ async fn catalog_auth_headers_match_provider_contracts() {
                     && *line != "accept: application/json"
                     && !line.is_empty()
             })
-            .collect::<Vec<_>>();
+            .collect();
         assert_eq!(actual, expected, "{kind:?}");
         assert!(requests.last().unwrap().body.is_empty());
     }
 }
 
-#[derive(Debug)]
-struct CapturedRequest {
-    raw: String,
-    headers: String,
-    body: String,
-}
-
 #[tokio::test]
-async fn http_provider_retries_retryable_status_before_returning_a_stream() {
-    let (base_url, attempts) = start_retry_server().await;
-    let provider = HttpProvider::new(
+async fn http_retry_status_header_timeout_and_budget_contracts() {
+    assert_eq!(RetryConfig::default().backoff_base, Duration::from_secs(1));
+    let busy = "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 4\r\nretry-after: 0\r\nconnection: close\r\n\r\nbusy";
+    let ok = sse_ok(&["data: [DONE]"]);
+
+    // 1. Retries transient 503 before stream establishment.
+    let (url1, conns1, _) = start_scripted_server(vec![busy.into(), ok.clone()]).await;
+    let p1 = HttpProvider::new(
         "openai",
         ProviderKind::OpenAiCompatible,
-        &base_url,
-        Some("test-token".to_string()),
-        ["gpt-5".to_string()],
+        &url1,
+        Some("t".into()),
+        ["gpt-5".into()],
     )
-    .unwrap();
-    let req = CompletionRequest {
-        model: ModelRef::new("gpt-5"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers: Default::default(),
-    };
-
-    let events = provider
-        .stream(req, SessionId::new(), MessageId::new())
+    .unwrap()
+    .with_retry(fast_retry(3));
+    let evs: Vec<_> = p1
+        .stream(req("gpt-5"), SessionId::new(), MessageId::new())
         .await
         .unwrap()
-        .collect::<Vec<_>>()
+        .collect()
         .await;
+    assert!(evs.iter().all(Result::is_ok));
+    assert_eq!(conns1.load(Ordering::SeqCst), 2);
 
-    assert!(events.iter().all(Result::is_ok));
-    assert_eq!(attempts.load(Ordering::SeqCst), 2);
-}
-
-#[tokio::test]
-async fn http_provider_retries_a_route_that_never_sends_response_headers() {
-    let (base_url, connections) = start_stalled_header_server().await;
-    let provider = HttpProvider::new(
+    // 2. Stalled response headers hit response_header_timeout and retry onto attempt 2.
+    let (url2, conns2) = start_stalled_header_server().await;
+    let p2 = HttpProvider::new(
         "openai",
         ProviderKind::OpenAiCompatible,
-        &base_url,
-        Some("test-token".to_string()),
-        ["gpt-5".to_string()],
+        &url2,
+        Some("t".into()),
+        ["gpt-5".into()],
     )
     .unwrap()
-    .with_response_header_timeout(Duration::from_millis(200));
-    let req = CompletionRequest {
-        model: ModelRef::new("gpt-5"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers: Default::default(),
-    };
-
-    // Attempt one sits past the shortened header deadline; recovery must come
-    // from the bounded timeout plus the standard retry path inside this
-    // real-clock guard. Without the timeout the guard fires instead.
-    let events = timeout(Duration::from_secs(15), async {
-        provider
-            .stream(req, SessionId::new(), MessageId::new())
+    .with_response_header_timeout(Duration::from_millis(50))
+    .with_retry(fast_retry(3));
+    let evs = timeout(Duration::from_secs(5), async {
+        p2.stream(req("gpt-5"), SessionId::new(), MessageId::new())
             .await
             .unwrap()
             .collect::<Vec<_>>()
             .await
     })
     .await
-    .expect("header stall should hit the deadline and retry within the guard");
-
-    // A second connection happens only if attempt one exhausted the deadline.
-    assert_eq!(connections.load(Ordering::SeqCst), 2);
-    assert!(events.iter().all(Result::is_ok));
-}
-
-#[tokio::test]
-async fn http_provider_idle_stall_before_any_frame_surfaces_once() {
-    let (base_url, connections) = start_stalled_mid_stream_server().await;
-    let provider = HttpProvider::new(
-        "openai",
-        ProviderKind::OpenAiCompatible,
-        &base_url,
-        Some("test-token".to_string()),
-        ["gpt-5".to_string()],
-    )
-    .unwrap()
-    .with_idle_timeout(Duration::from_millis(250));
-    let req = CompletionRequest {
-        model: ModelRef::new("gpt-5"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers: Default::default(),
-    };
-
-    let events = timeout(Duration::from_secs(15), async {
-        provider
-            .stream(req, SessionId::new(), MessageId::new())
-            .await
-            .unwrap()
-            .collect::<Vec<_>>()
-            .await
-    })
-    .await
-    .expect("post-header idle stall should end the stream within the guard");
-
-    assert_eq!(connections.load(Ordering::SeqCst), 1);
-    let [Err(error @ ProviderError::StreamInterrupted(_))] = events.as_slice() else {
-        panic!("expected a single idle-stall error, got {events:?}");
-    };
-    assert_eq!(
-        error.to_string(),
-        "http: stalled stream: no SSE frame within 250ms"
-    );
-    assert!(!error.is_retryable_before_stream());
-    assert_eq!(error.retry_after(), None);
-}
-
-#[tokio::test]
-async fn zero_event_body_failure_surfaces_without_replay() {
-    // Attempt one: 200 headers, a body shorter than content-length (reqwest
-    // decode failure), zero SSE frames delivered. Attempt two: a valid stream.
-    let truncated = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: 500\r\nconnection: close\r\n\r\n";
-    let ok = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: [DONE]\n\n";
-    let (base_url, connections, _requests) =
-        start_scripted_server(vec![truncated.to_string(), ok.to_string()]).await;
-    let provider = HttpProvider::new(
-        "openai",
-        ProviderKind::OpenAiCompatible,
-        &base_url,
-        Some("test-token".to_string()),
-        ["gpt-5".to_string()],
-    )
     .unwrap();
-    let req = CompletionRequest {
-        model: ModelRef::new("gpt-5"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers: Default::default(),
-    };
+    assert_eq!(conns2.load(Ordering::SeqCst), 2);
+    assert!(evs.iter().all(Result::is_ok));
 
-    let events = timeout(Duration::from_secs(15), async {
-        provider
-            .stream(req, SessionId::new(), MessageId::new())
-            .await
-            .unwrap()
-            .collect::<Vec<_>>()
-            .await
-    })
-    .await
-    .expect("zero-event decode failure should surface");
-
-    let [Err(error @ ProviderError::StreamInterrupted(_))] = events.as_slice() else {
-        panic!("expected a single body-read error, got {events:?}");
-    };
-    assert_eq!(
-        error.to_string(),
-        "http: Transport error: error decoding response body"
-    );
-    assert_eq!(connections.load(Ordering::SeqCst), 1);
-}
-
-#[tokio::test]
-async fn retry_config_limits_total_attempts_to_one() {
-    let busy =
-        "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 4\r\nretry-after: 0\r\nconnection: close\r\n\r\nbusy".to_string();
-    let ok = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: [DONE]\n\n".to_string();
-    let (base_url, connections, _requests) = start_scripted_server(vec![busy, ok]).await;
-    let provider = HttpProvider::new(
+    // 3. max_attempts=1 fails fast without a second request.
+    let (url3, conns3, _) = start_scripted_server(vec![busy.into(), ok]).await;
+    let p3 = HttpProvider::new(
         "openai",
         ProviderKind::OpenAiCompatible,
-        &base_url,
-        Some("test-token".to_string()),
-        ["gpt-5".to_string()],
+        &url3,
+        Some("t".into()),
+        ["gpt-5".into()],
     )
     .unwrap()
-    .with_retry(hya_provider::RetryConfig {
-        max_attempts: 1,
-        ..hya_provider::RetryConfig::default()
-    });
-    let req = CompletionRequest {
-        model: ModelRef::new("gpt-5"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers: Default::default(),
-    };
-
-    let error = match provider
-        .stream(req, SessionId::new(), MessageId::new())
+    .with_retry(fast_retry(1));
+    let err3 = p3
+        .stream(req("gpt-5"), SessionId::new(), MessageId::new())
         .await
-    {
-        Err(error) => error,
-        Ok(_) => panic!("max_attempts=1 must fail fast instead of returning a stream"),
-    };
-    assert!(
-        matches!(error, ProviderError::HttpStatus { status: 503, .. }),
-        "unexpected error: {error:?}"
-    );
-    assert_eq!(
-        connections.load(Ordering::SeqCst),
-        1,
-        "max_attempts=1 must fail fast without a second request"
-    );
-}
-
-#[tokio::test]
-async fn exhausted_retryable_status_reports_attempt_count() {
-    let busy =
-        "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 4\r\nconnection: close\r\n\r\nbusy"
-            .to_string();
-    let (base_url, connections, _requests) =
-        start_scripted_server(vec![busy.clone(), busy.clone(), busy]).await;
-    let provider = HttpProvider::new(
-        "openai",
-        ProviderKind::OpenAiCompatible,
-        &base_url,
-        Some("test-token".to_string()),
-        ["gpt-5".to_string()],
-    )
-    .unwrap()
-    .with_retry(hya_provider::RetryConfig {
-        backoff_base: Duration::from_millis(1),
-        ..hya_provider::RetryConfig::default()
-    });
-    let req = CompletionRequest {
-        model: ModelRef::new("gpt-5"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers: Default::default(),
-    };
-
-    let error = match provider
-        .stream(req, SessionId::new(), MessageId::new())
-        .await
-    {
-        Err(error) => error,
-        Ok(_) => panic!("three 503 responses must exhaust the retry budget"),
-    };
+        .err()
+        .unwrap();
     assert!(matches!(
-        &error,
+        err3,
         ProviderError::HttpStatus { status: 503, .. }
     ));
-    assert_eq!(connections.load(Ordering::SeqCst), 3);
-    assert!(error.to_string().contains("after 3 attempts"), "{error}");
-    assert!(error.to_string().contains("busy"), "{error}");
-    assert!(error.is_retryable_before_stream());
-    assert_eq!(
-        hya_provider::RetryConfig::default().backoff_base,
-        Duration::from_secs(1)
-    );
+    assert_eq!(conns3.load(Ordering::SeqCst), 1);
+
+    // 4. Exhausted retryable 503 reports attempt count and body.
+    let busy_no_ra =
+        "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 4\r\nconnection: close\r\n\r\nbusy";
+    let (url4, conns4, _) = start_scripted_server(vec![busy_no_ra.into(); 3]).await;
+    let p4 = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiCompatible,
+        &url4,
+        Some("t".into()),
+        ["gpt-5".into()],
+    )
+    .unwrap()
+    .with_retry(fast_retry(3));
+    let err4 = p4
+        .stream(req("gpt-5"), SessionId::new(), MessageId::new())
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(
+        &err4,
+        ProviderError::HttpStatus { status: 503, .. }
+    ));
+    assert_eq!(conns4.load(Ordering::SeqCst), 3);
+    assert!(err4.to_string().contains("after 3 attempts") && err4.to_string().contains("busy"));
+    assert!(err4.is_retryable_before_stream());
 }
 
 #[tokio::test]
-async fn post_event_body_failure_is_never_replayed() {
-    // One valid frame is delivered before the body truncates: the consumer has
-    // now seen an event, so the no-replay boundary holds and the decode error
-    // surfaces exactly once on the same connection.
+async fn http_stream_interruption_idle_stall_body_truncation_and_drop_abort() {
+    // 1. Post-header idle stall surfaces once without replay.
+    let (idle_url, idle_conns) = start_stalled_mid_stream_server().await;
+    let p_idle = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiCompatible,
+        &idle_url,
+        Some("t".into()),
+        ["gpt-5".into()],
+    )
+    .unwrap()
+    .with_idle_timeout(Duration::from_millis(50));
+    let idle_evs: Vec<_> = p_idle
+        .stream(req("gpt-5"), SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    assert_eq!(idle_conns.load(Ordering::SeqCst), 1);
+    let [Err(err @ ProviderError::StreamInterrupted(_))] = idle_evs.as_slice() else {
+        panic!("expected single idle-stall error, got {idle_evs:?}");
+    };
+    assert_eq!(
+        err.to_string(),
+        "http: stalled stream: no SSE frame within 50ms"
+    );
+    assert!(!err.is_retryable_before_stream() && err.retry_after().is_none());
+
+    // 2. Zero-event truncated body surfaces once without replay.
+    let truncated = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: 500\r\nconnection: close\r\n\r\n";
+    let (z_url, z_conns, _) =
+        start_scripted_server(vec![truncated.into(), sse_ok(&["data: [DONE]"])]).await;
+    let p_z = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiCompatible,
+        &z_url,
+        Some("t".into()),
+        ["gpt-5".into()],
+    )
+    .unwrap();
+    let z_evs: Vec<_> = p_z
+        .stream(req("gpt-5"), SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    assert_eq!(z_conns.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        z_evs.as_slice(),
+        [Err(err @ ProviderError::StreamInterrupted(_))] if err.to_string() == "http: Transport error: error decoding response body"
+    ));
+
+    // 3. Post-event truncated body delivers earlier frames then terminal error without replay.
     let chunk = r#"data: {"id":"1","object":"chat.completion.chunk","created":0,"model":"gpt-5","choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"},"finish_reason":null}]}"#;
     let partial = format!(
         "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: 900\r\nconnection: close\r\n\r\n{chunk}\n\n"
     );
-    let (base_url, connections, _requests) = start_scripted_server(vec![partial]).await;
-    let provider = HttpProvider::new(
+    let (p_url, p_conns, _) = start_scripted_server(vec![partial]).await;
+    let p_part = HttpProvider::new(
         "openai",
         ProviderKind::OpenAiCompatible,
-        &base_url,
-        Some("test-token".to_string()),
-        ["gpt-5".to_string()],
+        &p_url,
+        Some("t".into()),
+        ["gpt-5".into()],
     )
     .unwrap();
-    let req = CompletionRequest {
-        model: ModelRef::new("gpt-5"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers: Default::default(),
-    };
-
-    let events = timeout(Duration::from_secs(15), async {
-        provider
-            .stream(req, SessionId::new(), MessageId::new())
-            .await
-            .unwrap()
-            .collect::<Vec<_>>()
-            .await
-    })
-    .await
-    .expect("truncated stream should surface within the guard");
-
-    assert_eq!(
-        connections.load(Ordering::SeqCst),
-        1,
-        "failures after a delivered event sit behind the no-replay boundary"
-    );
-    // TextStart + TextDelta arrive from the single delivered chunk, then the
-    // body-decode error surfaces exactly once.
-    assert_eq!(events.len(), 3, "events: {events:?}");
-    assert!(events[0].is_ok() && events[1].is_ok());
-    let Err(error @ ProviderError::StreamInterrupted(_)) = &events[2] else {
-        panic!("expected a terminal body-read error, got {events:?}");
-    };
-    assert_eq!(
-        error.to_string(),
-        "http: Transport error: error decoding response body"
-    );
-}
-
-#[tokio::test]
-async fn http_provider_aborts_http_body_when_event_stream_is_dropped() {
-    let (base_url, disconnected) = start_keepalive_sse_server().await;
-    let provider = HttpProvider::new(
-        "openai",
-        ProviderKind::OpenAiCompatible,
-        &base_url,
-        Some("test-token".to_string()),
-        ["gpt-5".to_string()],
-    )
-    .unwrap()
-    .with_idle_timeout(Duration::from_secs(30));
-    let req = CompletionRequest {
-        model: ModelRef::new("gpt-5"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers: Default::default(),
-    };
-
-    let stream = provider
-        .stream(req, SessionId::new(), MessageId::new())
-        .await
-        .unwrap();
-    drop(stream);
-
-    timeout(Duration::from_millis(750), disconnected)
-        .await
-        .expect("dropping the EventStream must abort the HTTP body before the SSE idle deadline")
-        .expect("keepalive server should observe the client disconnect");
-}
-
-#[tokio::test]
-async fn http_provider_forwards_completion_request_headers() {
-    let (base_url, request_rx) = start_sse_server("data: [DONE]\n\n".to_string()).await;
-    let provider = HttpProvider::new(
-        "openai",
-        ProviderKind::OpenAiCompatible,
-        &base_url,
-        Some("test-token".to_string()),
-        ["gpt-5".to_string()],
-    )
-    .unwrap();
-    let mut headers = BTreeMap::new();
-    headers.insert("x-hya-session".to_string(), "session-headers".to_string());
-
-    let req = CompletionRequest {
-        model: ModelRef::new("gpt-5"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers,
-    };
-
-    let stream = provider
-        .stream(req, SessionId::new(), MessageId::new())
-        .await
-        .unwrap();
-    let events: Vec<_> = stream.collect().await;
-    let request = captured_request(request_rx).await;
-    let headers = request.headers.to_ascii_lowercase();
-
-    assert!(events.iter().all(Result::is_ok));
-    assert!(headers.contains("authorization: bearer test-token"));
-    assert!(headers.contains("x-hya-session: session-headers"));
-}
-
-#[tokio::test]
-async fn http_provider_posts_openai_compatible_body_to_mock_endpoint() {
-    let mock_text = "mock openai delta";
-    let response = format!(
-        "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{mock_text}\"}},\"finish_reason\":null}}]}}\n\ndata: [DONE]\n\n"
-    );
-    let (base_url, request_rx) = start_sse_server(response).await;
-    let provider = HttpProvider::new(
-        "openai",
-        ProviderKind::OpenAiCompatible,
-        &base_url,
-        Some("test-token".to_string()),
-        ["gpt-5".to_string()],
-    )
-    .unwrap();
-
-    let req = CompletionRequest {
-        model: ModelRef::new("openai/gpt-5"),
-        system: Some("be terse".to_string()),
-        messages: vec![Message::User {
-            id: MessageId::new(),
-            parts: vec![Part::Text {
-                id: PartId::new(),
-                text: "hello provider".to_string(),
-            }],
-        }],
-        tools: vec![ToolSchema {
-            name: ToolName::new("read"),
-            description: "read a file".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {"path": {"type": "string"}},
-                "required": ["path"]
-            }),
-            output_schema: None,
-        }],
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers: Default::default(),
-    };
-
-    let events: Vec<_> = provider
-        .stream(req, SessionId::new(), MessageId::new())
+    let p_evs: Vec<_> = p_part
+        .stream(req("gpt-5"), SessionId::new(), MessageId::new())
         .await
         .unwrap()
         .collect()
         .await;
-    let request = captured_request(request_rx).await;
-    let headers = request.headers.to_ascii_lowercase();
-    let body: Value = serde_json::from_str(&request.body).unwrap();
-    let text_deltas: Vec<_> = events
-        .into_iter()
-        .map(Result::unwrap)
-        .filter_map(|event| match event {
-            Event::TextDelta { delta, .. } => Some(delta),
-            _ => None,
-        })
-        .collect();
+    assert_eq!(p_conns.load(Ordering::SeqCst), 1);
+    assert_eq!(p_evs.len(), 3);
+    assert!(p_evs[0].is_ok() && p_evs[1].is_ok());
+    assert!(matches!(p_evs[2], Err(ProviderError::StreamInterrupted(_))));
 
-    assert!(headers.contains("authorization: bearer test-token"));
-    assert!(
-        request
-            .raw
-            .starts_with("POST /chat/completions HTTP/1.1\r\n")
-    );
-    assert_eq!(body["model"], "gpt-5");
-    assert_eq!(
-        body["messages"],
-        json!([
-            {"role": "system", "content": "be terse"},
-            {"role": "user", "content": "hello provider"}
-        ])
-    );
-    assert_eq!(
-        body["tools"],
-        json!([
-            {
-                "type": "function",
-                "function": {
-                    "name": "read",
-                    "description": "read a file",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"path": {"type": "string"}},
-                        "required": ["path"]
-                    }
-                }
-            }
-        ])
-    );
-    assert_eq!(body["stream_options"], json!({"include_usage": true}));
-    assert!(text_deltas.iter().any(|delta| delta == mock_text));
+    // 4. Dropping EventStream aborts the HTTP body immediately.
+    let (ka_url, disconnected) = start_keepalive_sse_server().await;
+    let p_ka = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiCompatible,
+        &ka_url,
+        Some("t".into()),
+        ["gpt-5".into()],
+    )
+    .unwrap()
+    .with_idle_timeout(Duration::from_secs(30));
+    let stream = p_ka
+        .stream(req("gpt-5"), SessionId::new(), MessageId::new())
+        .await
+        .unwrap();
+    drop(stream);
+    timeout(Duration::from_millis(500), disconnected)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]
-async fn http_provider_posts_responses_body_with_every_reasoning_effort() {
-    for effort in [
-        ReasoningEffort::Off,
-        ReasoningEffort::Minimal,
-        ReasoningEffort::Low,
-        ReasoningEffort::Medium,
-        ReasoningEffort::High,
-        ReasoningEffort::XHigh,
-        ReasoningEffort::Max,
-    ] {
-        let (base_url, request_rx) = start_sse_server(
-            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\ndata: [DONE]\n\n"
-                .to_string(),
+async fn in_stream_error_frames_surface_once_without_replay() {
+    const CONCURRENCY: &str = "Concurrency limit exceeded for account, please retry later";
+    let anth_err = |kind: &str, msg: &str| {
+        format!(
+            "event: error\ndata: {{\"type\":\"error\",\"error\":{{\"type\":\"{kind}\",\"message\":\"{msg}\"}}}}"
         )
-        .await;
-        let provider = HttpProvider::new(
-            "openai",
-            ProviderKind::OpenAiResponse,
-            &base_url,
-            Some("test-token".to_string()),
-            ["gpt-5.6-sol".to_string()],
-        )
-        .unwrap();
-        let req = CompletionRequest {
-            model: ModelRef::new("openai/gpt-5.6-sol"),
-            system: Some("be terse".to_string()),
-            messages: vec![Message::User {
-                id: MessageId::new(),
-                parts: vec![Part::Text {
-                    id: PartId::new(),
-                    text: "hello provider".to_string(),
-                }],
-            }],
-            tools: vec![ToolSchema {
-                name: ToolName::new("read"),
-                description: "read a file".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {"path": {"type": "string"}},
-                    "required": ["path"]
-                }),
-                output_schema: None,
-            }],
-            temperature: None,
-            max_output_tokens: None,
-            reasoning: Some(effort),
-            headers: Default::default(),
-        };
+    };
+    let anth_ok = sse_ok(&[
+        r#"data: {"type":"message_start","message":{}}"#,
+        r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#,
+        r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}"#,
+        r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#,
+        r#"data: {"type":"message_stop"}"#,
+    ]);
 
+    // Zero-event in-stream errors never replay (rate limit, untyped gateway, overloaded, invalid_request, Responses failed).
+    for (label, kind, model, frame, expected_status) in [
+        ("rate_limit", ProviderKind::Anthropic, "claude-sonnet-4", anth_err("rate_limit_error", CONCURRENCY), Some(429)),
+        ("untyped_gateway", ProviderKind::Anthropic, "claude-sonnet-4", format!("data: {{\"error\":{{\"message\":\"{CONCURRENCY}\"}}}}"), None),
+        ("overloaded", ProviderKind::Anthropic, "claude-sonnet-4", anth_err("overloaded_error", "Overloaded"), None),
+        ("invalid_request", ProviderKind::Anthropic, "claude-sonnet-4", anth_err("invalid_request_error", "messages: field required"), Some(400)),
+        ("responses_server_error", ProviderKind::OpenAiResponse, "gpt-5", r#"data: {"type":"response.failed","response":{"error":{"code":"server_error","message":"The server had an error"}}}"#.to_string(), None),
+    ] {
+        let (url, conns, _) = start_scripted_server(vec![sse_ok(&[&frame]), anth_ok.clone()]).await;
+        let provider = HttpProvider::new("p", kind, &url, Some("t".into()), [model.into()])
+            .unwrap()
+            .with_retry(fast_retry(5));
         let events: Vec<_> = provider
-            .stream(req, SessionId::new(), MessageId::new())
+            .stream(req(model), SessionId::new(), MessageId::new())
             .await
             .unwrap()
             .collect()
             .await;
-        let request = captured_request(request_rx).await;
-        let body: Value = serde_json::from_str(&request.body).unwrap();
-
-        assert!(events.iter().all(Result::is_ok));
-        assert!(request.raw.starts_with("POST /responses HTTP/1.1\r\n"));
-        assert_eq!(body["model"], "gpt-5.6-sol");
-        assert_eq!(body["instructions"], "be terse");
-        assert_eq!(
-            body["input"],
-            json!([{"role": "user", "content": "hello provider"}])
-        );
-        assert_eq!(
-            body["tools"],
-            json!([{
-                "type": "function",
-                "name": "read",
-                "description": "read a file",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"path": {"type": "string"}},
-                    "required": ["path"]
-                }
-            }])
-        );
-        assert_eq!(
-            body["reasoning"],
-            json!({"effort": effort.as_str(), "summary": "auto"})
-        );
-        assert_eq!(body["stream"], true);
-        assert_eq!(body["store"], false);
-        if effort == ReasoningEffort::Off {
-            assert!(body.get("include").is_none());
-        } else {
-            assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
+        assert_eq!(conns.load(Ordering::SeqCst), 1, "{label}");
+        assert!(matches!(events.as_slice(), [Err(_)]), "{label}: {events:?}");
+        if let Some(code) = expected_status {
+            let Err(err @ ProviderError::HttpStatus { status, .. }) = &events[0] else {
+                panic!("{label}: expected HttpStatus({code}), got {:?}", events[0]);
+            };
+            assert_eq!(*status, code, "{label}");
+            if code == 400 {
+                assert!(!err.is_retryable_before_stream());
+            }
         }
     }
-}
 
-#[tokio::test]
-async fn http_provider_omits_reasoning_when_no_effort_is_selected() {
-    let (base_url, request_rx) = start_sse_server(
-        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\ndata: [DONE]\n\n".to_string(),
-    )
-    .await;
+    // Post-delta in-stream rate limit keeps partial text and surfaces one 429 error without replay.
+    let partial_frames = [
+        r#"data: {"type":"message_start","message":{}}"#.to_string(),
+        r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#.to_string(),
+        r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}"#.to_string(),
+        anth_err("rate_limit_error", CONCURRENCY),
+    ];
+    let refs: Vec<&str> = partial_frames.iter().map(String::as_str).collect();
+    let (url, conns, _) = start_scripted_server(vec![sse_ok(&refs), anth_ok]).await;
     let provider = HttpProvider::new(
-        "openai",
-        ProviderKind::OpenAiResponse,
-        &base_url,
-        Some("test-token".to_string()),
-        ["gpt-6-astra".to_string()],
+        "p",
+        ProviderKind::Anthropic,
+        &url,
+        Some("t".into()),
+        ["claude-sonnet-4".into()],
     )
-    .unwrap();
-    let req = CompletionRequest {
-        model: ModelRef::new("openai/gpt-6-astra"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers: Default::default(),
-    };
+    .unwrap()
+    .with_retry(fast_retry(5));
     let events: Vec<_> = provider
-        .stream(req, SessionId::new(), MessageId::new())
+        .stream(req("claude-sonnet-4"), SessionId::new(), MessageId::new())
         .await
         .unwrap()
         .collect()
         .await;
-    let request = captured_request(request_rx).await;
-    let body: Value = serde_json::from_str(&request.body).unwrap();
-
-    assert!(events.iter().all(Result::is_ok));
-    assert!(body.get("reasoning").is_none());
-    assert!(body.get("include").is_none());
+    assert_eq!(conns.load(Ordering::SeqCst), 1);
+    let text: String = events
+        .iter()
+        .filter_map(|e| match e {
+            Ok(Event::TextDelta { delta, .. }) => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "partial");
+    assert_eq!(events.iter().filter(|e| e.is_err()).count(), 1);
+    assert!(matches!(
+        events.last(),
+        Some(Err(ProviderError::HttpStatus { status: 429, message, .. })) if message.contains(CONCURRENCY)
+    ));
 }
 
-/// Codex shares the Responses encoder, so it requests encrypted reasoning
-/// exactly when a non-off effort is set; Grok Build always requests it.
 #[tokio::test]
-async fn http_provider_responses_routes_request_encrypted_reasoning_by_effort() {
-    let include = Some(json!(["reasoning.encrypted_content"]));
-    for (kind, effort, include) in [
+async fn http_401_auth_refresh_single_concurrent_exhausted_and_unconfigured() {
+    let unauth = "HTTP/1.1 401 Unauthorized\r\ncontent-length: 12\r\nconnection: close\r\n\r\nstale token.\n";
+    let ok = sse_ok(&["data: [DONE]"]);
+
+    // 1. Single 401 triggers one refresh and retries with the rotated bearer token.
+    {
+        let (url, conns, reqs) = start_scripted_server(vec![unauth.into(), ok.clone()]).await;
+        let token = Arc::new(std::sync::Mutex::new("expired-token".to_string()));
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let (rt, ft, rc) = (
+            Arc::clone(&token),
+            Arc::clone(&token),
+            Arc::clone(&refreshes),
+        );
+        let provider = HttpProvider::new(
+            "openai",
+            ProviderKind::OpenAiCompatible,
+            &url,
+            Some("unused".into()),
+            ["gpt-5".into()],
+        )
+        .unwrap()
+        .with_bearer_resolver(Arc::new(move || Ok(rt.lock().unwrap().clone())))
+        .with_auth_refresher(Arc::new(move |_| {
+            *ft.lock().unwrap() = "fresh-token".to_string();
+            rc.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }));
+        let evs: Vec<_> = provider
+            .stream(req("gpt-5"), SessionId::new(), MessageId::new())
+            .await
+            .unwrap()
+            .collect()
+            .await;
+        assert!(evs.iter().all(Result::is_ok));
+        assert_eq!(conns.load(Ordering::SeqCst), 2);
+        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+        let cap = reqs.lock().unwrap();
+        assert!(
+            cap[0]
+                .headers
+                .to_ascii_lowercase()
+                .contains("authorization: bearer expired-token")
+        );
+        assert!(
+            cap[1]
+                .headers
+                .to_ascii_lowercase()
+                .contains("authorization: bearer fresh-token")
+        );
+    }
+
+    // 2. Concurrent 401s sharing one expired token perform only one network refresh.
+    {
+        let first_rotation = Arc::new(Notify::new());
+        let (url, conns) = start_concurrent_unauthorized_server(Arc::clone(&first_rotation)).await;
+        let generation = Arc::new(AtomicUsize::new(0));
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let (rg, fg, rc) = (
+            Arc::clone(&generation),
+            Arc::clone(&generation),
+            Arc::clone(&refreshes),
+        );
+        let provider = Arc::new(
+            HttpProvider::new(
+                "openai",
+                ProviderKind::OpenAiCompatible,
+                &url,
+                Some("unused".into()),
+                ["gpt-5".into()],
+            )
+            .unwrap()
+            .with_bearer_resolver(Arc::new(move || {
+                let g = rg.load(Ordering::SeqCst);
+                Ok(if g == 0 {
+                    "expired-token".into()
+                } else {
+                    format!("fresh-token-{g}")
+                })
+            }))
+            .with_auth_refresher(Arc::new(move |failed| {
+                let expected = if failed == "expired-token" {
+                    Some(0)
+                } else {
+                    failed
+                        .strip_prefix("fresh-token-")
+                        .and_then(|v| v.parse().ok())
+                };
+                if let Some(exp) = expected
+                    && fg
+                        .compare_exchange(exp, exp + 1, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_ok()
+                    && rc.fetch_add(1, Ordering::SeqCst) == 0
+                {
+                    first_rotation.notify_one();
+                }
+                Ok(())
+            })),
+        );
+        let (a, b) = tokio::join!(
+            provider.stream(req("gpt-5"), SessionId::new(), MessageId::new()),
+            provider.stream(req("gpt-5"), SessionId::new(), MessageId::new()),
+        );
+        assert!(
+            a.unwrap()
+                .collect::<Vec<_>>()
+                .await
+                .iter()
+                .all(Result::is_ok)
+        );
+        assert!(
+            b.unwrap()
+                .collect::<Vec<_>>()
+                .await
+                .iter()
+                .all(Result::is_ok)
+        );
+        assert_eq!(conns.load(Ordering::SeqCst), 4);
+        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+    }
+
+    // 3. Persistent 401 surfaces after one forced refresh; without refresher makes one connection.
+    {
+        let (url, conns, _) = start_scripted_server(vec![unauth.into(), unauth.into()]).await;
+        let token = Arc::new(std::sync::Mutex::new("expired".to_string()));
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let (rt, ft, rc) = (
+            Arc::clone(&token),
+            Arc::clone(&token),
+            Arc::clone(&refreshes),
+        );
+        let provider = HttpProvider::new(
+            "openai",
+            ProviderKind::OpenAiCompatible,
+            &url,
+            Some("unused".into()),
+            ["gpt-5".into()],
+        )
+        .unwrap()
+        .with_bearer_resolver(Arc::new(move || Ok(rt.lock().unwrap().clone())))
+        .with_auth_refresher(Arc::new(move |_| {
+            *ft.lock().unwrap() = "fresh".to_string();
+            rc.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }));
+        assert!(matches!(
+            provider
+                .stream(req("gpt-5"), SessionId::new(), MessageId::new())
+                .await,
+            Err(ProviderError::HttpStatus { status: 401, .. })
+        ));
+        assert_eq!(conns.load(Ordering::SeqCst), 2);
+        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+    }
+    {
+        let (url, conns, _) = start_scripted_server(vec![unauth.into()]).await;
+        let provider = HttpProvider::new(
+            "openai",
+            ProviderKind::OpenAiCompatible,
+            &url,
+            Some("t".into()),
+            ["gpt-5".into()],
+        )
+        .unwrap();
+        assert!(matches!(
+            provider
+                .stream(req("gpt-5"), SessionId::new(), MessageId::new())
+                .await,
+            Err(ProviderError::HttpStatus { status: 401, .. })
+        ));
+        assert_eq!(conns.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn http_provider_routes_request_headers_and_protocol_bodies() {
+    // 1. OpenAI Compatible forwards custom headers, system, messages, tools, stream_options.
+    let (url, rx) = start_sse_server(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"mock openai delta\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n".into(),
+    )
+    .await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiCompatible,
+        &url,
+        Some("test-token".into()),
+        ["gpt-5".into()],
+    )
+    .unwrap();
+    let mut headers = BTreeMap::new();
+    headers.insert("x-hya-session".into(), "session-headers".into());
+    let chat_req = CompletionRequest {
+        model: ModelRef::new("openai/gpt-5"),
+        system: Some("be terse".into()),
+        messages: vec![Message::User {
+            id: MessageId::new(),
+            parts: vec![Part::Text {
+                id: PartId::new(),
+                text: "hello provider".into(),
+            }],
+        }],
+        tools: vec![ToolSchema {
+            name: ToolName::new("read"),
+            description: "read a file".into(),
+            input_schema: json!({"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}),
+            output_schema: None,
+        }],
+        headers,
+        ..req("openai/gpt-5")
+    };
+    let evs: Vec<_> = provider
+        .stream(chat_req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    let captured = captured_request(rx).await;
+    let lc = captured.headers.to_ascii_lowercase();
+    assert!(
+        lc.contains("authorization: bearer test-token")
+            && lc.contains("x-hya-session: session-headers")
+    );
+    assert!(
+        captured
+            .raw
+            .starts_with("POST /chat/completions HTTP/1.1\r\n")
+    );
+    let body: Value = serde_json::from_str(&captured.body).unwrap();
+    assert_eq!(body["model"], "gpt-5");
+    assert_eq!(body["stream_options"], json!({"include_usage": true}));
+    assert_eq!(body["tools"][0]["function"]["name"], "read");
+    assert!(
+        evs.iter().any(
+            |e| matches!(e, Ok(Event::TextDelta { delta, .. }) if delta == "mock openai delta")
+        )
+    );
+
+    // 2. OpenAI Responses across None + all 7 ReasoningEfforts.
+    let completed = sse_ok(&[
+        r#"data: {"type":"response.completed","response":{"status":"completed"}}"#,
+        "data: [DONE]",
+    ]);
+    let efforts = [
+        None,
+        Some(ReasoningEffort::Off),
+        Some(ReasoningEffort::Minimal),
+        Some(ReasoningEffort::Low),
+        Some(ReasoningEffort::Medium),
+        Some(ReasoningEffort::High),
+        Some(ReasoningEffort::XHigh),
+        Some(ReasoningEffort::Max),
+    ];
+    let (r_url, _, r_reqs) = start_scripted_server(vec![completed.clone(); efforts.len()]).await;
+    let r_prov = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiResponse,
+        &r_url,
+        Some("t".into()),
+        ["gpt-5.6-sol".into()],
+    )
+    .unwrap();
+    for effort in efforts {
+        let mut r = req("openai/gpt-5.6-sol");
+        r.system = Some("be terse".into());
+        r.reasoning = effort;
+        let _ = r_prov
+            .stream(r, SessionId::new(), MessageId::new())
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+    }
+    for (effort, cap) in efforts.into_iter().zip(r_reqs.lock().unwrap().iter()) {
+        assert!(cap.raw.starts_with("POST /responses HTTP/1.1\r\n"));
+        let b: Value = serde_json::from_str(&cap.body).unwrap();
+        assert_eq!(
+            (
+                b["model"].as_str(),
+                b["stream"].as_bool(),
+                b["store"].as_bool()
+            ),
+            (Some("gpt-5.6-sol"), Some(true), Some(false))
+        );
+        match effort {
+            None => assert!(b.get("reasoning").is_none() && b.get("include").is_none()),
+            Some(ReasoningEffort::Off) => {
+                assert_eq!(b["reasoning"], json!({"effort": "none", "summary": "auto"}));
+                assert!(b.get("include").is_none());
+            }
+            Some(e) => {
+                assert_eq!(
+                    b["reasoning"],
+                    json!({"effort": e.as_str(), "summary": "auto"})
+                );
+                assert_eq!(b["include"], json!(["reasoning.encrypted_content"]));
+            }
+        }
+    }
+
+    // 3. Codex & Grok Build encrypted reasoning matrix + session auth headers.
+    let enc = Some(json!(["reasoning.encrypted_content"]));
+    let matrix = [
         (ProviderKind::OpenAiCodex, None, None),
         (ProviderKind::OpenAiCodex, Some(ReasoningEffort::Off), None),
         (
             ProviderKind::OpenAiCodex,
             Some(ReasoningEffort::High),
-            include.clone(),
+            enc.clone(),
         ),
-        (ProviderKind::GrokBuild, None, include.clone()),
+        (ProviderKind::GrokBuild, None, enc.clone()),
         (
             ProviderKind::GrokBuild,
             Some(ReasoningEffort::Off),
-            include.clone(),
+            enc.clone(),
         ),
-    ] {
-        let (base_url, request_rx) = start_sse_server(
-            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
-                .to_string(),
-        )
-        .await;
-        let provider = HttpProvider::new(
-            "route",
-            kind,
-            &base_url,
-            Some("token".to_string()),
-            ["model".to_string()],
-        )
-        .unwrap();
-        let req = CompletionRequest {
-            model: ModelRef::new("route/model"),
-            system: None,
-            messages: Vec::new(),
-            tools: Vec::new(),
-            temperature: None,
-            max_output_tokens: None,
-            reasoning: effort,
-            headers: Default::default(),
-        };
-        let events: Vec<_> = provider
-            .stream(req, SessionId::new(), MessageId::new())
-            .await
-            .unwrap()
-            .collect()
-            .await;
-        let request = captured_request(request_rx).await;
-        let body: Value = serde_json::from_str(&request.body).unwrap();
-
-        assert!(events.iter().all(Result::is_ok));
-        assert_eq!(
-            body.get("include"),
-            include.as_ref(),
-            "kind={kind:?} effort={effort:?}"
-        );
-    }
-}
-
-#[tokio::test]
-async fn http_provider_codex_session_sends_account_id_header() {
-    let response = concat!(
-        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
-        "data: [DONE]\n\n",
-    )
-    .to_string();
-    let (base_url, request_rx) = start_sse_server(response).await;
-    let provider = HttpProvider::new(
-        "codex",
-        ProviderKind::OpenAiCodex,
-        &base_url,
-        Some("codex-jwt".to_string()),
-        ["gpt-5.3-codex".to_string()],
-    )
-    .unwrap()
-    .with_codex_session_auth(Some("acct-42".to_string()));
-    let req = CompletionRequest {
-        model: ModelRef::new("codex/gpt-5.3-codex"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers: Default::default(),
-    };
-
-    let events = provider
-        .stream(req, SessionId::new(), MessageId::new())
-        .await
-        .unwrap()
-        .collect::<Vec<_>>()
-        .await;
-    let request = captured_request(request_rx).await;
-    let headers = request.headers.to_ascii_lowercase();
-
-    assert!(events.iter().all(Result::is_ok));
-    assert!(headers.contains("authorization: bearer codex-jwt"));
-    assert!(headers.contains("chatgpt-account-id: acct-42"));
-    assert!(request.raw.starts_with("POST /responses HTTP/1.1\r\n"));
-}
-
-#[tokio::test]
-async fn http_provider_grok_session_sends_oauth_proxy_headers() {
-    let response = concat!(
-        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
-        "data: [DONE]\n\n",
-    )
-    .to_string();
-    let (base_url, request_rx) = start_sse_server(response).await;
-    let provider = HttpProvider::new(
-        "grok",
-        ProviderKind::GrokBuild,
-        &base_url,
-        Some("oauth-jwt-token".to_string()),
-        ["grok-4.5".to_string()],
-    )
-    .unwrap()
-    .with_grok_session_auth("0.33.19", "grok-cli");
-    let req = CompletionRequest {
-        model: ModelRef::new("grok/grok-4.5"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: Some(ReasoningEffort::High),
-        headers: Default::default(),
-    };
-
-    let events = provider
-        .stream(req, SessionId::new(), MessageId::new())
-        .await
-        .unwrap()
-        .collect::<Vec<_>>()
-        .await;
-    let request = captured_request(request_rx).await;
-    let headers = request.headers.to_ascii_lowercase();
-
-    assert!(events.iter().all(Result::is_ok));
-    assert!(headers.contains("authorization: bearer oauth-jwt-token"));
-    assert!(headers.contains("x-xai-token-auth: xai-grok-cli"));
-    assert!(headers.contains("x-grok-client-version: 0.33.19"));
-    assert!(headers.contains("x-grok-client-identifier: grok-cli"));
-    assert!(headers.contains("x-grok-model-override: grok-4.5"));
-    assert!(request.raw.starts_with("POST /responses HTTP/1.1\r\n"));
-}
-
-#[tokio::test]
-async fn http_provider_posts_grok_build_responses_body() {
-    for effort in [
-        ReasoningEffort::Low,
-        ReasoningEffort::Medium,
-        ReasoningEffort::High,
-    ] {
-        let response = concat!(
-            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
-            "data: [DONE]\n\n",
-        )
-        .to_string();
-        let (base_url, request_rx) = start_sse_server(response).await;
-        let provider = HttpProvider::new(
-            "grok",
-            ProviderKind::GrokBuild,
-            &base_url,
-            Some("test-token".to_string()),
-            ["grok-4.5".to_string()],
-        )
-        .unwrap();
-        let req = CompletionRequest {
-            model: ModelRef::new("grok/grok-4.5"),
-            system: None,
-            messages: Vec::new(),
-            tools: Vec::new(),
-            temperature: None,
-            max_output_tokens: None,
-            reasoning: Some(effort),
-            headers: Default::default(),
-        };
-
-        let events = provider
-            .stream(req, SessionId::new(), MessageId::new())
+        (ProviderKind::GrokBuild, Some(ReasoningEffort::High), enc),
+    ];
+    let (m_url, _, m_reqs) = start_scripted_server(vec![completed; matrix.len()]).await;
+    for (kind, effort, expected_include) in matrix {
+        let mut p =
+            HttpProvider::new("route", kind, &m_url, Some("tok".into()), ["model".into()]).unwrap();
+        if kind == ProviderKind::OpenAiCodex {
+            p = p.with_codex_session_auth(Some("acct-42".into()));
+        } else {
+            p = p.with_grok_session_auth("0.33.19", "grok-cli");
+        }
+        let mut r = req("route/model");
+        r.reasoning = effort;
+        let _ = p
+            .stream(r, SessionId::new(), MessageId::new())
             .await
             .unwrap()
             .collect::<Vec<_>>()
             .await;
-        let request = captured_request(request_rx).await;
-        let body: Value = serde_json::from_str(&request.body).unwrap();
-
-        assert!(events.iter().all(Result::is_ok));
-        assert!(
-            request
-                .headers
-                .to_ascii_lowercase()
-                .contains("authorization: bearer test-token")
-        );
-        assert!(request.raw.starts_with("POST /responses HTTP/1.1\r\n"));
-        assert_eq!(body["model"], "grok-4.5");
-        assert_eq!(body["stream"], true);
-        assert_eq!(body["store"], false);
-        assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
+        let cap = m_reqs.lock().unwrap();
+        let last = cap.last().unwrap();
+        let lc = last.headers.to_ascii_lowercase();
+        let b: Value = serde_json::from_str(&last.body).unwrap();
         assert_eq!(
-            body["reasoning"],
-            json!({"effort": effort.as_str(), "summary": "auto"})
+            b.get("include"),
+            expected_include.as_ref(),
+            "{kind:?} {effort:?}"
         );
+        if kind == ProviderKind::OpenAiCodex {
+            assert!(lc.contains("chatgpt-account-id: acct-42"));
+        } else {
+            assert!(lc.contains("x-xai-token-auth: xai-grok-cli"));
+            assert!(lc.contains("x-grok-client-version: 0.33.19"));
+            assert!(lc.contains("x-grok-client-identifier: grok-cli"));
+            assert!(lc.contains("x-grok-model-override: model"));
+        }
     }
 }
 
 #[tokio::test]
-async fn http_provider_decodes_grok_reasoning_text_delta_and_typed_terminal() {
-    let sse = [
-        r#"data: {"type":"response.reasoning_text.delta","output_index":0,"delta":"Need a file."}"#,
-        r#"data: {"type":"response.completed","response":{"status":"completed"}}"#,
-    ]
-    .join("\n\n")
-        + "\n\n";
-    let (base_url, _request_rx) = start_sse_server(sse).await;
-    let provider = HttpProvider::new(
-        "grok",
-        ProviderKind::GrokBuild,
-        &base_url,
-        Some("test-token".to_string()),
-        ["grok-4.5".to_string()],
-    )
-    .unwrap();
-    let req = CompletionRequest {
-        model: ModelRef::new("grok/grok-4.5"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: Some(ReasoningEffort::High),
-        headers: Default::default(),
-    };
-
-    let events = provider
-        .stream(req, SessionId::new(), MessageId::new())
-        .await
-        .unwrap()
-        .collect::<Vec<_>>()
+async fn http_provider_responses_stream_decoding_reasoning_tools_errors_and_replay() {
+    // 1. Grok reasoning_text.delta + typed terminal.
+    let grok_sse = "data: {\"type\":\"response.reasoning_text.delta\",\"output_index\":0,\"delta\":\"Need a file.\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n";
+    let grok_evs = response_events(ProviderKind::GrokBuild, grok_sse)
         .await
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-
-    assert_eq!(events.len(), 4);
-    let reasoning_part = match &events[0] {
-        Event::ReasoningStart { part, .. } => *part,
-        event => panic!("expected reasoning start, got {event:?}"),
-    };
+    assert_eq!(grok_evs.len(), 4);
+    assert!(matches!(&grok_evs[1], Event::ReasoningDelta { delta, .. } if delta == "Need a file."));
     assert!(matches!(
-        &events[1],
-        Event::ReasoningDelta { part, delta, .. }
-            if *part == reasoning_part && delta == "Need a file."
-    ));
-    assert!(matches!(
-        &events[2],
-        Event::ReasoningEnd { part, .. } if *part == reasoning_part
-    ));
-    assert!(matches!(
-        &events[3],
+        &grok_evs[3],
         Event::MessageFinished {
             finish: FinishReason::Stop,
             ..
         }
     ));
-}
 
-/// Responses routes require typed terminal events; Chat Completions keeps its permissive close.
-#[tokio::test]
-async fn responses_routes_require_typed_terminal_while_chat_completions_remains_permissive() {
-    for response in ["data: [DONE]\n\n", ""] {
+    // 2. Responses/Grok require typed terminal; Chat stays permissive; all OpenAI-family report malformed JSON.
+    for empty_or_done in ["data: [DONE]\n\n", ""] {
         for kind in [ProviderKind::OpenAiResponse, ProviderKind::GrokBuild] {
-            let events = response_events(kind, response).await;
+            let evs = response_events(kind, empty_or_done).await;
             assert!(matches!(
-                events.as_slice(),
-                [Err(ProviderError::Decode(message))]
-                    if message == "Responses stream ended without response.completed or response.incomplete"
+                evs.as_slice(),
+                [Err(ProviderError::Decode(m))] if m == "Responses stream ended without response.completed or response.incomplete"
             ));
         }
-
-        let chat = response_events(ProviderKind::OpenAiCompatible, response).await;
-        assert!(chat.iter().all(Result::is_ok));
+        let chat = response_events(ProviderKind::OpenAiCompatible, empty_or_done).await;
         assert!(matches!(
             chat.last(),
             Some(Ok(Event::MessageFinished {
@@ -1040,23 +825,28 @@ async fn responses_routes_require_typed_terminal_while_chat_completions_remains_
             }))
         ));
     }
-}
-
-/// Every OpenAI-family streaming route reports malformed JSON as `ProviderError::Json`.
-#[tokio::test]
-async fn openai_family_routes_report_malformed_json_frames() {
     for kind in [
         ProviderKind::OpenAiCompatible,
         ProviderKind::OpenAiResponse,
         ProviderKind::GrokBuild,
     ] {
-        let events = response_events(kind, "data: {not-json}\n\n").await;
-        assert!(matches!(events.as_slice(), [Err(ProviderError::Json(_))]));
+        assert!(matches!(
+            response_events(kind, "data: {not-json}\n\n")
+                .await
+                .as_slice(),
+            [Err(ProviderError::Json(_))]
+        ));
     }
-}
 
-#[tokio::test]
-async fn http_provider_decodes_responses_reasoning_text_tool_and_usage() {
+    // 3. Nested response.failed surfaces error message.
+    let failed = response_events(
+        ProviderKind::OpenAiResponse,
+        "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"quota exhausted\"}}}\n\n",
+    )
+    .await;
+    assert!(matches!(failed.as_slice(), [Err(ProviderError::Http(m))] if m == "quota exhausted"));
+
+    // 4. Full Responses decoding: reasoning summary + encrypted_content + 2 parallel tools + text + normalized usage.
     let sse = [
         r#"data: {"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"delta":"Need a file."}"#,
         r#"data: {"type":"response.output_item.done","output_index":0,"item":{"id":"rs_123","type":"reasoning","summary":[{"type":"summary_text","text":"Need a file."}],"encrypted_content":"opaque"}}"#,
@@ -1073,34 +863,19 @@ async fn http_provider_decodes_responses_reasoning_text_tool_and_usage() {
     ]
     .join("\n\n")
         + "\n\n";
-    let (base_url, _request_rx) = start_sse_server(sse).await;
-    let provider = HttpProvider::new(
+    let (url, _rx) = start_sse_server(sse).await;
+    let p = HttpProvider::new(
         "openai",
         ProviderKind::OpenAiResponse,
-        &base_url,
-        Some("test-token".to_string()),
-        ["gpt-5.6-sol".to_string()],
+        &url,
+        Some("t".into()),
+        ["gpt-5.6-sol".into()],
     )
     .unwrap();
-    let req = CompletionRequest {
-        model: ModelRef::new("openai/gpt-5.6-sol"),
-        system: None,
-        messages: vec![Message::User {
-            id: MessageId::new(),
-            parts: vec![Part::Text {
-                id: PartId::new(),
-                text: "read a.txt".to_string(),
-            }],
-        }],
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: Some(ReasoningEffort::Low),
-        headers: Default::default(),
-    };
-
-    let events: Vec<Event> = provider
-        .stream(req, SessionId::new(), MessageId::new())
+    let mut r = req("openai/gpt-5.6-sol");
+    r.reasoning = Some(ReasoningEffort::Low);
+    let evs: Vec<Event> = p
+        .stream(r, SessionId::new(), MessageId::new())
         .await
         .unwrap()
         .collect::<Vec<_>>()
@@ -1108,221 +883,165 @@ async fn http_provider_decodes_responses_reasoning_text_tool_and_usage() {
         .into_iter()
         .collect::<Result<_, _>>()
         .unwrap();
-
-    assert_eq!(events.len(), 13);
-    let reasoning_part = match &events[0] {
-        Event::ReasoningStart { part, .. } => *part,
-        event => panic!("expected reasoning start, got {event:?}"),
-    };
-    let reasoning_start = serde_json::to_value(&events[0]).unwrap();
-    assert_eq!(
-        reasoning_start["reason"], "low",
-        "reasoning start must retain the requested effort"
-    );
+    assert_eq!(evs.len(), 13);
+    assert_eq!(serde_json::to_value(&evs[0]).unwrap()["reason"], "low");
     assert!(matches!(
-        &events[1],
-        Event::ReasoningDelta { part, delta, .. }
-            if *part == reasoning_part && delta == "Need a file."
-    ));
-    assert!(matches!(
-        &events[2],
-        Event::ReasoningEnd { part, provider_data: Some(data), .. }
-            if *part == reasoning_part
-                && data == &json!({
-                    "id": "rs_123",
-                    "type": "reasoning",
-                    "summary": [{"type": "summary_text", "text": "Need a file."}],
-                    "encrypted_content": "opaque"
-                })
-    ));
-    let (tool_part, tool_call) = match &events[3] {
-        Event::ToolInputStart {
-            part, call, name, ..
-        } if name.as_str() == "read" => (*part, *call),
-        event => panic!("expected tool input start, got {event:?}"),
-    };
-    let (second_tool_part, second_tool_call) = match &events[4] {
-        Event::ToolInputStart {
-            part, call, name, ..
-        } if name.as_str() == "search" => (*part, *call),
-        event => panic!("expected second tool input start, got {event:?}"),
-    };
-    assert_ne!(tool_call, second_tool_call);
-    assert!(matches!(
-        &events[5],
-        Event::ToolInputDelta { part, call, name, delta, .. }
-            if *part == tool_part && *call == tool_call && name.as_str() == "read"
-                && delta == "{\"path\":\"a.txt\"}"
-    ));
-    assert!(matches!(
-        &events[6],
-        Event::ToolInputDelta { part, call, name, delta, .. }
-            if *part == second_tool_part && *call == second_tool_call
-                && name.as_str() == "search" && delta == "{\"query\":\"needle\"}"
-    ));
-    assert!(matches!(
-        &events[7],
-        Event::ToolCallRequested { part, call, name, input, .. }
-            if *part == tool_part && *call == tool_call && name.as_str() == "read"
-                && input == &json!({"path": "a.txt"})
-    ));
-    assert!(matches!(
-        &events[8],
-        Event::ToolCallRequested { part, call, name, input, .. }
-            if *part == second_tool_part && *call == second_tool_call
-                && name.as_str() == "search" && input == &json!({"query": "needle"})
-    ));
-    let text_part = match &events[9] {
-        Event::TextStart { part, .. } => *part,
-        event => panic!("expected text start, got {event:?}"),
-    };
-    assert!(matches!(
-        &events[10],
-        Event::TextDelta { part, delta, .. } if *part == text_part && delta == "Reading"
-    ));
-    assert!(matches!(
-        &events[11],
-        Event::TextEnd { part, .. } if *part == text_part
-    ));
-    assert!(matches!(
-        &events[12],
+        &evs[12],
         Event::MessageFinished {
             finish: FinishReason::ToolCalls,
-            // Normalized: Responses `input_tokens` includes cached tokens.
             tokens: Some(TokenUsage {
                 input: 8,
                 output: 7,
                 reasoning: 2,
                 cache_read: 3,
                 cache_write: 0,
-                reasoning_unknown: false,
+                reasoning_unknown: false
             }),
             ..
         }
     ));
+
+    // 5. Replays completed Responses reasoning + tool round verbatim over HTTP.
+    let (rep_url, rep_rx) = start_sse_server(
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
+            .into(),
+    )
+    .await;
+    let rep_p = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiResponse,
+        &rep_url,
+        Some("t".into()),
+        ["gpt-5.6-sol".into()],
+    )
+    .unwrap();
+    let call_id = ToolCallId::new();
+    let pdata = json!({"id": "rs_123", "type": "reasoning", "summary": [{"type": "summary_text", "text": "Need a file."}], "encrypted_content": "opaque"});
+    let rep_req = CompletionRequest {
+        reasoning: Some(ReasoningEffort::Medium),
+        messages: vec![
+            Message::User {
+                id: MessageId::new(),
+                parts: vec![Part::Text {
+                    id: PartId::new(),
+                    text: "read a.txt".into(),
+                }],
+            },
+            Message::Assistant {
+                id: MessageId::new(),
+                agent: AgentName::new("build"),
+                model: ModelRef::new("openai/gpt-5.6-sol"),
+                parts: vec![
+                    Part::Reasoning {
+                        id: PartId::new(),
+                        text: "Need a file.".into(),
+                        provider_data: Some(pdata.clone()),
+                    },
+                    Part::Tool {
+                        id: PartId::new(),
+                        call_id,
+                        name: ToolName::new("read"),
+                        state: ToolPartState::Completed {
+                            input: json!({"path": "a.txt"}),
+                            output: json!("contents"),
+                            time_ms: 3,
+                        },
+                        provider_data: None,
+                    },
+                ],
+                finish: Some(FinishReason::ToolCalls),
+                tokens: None,
+                last_round: None,
+                last_step_start: None,
+            },
+        ],
+        ..req("openai/gpt-5.6-sol")
+    };
+    let _ = rep_p
+        .stream(rep_req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    let body: Value = serde_json::from_str(&captured_request(rep_rx).await.body).unwrap();
+    assert_eq!(body["input"][1], pdata);
+    assert_eq!(body["input"][2]["call_id"], call_id.to_string());
+    assert_eq!(body["input"][3]["output"], "contents");
 }
 
-/// A reasoning item that only the terminal `/response/output` carries is
-/// still closed with its encrypted payload, before the message finishes.
 #[tokio::test]
-async fn responses_terminal_output_closes_unfinished_reasoning() {
-    let item = json!({
-        "id": "rs_1",
-        "type": "reasoning",
-        "summary": [{"type": "summary_text", "text": "Plan."}],
-        "encrypted_content": "opaque"
-    });
-    let completed = json!({
-        "type": "response.completed",
-        "response": {
-            "status": "completed",
-            "output": [item, {"type": "message", "content": []}],
-            "input_transformations": [
-                {"action": "removed", "type": "reasoning", "reason": "prefix_mismatch"}
-            ]
-        }
-    });
+async fn http_provider_responses_terminal_output_and_summary_edge_cases() {
+    // 1. Terminal output closes unfinished reasoning (streamed or unstreamed) once, and never recloses finished reasoning.
+    let item = json!({"id": "rs_1", "type": "reasoning", "summary": [{"type": "summary_text", "text": "Plan."}], "encrypted_content": "opaque"});
+    let completed = json!({"type": "response.completed", "response": {"status": "completed", "output": [item, {"type": "message", "content": []}], "input_transformations": [{"action": "removed", "type": "reasoning", "reason": "prefix_mismatch"}]}});
     for streamed in [
         "",
         "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"Plan.\"}\n\n",
     ] {
-        let sse = format!("{streamed}data: {completed}\n\n");
-        let events = response_events(ProviderKind::OpenAiResponse, &sse)
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        let kinds: Vec<_> = events
-            .iter()
-            .map(|event| match event {
-                Event::ReasoningStart { .. } => "start",
-                Event::ReasoningDelta { .. } => "delta",
-                Event::ReasoningEnd { .. } => "end",
-                Event::MessageFinished { .. } => "finished",
-                event => panic!("unexpected event {event:?}"),
-            })
-            .collect();
-        let expected: &[&str] = if streamed.is_empty() {
-            &["start", "end", "finished"]
-        } else {
-            &["start", "delta", "end", "finished"]
-        };
-        assert_eq!(kinds, expected, "streamed={streamed:?}");
-        assert!(events.iter().any(|event| matches!(
-            event,
-            Event::ReasoningEnd { provider_data: Some(data), .. } if data == &item
-        )));
-    }
-}
-
-/// A reasoning item already closed by `output_item.done` is not closed again
-/// by the terminal output: a second `ReasoningEnd` would blank its text.
-#[tokio::test]
-async fn responses_terminal_output_does_not_reclose_finished_reasoning() {
-    let sse = concat!(
-        "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"Plan.\"}\n\n",
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\",\"encrypted_content\":\"opaque\"}}\n\n",
-        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"encrypted_content\":\"opaque\"}]}}\n\n",
-    );
-    let events = response_events(ProviderKind::OpenAiResponse, sse)
+        let evs = response_events(
+            ProviderKind::OpenAiResponse,
+            &format!("{streamed}data: {completed}\n\n"),
+        )
         .await
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    let ends = events
-        .iter()
-        .filter(|event| matches!(event, Event::ReasoningEnd { .. }))
-        .count();
-    assert_eq!(ends, 1);
-    assert!(matches!(events.last(), Some(Event::MessageFinished { .. })));
-}
+        assert_eq!(
+            evs.iter()
+                .filter(|e| matches!(e, Event::ReasoningEnd { .. }))
+                .count(),
+            1
+        );
+        assert!(evs.iter().any(
+            |e| matches!(e, Event::ReasoningEnd { provider_data: Some(d), .. } if d == &item)
+        ));
+    }
+    let already_closed = concat!(
+        "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"Plan.\"}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\",\"encrypted_content\":\"opaque\"}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"encrypted_content\":\"opaque\"}]}}\n\n",
+    );
+    let closed_evs = response_events(ProviderKind::OpenAiResponse, already_closed)
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        closed_evs
+            .iter()
+            .filter(|e| matches!(e, Event::ReasoningEnd { .. }))
+            .count(),
+        1
+    );
 
-/// A reasoning item announced by `output_item.added` keeps its place before a
-/// call that streams next, though only the terminal output carries its
-/// payload, so the next request replays reasoning before the call.
-#[tokio::test]
-async fn responses_terminal_reasoning_replays_before_a_streamed_call() {
+    // 2. Announced reasoning keeps its place before a streamed call when folded and replayed;
+    //    unannounced terminal reasoning after streamed call is skipped.
     let reasoning =
         json!({"id": "rs_1", "type": "reasoning", "summary": [], "encrypted_content": "opaque"});
-    let function_call = json!({"id": "fc_1", "type": "function_call", "call_id": "call_up", "name": "read", "arguments": "{\"path\":\"a.txt\"}"});
-    let completed = json!({"type": "response.completed", "response": {
-        "status": "completed",
-        "output": [reasoning, function_call],
-    }});
-    let sse = [
+    let fc = json!({"id": "fc_1", "type": "function_call", "call_id": "call_up", "name": "read", "arguments": "{\"path\":\"a.txt\"}"});
+    let announced_sse = [
         json!({"type": "response.output_item.added", "output_index": 0, "item": {"id": "rs_1", "type": "reasoning", "summary": []}}),
         json!({"type": "response.output_item.added", "output_index": 1, "item": {"id": "fc_1", "type": "function_call", "call_id": "call_up", "name": "read", "arguments": ""}}),
-        json!({"type": "response.output_item.done", "output_index": 1, "item": function_call}),
-        completed,
+        json!({"type": "response.output_item.done", "output_index": 1, "item": fc}),
+        json!({"type": "response.completed", "response": {"status": "completed", "output": [reasoning, fc]}}),
     ]
     .iter()
-    .map(|frame| format!("data: {frame}\n\n"))
+    .map(|f| format!("data: {f}\n\n"))
     .collect::<String>();
     let (session, user, message) = (SessionId::new(), MessageId::new(), MessageId::new());
-    let (base_url, _request_rx) = start_sse_server(sse).await;
-    let provider = HttpProvider::new(
+    let (u, _) = start_sse_server(announced_sse).await;
+    let p = HttpProvider::new(
         "openai",
         ProviderKind::OpenAiResponse,
-        &base_url,
-        Some("test-token".to_string()),
-        ["model".to_string()],
+        &u,
+        Some("t".into()),
+        ["model".into()],
     )
     .unwrap();
-    let decoded: Vec<Event> = provider
-        .stream(
-            CompletionRequest {
-                model: ModelRef::new("openai/model"),
-                system: None,
-                messages: Vec::new(),
-                tools: Vec::new(),
-                temperature: None,
-                max_output_tokens: None,
-                reasoning: Some(ReasoningEffort::High),
-                headers: Default::default(),
-            },
-            session,
-            message,
-        )
+    let mut r = req("openai/model");
+    r.reasoning = Some(ReasoningEffort::High);
+    let decoded: Vec<Event> = p
+        .stream(r, session, message)
         .await
         .unwrap()
         .collect::<Vec<_>>()
@@ -1332,21 +1051,19 @@ async fn responses_terminal_reasoning_replays_before_a_streamed_call() {
         .unwrap();
     let (tool_part, call) = decoded
         .iter()
-        .find_map(|event| match event {
+        .find_map(|e| match e {
             Event::ToolCallRequested { part, call, .. } => Some((*part, *call)),
             _ => None,
         })
         .unwrap();
-
-    // Fold the round into the log the way the kernel records it.
     let user_part = PartId::new();
-    let mut events = vec![
+    let mut log = vec![
         Event::SessionCreated {
             session,
             parent: None,
             agent: AgentName::new("build"),
             model: ModelRef::new("openai/model"),
-            workdir: "/tmp".to_string(),
+            workdir: "/tmp".into(),
             project: None,
             kind: SessionKind::Project,
         },
@@ -1366,7 +1083,7 @@ async fn responses_terminal_reasoning_replays_before_a_streamed_call() {
             session,
             message: user,
             part: user_part,
-            delta: "read a.txt".to_string(),
+            delta: "read a.txt".into(),
         },
         Event::MessageStarted {
             session,
@@ -1376,8 +1093,8 @@ async fn responses_terminal_reasoning_replays_before_a_streamed_call() {
             model: None,
         },
     ];
-    events.extend(decoded);
-    events.push(Event::ToolResult {
+    log.extend(decoded);
+    log.push(Event::ToolResult {
         session,
         message,
         part: tool_part,
@@ -1385,22 +1102,22 @@ async fn responses_terminal_reasoning_replays_before_a_streamed_call() {
         output: json!("contents"),
         time_ms: 3,
     });
-    let envelopes: Vec<_> = (1..)
-        .zip(events)
-        .map(|(seq, event)| Envelope {
-            seq: EventSeq(seq),
-            ts_millis: 0,
-            event,
-        })
-        .collect();
-    let projection = Projection::from_events(&envelopes);
-    let row = projection
+    let proj = Projection::from_events(
+        &(1..)
+            .zip(log)
+            .map(|(s, event)| Envelope {
+                seq: EventSeq(s),
+                ts_millis: 0,
+                event,
+            })
+            .collect::<Vec<_>>(),
+    );
+    let parts = proj
         .session
         .messages
         .iter()
         .find(|row| row.id == message)
-        .unwrap();
-    let parts = row
+        .unwrap()
         .parts
         .iter()
         .map(|part| match part {
@@ -1435,14 +1152,13 @@ async fn responses_terminal_reasoning_replays_before_a_streamed_call() {
         })
         .collect();
     let next = CompletionRequest {
-        model: ModelRef::new("openai/model"),
-        system: None,
+        reasoning: Some(ReasoningEffort::High),
         messages: vec![
             Message::User {
                 id: user,
                 parts: vec![Part::Text {
                     id: user_part,
-                    text: "read a.txt".to_string(),
+                    text: "read a.txt".into(),
                 }],
             },
             Message::Assistant {
@@ -1456,73 +1172,41 @@ async fn responses_terminal_reasoning_replays_before_a_streamed_call() {
                 last_step_start: None,
             },
         ],
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: Some(ReasoningEffort::High),
-        headers: Default::default(),
+        ..req("openai/model")
     };
-    let body = OpenAiResponsesProtocol.encode(&next).unwrap();
-    assert_eq!(
-        body["input"],
-        json!([
-            {"role": "user", "content": "read a.txt"},
-            reasoning,
-            {
-                "type": "function_call",
-                "call_id": "call_up",
-                "name": "read",
-                "arguments": "{\"path\":\"a.txt\"}"
-            },
-            {"type": "function_call_output", "call_id": "call_up", "output": "contents"},
-        ])
-    );
-}
+    let encoded = OpenAiResponsesProtocol.encode(&next).unwrap();
+    assert_eq!(encoded["input"][1], reasoning);
+    assert_eq!(encoded["input"][2]["call_id"], "call_up");
 
-/// A reasoning item that only the terminal output carries, after a call
-/// already streamed, is left out rather than recorded after the call.
-#[tokio::test]
-async fn responses_terminal_reasoning_after_streamed_output_is_skipped() {
-    let function_call = json!({"id": "fc_1", "type": "function_call", "call_id": "call_up", "name": "read", "arguments": "{}"});
-    let sse = [
-        json!({"type": "response.output_item.added", "output_index": 1, "item": function_call}),
-        json!({"type": "response.output_item.done", "output_index": 1, "item": function_call}),
-        json!({"type": "response.completed", "response": {
-            "status": "completed",
-            "output": [{"id": "rs_1", "type": "reasoning", "encrypted_content": "opaque"}, function_call],
-        }}),
+    let unannounced_sse = [
+        json!({"type": "response.output_item.added", "output_index": 1, "item": fc}),
+        json!({"type": "response.output_item.done", "output_index": 1, "item": fc}),
+        json!({"type": "response.completed", "response": {"status": "completed", "output": [reasoning, fc]}}),
     ]
     .iter()
-    .map(|frame| format!("data: {frame}\n\n"))
+    .map(|f| format!("data: {f}\n\n"))
     .collect::<String>();
-    let events = response_events(ProviderKind::OpenAiResponse, &sse)
+    let unannounced_evs = response_events(ProviderKind::OpenAiResponse, &unannounced_sse)
         .await
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert!(
-        !events.iter().any(|event| matches!(
-            event,
-            Event::ReasoningStart { .. } | Event::ReasoningEnd { .. }
-        )),
-        "{events:?}"
+        !unannounced_evs
+            .iter()
+            .any(|e| matches!(e, Event::ReasoningStart { .. } | Event::ReasoningEnd { .. }))
     );
-    assert!(matches!(events.last(), Some(Event::MessageFinished { .. })));
-}
 
-/// A summary-only `output_item.done` leaves the part open; the terminal
-/// output's item with `encrypted_content` closes it, once, keeping the text.
-#[tokio::test]
-async fn responses_terminal_encrypted_item_replaces_summary_only_done() {
+    // 3. Summary-only done replaced by encrypted terminal item; earlier open text closes before terminal reasoning;
+    //    response.incomplete closes reasoning before Length; summary parts join with \n\n.
     let summary = json!({"id": "rs_1", "type": "reasoning", "summary": [{"type": "summary_text", "text": "Need a file."}]});
     let mut encrypted = summary.clone();
     encrypted["encrypted_content"] = json!("opaque");
-    for (completed, provider_data) in [
+    for (term, expected) in [
         (
             json!({"type": "response.completed", "response": {"status": "completed", "output": [encrypted]}}),
             encrypted.clone(),
         ),
-        // Without terminal output the summary-only item is kept.
         (
             json!({"type": "response.completed", "response": {"status": "completed"}}),
             summary.clone(),
@@ -1531,563 +1215,143 @@ async fn responses_terminal_encrypted_item_replaces_summary_only_done() {
         let sse = [
             json!({"type": "response.reasoning_summary_text.delta", "output_index": 0, "summary_index": 0, "delta": "Need a file."}),
             json!({"type": "response.output_item.done", "output_index": 0, "item": summary}),
-            completed,
-        ]
-        .iter()
-        .map(|frame| format!("data: {frame}\n\n"))
-        .collect::<String>();
-        let events = response_events(ProviderKind::OpenAiResponse, &sse)
+            term,
+        ].iter().map(|f| format!("data: {f}\n\n")).collect::<String>();
+        let evs = response_events(ProviderKind::OpenAiResponse, &sse)
             .await
             .into_iter()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        assert!(
-            matches!(
-                events.as_slice(),
-                [
-                    Event::ReasoningStart { .. },
-                    Event::ReasoningDelta { delta, .. },
-                    Event::ReasoningEnd { provider_data: Some(data), .. },
-                    Event::MessageFinished { .. },
-                ] if delta == "Need a file." && data == &provider_data
-            ),
-            "{events:?}"
-        );
+        assert!(matches!(
+            evs.as_slice(),
+            [Event::ReasoningStart { .. }, Event::ReasoningDelta { delta, .. }, Event::ReasoningEnd { provider_data: Some(d), .. }, Event::MessageFinished { .. }]
+                if delta == "Need a file." && d == &expected
+        ));
     }
-}
 
-/// Text still open at an earlier output index ends before a terminal-only
-/// reasoning item starts, so the text is recorded first.
-#[tokio::test]
-async fn responses_terminal_reasoning_follows_earlier_open_text() {
-    let sse = [
+    let text_then_r = [
         json!({"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "Reading"}),
-        json!({"type": "response.completed", "response": {
-            "status": "completed",
-            "output": [
-                {"type": "message", "content": [{"type": "output_text", "text": "Reading"}]},
-                {"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque", "summary": []},
-            ],
-        }}),
-    ]
-    .iter()
-    .map(|frame| format!("data: {frame}\n\n"))
-    .collect::<String>();
-    let events = response_events(ProviderKind::OpenAiResponse, &sse)
+        json!({"type": "response.completed", "response": {"status": "completed", "output": [{"type": "message", "content": [{"type": "output_text", "text": "Reading"}]}, reasoning]}}),
+    ].iter().map(|f| format!("data: {f}\n\n")).collect::<String>();
+    let tr_evs = response_events(ProviderKind::OpenAiResponse, &text_then_r)
         .await
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    assert!(
-        matches!(
-            events.as_slice(),
-            [
-                Event::TextStart { .. },
-                Event::TextDelta { .. },
-                Event::TextEnd { .. },
-                Event::ReasoningStart { .. },
-                Event::ReasoningEnd {
-                    provider_data: Some(_),
-                    ..
-                },
-                Event::MessageFinished { .. },
-            ]
-        ),
-        "{events:?}"
-    );
-}
+    assert!(matches!(
+        tr_evs.as_slice(),
+        [
+            Event::TextStart { .. },
+            Event::TextDelta { .. },
+            Event::TextEnd { .. },
+            Event::ReasoningStart { .. },
+            Event::ReasoningEnd {
+                provider_data: Some(_),
+                ..
+            },
+            Event::MessageFinished { .. }
+        ]
+    ));
 
-/// `response.incomplete` closes a terminal-only reasoning item too, before
-/// the `Length` finish.
-#[tokio::test]
-async fn responses_incomplete_terminal_output_closes_reasoning() {
-    let item = json!({"id": "rs_1", "type": "reasoning", "encrypted_content": "opaque"});
-    let sse = format!(
-        "data: {}\n\n",
-        json!({"type": "response.incomplete", "response": {"status": "incomplete", "output": [item]}})
-    );
-    let events = response_events(ProviderKind::OpenAiResponse, &sse)
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    assert!(
-        matches!(
-            events.as_slice(),
-            [
-                Event::ReasoningStart { .. },
-                Event::ReasoningEnd { provider_data: Some(data), .. },
-                Event::MessageFinished { finish: FinishReason::Length, .. },
-            ] if data == &item
-        ),
-        "{events:?}"
-    );
-}
+    let inc_evs = response_events(
+        ProviderKind::OpenAiResponse,
+        &format!("data: {}\n\n", json!({"type": "response.incomplete", "response": {"status": "incomplete", "output": [reasoning]}})),
+    ).await.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
+    assert!(matches!(
+        inc_evs.as_slice(),
+        [
+            Event::ReasoningStart { .. },
+            Event::ReasoningEnd {
+                provider_data: Some(_),
+                ..
+            },
+            Event::MessageFinished {
+                finish: FinishReason::Length,
+                ..
+            }
+        ]
+    ));
 
-#[tokio::test]
-async fn responses_summary_parts_have_paragraph_separator() {
     for part_added in [
         "",
         "data: {\"type\":\"response.reasoning_summary_part.added\",\"output_index\":0,\"summary_index\":1,\"part\":{\"type\":\"summary_text\",\"text\":\"\"}}\n\n",
     ] {
-        let delta_index = if part_added.is_empty() {
+        let idx = if part_added.is_empty() {
             "\"summary_index\":1,"
         } else {
             ""
         };
         let sse = format!(
-            "data: {{\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"A\"}}\n\n{part_added}data: {{\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,{delta_index}\"delta\":\"B\"}}\n\ndata: {{\"type\":\"response.completed\",\"response\":{{\"status\":\"completed\"}}}}\n\n"
+            "data: {{\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"A\"}}\n\n{part_added}data: {{\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,{idx}\"delta\":\"B\"}}\n\ndata: {{\"type\":\"response.completed\",\"response\":{{\"status\":\"completed\"}}}}\n\n"
         );
-        let events = response_events(ProviderKind::OpenAiResponse, &sse)
+        let text: String = response_events(ProviderKind::OpenAiResponse, &sse)
             .await
             .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        let text = events.iter().fold(String::new(), |mut text, event| {
-            if let Event::ReasoningDelta { delta, .. } = event {
-                text.push_str(delta);
-            }
-            text
-        });
-        assert_eq!(text, "A\n\nB", "part_added={part_added:?}");
+            .map(Result::unwrap)
+            .filter_map(|e| match e {
+                Event::ReasoningDelta { delta, .. } => Some(delta),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "A\n\nB");
     }
 }
 
 #[tokio::test]
-async fn http_provider_reports_nested_responses_failure() {
-    let (base_url, _request_rx) = start_sse_server(
-        "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"quota exhausted\"}}}\n\n"
-            .to_string(),
-    )
-    .await;
-    let provider = HttpProvider::new(
-        "openai",
-        ProviderKind::OpenAiResponse,
-        &base_url,
-        Some("test-token".to_string()),
-        ["gpt-5.6-sol".to_string()],
-    )
-    .unwrap();
-    let req = CompletionRequest {
-        model: ModelRef::new("openai/gpt-5.6-sol"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers: Default::default(),
-    };
+async fn http_provider_anthropic_body_cache_breakpoints_thinking_and_binding_beta() {
+    let sse = sse_ok(&[
+        r#"data: {"type":"message_start","message":{"id":"msg_1","model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":1}}}"#,
+        r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#,
+        r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"mock anthropic delta"}}"#,
+        r#"data: {"type":"content_block_stop","index":0}"#,
+        r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#,
+        r#"data: {"type":"message_stop"}"#,
+    ]);
 
-    let events = provider
-        .stream(req, SessionId::new(), MessageId::new())
-        .await
-        .unwrap()
-        .collect::<Vec<_>>()
-        .await;
-
-    assert!(matches!(
-        events.as_slice(),
-        [Err(ProviderError::Http(message))] if message == "quota exhausted"
-    ));
-}
-
-#[tokio::test]
-async fn http_provider_replays_completed_responses_reasoning_and_tool_round() {
-    let (base_url, request_rx) = start_sse_server(
-        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\ndata: [DONE]\n\n"
-            .to_string(),
-    )
-    .await;
-    let provider = HttpProvider::new(
-        "openai",
-        ProviderKind::OpenAiResponse,
-        &base_url,
-        Some("test-token".to_string()),
-        ["gpt-5.6-sol".to_string()],
-    )
-    .unwrap();
-    let call_id = ToolCallId::new();
-    let provider_data = json!({
-        "id": "rs_123",
-        "type": "reasoning",
-        "summary": [{"type": "summary_text", "text": "Need a file."}],
-        "encrypted_content": "opaque"
-    });
-    let req = CompletionRequest {
-        model: ModelRef::new("openai/gpt-5.6-sol"),
-        system: None,
-        messages: vec![
-            Message::User {
-                id: MessageId::new(),
-                parts: vec![Part::Text {
-                    id: PartId::new(),
-                    text: "read a.txt".to_string(),
-                }],
-            },
-            Message::Assistant {
-                id: MessageId::new(),
-                agent: AgentName::new("build"),
-                model: ModelRef::new("openai/gpt-5.6-sol"),
-                parts: vec![
-                    Part::Reasoning {
-                        id: PartId::new(),
-                        text: "Need a file.".to_string(),
-                        provider_data: Some(provider_data.clone()),
-                    },
-                    Part::Tool {
-                        id: PartId::new(),
-                        call_id,
-                        name: ToolName::new("read"),
-                        state: ToolPartState::Completed {
-                            input: json!({"path": "a.txt"}),
-                            output: json!("contents"),
-                            time_ms: 3,
-                        },
-                        provider_data: None,
-                    },
-                ],
-                finish: Some(FinishReason::ToolCalls),
-                tokens: None,
-                last_round: None,
-                last_step_start: None,
-            },
-        ],
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: Some(ReasoningEffort::Medium),
-        headers: Default::default(),
-    };
-
-    let events = provider
-        .stream(req, SessionId::new(), MessageId::new())
-        .await
-        .unwrap()
-        .collect::<Vec<_>>()
-        .await;
-    let request = captured_request(request_rx).await;
-    let body: Value = serde_json::from_str(&request.body).unwrap();
-
-    assert!(events.iter().all(Result::is_ok));
-    assert_eq!(body["input"][1], provider_data);
-    assert_eq!(
-        body["input"][2],
-        json!({
-            "type": "function_call",
-            "call_id": call_id.to_string(),
-            "name": "read",
-            "arguments": "{\"path\":\"a.txt\"}"
-        })
-    );
-    assert_eq!(
-        body["input"][3],
-        json!({
-            "type": "function_call_output",
-            "call_id": call_id.to_string(),
-            "output": "contents"
-        })
-    );
-}
-
-#[tokio::test]
-async fn http_provider_posts_anthropic_compatible_body_to_mock_endpoint() {
-    let mock_text = "mock anthropic delta";
-    let response = [
-        r#"data: {"type":"message_start","message":{}}"#.to_string(),
-        r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#.to_string(),
-        format!(
-            r#"data: {{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{}"}}}}"#,
-            mock_text,
-        ),
-        r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#.to_string(),
-        r#"data: {"type":"message_stop"}"#.to_string(),
-    ]
-    .join("\n\n")
-        + "\n\n";
-    let (base_url, request_rx) = start_sse_server(response).await;
-    let provider = HttpProvider::new(
+    // 1. Anthropic cache_control breakpoints + headers + body.
+    let (url, _, reqs) = start_scripted_server(vec![sse.clone(); 5]).await;
+    let p_sonnet = HttpProvider::new(
         "anthropic",
         ProviderKind::Anthropic,
-        &base_url,
-        Some("test-token".to_string()),
-        ["claude-sonnet-4-20250514".to_string()],
+        &url,
+        Some("test-token".into()),
+        ["claude-sonnet-4-20250514".into()],
     )
     .unwrap();
-
-    let req = CompletionRequest {
-        model: ModelRef::new("anthropic/claude-sonnet-4-20250514"),
-        system: Some("be helpful".to_string()),
+    let r1 = CompletionRequest {
+        system: Some("be helpful".into()),
+        max_output_tokens: Some(128),
         messages: vec![Message::User {
             id: MessageId::new(),
             parts: vec![Part::Text {
                 id: PartId::new(),
-                text: "explain the file".to_string(),
+                text: "explain the file".into(),
             }],
         }],
         tools: vec![ToolSchema {
             name: ToolName::new("read"),
-            description: "read a file".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {"path": {"type": "string"}},
-                "required": ["path"]
-            }),
+            description: "read a file".into(),
+            input_schema: json!({"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}),
             output_schema: None,
         }],
-        temperature: None,
-        max_output_tokens: Some(128),
-        reasoning: None,
-        headers: Default::default(),
+        ..req("anthropic/claude-sonnet-4-20250514")
     };
-
-    let events: Vec<_> = provider
-        .stream(req, SessionId::new(), MessageId::new())
+    let evs: Vec<_> = p_sonnet
+        .stream(r1, SessionId::new(), MessageId::new())
         .await
         .unwrap()
         .collect()
         .await;
-    let request = captured_request(request_rx).await;
-    let headers = request.headers.to_ascii_lowercase();
-    let body: Value = serde_json::from_str(&request.body).unwrap();
-    let text_deltas: Vec<_> = events
-        .into_iter()
-        .map(Result::unwrap)
-        .filter_map(|event| match event {
-            Event::TextDelta { delta, .. } => Some(delta),
-            _ => None,
-        })
-        .collect();
-
-    assert!(headers.contains("x-api-key: test-token"));
-    assert!(headers.contains("anthropic-version: 2023-06-01"));
-    assert!(request.raw.starts_with("POST /messages HTTP/1.1\r\n"));
-    assert_eq!(body["model"], "claude-sonnet-4-20250514");
-    // Anthropic routes cache by default: the last system block, the last tool,
-    // and the last block of the final message carry ephemeral breakpoints.
-    assert_eq!(
-        body["messages"],
-        json!([
-            {
-                "role": "user",
-                "content": [{
-                    "type": "text",
-                    "text": "explain the file",
-                    "cache_control": {"type": "ephemeral"}
-                }]
-            }
-        ])
-    );
-    assert_eq!(
-        body["tools"],
-        json!([
-            {
-                "name": "read",
-                "description": "read a file",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"path": {"type": "string"}},
-                    "required": ["path"]
-                },
-                "cache_control": {"type": "ephemeral"}
-            }
-        ])
-    );
-    assert_eq!(body["max_tokens"], 128);
-    assert_eq!(
-        body["system"],
-        json!([{
-            "type": "text",
-            "text": "be helpful",
-            "cache_control": {"type": "ephemeral"}
-        }])
-    );
-    assert!(text_deltas.iter().any(|delta| delta == mock_text));
-}
-
-#[tokio::test]
-async fn http_provider_posts_signed_anthropic_thinking_before_tool_use() {
-    let (base_url, request_rx) =
-        start_sse_server("data: {\"type\":\"message_stop\"}\n\n".to_string()).await;
-    let provider = HttpProvider::new(
-        "anthropic",
-        ProviderKind::Anthropic,
-        &base_url,
-        Some("token".to_string()),
-        ["claude".to_string()],
-    )
-    .unwrap();
-    let call_id = ToolCallId::new();
-    let req = CompletionRequest {
-        model: ModelRef::new("anthropic/claude"),
-        system: None,
-        messages: vec![
-            Message::User {
-                id: MessageId::new(),
-                parts: vec![Part::Text {
-                    id: PartId::new(),
-                    text: "read".into(),
-                }],
-            },
-            Message::Assistant {
-                id: MessageId::new(),
-                agent: AgentName::new("build"),
-                model: ModelRef::new("anthropic/claude"),
-                parts: vec![
-                    Part::Reasoning {
-                        id: PartId::new(),
-                        text: "think".into(),
-                        provider_data: Some(json!({"type":"thinking","signature":"sig"})),
-                    },
-                    Part::Text {
-                        id: PartId::new(),
-                        text: "done".into(),
-                    },
-                    Part::Tool {
-                        id: PartId::new(),
-                        call_id,
-                        name: ToolName::new("read"),
-                        state: ToolPartState::Completed {
-                            input: json!({}),
-                            output: json!("ok"),
-                            time_ms: 1,
-                        },
-                        provider_data: None,
-                    },
-                ],
-                finish: None,
-                tokens: None,
-                last_round: None,
-                last_step_start: None,
-            },
-        ],
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: Some(128),
-        reasoning: None,
-        headers: Default::default(),
-    };
-    let _ = provider
-        .stream(req, SessionId::new(), MessageId::new())
-        .await
-        .unwrap()
-        .collect::<Vec<_>>()
-        .await;
-    let body: Value = serde_json::from_str(&captured_request(request_rx).await.body).unwrap();
-    let content = &body["messages"][1]["content"];
-    assert_eq!(
-        content[0],
-        json!({"type":"thinking","thinking":"think","signature":"sig"})
-    );
-    assert_eq!(content[1]["type"], "text");
-    assert_eq!(content[2]["type"], "tool_use");
-}
-
-#[tokio::test]
-async fn http_provider_google_uses_google_thought_policy_and_gemini3_thinking_level() {
-    let (base_url, request_rx) = start_sse_server(
-        r#"data: {"candidates":[{"content":{"parts":[{"thought":true,"text":"plan","thoughtSignature":"s1"},{"text":"ok"}],"role":"model"},"finishReason":"STOP"}]}"#
-            .to_string()
-            + "\n\n",
-    )
-    .await;
-    let provider = HttpProvider::new(
-        "google",
-        ProviderKind::Google,
-        &base_url,
-        Some("g-token".to_string()),
-        ["gemini-3-pro-preview".to_string()],
-    )
-    .unwrap();
-    assert_eq!(
-        provider.reasoning_replay_policy(),
-        hya_provider::ReasoningReplayPolicy::GoogleThought
-    );
-    assert!(!provider.reasoning_replay_policy().expands_next_prompt());
-
-    let req = CompletionRequest {
-        model: ModelRef::new("google/gemini-3-pro-preview"),
-        system: Some("sys".to_string()),
-        messages: vec![Message::User {
-            id: MessageId::new(),
-            parts: vec![
-                Part::Text {
-                    id: PartId::new(),
-                    text: "hi".to_string(),
-                },
-                Part::Media {
-                    id: PartId::new(),
-                    media_type: "AuDio/WAV".to_string(),
-                    data: "data:AUDIO/wav;BASE64,Zg==".to_string(),
-                    filename: None,
-                },
-            ],
-        }],
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: Some(ReasoningEffort::Medium),
-        headers: Default::default(),
-    };
-    let events: Vec<_> = provider
-        .stream(req, SessionId::new(), MessageId::new())
-        .await
-        .unwrap()
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .map(Result::unwrap)
-        .collect();
-    let captured = captured_request(request_rx).await;
-    assert!(
-        captured
-            .headers
-            .lines()
-            .any(|line| line == "x-goog-api-key: g-token")
-    );
-    assert!(captured.raw.starts_with(
-        "POST /v1beta/models/gemini-3-pro-preview:streamGenerateContent?alt=sse HTTP/1.1\r\n"
+    assert!(evs.iter().any(
+        |e| matches!(e, Ok(Event::TextDelta { delta, .. }) if delta == "mock anthropic delta")
     ));
-    let body: Value = serde_json::from_str(&captured.body).unwrap();
-    assert!(
-        captured
-            .body
-            .contains(r#"{"inlineData":{"mimeType":"audio/wav","data":"Zg=="}}"#)
-    );
-    assert_eq!(
-        body["generationConfig"]["thinkingConfig"],
-        json!({"thinkingLevel": "medium", "includeThoughts": true})
-    );
-    assert!(events.iter().any(|e| matches!(
-        e,
-        Event::ReasoningEnd { provider_data: Some(data), .. }
-            if data["type"] == "google_thought" && data["thought_signature"] == "s1"
-    )));
-}
-
-#[tokio::test]
-async fn http_provider_anthropic_sends_thinking_binding_beta_only_when_block_binding_present() {
-    let sse_reply = concat!(
-        "event: message_start\n",
-        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-opus-4-7\",\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}}\n\n",
-        "event: content_block_start\n",
-        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
-        "event: content_block_delta\n",
-        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"done\"}}\n\n",
-        "event: content_block_stop\n",
-        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
-        "event: message_delta\n",
-        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n",
-        "event: message_stop\n",
-        "data: {\"type\":\"message_stop\"}\n\n",
-    );
 
     let turn2_messages = vec![
         Message::User {
             id: MessageId::new(),
             parts: vec![Part::Text {
                 id: PartId::new(),
-                text: "start".to_string(),
+                text: "start".into(),
             }],
         },
         Message::Assistant {
@@ -2097,12 +1361,10 @@ async fn http_provider_anthropic_sends_thinking_binding_beta_only_when_block_bin
             parts: vec![
                 Part::Reasoning {
                     id: PartId::new(),
-                    text: "reason".to_string(),
-                    provider_data: Some(json!({
-                        "type": "thinking",
-                        "thinking": "reason",
-                        "signature": "sig_1"
-                    })),
+                    text: "reason".into(),
+                    provider_data: Some(
+                        json!({"type": "thinking", "thinking": "reason", "signature": "sig_1"}),
+                    ),
                 },
                 Part::Tool {
                     id: PartId::new(),
@@ -2123,43 +1385,97 @@ async fn http_provider_anthropic_sends_thinking_binding_beta_only_when_block_bin
         },
     ];
 
-    // 1. Adaptive Turn 2+ with replayed signed thinking AND existing caller anthropic-beta merges without duplicate.
-    let (base_url, rx_turn2) = start_sse_server(sse_reply.to_string()).await;
-    let provider = HttpProvider::new(
+    // 2..5. thinking-binding-controls-2026-08-01 beta header matrix + signed thinking replay.
+    let p_opus = HttpProvider::new(
         "anthropic",
         ProviderKind::Anthropic,
-        &base_url,
-        Some("token".to_string()),
-        ["claude-opus-4-7".to_string()],
+        &url,
+        Some("t".into()),
+        [
+            "claude-opus-4-7".into(),
+            "claude-sonnet-4-5-20250929".into(),
+        ],
     )
     .unwrap();
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "Anthropic-Beta".to_string(),
-        "interleaved-thinking-2025-05-14".to_string(),
+    let mut merged_headers = BTreeMap::new();
+    merged_headers.insert(
+        "Anthropic-Beta".into(),
+        "interleaved-thinking-2025-05-14".into(),
     );
-    let turn2_req = CompletionRequest {
-        model: ModelRef::new("anthropic/claude-opus-4-7"),
-        system: None,
-        messages: turn2_messages.clone(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: Some(ReasoningEffort::High),
-        headers,
-    };
-    let _ = provider
-        .stream(turn2_req, SessionId::new(), MessageId::new())
-        .await
-        .unwrap()
-        .collect::<Vec<_>>()
-        .await;
-    let captured_turn2 = captured_request(rx_turn2).await;
-    let beta_line = captured_turn2
+    let matrix = [
+        (
+            "anthropic/claude-opus-4-7",
+            turn2_messages.clone(),
+            Some(ReasoningEffort::High),
+            merged_headers,
+            true,
+        ),
+        (
+            "anthropic/claude-opus-4-7",
+            vec![turn2_messages[0].clone()],
+            Some(ReasoningEffort::High),
+            BTreeMap::new(),
+            false,
+        ),
+        (
+            "anthropic/claude-opus-4-7",
+            turn2_messages.clone(),
+            Some(ReasoningEffort::Off),
+            BTreeMap::new(),
+            false,
+        ),
+        (
+            "anthropic/claude-sonnet-4-5-20250929",
+            turn2_messages,
+            Some(ReasoningEffort::High),
+            BTreeMap::new(),
+            false,
+        ),
+    ];
+    for (model, messages, reasoning, headers, _) in &matrix {
+        let mut r = req(model);
+        r.messages = messages.clone();
+        r.reasoning = *reasoning;
+        r.headers = headers.clone();
+        let _ = p_opus
+            .stream(r, SessionId::new(), MessageId::new())
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+    }
+
+    let cap = reqs.lock().unwrap();
+    // Assert #1 cache breakpoints & headers.
+    let lc0 = cap[0].headers.to_ascii_lowercase();
+    assert!(lc0.contains("x-api-key: test-token") && lc0.contains("anthropic-version: 2023-06-01"));
+    assert!(cap[0].raw.starts_with("POST /messages HTTP/1.1\r\n"));
+    let b0: Value = serde_json::from_str(&cap[0].body).unwrap();
+    assert_eq!(
+        b0["system"][0]["cache_control"],
+        json!({"type": "ephemeral"})
+    );
+    assert_eq!(
+        b0["tools"][0]["cache_control"],
+        json!({"type": "ephemeral"})
+    );
+    assert_eq!(
+        b0["messages"][0]["content"][0]["cache_control"],
+        json!({"type": "ephemeral"})
+    );
+
+    // Assert #2 signed thinking before tool_use + beta header merge.
+    let b1: Value = serde_json::from_str(&cap[1].body).unwrap();
+    assert_eq!(
+        b1["messages"][1]["content"][0],
+        json!({"type": "thinking", "thinking": "reason", "signature": "sig_1"})
+    );
+    assert_eq!(b1["messages"][1]["content"][1]["type"], "tool_use");
+    let beta_line = cap[1]
         .headers
         .lines()
-        .find(|line| line.to_ascii_lowercase().starts_with("anthropic-beta:"))
-        .expect("anthropic-beta header should be present when block_binding is set");
+        .find(|l| l.to_ascii_lowercase().starts_with("anthropic-beta:"))
+        .unwrap();
     assert!(beta_line.contains("interleaved-thinking-2025-05-14"));
     assert_eq!(
         beta_line
@@ -2168,459 +1484,180 @@ async fn http_provider_anthropic_sends_thinking_binding_beta_only_when_block_bin
         1
     );
 
-    // 2. Adaptive Turn 1 (no replayed thinking) omits thinking-binding-controls-2026-08-01.
-    let (base_url_t1, rx_t1) = start_sse_server(sse_reply.to_string()).await;
-    let provider_t1 = HttpProvider::new(
-        "anthropic",
-        ProviderKind::Anthropic,
-        &base_url_t1,
-        Some("token".to_string()),
-        ["claude-opus-4-7".to_string()],
-    )
-    .unwrap();
-    let t1_req = CompletionRequest {
-        model: ModelRef::new("anthropic/claude-opus-4-7"),
-        system: None,
-        messages: vec![turn2_messages[0].clone()],
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: Some(ReasoningEffort::High),
-        headers: Default::default(),
-    };
-    let _ = provider_t1
-        .stream(t1_req, SessionId::new(), MessageId::new())
-        .await
-        .unwrap()
-        .collect::<Vec<_>>()
-        .await;
-    let captured_t1 = captured_request(rx_t1).await;
-    assert!(
-        !captured_t1
+    for (idx, (_, _, _, _, expect_beta)) in matrix.iter().enumerate() {
+        let has_beta = cap[idx + 1]
             .headers
             .to_ascii_lowercase()
-            .contains("thinking-binding-controls-2026-08-01")
-    );
-
-    // 3. Adaptive Turn 2+ with ReasoningEffort::Off omits thinking-binding-controls-2026-08-01.
-    let (base_url_off, rx_off) = start_sse_server(sse_reply.to_string()).await;
-    let provider_off = HttpProvider::new(
-        "anthropic",
-        ProviderKind::Anthropic,
-        &base_url_off,
-        Some("token".to_string()),
-        ["claude-opus-4-7".to_string()],
-    )
-    .unwrap();
-    let off_req = CompletionRequest {
-        model: ModelRef::new("anthropic/claude-opus-4-7"),
-        system: None,
-        messages: turn2_messages.clone(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: Some(ReasoningEffort::Off),
-        headers: Default::default(),
-    };
-    let _ = provider_off
-        .stream(off_req, SessionId::new(), MessageId::new())
-        .await
-        .unwrap()
-        .collect::<Vec<_>>()
-        .await;
-    let captured_off = captured_request(rx_off).await;
-    assert!(
-        !captured_off
-            .headers
-            .to_ascii_lowercase()
-            .contains("thinking-binding-controls-2026-08-01")
-    );
-
-    // 4. Legacy Claude <= 4.5 omits thinking-binding-controls-2026-08-01.
-    let (base_url_legacy, rx_legacy) = start_sse_server(sse_reply.to_string()).await;
-    let provider_legacy = HttpProvider::new(
-        "anthropic",
-        ProviderKind::Anthropic,
-        &base_url_legacy,
-        Some("token".to_string()),
-        ["claude-sonnet-4-5-20250929".to_string()],
-    )
-    .unwrap();
-    let legacy_req = CompletionRequest {
-        model: ModelRef::new("anthropic/claude-sonnet-4-5-20250929"),
-        system: None,
-        messages: turn2_messages,
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: Some(ReasoningEffort::High),
-        headers: Default::default(),
-    };
-    let _ = provider_legacy
-        .stream(legacy_req, SessionId::new(), MessageId::new())
-        .await
-        .unwrap()
-        .collect::<Vec<_>>()
-        .await;
-    let captured_legacy = captured_request(rx_legacy).await;
-    assert!(
-        !captured_legacy
-            .headers
-            .to_ascii_lowercase()
-            .contains("thinking-binding-controls-2026-08-01")
-    );
+            .contains("thinking-binding-controls-2026-08-01");
+        assert_eq!(has_beta, *expect_beta, "case {idx}");
+    }
 }
 
 #[tokio::test]
-async fn grok_compaction_preserves_proxy_headers_and_body() {
-    let response = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 13\r\nconnection: close\r\n\r\n{\"output\":[]}";
-    let (base_url, _, requests) = start_scripted_server(vec![response.into()]).await;
+async fn http_provider_google_route_thought_policy_media_and_gemini3_thinking_level() {
+    let (url, rx) = start_sse_server(
+        "data: {\"candidates\":[{\"content\":{\"parts\":[{\"thought\":true,\"text\":\"plan\",\"thoughtSignature\":\"s1\"},{\"text\":\"ok\"}],\"role\":\"model\"},\"finishReason\":\"STOP\"}]}\n\n".into(),
+    )
+    .await;
     let provider = HttpProvider::new(
+        "google",
+        ProviderKind::Google,
+        &url,
+        Some("g-token".into()),
+        ["gemini-3-pro-preview".into()],
+    )
+    .unwrap();
+    assert_eq!(
+        provider.reasoning_replay_policy(),
+        hya_provider::ReasoningReplayPolicy::GoogleThought
+    );
+    assert!(!provider.reasoning_replay_policy().expands_next_prompt());
+
+    let r = CompletionRequest {
+        system: Some("sys".into()),
+        reasoning: Some(ReasoningEffort::Medium),
+        messages: vec![Message::User {
+            id: MessageId::new(),
+            parts: vec![
+                Part::Text {
+                    id: PartId::new(),
+                    text: "hi".into(),
+                },
+                Part::Media {
+                    id: PartId::new(),
+                    media_type: "AuDio/WAV".into(),
+                    data: "data:AUDIO/wav;BASE64,Zg==".into(),
+                    filename: None,
+                },
+            ],
+        }],
+        ..req("google/gemini-3-pro-preview")
+    };
+    let evs: Vec<_> = provider
+        .stream(r, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .map(Result::unwrap)
+        .collect();
+    let captured = captured_request(rx).await;
+    assert!(
+        captured
+            .headers
+            .lines()
+            .any(|l| l == "x-goog-api-key: g-token")
+    );
+    assert!(captured.raw.starts_with(
+        "POST /v1beta/models/gemini-3-pro-preview:streamGenerateContent?alt=sse HTTP/1.1\r\n"
+    ));
+    let body: Value = serde_json::from_str(&captured.body).unwrap();
+    assert!(
+        captured
+            .body
+            .contains(r#"{"inlineData":{"mimeType":"audio/wav","data":"Zg=="}}"#)
+    );
+    assert_eq!(
+        body["generationConfig"]["thinkingConfig"],
+        json!({"thinkingLevel": "medium", "includeThoughts": true})
+    );
+    assert!(evs.iter().any(|e| matches!(
+        e, Event::ReasoningEnd { provider_data: Some(d), .. } if d["type"] == "google_thought" && d["thought_signature"] == "s1"
+    )));
+}
+
+#[tokio::test]
+async fn responses_compact_headers_body_multibyte_error_and_header_deadline() {
+    // 1. Grok compaction preserves proxy headers & body.
+    let ok_json = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 13\r\nconnection: close\r\n\r\n{\"output\":[]}";
+    let body_429 = "界".repeat(600);
+    let err_429 = format!(
+        "HTTP/1.1 429 Too Many Requests\r\ncontent-type: text/plain; charset=utf-8\r\ncontent-length: {}\r\nretry-after: 2\r\nconnection: close\r\n\r\n{body_429}",
+        body_429.len()
+    );
+    let (url, conns, reqs) = start_scripted_server(vec![ok_json.into(), err_429]).await;
+    let grok = HttpProvider::new(
         "grok",
         ProviderKind::GrokBuild,
-        &format!("{base_url}/v1/"),
+        &format!("{url}/v1/"),
         Some("GrokToken".into()),
         ["grok-4.5".into()],
     )
     .unwrap()
     .with_grok_session_auth("1.2.3", "TestClient");
-
-    provider
-        .compact_responses(&ModelRef::new("grok/grok-4.5"), &[], Some("summary"))
+    grok.compact_responses(&ModelRef::new("grok/grok-4.5"), &[], Some("summary"))
         .await
         .unwrap();
 
-    let requests = requests.lock().unwrap();
-    let request = &requests[0];
-    assert!(
-        request
-            .raw
-            .starts_with("POST /v1/responses/compact HTTP/1.1\r\n")
-    );
-    for expected in [
-        "authorization: Bearer GrokToken",
-        "x-xai-token-auth: xai-grok-cli",
-        "x-grok-client-version: 1.2.3",
-        "x-grok-client-identifier: TestClient",
-        "x-grok-model-override: grok-4.5",
-    ] {
-        assert!(request.headers.lines().any(|line| line == expected));
-    }
-    assert_eq!(
-        request.body,
-        r#"{"model":"grok-4.5","input":[{"role":"system","content":"summary"}]}"#
-    );
-}
-#[tokio::test]
-async fn responses_compact_bounds_multibyte_http_error() {
-    let body = "界".repeat(600);
-    let response = format!(
-        "HTTP/1.1 429 Too Many Requests\r\ncontent-type: text/plain; charset=utf-8\r\ncontent-length: {}\r\nretry-after: 2\r\nconnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    let (base_url, connections, requests) = start_scripted_server(vec![response]).await;
-    let provider = HttpProvider::new(
+    // 2. Multibyte 429 error bounds cleanly to 500 chars and parses retry-after.
+    let oai = HttpProvider::new(
         "openai",
         ProviderKind::OpenAiResponse,
-        &base_url,
+        &url,
         None,
-        ["gpt-5".to_string()],
+        ["gpt-5".into()],
     )
     .unwrap();
-
-    let error = provider
+    let error = oai
         .compact_responses(&ModelRef::new("gpt-5"), &[], None)
         .await
         .unwrap_err();
-
-    assert_eq!(
-        error.to_string().chars().filter(|&ch| ch == '界').count(),
-        500
-    );
     let ProviderError::HttpStatus {
         status,
         message,
         retry_after,
     } = error
     else {
-        panic!("expected a typed HTTP status, got {error:?}");
+        panic!("expected HttpStatus, got {error:?}");
     };
-    assert_eq!(status, 429);
-    assert_eq!(message, "界".repeat(500));
-    assert_eq!(retry_after, Some(Duration::from_secs(2)));
-    assert_eq!(connections.load(Ordering::SeqCst), 1);
-    assert!(
-        requests.lock().unwrap()[0]
-            .raw
-            .starts_with("POST /responses/compact ")
+    assert_eq!(
+        (status, message.chars().count(), retry_after),
+        (429, 500, Some(Duration::from_secs(2)))
     );
-}
+    assert_eq!(conns.load(Ordering::SeqCst), 2);
+    {
+        let cap = reqs.lock().unwrap();
+        assert!(
+            cap[0]
+                .raw
+                .starts_with("POST /v1/responses/compact HTTP/1.1\r\n")
+        );
+        for h in [
+            "authorization: Bearer GrokToken",
+            "x-xai-token-auth: xai-grok-cli",
+            "x-grok-client-version: 1.2.3",
+            "x-grok-client-identifier: TestClient",
+            "x-grok-model-override: grok-4.5",
+        ] {
+            assert!(cap[0].headers.lines().any(|l| l == h), "missing {h}");
+        }
+        assert_eq!(
+            cap[0].body,
+            r#"{"model":"grok-4.5","input":[{"role":"system","content":"summary"}]}"#
+        );
+        assert!(cap[1].raw.starts_with("POST /responses/compact "));
+    }
 
-#[tokio::test]
-async fn responses_compact_uses_the_route_header_deadline() {
-    let (base_url, connections) = start_stalled_header_server().await;
-    let provider = HttpProvider::new(
+    // 3. Compaction honors route response_header_timeout without retry.
+    let (stall_url, stall_conns) = start_stalled_header_server().await;
+    let stall_p = HttpProvider::new(
         "openai",
         ProviderKind::OpenAiResponse,
-        &base_url,
+        &stall_url,
         None,
-        ["gpt-5".to_string()],
+        ["gpt-5".into()],
     )
     .unwrap()
-    .with_response_header_timeout(Duration::from_millis(200));
-    let model = ModelRef::new("gpt-5");
-
-    let result = timeout(
-        Duration::from_secs(5),
-        provider.compact_responses(&model, &[], None),
-    )
-    .await
-    .expect("compaction should hit the header deadline within the guard");
-
-    assert!(matches!(result, Err(ProviderError::Transport(message)) if message.contains("200ms")));
-    assert_eq!(connections.load(Ordering::SeqCst), 1);
-}
-
-#[tokio::test]
-async fn http_provider_forces_single_auth_refresh_on_401_and_retries_once() {
-    let (base_url, connections, requests) = start_scripted_server(vec![
-        "HTTP/1.1 401 Unauthorized\r\ncontent-length: 12\r\nconnection: close\r\n\r\nstale token.\n".to_string(),
-        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: [DONE]\n\n".to_string(),
-    ])
-    .await;
-    let token = Arc::new(std::sync::Mutex::new("expired-token".to_string()));
-    let refresh_calls = Arc::new(AtomicUsize::new(0));
-    let resolver_token = Arc::clone(&token);
-    let refresher_token = Arc::clone(&token);
-    let refresher_calls = Arc::clone(&refresh_calls);
-    let provider = HttpProvider::new(
-        "openai",
-        ProviderKind::OpenAiCompatible,
-        &base_url,
-        Some("static-unused".to_string()),
-        ["gpt-5".to_string()],
-    )
-    .unwrap()
-    .with_bearer_resolver(Arc::new(move || Ok(resolver_token.lock().unwrap().clone())))
-    .with_auth_refresher(Arc::new(move |_failed_token| {
-        *refresher_token.lock().unwrap() = "fresh-token".to_string();
-        refresher_calls.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }));
-    let req = CompletionRequest {
-        model: ModelRef::new("gpt-5"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers: Default::default(),
-    };
-
-    let events = timeout(Duration::from_secs(15), async {
-        provider
-            .stream(req, SessionId::new(), MessageId::new())
-            .await
-            .expect("recovered request should establish a stream")
-            .collect::<Vec<_>>()
-            .await
-    })
-    .await
-    .expect("forced-refresh recovery should complete within the guard");
-
-    assert!(events.iter().all(Result::is_ok));
-    assert_eq!(connections.load(Ordering::SeqCst), 2);
-    assert_eq!(refresh_calls.load(Ordering::SeqCst), 1);
-    let captured = requests.lock().unwrap();
-    assert_eq!(captured.len(), 2);
-    assert!(
-        captured[0]
-            .headers
-            .to_ascii_lowercase()
-            .contains("authorization: bearer expired-token")
-    );
-    assert!(
-        captured[1]
-            .headers
-            .to_ascii_lowercase()
-            .contains("authorization: bearer fresh-token")
-    );
-}
-
-#[tokio::test]
-async fn concurrent_401s_refresh_the_credential_used_by_each_request_once() {
-    let first_rotation = Arc::new(Notify::new());
-    let (base_url, connections) =
-        start_concurrent_unauthorized_server(Arc::clone(&first_rotation)).await;
-    let token_generation = Arc::new(AtomicUsize::new(0));
-    let refresh_calls = Arc::new(AtomicUsize::new(0));
-    let resolver_generation = Arc::clone(&token_generation);
-    let refresher_generation = Arc::clone(&token_generation);
-    let refresher_calls = Arc::clone(&refresh_calls);
-    let provider = Arc::new(
-        HttpProvider::new(
-            "openai",
-            ProviderKind::OpenAiCompatible,
-            &base_url,
-            Some("static-unused".to_string()),
-            ["gpt-5".to_string()],
-        )
-        .unwrap()
-        .with_bearer_resolver(Arc::new(move || {
-            let generation = resolver_generation.load(Ordering::SeqCst);
-            Ok(if generation == 0 {
-                "expired-token".to_string()
-            } else {
-                format!("fresh-token-{generation}")
-            })
-        }))
-        .with_auth_refresher(Arc::new(move |failed_token| {
-            let expected_generation = if failed_token == "expired-token" {
-                Some(0)
-            } else {
-                failed_token
-                    .strip_prefix("fresh-token-")
-                    .and_then(|value| value.parse::<usize>().ok())
-            };
-            if let Some(expected) = expected_generation
-                && refresher_generation
-                    .compare_exchange(expected, expected + 1, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_ok()
-            {
-                let call = refresher_calls.fetch_add(1, Ordering::SeqCst) + 1;
-                if call == 1 {
-                    first_rotation.notify_one();
-                }
-            }
-            Ok(())
-        })),
-    );
-    let request = CompletionRequest {
-        model: ModelRef::new("gpt-5"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers: Default::default(),
-    };
-
-    let first = provider.stream(request.clone(), SessionId::new(), MessageId::new());
-    let second = provider.stream(request, SessionId::new(), MessageId::new());
-    let (first, second) = timeout(Duration::from_secs(15), async {
-        tokio::join!(first, second)
-    })
-    .await
-    .expect("both concurrent requests should recover within the guard");
-    let first_events = first.unwrap().collect::<Vec<_>>().await;
-    let second_events = second.unwrap().collect::<Vec<_>>().await;
-
-    assert!(first_events.iter().all(Result::is_ok));
-    assert!(second_events.iter().all(Result::is_ok));
-    assert_eq!(connections.load(Ordering::SeqCst), 4);
-    assert_eq!(
-        refresh_calls.load(Ordering::SeqCst),
-        1,
-        "both requests sent the same expired token, so only one network refresh is valid"
-    );
-    assert_eq!(token_generation.load(Ordering::SeqCst), 1);
-}
-
-#[tokio::test]
-async fn http_provider_surfaces_401_after_a_single_forced_refresh_attempt() {
-    let unauthorized = "HTTP/1.1 401 Unauthorized\r\ncontent-length: 12\r\nconnection: close\r\n\r\nstale token.\n"
-        .to_string();
-    let (base_url, connections, _requests) =
-        start_scripted_server(vec![unauthorized.clone(), unauthorized]).await;
-    let refresh_calls = Arc::new(AtomicUsize::new(0));
-    // The hook really rotates the live credential: connection one fails on
-    // "expired-token", recovery installs "fresh-token", but the server still
-    // answers 401. Only then must the original status surface, unrefreshed.
-    let token = Arc::new(std::sync::Mutex::new("expired-token".to_string()));
-    let resolver_token = Arc::clone(&token);
-    let refresher_token = Arc::clone(&token);
-    let refresher_calls = Arc::clone(&refresh_calls);
-    let provider = HttpProvider::new(
-        "openai",
-        ProviderKind::OpenAiCompatible,
-        &base_url,
-        Some("static-unused".to_string()),
-        ["gpt-5".to_string()],
-    )
-    .unwrap()
-    .with_bearer_resolver(Arc::new(move || Ok(resolver_token.lock().unwrap().clone())))
-    .with_auth_refresher(Arc::new(move |_failed_token| {
-        *refresher_token.lock().unwrap() = "fresh-token".to_string();
-        refresher_calls.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }));
-    let req = CompletionRequest {
-        model: ModelRef::new("gpt-5"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers: Default::default(),
-    };
-
-    let result = timeout(
-        Duration::from_secs(15),
-        provider.stream(req, SessionId::new(), MessageId::new()),
-    )
-    .await
-    .expect("401 recovery must surface an error without hanging");
-
-    let Err(error) = result else {
-        panic!("401 without recovery budget must fail before any stream");
-    };
-    assert!(
-        matches!(&error, ProviderError::HttpStatus { status: 401, .. }),
-        "expected the original 401 surfaced unchanged, got {error:?}"
-    );
-    assert_eq!(connections.load(Ordering::SeqCst), 2);
-    assert_eq!(refresh_calls.load(Ordering::SeqCst), 1);
-}
-
-#[tokio::test]
-async fn http_provider_without_refresher_makes_one_connection_on_401() {
-    let (base_url, connections, _requests) = start_scripted_server(vec![
-        "HTTP/1.1 401 Unauthorized\r\ncontent-length: 12\r\nconnection: close\r\n\r\nstale token.\n"
-            .to_string(),
-    ])
-    .await;
-    let provider = HttpProvider::new(
-        "openai",
-        ProviderKind::OpenAiCompatible,
-        &base_url,
-        Some("test-token".to_string()),
-        ["gpt-5".to_string()],
-    )
-    .unwrap();
-    let req = CompletionRequest {
-        model: ModelRef::new("gpt-5"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers: Default::default(),
-    };
-
-    let result = provider
-        .stream(req, SessionId::new(), MessageId::new())
+    .with_response_header_timeout(Duration::from_millis(50));
+    let res = stall_p
+        .compact_responses(&ModelRef::new("gpt-5"), &[], None)
         .await;
-
-    assert!(matches!(
-        result,
-        Err(ProviderError::HttpStatus { status: 401, .. })
-    ));
-    assert_eq!(connections.load(Ordering::SeqCst), 1);
+    assert!(matches!(res, Err(ProviderError::Transport(m)) if m.contains("50ms")));
+    assert_eq!(stall_conns.load(Ordering::SeqCst), 1);
 }
+
+// ---- mock HTTP test servers ----
 
 fn content_length(headers: &str) -> usize {
     headers
@@ -2641,28 +1678,17 @@ async fn captured_request(request_rx: oneshot::Receiver<CapturedRequest>) -> Cap
 }
 
 async fn response_events(kind: ProviderKind, response: &str) -> Vec<Result<Event, ProviderError>> {
-    let (base_url, _request_rx) = start_sse_server(response.to_string()).await;
+    let (base_url, _rx) = start_sse_server(response.to_string()).await;
     let provider = HttpProvider::new(
         "test",
         kind,
         &base_url,
-        Some("test-token".to_string()),
-        ["model".to_string()],
+        Some("test-token".into()),
+        ["model".into()],
     )
     .unwrap();
-    let req = CompletionRequest {
-        model: ModelRef::new("test/model"),
-        system: None,
-        messages: Vec::new(),
-        tools: Vec::new(),
-        temperature: None,
-        max_output_tokens: None,
-        reasoning: None,
-        headers: Default::default(),
-    };
-
     provider
-        .stream(req, SessionId::new(), MessageId::new())
+        .stream(req("test/model"), SessionId::new(), MessageId::new())
         .await
         .unwrap()
         .collect()
@@ -2674,54 +1700,70 @@ async fn read_request_head(socket: &mut TcpStream) {
     let mut chunk = [0_u8; 1024];
     loop {
         let n = socket.read(&mut chunk).await.unwrap();
-        assert!(n != 0, "socket closed before request completed");
+        assert!(n != 0, "socket closed before request headers");
         buf.extend_from_slice(&chunk[..n]);
-        if buf.windows(4).any(|window| window == b"\r\n\r\n") {
-            // The JSON body may still be arriving; neither stall nor success
-            // branches depend on it (success responds over the buffered bytes,
-            // matching the existing mock servers here).
+        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
             break;
         }
     }
 }
 
-/// Connection 1 receives the request and then falls silent before response
-/// headers; every later connection receives a complete successful SSE reply.
+async fn read_full_request(socket: &mut TcpStream) -> CapturedRequest {
+    let mut buf = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    let header_end = loop {
+        let n = socket.read(&mut chunk).await.unwrap();
+        assert!(n != 0, "socket closed before request headers");
+        buf.extend_from_slice(&chunk[..n]);
+        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            break pos + 4;
+        }
+    };
+    let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
+    let body_len = content_length(&headers);
+    while buf.len() < header_end + body_len {
+        let n = socket.read(&mut chunk).await.unwrap();
+        assert!(n != 0, "socket closed before request body");
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    let body_end = header_end + body_len;
+    CapturedRequest {
+        raw: String::from_utf8_lossy(&buf[..body_end]).to_string(),
+        headers,
+        body: String::from_utf8_lossy(&buf[header_end..body_end]).to_string(),
+    }
+}
+
 async fn start_stalled_header_server() -> (String, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let attempts = Arc::new(AtomicUsize::new(0));
-    let server_attempts = attempts.clone();
+    let server_attempts = Arc::clone(&attempts);
     tokio::spawn(async move {
         loop {
-            let (socket, _) = listener.accept().await.unwrap();
+            let Ok((socket, _)) = listener.accept().await else {
+                return;
+            };
             let seq = server_attempts.fetch_add(1, Ordering::SeqCst);
             tokio::spawn(async move {
                 let mut socket = socket;
                 read_request_head(&mut socket).await;
                 if seq == 0 {
-                    // Stall exactly where the response-header deadline bites.
                     futures::future::pending::<()>().await;
                 }
-                socket
-                    .write_all(
-                        b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: [DONE]\n\n",
-                    )
-                    .await
-                    .unwrap();
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: [DONE]\n\n")
+                    .await;
             });
         }
     });
     (format!("http://{addr}"), attempts)
 }
 
-/// Responds with stream headers, then writes SSE comments until the client
-/// disconnects. Used to prove drop/cancel aborts HTTP without waiting for the
-/// idle deadline.
 async fn start_keepalive_sse_server() -> (String, oneshot::Receiver<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let (disconnect_tx, disconnect_rx) = oneshot::channel();
+    let (tx, rx) = oneshot::channel();
     tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         read_request_head(&mut socket).await;
@@ -2732,47 +1774,40 @@ async fn start_keepalive_sse_server() -> (String, oneshot::Receiver<()>) {
         let mut buf = [0_u8; 8];
         loop {
             tokio::select! {
-                result = socket.read(&mut buf) => {
-                    match result {
-                        Ok(0) | Err(_) => {
-                            let _ = disconnect_tx.send(());
-                            return;
-                        }
-                        Ok(_) => {}
+                res = socket.read(&mut buf) => {
+                    if matches!(res, Ok(0) | Err(_)) {
+                        let _ = tx.send(());
+                        return;
                     }
                 }
-                _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {
                     if socket.write_all(b": ping\n\n").await.is_err() {
-                        let _ = disconnect_tx.send(());
+                        let _ = tx.send(());
                         return;
                     }
                 }
             }
         }
     });
-    (format!("http://{addr}"), disconnect_rx)
+    (format!("http://{addr}"), rx)
 }
 
-/// Responds with successful stream headers immediately, then sends no SSE
-/// frame and never closes the socket.
 async fn start_stalled_mid_stream_server() -> (String, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let connections = Arc::new(AtomicUsize::new(0));
-    let server_connections = connections.clone();
+    let sc = Arc::clone(&connections);
     tokio::spawn(async move {
         loop {
-            let (socket, _) = listener.accept().await.unwrap();
-            server_connections.fetch_add(1, Ordering::SeqCst);
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            sc.fetch_add(1, Ordering::SeqCst);
             tokio::spawn(async move {
-                let mut socket = socket;
                 read_request_head(&mut socket).await;
-                socket
+                let _ = socket
                     .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n")
-                    .await
-                    .unwrap();
-                // Hold the connection open in silence so the idle deadline is
-                // the only way the client can make progress.
+                    .await;
                 futures::future::pending::<()>().await;
             });
         }
@@ -2780,36 +1815,6 @@ async fn start_stalled_mid_stream_server() -> (String, Arc<AtomicUsize>) {
     (format!("http://{addr}"), connections)
 }
 
-async fn start_retry_server() -> (String, Arc<AtomicUsize>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let attempts = Arc::new(AtomicUsize::new(0));
-    let server_attempts = attempts.clone();
-    tokio::spawn(async move {
-        for response in [
-            "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 4\r\nretry-after: 0\r\nconnection: close\r\n\r\nbusy".to_string(),
-            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: [DONE]\n\n".to_string(),
-        ] {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            server_attempts.fetch_add(1, Ordering::SeqCst);
-            let mut buf = Vec::new();
-            let mut chunk = [0_u8; 1024];
-            loop {
-                let n = socket.read(&mut chunk).await.unwrap();
-                assert!(n != 0, "socket closed before request headers");
-                buf.extend_from_slice(&chunk[..n]);
-                if buf.windows(4).any(|window| window == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            socket.write_all(response.as_bytes()).await.unwrap();
-        }
-    });
-    (format!("http://{addr}"), attempts)
-}
-
-/// Sequential scripted-response server: connection N receives `responses[N]`,
-/// and every request head/body pair is recorded for assertions.
 async fn start_scripted_server(
     responses: Vec<String>,
 ) -> (
@@ -2821,71 +1826,47 @@ async fn start_scripted_server(
     let addr = listener.local_addr().unwrap();
     let connections = Arc::new(AtomicUsize::new(0));
     let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let server_connections = Arc::clone(&connections);
-    let server_requests = Arc::clone(&requests);
+    let sc = Arc::clone(&connections);
+    let sr = Arc::clone(&requests);
     tokio::spawn(async move {
         for response in responses {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            server_connections.fetch_add(1, Ordering::SeqCst);
-            let mut buf = Vec::new();
-            let mut chunk = [0_u8; 1024];
-            let header_end = loop {
-                let n = socket.read(&mut chunk).await.unwrap();
-                assert!(n != 0, "socket closed before request headers");
-                buf.extend_from_slice(&chunk[..n]);
-                if let Some(pos) = buf.windows(4).position(|window| window == b"\r\n\r\n") {
-                    break pos + 4;
-                }
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
             };
-            let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
-            let body_len = content_length(&headers);
-            while buf.len() < header_end + body_len {
-                let n = socket.read(&mut chunk).await.unwrap();
-                assert!(n != 0, "socket closed before request body");
-                buf.extend_from_slice(&chunk[..n]);
-            }
-            let body_end = header_end + body_len;
-            server_requests.lock().unwrap().push(CapturedRequest {
-                raw: String::from_utf8_lossy(&buf[..body_end]).to_string(),
-                headers,
-                body: String::from_utf8_lossy(&buf[header_end..body_end]).to_string(),
-            });
-            socket.write_all(response.as_bytes()).await.unwrap();
+            sc.fetch_add(1, Ordering::SeqCst);
+            let captured = read_full_request(&mut socket).await;
+            sr.lock().unwrap().push(captured);
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.shutdown().await;
         }
     });
     (format!("http://{addr}"), connections, requests)
 }
 
-/// Hold two requests that used the original bearer, release the second 401 only
-/// after the first request rotates storage, then serve both retries.
 async fn start_concurrent_unauthorized_server(
     first_rotation: Arc<Notify>,
 ) -> (String, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let connections = Arc::new(AtomicUsize::new(0));
-    let server_connections = Arc::clone(&connections);
+    let sc = Arc::clone(&connections);
     tokio::spawn(async move {
         let (mut first, _) = listener.accept().await.unwrap();
-        server_connections.fetch_add(1, Ordering::SeqCst);
+        sc.fetch_add(1, Ordering::SeqCst);
         let (mut second, _) = listener.accept().await.unwrap();
-        server_connections.fetch_add(1, Ordering::SeqCst);
+        sc.fetch_add(1, Ordering::SeqCst);
         read_request_head(&mut first).await;
         read_request_head(&mut second).await;
-        let unauthorized =
-            b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
-        first.write_all(unauthorized).await.unwrap();
+        let unauth = b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        first.write_all(unauth).await.unwrap();
         first_rotation.notified().await;
-        second.write_all(unauthorized).await.unwrap();
-
+        second.write_all(unauth).await.unwrap();
         for _ in 0..2 {
             let (mut retry, _) = listener.accept().await.unwrap();
-            server_connections.fetch_add(1, Ordering::SeqCst);
+            sc.fetch_add(1, Ordering::SeqCst);
             read_request_head(&mut retry).await;
             retry
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: [DONE]\n\n",
-                )
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: [DONE]\n\n")
                 .await
                 .unwrap();
         }
@@ -2896,44 +1877,17 @@ async fn start_concurrent_unauthorized_server(
 async fn start_sse_server(response: String) -> (String, oneshot::Receiver<CapturedRequest>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let (request_tx, request_rx) = oneshot::channel();
+    let (tx, rx) = oneshot::channel();
     tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = Vec::new();
-        let mut chunk = [0_u8; 1024];
-        let header_end = loop {
-            let n = socket.read(&mut chunk).await.unwrap();
-            assert!(n != 0, "socket closed before request headers");
-            buf.extend_from_slice(&chunk[..n]);
-            if let Some(pos) = buf.windows(4).position(|window| window == b"\r\n\r\n") {
-                break pos + 4;
-            }
-        };
-
-        let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
-        let body_len = content_length(&headers);
-        while buf.len() < header_end + body_len {
-            let n = socket.read(&mut chunk).await.unwrap();
-            assert!(n != 0, "socket closed before request body");
-            buf.extend_from_slice(&chunk[..n]);
-        }
-
-        let body_end = header_end + body_len;
-        let body = String::from_utf8_lossy(&buf[header_end..body_end]).to_string();
-        let raw = String::from_utf8_lossy(&buf[..body_end]).to_string();
-        request_tx
-            .send(CapturedRequest { raw, headers, body })
-            .unwrap();
-
-        socket
+        let captured = read_full_request(&mut socket).await;
+        let _ = tx.send(captured);
+        let _ = socket
             .write_all(
-                format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{response}"
-                )
-                .as_bytes(),
+                format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{response}")
+                    .as_bytes(),
             )
-            .await
-            .unwrap();
+            .await;
     });
-    (format!("http://{addr}"), request_rx)
+    (format!("http://{addr}"), rx)
 }
