@@ -38,7 +38,7 @@ Both describe the same model ids, so hya needs one rule for which one wins.
   (`(config override)` / `(config only)`).
 
 Implementation: `merge_provider_models` and `override_model` in
-`crates/hya-app/src/config.rs`. The test
+`crates/hya-app/src/config/provider.rs`. The test
 `effective_models_merge_cache_and_config_per_id_with_field_level_override`
 pins the rule.
 

@@ -14,7 +14,7 @@ use hya_tool::{
 };
 use serde::Deserialize;
 
-use super::{ProviderConfig, ProviderRetryFile};
+use super::provider::{ProviderConfig, ProviderRetryFile};
 
 /// Top-level shape of `~/.config/hya/config.yaml`.
 #[derive(Debug, Default, Deserialize)]
