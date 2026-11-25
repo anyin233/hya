@@ -4,7 +4,8 @@
 //! port and drives it through the same `prepare` path used for stdio servers.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::net::{TcpListener, TcpStream};
+use std::io::{BufRead, BufReader};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -25,6 +26,7 @@ impl Drop for FixtureServer {
     }
 }
 
+/// A loopback port with no listener, for the connection-refused cases.
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .expect("bind ephemeral port")
@@ -38,28 +40,24 @@ fn fixture_path(name: &str) -> PathBuf {
 }
 
 /// Start a fixture server and wait until its TCP port accepts connections.
+/// Start a fixture on a port the fixture itself binds (`0`) and reports on its
+/// first stdout line, so parallel tests never race for a port.
 fn spawn_fixture(script: &str, args: &[&str]) -> (u16, FixtureServer) {
-    let port = free_port();
-    let port_string = port.to_string();
-    let child = Command::new("python3")
+    let mut child = Command::new("python3")
         .arg(fixture_path(script))
         .args(args)
-        .arg(&port_string)
-        .stdout(Stdio::null())
+        .arg("0")
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn fixture server");
+    let stdout = child.stdout.take().expect("fixture stdout");
     let server = FixtureServer(child);
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            break;
-        }
-        if std::time::Instant::now() > deadline {
-            panic!("fixture server did not start on port {port}");
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    let mut line = String::new();
+    BufReader::new(stdout)
+        .read_line(&mut line)
+        .expect("read fixture port");
+    let port = line.trim().parse().expect("fixture prints its port");
     (port, server)
 }
 
