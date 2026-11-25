@@ -277,6 +277,7 @@ test.describe("command menu", () => {
     const term = await tui(hyaTui(backend), { viewport: { width: 1700, height: 800 } })
     await connected(term, backend)
     await term.press("Alt+ArrowRight")
+    await term.waitForText("Projects")
     const projects = (await term.find("Projects"))!
     await expect.poll(async () => (await term.cell(projects.row, projects.col - 1))?.fg).toBe(accent)
     // Not `createSessionViaMenu`: at this width the Projects sidebar starts every row, so `^Created` never matches.
