@@ -606,7 +606,7 @@ pending  -> running -> completed
 
 ## Projection
 
-[`projection.rs`](../../crates/hya-proto/src/projection.rs) folds ordered
+[`projection/mod.rs`](../../crates/hya-proto/src/projection/mod.rs) folds ordered
 envelopes into a `Projection`:
 
 ```text
