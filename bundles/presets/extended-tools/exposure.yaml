@@ -1,7 +1,6 @@
 schema_version: 1
 identity: hya/extended-tools
 protected_names: []
-schemes: []
 tools:
   - { name: lsp, schema_version: 1, permission: read_only, prompt: query a language server about code }
   - { name: skill, schema_version: 1, permission: read_only, prompt: load a skill's instructions }

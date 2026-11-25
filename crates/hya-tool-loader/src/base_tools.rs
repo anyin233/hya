@@ -3,6 +3,11 @@
 //! Each family's `exposure.yaml` is read from its first-party bundle when the
 //! process first needs it; nothing is compiled into the binary.
 
+#![allow(
+    deprecated,
+    reason = "Decode and validate legacy preset schemes until their public type can be removed"
+)]
+
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
@@ -43,6 +48,7 @@ struct FileOperationsRule {
 /// One builtin URI scheme declaration retained by the preset owner.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+#[deprecated(note = "Declare URI schemes as bundle schema resources instead")]
 pub struct BaseToolScheme {
     scheme: String,
     tool: String,
@@ -431,6 +437,35 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+
+    #[test]
+    fn legacy_scheme_and_public_alias_still_parse() {
+        let policy: ExposurePolicy = serde_norway::from_str(
+            "schema_version: 1
+identity: hya/base-tools
+protected_names: []
+schemes: [{ scheme: example, tool: read, writable: true }]
+tools:
+  - name: read
+    schema_version: 1
+    permission: read_only
+    aliases: [{ name: example_read, visibility: public }]
+",
+        )
+        .unwrap();
+        assert_eq!(validate_policy(&policy, "hya/base-tools"), Ok(()));
+        let [scheme] = policy.schemes.as_slice() else {
+            panic!("expected one legacy scheme")
+        };
+        assert_eq!(
+            (scheme.scheme(), scheme.tool(), scheme.writable()),
+            ("example", "read", true)
+        );
+        assert_eq!(
+            policy.tools[0].aliases[0].visibility(),
+            AliasVisibility::Public
+        );
+    }
 
     fn tools(yaml: &str) -> Vec<BaseToolExposure> {
         serde_norway::from_str(yaml).unwrap_or_else(|error| panic!("{yaml}: {error}"))

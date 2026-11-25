@@ -1,7 +1,6 @@
 schema_version: 1
 identity: hya/network-tools
 protected_names: []
-schemes: []
 tools:
   - name: webfetch
     schema_version: 1

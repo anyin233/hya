@@ -1,7 +1,6 @@
 schema_version: 1
 identity: hya/base-tools
 protected_names: [read]
-schemes: []
 # Replaces the kernel prompt's "Use bash for file operations" rule whenever
 # the round offers one of these tools.
 file_operations_rule:

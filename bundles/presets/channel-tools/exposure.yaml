@@ -1,7 +1,6 @@
 schema_version: 1
 identity: hya/channel-tools
 protected_names: []
-schemes: []
 tools:
   - { name: send, schema_version: 1, permission: tool, prompt: send mail to a channel or agent }
   - { name: list_channel, schema_version: 1, permission: read_only, prompt: list your channels with unread counts and team status }

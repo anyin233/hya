@@ -316,6 +316,7 @@ pub enum AliasVisibility {
     /// Dispatchable compatibility spelling omitted from advertised schemas.
     Hidden,
     /// Dispatchable spelling that is also advertised to models.
+    #[deprecated(note = "Register a canonical tool name to advertise an additional spelling")]
     Public,
 }
 
@@ -564,6 +565,7 @@ impl ToolRegistry {
     ///
     /// Panics if the canonical name or any alias collides with a registered name.
     #[doc(hidden)]
+    #[allow(deprecated, reason = "Preserve advertising for legacy public aliases")]
     pub fn register_builtin<'a>(
         &self,
         tool: Arc<dyn Tool>,
