@@ -396,67 +396,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn session_id_parses_display_format() {
-        let id = SessionId::new();
-        let parsed: SessionId = id.to_string().parse().unwrap();
-        assert_eq!(parsed, id);
+    fn session_id_hysec_shape_round_trips_and_storage_key() {
+        for id in [SessionId::new(), SessionId::default()] {
+            let text = id.to_string();
+            assert!(text.starts_with("hysec_"), "{text}");
+            let suffix = &text["hysec_".len()..];
+            assert_eq!(suffix.len(), 20);
+            assert!(suffix.bytes().all(|byte| byte.is_ascii_alphanumeric()));
+            assert_eq!(text.parse::<SessionId>().unwrap(), id);
+        }
+
+        let fixed: SessionId = "hysec_ABCDEFGHIJKLMNOPQRST".parse().unwrap();
+        let encoded = serde_json::to_string(&fixed).unwrap();
+        assert_eq!(encoded, "\"hysec_ABCDEFGHIJKLMNOPQRST\"");
+        assert_eq!(serde_json::from_str::<SessionId>(&encoded).unwrap(), fixed);
+        assert_eq!(fixed.storage_key(), b"hysec_ABCDEFGHIJKLMNOPQRST".to_vec());
     }
 
     #[test]
-    fn session_id_new_uses_hysec_shape() {
-        let id = SessionId::new().to_string();
-
-        assert!(id.starts_with("hysec_"));
-        let suffix = &id["hysec_".len()..];
-        assert_eq!(suffix.len(), 20);
-        assert!(suffix.bytes().all(|byte| byte.is_ascii_alphanumeric()));
-    }
-
-    #[test]
-    fn session_id_default_uses_hysec_shape() {
-        let id = SessionId::default().to_string();
-
-        assert!(id.starts_with("hysec_"));
-        let suffix = &id["hysec_".len()..];
-        assert_eq!(suffix.len(), 20);
-        assert!(suffix.bytes().all(|byte| byte.is_ascii_alphanumeric()));
-    }
-
-    #[test]
-    fn session_id_rejects_legacy_uuid_formats() {
+    fn session_id_rejects_legacy_and_invalid_formats() {
         for raw in [
             "ses_018f032a3d2f7a21a05c2e61fc57dced",
             "018f032a-3d2f-7a21-a05c-2e61fc57dced",
             "018f032a3d2f7a21a05c2e61fc57dced",
+            "ses_ABCDEFGHIJKLMNOPQRST",
+            "hysec_ABCDEFGHIJKLMNOPQRS",
+            "hysec_ABCDEFGHIJKLMNOPQRSTU",
+            "hysec_ABCDEFGHIJKLMNO!!!!",
         ] {
             assert!(raw.parse::<SessionId>().is_err(), "{raw}");
         }
-    }
-
-    #[test]
-    fn session_id_rejects_invalid_hysec_formats() {
-        assert!("ses_ABCDEFGHIJKLMNOPQRST".parse::<SessionId>().is_err());
-        assert!("hysec_ABCDEFGHIJKLMNOPQRS".parse::<SessionId>().is_err());
-        assert!("hysec_ABCDEFGHIJKLMNOPQRSTU".parse::<SessionId>().is_err());
-        assert!("hysec_ABCDEFGHIJKLMNO!!!!".parse::<SessionId>().is_err());
-    }
-
-    #[test]
-    fn session_id_serde_round_trips_hysec_display() {
-        let id: SessionId = "hysec_ABCDEFGHIJKLMNOPQRST".parse().unwrap();
-
-        let encoded = serde_json::to_string(&id).unwrap();
-        let decoded: SessionId = serde_json::from_str(&encoded).unwrap();
-
-        assert_eq!(encoded, "\"hysec_ABCDEFGHIJKLMNOPQRST\"");
-        assert_eq!(decoded, id);
-    }
-
-    #[test]
-    fn session_id_storage_key_uses_display_bytes_for_hysec() {
-        let id: SessionId = "hysec_ABCDEFGHIJKLMNOPQRST".parse().unwrap();
-
-        assert_eq!(id.storage_key(), b"hysec_ABCDEFGHIJKLMNOPQRST".to_vec());
     }
 
     #[test]
