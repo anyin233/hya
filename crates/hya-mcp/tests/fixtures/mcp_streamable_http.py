@@ -274,7 +274,7 @@ def main():
     handler.fail5xx = args.fail5xx
     server = LoopbackServer(("127.0.0.1", args.port), handler)
     server.daemon_threads = True
-    print("ready", flush=True)
+    print(server.server_address[1], flush=True)
     server.serve_forever()
 
 

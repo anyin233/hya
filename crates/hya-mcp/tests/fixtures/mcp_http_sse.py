@@ -193,7 +193,7 @@ def main():
     args = parser.parse_args()
     server = LoopbackServer(("127.0.0.1", args.port), Handler)
     server.daemon_threads = True
-    print("ready", flush=True)
+    print(server.server_address[1], flush=True)
     server.serve_forever()
 
 
