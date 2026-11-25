@@ -7,7 +7,7 @@ use clap::{Args, Subcommand};
 use hya_app::bundle_admin::{self, InstallTarget, Removed, SelfCheck};
 use hya_app::bundle_registry::{
     BundleInstallAction, BundleInstallPlan, BundleRegistry, BundleRegistryError,
-    BundleRegistryRecord, NamespaceInstallPolicy,
+    LoadedBundleRegistryRecord, NamespaceInstallPolicy,
 };
 use hya_app::project_bundles::{ProjectBundle, find_project_bundle, plan_project_install};
 use hya_bundle::{Bundle, PreparedCatalog, PublicPackageInspection};
@@ -950,13 +950,12 @@ async fn info(bundle_id: &str, filter: Option<Scope>) -> anyhow::Result<()> {
 
 /// Print a user-installed bundle; `false` when the registry has no such id.
 async fn info_installed(bundle_id: &str) -> anyhow::Result<bool> {
-    let Some((record, enabled)) = installed_record_if_exists(bundle_id).await? else {
+    let Some((loaded, enabled)) = installed_record_if_exists(bundle_id).await? else {
         return Ok(false);
     };
-    let prepared = bundle_admin::decode_installed_catalog(&record)?;
-    let [bundle] = prepared.bundles() else {
-        anyhow::bail!("installed catalog must contain exactly one bundle")
-    };
+    let record = &loaded.record;
+    let prepared = &loaded.prepared;
+    let bundle = &prepared.bundles()[0];
 
     let identity = bundle.identity();
     println!("name={}", identity.id);
@@ -1110,15 +1109,13 @@ async fn schema(name: &str, filter: Option<Scope>) -> anyhow::Result<()> {
     let project = || -> anyhow::Result<Option<ProjectBundle>> {
         Ok(find_project_bundle(&project_dir()?, name).ok())
     };
-    let installed =
-        || async {
-            let Some((record, _)) = installed_record_if_exists(name).await? else {
-                return anyhow::Ok(None);
-            };
-            bundle_admin::decode_installed_catalog(&record).map(Some).with_context(|| {
-            format!("installed bundle {name} is unreadable; reinstall it with `hya bundle install`")
-        })
-        };
+    let installed = || async {
+        Ok::<_, anyhow::Error>(
+            installed_record_if_exists(name)
+                .await?
+                .map(|(loaded, _)| loaded.prepared),
+        )
+    };
     let prepared: PreparedCatalog = match filter {
         Some(Scope::Project) => {
             let bundle = project()?.ok_or_else(not_found)?;
@@ -1167,12 +1164,12 @@ fn print_schema_rows(schemas: &[hya_bundle::PreparedSchema]) {
 
 async fn installed_record_if_exists(
     id: &str,
-) -> anyhow::Result<Option<(BundleRegistryRecord, bool)>> {
+) -> anyhow::Result<Option<(LoadedBundleRegistryRecord, bool)>> {
     let Some(registry) = bundle_admin::existing_registry().await? else {
         return Ok(None);
     };
     let snapshot = registry
-        .snapshot()
+        .snapshot_with_catalogs()
         .await
         .map_err(bundle_admin::store_error)?;
     let enabled = !registry.disabled_bundle_ids().await?.contains(id);
@@ -1186,8 +1183,8 @@ async fn installed_record_if_exists(
     Ok(snapshot
         .bundles
         .into_iter()
-        .find(|record| record.bundle_id == id)
-        .map(|record| (record, enabled)))
+        .find(|loaded| loaded.record.bundle_id == id)
+        .map(|loaded| (loaded, enabled)))
 }
 
 /// Print the static metadata of one prepared bundle, including its declared

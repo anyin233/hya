@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::bundle_registry::{BundleRegistry, BundleRegistryRecord};
+use crate::bundle_registry::BundleRegistry;
 use async_trait::async_trait;
 use hya_bundle::{BundleCatalog, PreparedBundleSchemas, PreparedCatalog};
 use hya_engine::{
@@ -501,14 +501,14 @@ impl InstalledBundleRefresh {
         }
 
         let snapshot = match &self.registry.get() {
-            Some(registry) => Some(registry.snapshot().await.map_err(CoreError::bundle)?),
+            Some(registry) => Some(
+                registry
+                    .snapshot_with_catalogs()
+                    .await
+                    .map_err(CoreError::bundle)?,
+            ),
             None => None,
         };
-        let mut installed = Vec::with_capacity(
-            snapshot
-                .as_ref()
-                .map_or(0, |snapshot| snapshot.bundles.len()),
-        );
         let mut disabled = match &self.registry.get() {
             Some(registry) => registry
                 .disabled_bundle_ids()
@@ -527,12 +527,10 @@ impl InstalledBundleRefresh {
                 .map(|row| (row.bundle_id.clone(), row.error.clone()))
                 .collect::<Vec<_>>()
         });
-        if let Some(snapshot) = &snapshot {
-            for record in &snapshot.bundles {
-                let prepared = Self::decode_installed(record).map_err(CoreError::Invalid)?;
-                installed.push(Arc::new(prepared));
-            }
-        }
+        let installed = snapshot
+            .into_iter()
+            .flat_map(|snapshot| snapshot.bundles)
+            .map(|loaded| Arc::new(loaded.prepared));
         let first_party = first_party_catalogs()?
             .into_iter()
             .map(Arc::new)
@@ -676,23 +674,6 @@ impl InstalledBundleRefresh {
         } else {
             Err(CoreError::BundleRefresh(errors))
         }
-    }
-
-    /// Decode one registry row, or explain why it is unreadable.
-    fn decode_installed(record: &BundleRegistryRecord) -> Result<PreparedCatalog, String> {
-        let prepared = PreparedCatalog::decode(&record.prepared_bytes, &record.prepared_digest)
-            .map_err(|error| error.to_string())?;
-        let [bundle] = prepared.bundles() else {
-            return Err("prepared catalog must contain exactly one bundle".to_string());
-        };
-        let identity = bundle.identity();
-        if identity.id != record.bundle_id
-            || identity.version != record.version
-            || identity.publisher != record.publisher
-        {
-            return Err("registry metadata does not match the prepared catalog".to_string());
-        }
-        Ok(prepared)
     }
 }
 

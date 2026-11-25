@@ -621,7 +621,10 @@ pub async fn listings(
     let registry = existing_registry().await?;
     let (mut disabled, installed, unreadable) = match &registry {
         Some(registry) => {
-            let snapshot = registry.snapshot().await.map_err(store_error)?;
+            let snapshot = registry
+                .snapshot_with_catalogs()
+                .await
+                .map_err(store_error)?;
             (
                 registry.disabled_bundle_ids().await.map_err(store_error)?,
                 snapshot.bundles,
@@ -682,11 +685,9 @@ pub async fn listings(
             ..BundleListing::default()
         });
     }
-    for record in &installed {
-        let prepared = decode_installed_catalog(record).map_err(store_error)?;
-        let [bundle] = prepared.bundles() else {
-            continue;
-        };
+    for loaded in &installed {
+        let record = &loaded.record;
+        let bundle = &loaded.prepared.bundles()[0];
         let enabled = !disabled.contains(&record.bundle_id);
         let shadowed = higher_ids.contains(&record.bundle_id)
             || higher_namespaces.contains(bundle.namespace());
@@ -695,15 +696,18 @@ pub async fn listings(
             (true, true) => "shadowed",
             (true, false) => "active",
         };
-        rows.push(listing(&prepared, bundle, SCOPE_USER, state, enabled));
+        rows.push(listing(
+            &loaded.prepared,
+            bundle,
+            SCOPE_USER,
+            state,
+            enabled,
+        ));
     }
-    for record in &installed {
-        if !disabled.contains(&record.bundle_id)
-            && let Ok(prepared) = decode_installed_catalog(record)
-            && let [bundle] = prepared.bundles()
-        {
-            higher_ids.insert(record.bundle_id.clone());
-            higher_namespaces.insert(bundle.namespace().to_string());
+    for loaded in &installed {
+        if !disabled.contains(&loaded.record.bundle_id) {
+            higher_ids.insert(loaded.record.bundle_id.clone());
+            higher_namespaces.insert(loaded.prepared.bundles()[0].namespace().to_string());
         }
     }
     for preset in crate::trusted_preset_inventory().map_err(failure)? {

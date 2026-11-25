@@ -18,11 +18,12 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use hya_bundle::{Bundle, BundleCatalog, BundleError, BundleSource, PreparedCatalog, SourceFile};
+use hya_bundle::{Bundle, BundleError, BundleSource, PreparedCatalog, SourceFile};
 
-use crate::bundle_registry::{
-    BundleInstallAction, BundleRegistryError, NamespaceInstallPolicy, is_downgrade,
+use crate::bundle_install::{
+    InstallScope, check_reserved_agents, plan_install, validate_install_catalog,
 };
+use crate::bundle_registry::{BundleInstallAction, BundleRegistryError, NamespaceInstallPolicy};
 
 /// One loaded project bundle: its prepared catalog, source directory, and the
 /// content digest that feeds the directory fingerprint.
@@ -507,16 +508,7 @@ pub fn plan_project_install(
         BundleSource::new("project-install", without_config_entries(files)),
     )?;
     let bundle_id = incoming.bundle_id().to_string();
-    let version = incoming.version().to_string();
-    for agent in incoming.bundle().agents() {
-        if reserved_agent_ids.contains(&agent.id.as_str()) {
-            return Err(BundleRegistryError::BundleAgentIdReserved {
-                bundle_id,
-                agent_id: agent.id.as_str().to_string(),
-            }
-            .into());
-        }
-    }
+    check_reserved_agents(incoming.bundle(), reserved_agent_ids)?;
 
     let installed = project_bundles(dir)
         .into_iter()
@@ -525,53 +517,15 @@ pub fn plan_project_install(
     let existing = installed
         .iter()
         .find(|bundle| bundle.bundle_id() == bundle_id);
-    let same_content =
-        existing.is_some_and(|bundle| bundle.prepared().digest() == incoming.prepared().digest());
-    if let Some(bundle) = existing
-        && !same_content
-        && bundle.version() != version
-        && is_downgrade(&version, bundle.version())
-        && policy == NamespaceInstallPolicy::DenyConflicts
-    {
-        return Err(BundleRegistryError::BundleDowngradeRequired {
-            bundle_id,
-            installed_version: bundle.version().to_string(),
-            incoming_version: version,
-        }
-        .into());
-    }
-
-    let namespace = incoming.bundle().namespace().to_string();
-    let displaced = installed
-        .iter()
-        .filter(|bundle| {
-            bundle.bundle_id() != bundle_id && bundle.bundle().namespace() == namespace
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if let Some(owner) = displaced.first()
-        && policy == NamespaceInstallPolicy::DenyConflicts
-    {
-        return Err(BundleRegistryError::NamespaceConflict {
-            namespace,
-            existing_bundle_id: owner.bundle_id().to_string(),
-            incoming_bundle_id: bundle_id,
-        }
-        .into());
-    }
-
-    let action = match existing {
-        None => BundleInstallAction::Install,
-        Some(_) if same_content => BundleInstallAction::Unchanged,
-        Some(bundle)
-            if bundle.version() == version && policy == NamespaceInstallPolicy::DenyConflicts =>
-        {
-            return Err(BundleRegistryError::BundleContentConflict { bundle_id, version }.into());
-        }
-        Some(bundle) => BundleInstallAction::Replace {
-            installed_version: bundle.version().to_string(),
-        },
-    };
+    let plan = plan_install(
+        installed
+            .iter()
+            .map(|bundle| (bundle.bundle(), bundle.prepared().digest())),
+        incoming.bundle(),
+        incoming.prepared().digest(),
+        policy,
+        InstallScope::Project,
+    )?;
 
     let target = match existing {
         Some(bundle) => bundle.dir().to_path_buf(),
@@ -587,24 +541,22 @@ pub fn plan_project_install(
         }
     };
 
-    let mut complete = installed
-        .iter()
-        .filter(|bundle| {
-            bundle.bundle_id() != bundle_id
-                && !displaced
-                    .iter()
-                    .any(|loser| loser.bundle_id() == bundle.bundle_id())
-        })
-        .map(|bundle| bundle.bundle().clone())
-        .collect::<Vec<_>>();
-    complete.push(incoming.bundle().clone());
-    BundleCatalog::from_prepared(&complete).map_err(BundleRegistryError::from)?;
+    validate_install_catalog(
+        installed.iter().map(ProjectBundle::bundle),
+        Some(bundle_id.as_str()),
+        &plan.displaced,
+        Some(incoming.bundle()),
+    )?;
+    let displaced = installed
+        .into_iter()
+        .filter(|bundle| plan.displaced.iter().any(|id| id == bundle.bundle_id()))
+        .collect();
 
     incoming.dir.clone_from(&target);
     Ok(ProjectInstallPlan {
         incoming,
         target,
-        action,
+        action: plan.action,
         displaced,
     })
 }

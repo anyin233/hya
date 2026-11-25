@@ -135,15 +135,24 @@ async fn workflow_bundle_installs_as_one_row_and_one_generation() {
     };
     assert_eq!(installed, BundleInstallOutcome::Installed { generation: 1 });
 
-    let snapshot = registry.snapshot().await;
+    let snapshot = registry.snapshot_with_catalogs().await;
     let Ok(snapshot) = snapshot else {
         panic!("bundle registry snapshot failed: {snapshot:?}");
     };
     assert_eq!(snapshot.generation, 1);
-    let [record] = snapshot.bundles.as_slice() else {
+    let [loaded] = snapshot.bundles.as_slice() else {
         panic!("WorkflowBundle install must write exactly one registry row");
     };
+    let record = &loaded.record;
     assert_eq!(record.bundle_id, "hya/workflow-installed");
+    assert_eq!(loaded.prepared.digest(), record.prepared_digest);
+    let bundle = &loaded.prepared.bundles()[0];
+    assert_eq!(bundle.identity().id, record.bundle_id);
+    assert_eq!(
+        bundle.workflow().map(|workflow| workflow.id.as_str()),
+        Some("release")
+    );
+    assert_eq!(bundle.agents().len(), 2);
     let document = serde_json::from_slice::<serde_json::Value>(&record.prepared_bytes);
     let Ok(document) = document else {
         panic!("stored prepared WorkflowBundle was not JSON: {document:?}");
@@ -242,7 +251,7 @@ async fn corrupted_prepared_blob_is_an_unreadable_snapshot_row() {
     };
     assert_eq!(generation, 1);
 
-    let snapshot = registry.snapshot().await;
+    let snapshot = registry.snapshot_with_catalogs().await;
     let Ok(snapshot) = snapshot else {
         panic!("one corrupt row must not reject the snapshot: {snapshot:?}");
     };
