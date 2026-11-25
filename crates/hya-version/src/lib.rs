@@ -5,6 +5,7 @@ pub const VERSION: &str = env!("HYA_VERSION");
 /// Alias for [`VERSION`] retained for backend crates.
 pub const BACKEND_VERSION: &str = VERSION;
 /// Alias for [`VERSION`] retained for frontend consumers.
+#[deprecated(since = "0.48.0-dev.37", note = "use hya_version::VERSION")]
 pub const FRONTEND_VERSION: &str = VERSION;
 
 /// The minimum backend version required by the current frontend.

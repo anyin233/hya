@@ -32,7 +32,7 @@ For visual dependency and runtime flow diagrams, see
 
 | Crate | Source | Responsibility |
 | --- | --- | --- |
-| `hya-version` | [`../crates/hya-version`](../crates/hya-version) | Compile-time unified `VERSION` (`BACKEND_VERSION` / `FRONTEND_VERSION`) and `MINIMUM_BACKEND_VERSION` constants parsed from `versions.toml`. |
+| `hya-version` | [`../crates/hya-version`](../crates/hya-version) | Compile-time unified `VERSION` and `MINIMUM_BACKEND_VERSION` constants parsed from `versions.toml`. Rust callers should use `VERSION` in place of the deprecated `FRONTEND_VERSION` alias. |
 | `hya-proto` | [`../crates/hya-proto`](../crates/hya-proto) | Dependency-light domain & wire types: prefixed strong IDs (`hysec_`, `msg_`, `part_`, `tc_`, `prj_`, …), `Event`/`Envelope`, `Message`/`Part`, mail/scope types, and the deterministic `Projection` reducer. |
 | `hya-api` | [`../crates/hya-api`](../crates/hya-api) | Generated `hya.v1` Rust types (prost/tonic/pbjson), HTTP status ↔ gRPC code error table, and pagination cursor helpers (`cargo run -p xtask -- gen-api`). |
 | `hya-provider` | [`../crates/hya-provider`](../crates/hya-provider) | `Provider`/`Protocol`/`Decoder` traits, `ProviderRouter`, HTTP/SSE client, OpenAI Chat/Responses/Codex, Grok Build, Anthropic, Google Gemini, scripted `FakeProvider`, and offline `DevProvider`. |
