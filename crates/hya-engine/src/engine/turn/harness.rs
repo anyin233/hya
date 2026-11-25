@@ -16,7 +16,7 @@ use hya_proto::{
     AgentName, Event, FinishReason, MessageId, ModelRef, PartProjection, Projection, SessionId,
     TokenUsage, ToolSchema,
 };
-use hya_provider::{CompletionRequest, EventStream, ProviderError, ProviderRouter};
+use hya_provider::{CompletionRequest, EventStream, ProviderRetryClass, ProviderRouter};
 use hya_store::ActorClaim;
 use hya_tool::{AgentDef, ReportLatch};
 use tokio::sync::OwnedSemaphorePermit;
@@ -851,20 +851,14 @@ impl Harness for TurnHarness<'_> {
     }
 }
 
-/// Retry transient opens and interrupted streams before a tool request. Decode is deliberately
-/// narrow: only the known truncated response-body diagnostics are included.
 fn is_retryable_round_error(error: &CoreError) -> bool {
     let CoreError::Provider(error) = error else {
         return false;
     };
-    match error.as_ref() {
-        ProviderError::StreamInterrupted(_) => true,
-        ProviderError::Decode(message) => {
-            let message = message.to_ascii_lowercase();
-            message == "error decoding response body"
-                || message.contains("unexpected eof")
-                || message.contains("unexpected end of file")
-        }
-        _ => error.is_retryable_before_stream(),
-    }
+    matches!(
+        error.retry_class(),
+        ProviderRetryClass::Transient
+            | ProviderRetryClass::InterruptedBody
+            | ProviderRetryClass::TruncatedBody
+    )
 }

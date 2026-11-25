@@ -162,6 +162,13 @@ leaves `reasoning_request` false.
 | `Decode(String)` | `decode: …` | Malformed or truncated stream / compact-window payload. | No dedicated entry; inspect SSE frames. |
 | `AuthExpired { provider, hint }` | `auth expired for provider '<p>': <hint>` | Produced by the OAuth bearer-resolver wiring in `hya-app` when refresh fails or credentials are revoked. | Re-run `hya oauth login` for that provider (see [`../configuration.md`](../configuration.md) / CLI auth). |
 
+Rust callers use `ProviderError::retry_class() -> ProviderRetryClass` to distinguish
+`Transient`, `InterruptedBody`, `TruncatedBody` and `Terminal`. The HTTP opener
+and pre-stream failover use `is_retryable_before_stream() -> bool`, which is true
+for `Transient`. Each round harness applies its own policy to the class.
+For example, an `InterruptedBody` error reaches the round harness after a
+stream opens.
+
 ## Provider Router
 
 [`router.rs`](../../crates/hya-provider/src/router.rs) keeps an **ordered** list of
