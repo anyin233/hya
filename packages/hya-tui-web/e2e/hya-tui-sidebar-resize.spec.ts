@@ -42,6 +42,7 @@ test.describe("right sidebar width", () => {
     expect(await term.find("Sessions")).toBeNull()
     await term.press("Control+x")
     await term.type("/sidebar")
+    await term.waitForText("▸ /sidebar")
     await term.press("Enter")
     await expect.poll(() => term.find("Commands")).toBeNull()
     expect(await term.find("Sessions")).toBeNull()
