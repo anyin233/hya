@@ -24,6 +24,17 @@ pub use responses::{
 pub struct OpenAiChatProtocol;
 
 impl Protocol for OpenAiChatProtocol {
+    fn endpoint_url(&self, base: &str, _model: &str) -> String {
+        format!("{base}/chat/completions")
+    }
+
+    fn reasoning_replay_policy(&self) -> crate::ReasoningReplayPolicy {
+        crate::ReasoningReplayPolicy::ReasoningContent
+    }
+
+    fn reasoning_variant_labels(&self) -> &'static [&'static str] {
+        &["minimal", "low", "medium", "high", "xhigh"]
+    }
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
         self.encode_for_model(req, None, false)
     }

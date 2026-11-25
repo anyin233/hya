@@ -574,6 +574,49 @@ pub trait Provider: Send + Sync {
 /// fresh stateful decoder; the transport (e.g. [`HttpProvider`]) owns SSE framing
 /// and feeds frame data into [`Decoder::push`].
 pub trait Protocol: Send + Sync {
+    /// Completion URL for a trimmed API base and the upstream model ID.
+    fn endpoint_url(&self, base: &str, _model: &str) -> String {
+        base.to_owned()
+    }
+
+    /// Native context-compaction URL, when the protocol supports it.
+    fn compact_endpoint(&self, _base: &str) -> Option<String> {
+        None
+    }
+
+    /// Whether this wire can add prompt-cache breakpoints.
+    fn supports_prompt_cache(&self) -> bool {
+        false
+    }
+
+    /// Apply protocol-specific changes to an encoded completion and its request headers.
+    fn post_encode(
+        &self,
+        _body: &mut serde_json::Value,
+        _headers: &mut BTreeMap<String, String>,
+        _prompt_caching: bool,
+    ) {
+    }
+
+    /// Model ID to send as a session header when this protocol requires one.
+    fn session_model_override<'a>(&self, _model: &'a str) -> Option<&'a str> {
+        None
+    }
+
+    /// Whether the protocol can attach tool-result images on image-capable models.
+    fn supports_tool_images(&self) -> bool {
+        true
+    }
+
+    /// How to replay prior reasoning for this wire protocol.
+    fn reasoning_replay_policy(&self) -> ReasoningReplayPolicy {
+        ReasoningReplayPolicy::None
+    }
+
+    /// Default reasoning effort labels, in the order shown to users.
+    fn reasoning_variant_labels(&self) -> &'static [&'static str] {
+        &[]
+    }
     /// Encode a normalized request into the upstream JSON body.
     fn encode(&self, req: &CompletionRequest) -> Result<serde_json::Value, ProviderError>;
     /// Encode with what the route knows about the request's model.
