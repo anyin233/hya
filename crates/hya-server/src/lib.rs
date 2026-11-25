@@ -35,6 +35,9 @@ mod session_list;
 mod state;
 mod streams;
 mod support;
+#[cfg(test)]
+#[path = "../tests/it/support/mod.rs"]
+mod test_support;
 mod v1;
 mod workflow;
 mod workflow_control;

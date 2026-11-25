@@ -609,10 +609,6 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "../../tests/it/support/mod.rs"]
-mod shutdown_test_support;
-
-#[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod shutdown_order_tests {
     use super::*;
@@ -678,7 +674,7 @@ mod shutdown_order_tests {
             let engine = Arc::new(SessionEngine::new(
                 SessionStore::connect_memory().await.unwrap(),
                 Arc::new(ProviderRouter::new().with(provider.clone())),
-                super::shutdown_test_support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+                crate::test_support::test_runtime(Arc::new(hya_tool_loader::builtins())),
                 permission,
                 EventBus::default(),
             ));

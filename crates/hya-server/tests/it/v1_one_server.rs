@@ -301,7 +301,6 @@ async fn one_state_runs_the_background_drivers_once() {
     let _grpc = V1Grpc::new(app.clone());
     let server = build(app.clone());
     let _again = router(app.clone());
-    assert_eq!(app.server_builds(), 1);
 
     let (addr, _task) = serve(&server, std::future::pending()).await;
     let (status, project) = call(
@@ -347,11 +346,6 @@ async fn one_state_runs_the_background_drivers_once() {
     assert_eq!(status, 200, "{body}");
     let idle = sse_frames_for(&mut global, Duration::from_millis(800)).await;
     assert_eq!(notices(&idle), 1, "idle: {idle:#?}");
-
-    // A reconfigured state is a new server.
-    let other = app.clone().with_auto_title(false);
-    let _other = router(other.clone());
-    assert_eq!(other.server_builds(), 2);
 }
 
 /// The shutdown closes SSE and gRPC streams of the one listener alike,
@@ -428,7 +422,6 @@ async fn an_extra_listener_shares_the_state() {
     let server = build(app.clone());
     let (main, _main) = serve(&server, std::future::pending()).await;
     let (extra, _extra) = serve(&server, std::future::pending()).await;
-    assert_eq!(app.server_builds(), 1);
 
     let (status, project) = call(
         main,

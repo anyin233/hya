@@ -139,6 +139,7 @@ async fn spawn_turn_run(
     turn: PreparedTurn,
     admission: Admission,
 ) -> Result<bool, V1Error> {
+    #[cfg(test)]
     if let Some((paused, barrier)) = &st.turn_spawn_barrier
         && *paused == session
     {
