@@ -60,7 +60,7 @@ The SQLite `event_log` in `hya-store` and the pure `Projection` reducer in
 
 Every client drives the backend over one contract defined in `proto/hya/v1`:
 
-- **18 services / 107 RPCs on a single port:** `hya_server::build` serves both
+- **18 services / 108 RPCs on a single port:** `hya_server::build` serves both
   HTTP/JSON + SSE + WebSocket (`/v1/*`) and tonic gRPC (`V1Grpc`, routed by
   `content-type: application/grpc*`) from the same `AppState`. Unary gRPC calls
   dispatch in-process through the same Axum `/v1` router, guaranteeing
@@ -120,9 +120,8 @@ Every client drives the backend over one contract defined in `proto/hya/v1`:
   on the clamped `InternalPublic` plane plus only their own bundle's declared
   resources.
 - **Unified `kind: Bundle` (prepared format v4) & process isolation ([ADR-0009](../adr/0009-rust-plugin-binaries-over-in-process-libraries.md)):**
-  Twelve trusted first-party bundles ship with the backend (five lockstep Rust
-  dylib tool-family presets, `core-agents`, `core-skills`, `core-commands`,
-  `agent-channels`, `goal-loop`, `plan-impl-review`, `basic-tui-components`).
+  The backend ships [13 trusted first-party bundles](../project-structure.md#trusted-first-party-bundles-13-total),
+  including four lockstep native tool families and the internal compaction bundle.
   Third-party extensions package as deterministic `.hyabundle` archives
   containing `agents[]`, optional `workflow`, `channels[]`, MCP declarations,
   out-of-process NDJSON JSON-RPC 2.0 sidecars (`kind: rust`, `kind: bun`,
@@ -210,5 +209,5 @@ Per [ADR-0031](../adr/0031-hot-reload-and-stop-start-restart.md) (and
 | [Tools and Permissions](tools-and-permissions.md) | `ToolRegistry`, `PermissionPlane`, `ProjectScope` multi-root containment, saved rules, and output caps. |
 | [Agent Tool Surface](agent-tool-surface.md) | Registered vs advertised vs executable tool contracts, `todo`, `task`, `send`/`wait`/`report`/`archive`, and hashline editing. |
 | [Server and Client](server-client.md) | Consolidated `hya.v1` HTTP/SSE/WS + gRPC single-port server, `AppState`, error codes, and `hya-sdk-v1`. |
-| [Protocol Guide](../protocol/README.md) & [API Reference](../protocol/api-reference.md) | Wire-level `hya.v1` integration guide and generated 18-service / 107-RPC specification. |
+| [Protocol Guide](../protocol/README.md) & [API Reference](../protocol/api-reference.md) | Wire-level `hya.v1` integration guide and generated 18-service / 108-RPC specification. |
 | [Architecture Decision Records (`docs/adr/`)](../adr/) | Accepted ADRs governing daemon lifecycle, Projects, Relay, episodic subagents, TUI/WebUI, and hot reload. |

@@ -11,7 +11,7 @@ and a multi-root permission plane for 25 registry tools, MCP servers, and
 out-of-process Rust/Bun/Claude bundle extensions. It orchestrates episodic
 resident subagents and compiled `Workflow` DAGs.
 
-Every client speaks one consolidated contract — **`hya.v1`** (18 services, 107
+Every client speaks one consolidated contract — **`hya.v1`** (18 services, 108
 RPCs) — served identically over HTTP/JSON + SSE + WebSocket (`/v1`) and gRPC on
 a single port. Running bare `hya` in a terminal discovers or auto-starts the
 database's persistent backend daemon and launches both the interactive

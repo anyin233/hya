@@ -22,6 +22,9 @@ builds on it.
   with the WebUI. It is still a separate Bun program, not code in the binary.*
 - It is previewed and tested only through the browser rendering in
   `packages/hya-tui-web` (ADR-0018). That rendering is also the WebUI.
+  *Amended by [ADR-0018](0018-browser-rendered-tui-test-environment.md#required-terminal-gate-2026-10-09):
+  CI runs the shared terminal scenarios with `tui-exp` on a direct PTY.
+  Chromium still runs browser-specific scenarios and provides visual previews.*
 
 ## Consequences
 

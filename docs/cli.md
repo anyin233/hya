@@ -242,7 +242,7 @@ bundle](bundle-runtime.md#first-party-bundles).
 **Expandability.** Every built-in is client-side: server-side `expand_prompt`
 never expands it. Only user-defined commands (their template) and skills
 (`/skill:<name>`, a `<skill>` block; see [Skills](skills.md#invoke-a-skill))
-expand. For the eight built-ins below, admitting a
+expand. For the built-ins below, admitting a
 slash command therefore uses the literal admitted text `/<name>` or
 `/<name> <arguments>` — **not** the stored AGENTS.md / review template body.
 Catalog construction still substitutes the current workdir for `${path}` inside
@@ -251,7 +251,7 @@ the *stored* init/review template strings, but that body is not applied by
 
 | Command | Description | Catalog notes |
 | --- | --- | --- |
-| `/init` | Guided AGENTS.md setup | Built-in, **not** expandable. Stored template includes `${path}` → workdir at list time; admission still falls back to literal `/init` + args. |
+| `/init` | Guided AGENTS.md setup | Built-in, **not** expandable. The shipped template explains [AGENTS.md discovery](configuration.md#project-context-agentsmd) and includes `${path}` → workdir at list time; admission still falls back to literal `/init` + args. |
 | `/review` | Review changes `[commit\|branch\|pr]`, defaults to uncommitted | Built-in, **not** expandable. Catalog sets `subtask: true` metadata. Same literal-admission rule as `/init`. |
 | `/help` | Show help | Built-in, not expandable; template is the literal `/help`. |
 | `/model $ARGUMENTS` | Switch the active model | Built-in, not expandable; template is `/model $ARGUMENTS`. |

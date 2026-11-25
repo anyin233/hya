@@ -1,7 +1,7 @@
 # hya Documentation
 
 `hya` is an event-sourced Rust multi-agent coding runtime. Every client surface
-speaks one consolidated contract — **`hya.v1`** (18 services / 107 RPCs) — over
+speaks one consolidated contract — **`hya.v1`** (18 services / 108 RPCs) — over
 HTTP/JSON + SSE + WebSocket (`/v1`) and gRPC on a single port, backed by a
 persistent per-database daemon and optional end-to-end encrypted `Noise_NKpsk0`
 relay access.
@@ -21,7 +21,7 @@ event log, how crates and runtime planes fit together, and what invariants
 govern sessions, Projects, subagents, and Workflows:
 
 - **[Design Philosophy & Architecture Overview](architecture/overview.md)** — The seven core architectural pillars, layer boundaries, and end-to-end turn lifecycle.
-- **[Project Structure](project-structure.md)** — Repository layout, all 21 workspace crates + 5 native bundle crates, 25 registry tools, 13 first-party bundles, and dependency direction.
+- **[Project Structure](project-structure.md)** — Repository layout, workspace and native bundle crates, 25 registry tools, 13 first-party bundles, and dependency direction.
 - **[Domain Glossary (`CONTEXT.md`)](../CONTEXT.md)** — Canonical domain terminology across `hya-proto`, `hya-core`, Projects, Relay, Workflows, and TUI.
 - **Core Subsystem Specifications:**
   - [Runtime (`hya-engine`)](architecture/runtime.md) — `SessionEngine`, publish seams, `TurnBinding`, Goal/Loop drivers, file snapshots & revert, and workspace roots.

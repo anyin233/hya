@@ -1,6 +1,6 @@
 Create or update `AGENTS.md` for this repository.
 
-The goal is a compact instruction file that helps future Compat sessions avoid mistakes and ramp up quickly. Every line should answer: "Would an agent likely miss this without help?" If not, leave it out.
+Write compact, repository-specific guidance for future hya sessions. Include a fact when it would help an agent avoid a mistake or find a non-obvious way to work.
 
 User-provided focus or constraints (honor these):
 $ARGUMENTS
@@ -12,7 +12,8 @@ Read the highest-value sources first:
 - build, test, lint, formatter, typecheck, and codegen config
 - CI workflows and pre-commit / task runner config
 - existing instruction files (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules/`, `.cursorrules`, `.github/copilot-instructions.md`)
-- repo-local Compat config such as `opencode.json`
+
+In full mode, hya discovers `AGENTS.md` from the session working directory up to `$HOME` or the filesystem root and adds the files to the prompt in parent-first order. Check applicable ancestor files before repeating shared guidance.
 
 If architecture is still unclear after reading config and docs, inspect a small number of representative code files to find the real entrypoints, package boundaries, and execution flow. Prefer reading the files that explain how the system is wired together over random leaf files.
 
@@ -34,7 +35,7 @@ Good `AGENTS.md` content is usually hard-earned context that took reading multip
 
 ## Questions
 
-Only ask the user questions if the repo cannot answer something important. Use the `question` tool for one short batch at most.
+Ask the user in one short batch if the repository cannot answer an important question.
 
 Good questions:
 - undocumented team conventions
@@ -57,7 +58,7 @@ Exclude:
 - long tutorials or exhaustive file trees
 - obvious language conventions
 - speculative claims or anything you could not verify
-- content better stored in another file referenced via `opencode.json` `instructions`
+- shared instructions already covered by an ancestor `AGENTS.md`
 
 When in doubt, omit.
 

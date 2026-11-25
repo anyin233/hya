@@ -16,8 +16,8 @@ For visual dependency and runtime flow diagrams, see
 | --- | --- |
 | [`../Cargo.toml`](../Cargo.toml), [`../versions.toml`](../versions.toml) | Workspace members, shared dependencies, Rust `1.91` / edition `2024`, clippy lints (`unwrap_used`/`expect_used` denied), and the unified `hya` release version + minimum compatible backend version. |
 | [`../CONTEXT.md`](../CONTEXT.md) | Ubiquitous domain glossary across runtime, store, tools, Projects, Relay, Workflows, and TUI. |
-| [`../proto/hya/v1`](../proto/hya/v1), [`../proto/hya/relay/v1`](../proto/hya/relay/v1) | Canonical protobuf IDLs for the `hya.v1` client/server contract (18 services, 107 RPCs) and the `hya.relay.v1` rendezvous protocol. |
-| [`../crates`](../crates) | 21 Rust crates: runtime, providers, tools, MCP, plugins, store, server, SDK, relay, updater, unified `hya` binary, E2E harness, and `xtask`. |
+| [`../proto/hya/v1`](../proto/hya/v1), [`../proto/hya/relay/v1`](../proto/hya/relay/v1) | Canonical protobuf IDLs for the `hya.v1` client/server contract (18 services, 108 RPCs) and the `hya.relay.v1` rendezvous protocol. |
+| [`../crates`](../crates) | 26 Rust crates covering runtime, providers, tools, MCP, plugins, store, server, SDK, relay, updater, unified `hya` binary, E2E harness, and `xtask`. |
 | [`../bundles/presets`](../bundles/presets), [`../bundles/first-party`](../bundles/first-party), [`../bundles/internal`](../bundles/internal) | The 13 trusted first-party bundles (including the 4 native Rust tool-family library crates under `bundles/presets/*-tools/native` and the internal `hya/compaction` library crate under `bundles/internal/compaction/native`). |
 | [`../bundles/extra`](../bundles/extra), [`../bundles/examples`](../bundles/examples) | Optional installable `hya-extra/*` bundles (`zvec-grep`, `scout`, `jev-model-router`, `model-fallback`, `token-summary`) and WorkflowBundle examples (`argus-example`). |
 | [`../packages/hya-tui`](../packages/hya-tui) | Interactive Bun/OpenTUI terminal frontend over `hya.v1` HTTP/JSON+SSE or direct gRPC (shipped as `lib/hya/tui`). |
@@ -25,6 +25,7 @@ For visual dependency and runtime flow diagrams, see
 | [`../packages/hya-tui-sdk`](../packages/hya-tui-sdk) | `@hya/tui-sdk` package for authoring isolated bundle TUI extensions (`defineTuiExtension`). |
 | [`../plugins`](../plugins) | Standalone full-stack plugin examples such as [`disk-inspector`](disk-inspector.md). |
 | [`../scripts/hya-install.sh`](../scripts/hya-install.sh), [`../install.sh`](../install.sh) | Hosted release installer (also embedded in `hya update`) and local source-checkout installer. |
+| [`../opencode.json`](../opencode.json), [`../scripts/claude-isolated`](../scripts/claude-isolated) | OpenCode contributor configuration and a helper for launching an isolated Claude Code session. hya project context comes from [`AGENTS.md` discovery](configuration.md#project-context-agentsmd). |
 | [`../docs`](../docs) | Architecture, user/configuration guides, diagrams, generated `hya.v1` protocol specs, ADRs, and developer guidelines. |
 
 ## Rust Crates (`crates/` & Native Bundles)
@@ -47,10 +48,10 @@ For visual dependency and runtime flow diagrams, see
 | `hya-plugin-bun` | [`../crates/hya-plugin-bun`](../crates/hya-plugin-bun) | `adapter/` Bun runtime loading JS bundle extensions (`--bundle-extension` / `--extension`). |
 | `hya-plugin-claude` | [`../crates/hya-plugin-claude`](../crates/hya-plugin-claude) | Claude Code plugin directory / marketplace importer and runtime bridge (`hya bundle install --claude`). |
 | `hya-store` | [`../crates/hya-store`](../crates/hya-store) | SQLite WAL session store (`event_log`, `session`, `project`/`project_root`, `saved_permission`, `resident_actor_claim`, `pending_resume`, `projection_snapshot`, `file_blob`). |
-| `hya-bundle` | [`../crates/hya-bundle`](../crates/hya-bundle) | Unified `kind: Bundle` (prepared format v4) source parser, validator, deterministic `.hyabundle` 7z packager, 13 first-party bundle loaders, and `BundleCatalog`. |
+| `hya-bundle` | [`../crates/hya-bundle`](../crates/hya-bundle) | Unified `kind: Bundle` (prepared format v4) source parser, validator, deterministic `.hyabundle` 7z packager, the loader for 13 first-party bundles, and `BundleCatalog`. |
 | `hya-workflow` | [`../crates/hya-workflow`](../crates/hya-workflow) | `*.hya.md` Workflow parser, graph validator (`flowchart TD`), normalization, topological levels, model assignments, and canonical revisions. |
-| `hya-core` | [`../crates/hya-core`](../crates/hya-core) | The three-primitive kernel (`kernel`, run alone by `hya exec --bare`), the internal native bundle loader (`bundles`), and the shared `CoreError`. |
-| `hya-engine` | [`../crates/hya-engine`](../crates/hya-engine) | Full-mode session engine on the kernel: `SessionEngine`, turn admission/streaming rounds, compaction settings and the terminal-handoff summarizer (the context-reduction steps are the `hya/compaction` bundle), file snapshots/revert/fork, `ResidentSupervisor` episodic actors, vertical channel service, `SubagentGovernor`, Goal/Loop drivers, durable Workflow execution, and `RuntimeRegistry` / `CatalogScope` overlays. |
+| `hya-core` | [`../crates/hya-core`](../crates/hya-core) | The three-primitive kernel (`kernel`, run alone by `hya exec --bare`), the internal bundle entry point (`bundles`, backed by `hya-tool-loader`), and the shared `CoreError`. |
+| `hya-engine` | [`../crates/hya-engine`](../crates/hya-engine) | Full-mode session engine on the kernel: `SessionEngine`, turn admission/streaming rounds, compaction settings and the `terminal_handoff` summarizer (the context-reduction steps are the `hya/compaction` bundle), file snapshots/revert/fork, `ResidentSupervisor` episodic actors, vertical channel service, `SubagentGovernor`, Goal/Loop drivers, durable Workflow execution, and `RuntimeRegistry` / `CatalogScope` overlays. |
 | `hya-app` | [`../crates/hya-app`](../crates/hya-app) | Runtime composition with `config.yaml` and auth/OAuth, model cache merge, the user bundle registry, skill discovery, MCP/plugin/LSP/formatter wiring, engine adapters for plugin hosts, per-Project `.hya/bundles` and `.hya/plugins` watchers, `WorkflowControl`, and `HyaRuntime` / `BuiltSessionEngine`. |
 | `hya-server` | [`../crates/hya-server`](../crates/hya-server) | Single-port `/v1` HTTP/JSON+SSE+WS router + `V1Grpc` tonic dispatcher, Host allowlist guard, Projects & session placement, ephemeral session reaper, and `relay_host` connector. |
 | `hya-sdk-v1` | [`../crates/hya-sdk-v1`](../crates/hya-sdk-v1) | Typed Rust client SDK over `hya.v1`: bootstrap, sessions, event-driven turns, live SSE `StreamFrame` subscription, `V1SessionMirror`, and `Client` harness helpers. |
@@ -68,7 +69,7 @@ handles discovery, cache writes, and startup and live catalog assembly.
 
 ## Canonical Builtin Tool Surface (25 Registry Tools and 2 Kernel Tools)
 
-`ToolRegistry::builtins()` loads the four trusted first-party tool-family bundles
+`hya_tool_loader::builtins()` loads the four trusted first-party tool-family bundles
 into **25 canonical schema names** (`wait` is declared by both `extended-tools`
 and `channel-tools`, with `channel-tools` overriding to add mail wake):
 
@@ -90,7 +91,9 @@ and `channel-tools`, with `channel-tools` overriding to add mail wake):
 | `hya/channel-tools` | `list_channel`, `wait` | `ReadOnly` | Caller channel listing and bounded blocking wait on child reports or inbound mail (overrides `extended-tools` `wait`). |
 | `hya/network-tools` | `webfetch` (`fetch`), `websearch` (`search`) | `WebFetch` / `WebSearch` | URL fetch and configured Exa/Parallel web search. |
 | Kernel | `todo`, `rewrite` | Kernel | Update session completion criteria and rewrite the live transcript. |
-| Builtin fallback | `invalid` | `Tool` | Structured error response when a model emits an unknown tool name or malformed JSON arguments. |
+
+The two kernel tools above are added to full-mode rounds. Bare mode uses
+[six kernel tools](kernel.md) with its own `read`, `bash`, `edit`, and `write`.
 
 ## Trusted First-Party Bundles (13 Total)
 
@@ -113,31 +116,21 @@ Loaded from `bundles/presets/*`, `bundles/first-party/*`, and `bundles/internal/
 
 ## Dependency Direction
 
+Selected direct workspace dependencies are shown below.
+
 ```text
-                       hya-proto   hya-version   hya-api (proto/hya/v1)
-                         ^   ^   ^       ^              ^
-            +------------+   |   +-------+------+       |
-            |                |           |      |       |
-      hya-provider       hya-tool    hya-store  |   hya-relay (proto/hya/relay/v1)
-                         ^   ^  ^        ^      |       ^
-       4x native tools --+   |  |        |      |       |
-                 hya-mcp ----+  |        |      |       |
-              hya-plugin -------+        |      |       |
-     (hya-plugin-bun / claude)           |      |       |
-                                    hya-bundle  |       |
-                                    hya-workflow|       |
-                                         ^      |       |
-                                         |      |       |
-                                      hya-core -+       |
-                                         ^              |
-                                         |              |
-                                      hya-app     hya-server <--> hya-sdk-v1
-                                         ^         ^    ^
-                                         |         |    |
-                              hya-backend (bin/hya) +----+ (+ hya-updater)
-                                         |
-                      spawns child processes (bare `hya`):
-                   packages/hya-tui  +  packages/hya-tui-web
+hya-backend -> hya-app -> hya-engine -> hya-core
+     |            |           |            |
+     |            |           |            +-> hya-provider, hya-store
+     |            |           +-> hya-context, hya-workflow
+     |            +-> hya-mcp and hya-plugin (both use hya-child-io)
+     +-> hya-server -> hya-engine, hya-api
+
+hya-core -> hya-tool-loader -> hya-bundle, hya-tool
+hya-tool -> hya-context, hya-tool-error
+hya-sdk-v1 -> hya-api <- hya-server
+
+bare hya spawns packages/hya-tui and packages/hya-tui-web
 ```
 
 Lower crates never depend on `hya-backend` or frontend packages; `hya-relay` and
