@@ -99,10 +99,10 @@ restart`: stop drains interrupted turns, start restores them with a restore
 prompt, and connected TUIs automatically discover the new URL and reconnect.
 No running daemon is started solely by an update.
 
-The Rust helper exports `hya_updater::release_install::RELEASE_INSTALLER` and
-`install_prefix` are deprecated and scheduled for removal after the next
-release. `run_release_install(&ReleaseInstallArgs) -> Result<InstalledChanges, String>`
-continues to embed the script and resolve the running prefix when needed.
+For Rust callers, `hya_updater::release_install::run_release_install` takes
+`&ReleaseInstallArgs` and returns `Result<InstalledChanges, String>`. It runs
+the embedded installer and resolves the running prefix when needed.
+
 ## Release package
 
 Each `v<version>` tag publishes unified target archives:

@@ -8,14 +8,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// `scripts/hya-install.sh`, embedded so `hya update` runs the exact installer
-/// `hya.ed-aisys.com/install.sh` serves.
-#[deprecated(
-    since = "0.48.0-dev.37",
-    note = "no replacement; removed after the next release"
-)]
-pub const RELEASE_INSTALLER: &str = INSTALLER_SCRIPT;
-
+// Embed the same script served at hya.ed-aisys.com/install.sh.
 const INSTALLER_SCRIPT: &str = include_str!("../../../scripts/hya-install.sh");
 
 /// Options of bare `hya update`.
@@ -33,16 +26,7 @@ pub struct ReleaseInstallArgs {
     pub prefix: Option<PathBuf>,
 }
 
-/// The install prefix of a released `hya` at `executable`: the real (symlink
-/// resolved) `<prefix>/bin/hya` whose prefix also holds `lib/hya`.
-#[deprecated(
-    since = "0.48.0-dev.37",
-    note = "no replacement; removed after the next release"
-)]
-pub fn install_prefix(executable: &Path) -> Result<PathBuf, String> {
-    resolve_install_prefix(executable)
-}
-
+// Resolve symlinks before deriving the prefix from the executable path.
 fn resolve_install_prefix(executable: &Path) -> Result<PathBuf, String> {
     let real = executable
         .canonicalize()
