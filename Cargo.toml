@@ -17,7 +17,7 @@ hya-version = { path = "crates/hya-version" }
 hya-api = { path = "crates/hya-api" }
 hya-bundle = { path = "crates/hya-bundle" }
 hya-proto = { path = "crates/hya-proto" }
-hya-provider = { path = "crates/hya-provider" }
+hya-provider = { path = "crates/hya-provider", default-features = false }
 hya-tool = { path = "crates/hya-tool" }
 hya-context = { path = "crates/hya-context" }
 hya-tool-error = { path = "crates/hya-tool-error" }

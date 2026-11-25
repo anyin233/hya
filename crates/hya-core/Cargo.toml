@@ -30,6 +30,7 @@ tracing = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
+hya-provider = { workspace = true, features = ["test-support"] }
 image = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

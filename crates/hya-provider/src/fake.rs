@@ -1,4 +1,12 @@
-//! Deterministic scripted provider for tests and process E2E matrices.
+//! Deterministic scripted provider for in-process tests and benchmarks.
+
+#![cfg_attr(
+    all(
+        feature = "legacy-fake-provider",
+        not(any(test, feature = "test-support"))
+    ),
+    allow(deprecated)
+)]
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -16,6 +24,15 @@ use crate::{
 
 /// One step in a scripted assistant turn materialised as canonical events.
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    all(
+        feature = "legacy-fake-provider",
+        not(any(test, feature = "test-support"))
+    ),
+    deprecated(
+        note = "Enable the hya-provider test-support feature for scripted provider fixtures"
+    )
+)]
 pub enum FakeStep {
     /// Emit a complete text part with this body.
     Text(String),
@@ -35,6 +52,15 @@ pub enum FakeStep {
 }
 
 /// Provider that plays back one or more [`FakeStep`] scripts per `stream()` call.
+#[cfg_attr(
+    all(
+        feature = "legacy-fake-provider",
+        not(any(test, feature = "test-support"))
+    ),
+    deprecated(
+        note = "Enable the hya-provider test-support feature for scripted provider fixtures"
+    )
+)]
 pub struct FakeProvider {
     id: String,
     scripts: Vec<Vec<FakeStep>>,

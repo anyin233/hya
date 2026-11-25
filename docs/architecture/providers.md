@@ -1028,6 +1028,15 @@ Two non-live providers support development and tests.
 [`fake.rs`](../../crates/hya-provider/src/fake.rs) — id **`fake`**. Replays one
 scripted step list per assistant turn (`scripted` / `scripted_turns`).
 
+`FakeProvider` and `FakeStep` are available through the `hya-provider/test-support` Cargo feature. Enable it as a dev-dependency in a test crate or as a normal dependency for a developer binary such as the lifecycle benchmark.
+
+```toml
+[dev-dependencies]
+hya-provider = { workspace = true, features = ["test-support"] }
+```
+
+Direct Cargo consumers get the deprecated `legacy-fake-provider` default feature for this release. Enable `test-support` explicitly to use the scripted provider. Workspace production dependencies disable the compatibility feature. The offline `hya/offline` route uses `DevProvider`.
+
 `FakeStep` vocabulary:
 
 | Variant | Effect when materialized |

@@ -24,7 +24,8 @@ pub mod catalog;
 pub mod catalog_discovery;
 /// Offline echo provider for local/dev runs without API keys.
 pub mod dev;
-/// Scripted provider for tests and deterministic agent-loop fixtures.
+/// Scripted provider fixtures, available with the Cargo feature test-support.
+#[cfg(any(test, feature = "test-support", feature = "legacy-fake-provider"))]
 pub mod fake;
 /// Gemini generateContent protocol and decoder.
 pub mod google;
@@ -53,6 +54,8 @@ pub use catalog_discovery::{
     ProviderDiscoveryOutcome, discover_models, is_grok_executable_model_id, parse_catalog_payload,
 };
 pub use dev::DevProvider;
+#[cfg(any(test, feature = "test-support", feature = "legacy-fake-provider"))]
+#[allow(deprecated)]
 pub use fake::{FakeProvider, FakeStep};
 pub use google::{GoogleDecoder, GoogleProtocol};
 pub use http::{
