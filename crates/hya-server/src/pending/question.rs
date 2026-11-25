@@ -9,6 +9,8 @@ use hya_tool::{
 use serde::Serialize;
 use tokio::sync::{Mutex, broadcast, mpsc};
 
+use crate::state::ServerHandlers;
+
 use super::PendingEvent;
 
 #[derive(Clone)]
@@ -60,12 +62,12 @@ impl QuestionRequests {
     #[must_use]
     pub(crate) fn spawn(
         mut rx: mpsc::UnboundedReceiver<QuestionRequest>,
-        tasks: &crate::RuntimeTaskOwner,
+        handlers: &ServerHandlers,
     ) -> Self {
         let requests = Self::new();
         let inner = requests.inner.clone();
         let events = requests.events.clone();
-        crate::runtime_tasks::spawn_cancellable(&tasks.tasks, &tasks.stop, async move {
+        handlers.spawn(async move {
             while let Some(req) = rx.recv().await {
                 let entry = PendingQuestion {
                     session: req.session,

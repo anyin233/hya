@@ -14,9 +14,7 @@ pub struct RuntimeTaskOwner {
     pub stop: CancellationToken,
     /// Services and admitted children that shutdown must join.
     pub tasks: TaskTracker,
-    /// Plugin and MCP connection I/O. BuiltSessionEngine::drain and the standalone
-    /// spawn_team_supervisor owner join it after stopping residents and sources;
-    /// AppState owns no connection I/O.
+    /// Connection I/O joined by the application after residents and sources stop.
     pub io_tasks: TaskTracker,
 }
 
@@ -31,9 +29,7 @@ impl RuntimeTaskOwner {
         let stop = self.stop.clone();
         let tasks = self.tasks.clone();
         async move {
-            stop.cancel();
-            tasks.close();
-            tasks.wait().await;
+            cancel_and_join(&stop, &tasks).await;
         }
     }
 }
@@ -42,6 +38,12 @@ impl Drop for RuntimeTaskOwner {
     fn drop(&mut self) {
         self.stop.cancel();
     }
+}
+
+pub(crate) async fn cancel_and_join(stop: &CancellationToken, tasks: &TaskTracker) {
+    stop.cancel();
+    tasks.close();
+    tasks.wait().await;
 }
 
 /// Register before checking cancellation, so shutdown joins racing admissions.

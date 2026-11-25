@@ -186,10 +186,14 @@ mod tests {
 
     fn bridge(
         store: &SessionStore,
-    ) -> (PermissionPlane, PermissionRequests, crate::RuntimeTaskOwner) {
+    ) -> (
+        PermissionPlane,
+        PermissionRequests,
+        crate::state::ServerHandlers,
+    ) {
         let (plane, rx): (PermissionPlane, UnboundedReceiver<AskRequest>) =
             PermissionPlane::new(PermissionRules::default());
-        let owner = crate::RuntimeTaskOwner::new();
+        let owner = crate::state::ServerHandlers::default();
         let requests = PermissionRequests::spawn(rx, store.clone(), &owner);
         (plane, requests, owner)
     }

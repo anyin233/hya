@@ -603,9 +603,11 @@ relative spread is `(max-min)/median`, not a performance regression threshold.
 
 `hya_server::AppState` owns the live frame relay, catalog notice relay, Project
 busy watcher, session-list tracker, ephemeral reaper (including startup sweep
-and delayed checks), and permission/question bridges. Routers retain the owner;
-background tasks retain only its cancellation and tracking handles, so dropping
-the final owner can cancel them without an ownership cycle.
+and delayed checks), and permission/question bridges. Its cancellation token
+and handler tracker cover those services and their admitted children. Routers
+retain the owner, and background tasks retain only the handles they need.
+Dropping the last owner signals cancellation. Awaiting `AppState::shutdown()`
+also joins the tracked tasks.
 
 Shutdown keeps the interaction bridges alive until their turns have drained.
 The daemon and `HyaRuntime` share the following application sequence:
@@ -627,10 +629,11 @@ serve(runtime.router().clone()).await;
 runtime.shutdown().await?;
 ```
 
-The shared `RuntimeTaskOwner` remains available from `hya_app` and is defined
-in `hya_server`; `stop: CancellationToken` and `tasks: TaskTracker` track service
-cancellation and completion. Explicit shutdown joins; drop only cancels.
-Resident bus listeners and plugin/MCP connection I/O have separate owners.
+The application uses `RuntimeTaskOwner` for composition work. It exposes
+`stop: CancellationToken` and `tasks: TaskTracker` for services, plus
+`io_tasks: TaskTracker` for plugin and MCP connections. The type is available
+from `hya_app` and `hya_server`. The application joins resident and connection
+work during its own drain.
 
 Actor-owned streaming deltas execute no claim-check SQL. Durable text/reasoning
 boundaries, tool results, work completion and endings retain their transactional

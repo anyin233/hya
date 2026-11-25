@@ -8,6 +8,8 @@ use hya_tool::{Action, AskRequest, Decision, RememberScope, Resource};
 use serde_json::Value;
 use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 
+use crate::state::ServerHandlers;
+
 use super::PendingEvent;
 use super::saved_permission::{SavedPermissions, action_name, install, uninstall};
 
@@ -77,14 +79,14 @@ impl PermissionRequests {
     pub(crate) fn spawn(
         mut rx: mpsc::UnboundedReceiver<AskRequest>,
         store: SessionStore,
-        tasks: &crate::RuntimeTaskOwner,
+        handlers: &ServerHandlers,
     ) -> Self {
         let requests = Self::new(store.clone());
         let inner = requests.inner.clone();
         let events = requests.events.clone();
         #[cfg(test)]
         let bridge_waiting = requests.bridge_waiting.clone();
-        crate::runtime_tasks::spawn_cancellable(&tasks.tasks, &tasks.stop, async move {
+        handlers.spawn(async move {
             while let Some(req) = rx.recv().await {
                 let (message_id, call_id) = tool_correlation(&store, &req).await;
                 let tool = match (req.session, call_id) {
