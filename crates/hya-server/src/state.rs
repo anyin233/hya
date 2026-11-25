@@ -7,6 +7,7 @@ use hya_engine::{AgentSpec, SessionEngine};
 use hya_tool::{AskRequest, FormatterStatus, QuestionRequest};
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::agent_model_control::{AgentModelControl, EmptyAgentModelControl};
 use crate::bundle_control::{BundleControl, EmptyBundleControl};
@@ -30,7 +31,7 @@ mod restart_tests;
 /// `AppState` shares them.
 #[derive(Clone)]
 pub struct AppState {
-    pub(crate) tasks: Arc<crate::RuntimeTaskOwner>,
+    pub(crate) handlers: Arc<ServerHandlers>,
     /// Shared session engine for all routes.
     pub engine: Arc<SessionEngine>,
     /// Process-level agent base used by native turns.
@@ -69,6 +70,26 @@ pub struct AppState {
     server_builds: Arc<std::sync::atomic::AtomicUsize>,
 }
 
+/// Routers retain the owner. A running handler only retains its tracking and
+/// cancellation handles, so it cannot keep its own owner alive.
+#[derive(Default)]
+pub(crate) struct ServerHandlers {
+    stop: CancellationToken,
+    tasks: TaskTracker,
+}
+
+impl ServerHandlers {
+    pub(crate) fn spawn(&self, future: impl std::future::Future<Output = ()> + Send + 'static) {
+        crate::runtime_tasks::spawn_cancellable(&self.tasks, &self.stop, future);
+    }
+}
+
+impl Drop for ServerHandlers {
+    fn drop(&mut self) {
+        self.stop.cancel();
+    }
+}
+
 impl AppState {
     /// Stop for a restart: refuse new server runs, drain engine turns, then
     /// wait for the server runs already reserved, all against one deadline. A
@@ -104,7 +125,7 @@ impl AppState {
         if !self.runs.wait_idle(until).await {
             tracing::warn!("server runs did not settle before the drain deadline");
         }
-        self.tasks.shutdown().await;
+        crate::runtime_tasks::cancel_and_join(&self.handlers.stop, &self.handlers.tasks).await;
         report
     }
 
@@ -128,7 +149,7 @@ impl AppState {
         let (catalog_updates, _) = broadcast::channel(16);
         let (projects_updates, _) = broadcast::channel(16);
         Self {
-            tasks: Arc::new(crate::RuntimeTaskOwner::new()),
+            handlers: Arc::default(),
             engine,
             agent,
             permission_requests,
@@ -285,7 +306,7 @@ impl AppState {
     #[must_use]
     pub fn with_permission_requests(mut self, rx: mpsc::UnboundedReceiver<AskRequest>) -> Self {
         self.permission_requests =
-            pending::PermissionRequests::spawn(rx, self.engine.store().clone(), &self.tasks);
+            pending::PermissionRequests::spawn(rx, self.engine.store().clone(), &self.handlers);
         self.reconfigured()
     }
 
@@ -310,7 +331,7 @@ impl AppState {
     /// Attach the user-question receiver and start the pending-question bridge.
     #[must_use]
     pub fn with_question_requests(mut self, rx: mpsc::UnboundedReceiver<QuestionRequest>) -> Self {
-        self.question_requests = pending::QuestionRequests::spawn(rx, &self.tasks);
+        self.question_requests = pending::QuestionRequests::spawn(rx, &self.handlers);
         self.reconfigured()
     }
 
@@ -384,8 +405,8 @@ impl AppState {
 pub(crate) struct ServerState {
     #[cfg(test)]
     pub(crate) admission_reply_hook: Option<Arc<dyn Fn() + Send + Sync>>,
-    pub(crate) tasks: tokio_util::task::TaskTracker,
-    pub(crate) stop: tokio_util::sync::CancellationToken,
+    pub(crate) tasks: TaskTracker,
+    pub(crate) stop: CancellationToken,
     #[cfg(test)]
     pub(crate) stream_conversions: Arc<std::sync::atomic::AtomicUsize>,
     pub(crate) frames: crate::v1::events::FrameHub,
@@ -423,8 +444,8 @@ impl ServerState {
         Self {
             #[cfg(test)]
             admission_reply_hook: None,
-            tasks: app.tasks.tasks.clone(),
-            stop: app.tasks.stop.clone(),
+            tasks: app.handlers.tasks.clone(),
+            stop: app.handlers.stop.clone(),
             #[cfg(test)]
             stream_conversions: Arc::default(),
             frames: crate::v1::events::FrameHub::new(app.engine.bus().capacity()),

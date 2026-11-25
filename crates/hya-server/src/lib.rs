@@ -99,12 +99,12 @@ pub use workflow_control::{
 /// state, whose background drivers start once. To serve HTTP and gRPC on
 /// one listener use [`build`].
 pub fn router(state: AppState) -> Router {
-    let tasks = state.tasks.clone();
+    let handlers = state.handlers.clone();
     let hosts = std::sync::Arc::new(state.allowed_hosts());
     let state = state.server_state();
     v1::router()
         .with_state(state)
-        .layer(axum::Extension(tasks))
+        .layer(axum::Extension(handlers))
         .layer(axum::middleware::from_fn(v1::directory_header_guard))
         .layer(cors())
         .layer(axum::middleware::from_fn(move |request, next| {
