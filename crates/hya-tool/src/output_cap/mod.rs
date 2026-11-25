@@ -21,7 +21,7 @@ use serde_json::Value;
 use coding_envelope::cap_coding_result;
 
 /// Return the serialized byte width of one character inside a JSON string.
-pub(crate) fn json_char_len(character: char) -> usize {
+pub fn json_char_len(character: char) -> usize {
     match character {
         '"' | '\\' | '\u{08}' | '\u{0c}' | '\n' | '\r' | '\t' => 2,
         character if character < ' ' => 6,
@@ -35,7 +35,7 @@ pub(crate) fn json_char_len(character: char) -> usize {
 ///
 /// # Returns
 /// The quoted JSON string width, saturating on arithmetic overflow.
-pub(crate) fn serialized_string_len(text: &str) -> usize {
+pub fn serialized_string_len(text: &str) -> usize {
     text.chars().fold(2usize, |used, character| {
         used.saturating_add(json_char_len(character))
     })
@@ -63,7 +63,7 @@ pub const MAX_CODING_DIFF_BYTES: usize = 50 * 1024;
 /// images; it is counted apart from [`MAX_CODING_ENVELOPE_BYTES`].
 pub const MAX_CODING_ATTACHMENT_BYTES: usize = 2 * 1024 * 1024;
 /// Maximum serialized bytes retained for an artifact path that must stay atomic.
-pub(crate) const MAX_CODING_OUTPUT_PATH_BYTES: usize = 32 * 1024;
+pub const MAX_CODING_OUTPUT_PATH_BYTES: usize = 32 * 1024;
 /// Maximum attachment entries retained after validation.
 const MAX_CODING_ATTACHMENT_ENTRIES: usize = 16;
 /// Maximum serialized bytes retained for one path-keyed diagnostic identity.

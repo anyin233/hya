@@ -15,7 +15,6 @@ mod lsp_post_edit;
 mod read;
 mod read_media;
 mod shell;
-mod shell_output;
 mod utf8_bom;
 mod write;
 
