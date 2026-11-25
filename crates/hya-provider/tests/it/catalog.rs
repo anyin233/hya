@@ -1,23 +1,14 @@
-//! Shared provider catalog snapshot contract tests.
+//! Shared provider catalog snapshot and model-list discovery parser contracts.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use hya_proto::ModelRef;
 use hya_provider::{
-    Capabilities, CatalogNotice, ModelCatalogSource, ProviderAuthState, ProviderCatalogResult,
-    ProviderCatalogSnapshot, ProviderCatalogSource, ProviderCatalogState, ProviderKind,
-    ProviderModel,
+    Capabilities, CatalogFailure, CatalogNotice, DiscoveredModel, ModelCatalogSource,
+    ProviderAuthState, ProviderCatalogResult, ProviderCatalogSnapshot, ProviderCatalogSource,
+    ProviderCatalogState, ProviderKind, ProviderModel, parse_catalog_payload, valid_provider_id,
 };
-
-#[test]
-fn provider_management_ids_have_one_ascii_format() {
-    use hya_provider::valid_provider_id;
-
-    for id in ["a", "Team_openai-2", "hya", &"a".repeat(64)] {
-        assert!(valid_provider_id(id), "valid ID {id:?}");
-    }
-    for id in ["", "a.b", "a/b", "a b", "é", &"a".repeat(65)] {
-        assert!(!valid_provider_id(id), "invalid ID {id:?}");
-    }
-}
+use serde_json::json;
 
 fn model(provider_id: &str, model_id: &str, source: ModelCatalogSource) -> ProviderModel {
     ProviderModel {
@@ -47,8 +38,29 @@ fn state(
 }
 
 #[test]
-fn snapshot_sorts_deduplicates_and_keeps_zero_row_provider_state() {
-    let snapshot = ProviderCatalogSnapshot::build(
+fn provider_ids_and_offline_provider_canonical_contract() {
+    for id in ["a", "Team_openai-2", "hya", &"a".repeat(64)] {
+        assert!(valid_provider_id(id), "valid ID {id:?}");
+    }
+    for id in ["", "a.b", "a/b", "a b", "é", &"a".repeat(65)] {
+        assert!(!valid_provider_id(id), "invalid ID {id:?}");
+    }
+
+    let provider = hya_provider::DevProvider::new();
+    assert_eq!(hya_provider::Provider::id(&provider), "hya");
+    assert!(
+        hya_provider::Provider::capabilities(&provider, &ModelRef::new("hya/offline")).is_some()
+    );
+    assert!(hya_provider::Provider::capabilities(&provider, &ModelRef::new("offline")).is_none());
+    assert!(
+        hya_provider::Provider::capabilities(&provider, &ModelRef::new("hya/anything")).is_none()
+    );
+}
+
+#[test]
+fn catalog_snapshot_sorting_dedup_defaults_provenance_and_offline_isolation() {
+    // 1. Sorts, deduplicates, preserves provenance & zero-row provider state.
+    let live = ProviderCatalogSnapshot::build(
         vec![
             model("zeta", "same", ModelCatalogSource::Configured),
             model("alpha", "z", ModelCatalogSource::Discovered),
@@ -74,30 +86,29 @@ fn snapshot_sorts_deduplicates_and_keeps_zero_row_provider_state() {
         ],
         Some(ModelRef::new("alpha/a")),
     );
-
     assert_eq!(
-        snapshot
-            .models()
+        live.models()
             .iter()
-            .map(|row| format!("{}/{}", row.provider_id, row.model_id))
+            .map(|r| (format!("{}/{}", r.provider_id, r.model_id), r.source))
             .collect::<Vec<_>>(),
-        ["alpha/a", "alpha/z", "zeta/same"],
+        [
+            ("alpha/a".to_string(), ModelCatalogSource::Discovered),
+            ("alpha/z".to_string(), ModelCatalogSource::Discovered),
+            ("zeta/same".to_string(), ModelCatalogSource::Configured),
+        ]
     );
     assert_eq!(
-        snapshot
-            .providers()
+        live.providers()
             .iter()
-            .map(|provider| provider.provider_id.as_str())
+            .map(|p| p.provider_id.as_str())
             .collect::<Vec<_>>(),
-        ["alpha", "empty", "zeta"],
+        ["alpha", "empty", "zeta"]
     );
-    assert_eq!(snapshot.default_model(), &ModelRef::new("alpha/a"));
-    assert!(snapshot.notice().is_none());
-}
+    assert_eq!(live.default_model(), &ModelRef::new("alpha/a"));
+    assert!(live.notice().is_none());
 
-#[test]
-fn empty_snapshot_adds_only_canonical_offline_row_and_notice() {
-    let snapshot = ProviderCatalogSnapshot::build(
+    // 2. Empty snapshot injects canonical hya/offline row & notice; replaces declared hya state.
+    let empty = ProviderCatalogSnapshot::build(
         Vec::new(),
         vec![state(
             "openai",
@@ -106,30 +117,23 @@ fn empty_snapshot_adds_only_canonical_offline_row_and_notice() {
         )],
         None,
     );
-
-    assert_eq!(snapshot.models().len(), 1);
-    let row = &snapshot.models()[0];
-    assert_eq!(row.provider_id, "hya");
-    assert_eq!(row.model_id, "offline");
-    assert_eq!(row.source, ModelCatalogSource::Offline);
-    assert_eq!(snapshot.default_model().as_str(), "hya/offline");
+    assert_eq!(empty.models().len(), 1);
+    assert_eq!(empty.models()[0].source, ModelCatalogSource::Offline);
+    assert_eq!(empty.default_model().as_str(), "hya/offline");
     assert!(matches!(
-        snapshot.notice(),
+        empty.notice(),
         Some(CatalogNotice::ConfigureProvider { .. })
     ));
     assert_eq!(
-        snapshot
+        empty
             .providers()
             .iter()
-            .map(|provider| provider.provider_id.as_str())
+            .map(|p| p.provider_id.as_str())
             .collect::<Vec<_>>(),
-        ["hya", "openai"],
+        ["hya", "openai"]
     );
-}
 
-#[test]
-fn offline_snapshot_replaces_a_declared_hya_state_with_canonical_metadata() {
-    let snapshot = ProviderCatalogSnapshot::build(
+    let replaced_hya = ProviderCatalogSnapshot::build(
         Vec::new(),
         vec![state(
             "hya",
@@ -138,18 +142,22 @@ fn offline_snapshot_replaces_a_declared_hya_state_with_canonical_metadata() {
         )],
         None,
     );
+    assert_eq!(replaced_hya.providers().len(), 1);
+    assert_eq!(
+        replaced_hya.providers()[0].source,
+        ProviderCatalogSource::Offline
+    );
+    assert_eq!(
+        replaced_hya.providers()[0].auth,
+        ProviderAuthState::NotApplicable
+    );
+    assert_eq!(
+        replaced_hya.providers()[0].result,
+        ProviderCatalogResult::Offline
+    );
 
-    assert_eq!(snapshot.providers().len(), 1);
-    let provider = &snapshot.providers()[0];
-    assert_eq!(provider.provider_id, "hya");
-    assert_eq!(provider.source, ProviderCatalogSource::Offline);
-    assert_eq!(provider.auth, ProviderAuthState::NotApplicable);
-    assert_eq!(provider.result, ProviderCatalogResult::Offline);
-}
-
-#[test]
-fn live_snapshot_never_contains_offline_row() {
-    let snapshot = ProviderCatalogSnapshot::build(
+    // 3. Live snapshot strips offline rows/providers; remote rows cannot claim hya/offline.
+    let live_stripped = ProviderCatalogSnapshot::build(
         vec![
             model("hya", "offline", ModelCatalogSource::Offline),
             model("openai", "gpt", ModelCatalogSource::Configured),
@@ -168,76 +176,145 @@ fn live_snapshot_never_contains_offline_row() {
         ],
         None,
     );
-
-    assert_eq!(snapshot.models().len(), 1);
-    assert_eq!(snapshot.models()[0].source, ModelCatalogSource::Configured);
-    assert!(snapshot.notice().is_none());
+    assert_eq!(live_stripped.models().len(), 1);
+    assert_eq!(
+        live_stripped.models()[0].source,
+        ModelCatalogSource::Configured
+    );
     assert!(
-        !snapshot
+        !live_stripped
             .providers()
             .iter()
-            .any(|provider| provider.provider_id == "hya")
+            .any(|p| p.provider_id == "hya")
     );
-    assert!(
-        !snapshot
-            .models()
-            .iter()
-            .any(|row| row.model_id == "offline")
-    );
-}
 
-#[test]
-fn default_must_be_a_snapshot_member() {
-    let snapshot = ProviderCatalogSnapshot::build(
-        vec![model("openai", "gpt", ModelCatalogSource::Configured)],
-        Vec::new(),
-        Some(ModelRef::new("missing/model")),
-    );
-    assert_eq!(snapshot.default_model(), &ModelRef::new("openai/gpt"));
-}
-
-#[test]
-fn unique_bare_default_is_canonicalized_to_its_snapshot_row() {
-    let snapshot = ProviderCatalogSnapshot::build(
-        vec![model("openai", "gpt", ModelCatalogSource::Configured)],
-        Vec::new(),
-        Some(ModelRef::new("gpt")),
-    );
-    assert_eq!(snapshot.default_model(), &ModelRef::new("openai/gpt"));
-}
-
-#[test]
-fn remote_row_cannot_claim_the_reserved_offline_reference() {
-    let snapshot = ProviderCatalogSnapshot::build(
+    let reserved = ProviderCatalogSnapshot::build(
         vec![model("hya", "offline", ModelCatalogSource::Discovered)],
         Vec::new(),
         Some(ModelRef::new("hya/offline")),
     );
-    assert_eq!(snapshot.models().len(), 1);
-    assert_eq!(snapshot.models()[0].source, ModelCatalogSource::Offline);
+    assert_eq!(reserved.models().len(), 1);
+    assert_eq!(reserved.models()[0].source, ModelCatalogSource::Offline);
+
+    // 4. Default falls back to snapshot member and canonicalizes unique bare names.
+    for requested in ["missing/model", "gpt"] {
+        let snap = ProviderCatalogSnapshot::build(
+            vec![model("openai", "gpt", ModelCatalogSource::Configured)],
+            Vec::new(),
+            Some(ModelRef::new(requested)),
+        );
+        assert_eq!(
+            snap.default_model(),
+            &ModelRef::new("openai/gpt"),
+            "requested={requested}"
+        );
+    }
 }
 
 #[test]
-fn model_provenance_preserves_configured_discovered_and_offline() {
-    let configured = model("a", "one", ModelCatalogSource::Configured);
-    let discovered = model("b", "two", ModelCatalogSource::Discovered);
-    let snapshot = ProviderCatalogSnapshot::build(vec![configured, discovered], Vec::new(), None);
-    assert_eq!(snapshot.models()[0].source, ModelCatalogSource::Configured);
-    assert_eq!(snapshot.models()[1].source, ModelCatalogSource::Discovered);
+fn catalog_discovery_parses_provider_payloads_and_metadata() {
+    // OpenAI data ids with trim, dedup, empty drop, and case sensitivity.
+    let openai = parse_catalog_payload(
+        ProviderKind::OpenAiCompatible,
+        &json!({"data": [{"id": " gpt-5 "}, {"id": "gpt-5"}, {"id": ""}, {"id": "GPT-5"}]}),
+    )
+    .unwrap();
+    assert_eq!(
+        openai,
+        vec![
+            DiscoveredModel {
+                id: "gpt-5".into(),
+                ..DiscoveredModel::default()
+            },
+            DiscoveredModel {
+                id: "GPT-5".into(),
+                ..DiscoveredModel::default()
+            },
+        ]
+    );
 
-    let offline = ProviderCatalogSnapshot::build(Vec::new(), Vec::new(), None);
-    assert_eq!(offline.models()[0].source, ModelCatalogSource::Offline);
+    // Codex keeps slug & reasoning metadata.
+    let codex = parse_catalog_payload(
+        ProviderKind::OpenAiCodex,
+        &json!({
+            "models": [{
+                "slug": " codex-model ",
+                "default_reasoning_level": "high",
+                "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}]
+            }]
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        codex,
+        vec![DiscoveredModel {
+            id: "codex-model".into(),
+            reasoning_default: Some("high".into()),
+            reasoning_variants: vec!["low".into(), "high".into()],
+            ..DiscoveredModel::default()
+        }]
+    );
+
+    // Google filters generateContent, strips models/ prefix, keeps displayName & limits.
+    let google = parse_catalog_payload(
+        ProviderKind::Google,
+        &json!({
+            "models": [
+                {
+                    "name": "models/gemini-2.5-pro",
+                    "displayName": "Gemini X",
+                    "inputTokenLimit": 1_048_576,
+                    "outputTokenLimit": 65_536,
+                    "supportedGenerationMethods": ["generateContent"]
+                },
+                {"name": "models/embed", "supportedGenerationMethods": ["embedContent"]}
+            ]
+        }),
+    )
+    .unwrap();
+    assert_eq!(google.len(), 1);
+    assert_eq!(google[0].id, "gemini-2.5-pro");
+    assert_eq!(google[0].display_name.as_deref(), Some("Gemini X"));
+    assert_eq!(google[0].context_limit, Some(1_048_576));
+    assert_eq!(google[0].output_limit, Some(65_536));
+
+    // Anthropic & gateway display names and token limits.
+    let anthropic = parse_catalog_payload(
+        ProviderKind::Anthropic,
+        &json!({"data": [{"id": "claude-x", "display_name": "Claude X"}]}),
+    )
+    .unwrap();
+    assert_eq!(anthropic[0].display_name.as_deref(), Some("Claude X"));
+    assert_eq!(anthropic[0].context_limit, None);
+
+    let gateway = parse_catalog_payload(
+        ProviderKind::OpenAiCompatible,
+        &json!({"data": [{
+            "id": "vendor/model",
+            "name": "Vendor Model",
+            "context_length": 131_072,
+            "top_provider": {"max_completion_tokens": 8_192}
+        }]}),
+    )
+    .unwrap();
+    assert_eq!(gateway[0].display_name.as_deref(), Some("Vendor Model"));
+    assert_eq!(gateway[0].context_limit, Some(131_072));
+    assert_eq!(gateway[0].output_limit, Some(8_192));
 }
 
 #[test]
-fn offline_provider_claims_only_canonical_reference() {
-    let provider = hya_provider::DevProvider::new();
-    assert_eq!(hya_provider::Provider::id(&provider), "hya");
-    assert!(
-        hya_provider::Provider::capabilities(&provider, &ModelRef::new("hya/offline")).is_some()
-    );
-    assert!(hya_provider::Provider::capabilities(&provider, &ModelRef::new("offline")).is_none());
-    assert!(
-        hya_provider::Provider::capabilities(&provider, &ModelRef::new("hya/anything")).is_none()
-    );
+fn catalog_discovery_rejects_guessed_slug_and_malformed_shapes() {
+    for (kind, payload) in [
+        (
+            ProviderKind::OpenAiCompatible,
+            json!({ "data": [{ "slug": "guessed" }] }),
+        ),
+        (ProviderKind::OpenAiResponse, json!({ "models": [] })),
+    ] {
+        assert_eq!(
+            parse_catalog_payload(kind, &payload).unwrap_err(),
+            CatalogFailure::Schema,
+            "{kind:?}"
+        );
+    }
 }

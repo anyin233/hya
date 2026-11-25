@@ -1,7 +1,8 @@
-//! Real MCP servers over HTTP transports (Streamable HTTP + classic HTTP+SSE).
+//! Real MCP servers over HTTP transports (Streamable HTTP + classic HTTP+SSE)
+//! and stdio EOF handling.
 //!
-//! Each test boots a stdlib-only Python fixture server on an ephemeral loopback
-//! port and drives it through the same `prepare` path used for stdio servers.
+//! Tests boot stdlib-only Python fixture servers on ephemeral loopback ports
+//! and drive them through the same `prepare` path used for stdio servers.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::io::{BufRead, BufReader};
@@ -39,7 +40,6 @@ fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(name)
 }
 
-/// Start a fixture server and wait until its TCP port accepts connections.
 /// Start a fixture on a port the fixture itself binds (`0`) and reports on its
 /// first stdout line, so parallel tests never race for a port.
 fn spawn_fixture(script: &str, args: &[&str]) -> (u16, FixtureServer) {
@@ -102,16 +102,6 @@ fn ctx_allowing_mcp() -> hya_tool::ToolCtx {
     }
 }
 
-async fn call_tool(
-    server: &hya_mcp::PreparedMcpServer,
-    tool_suffix: &str,
-    input: serde_json::Value,
-) -> serde_json::Value {
-    call_tool_result(server, tool_suffix, input)
-        .await
-        .expect("tool call succeeds")
-}
-
 async fn call_tool_result(
     server: &hya_mcp::PreparedMcpServer,
     tool_suffix: &str,
@@ -125,8 +115,18 @@ async fn call_tool_result(
     tool.execute(&ctx_allowing_mcp(), input).await
 }
 
+async fn call_tool(
+    server: &hya_mcp::PreparedMcpServer,
+    tool_suffix: &str,
+    input: serde_json::Value,
+) -> serde_json::Value {
+    call_tool_result(server, tool_suffix, input)
+        .await
+        .expect("tool call succeeds")
+}
+
 #[tokio::test]
-async fn streamable_http_connects_and_calls_tool_over_json_response() {
+async fn streamable_http_json_sse_errors_sessionless_404_and_timeout() {
     let (port, _server) = spawn_fixture(STREAMABLE_FIXTURE, &[]);
     let prepared = hya_mcp::prepare("http".into(), url_config(port))
         .await
@@ -139,52 +139,47 @@ async fn streamable_http_connects_and_calls_tool_over_json_response() {
             .any(|tool| tool.name() == "mcp__http__ping"),
         "ping tool registered"
     );
-    let out = call_tool(&prepared, "__ping", json!({ "msg": "hya" })).await;
-    assert_eq!(out["output"], "pong:hya");
-}
+    assert_eq!(
+        call_tool(&prepared, "__ping", json!({ "msg": "hya" })).await["output"],
+        "pong:hya"
+    );
+    // stream_add replies with text/event-stream instead of JSON: demux SSE frame.
+    assert_eq!(
+        call_tool(&prepared, "__stream_add", json!({ "a": 2, "b": 3 })).await["output"],
+        "stream_sum:5"
+    );
 
-#[tokio::test]
-async fn streamable_http_parses_sse_streamed_tool_response() {
-    let (port, _server) = spawn_fixture(STREAMABLE_FIXTURE, &[]);
-    let prepared = hya_mcp::prepare("http".into(), url_config(port))
-        .await
-        .expect("streamable http server connects");
-
-    // stream_add replies with text/event-stream instead of JSON: the client
-    // must demux the SSE frame and find the JSON-RPC result inside.
-    let out = call_tool(&prepared, "__stream_add", json!({ "a": 2, "b": 3 })).await;
-    assert_eq!(out["output"], "stream_sum:5");
-}
-
-#[tokio::test]
-async fn streamable_http_surfaces_tool_iserror_and_rpc_error() {
-    let (port, _server) = spawn_fixture(STREAMABLE_FIXTURE, &[]);
-    let prepared = hya_mcp::prepare("http".into(), url_config(port))
-        .await
-        .expect("streamable http server connects");
-
-    let ctx = ctx_allowing_mcp();
-    let fail = prepared
-        .tools()
-        .into_iter()
-        .find(|tool| tool.name().ends_with("__fail_tool"))
-        .expect("fail_tool registered");
-    let err = fail
-        .execute(&ctx, json!({}))
+    let err = call_tool_result(&prepared, "__fail_tool", json!({}))
         .await
         .expect_err("isError result is a tool error");
     assert!(err.to_string().contains("deliberate tool failure"));
 
-    let rpc = prepared
-        .tools()
-        .into_iter()
-        .find(|tool| tool.name().ends_with("__rpc_error"))
-        .expect("rpc_error registered");
-    let err = rpc
-        .execute(&ctx, json!({}))
+    let err = call_tool_result(&prepared, "__rpc_error", json!({}))
         .await
         .expect_err("json-rpc error is a tool error");
     assert!(err.to_string().contains("deliberate failure"));
+
+    // Raw client skipping initialize has no Mcp-Session-Id -> server returns 404.
+    let raw = hya_mcp::McpClient::connect_streamable_http(format!("http://127.0.0.1:{port}/mcp"))
+        .expect("client builds");
+    let err = raw
+        .call("tools/list", json!({}), Duration::from_secs(5))
+        .await
+        .expect_err("session-less call must fail");
+    assert!(err.to_string().contains("404"), "got: {err}");
+
+    // Slow tool exceeding configured timeout returns a typed timeout error.
+    let short_timeout = McpServerConfig {
+        timeout_ms: Some(80),
+        ..url_config(port)
+    };
+    let timed = hya_mcp::prepare("http".into(), short_timeout)
+        .await
+        .expect("connects");
+    let err = call_tool_result(&timed, "__slow", json!({ "seconds": 5 }))
+        .await
+        .expect_err("5s sleep inside an 80ms budget times out");
+    assert!(err.to_string().contains("timed out"), "got: {err}");
 }
 
 #[tokio::test]
@@ -199,7 +194,28 @@ async fn streamable_http_stateless_server_connects_without_sessions() {
 }
 
 #[tokio::test]
-async fn classic_http_sse_connects_and_calls_tool() {
+async fn streamable_http_surfaces_http_500_and_malformed_json() {
+    for (flag, expected_substrings) in [
+        ("--fail5xx", &["500", "deliberate"][..]),
+        ("--malformed", &["json"][..]),
+    ] {
+        let (port, _server) = spawn_fixture(STREAMABLE_FIXTURE, &[flag]);
+        let err = match hya_mcp::prepare("http".into(), url_config(port)).await {
+            Err(error) => error,
+            Ok(_) => panic!("{flag} must fail prepare"),
+        };
+        let msg = err.to_string();
+        for needle in expected_substrings {
+            assert!(
+                msg.contains(needle),
+                "{flag}: expected `{needle}` in `{msg}`"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn classic_http_sse_connects_calls_tool_and_surfaces_error_paths() {
     let (port, _server) = spawn_fixture(SSE_FIXTURE, &[]);
     let config = McpServerConfig {
         url: Some(format!("http://127.0.0.1:{port}/sse")),
@@ -218,26 +234,35 @@ async fn classic_http_sse_connects_and_calls_tool() {
             .any(|tool| tool.name() == "mcp__sse__ping"),
         "ping tool registered"
     );
-    let out = call_tool(&prepared, "__ping", json!({ "msg": "sse" })).await;
-    assert_eq!(out["output"], "pong:sse");
+    assert_eq!(
+        call_tool(&prepared, "__ping", json!({ "msg": "sse" })).await["output"],
+        "pong:sse"
+    );
+
+    let err = call_tool_result(&prepared, "__fail_tool", json!({}))
+        .await
+        .expect_err("isError becomes a tool error");
+    assert!(err.to_string().contains("deliberate tool failure"));
+
+    let err = call_tool_result(&prepared, "__rpc_error", json!({}))
+        .await
+        .expect_err("json-rpc error becomes a tool error");
+    assert!(err.to_string().contains("deliberate failure"));
 }
 
-// --- error handling across transports ---
-
 #[tokio::test]
-async fn streamable_http_connection_refused_fails_prepare() {
+async fn http_transports_connection_refused_fail_with_io_error() {
     let port = free_port();
-    let error = match hya_mcp::prepare("http".into(), url_config(port)).await {
+    let streamable_err = match hya_mcp::prepare("http".into(), url_config(port)).await {
         Err(error) => error,
         Ok(_) => panic!("no listener on port, prepare must fail"),
     };
-    assert!(error.to_string().contains("io"), "got: {error}");
-}
+    assert!(
+        streamable_err.to_string().contains("io"),
+        "got: {streamable_err}"
+    );
 
-#[tokio::test]
-async fn classic_sse_connection_refused_fails_connect() {
-    let port = free_port();
-    let error = match hya_mcp::McpClient::connect_classic_sse(&format!(
+    let sse_err = match hya_mcp::McpClient::connect_classic_sse(&format!(
         "http://127.0.0.1:{port}/sse"
     ))
     .await
@@ -245,104 +270,12 @@ async fn classic_sse_connection_refused_fails_connect() {
         Err(error) => error,
         Ok(_) => panic!("no listener on port, connect must fail"),
     };
-    assert!(error.to_string().contains("io"), "got: {error}");
-}
-
-#[tokio::test]
-async fn streamable_http_without_initialize_session_surfaces_404() {
-    let (port, _server) = spawn_fixture(STREAMABLE_FIXTURE, &[]);
-    // A raw client that skips initialize has no Mcp-Session-Id; the server
-    // must reject it with 404 and the client must surface a typed error.
-    let client =
-        hya_mcp::McpClient::connect_streamable_http(format!("http://127.0.0.1:{port}/mcp"))
-            .expect("client builds");
-    let error = client
-        .call("tools/list", json!({}), Duration::from_secs(5))
-        .await
-        .expect_err("session-less call must fail");
-    assert!(error.to_string().contains("404"), "got: {error}");
-}
-
-#[tokio::test]
-async fn streamable_http_surfaces_http_500_from_tools_list() {
-    let (port, _server) = spawn_fixture(STREAMABLE_FIXTURE, &["--fail5xx"]);
-    let error = match hya_mcp::prepare("http".into(), url_config(port)).await {
-        Err(error) => error,
-        Ok(_) => panic!("tools/list 500 must fail prepare"),
-    };
-    assert!(
-        error.to_string().contains("500") && error.to_string().contains("deliberate"),
-        "got: {error}"
-    );
-}
-
-#[tokio::test]
-async fn streamable_http_surfaces_malformed_json_body() {
-    let (port, _server) = spawn_fixture(STREAMABLE_FIXTURE, &["--malformed"]);
-    let error = match hya_mcp::prepare("http".into(), url_config(port)).await {
-        Err(error) => error,
-        Ok(_) => panic!("malformed tools/list body must fail prepare"),
-    };
-    assert!(error.to_string().contains("json"), "got: {error}");
-}
-
-#[tokio::test]
-async fn streamable_http_call_timeout_is_typed() {
-    let (port, _server) = spawn_fixture(STREAMABLE_FIXTURE, &[]);
-    let config = McpServerConfig {
-        timeout_ms: Some(200),
-        ..url_config(port)
-    };
-    let prepared = hya_mcp::prepare("http".into(), config)
-        .await
-        .expect("connects");
-    let error = call_tool_result(&prepared, "__slow", json!({ "seconds": 5 }))
-        .await
-        .expect_err("5s sleep inside a 200ms budget times out");
-    assert!(error.to_string().contains("timed out"), "got: {error}");
-}
-
-#[tokio::test]
-async fn classic_sse_surfaces_tool_error_paths() {
-    let (port, _server) = spawn_fixture(SSE_FIXTURE, &[]);
-    let config = McpServerConfig {
-        url: Some(format!("http://127.0.0.1:{port}/sse")),
-        transport: Some("sse".into()),
-        timeout_ms: Some(5000),
-        ..McpServerConfig::default()
-    };
-    let prepared = hya_mcp::prepare("sse".into(), config)
-        .await
-        .expect("connects");
-    let ctx = ctx_allowing_mcp();
-
-    let fail = prepared
-        .tools()
-        .into_iter()
-        .find(|tool| tool.name().ends_with("__fail_tool"))
-        .expect("fail_tool registered");
-    let err = fail
-        .execute(&ctx, json!({}))
-        .await
-        .expect_err("isError becomes a tool error");
-    assert!(err.to_string().contains("deliberate tool failure"));
-
-    let rpc = prepared
-        .tools()
-        .into_iter()
-        .find(|tool| tool.name().ends_with("__rpc_error"))
-        .expect("rpc_error registered");
-    let err = rpc
-        .execute(&ctx, json!({}))
-        .await
-        .expect_err("json-rpc error becomes a tool error");
-    assert!(err.to_string().contains("deliberate failure"));
+    assert!(sse_err.to_string().contains("io"), "got: {sse_err}");
 }
 
 #[tokio::test]
 async fn stdio_server_exit_mid_call_surfaces_closed() {
     use hya_mcp::McpClient;
-    use std::process::Stdio;
     use tokio::process::Command as AsyncCommand;
 
     // The child exits without answering: the reader sees EOF while a request

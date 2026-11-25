@@ -16,180 +16,124 @@ fn preference(agent: &str, provider_id: &str, model_id: &str) -> AgentModelPrefe
     }
 }
 
-fn temp_db() -> String {
-    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir()
-        .join(format!(
-            "hya-agent-model-preference-{nanos}-{}-{id}.db",
-            std::process::id()
-        ))
-        .to_string_lossy()
-        .into_owned()
+struct TempDb(String);
+
+impl TempDb {
+    fn new() -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        Self(
+            std::env::temp_dir()
+                .join(format!(
+                    "hya-agent-model-preference-{nanos}-{}-{id}.db",
+                    std::process::id()
+                ))
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+}
+
+impl Drop for TempDb {
+    fn drop(&mut self) {
+        for suffix in ["", "-wal", "-shm", ".runtime-owner.lock"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", self.0));
+        }
+    }
 }
 
 #[tokio::test]
-async fn preferences_require_the_runtime_owner_and_remain_isolated() {
-    let store = SessionStore::connect_memory().await.unwrap();
+async fn preferences_require_owner_persist_across_reopen_and_handle_concurrent_writes() {
+    let db = TempDb::new();
     let owner = OwnerRunId::new();
     let build = preference("build", "openai", "gpt-5.6-sol");
     let general = preference("general", "anthropic", "claude-opus-4-1");
-
-    let error = store
-        .upsert_agent_model_preference(owner, &build)
-        .await
-        .expect_err("claim-less preference mutation must fail closed");
-    assert!(matches!(error, StoreError::RuntimeOwnerClaimRequired));
-
-    store
-        .claim_runtime_owner(owner)
-        .expect("claim runtime owner");
-    store
-        .upsert_agent_model_preference(owner, &general)
-        .await
-        .unwrap();
-    store
-        .upsert_agent_model_preference(owner, &build)
-        .await
-        .unwrap();
-
-    assert_eq!(
-        store.list_agent_model_preferences().await.unwrap(),
-        vec![build.clone(), general]
-    );
-
     let replacement = preference("build", "openai", "gpt-5.6-pro");
-    store
-        .upsert_agent_model_preference(owner, &replacement)
-        .await
-        .unwrap();
-    assert_eq!(
-        store.list_agent_model_preferences().await.unwrap(),
-        vec![
-            replacement,
-            preference("general", "anthropic", "claude-opus-4-1")
-        ]
-    );
-
-    store
-        .remove_agent_model_preference(owner, &AgentName::new("build"))
-        .await
-        .unwrap();
-    store
-        .remove_agent_model_preference(owner, &AgentName::new("build"))
-        .await
-        .unwrap();
-    assert_eq!(
-        store.list_agent_model_preferences().await.unwrap(),
-        vec![preference("general", "anthropic", "claude-opus-4-1")]
-    );
-}
-
-#[tokio::test]
-async fn preferences_survive_a_file_backed_store_reopen() {
-    let path = temp_db();
-    let build = preference("build", "anthropic", "claude-opus-4-1");
-    let general = preference("general", "openai", "openai/gpt-5.6-sol");
 
     {
-        let store = SessionStore::connect(&path).await.unwrap();
-        let owner = OwnerRunId::new();
+        let store = SessionStore::connect(&db.0).await.unwrap();
+        assert!(matches!(
+            store.upsert_agent_model_preference(owner, &build).await,
+            Err(StoreError::RuntimeOwnerClaimRequired)
+        ));
+        store.claim_runtime_owner(owner).unwrap();
+        let (r1, r2) = tokio::join!(
+            store.upsert_agent_model_preference(owner, &build),
+            store.upsert_agent_model_preference(owner, &general),
+        );
+        r1.unwrap();
+        r2.unwrap();
+        assert_eq!(
+            store.list_agent_model_preferences().await.unwrap(),
+            vec![build.clone(), general.clone()]
+        );
+
         store
-            .claim_runtime_owner(owner)
-            .expect("claim first runtime owner");
-        store
-            .upsert_agent_model_preference(owner, &general)
+            .upsert_agent_model_preference(owner, &replacement)
             .await
             .unwrap();
-        store
-            .upsert_agent_model_preference(owner, &build)
-            .await
-            .unwrap();
+        assert_eq!(
+            store.list_agent_model_preferences().await.unwrap(),
+            vec![replacement.clone(), general.clone()]
+        );
     }
 
-    let reopened = SessionStore::connect(&path).await.unwrap();
+    let reopened = SessionStore::connect(&db.0).await.unwrap();
     assert_eq!(
         reopened.list_agent_model_preferences().await.unwrap(),
-        vec![build, general]
+        vec![replacement, general.clone()]
     );
-}
-
-/// Exact identity bounds fail before SQLite mutation, while boundary values remain valid.
-#[tokio::test]
-async fn preferences_validate_identity_bounds_before_mutation() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let owner = OwnerRunId::new();
-    store
-        .claim_runtime_owner(owner)
-        .expect("claim runtime owner");
-
-    let boundary = preference(&"a".repeat(1_024), &"p".repeat(1_024), &"m".repeat(4_096));
-    store
-        .upsert_agent_model_preference(owner, &boundary)
+    let next_owner = OwnerRunId::new();
+    reopened.claim_runtime_owner(next_owner).unwrap();
+    reopened
+        .remove_agent_model_preference(next_owner, &AgentName::new("build"))
         .await
-        .expect("boundary-sized preference must be accepted");
-
-    let invalid = [
-        preference("", "hya", "offline"),
-        preference(&"a".repeat(1_025), "hya", "offline"),
-        preference("build", "", "offline"),
-        preference("build", &"p".repeat(1_025), "offline"),
-        preference("build", "hya", ""),
-        preference("build", "hya", &"m".repeat(4_097)),
-    ];
-    for candidate in invalid {
-        let error = store
-            .upsert_agent_model_preference(owner, &candidate)
-            .await
-            .expect_err("invalid preference identity must fail closed");
-        assert!(matches!(error, StoreError::InvalidPreferenceData { .. }));
-    }
-
+        .unwrap();
+    reopened
+        .remove_agent_model_preference(next_owner, &AgentName::new("build"))
+        .await
+        .unwrap();
     assert_eq!(
-        store.list_agent_model_preferences().await.unwrap(),
-        vec![boundary]
-    );
-}
-
-/// Concurrent valid clients preserve disjoint Agent rows under the serialized writer boundary.
-#[tokio::test]
-async fn concurrent_disjoint_preferences_are_not_lost() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let owner = OwnerRunId::new();
-    store
-        .claim_runtime_owner(owner)
-        .expect("claim runtime owner");
-    let build = preference("build", "hya", "offline");
-    let general = preference("general", "openai", "gpt-5.6-sol");
-    let build_store = store.clone();
-    let general_store = store.clone();
-
-    let (build_result, general_result) = tokio::join!(
-        build_store.upsert_agent_model_preference(owner, &build),
-        general_store.upsert_agent_model_preference(owner, &general),
-    );
-    build_result.expect("first disjoint preference must commit");
-    general_result.expect("second disjoint preference must commit");
-
-    assert_eq!(
-        store.list_agent_model_preferences().await.unwrap(),
-        vec![build, general]
+        reopened.list_agent_model_preferences().await.unwrap(),
+        vec![general]
     );
 }
 
 #[tokio::test]
-async fn preferences_reject_blank_identities_and_preserve_nonblank_values() {
+async fn preferences_validate_bounds_blank_identities_and_legacy_rows() {
     let store = SessionStore::connect_memory().await.unwrap();
     let owner = OwnerRunId::new();
     store.claim_runtime_owner(owner).unwrap();
 
-    for (candidate, invalid_field) in [
+    // Boundary-sized and padded non-blank values are accepted verbatim.
+    let boundary = preference(&"a".repeat(1_024), &"p".repeat(1_024), &"m".repeat(4_096));
+    let exact = preference(" build ", " hya ", " offline ");
+    store
+        .upsert_agent_model_preference(owner, &boundary)
+        .await
+        .unwrap();
+    store
+        .upsert_agent_model_preference(owner, &exact)
+        .await
+        .unwrap();
+
+    // Out-of-bounds and blank identities fail closed before mutation.
+    for (candidate, expected_field) in [
+        (preference("", "hya", "offline"), "agent_id"),
+        (preference(&"a".repeat(1_025), "hya", "offline"), "agent_id"),
         (preference(" \t", "hya", "offline"), "agent_id"),
+        (preference("build", "", "offline"), "provider_id"),
+        (
+            preference("build", &"p".repeat(1_025), "offline"),
+            "provider_id",
+        ),
         (preference("build", " \t", "offline"), "provider_id"),
+        (preference("build", "hya", ""), "model_id"),
+        (preference("build", "hya", &"m".repeat(4_097)), "model_id"),
         (preference("build", "hya", " \t"), "model_id"),
     ] {
         let error = store
@@ -197,39 +141,30 @@ async fn preferences_reject_blank_identities_and_preserve_nonblank_values() {
             .await
             .unwrap_err();
         assert!(
-            matches!(error, StoreError::InvalidPreferenceData { field, .. } if field == invalid_field)
+            matches!(error, StoreError::InvalidPreferenceData { field, .. } if field == expected_field),
+            "expected {expected_field}, got {error:?}"
         );
     }
-    let blank_agent = AgentName::new(" \t");
     assert!(matches!(
         store
-            .remove_agent_model_preference(owner, &blank_agent)
+            .remove_agent_model_preference(owner, &AgentName::new(" \t"))
             .await,
         Err(StoreError::InvalidPreferenceData {
             field: "agent_id",
             ..
         })
     ));
-
-    let exact = preference(" build ", " hya ", " offline ");
-    store
-        .upsert_agent_model_preference(owner, &exact)
-        .await
-        .unwrap();
     assert_eq!(
         store.list_agent_model_preferences().await.unwrap(),
-        vec![exact]
+        vec![exact, boundary]
     );
-}
 
-#[tokio::test]
-async fn preferences_reject_legacy_rows_with_blank_identities() {
-    let store = SessionStore::connect_memory().await.unwrap();
+    // Legacy rows with blank identities fail closed on read.
     let mut tx = store.begin_transaction().await.unwrap();
     sqlx::query(
         "INSERT INTO agent_model_preference (agent_id, provider_id, model_id) VALUES (?, ?, ?)",
     )
-    .bind("build")
+    .bind("legacy")
     .bind(" \t")
     .bind("offline")
     .execute(&mut *tx)

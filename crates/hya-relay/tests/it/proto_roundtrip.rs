@@ -15,32 +15,22 @@ fn round_trip<M: Message + Default + PartialEq + std::fmt::Debug>(message: M) {
 }
 
 #[test]
-fn host_frames_round_trip() {
-    round_trip(HostFrame {
-        frame: Some(host_frame::Frame::Register(Register {
+fn all_frames_round_trip_and_opened_uses_field_7() {
+    for frame in [
+        host_frame::Frame::Register(Register {
             ed25519_pubkey: vec![7; 32],
             signature: vec![9; 64],
             open_token_hash: vec![3; 32],
-        })),
-    });
-    round_trip(HostFrame {
-        frame: Some(host_frame::Frame::UpdateOpenToken(
-            hya_relay::proto::UpdateOpenToken {
-                open_token_hash: vec![4; 32],
-                signature: vec![5; 64],
-            },
-        )),
-    });
-    round_trip(HostFrame {
-        frame: Some(host_frame::Frame::Heartbeat(Heartbeat {
-            seq: 3,
-            pong: true,
-        })),
-    });
-}
+        }),
+        host_frame::Frame::UpdateOpenToken(hya_relay::proto::UpdateOpenToken {
+            open_token_hash: vec![4; 32],
+            signature: vec![5; 64],
+        }),
+        host_frame::Frame::Heartbeat(Heartbeat { seq: 3, pong: true }),
+    ] {
+        round_trip(HostFrame { frame: Some(frame) });
+    }
 
-#[test]
-fn proxy_to_host_frames_round_trip() {
     for frame in [
         proxy_to_host::Frame::Challenge(Challenge { nonce: vec![1; 32] }),
         proxy_to_host::Frame::Registered(Registered {
@@ -61,10 +51,7 @@ fn proxy_to_host_frames_round_trip() {
     ] {
         round_trip(ProxyToHost { frame: Some(frame) });
     }
-}
 
-#[test]
-fn chunk_frames_round_trip() {
     for frame in [
         chunk::Frame::Open(Open {
             room_id: "abcdefghijklmnopqrstuvwxyz".into(),
@@ -84,10 +71,7 @@ fn chunk_frames_round_trip() {
     ] {
         round_trip(Chunk { frame: Some(frame) });
     }
-}
 
-#[test]
-fn opened_ack_uses_a_new_field_number() {
     // `opened` is field 7 of `Chunk`: tag byte (7 << 3) | 2 = 0x3a, length 0.
     let bytes = Chunk {
         frame: Some(chunk::Frame::Opened(Opened {})),
@@ -137,13 +121,11 @@ fn register_signing_message_is_domain_separated_and_versioned() {
     assert_eq!(message.len(), b"hya.relay.v1/register/v2\0".len() + 32 + 32);
     assert_eq!(&message[message.len() - 64..message.len() - 32], &nonce);
     assert!(message.ends_with(&hash));
-    // Never a v1 message (context || nonce) or an open-token update.
     assert!(!message.starts_with(b"hya.relay.v1/register\0"));
     let update = hya_relay::proto::update_open_token_signing_message(&nonce, &hash);
     assert!(update.starts_with(b"hya.relay.v1/update-open-token/v1\0"));
     assert!(update.ends_with(&hash));
     assert_ne!(update, message);
-    // A different hash signs different bytes.
     assert_ne!(
         hya_relay::proto::register_signing_message(&nonce, &[8u8; 32]),
         message
