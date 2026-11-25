@@ -28,7 +28,6 @@ use hya_tool::{
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
-use tracing::instrument::WithSubscriber;
 
 #[test]
 fn bare_deadline_notices() {
@@ -1273,6 +1272,10 @@ async fn flaky_fixture(
     fake: Vec<Vec<FakeStep>>,
     failures: Vec<Attempt>,
 ) -> (Fixture, Arc<Flaky>) {
+    // A scoped subscriber can miss the retry callsite if another test first
+    // reaches it without a subscriber. Keep one subscriber for the process.
+    static RETRY_SUBSCRIBER: std::sync::Once = std::sync::Once::new();
+    RETRY_SUBSCRIBER.call_once(|| tracing::subscriber::set_global_default(RetryEvents).unwrap());
     let mut fx = fixture(name, FakeProvider::scripted_turns(Vec::new())).await;
     let flaky = Arc::new(Flaky {
         fake: FakeProvider::scripted_turns(fake),
@@ -1337,16 +1340,24 @@ impl RetryClock {
     }
 }
 
-impl tracing::Subscriber for RetryClock {
+tokio::task_local! {
+    static ACTIVE_RETRY_CLOCK: RetryClock;
+}
+
+struct RetryEvents;
+
+impl tracing::Subscriber for RetryEvents {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
         metadata.name() == "bare_round_retry"
     }
 
     fn event(&self, _: &tracing::Event<'_>) {
         // The kernel has checked the durable projection and is about to sleep.
-        let mut state = self.0.lock().unwrap();
-        let wait = state.pending.as_mut().unwrap();
-        drop(wait.hold_clock.take());
+        let _ = ACTIVE_RETRY_CLOCK.try_with(|clock| {
+            let mut state = clock.0.lock().unwrap();
+            let wait = state.pending.as_mut().unwrap();
+            drop(wait.hold_clock.take());
+        });
     }
 
     fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
@@ -1372,9 +1383,12 @@ impl Flaky {
                 self.clock.pause();
             }
         };
-        let finish = fx
-            .turn_with_publish(prompt, &CancellationToken::new(), &publish)
-            .with_subscriber(self.clock.clone())
+        let cancel = CancellationToken::new();
+        let finish = ACTIVE_RETRY_CLOCK
+            .scope(
+                self.clock.clone(),
+                fx.turn_with_publish(prompt, &cancel, &publish),
+            )
             .await;
         self.clock.finish_wait();
         finish
