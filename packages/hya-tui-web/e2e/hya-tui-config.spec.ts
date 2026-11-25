@@ -23,6 +23,7 @@ async function belowInput(term: Tui, anchor = input): Promise<string> {
 async function command(term: Tui, text: string): Promise<void> {
   await term.press("Control+x")
   await term.type(text)
+  await term.waitForText("Commands")
   await term.press("Enter")
   await expect.poll(() => term.find("Commands")).toBeNull()
 }
