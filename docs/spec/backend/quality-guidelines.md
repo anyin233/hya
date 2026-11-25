@@ -132,12 +132,12 @@ Ok(Json(response))
 
 ### 6. Tests Required
 
-- Route tests (`crates/hya-server/tests/it/v1_api.rs`) assert the Interaction
+- Route tests (`crates/hya-server/tests/it/v1_interactions_and_tools.rs`) assert the Interaction
   field sets, type/session filters, duplicate `applied: false`, and
   unknown-id `not_found`.
 - Stream tests assert `permissionRequested`/`questionRequested`/
   `interactionResolved` ordering relative to pending insertion/removal.
-- Process E2E (Track P `p03_permissions`, `p04_questions`) covers the
+- Process E2E (Track P `p02_permissions_and_questions.rs`) covers the
   once/reject and reply flows through the real binary.
 
 ### 7. Wrong vs Correct

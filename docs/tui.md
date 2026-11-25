@@ -4419,7 +4419,7 @@ menu, a mode chosen before the session exists, a bundle mode from a project
 bundle whose Bun `permission.approve` hook allows `echo` and defers `ls`,
 `!command` shell turns running without a prompt in `manual` and `yolo`,
 and about 80 columns.
-`e2e/hya-tui-launch.spec.ts` covers the one-command launch: no `--server`
+`e2e/hya-tui-launch-daemon.spec.ts` covers the one-command launch: no `--server`
 (`HYA_BIN` = the binary under test, an isolated HOME/XDG from the
 `workspace` fixture), a prompt end to end, `/exit` and a closed tab
 (SIGHUP) leaving no `hya serve` process (checked by pid), `--continue`, a

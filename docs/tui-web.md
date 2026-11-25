@@ -515,19 +515,18 @@ text wait does not guarantee a later screen read still contains the field.
 ### CI
 
 `.github/workflows/ci.yml`'s `tui` job runs this suite on every push and pull
-request, alongside the Rust `lint`, `test`, and `e2e` jobs and the `frontend`
-job. Both Bun jobs install the pinned Bun (the same `bun-v1.4.2` install used
-by the release workflow) and run `bun install --frozen-lockfile` in
+request, alongside the Rust `lint`, `build-bin`, `test`, and `e2e` jobs and the
+`frontend` job. Both Bun jobs install the pinned Bun (the same `bun-v1.4.2`
+install used by the release workflow) and run `bun install --frozen-lockfile` in
 `packages/hya-tui`, `packages/hya-tui-web`, `packages/hya-tui-sdk`, and the two
 adapters. `frontend` needs no Rust build: it runs `bun run typecheck && bun test`
-in each package (`bun test ./test` in `hya-tui-web`). `tui` precompiles the TUI
+in each package (`bun test ./test` in `hya-tui-web`). `tui` downloads the
+prebuilt `hya`, `xtask`, and lockstep native bundle `.so` libraries from
+`build-bin` (avoiding a duplicate Rust build), precompiles the TUI
 (`bun run build` in `packages/hya-tui`), so every launch of the suite runs
-`dist/app.js` as a release does instead of transforming the JSX sources again;
-a local run uses the sources unless `dist/` exists. It then builds `hya` and the
-bundle packager
-(`cargo build --locked -p hya-backend --bin hya -p xtask --bin xtask`)
-with the same Rust toolchain/cache actions as the Rust jobs, sets `HYA_BIN` to
-that binary, and runs `bun run test:tui-exp` from `packages/hya-tui-web`.
+`dist/app.js` as a release does instead of transforming the JSX sources again
+(a local run uses the sources unless `dist/` exists), sets `HYA_BIN` to that
+binary, and runs `bun run test:tui-exp` from `packages/hya-tui-web`.
 The required CI matrix sets `HYA_TUI_EXP_WORKERS=4` and uses no retries.
 The direct runner defaults to four workers locally; `HYA_TUI_EXP_WORKERS`
 is the positive integer worker count, also overridable with `--workers=N`.

@@ -218,8 +218,9 @@ jobs:
       - name: precompile the TUI
         working-directory: packages/hya-tui
         run: bun run build
-      # e2e/hya-tui.spec.ts and e2e/hya-tui-launch.spec.ts start target/debug/hya
-      # (downloaded from `build-bin`), and disk-inspector runs target/debug/xtask.
+      # e2e/hya-tui.spec.ts and e2e/hya-tui-launch-daemon.spec.ts start
+      # target/debug/hya (downloaded from `build-bin`), and
+      # e2e/hya-tui-bundles-ext.spec.ts runs target/debug/xtask.
       - name: direct PTY protocol checks and full terminal suite
         if: ${{ !cancelled() }}
         working-directory: packages/hya-tui-web
