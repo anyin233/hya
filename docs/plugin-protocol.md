@@ -1003,7 +1003,8 @@ with `Child::wait` on the active runtime, without spawning a kill utility.
 
 ### Activation process adapter
 
-`hya_app::runtime::sidecar` owns private activation startup and lifetime.
+The app’s bundle runtime owns activation startup and lifetime. The public
+Rust API is available through `hya_app::runtime::sidecar`.
 It creates the activation directory, connects through `PluginHost`, terminates a
 process whose exports fail validation, and returns a core `SidecarHandle` with
 the selected tools/hooks and the process loss token. Shutdown and termination

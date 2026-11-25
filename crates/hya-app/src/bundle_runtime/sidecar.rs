@@ -12,6 +12,7 @@ use hya_plugin::messages::{HookName, HookRegistration};
 use hya_tool::{ResolvedTool, ToolPermission};
 
 mod activation;
+pub(crate) mod environment;
 pub use activation::{ActivationBindings, start_activation_sidecar};
 /// Materialize the selected captured bundle extension closure into an activation directory.
 pub fn materialize_bundle_sidecar_resources(
