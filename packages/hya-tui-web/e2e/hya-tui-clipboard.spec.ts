@@ -50,7 +50,10 @@ test.describe("copy", () => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     await captureOsc52(term)
-    await prompt(term, "/copy")
+    await term.type("/copy")
+    await term.waitForText("▸ /copy")
+    await term.press("Enter")
+    await expect.poll(() => term.find("Commands")).toBeNull()
     expect(await copied(term)).toEqual([])
 
     await prompt(term, "say it")
