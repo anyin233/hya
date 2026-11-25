@@ -77,7 +77,7 @@
  * `/resume` and `--resume` unarchive and open one (app/resume.ts).
  */
 import { SessionViews } from "./sessionViews"
-import { HttpError, type HyaClient, type Interaction, type MessageInfo, type ProjectInfo, type PromptAttachment, type CommandSummary, type SessionInfo, type SkillListing, type StreamEvent, type StreamFrame } from "../client"
+import { type HyaClient, type Interaction, type MessageInfo, type ProjectInfo, type PromptAttachment, type CommandSummary, type SessionInfo, type SkillListing, type StreamEvent, type StreamFrame } from "../client"
 import { completeCommand } from "../completion"
 import { createCommandRegistry, mergeCommandEntries, openModelPicker, selectAgent, toBackground, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
 import {
@@ -102,8 +102,8 @@ import type { Chip } from "../composer/chips"
 import { shellCommand } from "../composer/shell"
 import type { KeyLike } from "../keys/bindings"
 import { helpPickerHint, helpPickerRows } from "../commands"
-import { initialSessionId } from "../launch"
-import { askSessionLabel, currentModel, modelReference, otherAskNotice, webNotice } from "../state/format"
+import { createBackendLifecycle } from "./backendLifecycle"
+import { askSessionLabel, currentModel, modelReference, otherAskNotice } from "../state/format"
 import { childActivity, childSessionIds } from "../state/members"
 import { subagentRows } from "../state/subagents"
 import { editText } from "../composer/editor"
@@ -135,13 +135,10 @@ import type { AppStore } from "../state/store"
 import { errorLine } from "../state/projectCommands"
 import { createDebounce } from "./debounce"
 import { createTurnRunner, turnEndStatus } from "./turns"
-import { createReconnector, type ServerSwitch } from "./reconnect"
+import type { ServerSwitch } from "./reconnect"
 import { createSessionKeeper, type ExitMode } from "./sessionKeeper"
 import { createResumer } from "./resume"
-import { probeHealth } from "../launch"
-import { backendVersionError, tuiVersion } from "../version"
 import { containsRelayLink, parseConnectRemote, redactRelayLinks, type Bridge, type BridgeFlags } from "../bridge"
-import { stripTerminalControls } from "../sanitize"
 import { SecretEntry } from "../completion"
 
 /** Overlay flush interval: coalesces stream deltas into one render per display frame. */
@@ -158,12 +155,6 @@ const globalRetryMs = 800
 const globalRetryMaxMs = 15_000
 /** Longest wait on exit for archiving the open session (a graceful exit of a used session only). */
 const archiveOnExitMs = 2_000
-
-
-function requireCompatibleBackend(version: string | undefined): void {
-  const error = backendVersionError(version ?? "")
-  if (error) throw new Error(error)
-}
 export interface ControllerOptions {
   client: HyaClient
   store: AppStore
@@ -249,18 +240,13 @@ const helpMaxRows = 40
 /** One attachment file read: its size and (within the per-file cap) its base64 bytes, or why it could not be read. */
 type FileRead = { size: number; data?: string } | { error: string }
 
-/** How long the startup list waits for MCP servers that are still connecting, and how often it asks. */
-const mcpSettleMs = 10_000
-const mcpPollMs = 500
 
 /** Paths requested per `@file` lookup; the best `fileSuggestionLimit` are shown. */
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
 
-export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, preferredPermissionMode, terminal, env = process.env, reconnect, find, onRestarted, refreshExtensions, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home, onScopeChanged, interceptSubmit, structure, reloadTui }: ControllerOptions) {
-  /** No `EnsureProjectForPath`; new sessions need a chosen Project: `--remote`, or connected through `/connect-remote`. */
+export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, preferredPermissionMode, terminal, env = process.env, reconnect, find, onRestarted, refreshExtensions, probe, bridge: startRemoteBridge, home, onScopeChanged, interceptSubmit, structure, reloadTui }: ControllerOptions) {
   const sessionViews = new SessionViews(client)
-  let remote = startedRemote
   let streamAbort: AbortController | undefined
   let globalAbort: AbortController | undefined
   /** Asks a desktop notification was considered for: the open tree's asks arrive on both streams. */
@@ -278,18 +264,9 @@ export function createController({ client, store, directory, remote: startedRemo
   let childAgain = false
   let lastChildRead = 0
   let unsubscribeFocus: (() => void) | undefined
-  /** The relay bridge child of `/connect-remote` while it runs (app/run.tsx; src/bridge.ts). */
-  let remoteBridge: Bridge | undefined
-  /** The bridge child exited on its own: the TUI stays on the (dead) remote until `/connect-remote` or `/disconnect-remote`. */
-  let bridgeDown = false
-  let connectingRemote = false
-  /** The catalogs could not be read when the remote was entered (backend offline): read them when the global stream opens. */
-  let catalogStale = false
   /** `/connect-remote` without a link: the concealed entry's text (never in the store). */
   const secret = new SecretEntry()
   let secretFlags: BridgeFlags = {}
-  /** A remote backend reached through `/connect-remote`'s bridge (running or exited). */
-  const viaBridge = (): boolean => remoteBridge !== undefined || bridgeDown || connectingRemote
   /** The server as the user should see it: a label (the remote) replaces the loopback bridge URL. */
   function shownServerText(text: string): string {
     const label = store.state.serverLabel
@@ -299,6 +276,14 @@ export function createController({ client, store, directory, remote: startedRemo
   }
   /** Status line text never carries the loopback bridge URL (a label replaces it) or a relay link's secret. */
   const status = (text: string): void => store.setStatus(redactRelayLinks(shownServerText(text)))
+
+  const backend = createBackendLifecycle({
+    client, store, directory, startedRemote, startup, connectionHint, reconnect, find, onRestarted, probe,
+    startRemoteBridge, home, onScopeChanged, status, isClosing: () => closing, refresh, refreshVcs,
+    subscribeFocus: () => { unsubscribeFocus = terminal?.onFocusChange?.((focused) => store.setFocused(focused)) },
+    startGlobalStream, startStream, stopGlobalStream: () => globalAbort?.abort(), leaveOpenSession,
+    activateProject, openProjectOverlay, openSession, newSession, resume: (id, onCancel) => resumer.resume(id, onCancel),
+  })
 
   /** Desktop notifications (src/notify.ts): only while unfocused and the preference is on. */
   function sendNotification(kind: NotifyKind, detail: string): void {
@@ -613,28 +598,8 @@ export function createController({ client, store, directory, remote: startedRemo
     store.setMessages(sessionId, store.state.messages)
   }
 
-  /** `serverStopping` (live, empty `session`): the last frame before the server ends this stream. */
-  function onStopping(event: StreamEvent | undefined): boolean {
-    if (!event?.serverStopping) return false
-    // A remote backend stopping: its host brings it back; nothing local is found or started.
-    if (viaBridge()) status(`Remote backend stopping (${event.serverStopping.reason || "no reason"}) · the TUI reconnects when it is back`)
-    else reconnector?.stopping(client.baseUrl, event.serverStopping.reason ?? "")
-    return true
-  }
-
-  /**
-   * A stream failed or ended. A local server may be gone: the reconnector
-   * checks and replaces it. Through the relay bridge the URL is fixed (the
-   * bridge answers 503 while the remote is offline): the streams keep
-   * retrying it, and no local daemon is ever found or started.
-   */
-  function serverLost(): void {
-    if (viaBridge()) return
-    void reconnector?.lost()
-  }
-
   async function onFrame(frame: StreamFrame, sessionId: string): Promise<void> {
-    if (onStopping(frame.event)) return
+    if (backend.onStopping(frame.event)) return
     if (store.state.selected?.id !== sessionId) return
     if (frame.resync) {
       store.markLiveLost()
@@ -672,13 +637,13 @@ export function createController({ client, store, directory, remote: startedRemo
             ready()
           }, true)
         } catch (error) {
-          if (!controller.signal.aborted && !reconnector?.busy()) store.setConnected(false)
+          if (!controller.signal.aborted && !backend.reconnectBusy()) store.setConnected(false)
           // A stopped TUI keeps its `Backend stopped` notice while the stream retries.
-          if (!controller.signal.aborted && !reconnector?.busy() && !reconnector?.stopped() && !bridgeDown) status(`Stream reconnecting: ${String(error)}`)
+          if (!controller.signal.aborted && !backend.reconnectBusy() && !backend.reconnectStopped() && !backend.bridgeDown) status(`Stream reconnecting: ${String(error)}`)
         }
         ready()
         // Ended or failed: the server may be gone (stopped, restarted, crashed).
-        if (!controller.signal.aborted && !closing) serverLost()
+        if (!controller.signal.aborted && !closing) backend.serverLost()
         if (!controller.signal.aborted) await Bun.sleep(800)
       }
     })()
@@ -695,7 +660,7 @@ export function createController({ client, store, directory, remote: startedRemo
    * unfocused.
    */
   async function onGlobalFrame(frame: StreamFrame): Promise<void> {
-    if (onStopping(frame.event)) return
+    if (backend.onStopping(frame.event)) return
     if (frame.resync) {
       // Recover list, ask, and team-root lifecycle frames lost in the gap.
       await Promise.allSettled([
@@ -798,10 +763,8 @@ export function createController({ client, store, directory, remote: startedRemo
           await client.streamGlobal((frame) => onGlobalFrame(frame), controller.signal, async () => {
             delay = globalRetryMs
             // A remote that was offline when it was entered: its catalogs now.
-            if (catalogStale) {
-              catalogStale = false
-              await refresh().catch(() => { catalogStale = true })
-            }
+            const catalog = backend.refreshStaleCatalog()
+            if (catalog) await catalog
             // Asks and root lifecycle notifications before this subscription
             // are not replayed here; refresh nested parents' member state too.
             await Promise.allSettled([refreshInteractions(), refreshSession()])
@@ -812,7 +775,7 @@ export function createController({ client, store, directory, remote: startedRemo
         }
         if (controller.signal.aborted) break
         // With no session open this is the only stream: it notices a lost server too.
-        if (!closing) serverLost()
+        if (!closing) backend.serverLost()
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, delay)
           controller.signal.addEventListener("abort", () => { clearTimeout(timer); resolve() }, { once: true })
@@ -849,7 +812,7 @@ export function createController({ client, store, directory, remote: startedRemo
   function activateProject(project: ProjectInfo): void {
     if (!store.state.projects.some((row) => row.id === project.id)) store.setProjects([project, ...store.state.projects])
     store.setActiveProject(project.id)
-    client.setDirectory(projectScope(project, directory, remote))
+    client.setDirectory(projectScope(project, directory, backend.remote))
     void onScopeChanged?.()
   }
 
@@ -897,7 +860,7 @@ export function createController({ client, store, directory, remote: startedRemo
    * `--remote` start refuses (status `noProjectStatus`, `NoProjectError`).
    */
   async function newSession(agentArg?: string, modelArg?: string, options: { temporary?: boolean } = {}): Promise<void> {
-    const placement = sessionPlacement({ project: activeProject(store.state), directory, remote, ...(options.temporary ? { temporary: true } : {}) })
+    const placement = sessionPlacement({ project: activeProject(store.state), directory, remote: backend.remote, ...(options.temporary ? { temporary: true } : {}) })
     if (!placement) {
       status(noProjectStatus)
       // Without a Project to place it in (a `--remote` start), open the
@@ -1221,9 +1184,9 @@ export function createController({ client, store, directory, remote: startedRemo
     undo: () => revert.undo(),
     redo: () => revert.redo(),
     fork: () => revert.fork(),
-    reconnect: () => reconnectNow(),
+    reconnect: () => backend.reconnectNow(),
     connectRemote: (args) => connectRemoteCommand(args),
-    disconnectRemote: () => disconnectRemote(),
+    disconnectRemote: () => backend.disconnectRemote(),
     cancelTurn: () => turns.cancel(),
     sendPrompt: (text) => submit(text, "message"),
     reload: (targets) => reloader.run(targets),
@@ -1257,7 +1220,7 @@ export function createController({ client, store, directory, remote: startedRemo
   function pastePaths(paths: readonly PastedPath[]): Promise<PasteResult> {
     return resolvePastedPaths(paths, {
       chips,
-      remote,
+      remote: backend.remote,
       workdir: store.state.selected?.workdir || directory,
       roots: activeProject(store.state)?.roots ?? [],
       existsOnBackend: (path) => {
@@ -1345,7 +1308,7 @@ export function createController({ client, store, directory, remote: startedRemo
     for (const path of paths) {
       const name = attachmentName(path)
       try {
-        const read = remote && !localPastes.has(path)
+        const read = backend.remote && !localPastes.has(path)
           ? await (preview ? previewBackendFile(path) : readBackendFile(path))
           : await readLocalFile(path.startsWith("/") ? path : `${workdir}/${path}`)
         if ("error" in read) {
@@ -1404,16 +1367,16 @@ export function createController({ client, store, directory, remote: startedRemo
       }
       // A prompt typed before startup has opened its session belongs to that session; creating one
       // here as well would leave the prompt in a session startup then navigates away from.
-      if (!store.state.selected) await starting
+      if (!store.state.selected) await backend.starting
       if (store.state.selected?.parent) {
         status(readOnlyStatus)
         return
       }
-      if (reconnector?.stopped() && !viaBridge()) {
+      if (backend.reconnectStopped() && !backend.viaBridge()) {
         status(stoppedPromptStatus)
         return
       }
-      if (bridgeDown) {
+      if (backend.bridgeDown) {
         status(bridgeDownPromptStatus)
         return
       }
@@ -1493,7 +1456,7 @@ export function createController({ client, store, directory, remote: startedRemo
    * is checked on the backend (`ReadFile` of one byte under `backendScope`).
    */
   async function fileExists(path: string): Promise<boolean> {
-    if (remote) {
+    if (backend.remote) {
       if (path.startsWith("/") && await Bun.file(path).exists().catch(() => false)) {
         localPastes.add(path)
         return true
@@ -1515,159 +1478,6 @@ export function createController({ client, store, directory, remote: startedRemo
     void refresh().then(refreshMessages).catch((error: unknown) => status(`Refresh failed: ${String(error)}`))
   }
 
-  /** Set while `start()` runs; a prompt with no session yet waits for it (see `submit`). */
-  let starting: Promise<void> | undefined
-  /**
-   * Initial load: bootstrap, the Project of `--dir` (`EnsureProjectForPath`;
-   * skipped with `--remote`, which starts without an active Project),
-   * catalogs, then the session `startup` names (`--session <id>`, or
-   * `--continue`: the most recent nonarchived root of that Project). A
-   * plain local start restores a saved chat, prioritizing pending requests, or creates a new ephemeral session.
-   */
-  function start(): Promise<void> {
-    starting = startOnce().finally(() => { starting = undefined })
-    return starting
-  }
-  /**
-   * The startup list's bundles and MCP servers (state/startup.ts). MCP has no
-   * push for connection changes: poll `GetMcpStatus` while a server is still
-   * connecting, at most `mcpSettleMs`. Failures leave the sections out.
-   */
-  async function loadStartupResources(): Promise<void> {
-    const attempt = async <T>(read: () => Promise<T>): Promise<T | undefined> => {
-      try { return await read() } catch { return undefined }
-    }
-    const bundles = attempt(() => client.listBundles()).then((rows) => { if (rows) store.setBundles(rows) })
-    const deadline = Date.now() + mcpSettleMs
-    for (;;) {
-      const servers = await attempt(() => client.getMcpStatus())
-      if (!servers) break
-      store.setMcpServers(servers)
-      if (!servers.some((server) => server.state === "MCP_SERVER_STATE_DESIRED") || Date.now() >= deadline) break
-      await Bun.sleep(mcpPollMs)
-    }
-    await bundles
-    store.setStartupReady(true)
-  }
-
-  async function startOnce(): Promise<void> {
-    unsubscribeFocus = terminal?.onFocusChange?.((focused) => store.setFocused(focused))
-    try {
-      // A remote backend has no use for this machine's --dir: no scope until a Project is chosen.
-      if (remote) client.setDirectory("")
-      const bootstrap = await client.bootstrap()
-      requireCompatibleBackend(bootstrap.location?.version)
-      store.applyBootstrap(bootstrap)
-      store.setRemote(remote)
-      let missing = ""
-      let ensured: ProjectInfo | undefined
-      if (!remote) {
-        // A failure (an older backend) leaves no active Project: new sessions then send `--dir` alone.
-        ensured = await client.ensureProjectForPath(directory).then((result) => result.project, (error: unknown) => {
-          missing += ` · no project for ${directory}: ${String(error)}`
-          return undefined
-        })
-      }
-      await refresh()
-      if (ensured) activateProject(ensured)
-      void refreshVcs()
-      void loadStartupResources()
-      startGlobalStream()
-      const target = initialSessionId(store.state.sessions, startup, store.state.activeProjectId)
-      const resumeId = startup.resume?.id
-      if (resumeId) await resumer.resume(resumeId).catch(() => { missing += ` · session ${resumeId} not found` })
-      else if (startup.resume) {
-        // The picker waits for a choice; Esc (or nothing to pick) starts a new session.
-        await resumer.resume(undefined, () => void newSession().catch(() => undefined))
-      }
-      else if (target) await openSession(target).catch(() => { missing += ` · session ${target} not found` })
-      else if (startup.continue) missing += remote ? " · --continue needs a project" : " · no earlier session in this project"
-      else if (!remote && store.state.activeProjectId) {
-        const projectId = store.state.activeProjectId
-        const history = await client.listSessions({ includeArchived: true, projectId }).catch((error: unknown) => {
-          missing += ` · could not read earlier sessions: ${String(error)}`
-          return [] as SessionInfo[]
-        })
-        const durable = history.filter((session) => !session.ephemeral)
-        const waiting = durable.filter((session) => store.state.interactions.some((ask) => ask.session && treeSessionIds(session.id, history).has(ask.session)))
-        const prior = newestTopLevelSession(waiting, projectId, { includeArchived: true })
-          ?? newestTopLevelSession(durable, projectId, { includeArchived: true })
-        if (prior) await resumer.resume(prior.id).catch((error: unknown) => { missing += ` · could not resume ${prior.id}: ${String(error)}` })
-        if (!store.state.selected) await newSession().catch(() => undefined)
-      }
-      // With no local Project or model, no session is created until the first prompt.
-      else if (!remote || store.state.activeProjectId) await newSession().catch(() => undefined)
-      if (remote && !store.state.selected) missing += ` · ${noProjectStatus}`
-      // `--remote`: no Project was ensured; open the Project view so choosing or creating one is the first thing shown
-      // (unless `--resume` already shows its picker).
-      if (remote && !store.state.activeProjectId && !startup.resume) openProjectOverlay()
-      const version = bootstrap.location?.version ?? ""
-      const compatibilityError = backendVersionError(version)
-      const mismatch = compatibilityError ? ` · ${compatibilityError}` : ""
-      // A WebUI that bare `hya` could not start is the one notice worth the status line.
-      // Reopening any session already said `Resumed …`; keep it unless something needs saying.
-      const resumed = !missing && !mismatch && store.state.status.startsWith("Resumed ")
-      if (!resumed) status(webNotice(store.state.web) ?? `Connected to hya ${version} · ? or /help for keys and commands${missing}${mismatch}`)
-    } catch (error) {
-      status(`Connection failed: ${String(error)} · ${connectionHint}`)
-      // Keep the chat surface usable on startup failures; full-screen help is an
-      // explicit ? or /help action, not an error fallback.
-      store.setView("chat")
-      store.markReady()
-    }
-  }
-
-  /** Move to another server (app/reconnect.ts): new base URL, both streams resubscribed, catalogs and the open session reloaded. */
-  async function switchServer(next: ServerSwitch): Promise<void> {
-    client.setBaseUrl(next.url)
-    store.setServerUrl(next.url)
-    const backend = store.state.backend
-    if (backend) {
-      store.setBackend({
-        ...backend,
-        pid: next.pid,
-        ...(next.version ? { version: next.version } : {}),
-        ...(next.startedAt !== undefined ? { startedAt: next.startedAt } : {}),
-      })
-    }
-    try {
-      const bootstrap = await client.bootstrap()
-      requireCompatibleBackend(bootstrap.location?.version)
-      store.applyBootstrap(bootstrap)
-    } catch (error) {
-      status(`Connection failed: ${String(error)}`)
-      return
-    }
-    await refresh().catch((error: unknown) => status(`Refresh failed: ${String(error)}`))
-    void onScopeChanged?.()
-    startGlobalStream()
-    const selected = store.state.selected
-    if (!selected) return
-    await openSession(selected.id).catch(async (error: unknown) => {
-      // Gone while no stream watched it (an unused ephemeral session the daemon dropped, or a
-      // delete another client made meanwhile): never stay on a session with no log behind it.
-      if (!(error instanceof HttpError && error.status === 404)) return status(`Open failed: ${String(error)}`)
-      store.dropSessionRow(selected.id)
-      await newSession().catch((failure: unknown) => status(`Session ${selected.id} is gone · new session failed: ${String(failure)}`))
-    })
-    // A turn that ran on the old server died with it; the transcript above shows how far it got.
-    if (store.state.running && !store.state.selected?.busy) store.endTurn()
-  }
-
-  const reconnector = reconnect
-    ? createReconnector({
-      url: () => client.baseUrl,
-      generation: () => {
-        const backend = store.state.backend
-        return backend?.pid !== undefined && backend.startedAt !== undefined ? `${backend.pid}:${backend.startedAt}` : undefined
-      },
-      probe, reconnect, switchTo: switchServer, status,
-      ...(find ? { find } : {}),
-      onStopped: (stopped) => { store.setBackendStopped(stopped); if (stopped) store.setConnected(false) },
-      ...(onRestarted ? { onRestarted } : {}),
-    })
-    : undefined
-
   /**
    * Leave the open session of the server being left: closing its session
    * stream is all it takes, since an unused session this client created is
@@ -1677,174 +1487,6 @@ export function createController({ client, store, directory, remote: startedRemo
     streamAbort?.abort()
     streamAbort = undefined
     store.closeSession()
-  }
-
-  /**
-   * Point the client at `url` (with a relay bridge's `token`; none for a
-   * local backend) and load it like a start: bootstrap, the
-   * Project of `--dir` unless remote, catalogs, the global stream. A remote
-   * opens the Project view (no session is created); a local backend opens a
-   * new session in the ensured Project.
-   */
-  async function enterServer(url: string, token?: string): Promise<{ ok: boolean; detail: string }> {
-    client.setBaseUrl(url, token)
-    store.setServerUrl(url)
-    // A remote backend has no use for this machine's --dir: no scope until a Project is chosen.
-    client.setDirectory(remote ? "" : directory)
-    store.setActiveProject(undefined)
-    let detail = ""
-    let ok = true
-    try {
-      const bootstrap = await client.bootstrap()
-      requireCompatibleBackend(bootstrap.location?.version)
-      store.applyBootstrap(bootstrap)
-      let ensured: ProjectInfo | undefined
-      if (!remote) {
-        ensured = await client.ensureProjectForPath(directory).then((result) => result.project, (error: unknown) => {
-          detail += ` · no project for ${directory}: ${String(error)}`
-          return undefined
-        })
-      }
-      await refresh()
-      if (ensured) activateProject(ensured)
-    } catch (error) {
-      ok = false
-      catalogStale = true
-      detail += ` · ${String(error)}`
-    }
-    if (ok) {
-      startGlobalStream()
-      // Local/remote trust changes can replace the pane instance. Finish that
-      // replacement before exposing Projects to input on the new backend.
-      await onScopeChanged?.()
-    }
-    if (remote) {
-      if (!store.state.activeProjectId) openProjectOverlay()
-    } else if (ok) {
-      void refreshVcs()
-      await newSession().catch(() => undefined)
-    }
-    return { ok, detail }
-  }
-
-  /** The bridge child exited without `/disconnect-remote` asking it to. */
-  function bridgeExited(child: Bridge, code: number): void {
-    if (child !== remoteBridge || child.stopping || closing) return
-    remoteBridge = undefined
-    bridgeDown = true
-    store.setConnected(false)
-    const last = stripTerminalControls(child.lastLine() ?? "").replace(/^(?:error:\s*)?(?:hya bridge:\s*)?/i, "")
-    status(`Remote bridge exited (${last ? last : `code ${code}`}) · ${bridgeExitedStatus(home !== undefined)}`)
-  }
-
-  /**
-   * `/connect-remote <link>`: tear down a previous bridge child, start a new
-   * one (src/bridge.ts; the link goes to its stdin only), wait for it
-   * (status shows the progress and the bridge's lines), then move to its
-   * loopback URL as a remote start: label in the header, no Project ensured,
-   * no local reconnects, the Project view open.
-   */
-  async function connectRemote(link: string, flags: BridgeFlags = {}): Promise<void> {
-    if (!startRemoteBridge) {
-      status("/connect-remote is not available here (no hya binary to run hya bridge)")
-      return
-    }
-    if (connectingRemote) {
-      status("Already connecting to a remote backend…")
-      return
-    }
-    const wasRemote = viaBridge()
-    connectingRemote = true
-    const started = Date.now()
-    let latest = ""
-    const progress = (): void => status(`Connecting to the relay… ${Math.round((Date.now() - started) / 1000)}s${latest ? ` · ${latest}` : ""}`)
-    const ticker = setInterval(progress, 1000)
-    try {
-      const previous = remoteBridge
-      remoteBridge = undefined
-      bridgeDown = false
-      if (previous) {
-        status("Closing the previous relay bridge…")
-        await previous.stop()
-      }
-      progress()
-      let child: Bridge | undefined
-      child = await startRemoteBridge(link, flags, (raw) => {
-        // src/bridge.ts already strips them; the status line never takes terminal controls.
-        const line = stripTerminalControls(raw)
-        latest = line.replace(/^(?:error:\s*)?(?:hya bridge:\s*)?/i, "")
-        // After start-up the bridge only reports changes (online, offline, relay unreachable).
-        if (child && child === remoteBridge) status(line)
-        else progress()
-      })
-      clearInterval(ticker)
-      await leaveOpenSession()
-      remoteBridge = child
-      const running = child
-      void child.exited.then((code) => bridgeExited(running, code))
-      remote = true
-      store.setRemote(true)
-      store.setServerLabel(child.label)
-      store.setBackend({ remoteBridge: true })
-      const entered = await enterServer(child.url, child.token)
-      status(entered.ok
-        ? `Connected to ${child.label} · choose a project, or t for a temporary session`
-        : `Connected to the relay, but the remote backend did not answer${entered.detail} · the TUI loads it when it comes online`)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      // Still pointed at a remote (the previous bridge is gone): never fall back to a local daemon by itself.
-      if (wasRemote) {
-        bridgeDown = true
-        store.setConnected(false)
-      }
-      status(`Remote connection failed: ${message} · /connect-remote to try again${wasRemote && home ? " · /disconnect-remote goes back to the local backend" : ""}`)
-    } finally {
-      clearInterval(ticker)
-      connectingRemote = false
-    }
-  }
-
-  /**
-   * `/disconnect-remote`: close the bridge child's stdin (SIGTERM after 2 s),
-   * drop the label, and go back to the local backend (\`home\`: the
-   * database's daemon, found or started) with the Project of `--dir` and a
-   * new session, like a local start.
-   */
-  async function disconnectRemote(): Promise<void> {
-    if (!viaBridge()) {
-      status(store.state.serverLabel
-        ? `No local backend to go back to: this TUI was started on ${store.state.serverLabel} (hya --connect) · quit and run hya for a local one`
-        : "Not connected to a remote backend · /connect-remote <link> connects to one")
-      return
-    }
-    if (!home) {
-      status("No local backend to go back to: this TUI was started by hya --connect · quit and run hya for a local one")
-      return
-    }
-    await leaveOpenSession()
-    globalAbort?.abort()
-    const child = remoteBridge
-    remoteBridge = undefined
-    bridgeDown = false
-    status("Closing the relay bridge…")
-    await child?.stop()
-    if (store.state.extensionOverlay) store.setExtensionOverlay(undefined)
-    remote = startedRemote
-    store.setRemote(remote)
-    store.setServerLabel(undefined)
-    catalogStale = false
-    status("Switching back to the local backend…")
-    let next: ServerSwitch
-    try {
-      next = await home()
-    } catch (error) {
-      status(`Local backend unavailable: ${error instanceof Error ? error.message : String(error)} · /reconnect tries again`)
-      return
-    }
-    // Whatever the local server said before (`hya serve stop`) no longer holds for this one.
-    reconnector?.reset()
-    const entered = await enterServer(next.url)
-    status(entered.ok ? `Back on the local backend${next.pid ? ` · pid ${next.pid}` : ""}${entered.detail}` : `Local backend did not answer${entered.detail} · /reconnect tries again`)
   }
 
   /** `/connect-remote` without a link: a concealed entry replaces the composer (the text stays in `secret`). */
@@ -1878,7 +1520,7 @@ export function createController({ client, store, directory, remote: startedRemo
         status("Not connected · no relay link was entered")
         return
       }
-      void connectRemote(link, flags)
+      void backend.connectRemote(link, flags)
       return
     }
     if (key.name === "backspace") secret.backspace()
@@ -1898,28 +1540,7 @@ export function createController({ client, store, directory, remote: startedRemo
   async function connectRemoteCommand(args: readonly string[]): Promise<void> {
     const { link, flags } = parseConnectRemote(args)
     if (link === undefined) openSecretEntry(flags)
-    else await connectRemote(link, flags)
-  }
-
-  /** `/reconnect`: find or start the database's server now; a fixed `--server` only resubscribes. */
-  async function reconnectNow(): Promise<void> {
-    if (bridgeDown) {
-      status(bridgeExitedStatus(home !== undefined))
-      return
-    }
-    if (viaBridge() || store.state.serverLabel) {
-      // The bridge's URL is fixed; never find or start a local daemon from here.
-      status(`Reconnecting to ${store.state.serverLabel ?? client.baseUrl}…`)
-      startGlobalStream()
-      const selected = store.state.selected
-      if (selected) startStream(selected.id)
-      return
-    }
-    if (reconnector) return reconnector.reconnectNow()
-    status(`Reconnecting to ${client.baseUrl} (--server without --db: no backend to find or start)`)
-    startGlobalStream()
-    const selected = store.state.selected
-    if (selected) startStream(selected.id)
+    else await backend.connectRemote(link, flags)
   }
 
   /**
@@ -1934,10 +1555,7 @@ export function createController({ client, store, directory, remote: startedRemo
     if (selected && mode === "archive" && !keeper.isFresh(selected)) {
       await Promise.race([keeper.leave(selected, mode).catch(() => undefined), Bun.sleep(archiveOnExitMs)])
     }
-    // The bridge child also exits when this process dies (its stdin closes); close it cleanly first.
-    const child = remoteBridge
-    remoteBridge = undefined
-    await child?.stop(500).catch(() => undefined)
+    await backend.stopBridge()
     dispose()
   }
 
@@ -2040,7 +1658,7 @@ export function createController({ client, store, directory, remote: startedRemo
     closeSecretEntry: () => { closeSecretEntry(); status("Not connected · /connect-remote cancelled") },
     ui,
     refreshAll,
-    start,
+    start: backend.start,
     close,
     dispose,
   }
@@ -2062,10 +1680,7 @@ export const secretEntryHint = "paste or type the relay link (hidden) · Enter c
 /** Status shown when an input other than `/connect-remote` holds a relay link: it is never sent. */
 export const relayLinkRefusedStatus = "Not sent · the input holds a relay link, which is a secret · /connect-remote takes it"
 
-/** What to do after the relay bridge child exited on its own. */
-export function bridgeExitedStatus(local: boolean): string {
-  return `/connect-remote <link> connects again${local ? " · /disconnect-remote goes back to the local backend" : ""}`
-}
+export { bridgeExitedStatus } from "./backendLifecycle"
 
 /** Status shown when a prompt is submitted while the relay bridge is down. */
 export const bridgeDownPromptStatus = "Not sent · the relay bridge exited · /connect-remote <link> connects again"
