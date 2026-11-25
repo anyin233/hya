@@ -10,7 +10,13 @@ use std::process::{Command, Stdio};
 
 /// `scripts/hya-install.sh`, embedded so `hya update` runs the exact installer
 /// `hya.ed-aisys.com/install.sh` serves.
-pub const RELEASE_INSTALLER: &str = include_str!("../../../scripts/hya-install.sh");
+#[deprecated(
+    since = "0.48.0-dev.37",
+    note = "no replacement; removed after the next release"
+)]
+pub const RELEASE_INSTALLER: &str = INSTALLER_SCRIPT;
+
+const INSTALLER_SCRIPT: &str = include_str!("../../../scripts/hya-install.sh");
 
 /// Options of bare `hya update`.
 #[derive(Debug, Default, Args)]
@@ -29,7 +35,15 @@ pub struct ReleaseInstallArgs {
 
 /// The install prefix of a released `hya` at `executable`: the real (symlink
 /// resolved) `<prefix>/bin/hya` whose prefix also holds `lib/hya`.
+#[deprecated(
+    since = "0.48.0-dev.37",
+    note = "no replacement; removed after the next release"
+)]
 pub fn install_prefix(executable: &Path) -> Result<PathBuf, String> {
+    resolve_install_prefix(executable)
+}
+
+fn resolve_install_prefix(executable: &Path) -> Result<PathBuf, String> {
     let real = executable
         .canonicalize()
         .map_err(|error| format!("cannot resolve {}: {error}", executable.display()))?;
@@ -64,7 +78,7 @@ pub fn run_release_install(args: &ReleaseInstallArgs) -> Result<InstalledChanges
         None => {
             let executable = std::env::current_exe()
                 .map_err(|error| format!("cannot locate the running hya: {error}"))?;
-            install_prefix(&executable)?
+            resolve_install_prefix(&executable)?
         }
     };
     let executable = prefix.join("bin/hya");
@@ -88,7 +102,7 @@ pub fn run_release_install(args: &ReleaseInstallArgs) -> Result<InstalledChanges
         .ok_or_else(|| "sh has no stdin".to_string())
         .and_then(|mut stdin| {
             stdin
-                .write_all(RELEASE_INSTALLER.as_bytes())
+                .write_all(INSTALLER_SCRIPT.as_bytes())
                 .map_err(|error| format!("cannot pass the installer to sh: {error}"))
         });
     let status = child
@@ -143,7 +157,7 @@ fn fingerprint(path: &Path) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::install_prefix;
+    use super::resolve_install_prefix;
     use std::fs;
     use std::path::PathBuf;
 
@@ -209,20 +223,20 @@ mod tests {
         let scratch = Scratch::new("installed");
         let exe = scratch.file("prefix/bin/hya");
         fs::create_dir_all(scratch.0.join("prefix/lib/hya")).unwrap_or_default();
-        assert_eq!(install_prefix(&exe), Ok(scratch.0.join("prefix")));
+        assert_eq!(resolve_install_prefix(&exe), Ok(scratch.0.join("prefix")));
     }
 
     #[test]
     fn a_build_tree_or_bare_bin_is_not_an_install() {
         let scratch = Scratch::new("build");
         let debug = scratch.file("target/debug/hya");
-        let Err(error) = install_prefix(&debug) else {
+        let Err(error) = resolve_install_prefix(&debug) else {
             panic!("target/debug accepted as an install");
         };
         assert!(error.contains("--prefix"), "{error}");
         // `bin/hya` without the frontends beside it (e.g. /usr/bin) is refused.
         let bare = scratch.file("usr/bin/hya");
-        assert!(install_prefix(&bare).is_err());
+        assert!(resolve_install_prefix(&bare).is_err());
     }
 
     #[cfg(unix)]
@@ -234,6 +248,6 @@ mod tests {
         fs::create_dir_all(scratch.0.join("home/bin")).unwrap_or_default();
         let link = scratch.0.join("home/bin/hya");
         std::os::unix::fs::symlink(&exe, &link).unwrap_or_else(|error| panic!("{error}"));
-        assert_eq!(install_prefix(&link), Ok(scratch.0.join("opt/hya")));
+        assert_eq!(resolve_install_prefix(&link), Ok(scratch.0.join("opt/hya")));
     }
 }
