@@ -17,6 +17,7 @@ use std::{collections::BTreeMap, time::Duration};
 
 /// Anthropic Messages protocol and stream decoder.
 pub mod anthropic;
+mod auth;
 /// Immutable startup model catalog and provider resolution metadata.
 pub mod catalog;
 /// Bounded model-list endpoint discovery and typed provider outcomes.

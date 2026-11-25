@@ -27,6 +27,93 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
 
+#[tokio::test]
+async fn catalog_auth_headers_match_provider_contracts() {
+    use hya_provider::{CatalogAuth, CatalogDiscoveryRequest, discover_models};
+
+    let cases: [(ProviderKind, CatalogAuth, &[&str]); 8] = [
+        (
+            ProviderKind::OpenAiCompatible,
+            CatalogAuth::bearer("ChatToken", None),
+            &["authorization: Bearer ChatToken"],
+        ),
+        (
+            ProviderKind::OpenAiResponse,
+            CatalogAuth::bearer("ResponseToken", None),
+            &["authorization: Bearer ResponseToken"],
+        ),
+        (
+            ProviderKind::OpenAiCodex,
+            CatalogAuth::bearer("CodexToken", Some("Account".into())),
+            &[
+                "authorization: Bearer CodexToken",
+                "chatgpt-account-id: Account",
+                "openai-beta: responses=experimental",
+                "user-agent: codex_cli_rs",
+            ],
+        ),
+        (
+            ProviderKind::OpenAiCodex,
+            CatalogAuth::Bearer {
+                token: None,
+                account_id: Some("Account".into()),
+            },
+            &[
+                "openai-beta: responses=experimental",
+                "user-agent: codex_cli_rs",
+            ],
+        ),
+        (
+            ProviderKind::GrokBuild,
+            CatalogAuth::grok(Some("GrokToken".into()), "1.2.3", "TestClient"),
+            &[
+                "authorization: Bearer GrokToken",
+                "x-xai-token-auth: xai-grok-cli",
+                "x-grok-client-version: 1.2.3",
+                "x-grok-client-identifier: TestClient",
+            ],
+        ),
+        (
+            ProviderKind::GrokBuild,
+            CatalogAuth::grok(None, "1.2.3", "TestClient"),
+            &[
+                "x-grok-client-version: 1.2.3",
+                "x-grok-client-identifier: TestClient",
+            ],
+        ),
+        (
+            ProviderKind::Anthropic,
+            CatalogAuth::api_key("AnthropicKey"),
+            &["x-api-key: AnthropicKey", "anthropic-version: 2023-06-01"],
+        ),
+        (
+            ProviderKind::Google,
+            CatalogAuth::api_key("GoogleKey"),
+            &["x-goog-api-key: GoogleKey"],
+        ),
+    ];
+    let response = "HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+    let (base_url, _, requests) = start_scripted_server(vec![response.into(); cases.len()]).await;
+    for (kind, auth, expected) in cases {
+        discover_models(CatalogDiscoveryRequest::new("test", kind, &base_url, auth)).await;
+        let requests = requests.lock().unwrap();
+        let actual = requests
+            .last()
+            .unwrap()
+            .headers
+            .lines()
+            .filter(|line| {
+                !line.starts_with("GET ")
+                    && !line.starts_with("host: ")
+                    && *line != "accept: application/json"
+                    && !line.is_empty()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "{kind:?}");
+        assert!(requests.last().unwrap().body.is_empty());
+    }
+}
+
 #[derive(Debug)]
 struct CapturedRequest {
     raw: String,
@@ -1944,6 +2031,15 @@ async fn http_provider_google_uses_google_thought_policy_and_gemini3_thinking_le
         .map(Result::unwrap)
         .collect();
     let captured = captured_request(request_rx).await;
+    assert!(
+        captured
+            .headers
+            .lines()
+            .any(|line| line == "x-goog-api-key: g-token")
+    );
+    assert!(captured.raw.starts_with(
+        "POST /v1beta/models/gemini-3-pro-preview:streamGenerateContent?alt=sse HTTP/1.1\r\n"
+    ));
     let body: Value = serde_json::from_str(&captured.body).unwrap();
     assert_eq!(
         body["generationConfig"]["thinkingConfig"],
