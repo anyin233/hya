@@ -150,14 +150,14 @@ impl Provider for CountingProvider {
 
 type ToolsBySession = Arc<Mutex<Vec<(SessionId, Vec<String>)>>>;
 
-struct CaptureSystemsProvider {
+struct CaptureSystemsProvider<P = FakeProvider> {
     by_session: Arc<Mutex<Vec<(SessionId, String)>>>,
     tools_by_session: ToolsBySession,
-    inner: FakeProvider,
+    inner: P,
 }
 
 #[async_trait::async_trait]
-impl Provider for CaptureSystemsProvider {
+impl<P: Provider> Provider for CaptureSystemsProvider<P> {
     fn id(&self) -> &str {
         self.inner.id()
     }
@@ -186,6 +186,44 @@ impl Provider for CaptureSystemsProvider {
                 .collect(),
         ));
         self.inner.stream(request, session, message).await
+    }
+}
+
+/// One script per session, assigned in the order sessions first reach the
+/// provider; later sessions (and turns past a script) get a bare stop. A single
+/// shared queue would let concurrent sessions take each other's turns.
+struct SessionScripts {
+    seen: Mutex<Vec<SessionId>>,
+    scripts: Vec<FakeProvider>,
+    rest: FakeProvider,
+}
+
+#[async_trait::async_trait]
+impl Provider for SessionScripts {
+    fn id(&self) -> &str {
+        self.rest.id()
+    }
+    fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+        self.rest.capabilities(model)
+    }
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        let index = {
+            let mut seen = self.seen.lock().unwrap();
+            seen.iter().position(|s| *s == session).unwrap_or_else(|| {
+                seen.push(session);
+                seen.len() - 1
+            })
+        };
+        self.scripts
+            .get(index)
+            .unwrap_or(&self.rest)
+            .stream(request, session, message)
+            .await
     }
 }
 
@@ -331,15 +369,20 @@ impl GuidanceFixture {
     }
 }
 
+/// `scripts[i]` drives the i-th session to reach the provider.
 async fn guidance_fixture(
     agents: &[(&str, AgentRole, &[&str])],
-    scripted: FakeProvider,
+    scripts: Vec<FakeProvider>,
 ) -> GuidanceFixture {
     let by_session = Arc::new(Mutex::new(Vec::new()));
     let provider_router = Arc::new(ProviderRouter::new().with(Arc::new(CaptureSystemsProvider {
         by_session: by_session.clone(),
         tools_by_session: Arc::new(Mutex::new(Vec::new())),
-        inner: scripted,
+        inner: SessionScripts {
+            seen: Mutex::new(Vec::new()),
+            scripts,
+            rest: FakeProvider::scripted_turns(Vec::new()),
+        },
     })));
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![
         Rule::new(Action::Task, "*", Mode::Allow),
@@ -483,7 +526,8 @@ async fn inline_validation_overlay_execution_and_base_roster_spawn() {
             ("quick", AgentRole::Subagent, &["plan"]),
             ("plan", AgentRole::Subagent, &[]),
         ],
-        FakeProvider::scripted_turns(vec![
+        // The inline child, then its nested `plan`.
+        vec![FakeProvider::scripted_turns(vec![
             vec![
                 FakeStep::ToolCall {
                     name: "task".into(),
@@ -496,8 +540,7 @@ async fn inline_validation_overlay_execution_and_base_roster_spawn() {
                 FakeStep::Finish(FinishReason::ToolCalls),
             ],
             vec![FakeStep::Finish(FinishReason::Stop)],
-            vec![FakeStep::Finish(FinishReason::Stop)],
-        ]),
+        ])],
     )
     .await;
     let out = fixture
@@ -970,30 +1013,25 @@ async fn guidance_is_ephemeral_immutable_and_propagates_across_turns_and_nested_
             ("quick", AgentRole::Subagent, &["plan"]),
             ("plan", AgentRole::Subagent, &[]),
         ],
-        FakeProvider::scripted_turns(vec![
-            // Root turn: invoke real `task` tool.
-            vec![
+        // Root, then child; later turns and the grandchild get a bare stop.
+        vec![
+            // Root: invoke real `task` tool.
+            FakeProvider::scripted_turns(vec![vec![
                 FakeStep::ToolCall {
                     name: "task".into(),
                     input: json!({"description": "child", "prompt": "spawn plan", "subagent_type": "quick"}),
                 },
                 FakeStep::Finish(FinishReason::ToolCalls),
-            ],
-            // Root round 2.
-            vec![FakeStep::Finish(FinishReason::Stop)],
-            // Child round 1: spawn nested `plan`.
-            vec![
+            ]]),
+            // Child: spawn nested `plan`.
+            FakeProvider::scripted_turns(vec![vec![
                 FakeStep::ToolCall {
                     name: "task".into(),
                     input: json!({"description": "nested", "prompt": "work", "subagent_type": "plan"}),
                 },
                 FakeStep::Finish(FinishReason::ToolCalls),
-            ],
-            // Child round 2, grandchild round 1, child mail-wake round.
-            vec![FakeStep::Finish(FinishReason::Stop)],
-            vec![FakeStep::Finish(FinishReason::Stop)],
-            vec![FakeStep::Finish(FinishReason::Stop)],
-        ]),
+            ]]),
+        ],
     )
     .await;
     std::fs::write(fixture.agent.workdir.join("AGENTS.md"), PROJECT_CONTEXT).unwrap();
