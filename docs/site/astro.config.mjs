@@ -15,8 +15,8 @@ export default defineConfig({
   integrations: [starlight({
     title: 'hya',
     description: 'An event-sourced, multi-agent coding runtime. Architecture, guides, and API reference.',
-    logo: { src: '../assets/hya-icon-8bit.png', alt: 'hya' },
-    favicon: '/hya-icon-8bit.png',
+    logo: { src: '../assets/hya-logo.png', alt: 'hya', replacesTitle: true },
+    favicon: '/hya-icon.png',
     social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/chrono-foundry/hya' }],
     components: { MarkdownContent: './src/components/MarkdownContent.astro' },
     expressiveCode: { shiki: { langAlias: { 'rust,ignore': 'rust', caddyfile: 'text' } } },
