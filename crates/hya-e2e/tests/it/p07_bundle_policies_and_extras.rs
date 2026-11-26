@@ -218,7 +218,8 @@ for line in sys.stdin:
     std::fs::remove_dir_all(&plugin_dir).unwrap();
 
     // 3. T2.25: installed channel policy denies child sends; uninstall restores default delivery.
-    const ROOT: &str = "hya-main";
+    const FIRST: &str = "spawn restricted worker";
+    const SECOND: &str = "spawn restored worker";
     const CHILD: &str = "CHANNEL_POLICY_CHILD";
     const RESTORED_CHILD: &str = "RESTORED_CHILD";
     let spawn = |marker: &str| {
@@ -250,13 +251,22 @@ for line in sys.stdin:
             ],
         )
         .unwrap();
+    // One queue per session: a late wake of the first root must not spawn the
+    // restored worker while the policy is still installed.
     env.fake
-        .route(
-            ROOT,
-            vec![
+        .route_session(
+            FIRST,
+            [
                 spawn(CHILD),
                 text_step("FIRST_ROOT_DONE"),
                 text_step("FIRST_ROOT_SETTLED"),
+            ],
+        )
+        .unwrap();
+    env.fake
+        .route_session(
+            SECOND,
+            [
                 spawn(RESTORED_CHILD),
                 text_step("SECOND_ROOT_DONE"),
                 text_step("MAIL_RECEIVED"),
@@ -274,27 +284,29 @@ for line in sys.stdin:
     );
     install_source(&env, tmp.path(), "channel-policy.hyabundle", &chan_source);
     let first = env.create_session().await.unwrap();
-    env.prompt(first, "spawn restricted worker").await.unwrap();
+    env.prompt(first, FIRST).await.unwrap();
     env.wait_route_contains(CHILD, "direction denied by policy", Duration::from_secs(20))
         .await
         .expect("send refused by policy");
     assert!(
-        !env.route_dump(ROOT)
-            .unwrap_or_default()
+        !env.route_dump(FIRST)
+            .unwrap()
             .contains("DENIED_CHANNEL_PAYLOAD")
     );
 
     uninstall_bundle(&env, "acme/channel-policy");
     let second = env.create_session_with_agent("hya-main").await.unwrap();
-    env.prompt(second, "spawn restored worker").await.unwrap();
-    env.wait_route_contains(ROOT, "RESTORED_CHANNEL_PAYLOAD", Duration::from_secs(20))
+    env.prompt(second, SECOND).await.unwrap();
+    env.wait_route_contains(SECOND, "RESTORED_CHANNEL_PAYLOAD", Duration::from_secs(20))
         .await
         .expect("default delivery restored");
-    assert!(
-        !env.route_dump(ROOT)
-            .unwrap_or_default()
-            .contains("DENIED_CHANNEL_PAYLOAD")
-    );
+    for session in [FIRST, SECOND] {
+        assert!(
+            !env.route_dump(session)
+                .unwrap()
+                .contains("DENIED_CHANNEL_PAYLOAD")
+        );
+    }
 }
 
 /// T2.26 — `hya-extra/zvec-grep` MCP tool + `hya-extra/scout` subagent bundle via fake `zg`.
@@ -660,7 +672,10 @@ async fn extra_jev_router_model_fallback_and_token_summary() {
     );
 
     let usage_path = format!("/v1/sessions/{s_ts}/bundles/hya-extra%2Ftoken-summary/usage");
+    // The root never `wait`s, so a `TEAM QUIESCED` synthesis round may land
+    // between two reads: settle on a tree read and a session read that agree.
     let mut tree_body = Value::Null;
+    let mut single = Value::Null;
     for _ in 0..100 {
         let resp = env
             .http
@@ -670,11 +685,24 @@ async fn extra_jev_router_model_fallback_and_token_summary() {
             .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
         tree_body = resp.json().await.unwrap();
+        single = env
+            .http
+            .get(format!("{}{usage_path}?scope=session", env.backend.url))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         let settled = tree_body["sessions"].as_array().is_some_and(|rows| {
             rows.len() == 2
                 && rows
                     .iter()
                     .all(|r| r["models"][0]["rounds"].as_u64().is_some_and(|n| n >= 1))
+                && rows.iter().any(|r| {
+                    r["parent"].is_null()
+                        && r["models"][0]["rounds"] == single["models"][0]["rounds"]
+                })
         });
         if settled {
             break;
@@ -699,15 +727,6 @@ async fn extra_jev_router_model_fallback_and_token_summary() {
     let child_rounds = child_row["models"][0]["rounds"].as_u64().unwrap();
     assert_eq!(root_rounds + child_rounds, rounds);
 
-    let single: Value = env
-        .http
-        .get(format!("{}{usage_path}?scope=session", env.backend.url))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
     assert_eq!(single["sessions"].as_array().unwrap().len(), 1);
     assert_eq!(single["models"][0]["rounds"].as_u64().unwrap(), root_rounds);
 
