@@ -374,8 +374,8 @@ pub(crate) enum Command {
         action: Option<crate::sessions_cmd::SessionsAction>,
     },
     /// Update hya: bare `hya update` reinstalls the latest GitHub release into
-    /// this hya's prefix (docs/install.md); `hya update version` prints the
-    /// updater's package version.
+    /// this hya's prefix (docs/getting-started/installation.md); `hya update
+    /// version` prints the updater's package version.
     #[command(args_conflicts_with_subcommands = true)]
     Update {
         #[command(subcommand)]

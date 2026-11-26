@@ -2,7 +2,7 @@
 //! releases with the same installer `curl … | sh` runs.
 //!
 //! It trusts HTTPS to the release host and each release's `SHA256SUMS`
-//! (docs/install.md).
+//! (docs/getting-started/installation.md).
 use clap::Args;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
