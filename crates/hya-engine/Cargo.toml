@@ -38,7 +38,6 @@ libc = { workspace = true }
 
 [dev-dependencies]
 hya-provider = { workspace = true, features = ["test-support"] }
-hya-app = { workspace = true }
 hya-store = { workspace = true, features = ["lifecycle-bench"] }
 hya-base-tools = { workspace = true }
 hya-extended-tools = { workspace = true }

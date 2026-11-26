@@ -1010,8 +1010,8 @@ async fn build_session_engine_with_mcp_defer(
     let runtime = Arc::new(
         RuntimeRegistry::new(registry, catalog)
             .with_skill_discovery(
-                crate::skill_catalog::discover,
-                crate::skill_catalog::builtin_skills,
+                hya_engine::skill_catalog::discover,
+                hya_engine::skill_catalog::builtin_skills,
             )
             .with_pure_skills(options.pure),
     );

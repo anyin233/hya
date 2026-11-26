@@ -6,16 +6,16 @@ use sha2::{Digest, Sha256};
 
 #[test]
 fn builtin_skill_catalog_comes_from_prepared_core_skills_bundle() {
-    let bytes = hya_app::skill_catalog::core_skills_preset_bytes();
+    let bytes = hya_engine::skill_catalog::core_skills_preset_bytes();
     let digest = format!("{:x}", Sha256::digest(bytes));
     let catalog = hya_bundle::PreparedCatalog::decode(bytes, &digest).expect("core Skill catalog");
     let bundle = &catalog.bundles()[0];
-    let builtins = hya_app::skill_catalog::builtin_skills();
+    let builtins = hya_engine::skill_catalog::builtin_skills();
     assert_eq!(bundle.identity().id, "hya/core-skills");
     assert_eq!(bundle.skills().len(), builtins.len());
     for (resource, builtin) in bundle.skills().iter().zip(builtins) {
         let parsed =
-            hya_app::skill_catalog::parse_skill(&resource.content).expect("valid bundled Skill");
+            hya_engine::skill_catalog::parse_skill(&resource.content).expect("valid bundled Skill");
         assert_eq!(resource.local_id, builtin.name);
         assert_eq!(parsed.name, builtin.name);
         assert_eq!(parsed.description, builtin.description);

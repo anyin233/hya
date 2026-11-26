@@ -161,7 +161,7 @@ fn local_runtime(tools: ToolRegistry, catalog: Arc<AgentCatalog>) -> RuntimeRegi
                 .resources(ExportKind::Skill)
                 .iter()
                 .map(|r| {
-                    let parsed = hya_app::skill_catalog::parse_skill(&r.content).unwrap();
+                    let parsed = hya_engine::skill_catalog::parse_skill(&r.content).unwrap();
                     let path =
                         PathBuf::from(format!("bundle:{}/{}", bundle.identity().id, r.source_path));
                     let dir = path.parent().unwrap().to_path_buf();
@@ -198,7 +198,7 @@ fn local_runtime(tools: ToolRegistry, catalog: Arc<AgentCatalog>) -> RuntimeRegi
         .collect();
     let reg = RuntimeRegistry::new(tools, catalog).with_skill_discovery(
         discover_local_skills,
-        hya_app::skill_catalog::builtin_skills,
+        hya_engine::skill_catalog::builtin_skills,
     );
     if !sources.is_empty() {
         reg.refresh(|c| c.replace_sources_of_kind(RuntimeSourceKind::Bundle, sources))

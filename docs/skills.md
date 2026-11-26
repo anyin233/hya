@@ -5,7 +5,7 @@ markdown bodies the model can load through the `skill` tool. The catalog is
 built from directory discovery plus two first-party fallback skills.
 
 Sources:
-[`crates/hya-app/src/skill_catalog.rs`](../crates/hya-app/src/skill_catalog.rs),
+[`crates/hya-engine/src/skill_catalog.rs`](../crates/hya-engine/src/skill_catalog.rs),
 [`crates/hya-server/src/support/skill_catalog.rs`](../crates/hya-server/src/support/skill_catalog.rs).
 
 Bundle-local skill resources (`resources.skills`) are separate: they live inside
@@ -102,7 +102,7 @@ readable `SKILL.md` is not a skill and is not reported either. For example:
 ## Discovery search path (first name wins)
 
 When HOME is set, hya walks these roots **in order**
-([`skill_dirs_for_workdir`](../crates/hya-app/src/skill_catalog.rs)):
+([`skill_dirs_for_workdir`](../crates/hya-engine/src/skill_catalog.rs)):
 
 1. `<workdir>/.hya/skills`
 2. `$HOME/.config/hya/skills`
@@ -119,8 +119,8 @@ override an earlier skill of the same name (`HashSet` insert on name).
 
 ### Multi-root (Project) discovery order
 
-[`skill_dirs_for(workdir, roots)`](../crates/hya-app/src/skill_catalog.rs) and
-[`discover_skills_for_roots_with_diagnostics`](../crates/hya-app/src/skill_catalog.rs)
+[`skill_dirs_for(workdir, roots)`](../crates/hya-engine/src/skill_catalog.rs) and
+[`discover_skills_for_roots_with_diagnostics`](../crates/hya-engine/src/skill_catalog.rs)
 extend the same first-name-wins rule across a Project's additional roots. The
 engine's per-scope binding composes its Skill catalog through
 the app’s `discover` callback, so this is the order in effect:
@@ -185,7 +185,7 @@ The bundle's `bundle.yaml` declares `kind: Bundle`, identity
 `id` and `path`. Each `SKILL.md` begins with YAML frontmatter containing
 `name: string` and `description: string`, then the Markdown body. The `name`
 must equal the declared resource `id`; invalid or missing metadata fails to
-load at startup. `hya_app::skill_catalog::core_skills_preset_bytes()` returns the loaded
+load at startup. `hya_engine::skill_catalog::core_skills_preset_bytes()` returns the loaded
 bundle's exact prepared catalog bytes for inventory and audit. The runtime
 Skill catalog exposes
 `name`, `description`, body `content`, empty `allowed_tools`, no model override,
@@ -294,7 +294,7 @@ Reloaded 4 skills, context (re-recorded at the next turn)
 
 ## Rust embedding
 
-`hya_app::skill_catalog::discover(workdir: Option<&Path>, roots: &[PathBuf])`
+`hya_engine::skill_catalog::discover(workdir: Option<&Path>, roots: &[PathBuf])`
 returns a `hya_tool::SkillDiscovery` containing resolved entries and file
 diagnostics. Supply `Some(workdir)` for a directory or Project and `None`
 for the global user and builtin catalog. `HyaRuntime` wires these sources
@@ -303,17 +303,17 @@ sources on its builder before sharing it with the engine or server.
 
 ```rust
 let registry = registry.with_skill_discovery(
-    hya_app::skill_catalog::discover,
-    hya_app::skill_catalog::builtin_skills,
+    hya_engine::skill_catalog::discover,
+    hya_engine::skill_catalog::builtin_skills,
 );
 ```
 
 The tool plane holds the catalog resolved for one turn. For a custom
 `ToolCtx`, pass `SkillPlane::from_snapshot(Arc::new(discovery.skills))`.
 Replace `SkillPlane::new(dirs)` with `discover_skills_from_dirs(&dirs)` from
-`hya_app::skill_catalog` followed by `from_snapshot`. `SkillPlane::default()`
+`hya_engine::skill_catalog` followed by `from_snapshot`. `SkillPlane::default()`
 represents an empty catalog. Discovery, parsing and trusted catalog helpers
-previously exposed at the root of `hya_tool` are in `hya_app::skill_catalog`.
+previously exposed at the root of `hya_tool` are in `hya_engine::skill_catalog`.
 
 ---
 

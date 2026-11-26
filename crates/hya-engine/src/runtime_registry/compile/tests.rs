@@ -47,7 +47,7 @@ fn reg_with(tools: ToolRegistry, catalog: Arc<AgentCatalog>) -> RuntimeRegistry 
                 .resources(hya_bundle::ExportKind::Skill)
                 .iter()
                 .map(|r| {
-                    let p = hya_app::skill_catalog::parse_skill(&r.content).expect("valid skill");
+                    let p = crate::skill_catalog::parse_skill(&r.content).expect("valid skill");
                     let path =
                         PathBuf::from(format!("bundle:{}/{}", bundle.identity().id, r.source_path));
                     let dir = path.parent().unwrap().to_path_buf();
@@ -83,8 +83,8 @@ fn reg_with(tools: ToolRegistry, catalog: Arc<AgentCatalog>) -> RuntimeRegistry 
         })
         .collect();
     let reg = RuntimeRegistry::new(tools, catalog).with_skill_discovery(
-        hya_app::skill_catalog::discover,
-        hya_app::skill_catalog::builtin_skills,
+        crate::skill_catalog::discover,
+        crate::skill_catalog::builtin_skills,
     );
     if !sources.is_empty() {
         reg.refresh(|c| c.replace_sources_of_kind(RuntimeSourceKind::Bundle, sources))
