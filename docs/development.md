@@ -503,6 +503,7 @@ When changing a boundary, update the nearest docs page:
 | Boundary | Docs page |
 | --- | --- |
 | CLI behavior | [CLI Reference](cli.md) |
+| ACP editor integration | [Agent Client Protocol](acp.md) |
 | Config behavior | [Configuration](configuration.md) |
 | Crate/file layout | [Project Structure](project-structure.md) |
 | Runtime behavior | [Runtime](architecture/runtime.md) |

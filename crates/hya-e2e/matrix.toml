@@ -524,3 +524,9 @@ reason = "custom command invoking an MCP Tool took 33-48 s alone; removed as exc
 [[retired]]
 id = "T2.45"
 reason = "the bash-timeout cap scenario waited out a ~20 s capped sleep (27-59 s alone); removed as excessively slow (2026-11-17)"
+
+[[scenario]]
+id = "T2.55"
+title = "ACP editor stdio and session MCP lifetime"
+track = "P"
+path = "crates/hya-e2e/tests/it/p03_mcp_and_custom_resources.rs"

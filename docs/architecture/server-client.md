@@ -63,7 +63,7 @@ admitted prompt before its assistant starts; see
 
 ## The v1 surface
 
-Eighteen services, 108 rpcs: AgentModels (durable per-agent model
+Eighteen services, 109 rpcs: AgentModels (durable per-agent model
 preferences, configuration saves, per-agent default efforts, and per-model effort preferences), Process (health/location/config/bootstrap), Catalog (agents/models/providers/commands/skills/
 tools/permission modes, plus provider upsert/refresh/model overrides/model
 test), Auth (keys applied live), Session (lifecycle + permission mode +

@@ -60,7 +60,7 @@ The SQLite `event_log` in `hya-store` and the pure `Projection` reducer in
 
 Every client drives the backend over one contract defined in `proto/hya/v1`:
 
-- **18 services / 108 RPCs on a single port:** `hya_server::build` serves both
+- **18 services / 109 RPCs on a single port:** `hya_server::build` serves both
   HTTP/JSON + SSE + WebSocket (`/v1/*`) and tonic gRPC (`V1Grpc`, routed by
   `content-type: application/grpc*`) from the same `AppState`. Unary gRPC calls
   dispatch in-process through the same Axum `/v1` router, guaranteeing
@@ -209,5 +209,5 @@ Per [ADR-0031](../adr/0031-hot-reload-and-stop-start-restart.md) (and
 | [Tools and Permissions](tools-and-permissions.md) | `ToolRegistry`, `PermissionPlane`, `ProjectScope` multi-root containment, saved rules, and output caps. |
 | [Agent Tool Surface](agent-tool-surface.md) | Registered vs advertised vs executable tool contracts, `todo`, `task`, `send`/`wait`/`report`/`archive`, and hashline editing. |
 | [Server and Client](server-client.md) | Consolidated `hya.v1` HTTP/SSE/WS + gRPC single-port server, `AppState`, error codes, and `hya-sdk-v1`. |
-| [Protocol Guide](../protocol/README.md) & [API Reference](../protocol/api-reference.md) | Wire-level `hya.v1` integration guide and generated 18-service / 108-RPC specification. |
+| [Protocol Guide](../protocol/README.md) & [API Reference](../protocol/api-reference.md) | Wire-level `hya.v1` integration guide and generated 18-service / 109-RPC specification. |
 | [Architecture Decision Records (`docs/adr/`)](../adr/) | Accepted ADRs governing daemon lifecycle, Projects, Relay, episodic subagents, TUI/WebUI, and hot reload. |

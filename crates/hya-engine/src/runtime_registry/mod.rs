@@ -105,7 +105,13 @@ pub struct RuntimeRegistry {
     pure_skills: bool,
     discover_skills: SkillDiscover,
     builtin_skills: fn() -> Vec<SkillCatalogEntry>,
+    session_sources: Mutex<HashMap<hya_proto::SessionId, SessionSources>>,
     source_owners: Mutex<Vec<Weak<dyn RuntimeSourceOwner>>>,
+}
+
+struct SessionSources {
+    sources: Vec<RuntimeSource>,
+    composed: Option<(ConfigGeneration, Arc<RuntimeSnapshot>)>,
 }
 
 /// One published scope overlay and its composed snapshot.
@@ -173,6 +179,63 @@ pub enum RuntimeRefreshError {
 }
 
 impl RuntimeRegistry {
+    /// Install connection-owned MCP exports for a newly created session.
+    /// The caller removes them when the client disconnects.
+    pub(crate) fn set_session_sources(
+        &self,
+        session: hya_proto::SessionId,
+        sources: Vec<RuntimeSource>,
+    ) {
+        let mut entries = self
+            .session_sources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if sources.is_empty() {
+            entries.remove(&session);
+        } else {
+            entries.insert(
+                session,
+                SessionSources {
+                    sources,
+                    composed: None,
+                },
+            );
+        }
+    }
+
+    pub(crate) fn bind_session_sources(
+        &self,
+        session: hya_proto::SessionId,
+        mut binding: TurnBinding,
+    ) -> Result<TurnBinding, RuntimeRefreshError> {
+        let mut entries = self
+            .session_sources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(entry) = entries.get_mut(&session) else {
+            return Ok(binding);
+        };
+        let base = binding.snapshot.generation;
+        if let Some((generation, snapshot)) = &entry.composed
+            && *generation == base
+        {
+            binding.snapshot = Arc::clone(snapshot);
+            return Ok(binding);
+        }
+        let mut candidate = RuntimeCandidate::from_snapshot(&binding.snapshot);
+        candidate.upsert_sources(entry.sources.clone())?;
+        let generation = allocate_generation(
+            &mut self
+                .publication
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )?;
+        binding.snapshot =
+            Arc::new(candidate.into_snapshot(generation, binding.snapshot.basic_tools.clone()));
+        entry.composed = Some((base, Arc::clone(&binding.snapshot)));
+        Ok(binding)
+    }
+
     /// Start a registry from a builder tools map and bundle catalog.
     #[must_use]
     pub fn new(tools: ToolRegistry, catalog: Arc<AgentCatalog>) -> Self {
@@ -229,6 +292,7 @@ impl RuntimeRegistry {
             pure_skills: false,
             discover_skills: |_, _| SkillDiscovery::default(),
             builtin_skills: Vec::new,
+            session_sources: Default::default(),
             source_owners: Mutex::new(Vec::new()),
         }
     }

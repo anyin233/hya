@@ -442,6 +442,32 @@ impl V1Sdk {
     /// # Errors
     /// Returns [`SdkError`] on transport or API failure.
     pub async fn cancel_turn(&self, session: &str, turn: &str) -> Result<pb::TurnInfo, SdkError> {
+        self.cancel(session, turn, None).await
+    }
+
+    /// Cancel a specific admitted prompt. A later turn in the same session is left running.
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure.
+    pub async fn cancel_matching_turn(
+        &self,
+        session: &str,
+        turn: &str,
+    ) -> Result<pb::TurnInfo, SdkError> {
+        self.cancel(
+            session,
+            turn,
+            Some(&serde_json::json!({"onlyIfCurrent":true})),
+        )
+        .await
+    }
+
+    async fn cancel(
+        &self,
+        session: &str,
+        turn: &str,
+        body: Option<&Value>,
+    ) -> Result<pb::TurnInfo, SdkError> {
         self.call(
             reqwest::Method::POST,
             &format!(
@@ -450,7 +476,7 @@ impl V1Sdk {
                 turn = encode_component(turn)
             ),
             None,
-            None::<&Value>,
+            body,
         )
         .await
     }

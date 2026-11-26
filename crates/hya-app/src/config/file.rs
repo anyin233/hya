@@ -408,12 +408,7 @@ pub(super) fn resolve_mcp(file: &FileConfig) -> anyhow::Result<BTreeMap<String, 
     for (id, server) in &file.mcp {
         // The server key is the namespace segment of `mcp__{server}__{tool}`;
         // a malformed key would compose ambiguous or unusable tool names.
-        let key_valid = !id.is_empty()
-            && !id.contains("__")
-            && id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
-        if !key_valid {
+        if !hya_mcp::bridge::valid_server_name(id) {
             anyhow::bail!(
                 "mcp server name `{id}` must contain only ASCII letters, digits, `-`, and `_`"
             );

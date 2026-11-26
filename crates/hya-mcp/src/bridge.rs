@@ -57,6 +57,19 @@ impl McpTool {
     }
 }
 
+/// Whether a configured server key can be one component of an MCP tool name.
+#[must_use]
+pub fn valid_server_name(name: &str) -> bool {
+    valid_name_token(name) && !name.contains("__")
+}
+
+fn valid_name_token(token: &str) -> bool {
+    !token.is_empty()
+        && token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+}
+
 /// Model-facing tool name: `mcp__{server}__{tool}` (server is the namespace).
 ///
 /// Returns `None` when either token is not a valid namespace segment
@@ -64,13 +77,7 @@ impl McpTool {
 /// never compose an ambiguous qualified spelling.
 #[must_use]
 pub fn namespaced_tool_name(server: &str, tool: &str) -> Option<String> {
-    let valid = |token: &str| {
-        !token.is_empty()
-            && token
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-    };
-    if !valid(server) || !valid(tool) {
+    if !valid_name_token(server) || !valid_name_token(tool) {
         return None;
     }
     Some(format!("mcp__{server}__{tool}"))

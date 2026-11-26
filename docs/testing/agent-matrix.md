@@ -103,6 +103,7 @@ cargo test -p hya-e2e -- --ignored --test-threads=1
 | T2.52 | Default `tools.code.mode` (`normal`) | `tests/it/p07_bundle_policies_and_extras.rs` | No `code-mode__run` offered; `hya bundle list` shows `hya/code-mode` disabled |
 | T2.53 | Headless exec single-turn step fold | `tests/it/p09_exec_headless.rs` | 12 large `bash` steps against 120k window trigger kernel Rewrite removing `STEP_0_BEGIN` |
 | T2.54 | Store robustness & exit durability | `tests/it/p43_store_robustness.rs` | Default PR smoke verifies clean JSONL/disk parity, clean archive drain, strict serve reject, and exec in-memory fallback; 7 `#[ignore = "nightly OS fault/soak"]` tests run in nightly |
+| T2.55 | ACP v1 stdio | `tests/it/p03_mcp_and_custom_resources.rs` | Multiplexed sessions isolate same-name MCP tools, dispatch permissions and cancel. A second editor stays usable across disconnect. |
 
 ### Built-in tool coverage
 

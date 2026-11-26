@@ -217,7 +217,7 @@ async fn pump<W: std::io::Write>(
 
 /// Rejects the permission asks and questions of one session tree, as the
 /// in-process `exec` does for its asks.
-struct Asks {
+pub(crate) struct Asks {
     root: String,
     /// Whether a session belongs to the tree (memoized parent walks).
     in_tree: HashMap<String, bool>,
@@ -225,7 +225,7 @@ struct Asks {
 }
 
 impl Asks {
-    fn new(root: String) -> Self {
+    pub(crate) fn new(root: String) -> Self {
         let mut in_tree = HashMap::new();
         in_tree.insert(root.clone(), true);
         Self {
@@ -235,7 +235,7 @@ impl Asks {
         }
     }
 
-    async fn belongs(&mut self, sdk: &V1Sdk, session: &str) -> bool {
+    pub(crate) async fn belongs(&mut self, sdk: &V1Sdk, session: &str) -> bool {
         let mut chain = Vec::new();
         let mut current = session.to_string();
         let verdict = loop {

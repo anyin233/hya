@@ -94,6 +94,11 @@ impl hya_server::McpControl for RuntimeMcpControl {
         config: McpServerConfig,
     ) -> ControlFuture<'_, Result<(), String>> {
         Box::pin(async move {
+            if !hya_mcp::bridge::valid_server_name(&name) {
+                return Err(format!(
+                    "MCP server name `{name}` must be a valid namespace segment"
+                ));
+            }
             let plan = self
                 .reconciler
                 .upsert_mcp(name, config)

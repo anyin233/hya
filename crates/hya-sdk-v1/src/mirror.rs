@@ -268,6 +268,12 @@ impl V1SessionMirror {
         self.members.values().collect()
     }
 
+    /// Look up the current projection of a message touched by a stream update.
+    #[must_use]
+    pub fn message(&self, id: &str) -> Option<&pb::MessageInfo> {
+        self.messages.get(id)
+    }
+
     /// The mirrored transcript in append order.
     #[must_use]
     pub fn messages(&self) -> Vec<&pb::MessageInfo> {

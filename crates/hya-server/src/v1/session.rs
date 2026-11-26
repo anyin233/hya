@@ -52,7 +52,7 @@ async fn session_exists(st: &ServerState, session: SessionId) -> Result<(), V1Er
     }
 }
 
-async fn create_session(
+pub(super) async fn create_session(
     State(st): State<ServerState>,
     Json(request): Json<pb::CreateSessionRequest>,
 ) -> Result<Json<pb::CreateSessionResponse>, V1Error> {

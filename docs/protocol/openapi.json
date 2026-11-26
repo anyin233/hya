@@ -393,6 +393,17 @@
         "x-server-streaming": false
       }
     },
+    "/v1/mcp/session": {
+      "post": {
+        "operationId": "Mcp.OpenMcpSession",
+        "summary": "Create a root session with MCP peers supplied by a local client. The",
+        "tags": [
+          "Mcp"
+        ],
+        "x-grpc-method": "hya.v1.Mcp.OpenMcpSession",
+        "x-server-streaming": true
+      }
+    },
     "/v1/mcp/{name}/auth": {
       "post": {
         "operationId": "Mcp.StartMcpAuth",
@@ -3752,6 +3763,45 @@
           }
         }
       },
+      "SessionMcpPeer": {
+        "type": "object",
+        "description": "A named MCP stdio peer bridged by the editor through a private Unix socket.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "socket": {
+            "type": "string"
+          }
+        }
+      },
+      "OpenMcpSessionRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "workdir": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "peers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionMcpPeer"
+            }
+          }
+        }
+      },
+      "OpenMcpSessionResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          }
+        }
+      },
       "TokenUsage": {
         "type": "object",
         "description": "Token accounting for one model round.",
@@ -5453,6 +5503,9 @@
         "type": "object",
         "description": "",
         "properties": {
+          "only_if_current": {
+            "type": "boolean"
+          },
           "session": {
             "type": "string"
           },

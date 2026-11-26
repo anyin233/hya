@@ -17,6 +17,7 @@ mod grpc;
 mod interaction;
 mod logs;
 mod mcp;
+mod mcp_session;
 mod message;
 mod process;
 mod project;
@@ -93,6 +94,7 @@ pub(crate) fn router() -> Router<ServerState> {
         .merge(project::router())
         .merge(worktree::router())
         .merge(mcp::router())
+        .merge(mcp_session::router())
         .merge(pty::router())
         .merge(relay::router())
 }

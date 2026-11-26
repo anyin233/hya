@@ -3127,6 +3127,9 @@ impl serde::Serialize for CancelTurnRequest {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
+        if self.only_if_current {
+            len += 1;
+        }
         if !self.session.is_empty() {
             len += 1;
         }
@@ -3134,6 +3137,9 @@ impl serde::Serialize for CancelTurnRequest {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("hya.v1.CancelTurnRequest", len)?;
+        if self.only_if_current {
+            struct_ser.serialize_field("onlyIfCurrent", &self.only_if_current)?;
+        }
         if !self.session.is_empty() {
             struct_ser.serialize_field("session", &self.session)?;
         }
@@ -3150,12 +3156,15 @@ impl<'de> serde::Deserialize<'de> for CancelTurnRequest {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "only_if_current",
+            "onlyIfCurrent",
             "session",
             "turn",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
+            OnlyIfCurrent,
             Session,
             Turn,
         }
@@ -3179,6 +3188,7 @@ impl<'de> serde::Deserialize<'de> for CancelTurnRequest {
                         E: serde::de::Error,
                     {
                         match value {
+                            "onlyIfCurrent" | "only_if_current" => Ok(GeneratedField::OnlyIfCurrent),
                             "session" => Ok(GeneratedField::Session),
                             "turn" => Ok(GeneratedField::Turn),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -3200,10 +3210,17 @@ impl<'de> serde::Deserialize<'de> for CancelTurnRequest {
                 where
                     V: serde::de::MapAccess<'de>,
             {
+                let mut only_if_current__ = None;
                 let mut session__ = None;
                 let mut turn__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
+                        GeneratedField::OnlyIfCurrent => {
+                            if only_if_current__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("onlyIfCurrent"));
+                            }
+                            only_if_current__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::Session => {
                             if session__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("session"));
@@ -3219,6 +3236,7 @@ impl<'de> serde::Deserialize<'de> for CancelTurnRequest {
                     }
                 }
                 Ok(CancelTurnRequest {
+                    only_if_current: only_if_current__.unwrap_or_default(),
                     session: session__.unwrap_or_default(),
                     turn: turn__.unwrap_or_default(),
                 })
@@ -19727,6 +19745,222 @@ impl<'de> serde::Deserialize<'de> for OauthTokens {
         deserializer.deserialize_struct("hya.v1.OauthTokens", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for OpenMcpSessionRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.workdir.is_empty() {
+            len += 1;
+        }
+        if !self.model.is_empty() {
+            len += 1;
+        }
+        if !self.peers.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.OpenMcpSessionRequest", len)?;
+        if !self.workdir.is_empty() {
+            struct_ser.serialize_field("workdir", &self.workdir)?;
+        }
+        if !self.model.is_empty() {
+            struct_ser.serialize_field("model", &self.model)?;
+        }
+        if !self.peers.is_empty() {
+            struct_ser.serialize_field("peers", &self.peers)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for OpenMcpSessionRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "workdir",
+            "model",
+            "peers",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Workdir,
+            Model,
+            Peers,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "workdir" => Ok(GeneratedField::Workdir),
+                            "model" => Ok(GeneratedField::Model),
+                            "peers" => Ok(GeneratedField::Peers),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = OpenMcpSessionRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.OpenMcpSessionRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<OpenMcpSessionRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut workdir__ = None;
+                let mut model__ = None;
+                let mut peers__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Workdir => {
+                            if workdir__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("workdir"));
+                            }
+                            workdir__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Model => {
+                            if model__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("model"));
+                            }
+                            model__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Peers => {
+                            if peers__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("peers"));
+                            }
+                            peers__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(OpenMcpSessionRequest {
+                    workdir: workdir__.unwrap_or_default(),
+                    model: model__.unwrap_or_default(),
+                    peers: peers__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.OpenMcpSessionRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for OpenMcpSessionResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.session.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.OpenMcpSessionResponse", len)?;
+        if !self.session.is_empty() {
+            struct_ser.serialize_field("session", &self.session)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for OpenMcpSessionResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "session",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Session,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "session" => Ok(GeneratedField::Session),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = OpenMcpSessionResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.OpenMcpSessionResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<OpenMcpSessionResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut session__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Session => {
+                            if session__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("session"));
+                            }
+                            session__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(OpenMcpSessionResponse {
+                    session: session__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.OpenMcpSessionResponse", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for PageInfo {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -28180,6 +28414,114 @@ impl<'de> serde::Deserialize<'de> for SessionKind {
             }
         }
         deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
+impl serde::Serialize for SessionMcpPeer {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.name.is_empty() {
+            len += 1;
+        }
+        if !self.socket.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.SessionMcpPeer", len)?;
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
+        }
+        if !self.socket.is_empty() {
+            struct_ser.serialize_field("socket", &self.socket)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for SessionMcpPeer {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "name",
+            "socket",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Name,
+            Socket,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "name" => Ok(GeneratedField::Name),
+                            "socket" => Ok(GeneratedField::Socket),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = SessionMcpPeer;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.SessionMcpPeer")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SessionMcpPeer, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut name__ = None;
+                let mut socket__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Socket => {
+                            if socket__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("socket"));
+                            }
+                            socket__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(SessionMcpPeer {
+                    name: name__.unwrap_or_default(),
+                    socket: socket__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.SessionMcpPeer", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for SessionRef {

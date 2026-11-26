@@ -1,4 +1,3 @@
-# 0.49.1
+# 0.50.0
 
-- **Rust API change for embedders.** Skill catalog discovery (`discover`, `parse_skill`, `builtin_skills`, `skill_dirs_for` and the rest of the module) moved from `hya_app::skill_catalog` to `hya_engine::skill_catalog`. No runtime, wire or CLI behaviour changes.
-- **Smaller test build graph.** `hya-engine` and `hya-server` no longer take `hya-app` as a dev-dependency, so their test binaries no longer compile the runtime composition crate.
+- Editors can launch `hya acp` to stream conversations, display tool calls, answer permissions and cancel turns over Agent Client Protocol v1. Each editor session can attach its own stdio MCP servers.

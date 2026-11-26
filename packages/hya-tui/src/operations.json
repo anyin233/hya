@@ -216,6 +216,12 @@
     "streaming": false
   },
   {
+    "method": "POST",
+    "path": "/v1/mcp/session",
+    "operationId": "Mcp.OpenMcpSession",
+    "streaming": true
+  },
+  {
     "method": "DELETE",
     "path": "/v1/mcp/{name}/auth",
     "operationId": "Mcp.RemoveMcpAuth",

@@ -421,6 +421,7 @@ observed state.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
+| `OpenMcpSession` | `POST /v1/mcp/session (stream)` | `hya.v1.Mcp.OpenMcpSession` | `OpenMcpSessionRequest` | `OpenMcpSessionResponse` |
 | `GetMcpStatus` | `GET /v1/mcp` | `hya.v1.Mcp.GetMcpStatus` | `GetMcpStatusRequest` | `GetMcpStatusResponse` |
 | `AddMcpServer` | `POST /v1/mcp` | `hya.v1.Mcp.AddMcpServer` | `AddMcpServerRequest` | `McpServerStatus` |
 | `ConnectMcp` | `POST /v1/mcp/{name}/connect` | `hya.v1.Mcp.ConnectMcp` | `ConnectMcpRequest` | `McpServerStatus` |
@@ -428,6 +429,12 @@ observed state.
 | `StartMcpAuth` | `POST /v1/mcp/{name}/auth` | `hya.v1.Mcp.StartMcpAuth` | `StartMcpAuthRequest` | `StartMcpAuthResponse` |
 | `CompleteMcpAuth` | `POST /v1/mcp/{name}/auth/complete` | `hya.v1.Mcp.CompleteMcpAuth` | `CompleteMcpAuthRequest` | `McpServerStatus` |
 | `RemoveMcpAuth` | `DELETE /v1/mcp/{name}/auth` | `hya.v1.Mcp.RemoveMcpAuth` | `RemoveMcpAuthRequest` | `RemoveMcpAuthResponse` |
+
+### `Mcp.OpenMcpSession`
+
+Create a root session with MCP peers supplied by a local client. The
+first frame identifies the session; closing the stream releases its peers.
+
 
 ### `Mcp.GetMcpStatus`
 
@@ -2384,6 +2391,31 @@ HTTP/SSE transport: connect to a URL.
 | `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 | `name` (2) | `string` | Server name whose credentials should be removed. |
 
+### `SessionMcpPeer`
+
+A named MCP stdio peer bridged by the editor through a private Unix socket.
+
+| Field | Type | Description |
+|---|---|---|
+| `name` (1) | `string` |  |
+| `socket` (2) | `string` |  |
+
+### `OpenMcpSessionRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `workdir` (1) | `string` | Existing absolute workspace directory. |
+| `model` (2) | `string` | Optional provider/model override. |
+| `peers` (3) | `repeated SessionMcpPeer` |  |
+
+### `OpenMcpSessionResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `session` (1) | `string` | Session id for subsequent Turns, Events and Interactions requests. |
+
 ### `TokenUsage`
 
 Token accounting for one model round.
@@ -3391,6 +3423,7 @@ features return an empty id.
 
 | Field | Type | Description |
 |---|---|---|
+| `only_if_current` (3) | `bool` | Cancel only the admitted turn identified by turn. A stale ID is a no-op. By default cancellation targets the current session execution. |
 | `session` (1) | `string` | Session identifier. |
 | `turn` (2) | `string` | Turn identifier. |
 

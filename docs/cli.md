@@ -805,6 +805,10 @@ skill catalog is the whole skill surface). Websearch keeps its own
 configuration, and builtin tools are unaffected. Use it for reproducible
 runs whose prompt context is exactly what you passed.
 
+## `hya acp`
+
+Launch the ACP v1 stdio agent from an editor with `hya acp`. Use `hya --db /tmp/hya-editor.db --model hya/offline acp` for an isolated offline session. The editor supplies the working directory at session creation. See the [ACP setup and protocol reference](acp.md).
+
 ## `hya exec`
 
 ```sh

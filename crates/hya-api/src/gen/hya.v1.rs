@@ -9903,6 +9903,31 @@ pub struct RemoveMcpAuthRequest {
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct RemoveMcpAuthResponse {}
+/// A named MCP stdio peer bridged by the editor through a private Unix socket.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SessionMcpPeer {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub socket: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OpenMcpSessionRequest {
+    /// Existing absolute workspace directory.
+    #[prost(string, tag = "1")]
+    pub workdir: ::prost::alloc::string::String,
+    /// Optional provider/model override.
+    #[prost(string, tag = "2")]
+    pub model: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "3")]
+    pub peers: ::prost::alloc::vec::Vec<SessionMcpPeer>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OpenMcpSessionResponse {
+    /// Session id for subsequent Turns, Events and Interactions requests.
+    #[prost(string, tag = "1")]
+    pub session: ::prost::alloc::string::String,
+}
 /// Connection state of an MCP server.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -10037,6 +10062,33 @@ pub mod mcp_client {
         pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
             self.inner = self.inner.max_encoding_message_size(limit);
             self
+        }
+        /// Create a root session with MCP peers supplied by a local client. The
+        /// first frame identifies the session; closing the stream releases its peers.
+        ///
+        /// hya.http: POST /v1/mcp/session
+        pub async fn open_mcp_session(
+            &mut self,
+            request: impl tonic::IntoRequest<super::OpenMcpSessionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<tonic::codec::Streaming<super::OpenMcpSessionResponse>>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Mcp/OpenMcpSession",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new("hya.v1.Mcp", "OpenMcpSession"));
+            self.inner.server_streaming(req, path, codec).await
         }
         /// Status of every configured MCP server in a directory.
         ///
@@ -10231,6 +10283,23 @@ pub mod mcp_server {
     /// Generated trait containing gRPC methods that should be implemented for use with McpServer.
     #[async_trait]
     pub trait Mcp: std::marker::Send + std::marker::Sync + 'static {
+        /// Server streaming response type for the OpenMcpSession method.
+        type OpenMcpSessionStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::OpenMcpSessionResponse, tonic::Status>,
+            >
+            + std::marker::Send
+            + 'static;
+        /// Create a root session with MCP peers supplied by a local client. The
+        /// first frame identifies the session; closing the stream releases its peers.
+        ///
+        /// hya.http: POST /v1/mcp/session
+        async fn open_mcp_session(
+            &self,
+            request: tonic::Request<super::OpenMcpSessionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<Self::OpenMcpSessionStream>,
+            tonic::Status,
+        >;
         /// Status of every configured MCP server in a directory.
         ///
         /// hya.http: GET /v1/mcp
@@ -10376,6 +10445,52 @@ pub mod mcp_server {
         }
         fn call(&mut self, req: http::Request<B>) -> Self::Future {
             match req.uri().path() {
+                "/hya.v1.Mcp/OpenMcpSession" => {
+                    #[allow(non_camel_case_types)]
+                    struct OpenMcpSessionSvc<T: Mcp>(pub Arc<T>);
+                    impl<
+                        T: Mcp,
+                    > tonic::server::ServerStreamingService<super::OpenMcpSessionRequest>
+                    for OpenMcpSessionSvc<T> {
+                        type Response = super::OpenMcpSessionResponse;
+                        type ResponseStream = T::OpenMcpSessionStream;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::OpenMcpSessionRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Mcp>::open_mcp_session(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = OpenMcpSessionSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.server_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
                 "/hya.v1.Mcp/GetMcpStatus" => {
                     #[allow(non_camel_case_types)]
                     struct GetMcpStatusSvc<T: Mcp>(pub Arc<T>);
@@ -16667,6 +16782,10 @@ pub struct WaitTurnRequest {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CancelTurnRequest {
+    /// Cancel only the admitted turn identified by turn. A stale ID is a no-op.
+    /// By default cancellation targets the current session execution.
+    #[prost(bool, tag = "3")]
+    pub only_if_current: bool,
     /// Session identifier.
     #[prost(string, tag = "1")]
     pub session: ::prost::alloc::string::String,
