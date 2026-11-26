@@ -150,7 +150,8 @@ async def editor_main(binary, db):
         assert "error" in await a.new(Path("relative"), [])
         assert "error" in await a.new(cwd, [dict(peer("unused"), name="bad__namespace")])
         invalid = dict(peer("invalid"), name="bad", command="/missing/acp-fixture")
-        assert "error" in await a.new(cwd, [peer("partial"), invalid])
+        failed = await a.new(cwd, [peer("partial"), invalid])
+        assert "MCP server `bad` discovery failed" in json.dumps(failed["error"]), failed
         first = (await a.new(cwd, [peer("alpha")]))["result"]["sessionId"]
         second = (await a.new(other_dir, [peer("beta")]))["result"]["sessionId"]
         survivor = (await b.new(cwd, []))["result"]["sessionId"]

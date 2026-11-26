@@ -38,36 +38,16 @@ impl Peers {
                 .join(format!("peer-{}", hya_proto::SessionId::new()));
             let listener = UnixListener::bind(&socket)?;
             peers.push(pb::SessionMcpPeer {
-                name: server.name,
+                name: server.name.clone(),
                 socket: socket.to_string_lossy().into_owned(),
             });
             let cwd = cwd.to_path_buf();
             tasks.spawn(async move {
-                let (stream, _) = listener.accept().await?;
-                // SAFETY: geteuid takes no arguments and cannot fail.
-                ensure!(
-                    stream.peer_cred()?.uid() == unsafe { libc::geteuid() },
-                    "unexpected MCP peer"
-                );
-                let mut child = Command::new(server.command)
-                    .args(server.args)
-                    .envs(server.env.into_iter().map(|v| (v.name, v.value)))
-                    .current_dir(cwd)
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::null())
-                    .kill_on_drop(true)
-                    .spawn()?;
-                let (mut read, mut write) = stream.into_split();
-                let mut input = child.stdin.take().context("missing MCP input")?;
-                let mut output = child.stdout.take().context("missing MCP output")?;
-                tokio::select! {
-                    r = tokio::io::copy(&mut read,&mut input) => { r?; },
-                    r = tokio::io::copy(&mut output,&mut write) => { r?; },
-                    r = child.wait() => { r?; return Ok(()) }
-                }
-                child.kill().await?;
-                Ok(())
+                let name = server.name.clone();
+                // The backend cannot see spawn errors; stderr is the editor's agent log.
+                bridge(listener, server, cwd)
+                    .await
+                    .inspect_err(|error| eprintln!("hya acp: MCP server `{name}`: {error:#}"))
             });
         }
         let channel = tonic::transport::Endpoint::from_shared(url.to_owned())?
@@ -102,4 +82,43 @@ impl Peers {
             },
         ))
     }
+}
+
+/// Accept the backend's connection, then run the server and pipe its stdio.
+async fn bridge(
+    listener: UnixListener,
+    server: acp::McpServerStdio,
+    cwd: std::path::PathBuf,
+) -> anyhow::Result<()> {
+    let (stream, _) = listener.accept().await?;
+    // SAFETY: geteuid takes no arguments and cannot fail.
+    ensure!(
+        stream.peer_cred()?.uid() == unsafe { libc::geteuid() },
+        "unexpected MCP peer"
+    );
+    let command = server.command;
+    let mut child = Command::new(&command)
+        .args(server.args)
+        .envs(server.env.into_iter().map(|v| (v.name, v.value)))
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true)
+        .spawn()
+        .with_context(|| format!("start {}", command.display()))?;
+    let (mut read, mut write) = stream.into_split();
+    let mut input = child.stdin.take().context("missing MCP input")?;
+    let mut output = child.stdout.take().context("missing MCP output")?;
+    tokio::select! {
+        r = tokio::io::copy(&mut read, &mut input) => { r?; },
+        r = tokio::io::copy(&mut output, &mut write) => { r?; },
+        r = child.wait() => {
+            let status = r?;
+            ensure!(status.success(), "exited with {status}");
+            return Ok(());
+        }
+    }
+    child.kill().await?;
+    Ok(())
 }

@@ -123,7 +123,12 @@ pub(super) async fn open(
             hya_mcp::McpClient::new(reader, writer),
         )
         .await
-        .map_err(|_| V1Error::invalid_argument("MCP discovery failed"))?;
+        .map_err(|error| {
+            V1Error::invalid_argument(format!(
+                "MCP server `{}` discovery failed: {error}",
+                peer.name
+            ))
+        })?;
         let exports = prepared
             .tools()
             .into_iter()
