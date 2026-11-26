@@ -1,0 +1,77 @@
+name: install-smoke
+
+# Runs the public one-line installer, exactly as users do, against a published
+# release on every supported target. Assets are uploaded before the release is
+# published, so `published` sees the complete release.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag to install: the latest stable release or any pre-release (for example v0.50.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: install ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+          - target: aarch64-apple-darwin
+            runner: macos-15
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.version }}
+      INSTALL_URL: https://hya.ed-aisys.com/install.sh
+    steps:
+      - name: Install with the one-line installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          scratch="$RUNNER_TEMP/hya-install"
+          prefix="$scratch/prefix"
+          export HOME="$scratch/home"
+          export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
+          export XDG_STATE_HOME="$HOME/.local/state" XDG_CACHE_HOME="$HOME/.cache"
+          mkdir -p "$HOME"
+
+          curl -fsSL "$INSTALL_URL" | sh -s -- --version "$version" --prefix "$prefix"
+
+          test "$("$prefix/bin/hya" --version)" = "hya $version"
+          test "$("$prefix/lib/hya/bin/bun" --version)" = "1.4.2"
+          for name in bun-adapter claude-adapter tui tui-sdk tui-web; do
+            test -e "$prefix/lib/hya/$name"
+          done
+          grep -F "\"$version\"" "$prefix/lib/hya/tui/frontend-version.ts"
+          ls "$prefix"/bundles/hya-*.hyabundle
+          if ls -d "$prefix"/.hya-install.* 2>/dev/null; then
+            echo "installer left a staging directory behind" >&2
+            exit 1
+          fi
+
+          curl -fsSL "$INSTALL_URL" | sh -s -- --version "$version" --prefix "$prefix" | tee "$scratch/rerun.txt"
+          grep -F "hya $version is already installed" "$scratch/rerun.txt"
+
+          if curl -fsSL "$INSTALL_URL" | sh -s -- --version 0.0.0-missing --prefix "$scratch/missing" 2> "$scratch/missing.txt"; then
+            echo "installing a missing release succeeded" >&2
+            exit 1
+          fi
+          grep -F "no hya release v0.0.0-missing" "$scratch/missing.txt"
+          test ! -e "$scratch/missing"
+
+          # `hya update` installs the latest stable release, which a pre-release is not.
+          if [[ "$version" != *-* ]]; then
+            "$prefix/bin/hya" update | tee "$scratch/update.txt"
+            grep -F "hya $version is already installed" "$scratch/update.txt"
+          fi
