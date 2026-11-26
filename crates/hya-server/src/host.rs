@@ -385,8 +385,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loopback_names_on_any_port_are_allowed() {
-        let policy = HostPolicy::loopback();
+    fn host_policy_validates_loopback_configured_and_malformed_names() {
+        let loopback = HostPolicy::loopback();
         for ok in [
             "localhost",
             "localhost:3250",
@@ -397,7 +397,7 @@ mod tests {
             "[::1]",
             "[::1]:4000",
         ] {
-            assert!(policy.allows(ok), "{ok}");
+            assert!(loopback.allows(ok), "{ok}");
         }
         for refused in [
             "evil.example",
@@ -413,12 +413,9 @@ mod tests {
             "",
             "[::1",
         ] {
-            assert!(!policy.allows(refused), "{refused}");
+            assert!(!loopback.allows(refused), "{refused}");
         }
-    }
 
-    #[test]
-    fn configured_names_are_normalized_and_allowed() {
         let policy =
             HostPolicy::with_hosts(["Hya.Example.Lan.", "192.168.1.20", "fe80::1", "localhost"])
                 .unwrap();
@@ -426,15 +423,16 @@ mod tests {
             policy.extra_hosts(),
             vec!["192.168.1.20", "[fe80::1]", "hya.example.lan"]
         );
-        assert!(policy.allows("hya.example.lan:8080"));
-        assert!(policy.allows("HYA.EXAMPLE.LAN"));
-        assert!(policy.allows("192.168.1.20:8080"));
-        assert!(policy.allows("[fe80::1]:8080"));
+        for ok in [
+            "hya.example.lan:8080",
+            "HYA.EXAMPLE.LAN",
+            "192.168.1.20:8080",
+            "[fe80::1]:8080",
+        ] {
+            assert!(policy.allows(ok), "{ok}");
+        }
         assert!(!policy.allows("other.example.lan"));
-    }
 
-    #[test]
-    fn configured_names_with_a_port_or_junk_are_refused() {
         for bad in [
             "",
             "host:8080",
@@ -460,33 +458,27 @@ mod tests {
     }
 
     #[test]
-    fn a_network_request_without_a_host_is_refused_an_in_process_one_is_not() {
+    fn admit_enforces_host_authority_and_relay_browser_headers() {
         let policy = HostPolicy::loopback();
         let (headers, uri, extensions) = parts(None, axum::http::Extensions::new());
         assert!(admit(&policy, &headers, &uri, &extensions).is_ok());
+
         let mut network = axum::http::Extensions::new();
         network.insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5000))));
         let (headers, uri, extensions) = parts(None, network);
         assert!(admit(&policy, &headers, &uri, &extensions).is_err());
+
         let mut relay = axum::http::Extensions::new();
         relay.insert(Origin::Relay);
         let (headers, uri, extensions) = parts(None, relay);
         assert!(admit(&policy, &headers, &uri, &extensions).is_err());
-    }
 
-    #[test]
-    fn an_absolute_uri_authority_is_checked_too() {
-        let policy = HostPolicy::loopback();
-        let headers = HeaderMap::new();
-        let uri: Uri = "http://evil.example/v1/health".parse().unwrap();
-        assert!(admit(&policy, &headers, &uri, &axum::http::Extensions::new()).is_err());
-        let uri: Uri = "http://127.0.0.1:9/v1/health".parse().unwrap();
-        assert!(admit(&policy, &headers, &uri, &axum::http::Extensions::new()).is_ok());
-    }
+        let empty = HeaderMap::new();
+        let bad_uri: Uri = "http://evil.example/v1/health".parse().unwrap();
+        assert!(admit(&policy, &empty, &bad_uri, &axum::http::Extensions::new()).is_err());
+        let ok_uri: Uri = "http://127.0.0.1:9/v1/health".parse().unwrap();
+        assert!(admit(&policy, &empty, &ok_uri, &axum::http::Extensions::new()).is_ok());
 
-    #[test]
-    fn relay_browser_requests_are_refused_local_ones_are_not() {
-        let policy = HostPolicy::loopback();
         for header in [
             "origin",
             "sec-fetch-site",

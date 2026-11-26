@@ -1,61 +1,54 @@
 //! Guards for `support::test_runtime`'s agent-id validation.
-//!
-//! The shared fixture helper builds its `bundle.yaml` by string concatenation,
-//! so an id can parse into a *different* value than the caller wrote. These
-//! tests pin both halves of that contract: the ids that must be rejected, and
-//! the ids that must keep working. Without them the guard itself can rot the
-//! same way the duplicated fixture helper did.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
-
-use crate::support;
 
 use std::sync::Arc;
 
 use hya_bundle::AgentRole;
 
-fn build(agents: &[(&str, AgentRole, &[&str])]) {
-    support::test_runtime(Arc::new(hya_tool_loader::builtins()), agents);
-}
+use crate::support;
 
 #[test]
-#[should_panic(expected = "splits the can_spawn flow sequence")]
-fn rejects_comma_that_splits_can_spawn() {
-    // `can_spawn: [alpha,beta]` would silently grant two spawn edges.
-    build(&[("caller", AgentRole::Main, &["alpha,beta"])]);
-}
+fn test_runtime_rejects_yaml_hazards_and_accepts_bareword_ids() {
+    type AgentRow<'a> = (&'a str, AgentRole, &'a [&'a str]);
+    let tools = Arc::new(hya_tool_loader::builtins());
+    let cases: &[(&[AgentRow<'_>], &str)] = &[
+        (
+            &[("caller", AgentRole::Main, &["alpha,beta"])],
+            "splits the can_spawn flow sequence",
+        ),
+        (
+            &[("&anchored", AgentRole::Main, &[])],
+            "YAML parses as an anchor",
+        ),
+        (
+            &[(" padded", AgentRole::Main, &[])],
+            "surrounding whitespace",
+        ),
+        (&[("", AgentRole::Main, &[])], "must not be empty"),
+    ];
+    for (agents, expected) in cases {
+        let err = std::panic::catch_unwind(|| {
+            support::test_runtime(Arc::clone(&tools), agents);
+        })
+        .expect_err("hazard id must panic");
+        let msg = err
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| err.downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        assert!(msg.contains(expected), "expected {expected:?} in {msg:?}");
+    }
 
-#[test]
-#[should_panic(expected = "YAML parses as an anchor")]
-fn rejects_leading_ampersand_anchor() {
-    // A leading `&` is a YAML anchor; the id would silently become "".
-    build(&[("&anchored", AgentRole::Main, &[])]);
-}
-
-#[test]
-#[should_panic(expected = "surrounding whitespace")]
-fn rejects_surrounding_whitespace() {
-    build(&[(" padded", AgentRole::Main, &[])]);
-}
-
-#[test]
-#[should_panic(expected = "must not be empty")]
-fn rejects_empty_id() {
-    build(&[("", AgentRole::Main, &[])]);
-}
-
-/// YAML 1.1 bareword booleans are **not** a hazard for this manifest, and this
-/// test exists so nobody "hardens" the guard against them: `serde_norway`
-/// resolves only `true|True|TRUE|false|False|FALSE` as booleans, and these
-/// fields deserialize as raw `String`s regardless. Verified end-to-end through
-/// `hya_bundle::prepare_package`, not against a standalone parser probe.
-#[test]
-fn accepts_yaml_1_1_bareword_ids() {
-    build(&[
-        ("no", AgentRole::Main, &["on", "y"]),
-        ("on", AgentRole::Subagent, &[]),
-        ("y", AgentRole::Subagent, &[]),
-        ("null", AgentRole::Subagent, &[]),
-        ("123", AgentRole::Subagent, &[]),
-    ]);
+    // YAML 1.1 barewords round-trip verbatim through serde_norway as Strings.
+    support::test_runtime(
+        tools,
+        &[
+            ("no", AgentRole::Main, &["on", "y"]),
+            ("on", AgentRole::Subagent, &[]),
+            ("y", AgentRole::Subagent, &[]),
+            ("null", AgentRole::Subagent, &[]),
+            ("123", AgentRole::Subagent, &[]),
+        ],
+    );
 }

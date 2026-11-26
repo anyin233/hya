@@ -1,31 +1,20 @@
-//! A configured stdio server must be reachable through the shipped HTTP surface.
+//! A configured stdio LSP server must be reachable through the shipped HTTP surface.
 #![cfg(unix)]
 
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-struct Workspace(PathBuf);
-
-impl Drop for Workspace {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
+use crate::common::{Scratch, TestResult};
 
 #[tokio::test]
-async fn configured_language_server_exposes_workspace_symbols()
--> Result<(), Box<dyn std::error::Error>> {
-    let root = Workspace(std::env::temp_dir().join(format!(
-        "hya-lsp-runtime-{}-{}",
-        std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-    )));
-    let project = root.0.join("project");
-    let config = root.0.join("config");
+async fn configured_language_server_exposes_workspace_symbols() -> TestResult {
+    let scratch = Scratch::new("hya-lsp-runtime")?;
+    let project = scratch.0.join("project");
+    let config = scratch.0.join("config");
     std::fs::create_dir_all(&project)?;
     std::fs::create_dir_all(config.join("hya"))?;
     std::fs::write(
@@ -44,18 +33,17 @@ async fn configured_language_server_exposes_workspace_symbols()
     )?;
     let mut backend = tokio::process::Command::new(env!("CARGO_BIN_EXE_hya"))
         .args(["serve", "--bind", "127.0.0.1:0"])
-        .env("HOME", root.0.join("home"))
+        .env("HOME", scratch.0.join("home"))
         .env("XDG_CONFIG_HOME", &config)
-        .env("XDG_STATE_HOME", root.0.join("state"))
-        .env("XDG_DATA_HOME", root.0.join("data"))
-        .env("XDG_CACHE_HOME", root.0.join("cache"))
+        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("XDG_DATA_HOME", scratch.0.join("data"))
+        .env("XDG_CACHE_HOME", scratch.0.join("cache"))
         .current_dir(&project)
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::null())
         .kill_on_drop(true)
         .spawn()?;
-    let stdout = backend.stdout.take().ok_or("missing backend stdout")?;
-    let mut lines = BufReader::new(stdout).lines();
+    let mut lines = BufReader::new(backend.stdout.take().ok_or("no stdout")?).lines();
     let url = tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(line) = lines.next_line().await? {
             if let Some(url) = line.strip_prefix("hya server listening on ") {
@@ -65,10 +53,9 @@ async fn configured_language_server_exposes_workspace_symbols()
         Err(std::io::Error::other("backend exited before readiness"))
     })
     .await??;
-    let client = reqwest::Client::builder()
+    let symbols: Value = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
-        .build()?;
-    let symbols: Value = client
+        .build()?
         .get(format!("{url}/v1/fs/symbols"))
         .query(&[
             ("query", "qaSymbol"),

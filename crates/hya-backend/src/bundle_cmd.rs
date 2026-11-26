@@ -1,5 +1,4 @@
 use std::fs;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
@@ -567,19 +566,31 @@ fn action_label(action: &BundleInstallAction) -> String {
 /// Ask `question` on stderr and read one answer line from stdin. Only `y` or
 /// `yes` (any case) proceeds; anything else, including closed stdin, cancels.
 fn confirm(summary: &str, verb: &str, yes: bool) -> anyhow::Result<()> {
+    confirm_from(
+        summary,
+        verb,
+        yes,
+        std::io::stdin().lock(),
+        std::io::stderr().lock(),
+    )
+}
+
+fn confirm_from(
+    summary: &str,
+    verb: &str,
+    yes: bool,
+    mut reader: impl std::io::BufRead,
+    mut writer: impl std::io::Write,
+) -> anyhow::Result<()> {
     if yes {
         return Ok(());
     }
-    let mut stderr = std::io::stderr().lock();
-    write!(stderr, "{summary}Proceed? [y/N] ").context("write confirmation prompt")?;
-    stderr.flush().context("flush confirmation prompt")?;
-    drop(stderr);
+    write!(writer, "{summary}Proceed? [y/N] ").context("write confirmation prompt")?;
+    writer.flush().context("flush confirmation prompt")?;
     let mut answer = String::new();
-    let read = std::io::stdin()
-        .read_line(&mut answer)
-        .context("read confirmation")?;
+    let read = reader.read_line(&mut answer).context("read confirmation")?;
     if read == 0 {
-        eprintln!();
+        let _ = writeln!(writer);
         anyhow::bail!("bundle {verb} cancelled: no answer on stdin (pass -y to skip the prompt)");
     }
     if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
@@ -721,22 +732,34 @@ fn project_dir() -> anyhow::Result<PathBuf> {
 }
 
 fn info_file(package: &Path) -> anyhow::Result<()> {
+    print!("{}", format_info_file(package)?);
+    Ok(())
+}
+
+fn format_info_file(package: &Path) -> anyhow::Result<String> {
+    use std::fmt::Write as _;
     bundle_admin::validate_package_path(package)?;
     let inspection = bundle_admin::inspect_package(package)?;
     let [bundle] = inspection.prepared.bundles() else {
         anyhow::bail!("public package must contain exactly one bundle")
     };
     let identity = bundle.identity();
-    println!("format: public-v1");
-    println!("name: {}", identity.id);
-    println!("version: {}", identity.version);
-    println!("publisher: {}", identity.publisher);
-    println!("origin: package");
-    println!("state: inspected");
-    println!("immutable: false");
-    println!("source_digest: {}", hex_digest(&inspection.source_digest));
-    println!("prepared_digest: {}", inspection.prepared.digest());
-    print_static_info(
+    let mut out = String::new();
+    let _ = writeln!(out, "format: public-v1");
+    let _ = writeln!(out, "name: {}", identity.id);
+    let _ = writeln!(out, "version: {}", identity.version);
+    let _ = writeln!(out, "publisher: {}", identity.publisher);
+    let _ = writeln!(out, "origin: package");
+    let _ = writeln!(out, "state: inspected");
+    let _ = writeln!(out, "immutable: false");
+    let _ = writeln!(
+        out,
+        "source_digest: {}",
+        hex_digest(&inspection.source_digest)
+    );
+    let _ = writeln!(out, "prepared_digest: {}", inspection.prepared.digest());
+    write_static_info(
+        &mut out,
         bundle,
         ": ",
         inspection.prepared.bundle_schemas(&identity.id),
@@ -744,7 +767,7 @@ fn info_file(package: &Path) -> anyhow::Result<()> {
         inspection.prepared.bundle_apis(&identity.id),
         inspection.prepared.bundle_permission_modes(&identity.id),
     );
-    Ok(())
+    Ok(out)
 }
 
 /// Every bundle across scopes as a `bundle list` row plus its search
@@ -850,12 +873,38 @@ struct SearchEntry {
 
 /// Print the `bundle list` header plus one line per row.
 fn print_list_rows<'a>(rows: impl Iterator<Item = &'a BundleListRow>) {
-    println!("NAME VERSION AGENT STATE KIND WORKFLOW SCOPE");
+    print!("{}", format_list_rows(rows));
+}
+
+fn format_list_rows<'a>(rows: impl Iterator<Item = &'a BundleListRow>) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::from("NAME VERSION AGENT STATE KIND WORKFLOW SCOPE\n");
     for row in rows {
-        println!(
+        let _ = writeln!(
+            out,
             "{} {} {} {} {} {} {}",
             row.name, row.version, row.agents, row.state, row.kind, row.workflow, row.scope
         );
+    }
+    out
+}
+
+/// Filter `entries` by case-insensitive substring; returns `(rows, fallback_used)`.
+fn filter_search_entries<'a>(
+    entries: &'a [SearchEntry],
+    query: &str,
+) -> anyhow::Result<(Vec<&'a BundleListRow>, bool)> {
+    let needle = query.trim().to_lowercase();
+    anyhow::ensure!(!needle.is_empty(), "bundle search requires a query");
+    let matched: Vec<&BundleListRow> = entries
+        .iter()
+        .filter(|entry| entry.haystack.contains(needle.as_str()))
+        .map(|entry| &entry.row)
+        .collect();
+    if matched.is_empty() {
+        Ok((entries.iter().map(|entry| &entry.row).collect(), true))
+    } else {
+        Ok((matched, false))
     }
 }
 
@@ -866,19 +915,12 @@ fn print_list_rows<'a>(rows: impl Iterator<Item = &'a BundleListRow>) {
 /// subcommand like `schema` rather than bundle metadata — every bundle in the
 /// searched scope prints instead and the fallback is explained on stderr.
 async fn search(query: &str, filter: Option<Scope>) -> anyhow::Result<()> {
-    let needle = query.trim().to_lowercase();
-    anyhow::ensure!(!needle.is_empty(), "bundle search requires a query");
     let entries = scoped_entries(filter).await?;
-    let matched = entries
-        .iter()
-        .filter(|entry| entry.haystack.contains(needle.as_str()))
-        .collect::<Vec<_>>();
-    if matched.is_empty() {
+    let (rows, fallback) = filter_search_entries(&entries, query)?;
+    if fallback {
         eprintln!("hya: no bundle metadata matched `{query}`; listing every bundle instead");
-        print_list_rows(entries.iter().map(|entry| &entry.row));
-        return Ok(());
     }
-    print_list_rows(matched.iter().map(|entry| &entry.row));
+    print_list_rows(rows.into_iter());
     Ok(())
 }
 
@@ -1156,10 +1198,16 @@ fn print_builtin_schema(bundle_id: &str) -> anyhow::Result<()> {
 }
 
 fn print_schema_rows(schemas: &[hya_bundle::PreparedSchema]) {
-    println!("SCHEME TOOL WRITABLE");
+    print!("{}", format_schema_rows(schemas));
+}
+
+fn format_schema_rows(schemas: &[hya_bundle::PreparedSchema]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::from("SCHEME TOOL WRITABLE\n");
     for schema in schemas {
-        println!("{} {} {}", schema.scheme, schema.tool, schema.writable);
+        let _ = writeln!(out, "{} {} {}", schema.scheme, schema.tool, schema.writable);
     }
+    out
 }
 
 async fn installed_record_if_exists(
@@ -1198,30 +1246,54 @@ fn print_static_info(
     apis: &[hya_bundle::PreparedApi],
     permission_modes: &[hya_bundle::PreparedPermissionMode],
 ) {
-    println!("kind{separator}{}", bundle.kind().as_str());
+    let mut out = String::new();
+    write_static_info(
+        &mut out,
+        bundle,
+        separator,
+        schemas,
+        process,
+        apis,
+        permission_modes,
+    );
+    print!("{out}");
+}
+
+fn write_static_info(
+    out: &mut String,
+    bundle: &Bundle,
+    separator: &str,
+    schemas: &[hya_bundle::PreparedSchema],
+    process: Option<&hya_bundle::PreparedProcessExtension>,
+    apis: &[hya_bundle::PreparedApi],
+    permission_modes: &[hya_bundle::PreparedPermissionMode],
+) {
+    use std::fmt::Write as _;
+    let _ = writeln!(out, "kind{separator}{}", bundle.kind().as_str());
     if let Some(workflow) = bundle.workflow() {
-        println!("workflow{separator}{}", workflow.id);
+        let _ = writeln!(out, "workflow{separator}{}", workflow.id);
     }
     for agent in bundle.agents() {
-        println!("agent{separator}{}", agent.id);
+        let _ = writeln!(out, "agent{separator}{}", agent.id);
     }
     for skill in bundle.skills() {
-        println!("skill{separator}{}", skill.stable_id);
+        let _ = writeln!(out, "skill{separator}{}", skill.stable_id);
     }
     for tool in bundle.tools() {
-        println!("tool{separator}{}", tool.stable_id);
+        let _ = writeln!(out, "tool{separator}{}", tool.stable_id);
     }
     for mcp in bundle.mcp() {
-        println!("mcp{separator}{}", mcp.stable_id);
+        let _ = writeln!(out, "mcp{separator}{}", mcp.stable_id);
     }
     for hook in bundle.hooks() {
-        println!("hook{separator}{}", hook.stable_id);
+        let _ = writeln!(out, "hook{separator}{}", hook.stable_id);
     }
     for extension in bundle.extensions() {
-        println!("extension{separator}{}", extension.stable_id);
+        let _ = writeln!(out, "extension{separator}{}", extension.stable_id);
     }
     for schema in schemas {
-        println!(
+        let _ = writeln!(
+            out,
             "schema{separator}{scheme} tool={tool} writable={writable}",
             scheme = schema.scheme,
             tool = schema.tool,
@@ -1229,7 +1301,8 @@ fn print_static_info(
         );
     }
     if let Some(process) = process {
-        println!(
+        let _ = writeln!(
+            out,
             "process{separator}{kind} command={command}",
             kind = process.kind.as_str(),
             command = process.command.join(" ")
@@ -1255,7 +1328,7 @@ fn print_static_info(
         if !api.description.is_empty() {
             line.push_str(&format!(" description={}", api.description));
         }
-        println!("{line}");
+        let _ = writeln!(out, "{line}");
     }
     // One line per mode: `permission_mode=<bundle-id>/<id> title=<title>`
     // plus (last, since it may contain spaces) the description.
@@ -1269,7 +1342,7 @@ fn print_static_info(
         if !mode.description.is_empty() {
             line.push_str(&format!(" description={}", mode.description));
         }
-        println!("{line}");
+        let _ = writeln!(out, "{line}");
     }
 }
 
@@ -1287,6 +1360,35 @@ fn hex_digest(digest: &[u8; 32]) -> String {
 mod refresh_tests {
     #![allow(clippy::unwrap_used)]
 
+    fn listing(
+        id: &str,
+        scope: &str,
+        state: &str,
+        enabled: bool,
+        agents: &[&str],
+        skills: &[&str],
+        workflows: &[&str],
+    ) -> super::SearchEntry {
+        use hya_server::{BundleListing, BundleListingComponents};
+        let to_vec = |xs: &[&str]| xs.iter().map(|s| (*s).into()).collect();
+        super::search_entry(BundleListing {
+            id: id.into(),
+            version: "1.0.0".into(),
+            kind: "Bundle".into(),
+            scope: scope.into(),
+            state: state.into(),
+            enabled,
+            removable: true,
+            components: BundleListingComponents {
+                agents: to_vec(agents),
+                skills: to_vec(skills),
+                workflows: to_vec(workflows),
+                ..BundleListingComponents::default()
+            },
+            ..BundleListing::default()
+        })
+    }
+
     #[tokio::test]
     async fn refresh_without_daemon_succeeds_without_starting_one() {
         let root = std::env::temp_dir().join(format!(
@@ -1298,8 +1400,7 @@ mod refresh_tests {
         super::run(super::BundleCommand::Refresh, db.to_str().unwrap().into())
             .await
             .unwrap();
-        assert!(crate::daemon::running(db.to_str().unwrap()).await.is_none());
-        assert!(!db.exists());
+        assert!(crate::daemon::running(db.to_str().unwrap()).await.is_none() && !db.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1339,9 +1440,9 @@ mod refresh_tests {
             .route(
                 "/v1/bundles:refresh",
                 axum::routing::post(
-                    |axum::Json(request): axum::Json<serde_json::Value>| async move {
+                    |axum::Json(req): axum::Json<serde_json::Value>| async move {
                         assert_eq!(
-                            request["directory"],
+                            req["directory"],
                             std::env::current_dir().unwrap().to_string_lossy().as_ref()
                         );
                         axum::Json(hya_api::v1::RefreshBundlesResponse {
@@ -1356,24 +1457,263 @@ mod refresh_tests {
                     },
                 ),
             );
-        let server = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-        std::fs::write(&paths.discovery, serde_json::to_vec(&serde_json::json!({"url":url,"pid":std::process::id(),"version":"test","startedAt":0})).unwrap()).unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        std::fs::write(
+            &paths.discovery,
+            serde_json::to_vec(&serde_json::json!({"url":url,"pid":std::process::id(),"version":"test","startedAt":0})).unwrap(),
+        )
+        .unwrap();
         let result = super::run(super::BundleCommand::Refresh, db.to_str().unwrap().into()).await;
         server.abort();
         let _ = server.await;
         drop(owner);
         std::fs::remove_dir_all(root).unwrap();
         assert!(
-            result.is_err(),
-            "HTTP 200 with errors must fail the CLI refresh"
-        );
-        assert!(
             result
                 .unwrap_err()
                 .to_string()
                 .contains("alpha failed to initialize")
         );
+    }
+
+    #[test]
+    fn info_file_formats_declarations_and_rejects_bad_suffix_and_private_format() {
+        let dir =
+            std::env::temp_dir().join(format!("hya-bundle-info-{}", hya_proto::SessionId::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = hya_bundle::BundleSource::new(
+            "decl-demo",
+            vec![
+                hya_bundle::SourceFile::new(
+                    "bundle.yaml",
+                    br#"kind: Bundle
+identity: { id: hya/decl-demo, version: 1.0.0, publisher: hya }
+schemas: [{ scheme: db, tool: query, writable: false }]
+apis:
+  - { id: usage, method: GET, scope: session, path: /usage, description: Token usage }
+  - { id: put-item, method: PUT, scope: global, path: "/items/{id}", request_schema: schemas/item.json, response_schema: schemas/item.json }
+permission_modes:
+  - { id: careful, title: Careful, description: Approves read-only commands }
+  - { id: ci, title: CI }
+resources:
+  tools: [{ id: query, path: extensions/runtime.js }]
+  mcp: [{ id: vecdb, path: mcp/vecdb.json }]
+  hooks: [{ id: permission.approve, path: hooks/permission-approve.json }]
+extensions:
+  js: [{ id: runtime, path: extensions/runtime.js }]
+  files: [{ id: item-schema, path: schemas/item.json }]
+  process: { kind: bun, command: [bun, run, extensions/runtime.ts] }
+agents: [{ id: decl-lead, role: main, resource_view: { allow: [query, runtime] } }]
+"#,
+                ),
+                hya_bundle::SourceFile::new("extensions/runtime.js", b"export default {}".to_vec()),
+                hya_bundle::SourceFile::new("schemas/item.json", br#"{"type":"object"}"#.to_vec()),
+                hya_bundle::SourceFile::new("hooks/permission-approve.json", b"{}".to_vec()),
+                hya_bundle::SourceFile::new("mcp/vecdb.json", br#"{"command":["python3","vecdb.py"]}"#.to_vec()),
+            ],
+        );
+        let pkg = dir.join("decl-demo.hyabundle");
+        let bytes = hya_bundle::write_public_package(&source).unwrap();
+        std::fs::write(&pkg, &bytes).unwrap();
+
+        let info = super::format_info_file(&pkg).unwrap();
+        for expected in [
+            "format: public-v1",
+            "name: hya/decl-demo",
+            "origin: package",
+            "state: inspected",
+            "schema: db tool=query writable=false",
+            "process: bun command=bun run extensions/runtime.ts",
+            "mcp: bundle:hya/decl-demo/mcp/vecdb",
+            "api: PUT global /items/{id} id=put-item request_schema=schemas/item.json response_schema=schemas/item.json",
+            "api: GET session /usage id=usage description=Token usage",
+            "permission_mode: hya/decl-demo/careful title=Careful description=Approves read-only commands",
+            "permission_mode: hya/decl-demo/ci title=CI",
+        ] {
+            assert!(
+                info.lines().any(|l| l == expected),
+                "missing {expected:?}:\n{info}"
+            );
+        }
+        for bad_name in ["demo.HYABUNDLE", "demo.hyabundle.extra"] {
+            let bad = dir.join(bad_name);
+            std::fs::write(&bad, &bytes).unwrap();
+            assert!(
+                super::format_info_file(&bad)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("exact lowercase .hyabundle suffix")
+            );
+        }
+        let mut private = b"HYABNDL\0".to_vec();
+        for v in [1_u16, 1, 1, 24, 12, 16] {
+            private.extend_from_slice(&v.to_le_bytes());
+        }
+        private.extend_from_slice(&1_u64.to_le_bytes());
+        private.extend_from_slice(&[0x6e; 32]);
+        private.extend_from_slice(b"x86_64-unknown-linux-gnu");
+        private.extend_from_slice(&[0; 29]);
+        let priv_path = dir.join("private.hyabundle");
+        std::fs::write(&priv_path, private).unwrap();
+        assert!(
+            super::format_info_file(&priv_path)
+                .unwrap_err()
+                .to_string()
+                .contains("invalid bundle package format")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_entry_formatting_filters_and_falls_back_including_unreadable_rows() {
+        let entries = vec![
+            listing(
+                "hya/goal-loop",
+                "first_party",
+                "active",
+                true,
+                &["hya-goal-guide"],
+                &["goal-contract"],
+                &[],
+            ),
+            listing(
+                "hya/wf",
+                "user",
+                "active",
+                true,
+                &["demo-worker"],
+                &[],
+                &["demo"],
+            ),
+            listing(
+                "hya/broken-on",
+                "user",
+                "unreadable",
+                true,
+                &["x"],
+                &[],
+                &[],
+            ),
+            listing(
+                "hya/broken-off",
+                "project",
+                "unreadable",
+                false,
+                &["x"],
+                &[],
+                &[],
+            ),
+        ];
+        let table = super::format_list_rows(entries.iter().map(|e| &e.row));
+        for row in [
+            "NAME VERSION AGENT STATE KIND WORKFLOW SCOPE\n",
+            "hya/goal-loop 1.0.0 hya-goal-guide active Bundle - builtin\n",
+            "hya/wf 1.0.0 demo-worker active Bundle demo user\n",
+            "hya/broken-on 1.0.0 - unreadable (reinstall) - - user\n",
+            "hya/broken-off 1.0.0 - disabled, unreadable (reinstall) - - project\n",
+        ] {
+            assert!(table.contains(row), "missing {row:?}:\n{table}");
+        }
+        let (matched, fallback) = super::filter_search_entries(&entries, "GOAL-CONTRACT").unwrap();
+        assert!(!fallback && matched.len() == 1 && matched[0].name == "hya/goal-loop");
+        let (all, fallback) = super::filter_search_entries(&entries, "schemas").unwrap();
+        assert!(fallback && all.len() == entries.len());
+        assert!(super::filter_search_entries(&entries, "   ").is_err());
+        assert!(super::parse_search_query("   ").is_err());
+        assert_eq!(super::parse_search_query("ok").unwrap(), "ok");
+    }
+
+    #[test]
+    fn schema_rows_confirmation_prompts_and_scope_helpers() {
+        assert_eq!(super::format_schema_rows(&[]), "SCHEME TOOL WRITABLE\n");
+        assert_eq!(
+            super::format_schema_rows(&[hya_bundle::PreparedSchema {
+                scheme: "db".into(),
+                tool: "query".into(),
+                writable: false,
+            }]),
+            "SCHEME TOOL WRITABLE\ndb query false\n"
+        );
+        let mut out = Vec::new();
+        super::confirm_from(
+            "Install x\n",
+            "install",
+            true,
+            std::io::Cursor::new(""),
+            &mut out,
+        )
+        .unwrap();
+        assert!(out.is_empty());
+        super::confirm_from(
+            "Install x\n",
+            "install",
+            false,
+            std::io::Cursor::new("YES\n"),
+            &mut out,
+        )
+        .unwrap();
+        assert!(String::from_utf8(out).unwrap().contains("[y/N]"));
+        for input in ["n\n", ""] {
+            let err = super::confirm_from(
+                "Remove x\n",
+                "remove",
+                false,
+                std::io::Cursor::new(input),
+                &mut Vec::new(),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains("cancelled"), "{input:?}: {err}");
+        }
+        assert_eq!(
+            (
+                super::ScopeArgs::default().target(),
+                super::ScopeArgs::default().filter()
+            ),
+            (super::Scope::User, None)
+        );
+        assert_eq!(
+            super::ScopeArgs {
+                project: true,
+                user: false
+            }
+            .target(),
+            super::Scope::Project
+        );
+        assert_eq!(
+            super::ScopeArgs {
+                project: false,
+                user: true
+            }
+            .filter(),
+            Some(super::Scope::User)
+        );
+        assert_eq!(
+            super::action_label(&super::BundleInstallAction::Replace {
+                installed_version: "1.0.0".into()
+            }),
+            "replace from=1.0.0"
+        );
+    }
+
+    #[tokio::test]
+    async fn install_dispatch_rejects_missing_or_conflicting_sources() {
+        let p = super::NamespaceInstallPolicy::DenyConflicts;
+        let both = super::install_dispatch(
+            Some("a.hyabundle".into()),
+            Some("plugin".into()),
+            p,
+            super::Scope::User,
+            true,
+            "",
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        let neither = super::install_dispatch(None, None, p, super::Scope::User, true, "")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(both.contains("not both") && neither.contains("requires a bundle package"));
     }
 }

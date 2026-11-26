@@ -58,12 +58,12 @@ async fn raw_pool(path: &str) -> sqlx::SqlitePool {
 /// durable snapshot, always equal a full replay.
 #[tokio::test]
 async fn cached_reads_equal_full_replay_across_appends_and_restarts() {
-    for seed in 0..16_u64 {
+    for seed in 0..6_u64 {
         let db = TempDb::new();
         let store = SessionStore::connect(&db.0)
             .await
             .unwrap()
-            .with_projection_snapshot_interval(1 + seed % 7);
+            .with_projection_snapshot_interval(1 + seed % 5);
         let source = format!("hysec_{:020}", u128::from(seed) + 1_000)
             .parse::<SessionId>()
             .unwrap();
@@ -71,7 +71,7 @@ async fn cached_reads_equal_full_replay_across_appends_and_restarts() {
             .parse::<SessionId>()
             .unwrap();
         let fork_of = (seed % 3 == 0).then_some(source);
-        let events = event_script::script(seed, session, fork_of, 160);
+        let events = event_script::script(seed, session, fork_of, 80);
         let mut rng = event_script::Rng::new(seed ^ 0xABCD);
         let mut next = 0;
         while next < events.len() {

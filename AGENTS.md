@@ -49,11 +49,20 @@ cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
 
 The TUI and the WebUI are one frontend: `packages/hya-tui-web` runs the TUI on
 a real PTY and renders it in the browser with xterm.js (see `docs/tui-web.md`,
-ADR-0018). The required integration gate is `packages/hya-tui-web/tui-exp`:
-it drives the actual TUI on a Bun PTY with `@xterm/headless` using shared
-`e2e/*.spec.ts` scenarios. Browser-only cases are excluded from normal CI.
-Chromium remains available for optional WebUI checks and visual previews.
-Neither driver uses tmux or terminal scraping.
+ADR-0018). TUI verification uses a two-tier pyramid:
+
+1. **In-memory UI suites (`packages/hya-tui/test/`)** — `@opentui/solid`
+   `testRender` tests (`test/support/appHarness.tsx`, `test/ui-*.test.tsx`) run
+   under `bun test` with no `hya serve` or PTY. They own UI layout,
+   keybindings, overlays, views, composer/Vim, transcript, sessions, and
+   subagent panes.
+2. **Thin real-PTY / real-backend seam gate (`packages/hya-tui-web/tui-exp`)** —
+   drives the actual TUI on a Bun PTY with `@xterm/headless` using shared
+   `packages/hya-tui-web/e2e/*.spec.ts` scenarios strictly for OS, terminal
+   protocol (OSC 52/9/0, `COLORFGBG`, bracketed paste), bare launcher, daemon
+   lifecycle, gRPC, relay, and bundle VM seams. Browser-only cases are excluded
+   from normal CI; Chromium remains available for optional WebUI checks and
+   visual previews. Neither driver uses tmux or terminal scraping.
 
 - **Preview in the browser, not a terminal multiplexer.** Do not use tmux,
   `script`, or terminal scraping to check TUI output. To look at the TUI, serve
@@ -67,10 +76,12 @@ Neither driver uses tmux or terminal scraping.
   `bun packages/hya-tui-web/src/main.ts --port 7681 -- target/debug/hya --port 0`.
   The offline echo model is enough; do not spend real provider calls on UI
   checks.
-- **Add shared terminal coverage for TUI changes where useful** under
-  `packages/hya-tui-web/e2e/`. Use the `tui()` fixture from `e2e/harness.ts`.
-  Cover layout,
-  keys, resize, and exit paths the change touches.
+- **Add TUI coverage at the lowest tier that catches regressions.** Put UI,
+  layout, keybinding, resize, and view behavior in `packages/hya-tui/test/`
+  using `@opentui/solid` `testRender` (`test/support/appHarness.tsx`). Add or
+  extend a shared PTY seam spec under `packages/hya-tui-web/e2e/` (using the
+  `tui()` fixture from `e2e/harness.ts`) only for real-PTY, terminal-protocol,
+  launcher/daemon, transport, or bundle/VM seams.
 - **Assert on the terminal buffer, not pixels.** Use `waitForText`, `find`,
   `cell` (color `#rrggbb`, glyph `width`, bold/inverse), and `size`. Do not
   commit pixel-baseline screenshots, because fonts differ between machines.
@@ -210,6 +221,7 @@ or verifiers; workers do not decide that their own objective is done.
 
 - After any fix, feature, or refactor, run the checks for the affected components and build a local executable before reporting done. Documentation-only changes need no build or tests; CI-only changes need only a syntax check of the edited workflow.
 - **Verify by component, not the full suite.** Local development runs only the tests of the components a change touches, plus the components that consume a changed public contract. CI (`.github/workflows/ci.yml`) runs the full workspace suite, Track P, and all TUI checks on every push; do not repeat that locally.
+- **CI gate & test ownership.** `.github/workflows/ci.yml` uses `cargo-nextest` (with `.config/nextest.toml` slow-test guards: warn 5s / terminate 20s in `ci`, warn 15s / terminate 60s in `ci-e2e`), Rust's bundled `rust-lld` linker, and a shared `build-bin` job whose `hya`/`xtask` artifacts feed `e2e` and `tui`. Enforce single-layer test ownership — deep engine/API semantics belong in Track I, UI behavior belongs in `packages/hya-tui/test`, and real-process seams belong in Track P or `packages/hya-tui-web/e2e`. Keep PR tests free of real sleeps > 1s (use injectable clocks/deadlines or event-driven waits; mark heavy OS-fault/soak tests `#[ignore]` for `.github/workflows/nightly.yml`).
 - Do not run `cargo test --workspace`, `cargo clippy --workspace`, the full `hya-e2e` matrix, or the full Playwright suite locally unless the user asks, or the change is a cross-cutting refactor that touches most crates (for example a workspace-wide dependency or lint bump).
 - Report which components you verified and why that scope is enough. If you skipped a consumer on purpose, name it.
 
@@ -240,14 +252,14 @@ cargo build -p hya-backend --bin hya
 
 ### Process agent E2E (`crates/hya-e2e`)
 
-Run Track P only when a change touches `crates/hya-e2e` or an agent surface the PR matrix covers (permissions, skills, MCP, subagents, hyabundle). Run the matrix rows for that surface, not the whole matrix:
+Run Track P only when a change touches `crates/hya-e2e` or an agent surface the PR matrix covers (permissions, skills, MCP, subagents, hyabundle). Track P is organized into 11 consolidated golden-path modules safe for parallel execution; run the module(s) for the surface you changed, not the whole matrix:
 
 ```sh
 cargo build -p hya-backend --bin hya
-cargo test -p hya-e2e --test it <pNN_scenario>:: -- --test-threads=1
+cargo test -p hya-e2e --test it <pNN_module>:: -- --test-threads=4
 ```
 
-Track P spawns real backend processes and must always run single-threaded. It stays out of any workspace-wide `cargo test` (`--exclude hya-e2e`). Matrix and harness docs: `docs/testing/README.md`, `docs/testing/agent-matrix.md`, `docs/testing/process-e2e.md`, `crates/hya-e2e/matrix.toml`.
+Track P stays out of any workspace-wide `cargo test` (`--exclude hya-e2e`) and runs in CI with `cargo nextest run --profile ci-e2e -p hya-e2e` (`--test-threads=4`). Heavy real-OS storage fault/soak tests (`p43_store_robustness.rs`) are marked `#[ignore = "nightly OS fault/soak"]` and run serially in `.github/workflows/nightly.yml` (`--ignored --test-threads=1`). Matrix and harness docs: `docs/testing/README.md`, `docs/testing/agent-matrix.md`, `docs/testing/process-e2e.md`, `crates/hya-e2e/matrix.toml`.
 
 ### Bun components
 
@@ -256,7 +268,9 @@ Run only the packages you changed, from that package's directory:
 |Changed package|Commands|
 |---|---|
 |`crates/hya-plugin-bun/adapter`|`bun run typecheck && bun test`|
-|`packages/hya-tui`|`bun run typecheck && bun test` (use `bun test <file>` while iterating)|
+|`crates/hya-plugin-claude/adapter`|`bun run typecheck && bun test`|
+|`packages/hya-tui-sdk`|`bun run typecheck && bun test`|
+|`packages/hya-tui`|`bun run typecheck && bun test` (unit + `@opentui/solid` `testRender` UI suites; use `bun test <file>` while iterating)|
 |`packages/hya-tui-web`|`bun run typecheck && bun test ./test`|
 
-A user-visible TUI change also runs its shared terminal specs from `packages/hya-tui-web`: the new or changed spec and the specs for the screens it touches (`bun run test:tui-exp:parity -- e2e/<spec>.ts`), not the whole suite. Specs that start the backend need `cargo build -p hya-backend --bin hya` first (see `docs/tui-web.md#running-the-tests`).
+A TUI change touching PTY, terminal protocol, launcher/daemon, gRPC/relay transport, or bundle/VM seams also runs the matching shared terminal seam specs from `packages/hya-tui-web` (`bun run test:tui-exp:parity -- e2e/<spec>.ts`), not the whole suite. Specs that start the backend or bundle packager need `cargo build -p hya-backend --bin hya -p xtask --bin xtask` first (see `docs/tui-web.md#running-the-tests`).

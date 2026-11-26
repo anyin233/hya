@@ -8,6 +8,8 @@
 //! the host's cell ([`crate::native_bundle::share_deadline_v1`]).
 
 use std::collections::HashMap;
+use std::ops::Deref;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
@@ -39,6 +41,7 @@ pub enum Stage {
 pub struct RunDeadline {
     start: Instant,
     budget: Duration,
+    clock_offset_ns: AtomicU64,
     notified: Mutex<HashMap<SessionId, Told>>,
     background: BackgroundJobs,
 }
@@ -76,11 +79,29 @@ impl Told {
 pub(crate) struct ProcessDeadline {
     deadline: OnceLock<RunDeadline>,
     unbudgeted: BackgroundJobs,
+    override_count: AtomicUsize,
+    thread_overrides: Mutex<HashMap<usize, &'static RunDeadline>>,
 }
 
 static DEADLINE: LazyLock<ProcessDeadline> = LazyLock::new(ProcessDeadline::default);
 /// In a native bundle's copy of this crate: the host's [`DEADLINE`].
 static HOST: OnceLock<&'static ProcessDeadline> = OnceLock::new();
+
+#[cfg(unix)]
+#[allow(clippy::unnecessary_cast)]
+fn os_thread_id() -> usize {
+    // SAFETY: `pthread_self` has no preconditions and returns the calling OS
+    // thread's identifier, which matches across native cdylib boundaries.
+    unsafe { libc::pthread_self() as usize }
+}
+
+#[cfg(not(unix))]
+fn os_thread_id() -> usize {
+    thread_local! {
+        static MARKER: u8 = const { 0 };
+    }
+    MARKER.with(|marker| std::ptr::from_ref(marker) as usize)
+}
 
 /// Start the run's clock with `budget`.
 ///
@@ -96,10 +117,107 @@ pub fn install(budget: Duration) {
     );
 }
 
+/// Scoped override of the active [`RunDeadline`] for the calling OS thread.
+///
+/// While this guard is alive, [`current`] returns this deadline on the calling
+/// OS thread — including inside first-party native tool bundles polled on that
+/// thread via `share_deadline_v1` — without mutating the process-wide deadline
+/// cell. Dropping the guard restores any previous override on the calling
+/// thread.
+///
+/// Intended for concurrent tests running on synchronous threads or default
+/// current-thread Tokio runtimes (`#[tokio::test]`).
+#[must_use]
+pub struct ScopedDeadline {
+    tid: usize,
+    deadline: &'static RunDeadline,
+    previous: Option<&'static RunDeadline>,
+}
+
+impl ScopedDeadline {
+    /// The active [`RunDeadline`] installed for the lifetime of this guard.
+    #[must_use]
+    pub fn deadline(&self) -> &'static RunDeadline {
+        self.deadline
+    }
+}
+
+impl Deref for ScopedDeadline {
+    type Target = RunDeadline;
+
+    fn deref(&self) -> &Self::Target {
+        self.deadline
+    }
+}
+
+impl Drop for ScopedDeadline {
+    fn drop(&mut self) {
+        let cell = host();
+        let mut overrides = cell
+            .thread_overrides
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match self.previous {
+            Some(previous) => {
+                overrides.insert(self.tid, previous);
+            }
+            None => {
+                if overrides.remove(&self.tid).is_some() {
+                    cell.override_count.fetch_sub(1, Ordering::Release);
+                }
+            }
+        }
+    }
+}
+
+/// Install a thread-scoped [`RunDeadline`] with `budget` for deterministic tests.
+///
+/// Unlike [`install`], this override is isolated to the calling OS thread, can
+/// be nested or repeated across tests in the same process, and is automatically
+/// removed when the returned [`ScopedDeadline`] drops.
+pub fn install_scoped(budget: Duration) -> ScopedDeadline {
+    install_scoped_with_elapsed(budget, Duration::ZERO)
+}
+
+/// Install a thread-scoped [`RunDeadline`] with `budget` and initial `elapsed`
+/// time already accounted for, without sleeping.
+pub fn install_scoped_with_elapsed(budget: Duration, elapsed: Duration) -> ScopedDeadline {
+    let cell = host();
+    let tid = os_thread_id();
+    let deadline: &'static RunDeadline = Box::leak(Box::new(RunDeadline::with_elapsed(
+        Instant::now(),
+        budget,
+        elapsed,
+    )));
+    let previous = cell
+        .thread_overrides
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(tid, deadline);
+    if previous.is_none() {
+        cell.override_count.fetch_add(1, Ordering::Release);
+    }
+    ScopedDeadline {
+        tid,
+        deadline,
+        previous,
+    }
+}
+
 /// The run's deadline, when it has a budget.
 #[must_use]
 pub fn current() -> Option<&'static RunDeadline> {
-    host().deadline.get()
+    let cell = host();
+    if cell.override_count.load(Ordering::Acquire) > 0
+        && let Some(&deadline) = cell
+            .thread_overrides
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&os_thread_id())
+    {
+        return Some(deadline);
+    }
+    cell.deadline.get()
 }
 
 /// Close Bash admission and wait for foreground and yielded jobs before leaving exec.
@@ -189,8 +307,34 @@ impl RunDeadline {
         Self {
             start,
             budget,
+            clock_offset_ns: AtomicU64::new(0),
             notified: Mutex::new(HashMap::new()),
             background: BackgroundJobs::default(),
+        }
+    }
+
+    /// Measure a run's budget from `start` with `elapsed` already accounted for.
+    #[must_use]
+    pub fn with_elapsed(start: Instant, budget: Duration, elapsed: Duration) -> Self {
+        let deadline = Self::new(start, budget);
+        deadline.advance_clock(elapsed);
+        deadline
+    }
+
+    /// Advance this deadline's observed elapsed time by `delta` without sleeping.
+    ///
+    /// Intended for deterministic tests that exercise budget stages, clock lines,
+    /// and end-of-budget caps without waiting wall-clock seconds.
+    pub fn advance_clock(&self, delta: Duration) {
+        let nanos = u64::try_from(delta.as_nanos()).unwrap_or(u64::MAX);
+        let mut current = self.clock_offset_ns.load(Ordering::Relaxed);
+        while let Err(observed) = self.clock_offset_ns.compare_exchange_weak(
+            current,
+            current.saturating_add(nanos),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            current = observed;
         }
     }
 
@@ -208,7 +352,8 @@ impl RunDeadline {
     /// Time since the run started.
     #[must_use]
     pub fn elapsed(&self) -> Duration {
-        self.start.elapsed()
+        let offset = Duration::from_nanos(self.clock_offset_ns.load(Ordering::Relaxed));
+        self.start.elapsed().saturating_add(offset)
     }
 
     /// Time left before the kill.
@@ -451,10 +596,11 @@ mod tests {
     use super::*;
 
     fn started(budget: u64, elapsed: u64) -> RunDeadline {
-        let start = Instant::now()
-            .checked_sub(Duration::from_secs(elapsed))
-            .expect("monotonic clock far enough from boot");
-        RunDeadline::new(start, Duration::from_secs(budget))
+        RunDeadline::with_elapsed(
+            Instant::now(),
+            Duration::from_secs(budget),
+            Duration::from_secs(elapsed),
+        )
     }
 
     fn session() -> SessionId {
@@ -667,5 +813,43 @@ mod tests {
         assert_eq!(over.take_notice(member), None);
         over.mark_notified(member, Stage::WrapUp);
         assert_eq!(over.take_notice(member), None, "stages never go back");
+    }
+
+    #[test]
+    fn scoped_deadline_isolates_threads_supports_nesting_and_advances_clock() {
+        assert!(current().is_none());
+        let outer = install_scoped(Duration::from_secs(900));
+        assert_eq!(
+            current().map(RunDeadline::budget),
+            Some(Duration::from_secs(900))
+        );
+        assert_eq!(outer.stage(), Stage::Normal);
+
+        // Another OS thread does not observe this thread's scoped override.
+        let other_sees = std::thread::spawn(current).join().expect("thread join");
+        assert!(other_sees.is_none());
+
+        outer.advance_clock(Duration::from_secs(600));
+        assert_eq!(outer.stage(), Stage::WrapUp);
+
+        {
+            let inner =
+                install_scoped_with_elapsed(Duration::from_secs(380), Duration::from_secs(205));
+            assert_eq!(
+                current().map(RunDeadline::budget),
+                Some(Duration::from_secs(380))
+            );
+            assert_eq!(inner.stage(), Stage::WrapUp);
+            assert!(inner.remaining() <= Duration::from_secs(175));
+        }
+
+        // Dropping inner restores outer; dropping outer clears the override.
+        assert_eq!(
+            current().map(RunDeadline::budget),
+            Some(Duration::from_secs(900))
+        );
+        assert_eq!(current().map(RunDeadline::stage), Some(Stage::WrapUp));
+        drop(outer);
+        assert!(current().is_none());
     }
 }

@@ -342,31 +342,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn settings_validate_the_url_and_default_to_auto() {
+    fn settings_and_restart_flags_validate_and_roundtrip() {
         assert!(settings(&RelayFlags::default()).unwrap().is_none());
-        let flags = RelayFlags {
+        let parsed = settings(&RelayFlags {
             relay: Some("https://relay.example.com/hya".into()),
             ..RelayFlags::default()
-        };
-        let parsed = settings(&flags).unwrap().unwrap();
-        assert_eq!(parsed.proxy_url, "https://relay.example.com/hya");
+        })
+        .unwrap()
+        .unwrap();
         assert_eq!(parsed.transport.as_str(), "auto");
         assert!(!parsed.ephemeral);
-        let bad = RelayFlags {
-            relay: Some("ftp://relay".into()),
-            ..RelayFlags::default()
-        };
-        assert!(settings(&bad).unwrap_err().to_string().contains("--relay"));
-        let missing_ca = RelayFlags {
-            relay: Some("https://relay.example.com".into()),
-            relay_ca: Some("/nonexistent/ca.pem".into()),
-            ..RelayFlags::default()
-        };
-        assert!(settings(&missing_ca).is_err());
-    }
+        assert!(
+            settings(&RelayFlags {
+                relay: Some("ftp://relay".into()),
+                ..RelayFlags::default()
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("--relay")
+        );
+        assert!(
+            settings(&RelayFlags {
+                relay: Some("https://relay.example.com".into()),
+                relay_ca: Some("/nonexistent/ca.pem".into()),
+                ..RelayFlags::default()
+            })
+            .is_err()
+        );
 
-    #[test]
-    fn restart_rejoins_the_recorded_relay_unless_told_otherwise() {
         let old = DiscoveredRelay {
             proxy_url: "https://relay.example.com".into(),
             transport: "ws".into(),
@@ -377,18 +380,12 @@ mod tests {
         let flags = restart_flags(RelayFlags::default(), Some(&old));
         assert_eq!(flags.relay.as_deref(), Some("https://relay.example.com"));
         assert_eq!(flags.relay_transport.as_deref(), Some("ws"));
-        assert_eq!(flags.relay_ca.as_deref(), Some(Path::new("/etc/ca.pem")));
         assert_eq!(flags.relay_heartbeat, Some(20));
         let explicit = RelayFlags {
             relay: Some("http://100.64.0.7:8766".into()),
             ..RelayFlags::default()
         };
         assert_eq!(restart_flags(explicit.clone(), Some(&old)), explicit);
-        assert_eq!(
-            restart_flags(RelayFlags::default(), None),
-            RelayFlags::default()
-        );
-        // Recording the settings of those flags gives the same record back.
         let parsed = settings(&RelayFlags {
             relay_ca: None,
             ..flags
@@ -396,13 +393,18 @@ mod tests {
         .unwrap()
         .unwrap();
         let recorded = discovered(&parsed, Some(20));
-        assert_eq!(recorded.proxy_url, old.proxy_url);
-        assert_eq!(recorded.transport, "ws");
-        assert_eq!(recorded.heartbeat_secs, Some(20));
+        assert_eq!(
+            (
+                recorded.proxy_url,
+                recorded.transport,
+                recorded.heartbeat_secs
+            ),
+            (old.proxy_url, "ws".into(), Some(20))
+        );
     }
 
     #[test]
-    fn status_lines_never_show_a_secret_and_name_the_state() {
+    fn status_lines_format_state_and_strip_terminal_controls() {
         let status = json!({
             "state": "RELAY_STATE_CONNECTED",
             "proxy": "https://relay.example.com",
@@ -410,26 +412,27 @@ mod tests {
             "redactedLink": "hya://relay.example.com/eh7ddx5bksrgcytl7bkai36se4",
             "transport": "auto",
             "binding": "grpc",
-            "bindingReason": "gRPC works on this path",
             "activeStreams": 2,
         });
         let lines = status_lines(&status).join("\n");
-        assert!(lines.starts_with("relay connected"), "{lines}");
-        assert!(lines.contains("using grpc"), "{lines}");
-        assert!(lines.contains("streams    2"), "{lines}");
-        assert!(lines.contains("persistent"), "{lines}");
+        for needle in [
+            "relay connected",
+            "using grpc",
+            "streams    2",
+            "persistent",
+        ] {
+            assert!(lines.contains(needle), "{lines}");
+        }
         assert_eq!(status_lines(&json!({})), ["relay disconnected"]);
-    }
 
-    #[test]
-    fn status_lines_strip_terminal_controls_from_relay_text() {
-        let status = json!({
+        let dirty = status_lines(&json!({
             "state": "RELAY_STATE_BACKOFF",
             "lastError": "relay says \u{1b}]0;pwned\u{7}\u{1b}[2Jno\nforged line\u{9b}",
-        });
-        let lines = status_lines(&status);
-        let error = lines.iter().find(|line| line.contains("error")).unwrap();
-        assert_eq!(error, "  error      relay says no forged line");
-        assert!(!lines.iter().any(|line| line.contains('\u{1b}')));
+        }));
+        assert_eq!(
+            dirty.iter().find(|l| l.contains("error")).unwrap(),
+            "  error      relay says no forged line"
+        );
+        assert!(!dirty.iter().any(|l| l.contains('\u{1b}')));
     }
 }

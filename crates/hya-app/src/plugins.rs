@@ -374,65 +374,41 @@ mod tests {
     }
 
     #[test]
-    fn specs_from_config_filters_disabled_plugins() {
+    fn specs_from_config_filters_disabled_preserves_rust_and_propagates_plugin_dir() {
         let _env = StableEnvGuard::new();
-        let mut config = BTreeMap::new();
-        config.insert(
-            "enabled".to_string(),
-            entry(true, vec!["plugin-bin".to_string()]),
-        );
-        config.insert(
-            "disabled".to_string(),
-            entry(false, vec!["ignored".to_string()]),
-        );
-
+        let config = BTreeMap::from([
+            ("enabled".into(), entry(true, vec!["plugin-bin".into()])),
+            ("disabled".into(), entry(false, vec!["ignored".into()])),
+            (
+                "cc".into(),
+                claude_entry(Some(PathBuf::from("/plugins/cc-demo"))),
+            ),
+        ]);
         let specs = super::specs_from_config(config);
-
-        assert_eq!(specs.len(), 1);
-        assert_eq!(specs[0].id, "enabled");
-        assert_eq!(specs[0].command, vec!["plugin-bin"]);
-    }
-
-    /// A release install runs the Bun it ships, not whichever Bun is on
-    /// `PATH`; `BUN` still overrides both.
-    #[test]
-    fn bun_resolution_prefers_env_then_installed_then_path() {
-        let _env = StableEnvGuard::new();
-        let root = std::env::temp_dir().join(format!("hya-find-bun-{}", std::process::id()));
-        let write = |relative: &str| {
-            let path = root.join(relative);
-            std::fs::create_dir_all(path.parent().unwrap_or(&root)).unwrap_or_default();
-            std::fs::write(&path, "").unwrap_or_default();
-            path
+        assert_eq!(specs.len(), 2);
+        let Some(enabled) = specs.iter().find(|s| s.id == "enabled") else {
+            panic!("missing enabled plugin");
         };
-        let exe = write("prefix/bin/hya");
-        let path_bun = write("path/bun");
-        let path = Some(std::ffi::OsString::from(root.join("path")));
-        assert_eq!(
-            super::resolve_bun(None, Some(&exe), path.clone()),
-            Some(path_bun),
-            "without an installed Bun, PATH wins"
-        );
-        let installed = write("prefix/lib/hya/bin/bun");
-        let found = super::resolve_bun(None, Some(&exe), path.clone());
-        assert_eq!(
-            found.and_then(|bun| bun.canonicalize().ok()),
-            installed.canonicalize().ok()
-        );
-        let env = PathBuf::from("/opt/bun");
-        assert_eq!(
-            super::resolve_bun(Some(env.clone()), Some(&exe), path),
-            Some(env)
-        );
-        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(enabled.command, vec!["plugin-bin"]);
+        let Some(cc) = specs.iter().find(|s| s.id == "cc") else {
+            panic!("missing cc plugin");
+        };
+        assert_eq!(cc.plugin_dir, Some(PathBuf::from("/plugins/cc-demo")));
+
+        // Rust plugins never probe Bun.
+        let rust_only = BTreeMap::from([("native".into(), entry(true, vec!["my-plugin".into()]))]);
+        let specs = super::resolve_with_bun(rust_only, || panic!("bun must not be probed"));
+        assert_eq!(specs[0].command, vec!["my-plugin"]);
     }
 
     #[test]
-    fn bun_entry_without_command_resolves_to_bundled_adapter() {
+    fn bun_and_claude_entries_resolve_adapter_explicit_command_or_skip() {
         let _env = StableEnvGuard::new();
-        let mut config = BTreeMap::new();
-        config.insert(
-            "ext".to_string(),
+        let bun = || Some(PathBuf::from("/usr/local/bin/bun"));
+
+        // Bun: bundled adapter, explicit command preserved, missing bun skipped.
+        let bun_cfg = BTreeMap::from([(
+            "ext".into(),
             PluginEntry {
                 kind: PluginKindWire::Bun,
                 command: Vec::new(),
@@ -441,121 +417,134 @@ mod tests {
                 env: BTreeMap::new(),
                 plugin_dir: None,
             },
-        );
-
-        let specs = super::resolve_with_bun(config, || Some(PathBuf::from("/usr/local/bin/bun")));
-
+        )]);
+        let specs = super::resolve_with_bun(bun_cfg.clone(), bun);
         assert_eq!(specs.len(), 1);
-        let spec = &specs[0];
-        assert_eq!(spec.id, "ext");
-        assert_eq!(spec.kind, PluginKindWire::Bun);
         assert_eq!(
-            spec.command.first().map(String::as_str),
-            Some("/usr/local/bin/bun")
+            (specs[0].command[0].as_str(), specs[0].command[1].as_str()),
+            ("/usr/local/bin/bun", "run")
         );
-        assert_eq!(spec.command.get(1).map(String::as_str), Some("run"));
         assert!(
-            spec.command
+            specs[0]
+                .command
                 .last()
-                .is_some_and(|path| path.ends_with("src/main.ts"))
+                .is_some_and(|p| p.ends_with("src/main.ts"))
         );
-        assert_eq!(spec.timeout_ms, Some(1000));
+        assert_eq!(specs[0].timeout_ms, Some(1000));
+        assert!(super::resolve_with_bun(bun_cfg, || None).is_empty());
+
+        let custom_bun = BTreeMap::from([(
+            "ext".into(),
+            PluginEntry {
+                kind: PluginKindWire::Bun,
+                command: vec!["custom-adapter".into(), "--stdio".into()],
+                enabled: true,
+                timeout_ms: None,
+                env: BTreeMap::new(),
+                plugin_dir: None,
+            },
+        )]);
+        assert_eq!(
+            super::resolve_with_bun(custom_bun, || None)[0].command,
+            vec!["custom-adapter", "--stdio"]
+        );
+
+        // Claude: bundled adapter with plugin_dir, skipped without plugin_dir or bun, explicit command preserved.
+        let cc_cfg = BTreeMap::from([(
+            "cc".into(),
+            claude_entry(Some(PathBuf::from("/plugins/cc-demo"))),
+        )]);
+        let specs = super::resolve_with_bun(cc_cfg.clone(), bun);
+        assert_eq!(specs.len(), 1);
+        assert_eq!(
+            specs[0].command[3..]
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["--plugin-dir", "/plugins/cc-demo", "--plugin-id", "cc"]
+        );
+        assert!(super::resolve_with_bun(cc_cfg, || None).is_empty());
+        assert!(
+            super::resolve_with_bun(BTreeMap::from([("cc".into(), claude_entry(None))]), bun)
+                .is_empty()
+        );
+
+        let custom_cc = BTreeMap::from([(
+            "cc".into(),
+            PluginEntry {
+                kind: PluginKindWire::Claude,
+                command: vec!["custom-claude-adapter".into()],
+                enabled: true,
+                timeout_ms: None,
+                env: BTreeMap::new(),
+                plugin_dir: None,
+            },
+        )]);
+        assert_eq!(
+            super::resolve_with_bun(custom_cc, || None)[0].command,
+            vec!["custom-claude-adapter"]
+        );
     }
 
-    /// Installed binaries resolve the adjacent production adapter before workspace source.
     #[test]
-    fn bun_adapter_resolution_prefers_override_then_installed_then_workspace()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn bun_and_adapter_resolution_precedence() -> Result<(), Box<dyn std::error::Error>> {
         let _env = StableEnvGuard::new();
-        let root =
-            std::env::temp_dir().join(format!("hya-bun-adapter-resolution-{}", std::process::id()));
-        let executable = root.join("prefix/bin/hya");
-        let installed = root.join("prefix/lib/hya/bun-adapter");
+        let root = std::env::temp_dir().join(format!("hya-plugin-res-{}", std::process::id()));
+        let write = |rel: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap_or(&root)).unwrap_or_default();
+            std::fs::write(&p, "").unwrap_or_default();
+            p
+        };
+        let exe = write("prefix/bin/hya");
+        let path_bun = write("path/bun");
+        let path = Some(std::ffi::OsString::from(root.join("path")));
+        assert_eq!(
+            super::resolve_bun(None, Some(&exe), path.clone()),
+            Some(path_bun)
+        );
+        let installed_bun = write("prefix/lib/hya/bin/bun");
+        assert_eq!(
+            super::resolve_bun(None, Some(&exe), path.clone()).and_then(|p| p.canonicalize().ok()),
+            installed_bun.canonicalize().ok()
+        );
+        assert_eq!(
+            super::resolve_bun(Some(PathBuf::from("/opt/bun")), Some(&exe), path),
+            Some(PathBuf::from("/opt/bun"))
+        );
+
+        // Bun & Claude adapter dir precedence: override > installed > workspace.
         let workspace = root.join("workspace");
-        let executable_parent = executable
-            .parent()
-            .ok_or_else(|| std::io::Error::other("installed executable has no parent"))?;
-        std::fs::create_dir_all(executable_parent)?;
-        std::fs::create_dir_all(installed.join("src"))?;
-        std::fs::write(installed.join("src/main.ts"), "export {}\n")?;
-
+        let exe_parent = exe.parent().ok_or_else(|| anyhow::anyhow!("exe parent"))?;
+        let installed_bun_ad = root.join("prefix/lib/hya/bun-adapter");
+        let installed_cc_ad = root.join("prefix/lib/hya/claude-adapter");
+        for d in [&installed_bun_ad, &installed_cc_ad] {
+            std::fs::create_dir_all(d.join("src"))?;
+            std::fs::write(d.join("src/main.ts"), "export {}\n")?;
+        }
         assert_eq!(
-            super::resolve_bun_adapter_dir(None, &executable, &workspace),
-            executable_parent.join("../lib/hya/bun-adapter")
+            super::resolve_bun_adapter_dir(None, &exe, &workspace),
+            exe_parent.join("../lib/hya/bun-adapter")
         );
-        let explicit = root.join("explicit");
         assert_eq!(
-            super::resolve_bun_adapter_dir(Some(explicit.clone()), &executable, &workspace),
-            explicit
+            super::resolve_bun_adapter_dir(Some(root.join("exp")), &exe, &workspace),
+            root.join("exp")
         );
-
+        assert_eq!(
+            super::resolve_claude_adapter_dir(None, &exe, &workspace),
+            exe_parent.join("../lib/hya/claude-adapter")
+        );
+        assert_eq!(
+            super::resolve_claude_adapter_dir(Some(root.join("exp")), &exe, &workspace),
+            root.join("exp")
+        );
+        std::fs::remove_dir_all(&installed_cc_ad)?;
+        assert_eq!(
+            super::resolve_claude_adapter_dir(None, &exe, &workspace),
+            workspace.join("crates/hya-plugin-claude/adapter")
+        );
         std::fs::remove_dir_all(root)?;
         Ok(())
-    }
-
-    #[test]
-    fn bun_entry_without_bun_is_skipped() {
-        let _env = StableEnvGuard::new();
-        let mut config = BTreeMap::new();
-        config.insert(
-            "ext".to_string(),
-            PluginEntry {
-                kind: PluginKindWire::Bun,
-                command: Vec::new(),
-                enabled: true,
-                timeout_ms: None,
-                env: BTreeMap::new(),
-                plugin_dir: None,
-            },
-        );
-
-        let specs = super::resolve_with_bun(config, || None);
-
-        assert!(specs.is_empty());
-    }
-
-    #[test]
-    fn rust_plugins_never_invoke_bun() {
-        let _env = StableEnvGuard::new();
-        // The pure-Rust plugin path must not depend on Bun: resolving a `rust`
-        // plugin must never call the bun locator.
-        let mut config = BTreeMap::new();
-        config.insert(
-            "native".to_string(),
-            PluginEntry {
-                kind: PluginKindWire::Rust,
-                command: vec!["my-plugin".to_string()],
-                enabled: true,
-                timeout_ms: None,
-                env: BTreeMap::new(),
-                plugin_dir: None,
-            },
-        );
-        let specs = super::resolve_with_bun(config, || panic!("bun must not be probed"));
-        assert_eq!(specs.len(), 1);
-        assert_eq!(specs[0].command, vec!["my-plugin"]);
-    }
-
-    #[test]
-    fn bun_entry_with_explicit_command_is_preserved() {
-        let _env = StableEnvGuard::new();
-        let mut config = BTreeMap::new();
-        config.insert(
-            "ext".to_string(),
-            PluginEntry {
-                kind: PluginKindWire::Bun,
-                command: vec!["custom-adapter".to_string(), "--stdio".to_string()],
-                enabled: true,
-                timeout_ms: None,
-                env: BTreeMap::new(),
-                plugin_dir: None,
-            },
-        );
-
-        let specs = super::resolve_with_bun(config, || None);
-
-        assert_eq!(specs.len(), 1);
-        assert_eq!(specs[0].command, vec!["custom-adapter", "--stdio"]);
     }
 
     fn claude_entry(plugin_dir: Option<PathBuf>) -> PluginEntry {
@@ -567,148 +556,5 @@ mod tests {
             env: BTreeMap::new(),
             plugin_dir,
         }
-    }
-
-    #[test]
-    fn claude_entry_with_plugin_dir_resolves_to_bundled_adapter() {
-        let _env = StableEnvGuard::new();
-        let mut config = BTreeMap::new();
-        config.insert(
-            "cc".to_string(),
-            claude_entry(Some(PathBuf::from("/plugins/cc-demo"))),
-        );
-
-        let specs = super::resolve_with_bun(config, || Some(PathBuf::from("/usr/local/bin/bun")));
-
-        assert_eq!(specs.len(), 1);
-        let spec = &specs[0];
-        assert_eq!(spec.id, "cc");
-        assert_eq!(spec.kind, PluginKindWire::Claude);
-        // [bun, run, <adapter>/src/main.ts, --plugin-dir, <plugin>, --plugin-id, <id>]
-        assert_eq!(
-            spec.command.first().map(String::as_str),
-            Some("/usr/local/bin/bun")
-        );
-        assert_eq!(spec.command.get(1).map(String::as_str), Some("run"));
-        assert!(
-            spec.command
-                .get(2)
-                .is_some_and(|path| path.ends_with("src/main.ts"))
-        );
-        assert_eq!(
-            spec.command.get(3).map(String::as_str),
-            Some("--plugin-dir")
-        );
-        assert_eq!(
-            spec.command.get(4).map(String::as_str),
-            Some("/plugins/cc-demo")
-        );
-        assert_eq!(spec.command.get(5).map(String::as_str), Some("--plugin-id"));
-        assert_eq!(spec.command.get(6).map(String::as_str), Some("cc"));
-    }
-
-    #[test]
-    fn claude_entry_without_plugin_dir_is_skipped_with_a_notice() {
-        let _env = StableEnvGuard::new();
-        let mut config = BTreeMap::new();
-        config.insert("cc".to_string(), claude_entry(None));
-
-        let specs = super::resolve_with_bun(config, || Some(PathBuf::from("/usr/local/bin/bun")));
-
-        assert!(
-            specs.is_empty(),
-            "claude entries without plugin_dir must be skipped"
-        );
-    }
-
-    #[test]
-    fn claude_entry_without_bun_is_skipped() {
-        let _env = StableEnvGuard::new();
-        let mut config = BTreeMap::new();
-        config.insert(
-            "cc".to_string(),
-            claude_entry(Some(PathBuf::from("/plugins/cc-demo"))),
-        );
-
-        let specs = super::resolve_with_bun(config, || None);
-
-        assert!(specs.is_empty());
-    }
-
-    #[test]
-    fn claude_entry_with_explicit_command_is_preserved() {
-        let _env = StableEnvGuard::new();
-        let mut config = BTreeMap::new();
-        config.insert(
-            "cc".to_string(),
-            PluginEntry {
-                kind: PluginKindWire::Claude,
-                command: vec!["custom-claude-adapter".to_string()],
-                enabled: true,
-                timeout_ms: None,
-                env: BTreeMap::new(),
-                plugin_dir: None,
-            },
-        );
-
-        let specs = super::resolve_with_bun(config, || None);
-
-        assert_eq!(specs.len(), 1);
-        assert_eq!(specs[0].command, vec!["custom-claude-adapter"]);
-    }
-
-    /// The Claude adapter resolves override, installed-adjacent, then
-    /// workspace order, mirroring the Bun adapter layout.
-    #[test]
-    fn claude_adapter_resolution_prefers_override_then_installed_then_workspace()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let _env = StableEnvGuard::new();
-        let root = std::env::temp_dir().join(format!(
-            "hya-claude-adapter-resolution-{}",
-            std::process::id()
-        ));
-        let executable = root.join("prefix/bin/hya");
-        let installed = root.join("prefix/lib/hya/claude-adapter");
-        let workspace = root.join("workspace");
-        let executable_parent = executable
-            .parent()
-            .ok_or_else(|| std::io::Error::other("installed executable has no parent"))?;
-        std::fs::create_dir_all(executable_parent)?;
-        std::fs::create_dir_all(installed.join("src"))?;
-        std::fs::write(installed.join("src/main.ts"), "export {}\n")?;
-
-        assert_eq!(
-            super::resolve_claude_adapter_dir(None, &executable, &workspace),
-            executable_parent.join("../lib/hya/claude-adapter")
-        );
-        let explicit = root.join("explicit");
-        assert_eq!(
-            super::resolve_claude_adapter_dir(Some(explicit.clone()), &executable, &workspace),
-            explicit
-        );
-        // Without an installed adapter the workspace source wins.
-        std::fs::remove_dir_all(&installed)?;
-        assert_eq!(
-            super::resolve_claude_adapter_dir(None, &executable, &workspace),
-            workspace.join("crates/hya-plugin-claude/adapter")
-        );
-
-        std::fs::remove_dir_all(root)?;
-        Ok(())
-    }
-
-    #[test]
-    fn config_plugin_dir_flows_into_merged_specs() {
-        let _env = StableEnvGuard::new();
-        let mut config = BTreeMap::new();
-        config.insert(
-            "cc".to_string(),
-            claude_entry(Some(PathBuf::from("/plugins/cc-demo"))),
-        );
-
-        let specs = super::specs_from_config(config);
-
-        assert_eq!(specs.len(), 1);
-        assert_eq!(specs[0].plugin_dir, Some(PathBuf::from("/plugins/cc-demo")));
     }
 }

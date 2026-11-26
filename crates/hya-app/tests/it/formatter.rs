@@ -1,4 +1,4 @@
-//! Integration tests for `hya-app`: formatter.
+//! Integration tests for `hya-app`: formatter catalog status and execution.
 
 #![allow(clippy::unwrap_used)]
 
@@ -10,12 +10,13 @@ use hya_app::BuiltinFormatterProvider;
 use hya_tool::{FormatterConfig, FormatterEntry, FormatterProvider};
 
 fn tempdir() -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir =
-        std::env::temp_dir().join(format!("hya-formatter-test-{nanos}-{}", std::process::id()));
+    let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("hya-fmt-{nanos}-{seq}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -26,83 +27,60 @@ async fn status_json(config: FormatterConfig) -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn disabled_formatter_config_returns_empty_status() {
-    let status = status_json(FormatterConfig::Disabled).await;
+async fn formatter_status_reflects_disabled_builtins_ruff_pair_and_custom_entries() {
+    assert_eq!(
+        status_json(FormatterConfig::Disabled).await,
+        serde_json::json!([])
+    );
 
-    assert_eq!(status, serde_json::json!([]));
-}
-
-#[tokio::test]
-async fn builtin_formatter_config_returns_compat_catalog_status() {
-    let status = status_json(FormatterConfig::Builtins).await;
-
-    assert!(status.as_array().unwrap().iter().any(|item| {
-        item["name"] == "gofmt" && item["extensions"] == serde_json::json!([".go"])
-    }));
-    assert!(status.as_array().unwrap().iter().any(|item| {
-        item["name"] == "prettier"
-            && item["extensions"]
+    let builtins = status_json(FormatterConfig::Builtins).await;
+    let list = builtins.as_array().unwrap();
+    assert!(
+        list.iter()
+            .any(|i| i["name"] == "gofmt" && i["extensions"] == serde_json::json!([".go"]))
+    );
+    assert!(list.iter().any(|i| {
+        i["name"] == "prettier"
+            && i["extensions"]
                 .as_array()
                 .unwrap()
                 .contains(&serde_json::json!(".ts"))
     }));
-}
 
-#[tokio::test]
-async fn disabling_ruff_or_uv_disables_both_python_formatters() {
-    let mut entries = BTreeMap::new();
-    entries.insert(
+    // Disabling ruff disables both Python formatters (ruff + uv).
+    let status = status_json(FormatterConfig::Custom(BTreeMap::from([(
         "ruff".to_string(),
         FormatterEntry {
             disabled: true,
             ..FormatterEntry::default()
         },
-    );
+    )])))
+    .await;
+    let names: Vec<_> = status
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|i| i["name"].as_str())
+        .collect();
+    assert!(!names.contains(&"ruff") && !names.contains(&"uv"));
 
-    let status = status_json(FormatterConfig::Custom(entries)).await;
-
-    assert!(
-        !status
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|item| item["name"] == "ruff")
-    );
-    assert!(
-        !status
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|item| item["name"] == "uv")
-    );
-}
-
-#[tokio::test]
-async fn custom_formatter_command_is_reported_enabled() {
-    let mut entries = BTreeMap::new();
-    entries.insert(
+    // Custom formatter entry is reported enabled.
+    let status = status_json(FormatterConfig::Custom(BTreeMap::from([(
         "treefmt".to_string(),
         FormatterEntry {
             command: Some(vec!["treefmt".to_string(), "$FILE".to_string()]),
             extensions: Some(vec![".nix".to_string()]),
             ..FormatterEntry::default()
         },
-    );
-
-    let status = status_json(FormatterConfig::Custom(entries)).await;
-
+    )])))
+    .await;
     assert!(status.as_array().unwrap().iter().any(|item| {
-        item == &serde_json::json!({
-            "name": "treefmt",
-            "extensions": [".nix"],
-            "enabled": true
-        })
+        item == &serde_json::json!({"name": "treefmt", "extensions": [".nix"], "enabled": true})
     }));
 }
 
 #[tokio::test]
-async fn custom_formatter_command_formats_matching_extension() {
-    // Given: a custom formatter command with an environment override.
+async fn custom_formatter_formats_matching_extension_and_surfaces_spawn_errors() {
     let dir = tempdir();
     let target = dir.join("note.txt");
     tokio::fs::write(&target, "raw\n").await.unwrap();
@@ -111,67 +89,43 @@ async fn custom_formatter_command_formats_matching_extension() {
         .await
         .unwrap();
 
-    let mut environment = BTreeMap::new();
-    environment.insert("FORMATTER_MARK".to_string(), "formatted".to_string());
-    let mut entries = BTreeMap::new();
-    entries.insert(
+    let provider = BuiltinFormatterProvider::new(FormatterConfig::Custom(BTreeMap::from([(
         "textfmt".to_string(),
         FormatterEntry {
             command: Some(vec![
-                "sh".to_string(),
+                "sh".into(),
                 script.to_string_lossy().into_owned(),
-                "$FILE".to_string(),
+                "$FILE".into(),
             ]),
-            environment,
-            extensions: Some(vec![".txt".to_string()]),
+            environment: BTreeMap::from([("FORMATTER_MARK".into(), "formatted".into())]),
+            extensions: Some(vec![".txt".into()]),
             ..FormatterEntry::default()
         },
-    );
-    let provider = BuiltinFormatterProvider::new(FormatterConfig::Custom(entries));
-
-    // When: formatting a file with the matching extension.
-    let formatted = provider.format_file(&dir, &target).await.unwrap();
-
-    // Then: the formatter ran and rewrote the file.
-    assert!(formatted);
+    )])));
+    assert!(provider.format_file(&dir, &target).await.unwrap());
     assert_eq!(
         tokio::fs::read_to_string(&target).await.unwrap(),
         "formatted\n"
     );
-}
 
-#[tokio::test]
-async fn custom_formatter_command_failure_returns_error() {
-    // Given: a custom formatter whose command cannot be spawned.
-    let dir = tempdir();
-    let target = dir.join("note.txt");
-    tokio::fs::write(&target, "raw\n").await.unwrap();
-
-    let mut entries = BTreeMap::new();
-    entries.insert(
+    let missing = BuiltinFormatterProvider::new(FormatterConfig::Custom(BTreeMap::from([(
         "textfmt".to_string(),
         FormatterEntry {
             command: Some(vec![
-                dir.join("missing-formatter").to_string_lossy().into_owned(),
-                "$FILE".to_string(),
+                dir.join("missing").to_string_lossy().into_owned(),
+                "$FILE".into(),
             ]),
-            extensions: Some(vec![".txt".to_string()]),
+            extensions: Some(vec![".txt".into()]),
             ..FormatterEntry::default()
         },
-    );
-    let provider = BuiltinFormatterProvider::new(FormatterConfig::Custom(entries));
-
-    // When: formatting a file with the matching extension.
-    let result = provider.format_file(&dir, &target).await;
-
-    // Then: spawn failures surface as formatter errors.
-    assert!(result.is_err(), "expected formatter error, got {result:?}");
+    )])));
+    assert!(missing.format_file(&dir, &target).await.is_err());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn builtin_formatter_command_formats_matching_extension() {
-    // Given: a built-in formatter enabled by its Compat project probe.
     let dir = tempdir();
     tokio::fs::write(
         dir.join("composer.json"),
@@ -181,20 +135,13 @@ async fn builtin_formatter_command_formats_matching_extension() {
     .unwrap();
     let bin_dir = dir.join("vendor/bin");
     tokio::fs::create_dir_all(&bin_dir).await.unwrap();
-    // Symlink to a stable binary so discovery still execs ./vendor/bin/pint without
-    // racing ETXTBSY on a freshly written executable inode.
     std::os::unix::fs::symlink("/bin/sh", bin_dir.join("pint")).unwrap();
     let target = dir.join("app.php");
-    // Target is a tiny shell program: when run as `pint app.php`, sh rewrites $0.
     tokio::fs::write(&target, "printf 'pint\\n' > \"$0\"\n")
         .await
         .unwrap();
     let provider = BuiltinFormatterProvider::new(FormatterConfig::Builtins);
-
-    // When: formatting a matching PHP file.
-    let formatted = provider.format_file(&dir, &target).await.unwrap();
-
-    // Then: hya executes the Compat built-in command.
-    assert!(formatted);
+    assert!(provider.format_file(&dir, &target).await.unwrap());
     assert_eq!(tokio::fs::read_to_string(&target).await.unwrap(), "pint\n");
+    let _ = std::fs::remove_dir_all(&dir);
 }

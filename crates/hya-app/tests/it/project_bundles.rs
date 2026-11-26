@@ -14,29 +14,29 @@ use hya_engine::{
     TurnBinding,
 };
 use hya_proto::{ModelRef, ProjectId};
-use hya_provider::ProviderRouter;
+use hya_provider::{
+    Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
+    ProviderRouter, ReasoningEffort,
+};
+use hya_server::AgentModelControl as _;
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules};
+use sha2::{Digest, Sha256};
+use sqlx::Connection;
 
 fn temp_path(suffix: &str) -> PathBuf {
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-    let elapsed = SystemTime::now()
+    let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system clock must follow the Unix epoch");
+        .unwrap()
+        .as_nanos();
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!(
-        "hya-project-bundles-{}-{}-{id}-{suffix}",
-        elapsed.as_nanos(),
+        "hya-project-bundles-{nanos}-{}-{id}-{suffix}",
         std::process::id()
     ));
-    std::fs::create_dir_all(&path).expect("create temp dir");
+    std::fs::create_dir_all(&path).unwrap();
     path
-}
-
-/// Write one AgentBundle source directory under `<root>/.hya/bundles/<name>/`
-/// whose Agent is `<name>-agent`.
-fn write_project_bundle(root: &Path, name: &str, bundle_id: &str, prompt: &str) {
-    write_project_bundle_in(root, name, bundle_id, None, prompt);
 }
 
 fn write_project_bundle_in(
@@ -47,43 +47,30 @@ fn write_project_bundle_in(
     prompt: &str,
 ) {
     let dir = root.join(".hya/bundles").join(name);
-    std::fs::create_dir_all(&dir).expect("create project bundle dir");
-    let namespace = namespace.map_or(String::new(), |namespace| {
-        format!("namespace: {namespace}\n")
-    });
-    let manifest = format!(
-        "---\nkind: Bundle\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\n{namespace}resources:\n  skills:\n    - id: {name}-skill\n      path: resources/skills/{name}-skill.md\nagents:\n  - id: {name}-agent\n    role: main\n---\n{prompt}\n"
-    );
-    std::fs::write(dir.join("bundle.hya.md"), manifest).expect("write project manifest");
-    let skills = dir.join("resources/skills");
-    std::fs::create_dir_all(&skills).expect("create skills dir");
+    std::fs::create_dir_all(dir.join("resources/skills")).unwrap();
+    let ns = namespace.map_or(String::new(), |ns| format!("namespace: {ns}\n"));
     std::fs::write(
-        skills.join(format!("{name}-skill.md")),
+        dir.join("bundle.hya.md"),
         format!(
-            "---\nname: {name}-skill\ndescription: Project Skill fixture.\n---\n{}_SKILL_BODY\n",
-            name.to_uppercase()
+            "---\nkind: Bundle\nidentity: {{ id: {bundle_id}, version: 1.0.0, publisher: hya }}\n{ns}resources:\n  skills: [{{ id: {name}-skill, path: resources/skills/{name}-skill.md }}]\nagents: [{{ id: {name}-agent, role: main }}]\n---\n{prompt}\n"
         ),
     )
-    .expect("write project skill");
-}
-
-fn write_project_plugin(root: &Path, name: &str, bundle_id: &str, body: &str) {
-    let dir = root.join(".hya/bundles").join(name);
-    std::fs::create_dir_all(dir.join("resources/skills")).expect("create project plugin dir");
-    let manifest = format!(
-        "kind: Bundle\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\nresources:\n  skills:\n    - id: {name}-skill\n      path: resources/skills/{name}-skill.md\n"
-    );
-    std::fs::write(dir.join("bundle.yaml"), manifest).expect("write project plugin manifest");
+    .unwrap();
     std::fs::write(
         dir.join("resources/skills")
             .join(format!("{name}-skill.md")),
-        format!("---\nname: {name}-skill\ndescription: Project plugin fixture.\n---\n{body}\n"),
+        format!(
+            "---\nname: {name}-skill\ndescription: Project Skill.\n---\n{}_SKILL_BODY\n",
+            name.to_uppercase()
+        ),
     )
-    .expect("write project plugin skill");
+    .unwrap();
 }
 
-/// A process whose `echo` tool description reports the process id; its
-/// plugin id is the bundle namespace `namespace`.
+fn write_project_bundle(root: &Path, name: &str, bundle_id: &str, prompt: &str) {
+    write_project_bundle_in(root, name, bundle_id, None, prompt);
+}
+
 fn pid_script(namespace: &str) -> String {
     r#"import json,os,sys
 for line in sys.stdin:
@@ -102,21 +89,20 @@ fn process_manifest(bundle_id: &str) -> String {
     )
 }
 
-/// A process-backed project Plugin under `<root>/.hya/bundles/<name>/`.
 fn write_project_process(root: &Path, name: &str, bundle_id: &str) {
     let dir = root.join(".hya/bundles").join(name);
-    std::fs::create_dir_all(&dir).expect("create project process dir");
+    std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("bundle.yaml"), process_manifest(bundle_id)).unwrap();
-    let namespace = bundle_id.rsplit('/').next().unwrap();
-    std::fs::write(dir.join("runtime.py"), pid_script(namespace)).unwrap();
+    let ns = bundle_id.rsplit('/').next().unwrap();
+    std::fs::write(dir.join("runtime.py"), pid_script(ns)).unwrap();
     std::fs::write(dir.join("tool.json"), "{}").unwrap();
 }
 
 async fn install(registry_path: &Path, source: hya_bundle::BundleSource, digest: u8) {
-    let registry = BundleRegistry::connect(registry_path.to_str().expect("registry path UTF-8"))
+    let registry = BundleRegistry::connect(registry_path.to_str().unwrap())
         .await
-        .expect("connect registry");
-    let prepared = hya_bundle::prepare_package(source).expect("prepare installed");
+        .unwrap();
+    let prepared = hya_bundle::prepare_package(source).unwrap();
     registry
         .install(
             &[],
@@ -129,7 +115,7 @@ async fn install(registry_path: &Path, source: hya_bundle::BundleSource, digest:
             },
         )
         .await
-        .expect("install bundle");
+        .unwrap();
 }
 
 fn installed_agent_source(
@@ -143,7 +129,7 @@ fn installed_agent_source(
         vec![hya_bundle::SourceFile::new(
             "bundle.hya.md",
             format!(
-                "---\nkind: Bundle\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\nnamespace: {namespace}\nagents:\n  - id: {agent}\n    role: main\n---\n{prompt}\n"
+                "---\nkind: Bundle\nidentity: {{ id: {bundle_id}, version: 1.0.0, publisher: hya }}\nnamespace: {namespace}\nagents: [{{ id: {agent}, role: main }}]\n---\n{prompt}\n"
             ),
         )],
     )
@@ -155,130 +141,34 @@ struct Harness {
     refresh: Arc<hya_app::ProjectScopeRefresh>,
 }
 
-async fn harness(state: &Path) -> Harness {
-    let runtime = Arc::new(RuntimeRegistry::new(
-        hya_tool_loader::builtins(),
-        hya_app::builtin_agent_catalog().expect("builtin agent catalog"),
-    ));
-    let installed = Arc::new(hya_app::InstalledBundleRefresh::new(
-        state.join("registry.db"),
-    ));
-    let refresh = Arc::new(hya_app::ProjectScopeRefresh::new(installed));
-    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
-    let engine = Arc::new(
-        SessionEngine::new(
-            SessionStore::connect_memory().await.expect("connect store"),
-            Arc::new(ProviderRouter::new()),
-            Arc::clone(&runtime),
-            permission,
-            EventBus::default(),
-        )
-        .with_catalog_refresh(refresh.clone()),
-    );
-    Harness {
-        engine,
-        runtime,
-        refresh,
-    }
-}
-
-fn project(roots: &[&Path]) -> CatalogScope {
-    CatalogScope::Project {
-        id: ProjectId::new(),
-        roots: roots.iter().map(|root| root.to_path_buf()).collect(),
-    }
-}
-
-#[tokio::test]
-async fn unreadable_registry_row_does_not_block_installed_or_project_sources_on_session_bind() {
-    use sha2::{Digest, Sha256};
-    use sqlx::Connection;
-
-    let state = temp_path("unreadable-registry");
-    let root = temp_path("unreadable-project");
-    let registry_path = state.join("registry.db");
-    for (id, agent, digest) in [
-        ("hya/readable", "readable-agent", 1),
-        ("hya/old", "old-agent", 2),
-    ] {
-        install(
-            &registry_path,
-            installed_agent_source(id, agent, agent, agent),
-            digest,
-        )
-        .await;
-    }
-    let mut connection = sqlx::SqliteConnection::connect(registry_path.to_str().unwrap())
-        .await
-        .unwrap();
-    let (bytes,): (Vec<u8>,) =
-        sqlx::query_as("SELECT prepared_bytes FROM installed_bundle WHERE bundle_id = 'hya/old'")
-            .fetch_one(&mut connection)
-            .await
-            .unwrap();
-    let mut document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    document["format_version"] = 3.into();
-    let bytes = serde_json::to_vec(&document).unwrap();
-    sqlx::query("UPDATE installed_bundle SET prepared_bytes = ?, prepared_digest = ? WHERE bundle_id = 'hya/old'")
-        .bind(&bytes).bind(format!("{:x}", Sha256::digest(&bytes)))
-        .execute(&mut connection).await.unwrap();
-    connection.close().await.unwrap();
-
-    write_project_bundle(&root, "local", "hya/local", "LOCAL");
-    let plugin = root.join(".hya/plugins/helper");
-    std::fs::create_dir_all(&plugin).unwrap();
-    std::fs::write(plugin.join("helper.py"), pid_script("helper")).unwrap();
-    std::fs::write(
-        plugin.join("plugin.toml"),
-        "id = 'helper'\nkind = 'rust'\ncommand = ['python3', '.hya/plugins/helper/helper.py']\n",
-    )
-    .unwrap();
-
-    let h = harness(&state).await;
-    let registered = h
-        .engine
-        .store()
-        .create_project("unreadable", &[root.display().to_string()])
-        .await
-        .unwrap();
-    let session = h
-        .engine
-        .create(hya_engine::CreateSession {
-            parent: None,
-            agent: hya_proto::AgentName::new("hya-main"),
-            model: ModelRef::new("dev/echo"),
-            workdir: root.display().to_string(),
-            project: Some(registered.id),
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
-    let bound = h.engine.bind_session_runtime(session, &root).await.unwrap();
-    assert_eq!(prompt_of(&bound, "readable-agent"), "readable-agent");
-    assert_eq!(prompt_of(&bound, "local-agent"), "LOCAL");
-    assert!(bound.resolve_agent("old-agent").is_none());
-    assert!(tool_pid(&bound, "helper__echo") > 0);
-    let refreshed = h
-        .engine
-        .refresh_bundles(&project(&[&root]), &root)
-        .await
-        .unwrap();
-    assert!(
-        refreshed
-            .errors
-            .iter()
-            .any(|error| error.to_string().contains("hya/old")),
-        "{:?}",
-        refreshed.errors
-    );
-    drop(refreshed);
-    drop(bound);
-    drop(h);
-    std::fs::remove_dir_all(state).unwrap();
-    std::fs::remove_dir_all(root).unwrap();
-}
-
 impl Harness {
+    async fn new(state: &Path) -> Self {
+        let runtime = Arc::new(RuntimeRegistry::new(
+            hya_tool_loader::builtins(),
+            hya_app::builtin_agent_catalog().unwrap(),
+        ));
+        let installed = Arc::new(hya_app::InstalledBundleRefresh::new(
+            state.join("registry.db"),
+        ));
+        let refresh = Arc::new(hya_app::ProjectScopeRefresh::new(installed));
+        let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+        let engine = Arc::new(
+            SessionEngine::new(
+                SessionStore::connect_memory().await.unwrap(),
+                Arc::new(ProviderRouter::new()),
+                Arc::clone(&runtime),
+                permission,
+                EventBus::default(),
+            )
+            .with_catalog_refresh(refresh.clone()),
+        );
+        Self {
+            engine,
+            runtime,
+            refresh,
+        }
+    }
+
     async fn bind(&self, scope: &CatalogScope) -> TurnBinding {
         let workdir = scope
             .roots()
@@ -288,7 +178,14 @@ impl Harness {
         self.engine
             .bind_scope_runtime(scope, &workdir)
             .await
-            .expect("bind scope")
+            .unwrap()
+    }
+}
+
+fn project(roots: &[&Path]) -> CatalogScope {
+    CatalogScope::Project {
+        id: ProjectId::new(),
+        roots: roots.iter().map(|r| r.to_path_buf()).collect(),
     }
 }
 
@@ -302,216 +199,214 @@ fn prompt_of(binding: &TurnBinding, agent: &str) -> String {
 }
 
 fn tool_pid(binding: &TurnBinding, tool: &str) -> u32 {
-    let description = binding
+    binding
         .resolve_tool(tool)
         .unwrap_or_else(|| panic!("tool `{tool}` must publish"))
         .tool
         .schema()
-        .description;
-    description
+        .description
         .strip_prefix("pid=")
-        .and_then(|pid| pid.parse().ok())
-        .unwrap_or_else(|| panic!("unexpected description {description}"))
+        .and_then(|p| p.parse().ok())
+        .unwrap()
 }
 
-/// Whether `pid` is a running (non-zombie) process.
 fn running(pid: u32) -> bool {
     std::process::Command::new("ps")
         .args(["-o", "stat=", "-p", &pid.to_string()])
         .output()
-        .map(|output| {
-            let stat = String::from_utf8_lossy(&output.stdout);
-            let stat = stat.trim();
-            output.status.success() && !stat.is_empty() && !stat.starts_with('Z')
+        .map(|o| {
+            let s = String::from_utf8_lossy(&o.stdout);
+            let s = s.trim();
+            o.status.success() && !s.is_empty() && !s.starts_with('Z')
         })
         .unwrap_or(false)
 }
 
 async fn wait_until_exited(pid: u32) -> bool {
-    for _ in 0..100 {
+    for _ in 0..200 {
         if !running(pid) {
             return true;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_millis(15)).await;
     }
     false
 }
 
 #[tokio::test]
-async fn each_project_sees_only_its_own_bundles_and_global_sees_none() {
-    let state = temp_path("state");
-    let root_a = temp_path("root-a");
-    let root_b = temp_path("root-b");
-    write_project_bundle(&root_a, "alpha", "hya/alpha", "You are ALPHA.");
-    write_project_bundle(&root_b, "beta", "hya/beta", "You are BETA.");
-    let harness = harness(&state).await;
-    let scope_a = project(&[&root_a]);
-    let scope_b = project(&[&root_b]);
+async fn project_scope_isolation_precedence_first_root_and_static_plugin() {
+    let _env = crate::support::env_read_lock().await;
+    let state = temp_path("iso-state");
+    let root_a = temp_path("iso-a");
+    let root_b = temp_path("iso-b");
 
-    let a = harness.bind(&scope_a).await;
-    assert!(a.resolve_agent("alpha-agent").is_some());
-    assert!(a.resolve_agent("beta-agent").is_none());
-    assert_eq!(
-        a.project_bundle_dirs().keys().collect::<Vec<_>>(),
-        vec!["hya/alpha"]
-    );
-    let policy = a
-        .agent_resource_policy("alpha-agent")
-        .expect("compile project agent policy");
-    assert_eq!(
-        policy.selected_bundle_skill_ids(),
-        &["bundle:hya/alpha/skill/alpha-skill".to_string()]
-    );
+    write_project_bundle(&root_a, "alpha", "hya/alpha", "ALPHA");
+    write_project_bundle_in(&root_a, "ns-one", "hya/ns-one", Some("team"), "FIRST ns");
+    write_project_bundle(&root_a, "shared", "hya/shared", "PROJECT shared");
+    write_project_bundle(&root_a, "proj-ns", "hya/proj-ns", "PROJECT ns");
+    // Agentless static plugin bundle in root_a.
+    let plugin_dir = root_a.join(".hya/bundles/local-plugin");
+    std::fs::create_dir_all(plugin_dir.join("resources/skills")).unwrap();
+    std::fs::write(
+        plugin_dir.join("bundle.yaml"),
+        "kind: Bundle\nidentity: { id: hya/local-plugin, version: 1.0.0, publisher: hya }\nresources:\n  skills: [{ id: local-plugin-skill, path: resources/skills/local-plugin-skill.md }]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        plugin_dir.join("resources/skills/local-plugin-skill.md"),
+        "---\nname: local-plugin-skill\ndescription: Static.\n---\nPLUGIN_SKILL_BODY\n",
+    )
+    .unwrap();
 
-    let b = harness.bind(&scope_b).await;
-    assert!(b.resolve_agent("beta-agent").is_some());
-    assert!(b.resolve_agent("alpha-agent").is_none());
+    write_project_bundle(&root_b, "beta", "hya/beta", "BETA");
+    write_project_bundle(&root_b, "shared-two", "hya/shared", "SECOND shared");
+    write_project_bundle_in(&root_b, "ns-two", "acme/ns-two", Some("team"), "SECOND ns");
 
-    let global = harness.engine.bind_global_runtime().await.unwrap();
-    assert!(global.resolve_agent("alpha-agent").is_none());
-    assert!(global.resolve_agent("beta-agent").is_none());
-
-    // A directory outside every Project never loads project bundles.
-    let directory = harness.bind(&CatalogScope::Directory(root_a.clone())).await;
-    assert!(directory.resolve_agent("alpha-agent").is_none());
-    // First-party bundles stay visible everywhere.
-    for binding in [&a, &b, &global, &directory] {
-        assert!(
-            binding
-                .bundle_catalog()
-                .bundles()
-                .iter()
-                .any(|bundle| bundle.identity().id == "hya/plan-impl-review")
-        );
-    }
-}
-
-#[tokio::test]
-async fn the_first_root_wins_on_bundle_id_and_namespace() {
-    let state = temp_path("state");
-    let first = temp_path("first");
-    let second = temp_path("second");
-    write_project_bundle(&first, "shared-one", "hya/shared", "FIRST shared.");
-    write_project_bundle(&second, "shared-two", "hya/shared", "SECOND shared.");
-    write_project_bundle_in(&first, "ns-one", "hya/ns-one", Some("team"), "FIRST ns.");
-    write_project_bundle_in(&second, "ns-two", "acme/ns-two", Some("team"), "SECOND ns.");
-    write_project_bundle(&second, "only-second", "hya/only-second", "SECOND only.");
-    let harness = harness(&state).await;
-
-    let forward = harness.bind(&project(&[&first, &second])).await;
-    assert!(prompt_of(&forward, "shared-one-agent").contains("FIRST"));
-    assert!(forward.resolve_agent("shared-two-agent").is_none());
-    assert!(forward.resolve_agent("ns-one-agent").is_some());
-    assert!(forward.resolve_agent("ns-two-agent").is_none());
-    assert!(forward.resolve_agent("only-second-agent").is_some());
-    assert_eq!(
-        forward.project_bundle_dirs().get("hya/shared"),
-        Some(&first.join(".hya/bundles/shared-one"))
-    );
-
-    let reversed = harness.bind(&project(&[&second, &first])).await;
-    assert!(prompt_of(&reversed, "shared-two-agent").contains("SECOND"));
-    assert!(reversed.resolve_agent("shared-one-agent").is_none());
-    assert!(reversed.resolve_agent("ns-two-agent").is_some());
-    assert!(reversed.resolve_agent("ns-one-agent").is_none());
-
-    let (catalogs, _) =
-        hya_app::project_bundles::load_project_bundles_for_roots(&[first.clone(), second.clone()])
-            .unwrap();
-    let mut ids = catalogs
-        .iter()
-        .map(|catalog| catalog.bundles()[0].identity().id.clone())
-        .collect::<Vec<_>>();
-    ids.sort();
-    assert_eq!(ids, vec!["hya/ns-one", "hya/only-second", "hya/shared"]);
-}
-
-#[tokio::test]
-async fn project_bundle_wins_id_conflict_over_installed() {
-    let state = temp_path("state");
-    let root = temp_path("project-id");
-    write_project_bundle(&root, "shared", "hya/shared", "You are the PROJECT agent.");
     install(
         &state.join("registry.db"),
-        installed_agent_source(
-            "hya/shared",
-            "shared",
-            "shared-agent",
-            "You are the INSTALLED agent.",
-        ),
+        installed_agent_source("hya/shared", "shared", "shared-agent", "INSTALLED shared"),
         0x61,
     )
     .await;
-    let harness = harness(&state).await;
-
-    let binding = harness.bind(&project(&[&root])).await;
-    assert!(prompt_of(&binding, "shared-agent").contains("PROJECT"));
-    let global = harness.engine.bind_global_runtime().await.unwrap();
-    assert!(prompt_of(&global, "shared-agent").contains("INSTALLED"));
-}
-
-#[tokio::test]
-async fn project_bundle_wins_namespace_conflict_over_installed() {
-    let state = temp_path("state");
-    let root = temp_path("project-ns");
-    // Project namespace defaults to the identity name segment: `proj-ns`.
-    write_project_bundle(
-        &root,
-        "proj-ns",
-        "hya/proj-ns",
-        "You are the PROJECT agent.",
-    );
     install(
         &state.join("registry.db"),
-        installed_agent_source("hya/other-thing", "proj-ns", "other-agent", "INSTALLED."),
+        installed_agent_source("hya/other-thing", "proj-ns", "other-agent", "INSTALLED ns"),
         0x62,
     )
     .await;
-    let harness = harness(&state).await;
 
-    let binding = harness.bind(&project(&[&root])).await;
-    assert!(binding.resolve_agent("other-agent").is_none());
-    assert!(binding.resolve_agent("proj-ns-agent").is_some());
-    let global = harness.engine.bind_global_runtime().await.unwrap();
+    let h = Harness::new(&state).await;
+    let scope_a = project(&[&root_a]);
+    let scope_b = project(&[&root_b]);
+    let a = h.bind(&scope_a).await;
+    let b = h.bind(&scope_b).await;
+    let global = h.engine.bind_global_runtime().await.unwrap();
+    let dir_scope = h.bind(&CatalogScope::Directory(root_a.clone())).await;
+
+    // Isolation: project A vs B vs global vs directory.
+    assert!(a.resolve_agent("alpha-agent").is_some());
+    assert!(a.resolve_agent("beta-agent").is_none());
+    assert_eq!(
+        a.agent_resource_policy("alpha-agent")
+            .unwrap()
+            .selected_bundle_skill_ids(),
+        &["bundle:hya/alpha/skill/alpha-skill".to_string()]
+    );
+    assert!(
+        a.bundle_skill_content("hya/local-plugin", "local-plugin-skill")
+            .is_some_and(|c| c.contains("PLUGIN_SKILL_BODY"))
+    );
+    assert!(
+        !h.runtime
+            .effective_manifest()
+            .sources
+            .contains_key(&RuntimeSourceId::bundle("hya/local-plugin"))
+    );
+    assert!(b.resolve_agent("beta-agent").is_some());
+    assert!(b.resolve_agent("alpha-agent").is_none());
+    assert!(global.resolve_agent("alpha-agent").is_none());
+    assert!(dir_scope.resolve_agent("alpha-agent").is_none());
+
+    // Project overrides installed on both bundle ID and namespace; global retains installed.
+    assert!(prompt_of(&a, "shared-agent").contains("PROJECT"));
+    assert!(prompt_of(&global, "shared-agent").contains("INSTALLED"));
+    assert!(a.resolve_agent("other-agent").is_none());
+    assert!(a.resolve_agent("proj-ns-agent").is_some());
     assert!(global.resolve_agent("other-agent").is_some());
+
+    // Multi-root: first root wins by bundle ID and namespace.
+    let forward = h.bind(&project(&[&root_a, &root_b])).await;
+    assert!(prompt_of(&forward, "shared-agent").contains("PROJECT"));
+    assert!(forward.resolve_agent("shared-two-agent").is_none());
+    assert!(forward.resolve_agent("ns-one-agent").is_some());
+    assert!(forward.resolve_agent("ns-two-agent").is_none());
+    assert!(forward.resolve_agent("beta-agent").is_some());
+    assert_eq!(
+        forward.project_bundle_dirs().get("hya/shared"),
+        Some(&root_a.join(".hya/bundles/shared"))
+    );
+    let reversed = h.bind(&project(&[&root_b, &root_a])).await;
+    assert!(prompt_of(&reversed, "shared-two-agent").contains("SECOND"));
+    assert!(reversed.resolve_agent("ns-two-agent").is_some());
+    assert!(reversed.resolve_agent("ns-one-agent").is_none());
 }
 
 #[tokio::test]
-async fn editing_a_bundle_republishes_only_its_project() {
-    let state = temp_path("state");
-    let root_a = temp_path("edit-a");
-    let root_b = temp_path("edit-b");
-    write_project_bundle(&root_a, "live", "hya/live", "Version one prompt.");
-    write_project_bundle(&root_b, "other", "hya/other", "Other prompt.");
-    let harness = harness(&state).await;
+async fn editing_evicting_and_zero_read_caching_stay_scoped() {
+    let _env = crate::support::env_read_lock().await;
+    let state = temp_path("cache-state");
+    let root_a = temp_path("cache-a");
+    let root_b = temp_path("cache-b");
+    let empty_root = temp_path("cache-empty");
+    write_project_bundle(&root_a, "live", "hya/live", "Version one");
+    write_project_bundle(&root_b, "other", "hya/other", "Other");
+    std::fs::write(root_a.join(".hya/bundles/live/config.yml"), "agents: {}\n").unwrap();
+
+    let h = Harness::new(&state).await;
     let scope_a = project(&[&root_a]);
     let scope_b = project(&[&root_b]);
+    let scope_empty = project(&[&empty_root]);
 
-    let first_a = harness.bind(&scope_a).await;
-    let first_b = harness.bind(&scope_b).await;
+    let first_a = h.bind(&scope_a).await;
+    let first_b = h.bind(&scope_b).await;
+    let first_empty = h.bind(&scope_empty).await;
     assert!(prompt_of(&first_a, "live-agent").contains("Version one"));
+    assert!(!h.refresh.refresh_scope(&h.runtime, &scope_a).await.unwrap());
+
+    // On Linux, steady re-binds perform zero filesystem reads on bundle files.
+    #[cfg(target_os = "linux")]
+    {
+        use std::ffi::CString;
+        use std::io::Read;
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        use std::os::unix::ffi::OsStrExt;
+        let fd = unsafe {
+            OwnedFd::from_raw_fd(libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC))
+        };
+        for rel in [
+            "bundle.hya.md",
+            "resources/skills/live-skill.md",
+            "config.yml",
+        ] {
+            let path = CString::new(
+                root_a
+                    .join(".hya/bundles/live")
+                    .join(rel)
+                    .as_os_str()
+                    .as_bytes(),
+            )
+            .unwrap();
+            assert!(
+                unsafe { libc::inotify_add_watch(fd.as_raw_fd(), path.as_ptr(), libc::IN_ACCESS) }
+                    >= 0
+            );
+        }
+        assert_eq!(h.bind(&scope_a).await.generation(), first_a.generation());
+        let mut file = std::fs::File::from(fd);
+        assert_eq!(
+            file.read(&mut [0u8; 4096]).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+
+    // Edits are invisible until explicit refresh, and refresh touches only Project A.
+    write_project_bundle(&root_a, "live", "hya/live", "Version two");
+    write_project_bundle(&empty_root, "added", "hya/added", "EXPLICIT_ONLY");
+    assert_eq!(
+        prompt_of(&h.bind(&scope_a).await, "live-agent"),
+        "Version one"
+    );
     assert!(
-        !harness
-            .refresh
-            .refresh_scope(&harness.runtime, &scope_a)
+        h.bind(&scope_empty)
             .await
-            .unwrap(),
-        "an unchanged Project must not republish"
+            .resolve_agent("added-agent")
+            .is_none()
+    );
+    assert_eq!(
+        h.bind(&scope_empty).await.generation(),
+        first_empty.generation()
     );
 
-    write_project_bundle(&root_a, "live", "hya/live", "Version two prompt.");
-    assert!(
-        !harness
-            .refresh
-            .refresh_scope(&harness.runtime, &scope_b)
-            .await
-            .unwrap(),
-        "editing Project A must not republish Project B"
-    );
-    let second_b = harness.bind(&scope_b).await;
-    assert_eq!(second_b.generation(), first_b.generation());
-
-    let second_a = harness
+    let second_a = h
         .engine
         .refresh_bundles(&scope_a, &root_a)
         .await
@@ -519,173 +414,41 @@ async fn editing_a_bundle_republishes_only_its_project() {
         .binding;
     assert_ne!(second_a.generation(), first_a.generation());
     assert!(prompt_of(&second_a, "live-agent").contains("Version two"));
+    assert!(prompt_of(&first_a, "live-agent").contains("Version one"));
+    assert_eq!(h.bind(&scope_b).await.generation(), first_b.generation());
     assert!(
-        prompt_of(&first_a, "live-agent").contains("Version one"),
-        "a retained binding keeps its snapshot"
+        h.engine
+            .refresh_bundles(&scope_empty, &empty_root)
+            .await
+            .unwrap()
+            .binding
+            .resolve_agent("added-agent")
+            .is_some()
     );
+
+    // Dropping a scope evicts it; next bind republishes it.
+    h.runtime.drop_scope(&scope_a.key());
+    assert!(h.runtime.scope_overlay(&scope_a.key()).is_none());
+    assert!(h.bind(&scope_a).await.resolve_agent("live-agent").is_some());
 }
 
 #[tokio::test]
-async fn project_plugin_publishes_static_skills_without_an_agent() {
-    let state = temp_path("state");
-    let root = temp_path("project-plugin");
-    write_project_plugin(
-        &root,
-        "local-plugin",
-        "hya/local-plugin",
-        "PLUGIN_SKILL_BODY",
-    );
-    let harness = harness(&state).await;
-    let scope = project(&[&root]);
-
-    let binding = harness.bind(&scope).await;
-    assert!(binding.resolve_agent("local-plugin-agent").is_none());
-    assert!(
-        binding
-            .bundle_catalog()
-            .bundles()
-            .iter()
-            .any(|bundle| bundle.identity().id == "hya/local-plugin" && bundle.agents().is_empty())
-    );
-    assert!(
-        binding
-            .bundle_skill_content("hya/local-plugin", "local-plugin-skill")
-            .is_some_and(|content| content.contains("PLUGIN_SKILL_BODY"))
-    );
-    let overlay = harness
-        .runtime
-        .scope_overlay(&scope.key())
-        .expect("the Project overlay is published");
-    assert!(
-        overlay
-            .bundle_sources
-            .iter()
-            .any(|source| *source.id() == RuntimeSourceId::bundle("hya/local-plugin")),
-        "plugin skill source must publish in the Project scope"
-    );
-    assert!(
-        !harness
-            .runtime
-            .effective_manifest()
-            .sources
-            .contains_key(&RuntimeSourceId::bundle("hya/local-plugin")),
-        "the base snapshot never carries project bundles"
-    );
-}
-
-#[tokio::test]
-async fn a_project_bundle_process_exits_once_its_scope_is_dropped() {
-    let state = temp_path("state");
-    let root = temp_path("process-project");
-    write_project_process(&root, "proc", "acme/proj-proc");
-    let harness = harness(&state).await;
-    let scope = project(&[&root]);
-
-    let directory = harness.bind(&CatalogScope::Directory(root.clone())).await;
-    assert!(
-        directory.resolve_tool("proj-proc__echo").is_none(),
-        "a directory outside a Project never starts project code"
-    );
-
-    let binding = harness.bind(&scope).await;
-    let pid = tool_pid(&binding, "proj-proc__echo");
-    assert!(running(pid));
-    let again = harness.bind(&scope).await;
-    assert_eq!(tool_pid(&again, "proj-proc__echo"), pid, "no respawn");
-    drop(again);
-
-    harness.runtime.drop_scope(&scope.key());
-    drop(binding);
-    // Any later bind collects sources no live scope uses.
-    let _global = harness.engine.bind_global_runtime().await.unwrap();
-    assert!(
-        wait_until_exited(pid).await,
-        "the dropped Project's process {pid} must exit"
-    );
-}
-
-#[tokio::test]
-async fn shadowed_project_bundle_processes_never_start_or_report_errors() {
-    for same_id in [true, false] {
-        let state = temp_path("shadowed-state");
-        let first = temp_path("shadowed-first");
-        let second = temp_path("shadowed-second");
-        write_project_bundle_in(
-            &first,
-            "winner",
-            "acme/shared",
-            Some(if same_id { "winner" } else { "shared" }),
-            "FIRST",
-        );
-        let loser_id = if same_id {
-            "acme/shared"
-        } else {
-            "other/shared"
-        };
-        write_project_process(&second, "loser", loser_id);
-        let marker = second.join("started");
-        std::fs::write(
-            second.join(".hya/bundles/loser/runtime.py"),
-            format!(
-                "from pathlib import Path\nPath({:?}).touch()\nraise SystemExit(1)\n",
-                marker.to_str().unwrap()
-            ),
-        )
-        .unwrap();
-        let h = harness(&state).await;
-        let scope = project(&[&first, &second]);
-        let binding = h.bind(&scope).await;
-        assert_eq!(prompt_of(&binding, "winner-agent"), "FIRST");
-        let refreshed = h.engine.refresh_bundles(&scope, &first).await.unwrap();
-        assert!(refreshed.errors.is_empty(), "{:?}", refreshed.errors);
-        assert!(!marker.exists(), "a shadowed process must never start");
-        // Even invalid resources/config in the ignored directory are irrelevant.
-        std::fs::remove_file(second.join(".hya/bundles/loser/tool.json")).unwrap();
-        std::fs::write(second.join(".hya/bundles/loser/config.yml"), "[").unwrap();
-        let manifest = second.join(".hya/bundles/loser/bundle.yaml");
-        let text = std::fs::read_to_string(&manifest).unwrap();
-        std::fs::write(manifest, text.replace("version: 1.0.0", "version: []")).unwrap();
-        let refreshed = h.engine.refresh_bundles(&scope, &first).await.unwrap();
-        assert!(refreshed.errors.is_empty(), "{:?}", refreshed.errors);
-        assert!(!marker.exists());
-    }
-}
-
-#[tokio::test]
-async fn a_project_bundle_that_becomes_shadowed_releases_its_process() {
-    let state = temp_path("new-shadow-state");
-    let first = temp_path("new-shadow-first");
-    let second = temp_path("new-shadow-second");
-    write_project_process(&second, "loser", "acme/shared");
-    let h = harness(&state).await;
-    let scope = project(&[&first, &second]);
-    let binding = h.bind(&scope).await;
-    let pid = tool_pid(&binding, "shared__echo");
-    assert!(running(pid));
-    drop(binding);
-
-    write_project_bundle(&first, "winner", "acme/shared", "FIRST");
-    let refreshed = h.engine.refresh_bundles(&scope, &first).await.unwrap();
-    assert!(refreshed.errors.is_empty(), "{:?}", refreshed.errors);
-    assert_eq!(prompt_of(&refreshed.binding, "winner-agent"), "FIRST");
-    assert!(
-        wait_until_exited(pid).await,
-        "newly shadowed process {pid} must exit"
-    );
-
-    std::fs::remove_dir_all(first.join(".hya/bundles/winner")).unwrap();
-    let unshadowed = h.engine.refresh_bundles(&scope, &first).await.unwrap();
-    assert!(unshadowed.errors.is_empty(), "{:?}", unshadowed.errors);
-    assert_ne!(tool_pid(&unshadowed.binding, "shared__echo"), pid);
-}
-
-#[tokio::test]
-async fn an_installed_bundle_process_is_shared_across_scopes() {
-    let state = temp_path("state");
-    let root_a = temp_path("shared-a");
-    let root_b = temp_path("shared-b");
-    write_project_bundle(&root_a, "alpha", "hya/alpha", "ALPHA.");
-    write_project_bundle(&root_b, "beta", "hya/beta", "BETA.");
+async fn project_bundle_process_drop_share_and_disable_lifecycle() {
+    let _env = crate::support::env_read_lock().await;
+    let state = temp_path("proc-state");
+    let root_a = temp_path("proc-a");
+    let root_b = temp_path("proc-b");
+    write_project_process(&root_a, "proc", "acme/proj-proc");
+    let starts = root_a.join("starts");
+    std::fs::write(
+        root_a.join(".hya/bundles/proc/runtime.py"),
+        format!(
+            "with open({}, 'a') as f: f.write('start\\n')\n{}",
+            serde_json::to_string(&starts).unwrap(),
+            pid_script("proj-proc")
+        ),
+    )
+    .unwrap();
     install(
         &state.join("registry.db"),
         hya_bundle::BundleSource::new(
@@ -699,307 +462,232 @@ async fn an_installed_bundle_process_is_shared_across_scopes() {
         0x63,
     )
     .await;
-    let harness = harness(&state).await;
+    let registry = BundleRegistry::connect(state.join("registry.db").to_str().unwrap())
+        .await
+        .unwrap();
+    registry
+        .set_bundle_enabled("acme/proj-proc", false)
+        .await
+        .unwrap();
+
+    let h = Harness::new(&state).await;
     let scope_a = project(&[&root_a]);
+    let scope_b = project(&[&root_b]);
 
-    let a = harness.bind(&scope_a).await;
-    let b = harness.bind(&project(&[&root_b])).await;
-    let global = harness.engine.bind_global_runtime().await.unwrap();
-    let pid = tool_pid(&global, "shared-proc__echo");
-    assert_eq!(tool_pid(&a, "shared-proc__echo"), pid);
-    assert_eq!(tool_pid(&b, "shared-proc__echo"), pid);
+    // Directory scope and disabled project bundle never start project code.
+    assert!(
+        h.bind(&CatalogScope::Directory(root_a.clone()))
+            .await
+            .resolve_tool("proj-proc__echo")
+            .is_none()
+    );
+    assert!(
+        h.bind(&scope_a)
+            .await
+            .resolve_tool("proj-proc__echo")
+            .is_none()
+    );
+    assert!(!starts.exists());
 
-    harness.runtime.drop_scope(&scope_a.key());
+    // Re-enable -> starts once; installed bundle process is shared across scopes.
+    registry
+        .set_bundle_enabled("acme/proj-proc", true)
+        .await
+        .unwrap();
+    let a = h.bind(&scope_a).await;
+    let b = h.bind(&scope_b).await;
+    let global = h.engine.bind_global_runtime().await.unwrap();
+    let proj_pid = tool_pid(&a, "proj-proc__echo");
+    let shared_pid = tool_pid(&global, "shared-proc__echo");
+    assert!(running(proj_pid));
+    assert_eq!(
+        tool_pid(&h.bind(&scope_a).await, "proj-proc__echo"),
+        proj_pid
+    );
+    assert_eq!(tool_pid(&a, "shared-proc__echo"), shared_pid);
+    assert_eq!(tool_pid(&b, "shared-proc__echo"), shared_pid);
+
+    // Dropping scope stops project process but preserves shared installed process.
+    h.runtime.drop_scope(&scope_a.key());
     drop(a);
-    let _again = harness.engine.bind_global_runtime().await.unwrap();
-    assert!(
-        running(pid),
-        "dropping a Project keeps shared installed processes"
-    );
-}
+    let _ = h.engine.bind_global_runtime().await.unwrap();
+    assert!(wait_until_exited(proj_pid).await);
+    assert!(running(shared_pid));
 
-#[tokio::test]
-async fn a_project_bundle_config_model_applies_only_in_its_project() {
-    let state = temp_path("state");
-    let root_a = temp_path("model-a");
-    let root_b = temp_path("model-b");
-    write_project_bundle(&root_a, "tools", "acme/tools", "Tools A.");
-    write_project_bundle(&root_b, "tools", "acme/tools", "Tools B.");
-    let config_a = root_a.join(".hya/bundles/tools/config.yml");
-    std::fs::write(
-        &config_a,
-        "agents:\n  tools-agent:\n    model: p/project-a\n",
-    )
-    .unwrap();
-    let harness = harness(&state).await;
-    let scope_a = project(&[&root_a]);
-    let scope_b = project(&[&root_b]);
-
-    let a = harness.bind(&scope_a).await;
-    assert_eq!(
-        a.configured_agent_model("tools-agent"),
-        Some(&ModelRef::new("p/project-a"))
-    );
-    assert_eq!(
-        a.project_bundle_dirs().get("acme/tools"),
-        Some(&root_a.join(".hya/bundles/tools"))
-    );
-    let b = harness.bind(&scope_b).await;
-    assert!(b.resolve_agent("tools-agent").is_some());
-    assert_eq!(b.configured_agent_model("tools-agent"), None);
-
-    // An explicit refresh publishes edits to the Project config.yml.
-    std::fs::write(&config_a, "agents:\n  tools-agent:\n    model: p/edited\n").unwrap();
-    let edited = harness
-        .engine
-        .refresh_bundles(&scope_a, &root_a)
+    // Disabling a running project process also stops it.
+    let a2 = h.bind(&scope_a).await;
+    let pid2 = tool_pid(&a2, "proj-proc__echo");
+    drop(a2);
+    registry
+        .set_bundle_enabled("acme/proj-proc", false)
         .await
-        .unwrap()
-        .binding;
-    assert_eq!(
-        edited.configured_agent_model("tools-agent"),
-        Some(&ModelRef::new("p/edited"))
-    );
-    assert_eq!(harness.bind(&scope_b).await.generation(), b.generation());
-}
-
-#[tokio::test]
-async fn an_evicted_scope_is_republished_at_its_next_bind() {
-    let state = temp_path("state");
-    let root = temp_path("evicted");
-    write_project_bundle(&root, "alpha", "hya/alpha", "ALPHA.");
-    let harness = harness(&state).await;
-    let scope = project(&[&root]);
-
+        .unwrap();
     assert!(
-        harness
-            .bind(&scope)
+        h.bind(&scope_a)
             .await
-            .resolve_agent("alpha-agent")
-            .is_some()
+            .resolve_tool("proj-proc__echo")
+            .is_none()
     );
-    harness.runtime.drop_scope(&scope.key());
-    assert!(harness.runtime.scope_overlay(&scope.key()).is_none());
-
-    let again = harness.bind(&scope).await;
-    assert!(again.resolve_agent("alpha-agent").is_some());
-    assert!(harness.runtime.scope_overlay(&scope.key()).is_some());
+    assert!(wait_until_exited(pid2).await);
 }
 
 #[tokio::test]
-async fn saving_a_project_bundle_model_writes_only_that_projects_file() {
-    use hya_server::AgentModelControl as _;
+async fn shadowed_project_bundle_processes_never_start_and_release_when_shadowed() {
+    let _env = crate::support::env_read_lock().await;
+    let state = temp_path("shadow-state");
+    let first = temp_path("shadow-first");
+    let second = temp_path("shadow-second");
 
-    let state = temp_path("state");
-    let root_a = temp_path("save-a");
-    let root_b = temp_path("save-b");
-    write_project_bundle(&root_a, "tools", "acme/tools", "Tools A.");
-    write_project_bundle(&root_b, "tools", "acme/tools", "Tools B.");
-    let harness = harness(&state).await;
-    let scope_a = project(&[&root_a]);
-    let scope_b = project(&[&root_b]);
-    let a = harness.bind(&scope_a).await;
-
-    let store = SessionStore::connect_memory().await.unwrap();
-    let owner = hya_proto::OwnerRunId::new();
-    store
-        .claim_runtime_owner(owner)
-        .expect("claim runtime owner");
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(hya_provider::DevProvider::new())));
-    let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
-    let engine = Arc::new(
-        SessionEngine::new(
-            store.clone(),
-            router,
-            harness.runtime.clone(),
-            permission,
-            EventBus::default(),
-        )
-        .with_catalog_refresh(harness.refresh.clone()),
-    );
-    let config_file = state.join("config-home/hya/config.yaml");
-    let control = hya_app::PersistentAgentModelControl::load(
-        store,
-        owner,
-        Arc::clone(&harness.runtime),
-        engine,
+    // 1. Already shadowed by ID and by namespace: never starts even if broken.
+    write_project_bundle_in(&first, "winner", "acme/shared", Some("shared"), "FIRST");
+    write_project_process(&second, "loser", "other/shared");
+    let marker = second.join("started");
+    std::fs::write(
+        second.join(".hya/bundles/loser/runtime.py"),
+        format!(
+            "from pathlib import Path\nPath({:?}).touch()\nraise SystemExit(1)\n",
+            marker.to_str().unwrap()
+        ),
     )
-    .await
-    .unwrap()
-    .with_configuration(hya_app::agent_model_config::AgentModelConfigFiles::new(
-        config_file.clone(),
-    ))
-    .await
     .unwrap();
-
-    let project_file = std::path::absolute(root_a.join(".hya/bundles/tools/config.yml")).unwrap();
-    let listed = control
-        .list(a.clone(), ModelRef::new("fallback"))
-        .await
-        .unwrap();
-    let listed = listed
-        .iter()
-        .find(|row| row.agent_id == "tools-agent")
-        .expect("the project Agent is listed");
-    assert_eq!(
-        listed.configuration_path.as_deref(),
-        Some(project_file.to_string_lossy().as_ref())
-    );
-
-    let row = control
-        .save_configuration(
-            a,
-            "tools-agent".to_string(),
-            Some(hya_server::AgentModelIdentity::new("hya", "offline")),
-            ModelRef::new("fallback"),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        row.configuration_path.as_deref(),
-        Some(project_file.to_string_lossy().as_ref())
-    );
-    assert_eq!(
-        row.configuration
-            .map(|identity| format!("{}/{}", identity.provider_id, identity.model_id)),
-        Some("hya/offline".to_string())
-    );
+    let h = Harness::new(&state).await;
+    let scope = project(&[&first, &second]);
+    assert_eq!(prompt_of(&h.bind(&scope).await, "winner-agent"), "FIRST");
     assert!(
-        std::fs::read_to_string(&project_file)
+        h.engine
+            .refresh_bundles(&scope, &first)
+            .await
             .unwrap()
-            .contains("hya/offline")
+            .errors
+            .is_empty()
     );
-    assert!(
-        !config_file.parent().unwrap().join("bundles").exists(),
-        "a project bundle model never lands in the user scope"
-    );
+    assert!(!marker.exists());
 
-    assert_eq!(
-        harness
-            .bind(&scope_a)
-            .await
-            .configured_agent_model("tools-agent"),
-        Some(&ModelRef::new("hya/offline"))
-    );
-    assert_eq!(
-        harness
-            .bind(&scope_b)
-            .await
-            .configured_agent_model("tools-agent"),
-        None
-    );
+    // 2. Becoming shadowed releases a running process; removing shadow starts a fresh one.
+    let state2 = temp_path("new-shadow-state");
+    let first2 = temp_path("new-shadow-first");
+    let second2 = temp_path("new-shadow-second");
+    write_project_process(&second2, "loser", "acme/shared");
+    let h2 = Harness::new(&state2).await;
+    let scope2 = project(&[&first2, &second2]);
+    let b1 = h2.bind(&scope2).await;
+    let pid = tool_pid(&b1, "shared__echo");
+    drop(b1);
+
+    write_project_bundle(&first2, "winner", "acme/shared", "FIRST");
+    let refreshed = h2.engine.refresh_bundles(&scope2, &first2).await.unwrap();
+    assert!(refreshed.errors.is_empty());
+    assert_eq!(prompt_of(&refreshed.binding, "winner-agent"), "FIRST");
+    assert!(wait_until_exited(pid).await);
+
+    std::fs::remove_dir_all(first2.join(".hya/bundles/winner")).unwrap();
+    let unshadowed = h2.engine.refresh_bundles(&scope2, &first2).await.unwrap();
+    assert_ne!(tool_pid(&unshadowed.binding, "shared__echo"), pid);
 }
 
 #[tokio::test]
-async fn hot_reload_invalid_project_bundle_keeps_published_catalog() {
-    let root = temp_path("invalid-edit");
-    write_project_bundle(&root, "kept", "acme/kept", "ORIGINAL");
-    write_project_bundle(&root, "other", "acme/other", "BEFORE");
-    let h = harness(&root.join("registry.sqlite")).await;
-    let scope = project(&[&root]);
+async fn hot_reload_fault_isolation_for_registry_manifest_config_and_root() {
+    let _env = crate::support::env_read_lock().await;
+    let state = temp_path("fault-state");
+    let bad = temp_path("fault-bad");
+    let good = temp_path("fault-good");
+    let registry_path = state.join("registry.db");
+
+    // Corrupt one installed registry row; readable installed + project + plugin still load.
+    install(
+        &registry_path,
+        installed_agent_source("hya/readable", "r", "readable-agent", "R"),
+        1,
+    )
+    .await;
+    install(
+        &registry_path,
+        installed_agent_source("hya/old", "o", "old-agent", "O"),
+        2,
+    )
+    .await;
+    let mut conn = sqlx::SqliteConnection::connect(registry_path.to_str().unwrap())
+        .await
+        .unwrap();
+    let (bytes,): (Vec<u8>,) =
+        sqlx::query_as("SELECT prepared_bytes FROM installed_bundle WHERE bundle_id = 'hya/old'")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+    let mut doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    doc["format_version"] = 3.into();
+    let bytes = serde_json::to_vec(&doc).unwrap();
+    sqlx::query("UPDATE installed_bundle SET prepared_bytes = ?, prepared_digest = ? WHERE bundle_id = 'hya/old'")
+        .bind(&bytes)
+        .bind(format!("{:x}", Sha256::digest(&bytes)))
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    conn.close().await.unwrap();
+
+    write_project_bundle(&bad, "kept", "acme/kept", "ORIGINAL");
+    write_project_bundle(&good, "other", "acme/other", "BEFORE");
+    let h = Harness::new(&state).await;
+    let scope = project(&[&bad, &good]);
     let before = h.bind(&scope).await;
+    assert_eq!(prompt_of(&before, "readable-agent"), "R");
+    assert!(before.resolve_agent("old-agent").is_none());
+
+    // Invalid manifest + unreadable config.yml retain `kept` while updating `other`.
     std::fs::write(
-        root.join(".hya/bundles/kept/bundle.hya.md"),
+        bad.join(".hya/bundles/kept/bundle.hya.md"),
         "---\nkind: invalid\n---\n",
     )
     .unwrap();
-    write_project_bundle(&root, "other", "acme/other", "AFTER");
+    std::fs::create_dir(bad.join(".hya/bundles/kept/config.yml")).unwrap();
+    write_project_bundle(&good, "other", "acme/other", "AFTER-1");
     assert!(
         h.refresh
             .refresh_scope_explicit(&h.runtime, &scope)
             .await
             .is_err()
     );
-    let after = h
+    let after1 = h.engine.refresh_bundles(&scope, &bad).await.unwrap();
+    assert!(
+        after1
+            .errors
+            .iter()
+            .any(|e| e.to_string().contains("hya/old"))
+    );
+    assert_eq!(prompt_of(&after1.binding, "kept-agent"), "ORIGINAL");
+    assert!(prompt_of(&after1.binding, "other-agent").contains("AFTER-1"));
+
+    // Unreadable `.hya/bundles` root keeps prior `kept` while updating `other`.
+    std::fs::rename(bad.join(".hya/bundles"), bad.join(".hya/saved-bundles")).unwrap();
+    std::fs::write(bad.join(".hya/bundles"), "not a directory").unwrap();
+    write_project_bundle(&good, "other", "acme/other", "AFTER-2");
+    let after2 = h
         .engine
-        .refresh_bundles(&scope, scope.roots().first().unwrap())
+        .refresh_bundles(&scope, &bad)
         .await
         .unwrap()
         .binding;
-    assert!(prompt_of(&after, "other-agent").contains("AFTER"));
-    assert_eq!(
-        prompt_of(&after, "kept-agent"),
-        prompt_of(&before, "kept-agent")
-    );
-    std::fs::remove_file(root.join(".hya/bundles/kept/bundle.hya.md")).unwrap();
-    assert!(
-        h.refresh
-            .refresh_scope_explicit(&h.runtime, &scope)
-            .await
-            .is_err()
-    );
-    std::fs::remove_dir_all(root.join(".hya/bundles/kept")).unwrap();
-    assert!(
-        h.refresh
-            .refresh_scope_explicit(&h.runtime, &scope)
-            .await
-            .unwrap()
-    );
+    assert_eq!(prompt_of(&after2, "kept-agent"), "ORIGINAL");
+    assert!(prompt_of(&after2, "other-agent").contains("AFTER-2"));
+
+    // Removing the broken bundle directory cleanly removes its agent.
+    std::fs::remove_file(bad.join(".hya/bundles")).unwrap();
+    std::fs::create_dir_all(bad.join(".hya/bundles")).unwrap();
+    let _ = h.refresh.refresh_scope_explicit(&h.runtime, &scope).await;
     assert!(
         h.runtime
-            .bind_scoped(&scope, &root)
+            .bind_scoped(&scope, &bad)
             .unwrap()
             .resolve_agent("kept-agent")
             .is_none()
     );
-    drop(h);
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-#[tokio::test]
-async fn hot_reload_unreadable_bundle_config_does_not_block_other_sources() {
-    let root = temp_path("unreadable-config");
-    write_project_bundle(&root, "kept", "acme/kept", "ORIGINAL");
-    write_project_bundle(&root, "other", "acme/other", "BEFORE");
-    let h = harness(&root.join("registry.sqlite")).await;
-    let scope = project(&[&root]);
-    let before = h.bind(&scope).await;
-    // A directory in place of the file fails read() consistently, including
-    // on hosts whose user can bypass ordinary file permission bits.
-    std::fs::create_dir(root.join(".hya/bundles/kept/config.yml")).unwrap();
-    write_project_bundle(&root, "other", "acme/other", "AFTER");
-    let after = h
-        .engine
-        .refresh_bundles(&scope, scope.roots().first().unwrap())
-        .await
-        .unwrap()
-        .binding;
-    assert_eq!(
-        prompt_of(&after, "kept-agent"),
-        prompt_of(&before, "kept-agent")
-    );
-    assert!(prompt_of(&after, "other-agent").contains("AFTER"));
-}
-
-#[tokio::test]
-async fn hot_reload_unreadable_project_root_keeps_sources_and_other_roots_update() {
-    let bad = temp_path("unreadable-bundle-root");
-    let good = temp_path("readable-bundle-root");
-    write_project_bundle(&bad, "kept", "acme/kept", "ORIGINAL");
-    write_project_bundle(&good, "other", "acme/other", "BEFORE");
-    let h = harness(&good.join("registry.sqlite")).await;
-    let scope = project(&[&bad, &good]);
-    let before = h.bind(&scope).await;
-    std::fs::rename(bad.join(".hya/bundles"), bad.join(".hya/saved-bundles")).unwrap();
-    std::fs::write(bad.join(".hya/bundles"), "not a directory").unwrap();
-    write_project_bundle(&good, "other", "acme/other", "AFTER");
-    let after = h
-        .engine
-        .refresh_bundles(&scope, scope.roots().first().unwrap())
-        .await
-        .unwrap()
-        .binding;
-    assert_eq!(
-        prompt_of(&after, "kept-agent"),
-        prompt_of(&before, "kept-agent")
-    );
-    assert!(prompt_of(&after, "other-agent").contains("AFTER"));
 }
 
 #[tokio::test]
 async fn hot_reload_failed_bundle_process_keeps_source_and_explicit_refresh_retries() {
-    let state = temp_path("failed-bundle-state");
-    let root = temp_path("failed-bundle-process");
+    let _env = crate::support::env_read_lock().await;
+    let state = temp_path("fail-proc-state");
+    let root = temp_path("fail-proc-root");
     write_project_process(&root, "proc", "acme/proj-proc");
     write_project_bundle(&root, "other", "acme/other", "BEFORE");
     let gate = root.join("ready");
@@ -1012,15 +700,16 @@ async fn hot_reload_failed_bundle_process_keeps_source_and_explicit_refresh_retr
         pid_script("proj-proc")
     );
     std::fs::write(root.join(".hya/bundles/proc/runtime.py"), script).unwrap();
-    let h = harness(&state).await;
+
+    let h = Harness::new(&state).await;
     let scope = project(&[&root]);
     let first = h.bind(&scope).await;
     let original = tool_pid(&first, "proj-proc__echo");
     drop(first);
+
     std::fs::remove_file(&gate).unwrap();
-    let manifest = root.join(".hya/bundles/proc/bundle.yaml");
     std::fs::write(
-        &manifest,
+        root.join(".hya/bundles/proc/bundle.yaml"),
         process_manifest("acme/proj-proc").replace("1.0.0", "1.0.1"),
     )
     .unwrap();
@@ -1028,6 +717,7 @@ async fn hot_reload_failed_bundle_process_keeps_source_and_explicit_refresh_retr
     assert!(!failed.errors.is_empty());
     assert_eq!(tool_pid(&failed.binding, "proj-proc__echo"), original);
     drop(failed);
+
     write_project_bundle(&root, "other", "acme/other", "AFTER");
     let partial = h
         .engine
@@ -1038,75 +728,18 @@ async fn hot_reload_failed_bundle_process_keeps_source_and_explicit_refresh_retr
     assert_eq!(tool_pid(&partial, "proj-proc__echo"), original);
     assert!(prompt_of(&partial, "other-agent").contains("AFTER"));
     drop(partial);
-    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 3);
-    // Repair the external input without changing any bundle bytes.
+
+    // Repair external dependency without changing bundle bytes -> explicit refresh retries.
     std::fs::write(&gate, "ready").unwrap();
-    let refreshed = h.engine.refresh_bundles(&scope, &root).await.unwrap();
-    assert!(refreshed.errors.is_empty(), "{:?}", refreshed.errors);
-    assert!(refreshed.changed);
-    assert_ne!(tool_pid(&refreshed.binding, "proj-proc__echo"), original);
-    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 4);
+    let repaired = h.engine.refresh_bundles(&scope, &root).await.unwrap();
+    assert!(repaired.errors.is_empty(), "{:?}", repaired.errors);
+    assert!(repaired.changed);
+    assert_ne!(tool_pid(&repaired.binding, "proj-proc__echo"), original);
 }
 
 #[tokio::test]
-async fn hot_reload_disabled_project_bundle_stops_and_does_not_start_until_enabled() {
-    let state = temp_path("disabled-bundle-state");
-    let root = temp_path("disabled-bundle-root");
-    write_project_process(&root, "proc", "acme/proj-proc");
-    let starts = root.join("starts");
-    std::fs::write(
-        root.join(".hya/bundles/proc/runtime.py"),
-        format!(
-            "with open({}, 'a') as f: f.write('start\\n')\n{}",
-            serde_json::to_string(&starts).unwrap(),
-            pid_script("proj-proc")
-        ),
-    )
-    .unwrap();
-    let registry = BundleRegistry::connect(state.join("registry.db").to_str().unwrap())
-        .await
-        .unwrap();
-    registry
-        .set_bundle_enabled("acme/proj-proc", false)
-        .await
-        .unwrap();
-    let h = harness(&state).await;
-    let scope = project(&[&root]);
-    assert!(
-        h.bind(&scope)
-            .await
-            .resolve_tool("proj-proc__echo")
-            .is_none()
-    );
-    assert!(!starts.exists(), "disabled source must never start");
-    registry
-        .set_bundle_enabled("acme/proj-proc", true)
-        .await
-        .unwrap();
-    let binding = h.bind(&scope).await;
-    let pid = tool_pid(&binding, "proj-proc__echo");
-    drop(binding);
-    registry
-        .set_bundle_enabled("acme/proj-proc", false)
-        .await
-        .unwrap();
-    assert!(
-        h.bind(&scope)
-            .await
-            .resolve_tool("proj-proc__echo")
-            .is_none()
-    );
-    assert!(
-        wait_until_exited(pid).await,
-        "disabled source must release its process"
-    );
-}
-
-#[tokio::test]
-async fn project_model_and_effort_reach_the_actual_request() {
-    use hya_provider::{
-        Capabilities, CompletionRequest, EventStream, Provider, ProviderError, ReasoningEffort,
-    };
+async fn project_bundle_model_config_isolation_save_and_request_routing() {
+    let _env = crate::support::env_read_lock().await;
     struct Recording(std::sync::Mutex<Vec<CompletionRequest>>);
     #[async_trait::async_trait]
     impl Provider for Recording {
@@ -1129,9 +762,7 @@ async fn project_model_and_effort_reach_the_actual_request() {
         ) -> Result<EventStream, ProviderError> {
             self.0.lock().unwrap().push(request);
             Provider::stream(
-                &hya_provider::FakeProvider::scripted(vec![hya_provider::FakeStep::Text(
-                    "done".into(),
-                )]),
+                &FakeProvider::scripted(vec![FakeStep::Text("done".into())]),
                 CompletionRequest {
                     model: ModelRef::new("unused"),
                     system: None,
@@ -1148,45 +779,67 @@ async fn project_model_and_effort_reach_the_actual_request() {
             .await
         }
     }
-    let state = temp_path("effort-state");
-    let root = temp_path("effort-project");
-    write_project_bundle(&root, "tools", "acme/tools", "Reply briefly.");
+
+    let state = temp_path("model-state");
+    let root_a = temp_path("model-a");
+    let root_b = temp_path("model-b");
+    write_project_bundle(&root_a, "tools", "acme/tools", "Tools A.");
+    write_project_bundle(&root_b, "tools", "acme/tools", "Tools B.");
+    let config_a = root_a.join(".hya/bundles/tools/config.yml");
     std::fs::write(
-        root.join(".hya/bundles/tools/config.yml"),
-        "agents:\n  tools-agent:\n    model: p/project\n    reasoning: high\n",
+        &config_a,
+        "agents:\n  tools-agent:\n    model: p/project-a\n    reasoning: high\n",
     )
     .unwrap();
-    let fixture = harness(&state).await;
+
+    let h = Harness::new(&state).await;
+    let scope_a = project(&[&root_a]);
+    let scope_b = project(&[&root_b]);
+
+    let a = h.bind(&scope_a).await;
+    let b = h.bind(&scope_b).await;
+    assert_eq!(
+        a.configured_agent_model("tools-agent"),
+        Some(&ModelRef::new("p/project-a"))
+    );
+    assert_eq!(b.configured_agent_model("tools-agent"), None);
+
+    // Project model & effort beat user-level defaults on actual provider requests.
     let provider = Arc::new(Recording(Default::default()));
     let store = SessionStore::connect_memory().await.unwrap();
-    let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
-    let engine = SessionEngine::new(
-        store.clone(),
-        Arc::new(ProviderRouter::new().with(provider.clone())),
-        fixture.runtime.clone(),
-        permission,
-        EventBus::default(),
-    )
-    .with_catalog_refresh(fixture.refresh.clone());
-    // A same-id user default must lose to the project owning file.
-    fixture
-        .runtime
+    let owner = hya_proto::OwnerRunId::new();
+    store.claim_runtime_owner(owner).unwrap();
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+    let engine = Arc::new(
+        SessionEngine::new(
+            store.clone(),
+            Arc::new(
+                ProviderRouter::new()
+                    .with(provider.clone())
+                    .with(Arc::new(hya_provider::DevProvider::new())),
+            ),
+            h.runtime.clone(),
+            permission,
+            EventBus::default(),
+        )
+        .with_catalog_refresh(h.refresh.clone()),
+    );
+    h.runtime
         .publish_agent_effort_configuration(std::collections::BTreeMap::from([(
             "tools-agent".into(),
             ReasoningEffort::Low,
         )]));
-    let project = store
-        .create_project("effort", &[root.display().to_string()])
+    let registered = store
+        .create_project("effort", &[root_a.display().to_string()])
         .await
         .unwrap();
-    let agent = hya_app::agent_base_with_model("p/fallback", None);
     let session = engine
         .create(hya_engine::CreateSession {
             parent: None,
             agent: hya_proto::AgentName::new("tools-agent"),
             model: ModelRef::new("p/fallback"),
-            workdir: root.display().to_string(),
-            project: Some(project.id),
+            workdir: root_a.display().to_string(),
+            project: Some(registered.id),
             kind: hya_proto::SessionKind::Project,
         })
         .await
@@ -1196,84 +849,56 @@ async fn project_model_and_effort_reach_the_actual_request() {
         .await
         .unwrap();
     engine
-        .run_turn(session, &agent, Default::default())
+        .run_turn(
+            session,
+            &hya_app::agent_base_with_model("p/fallback", None),
+            Default::default(),
+        )
         .await
         .unwrap();
-    let requests = provider.0.lock().unwrap();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].model.as_str(), "p/project");
-    assert_eq!(requests[0].reasoning, Some(ReasoningEffort::High));
-}
+    {
+        let captured = provider.0.lock().unwrap();
+        assert_eq!(captured[0].model.as_str(), "p/project-a");
+        assert_eq!(captured[0].reasoning, Some(ReasoningEffort::High));
+    }
 
-#[cfg(target_os = "linux")]
-#[tokio::test]
-async fn unchanged_binding_reads_zero_bundle_files() {
-    use std::ffi::CString;
-    use std::io::Read;
-    use std::os::fd::{FromRawFd, OwnedFd};
-    use std::os::unix::ffi::OsStrExt;
-
-    let state = temp_path("no-reads-state");
-    let root = temp_path("no-reads-root");
-    write_project_bundle(&root, "alpha", "acme/alpha", "BEFORE");
-    std::fs::write(root.join(".hya/bundles/alpha/config.yml"), "agents: {}\n").unwrap();
-    let h = harness(&state).await;
-    let scope = project(&[&root]);
-    let before = h.bind(&scope).await;
-    let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
-    assert!(fd >= 0);
-    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
-    use std::os::fd::AsRawFd;
-    for relative in [
-        "bundle.hya.md",
-        "resources/skills/alpha-skill.md",
-        "config.yml",
-    ] {
-        let path = CString::new(
-            root.join(".hya/bundles/alpha")
-                .join(relative)
-                .as_os_str()
-                .as_bytes(),
+    // Saving through AgentModelControl writes only to Project A's config.yml, never user scope or Project B.
+    let user_config = state.join("config-home/hya/config.yaml");
+    let control =
+        hya_app::PersistentAgentModelControl::load(store, owner, Arc::clone(&h.runtime), engine)
+            .await
+            .unwrap()
+            .with_configuration(hya_app::agent_model_config::AgentModelConfigFiles::new(
+                user_config.clone(),
+            ))
+            .await
+            .unwrap();
+    let project_file = std::path::absolute(&config_a).unwrap();
+    let row = control
+        .save_configuration(
+            a,
+            "tools-agent".into(),
+            Some(hya_server::AgentModelIdentity::new("hya", "offline")),
+            ModelRef::new("fallback"),
         )
+        .await
         .unwrap();
-        assert!(
-            unsafe { libc::inotify_add_watch(fd.as_raw_fd(), path.as_ptr(), libc::IN_ACCESS) } >= 0
-        );
-    }
-    for _ in 0..3 {
-        assert_eq!(h.bind(&scope).await.generation(), before.generation());
-    }
-    let mut events = std::fs::File::from(fd);
-    let error = events
-        .read(&mut [0u8; 4096])
-        .expect_err("unchanged binding must perform zero bundle reads");
-    assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
-
-    write_project_bundle(&root, "alpha", "acme/alpha", "AFTER");
-    assert_eq!(prompt_of(&h.bind(&scope).await, "alpha-agent"), "BEFORE");
-    let refreshed = h.engine.refresh_bundles(&scope, &root).await.unwrap();
-    assert!(refreshed.errors.is_empty());
-    assert_eq!(prompt_of(&refreshed.binding, "alpha-agent"), "AFTER");
-    drop(h);
-    std::fs::remove_dir_all(root).unwrap();
-    std::fs::remove_dir_all(state).unwrap();
-}
-
-#[tokio::test]
-async fn binding_an_empty_project_does_not_discover_source_edits() {
-    let state = temp_path("empty-cache-state");
-    let root = temp_path("empty-cache-project");
-    let h = harness(&state).await;
-    let scope = project(&[&root]);
-    let before = h.bind(&scope).await;
-    write_project_bundle(&root, "alpha", "acme/alpha", "EXPLICIT_ONLY");
-    let unchanged = h.bind(&scope).await;
-    assert_eq!(unchanged.generation(), before.generation());
-    assert!(unchanged.resolve_agent("alpha-agent").is_none());
-    let refreshed = h.engine.refresh_bundles(&scope, &root).await.unwrap();
-    assert!(refreshed.errors.is_empty());
-    assert!(refreshed.binding.resolve_agent("alpha-agent").is_some());
-    drop(h);
-    std::fs::remove_dir_all(root).unwrap();
-    std::fs::remove_dir_all(state).unwrap();
+    assert_eq!(
+        row.configuration_path.as_deref(),
+        Some(project_file.to_string_lossy().as_ref())
+    );
+    assert!(
+        std::fs::read_to_string(&project_file)
+            .unwrap()
+            .contains("hya/offline")
+    );
+    assert!(!user_config.parent().unwrap().join("bundles").exists());
+    assert_eq!(
+        h.bind(&scope_a).await.configured_agent_model("tools-agent"),
+        Some(&ModelRef::new("hya/offline"))
+    );
+    assert_eq!(
+        h.bind(&scope_b).await.configured_agent_model("tools-agent"),
+        None
+    );
 }

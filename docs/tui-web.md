@@ -195,18 +195,47 @@ the TUI's input shows `[image #1 image.png]`.
 
 ### Running the tests
 
+TUI verification uses a two-tier pyramid:
+
+1. **In-memory UI and unit tests (`packages/hya-tui/test/`)** — run under
+   `bun test` without spawning `hya serve` or a PTY. Pure logic unit tests and
+   `testRender` full-`<App />` UI suites (`test/support/appHarness.tsx` with an
+   in-memory `/v1` `FakeBackend` + controllable SSE stream, `test/ui-*.test.tsx`)
+   cover command menu/overlays, tiled layout/presets/focus/editor/sidebar resize,
+   composer/keybindings/Vim/paste/attachments, transcript/streaming/tools/status/revert/theme,
+   sessions/prompts/permission modes/projects/pickers/effort, subagent panes, and
+   management views (`/key`, `/agent`, `/diff`, `/mcp`, `/rules`, `/skills`, `/bundles`)
+   at both wide and 80-column viewports in milliseconds per scenario.
+2. **Real-PTY and real-backend seam tests (`packages/hya-tui-web/e2e/`)** —
+   run through `bun run test:tui-exp` against a real `hya` binary on a real Bun
+   PTY with `@xterm/headless`, focused strictly on OS/process/wire seams that
+   cannot be verified in-memory:
+   - `e2e/opentui.spec.ts` — real PTY borders/truecolor, wide CJK glyphs, keys, resize, Ctrl+C.
+   - `e2e/hya-tui.spec.ts` — real `hya serve` connect, offline echo, slash completion/exit, and fake-model streamed Markdown + tool card + permission ask golden path.
+   - `e2e/hya-bare.spec.ts` — bare `hya` launcher, busy `--port`, `--backend <url>`, missing assets/Bun errors (plus `@browser-only` WebUI tab cases).
+   - `e2e/hya-tui-launch-daemon.spec.ts` — persistent backend daemon auto-start, `/exit` archive / `--continue` / `--resume`, empty-session reaping, Ctrl+D background exit, `hya serve stop` + `/reconnect`, `hya serve restart` hot-update preserving session & draft, two-client live sync + `SIGKILL` single-successor recovery, launch errors, and cold startup trace (plus `@browser-only` WebUI tab case).
+   - `e2e/hya-tui-grpc.spec.ts` — direct `--grpc` wire transport.
+   - `e2e/hya-tui-remote.spec.ts` — real `hya proxy` + `hya serve --relay` + `hya bridge` `/connect-remote`, remote `@path` attachments, offline 503 handling, and `/disconnect-remote`.
+   - `e2e/hya-tui-bundles-ext.spec.ts` — real project bundle TUI extension in the confined Bun VM sidecar, `.hyabundle` install/trust/uninstall via `/bundles`, and `xtask package-bundle plugins/disk-inspector` opt-in pane.
+   - `e2e/hya-tui-terminal-protocol.spec.ts` — real OSC 52 clipboard (`/copy` + drag), OSC 9 focus-gated notifications, OSC 0 terminal title (`●`/`✓`/`?`), `COLORFGBG` auto-light theme, and PTY bracketed paste (plus `@browser-only` `Notification` / `document.title` case).
+   - `e2e/host.spec.ts` and `e2e/hya-tui-web-upload.spec.ts` — browser-only WebUI host and file upload checks.
+
 ```sh
-cd packages/hya-tui-web
+cd packages/hya-tui
+bun run typecheck && bun test                # fast unit + testRender UI suites
+
+cd ../hya-tui-web
 bun run typecheck
-bun test ./test                       # codec + host unit tests (bun run test)
-bun run test:tui-exp:parity -- e2e/<spec>.ts  # terminal scenarios for changed screens
-bun run test:tui-exp                         # full required terminal suite
+bun test ./test                              # codec, host, and fake-model unit tests (bun run test)
+bun run test:tui-exp:parity -- e2e/<spec>.ts # terminal seam spec for changed behavior
+bun run test:tui-exp                         # full required real-PTY seam suite
 bun run test:e2e                             # optional Chromium/WebUI checks
 ```
 
-Locally, run the specs that cover your change: the new or changed spec and the
-specs for the screens it touches. The whole terminal suite is the CI gate; run it
-locally only when asked or when a change affects every screen.
+Locally, run `packages/hya-tui` `bun test` for UI behavior changes and the
+matching `e2e/<spec>.ts` when touching PTY, daemon, gRPC, relay, or bundle
+seams. Both suites run in CI (`frontend` runs `hya-tui`, `hya-tui-sdk`, and
+`hya-tui-web` unit/UI tests; `tui` runs `test:tui-exp`).
 
 #### Experimental direct-PTY suite (`tui-exp`)
 
@@ -242,8 +271,8 @@ The command runs protocol checks followed by the shared terminal matrix:
 
 ```sh
 bun run test:tui-exp:unit           # nine focused protocol and real-TUI tests
-bun run test:tui-exp:parity         # all shared terminal scenarios, four workers
-bun run test:tui-exp:parity -- e2e/hya-tui-layout-editor.spec.ts
+bun run test:tui-exp:parity         # real-PTY seam scenarios, four workers
+bun run test:tui-exp:parity -- e2e/hya-tui-launch-daemon.spec.ts
 HYA_TUI_EXP_WORKERS=2 bun run test:tui-exp:parity
 ```
 
@@ -251,26 +280,27 @@ The parity runner uses **Playwright's test runner and assertions under Bun**,
 without launching Chromium. `tui-exp/playwright.config.ts` selects
 `HYA_TUI_DRIVER=pty`; the default browser config selects the browser driver.
 Both load the same `e2e/*.spec.ts` test bodies, backend fixtures, fake model
-scripts, and assertions. New terminal scenarios automatically run on both
-drivers. Requesting a browser `page` in PTY mode fails explicitly.
+scripts, and assertions. New real-PTY seam scenarios automatically run on both
+drivers; pure UI interaction scenarios belong in `packages/hya-tui/test/` via
+`testRender` (`test/support/appHarness.tsx`). Requesting a browser `page` in PTY
+mode fails explicitly.
 
-Coverage includes sessions and archive/resume, providers/models/effort, prompts
-and permissions, shell/tools/MCP/bundles, extensions, projects, direct gRPC,
-relay connections and remote attachments, subagent panes, every layout editor
-flow, pane focus, clipboard OSC 52, notification OSC 9, terminal focus reporting,
-Markdown streaming, scrolling, input/history/Vim, and daemon crash/restart and
-multi-client synchronization. At introduction, the shared inventory contains
-294 terminal scenarios and seven excluded browser-only scenarios;
-the browser suite additionally contains two generic host tests.
+Coverage in `e2e/` focuses on real-process and terminal-wire seams: OpenTUI PTY
+rendering, real `hya serve` streaming/tool/permission golden path, bare `hya`
+launcher, persistent backend daemon lifecycle/archive/resume/hot-update/crash
+recovery, direct gRPC, relay proxy/bridge remote sessions, confined Bun VM
+extensions and `.hyabundle` packaging, and real OSC 52/9/0/`COLORFGBG`/bracketed-paste
+terminal protocols.
 
 | Optional Chromium-only coverage, excluded from CI | Why a direct PTY cannot provide equivalent assertions |
 | --- | --- |
 | `host.spec.ts` (two tests) | WebUI-injected exit notice and browser reload creating a new WebSocket/client process. Direct child exit, cleanup and real process spawning are covered separately by PTY tests. |
 | `hya-bare.spec.ts` (five tagged cases) | Actual WebUI tabs alongside the terminal, tab teardown on exit/signals, and WebUI reconnect after daemon replacement. The three terminal-only bare-hya cases also run on PTY. |
-| `hya-tui-archive.spec.ts`, WebUI tab case | Web-tab-only command restrictions and closing an actual tab while a turn runs. Cross-client resume runs on two real PTYs as well as terminal/WebUI in Chromium. |
-| `hya-tui-notifications.spec.ts`, browser Notification case | Browser Notification API and document visibility. The three terminal OSC notification cases also run on PTY. |
+| `hya-tui-launch-daemon.spec.ts`, WebUI tab case | Web-tab-only command restrictions and closing an actual tab while a turn runs. |
+| `hya-tui-terminal-protocol.spec.ts`, WebUI Notification/title case | Browser Notification API, document visibility, and `document.title`. The terminal OSC 52/9/0 and `COLORFGBG`/paste cases run on PTY. |
+| `hya-tui-web-upload.spec.ts` (one tagged case) | Browser `ClipboardEvent` file paste upload to the WebUI host. |
 
-These seven cases are tagged `@browser-only` and excluded via `grepInvert`
+These browser-only cases are tagged `@browser-only` and excluded via `grepInvert`
 from the required gate. They remain available through the optional
 `bun run test:e2e` browser suite. The two generic host tests are excluded by exact filename from
 the PTY config. Browser clipboard permissions, DOM focus and WebSocket behavior
@@ -485,19 +515,18 @@ text wait does not guarantee a later screen read still contains the field.
 ### CI
 
 `.github/workflows/ci.yml`'s `tui` job runs this suite on every push and pull
-request, alongside the Rust `lint`, `test`, and `e2e` jobs and the `frontend`
-job. Both Bun jobs install the pinned Bun (the same `bun-v1.4.2` install used
-by the release workflow) and run `bun install --frozen-lockfile` in
+request, alongside the Rust `lint`, `build-bin`, `test`, and `e2e` jobs and the
+`frontend` job. Both Bun jobs install the pinned Bun (the same `bun-v1.4.2`
+install used by the release workflow) and run `bun install --frozen-lockfile` in
 `packages/hya-tui`, `packages/hya-tui-web`, `packages/hya-tui-sdk`, and the two
 adapters. `frontend` needs no Rust build: it runs `bun run typecheck && bun test`
-in each package (`bun test ./test` in `hya-tui-web`). `tui` precompiles the TUI
+in each package (`bun test ./test` in `hya-tui-web`). `tui` downloads the
+prebuilt `hya`, `xtask`, and lockstep native bundle `.so` libraries from
+`build-bin` (avoiding a duplicate Rust build), precompiles the TUI
 (`bun run build` in `packages/hya-tui`), so every launch of the suite runs
-`dist/app.js` as a release does instead of transforming the JSX sources again;
-a local run uses the sources unless `dist/` exists. It then builds `hya` and the
-bundle packager
-(`cargo build --locked -p hya-backend --bin hya -p xtask --bin xtask`)
-with the same Rust toolchain/cache actions as the Rust jobs, sets `HYA_BIN` to
-that binary, and runs `bun run test:tui-exp` from `packages/hya-tui-web`.
+`dist/app.js` as a release does instead of transforming the JSX sources again
+(a local run uses the sources unless `dist/` exists), sets `HYA_BIN` to that
+binary, and runs `bun run test:tui-exp` from `packages/hya-tui-web`.
 The required CI matrix sets `HYA_TUI_EXP_WORKERS=4` and uses no retries.
 The direct runner defaults to four workers locally; `HYA_TUI_EXP_WORKERS`
 is the positive integer worker count, also overridable with `--workers=N`.
@@ -520,7 +549,7 @@ options?)` returns the `tui()` arguments that run the TUI with no
 `--server` and `HYA_BIN` set to the binary under test, so the TUI starts
 a detached `hya serve` daemon; the fixture stops it on cleanup. Its default database lands under the
 workspace's `XDG_STATE_HOME`, so a second launch in the same test sees the
-first one's sessions (`--continue`). See `e2e/hya-tui-launch.spec.ts`:
+first one's sessions (`--continue`). See `e2e/hya-tui-launch-daemon.spec.ts`:
 
 ```ts
 import { expect, launchTest as test, selfLaunch, statusSessionId, textStep } from "./hya"
@@ -632,8 +661,9 @@ requests; a single step makes the other child finish with an empty reply.
 Wait for `pendingHangs()` to reach the expected count before inspecting those
 children. A timed hang removes itself when its deadline expires, and a client
 disconnect removes its hang, so `release()` always targets a live request.
-`e2e/fake-model-lifecycle.spec.ts` checks timeout, cancellation followed by a
-new release, and shutdown on both model protocols.
+`test/fake-model.test.ts` checks protocol framing, routing, timeout, cancellation
+followed by a new release, and shutdown on both model protocols without starting
+`hya serve`.
 
 The `backend` fixture (`e2e/hya.ts`) gains a `model` test option that wires
 the isolated `hya serve` to a fake model instead of the offline echo model:
@@ -662,7 +692,7 @@ silently dropping steps past the first). `protocol` defaults to `chat`. `permiss
 (default `default`, under which `bash`, `edit`, and `write` ask first and
 leave a pending permission request, shown by the TUI as a permission
 prompt); specs that run those tools without answering a prompt use `allow`,
-and specs that answer the prompt (`e2e/hya-tui-prompts.spec.ts`: press `1`,
+and specs that answer the prompt (for example `e2e/hya-tui.spec.ts`: press `1`,
 `2`, or `3`) keep `default`.
 `models` lists the provider model ids registered (default `["model"]`, each
 reachable as `fake/<id>`). `contextLimit` writes each model entry in object
@@ -699,8 +729,7 @@ permission:
 
 To script a subagent, route the parent's and the child's requests by their
 system prompts: the main agent's contains ``NEVER call `report` `` and a
-subagent's ``Finish your task with `report` `` (see
-`e2e/hya-tui-tools.spec.ts`):
+subagent's ``Finish your task with `report` ``:
 
 ```ts
 test.use({ model: { steps: [] } })
@@ -760,13 +789,12 @@ test.use({
 ```
 
 The bundle process needs `bun` on `PATH` (the same Bun that runs the
-specs). See `e2e/hya-tui-permission-modes.spec.ts`.
+specs).
 
 A spec that only needs to assert on the v1 HTTP API (no TUI rendering) can
 skip `tui()` and use `fetch` directly against `backend.url`; a scoped rpc
 names `backend.dir` in its `directory` field (query parameter on GET, body
-field otherwise; the server refuses the removed `x-hya-directory` header);
-see `e2e/fake-model.spec.ts`.
+field otherwise; the server refuses the removed `x-hya-directory` header).
 
 ## Interfaces
 
@@ -803,7 +831,7 @@ WebSocket message may be up to `maxFrameBytes` (a 20 MiB file in base64 plus
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `term` | xterm.js `Terminal` | Live terminal; read `term.buffer.active`, `cols`, `rows`. A spec can also observe escape sequences the program writes, e.g. `term.parser.registerOscHandler(52, (data) => …)` records OSC 52 clipboard writes (`e2e/hya-tui-clipboard.spec.ts`), and `registerOscHandler(9, …)` / `registerOscHandler(777, …)` record desktop-notification writes (`e2e/hya-tui-notifications.spec.ts`, [Desktop notifications](#desktop-notifications)); return `true` to consume them. |
+| `term` | xterm.js `Terminal` | Live terminal; read `term.buffer.active`, `cols`, `rows`. A spec can also observe escape sequences the program writes, e.g. `term.parser.registerOscHandler(52, (data) => …)` records OSC 52 clipboard writes, and `registerOscHandler(9, …)` / `registerOscHandler(777, …)` record desktop-notification writes (`e2e/hya-tui-terminal-protocol.spec.ts`, [Desktop notifications](#desktop-notifications)); return `true` to consume them. |
 | `connected` | `boolean` | WebSocket open. |
 | `exitCode` | `number \| null` | Child exit code once reported. |
 | `frames` | `number` | Output frames written so far. |

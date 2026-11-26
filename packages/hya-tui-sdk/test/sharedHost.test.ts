@@ -47,8 +47,8 @@ function host(serveFs: (method: string, params: Record<string, unknown>) => Prom
     const frame = await request("ext/call", { ext, request: { jsonrpc: "2.0", id: ++requestId, method, params } });
     return frame.error ? { error: frame.error } : (frame.result as { response: { result?: unknown; error?: { code: number; message: string } } }).response;
   };
-  const load = async (ext: string, entry: string, permissions: string[] = [], jit = false) => {
-    const loaded = await request("host/load", { ext, entry: fixture(entry), permissions, jit });
+  const load = async (ext: string, entry: string, permissions: string[] = [], jit = false, deadlineMs?: number) => {
+    const loaded = await request("host/load", { ext, entry: fixture(entry), permissions, jit, ...(deadlineMs !== undefined ? { deadlineMs } : {}) });
     if (loaded.error) return loaded.error.message;
     await call(ext, "tui/initialize", { api_version: 1, sdk_version: "1.0.0", extension_id: ext, permissions });
     await call(ext, "tui/activate", { context: { terminal: { columns: 80, rows: 24 } } });
@@ -82,12 +82,12 @@ test("a bundle error fails only that load", async () => {
 test("an extension spinning past its deadline answers with VM_STOPPED_ERROR_CODE, then refuses; the others keep answering", async () => {
   const h = host();
   running = h.child;
-  await h.load("spinner", "busy.ts");
-  await h.load("other", "busy.ts");
+  await h.load("spinner", "busy.ts", [], false, 100);
+  await h.load("other", "busy.ts", [], false, 100);
   const spinning = h.render("spinner", "spin");
   const other = h.render("other", "fast");
   const answer = await spinning;
-  expect(answer.error).toEqual({ code: VM_STOPPED_ERROR_CODE, message: "extension exceeded its 2000 ms limit" });
+  expect(answer.error).toEqual({ code: VM_STOPPED_ERROR_CODE, message: "extension exceeded its 100 ms limit" });
   expect((await other).result).toEqual({ root: { kind: "text", text: "fast" } });
   expect((await h.render("spinner", "fast")).error?.code).toBe(VM_STOPPED_ERROR_CODE);
   expect((await h.render("other", "fast")).result).toEqual({ root: { kind: "text", text: "fast" } });
@@ -141,26 +141,26 @@ describe("trusted extensions (jit: JavaScriptCore on their own thread)", () => {
   test("a handler past the deadline stops only that thread; others answer meanwhile", async () => {
     const h = host();
     running = h.child;
-    await h.load("spinner", "busy.ts", [], true);
-    await h.load("jit-other", "busy.ts", [], true);
-    await h.load("vm-other", "busy.ts");
+    await h.load("spinner", "busy.ts", [], true, 100);
+    await h.load("jit-other", "busy.ts", [], true, 100);
+    await h.load("vm-other", "busy.ts", [], false, 100);
     const spinning = h.render("spinner", "spin");
     const started = performance.now();
     expect((await h.render("jit-other", "fast")).result).toEqual({ root: { kind: "text", text: "fast" } });
     expect((await h.render("vm-other", "fast")).result).toEqual({ root: { kind: "text", text: "fast" } });
     // Separate threads: neither waited for the spinning one.
     expect(performance.now() - started).toBeLessThan(1_000);
-    expect((await spinning).error).toEqual({ code: VM_STOPPED_ERROR_CODE, message: "extension exceeded its 2000 ms limit" });
+    expect((await spinning).error).toEqual({ code: VM_STOPPED_ERROR_CODE, message: "extension exceeded its 100 ms limit" });
     expect((await h.render("spinner", "fast")).error?.code).toBe(VM_STOPPED_ERROR_CODE);
-    expect(await h.load("spinner", "busy.ts", [], true)).toBeUndefined();
+    expect(await h.load("spinner", "busy.ts", [], true, 100)).toBeUndefined();
     expect((await h.render("spinner", "fast")).result).toEqual({ root: { kind: "text", text: "fast" } });
   });
 
   test("waiting for api.fs does not count against the deadline", async () => {
-    // The TUI answers after more than the 2 s deadline: only execution is limited.
-    const h = host(async () => { await Bun.sleep(2_300); return { text: "late" }; });
+    // The TUI answers after more than the configured 100 ms deadline: only execution is limited.
+    const h = host(async () => { await Bun.sleep(200); return { text: "late" }; });
     running = h.child;
-    await h.load("reader", "busy.ts", ["fs.read"], true);
+    await h.load("reader", "busy.ts", ["fs.read"], true, 100);
     expect((await h.render("reader", "read")).result).toEqual({ root: { kind: "text", text: "read:late" } });
   }, 10_000);
 });

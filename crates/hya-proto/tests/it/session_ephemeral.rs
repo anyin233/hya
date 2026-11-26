@@ -45,8 +45,17 @@ fn marked(session: SessionId) -> Vec<Envelope> {
 }
 
 #[test]
-fn the_mark_folds_and_old_logs_are_not_ephemeral() {
+fn the_mark_folds_round_trips_and_old_logs_are_not_ephemeral() {
     let session = SessionId::new();
+    let event = Event::SessionEphemeralSet {
+        session,
+        ephemeral: true,
+    };
+    let wire = serde_json::to_value(&event).unwrap();
+    assert_eq!(wire["type"], "session_ephemeral_set");
+    assert_eq!(serde_json::from_value::<Event>(wire).unwrap(), event);
+    assert_eq!(event.session(), Some(session));
+
     assert!(Projection::from_events(&marked(session)).session.ephemeral);
     let old = Projection::from_events(&[env(1, created(session))]);
     assert!(!old.session.ephemeral);
@@ -100,17 +109,4 @@ fn the_mark_survives_a_snapshot_round_trip_and_is_omitted_when_unset() {
     let plain = Projection::from_events(&[env(1, created(session))]);
     let wire = serde_json::to_value(&plain).unwrap();
     assert!(wire["session"].get("ephemeral").is_none(), "{wire}");
-}
-
-#[test]
-fn the_event_round_trips_and_names_its_session() {
-    let session = SessionId::new();
-    let event = Event::SessionEphemeralSet {
-        session,
-        ephemeral: true,
-    };
-    let json = serde_json::to_value(&event).unwrap();
-    assert_eq!(json["type"], "session_ephemeral_set");
-    assert_eq!(serde_json::from_value::<Event>(json).unwrap(), event);
-    assert_eq!(event.session(), Some(session));
 }

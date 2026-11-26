@@ -21,8 +21,6 @@ use tokio::time::{Instant, timeout};
 type HostEnd = MemoryTransport<HostFrame, ProxyToHost>;
 type ChunkEnd = MemoryTransport<Chunk, Chunk>;
 
-/// Longer than every proxy timeout the tests rely on (paused-time tests
-/// auto-advance through it).
 const WAIT: Duration = Duration::from_secs(60);
 
 fn key(seed: u8) -> SigningKey {
@@ -35,7 +33,6 @@ fn room_of(key: &SigningKey) -> String {
         .to_owned()
 }
 
-/// The test PSK of a room: its id bytes, zero-padded.
 fn psk_for(room: &str, generation: u8) -> Psk {
     let mut bytes = [generation; 32];
     let len = room.len().min(32);
@@ -43,7 +40,6 @@ fn psk_for(room: &str, generation: u8) -> Psk {
     Psk::from_bytes(bytes)
 }
 
-/// The open token a link holder of `room` presents (PSK generation 0).
 fn token_for(room: &str) -> Vec<u8> {
     token_gen(room, 0)
 }
@@ -95,7 +91,6 @@ fn pong(seq: u64) -> Chunk {
     }
 }
 
-/// Start a host control stream on the core; returns the host's end.
 fn start_host(core: &ProxyCore, who: &str) -> HostEnd {
     let (host, proxy) = memory::pair::<HostFrame, ProxyToHost>(16);
     tokio::spawn(core.serve_host(Box::pin(proxy), peer(who)));
@@ -145,12 +140,10 @@ fn update_frame(key: &SigningKey, nonce: &[u8], hash: &[u8; 32]) -> HostFrame {
     }
 }
 
-/// Register `key` and return the host end after `registered`.
 async fn register(core: &ProxyCore, key: &SigningKey) -> HostEnd {
     register_as(core, key, "host").await
 }
 
-/// Register `key` from client identity `who`.
 async fn register_as(core: &ProxyCore, key: &SigningKey, who: &str) -> HostEnd {
     let mut host = start_host(core, who);
     let nonce = challenge(&mut host).await;
@@ -160,6 +153,17 @@ async fn register_as(core: &ProxyCore, key: &SigningKey, who: &str) -> HostEnd {
         other => panic!("expected registered, got {other:?}"),
     }
     host
+}
+
+async fn register_with_nonce(core: &ProxyCore, key: &SigningKey) -> (HostEnd, Vec<u8>) {
+    let mut host = start_host(core, "host");
+    let nonce = challenge(&mut host).await;
+    host.send(register_frame(key, &nonce)).await.unwrap();
+    match recv_host(&mut host).await {
+        proxy_to_host::Frame::Registered(_) => {}
+        other => panic!("expected registered, got {other:?}"),
+    }
+    (host, nonce)
 }
 
 async fn host_error(host: &mut HostEnd) -> RelayErrorCode {
@@ -233,7 +237,13 @@ async fn chunk_error(end: &mut ChunkEnd) -> RelayErrorCode {
     }
 }
 
-/// A registered host plus one fully spliced stream (opener got `opened`).
+async fn expect_no_incoming(host: &mut HostEnd) {
+    match timeout(Duration::from_millis(40), host.next()).await {
+        Err(_) => {}
+        Ok(frame) => panic!("the host heard of a rejected open: {frame:?}"),
+    }
+}
+
 async fn spliced(core: &ProxyCore, key: &SigningKey) -> (HostEnd, ChunkEnd, ChunkEnd) {
     let mut host = register(core, key).await;
     let mut opener = start_open(core, &room_of(key)).await;
@@ -243,7 +253,6 @@ async fn spliced(core: &ProxyCore, key: &SigningKey) -> (HostEnd, ChunkEnd, Chun
     (host, opener, host_leg)
 }
 
-/// Echo host: accept every incoming stream and echo data until close.
 fn spawn_echo_host(core: ProxyCore, mut host: HostEnd) {
     tokio::spawn(async move {
         while let Some(Ok(frame)) = host.next().await {
@@ -272,74 +281,123 @@ fn spawn_echo_host(core: ProxyCore, mut host: HostEnd) {
 // ---- registration ----
 
 #[tokio::test]
-async fn registration_succeeds_with_a_valid_signature() {
+async fn registration_challenge_heartbeat_and_duplicate_register_rejection() {
     let core = ProxyCore::new(ProxyLimits::default());
-    let mut host = start_host(&core, "host");
-    let nonce = challenge(&mut host).await;
-    assert_eq!(nonce.len(), 32);
+    let mut a = start_host(&core, "a");
+    let mut b = start_host(&core, "b");
+    let nonce_a = challenge(&mut a).await;
+    let nonce_b = challenge(&mut b).await;
+    assert_eq!(nonce_a.len(), 32);
+    assert_ne!(nonce_a, nonce_b);
+
     let k = key(1);
-    host.send(register_frame(&k, &nonce)).await.unwrap();
-    match recv_host(&mut host).await {
+    a.send(register_frame(&k, &nonce_a)).await.unwrap();
+    match recv_host(&mut a).await {
         proxy_to_host::Frame::Registered(r) => assert_eq!(r.room_id, room_of(&k)),
         other => panic!("expected registered, got {other:?}"),
     }
     assert_eq!(core.stats().rooms, 1);
-}
 
-#[tokio::test]
-async fn challenges_are_fresh() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let mut a = start_host(&core, "a");
-    let mut b = start_host(&core, "b");
-    assert_ne!(challenge(&mut a).await, challenge(&mut b).await);
-}
-
-#[tokio::test]
-async fn bad_signature_is_unauthenticated() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let mut host = start_host(&core, "host");
-    let nonce = challenge(&mut host).await;
-    // Signed over a different nonce: a replayed registration.
-    let mut frame = register_frame(&key(1), &[0u8; 32]);
-    if nonce == [0u8; 32] {
-        frame = register_frame(&key(1), &[1u8; 32]);
-    }
-    host.send(frame).await.unwrap();
-    assert_eq!(host_error(&mut host).await, RelayErrorCode::Unauthenticated);
-    assert_eq!(core.stats().rooms, 0);
-}
-
-#[tokio::test]
-async fn malformed_key_is_unauthenticated() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let mut host = start_host(&core, "host");
-    let _ = challenge(&mut host).await;
-    host.send(HostFrame {
-        frame: Some(host_frame::Frame::Register(Register {
-            ed25519_pubkey: vec![1; 31],
-            signature: vec![0; 64],
-            open_token_hash: vec![0; 32],
-        })),
-    })
-    .await
-    .unwrap();
-    assert_eq!(host_error(&mut host).await, RelayErrorCode::Unauthenticated);
-}
-
-#[tokio::test]
-async fn first_host_frame_must_be_register() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let mut host = start_host(&core, "host");
-    let _ = challenge(&mut host).await;
-    host.send(HostFrame {
+    // Control heartbeat probe is answered.
+    a.send(HostFrame {
         frame: Some(host_frame::Frame::Heartbeat(Heartbeat {
-            seq: 1,
+            seq: 7,
             pong: false,
         })),
     })
     .await
     .unwrap();
-    assert_eq!(host_error(&mut host).await, RelayErrorCode::InvalidArgument);
+    match recv_host(&mut a).await {
+        proxy_to_host::Frame::Heartbeat(hb) => assert_eq!(hb, Heartbeat { seq: 7, pong: true }),
+        other => panic!("expected pong, got {other:?}"),
+    }
+
+    // Second Register on one control stream is rejected.
+    a.send(register_frame(&k, &[0; 32])).await.unwrap();
+    assert_eq!(host_error(&mut a).await, RelayErrorCode::FailedPrecondition);
+}
+
+#[tokio::test]
+async fn registration_rejects_bad_auth_frames_and_token_hashes() {
+    let core = ProxyCore::new(ProxyLimits::default());
+    let k = key(1);
+
+    type FrameBuilder = Box<dyn Fn(&[u8]) -> HostFrame>;
+    let cases: [(&str, FrameBuilder, RelayErrorCode); 5] = [
+        (
+            "bad signature / replayed nonce",
+            Box::new(move |nonce| {
+                let wrong_nonce = if nonce == [0u8; 32] {
+                    [1u8; 32]
+                } else {
+                    [0u8; 32]
+                };
+                register_frame(&key(1), &wrong_nonce)
+            }),
+            RelayErrorCode::Unauthenticated,
+        ),
+        (
+            "malformed pubkey",
+            Box::new(|_| HostFrame {
+                frame: Some(host_frame::Frame::Register(Register {
+                    ed25519_pubkey: vec![1; 31],
+                    signature: vec![0; 64],
+                    open_token_hash: vec![0; 32],
+                })),
+            }),
+            RelayErrorCode::Unauthenticated,
+        ),
+        (
+            "non-register first frame",
+            Box::new(|_| HostFrame {
+                frame: Some(host_frame::Frame::Heartbeat(Heartbeat {
+                    seq: 1,
+                    pong: false,
+                })),
+            }),
+            RelayErrorCode::InvalidArgument,
+        ),
+        (
+            "missing token hash",
+            Box::new(move |nonce| HostFrame {
+                frame: Some(host_frame::Frame::Register(Register {
+                    ed25519_pubkey: k.verifying_key().as_bytes().to_vec(),
+                    signature: k
+                        .sign(&register_signing_message(nonce, &[]))
+                        .to_bytes()
+                        .to_vec(),
+                    open_token_hash: Vec::new(),
+                })),
+            }),
+            RelayErrorCode::InvalidArgument,
+        ),
+        (
+            "signature over swapped token hash",
+            Box::new(|nonce| {
+                let k = key(1);
+                let signed = hash_gen(&k, 0);
+                HostFrame {
+                    frame: Some(host_frame::Frame::Register(Register {
+                        ed25519_pubkey: k.verifying_key().as_bytes().to_vec(),
+                        signature: k
+                            .sign(&register_signing_message(nonce, &signed))
+                            .to_bytes()
+                            .to_vec(),
+                        open_token_hash: hash_gen(&k, 1).to_vec(),
+                    })),
+                }
+            }),
+            RelayErrorCode::Unauthenticated,
+        ),
+    ];
+
+    for (label, make_frame, expected) in cases {
+        let mut host = start_host(&core, "host");
+        let nonce = challenge(&mut host).await;
+        host.send(make_frame(&nonce)).await.unwrap();
+        assert_eq!(host_error(&mut host).await, expected, "{label}");
+        assert_eq!(core.stats().rooms, 0, "{label}");
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -356,61 +414,23 @@ async fn registration_times_out() {
 }
 
 #[tokio::test]
-async fn control_heartbeat_probe_is_answered() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let mut host = register(&core, &key(1)).await;
-    host.send(HostFrame {
-        frame: Some(host_frame::Frame::Heartbeat(Heartbeat {
-            seq: 7,
-            pong: false,
-        })),
-    })
-    .await
-    .unwrap();
-    match recv_host(&mut host).await {
-        proxy_to_host::Frame::Heartbeat(hb) => assert_eq!(hb, Heartbeat { seq: 7, pong: true }),
-        other => panic!("expected pong, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn second_register_on_one_control_stream_is_rejected() {
+async fn replacement_evicts_old_host_and_closes_existing_streams() {
     let core = ProxyCore::new(ProxyLimits::default());
     let k = key(1);
-    let mut host = register(&core, &k).await;
-    host.send(register_frame(&k, &[0; 32])).await.unwrap();
-    assert_eq!(
-        host_error(&mut host).await,
-        RelayErrorCode::FailedPrecondition
-    );
-}
-
-#[tokio::test]
-async fn new_registration_replaces_the_old_host() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let k = key(1);
-    let mut old = register(&core, &k).await;
+    let (mut old, mut opener, mut host_leg) = spliced(&core, &k).await;
     let mut new = register(&core, &k).await;
     assert_eq!(host_error(&mut old).await, RelayErrorCode::AlreadyExists);
     assert!(timeout(WAIT, old.next()).await.unwrap().is_none());
-    assert_eq!(core.stats().rooms, 1);
-    // Opens now reach the new host.
-    let _opener = start_open(&core, &room_of(&k)).await;
-    let id = incoming(&mut new).await;
-    assert!(!id.is_empty());
-}
-
-#[tokio::test]
-async fn replacement_closes_the_old_hosts_streams() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let k = key(1);
-    let (_old, mut opener, mut host_leg) = spliced(&core, &k).await;
-    let _new = register(&core, &k).await;
     assert_eq!(chunk_error(&mut opener).await, RelayErrorCode::Unavailable);
     assert_eq!(
         chunk_error(&mut host_leg).await,
         RelayErrorCode::Unavailable
     );
+    assert_eq!(core.stats().rooms, 1);
+    // Opens now reach the new host.
+    let _opener = start_open(&core, &room_of(&k)).await;
+    let id = incoming(&mut new).await;
+    assert!(!id.is_empty());
 }
 
 #[tokio::test]
@@ -436,56 +456,90 @@ async fn host_disconnect_evicts_the_room_and_its_streams() {
 // ---- open / accept ----
 
 #[tokio::test]
-async fn open_to_a_missing_room_is_not_found() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let mut opener = start_open(&core, &room_of(&key(9))).await;
-    assert_eq!(chunk_error(&mut opener).await, RelayErrorCode::NotFound);
-    expect_end(&mut opener).await;
-}
-
-#[tokio::test]
-async fn open_with_a_malformed_room_is_invalid() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let mut opener = start_open(&core, "NOT-A-ROOM").await;
-    assert_eq!(
-        chunk_error(&mut opener).await,
-        RelayErrorCode::InvalidArgument
-    );
-}
-
-#[tokio::test]
-async fn first_open_frame_must_be_open() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let (mut client, proxy) = memory::pair::<Chunk, Chunk>(4);
-    tokio::spawn(core.serve_open(Box::pin(proxy), peer("client")));
-    client.send(data(b"hi")).await.unwrap();
-    assert_eq!(
-        chunk_error(&mut client).await,
-        RelayErrorCode::InvalidArgument
-    );
-}
-
-#[tokio::test]
-async fn stream_ids_are_long_and_unique() {
+async fn open_and_accept_protocol_errors() {
     let core = ProxyCore::new(ProxyLimits::default());
     let k = key(1);
     let mut host = register(&core, &k).await;
-    let _a = start_open(&core, &room_of(&k)).await;
-    let _b = start_open(&core, &room_of(&k)).await;
-    let a = incoming(&mut host).await;
-    let b = incoming(&mut host).await;
-    assert_ne!(a, b);
-    // At least 128 bits of hex.
-    assert!(a.len() >= 32 && a.bytes().all(|c| c.is_ascii_hexdigit()));
+
+    // Open to missing room -> NotFound + stream end.
+    let mut missing = start_open(&core, &room_of(&key(9))).await;
+    assert_eq!(chunk_error(&mut missing).await, RelayErrorCode::NotFound);
+    expect_end(&mut missing).await;
+
+    // Open with malformed room -> InvalidArgument.
+    let mut malformed = start_open(&core, "NOT-A-ROOM").await;
+    assert_eq!(
+        chunk_error(&mut malformed).await,
+        RelayErrorCode::InvalidArgument
+    );
+
+    // First frame on open or accept must be Open / Accept.
+    let (mut bad_open, proxy) = memory::pair::<Chunk, Chunk>(4);
+    tokio::spawn(core.serve_open(Box::pin(proxy), peer("client")));
+    bad_open.send(data(b"hi")).await.unwrap();
+    assert_eq!(
+        chunk_error(&mut bad_open).await,
+        RelayErrorCode::InvalidArgument
+    );
+
+    let (mut bad_accept, proxy) = memory::pair::<Chunk, Chunk>(4);
+    tokio::spawn(core.serve_accept(Box::pin(proxy), peer("host")));
+    bad_accept.send(data(b"x")).await.unwrap();
+    assert_eq!(
+        chunk_error(&mut bad_accept).await,
+        RelayErrorCode::InvalidArgument
+    );
+
+    // Unknown stream id on accept -> NotFound.
+    let mut unknown = start_accept(&core, "0123456789abcdef0123456789abcdef").await;
+    assert_eq!(chunk_error(&mut unknown).await, RelayErrorCode::NotFound);
+
+    // Duplicate accept -> NotFound.
+    let mut opener = start_open(&core, &room_of(&k)).await;
+    let id = incoming(&mut host).await;
+    let _first = start_accept(&core, &id).await;
+    assert_eq!(recv(&mut opener).await, opened());
+    let mut dup = start_accept(&core, &id).await;
+    assert_eq!(chunk_error(&mut dup).await, RelayErrorCode::NotFound);
 }
 
 #[tokio::test]
-async fn splice_round_trips_both_ways_through_an_echo_host() {
+async fn stream_ids_echo_splice_data_integrity_and_opened_ordering() {
     let core = ProxyCore::new(ProxyLimits::default());
     let k = key(1);
-    let host = register(&core, &k).await;
-    spawn_echo_host(core.clone(), host);
-    let mut opener = start_open(&core, &room_of(&k)).await;
+    let mut host = register(&core, &k).await;
+
+    // Stream ids are >= 128-bit hex and unique.
+    let mut opener_a = start_open(&core, &room_of(&k)).await;
+    let mut opener_b = start_open(&core, &room_of(&k)).await;
+    let id_a = incoming(&mut host).await;
+    let id_b = incoming(&mut host).await;
+    assert_ne!(id_a, id_b);
+    assert!(id_a.len() >= 32 && id_a.bytes().all(|c| c.is_ascii_hexdigit()));
+
+    // `opened` ack precedes frames sent by the host immediately after accept.
+    let mut leg_a = start_accept(&core, &id_a).await;
+    leg_a.send(data(b"server hello")).await.unwrap();
+    assert_eq!(recv(&mut opener_a).await, opened());
+    assert_eq!(recv(&mut opener_a).await, data(b"server hello"));
+
+    // Arbitrary byte patterns (0..=255, 60 KB, empty) forward unchanged both ways.
+    let mut leg_b = start_accept(&core, &id_b).await;
+    assert_eq!(recv(&mut opener_b).await, opened());
+    let all: Vec<u8> = (0..=255u8).collect();
+    let big: Vec<u8> = (0..60_000u32).map(|i| (i * 31 % 251) as u8).collect();
+    for payload in [all, big, Vec::new()] {
+        opener_b.send(data(&payload)).await.unwrap();
+        assert_eq!(recv(&mut leg_b).await, data(&payload));
+        leg_b.send(data(&payload)).await.unwrap();
+        assert_eq!(recv(&mut opener_b).await, data(&payload));
+    }
+
+    // Echo host round-trip with clean close.
+    let k2 = key(2);
+    let echo_host = register(&core, &k2).await;
+    spawn_echo_host(core.clone(), echo_host);
+    let mut opener = start_open(&core, &room_of(&k2)).await;
     assert_eq!(recv(&mut opener).await, opened());
     for msg in [&b"hello"[..], b"world", &[0u8, 255, 1, 254]] {
         opener.send(data(msg)).await.unwrap();
@@ -497,61 +551,49 @@ async fn splice_round_trips_both_ways_through_an_echo_host() {
 }
 
 #[tokio::test]
-async fn proxy_forwards_data_bytes_unchanged() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let (_host, mut opener, mut host_leg) = spliced(&core, &key(1)).await;
-    let all: Vec<u8> = (0..=255u8).collect();
-    let big: Vec<u8> = (0..60_000u32).map(|i| (i * 31 % 251) as u8).collect();
-    for payload in [all.clone(), big.clone(), Vec::new()] {
-        opener.send(data(&payload)).await.unwrap();
-        assert_eq!(recv(&mut host_leg).await, data(&payload));
-        host_leg.send(data(&payload)).await.unwrap();
-        assert_eq!(recv(&mut opener).await, data(&payload));
-    }
-}
-
-#[tokio::test]
-async fn opened_ack_precedes_host_frames() {
+async fn early_opener_data_and_half_close_delivered_after_accept() {
     let core = ProxyCore::new(ProxyLimits::default());
     let k = key(1);
     let mut host = register(&core, &k).await;
-    let mut opener = start_open(&core, &room_of(&k)).await;
-    let id = incoming(&mut host).await;
-    let mut host_leg = start_accept(&core, &id).await;
-    // The host speaks first, before the opener sent anything.
-    host_leg.send(data(b"server hello")).await.unwrap();
-    assert_eq!(recv(&mut opener).await, opened());
-    assert_eq!(recv(&mut opener).await, data(b"server hello"));
-}
 
-#[tokio::test]
-async fn early_opener_data_is_delivered_after_accept() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let k = key(1);
-    let mut host = register(&core, &k).await;
-    let mut opener = start_open(&core, &room_of(&k)).await;
-    opener.send(data(b"early-1")).await.unwrap();
-    opener.send(data(b"early-2")).await.unwrap();
-    let id = incoming(&mut host).await;
-    let mut host_leg = start_accept(&core, &id).await;
-    assert_eq!(recv(&mut opener).await, opened());
-    assert_eq!(recv(&mut host_leg).await, data(b"early-1"));
-    assert_eq!(recv(&mut host_leg).await, data(b"early-2"));
+    // Early multi-chunk data before accept.
+    let mut opener1 = start_open(&core, &room_of(&k)).await;
+    opener1.send(data(b"early-1")).await.unwrap();
+    opener1.send(data(b"early-2")).await.unwrap();
+    let id1 = incoming(&mut host).await;
+    let mut leg1 = start_accept(&core, &id1).await;
+    assert_eq!(recv(&mut opener1).await, opened());
+    assert_eq!(recv(&mut leg1).await, data(b"early-1"));
+    assert_eq!(recv(&mut leg1).await, data(b"early-2"));
+
+    // Early data + close before accept, with responder still replying.
+    let mut opener2 = start_open(&core, &room_of(&k)).await;
+    opener2.send(data(b"req")).await.unwrap();
+    opener2.send(close()).await.unwrap();
+    let id2 = incoming(&mut host).await;
+    let mut leg2 = start_accept(&core, &id2).await;
+    assert_eq!(recv(&mut opener2).await, opened());
+    assert_eq!(recv(&mut leg2).await, data(b"req"));
+    assert_eq!(recv(&mut leg2).await, close());
+    expect_end(&mut leg2).await;
+    leg2.send(data(b"resp")).await.unwrap();
+    leg2.send(close()).await.unwrap();
+    assert_eq!(recv(&mut opener2).await, data(b"resp"));
+    assert_eq!(recv(&mut opener2).await, close());
+    expect_end(&mut opener2).await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn early_data_is_bounded_then_backpressured() {
-    let limits = ProxyLimits {
+async fn early_data_is_bounded_per_stream_and_globally() {
+    // Per-stream limit backpressures then drains on accept.
+    let core = ProxyCore::new(ProxyLimits {
         early_data_limit: 16,
         ..ProxyLimits::default()
-    };
-    let core = ProxyCore::new(limits);
+    });
     let k = key(1);
     let mut host = register(&core, &k).await;
     let mut opener = start_open(&core, &room_of(&k)).await;
     let id = incoming(&mut host).await;
-    // 8-byte chunks: the proxy reads two (16 bytes), then stops reading, so
-    // the opener's sends block once the in-memory channel fills.
     let mut sent = 0usize;
     for i in 0..40u8 {
         match timeout(Duration::from_millis(200), opener.send(data(&[i; 8]))).await {
@@ -566,28 +608,40 @@ async fn early_data_is_bounded_then_backpressured() {
     for i in 0..sent {
         assert_eq!(recv(&mut host_leg).await, data(&[i as u8; 8]));
     }
-}
 
-#[tokio::test]
-async fn opener_close_before_accept_is_forwarded() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let k = key(1);
+    // Global cap across multiple openers.
+    let core = ProxyCore::new(ProxyLimits {
+        early_data_limit: 1024,
+        max_early_data_bytes: 16,
+        ..ProxyLimits::default()
+    });
     let mut host = register(&core, &k).await;
-    let mut opener = start_open(&core, &room_of(&k)).await;
-    opener.send(data(b"req")).await.unwrap();
-    opener.send(close()).await.unwrap();
-    let id = incoming(&mut host).await;
-    let mut host_leg = start_accept(&core, &id).await;
-    assert_eq!(recv(&mut opener).await, opened());
-    assert_eq!(recv(&mut host_leg).await, data(b"req"));
-    assert_eq!(recv(&mut host_leg).await, close());
-    expect_end(&mut host_leg).await;
-    // The other direction still works.
-    host_leg.send(data(b"resp")).await.unwrap();
-    host_leg.send(close()).await.unwrap();
-    assert_eq!(recv(&mut opener).await, data(b"resp"));
-    assert_eq!(recv(&mut opener).await, close());
-    expect_end(&mut opener).await;
+    let mut first = start_open_as(&core, &room_of(&k), "10.0.0.1").await;
+    let first_id = incoming(&mut host).await;
+    let mut second = start_open_as(&core, &room_of(&k), "10.0.0.2").await;
+    let _second_id = incoming(&mut host).await;
+    let mut sent = [0usize; 2];
+    for i in 0..40u8 {
+        for (n, opener) in [&mut first, &mut second].into_iter().enumerate() {
+            if let Ok(Ok(())) = timeout(Duration::from_millis(50), opener.send(data(&[i; 8]))).await
+            {
+                sent[n] += 1;
+            }
+        }
+    }
+    let buffered = core.stats().early_data_bytes;
+    assert!((16..=32).contains(&buffered), "{buffered}");
+    assert!(sent[0] < 40 && sent[1] < 40, "{sent:?}");
+    let mut leg = start_accept(&core, &first_id).await;
+    assert_eq!(recv(&mut first).await, opened());
+    assert_eq!(recv(&mut leg).await, data(&[0; 8]));
+    timeout(WAIT, async {
+        while core.stats().early_data_bytes > 16 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -600,90 +654,50 @@ async fn accept_timeout_fails_the_opener_with_unavailable() {
     let started = Instant::now();
     assert_eq!(chunk_error(&mut opener).await, RelayErrorCode::Unavailable);
     assert!(started.elapsed() >= ProxyLimits::default().accept_timeout);
-    // A late accept finds nothing.
     let mut late = start_accept(&core, &id).await;
     assert_eq!(chunk_error(&mut late).await, RelayErrorCode::NotFound);
     assert_eq!(core.stats().streams, 0);
 }
 
 #[tokio::test]
-async fn accept_with_an_unknown_stream_id_is_not_found() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let _host = register(&core, &key(1)).await;
-    let mut leg = start_accept(&core, "0123456789abcdef0123456789abcdef").await;
-    assert_eq!(chunk_error(&mut leg).await, RelayErrorCode::NotFound);
-}
-
-#[tokio::test]
-async fn duplicate_accept_is_not_found() {
+async fn data_heartbeats_before_during_and_after_half_close() {
     let core = ProxyCore::new(ProxyLimits::default());
     let k = key(1);
     let mut host = register(&core, &k).await;
-    let mut opener = start_open(&core, &room_of(&k)).await;
+
+    // Heartbeat before accept is answered locally.
+    let mut pre = start_open(&core, &room_of(&k)).await;
     let id = incoming(&mut host).await;
-    let _first = start_accept(&core, &id).await;
-    assert_eq!(recv(&mut opener).await, opened());
-    let mut second = start_accept(&core, &id).await;
-    assert_eq!(chunk_error(&mut second).await, RelayErrorCode::NotFound);
-}
+    pre.send(probe(1)).await.unwrap();
+    assert_eq!(recv(&mut pre).await, pong(1));
 
-#[tokio::test]
-async fn first_accept_frame_must_be_accept() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let (mut leg, proxy) = memory::pair::<Chunk, Chunk>(4);
-    tokio::spawn(core.serve_accept(Box::pin(proxy), peer("host")));
-    leg.send(data(b"x")).await.unwrap();
-    assert_eq!(chunk_error(&mut leg).await, RelayErrorCode::InvalidArgument);
-}
-
-#[tokio::test]
-async fn data_heartbeats_are_answered_locally_not_forwarded() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let (_host, mut opener, mut host_leg) = spliced(&core, &key(1)).await;
-    opener.send(probe(3)).await.unwrap();
-    assert_eq!(recv(&mut opener).await, pong(3));
+    // Once spliced, probes on both legs are answered locally and pongs swallowed.
+    let mut host_leg = start_accept(&core, &id).await;
+    assert_eq!(recv(&mut pre).await, opened());
+    pre.send(probe(3)).await.unwrap();
+    assert_eq!(recv(&mut pre).await, pong(3));
     host_leg.send(probe(4)).await.unwrap();
     assert_eq!(recv(&mut host_leg).await, pong(4));
-    // Pongs are swallowed; the next frames each side sees are real data.
-    opener.send(pong(5)).await.unwrap();
-    opener.send(data(b"a")).await.unwrap();
+    pre.send(pong(5)).await.unwrap();
+    pre.send(data(b"a")).await.unwrap();
     assert_eq!(recv(&mut host_leg).await, data(b"a"));
-    host_leg.send(data(b"b")).await.unwrap();
-    assert_eq!(recv(&mut opener).await, data(b"b"));
-}
 
-#[tokio::test]
-async fn probe_after_a_legs_direction_closed_is_dropped_silently() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let (_host, mut opener, mut host_leg) = spliced(&core, &key(1)).await;
-    // The host finishes its direction: the proxy closes the opener's sink.
+    // After host closes its direction, probe on opener is silently dropped without aborting.
     host_leg.send(data(b"reply")).await.unwrap();
     host_leg.send(close()).await.unwrap();
-    assert_eq!(recv(&mut opener).await, data(b"reply"));
-    assert_eq!(recv(&mut opener).await, close());
-    expect_end(&mut opener).await;
-    // A probe on the opener's leg can no longer be answered; it must not be
-    // mistaken for the opener going away.
-    opener.send(probe(9)).await.unwrap();
-    opener.send(data(b"late")).await.unwrap();
-    opener.send(close()).await.unwrap();
+    assert_eq!(recv(&mut pre).await, data(b"reply"));
+    assert_eq!(recv(&mut pre).await, close());
+    expect_end(&mut pre).await;
+    pre.send(probe(9)).await.unwrap();
+    pre.send(data(b"late")).await.unwrap();
+    pre.send(close()).await.unwrap();
     assert_eq!(recv(&mut host_leg).await, data(b"late"));
     assert_eq!(recv(&mut host_leg).await, close());
     expect_end(&mut host_leg).await;
 }
 
 #[tokio::test]
-async fn opener_heartbeat_before_accept_is_answered() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let k = key(1);
-    let _host = register(&core, &k).await;
-    let mut opener = start_open(&core, &room_of(&k)).await;
-    opener.send(probe(1)).await.unwrap();
-    assert_eq!(recv(&mut opener).await, pong(1));
-}
-
-#[tokio::test]
-async fn peer_error_frame_is_forwarded() {
+async fn peer_error_frame_and_transport_drop_propagate() {
     let core = ProxyCore::new(ProxyLimits::default());
     let (_host, mut opener, mut host_leg) = spliced(&core, &key(1)).await;
     host_leg
@@ -699,20 +713,16 @@ async fn peer_error_frame_is_forwarded() {
         chunk_error(&mut opener).await,
         RelayErrorCode::PermissionDenied
     );
-}
 
-#[tokio::test]
-async fn opener_drop_fails_the_host_leg() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let (_host, opener, mut host_leg) = spliced(&core, &key(1)).await;
-    opener
+    let (_host2, opener2, mut host_leg2) = spliced(&core, &key(2)).await;
+    opener2
         .inject_error(hya_relay::transport::TransportError::Transport(
             "reset".into(),
         ))
         .await
         .unwrap();
     assert_eq!(
-        chunk_error(&mut host_leg).await,
+        chunk_error(&mut host_leg2).await,
         RelayErrorCode::Unavailable
     );
 }
@@ -720,7 +730,8 @@ async fn opener_drop_fails_the_host_leg() {
 // ---- limits ----
 
 #[tokio::test]
-async fn max_rooms_is_enforced() {
+async fn room_limits_global_per_peer_replacement_and_eviction() {
+    // Global max_rooms.
     let core = ProxyCore::new(ProxyLimits {
         max_rooms: 1,
         ..ProxyLimits::default()
@@ -734,12 +745,94 @@ async fn max_rooms_is_enforced() {
         host_error(&mut second).await,
         RelayErrorCode::ResourceExhausted
     );
-    // Replacing an existing room needs no new slot.
     let _again = register(&core, &k1).await;
+
+    // Per-peer max_rooms, replacement, cross-peer takeover, and eviction release.
+    let core = ProxyCore::new(ProxyLimits {
+        max_rooms_per_peer: 1,
+        ..ProxyLimits::default()
+    });
+    let mut a = register_as(&core, &k1, "10.0.0.1").await;
+    let mut extra = start_host(&core, "10.0.0.1");
+    let nonce = challenge(&mut extra).await;
+    extra.send(register_frame(&key(2), &nonce)).await.unwrap();
+    assert_eq!(
+        host_error(&mut extra).await,
+        RelayErrorCode::ResourceExhausted
+    );
+    // Same peer may replace its own room; another peer is unaffected.
+    let mut a_replaced = register_as(&core, &k1, "10.0.0.1").await;
+    assert_eq!(host_error(&mut a).await, RelayErrorCode::AlreadyExists);
+    let _other = register_as(&core, &key(3), "10.0.0.2").await;
+
+    // Peer B takes over peer A's room (key(1)): A's slot frees up.
+    let _b = register_as(&core, &k1, "10.0.0.3").await;
+    assert_eq!(
+        host_error(&mut a_replaced).await,
+        RelayErrorCode::AlreadyExists
+    );
+    let a2 = register_as(&core, &key(2), "10.0.0.1").await;
+    drop(a2);
+    let deadline = Instant::now() + WAIT;
+    while core.stats().rooms > 2 {
+        assert!(Instant::now() < deadline, "room not evicted");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let _a3 = register_as(&core, &key(4), "10.0.0.1").await;
 }
 
 #[tokio::test]
-async fn max_streams_per_room_is_enforced() {
+async fn pending_registration_limits_per_peer_global_and_release() {
+    // Per-peer cap + release on completion & failure.
+    let core = ProxyCore::new(ProxyLimits {
+        max_pending_registrations_per_peer: 2,
+        ..ProxyLimits::default()
+    });
+    let mut p1 = start_host(&core, "10.0.0.1");
+    let mut p2 = start_host(&core, "10.0.0.1");
+    let _ = challenge(&mut p1).await;
+    let nonce2 = challenge(&mut p2).await;
+    let mut p3 = start_host(&core, "10.0.0.1");
+    assert_eq!(host_error(&mut p3).await, RelayErrorCode::ResourceExhausted);
+    let mut other = start_host(&core, "10.0.0.2");
+    let _ = challenge(&mut other).await;
+
+    p2.send(register_frame(&key(1), &nonce2)).await.unwrap();
+    assert!(matches!(
+        recv_host(&mut p2).await,
+        proxy_to_host::Frame::Registered(_)
+    ));
+    let mut p4 = start_host(&core, "10.0.0.1");
+    let _ = challenge(&mut p4).await;
+    // Failing frees its slot too.
+    p4.send(HostFrame { frame: None }).await.unwrap();
+    assert_eq!(host_error(&mut p4).await, RelayErrorCode::InvalidArgument);
+    let _registered = register_as(&core, &key(2), "10.0.0.1").await;
+
+    // Global cap across distinct peers.
+    let core = ProxyCore::new(ProxyLimits {
+        max_pending_registrations: 2,
+        ..ProxyLimits::default()
+    });
+    let mut g1 = start_host(&core, "10.0.0.1");
+    let mut g2 = start_host(&core, "10.0.0.2");
+    let _ = challenge(&mut g1).await;
+    let nonce = challenge(&mut g2).await;
+    assert_eq!(core.stats().pending_registrations, 2);
+    let mut g3 = start_host(&core, "10.0.0.3");
+    assert_eq!(host_error(&mut g3).await, RelayErrorCode::ResourceExhausted);
+    g2.send(register_frame(&key(1), &nonce)).await.unwrap();
+    assert!(matches!(
+        recv_host(&mut g2).await,
+        proxy_to_host::Frame::Registered(_)
+    ));
+    let mut g4 = start_host(&core, "10.0.0.4");
+    let _ = challenge(&mut g4).await;
+}
+
+#[tokio::test]
+async fn stream_limits_per_room_per_peer_and_global() {
+    // Per-room cap.
     let core = ProxyCore::new(ProxyLimits {
         max_streams_per_room: 1,
         ..ProxyLimits::default()
@@ -753,15 +846,12 @@ async fn max_streams_per_room_is_enforced() {
         chunk_error(&mut second).await,
         RelayErrorCode::ResourceExhausted
     );
-}
 
-#[tokio::test]
-async fn max_streams_per_peer_is_enforced() {
+    // Per-peer cap (other peer unaffected).
     let core = ProxyCore::new(ProxyLimits {
         max_streams_per_peer: 1,
         ..ProxyLimits::default()
     });
-    let k = key(1);
     let mut host = register(&core, &k).await;
     let _first = start_open_as(&core, &room_of(&k), "10.0.0.1").await;
     let _ = incoming(&mut host).await;
@@ -770,91 +860,27 @@ async fn max_streams_per_peer_is_enforced() {
         chunk_error(&mut second).await,
         RelayErrorCode::ResourceExhausted
     );
-    // Another client is not affected.
     let _other = start_open_as(&core, &room_of(&k), "10.0.0.2").await;
     let _ = incoming(&mut host).await;
-}
 
-#[tokio::test]
-async fn max_rooms_per_peer_is_enforced() {
+    // Global cap across rooms and peers.
     let core = ProxyCore::new(ProxyLimits {
-        max_rooms_per_peer: 1,
+        max_streams: 2,
         ..ProxyLimits::default()
     });
-    let k1 = key(1);
-    let _first = register_as(&core, &k1, "10.0.0.1").await;
-    let mut second = start_host(&core, "10.0.0.1");
-    let nonce = challenge(&mut second).await;
-    second.send(register_frame(&key(2), &nonce)).await.unwrap();
+    let (a, b) = (key(1), key(2));
+    let mut host_a = register(&core, &a).await;
+    let mut host_b = register(&core, &b).await;
+    let _one = start_open_as(&core, &room_of(&a), "10.0.0.1").await;
+    let _ = incoming(&mut host_a).await;
+    let _two = start_open_as(&core, &room_of(&b), "10.0.0.2").await;
+    let _ = incoming(&mut host_b).await;
+    let mut third = start_open_as(&core, &room_of(&a), "10.0.0.3").await;
     assert_eq!(
-        host_error(&mut second).await,
+        chunk_error(&mut third).await,
         RelayErrorCode::ResourceExhausted
     );
-    // The same client may replace its own room.
-    let _again = register_as(&core, &k1, "10.0.0.1").await;
-    // Another client is not affected.
-    let _other = register_as(&core, &key(3), "10.0.0.2").await;
-}
-
-#[tokio::test]
-async fn room_slots_per_peer_follow_replacement_and_eviction() {
-    let core = ProxyCore::new(ProxyLimits {
-        max_rooms_per_peer: 1,
-        ..ProxyLimits::default()
-    });
-    // Client A's room is taken over by client B: A's slot is free again.
-    let mut a = register_as(&core, &key(1), "10.0.0.1").await;
-    let _b = register_as(&core, &key(1), "10.0.0.2").await;
-    assert_eq!(host_error(&mut a).await, RelayErrorCode::AlreadyExists);
-    let a2 = register_as(&core, &key(2), "10.0.0.1").await;
-    // Eviction frees the slot too.
-    drop(a2);
-    let deadline = Instant::now() + WAIT;
-    while core.stats().rooms > 1 {
-        assert!(Instant::now() < deadline, "room not evicted");
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    let _a3 = register_as(&core, &key(3), "10.0.0.1").await;
-}
-
-#[tokio::test]
-async fn max_pending_registrations_per_peer_is_enforced() {
-    let core = ProxyCore::new(ProxyLimits {
-        max_pending_registrations_per_peer: 2,
-        ..ProxyLimits::default()
-    });
-    let mut p1 = start_host(&core, "10.0.0.1");
-    let mut p2 = start_host(&core, "10.0.0.1");
-    let _ = challenge(&mut p1).await;
-    let nonce2 = challenge(&mut p2).await;
-    // A third unregistered control stream from the same client is refused.
-    let mut p3 = start_host(&core, "10.0.0.1");
-    assert_eq!(host_error(&mut p3).await, RelayErrorCode::ResourceExhausted);
-    // Another client is not affected.
-    let mut other = start_host(&core, "10.0.0.2");
-    let _ = challenge(&mut other).await;
-    // Completing a registration frees its pending slot.
-    let k = key(1);
-    p2.send(register_frame(&k, &nonce2)).await.unwrap();
-    match recv_host(&mut p2).await {
-        proxy_to_host::Frame::Registered(_) => {}
-        other => panic!("expected registered, got {other:?}"),
-    }
-    let mut p4 = start_host(&core, "10.0.0.1");
-    let _ = challenge(&mut p4).await;
-}
-
-#[tokio::test]
-async fn failed_registrations_free_their_pending_slot() {
-    let core = ProxyCore::new(ProxyLimits {
-        max_pending_registrations_per_peer: 1,
-        ..ProxyLimits::default()
-    });
-    let mut p1 = start_host(&core, "10.0.0.1");
-    let _ = challenge(&mut p1).await;
-    p1.send(HostFrame { frame: None }).await.unwrap();
-    assert_eq!(host_error(&mut p1).await, RelayErrorCode::InvalidArgument);
-    let _registered = register_as(&core, &key(1), "10.0.0.1").await;
+    assert_eq!(core.stats().streams, 2);
 }
 
 #[tokio::test]
@@ -875,14 +901,15 @@ async fn stream_slots_are_released_when_streams_end() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn idle_streams_are_closed() {
+async fn idle_timeouts_evict_streams_and_control_unless_kept_alive() {
     let limits = ProxyLimits {
         idle_timeout: Duration::from_secs(30),
         ..ProxyLimits::default()
     };
-    let core = ProxyCore::new(limits);
+
+    // 1. Silent data stream closes while control stream stays alive.
+    let core = ProxyCore::new(limits.clone());
     let (mut host, mut opener, mut host_leg) = spliced(&core, &key(1)).await;
-    // Keep the control stream alive; the data stream stays silent.
     let keepalive = tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(10)).await;
@@ -912,16 +939,10 @@ async fn idle_streams_are_closed() {
     );
     assert!(started.elapsed() >= Duration::from_secs(30));
     keepalive.abort();
-}
 
-#[tokio::test(start_paused = true)]
-async fn heartbeats_keep_a_stream_alive() {
-    let limits = ProxyLimits {
-        idle_timeout: Duration::from_secs(30),
-        ..ProxyLimits::default()
-    };
-    let core = ProxyCore::new(limits);
-    let (mut host, mut opener, mut host_leg) = spliced(&core, &key(1)).await;
+    // 2. Heartbeats on control + both data legs keep everything alive past 4x idle_timeout.
+    let core = ProxyCore::new(limits.clone());
+    let (mut host, mut opener, mut host_leg) = spliced(&core, &key(2)).await;
     for seq in 0..6 {
         tokio::time::sleep(Duration::from_secs(20)).await;
         host.send(HostFrame {
@@ -937,18 +958,12 @@ async fn heartbeats_keep_a_stream_alive() {
     }
     opener.send(data(b"still here")).await.unwrap();
     assert_eq!(recv(&mut host_leg).await, data(b"still here"));
-}
 
-#[tokio::test(start_paused = true)]
-async fn idle_control_stream_evicts_the_room() {
-    let limits = ProxyLimits {
-        idle_timeout: Duration::from_secs(30),
-        ..ProxyLimits::default()
-    };
+    // 3. Idle control stream evicts its room.
     let core = ProxyCore::new(limits);
-    let mut host = register(&core, &key(1)).await;
+    let mut idle_host = register(&core, &key(3)).await;
     assert_eq!(
-        host_error(&mut host).await,
+        host_error(&mut idle_host).await,
         RelayErrorCode::DeadlineExceeded
     );
     assert_eq!(core.stats().rooms, 0);
@@ -973,7 +988,6 @@ async fn stream_byte_rate_is_capped() {
     for _ in 0..4 {
         assert_eq!(recv(&mut host_leg).await, data(&[7; 1_000]));
     }
-    // 4000 bytes at 1000 B/s with a 1000-byte burst: at least 3 s.
     assert!(
         started.elapsed() >= Duration::from_secs(3),
         "elapsed {:?}",
@@ -983,7 +997,8 @@ async fn stream_byte_rate_is_capped() {
 }
 
 #[tokio::test]
-async fn oversized_chunk_is_resource_exhausted() {
+async fn oversized_chunks_are_resource_exhausted_before_and_after_accept() {
+    // Spliced stream.
     let core = ProxyCore::new(ProxyLimits {
         max_chunk_data: 1024,
         ..ProxyLimits::default()
@@ -1000,20 +1015,18 @@ async fn oversized_chunk_is_resource_exhausted() {
         chunk_error(&mut host_leg).await,
         RelayErrorCode::ResourceExhausted
     );
-}
 
-#[tokio::test]
-async fn oversized_early_chunk_is_resource_exhausted() {
+    // Early chunk before accept.
     let core = ProxyCore::new(ProxyLimits {
         max_chunk_data: 8,
         ..ProxyLimits::default()
     });
-    let k = key(1);
+    let k = key(2);
     let _host = register(&core, &k).await;
-    let mut opener = start_open(&core, &room_of(&k)).await;
-    opener.send(data(&[0; 9])).await.unwrap();
+    let mut early = start_open(&core, &room_of(&k)).await;
+    early.send(data(&[0; 9])).await.unwrap();
     assert_eq!(
-        chunk_error(&mut opener).await,
+        chunk_error(&mut early).await,
         RelayErrorCode::ResourceExhausted
     );
 }
@@ -1072,17 +1085,12 @@ async fn shutdown_closes_everything_and_refuses_new_work() {
 
 // ---- open tokens (link-holder gating) ----
 
-/// No `incoming` reaches the host within a short window.
-async fn expect_no_incoming(host: &mut HostEnd) {
-    match timeout(Duration::from_millis(200), host.next()).await {
-        Err(_) => {}
-        Ok(frame) => panic!("the host heard of a rejected open: {frame:?}"),
-    }
-}
-
 #[tokio::test]
-async fn open_without_or_with_a_wrong_token_looks_offline_and_never_reaches_the_host() {
-    let core = ProxyCore::new(ProxyLimits::default());
+async fn wrong_open_tokens_look_offline_before_room_limits_apply() {
+    let core = ProxyCore::new(ProxyLimits {
+        max_streams_per_room: 1,
+        ..ProxyLimits::default()
+    });
     let k = key(1);
     let room = room_of(&k);
     let mut host = register(&core, &k).await;
@@ -1104,89 +1112,45 @@ async fn open_without_or_with_a_wrong_token_looks_offline_and_never_reaches_the_
         assert_eq!(core.stats().streams, 0, "no stream slot was taken");
     }
     expect_no_incoming(&mut host).await;
-    // The right token still opens.
-    let _opener = start_open(&core, &room).await;
-    let _ = incoming(&mut host).await;
-}
 
-#[tokio::test]
-async fn a_wrong_token_is_rejected_before_room_limits_apply() {
-    let core = ProxyCore::new(ProxyLimits {
-        max_streams_per_room: 1,
-        ..ProxyLimits::default()
-    });
-    let k = key(1);
-    let room = room_of(&k);
-    let mut host = register(&core, &k).await;
+    // Right token opens and fills the single room slot.
     let _first = start_open(&core, &room).await;
     let _ = incoming(&mut host).await;
-    // A room-id holder cannot tell a full room from an offline one.
+    // A wrong token against a full room still returns NotFound (not ResourceExhausted).
     let mut guess = start_open_with(&core, &room, vec![7; 32], "client").await;
     assert_eq!(chunk_error(&mut guess).await, RelayErrorCode::NotFound);
 }
 
 #[tokio::test]
-async fn registration_without_a_token_hash_is_refused() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let mut host = start_host(&core, "host");
-    let nonce = challenge(&mut host).await;
-    let k = key(1);
-    host.send(HostFrame {
-        frame: Some(host_frame::Frame::Register(Register {
-            ed25519_pubkey: k.verifying_key().as_bytes().to_vec(),
-            signature: k
-                .sign(&register_signing_message(&nonce, &[]))
-                .to_bytes()
-                .to_vec(),
-            open_token_hash: Vec::new(),
-        })),
-    })
-    .await
-    .unwrap();
-    assert_eq!(host_error(&mut host).await, RelayErrorCode::InvalidArgument);
-    assert_eq!(core.stats().rooms, 0);
-}
-
-#[tokio::test]
-async fn the_signature_covers_the_token_hash() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let mut host = start_host(&core, "host");
-    let nonce = challenge(&mut host).await;
-    let k = key(1);
-    // Signed for one hash, presenting another (a proxy-side swap).
-    let signed = hash_gen(&k, 0);
-    host.send(HostFrame {
-        frame: Some(host_frame::Frame::Register(Register {
-            ed25519_pubkey: k.verifying_key().as_bytes().to_vec(),
-            signature: k
-                .sign(&register_signing_message(&nonce, &signed))
-                .to_bytes()
-                .to_vec(),
-            open_token_hash: hash_gen(&k, 1).to_vec(),
-        })),
-    })
-    .await
-    .unwrap();
-    assert_eq!(host_error(&mut host).await, RelayErrorCode::Unauthenticated);
-}
-
-/// Register `key` and also return the challenge nonce.
-async fn register_with_nonce(core: &ProxyCore, key: &SigningKey) -> (HostEnd, Vec<u8>) {
-    let mut host = start_host(core, "host");
-    let nonce = challenge(&mut host).await;
-    host.send(register_frame(key, &nonce)).await.unwrap();
-    match recv_host(&mut host).await {
-        proxy_to_host::Frame::Registered(_) => {}
-        other => panic!("expected registered, got {other:?}"),
-    }
-    (host, nonce)
-}
-
-#[tokio::test]
-async fn a_token_update_invalidates_old_tokens_at_the_proxy() {
+async fn open_token_update_requires_valid_signature_and_invalidates_old_tokens() {
     let core = ProxyCore::new(ProxyLimits::default());
     let k = key(1);
     let room = room_of(&k);
+
+    // Wrong nonce and wrong key are both rejected.
+    let (mut bad_nonce_host, nonce) = register_with_nonce(&core, &k).await;
+    let mut other_nonce = nonce.clone();
+    other_nonce[0] ^= 1;
+    bad_nonce_host
+        .send(update_frame(&k, &other_nonce, &hash_gen(&k, 1)))
+        .await
+        .unwrap();
+    assert_eq!(
+        host_error(&mut bad_nonce_host).await,
+        RelayErrorCode::Unauthenticated
+    );
+
+    let (mut bad_key_host, nonce) = register_with_nonce(&core, &k).await;
+    bad_key_host
+        .send(update_frame(&key(2), &nonce, &hash_gen(&k, 1)))
+        .await
+        .unwrap();
+    assert_eq!(
+        host_error(&mut bad_key_host).await,
+        RelayErrorCode::Unauthenticated
+    );
+
+    // Valid update swaps active hash and invalidates generation-0 tokens.
     let (mut host, nonce) = register_with_nonce(&core, &k).await;
     host.send(update_frame(&k, &nonce, &hash_gen(&k, 1)))
         .await
@@ -1200,112 +1164,4 @@ async fn a_token_update_invalidates_old_tokens_at_the_proxy() {
     expect_no_incoming(&mut host).await;
     let _new = start_open_with(&core, &room, token_gen(&room, 1), "client").await;
     let _ = incoming(&mut host).await;
-}
-
-#[tokio::test]
-async fn a_token_update_must_be_signed_over_this_streams_nonce() {
-    let core = ProxyCore::new(ProxyLimits::default());
-    let k = key(1);
-    let (mut host, nonce) = register_with_nonce(&core, &k).await;
-    // A different nonce (say, replayed from another control stream).
-    let mut other_nonce = nonce.clone();
-    other_nonce[0] ^= 1;
-    host.send(update_frame(&k, &other_nonce, &hash_gen(&k, 1)))
-        .await
-        .unwrap();
-    assert_eq!(host_error(&mut host).await, RelayErrorCode::Unauthenticated);
-    // Signed by another key.
-    let (mut host, nonce) = register_with_nonce(&core, &k).await;
-    host.send(update_frame(&key(2), &nonce, &hash_gen(&k, 1)))
-        .await
-        .unwrap();
-    assert_eq!(host_error(&mut host).await, RelayErrorCode::Unauthenticated);
-}
-
-// ---- global caps ----
-
-#[tokio::test]
-async fn max_streams_is_enforced_across_rooms_and_clients() {
-    let core = ProxyCore::new(ProxyLimits {
-        max_streams: 2,
-        ..ProxyLimits::default()
-    });
-    let (a, b) = (key(1), key(2));
-    let mut host_a = register(&core, &a).await;
-    let mut host_b = register(&core, &b).await;
-    let _one = start_open_as(&core, &room_of(&a), "10.0.0.1").await;
-    let _ = incoming(&mut host_a).await;
-    let _two = start_open_as(&core, &room_of(&b), "10.0.0.2").await;
-    let _ = incoming(&mut host_b).await;
-    let mut third = start_open_as(&core, &room_of(&a), "10.0.0.3").await;
-    assert_eq!(
-        chunk_error(&mut third).await,
-        RelayErrorCode::ResourceExhausted
-    );
-    assert_eq!(core.stats().streams, 2);
-}
-
-#[tokio::test]
-async fn max_pending_registrations_is_enforced_across_clients() {
-    let core = ProxyCore::new(ProxyLimits {
-        max_pending_registrations: 2,
-        ..ProxyLimits::default()
-    });
-    let mut p1 = start_host(&core, "10.0.0.1");
-    let mut p2 = start_host(&core, "10.0.0.2");
-    let _ = challenge(&mut p1).await;
-    let nonce2 = challenge(&mut p2).await;
-    assert_eq!(core.stats().pending_registrations, 2);
-    let mut p3 = start_host(&core, "10.0.0.3");
-    assert_eq!(host_error(&mut p3).await, RelayErrorCode::ResourceExhausted);
-    // A finished registration frees its slot.
-    p2.send(register_frame(&key(1), &nonce2)).await.unwrap();
-    match recv_host(&mut p2).await {
-        proxy_to_host::Frame::Registered(_) => {}
-        other => panic!("expected registered, got {other:?}"),
-    }
-    let mut p4 = start_host(&core, "10.0.0.4");
-    let _ = challenge(&mut p4).await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn early_data_is_capped_across_all_openers() {
-    let core = ProxyCore::new(ProxyLimits {
-        early_data_limit: 1024,
-        max_early_data_bytes: 16,
-        ..ProxyLimits::default()
-    });
-    let k = key(1);
-    let mut host = register(&core, &k).await;
-    let mut first = start_open_as(&core, &room_of(&k), "10.0.0.1").await;
-    let first_id = incoming(&mut host).await;
-    let mut second = start_open_as(&core, &room_of(&k), "10.0.0.2").await;
-    let _second_id = incoming(&mut host).await;
-    // 8-byte chunks from both openers: together the proxy buffers 16 bytes
-    // (plus at most one chunk per opener), then stops reading both.
-    let mut sent = [0usize; 2];
-    for i in 0..40u8 {
-        for (n, opener) in [&mut first, &mut second].into_iter().enumerate() {
-            if let Ok(Ok(())) = timeout(Duration::from_millis(50), opener.send(data(&[i; 8]))).await
-            {
-                sent[n] += 1;
-            }
-        }
-    }
-    let buffered = core.stats().early_data_bytes;
-    assert!(buffered >= 16, "{buffered}");
-    assert!(buffered <= 16 + 2 * 8, "{buffered}");
-    assert!(sent[0] < 40 && sent[1] < 40, "{sent:?}");
-    // Accepting the first stream delivers its early data and frees the
-    // buffer.
-    let mut leg = start_accept(&core, &first_id).await;
-    assert_eq!(recv(&mut first).await, opened());
-    assert_eq!(recv(&mut leg).await, data(&[0; 8]));
-    timeout(WAIT, async {
-        while core.stats().early_data_bytes > 16 {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
 }

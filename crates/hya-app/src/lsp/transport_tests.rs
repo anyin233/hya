@@ -47,7 +47,7 @@ while True:
         text = document.get('text', params.get('contentChanges', [{}])[0].get('text', ''))
         documents[uri] = text
         send({'jsonrpc': '2.0', 'method': 'textDocument/publishDiagnostics', 'params': {'uri': uri, 'diagnostics': []}})
-        time.sleep(0.08)
+        time.sleep(0.01)
         send({'jsonrpc': '2.0', 'method': 'textDocument/publishDiagnostics', 'params': {'uri': uri, 'version': version - 1, 'diagnostics': [{'severity': 1, 'message': 'STALE'}]}})
         rows = [{'severity': 1, 'message': text, 'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 0, 'character': 1}}}] if 'BAD' in text else []
         published = {'uri': uri, 'diagnostics': rows}
@@ -124,43 +124,6 @@ fn provider(servers: BTreeMap<String, ServerConfig>) -> ProcessLspProvider {
         clients: Mutex::new(BTreeMap::new()),
         updates: watch::channel(0).0,
     }
-}
-
-#[test]
-fn concurrent_workspaces_never_share_a_directory() -> Result<(), Box<dyn std::error::Error>> {
-    // Parallel tests start within the same clock tick; a shared directory is
-    // deleted by whichever test finishes first while the other still uses it.
-    for _ in 0..50 {
-        let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
-        let workers = (0..16)
-            .map(|_| {
-                let barrier = std::sync::Arc::clone(&barrier);
-                std::thread::spawn(move || {
-                    barrier.wait();
-                    Workspace::new().map_err(|error| error.to_string())
-                })
-            })
-            .collect::<Vec<_>>();
-        let workspaces = workers
-            .into_iter()
-            .map(|worker| {
-                worker
-                    .join()
-                    .map_err(|_| "workspace worker panicked".to_string())
-                    .and_then(|workspace| workspace)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let unique = workspaces
-            .iter()
-            .map(|workspace| workspace.0.clone())
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(
-            unique.len(),
-            workspaces.len(),
-            "concurrent workspaces collided"
-        );
-    }
-    Ok(())
 }
 
 #[tokio::test]

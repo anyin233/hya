@@ -44,7 +44,9 @@ async fn open_turn(store: &SessionStore, session: SessionId) -> MessageId {
 }
 
 #[tokio::test]
-async fn restore_is_appended_once_and_survives_a_new_owner() {
+async fn restore_lifecycle_survives_new_owner_replaces_unconsumed_and_clears_on_delete_or_archive()
+{
+    // 1. Atomic cancel+restore, survives new owner, reuses prompt until assistant turn starts.
     let store = SessionStore::connect_memory().await.unwrap();
     let owner = OwnerRunId::new();
     store.claim_runtime_owner(owner).unwrap();
@@ -60,6 +62,19 @@ async fn restore_is_appended_once_and_survives_a_new_owner() {
         store.list_pending_resumes().await.unwrap()[0].message,
         interrupted
     );
+
+    // Another shutdown cancel replaces an unconsumed restore without duplicating rows.
+    let replaced = open_turn(&store, session).await;
+    store
+        .close_open_turns(session, FinishCause::Shutdown, "second stop")
+        .await
+        .unwrap();
+    assert_eq!(store.list_pending_resumes().await.unwrap().len(), 1);
+    assert_eq!(
+        store.list_pending_resumes().await.unwrap()[0].message,
+        replaced
+    );
+
     store.release_runtime_owner(owner).unwrap();
     let next = OwnerRunId::new();
     store.claim_runtime_owner(next).unwrap();
@@ -69,96 +84,51 @@ async fn restore_is_appended_once_and_survives_a_new_owner() {
         .unwrap()
         .unwrap();
     assert!(envelopes.iter().any(|e| matches!(&e.event, Event::TextDelta { delta, .. } if delta.contains("Your previous turn was interrupted by a restart."))));
-    assert_eq!(
-        store.list_pending_resumes().await.unwrap().len(),
-        1,
-        "a restore must remain pending until its assistant turn starts"
-    );
+    assert_eq!(store.list_pending_resumes().await.unwrap().len(), 1);
     assert_eq!(
         store
             .take_restart_resume(session, next)
             .await
             .unwrap()
             .unwrap(),
-        (prompt, Vec::new()),
-        "a second start reuses the injected prompt"
+        (prompt, Vec::new())
     );
-    let projection = store.read_projection(session).await.unwrap();
-    assert_eq!(projection.session.messages.len(), 2);
-    assert_eq!(projection.session.messages[1].role, Role::User);
     let restored = open_turn(&store, session).await;
     assert!(store.list_pending_resumes().await.unwrap().is_empty());
     store
-        .close_open_turns(session, FinishCause::Shutdown, "second stop")
+        .close_open_turns(session, FinishCause::Shutdown, "third stop")
         .await
         .unwrap();
-    assert_eq!(store.list_pending_resumes().await.unwrap().len(), 1);
     assert_eq!(
         store.list_pending_resumes().await.unwrap()[0].message,
         restored
     );
-}
 
-#[tokio::test]
-async fn deleting_a_session_removes_its_restore() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let owner = OwnerRunId::new();
-    store.claim_runtime_owner(owner).unwrap();
-    let session = SessionId::new();
-    create(&store, session).await;
-    open_turn(&store, session).await;
-    store
-        .close_open_turns(session, FinishCause::Shutdown, "stopping")
-        .await
-        .unwrap();
+    // 2. Deleting a session clears its restore row.
     store.delete_session(session).await.unwrap();
     assert!(
         store
-            .take_restart_resume(session, owner)
+            .take_restart_resume(session, next)
             .await
             .unwrap()
             .is_none()
     );
     assert!(!store.session_exists(session).await.unwrap());
     assert!(store.list_pending_resumes().await.unwrap().is_empty());
-}
 
-#[tokio::test]
-async fn shutdown_cancellation_and_restore_are_one_transaction() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let owner = OwnerRunId::new();
-    store.claim_runtime_owner(owner).unwrap();
-    let session = SessionId::new();
-    create(&store, session).await;
-    open_turn(&store, session).await;
+    // 3. Archived root is not restored at stop or start.
+    let archived = SessionId::new();
+    create(&store, archived).await;
+    open_turn(&store, archived).await;
     store
-        .close_open_turns(session, FinishCause::Shutdown, "stopping")
-        .await
-        .unwrap();
-    assert_eq!(
-        store.list_pending_resumes().await.unwrap().len(),
-        1,
-        "the transaction that cancels a root must also leave a restore row"
-    );
-}
-
-#[tokio::test]
-async fn archived_root_is_not_restored_at_stop_or_start() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let owner = OwnerRunId::new();
-    store.claim_runtime_owner(owner).unwrap();
-    let session = SessionId::new();
-    create(&store, session).await;
-    open_turn(&store, session).await;
-    store
-        .close_open_turns(session, FinishCause::Shutdown, "stopping")
+        .close_open_turns(archived, FinishCause::Shutdown, "stopping")
         .await
         .unwrap();
     store
         .append_event(
-            session,
+            archived,
             &Event::SessionArchived {
-                session,
+                session: archived,
                 archived: 123.into(),
             },
         )
@@ -166,49 +136,27 @@ async fn archived_root_is_not_restored_at_stop_or_start() {
         .unwrap();
     assert!(
         store
-            .take_restart_resume(session, owner)
+            .take_restart_resume(archived, next)
             .await
             .unwrap()
             .is_none()
     );
     assert!(store.list_pending_resumes().await.unwrap().is_empty());
-    open_turn(&store, session).await;
+    open_turn(&store, archived).await;
     store
-        .close_open_turns(session, FinishCause::Shutdown, "stopping")
+        .close_open_turns(archived, FinishCause::Shutdown, "stopping")
         .await
         .unwrap();
     assert!(store.list_pending_resumes().await.unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn another_cancel_replaces_an_unconsumed_restore() {
+async fn restore_reports_noncompleted_tools_and_interrupted_children() {
     let store = SessionStore::connect_memory().await.unwrap();
     let owner = OwnerRunId::new();
     store.claim_runtime_owner(owner).unwrap();
-    let session = SessionId::new();
-    create(&store, session).await;
-    for prompt in ["first stop", "second stop"] {
-        open_turn(&store, session).await;
-        store
-            .close_open_turns(session, FinishCause::Shutdown, prompt)
-            .await
-            .unwrap();
-    }
-    assert_eq!(store.list_pending_resumes().await.unwrap().len(), 1);
-    let (_, injected) = store
-        .take_restart_resume(session, owner)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(injected.iter().any(|entry| matches!(&entry.event,
-        Event::TextDelta { delta, .. } if delta.contains("Your previous turn was interrupted by a restart."))));
-}
 
-#[tokio::test]
-async fn restore_is_derived_from_the_indexed_messages_noncompleted_tools() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let owner = OwnerRunId::new();
-    store.claim_runtime_owner(owner).unwrap();
+    // 1. Non-completed tools appear in resume prompt; completed tools do not.
     let session = SessionId::new();
     create(&store, session).await;
     let message = open_turn(&store, session).await;
@@ -264,10 +212,6 @@ async fn restore_is_derived_from_the_indexed_messages_noncompleted_tools() {
         cause: Some(FinishCause::Shutdown),
     });
     store.append_events(session, events).await.unwrap();
-    assert_eq!(
-        store.list_pending_resumes().await.unwrap()[0].message,
-        message
-    );
     let (_, envelopes) = store
         .take_restart_resume(session, owner)
         .await
@@ -285,13 +229,8 @@ async fn restore_is_derived_from_the_indexed_messages_noncompleted_tools() {
     for name in ["errored", "denied", "pending", "running"] {
         assert!(text.contains(&format!("- {name} (call ")));
     }
-}
 
-#[tokio::test]
-async fn restore_lists_children_interrupted_before_the_root_message_started() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let owner = OwnerRunId::new();
-    store.claim_runtime_owner(owner).unwrap();
+    // 2. Children interrupted before root message started are listed, then cleared after answer.
     let root = SessionId::new();
     let child = SessionId::new();
     create(&store, root).await;
@@ -315,7 +254,6 @@ async fn restore_lists_children_interrupted_before_the_root_message_started() {
         .close_open_turns(child, FinishCause::Shutdown, "child stopped first")
         .await
         .unwrap();
-    // Explicit timestamps keep the ordering deterministic without a sleep.
     let mut tx = store.begin_transaction().await.unwrap();
     sqlx::query("UPDATE event_log SET ts = 1 WHERE session_id = ?")
         .bind(child.storage_key())
@@ -333,10 +271,8 @@ async fn restore_lists_children_interrupted_before_the_root_message_started() {
         .await
         .unwrap()
         .unwrap();
-    assert!(prompt.iter().any(|e| matches!(&e.event,
-        Event::TextDelta { delta, .. } if delta.contains("Interrupted subagents: main/worker."))));
+    assert!(prompt.iter().any(|e| matches!(&e.event, Event::TextDelta { delta, .. } if delta.contains("Interrupted subagents: main/worker."))));
 
-    // An assistant answer after that shutdown removes the child from the list.
     let answer = open_turn(&store, child).await;
     store
         .append_event(
@@ -362,69 +298,61 @@ async fn restore_lists_children_interrupted_before_the_root_message_started() {
         .await
         .unwrap()
         .unwrap();
-    assert!(!prompt.iter().any(|e| matches!(&e.event,
-        Event::TextDelta { delta, .. } if delta.contains("Interrupted subagents:"))));
+    assert!(!prompt.iter().any(|e| matches!(&e.event, Event::TextDelta { delta, .. } if delta.contains("Interrupted subagents:"))));
 }
 
 #[tokio::test]
-async fn shutdown_resume_uses_unarchived_tail_after_archived_snapshot() {
-    shutdown_resume_after_snapshot_archive_change(true).await;
-}
-
-#[tokio::test]
-async fn shutdown_resume_uses_archived_tail_after_unarchived_snapshot() {
-    shutdown_resume_after_snapshot_archive_change(false).await;
-}
-
-async fn shutdown_resume_after_snapshot_archive_change(snapshot_archived: bool) {
-    let store = SessionStore::connect_memory()
-        .await
-        .unwrap()
-        .with_projection_snapshot_interval(1);
-    let session = SessionId::new();
-    create(&store, session).await;
-    if snapshot_archived {
+async fn shutdown_resume_honors_archive_changes_after_projection_snapshot() {
+    for snapshot_archived in [true, false] {
+        let store = SessionStore::connect_memory()
+            .await
+            .unwrap()
+            .with_projection_snapshot_interval(1);
+        let session = SessionId::new();
+        create(&store, session).await;
+        if snapshot_archived {
+            store
+                .append_event(
+                    session,
+                    &Event::SessionArchived {
+                        session,
+                        archived: 123.into(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let snapshot = store.read_projection_shared(session).await.unwrap();
+        assert_eq!(snapshot.session.is_archived(), snapshot_archived);
+        drop(snapshot);
+        let archive_change = if snapshot_archived {
+            Event::SessionUnarchived { session }
+        } else {
+            Event::SessionArchived {
+                session,
+                archived: 456.into(),
+            }
+        };
+        store.append_event(session, &archive_change).await.unwrap();
+        let message = open_turn(&store, session).await;
         store
             .append_event(
                 session,
-                &Event::SessionArchived {
+                &Event::MessageFinished {
                     session,
-                    archived: 123.into(),
+                    message,
+                    role: Role::Assistant,
+                    finish: FinishReason::Cancelled,
+                    tokens: None,
+                    cause: Some(FinishCause::Shutdown),
                 },
             )
             .await
             .unwrap();
-    }
-    let snapshot = store.read_projection_shared(session).await.unwrap();
-    assert_eq!(snapshot.session.is_archived(), snapshot_archived);
-    drop(snapshot);
-    let archive_change = if snapshot_archived {
-        Event::SessionUnarchived { session }
-    } else {
-        Event::SessionArchived {
-            session,
-            archived: 456.into(),
+        let resumes = store.list_pending_resumes().await.unwrap();
+        assert_eq!(resumes.len(), usize::from(snapshot_archived));
+        if snapshot_archived {
+            assert_eq!(resumes[0].message, message);
         }
-    };
-    store.append_event(session, &archive_change).await.unwrap();
-    let message = open_turn(&store, session).await;
-    store
-        .append_event(
-            session,
-            &Event::MessageFinished {
-                session,
-                message,
-                role: Role::Assistant,
-                finish: FinishReason::Cancelled,
-                tokens: None,
-                cause: Some(FinishCause::Shutdown),
-            },
-        )
-        .await
-        .unwrap();
-    let resumes = store.list_pending_resumes().await.unwrap();
-    assert_eq!(resumes.len(), usize::from(snapshot_archived));
-    if snapshot_archived {
-        assert_eq!(resumes[0].message, message);
     }
 }

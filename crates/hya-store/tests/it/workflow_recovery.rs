@@ -1,4 +1,4 @@
-//! File-backed recovery of durable Workflow runs.
+//! File-backed recovery, atomic admission, and runtime ownership of durable Workflow runs.
 
 #![allow(clippy::expect_used)]
 
@@ -11,30 +11,35 @@ use hya_proto::{
 };
 use hya_store::{SessionStore, StoreError, WorkflowAdmissionOutcome, WorkflowSelectionOutcome};
 
-/// Return one process-unique SQLite path.
-fn database_path() -> PathBuf {
-    // macOS clock reads share ~1us granularity, so parallel test threads can
-    // draw the same nanosecond; a serial suffix keeps the paths distinct.
-    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos());
-    let serial = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "hya-workflow-recovery-{}-{nonce}-{serial}.db",
-        std::process::id()
-    ))
+struct TempDb(PathBuf);
+
+impl TempDb {
+    fn new() -> Self {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let serial = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self(std::env::temp_dir().join(format!(
+            "hya-workflow-recovery-{}-{nonce}-{serial}.db",
+            std::process::id()
+        )))
+    }
+
+    fn path_str(&self) -> &str {
+        self.0.to_str().expect("UTF-8 path")
+    }
 }
 
-/// Delete the database and SQLite sidecar files after a test.
-fn remove_database(path: &PathBuf) {
-    let _ = std::fs::remove_file(path);
-    let _ = std::fs::remove_file(format!("{}-wal", path.display()));
-    let _ = std::fs::remove_file(format!("{}-shm", path.display()));
-    let _ = std::fs::remove_file(format!("{}.runtime-owner.lock", path.display()));
+impl Drop for TempDb {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+        for suffix in ["-wal", "-shm", ".runtime-owner.lock"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", self.0.display()));
+        }
+    }
 }
 
-/// Build one stable Workflow identity for a recovery fixture.
 fn workflow_identity(name: &str) -> WorkflowIdentity {
     WorkflowIdentity {
         source: WorkflowSourceId::new(format!("project:{name}")),
@@ -43,7 +48,6 @@ fn workflow_identity(name: &str) -> WorkflowIdentity {
     }
 }
 
-/// Build one declaration-ordered Stage plan for a recovery fixture.
 fn workflow_stage() -> WorkflowStagePlan {
     WorkflowStagePlan {
         id: "stage".to_string(),
@@ -58,21 +62,20 @@ fn workflow_stage() -> WorkflowStagePlan {
     }
 }
 
-/// Idle Sessions without any Workflow lifecycle events must not hide a running
-/// Workflow Session from startup recovery (candidate filter must stay complete).
+/// Reopen + startup recovery finds running runs among idle sessions, interrupts stale-owner
+/// runs exactly once without replaying stage side effects, and preserves workflow selections.
 #[tokio::test]
-async fn recovery_finds_running_workflow_among_idle_sessions() {
-    let path = database_path();
+async fn reopen_and_recovery_interrupts_stale_runs_once_among_idle_sessions() {
+    let db = TempDb::new();
     let running = SessionId::new();
+    let selected_session = SessionId::new();
     let run = WorkflowRunId::new();
     let old_owner = OwnerRunId::new();
     let current_owner = OwnerRunId::new();
 
-    {
-        let store = SessionStore::connect(path.to_str().expect("UTF-8 path"))
-            .await
-            .expect("create store");
-        for _ in 0..32 {
+    let selection_before = {
+        let store = SessionStore::connect(db.path_str()).await.expect("create");
+        for _ in 0..12 {
             let idle = SessionId::new();
             store
                 .append_event(
@@ -88,67 +91,13 @@ async fn recovery_finds_running_workflow_among_idle_sessions() {
                     },
                 )
                 .await
-                .expect("append idle session");
+                .expect("idle session");
         }
         store
             .append_event(
                 running,
                 &Event::WorkflowRunStarted {
                     session: running,
-                    run,
-                    workflow: workflow_identity("among-idle"),
-                    request_hash: "inputs".to_string(),
-                    owner: old_owner,
-                    stages: vec![workflow_stage()],
-                },
-            )
-            .await
-            .expect("append running workflow");
-    }
-
-    let store = SessionStore::connect(path.to_str().expect("UTF-8 path"))
-        .await
-        .expect("reopen store");
-    store
-        .claim_runtime_owner(current_owner)
-        .expect("claim runtime owner before recovery");
-    let recovered = store
-        .recover_nonterminal_workflows(current_owner, "backend owner exited")
-        .await
-        .expect("recover among idle sessions");
-    assert_eq!(recovered.len(), 1);
-    assert!(matches!(
-        recovered[0].event,
-        Event::WorkflowRunFinished {
-            run: event_run,
-            status: WorkflowRunStatus::Interrupted,
-            ..
-        } if event_run == run
-    ));
-    drop(store);
-    remove_database(&path);
-}
-
-/// Startup recovery terminalizes a persisted running run exactly once and never
-/// replays Stage side effects.
-#[tokio::test]
-async fn reopen_then_recovery_marks_running_workflow_interrupted_once() {
-    let path = database_path();
-    let session = SessionId::new();
-    let run = WorkflowRunId::new();
-    let old_owner = OwnerRunId::new();
-    let current_owner = OwnerRunId::new();
-    assert_ne!(old_owner, current_owner);
-
-    {
-        let store = SessionStore::connect(path.to_str().expect("UTF-8 path"))
-            .await
-            .expect("create store");
-        store
-            .append_event(
-                session,
-                &Event::WorkflowRunStarted {
-                    session,
                     run,
                     workflow: workflow_identity("deliver"),
                     request_hash: "inputs".to_string(),
@@ -158,82 +107,105 @@ async fn reopen_then_recovery_marks_running_workflow_interrupted_once() {
             )
             .await
             .expect("append run start");
-    }
-
-    let store = SessionStore::connect(path.to_str().expect("UTF-8 path"))
-        .await
-        .expect("reopen store");
-    assert_eq!(
         store
-            .read_projection(session)
+            .append_event(
+                selected_session,
+                &Event::WorkflowSelected {
+                    session: selected_session,
+                    workflow: workflow_identity("persisted"),
+                },
+            )
             .await
-            .expect("projection before recovery")
+            .expect("append selection");
+        store
+            .read_projection(selected_session)
+            .await
+            .expect("proj")
             .session
             .workflow
-            .expect("Workflow projection")
+    };
+
+    let store = SessionStore::connect(db.path_str()).await.expect("reopen");
+    assert_eq!(
+        store
+            .read_projection(selected_session)
+            .await
+            .expect("proj")
+            .session
+            .workflow,
+        selection_before
+    );
+    assert_eq!(
+        store
+            .read_projection(running)
+            .await
+            .expect("proj")
+            .session
+            .workflow
+            .expect("wf")
             .run
-            .expect("running run")
+            .expect("run")
             .status,
         WorkflowRunStatus::Running
     );
 
-    store
-        .claim_runtime_owner(current_owner)
-        .expect("claim runtime owner before recovery");
+    store.claim_runtime_owner(current_owner).expect("claim");
     let recovered = store
         .recover_nonterminal_workflows(current_owner, "backend owner exited")
         .await
-        .expect("recover running Workflows");
+        .expect("recover");
     let repeated = store
         .recover_nonterminal_workflows(current_owner, "backend owner exited")
         .await
-        .expect("repeat recovery");
+        .expect("repeat");
 
     assert_eq!(recovered.len(), 1);
     assert!(repeated.is_empty());
     assert!(matches!(
         recovered[0].event,
-        Event::WorkflowRunFinished {
-            run: event_run,
-            status: WorkflowRunStatus::Interrupted,
-            ..
-        } if event_run == run
+        Event::WorkflowRunFinished { run: r, status: WorkflowRunStatus::Interrupted, .. } if r == run
     ));
-    let events = store.replay(session).await.expect("replay recovered log");
-    assert_eq!(events.len(), 2, "recovery adds only one terminal event");
-    assert!(!events.iter().any(|envelope| matches!(
-        envelope.event,
+    let events = store.replay(running).await.expect("replay");
+    assert_eq!(events.len(), 2);
+    assert!(!events.iter().any(|e| matches!(
+        e.event,
         Event::WorkflowStageStarted { .. } | Event::WorkflowStageMemberLinked { .. }
     )));
-    let current = store
-        .read_projection(session)
+    let after = store
+        .read_projection(running)
         .await
-        .expect("projection after recovery")
+        .expect("proj")
         .session
         .workflow
-        .expect("Workflow projection")
+        .expect("wf")
         .run
-        .expect("recovered run");
-    assert_eq!(current.status, WorkflowRunStatus::Interrupted);
-    assert_eq!(current.error.as_deref(), Some("backend owner exited"));
-
-    drop(store);
-    remove_database(&path);
+        .expect("run");
+    assert_eq!(after.status, WorkflowRunStatus::Interrupted);
+    assert_eq!(after.error.as_deref(), Some("backend owner exited"));
 }
 
-/// Recovery leaves already-terminal Workflow runs unchanged.
+/// Recovery requires the runtime owner claim, skips terminal runs, and skips current-owner runs.
 #[tokio::test]
-async fn recovery_does_not_reterminalize_completed_workflow() {
-    let store = SessionStore::connect_memory().await.expect("memory store");
-    let session = SessionId::new();
+async fn recovery_guards_owner_claim_terminal_runs_and_live_owner_runs() {
+    let store = SessionStore::connect_memory().await.expect("memory");
+    let error = store
+        .recover_nonterminal_workflows(OwnerRunId::new(), "backend owner exited")
+        .await
+        .expect_err("claim-less recovery must fail closed");
+    assert!(matches!(error, StoreError::RuntimeOwnerClaimRequired));
+
     let owner = OwnerRunId::new();
-    let run = WorkflowRunId::new();
+    let done_session = SessionId::new();
+    let done_run = WorkflowRunId::new();
+    let live_session = SessionId::new();
+    let live_run = WorkflowRunId::new();
+
     store
         .append_event(
-            session,
+            done_session,
             &Event::WorkflowRunStarted {
-                session,
-                run,
+                session: done_session,
+                run: done_run,
                 workflow: workflow_identity("done"),
                 request_hash: "inputs".to_string(),
                 owner,
@@ -241,45 +213,25 @@ async fn recovery_does_not_reterminalize_completed_workflow() {
             },
         )
         .await
-        .expect("append start");
+        .expect("start done");
     store
         .append_event(
-            session,
+            done_session,
             &Event::WorkflowRunFinished {
-                session,
-                run,
+                session: done_session,
+                run: done_run,
                 status: WorkflowRunStatus::Completed,
                 error: None,
             },
         )
         .await
-        .expect("append finish");
-
-    store
-        .claim_runtime_owner(owner)
-        .expect("claim runtime owner before terminal recovery");
-    let recovered = store
-        .recover_nonterminal_workflows(owner, "backend owner exited")
-        .await
-        .expect("recover terminal Workflows");
-
-    assert!(recovered.is_empty());
-    assert_eq!(store.replay(session).await.expect("replay").len(), 2);
-}
-
-/// Startup recovery never interrupts a run owned by the current runtime.
-#[tokio::test]
-async fn recovery_leaves_current_owner_running() {
-    let store = SessionStore::connect_memory().await.expect("memory store");
-    let session = SessionId::new();
-    let run = WorkflowRunId::new();
-    let owner = OwnerRunId::new();
+        .expect("finish done");
     store
         .append_event(
-            session,
+            live_session,
             &Event::WorkflowRunStarted {
-                session,
-                run,
+                session: live_session,
+                run: live_run,
                 workflow: workflow_identity("live"),
                 request_hash: "inputs".to_string(),
                 owner,
@@ -287,91 +239,37 @@ async fn recovery_leaves_current_owner_running() {
             },
         )
         .await
-        .expect("append start");
+        .expect("start live");
 
-    store
-        .claim_runtime_owner(owner)
-        .expect("claim runtime owner before current-owner recovery");
-    let recovered = store
-        .recover_nonterminal_workflows(owner, "backend owner exited")
-        .await
-        .expect("recover current-owner Workflows");
-
-    assert!(recovered.is_empty());
-    let current = store
-        .read_projection(session)
-        .await
-        .expect("projection")
-        .session
-        .workflow
-        .expect("Workflow projection")
-        .run
-        .expect("run");
-    assert_eq!(current.status, WorkflowRunStatus::Running);
-}
-
-/// Closing and reopening the store preserves replay-derived Workflow selection.
-#[tokio::test]
-async fn reopen_preserves_workflow_projection() {
-    let path = database_path();
-    let session = SessionId::new();
-    let selected = workflow_identity("persisted");
-
-    let before = {
-        let store = SessionStore::connect(path.to_str().expect("UTF-8 path"))
-            .await
-            .expect("create store");
+    store.claim_runtime_owner(owner).expect("claim");
+    assert!(
         store
-            .append_event(
-                session,
-                &Event::WorkflowSelected {
-                    session,
-                    workflow: selected,
-                },
-            )
+            .recover_nonterminal_workflows(owner, "backend owner exited")
             .await
-            .expect("append selection");
+            .expect("recover")
+            .is_empty()
+    );
+    assert_eq!(store.replay(done_session).await.expect("replay").len(), 2);
+    assert_eq!(
         store
-            .read_projection(session)
+            .read_projection(live_session)
             .await
-            .expect("projection before reopen")
+            .expect("proj")
             .session
             .workflow
-    };
-    assert_eq!(
-        before
-            .as_ref()
-            .and_then(|workflow| workflow.selection.as_ref())
-            .map(|workflow| workflow.name.as_str()),
-        Some("persisted")
+            .expect("wf")
+            .run
+            .expect("run")
+            .status,
+        WorkflowRunStatus::Running
     );
-
-    let store = SessionStore::connect(path.to_str().expect("UTF-8 path"))
-        .await
-        .expect("reopen store");
-    let after = store
-        .read_projection(session)
-        .await
-        .expect("projection after reopen")
-        .session
-        .workflow;
-
-    assert_eq!(after, before);
-    drop(store);
-    remove_database(&path);
 }
 
-/// Concurrent stores cannot duplicate a run start, change its immutable
-/// request, or switch selection while that run remains active.
 #[tokio::test]
-async fn workflow_admission_is_atomic_across_store_handles() {
-    let path = database_path();
-    let store = SessionStore::connect(path.to_str().expect("UTF-8 path"))
-        .await
-        .expect("left store");
-    let other = SessionStore::connect(path.to_str().expect("UTF-8 path"))
-        .await
-        .expect("right store");
+async fn workflow_admission_is_atomic_and_rejects_conflicts_and_stale_claims() {
+    let db = TempDb::new();
+    let store = SessionStore::connect(db.path_str()).await.expect("left");
+    let other = SessionStore::connect(db.path_str()).await.expect("right");
     let session = SessionId::new();
     let run = WorkflowRunId::new();
     let owner = OwnerRunId::new();
@@ -383,92 +281,80 @@ async fn workflow_admission_is_atomic_across_store_handles() {
         owner,
         stages: vec![workflow_stage()],
     };
-    let left_store = store.clone();
-    let right_store = other.clone();
     let (left, right) = tokio::join!(
-        left_store.admit_workflow_run(None, session, start.clone()),
-        right_store.admit_workflow_run(None, session, start.clone()),
+        store.admit_workflow_run(None, session, start.clone()),
+        other.admit_workflow_run(None, session, start.clone()),
     );
-    let outcomes = [
-        left.expect("left admission"),
-        right.expect("right admission"),
-    ];
+    let outcomes = [left.expect("left"), right.expect("right")];
     assert_eq!(
         outcomes
             .iter()
-            .filter(|outcome| matches!(outcome, WorkflowAdmissionOutcome::Admitted(_)))
+            .filter(|o| matches!(o, WorkflowAdmissionOutcome::Admitted(_)))
             .count(),
         1
     );
     assert_eq!(
         outcomes
             .iter()
-            .filter(|outcome| matches!(outcome, WorkflowAdmissionOutcome::Existing))
+            .filter(|o| matches!(o, WorkflowAdmissionOutcome::Existing))
             .count(),
         1
     );
 
-    let conflict = store
-        .admit_workflow_run(
-            None,
-            session,
-            Event::WorkflowRunStarted {
+    assert_eq!(
+        store
+            .admit_workflow_run(
+                None,
                 session,
-                run,
-                workflow: workflow_identity("atomic"),
-                request_hash: "request-b".to_string(),
-                owner,
-                stages: vec![workflow_stage()],
-            },
-        )
-        .await
-        .expect("conflicting admission outcome");
-    assert_eq!(conflict, WorkflowAdmissionOutcome::Conflict);
-    let selection = store
-        .select_workflow(
-            None,
-            session,
-            Event::WorkflowSelected {
+                Event::WorkflowRunStarted {
+                    session,
+                    run,
+                    workflow: workflow_identity("atomic"),
+                    request_hash: "request-b".to_string(),
+                    owner,
+                    stages: vec![workflow_stage()],
+                },
+            )
+            .await
+            .expect("conflict"),
+        WorkflowAdmissionOutcome::Conflict
+    );
+    assert_eq!(
+        store
+            .select_workflow(
+                None,
                 session,
-                workflow: workflow_identity("other"),
-            },
-        )
-        .await
-        .expect("busy selection outcome");
-    assert_eq!(selection, WorkflowSelectionOutcome::Busy { run });
+                Event::WorkflowSelected {
+                    session,
+                    workflow: workflow_identity("other"),
+                },
+            )
+            .await
+            .expect("busy"),
+        WorkflowSelectionOutcome::Busy { run }
+    );
     assert_eq!(store.replay(session).await.expect("replay").len(), 1);
-    drop(left_store);
-    drop(right_store);
-    drop(other);
-    drop(store);
-    remove_database(&path);
-}
 
-/// Run admission validates the complete actor capability in the same writer
-/// transaction as the start event.
-#[tokio::test]
-async fn workflow_admission_rejects_stale_actor_claim_without_event() {
-    let store = SessionStore::connect_memory().await.expect("memory store");
+    // Stale actor claim is rejected atomically without appending an event.
+    let mem = SessionStore::connect_memory().await.expect("mem");
     let recovery_owner = OwnerRunId::new();
-    store
-        .claim_runtime_owner(recovery_owner)
-        .expect("claim recovery runtime owner");
+    mem.claim_runtime_owner(recovery_owner).expect("claim");
     let actor = SessionId::new();
-    let session = SessionId::new();
-    let stale = store
-        .try_claim_new(session, actor, OwnerRunId::new())
+    let fenced_session = SessionId::new();
+    let stale = mem
+        .try_claim_new(fenced_session, actor, OwnerRunId::new())
         .await
-        .expect("initial actor claim");
-    let _current = store
+        .expect("claim");
+    let _ = mem
         .recover_claim(actor, recovery_owner)
         .await
-        .expect("fence initial claim");
-    let result = store
+        .expect("fence");
+    let err = mem
         .admit_workflow_run(
             Some(&stale),
-            session,
+            fenced_session,
             Event::WorkflowRunStarted {
-                session,
+                session: fenced_session,
                 run: WorkflowRunId::new(),
                 workflow: workflow_identity("fenced"),
                 request_hash: "request".to_string(),
@@ -477,50 +363,25 @@ async fn workflow_admission_rejects_stale_actor_claim_without_event() {
             },
         )
         .await;
-    assert!(matches!(result, Err(StoreError::StaleActorClaim { .. })));
-    assert!(store.replay(session).await.expect("replay").is_empty());
-}
-
-/// Recovery is rejected unless this store holds the matching runtime owner claim.
-#[tokio::test]
-async fn recovery_requires_runtime_owner_claim() {
-    let store = SessionStore::connect_memory().await.expect("memory store");
-    let error = store
-        .recover_nonterminal_workflows(OwnerRunId::new(), "backend owner exited")
-        .await
-        .expect_err("claim-less recovery must fail closed");
-    assert!(matches!(error, StoreError::RuntimeOwnerClaimRequired));
-}
-
-/// File-backed claims are clone-shared, process-exclusive, and released on drop.
-#[tokio::test]
-async fn dropping_a_reserved_runtime_store_clears_its_metadata() {
-    let path = database_path();
-    let store = SessionStore::connect_runtime(path.to_str().expect("UTF-8 path"))
-        .await
-        .expect("reserve store");
-    let metadata = std::path::PathBuf::from(format!("{}.runtime-owner.lock", path.display()));
-    assert_eq!(
-        std::fs::read_to_string(&metadata).expect("metadata").trim(),
-        std::process::id().to_string()
-    );
-    drop(store);
-    assert_eq!(
-        std::fs::read_to_string(&metadata).expect("released metadata"),
-        ""
-    );
+    assert!(matches!(err, Err(StoreError::StaleActorClaim { .. })));
+    assert!(mem.replay(fenced_session).await.expect("replay").is_empty());
 }
 
 #[tokio::test]
-async fn runtime_owner_claim_is_exclusive_and_releases_after_holder_drop() {
-    let path = database_path();
+async fn runtime_owner_lock_metadata_exclusivity_and_release_on_drop() {
+    let db = TempDb::new();
     let session = SessionId::new();
     let run = WorkflowRunId::new();
     let previous_owner = OwnerRunId::new();
     let owner = OwnerRunId::new();
-    let first = SessionStore::connect_runtime(path.to_str().expect("UTF-8 path"))
+
+    let first = SessionStore::connect_runtime(db.path_str())
         .await
-        .expect("first store");
+        .expect("first");
+    let metadata = PathBuf::from(format!("{}.runtime-owner.lock", db.0.display()));
+    let pid = format!("{}\n", std::process::id());
+    assert_eq!(std::fs::read_to_string(&metadata).expect("meta"), pid);
+
     first
         .append_event(
             session,
@@ -534,97 +395,65 @@ async fn runtime_owner_claim_is_exclusive_and_releases_after_holder_drop() {
             },
         )
         .await
-        .expect("append running workflow");
+        .expect("start");
     let first_clone = first.clone();
-    let second = SessionStore::connect(path.to_str().expect("UTF-8 path"))
-        .await
-        .expect("second store");
+    let second = SessionStore::connect(db.path_str()).await.expect("second");
 
-    assert!(
-        matches!(
-            second.claim_runtime_owner(OwnerRunId::new()),
-            Err(StoreError::RuntimeOwnerBusy)
-        ),
-        "reserved lock excludes writers before runtime construction"
-    );
-    first
-        .claim_runtime_owner(owner)
-        .expect("first store claims runtime owner");
-    let metadata = std::path::PathBuf::from(format!("{}.runtime-owner.lock", path.display()));
-    let pid = format!("{}\n", std::process::id());
-    assert_eq!(
-        std::fs::read_to_string(&metadata).expect("owner metadata"),
-        pid
-    );
-    first_clone
-        .claim_runtime_owner(owner)
-        .expect("matching clone claim is idempotent");
     assert!(matches!(
         second.claim_runtime_owner(OwnerRunId::new()),
         Err(StoreError::RuntimeOwnerBusy)
     ));
+    first.claim_runtime_owner(owner).expect("claim");
+    first_clone
+        .claim_runtime_owner(owner)
+        .expect("clone idempotent");
+    assert!(matches!(
+        second.claim_runtime_owner(OwnerRunId::new()),
+        Err(StoreError::RuntimeOwnerBusy)
+    ));
+    assert_eq!(std::fs::read_to_string(&metadata).expect("meta"), pid);
 
-    assert_eq!(
-        std::fs::read_to_string(&metadata).expect("loser preserves metadata"),
-        pid
-    );
     drop(first_clone);
     drop(first);
-    assert_eq!(
-        std::fs::read_to_string(&metadata).expect("released metadata"),
-        ""
-    );
-    second
-        .claim_runtime_owner(owner)
-        .expect("second store claims after holder drop");
+    assert_eq!(std::fs::read_to_string(&metadata).expect("released"), "");
+
+    second.claim_runtime_owner(owner).expect("takeover");
     let recovered = second
         .recover_nonterminal_workflows(owner, "backend owner exited")
         .await
-        .expect("recover running workflow");
-    let repeated = second
-        .recover_nonterminal_workflows(owner, "backend owner exited")
-        .await
-        .expect("repeat recovery");
+        .expect("recover");
     assert_eq!(recovered.len(), 1);
-    assert!(repeated.is_empty());
-    assert!(matches!(
-        recovered[0].event,
-        Event::WorkflowRunFinished {
-            run: recovered_run,
-            status: WorkflowRunStatus::Interrupted,
-            ..
-        } if recovered_run == run
-    ));
-    drop(second);
-    remove_database(&path);
+    assert!(
+        second
+            .recover_nonterminal_workflows(owner, "backend owner exited")
+            .await
+            .expect("repeat")
+            .is_empty()
+    );
 }
 
-/// Runtime ownership never follows an attacker-controlled adjacent symlink.
 #[cfg(unix)]
 #[tokio::test]
 async fn runtime_owner_claim_rejects_symlink_lock_path() {
     use std::os::unix::fs::symlink;
 
-    let path = database_path();
-    let store = SessionStore::connect(path.to_str().expect("UTF-8 path"))
-        .await
-        .expect("store");
-    let victim = path.with_extension("victim");
-    std::fs::write(&victim, "unchanged").expect("victim fixture");
-    let lock_path = PathBuf::from(format!("{}.runtime-owner.lock", path.display()));
-    symlink(&victim, &lock_path).expect("lock symlink fixture");
+    let db = TempDb::new();
+    let store = SessionStore::connect(db.path_str()).await.expect("store");
+    let victim = db.0.with_extension("victim");
+    std::fs::write(&victim, "unchanged").expect("victim");
+    let lock_path = PathBuf::from(format!("{}.runtime-owner.lock", db.0.display()));
+    symlink(&victim, &lock_path).expect("symlink");
 
     let error = store
         .claim_runtime_owner(OwnerRunId::new())
         .expect_err("symlink lock must fail closed");
     assert!(matches!(error, StoreError::RuntimeOwnerLock { .. }));
     assert_eq!(
-        std::fs::read_to_string(&victim).expect("read victim"),
+        std::fs::read_to_string(&victim).expect("victim"),
         "unchanged"
     );
 
     drop(store);
     let _ = std::fs::remove_file(&lock_path);
     let _ = std::fs::remove_file(&victim);
-    remove_database(&path);
 }

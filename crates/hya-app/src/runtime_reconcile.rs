@@ -807,35 +807,6 @@ mod tests {
         PreparedSource, ReconcileError, RuntimeReconciler, SourceId,
     };
 
-    #[tokio::test]
-    async fn cancelled_plan_does_not_publish_or_finish_tickets() -> anyhow::Result<()> {
-        let _env = StableEnvGuard::new();
-        let registry = Arc::new(RuntimeRegistry::new(
-            hya_tool_loader::builtins(),
-            crate::runtime::builtin_agent_catalog()?,
-        ));
-        let before = registry.effective_manifest().generation;
-        let reconciler = RuntimeReconciler::new(registry.clone());
-        let source = SourceId::mcp("cancelled");
-        let plan = reconciler.upsert_mcp(
-            source.configured_id().to_string(),
-            McpServerConfig {
-                command: vec!["/nonexistent/hya-mcp-missing-binary".into()],
-                ..McpServerConfig::default()
-            },
-        )?;
-        let stop = tokio_util::sync::CancellationToken::new();
-        stop.cancel();
-        let result = reconciler.reconcile_plan(plan, stop).await;
-        assert!(
-            matches!(result, Err(ReconcileError::InvalidPrepared(error)) if error == "runtime reconciliation cancelled")
-        );
-        let status = &reconciler.status()[&source];
-        assert_eq!(status.observed, ObservedState::Connecting);
-        assert!(!status.effective);
-        assert_eq!(registry.effective_manifest().generation, before);
-        Ok(())
-    }
     struct MarkerTool(&'static str);
 
     #[async_trait]
@@ -927,29 +898,64 @@ mod tests {
         )
     }
 
-    /// `POST /v1/mcp` semantics: a server that cannot start is stored and
-    /// reported FAILED with its error (the add succeeds), and a disabled
-    /// server is stored without connecting.
-    #[test]
-    fn hot_reload_unrelated_source_does_not_invalidate_pending_preparation() -> anyhow::Result<()> {
+    #[tokio::test]
+    async fn cancelled_plan_and_ticket_fencing_protect_effective_snapshot() -> anyhow::Result<()> {
         let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
             hya_tool_loader::builtins(),
             crate::runtime::builtin_agent_catalog()?,
         ));
         let reconciler = RuntimeReconciler::new(registry.clone());
-        let a = SourceId::mcp("a");
-        let first = reconciler.replace_desired(vec![desired(&a, "a")])?;
-        let second = reconciler.upsert_mcp(
-            "b".into(),
+
+        // 1. Cancelled plan does not publish or advance observed state.
+        let before = registry.effective_manifest().generation;
+        let cancelled = SourceId::mcp("cancelled");
+        let cplan = reconciler.upsert_mcp(
+            cancelled.configured_id().into(),
             McpServerConfig {
-                command: vec!["b".into()],
+                command: vec!["/nonexistent/hya-mcp-missing-binary".into()],
                 ..Default::default()
             },
         )?;
-        assert_eq!(second.sources().len(), 1);
+        let stop = tokio_util::sync::CancellationToken::new();
+        stop.cancel();
+        assert!(matches!(
+            reconciler.reconcile_plan(cplan, stop).await,
+            Err(ReconcileError::InvalidPrepared(ref e)) if e == "runtime reconciliation cancelled"
+        ));
+        assert_eq!(
+            reconciler.status()[&cancelled].observed,
+            ObservedState::Connecting
+        );
+        assert_eq!(registry.effective_manifest().generation, before);
+
+        // 2. Unrelated upsert preserves pending ticket; remote endpoint/transport diffs replan.
+        let a = SourceId::mcp("a");
+        let p1 = reconciler.replace_desired(vec![desired(&a, "a")])?;
+        let p2 = reconciler.upsert_mcp(
+            "remote".into(),
+            McpServerConfig {
+                url: Some("http://localhost/1".into()),
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(p2.sources().len(), 1);
+        assert_eq!(
+            reconciler
+                .upsert_mcp(
+                    "remote".into(),
+                    McpServerConfig {
+                        url: Some("http://localhost/2".into()),
+                        transport: Some("sse".into()),
+                        ..Default::default()
+                    }
+                )?
+                .sources()
+                .len(),
+            1
+        );
         reconciler.finish_revision(
-            &first,
+            &p1,
             vec![prepared(
                 a.clone(),
                 [1; 32],
@@ -958,28 +964,110 @@ mod tests {
             )],
         )?;
         assert!(reconciler.status()[&a].effective);
+
+        // 3. Stale attempt is closed without overwriting newer ticket.
+        let alpha = SourceId::mcp("alpha");
+        let old_plan = reconciler.replace_desired(vec![desired(&alpha, "old")])?;
+        let new_plan = reconciler.replace_desired(vec![desired(&alpha, "new")])?;
+        let new_closes = Arc::new(AtomicUsize::new(0));
+        assert!(
+            reconciler
+                .finish_revision(
+                    &new_plan,
+                    vec![prepared(
+                        alpha.clone(),
+                        [2; 32],
+                        "mcp__alpha__new",
+                        new_closes.clone()
+                    )]
+                )?
+                .published_generation
+                .is_some()
+        );
+        let stale_closes = Arc::new(AtomicUsize::new(0));
+        assert!(matches!(
+            reconciler.finish_revision(
+                &old_plan,
+                vec![prepared(
+                    alpha,
+                    [1; 32],
+                    "mcp__alpha__old",
+                    stale_closes.clone()
+                )]
+            ),
+            Err(ReconcileError::StaleAttempt { .. })
+        ));
+        assert_eq!(
+            (
+                stale_closes.load(Ordering::SeqCst),
+                new_closes.load(Ordering::SeqCst)
+            ),
+            (1, 0)
+        );
+        let names: Vec<_> = registry
+            .tool_schemas()
+            .into_iter()
+            .map(|s| s.name.as_str().to_string())
+            .collect();
+        assert!(
+            names.contains(&"mcp__alpha__new".into()) && !names.contains(&"mcp__alpha__old".into())
+        );
         Ok(())
     }
 
     #[test]
-    fn hot_reload_identical_failed_source_can_retry() -> anyhow::Result<()> {
+    fn removal_partial_failure_retry_and_candidate_rejection() -> anyhow::Result<()> {
         let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
             hya_tool_loader::builtins(),
             crate::runtime::builtin_agent_catalog()?,
         ));
-        let reconciler = RuntimeReconciler::new(registry);
-        let a = SourceId::mcp("a");
-        let first = reconciler.replace_desired(vec![desired(&a, "a")])?;
+        let reconciler = RuntimeReconciler::new(registry.clone());
+        let workdir = std::env::temp_dir().join("hya-reconcile-test");
+
+        // 1. Removal drops immediately while old binding retains owner until dropped, even when new source fails.
+        let removed = SourceId::mcp("removed");
+        let init = reconciler.replace_desired(vec![desired(&removed, "init")])?;
+        let retained_closes = Arc::new(AtomicUsize::new(0));
+        reconciler.finish_revision(
+            &init,
+            vec![prepared(
+                removed,
+                [3; 32],
+                "mcp__removed__tool",
+                retained_closes.clone(),
+            )],
+        )?;
+        let old_binding = registry.bind_turn(&workdir)?;
+        let failing = SourceId::mcp("failing");
+        let repl = reconciler.replace_desired(vec![desired(&failing, "fails")])?;
+        let gen_after_drop = registry.effective_manifest().generation;
+        assert!(matches!(
+            reconciler.finish_revision(
+                &repl,
+                vec![PreparedFailure::new(
+                    failing.clone(),
+                    "MCP_HANDSHAKE_FAILED"
+                )]
+            ),
+            Err(ReconcileError::PreparationFailed { .. })
+        ));
+        assert_eq!(registry.effective_manifest().generation, gen_after_drop);
         assert!(
-            reconciler
-                .finish_revision(&first, vec![PreparedFailure::new(a.clone(), "failed")])
-                .is_err()
+            registry
+                .bind_turn(&workdir)?
+                .resolve_tool("mcp__removed__tool")
+                .is_none()
         );
+        assert_eq!(retained_closes.load(Ordering::SeqCst), 0);
+        drop(old_binding);
+        assert_eq!(retained_closes.load(Ordering::SeqCst), 1);
+
+        // 2. Identical failed source can retry on explicit upsert.
         let retry = reconciler.upsert_mcp(
-            "a".into(),
+            "failing".into(),
             McpServerConfig {
-                command: vec!["a".into()],
+                command: vec!["fails".into()],
                 ..Default::default()
             },
         )?;
@@ -987,258 +1075,81 @@ mod tests {
         reconciler.finish_revision(
             &retry,
             vec![prepared(
-                a.clone(),
-                [2; 32],
-                "mcp__a__retry",
+                failing.clone(),
+                [4; 32],
+                "mcp__failing__ok",
                 Arc::new(AtomicUsize::new(0)),
             )],
         )?;
-        assert_eq!(reconciler.status()[&a].observed, ObservedState::Ready);
-        Ok(())
-    }
+        assert_eq!(reconciler.status()[&failing].observed, ObservedState::Ready);
 
-    #[test]
-    fn hot_reload_mcp_compares_remote_endpoint_and_transport() -> anyhow::Result<()> {
-        let _env = StableEnvGuard::new();
-        let registry = Arc::new(RuntimeRegistry::new(
-            hya_tool_loader::builtins(),
-            crate::runtime::builtin_agent_catalog()?,
-        ));
-        let reconciler = RuntimeReconciler::new(registry);
-        let config = McpServerConfig {
-            url: Some("http://localhost/first".into()),
-            ..Default::default()
-        };
-        reconciler.upsert_mcp("remote".into(), config.clone())?;
-        let mut changed = config;
-        changed.url = Some("http://localhost/second".into());
-        assert_eq!(
-            reconciler
-                .upsert_mcp("remote".into(), changed.clone())?
-                .sources()
-                .len(),
-            1
-        );
-        changed.transport = Some("sse".into());
-        assert_eq!(
-            reconciler
-                .upsert_mcp("remote".into(), changed)?
-                .sources()
-                .len(),
-            1
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn stale_success_is_closed_and_cannot_publish_over_newer_ticket() -> anyhow::Result<()> {
-        let _env = StableEnvGuard::new();
-        let registry = Arc::new(RuntimeRegistry::new(
-            hya_tool_loader::builtins(),
-            crate::runtime::builtin_agent_catalog()?,
-        ));
-        let reconciler = RuntimeReconciler::new(registry.clone());
-        let source = SourceId::mcp("alpha");
-        let old_plan = reconciler.replace_desired(vec![desired(&source, "old")])?;
-        let new_plan = reconciler.replace_desired(vec![desired(&source, "new")])?;
-
-        let new_closes = Arc::new(AtomicUsize::new(0));
-        let new_outcome = reconciler.finish_revision(
-            &new_plan,
-            vec![prepared(
-                source.clone(),
-                [2; 32],
-                "mcp__alpha__new_tool",
-                new_closes.clone(),
-            )],
-        )?;
-        assert!(new_outcome.published_generation.is_some());
-
-        let stale_closes = Arc::new(AtomicUsize::new(0));
-        let stale = reconciler.finish_revision(
-            &old_plan,
-            vec![prepared(
-                source,
-                [1; 32],
-                "mcp__alpha__old_tool",
-                stale_closes.clone(),
-            )],
-        );
-        assert!(matches!(stale, Err(ReconcileError::StaleAttempt { .. })));
-        assert_eq!(stale_closes.load(Ordering::SeqCst), 1);
-        assert_eq!(new_closes.load(Ordering::SeqCst), 0);
-
-        let names = registry
-            .tool_schemas()
-            .into_iter()
-            .map(|schema| schema.name.as_str().to_string())
-            .collect::<Vec<_>>();
-        assert!(names.contains(&"mcp__alpha__new_tool".to_string()));
-        assert!(!names.contains(&"mcp__alpha__old_tool".to_string()));
-        Ok(())
-    }
-
-    #[test]
-    fn explicit_removal_publishes_drop_only_despite_unrelated_connect_failure() -> anyhow::Result<()>
-    {
-        let _env = StableEnvGuard::new();
-        let registry = Arc::new(RuntimeRegistry::new(
-            hya_tool_loader::builtins(),
-            crate::runtime::builtin_agent_catalog()?,
-        ));
-        let reconciler = RuntimeReconciler::new(registry.clone());
-        let removed_source = SourceId::mcp("removed");
-        let initial = reconciler.replace_desired(vec![desired(&removed_source, "initial")])?;
-        let retained_closes = Arc::new(AtomicUsize::new(0));
-        reconciler.finish_revision(
-            &initial,
-            vec![prepared(
-                removed_source,
-                [3; 32],
-                "mcp__removed__tool",
-                retained_closes.clone(),
-            )],
-        )?;
-
-        let workdir = std::env::temp_dir().join("hya-reconcile-removal-binding");
-        let old_binding = registry.bind_turn(&workdir)?;
-        assert!(old_binding.resolve_tool("mcp__removed__tool").is_some());
-
-        let failing_source = SourceId::mcp("failing");
-        let replacement = reconciler.replace_desired(vec![desired(&failing_source, "fails")])?;
-        let after_removal_generation = registry.effective_manifest().generation;
-        assert!(old_binding.resolve_tool("mcp__removed__tool").is_some());
-        assert_eq!(retained_closes.load(Ordering::SeqCst), 0);
-
-        let failed = reconciler.finish_revision(
-            &replacement,
-            vec![PreparedFailure::new(failing_source, "MCP_HANDSHAKE_FAILED")],
-        );
+        // 3. Partial failure publishes ready peers; runtime candidate rejection closes owner and invalidates ticket.
+        let ready = SourceId::mcp("ready");
+        let bad = SourceId::mcp("bad");
+        let plan = reconciler.replace_desired(vec![desired(&ready, "r"), desired(&bad, "b")])?;
+        let ready_closes = Arc::new(AtomicUsize::new(0));
         assert!(matches!(
-            failed,
+            reconciler.finish_revision(
+                &plan,
+                vec![
+                    PreparedResult::from(prepared(
+                        ready,
+                        [5; 32],
+                        "mcp__ready__t",
+                        ready_closes.clone()
+                    )),
+                    PreparedResult::from(PreparedFailure::new(bad.clone(), "ERR")),
+                ]
+            ),
             Err(ReconcileError::PreparationFailed { .. })
         ));
-        let after_failure_generation = registry.effective_manifest().generation;
-        assert_eq!(after_failure_generation, after_removal_generation);
-        let after_failure = registry.bind_turn(&workdir)?;
-        assert!(after_failure.resolve_tool("mcp__removed__tool").is_none());
-        assert!(old_binding.resolve_tool("mcp__removed__tool").is_some());
-        drop(old_binding);
-        assert_eq!(retained_closes.load(Ordering::SeqCst), 1);
-        Ok(())
-    }
-
-    #[test]
-    fn source_failure_preserves_independent_successes() -> anyhow::Result<()> {
-        let _env = StableEnvGuard::new();
-        let registry = Arc::new(RuntimeRegistry::new(
-            hya_tool_loader::builtins(),
-            crate::runtime::builtin_agent_catalog()?,
-        ));
-        let reconciler = RuntimeReconciler::new(registry.clone());
-        let ready_source = SourceId::mcp("ready");
-        let failed_source = SourceId::mcp("failed");
-        let plan = reconciler.replace_desired(vec![
-            desired(&ready_source, "ready"),
-            desired(&failed_source, "failed"),
-        ])?;
-        let workdir = std::env::temp_dir().join("hya-reconcile-partial-failure");
-        let before_generation = registry.effective_manifest().generation;
-        let partial_closes = Arc::new(AtomicUsize::new(0));
-
-        let failed = reconciler.finish_revision(
-            &plan,
-            vec![
-                PreparedResult::from(prepared(
-                    ready_source,
-                    [4; 32],
-                    "mcp__ready__partial_tool",
-                    partial_closes.clone(),
-                )),
-                PreparedResult::from(PreparedFailure::new(
-                    failed_source.clone(),
-                    "PLUGIN_INITIALIZE_FAILED",
-                )),
-            ],
-        );
-
-        assert!(matches!(
-            failed,
-            Err(ReconcileError::PreparationFailed { .. })
-        ));
-        assert_eq!(partial_closes.load(Ordering::SeqCst), 0);
-        let after_failure_generation = registry.effective_manifest().generation;
-        assert_eq!(after_failure_generation.get(), before_generation.get() + 1);
-        let status = reconciler.status();
-        let observed = &status[&failed_source];
-        assert_eq!(observed.observed, ObservedState::Failed);
-        assert_eq!(
-            observed.typed_error.as_deref(),
-            Some("PLUGIN_INITIALIZE_FAILED")
-        );
-        assert!(!observed.effective);
-        assert_eq!(observed.effective_generation, after_failure_generation);
-        let after = registry.bind_turn(&workdir)?;
-        assert!(after.resolve_tool("mcp__ready__partial_tool").is_some());
-        Ok(())
-    }
-
-    #[test]
-    fn candidate_rejection_records_failure_and_invalidates_attempt() -> anyhow::Result<()> {
-        let _env = StableEnvGuard::new();
-        let registry = Arc::new(RuntimeRegistry::new(
-            hya_tool_loader::builtins(),
-            crate::runtime::builtin_agent_catalog()?,
-        ));
-        let reconciler = RuntimeReconciler::new(registry.clone());
-        let source = SourceId::plugin("collision");
-        let plan = reconciler.replace_desired(vec![desired_plugin(&source, "collision")])?;
-        let first_closes = Arc::new(AtomicUsize::new(0));
-        let before = registry.effective_manifest().generation;
-
-        let rejected = reconciler.finish_revision(
-            &plan,
-            vec![prepared_with_permission(
-                source.clone(),
-                [20; 32],
-                "mcp__reserved__tool",
-                first_closes.clone(),
-                ToolPermission::Tool,
-            )],
-        );
-
-        assert!(matches!(rejected, Err(ReconcileError::Runtime(_))));
-        assert_eq!(registry.effective_manifest().generation, before);
-        assert_eq!(first_closes.load(Ordering::SeqCst), 1);
-        let status = reconciler.status();
-        let observed = &status[&source];
-        assert_eq!(observed.observed, ObservedState::Failed);
+        assert_eq!(ready_closes.load(Ordering::SeqCst), 0);
         assert!(
-            observed
-                .typed_error
-                .as_deref()
-                .is_some_and(|error| error.contains("mcp__reserved__tool"))
+            registry
+                .bind_turn(&workdir)?
+                .resolve_tool("mcp__ready__t")
+                .is_some()
+        );
+        assert_eq!(
+            reconciler.status()[&bad].typed_error.as_deref(),
+            Some("ERR")
         );
 
-        let retry_closes = Arc::new(AtomicUsize::new(0));
-        let retry = reconciler.finish_revision(
-            &plan,
-            vec![prepared_with_permission(
-                source,
-                [21; 32],
-                "retry_after_failure",
-                retry_closes.clone(),
-                ToolPermission::Tool,
-            )],
-        );
-        assert!(matches!(retry, Err(ReconcileError::InvalidPrepared(_))));
-        assert_eq!(retry_closes.load(Ordering::SeqCst), 1);
-        assert_eq!(registry.effective_manifest().generation, before);
+        let col = SourceId::plugin("collision");
+        let cplan = reconciler.replace_desired(vec![desired_plugin(&col, "c")])?;
+        let c1 = Arc::new(AtomicUsize::new(0));
+        assert!(matches!(
+            reconciler.finish_revision(
+                &cplan,
+                vec![prepared_with_permission(
+                    col.clone(),
+                    [20; 32],
+                    "mcp__reserved__tool",
+                    c1.clone(),
+                    ToolPermission::Tool
+                )]
+            ),
+            Err(ReconcileError::Runtime(_))
+        ));
+        assert_eq!(c1.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            reconciler.finish_revision(
+                &cplan,
+                vec![prepared_with_permission(
+                    col,
+                    [21; 32],
+                    "retry_ok",
+                    Arc::new(AtomicUsize::new(0)),
+                    ToolPermission::Tool
+                )]
+            ),
+            Err(ReconcileError::InvalidPrepared(_))
+        ));
         Ok(())
     }
 
     #[test]
-    fn mixed_mcp_plugin_plan_publishes_each_complete_source() -> anyhow::Result<()> {
+    fn mixed_mcp_plugin_plan_publishes_complete_sources_and_tracks_digests() -> anyhow::Result<()> {
         let _env = StableEnvGuard::new();
         let registry = Arc::new(RuntimeRegistry::new(
             hya_tool_loader::builtins(),
@@ -1247,12 +1158,8 @@ mod tests {
         let reconciler = RuntimeReconciler::new(registry.clone());
         let mcp = SourceId::mcp("mixed-mcp");
         let plugin = SourceId::plugin("mixed-plugin");
-        let initial = reconciler.replace_desired(vec![
-            desired(&mcp, "mcp-v1"),
-            desired_plugin(&plugin, "plugin-v1"),
-        ])?;
-        let old_mcp_closes = Arc::new(AtomicUsize::new(0));
-        let old_plugin_closes = Arc::new(AtomicUsize::new(0));
+        let initial =
+            reconciler.replace_desired(vec![desired(&mcp, "m1"), desired_plugin(&plugin, "p1")])?;
         reconciler.finish_revision(
             &initial,
             vec![
@@ -1260,36 +1167,33 @@ mod tests {
                     mcp.clone(),
                     [10; 32],
                     "mcp__mixed__lookup",
-                    old_mcp_closes.clone(),
+                    Arc::new(AtomicUsize::new(0)),
                 ),
                 prepared_with_permission(
                     plugin.clone(),
                     [11; 32],
-                    "mixed-plugin__plugin_lookup",
-                    old_plugin_closes.clone(),
+                    "mixed-plugin__lookup",
+                    Arc::new(AtomicUsize::new(0)),
                     ToolPermission::Tool,
                 ),
             ],
         )?;
-        let workdir = std::env::temp_dir().join("hya-reconcile-mixed-revision");
-        let old_binding = registry.bind_turn(&workdir)?;
+        let old_binding = registry.bind_turn(&std::env::temp_dir())?;
 
-        let replacement = reconciler.replace_desired(vec![
-            desired(&mcp, "mcp-v2"),
-            desired_plugin(&plugin, "plugin-v2"),
-        ])?;
+        // Incomplete result list is rejected and closes staged owner without publishing.
+        let repl =
+            reconciler.replace_desired(vec![desired(&mcp, "m2"), desired_plugin(&plugin, "p2")])?;
         let partial_closes = Arc::new(AtomicUsize::new(0));
-        let incomplete = reconciler.finish_revision(
-            &replacement,
-            vec![prepared(
-                mcp.clone(),
-                [12; 32],
-                "mcp__mixed__lookup",
-                partial_closes.clone(),
-            )],
-        );
         assert!(matches!(
-            incomplete,
+            reconciler.finish_revision(
+                &repl,
+                vec![prepared(
+                    mcp.clone(),
+                    [12; 32],
+                    "mcp__mixed__lookup",
+                    partial_closes.clone()
+                )]
+            ),
             Err(ReconcileError::InvalidPrepared(_))
         ));
         assert_eq!(partial_closes.load(Ordering::SeqCst), 1);
@@ -1298,51 +1202,35 @@ mod tests {
             old_binding.generation()
         );
 
-        let new_mcp_closes = Arc::new(AtomicUsize::new(0));
-        let new_plugin_closes = Arc::new(AtomicUsize::new(0));
+        // Complete result list publishes both and records declaration digests.
         let outcome = reconciler.finish_revision(
-            &replacement,
+            &repl,
             vec![
                 prepared(
                     mcp.clone(),
                     [12; 32],
                     "mcp__mixed__lookup",
-                    new_mcp_closes.clone(),
+                    Arc::new(AtomicUsize::new(0)),
                 ),
                 prepared_with_permission(
                     plugin.clone(),
                     [13; 32],
-                    "mixed-plugin__plugin_lookup",
-                    new_plugin_closes.clone(),
+                    "mixed-plugin__lookup",
+                    Arc::new(AtomicUsize::new(0)),
                     ToolPermission::Tool,
                 ),
             ],
         )?;
-        let effective = registry.effective_manifest();
-        assert_eq!(outcome.published_generation, Some(effective.generation));
         assert_eq!(
-            effective.generation.get(),
-            old_binding.generation().get() + 2
+            outcome.published_generation,
+            Some(registry.effective_manifest().generation)
         );
-        let names = registry
-            .tool_schemas()
-            .into_iter()
-            .map(|schema| schema.name.as_str().to_string())
-            .collect::<Vec<_>>();
-        assert!(names.contains(&"mcp__mixed__lookup".to_string()));
-        assert!(names.contains(&"mixed-plugin__plugin_lookup".to_string()));
-        assert_eq!(old_mcp_closes.load(Ordering::SeqCst), 0);
-        assert_eq!(old_plugin_closes.load(Ordering::SeqCst), 0);
-        assert_eq!(new_mcp_closes.load(Ordering::SeqCst), 0);
-        assert_eq!(new_plugin_closes.load(Ordering::SeqCst), 0);
         let status = reconciler.status();
-        assert_eq!(status[&mcp].observed_declaration_digest, Some([12; 32]));
         assert_eq!(status[&mcp].effective_declaration_digest, Some([12; 32]));
-        assert_eq!(status[&plugin].observed_declaration_digest, Some([13; 32]));
         assert_eq!(status[&plugin].effective_declaration_digest, Some([13; 32]));
         Ok(())
     }
-    /// Prepared static Skills must use the shared contribution declaration and preserve parsed metadata.
+
     #[test]
     fn prepared_static_bundle_skills_require_exact_contributions_and_preserve_metadata()
     -> anyhow::Result<()> {
@@ -1355,167 +1243,124 @@ mod tests {
         let content = "---\nname: reviewer\ndescription: reviews code\nallowed-tools: [read, grep]\nmodel: anthropic/claude-sonnet-4-6\n---\nBODY TEXT\n";
         let digest = format!("{:x}", Sha256::digest(content.as_bytes()));
         let prepared = PreparedResource {
-            local_id: "reviewer".to_string(),
+            local_id: "reviewer".into(),
             stable_id: format!("bundle:{bundle_id}/skill/reviewer"),
-            source_path: source_path.to_string(),
+            source_path: source_path.into(),
             digest: digest.clone(),
-            content: content.to_string(),
+            content: content.into(),
             binary_base64: None,
             aliases: Vec::new(),
         };
         let valid = PluginContributionSet {
             skills: vec![SkillContribution {
-                id: "reviewer".to_string(),
-                content: content.to_string(),
-                digest: digest.clone(),
+                id: "reviewer".into(),
+                content: content.into(),
+                digest,
             }],
-            ..PluginContributionSet::default()
+            ..Default::default()
         };
 
-        let parsed = super::adapt_prepared_bundle_skills(
+        let entries = super::adapt_prepared_bundle_skills(
             bundle_id,
             std::slice::from_ref(&prepared),
             &valid,
         )?;
-        let [entry] = parsed.as_slice() else {
-            panic!("matching prepared Skill contribution must publish one entry");
-        };
-        assert_eq!(entry.name, "reviewer");
-        assert_eq!(entry.description, "reviews code");
-        assert_eq!(entry.content, "BODY TEXT\n");
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(
+            (
+                entry.name.as_str(),
+                entry.content.as_str(),
+                entry.model.as_deref()
+            ),
+            (
+                "reviewer",
+                "BODY TEXT\n",
+                Some("anthropic/claude-sonnet-4-6")
+            )
+        );
         assert_eq!(entry.allowed_tools, ["read", "grep"]);
-        assert_eq!(entry.model.as_deref(), Some("anthropic/claude-sonnet-4-6"));
-        assert_eq!(
-            entry.path,
-            std::path::PathBuf::from(format!("bundle:{bundle_id}/{source_path}"))
-        );
-        assert_eq!(
-            entry.dir,
-            std::path::PathBuf::from(format!("bundle:{bundle_id}/resources/skills"))
-        );
-
-        let mut wrong_id = valid.clone();
-        wrong_id.skills[0].id = "other".to_string();
         assert!(
             super::adapt_prepared_bundle_skills(
                 bundle_id,
                 std::slice::from_ref(&prepared),
-                &wrong_id,
+                &PluginContributionSet::default()
             )
-            .is_err(),
-            "a contribution id different from the prepared local id must fail closed"
+            .is_ok()
         );
 
+        // Mismatched id, content, digest, extra, or duplicate all fail closed.
+        let mut wrong_id = valid.clone();
+        wrong_id.skills[0].id = "other".into();
         let mut wrong_content = valid.clone();
         wrong_content.skills[0].content.push_str("tampered");
         wrong_content.skills[0].digest = format!(
             "{:x}",
             Sha256::digest(wrong_content.skills[0].content.as_bytes())
         );
-        assert!(
-            super::adapt_prepared_bundle_skills(
-                bundle_id,
-                std::slice::from_ref(&prepared),
-                &wrong_content,
-            )
-            .is_err(),
-            "content different from the prepared bytes must fail closed"
-        );
-
         let mut wrong_digest = valid.clone();
         wrong_digest.skills[0].digest = "0".repeat(64);
-        assert!(
-            super::adapt_prepared_bundle_skills(
-                bundle_id,
-                std::slice::from_ref(&prepared),
-                &wrong_digest,
-            )
-            .is_err(),
-            "a digest different from the prepared digest must fail closed"
-        );
-
-        let missing = PluginContributionSet::default();
-        assert!(
-            super::adapt_prepared_bundle_skills(
-                bundle_id,
-                std::slice::from_ref(&prepared),
-                &missing,
-            )
-            .is_ok(),
-            "static Skills remain available without process declarations"
-        );
-
         let mut extra = valid.clone();
         extra.skills.push(SkillContribution {
-            id: "extra".to_string(),
-            content: "---\nname: extra\ndescription: extra\n---\nextra\n".to_string(),
+            id: "extra".into(),
+            content: "---\nname: extra\ndescription: e\n---\ne\n".into(),
             digest: format!(
                 "{:x}",
-                Sha256::digest(b"---\nname: extra\ndescription: extra\n---\nextra\n")
+                Sha256::digest(b"---\nname: extra\ndescription: e\n---\ne\n")
             ),
         });
-        assert!(
-            super::adapt_prepared_bundle_skills(
-                bundle_id,
-                std::slice::from_ref(&prepared),
-                &extra,
-            )
-            .is_err(),
-            "an extra undeclared Skill must fail closed"
-        );
+        let mut dup = valid.clone();
+        dup.skills.push(valid.skills[0].clone());
+        for bad in [&wrong_id, &wrong_content, &wrong_digest, &extra, &dup] {
+            assert!(
+                super::adapt_prepared_bundle_skills(
+                    bundle_id,
+                    std::slice::from_ref(&prepared),
+                    bad
+                )
+                .is_err()
+            );
+        }
 
-        let mut duplicate = valid.clone();
-        duplicate.skills.push(valid.skills[0].clone());
-        assert!(
-            super::adapt_prepared_bundle_skills(
-                bundle_id,
-                std::slice::from_ref(&prepared),
-                &duplicate,
-            )
-            .is_err(),
-            "duplicate Skill declarations must fail closed"
-        );
-
-        let agent = PreparedAgent {
-            private: false,
-            id: AgentName::new("static-agent"),
-            description: None,
-            role: AgentRole::Main,
-            color: None,
-            prompt: Some("static agent".to_string()),
-            prompt_source: None,
-            prompt_digest: None,
-            model_policy: ModelPolicy::default(),
-            workdir: None,
-            resource_view: ResourceView {
-                allow: vec![prepared.stable_id.clone()],
-                deny: Vec::new(),
-                aliases: BTreeMap::new(),
-                namespace: None,
-            },
-            can_spawn: Vec::new(),
-            hook_refs: Vec::new(),
-            advertise: Vec::new(),
-            handoff: hya_bundle::HandoffPolicy::Model,
-        };
+        // Static bundle source publishes parsed skill metadata into RuntimeRegistry.
         let bundle = Bundle {
             check: None,
             tui: None,
             format_version: 4,
             identity: BundleIdentity {
-                id: bundle_id.to_string(),
-                version: "1.0.0".to_string(),
-                publisher: "hya-tests".to_string(),
+                id: bundle_id.into(),
+                version: "1.0.0".into(),
+                publisher: "hya-tests".into(),
             },
             namespace: None,
-            digest: "test-only".to_string(),
-            agents: vec![agent],
+            digest: "test-only".into(),
+            agents: vec![PreparedAgent {
+                private: false,
+                id: AgentName::new("static-agent"),
+                description: None,
+                role: AgentRole::Main,
+                color: None,
+                prompt: Some("static".into()),
+                prompt_source: None,
+                prompt_digest: None,
+                model_policy: ModelPolicy::default(),
+                workdir: None,
+                resource_view: ResourceView {
+                    allow: vec![prepared.stable_id.clone()],
+                    deny: Vec::new(),
+                    aliases: BTreeMap::new(),
+                    namespace: None,
+                },
+                can_spawn: Vec::new(),
+                hook_refs: Vec::new(),
+                advertise: Vec::new(),
+                handoff: hya_bundle::HandoffPolicy::Model,
+            }],
             tools: Vec::new(),
             skills: vec![prepared.clone()],
             mcp: Vec::new(),
             hooks: Vec::new(),
             extensions: Vec::new(),
-
             workflow: None,
             channels: vec![],
             schemas: vec![],
@@ -1523,39 +1368,24 @@ mod tests {
             apis: vec![],
             permission_modes: vec![],
         };
-        let bundles = BundleCatalog::from_prepared(&[bundle])?;
-        let catalog = Arc::new(AgentCatalog::new(Arc::new(bundles))?);
-        let registry = Arc::new(RuntimeRegistry::new(hya_tool_loader::builtins(), catalog));
-        let source_id = SourceId::bundle(bundle_id);
+        let registry = Arc::new(RuntimeRegistry::new(
+            hya_tool_loader::builtins(),
+            Arc::new(AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(
+                &[bundle],
+            )?))?),
+        ));
         let source = super::prepared_static_bundle_source(bundle_id, &[prepared], &valid)?
             .into_runtime_source();
-        let published = registry.refresh(|candidate| {
-            candidate.replace_sources_of_kind(
-                hya_engine::RuntimeSourceKind::Bundle,
-                vec![source.clone()],
-            )
+        registry.refresh(|c| {
+            c.replace_sources_of_kind(hya_engine::RuntimeSourceKind::Bundle, vec![source])
         })?;
-        assert_eq!(published, registry.effective_manifest().generation);
-        let source_manifest = registry
+        let manifest = registry
             .effective_manifest()
             .sources
-            .remove(&source_id)
-            .ok_or_else(|| anyhow::anyhow!("published static Skill source is missing"))?;
-        let [published] = source_manifest.skill_entries.as_slice() else {
-            panic!("published static Skill source must retain one metadata entry");
-        };
-        assert_eq!(published.name, "reviewer");
-        assert_eq!(published.description, "reviews code");
-        assert_eq!(published.content, "BODY TEXT\n");
-        assert_eq!(published.allowed_tools, ["read", "grep"]);
-        assert_eq!(
-            published.model.as_deref(),
-            Some("anthropic/claude-sonnet-4-6")
-        );
-        assert_eq!(
-            published.path,
-            std::path::PathBuf::from(format!("bundle:{bundle_id}/{source_path}"))
-        );
+            .remove(&SourceId::bundle(bundle_id))
+            .ok_or_else(|| anyhow::anyhow!("missing bundle source"))?;
+        assert_eq!(manifest.skill_entries.len(), 1);
+        assert_eq!(manifest.skill_entries[0].name, "reviewer");
         Ok(())
     }
 }

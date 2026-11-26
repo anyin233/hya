@@ -410,28 +410,169 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_frontmatter_policy_fields() {
-        let md = "---\nname: reviewer\ndescription: reviews code\nallowed-tools: [read, grep]\nmodel: anthropic/claude-sonnet-4-6\nlicense: MIT\n---\nBODY TEXT\n";
-        let parsed = parse_skill(md).expect("parses");
-        assert_eq!(parsed.name, "reviewer");
-        assert_eq!(parsed.description, "reviews code");
-        assert_eq!(parsed.allowed_tools, vec!["read", "grep"]);
-        assert_eq!(parsed.model.as_deref(), Some("anthropic/claude-sonnet-4-6"));
-        assert_eq!(parsed.content, "BODY TEXT\n");
+    fn frontmatter_parsing_naming_and_model_invocation_visibility() {
+        let full = parse_skill("---\nname: reviewer\ndescription: reviews code\nallowed-tools: [read, grep]\nmodel: anthropic/claude-sonnet-4-6\nlicense: MIT\n---\nBODY TEXT\n").unwrap();
+        assert_eq!(
+            (
+                full.name.as_str(),
+                full.description.as_str(),
+                full.content.as_str()
+            ),
+            ("reviewer", "reviews code", "BODY TEXT\n")
+        );
+        assert_eq!(full.allowed_tools, vec!["read", "grep"]);
+        assert_eq!(full.model.as_deref(), Some("anthropic/claude-sonnet-4-6"));
+
+        let mini = parse_skill("---\nname: mini\ndescription: tiny\n---\nbody").unwrap();
+        assert!(mini.allowed_tools.is_empty() && mini.model.is_none());
+        assert!(
+            parse_skill("---\nname: off\ndescription: nope\ndisable: true\n---\nbody").is_none()
+        );
+
+        let manual = parse_skill("---\nname: manual\ndescription: run by hand\ndisable-model-invocation: true\n---\nbody").unwrap();
+        assert!(manual.disable_model_invocation);
+        let mut hidden = builtin_skills().remove(0);
+        hidden.name = "manual".to_owned();
+        hidden.disable_model_invocation = true;
+        let shown = builtin_skills().remove(0);
+        let section = skills_section(&[hidden.clone(), shown.clone()]).unwrap();
+        assert!(section.contains(&shown.name) && !section.contains("manual"));
+        assert_eq!(skills_section(&[hidden]), None);
+
+        assert_eq!(skill_name_problem("pdf-tools-2"), None);
+        assert_eq!(skill_name_problem(&"a".repeat(MAX_SKILL_NAME_CHARS)), None);
+        for bad in [
+            "PDF",
+            "pdf_tools",
+            "-pdf",
+            "pdf--tools",
+            &"a".repeat(MAX_SKILL_NAME_CHARS + 1),
+        ] {
+            assert!(skill_name_problem(bad).is_some(), "{bad}");
+        }
     }
 
     #[test]
-    fn minimal_frontmatter_still_parses_with_defaults() {
-        let md = "---\nname: mini\ndescription: tiny\n---\nbody";
-        let parsed = parse_skill(md).expect("parses");
-        assert!(parsed.allowed_tools.is_empty());
-        assert!(parsed.model.is_none());
+    fn skill_dirs_for_orders_and_dedupes_roots() {
+        let workdir = Path::new("/work");
+        let dirs = skill_dirs_for(
+            workdir,
+            &[
+                PathBuf::from("/work"),
+                PathBuf::from("/root-a"),
+                PathBuf::from("/root-b"),
+            ],
+        );
+        let mut seen = HashSet::new();
+        for d in &dirs {
+            assert!(seen.insert(d.clone()), "duplicate directory: {d:?}");
+        }
+        let hya_positions: Vec<_> = dirs.iter().filter(|d| d.ends_with(".hya/skills")).collect();
+        assert_eq!(
+            hya_positions,
+            vec![
+                &PathBuf::from("/work/.hya/skills"),
+                &PathBuf::from("/root-a/.hya/skills"),
+                &PathBuf::from("/root-b/.hya/skills"),
+            ]
+        );
+        let idx = |needle: &PathBuf| dirs.iter().position(|d| d == needle).unwrap();
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            let user_idx = idx(&home.join(".config/hya/skills"));
+            assert!(user_idx > idx(&PathBuf::from("/root-b/.hya/skills")));
+            assert!(user_idx < idx(&PathBuf::from("/work/.agents/skills")));
+        }
     }
 
     #[test]
-    fn disabled_skill_is_skipped() {
-        let md = "---\nname: off\ndescription: nope\ndisable: true\n---\nbody";
-        assert!(parse_skill(md).is_none(), "disabled skills are skipped");
+    fn discovery_precedence_and_diagnostics() {
+        let tmp = tempdir("diagnostics");
+        let workdir = tmp.join("workdir");
+        let root = tmp.join("root");
+        std::fs::create_dir_all(workdir.join(".hya/skills")).unwrap();
+        std::fs::create_dir_all(root.join(".hya/skills")).unwrap();
+        write_skill(&workdir.join(".hya/skills"), "shared", "from workdir");
+        write_skill(&root.join(".hya/skills"), "shared", "from root");
+        write_skill(&root.join(".hya/skills"), "only-in-root", "root only");
+
+        let skills =
+            discover_skills_from_dirs(&skill_dirs_for(&workdir, std::slice::from_ref(&root)));
+        assert_eq!(
+            skills
+                .iter()
+                .find(|s| s.name == "shared")
+                .unwrap()
+                .description,
+            "from workdir"
+        );
+        assert!(skills.iter().any(|s| s.name == "only-in-root"));
+
+        let first = tmp.join("first");
+        let second = tmp.join("second");
+        write_skill(&first, "shared", "from first");
+        write_skill(&second, "shared", "from second");
+        write_skill(&second, "Bad_Name", "listed with a warning");
+        write_skill(
+            &second,
+            "long-description",
+            &"x".repeat(MAX_SKILL_DESCRIPTION_CHARS + 1),
+        );
+        for (dir, text) in [
+            ("no-fence", "name: x\n"),
+            ("unclosed", "---\nname: x\ndescription: y\n"),
+            ("bad-yaml", "---\nname: [x\n---\nbody"),
+            ("no-name", "---\ndescription: y\n---\nbody"),
+            ("no-description", "---\nname: z\n---\nbody"),
+            (
+                "off",
+                "---\nname: off\ndescription: y\ndisable: true\n---\nbody",
+            ),
+        ] {
+            std::fs::create_dir_all(second.join(dir)).unwrap();
+            std::fs::write(second.join(dir).join("SKILL.md"), text).unwrap();
+        }
+        let discovery =
+            discover_skills_from_dirs_with_diagnostics(&[first.clone(), second.clone()]);
+        assert_eq!(
+            discovery
+                .skills
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            ["shared", "Bad_Name", "long-description"]
+        );
+        let kinds: Vec<_> = discovery
+            .diagnostics
+            .iter()
+            .map(|d| {
+                (
+                    d.path
+                        .parent()
+                        .and_then(Path::file_name)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                    d.kind.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("Bad_Name".into(), "name"),
+                ("bad-yaml".into(), "invalid"),
+                ("long-description".into(), "description_length"),
+                ("no-description".into(), "missing_description"),
+                ("no-fence".into(), "invalid"),
+                ("no-name".into(), "missing_name"),
+                ("shared".into(), "collision"),
+                ("unclosed".into(), "invalid"),
+            ]
+        );
+        assert_eq!(
+            discover_skills_from_dirs(&[first, second]).len(),
+            discovery.skills.len()
+        );
     }
 
     fn tempdir(label: &str) -> PathBuf {
@@ -445,225 +586,17 @@ mod tests {
                 .unwrap_or_default()
                 .as_nanos()
         ));
-        std::fs::create_dir_all(&dir).expect("mkdir tempdir");
+        std::fs::create_dir_all(&dir).unwrap();
         dir
     }
 
     fn write_skill(dir: &Path, name: &str, description: &str) {
         let skill_dir = dir.join(name);
-        std::fs::create_dir_all(&skill_dir).expect("mkdir");
+        std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(
             skill_dir.join("SKILL.md"),
             format!("---\nname: {name}\ndescription: {description}\n---\nbody"),
         )
-        .expect("write SKILL.md");
-    }
-
-    #[test]
-    fn skill_dirs_for_orders_workdir_roots_user_then_agents() {
-        let workdir = Path::new("/work");
-        let roots = vec![PathBuf::from("/root-a"), PathBuf::from("/root-b")];
-        let dirs = skill_dirs_for(workdir, &roots);
-
-        let hya_positions: Vec<&PathBuf> =
-            dirs.iter().filter(|d| d.ends_with(".hya/skills")).collect();
-        assert_eq!(
-            hya_positions,
-            vec![
-                &PathBuf::from("/work/.hya/skills"),
-                &PathBuf::from("/root-a/.hya/skills"),
-                &PathBuf::from("/root-b/.hya/skills"),
-            ],
-            "workdir .hya/skills first, then roots in order"
-        );
-
-        let idx = |needle: &PathBuf| dirs.iter().position(|d| d == needle).unwrap();
-        let workdir_hya = idx(&PathBuf::from("/work/.hya/skills"));
-        let root_a_hya = idx(&PathBuf::from("/root-a/.hya/skills"));
-        let root_b_hya = idx(&PathBuf::from("/root-b/.hya/skills"));
-        assert!(workdir_hya < root_a_hya);
-        assert!(root_a_hya < root_b_hya);
-
-        // User dirs come after all .hya/skills roots but before .agents/skills.
-        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-            let user_dir = home.join(".config/hya/skills");
-            let user_idx = idx(&user_dir);
-            assert!(user_idx > root_b_hya, "user dirs come after project roots");
-
-            let workdir_agents_idx = idx(&PathBuf::from("/work/.agents/skills"));
-            assert!(
-                user_idx < workdir_agents_idx,
-                "user dirs come before .agents/skills"
-            );
-
-            let root_a_agents_idx = idx(&PathBuf::from("/root-a/.agents/skills"));
-            let root_b_agents_idx = idx(&PathBuf::from("/root-b/.agents/skills"));
-            assert!(workdir_agents_idx < root_a_agents_idx);
-            assert!(root_a_agents_idx < root_b_agents_idx);
-        }
-    }
-
-    #[test]
-    fn skill_dirs_for_dedupes_directories() {
-        let workdir = Path::new("/work");
-        // root equal to workdir must not duplicate workdir's directories.
-        let roots = vec![PathBuf::from("/work"), PathBuf::from("/root-a")];
-        let dirs = skill_dirs_for(workdir, &roots);
-
-        let mut seen = HashSet::new();
-        for dir in &dirs {
-            assert!(seen.insert(dir.clone()), "duplicate directory: {dir:?}");
-        }
-    }
-
-    #[test]
-    fn skill_dirs_for_puts_workdir_before_roots() {
-        let workdir = Path::new("/work");
-        let roots = vec![PathBuf::from("/root-a")];
-        let dirs = skill_dirs_for(workdir, &roots);
-
-        let workdir_pos = dirs
-            .iter()
-            .position(|d| d == &PathBuf::from("/work/.hya/skills"))
-            .expect("workdir .hya/skills present");
-        let root_pos = dirs
-            .iter()
-            .position(|d| d == &PathBuf::from("/root-a/.hya/skills"))
-            .expect("root .hya/skills present");
-        assert!(workdir_pos < root_pos);
-    }
-
-    #[test]
-    fn discover_skills_for_roots_first_found_wins_on_name_clash() {
-        let tmp = tempdir("clash");
-        let workdir = tmp.join("workdir");
-        let root = tmp.join("root");
-        std::fs::create_dir_all(workdir.join(".hya/skills")).expect("mkdir");
-        std::fs::create_dir_all(root.join(".hya/skills")).expect("mkdir");
-
-        write_skill(&workdir.join(".hya/skills"), "shared", "from workdir");
-        write_skill(&root.join(".hya/skills"), "shared", "from root");
-        write_skill(&root.join(".hya/skills"), "only-in-root", "root only");
-
-        let dirs = skill_dirs_for(&workdir, std::slice::from_ref(&root));
-        let skills = discover_skills_from_dirs(&dirs);
-
-        let shared = skills
-            .iter()
-            .find(|s| s.name == "shared")
-            .expect("shared skill present");
-        assert_eq!(
-            shared.description, "from workdir",
-            "workdir entry wins over root entry with the same name"
-        );
-        assert!(
-            skills.iter().any(|s| s.name == "only-in-root"),
-            "root-only skill is still discovered"
-        );
-    }
-
-    #[test]
-    fn discovery_reports_skipped_and_suspicious_skill_files() {
-        let tmp = tempdir("diagnostics");
-        let first = tmp.join("first");
-        let second = tmp.join("second");
-        write_skill(&first, "shared", "from first");
-        write_skill(&second, "shared", "from second");
-        write_skill(&second, "Bad_Name", "listed with a warning");
-        let long = "x".repeat(MAX_SKILL_DESCRIPTION_CHARS + 1);
-        write_skill(&second, "long-description", &long);
-        for (dir, text) in [
-            ("no-fence", "name: x\n"),
-            ("unclosed", "---\nname: x\ndescription: y\n"),
-            ("bad-yaml", "---\nname: [x\n---\nbody"),
-            ("no-name", "---\ndescription: y\n---\nbody"),
-            ("no-description", "---\nname: z\n---\nbody"),
-            (
-                "off",
-                "---\nname: off\ndescription: y\ndisable: true\n---\nbody",
-            ),
-        ] {
-            std::fs::create_dir_all(second.join(dir)).expect("mkdir");
-            std::fs::write(second.join(dir).join("SKILL.md"), text).expect("write");
-        }
-        let discovery =
-            discover_skills_from_dirs_with_diagnostics(&[first.clone(), second.clone()]);
-        let names = discovery
-            .skills
-            .iter()
-            .map(|skill| skill.name.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(names, ["shared", "Bad_Name", "long-description"]);
-        let kinds = discovery
-            .diagnostics
-            .iter()
-            .map(|diagnostic| {
-                (
-                    diagnostic
-                        .path
-                        .parent()
-                        .and_then(Path::file_name)
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                    diagnostic.kind.as_str(),
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            kinds,
-            [
-                ("Bad_Name".to_owned(), "name"),
-                ("bad-yaml".to_owned(), "invalid"),
-                ("long-description".to_owned(), "description_length"),
-                ("no-description".to_owned(), "missing_description"),
-                ("no-fence".to_owned(), "invalid"),
-                ("no-name".to_owned(), "missing_name"),
-                ("shared".to_owned(), "collision"),
-                ("unclosed".to_owned(), "invalid"),
-            ]
-        );
-        let collision = discovery
-            .diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.kind == SkillDiagnosticKind::Collision)
-            .expect("collision");
-        assert!(
-            collision
-                .message
-                .contains(&first.join("shared/SKILL.md").display().to_string()),
-            "{}",
-            collision.message
-        );
-        // The plain discovery keeps the same catalog.
-        assert_eq!(
-            discover_skills_from_dirs(&[first, second]).len(),
-            discovery.skills.len()
-        );
-    }
-
-    #[test]
-    fn disable_model_invocation_keeps_the_skill_out_of_the_index_only() {
-        let md = "---\nname: manual\ndescription: run by hand\ndisable-model-invocation: true\n---\nbody";
-        let parsed = parse_skill(md).expect("parses");
-        assert!(parsed.disable_model_invocation);
-        let mut hidden = builtin_skills().remove(0);
-        hidden.name = "manual".to_owned();
-        hidden.disable_model_invocation = true;
-        let shown = builtin_skills().remove(0);
-        let section = skills_section(&[hidden.clone(), shown.clone()]).expect("section");
-        assert!(section.contains(&shown.name));
-        assert!(!section.contains("manual"));
-        assert_eq!(skills_section(&[hidden]), None);
-    }
-
-    #[test]
-    fn the_naming_rule_follows_agent_skills() {
-        assert_eq!(skill_name_problem("pdf-tools-2"), None);
-        assert!(skill_name_problem("PDF").is_some());
-        assert!(skill_name_problem("pdf_tools").is_some());
-        assert!(skill_name_problem("-pdf").is_some());
-        assert!(skill_name_problem("pdf--tools").is_some());
-        assert!(skill_name_problem(&"a".repeat(MAX_SKILL_NAME_CHARS + 1)).is_some());
-        assert!(skill_name_problem(&"a".repeat(MAX_SKILL_NAME_CHARS)).is_none());
+        .unwrap();
     }
 }

@@ -7,6 +7,9 @@ on:
   # changes themselves, which `push: [main]` + `pull_request` alone cannot cover.
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 # A newer push to the same PR or branch supersedes the running gate. Pushes to
 # main are never cancelled, so every main commit keeps its own result.
 concurrency:
@@ -15,19 +18,23 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings -C link-arg=-fuse-ld=bfd"
+  # Rust >= 1.90 defaults to bundled rust-lld on x86_64-unknown-linux-gnu
+  # (workspace MSRV is 1.91), so leaving the default linker enables fast LLD
+  # linking without installing a system linker package.
+  RUSTFLAGS: "-D warnings"
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
 
-# The gate is split into independent jobs that run in parallel, each with its
-# own Cargo cache. Every step inside a job carries `if: ${{ !cancelled() }}` so
-# that one failure reports on its own instead of skipping the rest. A red `fmt`
-# used to skip the test step entirely, which hid six failing tests for weeks.
+# The gate splits work across parallel jobs: `lint`, `build-bin`, `test`, and
+# `frontend` start immediately; `e2e` and `tui` reuse the `hya`/`xtask` binaries
+# (and their lockstep native bundle `.so` libraries) built once by `build-bin`.
+# Independent steps carry `if: ${{ !cancelled() }}` so one failure reports on
+# its own instead of skipping the rest.
 jobs:
   lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
@@ -46,9 +53,63 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  build-bin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # `xtask gen-api` runs `rustfmt` on the generated gRPC adapter.
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+      - name: build hya and xtask binaries
+        id: build
+        run: cargo build --locked -p hya-backend --bin hya -p xtask --bin xtask
+      - name: generated v1 API drift check
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          target/debug/xtask gen-api
+          git add --intent-to-add .
+          git diff HEAD --exit-code
+      # Fails if matrix.toml and the real tests disagree in either direction, or
+      # if a T-series numbering hole is neither used nor retired.
+      - name: matrix registry check
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: target/debug/xtask matrix-check
+      # `hya` loads its five lockstep first-party native bundles from
+      # `<exe-dir>/deps/libhya_*.so`, so ship them alongside `hya` and `xtask`.
+      - name: stage prebuilt binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="${RUNNER_TEMP}/ci-bins"
+          rm -rf "$stage"
+          mkdir -p "$stage/deps"
+          cp target/debug/hya target/debug/xtask "$stage/"
+          for stem in hya_base_tools hya_extended_tools hya_channel_tools hya_network_tools hya_compaction; do
+            pkg="${stem//_/-}"
+            if [[ -f "target/debug/deps/lib${stem}.so" ]]; then
+              cp "target/debug/deps/lib${stem}.so" "$stage/deps/"
+            else
+              lib="$(find "target/debug/build/${pkg}" -name "lib${stem}.so" -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2- || true)"
+              test -n "$lib"
+              cp "$lib" "$stage/deps/"
+            fi
+          done
+      - name: upload prebuilt binaries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-bins
+          path: ${{ runner.temp }}/ci-bins
+          retention-days: 1
+          if-no-files-found: error
+
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # hya-app runs executable Bundle sidecars under Bun; without it those
@@ -59,45 +120,44 @@ jobs:
       - name: free runner disk
         run: sudo sh -c 'nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup >/dev/null 2>&1 &'
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: taiki-e/install-action@893d6ee8d714b6c7dfe2bcd94e5759e9a7958a7e # v2.90.10
+        with:
+          tool: nextest
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
-      # hya-e2e runs in its own job: it spawns real backend processes, and
-      # docs/testing/process-e2e.md requires serial execution.
-      # --no-fail-fast: one failing crate must not hide the failures behind it.
+      # hya-e2e runs in its own job after `build-bin`.
       - name: test
-        run: cargo test --workspace --exclude hya-e2e --no-fail-fast
+        run: cargo nextest run --profile ci --workspace --exclude hya-e2e
 
   e2e:
+    needs: build-bin
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Bundle and JavaScript Plugin scenarios run under Bun.
       - uses: ./.github/actions/setup-bun
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: taiki-e/install-action@893d6ee8d714b6c7dfe2bcd94e5759e9a7958a7e # v2.90.10
         with:
-          components: rustfmt
+          tool: nextest
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
-      - name: build agent e2e binaries
-        run: cargo build --locked -p hya-backend --bin hya -p xtask --bin xtask
-      - name: generated v1 API drift check
-        if: ${{ !cancelled() }}
-        run: |
-          cargo run --locked -p xtask -- gen-api
-          git add --intent-to-add .
-          git diff HEAD --exit-code
-      # Fails if matrix.toml and the real tests disagree in either direction, or
-      # if a T-series numbering hole is neither used nor retired. Runs here
-      # because xtask links the runtime crates this job builds anyway.
-      - name: matrix registry check
-        if: ${{ !cancelled() }}
-        run: target/debug/xtask matrix-check
+      # Keep prebuilt `hya` and its lockstep `deps/libhya_*.so` outside
+      # `target/debug` so `cargo nextest` and `rust-cache` cannot clobber them.
+      - name: download prebuilt binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-bins
+          path: ${{ runner.temp }}/ci-bins
+      - name: make prebuilt binaries executable
+        run: chmod +x "${RUNNER_TEMP}/ci-bins/hya" "${RUNNER_TEMP}/ci-bins/xtask" "${RUNNER_TEMP}/ci-bins/deps/"libhya_*.so
       - name: agent process e2e (Track P)
-        if: ${{ !cancelled() }}
-        run: cargo test -p hya-e2e --no-fail-fast -- --test-threads=1
+        env:
+          HYA_E2E_BACKEND_BIN: ${{ runner.temp }}/ci-bins/hya
+        run: cargo nextest run --profile ci-e2e -p hya-e2e
 
   # Type checks and unit tests of the Bun packages need no Rust build, so they
   # run beside the terminal suite instead of in front of it.
@@ -134,15 +194,19 @@ jobs:
         run: bun run typecheck && bun test
 
   tui:
+    needs: build-bin
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-bun
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: download prebuilt binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          cache-on-failure: true
+          name: ci-bins
+          path: target/debug
+      - name: make prebuilt binaries executable
+        run: chmod +x target/debug/hya target/debug/xtask target/debug/deps/libhya_*.so
       - name: install
         run: |
           for package in packages/hya-tui packages/hya-tui-web packages/hya-tui-sdk crates/hya-plugin-bun/adapter crates/hya-plugin-claude/adapter; do
@@ -154,12 +218,9 @@ jobs:
       - name: precompile the TUI
         working-directory: packages/hya-tui
         run: bun run build
-      # e2e/hya-tui.spec.ts and e2e/hya-tui-launch.spec.ts start this binary as
-      # the backend under test (see docs/tui-web.md#running-the-tests).
-      # The disk-inspector spec packages its source with target/debug/xtask.
-      - name: build hya and bundle packager
-        if: ${{ !cancelled() }}
-        run: cargo build --locked -p hya-backend --bin hya -p xtask --bin xtask
+      # e2e/hya-tui.spec.ts and e2e/hya-tui-launch-daemon.spec.ts start
+      # target/debug/hya (downloaded from `build-bin`), and
+      # e2e/hya-tui-bundles-ext.spec.ts runs target/debug/xtask.
       - name: direct PTY protocol checks and full terminal suite
         if: ${{ !cancelled() }}
         working-directory: packages/hya-tui-web

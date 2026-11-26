@@ -10,10 +10,10 @@ the same API real frontends consume.
 
 | Path | Role |
 | --- | --- |
-| `src/backend.rs` | Temp dirs, `config.yaml`, MCP/skill/bundle fixtures, spawn `hya serve` on `127.0.0.1:0` |
-| `src/fake_llm.rs` | Queue of `ScriptStep::Text` / `ToolCalls` over SSE `/v1/chat/completions` |
-| `src/scenario.rs` | `E2eEnv` / `E2eEnvBuilder`, HTTP helpers, permission/question auto-reply, tree helpers |
-| `tests/it/pNN_*.rs` | One scenario family per module of the single `it` test binary (`tests/it/main.rs`); run one alone with `cargo test -p hya-e2e --test it pNN_…::` (two digits, e.g. `p20_model_catalog_discovery::`) |
+| `src/backend.rs` | Thread-unique temp dirs (`unique_temp_dir`), `config.yaml`, MCP/skill/bundle fixtures, `default_backend_bin()` (`HYA_E2E_BACKEND_BIN` → `HYA_BIN` → `CARGO_TARGET_DIR/debug/hya` → `target/debug/hya`), spawn `hya serve` on `127.0.0.1:0` |
+| `src/fake_llm.rs` | Queue of `ScriptStep::Text` / `ToolCalls` / `HttpError` over SSE `/v1/chat/completions`, per-agent routes, and `push_scripts` / `push_route_scripts` for dense multi-phase journeys |
+| `src/scenario.rs` | `E2eEnv` / `HeadlessEnv` (`build_headless()` for `hya exec` without spawning `hya serve`) / `E2eEnvBuilder`, HTTP helpers, permission/question auto-reply, tree helpers |
+| `tests/it/pNN_*.rs` | 11 consolidated golden-path modules of the single `it` test binary (`tests/it/main.rs`); run one alone with `cargo test -p hya-e2e --test it <module>:: -- --test-threads=4` |
 | `matrix.toml` | Machine-readable PR-matrix registry (IDs → paths) |
 
 ## Building an environment
@@ -108,7 +108,7 @@ Mailbox delivery only reaches **resident** teammates (`task` with
 `resident: true`): `hya-engine::resident` injects a handle's unread inbox into its
 next turn as `[mail from <handle>] <body>` user prompts. There is no mailbox HTTP
 route, so the recipient's own next request is the only delivery oracle — see
-`crates/hya-e2e/tests/it/p16_swarm_mailbox.rs`.
+`crates/hya-e2e/tests/it/p04_subagents_and_mailbox.rs`.
 
 Helpers:
 
@@ -174,7 +174,7 @@ Harness pieces the relay file uses:
 
 ```sh
 cargo build -p hya-backend --bin hya
-cargo test -p hya-e2e --test it p38_relay:: -- --test-threads=1
+cargo test -p hya-e2e --test it p38_relay:: -- --test-threads=4
 ```
 
 The three scenarios take about a second together. Real intermediaries (nginx,
@@ -218,13 +218,19 @@ Install requires a path ending in `.hyabundle` — use
 
 ```sh
 cargo build -p hya-backend --bin hya
-cargo test -p hya-e2e -- --test-threads=1
-cargo test -p hya-e2e --test it p03_permissions:: -- --nocapture
-cargo test -p hya-e2e --test it p38_relay:: -- --test-threads=1
+cargo test -p hya-e2e -- --test-threads=4
+cargo test -p hya-e2e --test it p02_permissions_and_questions:: -- --nocapture
+cargo test -p hya-e2e --test it p38_relay:: -- --test-threads=4
+cargo test -p hya-e2e -- --ignored --test-threads=1   # nightly OS fault/soak tier (p43)
 cargo clippy -p hya-e2e --all-targets -- -D warnings
 ```
 
-`--test-threads=1` avoids port/process contention across concurrent backends.
+Every `E2eEnv` and `HeadlessEnv` uses an ephemeral loopback port (`127.0.0.1:0`)
+and a process- and thread-unique temporary root (`unique_temp_dir`), with zero
+process-global env mutation, so the default PR matrix runs safely in parallel
+with `--test-threads=4`. Heavy real-OS SQLite lock/open-stall/signal-drain soak
+tests in `p43_store_robustness.rs` carry `#[ignore = "nightly OS fault/soak"]`
+and run in the nightly workflow (`--ignored --test-threads=1`).
 Locally, run the scenario modules for the surface you changed (`--test it pNN_…::`);
 the whole-crate run is the CI gate.
 

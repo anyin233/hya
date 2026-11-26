@@ -96,6 +96,7 @@ flowchart TD
 "#,
     )
     .unwrap();
+    let _env = crate::support::env_read_lock().await;
     let entered = Arc::new(Semaphore::new(0));
     let provider = ProviderRouter::new().with(Arc::new(PausedStage(entered.clone())));
     let mut agent = agent_with_model("fake/model", None);

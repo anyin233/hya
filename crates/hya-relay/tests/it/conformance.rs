@@ -1,21 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Intermediary conformance: a real relay server behind in-process hops
 //! that behave like the HTTPS intermediaries the relay must work through.
-//! Every case runs a backend (host control stream with reconnects, Noise
-//! responder, echo) and a client (open, Noise initiator) through the relay
-//! client and checks a round trip.
-//!
-//! | Case | Hop | Deployment shape |
-//! | --- | --- | --- |
-//! | (a) | h2c-capable HTTP reverse proxy | nginx `grpc_pass`, Caddy `h2c://` |
-//! | (b) | TLS on the relay, private CA | direct TLS, `tailscale serve` |
-//! | (c) | HTTP/1.1-only proxy forwarding WS upgrades | Cloudflare Tunnel, nginx without h2 |
-//! | (d) | h2 proxy that drops trailers | misconfigured h2 proxies/CDNs |
-//! | (e) | cuts connections idle for N ms | nginx/Cloudflare idle timeouts |
-//! | (f) | cuts every connection after N ms | max stream duration caps |
-//! | (g) | routes only a path prefix | shared hosts, path-routed ingress |
-//! | (h) | rewrites Host / `:authority` | Cloudflare Tunnel, Caddy, `tailscale serve` |
-//! | (i) | none, `hya+insecure://` | tailnet |
 
 use crate::support;
 
@@ -38,7 +23,7 @@ fn config(transport: Transport) -> ClientConfig {
         connect_timeout: Duration::from_secs(5),
         probe_timeout: Duration::from_secs(5),
         open_timeout: Duration::from_secs(5),
-        heartbeat: HeartbeatConfig::every(Duration::from_millis(50))
+        heartbeat: HeartbeatConfig::every(Duration::from_millis(25))
             .dead_peer_after(Duration::from_secs(2)),
         ..ClientConfig::default()
     }
@@ -48,8 +33,6 @@ fn client(address: &RelayAddress, transport: Transport) -> RelayClient {
     RelayClient::new(address.clone(), config(transport)).unwrap()
 }
 
-/// A backend on `address` (auto binding) and a round trip from a client of
-/// each binding in `transports`. Returns the auto client's binding choice.
 async fn splice_through(address: &RelayAddress, transports: &[Transport]) -> Vec<Binding> {
     let identity = Identity::new(1);
     let link = identity.link(address.clone(), Transport::Auto);
@@ -130,7 +113,6 @@ async fn c_http1_only_hop_makes_auto_use_websocket() {
         }
         other => panic!("expected a gRPC failure, got {other:?}"),
     }
-    // Pinned gRPC fails instead of silently falling back.
     let pinned = client(&address, Transport::Grpc);
     let link = Identity::new(9).link(address.clone(), Transport::Grpc);
     assert!(pinned.open(link.room_id()).await.is_err());
@@ -167,8 +149,8 @@ async fn d_trailer_stripping_hop_makes_auto_use_websocket() {
     relay.stop().await;
 }
 
-/// Idle cut of the (e) hop, well above the 50 ms test heartbeat.
-const IDLE_CUT: Duration = Duration::from_millis(300);
+/// Idle cut of the (e) hop, well above the 25 ms test heartbeat.
+const IDLE_CUT: Duration = Duration::from_millis(120);
 
 // (e) A hop that cuts connections idle for N ms: heartbeats keep both the
 // control stream and an idle data stream alive for several N.
@@ -184,26 +166,30 @@ async fn e_heartbeats_keep_streams_alive_through_an_idle_cutting_hop() {
     )
     .await;
     let address = plain(hop.addr, "");
-    for transport in [Transport::Grpc, Transport::Ws] {
-        let identity = Identity::new(3);
-        let link = identity.link(address.clone(), transport);
-        let backend = Backend::start(client(&address, transport), identity, quick_policy()).await;
-        let opener = client(&address, transport);
-        let mut tunnel = support::connect(&opener, &link).await.unwrap();
-        ping(&mut tunnel, b"before").await.unwrap();
-        sleep(IDLE_CUT * 4).await;
-        timeout(WAIT, ping(&mut tunnel, b"after the idle period"))
-            .await
-            .expect("in time")
-            .unwrap_or_else(|e| panic!("{transport}: the idle stream was cut: {e}"));
-        // The control stream survived too: no re-registration was needed.
-        assert_eq!(
-            backend.registrations.load(Ordering::SeqCst),
-            1,
-            "{transport}"
-        );
-        round_trip(&opener, &link, b"new stream").await;
-    }
+    let run_one = |transport: Transport, seed: u8| {
+        let address = address.clone();
+        async move {
+            let identity = Identity::new(seed);
+            let link = identity.link(address.clone(), transport);
+            let backend =
+                Backend::start(client(&address, transport), identity, quick_policy()).await;
+            let opener = client(&address, transport);
+            let mut tunnel = support::connect(&opener, &link).await.unwrap();
+            ping(&mut tunnel, b"before").await.unwrap();
+            sleep(IDLE_CUT * 3).await;
+            timeout(WAIT, ping(&mut tunnel, b"after the idle period"))
+                .await
+                .expect("in time")
+                .unwrap_or_else(|e| panic!("{transport}: the idle stream was cut: {e}"));
+            assert_eq!(
+                backend.registrations.load(Ordering::SeqCst),
+                1,
+                "{transport}"
+            );
+            round_trip(&opener, &link, b"new stream").await;
+        }
+    };
+    tokio::join!(run_one(Transport::Grpc, 3), run_one(Transport::Ws, 13));
     relay.stop().await;
 }
 
@@ -220,7 +206,6 @@ async fn e_without_heartbeats_the_idle_cut_happens() {
     )
     .await;
     let identity = Identity::new(4);
-    // The backend talks to the relay directly; only the opener crosses the hop.
     let _backend = Backend::start(
         client(&relay.address(), Transport::Ws),
         identity_clone(&identity),
@@ -239,7 +224,7 @@ async fn e_without_heartbeats_the_idle_cut_happens() {
     .unwrap();
     let mut tunnel = support::connect(&silent, &link).await.unwrap();
     ping(&mut tunnel, b"before").await.unwrap();
-    sleep(IDLE_CUT * 4).await;
+    sleep(IDLE_CUT * 2).await;
     let after = timeout(WAIT, ping(&mut tunnel, b"after"))
         .await
         .expect("in time");
@@ -257,7 +242,7 @@ fn identity_clone(identity: &Identity) -> Identity {
 }
 
 /// Lifetime cap of the (f) hop.
-const MAX_DURATION: Duration = Duration::from_millis(400);
+const MAX_DURATION: Duration = Duration::from_millis(200);
 
 // (f) A hop that cuts every connection after N ms: the reconnect policy
 // re-registers the host, and new opens succeed after each cut.
@@ -273,38 +258,41 @@ async fn f_the_host_re_registers_after_max_duration_cuts() {
     )
     .await;
     let address = plain(hop.addr, "");
-    for transport in [Transport::Grpc, Transport::Ws] {
-        let identity = Identity::new(5);
-        let link = identity.link(address.clone(), transport);
-        let backend = Backend::start(client(&address, transport), identity, quick_policy()).await;
-        for cut in 2..=3 {
-            backend.wait_registrations(cut).await;
-            // The first attempts may race the cut; a fresh stream succeeds.
-            let opened = timeout(WAIT, async {
-                loop {
-                    let opener = client(&address, transport);
-                    match support::connect(&opener, &link).await {
-                        Ok(mut tunnel) => {
-                            if ping(&mut tunnel, b"after the cut").await.is_ok() {
-                                return;
+    let run_one = |transport: Transport, seed: u8| {
+        let address = address.clone();
+        async move {
+            let identity = Identity::new(seed);
+            let link = identity.link(address.clone(), transport);
+            let backend =
+                Backend::start(client(&address, transport), identity, quick_policy()).await;
+            for cut in 2..=3 {
+                backend.wait_registrations(cut).await;
+                let opened = timeout(WAIT, async {
+                    loop {
+                        let opener = client(&address, transport);
+                        match support::connect(&opener, &link).await {
+                            Ok(mut tunnel) => {
+                                if ping(&mut tunnel, b"after the cut").await.is_ok() {
+                                    return;
+                                }
                             }
+                            Err(ClientError::RoomOffline(_) | ClientError::Unavailable(_)) => {}
+                            Err(_) => {}
                         }
-                        Err(ClientError::RoomOffline(_) | ClientError::Unavailable(_)) => {}
-                        Err(_) => {}
+                        sleep(Duration::from_millis(15)).await;
                     }
-                    sleep(Duration::from_millis(20)).await;
-                }
-            })
-            .await;
-            assert!(opened.is_ok(), "{transport}: no stream after cut {cut}");
+                })
+                .await;
+                assert!(opened.is_ok(), "{transport}: no stream after cut {cut}");
+            }
         }
-        assert!(hop.cuts.load(Ordering::SeqCst) >= 2);
-    }
+    };
+    tokio::join!(run_one(Transport::Grpc, 5), run_one(Transport::Ws, 15));
+    assert!(hop.cuts.load(Ordering::SeqCst) >= 2);
     relay.stop().await;
 }
 
-// (g) A hop that routes only a path prefix to the relay (running with the
-// same --path-prefix): both bindings work under the prefix.
+// (g) A hop that routes only a path prefix to the relay.
 #[tokio::test]
 async fn g_prefix_routing_hop_carries_both_bindings() {
     let relay = Relay::start(support::relay_config().path_prefix("/relay").unwrap()).await;
@@ -319,7 +307,6 @@ async fn g_prefix_routing_hop_carries_both_bindings() {
     let address = plain(hop.addr, "/relay");
     let chosen = splice_through(&address, &ALL).await;
     assert_eq!(chosen, [Binding::Grpc, Binding::Grpc, Binding::Ws]);
-    // Without the prefix the hop answers 404 on both bindings.
     let wrong = client(&plain(hop.addr, ""), Transport::Auto);
     match wrong.binding().await.unwrap_err() {
         ClientError::NoBinding { grpc, ws } => {
@@ -349,9 +336,8 @@ async fn h_host_rewriting_hop_carries_both_bindings() {
     relay.stop().await;
 }
 
-// (j) An account-less Cloudflare Tunnel: the edge is HTTP/1.1-only, rewrites
-// Host at the origin, and cuts idle TCP connections. Heartbeats keep the
-// control and data streams alive, so auto selects WebSocket and survives.
+// (j) An account-less Cloudflare Tunnel: HTTP/1.1-only, rewrites Host, and
+// cuts idle TCP connections.
 #[tokio::test]
 async fn j_cloudflare_accountless_tunnel_uses_websocket_and_heartbeats() {
     let relay = Relay::start(support::relay_config()).await;
@@ -376,7 +362,7 @@ async fn j_cloudflare_accountless_tunnel_uses_websocket_and_heartbeats() {
     ping(&mut tunnel, b"before the edge idle period")
         .await
         .unwrap();
-    sleep(IDLE_CUT * 4).await;
+    sleep(IDLE_CUT * 3).await;
     timeout(WAIT, ping(&mut tunnel, b"after the edge idle period"))
         .await
         .expect("in time")
@@ -386,8 +372,7 @@ async fn j_cloudflare_accountless_tunnel_uses_websocket_and_heartbeats() {
     relay.stop().await;
 }
 
-// (i) Plaintext `hya+insecure://` straight to the relay (the tailnet shape),
-// from a parsed link.
+// (i) Plaintext `hya+insecure://` straight to the relay (the tailnet shape).
 #[tokio::test]
 async fn i_insecure_link_direct_carries_both_bindings() {
     let relay = Relay::start(support::relay_config()).await;

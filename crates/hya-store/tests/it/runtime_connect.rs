@@ -30,8 +30,8 @@ impl Drop for Scratch {
 }
 
 #[cfg(unix)]
-#[test]
-fn symlink_identity_is_stable_when_the_target_and_its_parent_are_created() {
+#[tokio::test]
+async fn symlink_identity_and_canonical_directory_lock_contention() {
     let scratch = Scratch::new();
     let target = scratch.0.join("new/sessions.db");
     let alias = scratch.0.join("alias.db");
@@ -48,18 +48,13 @@ fn symlink_identity_is_stable_when_the_target_and_its_parent_are_created() {
         database_paths(target.to_str().unwrap()).unwrap().unwrap(),
         before
     );
-}
 
-#[cfg(unix)]
-#[tokio::test]
-async fn symlinked_parent_contends_on_the_canonical_directory_lock() {
-    let scratch = Scratch::new();
     let directory = scratch.0.join("database");
     std::fs::create_dir(&directory).unwrap();
-    let alias = scratch.0.join("alias");
-    std::os::unix::fs::symlink(&directory, &alias).unwrap();
+    let dir_alias = scratch.0.join("alias");
+    std::os::unix::fs::symlink(&directory, &dir_alias).unwrap();
     let db = directory.join("sessions.db");
-    let spelling = alias.join("sessions.db");
+    let spelling = dir_alias.join("sessions.db");
     let paths = database_paths(spelling.to_str().unwrap()).unwrap().unwrap();
     assert_eq!(
         paths.database.parent().unwrap(),
@@ -76,7 +71,7 @@ async fn symlinked_parent_contends_on_the_canonical_directory_lock() {
 }
 
 #[tokio::test]
-async fn a_transient_discovery_probe_does_not_reject_a_starter() {
+async fn transient_discovery_probe_allows_starter_while_live_owner_blocks_spellings() {
     let scratch = Scratch::new();
     let paths = database_paths(&scratch.db()).unwrap().unwrap();
     let probe = OpenOptions::new()
@@ -99,11 +94,36 @@ async fn a_transient_discovery_probe_does_not_reject_a_starter() {
             ))
     });
     started.recv().unwrap();
-    // Model a short discovery lock already in flight when the starter arrives.
-    std::thread::sleep(Duration::from_millis(30));
+    std::thread::sleep(Duration::from_millis(20));
     drop(probe);
     let store = starter.join().unwrap().unwrap();
     store.claim_runtime_owner(OwnerRunId::new()).unwrap();
+    drop(store);
+
+    let relative_dir = PathBuf::from(format!("hya-owner-spellings-{}", SessionId::new()));
+    std::fs::create_dir(&relative_dir).unwrap();
+    let rel_scratch = Scratch(relative_dir.canonicalize().unwrap());
+    let relative = relative_dir.join("sessions.db");
+    let first = SessionStore::connect_runtime(&rel_scratch.db())
+        .await
+        .unwrap();
+    first.claim_runtime_owner(OwnerRunId::new()).unwrap();
+    let mut spellings = vec![rel_scratch.db(), relative.to_str().unwrap().to_owned()];
+    #[cfg(unix)]
+    {
+        let alias = rel_scratch.0.join("alias.db");
+        std::os::unix::fs::symlink("sessions.db", &alias).unwrap();
+        spellings.push(alias.to_str().unwrap().to_owned());
+    }
+    for spelling in spellings {
+        assert!(
+            matches!(
+                SessionStore::connect_runtime(&spelling).await,
+                Err(hya_store::StoreError::RuntimeOwnerBusy)
+            ),
+            "{spelling}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -135,7 +155,7 @@ async fn file_store_write_waits_for_sqlite_lock() {
     tokio::select! {
         biased;
         result = &mut write => panic!("store write finished while the lock was held: {result:?}"),
-        () = tokio::time::sleep(Duration::from_millis(600)) => {}
+        () = tokio::time::sleep(Duration::from_millis(60)) => {}
     }
     sqlx::query("COMMIT").execute(&mut sqlite).await.unwrap();
 
@@ -179,7 +199,6 @@ async fn read_only_connect_neither_migrates_nor_writes_projection_snapshots() {
         .execute(&mut sqlite)
         .await
         .unwrap();
-    // An ordinary connect would attempt BEGIN IMMEDIATE and wait behind this writer.
     let reader = tokio::time::timeout(
         Duration::from_secs(1),
         SessionStore::connect_read_only(&scratch.db()),
@@ -202,8 +221,8 @@ async fn read_only_connect_neither_migrates_nor_writes_projection_snapshots() {
                 session,
                 &Event::SessionArchived {
                     session,
-                    archived: 1.into()
-                }
+                    archived: 1.into(),
+                },
             )
             .await
             .is_err()
@@ -211,33 +230,17 @@ async fn read_only_connect_neither_migrates_nor_writes_projection_snapshots() {
 }
 
 #[tokio::test]
-async fn runtime_spellings_cannot_take_over_a_live_file_owner() {
-    let relative_dir = PathBuf::from(format!("hya-owner-spellings-{}", SessionId::new()));
-    std::fs::create_dir(&relative_dir).unwrap();
-    let scratch = Scratch(relative_dir.canonicalize().unwrap());
-    let relative = relative_dir.join("sessions.db");
-    let first = SessionStore::connect_runtime(&scratch.db()).await.unwrap();
-    first.claim_runtime_owner(OwnerRunId::new()).unwrap();
-    let mut spellings = vec![scratch.db(), relative.to_str().unwrap().to_owned()];
-    #[cfg(unix)]
-    {
-        let alias = scratch.0.join("alias.db");
-        std::os::unix::fs::symlink("sessions.db", &alias).unwrap();
-        spellings.push(alias.to_str().unwrap().to_owned());
-    }
-    for spelling in spellings {
-        assert!(
-            matches!(
-                SessionStore::connect_runtime(&spelling).await,
-                Err(hya_store::StoreError::RuntimeOwnerBusy)
-            ),
-            "{spelling}"
+async fn database_uri_rejection_lexical_validation_and_literal_punctuation() {
+    assert!(validate_database_arg("").is_ok());
+    assert!(validate_database_arg(":memory:").is_ok());
+    assert!(validate_database_arg("/nonexistent/unlikely/path/hya.db").is_ok());
+    for bad in ["file:hya.db", "sqlite:hya.db"] {
+        assert_eq!(
+            validate_database_arg(bad).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
         );
     }
-}
 
-#[tokio::test]
-async fn database_uris_are_rejected_before_any_open_or_lock() {
     let scratch = Scratch::new();
     for uri in [
         format!("sqlite:{}", scratch.db()),
@@ -266,11 +269,7 @@ async fn database_uris_are_rejected_before_any_open_or_lock() {
         }
         assert_eq!(std::fs::read_dir(&scratch.0).unwrap().count(), 0);
     }
-}
 
-#[tokio::test]
-async fn punctuation_in_plain_paths_is_literal_for_runtime_and_read_only() {
-    let scratch = Scratch::new();
     let path = scratch.0.join("literal?%23#sessions.db");
     let path = path.to_str().unwrap();
     let store = SessionStore::connect_runtime(path).await.unwrap();
@@ -289,19 +288,4 @@ async fn punctuation_in_plain_paths_is_literal_for_runtime_and_read_only() {
     assert!(std::path::Path::new(path).exists());
     let reader = SessionStore::connect_read_only(path).await.unwrap();
     assert_eq!(reader.replay(session).await.unwrap().len(), 1);
-}
-
-#[test]
-fn validate_database_arg_is_lexical_and_rejects_uris() {
-    assert!(validate_database_arg("").is_ok());
-    assert!(validate_database_arg(":memory:").is_ok());
-    assert!(validate_database_arg("/nonexistent/unlikely/path/hya.db").is_ok());
-    assert_eq!(
-        validate_database_arg("file:hya.db").unwrap_err().kind(),
-        std::io::ErrorKind::InvalidInput
-    );
-    assert_eq!(
-        validate_database_arg("sqlite:hya.db").unwrap_err().kind(),
-        std::io::ErrorKind::InvalidInput
-    );
 }

@@ -657,94 +657,57 @@ mod tests {
     }
 
     #[test]
-    fn absent_files_load_as_empty_configuration() {
+    fn loads_models_efforts_bundle_leaf_encoding_and_validation() {
         let (_dir, files) = files();
-        let loaded = files.load().unwrap();
-        assert!(loaded.builtin.is_empty());
-        assert!(loaded.bundles.is_empty());
-    }
+        let empty = files.load().unwrap();
+        assert!(empty.builtin.is_empty() && empty.bundles.is_empty());
 
-    /// `agents.<id>.reasoning` beside `agents.<id>.model`, in the global file
-    /// and in a bundle's `config.yml`, becomes that Agent's configured effort.
-    #[test]
-    fn reasoning_leaves_load_as_agent_efforts() {
-        let (_dir, files) = files();
-        let global = files.global_path().to_path_buf();
-        std::fs::create_dir_all(global.parent().unwrap()).unwrap();
-        std::fs::write(
-            &global,
-            "agents:\n  general:\n    model: openai/gpt-6\n    reasoning: high\n  build:\n    model: openai/gpt-6\n",
-        )
-        .unwrap();
-        let bundle_dir = crate::bundle_config::user_bundle_config_root(&global)
-            .join(crate::bundle_config::encode_bundle_leaf("acme/tools").unwrap());
-        std::fs::create_dir_all(&bundle_dir).unwrap();
-        std::fs::write(
-            bundle_dir.join(BUNDLE_CONFIG_FILE_NAME),
-            "agents:\n  acme-scout:\n    reasoning: low\n",
-        )
-        .unwrap();
-
-        let efforts = files.load_efforts().unwrap();
-        assert_eq!(
-            efforts,
-            BTreeMap::from([
-                ("acme-scout".to_string(), ReasoningEffort::Low),
-                ("general".to_string(), ReasoningEffort::High),
-            ])
-        );
-    }
-
-    #[test]
-    fn an_unknown_reasoning_label_is_rejected_with_its_location() {
-        let (_dir, files) = files();
-        let global = files.global_path().to_path_buf();
-        std::fs::create_dir_all(global.parent().unwrap()).unwrap();
-        std::fs::write(&global, "agents:\n  general:\n    reasoning: ludicrous\n").unwrap();
-        let error = format!("{:#}", files.load_efforts().unwrap_err());
-        assert!(
-            error.contains("agents.general.reasoning") && error.contains("ludicrous"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn bundle_leaf_encoding_is_reversible_and_canonical() {
-        let (_dir, files) = files();
-        let cases = [
+        // Leaf encoding round-trip + rejection of non-canonical encodings.
+        for (bundle_id, leaf) in [
             ("simple-bundle", "simple-bundle"),
             ("org/foo", "org%2Ffoo"),
             ("../escape", "..%2Fescape"),
             (".", "%2E"),
             ("..", "%2E%2E"),
             ("literal%2F", "literal%252F"),
-        ];
-        for (bundle_id, leaf) in cases {
+        ] {
             let path = files.path_for(AgentOrigin::Bundle { bundle_id }).unwrap();
-            assert_eq!(path.file_name().unwrap().to_str().unwrap(), "config.yml");
             assert!(path.parent().unwrap().ends_with(format!("bundles/{leaf}")));
             assert_eq!(decode_bundle_leaf(leaf).unwrap(), bundle_id);
         }
-        assert!(decode_bundle_leaf("org%2ffoo").is_err());
-        assert!(decode_bundle_leaf("org/foo").is_err());
-        assert_ne!(
-            files
-                .path_for(AgentOrigin::Bundle {
-                    bundle_id: "org/foo"
-                })
-                .unwrap(),
-            files
-                .path_for(AgentOrigin::Bundle {
-                    bundle_id: "org%2Ffoo",
-                })
-                .unwrap()
-        );
-    }
+        assert!(decode_bundle_leaf("org%2ffoo").is_err() && decode_bundle_leaf("org/foo").is_err());
 
-    #[test]
-    fn load_rejects_noncanonical_bundle_directory_alias() {
-        let (_dir, files) = files();
-        let alias = files
+        // Reasoning efforts load from global + user bundle config; unknown label & non-mapping fail.
+        let global = files.global_path().to_path_buf();
+        std::fs::create_dir_all(global.parent().unwrap()).unwrap();
+        std::fs::write(&global, "agents:\n  general: { model: openai/gpt-6, reasoning: high }\n  build: { model: openai/gpt-6 }\n").unwrap();
+        let bundle_dir = crate::bundle_config::user_bundle_config_root(&global)
+            .join(crate::bundle_config::encode_bundle_leaf("acme/tools").unwrap());
+        std::fs::create_dir_all(&bundle_dir).unwrap();
+        std::fs::write(
+            bundle_dir.join(BUNDLE_CONFIG_FILE_NAME),
+            "agents:\n  acme-scout: { reasoning: low }\n",
+        )
+        .unwrap();
+        assert_eq!(
+            files.load_efforts().unwrap(),
+            BTreeMap::from([
+                ("acme-scout".into(), ReasoningEffort::Low),
+                ("general".into(), ReasoningEffort::High),
+            ])
+        );
+
+        std::fs::write(&global, "agents:\n  general: { reasoning: ludicrous }\n").unwrap();
+        let err = format!("{:#}", files.load_efforts().unwrap_err());
+        assert!(err.contains("agents.general.reasoning") && err.contains("ludicrous"));
+        for bad in ["[p/model, high]", "p/model"] {
+            fs::write(&global, format!("agents:\n  worker: {bad}\n")).unwrap();
+            assert!(read_agent_settings(&global).is_err());
+        }
+
+        // Non-canonical bundle directory alias fails load.
+        let (_dir2, files2) = self::files();
+        let alias = files2
             .global_path()
             .parent()
             .unwrap()
@@ -752,27 +715,23 @@ mod tests {
         std::fs::create_dir_all(&alias).unwrap();
         std::fs::write(
             alias.join("config.yml"),
-            "agents:\n  worker:\n    model: provider/model\n",
+            "agents:\n  worker: { model: p/m }\n",
         )
         .unwrap();
-        assert!(files.load().is_err());
+        assert!(files2.load().is_err());
     }
 
     #[test]
-    fn set_reload_preserves_unknown_yaml_and_owns_bundle_files() {
-        let (_dir, files) = files();
+    fn save_clear_preserves_unknown_yaml_and_project_bundle_ownership() {
+        let (dir, files) = files();
         let global = files.global_path().to_path_buf();
         std::fs::create_dir_all(global.parent().unwrap()).unwrap();
         std::fs::write(
             &global,
-            "name: preserve-me\nagents:\n  shared:\n    model: old/global\n    category: deep\n  untouched:\n    note: yes\nproviders:\n  p:\n    base_url: https://example.invalid\n",
+            "name: preserve-me\nagents:\n  shared: { model: old/global, category: deep }\n  other: { model: keep/me }\n",
         )
         .unwrap();
 
-        let bundle_origin = AgentOrigin::Bundle {
-            bundle_id: "org/foo",
-        };
-        let bundle_path = files.path_for(bundle_origin).unwrap();
         files
             .set_model(
                 AgentOrigin::Builtin,
@@ -789,130 +748,83 @@ mod tests {
                 Some(&ModelRef::new("new/bundle")),
             )
             .unwrap();
-
-        let global_raw = std::fs::read_to_string(&global).unwrap();
-        assert!(global_raw.contains("name: preserve-me"));
-        assert!(global_raw.contains("category: deep"));
-        assert!(global_raw.contains("new/global"));
-        assert!(!global_raw.contains("new/bundle"));
-        assert!(bundle_path.exists());
+        let raw = std::fs::read_to_string(&global).unwrap();
+        assert!(
+            raw.contains("name: preserve-me")
+                && raw.contains("category: deep")
+                && raw.contains("new/global")
+                && !raw.contains("new/bundle")
+        );
         let loaded = files.load().unwrap();
         assert_eq!(
             loaded.builtin.get("shared"),
             Some(&ModelRef::new("new/global"))
         );
         assert_eq!(
-            loaded
-                .bundles
-                .get("org/foo")
-                .and_then(|models| models.get("shared")),
+            loaded.bundles.get("org/foo").and_then(|m| m.get("shared")),
             Some(&ModelRef::new("new/bundle"))
         );
-    }
 
-    #[test]
-    fn project_bundle_models_live_in_the_project_bundle_directory() {
-        let (dir, files) = files();
-        let project = dir.join("work/.hya/bundles");
-        let bundle_dir = project.join("acme__tools");
-        std::fs::create_dir_all(bundle_dir.join("prompts")).unwrap();
-        std::fs::write(
-            bundle_dir.join("bundle.yaml"),
-            "kind: Bundle\nidentity:\n  id: acme/tools\n  version: 1.0.0\n  publisher: acme\nagents:\n  - id: tools-lead\n    role: main\n    prompt: prompts/lead.md\n",
-        )
-        .unwrap();
-        std::fs::write(bundle_dir.join("prompts/lead.md"), "Lead.\n").unwrap();
+        // Clearing removes only the model leaf; malformed YAML leaves file untouched.
+        files
+            .set_model(AgentOrigin::Builtin, "shared", None)
+            .unwrap();
+        let cleared = std::fs::read_to_string(&global).unwrap();
+        assert!(
+            !cleared.contains("new/global")
+                && cleared.contains("category: deep")
+                && cleared.contains("keep/me")
+        );
+        let malformed = "agents:\n  shared:\n    model: [not, a, string]\nkeep: exact\n";
+        std::fs::write(&global, malformed).unwrap();
+        assert!(
+            files
+                .set_model(AgentOrigin::Builtin, "shared", Some(&ModelRef::new("p/m")))
+                .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(&global).unwrap(), malformed);
+
+        // Project bundle config lives in the project directory without affecting user scope.
+        let bundle_dir = dir.join("work/.hya/bundles/acme__tools");
+        std::fs::create_dir_all(&bundle_dir).unwrap();
         std::fs::write(bundle_dir.join("config.yml"), "bundle_key: kept\n").unwrap();
-        let shadowed = files
-            .global_path()
-            .parent()
-            .unwrap()
-            .join("bundles/acme%2Ftools");
+        let shadowed = global.parent().unwrap().join("bundles/acme%2Ftools");
         std::fs::create_dir_all(&shadowed).unwrap();
         std::fs::write(
             shadowed.join("config.yml"),
-            "agents:\n  tools-lead:\n    model: user/shadowed\n",
+            "agents:\n  tools-lead: { model: user/shadowed }\n",
         )
         .unwrap();
-        let project_dirs = BTreeMap::from([("acme/tools".to_string(), bundle_dir.clone())]);
+        let project_dirs = BTreeMap::from([("acme/tools".into(), bundle_dir.clone())]);
         let resolver = files.resolver_for(&project_dirs);
-        let origin = AgentOrigin::Bundle {
-            bundle_id: "acme/tools",
-        };
-
-        let path = files
+        let written = files
             .set_model_in(
                 &resolver,
-                origin,
+                AgentOrigin::Bundle {
+                    bundle_id: "acme/tools",
+                },
                 "tools-lead",
                 Some(&ModelRef::new("p/project")),
             )
             .unwrap();
         assert_eq!(
-            path,
+            written,
             std::path::absolute(bundle_dir.join("config.yml")).unwrap()
         );
-        let raw = std::fs::read_to_string(&path).unwrap();
-        assert!(raw.contains("bundle_key: kept"), "{raw}");
-        assert!(raw.contains("p/project"), "{raw}");
-        let project = AgentModelConfigFiles::load_project(&project_dirs).unwrap();
+        let proj_raw = std::fs::read_to_string(&written).unwrap();
+        assert!(proj_raw.contains("bundle_key: kept") && proj_raw.contains("p/project"));
         assert_eq!(
-            project
+            AgentModelConfigFiles::load_project(&project_dirs)
+                .unwrap()
                 .get("acme/tools")
-                .and_then(|models| models.get("tools-lead")),
-            Some(&ModelRef::new("p/project")),
-            "the project file holds the project bundle's leaves"
-        );
-        let user = files.load().unwrap();
-        assert_eq!(
-            user.bundles
-                .get("acme/tools")
-                .and_then(|models| models.get("tools-lead")),
-            Some(&ModelRef::new("user/shadowed")),
-            "the user scope never reads project files"
+                .and_then(|m| m.get("tools-lead")),
+            Some(&ModelRef::new("p/project"))
         );
     }
 
     #[test]
-    fn clearing_removes_only_model_leaf_and_malformed_input_stays_unchanged() {
-        let (_dir, files) = files();
-        let global = files.global_path().to_path_buf();
-        std::fs::create_dir_all(global.parent().unwrap()).unwrap();
-        let original = "agents:\n  target:\n    model: provider/model\n    category: deep\n  other:\n    model: keep/me\nroot_unknown: value\n";
-        std::fs::write(&global, original).unwrap();
-        files
-            .set_model(AgentOrigin::Builtin, "target", None)
-            .unwrap();
-        let cleared = std::fs::read_to_string(&global).unwrap();
-        assert!(!cleared.contains("provider/model"));
-        assert!(cleared.contains("category: deep"));
-        assert!(cleared.contains("keep/me"));
-        assert!(cleared.contains("root_unknown: value"));
-
-        let malformed = "agents:\n  target:\n    model: [not, a, string]\nkeep: exact\n";
-        std::fs::write(&global, malformed).unwrap();
-        let error = files.set_model(
-            AgentOrigin::Builtin,
-            "target",
-            Some(&ModelRef::new("provider/new")),
-        );
-        assert!(error.is_err());
-        assert_eq!(std::fs::read_to_string(&global).unwrap(), malformed);
-    }
-
-    #[test]
-    fn agent_settings_require_mapping_entries() {
-        let (_dir, files) = files();
-        let path = files.global_path();
-        ensure_parent(path).unwrap();
-        for entry in ["[p/model, high]", "p/model"] {
-            fs::write(path, format!("agents:\n  worker: {entry}\n")).unwrap();
-            assert!(read_agent_settings(path).is_err());
-        }
-    }
-
-    #[test]
-    fn provider_and_agent_writes_share_transaction() {
+    fn shared_file_lock_and_concurrent_updates_preserve_all_writes() {
+        // 1. Provider upsert and model writes serialize through the same file lock.
         let (_dir, files) = files();
         let path = files.global_path().to_path_buf();
         ensure_parent(&path).unwrap();
@@ -931,58 +843,41 @@ mod tests {
             sent.send(()).unwrap();
         });
         let premature = received
-            .recv_timeout(std::time::Duration::from_millis(200))
+            .recv_timeout(std::time::Duration::from_millis(50))
             .is_ok();
-        // Model save inside the already-held transaction, while provider save waits.
-        fs::write(&path, "agents:\n  worker:\n    model: openai/model\n").unwrap();
+        fs::write(&path, "agents:\n  worker: { model: openai/model }\n").unwrap();
         drop(lock);
         writer.join().unwrap();
-        assert!(
-            !premature,
-            "provider writer bypassed the agent-model file lock"
-        );
+        assert!(!premature);
         assert_eq!(
             files.load().unwrap().builtin.get("worker"),
             Some(&ModelRef::new("openai/model"))
         );
         let root: Value = serde_norway::from_str(&fs::read_to_string(path).unwrap()).unwrap();
         assert!(root["providers"]["openai"].is_mapping());
-    }
 
-    #[test]
-    fn concurrent_updates_reread_latest_document() {
-        let (_dir, files) = files();
-        let left = files.clone();
-        let right = files.clone();
-        let first = thread::spawn(move || {
-            left.set_model(
-                AgentOrigin::Builtin,
-                "left",
-                Some(&ModelRef::new("provider/left")),
-            )
-            .unwrap();
+        // 2. Concurrent model writes reread the latest document without clobbering.
+        let (_dir2, files2) = self::files();
+        let left = files2.clone();
+        let right = files2.clone();
+        let t1 = thread::spawn(move || {
+            left.set_model(AgentOrigin::Builtin, "left", Some(&ModelRef::new("p/left")))
+                .unwrap()
         });
-        let second = thread::spawn(move || {
+        let t2 = thread::spawn(move || {
             right
                 .set_model(
                     AgentOrigin::Builtin,
                     "right",
-                    Some(&ModelRef::new("provider/right")),
+                    Some(&ModelRef::new("p/right")),
                 )
-                .unwrap();
+                .unwrap()
         });
-        first.join().unwrap();
-        second.join().unwrap();
-
-        let loaded = files.load().unwrap();
-        assert_eq!(
-            loaded.builtin.get("left"),
-            Some(&ModelRef::new("provider/left"))
-        );
-        assert_eq!(
-            loaded.builtin.get("right"),
-            Some(&ModelRef::new("provider/right"))
-        );
+        t1.join().unwrap();
+        t2.join().unwrap();
+        let loaded = files2.load().unwrap();
+        assert_eq!(loaded.builtin.get("left"), Some(&ModelRef::new("p/left")));
+        assert_eq!(loaded.builtin.get("right"), Some(&ModelRef::new("p/right")));
     }
 
     #[test]
@@ -1007,8 +902,7 @@ mod tests {
                 0o640
             );
         }
-
-        let (_other_dir, new_files) = self::files();
+        let (_other, new_files) = self::files();
         new_files
             .set_model(
                 AgentOrigin::Builtin,

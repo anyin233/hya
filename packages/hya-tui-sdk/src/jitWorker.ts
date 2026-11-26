@@ -103,7 +103,7 @@ self.onmessage = (event: MessageEvent<ToWorker>) => {
       const [start, poll, drain, settle] = runInContext(prelude, context) as [Start, Poll, Drain, Settle]
       realm = { start, poll, drain, settle }
       try {
-        runInContext(message.script, context, { timeout: VM_DEADLINE_MS, filename: "extension.js" })
+        runInContext(message.script, context, { timeout: message.deadlineMs ?? VM_DEADLINE_MS, filename: "extension.js" })
       } catch (error) {
         realm = undefined
         post({ type: "done", seq: message.seq, error: `extension failed to load: ${describe(error)}` })

@@ -59,7 +59,7 @@ impl Running {
 }
 
 fn config() -> RelayServerConfig {
-    RelayServerConfig::new("127.0.0.1:0".parse().unwrap())
+    RelayServerConfig::new("127.0.0.1:0".parse().unwrap()).drain_timeout(Duration::from_millis(50))
 }
 
 async fn start(config: RelayServerConfig) -> Running {
@@ -593,56 +593,39 @@ async fn round_trip(target: &Target, host_binding: Binding, open_binding: Bindin
 // ---- tests ----
 
 #[tokio::test]
-async fn grpc_host_and_websocket_opener_splice() {
-    let server = start(config()).await;
-    round_trip(&Target::new(&server), Binding::Grpc, Binding::Ws).await;
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn websocket_host_and_grpc_opener_splice() {
-    let server = start(config()).await;
-    round_trip(&Target::new(&server), Binding::Ws, Binding::Grpc).await;
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn same_binding_splices_work() {
-    let server = start(config()).await;
-    round_trip(&Target::new(&server), Binding::Grpc, Binding::Grpc).await;
-    round_trip(&Target::new(&server), Binding::Ws, Binding::Ws).await;
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn open_to_an_offline_room_is_not_found_on_both_bindings() {
+async fn grpc_and_ws_same_and_cross_binding_splices() {
     let server = start(config()).await;
     let target = Target::new(&server);
+    for (host_b, open_b) in [
+        (Binding::Grpc, Binding::Ws),
+        (Binding::Ws, Binding::Grpc),
+        (Binding::Grpc, Binding::Grpc),
+        (Binding::Ws, Binding::Ws),
+    ] {
+        round_trip(&target, host_b, open_b).await;
+    }
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn offline_room_errors_and_ws_text_rejection() {
+    let server = start(config()).await;
+    let target = Target::new(&server);
+
+    // Offline room maps to NotFound on both bindings, and gRPC uses status (not message).
     for binding in [Binding::Grpc, Binding::Ws] {
         let mut opener = chunk_leg(&target, binding, true).await;
         opener.send(open(&room_of(&key(9)))).await;
         expect_chunk_failure(&mut opener, binding, RelayErrorCode::NotFound).await;
     }
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn grpc_error_is_the_status_not_a_message() {
-    let server = start(config()).await;
-    let target = Target::new(&server);
-    let mut opener = chunk_leg(&target, Binding::Grpc, true).await;
-    opener.send(open(&room_of(&key(9)))).await;
-    match opener.next().await {
+    let mut grpc_opener = chunk_leg(&target, Binding::Grpc, true).await;
+    grpc_opener.send(open(&room_of(&key(9)))).await;
+    match grpc_opener.next().await {
         Item::Status(tonic::Code::NotFound, message) => assert_eq!(message, "room is offline"),
         other => panic!("expected NOT_FOUND status, got {other:?}"),
     }
-    server.shutdown().await;
-}
 
-#[tokio::test]
-async fn websocket_text_frames_are_rejected() {
-    let server = start(config()).await;
-    let target = Target::new(&server);
+    // WebSocket text frames are rejected with close code 1003.
     let mut socket = ws_connect(&target, "open").await.unwrap();
     socket
         .send(WsMessage::Text("open please".into()))
@@ -663,8 +646,27 @@ async fn websocket_text_frames_are_rejected() {
     server.shutdown().await;
 }
 
+async fn http_get(target: &Target, path: &str) -> String {
+    let mut io = connect_io(target, true).await;
+    let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    io.write_all(request.as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    timeout(WAIT, io.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    String::from_utf8(response).unwrap()
+}
+
 #[tokio::test]
-async fn path_prefix_applies_to_both_bindings() {
+async fn path_prefix_validation_routing_and_404_fallback() {
+    for bad in ["/a b", "/../x", "/./x", "/a//b", "/a?b", "/é"] {
+        assert!(config().path_prefix(bad).is_err(), "{bad:?} accepted");
+    }
+    for good in ["", "/", "hya", "/hya/", "/a/b-c_d.e~f"] {
+        assert!(config().path_prefix(good).is_ok(), "{good:?} rejected");
+    }
+
     let server = start(config().path_prefix("/relay/hya/").unwrap()).await;
     let prefixed = Target::new(&server).prefix("/relay/hya");
     round_trip(&prefixed, Binding::Grpc, Binding::Ws).await;
@@ -686,43 +688,16 @@ async fn path_prefix_applies_to_both_bindings() {
         }
         other => panic!("expected HTTP 404, got {:?}", other.map(|_| ())),
     }
-    server.shutdown().await;
-}
 
-#[test]
-fn invalid_path_prefixes_are_rejected() {
-    for bad in ["/a b", "/../x", "/./x", "/a//b", "/a?b", "/é"] {
-        assert!(config().path_prefix(bad).is_err(), "{bad:?} accepted");
-    }
-    for good in ["", "/", "hya", "/hya/", "/a/b-c_d.e~f"] {
-        assert!(config().path_prefix(good).is_ok(), "{good:?} rejected");
-    }
-}
-
-async fn http_get(target: &Target, path: &str) -> String {
-    let mut io = connect_io(target, true).await;
-    let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-    io.write_all(request.as_bytes()).await.unwrap();
-    let mut response = Vec::new();
-    timeout(WAIT, io.read_to_end(&mut response))
-        .await
-        .unwrap()
-        .unwrap();
-    String::from_utf8(response).unwrap()
-}
-
-#[tokio::test]
-async fn other_paths_are_404_hya_relay() {
-    let server = start(config().path_prefix("/p").unwrap()).await;
-    let target = Target::new(&server);
+    // Plain HTTP on unrouted paths returns 404 "hya relay".
     for path in [
         "/",
-        "/p",
-        "/p/hya.relay.v1/ws/nope",
+        "/relay/hya",
+        "/relay/hya/hya.relay.v1/ws/nope",
         "/hya.relay.v1/ws/host",
         "/favicon.ico",
     ] {
-        let response = http_get(&target, path).await;
+        let response = http_get(&bare, path).await;
         assert!(response.starts_with("HTTP/1.1 404"), "{path}: {response}");
         assert!(
             response.ends_with("\r\n\r\nhya relay"),
@@ -733,19 +708,7 @@ async fn other_paths_are_404_hya_relay() {
 }
 
 #[tokio::test]
-async fn tls_serves_both_bindings() {
-    let tls = tls();
-    let server = start(config().tls(tls.files.clone())).await;
-    let target = Target::new(&server).tls(&tls);
-    round_trip(&target, Binding::Grpc, Binding::Ws).await;
-    round_trip(&target, Binding::Ws, Binding::Grpc).await;
-    let response = http_get(&target, "/").await;
-    assert!(response.ends_with("hya relay"), "{response}");
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn missing_tls_files_fail_bind() {
+async fn tls_serves_both_bindings_and_missing_files_fail_bind() {
     let result = RelayServer::bind(
         config().tls(TlsFiles {
             cert: "/nonexistent/cert.pem".into(),
@@ -755,6 +718,15 @@ async fn missing_tls_files_fail_bind() {
     )
     .await;
     assert!(result.is_err());
+
+    let tls = tls();
+    let server = start(config().tls(tls.files.clone())).await;
+    let target = Target::new(&server).tls(&tls);
+    round_trip(&target, Binding::Grpc, Binding::Ws).await;
+    round_trip(&target, Binding::Ws, Binding::Grpc).await;
+    let response = http_get(&target, "/").await;
+    assert!(response.ends_with("hya relay"), "{response}");
+    server.shutdown().await;
 }
 
 fn one_room_per_client() -> ProxyLimits {
@@ -783,79 +755,82 @@ async fn register_outcome(
 }
 
 #[tokio::test]
-async fn only_the_trusted_forwarding_header_identifies_clients() {
-    let server = start(
-        config()
-            .trust_forwarded(Some(ForwardedHeader::XForwardedFor))
-            .limits(one_room_per_client()),
-    )
-    .await;
-    let base = Target::new(&server);
-    // The rightmost X-Forwarded-For entry (appended by the trusted hop).
-    let a = base
-        .clone()
-        .header("x-forwarded-for", "10.0.0.1, 203.0.113.1");
-    let b = base.clone().header("x-forwarded-for", "203.0.113.2");
-    let _a = register_outcome(&a, Binding::Grpc, &key(1)).await.unwrap();
-    let _b = register_outcome(&b, Binding::Ws, &key(2)).await.unwrap();
-    // A forged left entry does not make a new client: 203.0.113.1 again.
-    let forged = base
-        .clone()
-        .header("x-forwarded-for", "198.51.100.99, 203.0.113.1");
-    assert_eq!(
-        register_outcome(&forged, Binding::Ws, &key(3)).await.err(),
-        Some(RelayErrorCode::ResourceExhausted)
-    );
-    // Other forwarding headers are ignored: 203.0.113.2 again.
-    let other = base
-        .clone()
-        .header("cf-connecting-ip", "198.51.100.1")
-        .header("x-real-ip", "198.51.100.2")
-        .header("x-forwarded-for", "203.0.113.2");
-    assert_eq!(
-        register_outcome(&other, Binding::Grpc, &key(4)).await.err(),
-        Some(RelayErrorCode::ResourceExhausted)
-    );
-    server.shutdown().await;
+async fn forwarded_headers_trusted_and_untrusted_client_identity() {
+    // 1. Untrusted mode ignores all forwarding headers.
+    {
+        let server = start(config().limits(one_room_per_client())).await;
+        let base = Target::new(&server);
+        let a = base.clone().header("x-forwarded-for", "203.0.113.1");
+        let b = base.clone().header("cf-connecting-ip", "203.0.113.2");
+        let host_a = register_outcome(&a, Binding::Grpc, &key(1)).await.unwrap();
+        assert_eq!(
+            register_outcome(&b, Binding::Ws, &key(2)).await.err(),
+            Some(RelayErrorCode::ResourceExhausted)
+        );
+        assert_eq!(
+            register_outcome(&b, Binding::Grpc, &key(3)).await.err(),
+            Some(RelayErrorCode::ResourceExhausted)
+        );
+        drop(host_a);
+        server.shutdown().await;
+    }
 
-    let server = start(
-        config()
-            .trust_forwarded(Some(ForwardedHeader::CfConnectingIp))
-            .limits(one_room_per_client()),
-    )
-    .await;
-    let base = Target::new(&server);
-    let c = base.clone().header("cf-connecting-ip", "203.0.113.3");
-    let _c = register_outcome(&c, Binding::Ws, &key(5)).await.unwrap();
-    // Without the trusted header: the socket address (127.0.0.1), whatever
-    // X-Forwarded-For claims.
-    let d = base.clone().header("x-forwarded-for", "203.0.113.4");
-    let _d = register_outcome(&d, Binding::Grpc, &key(6)).await.unwrap();
-    let e = base.clone().header("x-forwarded-for", "203.0.113.5");
-    assert_eq!(
-        register_outcome(&e, Binding::Ws, &key(7)).await.err(),
-        Some(RelayErrorCode::ResourceExhausted)
-    );
-    server.shutdown().await;
-}
+    // 2. Trusted X-Forwarded-For uses rightmost entry and ignores forged left / other headers.
+    {
+        let server = start(
+            config()
+                .trust_forwarded(Some(ForwardedHeader::XForwardedFor))
+                .limits(one_room_per_client()),
+        )
+        .await;
+        let base = Target::new(&server);
+        let a = base
+            .clone()
+            .header("x-forwarded-for", "10.0.0.1, 203.0.113.1");
+        let b = base.clone().header("x-forwarded-for", "203.0.113.2");
+        let host_a = register_outcome(&a, Binding::Grpc, &key(1)).await.unwrap();
+        let host_b = register_outcome(&b, Binding::Ws, &key(2)).await.unwrap();
+        let forged = base
+            .clone()
+            .header("x-forwarded-for", "198.51.100.99, 203.0.113.1");
+        assert_eq!(
+            register_outcome(&forged, Binding::Ws, &key(3)).await.err(),
+            Some(RelayErrorCode::ResourceExhausted)
+        );
+        let other = base
+            .clone()
+            .header("cf-connecting-ip", "198.51.100.1")
+            .header("x-real-ip", "198.51.100.2")
+            .header("x-forwarded-for", "203.0.113.2");
+        assert_eq!(
+            register_outcome(&other, Binding::Grpc, &key(4)).await.err(),
+            Some(RelayErrorCode::ResourceExhausted)
+        );
+        drop((host_a, host_b));
+        server.shutdown().await;
+    }
 
-#[tokio::test]
-async fn forwarding_headers_are_ignored_unless_trusted() {
-    let server = start(config().limits(one_room_per_client())).await;
-    let base = Target::new(&server);
-    let a = base.clone().header("x-forwarded-for", "203.0.113.1");
-    let b = base.clone().header("cf-connecting-ip", "203.0.113.2");
-    let _a = register_outcome(&a, Binding::Grpc, &key(1)).await.unwrap();
-    // Both come from 127.0.0.1.
-    assert_eq!(
-        register_outcome(&b, Binding::Ws, &key(2)).await.err(),
-        Some(RelayErrorCode::ResourceExhausted)
-    );
-    assert_eq!(
-        register_outcome(&b, Binding::Grpc, &key(3)).await.err(),
-        Some(RelayErrorCode::ResourceExhausted)
-    );
-    server.shutdown().await;
+    // 3. Trusted CF-Connecting-IP ignores X-Forwarded-For and falls back to socket addr.
+    {
+        let server = start(
+            config()
+                .trust_forwarded(Some(ForwardedHeader::CfConnectingIp))
+                .limits(one_room_per_client()),
+        )
+        .await;
+        let base = Target::new(&server);
+        let c = base.clone().header("cf-connecting-ip", "203.0.113.3");
+        let host_c = register_outcome(&c, Binding::Ws, &key(5)).await.unwrap();
+        let d = base.clone().header("x-forwarded-for", "203.0.113.4");
+        let host_d = register_outcome(&d, Binding::Grpc, &key(6)).await.unwrap();
+        let e = base.clone().header("x-forwarded-for", "203.0.113.5");
+        assert_eq!(
+            register_outcome(&e, Binding::Ws, &key(7)).await.err(),
+            Some(RelayErrorCode::ResourceExhausted)
+        );
+        drop((host_c, host_d));
+        server.shutdown().await;
+    }
 }
 
 #[tokio::test]
@@ -872,7 +847,6 @@ async fn pending_registrations_per_client_are_limited_across_bindings() {
         let mut refused = host_leg(&target, binding).await;
         expect_host_failure(&mut refused, binding, RelayErrorCode::ResourceExhausted).await;
     }
-    // Registering frees the slot.
     first.send(register_frame(&key(1), &nonce)).await;
     assert!(matches!(
         first.recv().await.frame,
@@ -883,10 +857,11 @@ async fn pending_registrations_per_client_are_limited_across_bindings() {
 }
 
 #[tokio::test]
-async fn graceful_shutdown_ends_streams_with_unavailable() {
-    let server = start(config()).await;
+async fn graceful_shutdown_ends_streams_and_drains_promptly() {
+    let server = start(config().drain_timeout(Duration::from_millis(500))).await;
     let target = Target::new(&server);
     let k = key(1);
+    let _idle_client = grpc_client(&target).await;
     let mut grpc_host = register(&target, Binding::Grpc, &k).await;
     let mut ws_host = register(&target, Binding::Ws, &key(2)).await;
     let mut opener = chunk_leg(&target, Binding::Ws, true).await;
@@ -900,6 +875,7 @@ async fn graceful_shutdown_ends_streams_with_unavailable() {
     ));
 
     let addr = server.addr;
+    let started = tokio::time::Instant::now();
     let (stop, done) = (server.stop, server.done);
     let _ = stop.unwrap().send(());
     expect_host_failure(&mut grpc_host, Binding::Grpc, RelayErrorCode::Unavailable).await;
@@ -907,22 +883,11 @@ async fn graceful_shutdown_ends_streams_with_unavailable() {
     expect_chunk_failure(&mut accepted, Binding::Grpc, RelayErrorCode::Unavailable).await;
     expect_chunk_failure(&mut opener, Binding::Ws, RelayErrorCode::Unavailable).await;
     timeout(WAIT, done).await.expect("serve ended").unwrap();
+    assert!(started.elapsed() < Duration::from_secs(5));
     assert!(
         TcpStream::connect(addr).await.is_err(),
         "listener still open"
     );
-}
-
-#[tokio::test]
-async fn shutdown_drains_idle_connections_promptly() {
-    let server = start(config().drain_timeout(Duration::from_millis(500))).await;
-    let target = Target::new(&server);
-    // An idle HTTP/2 connection and a registered host.
-    let _client = grpc_client(&target).await;
-    let _host = register(&target, Binding::Ws, &key(1)).await;
-    let started = tokio::time::Instant::now();
-    server.shutdown().await;
-    assert!(started.elapsed() < Duration::from_secs(5));
 }
 
 #[tokio::test]

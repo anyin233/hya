@@ -4,6 +4,7 @@ mod bare_launch;
 mod bridge_cli;
 mod bundle_api;
 mod bundle_cli;
+mod common;
 mod compat_agent_cli;
 mod db_ownership;
 mod db_writers;

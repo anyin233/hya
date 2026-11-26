@@ -28,14 +28,14 @@ export class JitThread {
   /** Host calls the active request is waiting for: its clock is paused while there are any. */
   private readonly hostCalls = new Set<number>()
 
-  constructor(private readonly ext: string, private readonly events: JitEvents) {
+  constructor(private readonly ext: string, private readonly events: JitEvents, private readonly deadlineMs = VM_DEADLINE_MS) {
     this.worker.onmessage = (event: MessageEvent<FromWorker>) => this.receive(event.data)
     this.worker.onerror = (event) => this.stop(`extension thread crashed: ${event.message}`)
   }
 
   /** Create the realm and run the bundle (its top level has the same deadline). */
   async load(script: string): Promise<void> {
-    await this.post((seq) => ({ type: "load", seq, ext: this.ext, script }))
+    await this.post((seq) => ({ type: "load", seq, ext: this.ext, script, deadlineMs: this.deadlineMs }))
   }
 
   /** Run one extension request (`text`: the request frame) and resolve to its response frame. */
@@ -71,7 +71,7 @@ export class JitThread {
     const seq = this.nextSeq++
     const waiter = Promise.withResolvers<string | undefined>()
     this.waiting.set(seq, waiter)
-    this.active = { seq, remaining: VM_DEADLINE_MS, since: 0, timer: undefined }
+    this.active = { seq, remaining: this.deadlineMs, since: 0, timer: undefined }
     this.hostCalls.clear()
     this.resume()
     this.worker.postMessage(message(seq))
@@ -104,7 +104,7 @@ export class JitThread {
     const active = this.active
     if (!active) return
     active.since = performance.now()
-    active.timer = setTimeout(() => this.stop(`extension exceeded its ${VM_DEADLINE_MS} ms limit`), active.remaining)
+    active.timer = setTimeout(() => this.stop(`extension exceeded its ${this.deadlineMs} ms limit`), active.remaining)
   }
 
   private pause(): void {

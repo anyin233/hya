@@ -1,0 +1,22 @@
+[profile.ci]
+# One failing test must not hide failures behind it.
+fail-fast = false
+# Warn at 5s and hard-terminate at 20s (4 * 5s) so slow sleeps cannot regress silently.
+slow-timeout = { period = "5s", terminate-after = 4 }
+status-level = "pass"
+final-status-level = "flaky"
+
+[profile.ci-e2e]
+fail-fast = false
+test-threads = 4
+# Process E2E tests spawn real `hya` backends: warn at 15s, terminate at 60s.
+slow-timeout = { period = "15s", terminate-after = 4 }
+status-level = "pass"
+final-status-level = "flaky"
+
+[profile.nightly]
+fail-fast = false
+# Ignored soak and OS-fault tests: warn at 30s, terminate at 120s.
+slow-timeout = { period = "30s", terminate-after = 4 }
+status-level = "pass"
+final-status-level = "flaky"

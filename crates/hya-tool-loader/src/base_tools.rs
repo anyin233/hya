@@ -529,4 +529,146 @@ tools:
             assert!(error.contains("overrides"), "{target}: {error}");
         }
     }
+
+    #[test]
+    fn embedded_tool_family_presets_match_runtime_bundles_and_registry_authority() {
+        let presets = tool_bundle_presets();
+        let expected_families: [(&str, &[&str]); 4] = [
+            (
+                "hya/base-tools",
+                &[
+                    "read",
+                    "write",
+                    "edit",
+                    "ls",
+                    "glob",
+                    "find",
+                    "grep",
+                    "ask_user",
+                    "bash",
+                    "apply_patch",
+                ],
+            ),
+            (
+                "hya/extended-tools",
+                &[
+                    "lsp",
+                    "skill",
+                    "list_agents",
+                    "task",
+                    "workflow",
+                    "project_activity",
+                    "search_agent",
+                    "archive",
+                    "plan_exit",
+                    "wait",
+                ],
+            ),
+            ("hya/network-tools", &["webfetch", "websearch"]),
+            (
+                "hya/channel-tools",
+                &["send", "list_channel", "report", "wait"],
+            ),
+        ];
+        assert_eq!(presets.len(), expected_families.len());
+        assert_eq!(base_tools_preset().identity(), "hya/base-tools");
+
+        for (preset, (identity, expected_names)) in presets.iter().zip(expected_families) {
+            assert_eq!(preset.identity(), identity);
+            assert_eq!(preset.schema_version(), 1);
+            assert_eq!(preset.bundle_digest().len(), 64);
+            assert!(!preset.prepared_catalog_bytes().is_empty());
+
+            let catalog = first_party_bundle(identity).unwrap_or_else(|e| panic!("{e}"));
+            assert!(std::ptr::eq(
+                preset.prepared_catalog_bytes(),
+                catalog.bytes()
+            ));
+            assert_eq!(preset.bundle_digest(), catalog.bundles()[0].digest());
+
+            let actual: BTreeSet<_> = preset.tools().iter().map(BaseToolExposure::name).collect();
+            assert_eq!(
+                actual,
+                expected_names.iter().copied().collect(),
+                "{identity}"
+            );
+        }
+
+        let frozen: &[(&str, ToolPermission, &[&str])] = &[
+            ("read", ToolPermission::ReadOnly, &[]),
+            ("write", ToolPermission::Tool, &[]),
+            ("edit", ToolPermission::Tool, &[]),
+            ("ls", ToolPermission::ReadOnly, &[]),
+            ("glob", ToolPermission::ReadOnly, &[]),
+            ("find", ToolPermission::ReadOnly, &[]),
+            ("grep", ToolPermission::ReadOnly, &[]),
+            ("lsp", ToolPermission::ReadOnly, &[]),
+            ("skill", ToolPermission::ReadOnly, &[]),
+            ("list_agents", ToolPermission::ReadOnly, &[]),
+            ("task", ToolPermission::Task, &[]),
+            ("workflow", ToolPermission::Tool, &[]),
+            ("project_activity", ToolPermission::ReadOnly, &[]),
+            ("send", ToolPermission::Tool, &[]),
+            ("list_channel", ToolPermission::ReadOnly, &[]),
+            ("search_agent", ToolPermission::ReadOnly, &[]),
+            ("report", ToolPermission::Tool, &[]),
+            ("archive", ToolPermission::Task, &[]),
+            ("wait", ToolPermission::ReadOnly, &[]),
+            ("wait", ToolPermission::ReadOnly, &[]),
+            ("ask_user", ToolPermission::Tool, &["question"]),
+            ("bash", ToolPermission::Command, &["shell"]),
+            ("apply_patch", ToolPermission::Tool, &["patch"]),
+            ("webfetch", ToolPermission::Tool, &["fetch"]),
+            ("websearch", ToolPermission::Tool, &["search"]),
+            ("plan_exit", ToolPermission::Tool, &["plan"]),
+        ];
+        let mut actual_policy: Vec<_> = presets
+            .iter()
+            .flat_map(|p| p.tools())
+            .map(|t| {
+                (
+                    t.name(),
+                    t.permission(),
+                    t.aliases()
+                        .iter()
+                        .map(BaseToolAlias::name)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        let mut expected_policy: Vec<_> = frozen
+            .iter()
+            .map(|(n, p, a)| (*n, *p, a.to_vec()))
+            .collect();
+        actual_policy.sort_by(|a, b| a.0.cmp(b.0));
+        expected_policy.sort_by(|a, b| a.0.cmp(b.0));
+        assert_eq!(actual_policy, expected_policy);
+
+        let registry = crate::builtins();
+        let advertised: BTreeSet<_> = registry
+            .schemas()
+            .into_iter()
+            .map(|s| s.name.as_str().to_string())
+            .collect();
+        let expected_exposed: BTreeSet<_> = presets
+            .iter()
+            .flat_map(|p| p.tools())
+            .filter(|t| t.exposed())
+            .map(|t| t.name().to_string())
+            .collect();
+        assert_eq!(advertised, expected_exposed);
+
+        for tool in presets.iter().flat_map(|p| p.tools()) {
+            assert_eq!(tool.schema_version(), 1);
+            let resolved = registry.resolve(tool.name()).unwrap();
+            assert_eq!(resolved.permission, tool.permission(), "{}", tool.name());
+            for alias in tool.aliases() {
+                let resolved_alias = registry.resolve(alias.name()).unwrap();
+                assert_eq!(resolved_alias.tool.name(), tool.name());
+                if alias.visibility() == AliasVisibility::Hidden {
+                    assert!(!advertised.contains(alias.name()));
+                }
+            }
+        }
+    }
 }

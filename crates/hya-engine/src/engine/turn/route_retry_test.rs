@@ -113,7 +113,8 @@ async fn check_interrupted_route(
         crate::test_support::runtime(hya_tool_loader::builtins()),
         PermissionPlane::new(hya_tool::PermissionRules::default()).0,
         EventBus::default(),
-    );
+    )
+    .with_round_retry_waits(&[std::time::Duration::ZERO; 8]);
     let agent = AgentSpec {
         name: "hya-main".into(),
         model: "a".into(),

@@ -6,9 +6,9 @@ process E2E when an in-process suite already owns them.
 
 | Track | What runs | When to use |
 | --- | --- | --- |
-| **I** (in-process) | Crate `#[test]` / integration tests with `FakeProvider`, in-memory store, Axum router | Engine rules, projection, permissions math, `hya.v1` route shapes and HTTP/gRPC parity (`crates/hya-server/tests/it/v1_api.rs`, `v1_grpc_parity.rs`) |
+| **I** (in-process) | Crate `#[test]` / integration tests with `FakeProvider`, in-memory store, Axum router | Engine rules, projection, permissions math, `hya.v1` route shapes and HTTP/gRPC parity (`crates/hya-server/tests/it/v1_api_core.rs`, `v1_grpc_parity.rs`) |
 | **P** (process) | Real `hya serve` + scripted OpenAI-compatible **FakeLlm** (`crates/hya-e2e`), driven entirely through the v1 client | Product path: config → HTTP provider → tools → sessions → MCP/skills/subagents/hyabundle |
-| **TUI** (terminal & browser) | `packages/hya-tui` unit tests + `packages/hya-tui-web/tui-exp` headless Bun PTY + optional Playwright Chromium E2E (`packages/hya-tui-web/e2e/*.spec.ts`) | Interactive OpenTUI rendering, keybindings, resize, sessions, Projects, and WebUI PTY host ([tui-web.md](../tui-web.md)) |
+| **TUI** (terminal & browser) | `packages/hya-tui` unit + `@opentui/solid` `testRender` UI suites + `packages/hya-tui-web/tui-exp` headless Bun PTY seam gate + optional Playwright Chromium E2E (`packages/hya-tui-web/e2e/*.spec.ts`) | Interactive OpenTUI rendering, keybindings, resize, sessions, Projects, and WebUI PTY host ([tui-web.md](../tui-web.md)) |
 
 Machine registry of PR-matrix IDs: [`../../crates/hya-e2e/matrix.toml`](../../crates/hya-e2e/matrix.toml).
 
@@ -54,18 +54,26 @@ CI runs the full suite on every push and pull request:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --exclude hya-e2e
+cargo nextest run --profile ci --workspace --exclude hya-e2e
 ```
 
-`--exclude hya-e2e` keeps Track P out of the multi-threaded workspace run; it
-runs separately with `--test-threads=1`. Run this full gate locally only when
-asked or for a cross-cutting change that touches most crates.
+`--exclude hya-e2e` keeps Track P out of the workspace unit/integration run; it
+runs in its own CI job (`cargo nextest run --profile ci-e2e -p hya-e2e`,
+`--test-threads=4`) against the prebuilt `hya` binary shared from `build-bin`
+(heavy real-OS storage fault/soak tests in `p43_store_robustness.rs` are marked
+`#[ignore = "nightly OS fault/soak"]` and run in `.github/workflows/nightly.yml`
+with `--run-ignored=only --test-threads=1`). `.config/nextest.toml` enforces
+slow-test timeouts (warn 5s / terminate 20s in `ci`; warn 15s / terminate 60s in
+`ci-e2e`). Run this full gate locally only when asked or for a cross-cutting
+change that touches most crates.
 
 CI exercises both tracks in different modes, but they are not all separate
 gates: Track P is enforced; Track I remains an index-only classification within
-the Rust suite. CI runs lint (fmt, clippy), the workspace suite,
-Track P (with the matrix check), the Bun packages' type checks and unit tests,
-and the terminal suite as five parallel jobs. Each gate step carries
+the Rust suite. CI runs lint (fmt, clippy), `build-bin` (prebuilt `hya`/`xtask`
+plus `gen-api` drift and `matrix-check`), the workspace suite (`test`), Track P
+(`e2e`), the Bun packages' type checks and unit/UI tests (`frontend`), and the
+real-PTY seam suite (`tui`) as parallel jobs (with `e2e` and `tui` reusing
+`build-bin` artifacts). Each gate step carries
 `if: ${{ !cancelled() }}`, so a failure in one step no longer skips the rest — a
 red `fmt` used to abort the job before the test step ever ran, which hid six
 failing tests for weeks.
@@ -76,7 +84,7 @@ for the agent surface you changed:
 
 ```sh
 cargo build -p hya-backend --bin hya
-cargo test -p hya-e2e --test it <pNN_scenario>:: -- --test-threads=1
+cargo test -p hya-e2e --test it <pNN_module>:: -- --test-threads=4
 ```
 
 ## Coverage

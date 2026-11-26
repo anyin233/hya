@@ -1,539 +1,18 @@
-//! Integration tests for `hya`: compat agent cli.
+//! Real-binary CLI integration tests for `exec`, `sessions`, `tail-session`,
+//! `agent`, `models`, and `update`. Flag parsing (`--time-budget`, `--db`
+//! precedence) and catalog rendering live in `src/` unit tests.
 
-use std::ffi::OsString;
-use std::path::PathBuf;
-use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use hya_store::SessionStore;
 use serde_json::Value;
 
-#[test]
-fn agent_list_prints_the_catalog_without_composing_a_runtime()
--> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-agent-list")?;
-    let output = hya_command(&env).args(["agent", "list"]).output()?;
+use crate::common::{Scratch, TestResult, assert_success};
 
-    assert_success("agent list", &output);
-    let stdout = String::from_utf8(output.stdout)?;
-    assert!(stdout.contains("hya-main ("), "{stdout}");
-    assert!(
-        !env.xdg_config.join("hya").exists(),
-        "`hya agent list` must not bootstrap runtime config"
-    );
-    Ok(())
-}
-
-#[test]
-fn models_command_creates_default_config_when_missing() -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-first-run-config")?;
-    let path = env.xdg_config.join("hya/config.yaml");
-    assert!(!path.exists(), "test should start without hya config");
-
-    let output = hya_command(&env).arg("models").output()?;
-
-    assert_success("models", &output);
-    let config = std::fs::read_to_string(&path)?;
-    assert!(
-        config.contains("default_model: hya/offline"),
-        "created config should contain the offline starter model:\n{config}"
-    );
-    assert!(
-        config.contains("providers: {}"),
-        "created config should contain an empty providers map:\n{config}"
-    );
-    Ok(())
-}
-
-#[test]
-fn update_commands_run_without_composing_the_runtime() -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-update-cli")?;
-
-    let version = hya_command(&env).args(["update", "version"]).output()?;
-    assert_success("update version", &version);
-    assert!(String::from_utf8(version.stdout)?.starts_with("hya update "));
-
-    assert!(
-        !env.xdg_config.join("hya").exists(),
-        "`hya update` must not bootstrap runtime config"
-    );
-    Ok(())
-}
-
-#[test]
-fn exec_time_budget_announces_the_budget_and_preserves_prompt_admission()
--> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-exec-time-budget")?;
-    let output = hya_command(&env)
-        .args([
-            "exec",
-            "--json",
-            "--time-budget",
-            "30",
-            "budgeted offline prompt",
-        ])
-        .output()?;
-    assert_success("exec --time-budget", &output);
-    let lines = String::from_utf8(output.stdout)?;
-    let events = lines
-        .lines()
-        .map(serde_json::from_str::<Value>)
-        .collect::<Result<Vec<_>, _>>()?;
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event
-                .to_string()
-                .contains("HEADLESS RUN — time budget: 30s"))
-            .count(),
-        1
-    );
-    assert!(lines.contains("budgeted offline prompt"));
-    assert!(
-        events
-            .iter()
-            .any(|event| event.pointer("/event/type").and_then(Value::as_str)
-                == Some("message_finished")
-                && event.pointer("/event/role").and_then(Value::as_str) == Some("assistant")),
-        "{lines}"
-    );
-    for budget in ["0", "-1", "1.5"] {
-        let output = hya_command(&env)
-            .args(["exec", "--time-budget", budget, "invalid"])
-            .output()?;
-        assert_eq!(output.status.code(), Some(2));
-    }
-    Ok(())
-}
-
-#[test]
-fn rendered_exec_db_persists_and_tail_replays_hysec_session()
--> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-rendered-exec-db")?;
-    let db = env.root.join("hya.db");
-
-    let exec = hya_command(&env)
-        .args(["--db"])
-        .arg(&db)
-        .args(["exec", "Say exactly hysec"])
-        .output()?;
-    assert_success("exec --db", &exec);
-
-    let sessions = hya_command(&env)
-        .args(["sessions", "--db"])
-        .arg(&db)
-        .output()?;
-    assert_success("sessions --db", &sessions);
-    let sessions_stdout = String::from_utf8(sessions.stdout)?;
-    let session = extract_hysec_id(&sessions_stdout).ok_or("missing hysec session id")?;
-    assert!(is_hysec_id(&session), "invalid session id: {session}");
-    assert_listed_session(&sessions_stdout, &session);
-
-    let global_sessions = hya_command(&env)
-        .args(["--db"])
-        .arg(&db)
-        .arg("sessions")
-        .output()?;
-    assert_success("--db sessions", &global_sessions);
-    assert_listed_session(&String::from_utf8(global_sessions.stdout)?, &session);
-
-    let tail = hya_command(&env)
-        .args(["tail-session"])
-        .arg(&session)
-        .args(["--db"])
-        .arg(&db)
-        .output()?;
-    assert_success("tail-session hysec --db", &tail);
-    let tail_stdout = String::from_utf8(tail.stdout)?;
-    assert_tail_replays_session(&tail_stdout, &session)?;
-
-    let global_tail = hya_command(&env)
-        .args(["--db"])
-        .arg(&db)
-        .args(["tail-session"])
-        .arg(&session)
-        .output()?;
-    assert_success("--db tail-session hysec", &global_tail);
-    assert_tail_replays_session(&String::from_utf8(global_tail.stdout)?, &session)?;
-
-    Ok(())
-}
-
-#[test]
-fn json_exec_db_emits_hysec_session_and_sessions_lists_exact_id()
--> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-json-exec-db")?;
-    let db = env.root.join("json.db");
-
-    let exec = hya_command(&env)
-        .args(["--db"])
-        .arg(&db)
-        .args(["exec", "--json", "Say exactly hysec json"])
-        .output()?;
-    assert_success("exec --json --db", &exec);
-    let exec_stdout = String::from_utf8(exec.stdout)?;
-    let session = session_created_id(&exec_stdout)?.ok_or("missing session_created event")?;
-    assert!(is_hysec_id(&session), "invalid session id: {session}");
-
-    let sessions = hya_command(&env)
-        .args(["sessions", "--db"])
-        .arg(&db)
-        .output()?;
-    assert_success("sessions --db", &sessions);
-    let sessions_stdout = String::from_utf8(sessions.stdout)?;
-    assert_listed_session(&sessions_stdout, &session);
-
-    Ok(())
-}
-
-#[test]
-fn exec_records_the_callers_working_directory_as_the_session_workdir()
--> Result<(), Box<dyn std::error::Error>> {
-    // `hya serve` has no working directory (ADR-0024); `hya exec` is a
-    // client-side command, so it names the caller's cwd explicitly as the
-    // session workdir instead of recording a relative `.`.
-    let env = IsolatedEnv::new("hya-exec-workdir")?;
-    let output = hya_command(&env)
-        .args(["exec", "--json", "hello"])
-        .output()?;
-    assert_success("exec --json", &output);
-    let stdout = String::from_utf8(output.stdout)?;
-    let workdir = session_created_field(&stdout, "workdir")?.ok_or("missing session_created")?;
-    assert_eq!(
-        std::fs::canonicalize(&workdir)?,
-        std::fs::canonicalize(&env.workdir)?,
-        "{stdout}"
-    );
-    assert!(std::path::Path::new(&workdir).is_absolute(), "{workdir}");
-    Ok(())
-}
-
-#[test]
-fn exec_starts_the_root_session_under_the_configured_default_agent()
--> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-exec-default-agent")?;
-    write_config_with_default_agent(&env, "hya-plan")?;
-
-    let output = hya_command(&env)
-        .args(["exec", "--json", "hello"])
-        .output()?;
-    assert_success("exec --json (default_agent: hya-plan)", &output);
-
-    let stdout = String::from_utf8(output.stdout)?;
-    let agent = session_created_agent(&stdout)?.ok_or("missing session_created event")?;
-    assert_eq!(
-        agent, "hya-plan",
-        "hya exec must start the root session under the configured `default_agent`, \
-         not the built-in `hya-main` agent:\n{stdout}"
-    );
-
-    Ok(())
-}
-
-#[test]
-fn exec_uses_a_project_bundle_agent_from_the_cwd_and_records_a_project_id()
--> Result<(), Box<dyn std::error::Error>> {
-    // F1 design Q3: the process-start-dir catalog tier is gone; an in-process
-    // root session (`exec`/`run`/`-p` goal/`loop`/`workflow`) ensures a
-    // Project for its cwd instead, so that directory's `.hya/bundles`
-    // project bundle tier applies exactly like a routed (daemon) session's
-    // server-ensured Project, and the session itself carries a project id.
-    let env = IsolatedEnv::new("hya-exec-project-bundle-agent")?;
-    let bundle_dir = env.workdir.join(".hya/bundles/demo");
-    std::fs::create_dir_all(bundle_dir.join("prompts"))?;
-    std::fs::write(
-        bundle_dir.join("bundle.yaml"),
-        "kind: Bundle\n\
-         identity:\n  id: hya/exec-project-demo\n  version: 1.0.0\n  publisher: hya\n\
-         agents:\n  - id: exec-project-lead\n    role: main\n    prompt: prompts/lead.md\n",
-    )?;
-    std::fs::write(
-        bundle_dir.join("prompts/lead.md"),
-        "You are the project bundle's lead agent.\n",
-    )?;
-    write_config_with_default_agent(&env, "exec-project-lead")?;
-
-    let output = hya_command(&env)
-        .args(["exec", "--json", "hello"])
-        .output()?;
-    assert_success("exec --json (project bundle agent)", &output);
-
-    let stdout = String::from_utf8(output.stdout)?;
-    let agent = session_created_agent(&stdout)?.ok_or("missing session_created event")?;
-    assert_eq!(
-        agent, "exec-project-lead",
-        "hya exec must ensure a Project for its cwd so the `.hya/bundles` \
-         project bundle agent is selectable through the Project catalog scope:\n{stdout}"
-    );
-    let project = session_created_field(&stdout, "project")?.ok_or(
-        "hya exec must record a project id on the session_created event once it \
-         ensures a Project for its cwd",
-    )?;
-    assert!(!project.is_empty(), "{stdout}");
-
-    Ok(())
-}
-
-#[test]
-fn exec_fails_clearly_when_default_agent_is_unselectable() -> Result<(), Box<dyn std::error::Error>>
-{
-    let env = IsolatedEnv::new("hya-exec-unknown-default-agent")?;
-    write_config_with_default_agent(&env, "not-a-real-agent")?;
-
-    let output = hya_command(&env)
-        .args(["exec", "--json", "hello"])
-        .output()?;
-    assert!(
-        !output.status.success(),
-        "exec should fail clearly on an unselectable default_agent instead of \
-         silently falling back to `hya-main`:\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stderr = String::from_utf8(output.stderr)?;
-    assert!(
-        stderr.contains("not-a-real-agent"),
-        "expected the typed UnknownAgentId error to name the bad agent id:\n{stderr}"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn sessions_empty_db_prints_no_sessions_found() -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-empty-sessions-db")?;
-    let db = env.root.join("empty.db");
-    drop(SessionStore::connect(db.to_str().ok_or("non-UTF-8 db path")?).await?);
-    let expected = format!("no sessions found in {}\n", db.display());
-
-    let sessions = hya_command(&env)
-        .args(["sessions", "--db"])
-        .arg(&db)
-        .output()?;
-    assert_success("sessions --db", &sessions);
-    assert_eq!(String::from_utf8(sessions.stdout)?, expected);
-
-    let global_sessions = hya_command(&env)
-        .args(["--db"])
-        .arg(&db)
-        .arg("sessions")
-        .output()?;
-    assert_success("--db sessions", &global_sessions);
-    assert_eq!(String::from_utf8(global_sessions.stdout)?, expected);
-
-    Ok(())
-}
-
-#[test]
-fn tail_session_json_replays_only_requested_session_when_multiple_sessions_exist()
--> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-tail-selected-session")?;
-    let db = env.root.join("tail.db");
-
-    let first = exec_json_session(&env, &db, "first offline session")?;
-    let second = exec_json_session(&env, &db, "second offline session")?;
-    assert_ne!(first, second, "expected two distinct sessions");
-
-    let sessions = hya_command(&env)
-        .args(["sessions", "--db"])
-        .arg(&db)
-        .output()?;
-    assert_success("sessions --db", &sessions);
-    let sessions_stdout = String::from_utf8(sessions.stdout)?;
-    assert_listed_session(&sessions_stdout, &first);
-    assert_listed_session(&sessions_stdout, &second);
-
-    let tail = hya_command(&env)
-        .arg("tail-session")
-        .arg(&second)
-        .args(["--db"])
-        .arg(&db)
-        .output()?;
-    assert_success("tail-session --db", &tail);
-    assert_tail_replays_session(&String::from_utf8(tail.stdout)?, &second)?;
-
-    Ok(())
-}
-
-#[test]
-fn subcommand_db_overrides_global_db_for_sessions_and_tail()
--> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-subcommand-db-override")?;
-    let db_a = env.root.join("a.db");
-    let db_b = env.root.join("b.db");
-
-    let session_a = exec_json_session(&env, &db_a, "session in db a")?;
-    let session_b = exec_json_session(&env, &db_b, "session in db b")?;
-    assert_ne!(
-        session_a, session_b,
-        "expected each database to contain its own session"
-    );
-
-    let sessions = hya_command(&env)
-        .args(["--db"])
-        .arg(&db_a)
-        .args(["sessions", "--db"])
-        .arg(&db_b)
-        .output()?;
-    assert_success("--db sessions --db", &sessions);
-    let sessions_stdout = String::from_utf8(sessions.stdout)?;
-    assert_listed_session(&sessions_stdout, &session_b);
-    assert_session_not_listed(&sessions_stdout, &session_a);
-
-    let tail = hya_command(&env)
-        .args(["--db"])
-        .arg(&db_a)
-        .arg("tail-session")
-        .arg(&session_b)
-        .args(["--db"])
-        .arg(&db_b)
-        .output()?;
-    assert_success("--db tail-session --db", &tail);
-    assert_tail_replays_session(&String::from_utf8(tail.stdout)?, &session_b)?;
-
-    Ok(())
-}
-
-struct IsolatedEnv {
-    root: PathBuf,
-    home: PathBuf,
-    xdg_config: PathBuf,
-    hya_config: PathBuf,
-    workdir: PathBuf,
-    path: Option<OsString>,
-}
-
-impl IsolatedEnv {
-    fn new(prefix: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let root = temp_dir(prefix)?;
-        let home = root.join("home");
-        let xdg_config = root.join("xdg-config");
-        let hya_config = root.join("hya-config");
-        let workdir = root.join("workdir");
-        std::fs::create_dir_all(&home)?;
-        std::fs::create_dir_all(&xdg_config)?;
-        std::fs::create_dir_all(&hya_config)?;
-        std::fs::create_dir_all(&workdir)?;
-        Ok(Self {
-            root,
-            home,
-            xdg_config,
-            hya_config,
-            workdir,
-            path: std::env::var_os("PATH"),
-        })
-    }
-}
-
-impl Drop for IsolatedEnv {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
-    }
-}
-
-fn hya_command(env: &IsolatedEnv) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_hya"));
-    command.env_clear();
-    if let Some(path) = &env.path {
-        command.env("PATH", path);
-    }
-    command
-        .env("HOME", &env.home)
-        .env("XDG_CONFIG_HOME", &env.xdg_config)
-        .env("HYA_CONFIG_HOME", &env.hya_config)
-        .env("NO_COLOR", "1")
-        .current_dir(&env.workdir);
-    command
-}
-
-fn assert_success(label: &str, output: &Output) {
-    assert!(
-        output.status.success(),
-        "{label} failed\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn temp_dir(prefix: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let dir = std::env::temp_dir().join(format!("{prefix}-{}-{nonce}", std::process::id()));
-    std::fs::create_dir(&dir)?;
-    Ok(dir)
-}
-
-fn extract_hysec_id(text: &str) -> Option<String> {
-    text.split(|c: char| !(c == '_' || c.is_ascii_alphanumeric()))
-        .find(|token| is_hysec_id(token))
-        .map(str::to_owned)
-}
-
-fn is_hysec_id(value: &str) -> bool {
-    let Some(suffix) = value.strip_prefix("hysec_") else {
-        return false;
-    };
-    suffix.len() == 20 && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
-}
-
-fn assert_listed_session(output: &str, expected: &str) {
-    assert!(
-        output
-            .lines()
-            .any(|line| line.split_whitespace().next() == Some(expected)),
-        "expected sessions output to list {expected}, got:\n{output}"
-    );
-}
-
-fn assert_session_not_listed(output: &str, unexpected: &str) {
-    assert!(
-        !output
-            .lines()
-            .any(|line| line.split_whitespace().next() == Some(unexpected)),
-        "expected sessions output not to list {unexpected}, got:\n{output}"
-    );
-}
-
-fn exec_json_session(
-    env: &IsolatedEnv,
-    db: &PathBuf,
-    prompt: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let exec = hya_command(env)
-        .args(["--db"])
-        .arg(db)
-        .args(["exec", "--json", prompt])
-        .output()?;
-    assert_success("exec --json --db", &exec);
-    let session = session_created_id(&String::from_utf8(exec.stdout)?)?
-        .ok_or("missing session_created event")?;
-    assert!(is_hysec_id(&session), "invalid session id: {session}");
-    Ok(session)
-}
-
-fn session_created_id(output: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
-    for line in output.lines().filter(|line| !line.trim().is_empty()) {
-        let value: Value = serde_json::from_str(line)?;
-        if value.pointer("/event/type") == Some(&Value::String("session_created".to_string())) {
-            return Ok(value
-                .pointer("/event/session")
-                .and_then(Value::as_str)
-                .map(str::to_owned));
-        }
-    }
-    Ok(None)
-}
-
-/// The root session's `agent` id from its `session_created` event, if the
-/// JSONL event stream (`--json`) contains one.
 fn session_created_field(
     output: &str,
     field: &str,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     for line in output.lines().filter(|line| !line.trim().is_empty()) {
         let value: Value = serde_json::from_str(line)?;
-        if value.pointer("/event/type") == Some(&Value::String("session_created".to_string())) {
+        if value.pointer("/event/type") == Some(&Value::String("session_created".into())) {
             return Ok(value
                 .pointer(&format!("/event/{field}"))
                 .and_then(Value::as_str)
@@ -543,60 +22,168 @@ fn session_created_field(
     Ok(None)
 }
 
-fn session_created_agent(output: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
-    for line in output.lines().filter(|line| !line.trim().is_empty()) {
-        let value: Value = serde_json::from_str(line)?;
-        if value.pointer("/event/type") == Some(&Value::String("session_created".to_string())) {
-            return Ok(value
-                .pointer("/event/agent")
-                .and_then(Value::as_str)
-                .map(str::to_owned));
-        }
-    }
-    Ok(None)
-}
-
-/// Write a minimal offline-provider `config.yaml` (matches the first-run
-/// starter shape) with `default_agent` set to `agent_id`, so headless
-/// commands resolve their root session's agent from config without needing a
-/// live provider.
-fn write_config_with_default_agent(
-    env: &IsolatedEnv,
-    agent_id: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let config_dir = env.xdg_config.join("hya");
-    std::fs::create_dir_all(&config_dir)?;
+fn write_config_with_default_agent(scratch: &Scratch, agent_id: &str) -> TestResult {
+    let dir = scratch.0.join("config/hya");
+    std::fs::create_dir_all(&dir)?;
     std::fs::write(
-        config_dir.join("config.yaml"),
+        dir.join("config.yaml"),
         format!(
-            "default_model: hya/offline\n\
-             providers: {{}}\n\
-             mcp: {{}}\n\
-             plugins: {{}}\n\
-             permission:\n  model: default\n  rules: []\n\
-             default_agent: {agent_id}\n"
+            "default_model: hya/offline\nproviders: {{}}\nmcp: {{}}\nplugins: {{}}\npermission:\n  model: default\n  rules: []\ndefault_agent: {agent_id}\n"
         ),
     )?;
     Ok(())
 }
 
-fn assert_tail_replays_session(
-    output: &str,
-    expected: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut saw_session_created = false;
-    for line in output.lines().filter(|line| !line.trim().is_empty()) {
+#[test]
+fn non_runtime_commands_skip_config_and_models_bootstraps_default_config() -> TestResult {
+    let scratch = Scratch::new("hya-non-runtime")?;
+    let cfg_dir = scratch.0.join("config/hya");
+
+    let agents = scratch.hya().args(["agent", "list"]).output()?;
+    assert_success("agent list", &agents);
+    assert!(String::from_utf8(agents.stdout)?.contains("hya-main ("));
+
+    let version = scratch.hya().args(["update", "version"]).output()?;
+    assert_success("update version", &version);
+    assert!(String::from_utf8(version.stdout)?.starts_with("hya update "));
+    assert!(
+        !cfg_dir.exists(),
+        "non-runtime commands must not bootstrap config"
+    );
+
+    let models = scratch.hya().arg("models").output()?;
+    assert_success("models", &models);
+    let config = std::fs::read_to_string(cfg_dir.join("config.yaml"))?;
+    assert!(config.contains("default_model: hya/offline") && config.contains("providers: {}"));
+    Ok(())
+}
+
+#[test]
+fn exec_db_persists_workdir_time_budget_and_tail_replays_selected_session() -> TestResult {
+    let scratch = Scratch::new("hya-exec-db")?;
+    let db_a = scratch.0.join("a.db");
+    let db_b = scratch.0.join("b.db");
+
+    let first = scratch
+        .hya()
+        .arg("--db")
+        .arg(&db_a)
+        .args([
+            "exec",
+            "--json",
+            "--time-budget",
+            "30",
+            "budgeted offline prompt",
+        ])
+        .output()?;
+    assert_success("exec --json --time-budget", &first);
+    let first_out = String::from_utf8(first.stdout)?;
+    assert!(
+        first_out.contains("HEADLESS RUN — time budget: 30s"),
+        "{first_out}"
+    );
+    assert!(first_out.contains("budgeted offline prompt"));
+    let first_id = session_created_field(&first_out, "session")?.ok_or("missing session id")?;
+    assert!(
+        first_id.starts_with("hysec_") && first_id.len() == 26,
+        "{first_id}"
+    );
+    let workdir = session_created_field(&first_out, "workdir")?.ok_or("missing workdir")?;
+    assert_eq!(std::fs::canonicalize(&workdir)?, scratch.0);
+
+    let second = scratch
+        .hya()
+        .arg("--db")
+        .arg(&db_a)
+        .args(["exec", "--json", "second in a"])
+        .output()?;
+    assert_success("second exec", &second);
+    let second_id = session_created_field(&String::from_utf8(second.stdout)?, "session")?
+        .ok_or("missing second id")?;
+
+    let b_exec = scratch
+        .hya()
+        .arg("--db")
+        .arg(&db_b)
+        .args(["exec", "--json", "session in b"])
+        .output()?;
+    assert_success("exec db_b", &b_exec);
+    let b_id = session_created_field(&String::from_utf8(b_exec.stdout)?, "session")?
+        .ok_or("missing b id")?;
+
+    // Subcommand --db overrides global --db for sessions and tail-session.
+    let list_b = scratch
+        .hya()
+        .arg("--db")
+        .arg(&db_a)
+        .args(["sessions", "--db"])
+        .arg(&db_b)
+        .output()?;
+    assert_success("sessions override", &list_b);
+    let list_b_out = String::from_utf8(list_b.stdout)?;
+    assert!(
+        list_b_out.contains(&b_id) && !list_b_out.contains(&first_id),
+        "{list_b_out}"
+    );
+
+    let tail = scratch
+        .hya()
+        .arg("--db")
+        .arg(&db_b)
+        .arg("tail-session")
+        .arg(&second_id)
+        .arg("--db")
+        .arg(&db_a)
+        .output()?;
+    assert_success("tail-session", &tail);
+    let tail_out = String::from_utf8(tail.stdout)?;
+    let mut saw_created = false;
+    for line in tail_out.lines().filter(|l| !l.trim().is_empty()) {
         let value: Value = serde_json::from_str(line)?;
-        if let Some(session) = value.pointer("/event/session").and_then(Value::as_str) {
-            assert_eq!(session, expected, "tail replayed event for another session");
+        if let Some(id) = value.pointer("/event/session").and_then(Value::as_str) {
+            assert_eq!(id, second_id, "replayed wrong session");
         }
-        if value.pointer("/event/type") == Some(&Value::String("session_created".to_string())) {
-            saw_session_created = true;
+        if value.pointer("/event/type") == Some(&Value::String("session_created".into())) {
+            saw_created = true;
         }
     }
     assert!(
-        saw_session_created,
-        "tail-session did not replay session_created event:\n{output}"
+        saw_created,
+        "tail-session missed session_created:\n{tail_out}"
     );
+    Ok(())
+}
+
+#[test]
+fn exec_resolves_project_bundle_default_agent_and_rejects_unselectable_agent() -> TestResult {
+    let scratch = Scratch::new("hya-exec-agent")?;
+    let bundle_dir = scratch.0.join(".hya/bundles/demo");
+    std::fs::create_dir_all(bundle_dir.join("prompts"))?;
+    std::fs::write(
+        bundle_dir.join("bundle.yaml"),
+        "kind: Bundle\nidentity:\n  id: hya/exec-project-demo\n  version: 1.0.0\n  publisher: hya\nagents:\n  - id: exec-project-lead\n    role: main\n    prompt: prompts/lead.md\n",
+    )?;
+    std::fs::write(
+        bundle_dir.join("prompts/lead.md"),
+        "You are the project lead.\n",
+    )?;
+    write_config_with_default_agent(&scratch, "exec-project-lead")?;
+
+    let ok = scratch.hya().args(["exec", "--json", "hello"]).output()?;
+    assert_success("exec project bundle agent", &ok);
+    let out = String::from_utf8(ok.stdout)?;
+    assert_eq!(
+        session_created_field(&out, "agent")?.as_deref(),
+        Some("exec-project-lead")
+    );
+    assert!(
+        session_created_field(&out, "project")?.is_some_and(|p| !p.is_empty()),
+        "missing project id:\n{out}"
+    );
+
+    write_config_with_default_agent(&scratch, "not-a-real-agent")?;
+    let bad = scratch.hya().args(["exec", "--json", "hello"]).output()?;
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("not-a-real-agent"));
     Ok(())
 }

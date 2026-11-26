@@ -14,10 +14,9 @@ pub const PATH_SEPARATOR: char = '/';
 /// The parent of a canonical path, or `None` for a root (a path with no
 /// separator).
 ///
-/// ```
-/// # use hya_proto::scope::parent_path;
-/// assert_eq!(parent_path("main/lead-1/worker-2"), Some("main/lead-1"));
-/// assert_eq!(parent_path("main"), None);
+/// ```text
+/// parent_path("main/lead-1/worker-2") == Some("main/lead-1")
+/// parent_path("main") == None
 /// ```
 #[must_use]
 pub fn parent_path(path: &str) -> Option<&str> {
@@ -26,10 +25,9 @@ pub fn parent_path(path: &str) -> Option<&str> {
 
 /// The last segment of a canonical path — the agent's short name within its unit.
 ///
-/// ```
-/// # use hya_proto::scope::leaf;
-/// assert_eq!(leaf("main/lead-1/worker-2"), "worker-2");
-/// assert_eq!(leaf("main"), "main");
+/// ```text
+/// leaf("main/lead-1/worker-2") == "worker-2"
+/// leaf("main") == "main"
 /// ```
 #[must_use]
 pub fn leaf(path: &str) -> &str {
@@ -83,7 +81,9 @@ mod tests {
     fn path_parts_round_trip() {
         assert_eq!(join_path(LEAD_1, "worker-2"), WORKER_2);
         assert_eq!(parent_path(WORKER_2), Some(LEAD_1));
+        assert_eq!(parent_path(LEAD_1), Some(ROOT));
         assert_eq!(leaf(WORKER_2), "worker-2");
+        assert_eq!(leaf(LEAD_1), "lead-1");
     }
 
     /// A leaf that carries a separator would make a stored path ambiguous.

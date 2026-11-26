@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::backend::{
     BackendProcess, BackendSpec, MCP_ECHO_SCRIPT_REL, McpFixture, default_backend_bin,
-    mcp_echo_command, mcp_echo_script,
+    materialize_root, mcp_echo_command, mcp_echo_script,
 };
 use crate::error::E2eError;
 use crate::fake_llm::{FakeLlm, ScriptStep};
@@ -231,6 +231,113 @@ impl E2eEnvBuilder {
             agent: self.agent,
             model: "fake/model".into(),
         })
+    }
+
+    /// Start FakeLlm and materialize isolated project/XDG roots WITHOUT booting
+    /// `hya serve`. Intended for headless `hya exec` and CLI scenarios.
+    pub async fn build_headless(self) -> Result<HeadlessEnv, E2eError> {
+        let fake = FakeLlm::start(self.scripts).await?;
+        for (marker, steps) in self.routes {
+            fake.route(marker, steps)?;
+        }
+        let binary = self.binary.unwrap_or_else(default_backend_bin);
+        let mut spec = BackendSpec::new(binary.clone(), fake.base_url());
+        spec.yolo = self.yolo;
+        spec.permission_model = self.permission_model;
+        spec.code_mode = self.code_mode;
+        spec.additional_models = self.additional_models;
+        spec.mcp = self.mcp;
+        spec.skill_files = self.skill_files;
+        spec.project_files = self.project_files;
+        spec.preinstall_bundles = self.preinstall_bundles;
+        spec.env = self.extra_env;
+        spec.serve_args = self.serve_args;
+        let mat = tokio::task::spawn_blocking(move || materialize_root(&spec))
+            .await
+            .map_err(|e| E2eError::Other(format!("join headless fixture: {e}")))??;
+        Ok(HeadlessEnv {
+            fake,
+            root: mat.root,
+            project: mat.project,
+            xdg_config_home: mat.xdg_config_home,
+            xdg_data_home: mat.xdg_data_home,
+            binary,
+            model: mat.model_ref,
+        })
+    }
+}
+
+/// Isolated `FakeLlm` + project/XDG roots for headless `hya exec` / CLI runs
+/// without the overhead of spawning a live `hya serve` daemon.
+pub struct HeadlessEnv {
+    /// Scripted OpenAI-compatible completions server.
+    pub fake: FakeLlm,
+    /// Temporary isolation root (removed on drop).
+    pub root: PathBuf,
+    /// Temp project workdir.
+    pub project: PathBuf,
+    /// Isolated `XDG_CONFIG_HOME`.
+    pub xdg_config_home: PathBuf,
+    /// Isolated `XDG_DATA_HOME`.
+    pub xdg_data_home: PathBuf,
+    /// Resolved `hya` binary path.
+    pub binary: PathBuf,
+    /// Configured default model ref (`fake/model`).
+    pub model: String,
+}
+
+impl HeadlessEnv {
+    /// Build a `tokio::process::Command` for `hya` with isolated HOME/XDG/cwd.
+    #[must_use]
+    pub fn command(&self) -> tokio::process::Command {
+        let mut cmd = tokio::process::Command::new(&self.binary);
+        cmd.current_dir(&self.project)
+            .env("HOME", self.root.join("home"))
+            .env("XDG_CONFIG_HOME", &self.xdg_config_home)
+            .env("XDG_DATA_HOME", &self.xdg_data_home)
+            .env("XDG_STATE_HOME", self.root.join("state"))
+            .env("XDG_CACHE_HOME", self.root.join("cache"))
+            .env_remove("HYA_MODEL")
+            .kill_on_drop(true);
+        cmd
+    }
+
+    /// Build a `hya --yolo --model <model> --db <root>/<db_name> exec` command.
+    #[must_use]
+    pub fn exec_command(&self, db_name: &str) -> tokio::process::Command {
+        let mut cmd = self.command();
+        cmd.args(["--yolo", "--model", &self.model, "--db"])
+            .arg(self.root.join(db_name))
+            .arg("exec");
+        cmd
+    }
+
+    /// Read a UTF-8 file relative to the temp project workdir.
+    pub fn read_project_file(&self, relative: &str) -> Result<String, E2eError> {
+        Ok(std::fs::read_to_string(self.project.join(relative))?)
+    }
+
+    /// Absolute path of a file under the temp project workdir.
+    #[must_use]
+    pub fn project_path(&self, relative: &str) -> PathBuf {
+        self.project.join(relative)
+    }
+
+    /// Compact diagnostic dump for failed assertions.
+    #[must_use]
+    pub fn diagnostics(&self) -> String {
+        let fake_n = self.fake.requests().map(|r| r.len()).unwrap_or(0);
+        let remaining = self.fake.remaining_scripts().unwrap_or(0);
+        format!(
+            "headless project={} fake_requests={fake_n} remaining_scripts={remaining}",
+            self.project.display()
+        )
+    }
+}
+
+impl Drop for HeadlessEnv {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
     }
 }
 

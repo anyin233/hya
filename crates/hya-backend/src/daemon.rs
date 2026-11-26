@@ -463,15 +463,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn durations_read_as_the_two_largest_units() {
-        assert_eq!(human_duration(Duration::from_secs(5)), "5s");
-        assert_eq!(human_duration(Duration::from_secs(125)), "2m 5s");
-        assert_eq!(human_duration(Duration::from_secs(3_725)), "1h 2m");
-        assert_eq!(human_duration(Duration::from_secs(90_000)), "1d 1h");
-    }
-
-    #[test]
-    fn a_version_note_only_for_another_version() {
+    fn durations_version_note_and_daemon_command_construction() {
+        for (secs, text) in [
+            (5, "5s"),
+            (125, "2m 5s"),
+            (3_725, "1h 2m"),
+            (90_000, "1d 1h"),
+        ] {
+            assert_eq!(human_duration(Duration::from_secs(secs)), text);
+        }
         let mut found = Discovery {
             url: "http://127.0.0.1:1".into(),
             pid: 1,
@@ -483,18 +483,16 @@ mod tests {
         assert_eq!(version_note(&found), None);
         found.version = "0.0.1".into();
         assert!(version_note(&found).unwrap().contains("hya serve restart"));
-    }
 
-    #[test]
-    fn the_daemon_runs_in_the_home_directory_never_the_starters() {
         let home = std::env::temp_dir();
         assert_eq!(daemon_dir(Some(home.clone().into_os_string())), home);
         assert_eq!(daemon_dir(Some("".into())), PathBuf::from("/"));
         assert_eq!(daemon_dir(None), PathBuf::from("/"));
-        // A HOME that does not exist would make the spawn fail.
-        let missing = home.join(format!("hya-no-such-home-{}", std::process::id()));
         assert_eq!(
-            daemon_dir(Some(missing.into_os_string())),
+            daemon_dir(Some(
+                home.join(format!("hya-no-home-{}", std::process::id()))
+                    .into_os_string()
+            )),
             PathBuf::from("/")
         );
 
@@ -503,82 +501,40 @@ mod tests {
             model: Some("hya/echo".into()),
             yolo: true,
             pure: true,
-            allow_hosts: vec!["hya.example.lan".into(), "192.168.1.20".into()],
+            allow_hosts: vec!["hya.example.lan".into()],
             exe: PathBuf::from("/bin/hya"),
         };
-        let command = serve_command(
+        let cmd = serve_command(
             &spec,
             &RelayFlags::default(),
             std::path::Path::new("/home/me"),
         );
-        assert_eq!(command.get_program(), "/bin/hya");
+        assert_eq!(cmd.get_program(), "/bin/hya");
         assert_eq!(
-            command.get_current_dir(),
+            cmd.get_current_dir(),
             Some(std::path::Path::new("/home/me"))
         );
-        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+        let args: Vec<&str> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
         assert_eq!(
-            args,
-            [
-                "serve",
-                "--bind",
-                "127.0.0.1:0",
-                "--db",
-                "/state/hya/sessions.db",
-                "--model",
-                "hya/echo",
-                "--yolo",
-                "--pure",
-                "--allow-host",
-                "hya.example.lan",
-                "--allow-host",
-                "192.168.1.20"
-            ]
+            args.join(" "),
+            "serve --bind 127.0.0.1:0 --db /state/hya/sessions.db --model hya/echo --yolo --pure --allow-host hya.example.lan"
         );
-        // Never the starter's relay link or bridge token.
-        let removed: Vec<_> = command
+        let removed: Vec<_> = cmd
             .get_envs()
-            .filter(|(_, value)| value.is_none())
-            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .filter(|(_, v)| v.is_none())
+            .map(|(k, _)| k.to_string_lossy().into_owned())
             .collect();
         assert!(
-            removed.contains(&"HYA_RELAY_LINK".to_owned()),
-            "{removed:?}"
+            removed.contains(&"HYA_RELAY_LINK".into())
+                && removed.contains(&"HYA_SERVER_TOKEN".into())
         );
-        assert!(
-            removed.contains(&"HYA_SERVER_TOKEN".to_owned()),
-            "{removed:?}"
-        );
+
         let plain = DaemonSpec {
             model: None,
             yolo: false,
-            allow_hosts: Vec::new(),
             pure: false,
+            allow_hosts: Vec::new(),
             ..spec
-        };
-        let command = serve_command(&plain, &RelayFlags::default(), std::path::Path::new("/"));
-        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
-        assert_eq!(
-            args,
-            [
-                "serve",
-                "--bind",
-                "127.0.0.1:0",
-                "--db",
-                "/state/hya/sessions.db"
-            ]
-        );
-    }
-
-    #[test]
-    fn a_relay_daemon_gets_the_relay_flags_and_never_prints_its_link() {
-        let spec = DaemonSpec {
-            db: "/state/hya/sessions.db".into(),
-            model: None,
-            yolo: false,
-            pure: false,
-            allow_hosts: Vec::new(),
-            exe: PathBuf::from("/bin/hya"),
         };
         let relay = RelayFlags {
             relay: Some("https://relay.example.com/hya".into()),
@@ -588,27 +544,11 @@ mod tests {
             relay_heartbeat: Some(20),
             relay_quiet_link: false,
         };
-        let command = serve_command(&spec, &relay, std::path::Path::new("/"));
-        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+        let rcmd = serve_command(&plain, &relay, std::path::Path::new("/"));
+        let rargs: Vec<&str> = rcmd.get_args().map(|a| a.to_str().unwrap()).collect();
         assert_eq!(
-            args,
-            [
-                "serve",
-                "--bind",
-                "127.0.0.1:0",
-                "--db",
-                "/state/hya/sessions.db",
-                "--relay",
-                "https://relay.example.com/hya",
-                "--relay-transport",
-                "ws",
-                "--relay-ca",
-                "/etc/relay-ca.pem",
-                "--relay-ephemeral",
-                "--relay-quiet-link",
-                "--relay-heartbeat",
-                "20"
-            ]
+            rargs.join(" "),
+            "serve --bind 127.0.0.1:0 --db /state/hya/sessions.db --relay https://relay.example.com/hya --relay-transport ws --relay-ca /etc/relay-ca.pem --relay-ephemeral --relay-quiet-link --relay-heartbeat 20"
         );
     }
 

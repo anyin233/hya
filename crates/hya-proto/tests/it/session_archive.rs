@@ -47,27 +47,23 @@ fn archive_then_unarchive_folds_the_flag_and_stamp() {
         Some(1_700_000_000_123)
     );
 
-    let mut restored = archived.clone();
-    restored.apply(&env(3, Event::SessionUnarchived { session }));
-    assert!(!restored.session.is_archived());
-    assert_eq!(restored.session.archived_at_millis(), None);
-    assert_eq!(restored.session.archived, None);
-}
-
-#[test]
-fn unarchive_decodes_from_its_wire_tag() {
-    let session = SessionId::new();
-    let event: Event = serde_json::from_value(serde_json::json!({
+    let unarchive: Event = serde_json::from_value(serde_json::json!({
         "type": "session_unarchived",
         "session": session.to_string(),
     }))
     .unwrap();
-    assert_eq!(event, Event::SessionUnarchived { session });
-    assert_eq!(event.session(), Some(session));
+    assert_eq!(unarchive, Event::SessionUnarchived { session });
+    assert_eq!(unarchive.session(), Some(session));
     assert_eq!(
-        serde_json::to_value(&event).unwrap()["type"],
+        serde_json::to_value(&unarchive).unwrap()["type"],
         serde_json::json!("session_unarchived")
     );
+
+    let mut restored = archived.clone();
+    restored.apply(&env(3, unarchive));
+    assert!(!restored.session.is_archived());
+    assert_eq!(restored.session.archived_at_millis(), None);
+    assert_eq!(restored.session.archived, None);
 }
 
 #[test]

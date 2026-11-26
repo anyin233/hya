@@ -15,68 +15,60 @@ impl crate::engine::TurnBoundaryObserver for MailObserver {
 
 #[tokio::test]
 async fn superseded_channel_reader_cannot_advance_the_inbox_cursor() {
-    let engine = Arc::new(engine().await);
-    let org = org(&engine).await;
-    let caller = org.lead_1.session;
+    let eng = Arc::new(engine().await);
+    let o = org(&eng).await;
+    let caller = o.lead_1.session;
     let owner = hya_proto::OwnerRunId::new();
-    engine.store().claim_runtime_owner(owner).unwrap();
-    let old = engine
+    eng.store().claim_runtime_owner(owner).unwrap();
+    let old = eng
         .store()
         .recover_claim(caller, owner)
         .await
         .unwrap()
         .claim;
-    engine
-        .mail_send(
-            org.root,
-            MailEndpoint::Handle(org.lead_1.path.clone()),
-            MailKind::Message,
-            "owed to replacement".into(),
-        )
-        .await
-        .unwrap();
-    let channel = dm_channel_between(
-        &engine.read_projection(org.root).await.unwrap(),
+    eng.mail_send(
+        o.root,
+        MailEndpoint::Handle(o.lead_1.path.clone()),
+        MailKind::Message,
+        "owed to replacement".into(),
+    )
+    .await
+    .unwrap();
+    let ch = dm_channel_between(
+        &eng.read_projection(o.root).await.unwrap(),
         "main",
-        &org.lead_1.path,
+        &o.lead_1.path,
     )
     .unwrap();
-    engine.store().recover_claim(caller, owner).await.unwrap();
-    let before = engine.replay(org.root).await.unwrap();
-    let (plane, requests) = hya_tool::MailboxPlane::new();
+    eng.store().recover_claim(caller, owner).await.unwrap();
+    let before = eng.replay(o.root).await.unwrap();
+    let (plane, rx) = hya_tool::MailboxPlane::new();
     let stop = tokio_util::sync::CancellationToken::new();
-    let service = tokio::spawn(crate::run_mailbox_service(
-        engine.clone(),
-        requests,
-        stop.clone(),
-    ));
-    let result = plane
+    let svc = tokio::spawn(crate::run_mailbox_service(eng.clone(), rx, stop.clone()));
+    let res = plane
         .for_session_with_actor(caller, Some(old))
-        .read_channel(channel, Some(10))
+        .read_channel(ch, Some(10))
         .await;
     stop.cancel();
-    service.await.unwrap();
-    assert!(result.is_err(), "a superseded read consumed mail");
-    assert_eq!(
-        engine.replay(org.root).await.unwrap(),
-        before,
-        "the superseded read changed the replacement's inbox cursor"
-    );
+    svc.await.unwrap();
+    assert!(res.is_err());
+    assert_eq!(eng.replay(o.root).await.unwrap(), before);
 }
 
-async fn cursor_cleanup_marks_only_incoming_work(read: bool) {
-    let engine = Arc::new(engine().await);
-    let org = org(&engine).await;
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let observer = Arc::new(MailObserver::default());
-    let erased: Arc<dyn crate::engine::TurnBoundaryObserver> = observer.clone();
-    engine.set_turn_observer(Arc::downgrade(&erased));
-    for (sender, target, incoming) in [
-        (org.root, org.lead_1.path.clone(), false),
-        (org.lead_1.session, "main".into(), true),
-    ] {
-        engine
-            .mail_send(
+#[tokio::test]
+async fn cursor_cleanup_marks_only_incoming_work_for_wait_and_read() {
+    for read in [false, true] {
+        let eng = Arc::new(engine().await);
+        let o = org(&eng).await;
+        let sup = ResidentSupervisor::start(eng.clone());
+        let obs = Arc::new(MailObserver::default());
+        let erased: Arc<dyn crate::engine::TurnBoundaryObserver> = obs.clone();
+        eng.set_turn_observer(Arc::downgrade(&erased));
+        for (sender, target, incoming) in [
+            (o.root, o.lead_1.path.clone(), false),
+            (o.lead_1.session, "main".into(), true),
+        ] {
+            eng.mail_send(
                 sender,
                 MailEndpoint::Handle(target),
                 MailKind::Message,
@@ -84,124 +76,96 @@ async fn cursor_cleanup_marks_only_incoming_work(read: bool) {
             )
             .await
             .unwrap();
-        if read {
-            let channel = dm_channel_between(
-                &engine.read_projection(org.root).await.unwrap(),
-                "main",
-                &org.lead_1.path,
-            )
-            .unwrap();
-            engine
-                .read_channel_history(None, org.root, &channel, Some(10))
+            if read {
+                let ch = dm_channel_between(
+                    &eng.read_projection(o.root).await.unwrap(),
+                    "main",
+                    &o.lead_1.path,
+                )
+                .unwrap();
+                eng.read_channel_history(None, o.root, &ch, Some(10))
+                    .await
+                    .unwrap();
+            } else {
+                crate::member_wait::wait_for_members(
+                    None,
+                    &eng,
+                    &sup,
+                    o.root,
+                    hya_tool::WaitSpec::parse(&serde_json::json!({"timeout_secs": 0}), true)
+                        .unwrap(),
+                    None,
+                )
                 .await
                 .unwrap();
-        } else {
-            crate::member_wait::wait_for_members(
-                None,
-                &engine,
-                &supervisor,
-                org.root,
-                hya_tool::WaitSpec::parse(&serde_json::json!({"timeout_secs": 0}), true).unwrap(),
-                None,
-            )
-            .await
-            .unwrap();
+            }
+            let p = eng.read_projection(o.root).await.unwrap();
+            assert_eq!(
+                p.team.roster["main"].resident_cursor,
+                p.team.inboxes["main"].len() as u64
+            );
+            assert_eq!(
+                *obs.0.lock().unwrap(),
+                if incoming { vec![(o.root, 7)] } else { vec![] }
+            );
         }
-        let projection = engine.read_projection(org.root).await.unwrap();
-        assert_eq!(
-            projection.team.roster["main"].resident_cursor,
-            projection.team.inboxes["main"].len() as u64,
-            "raw cursor must advance"
-        );
-        assert_eq!(
-            *observer.0.lock().unwrap(),
-            if incoming {
-                vec![(org.root, 7)]
-            } else {
-                vec![]
-            },
-            "outgoing history must not acknowledge unrelated team work"
-        );
-    }
-    supervisor
-        .drain(
+        sup.drain(
             hya_proto::FinishCause::Shutdown,
             std::time::Duration::from_secs(2),
         )
         .await;
+    }
 }
 
 #[tokio::test]
-async fn wait_cursor_cleanup_marks_only_incoming_work() {
-    cursor_cleanup_marks_only_incoming_work(false).await;
-}
-
-#[tokio::test]
-async fn read_cursor_cleanup_marks_only_incoming_work() {
-    cursor_cleanup_marks_only_incoming_work(true).await;
-}
-
-#[tokio::test]
-async fn steer_denies_group_mail_after_member_archive() {
-    let engine = engine().await;
-    let org = org(&engine).await;
-    engine
-        .mail_announce(org.lead_1.session, "group mail before archive".into())
+async fn steer_denies_archived_group_mail_and_acks_incoming_only() {
+    let eng = engine().await;
+    let o = org(&eng).await;
+    eng.mail_announce(o.lead_1.session, "group mail before archive".into())
         .await
         .unwrap();
-    let mut steer = engine
+    let mut steer = eng
         .steer_mailbox_snapshot_with_policy(
-            org.worker_1.session,
-            engine.session_channel_policy(org.worker_1.session),
+            o.worker_1.session,
+            eng.session_channel_policy(o.worker_1.session),
         )
         .await;
-    engine
-        .store()
+    eng.store()
         .append_event(
-            org.root,
+            o.root,
             &Event::AgentArchived {
-                session: org.root,
-                handle: org.worker_1.path,
-                child: org.worker_1.session,
+                session: o.root,
+                handle: o.worker_1.path,
+                child: o.worker_1.session,
                 reason: hya_proto::ArchiveReason::ArchivedByParent,
             },
         )
         .await
         .unwrap();
-    assert!(steer.drain(&engine).await.unwrap().is_none());
-    assert!(
-        steer.take_acknowledgement().unwrap().1,
-        "filtered incoming mail is acknowledged"
-    );
-}
+    assert!(steer.drain(&eng).await.unwrap().is_none() && steer.take_acknowledgement().unwrap().1);
 
-#[tokio::test]
-async fn steer_cursor_ack_marks_work_only_for_incoming_mail() {
-    let engine = engine().await;
-    let org = org(&engine).await;
-    engine
-        .mail_send(
-            org.root,
-            MailEndpoint::Handle(org.lead_1.path.clone()),
-            MailKind::Message,
-            "outgoing directive".into(),
-        )
-        .await
-        .unwrap();
-    // Both snapshots hide their notice, but only the child's cursor covers
-    // incoming work. The parent's outgoing history must not settle work.
+    let eng2 = engine().await;
+    let o2 = org(&eng2).await;
+    eng2.mail_send(
+        o2.root,
+        MailEndpoint::Handle(o2.lead_1.path.clone()),
+        MailKind::Message,
+        "outgoing directive".into(),
+    )
+    .await
+    .unwrap();
     for (session, handle, incoming) in [
-        (org.root, "main", false),
-        (org.lead_1.session, org.lead_1.path.as_str(), true),
+        (o2.root, "main", false),
+        (o2.lead_1.session, o2.lead_1.path.as_str(), true),
     ] {
-        let mut steer = engine
+        let mut s = eng2
             .steer_mailbox_snapshot_with_policy(
                 session,
                 Some(hya_tool::ChannelPolicySnapshot::default()),
             )
             .await;
-        assert!(steer.drain(&engine).await.unwrap().is_none());
-        let (ack, consumed_incoming) = steer.take_acknowledgement().unwrap();
+        assert!(s.drain(&eng2).await.unwrap().is_none());
+        let (ack, consumed_incoming) = s.take_acknowledgement().unwrap();
         assert!(
             matches!(ack, Event::MailConsumed { handle: target, through: 1, .. } if target == handle)
         );

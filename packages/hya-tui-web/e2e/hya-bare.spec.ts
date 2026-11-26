@@ -10,9 +10,17 @@
 import { execFileSync } from "node:child_process"
 import { mkdir, readFile } from "node:fs/promises"
 import { createServer, type Server } from "node:net"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { Tui, terminalDriver } from "./harness"
-import { createSession, daemon, daemonStatus, expect, hyaBin, launchTest as test, tuiInstances, type Workspace } from "./hya"
+import { createSession, daemon, daemonStatus, expect, expectStatus, hyaBin, launchTest as test, tuiInstances, type Workspace } from "./hya"
+
+const repoRoot = fileURLToPath(new URL("../../..", import.meta.url))
+/** When `HYA_BIN` comes from an external target dir (e.g. shared worktree cache), point bare `hya` at this checkout's packages. */
+const externalHyaBin = !hyaBin.startsWith(repoRoot)
+const checkoutPackageEnv: Record<string, string> = externalHyaBin
+  ? { HYA_TUI_DIR: resolve(repoRoot, "packages/hya-tui"), HYA_TUI_WEB_DIR: resolve(repoRoot, "packages/hya-tui-web") }
+  : {}
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
@@ -41,7 +49,7 @@ async function freePort(): Promise<number> {
 /** `tui()` arguments that run bare `hya --port <port>` in the workspace with its isolated environment. */
 function bareHya(workspace: Workspace, port: number, env: Record<string, string> = {}): [string[], { cwd: string; env: Record<string, string> }] {
   const { HYA_TUI_DIR: _tui, HYA_TUI_WEB_DIR: _web, ...inherited } = { ...workspace.env, ...env }
-  return [[hyaBin, "--port", String(port)], { cwd: workspace.dir, env: { ...inherited, ...env } }]
+  return [[hyaBin, "--port", String(port)], { cwd: workspace.dir, env: { ...inherited, ...checkoutPackageEnv, ...env } }]
 }
 
 /** The backend's URL, read from `/status` in the terminal TUI. */
@@ -143,12 +151,10 @@ test.describe("bare hya", () => {
     try {
       const term = await tui(...bareHya(workspace, port))
       await term.waitForText("Message, !shell, or @file · / commands", 60_000)
-      await prompt(term, "/status")
-      await term.waitForText(`WebUI       unavailable: port ${port} is in use`)
+      await expectStatus(term, "WebUI", new RegExp(`unavailable: port ${port} is in use`))
       await prompt(term, "still works")
       await term.waitForText("No live provider is available", 20_000)
-      await prompt(term, "/status")
-      await term.waitForText(`WebUI       unavailable: port ${port} is in use`)
+      await expectStatus(term, "WebUI", new RegExp(`unavailable: port ${port} is in use`))
     } finally {
       server.close()
     }
@@ -264,12 +270,12 @@ test.describe("bare hya", () => {
     expect(started.code).toBe(0)
     const { url, pid } = JSON.parse(started.stdout.trim()) as { url: string; pid: number }
     const port = await freePort()
-    const { HYA_TUI_DIR: _tui, HYA_TUI_WEB_DIR: _web, ...env } = workspace.env
+    const { HYA_TUI_DIR: _tui, HYA_TUI_WEB_DIR: _web, ...baseEnv } = workspace.env
+    const env = { ...baseEnv, ...checkoutPackageEnv }
     const term = await tui([hyaBin, "--port", String(port), "--backend", url], { cwd: workspace.dir, env })
     await term.waitForText("Message, !shell, or @file · / commands", 60_000)
-    await prompt(term, "/status")
-    await term.waitForText(`Server      ${url}`)
-    await term.waitForText(new RegExp(`Backend\\s+daemon · pid ${pid} · via --backend/--server`))
+    await expectStatus(term, "Server", url)
+    await expectStatus(term, "Backend", new RegExp(`daemon · pid ${pid} · via --backend/--server`))
     await term.attach(testInfo, "explicit-status")
     await prompt(term, "/exit")
     expect(await term.waitForExit(20_000)).toBe(0)

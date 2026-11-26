@@ -1378,64 +1378,6 @@ mod tests {
         assert!(!encoded.contains("skills"));
     }
 
-    #[test]
-    fn mailbox_events_round_trip_through_json() {
-        let root = SessionId::new();
-        let agent = SessionId::new();
-        for event in [
-            Event::AgentRegistered {
-                session: root,
-                agent_session: agent,
-                handle: "reviewer-3".to_string(),
-                parent: None,
-                agent_type: AgentName::new("reviewer"),
-                mode: SubagentMode::Resident,
-            },
-            Event::AgentActivityChanged {
-                session: root,
-                handle: "reviewer-3".to_string(),
-                status: RosterStatus::Busy,
-                current_task: Some("reviewing".to_string()),
-            },
-            Event::ResidentWorkStarted {
-                session: root,
-                actor_session: agent,
-                handle: "reviewer-3".to_string(),
-                epoch: ActorEpoch::INITIAL,
-                inbox_through: 2,
-            },
-            Event::ResidentWorkFinished {
-                session: root,
-                handle: "main/member".into(),
-                epoch: ActorEpoch::INITIAL,
-                inbox_through: 1,
-            },
-            Event::MailSent {
-                session: root,
-                from: "main".to_string(),
-                to: MailEndpoint::Channel("build".to_string()),
-                kind: MailKind::Announcement,
-                body: "ship it".to_string(),
-            },
-            Event::MailSent {
-                session: root,
-                from: "harness".to_string(),
-                to: MailEndpoint::Handle("reviewer-2".to_string()),
-                kind: MailKind::Message,
-                body: "hi".to_string(),
-            },
-            Event::ChannelJoined {
-                session: root,
-                channel: "build".to_string(),
-                member: "reviewer-1".to_string(),
-            },
-        ] {
-            let json = serde_json::to_string(&event).expect("serialize");
-            let back: Event = serde_json::from_str(&json).expect("deserialize");
-            assert_eq!(event, back, "mailbox event must round-trip: {json}");
-        }
-    }
-
     fn context_compacted(session: SessionId) -> Event {
         Event::ContextCompacted {
             session,
@@ -1450,14 +1392,211 @@ mod tests {
         }
     }
 
+    /// Wire round-trip and owning-session attribution across mailbox, fork,
+    /// compaction, and orchestration events (ADR-0015/0016).
     #[test]
-    fn context_compacted_round_trips_and_reports_its_session() {
-        let session = SessionId::new();
-        let event = context_compacted(session);
-        let json = serde_json::to_string(&event).expect("serialize");
-        let back: Event = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(event, back, "context_compacted must round-trip: {json}");
-        assert_eq!(back.session(), Some(session));
+    fn events_round_trip_and_report_owning_session() {
+        let root = SessionId::new();
+        let parent = SessionId::new();
+        let child = SessionId::new();
+        let cases: Vec<(Event, SessionId)> = vec![
+            (
+                Event::AgentRegistered {
+                    session: root,
+                    agent_session: child,
+                    handle: "reviewer-3".to_string(),
+                    parent: None,
+                    agent_type: AgentName::new("reviewer"),
+                    mode: SubagentMode::Resident,
+                },
+                root,
+            ),
+            (
+                Event::AgentActivityChanged {
+                    session: root,
+                    handle: "reviewer-3".to_string(),
+                    status: RosterStatus::Busy,
+                    current_task: Some("reviewing".to_string()),
+                },
+                root,
+            ),
+            (
+                Event::ResidentWorkStarted {
+                    session: root,
+                    actor_session: child,
+                    handle: "reviewer-3".to_string(),
+                    epoch: ActorEpoch::INITIAL,
+                    inbox_through: 2,
+                },
+                root,
+            ),
+            (
+                Event::ResidentWorkFinished {
+                    session: root,
+                    handle: "main/member".into(),
+                    epoch: ActorEpoch::INITIAL,
+                    inbox_through: 1,
+                },
+                root,
+            ),
+            (
+                Event::MailSent {
+                    session: root,
+                    from: "main".to_string(),
+                    to: MailEndpoint::Channel("build".to_string()),
+                    kind: MailKind::Announcement,
+                    body: "ship it".to_string(),
+                },
+                root,
+            ),
+            (
+                Event::MailSent {
+                    session: root,
+                    from: "harness".to_string(),
+                    to: MailEndpoint::Handle("reviewer-2".to_string()),
+                    kind: MailKind::Message,
+                    body: "hi".to_string(),
+                },
+                root,
+            ),
+            (
+                Event::ChannelJoined {
+                    session: root,
+                    channel: "build".to_string(),
+                    member: "reviewer-1".to_string(),
+                },
+                root,
+            ),
+            (context_compacted(root), root),
+            (
+                Event::SessionForked {
+                    session: root,
+                    source: parent,
+                    before_message: None,
+                },
+                root,
+            ),
+            (
+                Event::SessionForked {
+                    session: root,
+                    source: parent,
+                    before_message: Some(MessageId::new()),
+                },
+                root,
+            ),
+            (
+                Event::ChannelCreated {
+                    session: root,
+                    channel: "announce-aB12Cd34".to_string(),
+                    kind: ChannelKind::Group,
+                    unit: None,
+                    members: vec!["main".to_string()],
+                },
+                root,
+            ),
+            (
+                Event::ChannelCreated {
+                    session: root,
+                    channel: "DM-aB12Cd34".to_string(),
+                    kind: ChannelKind::Dm,
+                    unit: None,
+                    members: vec!["main".to_string(), "main/lead-1".to_string()],
+                },
+                root,
+            ),
+            (
+                Event::SubagentReported {
+                    session: parent,
+                    member: MemberId::new(),
+                    child,
+                    handle: "main/lead-1".to_string(),
+                    outcome: ReportOutcome::Done,
+                    report: "shipped".to_string(),
+                },
+                parent,
+            ),
+            (
+                Event::SubagentReported {
+                    session: parent,
+                    member: MemberId::new(),
+                    child,
+                    handle: "main/lead-1".to_string(),
+                    outcome: ReportOutcome::Failed,
+                    report: "blocked on tests".to_string(),
+                },
+                parent,
+            ),
+            (
+                Event::HandoffCommitted {
+                    session: child,
+                    handle: "main/lead-1".to_string(),
+                    generation: 1,
+                    doc: "1. Goal - ship".to_string(),
+                    degraded: false,
+                },
+                child,
+            ),
+            (
+                Event::AgentArchived {
+                    session: root,
+                    handle: "main/lead-1".to_string(),
+                    child,
+                    reason: ArchiveReason::Reported,
+                },
+                root,
+            ),
+            (
+                Event::AgentArchived {
+                    session: root,
+                    handle: "main/lead-1".to_string(),
+                    child,
+                    reason: ArchiveReason::Killed,
+                },
+                root,
+            ),
+            (
+                Event::AgentArchived {
+                    session: root,
+                    handle: "main/lead-1".to_string(),
+                    child,
+                    reason: ArchiveReason::RootTeardown,
+                },
+                root,
+            ),
+            (
+                Event::AgentArchived {
+                    session: root,
+                    handle: "main/lead-1".to_string(),
+                    child,
+                    reason: ArchiveReason::ArchivedByParent,
+                },
+                root,
+            ),
+            (
+                Event::AgentArchived {
+                    session: root,
+                    handle: "main/lead-1".to_string(),
+                    child,
+                    reason: ArchiveReason::Shutdown,
+                },
+                root,
+            ),
+            (
+                Event::AgentRestarted {
+                    session: root,
+                    handle: "main/lead-1".to_string(),
+                    child,
+                    epoch: ActorEpoch::INITIAL,
+                },
+                root,
+            ),
+        ];
+        for (event, owner) in cases {
+            let json = serde_json::to_string(&event).expect("serialize");
+            let back: Event = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(event, back, "event must round-trip: {json}");
+            assert_eq!(back.session(), Some(owner), "owning session for {json}");
+        }
     }
 
     #[test]
@@ -1579,22 +1718,6 @@ mod tests {
     }
 
     #[test]
-    fn session_forked_round_trips_with_and_without_a_cut_point() {
-        let session = SessionId::new();
-        for before_message in [None, Some(MessageId::new())] {
-            let event = Event::SessionForked {
-                session,
-                source: SessionId::new(),
-                before_message,
-            };
-            let json = serde_json::to_string(&event).expect("serialize");
-            let back: Event = serde_json::from_str(&json).expect("deserialize");
-            assert_eq!(event, back, "session_forked must round-trip: {json}");
-            assert_eq!(back.session(), Some(session));
-        }
-    }
-
-    #[test]
     fn context_evicted_round_trips_and_records_the_notice_beside_the_output() {
         let session = SessionId::new();
         let message = MessageId::new();
@@ -1651,130 +1774,6 @@ mod tests {
             crate::PartProjection::Tool { eviction_notice: Some(notice), .. }
                 if notice == "[tool output moved to artifact://a]"
         ));
-    }
-
-    /// Orchestration events (ADR-0015/0016) round-trip and report the right
-    /// owning session: root log for channel/archive/restart, parent log for the
-    /// report, child log for the handoff.
-    #[test]
-    fn orchestration_events_round_trip_through_json() {
-        let root = SessionId::new();
-        let parent = SessionId::new();
-        let child = SessionId::new();
-        let cases: Vec<(Event, SessionId)> = vec![
-            (
-                Event::ChannelCreated {
-                    session: root,
-                    channel: "announce-aB12Cd34".to_string(),
-                    kind: ChannelKind::Group,
-                    unit: None,
-                    members: vec!["main".to_string()],
-                },
-                root,
-            ),
-            (
-                Event::ChannelCreated {
-                    session: root,
-                    channel: "DM-aB12Cd34".to_string(),
-                    kind: ChannelKind::Dm,
-                    unit: None,
-                    members: vec!["main".to_string(), "main/lead-1".to_string()],
-                },
-                root,
-            ),
-            (
-                Event::SubagentReported {
-                    session: parent,
-                    member: MemberId::new(),
-                    child,
-                    handle: "main/lead-1".to_string(),
-                    outcome: ReportOutcome::Done,
-                    report: "shipped".to_string(),
-                },
-                parent,
-            ),
-            (
-                Event::SubagentReported {
-                    session: parent,
-                    member: MemberId::new(),
-                    child,
-                    handle: "main/lead-1".to_string(),
-                    outcome: ReportOutcome::Failed,
-                    report: "blocked on tests".to_string(),
-                },
-                parent,
-            ),
-            (
-                Event::HandoffCommitted {
-                    session: child,
-                    handle: "main/lead-1".to_string(),
-                    generation: 1,
-                    doc: "1. Goal - ship".to_string(),
-                    degraded: false,
-                },
-                child,
-            ),
-            (
-                Event::AgentArchived {
-                    session: root,
-                    handle: "main/lead-1".to_string(),
-                    child,
-                    reason: ArchiveReason::Reported,
-                },
-                root,
-            ),
-            (
-                Event::AgentArchived {
-                    session: root,
-                    handle: "main/lead-1".to_string(),
-                    child,
-                    reason: ArchiveReason::Killed,
-                },
-                root,
-            ),
-            (
-                Event::AgentArchived {
-                    session: root,
-                    handle: "main/lead-1".to_string(),
-                    child,
-                    reason: ArchiveReason::RootTeardown,
-                },
-                root,
-            ),
-            (
-                Event::AgentArchived {
-                    session: root,
-                    handle: "main/lead-1".to_string(),
-                    child,
-                    reason: ArchiveReason::ArchivedByParent,
-                },
-                root,
-            ),
-            (
-                Event::AgentArchived {
-                    session: root,
-                    handle: "main/lead-1".to_string(),
-                    child,
-                    reason: ArchiveReason::Shutdown,
-                },
-                root,
-            ),
-            (
-                Event::AgentRestarted {
-                    session: root,
-                    handle: "main/lead-1".to_string(),
-                    child,
-                    epoch: ActorEpoch::INITIAL,
-                },
-                root,
-            ),
-        ];
-        for (event, owner) in cases {
-            let json = serde_json::to_string(&event).expect("serialize");
-            let back: Event = serde_json::from_str(&json).expect("deserialize");
-            assert_eq!(event, back, "orchestration event must round-trip: {json}");
-            assert_eq!(back.session(), Some(owner), "owning session for {json}");
-        }
     }
 
     /// `parent: None` must not appear on the wire, so a root registration

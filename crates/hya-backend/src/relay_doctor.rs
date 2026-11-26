@@ -66,14 +66,7 @@ pub(crate) async fn run(command: RelayCommand) -> anyhow::Result<i32> {
         measure_idle,
         idle_cap: MAX_IDLE_MEASUREMENT,
     };
-    let target = if target == "-" {
-        read_stdin_target()?
-    } else {
-        if carries_secret(&target) {
-            eprintln!("warning: {ARGV_WARNING}");
-        }
-        target
-    };
+    let target = resolve_target_from(&target, std::io::stdin().lock(), &mut std::io::stderr())?;
     let report = diagnose(&target, options).await?;
     if json {
         println!(
@@ -81,7 +74,7 @@ pub(crate) async fn run(command: RelayCommand) -> anyhow::Result<i32> {
             serde_json::to_string_pretty(&report).unwrap_or_default()
         );
     } else {
-        print_report(&report);
+        print!("{}", format_report(&report));
     }
     Ok(if report.reachable { 0 } else { 1 })
 }
@@ -94,17 +87,29 @@ fn carries_secret(target: &str) -> bool {
     target.contains('#')
 }
 
-/// The first line of stdin, trimmed.
-fn read_stdin_target() -> anyhow::Result<String> {
-    let mut line = String::new();
-    std::io::stdin()
-        .read_line(&mut line)
-        .map_err(|error| anyhow::anyhow!("reading the target from stdin: {error}"))?;
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        anyhow::bail!("no relay link or proxy URL on stdin");
+/// Resolve the target from argv or stdin (`-`), emitting the argv warning when
+/// a secret-bearing link is passed directly on the command line.
+fn resolve_target_from(
+    target: &str,
+    mut stdin: impl std::io::BufRead,
+    mut stderr: impl std::io::Write,
+) -> anyhow::Result<String> {
+    if target == "-" {
+        let mut line = String::new();
+        stdin
+            .read_line(&mut line)
+            .map_err(|error| anyhow::anyhow!("reading the target from stdin: {error}"))?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!("no relay link or proxy URL on stdin");
+        }
+        Ok(trimmed.to_owned())
+    } else {
+        if carries_secret(target) {
+            let _ = writeln!(stderr, "warning: {ARGV_WARNING}");
+        }
+        Ok(target.to_owned())
     }
-    Ok(trimmed.to_owned())
 }
 
 /// Upper bound of `--measure-idle` (ADR-0025 D9).
@@ -370,45 +375,198 @@ async fn measure_idle(
     })
 }
 
-fn print_report(report: &DoctorReport) {
-    println!("target: {}", report.target);
-    println!("secure: {}", report.secure);
-    print_probe("gRPC", &report.grpc);
-    print_probe("WebSocket", &report.ws);
-    println!(
+fn format_report(report: &DoctorReport) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(out, "target: {}", report.target);
+    let _ = writeln!(out, "secure: {}", report.secure);
+    write_probe(&mut out, "gRPC", &report.grpc);
+    write_probe(&mut out, "WebSocket", &report.ws);
+    let _ = writeln!(
+        out,
         "path prefix: {}",
         if report.prefix_ok { "ok" } else { "mismatch" }
     );
     match &report.recommended_transport {
-        Some(transport) => println!("recommended t={transport}"),
-        None => println!("recommended: none — no binding works on this path"),
+        Some(transport) => {
+            let _ = writeln!(out, "recommended t={transport}");
+        }
+        None => {
+            let _ = writeln!(out, "recommended: none — no binding works on this path");
+        }
     }
     for line in &report.advice {
-        println!("advice: {line}");
+        let _ = writeln!(out, "advice: {line}");
     }
     if let Some(idle) = &report.idle {
         if idle.cut {
-            println!(
+            let _ = writeln!(
+                out,
                 "idle measurement: the path cut the stream after about {}s without heartbeats",
                 idle.after_secs
             );
         } else {
-            println!(
+            let _ = writeln!(
+                out,
                 "idle measurement: survived {}s without a cut (the bound)",
                 idle.after_secs
             );
         }
     }
+    out
 }
 
-fn print_probe(name: &str, probe: &ProbeReport) {
+fn write_probe(out: &mut String, name: &str, probe: &ProbeReport) {
+    use std::fmt::Write as _;
     if probe.ok {
-        println!("{name}: ok");
+        let _ = writeln!(out, "{name}: ok");
     } else {
-        println!(
+        let _ = writeln!(
+            out,
             "{name}: failed ({}) {}",
             probe.kind.as_deref().unwrap_or("Unexpected"),
             probe.detail.as_deref().unwrap_or_default()
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use std::io::Cursor;
+
+    use hya_relay::server::{RelayServer, RelayServerConfig};
+
+    use super::*;
+
+    const ROOM: &str = "eh7ddx5bksrgcytl7bkai36se4";
+    const KEY_B64: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+    const PSK_B64: &str = "S3CR3TS3CR3TS3CR3TS3CR3TS3CR3TS3CR3TS3CR3TA";
+
+    async fn start_relay() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let config = RelayServerConfig::new("127.0.0.1:0".parse().expect("valid addr"));
+        let (addr, serve) = RelayServer::bind(config, std::future::pending())
+            .await
+            .expect("relay binds");
+        (addr, tokio::spawn(serve))
+    }
+
+    #[test]
+    fn target_resolution_warns_only_for_argv_secret_and_redacts_errors() {
+        let redacted = format!("hya+insecure://127.0.0.1:8766/{ROOM}");
+        let full = format!("{redacted}#{KEY_B64}.{PSK_B64}");
+
+        let mut stderr = Vec::new();
+        assert_eq!(
+            resolve_target_from(&redacted, Cursor::new(""), &mut stderr).unwrap(),
+            redacted
+        );
+        assert!(stderr.is_empty());
+
+        assert_eq!(
+            resolve_target_from(&full, Cursor::new(""), &mut stderr).unwrap(),
+            full
+        );
+        let warn = String::from_utf8(stderr).unwrap();
+        assert!(warn.contains("process listings"), "{warn}");
+        assert!(!warn.contains("S3CR3T"), "{warn}");
+
+        let mut stdin_err = Vec::new();
+        let from_stdin =
+            resolve_target_from("-", Cursor::new(format!("{full}\n")), &mut stdin_err).unwrap();
+        assert_eq!(from_stdin, full);
+        assert!(stdin_err.is_empty());
+        assert!(resolve_target_from("-", Cursor::new("   \n"), &mut Vec::new()).is_err());
+
+        let err = parse_target("https://relay.example.com/x#S3CR3TKEY.S3CR3TPSK")
+            .err()
+            .expect("malformed proxy url with fragment must fail")
+            .to_string();
+        assert!(!err.contains("S3CR3T"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn diagnose_reports_reachable_redacted_full_and_unreachable_relays() {
+        let (addr, relay) = start_relay().await;
+        let opts = DoctorOptions {
+            timeout: Duration::from_secs(3),
+            ..DoctorOptions::default()
+        };
+
+        let report = diagnose(&format!("http://{addr}"), opts.clone())
+            .await
+            .unwrap();
+        assert!(report.reachable && report.grpc.ok && report.ws.ok && report.prefix_ok);
+        assert_eq!(report.recommended_transport.as_deref(), Some("auto"));
+        let text = format_report(&report);
+        assert!(text.contains(&addr.to_string()) && text.contains("recommended t=auto"));
+
+        let redacted_target = format!("hya+insecure://{addr}/{ROOM}");
+        let redacted = diagnose(&redacted_target, opts.clone()).await.unwrap();
+        assert_eq!(redacted.target, redacted_target);
+        assert!(redacted.reachable);
+
+        let full = diagnose(
+            &format!("hya+insecure://{addr}/{ROOM}#{KEY_B64}.{PSK_B64}"),
+            opts.clone(),
+        )
+        .await
+        .unwrap();
+        let full_text = format_report(&full);
+        assert!(full.reachable && !full_text.contains("S3CR3T"));
+        assert!(full_text.contains(&redacted_target), "{full_text}");
+        relay.abort();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closed = listener.local_addr().unwrap();
+        drop(listener);
+        let down = diagnose(&format!("http://{closed}"), opts).await.unwrap();
+        assert!(!down.reachable && !down.grpc.ok && !down.ws.ok);
+        assert!(down.recommended_transport.is_none());
+        assert!(format_report(&down).contains("recommended: none"));
+    }
+
+    #[test]
+    fn advice_and_report_formatting_cover_failures_and_idle() {
+        for (kind, needle) in [
+            (ProbeFailureKind::NoHttp2, "t=ws"),
+            (ProbeFailureKind::TrailersStripped, "t=ws"),
+            (ProbeFailureKind::HopRejected, "t=ws"),
+            (ProbeFailureKind::Timeout, "t=ws"),
+            (ProbeFailureKind::WrongPath, "--path-prefix"),
+            (ProbeFailureKind::Tls, "--relay-ca"),
+            (ProbeFailureKind::Connect, "firewall"),
+            (ProbeFailureKind::Unexpected, "detail"),
+        ] {
+            assert!(advice_for(kind).contains(needle), "{kind:?}");
+        }
+        let report = DoctorReport {
+            target: "https://relay.example.com".into(),
+            secure: true,
+            reachable: true,
+            grpc: ProbeReport::failed(&ProbeFailure {
+                kind: ProbeFailureKind::NoHttp2,
+                detail: "h1 only".into(),
+            }),
+            ws: ProbeReport::ok(),
+            prefix_ok: false,
+            recommended_transport: Some("ws".into()),
+            advice: vec!["gRPC: use ws".into()],
+            idle: Some(IdleReport {
+                cut: true,
+                after_secs: 25,
+            }),
+        };
+        let rendered = format_report(&report);
+        for needle in [
+            "gRPC: failed (NoHttp2) h1 only",
+            "WebSocket: ok",
+            "path prefix: mismatch",
+            "recommended t=ws",
+            "advice: gRPC: use ws",
+            "cut the stream after about 25s",
+        ] {
+            assert!(rendered.contains(needle), "missing {needle:?}:\n{rendered}");
+        }
     }
 }

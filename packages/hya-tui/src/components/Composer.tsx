@@ -174,7 +174,7 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
 
   /** Rows the text needs at the editor's width (wrapped lines counted), capped at `composerMaxRows`. */
   function measure(): void {
-    if (!editor) return
+    if (!editor || editor.isDestroyed) return
     const width = Math.max(1, Math.floor(props.width) - 4)
     const lines = editor.plainText.split("\n")
       .reduce((total, line) => total + Math.max(1, Math.ceil((Bun.stringWidth(line) + 1) / width)), 0)
@@ -722,7 +722,7 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
 
   /** Insert `text` at the cursor, with one space after it unless one follows already. */
   function insertAtCursor(text: string): void {
-    if (!editor || !text) return
+    if (!editor || editor.isDestroyed || !text) return
     const after = editor.plainText.slice(editor.cursorOffset, editor.cursorOffset + 1)
     editor.insertText(/^\s/.test(after) && text.endsWith(" ") ? text.slice(0, -1) : text)
   }
@@ -752,7 +752,7 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
         insertAtCursor(result.insert)
         setPasteNotice(result.notices.length ? result.notices.join(" · ") : undefined)
       }).catch((error: unknown) => {
-        editor?.insertText(cleaned)
+        if (editor && !editor.isDestroyed) editor.insertText(cleaned)
         setPasteNotice(`Paste failed: ${error instanceof Error ? error.message : String(error)}`)
       }).finally(() => { if (pendingPaste === work) pendingPaste = undefined })
       pendingPaste = work

@@ -694,7 +694,7 @@ impl Harness for TurnHarness<'_> {
         // Before the first successful open there is no pin. A failed reopen
         // during recovery still belongs to the model that served the stream.
         let deadline = hya_tool::deadline::current();
-        if let Some(&wait) = kernel::ROUND_RETRY_WAITS.get(self.retries)
+        if let Some(&wait) = self.engine.round_retry_waits.get(self.retries)
             && !failure.saw_tool_call
             && is_retryable_round_error(failure)
             && !self.cancel.is_cancelled()

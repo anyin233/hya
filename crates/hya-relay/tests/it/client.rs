@@ -1,8 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 //! The relay client: heartbeats and dead-peer detection (in memory), the
-//! reconnect policy, and the client bindings against a real relay server
-//! (typed open errors, pinned and negotiated bindings, prefix and TLS
-//! failures).
+//! reconnect policy, and the client bindings against a real relay server.
 
 use crate::support;
 
@@ -49,8 +47,6 @@ fn pong(seq: u64) -> Chunk {
 
 const SECOND: Duration = Duration::from_secs(1);
 
-/// A heartbeat-wrapped end (probe every 10 s, dead after 30 s) and its
-/// in-memory peer.
 fn wrapped() -> (ChunkTransport, Peer) {
     wrapped_with(HeartbeatConfig::every(10 * SECOND))
 }
@@ -78,7 +74,8 @@ fn is_probe(frame: &Chunk) -> bool {
 // ---- heartbeats ----
 
 #[tokio::test(start_paused = true)]
-async fn an_idle_leg_sends_probes_every_interval() {
+async fn heartbeat_probing_suppression_one_way_upload_and_peer_probes() {
+    // Idle leg sends probes every interval.
     let (_ours, mut peer) = wrapped();
     let start = Instant::now();
     assert_eq!(peer_recv(&mut peer).await, probe(1));
@@ -86,10 +83,8 @@ async fn an_idle_leg_sends_probes_every_interval() {
     peer.send(pong(1)).await.unwrap();
     assert_eq!(peer_recv(&mut peer).await, probe(2));
     assert!(start.elapsed() >= 20 * SECOND);
-}
 
-#[tokio::test(start_paused = true)]
-async fn traffic_both_ways_suppresses_probes() {
+    // Bidirectional traffic suppresses probes.
     let (mut ours, mut peer) = wrapped();
     for i in 0..10u8 {
         tokio::time::sleep(5 * SECOND).await;
@@ -98,10 +93,8 @@ async fn traffic_both_ways_suppresses_probes() {
         assert_eq!(peer_recv(&mut peer).await, data(&[i]));
         assert_eq!(ours.next().await.unwrap().unwrap(), data(&[i]));
     }
-}
 
-#[tokio::test(start_paused = true)]
-async fn a_one_way_upload_still_probes_the_silent_peer() {
+    // One-way upload still probes silent peer; answered probes keep leg alive.
     let (mut ours, mut peer) = wrapped();
     let mut probes = 0;
     for i in 0..12u8 {
@@ -120,15 +113,12 @@ async fn a_one_way_upload_still_probes_the_silent_peer() {
         }
     }
     assert!(probes >= 4, "only {probes} probes in 60 s");
-    // Answered probes keep the leg alive: no dead-peer failure.
     assert!(
         timeout(SECOND, ours.next()).await.is_err(),
-        "the leg failed although the peer answered"
+        "leg failed although peer answered"
     );
-}
 
-#[tokio::test(start_paused = true)]
-async fn probes_from_the_peer_are_answered_and_pongs_swallowed() {
+    // Probes from peer are answered and pongs swallowed.
     let (mut ours, mut peer) = wrapped();
     peer.send(probe(7)).await.unwrap();
     assert_eq!(peer_recv(&mut peer).await, pong(7));
@@ -138,7 +128,7 @@ async fn probes_from_the_peer_are_answered_and_pongs_swallowed() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_silent_peer_is_declared_dead() {
+async fn heartbeat_dead_peer_detection_and_configuration() {
     let (mut ours, mut peer) = wrapped();
     let start = Instant::now();
     let item = timeout(600 * SECOND, ours.next())
@@ -148,10 +138,7 @@ async fn a_silent_peer_is_declared_dead() {
         matches!(item, Some(Err(TransportError::Transport(_)))),
         "got {item:?}"
     );
-    assert!(start.elapsed() >= 30 * SECOND);
-    assert!(start.elapsed() < 40 * SECOND);
-    // The inner transport is dropped: after the unanswered probes the peer
-    // sees the end.
+    assert!(start.elapsed() >= 30 * SECOND && start.elapsed() < 40 * SECOND);
     loop {
         match timeout(600 * SECOND, peer.next()).await.expect("ends") {
             Some(Ok(frame)) => assert!(is_probe(&frame)),
@@ -159,12 +146,9 @@ async fn a_silent_peer_is_declared_dead() {
             Some(Err(error)) => panic!("unexpected {error:?}"),
         }
     }
-    // Sending afterwards fails.
     assert!(ours.send(data(b"late")).await.is_err());
-}
 
-#[tokio::test(start_paused = true)]
-async fn dead_peer_detection_is_configurable() {
+    // Dead-peer detection disabled vs custom threshold.
     let (mut ours, _peer) =
         wrapped_with(HeartbeatConfig::every(10 * SECOND).dead_peer_after(Duration::ZERO));
     assert!(timeout(300 * SECOND, ours.next()).await.is_err());
@@ -176,35 +160,27 @@ async fn dead_peer_detection_is_configurable() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn no_probes_after_the_peer_closed_its_direction() {
+async fn heartbeat_half_close_and_failed_pong_resilience() {
+    // Peer closed its direction: no probes, local direction stays open.
     let (mut ours, mut peer) = wrapped();
     peer.send(close()).await.unwrap();
     assert_eq!(ours.next().await.unwrap().unwrap(), close());
-    // Nothing is sent and nothing fails, however long the leg stays quiet.
     assert!(timeout(300 * SECOND, peer.next()).await.is_err());
     assert!(timeout(SECOND, ours.next()).await.is_err());
-    // The local direction still works.
     ours.send(data(b"after")).await.unwrap();
     assert_eq!(peer_recv(&mut peer).await, data(b"after"));
-}
 
-#[tokio::test(start_paused = true)]
-async fn no_probes_after_this_side_closed_its_direction() {
+    // Local side closed its direction: no probes, peer direction still works.
     let (mut ours, mut peer) = wrapped();
     ours.send(close()).await.unwrap();
     assert_eq!(peer_recv(&mut peer).await, close());
     assert!(timeout(300 * SECOND, peer.next()).await.is_err());
-    // The peer's direction still works, and its probes are not answered
-    // (they cannot be) without failing the leg.
     peer.send(probe(1)).await.unwrap();
     peer.send(data(b"reply")).await.unwrap();
     assert_eq!(ours.next().await.unwrap().unwrap(), data(b"reply"));
-}
 
-#[tokio::test(start_paused = true)]
-async fn a_failed_pong_does_not_end_the_other_direction() {
+    // Closing the sink prevents pongs without ending the peer->local direction.
     let (mut ours, mut peer) = wrapped();
-    // Closing the sink closes the inner sink: pongs can no longer be sent.
     ours.close().await.unwrap();
     assert!(timeout(SECOND, peer.next()).await.unwrap().is_none());
     peer.send(probe(1)).await.unwrap();
@@ -220,14 +196,13 @@ async fn queued_frames_are_delivered_after_drop() {
     drop(ours);
     assert_eq!(peer_recv(&mut peer).await, data(b"a"));
     assert_eq!(peer_recv(&mut peer).await, close());
-    // The direction was ended, so the inner transport is closed cleanly.
     assert!(timeout(SECOND, peer.next()).await.unwrap().is_none());
 }
 
 // ---- reconnect policy ----
 
 #[test]
-fn backoff_grows_with_jitter_up_to_the_cap() {
+fn backoff_growth_jitter_and_conflict_classification() {
     let mut backoff = Backoff::with_seed(ReconnectPolicy::default(), 7);
     for attempt in 0..12u32 {
         let ceiling = (SECOND * 2u32.pow(attempt.min(10))).min(60 * SECOND);
@@ -237,10 +212,7 @@ fn backoff_grows_with_jitter_up_to_the_cap() {
             "{attempt}: {delay:?}"
         );
     }
-}
 
-#[test]
-fn jitter_differs_between_seeds() {
     let delays = |seed| {
         let mut backoff = Backoff::with_seed(ReconnectPolicy::default(), seed);
         (0..6)
@@ -249,10 +221,7 @@ fn jitter_differs_between_seeds() {
     };
     assert_ne!(delays(1), delays(2));
     assert_eq!(delays(3), delays(3));
-}
 
-#[test]
-fn already_exists_backs_off_slower() {
     let mut backoff = Backoff::with_seed(ReconnectPolicy::default(), 1);
     let first = backoff.next_delay(RetryKind::Conflict);
     assert!(first >= 15 * SECOND && first <= 30 * SECOND, "{first:?}");
@@ -281,11 +250,9 @@ async fn a_stable_connection_resets_the_backoff() {
     for _ in 0..6 {
         backoff.next_delay(RetryKind::Normal);
     }
-    // A short-lived connection does not reset.
     backoff.connected();
     tokio::time::advance(5 * SECOND).await;
     assert!(backoff.next_delay(RetryKind::Normal) >= 30 * SECOND);
-    // A stable one does.
     backoff.connected();
     tokio::time::advance(61 * SECOND).await;
     assert!(backoff.next_delay(RetryKind::Normal) <= SECOND);
@@ -303,7 +270,6 @@ fn config(transport: Transport) -> ClientConfig {
     }
 }
 
-/// The open token hash and token of `key`'s room (PSK = the key bytes).
 fn token_of(key: &ed25519_dalek::SigningKey) -> ([u8; 32], hya_relay::keys::OpenToken) {
     let room = RoomId::from_ed25519(key.verifying_key().as_bytes());
     let token = hya_relay::keys::OpenToken::derive(
@@ -317,8 +283,34 @@ fn offline_room() -> RoomId {
     RoomId::from_ed25519(&[42; 32])
 }
 
+async fn next(open: &mut ChunkTransport) -> Option<Result<Chunk, TransportError>> {
+    timeout(5 * SECOND, open.next()).await.unwrap()
+}
+
 #[tokio::test]
-async fn open_to_an_offline_room_is_a_typed_error_on_both_bindings() {
+async fn binding_selection_pinned_and_auto_cache() {
+    let relay = Relay::start(support::relay_config()).await;
+
+    let pinned = RelayClient::new(relay.address(), config(Transport::Ws)).unwrap();
+    let choice = pinned.binding().await.unwrap();
+    assert_eq!(choice.binding, Binding::Ws);
+    assert_eq!(choice.reason, ChoiceReason::Pinned);
+    assert_eq!(pinned.remembered_binding(), None);
+
+    let auto = RelayClient::new(relay.address(), config(Transport::Auto)).unwrap();
+    let choice = auto.binding().await.unwrap();
+    assert_eq!(choice.binding, Binding::Grpc);
+    assert_eq!(choice.reason, ChoiceReason::GrpcWorks);
+    let other = RelayClient::new(relay.address(), config(Transport::Auto)).unwrap();
+    assert_eq!(other.remembered_binding(), Some(choice));
+    other.forget_binding();
+    assert_eq!(auto.remembered_binding(), None);
+
+    relay.stop().await;
+}
+
+#[tokio::test]
+async fn offline_open_and_unknown_accept_errors_on_both_bindings() {
     let relay = Relay::start(support::relay_config()).await;
     for transport in [Transport::Grpc, Transport::Ws] {
         let client = RelayClient::new(relay.address(), config(transport)).unwrap();
@@ -330,33 +322,23 @@ async fn open_to_an_offline_room_is_a_typed_error_on_both_bindings() {
             "{transport}: {error:?}"
         );
         assert_eq!(error.code(), Some(RelayErrorCode::NotFound));
+
+        let mut leg = client
+            .accept("00000000000000000000000000000000")
+            .await
+            .unwrap();
+        let item = timeout(5 * SECOND, leg.next()).await.unwrap();
+        assert!(
+            matches!(
+                item,
+                Some(Err(TransportError::Status {
+                    code: RelayErrorCode::NotFound,
+                    ..
+                }))
+            ),
+            "{transport}: {item:?}"
+        );
     }
-    relay.stop().await;
-}
-
-#[tokio::test]
-async fn pinned_bindings_skip_probing() {
-    let relay = Relay::start(support::relay_config()).await;
-    let client = RelayClient::new(relay.address(), config(Transport::Ws)).unwrap();
-    let choice = client.binding().await.unwrap();
-    assert_eq!(choice.binding, Binding::Ws);
-    assert_eq!(choice.reason, ChoiceReason::Pinned);
-    assert_eq!(client.remembered_binding(), None);
-    relay.stop().await;
-}
-
-#[tokio::test]
-async fn auto_picks_grpc_on_a_direct_path_and_remembers_it() {
-    let relay = Relay::start(support::relay_config()).await;
-    let client = RelayClient::new(relay.address(), config(Transport::Auto)).unwrap();
-    let choice = client.binding().await.unwrap();
-    assert_eq!(choice.binding, Binding::Grpc);
-    assert_eq!(choice.reason, ChoiceReason::GrpcWorks);
-    // Another client of the same address reuses the decision.
-    let other = RelayClient::new(relay.address(), config(Transport::Auto)).unwrap();
-    assert_eq!(other.remembered_binding(), Some(choice));
-    other.forget_binding();
-    assert_eq!(client.remembered_binding(), None);
     relay.stop().await;
 }
 
@@ -385,7 +367,18 @@ async fn a_wrong_prefix_is_reported_as_such_on_both_bindings() {
 }
 
 #[tokio::test]
-async fn an_untrusted_certificate_is_a_tls_failure() {
+async fn tls_untrusted_cert_and_unreadable_ca_errors() {
+    let bad_ca_addr = RelayAddress::new(true, "localhost", Some(1), "").unwrap();
+    let error = RelayClient::new(
+        bad_ca_addr,
+        ClientConfig {
+            extra_ca_pem: Some("/nonexistent/hya-relay-ca.pem".into()),
+            ..ClientConfig::default()
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(error, ClientError::Config(_)), "{error:?}");
+
     let tls = TestTls::new();
     let relay = Relay::start(support::relay_config().tls(tls.files.clone())).await;
     let address = RelayAddress::new(true, "localhost", Some(relay.addr.port()), "").unwrap();
@@ -398,49 +391,12 @@ async fn an_untrusted_certificate_is_a_tls_failure() {
 }
 
 #[tokio::test]
-async fn an_unreadable_ca_file_is_a_config_error() {
-    let address = RelayAddress::new(true, "localhost", Some(1), "").unwrap();
-    let error = RelayClient::new(
-        address,
-        ClientConfig {
-            extra_ca_pem: Some("/nonexistent/hya-relay-ca.pem".into()),
-            ..ClientConfig::default()
-        },
-    )
-    .unwrap_err();
-    assert!(matches!(error, ClientError::Config(_)), "{error:?}");
-}
-
-#[tokio::test]
-async fn accept_of_an_unknown_stream_fails_on_the_stream() {
-    let relay = Relay::start(support::relay_config()).await;
-    for transport in [Transport::Grpc, Transport::Ws] {
-        let client = RelayClient::new(relay.address(), config(transport)).unwrap();
-        let mut leg = client
-            .accept("00000000000000000000000000000000")
-            .await
-            .unwrap();
-        let item = timeout(5 * SECOND, leg.next()).await.unwrap();
-        assert!(
-            matches!(
-                item,
-                Some(Err(TransportError::Status {
-                    code: RelayErrorCode::NotFound,
-                    ..
-                }))
-            ),
-            "{transport}: {item:?}"
-        );
-    }
-    relay.stop().await;
-}
-
-#[tokio::test]
-async fn frames_sent_right_before_drop_are_delivered_on_both_bindings() {
+async fn stream_close_delivery_and_unclosed_drop_abort_on_both_bindings() {
     use hya_relay::client::register_host;
     use hya_relay::proto::proxy_to_host;
     let relay = Relay::start(support::relay_config()).await;
     for transport in [Transport::Grpc, Transport::Ws] {
+        // 1. Frames sent right before drop are delivered.
         let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
         let host = RelayClient::new(relay.address(), config(transport)).unwrap();
         let mut control = host.host().await.unwrap();
@@ -468,7 +424,6 @@ async fn frames_sent_right_before_drop_are_delivered_on_both_bindings() {
         open.send(close()).await.unwrap();
         assert_eq!(leg.next().await.unwrap().unwrap(), data(b"question"));
         assert_eq!(leg.next().await.unwrap().unwrap(), close());
-        // The host answers, ends its direction, and drops the leg at once.
         leg.send(data(b"answer")).await.unwrap();
         leg.send(close()).await.unwrap();
         drop(leg);
@@ -483,30 +438,13 @@ async fn frames_sent_right_before_drop_are_delivered_on_both_bindings() {
             "{transport}"
         );
         assert!(next(&mut open).await.is_none(), "{transport}");
-    }
-    relay.stop().await;
-}
 
-#[tokio::test]
-async fn dropping_an_unclosed_stream_aborts_it_on_both_bindings() {
-    use hya_relay::client::register_host;
-    use hya_relay::proto::proxy_to_host;
-    let relay = Relay::start(support::relay_config()).await;
-    for transport in [Transport::Grpc, Transport::Ws] {
-        let key = ed25519_dalek::SigningKey::from_bytes(&[8; 32]);
-        let host = RelayClient::new(relay.address(), config(transport)).unwrap();
-        let mut control = host.host().await.unwrap();
-        let (hash, token) = token_of(&key);
-        let room = register_host(&mut control, &key, &hash, 5 * SECOND)
-            .await
-            .unwrap()
-            .room()
-            .clone();
-        // The opener shares the host's gRPC connection: the abort must reset
-        // only its own stream.
+        // 2. Dropping an unclosed stream aborts only that stream without affecting control.
         let opener = host.clone();
+        let room2 = RoomId::from_ed25519(key.verifying_key().as_bytes());
+        let token2 = token_of(&key).1;
         let opening =
-            tokio::spawn(async move { opener.open_with_token(&room, &token).await.unwrap() });
+            tokio::spawn(async move { opener.open_with_token(&room2, &token2).await.unwrap() });
         let stream_id = loop {
             let frame = timeout(5 * SECOND, control.next()).await.unwrap();
             if let Some(Ok(hya_relay::proto::ProxyToHost {
@@ -532,19 +470,18 @@ async fn dropping_an_unclosed_stream_aborts_it_on_both_bindings() {
             ),
             "{transport}: {item:?}"
         );
-        // The control stream on the same connection is unaffected.
         let offline = RelayClient::new(relay.address(), config(transport)).unwrap();
         assert!(matches!(
             offline.open(&offline_room()).await,
             Err(ClientError::RoomOffline(_))
         ));
         let again = host.clone();
-        let token = token_of(&key).1;
+        let token3 = token_of(&key).1;
         let reopened = tokio::spawn(async move {
             again
                 .open_with_token(
                     &RoomId::from_ed25519(key.verifying_key().as_bytes()),
-                    &token,
+                    &token3,
                 )
                 .await
         });
@@ -562,10 +499,6 @@ async fn dropping_an_unclosed_stream_aborts_it_on_both_bindings() {
     relay.stop().await;
 }
 
-async fn next(open: &mut ChunkTransport) -> Option<Result<Chunk, TransportError>> {
-    timeout(5 * SECOND, open.next()).await.unwrap()
-}
-
 #[tokio::test]
 async fn only_link_holders_get_past_the_proxy_on_both_bindings() {
     use hya_relay::keys::Psk;
@@ -576,7 +509,6 @@ async fn only_link_holders_get_past_the_proxy_on_both_bindings() {
         support::Backend::start(host, support::Identity::new(31), support::quick_policy()).await;
     for transport in [Transport::Grpc, Transport::Ws] {
         let link = backend.identity.link(relay.address(), transport);
-        // Room id only (no link): looks offline.
         let bare = RelayClient::new(relay.address(), config(transport)).unwrap();
         assert!(
             matches!(
@@ -585,7 +517,6 @@ async fn only_link_holders_get_past_the_proxy_on_both_bindings() {
             ),
             "{transport}"
         );
-        // A link with the wrong PSK: also offline, before any handshake.
         let wrong = RelayLink::from_keys(
             link.address().clone(),
             link.room_id().clone(),
@@ -601,7 +532,6 @@ async fn only_link_holders_get_past_the_proxy_on_both_bindings() {
             ),
             "{transport}"
         );
-        // The link opens, through the tunnel.
         let holder = RelayClient::from_link(&link, config(transport)).unwrap();
         support::round_trip(&holder, &link, b"link holder").await;
     }
@@ -612,7 +542,6 @@ async fn only_link_holders_get_past_the_proxy_on_both_bindings() {
 async fn the_client_refuses_oversized_relay_messages_on_both_bindings() {
     use hya_relay::client::{MAX_CLIENT_MESSAGE_SIZE, register_host};
     use hya_relay::proto::proxy_to_host;
-    // A relay that forwards chunks far larger than a Noise record.
     let relay = Relay::start(
         support::relay_config().limits(hya_relay::proxy::ProxyLimits {
             max_chunk_data: 4 * MAX_CLIENT_MESSAGE_SIZE,
@@ -644,7 +573,6 @@ async fn the_client_refuses_oversized_relay_messages_on_both_bindings() {
         };
         let mut leg = host.accept(&stream_id).await.unwrap();
         let mut open = opening.await.unwrap().unwrap();
-        // A full Noise record fits.
         let record = vec![1u8; hya_relay::tunnel::MAX_NOISE_MESSAGE];
         leg.send(data(&record)).await.unwrap();
         assert_eq!(
@@ -652,7 +580,6 @@ async fn the_client_refuses_oversized_relay_messages_on_both_bindings() {
             data(&record),
             "{transport}"
         );
-        // Twice the bound does not: the stream fails instead of buffering it.
         leg.send(data(&vec![2u8; 2 * MAX_CLIENT_MESSAGE_SIZE]))
             .await
             .unwrap();

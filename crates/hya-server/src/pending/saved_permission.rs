@@ -162,7 +162,7 @@ mod tests {
         reply: PermissionReply,
     ) -> bool {
         let mut events = requests.subscribe();
-        let task = {
+        let mut task = {
             let plane = plane.clone();
             tokio::spawn(async move {
                 plane
@@ -170,18 +170,24 @@ mod tests {
                     .await
             })
         };
-        let asked = tokio::time::timeout(Duration::from_millis(300), events.recv()).await;
-        let Ok(Ok(event)) = asked else {
-            task.await.unwrap().unwrap();
-            return false;
-        };
-        let crate::pending::PendingEvent::PermissionRequested(view) = event else {
-            panic!("expected a permission request");
-        };
-        let id = view.id;
-        assert!(requests.reply(session, &id, reply, None).await.unwrap());
-        let _result = task.await.unwrap();
-        true
+        tokio::select! {
+            result = &mut task => {
+                result.unwrap().unwrap();
+                false
+            }
+            asked = tokio::time::timeout(Duration::from_secs(2), events.recv()) => {
+                let Ok(Ok(event)) = asked else {
+                    panic!("expected a permission request event");
+                };
+                let crate::pending::PendingEvent::PermissionRequested(view) = event else {
+                    panic!("expected a permission request");
+                };
+                let id = view.id;
+                assert!(requests.reply(session, &id, reply, None).await.unwrap());
+                let _result = task.await.unwrap();
+                true
+            }
+        }
     }
 
     fn bridge(
@@ -199,7 +205,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn project_allow_always_persists_the_concrete_directory_under_the_project() {
+    async fn allow_always_persists_project_grants_and_keeps_legacy_global() {
+        assert_eq!(
+            saved_row(&RememberScope::LegacyAction),
+            Some(("global".to_string(), "*".to_string()))
+        );
+        assert_eq!(
+            saved_row(&RememberScope::Scoped {
+                pattern: DIR.to_string(),
+                scope: None,
+            }),
+            None
+        );
+
         let store = SessionStore::connect_memory().await.unwrap();
         let (plane, requests, _owner) = bridge(&store);
         let session = SessionId::new();
@@ -239,21 +257,6 @@ mod tests {
             )
             .await,
             "another session asks again"
-        );
-    }
-
-    #[test]
-    fn legacy_and_exact_grants_stay_global() {
-        assert_eq!(
-            saved_row(&RememberScope::LegacyAction),
-            Some(("global".to_string(), "*".to_string()))
-        );
-        assert_eq!(
-            saved_row(&RememberScope::Scoped {
-                pattern: DIR.to_string(),
-                scope: None,
-            }),
-            None
         );
     }
 
