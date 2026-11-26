@@ -2219,7 +2219,13 @@ async fn running_resident_sidecar_loss_aborts_and_handles_terminate_failure() {
         release.notify_one();
         let _ = sup.end_member(root, &handle).await;
         assert!(!engine.store().replay(child).await.unwrap().iter().any(|e| matches!(&e.event, Event::TextReplace { text, .. } if text.contains("RESIDENT_STOP_TEXT"))));
-        assert_eq!(polls.load(Ordering::SeqCst), 1);
+        // Only the child's re-entry counts: the root may take its quiescence
+        // synthesis turn through the same provider.
+        let reentered: Vec<_> = std::iter::from_fn(|| entered_rx.try_recv().ok()).collect();
+        assert!(
+            !reentered.contains(&child),
+            "child polled again: {reentered:?}"
+        );
         assert_sidecar_failed(&engine, &sup, root, child, &handle).await;
         if fail_terminate {
             let proj = engine.read_projection(root).await.unwrap();
