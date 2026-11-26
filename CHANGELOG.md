@@ -1,12 +1,16 @@
-# 0.48.0-dev.38
+# 0.49.0
 
-- **Removed public Rust items deprecated in 0.48.0-dev.36 and 0.48.0-dev.37.** No runtime, wire or CLI behaviour changes; Rust embedders that still use these paths must move to the replacements named in the earlier release notes:
-  - `hya-engine`: `TmuxPaneManager`, `resolve_compaction_decision`, `CompactionResolution`, and the public re-export of `handoff_request_messages`;
-  - `hya-version`: `FRONTEND_VERSION` (use `VERSION`);
-  - the Rust adapter identity constants `BUN_ADAPTER_VERSION`, `CLAUDE_ADAPTER_VERSION`, `CLAUDE_PLUGIN_KIND` and `PLUGIN_MANIFEST_FILE`; the `hya-plugin-bun` Rust crate is gone, while the Bun adapter stays at `crates/hya-plugin-bun/adapter` and ships as `lib/hya/bun-adapter`;
-  - `hya-relay`: the public in-memory transport;
-  - `hya-updater`: `RELEASE_INSTALLER` and `install_prefix`;
-  - `hya-mcp`: `McpManager` (use `prepare` and `PreparedMcpServer`) and the `codec`/`io_tasks` re-exports (use `hya-child-io`);
-  - `hya-tool`: the token accounting and rewrite re-exports (use `hya-context`);
-  - `hya-workflow`: the old Workflow model type aliases (use the `hya-proto` types); `hya-server`: `valid_provider_id` (use `hya_provider::valid_provider_id`);
-  - `hya-sdk-v1`: the methods taking `SessionId` or returning `Envelope` (use the DTO-based methods).
+The first stable release since 0.47.0. It collects the 0.48.0 development line (`0.48.0-dev.1` through `0.48.0-dev.38`; per-release notes are archived under `docs/changes/CHANGELOG_0.48.0-dev.*.md`). The minimum compatible backend version stays `0.46.0`.
+
+- **Three-primitive kernel.** A minimal agent loop (`hya_core::kernel`, ADR-0033) where the context changes only through model append, tool append and rewrite, each recorded as events. `hya exec --bare` runs it alone; full-mode turns run on the same round loop and follow it wherever both did the same job (ADR-0035). Every round records the view it read, so a request replays exactly from the log (ADR-0034).
+- **Full mode moves out of `hya-core`.** The session engine lives in the new `hya-engine` crate. Compaction runs from the `hya/compaction` internal bundle (`shake` and `remote` before the kernel's own Rewrite), loaded once per process and never in `--bare`.
+- **Breaking: configuration.** `compaction.token_threshold`, `context_fraction`, `reserve_tokens` and `method_order`, with their `HYA_COMPACTION_*` variables, are removed; the kernel drives context reduction against 80% of the window. `workspace.state` returns a session-scoped file revision instead of a Git work-tree digest.
+- **Headless runs.** `hya exec --bare --time-budget <SECS>` announces the budget, sends staged deadline guidance and caps each `bash` wait; a long command yields `still_running` with its live output file instead of being killed. `hya exec -` reads the prompt from standard input, `--json` streams session events, and `--include-subagents` streams the whole session tree.
+- **Robust rounds.** Bare and full mode retry a round after a transient provider error, a stream that fails to open, stalls, or breaks mid-output; a malformed tool call, an empty turn, or a stalled or deleted session database no longer ends the run.
+- **Tools.** `todo` is a kernel tool in both modes; `read` sends PNG, JPEG, GIF and WebP images (once, within a replay budget, and only when they decode); `bash` output is capped at 30,000 bytes and the model sees how a call ended; `edit` is stricter about literal matches and reports a missing hash with an actionable diagnostic; `apply_patch` is offered to GPT-family models.
+- **Reasoning replay.** OpenAI Responses routes request encrypted reasoning, Gemini thinking (`thinkingLevel`, `thoughtSignature`) and Anthropic adaptive thinking are carried across steps, and both modes detect dropped replayed reasoning and warn the model.
+- **Store.** SQLite connections are no longer retired by age or idleness, write transactions take the write lock when they begin, and concurrent Workflow stages no longer deadlock on the store.
+- **TUI.** `tui.toml` structure presets (status line by default, a dock preset), an auto theme that follows the terminal background, paste chips and clipboard image paste, `/reload`, and skills as `/skill:<name>`.
+- **Releases ship the Claude adapter.** The archive, the source installer and `hya update` include `lib/hya/claude-adapter`, so `hya bundle install --claude` and `kind: claude` plugins work from an installed prefix.
+- **Rust API changes for embedders.** Crate boundaries were redrawn (`hya-engine`, `hya-context`, `hya-child-io`, `hya-tool-loader`), and the items deprecated in `0.48.0-dev.36` and `0.48.0-dev.37` are removed; see those releases' notes for the replacements.
+- **Since `0.48.0-dev.38`.** `hya-tool`'s deadline clock no longer uses the `AtomicU64::fetch_update` deprecated in Rust 1.100, so source builds on Rust 1.100 stay warning-free. No behaviour change; the rest is test-suite and CI restructuring.
