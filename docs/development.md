@@ -18,17 +18,18 @@ may use local allowances when appropriate.
 
 ## Task Management
 
-For multi-step work, use planning-with-files under
-`.planning/<YYYY-MM-DD-slug>/`:
+From the repository root, run `python3 scripts/new-plan.py`. It prints the
+path to a new `.plan/pN/task_plan.md`, allocated one above the highest existing
+plan number (starting at 1). Edit its goal, tasks and acceptance checks. To
+resume, open the same plan by number. For example, after verifying T1 in
+`.plan/p1/task_plan.md`, record the result, mark T1 Done, and pick a Todo row
+whose dependencies are Done.
 
-- `task_plan.md` records phases and decisions; `findings.md` records discoveries;
-  `progress.md` records updates and handoffs.
-- `.planning/.active_plan` is an optional pointer to the current plan when several
-  plan directories coexist.
-- Update the plan after each phase and when resuming work after a pause or context
-  reset. Small tasks may use a lightweight plan, or no plan when no durable
-  context is needed.
-- This workflow has no Trellis runtime dependency.
+The [shared template](templates/plan.md) uses a single Markdown table as the
+Kanban board. Longer investigation and run logs can live in adjacent
+`findings.md` and `progress.md`. Keep local development work in `.dev/` and local
+error-correction material and checks beyond unit tests in `.lint/`. Git ignores
+all three working directories.
 
 ## Embedded runtime shutdown
 
@@ -301,7 +302,7 @@ in the release archive or source install.
 These changes do **not** bump the version or write a new changelog:
 
 - documentation only: `docs/`, `*.md` files, code comments, `AGENTS.md`,
-  `.planning/`;
+  `.plan/`;
 - CI only: `.github/`, CI scripts and config;
 - tests only, when no shipped code changes.
 

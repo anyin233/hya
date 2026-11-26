@@ -1,24 +1,27 @@
 # Task Management
 
-Use `planning-with-files` for repository task management. For multi-step work or
-cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
-`.planning/<YYYY-MM-DD-slug>/`. Small tasks may use a lightweight plan.
+Use file-based planning for multi-step work. From the repository root, run
+`python3 scripts/new-plan.py` to copy the [plan template](docs/templates/plan.md)
+into the next numbered directory (`.plan/p1/`, `.plan/p2/`, …).
+Resume an existing plan by its ID. Leave other plan directories intact.
 
-- Resume the relevant existing plan; keep unrelated task directories intact.
-- `.planning/.active_plan` is an optional pointer to the current plan when several
-  plan directories coexist. Prefer an explicit task or `PLAN_ID` when several
-  sessions are active.
-- Record phase status, decisions, blockers, and verification results as work
-  progresses. Recover context from these files when resuming.
-- Use the installed skill when available; the Markdown files remain usable
-  directly without a plugin or CLI.
+- Keep the task breakdown and Kanban in `task_plan.md`. Each row has a stable
+  ID, dependencies, an acceptance check, and one status. Update the row when
+  starting work, encountering a blocker, or verifying completion.
+- Record decisions, findings, and verification evidence in the plan. Use
+  `findings.md` and `progress.md` alongside it if longer notes need their own
+  files. Use the planning-with-files skill when available.
+- Keep local development material in `.dev/`. Put local error-correction
+  procedures, reproducers, and checks beyond unit tests in `.lint/`.
+  Unit tests and shared CI gates stay with the components that own them.
+- All three directories are local to the checkout and ignored by Git.
 - Before editing a layer, read its guideline index under `docs/spec/backend/`;
   consult `docs/spec/guides/index.md` for cross-layer changes and code-reuse
   decisions.
 
 ## Forum Rule
 
-- `.planning/` holds one task's working state; `.forum/` (conventions: global
+- `.plan/` holds one task's working state; `.forum/` (conventions: global
   `AGENTS.md` and the `forum` skill) holds what other agents and later sessions
   need. When a finished plan produces something worth keeping (a pitfall, an
   environment fact, a decision and its reasons), record it on the forum as a
@@ -114,7 +117,7 @@ ADR-0018). TUI verification uses a two-tier pyramid:
 - Before pushing a release tag, run `cargo test -p xtask -p hya-bundle`, `actionlint .github/workflows/release.yml` (when installed), `bash tests/hya_install_script.sh`, and `release-rehearsal --no-publish` on a supported target. Push the version commit before the tag.
 - The packaged frontend declares `minimum_backend_version` in `versions.toml` and `minimumBackendVersion` in `packages/hya-tui/frontend-version.ts` (for attaching to older daemons or remote backends). It accepts only backend versions greater than or equal to that minimum; missing, malformed, or older backend versions MUST be rejected during bootstrap, backend switching, and remote entry. Raise the minimum only when the frontend requires a newer backend contract.
 - Every shipped behavior change updates the unified aggregate version once. Shipped behavior includes Rust crates, `proto/`, `bundles/`, `packages/hya-tui`, `packages/hya-tui-web`, the Bun adapter, and anything else in the release archive or source install.
-- Documentation-only changes (`docs/`, `*.md` files, code comments, `AGENTS.md`, `.planning/`), CI-only changes (`.github/`, CI scripts and config), and test-only changes that leave shipped code untouched MUST NOT bump the aggregate version or write a new changelog.
+- Documentation-only changes (`docs/`, `*.md` files, code comments, `AGENTS.md`, `.plan/`), CI-only changes (`.github/`, CI scripts and config), and test-only changes that leave shipped code untouched MUST NOT bump the aggregate version or write a new changelog.
 - Only the root aggregate version is a real release version (`@hya/tui-sdk` maintains its independent SDK version). Other Rust package manifests use `0.0.0` plus `[package.metadata.hya] version-reference = "hya"`; frontend and adapter package manifests use `0.0.0` plus `"hya": { "version-reference": "hya" }`. Bundle source manifests use identity version `0.0.0` plus `version_ref: hya` (legacy `backend` is also accepted); preparation resolves that reference to `hya_version::VERSION`.
 - `CHANGELOG.md` contains only the newest release notes. When the version advances, archive its previous file under `docs/changes/CHANGELOG_<version>.md`; historical `CHANGELOG_BACKEND_*.md` and `CHANGELOG_FRONTEND_*.md` files under `docs/changes/` remain untouched as archive history.
 - Version checks: `cargo test -p xtask` validates unified aggregate/reference metadata, `CHANGELOG.md` heading, tag grammar, frontend minimum-backend compatibility, and release layout; `cargo test -p hya-bundle` validates bundle preparation and resolved identities; release rehearsal validates `README.md`, `Cargo.lock`, and packaged assets.
@@ -192,7 +195,9 @@ or verifiers; workers do not decide that their own objective is done.
 | `crates/hya-e2e` | Process-level agent E2E harness (Track P): real `hya` + FakeLlm. Matrix in `matrix.toml`; docs under `docs/testing/`. |
 | `packages/hya-tui` | Bun/OpenTUI TUI over the v1 HTTP/JSON+SSE or direct gRPC contract: sessions, transcript, turns, pending interactions, models, Workflows, the Provider View (`/key`: providers, keys, model lists, model tests), Projects (the Project view `/project`, the left Projects sidebar, `/new --temp`), remote backends (`--remote`, `/connect-remote` through a `hya bridge` child), slash completion, and a generic `/api` command view. Started by bare `hya` (`--server <daemon URL> --dir <cwd> --db <db> --hya <hya>`, or with `--connect` `--server <bridge URL> --hya <hya> --remote --server-label …`; plus `--web-url|--web-error`); direct starts may pass `--grpc <host:port>`. Shipped as `lib/hya/tui` in the release archive and source install, so it must stay self-contained (no imports outside the package; the `/api` catalog `src/operations.json` is generated by `gen-api`, and protobuf definitions live under `src/proto`). Also runs directly with Bun for development (`bun packages/hya-tui/src/main.ts`). See `docs/tui.md`. |
 | `packages/hya-tui-web` | Bun host that runs a terminal frontend on a real PTY and renders it in the browser with xterm.js (WebSocket frames reuse `hya.v1` `PtyClientFrame`/`PtyServerFrame`). Playwright harness for TUI visual/interaction tests and the WebUI host that bare `hya` starts (shipped as `lib/hya/tui-web`). See `docs/tui-web.md`. |
-| `.planning` | Local task plans, findings, and progress using `planning-with-files`; existing tasks remain separate. |
+| `.plan/pN/` | Numbered local plans and their Kanban task tables. |
+| `.dev/` | Local development notes, experiments, and helpers. |
+| `.lint/` | Local error-correction material and checks beyond unit tests. |
 | `docs/spec` | Project coding guidelines. Read the relevant layer's `index.md` before changing code. |
 | `docs` | Project documentation: user guides, architecture, the `hya.v1` protocol references, historical Compat parity record, and testing/agent matrix under `docs/testing/`. |
 
