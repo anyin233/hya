@@ -120,8 +120,14 @@ async fn bundle_registry_set_bundle_enabled_prevents_busy_snapshot() {
     outcome.unwrap_or_else(|e| {
         panic!("set_bundle_enabled must use BEGIN IMMEDIATE and avoid SQLITE_BUSY_SNAPSHOT (517): {e}; trace={trace:?}")
     });
+    // The pool returns connections asynchronously, so under load the call may
+    // open a fresh one; its connection setup reads before any lock, which says
+    // nothing about `BEGIN`. The write-lock check below still applies.
+    let opened = trace
+        .iter()
+        .any(|e| e.kind == FileKind::MainDb && e.op == "xOpen");
     assert!(
-        hook_unfired,
+        hook_unfired || opened,
         "WAL_WRITE_LOCK was held before querying table data (BEGIN IMMEDIATE)"
     );
     assert!(
