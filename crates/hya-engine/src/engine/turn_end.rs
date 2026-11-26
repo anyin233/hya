@@ -67,6 +67,11 @@ pub(crate) fn error_cause(error: &CoreError) -> Option<FinishCause> {
 /// Stable machine code recorded on the `Error` event of a failed turn.
 pub(crate) fn error_code(error: &CoreError) -> &'static str {
     match error {
+        CoreError::Provider(error)
+            if crate::ModelFailureClass::of(error) == crate::ModelFailureClass::Auth =>
+        {
+            "provider_auth"
+        }
         CoreError::Provider(_) => "provider_error",
         CoreError::Tool(_) => "tool_error",
         CoreError::Store(_) => "store_error",

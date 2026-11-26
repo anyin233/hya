@@ -389,7 +389,7 @@ after it is a no-op.
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `error` | `session: Option<SessionId>`, `code: String`, `message: String`, `failed_message: Option<MessageId>` | Fold only with `failed_message`: sets `MessageProjection.error = {code, message}` on that message; otherwise **no-op**. The engine appends it when a turn fails (`code`: `provider_error`, `tool_error`, `store_error`, …; `message`: the error's display text, at most 2000 bytes) immediately before the message's `message_finished { finish: error }`. `session` optional so a global error is expressible; `Event::session()` returns `None` when absent. v1: `errorReported`, `MessageInfo.error`, `TurnInfo.errorCode`/`errorMessage`. |
+| `error` | `session: Option<SessionId>`, `code: String`, `message: String`, `failed_message: Option<MessageId>` | Fold only with `failed_message`: sets `MessageProjection.error = {code, message}` on that message; otherwise **no-op**. The engine appends it when a turn fails (`code`: `provider_auth`, `provider_error`, `tool_error`, `store_error`, …; `message`: the error's display text, at most 2000 bytes) immediately before the message's `message_finished { finish: error }`. `session` optional so a global error is expressible; `Event::session()` returns `None` when absent. v1: `errorReported`, `MessageInfo.error`, `TurnInfo.errorCode`/`errorMessage`. |
 
 ### Events the reducer does not fold
 

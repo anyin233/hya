@@ -168,12 +168,7 @@ fn busy() -> Error {
 }
 
 fn turn_error(code: String, message: String) -> Error {
-    let lower = message.to_ascii_lowercase();
-    if code == "auth_required"
-        || ["unauthorized", "401", "missing api key", "credentials"]
-            .iter()
-            .any(|hint| lower.contains(hint))
-    {
+    if code == "provider_auth" {
         return Error::auth_required().data(serde_json::json!({"code":code,"message":message,"hint":"Configure the provider or run hya login in a terminal."}));
     }
     Error::new(-32011, message).data(serde_json::json!({"code":code}))

@@ -36,7 +36,7 @@ For example, after receiving a session ID, an editor can send:
 {"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"<sessionId>","prompt":[{"type":"text","text":"Explain "},{"type":"resource_link","name":"README","uri":"file:///work/repo/README.md"}]}}
 ```
 
-Invalid inputs use `-32602`, unknown sessions use `-32002`, and a busy session uses `-32010`. A failed turn returns the backend's error code in `error.data.code`, with `-32000` for credential errors and `-32011` for execution errors. The advertised v1 capabilities cover text, resource links and stdio MCP. Optional session loading, model switching, embedded context, images, audio, HTTP/SSE MCP, editor file operations and editor terminals are outside this interface.
+Invalid inputs use `-32602`, unknown sessions use `-32002`, and a busy session uses `-32010`. A failed turn returns the backend's error code in `error.data.code`, with `-32000` (`auth_required`) when that code is `provider_auth` and `-32011` for every other failure. The advertised v1 capabilities cover text, resource links and stdio MCP. Optional session loading, model switching, embedded context, images, audio, HTTP/SSE MCP, editor file operations and editor terminals are outside this interface.
 
 ## Session MCP lifetime
 
