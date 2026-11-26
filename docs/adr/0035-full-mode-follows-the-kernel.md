@@ -72,7 +72,7 @@ the same name.
   environment variables. The parity with oh-my-pi's `compaction.methodOrder`
   no longer holds. `compaction.summary_max_tokens` and
   `HYA_COMPACTION_SUMMARY_MAX_TOKENS` remain as the output cap for the
-  [terminal handoff](../compaction.md#terminal-handoff) in F4.
+  [terminal handoff](../architecture/engine-and-subagents.md) in F4.
 - Every full-mode request's system prompt changes, so request digests and
   traces are not directly comparable with runs before this change.
 - `hya-main` no longer tells the model to keep working while a todo item is
@@ -82,6 +82,6 @@ the same name.
 - This replaces ADR-0033 D5's reading that a moved-out feature may take over
   a kernel primitive, and the SHA-256 identity described in ADR-0032.
 
-See [kernel.md](../kernel.md), [compaction.md](../compaction.md),
-[base-tools.md](../base-tools.md) and
-[plugin-protocol.md](../plugin-protocol.md).
+See [kernel-and-context.md](../architecture/kernel-and-context.md),
+[providers-and-tools.md](../architecture/providers-and-tools.md) and
+[plugins-and-hooks.md](../extend/plugins-and-hooks.md).

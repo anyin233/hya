@@ -23,7 +23,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
     rel="stylesheet"
-    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;700&family=Noto+Sans+SC:wght@400;500;700&display=swap"
   />
   <link rel="stylesheet" href="style.css" />
   <script src="main.js" defer></script>
@@ -39,9 +39,7 @@
             <img src="assets/hya-logo.png" alt="Hya" width="800" height="413" />
           </a>
           <a href="docs.html" class="nav-book is-active" aria-label="文档" aria-current="page" title="Documentation">
-            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" shape-rendering="crispEdges">
-              <path d="M1 2h5v1H1zM10 2h5v1h-5zM6 3h1v1H6zM9 3h1v1H9zM7 4h2v10H7zM1 3h1v10H1zM14 3h1v10h-1zM2 12h4v1H2zM10 12h4v1h-4zM6 13h1v1H6zM9 13h1v1H9zM3 5h3v1H3zM3 7h3v1H3zM10 5h3v1h-3zM10 7h3v1h-3zM10 9h2v1h-2z"/>
-            </svg>
+            <svg class="line-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6.5C10 5 7 4.6 3.5 5v13c3.5-.4 6.5 0 8.5 1.5 2-1.5 5-1.9 8.5-1.5V5C17 4.6 14 5 12 6.5Z"/><path d="M12 6.5v13"/></svg>
             <span class="nav-book-label">Docs</span>
           </a>
         </div>
@@ -118,7 +116,7 @@
           <h3>Requirements</h3>
           <ul>
             <li>预编译版本：glibc Linux（<code>x86_64</code>、<code>aarch64</code>）和 Apple silicon macOS。</li>
-            <li>Windows：在 WSL 2 中安装，见 <a class="link" href="https://chrono-foundry.github.io/hya/install-wsl/">Install on Windows with WSL</a>。</li>
+            <li>Windows：在 WSL 2 中安装，见 <a class="link" href="https://chrono-foundry.github.io/hya/getting-started/installation/#windows-wsl-2">Install on Windows with WSL</a>。</li>
             <li>从源码构建：Rust 1.91+、Bun 1.4.2+、Git。</li>
           </ul>
           <h3>Install</h3>
@@ -133,7 +131,7 @@ cd hya
           <h3>Update</h3>
 <pre>hya update                     <span class="dim"># 更新到最新稳定版</span>
 hya update --version v0.47.0   <span class="dim"># 固定到指定版本</span></pre>
-          <p>安装脚本会校验压缩包的 SHA-256，用重命名整体替换安装目录，失败时自动回滚。更多选项见 <a class="link" href="https://chrono-foundry.github.io/hya/install/">Install and Update</a>。</p>
+          <p>安装脚本会校验压缩包的 SHA-256，用重命名整体替换安装目录，失败时自动回滚。更多选项见 <a class="link" href="https://chrono-foundry.github.io/hya/getting-started/installation/">Installation</a>。</p>
         </section>
 
         <section id="quick-start">
@@ -213,7 +211,7 @@ compaction:
             <li>让模型把推导出的结论写进可见文本、工作区文件或 todo 清单，而不是只留在私有推理里。</li>
             <li>需要旧的工具输出时，用 <code>read</code> 读取通知中的 <code>artifact://</code> 句柄。</li>
           </ul>
-          <p>完整说明见 <a class="link" href="https://chrono-foundry.github.io/hya/kernel/">Kernel</a> 和 <a class="link" href="https://chrono-foundry.github.io/hya/compaction/">Compaction</a>。</p>
+          <p>完整说明见 <a class="link" href="https://chrono-foundry.github.io/hya/architecture/kernel-and-context/">Kernel &amp; Context</a> 和 <a class="link" href="https://chrono-foundry.github.io/hya/guide/context-and-memory/">Context &amp; Compaction</a>。</p>
         </section>
 
         <section id="fast-and-safe">
@@ -268,7 +266,7 @@ compaction:
 <span class="kw">hya -p</span> "make all unit tests in hya-proto pass" --max-iterations 6
 <span class="kw">hya loop</span> --target "formatting and hya-tool tests pass" \
   --until "cargo fmt --all --check &amp;&amp; cargo test -p hya-tool" --budget 8</pre>
-          <p>Workflow 是一份 Markdown 文档（<code>*.hya.md</code>），把多个 Agent 编排成有向无环图，放在 <code>.hya/workflows/</code> 或 <code>~/.config/hya/workflows/</code>。<code>hya -p</code>（Goal 模式）和 <code>hya loop</code> 由独立的评估者或 shell 条件决定何时停止。见 <a class="link" href="https://chrono-foundry.github.io/hya/workflows/">Workflows</a> 和 <a class="link" href="https://chrono-foundry.github.io/hya/architecture/subagent-orchestration/">Subagent Orchestration</a>。</p>
+          <p>Workflow 是一份 Markdown 文档（<code>*.hya.md</code>），把多个 Agent 编排成有向无环图，放在 <code>.hya/workflows/</code> 或 <code>~/.config/hya/workflows/</code>。<code>hya -p</code>（Goal 模式）和 <code>hya loop</code> 由独立的评估者或 shell 条件决定何时停止。见 <a class="link" href="https://chrono-foundry.github.io/hya/guide/workflows/">Workflows</a> 和 <a class="link" href="https://chrono-foundry.github.io/hya/architecture/engine-and-subagents/">Session Engine &amp; Subagents</a>。</p>
         </section>
 
         <!-- ---------- Reference ---------- -->
@@ -298,7 +296,7 @@ providers:
     base_url: https://api.anthropic.com/v1
     api_key: "{env:ANTHROPIC_API_KEY}"
     models: [claude-sonnet-4-6]</pre>
-          <p>凭据也可以用 <code>hya login anthropic "$ANTHROPIC_API_KEY"</code> 单独保存，它优先于配置里的 <code>api_key</code>。ChatGPT Codex 和 Grok 订阅用 <code>hya oauth login</code>。守护进程运行时手动改了 <code>providers</code>，运行 <code>hya serve restart</code> 或在 <code>/key</code> 中刷新。完整字段见 <a class="link" href="https://chrono-foundry.github.io/hya/configuration/">Configuration Guide</a>。</p>
+          <p>凭据也可以用 <code>hya login anthropic "$ANTHROPIC_API_KEY"</code> 单独保存，它优先于配置里的 <code>api_key</code>。ChatGPT Codex 和 Grok 订阅用 <code>hya oauth login</code>。守护进程运行时手动改了 <code>providers</code>，运行 <code>hya serve restart</code> 或在 <code>/key</code> 中刷新。完整字段见 <a class="link" href="https://chrono-foundry.github.io/hya/reference/configuration/">Configuration Reference</a>。</p>
         </section>
 
         <section id="cli">
@@ -325,7 +323,7 @@ providers:
               <tr><td><code>hya update</code></td><td>更新到最新 release</td></tr>
             </tbody>
           </table>
-          <p>每个子命令和参数的说明见 <a class="link" href="https://chrono-foundry.github.io/hya/cli/">CLI Reference</a>。</p>
+          <p>每个子命令和参数的说明见 <a class="link" href="https://chrono-foundry.github.io/hya/reference/cli/">CLI Reference</a>。</p>
         </section>
 
         <section id="faq">
@@ -337,18 +335,18 @@ providers:
           <h3>提示 WebUI 端口 3250 被占用？</h3>
           <p>通常是另一个 <code>hya</code> 正在用这个端口，TUI 本身照常工作。用 <code>hya --port 3251</code> 换一个端口，或 <code>hya --port 0</code> 让系统自动选择。</p>
           <h3>能在 Windows 上用吗？</h3>
-          <p>请在 WSL 2 中安装，Windows 上的浏览器可以访问 WebUI。见 <a class="link" href="https://chrono-foundry.github.io/hya/install-wsl/">Install on Windows with WSL</a>。</p>
+          <p>请在 WSL 2 中安装，Windows 上的浏览器可以访问 WebUI。见 <a class="link" href="https://chrono-foundry.github.io/hya/getting-started/installation/#windows-wsl-2">Install on Windows with WSL</a>。</p>
           <h3>无头模式下写文件或执行命令失败？</h3>
           <p><code>hya exec</code>、<code>-p</code> 和 <code>loop</code> 中没人回答权限询问，所以询问一律拒绝。可以在 <code>permission.rules</code> 里显式允许需要的命令，或在受信任的环境中使用 <code>--yolo</code>。</p>
           <h3>怎么从另一台电脑访问服务器上的 Hya？</h3>
-          <p>使用加密中继：在任意可达的机器上运行 <code>hya proxy</code>，在后端运行 <code>hya serve start --relay &lt;url&gt;</code> 得到 <code>hya://</code> 链接，再在本地用 <code>hya --connect -</code> 粘贴链接连接。见 <a class="link" href="https://chrono-foundry.github.io/hya/relay/">Secure Relay</a>。</p>
-          <p>其他问题见 <a class="link" href="https://chrono-foundry.github.io/hya/troubleshooting/">Troubleshooting</a>。</p>
+          <p>使用加密中继：在任意可达的机器上运行 <code>hya proxy</code>，在后端运行 <code>hya serve start --relay &lt;url&gt;</code> 得到 <code>hya://</code> 链接，再在本地用 <code>hya --connect -</code> 粘贴链接连接。见 <a class="link" href="https://chrono-foundry.github.io/hya/guide/daemon-and-relay/">Background Server &amp; Remote Relay</a>。</p>
+          <p>其他问题见 <a class="link" href="https://chrono-foundry.github.io/hya/reference/troubleshooting/">Troubleshooting</a>。</p>
         </section>
       </article>
 
       <nav class="docs-pager" aria-label="页面导航">
-        <a class="bracket-button" href="index.html">← Home</a>
-        <a class="bracket-button" href="#overview">Back to top</a>
+        <a class="button" href="index.html">← Home</a>
+        <a class="button" href="#overview">Back to top</a>
       </nav>
     </main>
   </div>

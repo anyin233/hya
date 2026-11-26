@@ -23,7 +23,7 @@ PTY asked for a notification, the same way it knows nothing about `bash` or
 behavior. `packages/hya-tui-web`'s job stays "run one fixed command and
 render its terminal" (ADR-0018); this decision adds one more terminal
 behavior to render faithfully, like OSC 52 clipboard writes already do
-(docs/tui.md "Copy").
+(`docs/guide/interactive-mode.md`).
 
 Payload handling:
 

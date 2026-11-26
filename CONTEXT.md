@@ -7,7 +7,7 @@ the ubiquitous language across `hya-proto`, `hya-core`, `hya-engine`, `hya-store
 ## Kernel
 
 **Context**:
-The state a kernel round reads through its [View](docs/kernel.md#request-views).
+The state a kernel round reads through its [View](docs/architecture/kernel-and-context.md).
 The part visible to the model is the live transcript (`m`), including todo
 tool results and Rewrite markers. The log also records the current
 completion criteria (`g`) independently of the visible transcript.
@@ -162,7 +162,7 @@ _Avoid_: swarm, crew
 The team-scoped canonical path of an agent (`main`,
 `main/hya-scout-suzuran`, `main/hya-task-exusiai/hya-task-amiya`). Leaf names
 are minted deterministically as `<sanitized-subagent-type>-<operator>`
-([subagent-orchestration.md §2.1](docs/architecture/subagent-orchestration.md#21-handles-agent-type--operator-name-0410)).
+([engine-and-subagents.md](docs/architecture/engine-and-subagents.md)).
 _Avoid_: bare agent name, caller-chosen name
 
 **Channel & Mail**:
@@ -215,7 +215,7 @@ The opaque value of the `workspace.state` host capability, formed as
 revision counts `FilesObserved` and `FilesChanged` events. Equal values mean
 the same session recorded no file change between observations. If the
 working directory has no native watch, the capability returns `null` and
-cannot validate a cached answer. See [workspace file observations](docs/kernel.md#workspace-file-observations).
+cannot validate a cached answer. See [Kernel & Context Engine](docs/architecture/kernel-and-context.md).
 _Avoid_: checkout hash, snapshot
 
 **Stage**:

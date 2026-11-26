@@ -89,5 +89,5 @@ workdir up to `$HOME` and the date on each runtime rebuild.
 - Editing `AGENTS.md` mid-session takes effect only in a new session or when
   the model reads the file with a tool.
 
-See [kernel.md](../kernel.md) and the
-[event reference](../architecture/event-model.md).
+See [kernel-and-context.md](../architecture/kernel-and-context.md) and
+[events-and-storage.md](../architecture/events-and-storage.md).

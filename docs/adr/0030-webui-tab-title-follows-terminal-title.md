@@ -4,7 +4,7 @@ Status: Accepted, 2026-10-14.
 
 The TUI names its terminal after the open session and marks what it needs
 (`●` running, `?` waiting on an ask, `✓`/`✗` a turn ended while away;
-docs/tui.md "Terminal title"). It does this with OSC 0, the escape sequence
+`docs/guide/interactive-mode.md`). It does this with OSC 0, the escape sequence
 programs use to set a terminal emulator's tab or window title. The WebUI
 (ADR-0018, ADR-0019) puts xterm.js in that emulator's place. Without a
 mapping, a browser tab running the TUI would always read `hya`, and the

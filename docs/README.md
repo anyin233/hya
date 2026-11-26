@@ -1,97 +1,63 @@
-# hya Documentation
+# Hya Documentation
 
-`hya` is an event-sourced Rust multi-agent coding runtime. Every client surface
-speaks one consolidated contract — **`hya.v1`** (18 services / 109 RPCs) — over
-HTTP/JSON + SSE + WebSocket (`/v1`) and gRPC on a single port, backed by a
-persistent per-database daemon and optional end-to-end encrypted `Noise_NKpsk0`
-relay access.
+Hya is an AI coding assistant that runs locally in your terminal and in your browser, connects to any model provider you choose, and saves every conversation safely on your own machine.
 
-The documentation is organized into **three core categories**, followed by
-protocol, bundle/extension, and contributor references.
-
-For the searchable Starlight website, local serving commands, and GitHub Pages
-deployment, see [Documentation Website](docs-site.md).
+Pick where you want to start based on what you're doing today:
 
 ---
 
-## 1. Design Philosophy & Architecture (`的设计理念与架构`)
+## 1. Using Hya (For Everyone)
 
-Start here to understand *why* `hya` is structured around a single canonical
-event log, how crates and runtime planes fit together, and what invariants
-govern sessions, Projects, subagents, and Workflows:
+New to Hya, or looking up how to run a workflow, switch models, or connect from another machine? Start here.
 
-- **[Design Philosophy & Architecture Overview](architecture/overview.md)** — The seven core architectural pillars, layer boundaries, and end-to-end turn lifecycle.
-- **[Project Structure](project-structure.md)** — Repository layout, workspace and native bundle crates, 25 registry tools, 13 first-party bundles, and dependency direction.
-- **[Domain Glossary (`CONTEXT.md`)](../CONTEXT.md)** — Canonical domain terminology across `hya-proto`, `hya-core`, Projects, Relay, Workflows, and TUI.
-- **Core Subsystem Specifications:**
-  - [Runtime (`hya-engine`)](architecture/runtime.md) — `SessionEngine`, publish seams, `TurnBinding`, Goal/Loop drivers, file snapshots & revert, and workspace roots.
-  - [Event Model (`hya-proto`)](architecture/event-model.md) — Strong IDs, `EventSeq` (`seq = 0` live vs `seq > 0` durable), full `Event` wire catalog, and deterministic `Projection` reducer.
-  - [Storage and bundle registry](architecture/storage.md) — SQLite WAL schema (`0001_init.sql`), atomic batch appends, `projection_snapshot`, `pending_resume`, and `bundle_registry`.
-  - [Subagent Orchestration](architecture/subagent-orchestration.md) — Episodic resident actors, `report` / `handoff` / `archive` / downward-DM revival, and vertical `#announce` / `#DM` channels.
-  - [Admission and Governor](architecture/admission-and-governor.md) — Atomic task batches, active-claim capacity, and in-memory `SubagentGovernor` stream budgets.
-  - [Providers (`hya-provider`)](architecture/providers.md) — OpenAI Chat/Responses/Codex, Grok Build, Anthropic, Google Gemini, capability preflight, and reasoning routing.
-  - [Tools and Permissions (`hya-tool`)](architecture/tools-and-permissions.md) — `ToolRegistry`, `PermissionPlane`, `ProjectScope` symlink-safe multi-root containment, saved rules, and output caps.
-  - [Agent Tool Surface](architecture/agent-tool-surface.md) — Registered vs advertised vs executable schemas, `todo`, `task`, channel tools, and hashline editing.
-  - [Server and Client (`hya-server` / `hya-sdk-v1`)](architecture/server-client.md) — Single-port `/v1` HTTP/SSE/WS + `V1Grpc` dispatch, `AppState` drain, error codes, and SDK clients.
-- **Architecture Decision Records (`docs/adr/`):**
-  - Daemon, Projects & Lifecycle: [ADR-0022 (One writer per DB)](adr/0022-one-writer-per-database.md), [ADR-0023 (Persistent daemon)](adr/0023-persistent-backend-daemon.md), [ADR-0024 (Projects & client workspace)](adr/0024-project-model-and-client-chosen-workspace.md), [ADR-0026 (Multi-root path permissions)](adr/0026-multi-root-path-permissions.md), [ADR-0027 (Per-Project catalog tier)](adr/0027-per-project-catalog-tier.md), [ADR-0031 (Hot reload & stop/start restart)](adr/0031-hot-reload-and-stop-start-restart.md), [ADR-0036 (Bounded append queue & degraded store)](adr/0036-bounded-append-queue-and-degraded-store.md).
-  - Multi-Agent, Mailbox & Workflows: [ADR-0001 (Event-sourced mailbox)](adr/0001-event-sourced-mailbox-and-channels.md), [ADR-0002 (Resident actor fencing & budgets)](adr/0002-resident-actor-model-and-autonomous-main-agent.md), [ADR-0013 (Compiled Workflows)](adr/0013-user-assembled-agent-workflows.md), [ADR-0014 (WorkflowBundle & control)](adr/0014-workflowbundle-and-event-sourced-control.md), [ADR-0015 (Unified episodic subagent lifecycle)](adr/0015-unified-resident-subagent-lifecycle.md), [ADR-0016 (Vertical channel plane)](adr/0016-channel-communication-plane.md), [ADR-0017 (Workflow on unified substrate)](adr/0017-workflow-on-unified-substrate.md), [ADR-0032 (Workflow programs & the orchestrator agent)](adr/0032-workflow-programs-and-the-orchestrator-agent.md).
-  - Models, Bundles, Plugins & Relay: [ADR-0004 (Model categories)](adr/0004-model-category-resolution-and-precedence.md), [ADR-0007 (Hot skill reload)](adr/0007-hot-skill-reload-visibility.md), [ADR-0008 (Plugin refresh visibility)](adr/0008-hot-plugin-reload-visibility.md), [ADR-0009 (Out-of-process plugin binaries)](adr/0009-rust-plugin-binaries-over-in-process-libraries.md), [ADR-0012 (Origin-controlled tool plane)](adr/0012-one-agent-per-bundle-and-host-controlled-tool-plane.md), [ADR-0025 (Secure relay)](adr/0025-secure-relay.md), [ADR-0029 (Config model cache overrides)](adr/0029-config-model-entries-override-the-model-cache.md).
-  - TUI & WebUI: [ADR-0018 (Browser PTY environment)](adr/0018-browser-rendered-tui-test-environment.md), [ADR-0019 (OpenTUI frontend)](adr/0019-adopt-opentui-frontend.md), [ADR-0020 (Bundled TUI & WebUI in bare `hya`)](adr/0020-bundle-tui-and-webui-in-hya.md), [ADR-0021 (WebUI desktop notifications)](adr/0021-webui-desktop-notifications.md), [ADR-0030 (WebUI tab titles)](adr/0030-webui-tab-title-follows-terminal-title.md), [ADR-0036 (TUI component presets & `tui.toml`)](adr/0036-tui-component-presets-and-tui-toml.md), [ADR-0037 (WebUI file uploads)](adr/0037-webui-uploads-pasted-and-dropped-files.md).
+### Get Started
+- **[What is Hya?](getting-started/overview.md)** — How the terminal UI, browser WebUI, background server, and offline mode fit together.
+- **[Installation](getting-started/installation.md)** — One-line install on Linux, macOS, and Windows (WSL 2), plus `hya update` and source builds.
+- **[5-Minute Quickstart](getting-started/quickstart.md)** — Launch Hya, add an API key or OAuth login, edit code, approve prompts, and `/undo` changes.
+- **[Common Workflows](getting-started/common-workflows.md)** — Copy-paste recipes for exploring code, fixing bugs, running on autopilot, and working remotely.
 
----
+### Guides
+- **[Interactive Mode (TUI & WebUI)](guide/interactive-mode.md)** — Layouts (`tui.toml` presets), `@file` & `!shell`, clipboard/browser file paste, `/undo` & `/fork`, and management screens.
+- **[Editor Integration (ACP)](guide/editor-integration.md)** — Connecting Zed and other ACP v1 code editors directly to your local Hya daemon via `hya acp`.
+- **[Headless & Automation](guide/headless-and-automation.md)** — Running Hya in scripts and CI with `hya exec`, `--bare`, `-p` Goal mode, and `hya loop`.
+- **[Models, Providers & Auth](guide/models-and-providers.md)** — Connecting Anthropic, OpenAI, Gemini, Grok, or local models via `/key`, OAuth, or `config.yaml`.
+- **[Projects, Permissions & Safety](guide/projects-and-permissions.md)** — Multi-folder Projects, outside-directory guards, `manual` vs `yolo` modes, and `/rules`.
+- **[Context, Memory & Compaction](guide/context-and-memory.md)** — Teaching Hya project rules with `AGENTS.md` and how Hya shrinks long chats automatically at 80%.
+- **[Subagents & Multi-Agent Teams](guide/subagents-and-teams.md)** — Built-in roles (`hya-main`, `hya-plan`, `hya-task`, `hya-scout`, `hya-reviewer`), `/subagents`, and vertical channels.
+- **[Workflows](guide/workflows.md)** — Running multi-stage `*.hya.md` pipelines from `/workflow` or the CLI.
+- **[Skills, Custom Commands & MCP](guide/skills-commands-and-mcp.md)** — Loading `SKILL.md` guides, writing `/commands`, connecting MCP tool servers, and Code Mode.
+- **[Background Server & Remote Relay](guide/daemon-and-relay.md)** — Controlling `hya serve` and connecting across machines over end-to-end encrypted `hya://` links.
 
-## 2. Usage Guides: Quick Start & Configuration (`的使用方法与配置指南`)
-
-Everything needed to install, configure, operate, and extend `hya` day to day:
-
-- **[Quick Start Guide](getting-started.md)** — Release & source installation, launching the TUI + WebUI, connecting live providers / OAuth, headless `exec` / `-p` / `loop` runs, session replay, and remote Relay setup.
-- **[Configuration Guide](configuration.md)** — Complete `~/.config/hya/config.yaml` map, offline fallback, providers/auth/OAuth, remembered Agent models & reasoning effort, model categories, permissions, MCP, plugins, websearch, subagent budgets, formatter/LSP, and `HYA_*` environment variables.
-- **Installation & Operations:**
-  - [Install and Update](install.md) — Unified `v<version>` release archives, `https://hya.ed-aisys.com/install.sh`, `hya update`, version pinning, and rollback.
-  - [Install on Windows with WSL](install-wsl.md) — WSL 2 setup and accessing the WebUI from Windows browsers.
-  - [Agent Client Protocol](acp.md) — Start hya from an editor over stdio, attach session MCP tools and answer permissions.
-  - [CLI Reference](cli.md) — Every `hya` subcommand, flag, database lock rule, and exit code.
-  - [Troubleshooting](troubleshooting.md) — Solutions for daemon locks, WebUI ports, Host allowlist (`403`), Relay diagnostics, and provider errors.
-- **Interactive Surfaces & Remote Access:**
-  - [OpenTUI Frontend](tui.md) — Layout, Projects sidebar, `/key` Provider View, `/agent`, `/subagents`, `/workflow`, `/rules`, `/diff`, Vim mode, and keybindings.
-  - [TUI Structure (`tui.toml`)](tui-config.md) — Presets (`minimal`, `statusline`, `workspace`), the status line, `/config`, and `/set`.
-  - [Browser-Rendered TUI (WebUI)](tui-web.md) — Running the TUI in browsers over a real PTY + xterm.js, plus the `tui-exp` and Playwright test harnesses.
-  - [Secure Relay](relay.md) — End-to-end encrypted remote access with `hya proxy`, `hya serve --relay`, `hya --connect`, `hya bridge`, and `hya relay doctor`.
-- **Context, Skills, Workflows & Bundles:**
-  - [Kernel](kernel.md) — Three Context primitives, six built-in tools, rewrite rules, and `hya exec --bare`.
-  - [Compaction](compaction.md) — The five context-reduction mechanisms, thresholds, and configurable order.
-  - [Skills](skills.md) — Skill discovery roots, progressive loading via `skill`, and `hya/core-skills`.
-  - [Workflows](workflows.md) — Authoring `*.hya.md` Stage DAGs, stage model routing, CLI/TUI control, and WorkflowBundle packaging.
-  - [Goal and Loop Authoring](goal-loop-authoring.md) — Independent evaluators, shell `--while`/`--until` predicates, and plugin hooks.
-  - [Bundle Authoring](agent-bundle-authoring.md) & [Bundle Runtime](bundle-runtime.md) — Authoring, packaging, installing, and running `.hyabundle` (format v4) static and Bun/Rust sidecar bundles (examples under [`examples/`](examples/)).
-  - [Code Mode](code-mode.md) — The optional `code-mode__run` tool: a JavaScript program that calls the agent's other tools (`tools.code.mode`).
-  - [Core Agents](core-agents.md), [Tool-Family Presets](base-tools.md), [Subagent Bundles](subagent-bundles.md), [Agent Channels](agent-channels.md), [Extra Bundles](extra-bundles.md), and [Claude Plugin Import](claude-plugin-import.md).
-  - [Plugin Protocol](plugin-protocol.md), [Bundle-Owned TUI Extensions](tui-extensions.md), [TUI Extension SDK (`@hya/tui-sdk`)](tui-extension-sdk.md), and [Disk Inspector Plugin](disk-inspector.md).
+### Reference Manuals
+- **[CLI Reference](reference/cli.md)** — Every `hya` command, flag, database lock rule, and exit code.
+- **[Configuration Reference](reference/configuration.md)** — Complete field dictionary for `~/.config/hya/config.yaml` and `~/.config/hya/tui.toml`.
+- **[Slash Commands & Keybindings](reference/commands-and-keybindings.md)** — Every `/command`, keyboard shortcut, and `/keybind` customization.
+- **[Built-in Tools, Agents & Bundles](reference/tools-and-presets.md)** — All 6 Kernel tools, 25 Registry tools, built-in agents, 13 presets, and `hya-extra/*` bundles.
+- **[Environment Variables & File Paths](reference/env-and-paths.md)** — Every `HYA_*` variable and XDG file location on disk.
+- **[Troubleshooting](reference/troubleshooting.md)** — Quick fixes for busy ports, daemon locks, `403` host errors, offline mode, and relay setup.
 
 ---
 
-## 3. Architecture & Design Diagrams (`的设计图`)
+## 2. Extending & Integrating Hya (For Plugin & App Developers)
 
-Visual blueprints and protocol/lifecycle diagrams for the current `hya` system:
+Customize Hya or build your own apps and scripts on top of it—without touching Hya's core Rust source code.
 
-- **[Architecture & Design Diagrams](architecture/diagrams.md)** — Includes:
-  1. High-Level System Architecture Blueprint ([SVG](../docs/assets/hya-architecture.svg))
-  2. Process Topology, Persistent Daemon & Client Surfaces
-  3. Workspace Crate & Package Dependency Graph
-  4. Single-Turn Event-Sourced Execution & Streaming Sequence (`seq = 0` vs `seq > 0`)
-  5. Episodic Resident Subagent Lifecycle & Vertical Channel Plane (`#announce` & `#DM`)
-  6. Governed Execution Modes (Turn vs Goal vs Loop vs Workflow DAG)
-  7. Multi-Root `Project`, `ProjectScope` & Lazy `CatalogScope` Overlays
-  8. Zero-Trust End-to-End Encrypted Relay (`hya.relay.v1` + `Noise_NKpsk0`)
-  9. Extension Hot-Reload vs Binary Stop/Start & `pending_resume` Recovery
+- **[Extending Hya: Overview](extend/overview.md)** — Decision table: `AGENTS.md` vs Skills vs Commands vs Workflows vs MCP vs `.hyabundle` vs TUI Extensions.
+- **[Authoring Skills & Slash Commands](extend/skills-and-commands.md)** — `SKILL.md` frontmatter, discovery precedence, and `.hya/commands/*.md` argument templates.
+- **[Authoring Workflows & Evaluators](extend/authoring-workflows.md)** — Writing `*.hya.md` Stage DAGs, loop verifiers, per-stage model routing, and custom Goal/Loop judges.
+- **[Creating Bundles (`.hyabundle`)](extend/bundles.md)** — Packaging agents, skills, tools, custom HTTP APIs (`apis:`), and permission modes—plus importing Claude Code plugins (`--claude`).
+- **[Sidecar Plugins, Custom Tools & Hooks](extend/plugins-and-hooks.md)** — Writing Bun JS modules or NDJSON JSON-RPC 2.0 plugins, `host/capability` calls, and all 19 hooks.
+- **[TUI Extensions (`@hya/tui-sdk`)](extend/tui-extensions.md)** — Building sandboxed custom UI panels, status items, renderers, and prompt interceptors.
+- **[`hya.v1` Protocol Overview](protocol/README.md)** · **[SDK & Client Integration](protocol/sdk.md)** · **[Generated API Reference](protocol/api-reference.md)** · **[OpenAPI Schema](protocol/openapi.json)** — Driving Hya over HTTP/JSON+SSE+WebSocket, gRPC, or Rust `hya-sdk-v1`.
 
 ---
 
-## Protocol & Contributor References
+## 3. Architecture & Contributing (For Core Contributors)
 
-| Area | Pages |
-| --- | --- |
-| `hya.v1` Wire Contract | [Protocol Guide](protocol/README.md) · [Generated API Reference](protocol/api-reference.md) · [OpenAPI Schema](protocol/openapi.json) |
-| Workspace Development & Release | [Development Guide & Git Tag Rules](development.md) · [Backend Spec Guidelines](spec/backend/index.md) · [Cross-Layer & Reuse Guides](spec/guides/index.md) |
-| Verification & E2E Matrix | [Testing Overview](testing/README.md) · [Agent Feature Matrix](testing/agent-matrix.md) · [Process E2E Harness](testing/process-e2e.md) |
+Working inside the `hya` repository or exploring how the runtime is built?
+
+- **[Architecture Overview](architecture/overview.md)** — Event-sourced truth, 3-primitive Kernel vs Full Mode, persistent daemon, single-port `hya.v1`, and system diagrams.
+- **[Repository & Crate Map](architecture/codebase-map.md)** — Workspace crates, native tool bundles, frontend packages, and where to make a change.
+- **[Kernel & Context Engine](architecture/kernel-and-context.md)** · **[Event Model & Storage](architecture/events-and-storage.md)** · **[Session Engine, Subagents & Channels](architecture/engine-and-subagents.md)** · **[Providers, Tool Plane & Scoping](architecture/providers-and-tools.md)** · **[Server, Relay & Frontend Internals](architecture/server-relay-and-tui.md)** · **[Domain Glossary](architecture/glossary.md)**
+- **[Development & Coding Standards](contributing/development.md)** · **[Plan Template](templates/plan.md)** · **[Testing & Verification](contributing/testing.md)** · **[Dev Tooling (`xtask`) & Docs Site](contributing/tooling-and-docs-site.md)** · **[Versioning & Release Guide](contributing/release.md)**
+- **[Architecture Decision Records (`docs/adr/`)](adr/0001-event-sourced-mailbox-and-channels.md)**

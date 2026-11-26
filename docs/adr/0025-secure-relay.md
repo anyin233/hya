@@ -197,7 +197,7 @@ may buffer".
 - **Diagnostics.** `hya relay doctor <proxy-url|link>` probes TLS, each
   binding, prefix routing, and a bounded idle-cut measurement, and recommends a
   `t=` value; `hya serve relay status` shows the same.
-- **First-class deployments.** Each has a recipe in `docs/relay.md`, a manual
+- **First-class deployments.** Each has a recipe in `docs/guide/daemon-and-relay.md`, a manual
   end-to-end check before release, and matching cases in the in-process
   conformance suite:
   1. **Cloudflare Tunnel** (`cloudflared` → `http://localhost:8766`). The

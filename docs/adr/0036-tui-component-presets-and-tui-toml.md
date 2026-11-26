@@ -8,7 +8,7 @@ Status: Accepted
 The TUI (ADR-0019) draws one fixed arrangement: the PaneLayout v4 tree with
 Projects on the left, the conversation viewer, an activity line, and the
 message editor in the middle, and Sessions, Todos, and Context on the right
-(docs/tui.md "Tiled workspace"). "Conversation without headings" removed every
+(`docs/guide/interactive-mode.md`). "Conversation without headings" removed every
 metadata row from the conversation, so the model, the permission mode, and the
 context occupancy appear only in the right sidebar, which needs 150 columns.
 At 80 to 149 columns, a common width for a terminal or a WebUI tab, the screen
@@ -56,7 +56,7 @@ the user writes once and keeps.
   remote backend.
 - **D9** The theme and keybindings are not part of `tui.toml` v1. A v1 loader
   warns that `[theme]` and `[keys]` are not supported yet. The reserved
-  contract is in docs/tui-config.md "Reserved tables" and needs its own
+  contract is in `docs/reference/configuration.md` and needs its own
   change.
 - **D10** One layout engine draws every preset. The single-column presets
   place a fixed chat column (conversation, activity, editor) in the existing
@@ -77,7 +77,7 @@ The same fact is shown in one resident place:
 
 ### Interface rule update
 
-"A box means it is selectable" (docs/tui.md "Tiled workspace") stays. One
+"A box means it is selectable" (`docs/guide/interactive-mode.md`) stays. One
 exception is added: attachment cards above the input (p2 P1) are part of the
 composer, use their attachment identity color instead of the focus color, and
 respond to clicks like the attachment rows they replace.

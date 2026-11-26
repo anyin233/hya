@@ -7,7 +7,7 @@
 > paths (`main/hya-plan-amiya/hya-task-texas`); and channels are event-minted
 > unit broadcast (`#announce-{8}`) and pair DM (`#DM-{8}`) channels. See
 > [ADR-0016](0016-channel-communication-plane.md) and
-> [Subagent Orchestration](../architecture/subagent-orchestration.md) for the
+> [Session Engine, Subagents & Channels](../architecture/engine-and-subagents.md) for the
 > current channel contract.
 
 Inter-agent communication (DM and unit broadcast) is implemented as
@@ -39,7 +39,7 @@ Handles are request aliases for existing sender–peer DM channels. The engine
 resolves canonical paths, relative leaves and `^parent`/`^` at its boundary;
 a missing DM rejects the send. There is no named/`^name` channel resolution.
 For example, `send {"channel":"main/worker","body":"Continue"}` persists the
-same target as an explicit `#DM-…` send. See [Agent channels](../agent-channels.md#handle-aliases-and-durable-mail)
+same target as an explicit `#DM-…` send. See [Session Engine, Subagents & Channels](../architecture/engine-and-subagents.md)
 for request, receipt and event schemas.
 
 Mail is written under the SQLite writer lock by `append_channel_mail`:

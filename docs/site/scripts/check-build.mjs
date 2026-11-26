@@ -5,7 +5,7 @@ import path from 'node:path';
 const output = path.resolve('dist');
 const base = (process.env.DOCS_BASE || '/').replace(/\/$/, '');
 const htmlFiles = readdirSync(output, { recursive: true }).filter((file) => file.endsWith('.html'));
-assert.ok(htmlFiles.length > 80, 'Expected the existing documentation to be rendered');
+assert.ok(htmlFiles.length >= 65, 'Expected the documentation pages to be rendered');
 assert.ok(existsSync(path.join(output, 'pagefind/pagefind.js')), 'Missing production search index');
 JSON.parse(readFileSync(path.join(output, 'protocol/openapi.json'), 'utf8'));
 const broken = [];

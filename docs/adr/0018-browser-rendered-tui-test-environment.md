@@ -54,11 +54,11 @@ timings justify migration. Browser notification/clipboard permissions, DOM
 focus, browser keyboard translation, and WebSocket behavior remain browser
 responsibilities. The experiment shares backend isolation and fake models with
 the browser suite; diagnostics are terminal text, recent parsed frames, raw
-output, and phase timings. See [usage and interface](../tui-web.md#experimental-direct-pty-suite-tui-exp).
+output, and phase timings. See [Testing & Verification](../contributing/testing.md).
 
 ### Full shared terminal matrix (2026-10-09)
 
-The direct-PTY experiment now runs the browser suite's terminal scenarios from the same spec files. A driver selected by `HYA_TUI_DRIVER` supplies screen, keyboard, mouse, paste, focus, OSC and process operations. Playwright remains the scenario/fixture/assertion runner under Bun; its browser/page fixtures are never requested by the PTY driver. Browser-only tests are explicitly tagged/excluded or, for the generic host tests, excluded by exact filename. They remain enabled in Chromium. A parity JSON inventory records every selected case and its result. This retains one scenario source while measuring the cost of browser transport separately; it does not move rendering into the backend or create another frontend. See `docs/tui-web.md` for commands, contracts and coverage boundaries.
+The direct-PTY experiment now runs the browser suite's terminal scenarios from the same spec files. A driver selected by `HYA_TUI_DRIVER` supplies screen, keyboard, mouse, paste, focus, OSC and process operations. Playwright remains the scenario/fixture/assertion runner under Bun; its browser/page fixtures are never requested by the PTY driver. Browser-only tests are explicitly tagged/excluded or, for the generic host tests, excluded by exact filename. They remain enabled in Chromium. A parity JSON inventory records every selected case and its result. This retains one scenario source while measuring the cost of browser transport separately; it does not move rendering into the backend or create another frontend. See `docs/architecture/server-relay-and-tui.md` for commands, contracts and coverage boundaries.
 
 ### Required terminal gate (2026-10-09)
 

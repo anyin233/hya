@@ -11,7 +11,7 @@ machine: a screenshot in the browser's clipboard, or a file on their own disk,
 cannot reach the TUI. The page only forwards xterm.js text input, so pasting
 an image does nothing, and dropping a file onto the tab opens it in the
 browser. A native terminal pastes a dragged file as its path, which the TUI
-already understands (docs/tui.md "Paste and attachments"), but over SSH that
+already understands (`docs/guide/interactive-mode.md`), but over SSH that
 path does not exist on the host.
 
 ADR-0018 keeps the host generic: it runs one fixed command and renders its
@@ -42,7 +42,7 @@ terminal, and a browser-only feature needs its own decision.
 - An SSH user can paste a screenshot or drop files into the WebUI; the TUI
   turns them into image and file chips without knowing they were uploaded.
 - The frame contract changes in `proto/hya/v1/pty.proto`,
-  `packages/hya-tui-web/src/frames.ts`, and docs/tui-web.md together.
+  `packages/hya-tui-web/src/frames.ts`, and `docs/architecture/server-relay-and-tui.md` together.
 - The host writes files to the local disk for as long as a tab is open;
   anyone who can open a same-origin tab could already run the command.
 - A program other than the hya TUI gets the paths as text, which is what a
