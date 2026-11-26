@@ -14,7 +14,7 @@ installer downloads `SHA256SUMS`, verifies the archive's SHA-256 checksum, and
 swaps it into the prefix atomically.
 
 Building from a source checkout (`./install.sh`) is still supported and remains
-a separate source-install path; see the [README](../README.md#quick-install).
+a separate source-install path; see [Build and install from source](getting-started.md#option-b-build-and-install-from-source).
 
 On Windows, install inside WSL 2; see
 [Install on Windows with WSL](install-wsl.md).
