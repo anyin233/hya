@@ -22,10 +22,11 @@ use hya_engine::{
     ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, CompactionConfig,
     CoreError, CreateSession, EventBus, HookDispatcher, MessageUserBeforeInput,
     MessageUserBeforeOutcome, ResidentRecovery, ResidentSupervisor, RuntimeSource, RuntimeSourceId,
-    SessionEngine, SidecarHandle, SidecarLifecycle, SidecarStart, SubagentGovernor, SubagentLimits,
-    SummarizeOptions, Summarizer, TaskSpawnOrigin, TextCompleteInput, TextCompleteOutcome,
-    ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, run_lifecycle_service, run_mailbox_service,
+    SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,
+    SubagentGovernor, SubagentLimits, SummarizeOptions, Summarizer, TaskSpawnOrigin,
+    TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
+    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, TurnBinding, run_lifecycle_service,
+    run_mailbox_service,
 };
 use hya_proto::{
     ActorEpoch, AgentName, ArchiveReason, ChannelKind, Envelope, Event, FinishCause, FinishReason,
@@ -407,6 +408,16 @@ impl Default for SidecarCfg {
             fail_terminate: false,
             drift_after_first: false,
         }
+    }
+}
+/// Revival resolves its sidecar from the engine environment, as production does.
+impl SidecarEnvironment for SidecarCfg {
+    fn factory_for(
+        &self,
+        _: &TurnBinding,
+        _: &str,
+    ) -> Result<Option<Arc<dyn BoundSidecarFactory>>, CoreError> {
+        Ok(Some(Arc::new(self.clone())))
     }
 }
 struct CfgHandle {
@@ -922,6 +933,7 @@ async fn sidecar_bundle_engine(
     mode: Mode,
     extra_bundles: Vec<Bundle>,
     plugin_hooks: Option<Arc<dyn HookDispatcher>>,
+    sidecar: Option<Arc<dyn SidecarEnvironment>>,
 ) -> (Arc<SessionEngine>, AgentSpec) {
     let mut bundles = vec![sidecar_bundle()];
     bundles.extend(extra_bundles);
@@ -945,16 +957,17 @@ async fn sidecar_bundle_engine(
             })
             .unwrap();
     }
-    let engine = Arc::new(
-        support::engine_with_router_and_runtime(
-            Arc::new(ProviderRouter::new().with(provider)),
-            runtime,
-            PermissionRules::new(vec![Rule::new(Action::Tool, SIDECAR_TOOL, mode)]),
-        )
-        .await,
-    );
+    let mut engine = support::engine_with_router_and_runtime(
+        Arc::new(ProviderRouter::new().with(provider)),
+        runtime,
+        PermissionRules::new(vec![Rule::new(Action::Tool, SIDECAR_TOOL, mode)]),
+    )
+    .await;
+    if let Some(sidecar) = sidecar {
+        engine = engine.with_sidecar_environment(sidecar);
+    }
     (
-        engine,
+        Arc::new(engine),
         support::agent_spec("sidecar-agent", "fake", empty_workdir()),
     )
 }
@@ -1472,6 +1485,7 @@ async fn sidecar_tool_binding_respects_permission_deny_and_allow_dispatch() {
             if allow { Mode::Allow } else { Mode::Deny },
             vec![],
             None,
+            None,
         )
         .await;
         let root =
@@ -1547,6 +1561,7 @@ async fn sidecar_hooks_mutate_tool_isolate_child_events_and_compose_with_plugin_
         Mode::Allow,
         vec![plugin.bundles()[0].clone()],
         Some(Arc::new(plugin_hooks.clone())),
+        None,
     )
     .await;
     let lead = support::create_root_session(&engine, "hya-main", "fake", &agent.workdir).await;
@@ -1973,6 +1988,11 @@ async fn resident_sidecar_hook_transport_loss_all_stages() {
             healthy,
             ..Default::default()
         });
+        // The restarted episode gets a new, healthy sidecar with the same tools.
+        let revived = Arc::new(SidecarCfg {
+            bindings: cfg.bindings.clone(),
+            ..Default::default()
+        });
         let requests = Arc::new(Mutex::new(vec![]));
         let (engine, agent) = sidecar_bundle_engine(
             Arc::new(SidecarEchoProvider {
@@ -1982,6 +2002,7 @@ async fn resident_sidecar_hook_transport_loss_all_stages() {
             Mode::Allow,
             vec![],
             None,
+            Some(revived.clone()),
         )
         .await;
         let root =
@@ -2016,6 +2037,7 @@ async fn resident_sidecar_hook_transport_loss_all_stages() {
         );
         assert!(!child_events.iter().any(|e| matches!(&e.event, Event::ToolError { message_text, .. } if message_text.contains("blocked by plugin"))));
         assert_revives(&engine, root, child, &handle, "after hook loss").await;
+        assert_eq!(revived.starts.load(Ordering::SeqCst), 1);
         sup.end_member(root, &handle).await.unwrap();
     }
 }
