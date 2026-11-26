@@ -84,7 +84,7 @@ pub fn skill_dirs_for(workdir: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let mut dirs = Vec::new();
 
-    let project_dirs = hya_engine::catalog_scope::inert_catalog_dirs(Some(workdir), roots);
+    let project_dirs = crate::catalog_scope::inert_catalog_dirs(Some(workdir), roots);
     dirs.extend(project_dirs.iter().map(|dir| dir.join(".hya/skills")));
     if let Some(home) = &home {
         dirs.push(home.join(".config/hya/skills"));

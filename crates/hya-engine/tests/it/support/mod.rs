@@ -43,8 +43,9 @@ pub fn discover_local_skills(workdir: Option<&Path>, roots: &[PathBuf]) -> Skill
     let mut dirs = Vec::new();
     dirs.extend(project_dirs.iter().map(|d| d.join(".hya/skills")));
     dirs.extend(project_dirs.iter().map(|d| d.join(".agents/skills")));
-    let mut discovery = hya_app::skill_catalog::discover_skills_from_dirs_with_diagnostics(&dirs);
-    discovery.skills = hya_app::skill_catalog::merge_skill_catalog(discovery.skills);
+    let mut discovery =
+        hya_engine::skill_catalog::discover_skills_from_dirs_with_diagnostics(&dirs);
+    discovery.skills = hya_engine::skill_catalog::merge_skill_catalog(discovery.skills);
     discovery
 }
 
@@ -134,7 +135,7 @@ pub fn test_runtime_with_catalog(
     Arc::new(
         RuntimeRegistry::from_snapshot(tools.snapshot(), catalog).with_skill_discovery(
             discover_local_skills,
-            hya_app::skill_catalog::builtin_skills,
+            hya_engine::skill_catalog::builtin_skills,
         ),
     )
 }

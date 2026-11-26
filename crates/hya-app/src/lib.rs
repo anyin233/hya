@@ -55,8 +55,6 @@ mod runtime_extensions_refresh;
 mod runtime_mcp_control;
 mod runtime_mcp_source;
 mod runtime_reconcile;
-/// Filesystem and trusted builtin skill discovery for full-mode hosts.
-pub mod skill_catalog;
 /// Opt-in `HYA_STARTUP_TRACE` phase marks for `hya serve` startup.
 pub mod startup_trace;
 #[cfg(test)]

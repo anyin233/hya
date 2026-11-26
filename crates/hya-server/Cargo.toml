@@ -48,7 +48,6 @@ uuid = { workspace = true }
 [dev-dependencies]
 hya-provider = { workspace = true, features = ["test-support"] }
 hya-tool-loader = { workspace = true }
-hya-app = { workspace = true }
 async-trait = { workspace = true }
 tower = { workspace = true }
 http-body-util = "0.1"

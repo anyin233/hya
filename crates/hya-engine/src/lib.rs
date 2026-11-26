@@ -74,6 +74,8 @@ pub mod resident;
 pub mod runtime_registry;
 /// Bundle sidecar lifecycle for executable public packages.
 pub mod sidecar;
+/// Filesystem and trusted builtin skill discovery for full-mode hosts.
+pub mod skill_catalog;
 /// Session title generation helpers.
 pub mod title;
 /// Token accounting: local estimation and provider-usage reliability.

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hya_app::skill_catalog::{
+use hya_engine::skill_catalog::{
     discover_skills, discover_skills_from_dirs, discover_skills_with_builtins,
     skill_dirs_for_workdir,
 };

@@ -32,12 +32,13 @@ pub(crate) fn parse_skill_contribution(
     contribution: &SkillContribution,
     path: PathBuf,
 ) -> Result<SkillCatalogEntry, ReconcileError> {
-    let parsed = crate::skill_catalog::parse_skill(&contribution.content).ok_or_else(|| {
-        ReconcileError::InvalidPrepared(format!(
-            "Skill contribution `{}` has invalid SKILL.md frontmatter",
-            contribution.id
-        ))
-    })?;
+    let parsed =
+        hya_engine::skill_catalog::parse_skill(&contribution.content).ok_or_else(|| {
+            ReconcileError::InvalidPrepared(format!(
+                "Skill contribution `{}` has invalid SKILL.md frontmatter",
+                contribution.id
+            ))
+        })?;
     if parsed.name != contribution.id {
         return Err(ReconcileError::InvalidPrepared(format!(
             "parsed Skill name `{}` does not match contribution id `{}`",

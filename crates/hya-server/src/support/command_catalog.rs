@@ -678,7 +678,7 @@ mod tests {
         write(".hya/commands/greet.md", "COMMAND $ARGUMENTS\n");
         write(".hya/commands/skill:greet.md", "RESERVED\n");
         let place = super::CatalogPlace::directory_for_tests(&dir.to_string_lossy());
-        let skills = hya_app::skill_catalog::discover(place.workdir(), place.roots())
+        let skills = hya_engine::skill_catalog::discover(place.workdir(), place.roots())
             .skills
             .into_iter()
             .map(|skill| crate::support::skill_catalog::info(skill, &place))

@@ -90,8 +90,8 @@ pub fn runtime_with_catalog(
     let runtime = Arc::new(
         RuntimeRegistry::from_snapshot(tools.snapshot(), agent_catalog_of(&bundles))
             .with_skill_discovery(
-                hya_app::skill_catalog::discover,
-                hya_app::skill_catalog::builtin_skills,
+                hya_engine::skill_catalog::discover,
+                hya_engine::skill_catalog::builtin_skills,
             ),
     );
     if !sources.is_empty() {
@@ -252,7 +252,7 @@ fn bundle_skill_source(bundle: &Bundle) -> Option<RuntimeSource> {
         .skills()
         .iter()
         .map(|resource| {
-            let parsed = hya_app::skill_catalog::parse_skill(&resource.content)
+            let parsed = hya_engine::skill_catalog::parse_skill(&resource.content)
                 .expect("server fixture Skill must contain valid frontmatter");
             let path = PathBuf::from(format!(
                 "bundle:{}/{}",
