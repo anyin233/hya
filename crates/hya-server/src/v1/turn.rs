@@ -310,11 +310,14 @@ pub(crate) fn turn_info(
         .and_then(|id| messages.iter().rposition(|m| m.id == id));
     let slice = start.map_or(messages.as_slice(), |i| &messages[i..]);
     // A later client may already have admitted another prompt while the first
-    // client is still draining its stream. Bound the result to the requested turn.
+    // client is still draining its stream. Only the run's admitted prompt marks
+    // that boundary: resident wakes append user messages inside the same run.
     let end = start.and_then(|_| {
-        slice[1..]
+        let later = st.runs.admitted_turn(session)?;
+        slice
             .iter()
-            .position(|m| m.role == hya_proto::Role::User)
+            .skip(1)
+            .position(|m| m.id == later)
             .map(|i| i + 1)
     });
     if end.is_none() && st.is_busy(session) {
@@ -646,12 +649,11 @@ mod admission_tests {
     use hya_engine::{
         AgentCatalog, AgentSpec, CreateSession, EventBus, RuntimeRegistry, SessionEngine,
     };
-    use hya_proto::{AgentName, ModelRef};
+    use hya_proto::{AgentName, Event, ModelRef};
     use hya_provider::ProviderRouter;
     use hya_tool::{PermissionPlane, PermissionRules};
 
-    #[tokio::test]
-    async fn o6_empty_and_failed_restores_release_both_reservations_before_reply() {
+    async fn fixture() -> (crate::AppState, ServerState, Arc<AgentSpec>, SessionId) {
         let catalog = hya_bundle::BundleCatalog::from_prepared(&[]).unwrap();
         let runtime = RuntimeRegistry::from_snapshot(
             hya_tool_loader::from_tool_families(&[]).snapshot(),
@@ -677,7 +679,7 @@ mod admission_tests {
             .claim_runtime_owner(engine.runtime_owner())
             .unwrap();
         let app = crate::AppState::new(engine.clone(), agent.clone());
-        let mut st = ServerState::new(app.clone());
+        let st = ServerState::new(app.clone());
         let session = engine
             .create(CreateSession {
                 parent: None,
@@ -689,6 +691,70 @@ mod admission_tests {
             })
             .await
             .unwrap();
+        (app, st, agent, session)
+    }
+
+    fn message(session: SessionId, message: MessageId, role: hya_proto::Role) -> [Event; 2] {
+        [
+            Event::MessageStarted {
+                session,
+                message,
+                role,
+                agent: None,
+                model: None,
+            },
+            Event::MessageFinished {
+                session,
+                message,
+                role,
+                finish: hya_proto::FinishReason::Stop,
+                tokens: None,
+                cause: None,
+            },
+        ]
+    }
+
+    #[tokio::test]
+    async fn resident_wake_keeps_the_turn_running_until_a_later_admission() {
+        use hya_proto::Role;
+        let (app, st, _, session) = fixture().await;
+        let engine = st.engine.clone();
+        let (turn, later) = (MessageId::new(), MessageId::new());
+        let mut events = Vec::new();
+        // A resident wake appends a user message inside the admitted run.
+        for (id, role) in [
+            (turn, Role::User),
+            (MessageId::new(), Role::Assistant),
+            (MessageId::new(), Role::User),
+        ] {
+            events.extend(message(session, id, role));
+        }
+        engine.store().append_events(session, events).await.unwrap();
+        let run = st.start_run(session).unwrap();
+        run.admitted(turn);
+        let state = |projection: &hya_proto::Projection| {
+            turn_info(&st, session, &turn.to_string(), projection).state
+        };
+        let projection = engine.read_projection_shared(session).await.unwrap();
+        assert_eq!(state(&projection), pb::TurnState::Running as i32);
+        drop(run);
+        engine
+            .store()
+            .append_events(session, message(session, later, Role::User).into())
+            .await
+            .unwrap();
+        let run = st.start_run(session).unwrap();
+        run.admitted(later);
+        let projection = engine.read_projection_shared(session).await.unwrap();
+        assert_eq!(state(&projection), pb::TurnState::Finished as i32);
+        drop(run);
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn o6_empty_and_failed_restores_release_both_reservations_before_reply() {
+        let (app, mut st, agent, session) = fixture().await;
+        let engine = st.engine.clone();
         for fail in [false, true] {
             let run = st.start_run(session).unwrap();
             if fail {
