@@ -1,10 +1,28 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import test from 'node:test';
-import { docsRoot, documentId, documentLinks, isDocumentation, rewriteLink, repository } from '../src/lib/paths.mjs';
+import {
+  docsRoot,
+  documentId,
+  documentLinks,
+  isDocumentation,
+  resolveDocsBase,
+  resolvePagesBase,
+  rewriteLink,
+  repository,
+} from '../src/lib/paths.mjs';
 import remarkDocs from '../src/lib/remark-docs.mjs';
 
 const source = path.join(docsRoot, 'architecture/overview.md');
+
+test('resolvePagesBase and resolveDocsBase nest Starlight under /docs', () => {
+  assert.equal(resolvePagesBase({}), '');
+  assert.equal(resolveDocsBase({}), '/docs');
+  assert.equal(resolvePagesBase({ PAGES_BASE: '/hya' }), '/hya');
+  assert.equal(resolveDocsBase({ PAGES_BASE: '/hya' }), '/hya/docs');
+  assert.equal(resolveDocsBase({ PAGES_BASE: '/' }), '/docs');
+  assert.equal(resolveDocsBase({ DOCS_BASE: '/custom/docs/' }), '/custom/docs');
+});
 
 test('sidebar groups include pages loaded outside Starlight’s default content directory', () => {
   assert.ok(documentLinks('architecture').some(({ slug }) => slug === 'architecture/overview'));

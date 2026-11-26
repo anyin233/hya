@@ -6,6 +6,21 @@ export const docsRoot = fileURLToPath(new URL('../../../', import.meta.url));
 export const repoRoot = path.dirname(docsRoot);
 export const repository = 'https://github.com/chrono-foundry/hya';
 
+export function resolvePagesBase(env = process.env) {
+  const raw = (env.PAGES_BASE || '/').trim();
+  const normalized = raw.startsWith('/') ? raw : `/${raw}`;
+  return normalized.replace(/\/+$/, '');
+}
+
+export function resolveDocsBase(env = process.env) {
+  if (env.DOCS_BASE) {
+    const raw = env.DOCS_BASE.trim();
+    const normalized = raw.startsWith('/') ? raw : `/${raw}`;
+    return normalized.replace(/\/+$/, '') || '/';
+  }
+  return `${resolvePagesBase(env)}/docs`;
+}
+
 export function isDocumentation(relativePath) {
   return relativePath.endsWith('.md') &&
     !relativePath.startsWith('../') &&
