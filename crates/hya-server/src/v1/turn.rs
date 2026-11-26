@@ -182,6 +182,7 @@ async fn spawn_turn_run(
                 return;
             }
         };
+        run.admitted(prompt);
         let _ = admitted.send(Ok(true));
         let execution = async {
             if let Some(lease) = restore_lease {
@@ -302,7 +303,21 @@ pub(crate) fn turn_info(
     turn: &str,
     projection: &hya_proto::Projection,
 ) -> pb::TurnInfo {
-    if st.is_busy(session) {
+    let messages = &projection.session.messages;
+    let start = turn
+        .parse::<MessageId>()
+        .ok()
+        .and_then(|id| messages.iter().rposition(|m| m.id == id));
+    let slice = start.map_or(messages.as_slice(), |i| &messages[i..]);
+    // A later client may already have admitted another prompt while the first
+    // client is still draining its stream. Bound the result to the requested turn.
+    let end = start.and_then(|_| {
+        slice[1..]
+            .iter()
+            .position(|m| m.role == hya_proto::Role::User)
+            .map(|i| i + 1)
+    });
+    if end.is_none() && st.is_busy(session) {
         return pb::TurnInfo {
             id: turn.to_owned(),
             session: session.to_string(),
@@ -312,18 +327,11 @@ pub(crate) fn turn_info(
             error_message: String::new(),
         };
     }
-    let last_assistant = projection
-        .session
-        .messages
+    let last_assistant = slice[..end.unwrap_or(slice.len())]
         .iter()
         .rev()
         .find(|message| message.role == hya_proto::Role::Assistant && message.finish.is_some());
-    let admitted = projection
-        .session
-        .messages
-        .iter()
-        .find(|message| message.id.to_string() == turn)
-        .and_then(|message| message.finish);
+    let admitted = start.and_then(|i| messages[i].finish);
     // A failed turn reports the error the engine recorded on the failed
     // assistant message (`Event::Error { failed_message }`).
     let (error_code, error_message) = last_assistant
@@ -607,10 +615,21 @@ async fn wait_turn(
 async fn cancel_turn(
     State(st): State<ServerState>,
     AxumPath((id, turn)): AxumPath<(String, String)>,
+    body: axum::body::Bytes,
 ) -> Result<Json<pb::TurnInfo>, V1Error> {
     let session = parse_session(&id)?;
     ensure_session(&st, session).await?;
-    let cancelled = st.cancel_run(session);
+    let cancelled = if body.is_empty()
+        || !serde_json::from_slice::<pb::CancelTurnRequest>(&body)
+            .map_err(|error| V1Error::invalid_argument(error.to_string()))?
+            .only_if_current
+    {
+        st.cancel_run(session)
+    } else {
+        st.runs.cancel_matching(session, &turn, || {
+            st.engine.cancel_user_turn(session);
+        })
+    };
     let projection = st.engine.read_projection_shared(session).await?;
     let mut info = turn_info(&st, session, &turn, &projection);
     if cancelled {

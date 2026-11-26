@@ -253,6 +253,8 @@ pub(crate) enum ServeRelayAction {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub(crate) enum Command {
+    /// Serve an ACP v1 editor over standard input and output.
+    Acp,
     /// Run a single prompt headlessly and print the resulting transcript.
     Exec {
         /// The user prompt to send to the agent. Use `-` to read it from stdin.

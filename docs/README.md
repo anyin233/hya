@@ -1,7 +1,7 @@
 # hya Documentation
 
 `hya` is an event-sourced Rust multi-agent coding runtime. Every client surface
-speaks one consolidated contract — **`hya.v1`** (18 services / 108 RPCs) — over
+speaks one consolidated contract — **`hya.v1`** (18 services / 109 RPCs) — over
 HTTP/JSON + SSE + WebSocket (`/v1`) and gRPC on a single port, backed by a
 persistent per-database daemon and optional end-to-end encrypted `Noise_NKpsk0`
 relay access.
@@ -50,6 +50,7 @@ Everything needed to install, configure, operate, and extend `hya` day to day:
 - **Installation & Operations:**
   - [Install and Update](install.md) — Unified `v<version>` release archives, `https://hya.ed-aisys.com/install.sh`, `hya update`, version pinning, and rollback.
   - [Install on Windows with WSL](install-wsl.md) — WSL 2 setup and accessing the WebUI from Windows browsers.
+  - [Agent Client Protocol](acp.md) — Start hya from an editor over stdio, attach session MCP tools and answer permissions.
   - [CLI Reference](cli.md) — Every `hya` subcommand, flag, database lock rule, and exit code.
   - [Troubleshooting](troubleshooting.md) — Solutions for daemon locks, WebUI ports, Host allowlist (`403`), Relay diagnostics, and provider errors.
 - **Interactive Surfaces & Remote Access:**

@@ -47,6 +47,7 @@ pub(crate) struct DeleteGuard {
 }
 
 struct ActiveRun {
+    turn: Option<hya_proto::MessageId>,
     id: u64,
     token: CancellationToken,
     admission_closed: Arc<AtomicBool>,
@@ -87,6 +88,7 @@ impl RunRegistry {
         state.runs.insert(
             session,
             ActiveRun {
+                turn: None,
                 id,
                 token: token.clone(),
                 admission_closed: admission_closed.clone(),
@@ -117,6 +119,25 @@ impl RunRegistry {
         } else {
             false
         }
+    }
+
+    /// Keep the matching run reserved while cancelling its engine turn and descendants.
+    pub(crate) fn cancel_matching(
+        &self,
+        session: SessionId,
+        turn: &str,
+        cancel_engine: impl FnOnce(),
+    ) -> bool {
+        let state = self.lock_state();
+        let Some(run) = state.runs.get(&session) else {
+            return false;
+        };
+        if run.turn.is_none_or(|id| id.to_string() != turn) {
+            return false;
+        }
+        cancel_engine();
+        run.token.cancel();
+        true
     }
 
     /// Subscribe to the sessions whose run started or ended.
@@ -200,6 +221,12 @@ impl RunRegistry {
 }
 
 impl RunGuard {
+    pub(crate) fn admitted(&self, turn: hya_proto::MessageId) {
+        if let Some(run) = self.registry.lock_state().runs.get_mut(&self.session) {
+            run.turn = Some(turn);
+        }
+    }
+
     /// Delete discards a not-yet-admitted prompt; user cancellation still
     /// admits and answers it with UserCancel. Keep this after a delete timeout.
     pub(crate) fn admission_closed(&self) -> bool {
@@ -237,5 +264,29 @@ impl Drop for DeleteGuard {
         for session in &self.sessions {
             state.deleting.remove(session);
         }
+    }
+}
+
+#[cfg(test)]
+mod acp_tests {
+    use super::*;
+    use hya_proto::MessageId;
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn stale_cancel_does_not_stop_a_later_turn() {
+        let runs = RunRegistry::default();
+        let session = SessionId::new();
+        let first = MessageId::new();
+        let run = runs.start(session).expect("first reservation");
+        run.admitted(first);
+        drop(run);
+        let second = MessageId::new();
+        let run = runs.start(session).expect("second reservation");
+        run.admitted(second);
+        assert!(!runs.cancel_matching(session, &first.to_string(), || panic!("stale cancel")));
+        assert!(!run.token().is_cancelled());
+        assert!(runs.cancel_matching(session, &second.to_string(), || {}));
+        assert!(run.token().is_cancelled());
     }
 }

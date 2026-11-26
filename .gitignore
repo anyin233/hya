@@ -18,6 +18,9 @@
 /.claude
 /.hya
 /.planning/
+/.dev/
+/.plan/
+/.lint/
 /.agent-docs/
 /.argus_subagents/
 /.autors/

@@ -9,6 +9,12 @@ package hya.v1;
 // through the app-owned MCP control handle; status composes desired and
 // observed state.
 service Mcp {
+  // Create a root session with MCP peers supplied by a local client. The
+  // first frame identifies the session; closing the stream releases its peers.
+  //
+  // hya.http: POST /v1/mcp/session
+  rpc OpenMcpSession(OpenMcpSessionRequest) returns (stream OpenMcpSessionResponse);
+
   // Status of every configured MCP server in a directory.
   //
   // hya.http: GET /v1/mcp
@@ -165,3 +171,22 @@ message RemoveMcpAuthRequest {
 }
 
 message RemoveMcpAuthResponse {}
+
+// A named MCP stdio peer bridged by the editor through a private Unix socket.
+message SessionMcpPeer {
+  string name = 1;
+  string socket = 2;
+}
+
+message OpenMcpSessionRequest {
+  // Existing absolute workspace directory.
+  string workdir = 1;
+  // Optional provider/model override.
+  string model = 2;
+  repeated SessionMcpPeer peers = 3;
+}
+
+message OpenMcpSessionResponse {
+  // Session id for subsequent Turns, Events and Interactions requests.
+  string session = 1;
+}

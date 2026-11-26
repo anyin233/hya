@@ -10,6 +10,7 @@
 //! startup discovery build authenticated or anonymous routes. With no resolved
 //! live model rows, the offline echo provider keeps the whole stack runnable.
 
+mod acp;
 mod agent_cmd;
 mod auth_cmd;
 mod bare;
@@ -564,6 +565,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                  `hya serve`, `hya exec \"<prompt>\"`, `hya -p \"<goal>\"`, or `hya --help`."
             );
             Ok(())
+        }
+        Some(Command::Acp) => {
+            anyhow::ensure!(!yolo, "hya acp uses the daemon's permission policy");
+            acp::run(absolute_db(resolve_interactive_db(&db)), model, pure).await
         }
         Some(Command::Exec { bare: true, .. }) if pure => {
             // `conflicts_with` does not see a global `--pure` given before `exec`.

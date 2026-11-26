@@ -454,6 +454,28 @@ impl V1Grpc {
 }
 
 impl V1Grpc {
+    async fn special_open_mcp_session(
+        &self,
+        request: GrpcRequest<pb::OpenMcpSessionRequest>,
+    ) -> Result<
+        GrpcResponse<
+            Pin<Box<dyn Stream<Item = Result<pb::OpenMcpSessionResponse, Status>> + Send>>,
+        >,
+        Status,
+    > {
+        let (ctx, request) = split(request);
+        require_loopback_peer(&ctx)?;
+        if ctx.headers.contains_key("origin") || ctx.headers.contains_key("sec-fetch-site") {
+            return Err(Status::permission_denied(
+                "local editor connection required",
+            ));
+        }
+        let stream = super::mcp_session::open(self.state.clone(), request)
+            .await
+            .map_err(|error| Status::new(error.code.grpc_code(), error.message))?;
+        Ok(GrpcResponse::new(Box::pin(stream.map(Ok))))
+    }
+
     async fn special_stream_session_events(
         &self,
         request: GrpcRequest<pb::StreamSessionEventsRequest>,

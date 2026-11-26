@@ -489,6 +489,14 @@ impl pb::logs_server::Logs for V1Grpc {
 }
 #[tonic::async_trait]
 impl pb::mcp_server::Mcp for V1Grpc {
+    type OpenMcpSessionStream =
+        Pin<Box<dyn Stream<Item = Result<pb::OpenMcpSessionResponse, Status>> + Send>>;
+    async fn open_mcp_session(
+        &self,
+        request: GrpcRequest<pb::OpenMcpSessionRequest>,
+    ) -> Result<GrpcResponse<Self::OpenMcpSessionStream>, Status> {
+        self.special_open_mcp_session(request).await
+    }
     async fn get_mcp_status(
         &self,
         request: GrpcRequest<pb::GetMcpStatusRequest>,

@@ -261,6 +261,12 @@ impl Clone for SessionEngine {
 }
 
 impl SessionEngine {
+    /// Set transient MCP sources for this session alone. Pass an empty list
+    /// when the owning transport closes.
+    pub fn set_session_mcp_sources(&self, session: SessionId, sources: Vec<crate::RuntimeSource>) {
+        self.runtime.set_session_sources(session, sources);
+    }
+
     /// Build an engine with disconnected mailbox/spawner and default tool planes.
     ///
     /// Wire product planes with `with_*` before serving interactive traffic.

@@ -16,7 +16,7 @@ For visual dependency and runtime flow diagrams, see
 | --- | --- |
 | [`../Cargo.toml`](../Cargo.toml), [`../versions.toml`](../versions.toml) | Workspace members, shared dependencies, Rust `1.91` / edition `2024`, clippy lints (`unwrap_used`/`expect_used` denied), and the unified `hya` release version + minimum compatible backend version. |
 | [`../CONTEXT.md`](../CONTEXT.md) | Ubiquitous domain glossary across runtime, store, tools, Projects, Relay, Workflows, and TUI. |
-| [`../proto/hya/v1`](../proto/hya/v1), [`../proto/hya/relay/v1`](../proto/hya/relay/v1) | Canonical protobuf IDLs for the `hya.v1` client/server contract (18 services, 108 RPCs) and the `hya.relay.v1` rendezvous protocol. |
+| [`../proto/hya/v1`](../proto/hya/v1), [`../proto/hya/relay/v1`](../proto/hya/relay/v1) | Canonical protobuf IDLs for the `hya.v1` client/server contract (18 services, 109 RPCs) and the `hya.relay.v1` rendezvous protocol. |
 | [`../crates`](../crates) | 25 Rust crates covering runtime, providers, tools, MCP, plugins, store, server, SDK, relay, updater, unified `hya` binary, E2E harness, and `xtask`. |
 | [`../bundles/presets`](../bundles/presets), [`../bundles/first-party`](../bundles/first-party), [`../bundles/internal`](../bundles/internal) | The 13 trusted first-party bundles (including the 4 native Rust tool-family library crates under `bundles/presets/*-tools/native` and the internal `hya/compaction` library crate under `bundles/internal/compaction/native`). |
 | [`../bundles/extra`](../bundles/extra), [`../bundles/examples`](../bundles/examples) | Optional installable `hya-extra/*` bundles (`zvec-grep`, `scout`, `jev-model-router`, `model-fallback`, `token-summary`) and WorkflowBundle examples (`argus-example`). |

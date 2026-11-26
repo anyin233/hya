@@ -11,9 +11,9 @@ and a multi-root permission plane for 25 registry tools, MCP servers, and
 out-of-process Rust/Bun/Claude bundle extensions. It orchestrates episodic
 resident subagents and compiled `Workflow` DAGs.
 
-Every client speaks one consolidated contract — **`hya.v1`** (18 services, 108
+Every backend client speaks one consolidated contract — **`hya.v1`** (18 services, 109
 RPCs) — served identically over HTTP/JSON + SSE + WebSocket (`/v1`) and gRPC on
-a single port. Running bare `hya` in a terminal discovers or auto-starts the
+a single port. Editors can launch [`hya acp`](docs/acp.md) to use that backend through Agent Client Protocol v1. Running bare `hya` in a terminal discovers or auto-starts the
 database's persistent backend daemon and launches both the interactive
 Bun/OpenTUI terminal frontend (`packages/hya-tui`) and the browser WebUI
 (`packages/hya-tui-web` on `http://127.0.0.1:3250`). With no provider
@@ -24,7 +24,7 @@ configured, `hya` starts offline against its built-in echo provider
 
 ## Status
 
-`hya` is under active development (unified version `0.49.1`, minimum compatible
+`hya` is under active development (unified version `0.50.0`, minimum compatible
 backend `0.46.0` for remote/daemon connections, licensed under `MIT OR Apache-2.0`).
 Releases ship unified backend + TUI/WebUI archives from `v<version>` tags
 (`v0.47.0`, `v0.47.1-dev.1`, …).

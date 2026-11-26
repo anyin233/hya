@@ -897,3 +897,73 @@ async fn plugin_tool_conflicts_errors_respawn_and_hot_reload() {
         "manifest edit must hot-respawn v2: {schema}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_stdio_permissions_and_session_mcp_lifecycle() {
+    let env = E2eEnvBuilder::new()
+        .yolo(false)
+        .permission_model("default")
+        .code_mode("with_tools")
+        .scripts(vec![
+            tool_step("mcp__peer__alpha", json!({})),
+            text_step("ALLOWED"),
+            tool_step("mcp__peer__beta", json!({})),
+            text_step("DENIED"),
+            tool_step("mcp__peer__alpha", json!({})),
+            text_step("PARALLEL"),
+            text_step("RESUMED"),
+            tool_step("mcp__peer__alpha", json!({})),
+            text_step("SURVIVED"),
+            hya_e2e::http_error_step(401),
+        ])
+        .build()
+        .await
+        .unwrap();
+    let output = tokio::process::Command::new("python3")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/acp_editor.py"
+        ))
+        .arg(&env.backend.binary)
+        .arg(&env.backend.db)
+        .current_dir(&env.backend.project)
+        .env("XDG_CONFIG_HOME", &env.backend.xdg_config_home)
+        .env("XDG_DATA_HOME", &env.backend.xdg_data_home)
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let requests = env.fake.requests().unwrap();
+    for (index, tool, foreign) in [(0, "alpha", "beta"), (2, "beta", "alpha")] {
+        let tools = requests[index]["tools"].to_string();
+        assert!(
+            tools.contains(&format!("mcp__peer__{tool}"))
+                && !tools.contains(&format!("mcp__peer__{foreign}")),
+            "{tools}"
+        );
+    }
+    assert!(
+        requests[0]["messages"]
+            .to_string()
+            .contains("allow [fixture](file:///fixture) after-link")
+    );
+    let sessions = env.get_json("/v1/sessions").await.unwrap();
+    let rows = sessions["sessions"].as_array().unwrap();
+    assert_eq!(rows.len(), 3, "failed discovery must not leave a session");
+    let first = rows
+        .iter()
+        .find(|row| row["workdir"] == env.backend.workdir_str())
+        .unwrap();
+    let second = rows
+        .iter()
+        .find(|row| row["workdir"] == env.project_path("second").display().to_string())
+        .unwrap();
+    assert!(first["projectId"].is_string());
+    assert_eq!(first["projectId"], second["projectId"]);
+    let global = env.get_json("/v1/mcp").await.unwrap();
+    assert!(!global.to_string().contains("mcp__peer__"));
+}

@@ -830,7 +830,8 @@ fn write_grpc_adapter(path: &Path, contract: &Contract) -> Result<()> {
             let name = snake(&rpc.name);
             let irregular = matches!(
                 rpc.name.as_str(),
-                "StreamSessionEvents"
+                "OpenMcpSession"
+                    | "StreamSessionEvents"
                     | "StreamGlobalEvents"
                     | "StreamPty"
                     | "InvokeSessionBundleApi"

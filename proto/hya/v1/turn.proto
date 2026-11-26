@@ -168,6 +168,9 @@ message WaitTurnRequest {
 }
 
 message CancelTurnRequest {
+  // Cancel only the admitted turn identified by turn. A stale ID is a no-op.
+  // By default cancellation targets the current session execution.
+  bool only_if_current = 3;
   // Session identifier.
   string session = 1;
   // Turn identifier.

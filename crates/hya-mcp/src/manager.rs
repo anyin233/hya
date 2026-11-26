@@ -170,6 +170,20 @@ async fn connect_server(
             (client, Some(guard))
         }
     };
+    prepare_connected(name, client, guard, timeout).await
+}
+
+/// Discover MCP exports on a client-owned, already connected stdio stream.
+pub async fn prepare_peer(name: String, client: McpClient) -> Result<PreparedMcpServer, McpError> {
+    prepare_connected(name, client, None, DEFAULT_CALL_TIMEOUT).await
+}
+
+async fn prepare_connected(
+    name: String,
+    client: McpClient,
+    guard: Option<ChildGuard>,
+    timeout: Duration,
+) -> Result<PreparedMcpServer, McpError> {
     client.initialize().await?;
     // Spec-required post-initialize handshake before issuing further requests.
     client

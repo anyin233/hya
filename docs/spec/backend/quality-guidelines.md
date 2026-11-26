@@ -835,7 +835,7 @@ const lifecycle = resolveLifecyclePresentation(node)
   `packages/hya-tui`, `packages/hya-tui-web`, the Bun adapter, or anything
   else in the release archive or source install.
 - Not a trigger: documentation-only changes (`docs/`, `*.md`, code comments,
-  `AGENTS.md`, `.planning/`), CI-only changes (`.github/`, CI scripts and
+  `AGENTS.md`, `.plan/`), CI-only changes (`.github/`, CI scripts and
   config), and test-only changes that leave shipped code untouched. These
   neither bump the aggregate version nor write a new changelog.
 

@@ -36,7 +36,7 @@ export default defineConfig({
       },
       {
         label: 'Using hya',
-        items: ['tui', 'tui-web', 'relay', 'skills', 'workflows', 'goal-loop-authoring', 'compaction']
+        items: ['tui', 'tui-web', 'acp', 'relay', 'skills', 'workflows', 'goal-loop-authoring', 'compaction']
           .map((slug) => ({ slug })),
       },
       { label: 'Architecture', items: documentLinks('architecture') },
@@ -53,6 +53,7 @@ export default defineConfig({
         label: 'Contributing', collapsed: true,
         items: [
           { slug: 'development' },
+          { label: 'Plan template', slug: 'templates/plan' },
           { slug: 'docs-site' },
           { label: 'Testing', items: documentLinks('testing') },
           { label: 'Guidelines', items: documentLinks('spec') },

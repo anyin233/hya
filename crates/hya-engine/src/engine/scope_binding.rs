@@ -556,6 +556,10 @@ impl SessionEngine {
             .into_iter()
             .filter(|(_, model)| router.resolve(model).is_some())
             .collect::<BTreeMap<_, _>>();
+        let binding = self
+            .runtime
+            .bind_session_sources(session, binding)
+            .map_err(|error| CoreError::Invalid(error.to_string()))?;
         Ok(binding.with_session_agent_models(overrides))
     }
 
