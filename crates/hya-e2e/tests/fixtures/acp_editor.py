@@ -123,8 +123,21 @@ async def launch(binary, db):
                                                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
     editor = Editor(proc)
     req = editor.request("initialize", protocolVersion=1, clientCapabilities={})
-    assert (await editor.response(req))["result"]["protocolVersion"] == 1
+    result = (await editor.response(req))["result"]
+    assert result["protocolVersion"] == 1
+    assert result["agentCapabilities"]["sessionCapabilities"]["close"] == {}, result
     return editor
+
+
+async def exited(pidfile):
+    pid = int(pidfile.read_text())
+    for _ in range(100):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"MCP peer {pid} survived its session")
 
 
 async def editor_main(binary, db):
@@ -146,6 +159,9 @@ async def editor_main(binary, db):
         await a.turn(second, "deny", "DENIED")
         assert (cwd / "alpha.called").exists() and not (other_dir / "beta.called").exists()
         await a.turn(first, "cancel", None, other=lambda: a.turn(second, "parallel", "PARALLEL"))
+        assert "result" in await a.response(a.request("session/close", sessionId=second))
+        await exited(other_dir / "beta.pid")
+        assert "error" in await a.response(a.prompt(second, "closed"))
         await a.turn(first, "resume", "RESUMED")
         await a.turn(first, "eof", None)
         assert await asyncio.wait_for(a.proc.wait(), 6) == 0
@@ -160,16 +176,8 @@ async def editor_main(binary, db):
             assert frame.get("method") == "session/update", frame
         b.proc.stdin.close()
         assert await asyncio.wait_for(b.proc.wait(), 6) == 0
-        for pidfile in [cwd / "partial.pid", cwd / "alpha.pid", other_dir / "beta.pid"]:
-            pid = int(pidfile.read_text())
-            for _ in range(100):
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
-                    break
-                await asyncio.sleep(0.01)
-            else:
-                raise AssertionError(f"MCP peer {pid} survived disconnect")
+        for pidfile in [cwd / "partial.pid", cwd / "alpha.pid"]:
+            await exited(pidfile)
     finally:
         for editor in (a, b):
             if editor.proc.returncode is None:
