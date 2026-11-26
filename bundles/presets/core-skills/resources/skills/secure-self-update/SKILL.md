@@ -36,7 +36,7 @@ release's `SHA256SUMS`, and rolls back when placement or verification fails.
 
 ## References
 
-- Guide: `docs/install.md`
+- Guide: `docs/getting-started/installation.md`
 - Script: `scripts/hya-install.sh`
 - Crate: `crates/hya-updater`
 
