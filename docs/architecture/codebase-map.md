@@ -23,7 +23,7 @@ hya/
 │   ├── hya/v1/              # Canonical hya.v1 Protobuf contract (18 services, 109 RPCs)
 │   └── hya/relay/v1/        # Blind relay rendezvous Protobuf contract
 ├── plugins/                 # Standalone full-stack example plugins (e.g. disk-inspector)
-├── HYA_web/                 # Static showcase website (plain HTML/CSS/JS)
+├── public/                  # Static GitHub Pages root landing page (plain HTML/CSS/JS)
 ├── scripts/                 # Unified release installer (hya-install.sh) & developer utilities
 ├── docs/                    # Documentation & Astro Starlight site (docs/site/)
 ├── CONTEXT.md               # Root domain glossary
