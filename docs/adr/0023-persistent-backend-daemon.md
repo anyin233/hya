@@ -103,7 +103,7 @@ database, and outlives all of them. Clients never stop it.
   use|run|state`) run through the daemon instead of opening the database a
   second time, so their sessions show up in every client. A command that holds
   the lock itself (no daemon running) makes a daemon started meanwhile wait
-  (ADR-0022, docs/cli.md "Database lock and the backend daemon").
+  (ADR-0022, `docs/reference/cli.md`).
 - ~~The daemon's working directory is the starter's. Requests carry their own
   directory (`x-hya-directory`), so this only matters for requests without
   one.~~ *Superseded in part by ADR-0024:* the daemon has no working directory

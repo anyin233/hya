@@ -99,7 +99,7 @@ The original stop/failure helpers have been replaced by
 cleanup, handoff and archive events, then releases the active claim in the same
 transaction. A matching repeated finalization returns no duplicate events.
 The active claim is also the live-member capacity lease; no admission journal
-or governor refund remains. See the [current store contract](../spec/backend/task-tool.md#atomic-resident-termination).
+or governor refund remains. See [Session Engine, Subagents & Channels](../architecture/engine-and-subagents.md).
 
 ### `RecoveredResidentWork` / `RecoveredResidentOutcome`
 

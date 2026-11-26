@@ -125,4 +125,4 @@ without changing the database engine or regressing healthy disk performance.
   `file_blob` payloads generated during a prolonged disk outage remain buffered
   in the process queue until storage recovers or the run exits.
 
-See [storage architecture](../architecture/storage.md) and [CLI reference](../cli.md).
+See [Event Model & Storage](../architecture/events-and-storage.md) and [CLI Reference](../reference/cli.md).

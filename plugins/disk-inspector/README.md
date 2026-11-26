@@ -108,7 +108,7 @@ This optional source folder is not part of Hya's release archives.
 
 ### Backend
 
-The process speaks [plugin protocol v1](../../docs/plugin-protocol.md) using
+The process speaks [plugin protocol v1](../../docs/extend/plugins-and-hooks.md) using
 one JSON-RPC 2.0 object per line. It implements:
 
 | Method | Parameters | Result |

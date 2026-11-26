@@ -4,12 +4,12 @@ import test from 'node:test';
 import { docsRoot, documentId, documentLinks, isDocumentation, rewriteLink, repository } from '../src/lib/paths.mjs';
 import remarkDocs from '../src/lib/remark-docs.mjs';
 
-const source = path.join(docsRoot, 'architecture/diagrams.md');
+const source = path.join(docsRoot, 'architecture/overview.md');
 
 test('sidebar groups include pages loaded outside Starlight’s default content directory', () => {
-  assert.ok(documentLinks('architecture').some(({ slug }) => slug === 'architecture/runtime'));
+  assert.ok(documentLinks('architecture').some(({ slug }) => slug === 'architecture/overview'));
   assert.ok(documentLinks('protocol').some(({ slug }) => slug === 'protocol/index'));
-  assert.ok(documentLinks('spec').some(({ slug }) => slug === 'spec/backend/index'));
+  assert.ok(documentLinks('adr').some(({ slug }) => slug.startsWith('adr/')));
 });
 
 test('README routes and links work at the root and under a Pages base path', () => {
@@ -18,8 +18,8 @@ test('README routes and links work at the root and under a Pages base path', () 
   assert.equal(rewriteLink('../README.md', source), '/');
   assert.equal(rewriteLink('../README.md', source, '/hya'), '/hya/');
   assert.equal(rewriteLink('../protocol/README.md#routes', source, '/hya/'), '/hya/protocol/#routes');
-  assert.equal(rewriteLink('../cli.md?view=all#exec', source, '/hya'), '/hya/cli/?view=all#exec');
-  assert.equal(rewriteLink('overview.md', source, '/hya'), '/hya/architecture/overview/');
+  assert.equal(rewriteLink('../reference/cli.md?view=all#exec', source, '/hya'), '/hya/reference/cli/?view=all#exec');
+  assert.equal(rewriteLink('codebase-map.md', source, '/hya'), '/hya/architecture/codebase-map/');
 });
 
 test('assets and the OpenAPI schema remain downloadable on subpath deployments', () => {
@@ -43,15 +43,15 @@ test('external URLs and fragment-only links are preserved', () => {
 
 test('Markdown adaptation preserves code, rewrites references, and escapes Mermaid source', () => {
   const tree = { type: 'root', children: [
-    { type: 'heading', depth: 1, children: [{ type: 'text', value: 'Diagrams' }] },
-    { type: 'definition', identifier: 'guide', url: '../cli.md' },
-    { type: 'code', lang: 'sh', value: 'cat ../cli.md' },
+    { type: 'heading', depth: 1, children: [{ type: 'text', value: 'Overview' }] },
+    { type: 'definition', identifier: 'guide', url: '../reference/cli.md' },
+    { type: 'code', lang: 'sh', value: 'cat ../reference/cli.md' },
     { type: 'code', lang: 'mermaid', value: 'A["<script>&"] --> B' },
   ] };
   remarkDocs({ base: '/hya' })(tree, { path: source });
   assert.equal(tree.children.length, 3);
-  assert.equal(tree.children[0].url, '/hya/cli/');
-  assert.equal(tree.children[1].value, 'cat ../cli.md');
+  assert.equal(tree.children[0].url, '/hya/reference/cli/');
+  assert.equal(tree.children[1].value, 'cat ../reference/cli.md');
   assert.equal(tree.children[2].type, 'html');
   assert.match(tree.children[2].value, /&lt;script&gt;&amp;/);
 });

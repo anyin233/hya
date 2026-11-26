@@ -9,7 +9,7 @@ require reinstalling. Resource-plane decisions in this ADR remain in effect.
 > **Superseded in part (2026-11-12 harness cleanup):** the prepared install
 > format is now **3**, not v2. A package or install record written by an older
 > format fails with the "please reinstall" diagnostic described in
-> [bundle-runtime.md](../bundle-runtime.md#prepared-install-format) instead of
+> [bundles.md](../extend/bundles.md) instead of
 > being decoded. The rest of this ADR stands.
 
 An `AgentBundle` defines **exactly one** Agent, while a distinct

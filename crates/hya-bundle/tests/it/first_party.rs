@@ -71,7 +71,7 @@ fn extra_bundle_dirs() -> Vec<PathBuf> {
 
 fn workflow_doc_paths() -> Vec<PathBuf> {
     let root = repository_root();
-    let mut paths = vec![root.join("docs/workflows.md")];
+    let mut paths = vec![root.join("docs/extend/authoring-workflows.md")];
     if root.join(".autors/hya/wiki").is_dir() {
         paths.push(root.join(".autors/hya/wiki/pages/architecture/workflow-composition.md"));
     }
@@ -118,8 +118,8 @@ fn fenced_block(doc: &str, heading: &str, language: &str, index: usize) -> Strin
 }
 
 fn authoring_doc() -> String {
-    std::fs::read_to_string(repository_root().join("docs/agent-bundle-authoring.md"))
-        .expect("docs/agent-bundle-authoring.md must exist")
+    std::fs::read_to_string(repository_root().join("docs/extend/bundles.md"))
+        .expect("docs/extend/bundles.md must exist")
 }
 
 #[test]
@@ -548,7 +548,7 @@ fn docs_example_bundles_and_api_snippet_prepare_deterministically() {
 #[test]
 fn docs_capture_authoring_sidecar_and_cli_contracts() {
     let authoring_paths = [
-        repository_root().join("docs/agent-bundle-authoring.md"),
+        repository_root().join("docs/extend/bundles.md"),
         repository_root()
             .join("bundles/presets/core-skills/resources/skills/agent-bundle-authoring/SKILL.md"),
     ];
@@ -604,7 +604,7 @@ fn docs_capture_authoring_sidecar_and_cli_contracts() {
     for path in [
         authoring_paths[0].clone(),
         authoring_paths[1].clone(),
-        repository_root().join("docs/architecture/runtime.md"),
+        repository_root().join("docs/architecture/engine-and-subagents.md"),
     ] {
         let normalized = std::fs::read_to_string(&path)
             .expect("read sidecar doc")
@@ -639,8 +639,8 @@ fn docs_capture_authoring_sidecar_and_cli_contracts() {
     }
 
     // CLI publication vs activation distinction.
-    let cli = std::fs::read_to_string(repository_root().join("docs/cli.md"))
-        .expect("read docs/cli.md")
+    let cli = std::fs::read_to_string(repository_root().join("docs/reference/cli.md"))
+        .expect("read docs/reference/cli.md")
         .replace('`', "")
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -649,7 +649,10 @@ fn docs_capture_authoring_sidecar_and_cli_contracts() {
         "publication validates the merged catalog after first-party shadowing, the complete installed BundleCatalog, and reserved core Agent ids before atomic generation publication",
         "activation materializes only the selected Agent's captured Tool/Hook/Skill capability closure and exact-path-matched JavaScript Extension entrypoints",
     ] {
-        assert!(cli.contains(marker), "docs/cli.md missing `{marker}`");
+        assert!(
+            cli.to_lowercase().contains(&marker.to_lowercase()),
+            "docs/reference/cli.md missing `{marker}`"
+        );
     }
     assert!(!cli.contains("Publication and activation compile only the selected agent"));
 }
@@ -687,8 +690,8 @@ fn workflow_and_provider_docs_cover_control_replay_and_model_routing() {
     }
 
     let providers =
-        std::fs::read_to_string(repository_root().join("docs/architecture/providers.md"))
-            .expect("read providers.md");
+        std::fs::read_to_string(repository_root().join("docs/architecture/providers-and-tools.md"))
+            .expect("read providers-and-tools.md");
     for marker in [
         "reasoning_default",
         "supports_reasoning_effort",

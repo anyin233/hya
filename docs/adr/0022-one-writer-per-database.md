@@ -82,7 +82,7 @@ database ties discovery to the store rather than to a per-user registry:
   (`--pure`, `workflow run --revision`). With no holder they take the lock
   for their whole run. With a holder that has not published a server they
   exit 75. Listing and `tail-session` only read and never lock. The per-command
-  table is in docs/cli.md, "Database lock and the backend daemon".
+  table is in `docs/reference/cli.md`.
 - Advisory locks on network filesystems may not work. Keep the database on a
   local disk.
 - Amends ADR-0020: bare `hya` starts its in-process server only when no

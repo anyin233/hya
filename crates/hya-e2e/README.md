@@ -4,9 +4,7 @@ Process-level agent E2E harness: real `hya` + scripted FakeLlm.
 
 Maintainer docs live under the project docs tree (not duplicated here):
 
-- [Testing overview](../../docs/testing/README.md)
-- [Process E2E harness](../../docs/testing/process-e2e.md)
-- [Agent feature matrix](../../docs/testing/agent-matrix.md)
+- [Testing & Verification Guide](../../docs/contributing/testing.md)
 - Machine registry: [`matrix.toml`](matrix.toml)
 
 ## Quick run
