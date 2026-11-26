@@ -5,11 +5,15 @@ use std::{os::unix::fs::PermissionsExt, path::Path, process::Stdio};
 use agent_client_protocol::v1::schema as acp;
 use anyhow::{Context, ensure};
 use hya_api::v1 as pb;
-use tokio::{net::UnixListener, process::Command, task::JoinSet};
+use tokio::{net::UnixListener, process::Command};
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 pub(super) struct Peers {
-    _tasks: JoinSet<anyhow::Result<()>>,
-    pub(super) disconnected: tokio_util::sync::CancellationToken,
+    /// Dropping it stops every bridge, which then kills and reaps its server.
+    /// Aborting the bridges instead would leave each killed server a zombie
+    /// until tokio's best-effort background reaping gets to it.
+    _stop: DropGuard,
+    pub(super) disconnected: CancellationToken,
 }
 
 impl Peers {
@@ -23,8 +27,9 @@ impl Peers {
             .prefix("hya-acp-")
             .permissions(std::fs::Permissions::from_mode(0o700))
             .tempdir_in("/tmp")?;
+        let stop = CancellationToken::new();
+        let guard = stop.clone().drop_guard();
         let mut peers = Vec::new();
-        let mut tasks = JoinSet::new();
         for server in servers {
             let acp::McpServer::Stdio(server) = server else {
                 anyhow::bail!("only stdio MCP peers are supported")
@@ -42,12 +47,13 @@ impl Peers {
                 socket: socket.to_string_lossy().into_owned(),
             });
             let cwd = cwd.to_path_buf();
-            tasks.spawn(async move {
+            let stop = stop.clone();
+            tokio::spawn(async move {
                 let name = server.name.clone();
                 // The backend cannot see spawn errors; stderr is the editor's agent log.
-                bridge(listener, server, cwd)
-                    .await
-                    .inspect_err(|error| eprintln!("hya acp: MCP server `{name}`: {error:#}"))
+                if let Err(error) = bridge(listener, server, cwd, stop).await {
+                    eprintln!("hya acp: MCP server `{name}`: {error:#}");
+                }
             });
         }
         let channel = tonic::transport::Endpoint::from_shared(url.to_owned())?
@@ -66,18 +72,18 @@ impl Peers {
             .await?
             .context("MCP lease ended before session creation")?
             .session;
-        let disconnected = tokio_util::sync::CancellationToken::new();
+        let disconnected = CancellationToken::new();
         let closed = disconnected.clone();
-        tasks.spawn(async move {
-            let result = lease.message().await;
-            closed.cancel();
-            result?;
-            Ok(())
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = lease.message() => closed.cancel(),
+                () = stop.cancelled() => {}
+            }
         });
         Ok((
             id,
             Self {
-                _tasks: tasks,
+                _stop: guard,
                 disconnected,
             },
         ))
@@ -89,8 +95,12 @@ async fn bridge(
     listener: UnixListener,
     server: acp::McpServerStdio,
     cwd: std::path::PathBuf,
+    stop: CancellationToken,
 ) -> anyhow::Result<()> {
-    let (stream, _) = listener.accept().await?;
+    let (stream, _) = tokio::select! {
+        accepted = listener.accept() => accepted?,
+        () = stop.cancelled() => return Ok(()),
+    };
     // SAFETY: geteuid takes no arguments and cannot fail.
     ensure!(
         stream.peer_cred()?.uid() == unsafe { libc::geteuid() },
@@ -118,6 +128,7 @@ async fn bridge(
             ensure!(status.success(), "exited with {status}");
             return Ok(());
         }
+        () = stop.cancelled() => {}
     }
     child.kill().await?;
     Ok(())

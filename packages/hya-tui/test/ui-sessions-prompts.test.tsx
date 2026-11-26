@@ -233,7 +233,8 @@ describe("sessions picker, live session push, projects sidebar & view, model & e
     for (let i = 0; i < "Second session".length; i++) await app.press("BACKSPACE")
     await app.type("Renamed chat")
     await app.press("RETURN")
-    await app.waitForText("Renamed chat")
+    // The typed title is on screen before the rename lands; the numbered row follows the refresh.
+    await app.waitForText(/\d\. Renamed chat/)
 
     // Ctrl+D asks confirmation; Esc cancels; Ctrl+D + Enter deletes and switches to remaining session.
     await app.press("d", { ctrl: true })
@@ -302,8 +303,10 @@ describe("sessions picker, live session push, projects sidebar & view, model & e
       },
       bridge: async () => { throw new Error("invalid relay link") },
     })
-    await app.waitForText("Projects")
+    // "Projects" alone matches the sidebar title before the view auto-opens.
+    await app.waitForText("Up/Down move · Enter opens/switches")
     await app.press("ESCAPE")
+    await app.waitForGone("Up/Down move · Enter opens/switches")
     await runCmd(app, "/status")
     await app.waitForText(/remote: relay\.example\.com\/abc/)
 

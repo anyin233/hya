@@ -14,7 +14,6 @@ use hya_e2e::{
 use hya_proto::Event;
 use serde_json::{Value, json};
 
-const ROOT: &str = "You are hya";
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 fn spawn_marked(marker: &str, model: &str) -> ScriptStep {
@@ -83,8 +82,8 @@ async fn subagent_roster_spawn_batch_nested_and_model_routing() {
 
     let s_roster = env.create_session().await.unwrap();
     env.fake
-        .push_route_scripts(
-            ROOT,
+        .route_session(
+            "probe roster",
             [
                 tool_step("list_agents", json!({})),
                 tool_step(
@@ -124,12 +123,12 @@ async fn subagent_roster_spawn_batch_nested_and_model_routing() {
         Event::ToolError { message_text, .. } if message_text.contains("AGENT_SPAWN_NOT_ALLOWED")
     )));
 
-    // 2. T2.1 (single spawn + DM mail event). `wait` consumes the child cleanly so no
-    // quiesce steer fires after this turn.
+    // 2. T2.1 (single spawn + DM mail event). Each phase scripts its own session:
+    // any session may still get a late `TEAM QUIESCED` synthesis wake.
     let s_single = env.create_session().await.unwrap();
     env.fake
-        .push_route_scripts(
-            ROOT,
+        .route_session(
+            "spawn a single hya-task",
             [
                 tool_step(
                     "task",
@@ -189,8 +188,8 @@ async fn subagent_roster_spawn_batch_nested_and_model_routing() {
     // 3. T2.1 (batch spawn: two distinct children with independent outputs).
     let s_batch = env.create_session().await.unwrap();
     env.fake
-        .push_route_scripts(
-            ROOT,
+        .route_session(
+            "launch batch",
             [
                 tool_step(
                     "task",
@@ -263,8 +262,8 @@ async fn subagent_roster_spawn_batch_nested_and_model_routing() {
     ] {
         let s = env.create_session().await.unwrap();
         env.fake
-            .push_route_scripts(
-                ROOT,
+            .route_session(
+                format!("dispatch {marker}"),
                 [
                     spawn_marked(marker, requested_model),
                     tool_step("wait", json!({"timeout_secs": 30})),
@@ -306,8 +305,8 @@ async fn subagent_roster_spawn_batch_nested_and_model_routing() {
     for (marker, requested_model) in [("VENDOR", "fake"), ("NONE", "")] {
         let s = env.create_session().await.unwrap();
         env.fake
-            .push_route_scripts(
-                ROOT,
+            .route_session(
+                format!("dispatch {marker}"),
                 [
                     spawn_marked(marker, requested_model),
                     tool_step("wait", json!({"timeout_secs": 30})),
@@ -331,8 +330,8 @@ async fn subagent_roster_spawn_batch_nested_and_model_routing() {
     // 5. T2.2: nested subagent tree depth >= 2 (root -> hya-task -> hya-plan).
     let s_nested = env.create_session().await.unwrap();
     env.fake
-        .push_route_scripts(
-            ROOT,
+        .route_session(
+            "nested subagents",
             [
                 tool_step(
                     "task",
@@ -400,16 +399,16 @@ async fn mailbox_dm_broadcast_worker_report_and_quiesce() {
                 text_step("WORKER_FOLLOWUP_MUST_NOT_RUN"),
             ],
         )
-        .route(ROOT, vec![])
         .build()
         .await
         .expect("e2e env");
 
     // Session 1 (T2.5 + T2.23): default subagent bundle worker sends vertical DM to parent,
     // calls `report`, takes no model round after accepted report, and archives cleanly.
+    const S1: &str = "run default worker";
     env.fake
-        .push_route_scripts(
-            ROOT,
+        .route_session(
+            S1,
             [
                 tool_step(
                     "task",
@@ -427,11 +426,11 @@ async fn mailbox_dm_broadcast_worker_report_and_quiesce() {
         )
         .unwrap();
     let s1 = env.create_session().await.unwrap();
-    env.prompt(s1, "run default worker").await.unwrap();
-    env.wait_route_contains(ROOT, "WORKER_MAIL_OK", TIMEOUT)
+    env.prompt(s1, S1).await.unwrap();
+    env.wait_route_contains(S1, "WORKER_MAIL_OK", TIMEOUT)
         .await
         .expect("parent received worker DM");
-    env.wait_route_contains(ROOT, "WORKER_REPORT_OK", TIMEOUT)
+    env.wait_route_contains(S1, "WORKER_REPORT_OK", TIMEOUT)
         .await
         .expect("parent received worker report");
     env.wait_session_idle(&s1, TIMEOUT)
@@ -452,9 +451,10 @@ async fn mailbox_dm_broadcast_worker_report_and_quiesce() {
 
     // Session 2 (T2.4, T2.6, T2.9, T2.49 server quiesce): spawn live resident, inspect
     // `channels`, broadcast `ALL_HANDS_BROADCAST`, and verify User `TEAM QUIESCED` wake.
+    const S2: &str = "broadcast to live team";
     env.fake
-        .replace_route_scripts(
-            ROOT,
+        .route_session(
+            S2,
             [
                 tool_step(
                     "task",
@@ -474,15 +474,15 @@ async fn mailbox_dm_broadcast_worker_report_and_quiesce() {
         )
         .unwrap();
     let s2 = env.create_session().await.unwrap();
-    env.prompt(s2, "broadcast to live team").await.unwrap();
+    env.prompt(s2, S2).await.unwrap();
     env.wait_route_contains(SYS_BROADCAST, "ALL_HANDS_BROADCAST", TIMEOUT)
         .await
         .expect("child heard broadcast");
-    env.wait_route_contains(ROOT, "TEAM QUIESCED", TIMEOUT)
+    env.wait_route_contains(S2, "TEAM QUIESCED", TIMEOUT)
         .await
         .expect("server quiesce synthesis wake");
 
-    let root_reqs = env.fake.route_requests(ROOT).unwrap().unwrap();
+    let root_reqs = env.fake.route_requests(S2).unwrap().unwrap();
     let root_dump = root_reqs
         .iter()
         .map(Value::to_string)
@@ -561,10 +561,11 @@ async fn wait_report_plain_answer_stall_archive_and_wake() {
         .expect("e2e env");
 
     // 1. Report wakes `wait`; repeated `wait` returns immediately; report not re-steered.
+    const S1: &str = "delegate and wait";
     let s1 = env.create_session().await.unwrap();
     env.fake
-        .push_route_scripts(
-            ROOT,
+        .route_session(
+            S1,
             [
                 spawn_inline("MARKER_W_REPORT"),
                 tool_step("wait", json!({"timeout_secs": 60})),
@@ -576,8 +577,8 @@ async fn wait_report_plain_answer_stall_archive_and_wake() {
             ],
         )
         .unwrap();
-    env.prompt(s1, "delegate and wait").await.unwrap();
-    let dump1 = env.route_dump(ROOT).unwrap();
+    env.prompt(s1, S1).await.unwrap();
+    let dump1 = env.route_dump(S1).unwrap();
     assert!(
         dump1.contains("Subagents finished.")
             && dump1.contains("WAITED_REPORT_OK")
@@ -594,11 +595,11 @@ async fn wait_report_plain_answer_stall_archive_and_wake() {
     );
 
     // 2. Plain answer without `report` finishes the worker cleanly (never stalled).
-    let reqs_before_s2 = env.fake.route_requests(ROOT).unwrap().unwrap().len();
+    const S2: &str = "delegate plain worker";
     let s2 = env.create_session().await.unwrap();
     env.fake
-        .push_route_scripts(
-            ROOT,
+        .route_session(
+            S2,
             [
                 spawn_inline("MARKER_W_PLAIN"),
                 tool_step("wait", json!({"timeout_secs": 60})),
@@ -606,12 +607,8 @@ async fn wait_report_plain_answer_stall_archive_and_wake() {
             ],
         )
         .unwrap();
-    env.prompt(s2, "delegate plain worker").await.unwrap();
-    let s2_dump = env.fake.route_requests(ROOT).unwrap().unwrap()[reqs_before_s2..]
-        .iter()
-        .map(Value::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
+    env.prompt(s2, S2).await.unwrap();
+    let s2_dump = env.route_dump(S2).unwrap();
     assert!(
         s2_dump.contains("Subagents finished.")
             && s2_dump.contains("PLAIN_ANSWER_OK")
@@ -620,10 +617,11 @@ async fn wait_report_plain_answer_stall_archive_and_wake() {
     );
 
     // 3. Empty reply stalls `wait`; `archive` stops worker; `send` to handle wakes it.
+    const S3: &str = "delegate, archive, wake";
     let s3 = env.create_session().await.unwrap();
     env.fake
-        .push_route_scripts(
-            ROOT,
+        .route_session(
+            S3,
             [
                 tool_step(
                     "task",
@@ -648,11 +646,11 @@ async fn wait_report_plain_answer_stall_archive_and_wake() {
             ],
         )
         .unwrap();
-    env.prompt(s3, "delegate, archive, wake").await.unwrap();
-    env.wait_route_contains(ROOT, "stopped without reporting", TIMEOUT)
+    env.prompt(s3, S3).await.unwrap();
+    env.wait_route_contains(S3, "stopped without reporting", TIMEOUT)
         .await
         .expect("stall wake");
-    env.wait_route_contains(ROOT, &format!("Archived `{handle_stall}`"), TIMEOUT)
+    env.wait_route_contains(S3, &format!("Archived `{handle_stall}`"), TIMEOUT)
         .await
         .expect("archive confirmation");
     env.wait_route_contains("You are hya-task", "WAKE_UP_PLEASE", TIMEOUT)

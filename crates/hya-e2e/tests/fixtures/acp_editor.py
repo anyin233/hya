@@ -130,8 +130,11 @@ async def launch(binary, db):
 
 
 async def exited(pidfile):
+    # Peers stop asynchronously after their session's turn settles; nothing
+    # signals it, so poll with the same bound as the process waits below.
     pid = int(pidfile.read_text())
-    for _ in range(100):
+    deadline = asyncio.get_running_loop().time() + 6
+    while asyncio.get_running_loop().time() < deadline:
         try:
             os.kill(pid, 0)
         except ProcessLookupError:

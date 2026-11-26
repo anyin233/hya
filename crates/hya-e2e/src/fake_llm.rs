@@ -37,7 +37,7 @@ pub struct ToolCallStep {
 }
 
 /// A per-agent script queue selected by a marker found in the request's
-/// `system`-role content.
+/// `system`-role content, or by a root session's opening prompt.
 ///
 /// Multi-agent scenarios (residents + main) issue interleaved completion
 /// requests, so a single shared queue is nondeterministic by construction: agent
@@ -47,8 +47,21 @@ pub struct ToolCallStep {
 #[derive(Clone, Debug)]
 struct Route {
     marker: String,
+    /// Match `marker` against the session's opening user prompt (exactly)
+    /// instead of the system prompt; see [`FakeLlm::route_session`].
+    session: bool,
     steps: VecDeque<ScriptStep>,
     requests: Vec<Value>,
+}
+
+impl Route {
+    fn matches(&self, system: &str, first_user: Option<&str>) -> bool {
+        if self.session {
+            !system.contains(TITLE_AGENT_MARKER) && first_user == Some(self.marker.as_str())
+        } else {
+            system.contains(&self.marker)
+        }
+    }
 }
 
 /// Opening of the fixed `hya-title` agent's system prompt (`core-agents`
@@ -217,6 +230,7 @@ impl FakeLlm {
         } else {
             guard.routes.push(Route {
                 marker,
+                session: false,
                 steps: steps.into_iter().collect(),
                 requests: Vec::new(),
             });
@@ -244,6 +258,7 @@ impl FakeLlm {
         } else {
             guard.routes.push(Route {
                 marker,
+                session: false,
                 steps: steps.into_iter().collect(),
                 requests: Vec::new(),
             });
@@ -269,7 +284,36 @@ impl FakeLlm {
             .map_err(|_| E2eError::Other("fake llm mutex poisoned".into()))?;
         guard.routes.push(Route {
             marker: marker.into(),
+            session: false,
             steps: steps.into(),
+            requests: Vec::new(),
+        });
+        Ok(())
+    }
+
+    /// Pin `steps` to the root session whose opening user prompt is exactly
+    /// `prompt`, for every turn of that session.
+    ///
+    /// Every primary agent's system prompt opens with "You are hya", so a
+    /// system-marker route cannot tell two root sessions apart: a late extra
+    /// turn of an earlier session (a `TEAM QUIESCED` synthesis wake, say) would
+    /// pop steps meant for the next one. Children open with a mail directive,
+    /// never with the root's prompt, so they never match. A session route takes
+    /// precedence over system-marker routes. It is keyed by `prompt` for
+    /// [`Self::route_requests`] and [`Self::route_remaining`].
+    pub fn route_session(
+        &self,
+        prompt: impl Into<String>,
+        steps: impl IntoIterator<Item = ScriptStep>,
+    ) -> Result<(), E2eError> {
+        let mut guard = self
+            .shared
+            .lock()
+            .map_err(|_| E2eError::Other("fake llm mutex poisoned".into()))?;
+        guard.routes.push(Route {
+            marker: prompt.into(),
+            session: true,
+            steps: steps.into_iter().collect(),
             requests: Vec::new(),
         });
         Ok(())
@@ -330,11 +374,12 @@ async fn chat_completions(
             return (StatusCode::INTERNAL_SERVER_ERROR, "mutex poisoned").into_response();
         };
         let system = system_text(&body.0);
+        let first_user = first_user_text(&body.0);
         if system.contains(TITLE_AGENT_MARKER)
             && !guard
                 .routes
                 .iter()
-                .any(|route| system.contains(&route.marker))
+                .any(|route| route.matches(&system, first_user))
         {
             guard.title_requests.push(body.0.clone());
             let title = guard.title_reply.clone().unwrap_or_default();
@@ -350,11 +395,17 @@ async fn chat_completions(
         // Attribution is by marker alone. An exhausted route does NOT fall back
         // to the shared queue: a resident that ran out of script must stop, not
         // start eating the main agent's steps.
-        let step = match guard
-            .routes
-            .iter_mut()
-            .find(|route| system.contains(&route.marker))
-        {
+        // A session route wins over any system marker (including "You are hya").
+        let routes = &guard.routes;
+        let index = routes
+            .iter()
+            .position(|route| route.session && route.matches(&system, first_user))
+            .or_else(|| {
+                routes
+                    .iter()
+                    .position(|route| route.matches(&system, first_user))
+            });
+        let step = match index.map(|index| &mut guard.routes[index]) {
             Some(route) => {
                 route.requests.push(body.0.clone());
                 route.steps.pop_front()
@@ -455,6 +506,15 @@ fn system_text(body: &Value) -> String {
         .filter_map(|m| m.get("content").and_then(|c| c.as_str()))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn first_user_text(body: &Value) -> Option<&str> {
+    body.get("messages")?
+        .as_array()?
+        .iter()
+        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))?
+        .get("content")?
+        .as_str()
 }
 
 fn sse_response(frames: Vec<Value>) -> Response {

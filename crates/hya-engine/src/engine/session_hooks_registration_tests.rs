@@ -27,11 +27,11 @@ struct Hooks {
     pause_start: Mutex<Pause>,
     pause_spawn: Mutex<Pause>,
     pause_request: Arc<Mutex<Pause>>,
-    requests: Arc<Mutex<Vec<hya_provider::CompletionRequest>>>,
+    requests: Arc<Mutex<Vec<(SessionId, hya_provider::CompletionRequest)>>>,
 }
 
 struct RecordingProvider {
-    requests: Arc<Mutex<Vec<hya_provider::CompletionRequest>>>,
+    requests: Arc<Mutex<Vec<(SessionId, hya_provider::CompletionRequest)>>>,
     pause: Arc<Mutex<Pause>>,
 }
 
@@ -49,7 +49,7 @@ impl Provider for RecordingProvider {
         s: SessionId,
         m: hya_proto::MessageId,
     ) -> Result<hya_provider::EventStream, hya_provider::ProviderError> {
-        self.requests.lock().unwrap().push(req.clone());
+        self.requests.lock().unwrap().push((s, req.clone()));
         let pause = self.pause.lock().unwrap().take();
         if let Some((e, r)) = pause {
             e.notify_one();
@@ -666,8 +666,9 @@ async fn archive_stop_and_sidecar_failure_before_first_wake_preserve_directive()
     mail(&eng, root, "main/worker", "do Y instead").await;
     wait_idle_stop(&eng, &sup, root, child).await;
     {
+        // The root's quiescence synthesis may land after the child's request.
         let reqs = hooks.requests.lock().unwrap();
-        let msgs = &reqs.last().unwrap().messages;
+        let msgs = &reqs.iter().rfind(|(s, _)| *s == child).unwrap().1.messages;
         assert!(msgs.iter().rev().find_map(|m| match m {
             hya_proto::Message::User { parts, .. } => Some(parts.iter().any(|p| matches!(p, hya_proto::Part::Text { text, .. } if text.contains("do Y instead")))),
             _ => None,
@@ -950,7 +951,7 @@ async fn revive_boundary_bypasses_user_hooks_keeps_latest_context_and_skips_spaw
         .filter(|(s, k)| *s == child && *k == "spawn")
         .count();
     let texts = hooks.user_texts.lock().unwrap().clone();
-    let req = hooks.requests.lock().unwrap().last().unwrap().clone();
+    let req = hooks.requests.lock().unwrap().last().unwrap().1.clone();
     let proj = eng.read_projection(child).await.unwrap();
     drop(_rt);
     sup.drain(FinishCause::Shutdown, crate::DRAIN_DEADLINE)
