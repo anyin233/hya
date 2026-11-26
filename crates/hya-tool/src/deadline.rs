@@ -327,11 +327,15 @@ impl RunDeadline {
     /// and end-of-budget caps without waiting wall-clock seconds.
     pub fn advance_clock(&self, delta: Duration) {
         let nanos = u64::try_from(delta.as_nanos()).unwrap_or(u64::MAX);
-        let _ =
-            self.clock_offset_ns
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                    Some(current.saturating_add(nanos))
-                });
+        let mut current = self.clock_offset_ns.load(Ordering::Relaxed);
+        while let Err(observed) = self.clock_offset_ns.compare_exchange_weak(
+            current,
+            current.saturating_add(nanos),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            current = observed;
+        }
     }
 
     /// Stop and join yielded jobs before exiting.
