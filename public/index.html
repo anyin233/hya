@@ -1,0 +1,616 @@
+<!doctype html>
+<html
+  lang="zh-CN"
+  data-title-zh="Hya · Little agents that go far"
+  data-title-en="Hya · Little agents that go far"
+>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="text-scale" content="scale" />
+  <meta name="color-scheme" content="light dark" />
+  <script>
+    (() => {
+      const root = document.documentElement;
+      let stored = null;
+      try { stored = localStorage.getItem("hya:theme"); } catch {}
+      document.querySelector('meta[name="color-scheme"]').content =
+        stored === "light" || stored === "dark" ? stored : "light dark";
+
+      let lang = "";
+      try {
+        const q = new URLSearchParams(window.location.search).get("lang");
+        if (q === "en" || q === "zh") {
+          lang = q;
+          localStorage.setItem("hya:lang", q);
+        } else {
+          lang = localStorage.getItem("hya:lang") || "";
+        }
+      } catch {}
+      if (lang !== "en" && lang !== "zh") {
+        const langs = navigator.languages?.length ? navigator.languages : [navigator.language || ""];
+        lang = langs.some((l) => /^zh\b/i.test(l)) ? "zh" : "en";
+      }
+      root.dataset.lang = lang;
+      root.lang = lang === "zh" ? "zh-CN" : "en";
+      const t = lang === "en" ? root.dataset.titleEn : root.dataset.titleZh;
+      if (t) document.title = t;
+    })();
+  </script>
+
+  <title>Hya · Little agents that go far</title>
+  <meta
+    name="description"
+    content="专为长程自主任务与多 Agent 协作设计的开源本地 Agent。"
+    data-desc-zh="专为长程自主任务与多 Agent 协作设计的开源本地 Agent。"
+    data-desc-en="Open-source local agents built for long-running work and multi-agent collaboration."
+  />
+  <link rel="icon" type="image/png" href="assets/favicon.png" />
+  <link rel="apple-touch-icon" href="assets/hya-mark.png" />
+  <meta name="theme-color" content="#0f141e" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f5f3ee" media="(prefers-color-scheme: light)" />
+
+  <script type="speculationrules">
+    {
+      "prefetch": [
+        {
+          "tag": "hya-docs-prefetch",
+          "where": { "href_matches": "/*docs/*" },
+          "eagerness": "moderate"
+        }
+      ]
+    }
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap"
+  />
+  <link rel="stylesheet" href="style.css" />
+  <script src="main.js" defer></script>
+</head>
+
+<body>
+  <header class="site-header">
+    <a href="#main-title" class="skip-link visually-hidden">
+      <span data-zh>跳至正文</span><span data-en>Skip to main content</span>
+    </a>
+    <div class="sticky-nav">
+      <div class="sticky-nav-inner">
+        <a href="./" class="sticky-nav-logo" aria-current="page">
+          <img src="assets/hya-logo.png" alt="" width="800" height="413" />
+          <span class="visually-hidden"><span data-zh>Hya 首页</span><span data-en>Hya home</span></span>
+        </a>
+
+        <div class="nav-right">
+          <nav aria-label="主菜单" data-aria-zh="主菜单" data-aria-en="Primary">
+            <ul class="nav-links">
+              <li>
+                <a href="docs/" class="sticky-nav-page-link">
+                  <span data-zh>文档</span><span data-en>Documentation</span>
+                </a>
+              </li>
+              <li>
+                <a href="https://github.com/chrono-foundry/hya" class="sticky-nav-page-link">GitHub</a>
+              </li>
+            </ul>
+          </nav>
+
+          <span class="nav-divider" aria-hidden="true"></span>
+
+          <button
+            id="lang-trigger"
+            type="button"
+            class="nav-icon-button lang-trigger"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            aria-label="选择语言"
+            data-aria-zh="选择语言"
+            data-aria-en="Choose language"
+            commandfor="lang-menu"
+            command="toggle-popover"
+          >
+            <svg class="line-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m5 8 6 6" /><path d="m4 14 6-6 2-3" /><path d="M2 5h12" /><path d="M7 2h1" /><path d="m22 22-5-10-5 10" /><path d="M14 18h6" />
+            </svg>
+          </button>
+          <div id="lang-menu" class="lang-menu" popover="auto">
+            <div focusgroup="menu nomemory" aria-labelledby="lang-trigger">
+              <div role="group" aria-label="语言" data-aria-zh="语言" data-aria-en="Language">
+                <button type="button" role="menuitemradio" aria-checked="true" data-lang-option="zh" lang="zh-CN">简体中文</button>
+                <button type="button" role="menuitemradio" aria-checked="false" data-lang-option="en" lang="en">English</button>
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="nav-icon-button"
+            data-theme-toggle
+            aria-label="切换主题"
+            data-aria-zh="切换主题"
+            data-aria-en="Switch theme"
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20V2Z"/><path fill-rule="evenodd" d="M12 0a12 12 0 1 1 0 24 12 12 0 0 1 0-24Zm0 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Z"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="page-shell">
+    <!-- ================= Hero ================= -->
+    <section class="hero">
+      <div class="hero-heading-group">
+        <img
+          class="hero-logo"
+          src="assets/hya-logo.png"
+          alt="Hya"
+          width="800"
+          height="413"
+          fetchpriority="high"
+        />
+
+        <h1 id="main-title" class="hero-subtitle" lang="en" tabindex="-1">
+          <span class="hero-subtitle-line">Little agents that go far solo,</span>
+          <span class="hero-subtitle-line">and even further <span class="hero-subtitle-accent">as a pack</span>.</span>
+        </h1>
+      </div>
+
+      <div class="tab-box" data-tabs>
+        <div
+          class="tab-list"
+          role="tablist"
+          focusgroup="tablist nomemory"
+          aria-label="安装命令"
+          data-aria-zh="安装命令"
+          data-aria-en="Install commands"
+        >
+          <button
+            class="tab"
+            type="button"
+            role="tab"
+            id="install-tab-a"
+            aria-selected="true"
+            tabindex="0"
+            focusgroupstart
+            data-tab="a"
+          >macOS · Linux</button>
+          <button
+            class="tab"
+            type="button"
+            role="tab"
+            id="install-tab-b"
+            aria-selected="false"
+            tabindex="-1"
+            data-tab="b"
+          >
+            <span data-zh>源码安装</span><span data-en>From source</span>
+          </button>
+          <button
+            class="tab"
+            type="button"
+            role="tab"
+            id="install-tab-c"
+            aria-selected="false"
+            tabindex="-1"
+            data-tab="c"
+          >
+            <span data-zh>升级</span><span data-en>Update</span>
+          </button>
+        </div>
+
+        <div class="tab-row">
+          <div class="tab-panels">
+            <div
+              class="tab-panel"
+              role="tabpanel"
+              id="install-panel-a"
+              aria-labelledby="install-tab-a"
+              tabindex="0"
+              data-panel="a"
+            >
+              <code id="install-cmd-a">curl -fsSL https://hya.ed-aisys.com/install.sh | sh</code>
+            </div>
+            <div
+              class="tab-panel"
+              role="tabpanel"
+              id="install-panel-b"
+              aria-labelledby="install-tab-b"
+              hidden="until-found"
+              data-panel="b"
+            >
+              <code id="install-cmd-b">git clone https://github.com/chrono-foundry/hya &amp;&amp; cd hya &amp;&amp; ./install.sh --prefix "$HOME/.local"</code>
+            </div>
+            <div
+              class="tab-panel"
+              role="tabpanel"
+              id="install-panel-c"
+              aria-labelledby="install-tab-c"
+              hidden="until-found"
+              data-panel="c"
+            >
+              <code id="install-cmd-c">hya update</code>
+            </div>
+          </div>
+
+          <span class="copy-wrap">
+            <button
+              type="button"
+              class="button copy-button"
+              command="--copy"
+              commandfor="install-cmd-a"
+              data-copy
+            >
+              <svg class="line-icon copy-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <svg class="line-icon check-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5L20 7"/></svg>
+              <span data-zh>复制</span><span data-en>Copy</span>
+            </button>
+            <span class="copy-tip" role="status"></span>
+          </span>
+        </div>
+      </div>
+
+      <a
+        href="#long-horizon-context"
+        class="hero-scroll-cue"
+        aria-label="向下滚动查看详情"
+        data-aria-zh="向下滚动查看详情"
+        data-aria-en="Scroll down"
+      >
+        <svg class="line-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg>
+      </a>
+    </section>
+
+    <!-- ================= Story ================= -->
+    <div class="story-grid">
+      <div class="stage">
+        <figure class="figure-frame">
+          <figcaption class="figure-caption">
+            <div class="figure-caption-left">
+              <span class="win-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="stage-title-text" data-stage-title>hya · Q3 feedback audit</span>
+            </div>
+          </figcaption>
+
+          <div class="media-frame" data-stage-media>
+            <div class="hya-tui" lang="en">
+              <div class="tui-scroll">
+                <div class="tui-notice">
+                  Context rewritten · <span class="t-fg">2 user messages kept verbatim</span> · <span class="t-ok">4 todos carried forward</span>
+                </div>
+
+                <div class="tui-assistant">
+                  <div class="tui-agent-head"><span class="t-muted">● </span><b>hya-main</b><span class="t-muted"> · anthropic/claude-sonnet-4-6</span></div>
+
+                  <div class="tui-tool">
+                    <div class="tui-tool-name">todo</div>
+                    <div class="tui-tool-head"><span><span class="t-ok">✓</span> 4 items · 2 completed</span><span>3ms</span></div>
+                    <div class="tui-tool-body">
+                      <div class="tui-rule">────────────────</div>
+                      <div class="t-muted"><span class="t-ok">✓</span> Pull Q3 feedback and group recurring issues</div>
+                      <div class="t-muted"><span class="t-ok">✓</span> Clear raw search logs, keep summary counts</div>
+                      <div class="t-fg"><span class="t-focus">◐</span> Cross-check edge cases and draft findings</div>
+                      <div class="t-fg"><span class="t-muted">○</span> Write final action list</div>
+                    </div>
+                  </div>
+
+                  <div class="tui-tool">
+                    <div class="tui-tool-name">read</div>
+                    <div class="tui-tool-head"><span><span class="t-ok">✓</span></span><span>4ms</span></div>
+                    <div class="tui-tool-args">notes/brief.md · lines 1-36 (reloaded external edit)</div>
+                  </div>
+
+                  <div class="tui-reply">Picked up your external edit to <code>brief.md</code>. Re-checking the edge cases against the two new scope rules now.</div>
+                </div>
+              </div>
+
+              <div class="tui-bottom">
+                <div class="tui-dock-row"><span class="t-focus">◐</span> <span class="t-fg">Cross-check edge cases and draft findings</span> <span class="t-muted">(2/4)</span></div>
+                <div class="tui-composer-band">
+                  <div class="tui-statusline">
+                    <span><span class="t-fg">claude-sonnet-4-6 · high</span> <span class="t-border">·</span> mode manual <span class="t-border">·</span> Todos 2/4 <span class="t-border">·</span> <span class="t-ok">ctx 18%</span></span>
+                    <span>Q3 feedback audit</span>
+                  </div>
+                  <div><span class="t-focus">╰─ </span><span class="t-cursor"></span><span class="t-muted">Message, !shell, or @file · / commands</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </figure>
+      </div>
+
+      <div class="story-sections">
+        <!-- 01 -->
+        <section
+          class="section"
+          id="long-horizon-context"
+          tabindex="-1"
+          data-title="hya · Q3 feedback audit"
+        >
+          <template class="section-media">
+            <div class="hya-tui" lang="en">
+              <div class="tui-scroll">
+                <div class="tui-notice">
+                  Context rewritten · <span class="t-fg">2 user messages kept verbatim</span> · <span class="t-ok">4 todos carried forward</span>
+                </div>
+
+                <div class="tui-assistant">
+                  <div class="tui-agent-head"><span class="t-muted">● </span><b>hya-main</b><span class="t-muted"> · anthropic/claude-sonnet-4-6</span></div>
+
+                  <div class="tui-tool">
+                    <div class="tui-tool-name">todo</div>
+                    <div class="tui-tool-head"><span><span class="t-ok">✓</span> 4 items · 2 completed</span><span>3ms</span></div>
+                    <div class="tui-tool-body">
+                      <div class="tui-rule">────────────────</div>
+                      <div class="t-muted"><span class="t-ok">✓</span> Pull Q3 feedback and group recurring issues</div>
+                      <div class="t-muted"><span class="t-ok">✓</span> Clear raw search logs, keep summary counts</div>
+                      <div class="t-fg"><span class="t-focus">◐</span> Cross-check edge cases and draft findings</div>
+                      <div class="t-fg"><span class="t-muted">○</span> Write final action list</div>
+                    </div>
+                  </div>
+
+                  <div class="tui-tool">
+                    <div class="tui-tool-name">read</div>
+                    <div class="tui-tool-head"><span><span class="t-ok">✓</span></span><span>4ms</span></div>
+                    <div class="tui-tool-args">notes/brief.md · lines 1-36 (reloaded external edit)</div>
+                  </div>
+
+                  <div class="tui-reply">Picked up your external edit to <code>brief.md</code>. Re-checking the edge cases against the two new scope rules now.</div>
+                </div>
+              </div>
+
+              <div class="tui-bottom">
+                <div class="tui-dock-row"><span class="t-focus">◐</span> <span class="t-fg">Cross-check edge cases and draft findings</span> <span class="t-muted">(2/4)</span></div>
+                <div class="tui-composer-band">
+                  <div class="tui-statusline">
+                    <span><span class="t-fg">claude-sonnet-4-6 · high</span> <span class="t-border">·</span> mode manual <span class="t-border">·</span> Todos 2/4 <span class="t-border">·</span> <span class="t-ok">ctx 18%</span></span>
+                    <span>Q3 feedback audit</span>
+                  </div>
+                  <div><span class="t-focus">╰─ </span><span class="t-cursor"></span><span class="t-muted">Message, !shell, or @file · / commands</span></div>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <span class="section-kicker">01</span>
+          <h2 class="section-title">
+            <span data-zh>不靠摘要硬撑的结构化记忆</span>
+            <span data-en>Structured memory without lossy summaries</span>
+          </h2>
+
+          <dl class="plain-defs" data-zh>
+            <div>
+              <dt>对话</dt>
+              <dd>只认工具结果和你的原话，模型自己说的只算计划。</dd>
+            </div>
+            <div>
+              <dt>目标</dt>
+              <dd>待办清单单独存着，记录做到哪一步、还剩什么。</dd>
+            </div>
+            <div>
+              <dt>文件</dt>
+              <dd>后台记录本地文件有没有变动，平时不放进对话占地方。</dd>
+            </div>
+          </dl>
+
+          <dl class="plain-defs" data-en>
+            <div>
+              <dt>Chat</dt>
+              <dd>Only tool output and your prompts count as fact. Model text on its own is just a plan.</dd>
+            </div>
+            <div>
+              <dt>Goals</dt>
+              <dd>The checklist lives outside the chat, tracking where things stand and what's left.</dd>
+            </div>
+            <div>
+              <dt>Files</dt>
+              <dd>Local file changes are tracked in the background instead of eating up context.</dd>
+            </div>
+          </dl>
+
+          <p data-zh>做完一阶段，它可以主动清掉前面的过程继续做。窗口满了需要压缩时，你的原话和待办清单原样保留，不会被重编成走样的摘要。</p>
+          <p data-en>Once a phase wraps up, Hya can clear out earlier legwork and keep going with a clean window. And when context runs tight, your original prompts and checklist stay word for word instead of getting boiled down into a vague summary.</p>
+
+          <div class="actions">
+            <a class="button" href="docs/guide/context-and-memory/">
+              <span data-zh>了解详情</span><span data-en>How context works</span>
+              <span aria-hidden="true">→</span>
+            </a>
+          </div>
+        </section>
+
+        <!-- 02 -->
+        <section
+          class="section"
+          id="multiagent"
+          tabindex="-1"
+          data-title="hya · fix/auth"
+        >
+          <template class="section-media">
+            <div class="hya-tui" lang="en">
+              <div class="hya-tui-split">
+                <div class="tui-col">
+                  <div class="tui-scroll">
+                    <div class="tui-user">Track down the intermittent login timeout, fix it, and add a regression test</div>
+                    <div class="tui-assistant">
+                      <div class="tui-agent-head"><span class="t-muted">● </span><b>hya-main</b><span class="t-muted"> · openai/gpt-5.4:high</span></div>
+                      <div class="tui-tool">
+                        <div class="tui-tool-name">task</div>
+                        <div class="tui-tool-head"><span><span class="t-ok">✓</span> 2 subagents</span><span>16ms</span></div>
+                        <div class="tui-tool-body">
+                          <div class="t-fg">scout · trace gateway and pool logs</div>
+                          <div><span class="t-ok">✓ done</span> <span class="t-muted">  ↳ Redis reconnect loop has no upper timeout</span></div>
+                          <div class="t-muted">click to view · /open ses_01j9scout</div>
+                        </div>
+                        <div class="tui-tool-body">
+                          <div class="t-fg">builder · cap reconnect timeout and add tests</div>
+                          <div><span class="t-focus">⠋ running</span> <span class="t-muted">  ↳ bun test auth/session.test.ts</span></div>
+                          <div class="t-muted">click to view · /open ses_01j9build</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="tui-bottom">
+                    <div class="tui-composer-box">
+                      <span><span class="t-cursor"></span>Have scout check the cache client for the same bug too</span>
+                    </div>
+                    <div class="tui-statusline">
+                      <span><span class="t-fg">gpt-5.4 · high</span> <span class="t-border">·</span> mode manual <span class="t-border">·</span> ⎇ fix/auth <span class="t-border">·</span> ctx 26%</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="tui-pane tui-pane-between is-focused">
+                  <span class="tui-pane-title">Subagents · archived included</span>
+                  <div class="tui-scroll tui-scroll-tight">
+                    <div>
+                      <div class="t-focus">▸ scout · done · archived</div>
+                      <div class="t-muted">  main/hya-scout-skade · handoff</div>
+                    </div>
+                    <div>
+                      <div class="t-fg">  builder · running</div>
+                      <div class="t-muted">  bun test auth/session.test.ts</div>
+                    </div>
+                  </div>
+                  <div class="t-muted tui-pane-foot">
+                    ↑↓ preview · Enter pin · n new · x interrupt · s steer · d archive
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <span class="section-kicker">02</span>
+          <h2 class="section-title">
+            <span data-zh>随时叫醒续做的多 Agent 小队</span>
+            <span data-en>Subagents that hand off, sleep, and pick right back up</span>
+          </h2>
+          <p data-zh>派出去的子 Agent 在各自会话里并行工作，不挤占主对话窗口。干完一阶段只交回一份简短交接单就进入休眠，不占额度；后续随时叫醒，带着上次的交接单接着做。</p>
+          <p data-zh>固定流程写成一份文档就能按步骤自动推进，是否达标由外部检查或独立验收判定，不听执行者自评。</p>
+          <p data-en>Subagents run in parallel inside their own sessions so your main chat stays clean. When one finishes a step, it sends back a short handoff note and goes to sleep at zero token cost. Ping it again later and it wakes right back up from that handoff.</p>
+          <p data-en>Repeatable workflows live in plain Markdown files and run step by step. External checks or a separate reviewer decide when the job is done, never the worker grading its own work.</p>
+          <div class="actions">
+            <a class="button" href="docs/guide/subagents-and-teams/">
+              <span data-zh>了解详情</span><span data-en>Subagents &amp; workflows</span>
+              <span aria-hidden="true">→</span>
+            </a>
+          </div>
+        </section>
+
+        <!-- 03 -->
+        <section
+          class="section"
+          id="runtime"
+          tabindex="-1"
+          data-title="hya · shop-api"
+        >
+          <template class="section-media">
+            <div class="hya-tui" lang="en">
+              <div class="hya-tui-workspace">
+                <div class="tui-pane">
+                  <span class="tui-pane-title">Projects</span>
+                  <div><span class="t-focus">▸ </span><span class="t-warn">● </span><span class="t-focus">shop-api</span> <span class="t-muted">(3)</span></div>
+                  <div class="tui-rule">───────────</div>
+                  <div><span>    </span><span class="t-fg">web-app</span> <span class="t-muted">(2)</span></div>
+                  <div class="tui-rule">───────────</div>
+                  <div><span>    </span><span class="t-fg">infra</span> <span class="t-muted">(1)</span></div>
+                </div>
+
+                <div class="tui-col">
+                  <div class="tui-scroll">
+                    <div class="tui-user">Finish the reconciliation job and pause for my sign-off if anything looks off</div>
+                    <div class="tui-assistant">
+                      <div class="tui-agent-head"><span class="t-muted">● </span><b>hya-main</b><span class="t-muted"> · anthropic/claude-sonnet-4-6</span></div>
+                      <div class="tui-tool">
+                        <div class="tui-tool-name">edit</div>
+                        <div class="tui-tool-head"><span><span class="t-ok">✓</span></span><span>12ms</span></div>
+                        <div class="tui-tool-args">src/billing/reconcile.ts · +2 -1</div>
+                        <div class="tui-tool-body">
+                          <div class="tui-rule">────────────────</div>
+                          <div class="t-err">- const batchSize = 5000</div>
+                          <div class="t-ok">+ const batchSize = 500</div>
+                          <div class="t-ok">+ const retryOnLock = true</div>
+                        </div>
+                      </div>
+                      <div class="tui-reply">Switched to smaller batches with lock retries and kept the run going in the background. Safe to close the terminal and check back later.</div>
+                    </div>
+                  </div>
+                  <div class="tui-composer-box">
+                    <span><span class="t-cursor"></span>Message, !shell, or @file · / commands</span>
+                  </div>
+                </div>
+
+                <div class="tui-col tui-col-start">
+                  <div class="tui-pane">
+                    <span class="tui-pane-title">Sessions</span>
+                    <div class="t-fg">▸ 1. Billing reconciliation</div>
+                    <div class="t-muted">   hya-main · running</div>
+                    <div class="tui-rule">───────────────────</div>
+                    <div class="t-fg">  2. Refund API cleanup</div>
+                    <div class="t-muted">   hya-main · archived</div>
+                  </div>
+                  <div class="tui-passive-pane">
+                    <div class="tui-passive-title">Context</div>
+                    <div class="tui-kv"><span class="t-muted">Mode</span><span class="t-fg">manual</span></div>
+                    <div class="tui-kv"><span class="t-muted">Context</span><span class="t-fg">22% · 44k/200k</span></div>
+                    <div class="tui-kv"><span class="t-muted">Branch</span><span class="t-fg">main</span></div>
+                    <div class="tui-kv"><span class="t-muted">WebUI</span><span class="t-fg">127.0.0.1:3250</span></div>
+                    <div class="tui-kv"><span class="t-muted">Server</span><span class="t-ok">relay · connected</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <span class="section-kicker">03</span>
+          <h2 class="section-title">
+            <span data-zh>不绑死窗口的本地常驻工作台</span>
+            <span data-en>A local workspace that outlives any window</span>
+          </h2>
+          <p data-zh>运行 <code>hya</code>，终端和浏览器打开的是同一个界面。关掉窗口任务在后台继续跑，随时重连查看；不满意哪一步，直接把对话和改过的文件一起撤回。</p>
+          <p data-zh>人在外面可以通过端到端加密链接连回自己的电脑，不用把工作搬上第三方云主机，文件、历史和密钥都留在本地。</p>
+          <p data-en>Run <code>hya</code> and the same interface opens in your terminal and your browser. Close either window and the run keeps going in the background until you check back in. If a step goes sideways, undo rewinds both the chat and the files touched on disk.</p>
+          <p data-en>When you're away from your desk, connect back to your machine over an end-to-end encrypted link. Nothing moves to a third-party cloud; your files, history, and keys stay on your own hardware.</p>
+          <div class="actions">
+            <a class="button" href="docs/getting-started/quickstart/">
+              <span data-zh>快速上手</span><span data-en>Quick start</span>
+              <span aria-hidden="true">→</span>
+            </a>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <!-- ================= Footer ================= -->
+  <footer class="site-footer">
+    <div class="site-footer-inner">
+      <div class="footer-left">
+        <div><a class="link" href="https://github.com/chrono-foundry/hya">Hya</a> &amp; Contributors · © 2026 · MIT / Apache-2.0</div>
+      </div>
+      <div class="footer-right">
+        <div class="footer-links">
+          <a class="link" href="docs/">
+            <span data-zh>文档</span><span data-en>Documentation</span>
+          </a>
+          <a class="link" href="https://github.com/chrono-foundry/hya">GitHub</a>
+          <a class="link" href="https://github.com/chrono-foundry/hya/issues">Issues</a>
+          <button
+            type="button"
+            class="theme-toggle"
+            data-theme-toggle
+            aria-label="切换主题"
+            data-aria-zh="切换主题"
+            data-aria-en="Switch theme"
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20V2Z"/></svg>
+            <span data-theme-label><span data-zh>跟随系统</span><span data-en>System</span></span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

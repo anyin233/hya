@@ -4,7 +4,7 @@
 </p>
 
 <p align="center">
-  <a href="https://chrono-foundry.github.io/hya/">Docs</a> ·
+  <a href="https://chrono-foundry.github.io/hya/docs/">Docs</a> ·
   <a href="docs/getting-started/quickstart.md">Quick Start</a> ·
   <a href="#install">Install</a> ·
   <a href="#license">License</a>
@@ -43,7 +43,7 @@ pinning, and [WSL 2](docs/getting-started/installation.md#windows-wsl-2) for Win
 
 ## Documentation
 
-Everything else lives on the [documentation site](https://chrono-foundry.github.io/hya/)
+Everything else lives on the [documentation site](https://chrono-foundry.github.io/hya/docs/)
 and in [`docs/`](docs/README.md).
 
 ## Status

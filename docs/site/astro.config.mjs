@@ -2,9 +2,9 @@ import { defineConfig } from 'astro/config';
 import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
 import remarkDocs from './src/lib/remark-docs.mjs';
-import { documentLinks } from './src/lib/paths.mjs';
+import { documentLinks, resolveDocsBase } from './src/lib/paths.mjs';
 
-const base = process.env.DOCS_BASE || '/';
+const base = resolveDocsBase();
 
 export default defineConfig({
   site: process.env.DOCS_SITE || 'https://chrono-foundry.github.io',

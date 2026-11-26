@@ -22,9 +22,9 @@ Run `cargo run -p xtask -- --help` to see all available tasks:
 
 ---
 
-## 2. Documentation Website (`docs/site/`)
+## 2. Landing Page (`public/`) & Documentation Website (`docs/site/`)
 
-The documentation website uses **[Astro Starlight](https://starlight.astro.build/)** to render the Markdown files directly from `docs/` with sidebar navigation, dark/light themes, Mermaid diagrams, and Pagefind full-text search—without duplicating Markdown files or requiring frontmatter in `docs/`.
+GitHub Pages serves the static landing page from `public/` at the site root (`/`) and mounts the **[Astro Starlight](https://starlight.astro.build/)** documentation site under `/docs/`. Starlight renders the Markdown files directly from `docs/` with sidebar navigation, dark/light themes, Mermaid diagrams, and Pagefind full-text search—without duplicating Markdown files or requiring frontmatter in `docs/`.
 
 ### Preview locally
 
@@ -40,7 +40,7 @@ Open `http://localhost:4321`. Edits to `docs/**/*.md` hot-reload in the browser.
 
 ### Build & link verification gate
 
-`.github/workflows/docs.yml` runs these exact checks on every PR touching `docs/` (and deploys `main` to GitHub Pages):
+`.github/workflows/docs.yml` runs these exact checks on every PR touching `public/` or `docs/` (assembling `public/` at `/` and Starlight under `/docs/` in `docs/site/dist-pages`, then deploying `main` to GitHub Pages):
 
 ```sh
 cd docs/site
