@@ -178,9 +178,9 @@ impl Output<'_> {
             return Ok(());
         }
         match &event.payload {
-            Some(P::MessageStarted(m)) if m.role == pb::Role::User as i32 => {
-                self.within = m.message == self.turn
-            }
+            // Resident wakes append user messages inside this turn; WaitTurn
+            // reports where it ends.
+            Some(P::MessageStarted(m)) if m.message == self.turn => self.within = true,
             Some(P::PermissionRequested(p)) if self.within => {
                 if let Some(ask) = &p.interaction {
                     self.ask(ask.clone());

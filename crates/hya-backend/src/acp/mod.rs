@@ -62,7 +62,20 @@ impl Agent {
             return Err(Error::invalid_request());
         }
         Ok(acp::InitializeResponse::new(ProtocolVersion::V1)
-            .agent_info(acp::Implementation::new("hya", hya_version::VERSION)))
+            .agent_info(acp::Implementation::new("hya", hya_version::VERSION))
+            .agent_capabilities(acp::AgentCapabilities::new().session_capabilities(
+                acp::SessionCapabilities::new().close(acp::SessionCloseCapabilities::new()),
+            )))
+    }
+    /// Forget the session and cancel its turn. Its MCP peers stop when the
+    /// turn task releases the last reference.
+    fn close(&self, id: &acp::SessionId) -> Result<acp::CloseSessionResponse> {
+        let session = self.session(id)?;
+        lock(&self.sessions).remove(id);
+        if let Some(token) = lock(&session.active).as_ref() {
+            token.cancel();
+        }
+        Ok(acp::CloseSessionResponse::new())
     }
     async fn new_session(&self, args: acp::NewSessionRequest) -> Result<acp::NewSessionResponse> {
         self.ready()?;
@@ -155,12 +168,7 @@ fn busy() -> Error {
 }
 
 fn turn_error(code: String, message: String) -> Error {
-    let lower = message.to_ascii_lowercase();
-    if code == "auth_required"
-        || ["unauthorized", "401", "missing api key", "credentials"]
-            .iter()
-            .any(|hint| lower.contains(hint))
-    {
+    if code == "provider_auth" {
         return Error::auth_required().data(serde_json::json!({"code":code,"message":message,"hint":"Configure the provider or run hya login in a terminal."}));
     }
     Error::new(-32011, message).data(serde_json::json!({"code":code}))
@@ -218,6 +226,7 @@ pub(super) async fn run(db: String, model: Option<String>, pure: bool) -> anyhow
     let init = agent.clone();
     let new = agent.clone();
     let prompt = agent.clone();
+    let close = agent.clone();
     let cancel = agent.clone();
     let result = agent_client_protocol::Agent
         .v1()
@@ -237,6 +246,12 @@ pub(super) async fn run(db: String, model: Option<String>, pure: bool) -> anyhow
         .on_receive_request(
             async move |request: acp::PromptRequest, responder, client| {
                 prompt.prompt(request, responder, client)
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: acp::CloseSessionRequest, responder, _| {
+                responder.respond_with_result(close.close(&request.session_id))
             },
             agent_client_protocol::on_receive_request!(),
         )

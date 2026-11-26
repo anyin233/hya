@@ -18,16 +18,17 @@ For a local smoke test, use arguments `["--db", "/tmp/hya-editor.db", "--model",
 
 ## ACP v1 interface
 
-The transport is newline-delimited JSON-RPC 2.0 on stdin and stdout. Diagnostics go to stderr. Each connection owns the session IDs it creates. Closing stdin cancels its active prompts, releases its session MCP processes and leaves the shared daemon and saved transcripts available.
+The transport is newline-delimited JSON-RPC 2.0 on stdin and stdout. Diagnostics go to stderr. Each connection owns the session IDs it creates. Each session's MCP processes run until `session/close` or the end of the connection. Closing stdin cancels its active prompts, releases its session MCP processes and leaves the shared daemon and saved transcripts available.
 
 | Method | Input and result |
 | --- | --- |
-| `initialize` | Send `{protocolVersion, clientCapabilities}` before other requests. The response selects version 1 and identifies the hya release. |
+| `initialize` | Send `{protocolVersion, clientCapabilities}` before other requests. The response selects version 1, identifies the hya release and advertises `agentCapabilities.sessionCapabilities.close`. |
 | `session/new` | Send `{cwd, mcpServers}` with an existing absolute directory and an array of stdio servers. Receive `{sessionId}`. hya resolves the directory using its ordinary Project placement rules. |
 | `session/prompt` | Send `{sessionId, prompt: ContentBlock[]}`. Text blocks are concatenated in order. A resource link inserts its name and URI as ` [name](URI) `; reading its contents requires an ordinary tool call. The result is `{stopReason}` after the last update, with `end_turn`, `max_tokens` or `cancelled`. Each session admits one prompt at a time. |
 | `session/update` | Agent notification containing `{sessionId, update}`. Text streams as `agent_message_chunk`. A `tool_call` and subsequent `tool_call_update` share a `toolCallId` and carry status and available input/output. |
 | `session/request_permission` | Agent request containing `{sessionId, toolCall, options}`. Reply with `{"outcome":{"outcome":"selected","optionId":"allow"}}` or select `deny`. Both choices apply once. An unrecognized selection or a cancelled response denies the request. Pending hya question prompts receive a rejection. |
 | `session/cancel` | Client notification containing `{sessionId}`. Cancels the connection's active turn and settles the original prompt. Repeated notifications during cancellation are safe. |
+| `session/close` | Send `{sessionId}` and receive `{}`. Cancels the session's active turn as `session/cancel` does and stops its MCP processes once that turn settles. Later requests for the session fail as unknown. The transcript stays in the database. |
 
 For example, after receiving a session ID, an editor can send:
 
@@ -35,7 +36,7 @@ For example, after receiving a session ID, an editor can send:
 {"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"<sessionId>","prompt":[{"type":"text","text":"Explain "},{"type":"resource_link","name":"README","uri":"file:///work/repo/README.md"}]}}
 ```
 
-Invalid inputs use `-32602`, unknown sessions use `-32002`, and a busy session uses `-32010`. A failed turn returns the backend's error code in `error.data.code`, with `-32000` for credential errors and `-32011` for execution errors. The advertised v1 capabilities cover text, resource links and stdio MCP. Optional session loading, model switching, embedded context, images, audio, HTTP/SSE MCP, editor file operations and editor terminals are outside this interface.
+Invalid inputs use `-32602`, unknown sessions use `-32002`, and a busy session uses `-32010`. A failed turn returns the backend's error code in `error.data.code`, with `-32000` (`auth_required`) when that code is `provider_auth` and `-32011` for every other failure. The advertised v1 capabilities cover text, resource links and stdio MCP. Optional session loading, model switching, embedded context, images, audio, HTTP/SSE MCP, editor file operations and editor terminals are outside this interface.
 
 ## Session MCP lifetime
 

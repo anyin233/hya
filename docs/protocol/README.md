@@ -1042,7 +1042,8 @@ before that message's `messageFinished` (`finish: FINISH_REASON_ERROR`,
 
 The same `{code, message}` is on the message (`MessageInfo.error`) and on
 the turn (`TurnInfo.errorCode` / `errorMessage` once `state` is
-`TURN_STATE_FAILED`). Codes: `provider_error`, `tool_error`,
+`TURN_STATE_FAILED`). Codes: `provider_auth` (the provider rejected the
+credentials: expired login or HTTP 401/403), `provider_error`, `tool_error`,
 `store_error`, `bundle_error`, `runtime_refresh_error`,
 `agent_definition_missing`, `invalid`, `turn_already_active`. The message
 text is the engine's error display text, at most 2000 bytes (a provider

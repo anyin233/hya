@@ -149,6 +149,14 @@ impl RunRegistry {
         self.lock_state().runs.contains_key(&session)
     }
 
+    /// The client prompt admitted by the session's current run, if any.
+    pub(crate) fn admitted_turn(&self, session: SessionId) -> Option<hya_proto::MessageId> {
+        self.lock_state()
+            .runs
+            .get(&session)
+            .and_then(|run| run.turn)
+    }
+
     /// Fence admission while existing writers settle and their rows are deleted.
     pub(crate) fn begin_delete(&self, sessions: Vec<SessionId>) -> Option<DeleteGuard> {
         let mut state = self.lock_state();
