@@ -38,7 +38,7 @@ fn fake_libraries(directory: &Path) {
 }
 
 fn stage(root: &Path, version: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_xtask"))
+    Command::new(common::xtask_bin())
         .args([
             "stage-first-party-bundles",
             "--target",

@@ -29,8 +29,6 @@ tokio-util = { workspace = true }
 [dev-dependencies]
 # integration tests may use unwrap
 hya-bundle = { path = "../hya-bundle" }
-# the seeded handle minter, to predict `HYA_HANDLE_SEED` subagent handles
-hya-engine = { path = "../hya-engine" }
 # p43 hostile-storage E2E: external SQLite lock setup and read-only disk replay
 hya-store = { path = "../hya-store" }
 sqlx = { workspace = true }

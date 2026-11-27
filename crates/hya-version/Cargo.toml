@@ -8,4 +8,7 @@ license.workspace = true
 [package.metadata.hya]
 version-reference = "hya"
 
+[lints]
+workspace = true
+
 [build-dependencies]

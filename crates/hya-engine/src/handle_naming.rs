@@ -1,183 +1,18 @@
 //! Subagent handle naming (0.41.0): a leaf is `<prefix>-<operator>`.
 //!
-//! The prefix is the sanitized agent id the `task` call named with
-//! `subagent_type` (see [`hya_tool::sanitize_handle_prefix`]) and
-//! the harness appends ONE randomly chosen Arknights operator name from
-//! [`operator_names`], e.g. `scout-suzuran`; the canonical handle keeps the
-//! parent path (`main/scout-suzuran`, `main/hya-implementer-exusiai/general-amiya`).
-//!
-//! A leaf is never reused within a team: every candidate is checked against
-//! the leaf of every handle the team ever registered (live roster, archived
-//! rows, inboxes, and channel memberships — all durable) plus this process's
-//! uncommitted name reservations. On collision the draw is retried; after
-//! [`SINGLE_NAME_ATTEMPTS`] failures (or once the single names are exhausted)
-//! the leaf falls back to two distinct operator names
-//! (`scout-suzuran-amiya`).
-//!
-//! Randomness is safe for replay: the minted handle is recorded in the event
-//! log (`AgentRegistered`) and replay reads it back — nothing re-derives a
-//! handle. Handles are opaque: operator names may contain `-`
-//! (`blue-poison`, `skadi-the-corrupting-heart`), so a leaf is never parsed
-//! back into prefix and name.
+//! Pure naming helpers live in [`hya_proto::handle_naming`]; this module
+//! re-exports them and adds [`HandleNamer`] for in-process uncommitted
+//! reservations during subagent spawn.
 
 use std::collections::{BTreeSet, HashMap};
-use std::hash::{BuildHasher, Hasher};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
-use hya_proto::{Projection, SessionId, scope};
+use hya_proto::SessionId;
 
-/// The checked-in operator name list: one lowercase ASCII name per line.
-///
-/// Snapshot of the prts.wiki operator list (干员一览, `data-en` attributes)
-/// taken 2026-09-25, normalized NFKD→ASCII, lowercased, apostrophes dropped,
-/// every other non-alphanumeric run turned into `-`, deduplicated and sorted.
-/// No name is filtered out. Never fetched at build or run time.
-const OPERATOR_NAMES_TXT: &str = include_str!("handle_names.txt");
-
-/// Random single-name draws before falling back to two names.
-pub const SINGLE_NAME_ATTEMPTS: usize = 16;
-/// Random two-name draws before the deterministic sweep.
-pub const PAIR_NAME_ATTEMPTS: usize = 64;
-
-/// Every operator name, in file order.
-#[must_use]
-pub fn operator_names() -> &'static [&'static str] {
-    static NAMES: OnceLock<Vec<&'static str>> = OnceLock::new();
-    NAMES.get_or_init(|| {
-        OPERATOR_NAMES_TXT
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .collect()
-    })
-}
-
-/// Source of the random draws; injectable so tests can seed or force it.
-pub trait HandleRng: Send {
-    /// A uniformly distributed index in `0..bound`; `bound` is never 0.
-    fn pick(&mut self, bound: usize) -> usize;
-}
-
-/// SplitMix64: small, fast, and good enough to spread handle names.
-#[derive(Clone, Debug)]
-pub struct SplitMix64 {
-    state: u64,
-}
-
-impl SplitMix64 {
-    /// A generator with a fixed seed (reproducible draws).
-    #[must_use]
-    pub fn seeded(seed: u64) -> Self {
-        Self { state: seed }
-    }
-
-    /// A generator seeded from the process's hash randomness and the clock.
-    #[must_use]
-    pub fn from_entropy() -> Self {
-        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-        hasher.write_u128(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |elapsed| elapsed.as_nanos()),
-        );
-        Self::seeded(hasher.finish())
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-}
-
-impl HandleRng for SplitMix64 {
-    fn pick(&mut self, bound: usize) -> usize {
-        // Lemire's multiply-shift: uniform enough for `bound` ≪ 2^64.
-        let wide = u128::from(self.next_u64()) * (bound as u128);
-        usize::try_from(wide >> 64).unwrap_or(0)
-    }
-}
-
-/// Mint a fresh leaf `<prefix>-<operator>` that is not in `taken`.
-///
-/// Tries [`SINGLE_NAME_ATTEMPTS`] random single names, then
-/// [`PAIR_NAME_ATTEMPTS`] random pairs of distinct names, then sweeps every
-/// pair from a random start; the numbered last resort only exists so the
-/// function is total (it needs every one of the ~175k pairs taken).
-pub fn mint_leaf(prefix: &str, taken: &BTreeSet<String>, rng: &mut dyn HandleRng) -> String {
-    let names = operator_names();
-    let count = names.len();
-    let free = |leaf: &String| !taken.contains(leaf);
-    if count == 0 {
-        return (1..)
-            .map(|ordinal| format!("{prefix}-{ordinal}"))
-            .find(free)
-            .unwrap_or_default();
-    }
-    let single = |index: usize| format!("{prefix}-{}", names[index]);
-    let pair = |first: usize, second: usize| format!("{prefix}-{}-{}", names[first], names[second]);
-    for _ in 0..SINGLE_NAME_ATTEMPTS {
-        let leaf = single(rng.pick(count));
-        if free(&leaf) {
-            return leaf;
-        }
-    }
-    if count >= 2 {
-        for _ in 0..PAIR_NAME_ATTEMPTS {
-            let first = rng.pick(count);
-            let mut second = rng.pick(count - 1);
-            if second >= first {
-                second += 1;
-            }
-            let leaf = pair(first, second);
-            if free(&leaf) {
-                return leaf;
-            }
-        }
-        let start = rng.pick(count);
-        for step in 0..count {
-            let first = (start + step) % count;
-            for offset in 1..count {
-                let leaf = pair(first, (first + offset) % count);
-                if free(&leaf) {
-                    return leaf;
-                }
-            }
-        }
-    }
-    (1..)
-        .map(|ordinal| format!("{}-{ordinal}", pair(0, count.min(2) - 1)))
-        .find(free)
-        .unwrap_or_default()
-}
-
-/// The leaf of every handle `projection`'s team ever registered: live roster,
-/// archived rows, inbox owners, and channel members — plus the reserved
-/// `main` and `harness`.
-#[must_use]
-pub fn team_leaves(projection: &Projection) -> BTreeSet<String> {
-    let team = &projection.team;
-    let mut leaves: BTreeSet<String> = [scope::ROOT_HANDLE, scope::HARNESS_HANDLE]
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-    let handles = team
-        .roster
-        .keys()
-        .chain(team.archived.keys())
-        .chain(team.inboxes.keys())
-        .chain(
-            team.channels
-                .values()
-                .flat_map(|channel| channel.members.iter()),
-        );
-    for handle in handles {
-        leaves.insert(scope::leaf(handle).to_string());
-    }
-    leaves
-}
+pub use hya_proto::handle_naming::{
+    HandleRng, PAIR_NAME_ATTEMPTS, SINGLE_NAME_ATTEMPTS, SplitMix64, mint_leaf, operator_names,
+    team_leaves,
+};
 
 /// Process-wide RNG and uncommitted reservations. Durable team history owns
 /// uniqueness after registration; aborted preparations release their names too.
@@ -277,6 +112,8 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+    use hya_proto::scope;
+
     use super::*;
 
     /// Always draws `value` (clamped to the bound): forces collisions.
@@ -288,41 +125,9 @@ mod tests {
         }
     }
 
-    fn is_name(line: &str) -> bool {
-        !line.is_empty()
-            && line.split('-').all(|part| {
-                !part.is_empty()
-                    && part
-                        .bytes()
-                        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-            })
-    }
-
     #[test]
-    fn operator_name_list_format_seeded_draws_and_max_length() {
+    fn operator_name_list_max_length_is_valid_leaf() {
         let names = operator_names();
-        assert!(!names.is_empty());
-        assert_eq!(OPERATOR_NAMES_TXT.lines().count(), names.len());
-        assert_eq!(names.iter().collect::<BTreeSet<_>>().len(), names.len());
-        for name in names {
-            assert!(
-                is_name(name),
-                "`{name}` must match ^[a-z0-9]+(-[a-z0-9]+)*$"
-            );
-        }
-        let mut rng = SplitMix64::seeded(7);
-        for _ in 0..50 {
-            let leaf = mint_leaf("scout", &BTreeSet::new(), &mut rng);
-            let name = leaf.strip_prefix("scout-").expect("prefix");
-            assert!(names.contains(&name), "{leaf}");
-        }
-        let draw = |seed| {
-            let mut rng = SplitMix64::seeded(seed);
-            (0..8)
-                .map(|_| mint_leaf("dev", &BTreeSet::new(), &mut rng))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(draw(42), draw(42));
         let longest = names.iter().max_by_key(|n| n.len()).copied().unwrap();
         let prefix = "a".repeat(hya_tool::HANDLE_PREFIX_MAX_LEN);
         let idx = names.iter().position(|n| *n == longest).unwrap();

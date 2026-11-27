@@ -13,6 +13,8 @@ pub mod context;
 
 /// Canonical streaming `Event` enum and ordered `Envelope` unit for the log and bus.
 pub mod event;
+/// Deterministic subagent handle leaf minting (`<prefix>-<operator>`).
+pub mod handle_naming;
 /// Strong id newtypes (`SessionId`, message/part/tool ids, claim epochs, etc.).
 pub mod ids;
 /// Mail address and kind types for event-sourced team messaging (ADR-0001).

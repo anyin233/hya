@@ -10,6 +10,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+/// Resolve the `hya` binary path, preferring nextest's runtime-remapped
+/// `NEXTEST_BIN_EXE_hya` so archived test runs work across directories.
+pub fn hya_bin() -> String {
+    std::env::var("NEXTEST_BIN_EXE_hya")
+        .or_else(|_| std::env::var("CARGO_BIN_EXE_hya"))
+        .unwrap_or_else(|_| env!("CARGO_BIN_EXE_hya").to_owned())
+}
+
 pub struct Scratch(pub PathBuf);
 
 impl Scratch {
@@ -28,7 +36,7 @@ impl Scratch {
     }
 
     pub fn hya(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_hya"));
+        let mut command = Command::new(hya_bin());
         command
             .env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())

@@ -51,5 +51,4 @@ hya-tool-loader = { workspace = true }
 async-trait = { workspace = true }
 tower = { workspace = true }
 http-body-util = "0.1"
-hyper = { workspace = true, features = ["client"] }
 tokio-tungstenite = { workspace = true }

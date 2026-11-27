@@ -10,13 +10,13 @@ use std::process::{Command, Output, Stdio};
 
 use hya_bundle::{BundleSource, SourceFile, write_public_package};
 
-use crate::common::{Scratch, TestResult, assert_success};
+use crate::common::{Scratch, TestResult, assert_success, hya_bin};
 
 const LIST_HEADER: &str = "NAME VERSION AGENT STATE KIND WORKFLOW SCOPE";
 const BUNDLE_ID: &str = "hya/valid-public";
 
 fn bundle_cmd(root: &Path) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_hya"));
+    let mut cmd = Command::new(hya_bin());
     cmd.env("XDG_DATA_HOME", root)
         .env("XDG_STATE_HOME", root.join("state"))
         .env("XDG_CONFIG_HOME", root.join("config"))

@@ -510,18 +510,18 @@ async fn mailbox_dm_broadcast_worker_report_and_quiesce() {
 #[tokio::test]
 async fn wait_report_plain_answer_stall_archive_and_wake() {
     const SEED: u64 = 36;
-    let mut rng = hya_engine::handle_naming::SplitMix64::seeded(SEED);
+    let mut rng = hya_proto::handle_naming::SplitMix64::seeded(SEED);
     let handle_report = format!(
         "main/{}",
-        hya_engine::handle_naming::mint_leaf("hya-task", &BTreeSet::new(), &mut rng)
+        hya_proto::handle_naming::mint_leaf("hya-task", &BTreeSet::new(), &mut rng)
     );
     let _handle_plain = format!(
         "main/{}",
-        hya_engine::handle_naming::mint_leaf("hya-task", &BTreeSet::new(), &mut rng)
+        hya_proto::handle_naming::mint_leaf("hya-task", &BTreeSet::new(), &mut rng)
     );
     let handle_stall = format!(
         "main/{}",
-        hya_engine::handle_naming::mint_leaf("hya-task", &BTreeSet::new(), &mut rng)
+        hya_proto::handle_naming::mint_leaf("hya-task", &BTreeSet::new(), &mut rng)
     );
 
     let spawn_inline = |marker: &str| {

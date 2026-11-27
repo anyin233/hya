@@ -100,21 +100,60 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.build_bin == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Full workspace test archiving is the largest build; drop unused SDKs in
+      # the background when `rust=true` so the runner has disk headroom.
+      - name: free runner disk
+        if: ${{ needs.changes.outputs.rust == 'true' }}
+        run: sudo sh -c 'nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup >/dev/null 2>&1 &'
       # `xtask gen-api` runs `rustfmt` on the generated gRPC adapter.
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           components: rustfmt
+      - uses: taiki-e/install-action@893d6ee8d714b6c7dfe2bcd94e5759e9a7958a7e # v2.90.10
+        if: ${{ needs.changes.outputs.rust == 'true' }}
+        with:
+          tool: nextest
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
+      # When Rust tests are selected, build `hya`, `xtask`, all five lockstep
+      # native bundle cdylibs, and every workspace test binary in ONE Cargo
+      # invocation, stage the five `.so` files into the fixed build-unit layout
+      # expected by `hya-tool-loader` on Cargo >= 1.100, and archive them for
+      # zero-compile `test` and `e2e` jobs.
+      - name: build workspace binaries and test archive
+        id: build-archive
+        if: ${{ needs.changes.outputs.rust == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-run --workspace
+          for stem in hya_base_tools hya_extended_tools hya_channel_tools hya_network_tools hya_compaction; do
+            pkg="${stem//_/-}"
+            if [[ -f "target/debug/deps/lib${stem}.so" ]]; then
+              lib="target/debug/deps/lib${stem}.so"
+            else
+              lib="$(find "target/debug/build/${pkg}" -name "lib${stem}.so" -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2- || true)"
+            fi
+            test -n "$lib"
+            mkdir -p "target/debug/build/${pkg}/ci-archive/out"
+            cp "$lib" "target/debug/build/${pkg}/ci-archive/out/lib${stem}.so"
+          done
+          cargo nextest archive --locked --profile ci --workspace \
+            --archive-file "${RUNNER_TEMP}/ci-nextest-archive.tar.zst"
+          rm -rf target/debug/build/*/ci-archive
+          test -x target/debug/hya
+          test -x target/debug/xtask
+      # Pure frontend PRs skip Rust tests and only need `hya` + `xtask` for `tui`.
       - name: build hya and xtask binaries
-        id: build
+        id: build-only
+        if: ${{ needs.changes.outputs.rust != 'true' }}
         run: cargo build --locked -p hya-backend --bin hya -p xtask --bin xtask
       - name: generated v1 API drift check
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && (steps.build-archive.outcome == 'success' || steps.build-only.outcome == 'success') }}
         run: |
           target/debug/xtask gen-api
           git add --intent-to-add .
@@ -122,7 +161,7 @@ jobs:
       # Fails if matrix.toml and the real tests disagree in either direction, or
       # if a T-series numbering hole is neither used nor retired.
       - name: matrix registry check
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && (steps.build-archive.outcome == 'success' || steps.build-only.outcome == 'success') }}
         run: target/debug/xtask matrix-check
       # `hya` loads its five lockstep first-party native bundles from
       # `<exe-dir>/deps/libhya_*.so`, so ship them alongside `hya` and `xtask`.
@@ -151,50 +190,58 @@ jobs:
           path: ${{ runner.temp }}/ci-bins
           retention-days: 1
           if-no-files-found: error
+      - name: upload nextest archive
+        if: ${{ needs.changes.outputs.rust == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-nextest-archive
+          path: ${{ runner.temp }}/ci-nextest-archive.tar.zst
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
 
   test:
-    needs: changes
+    needs: [changes, build-bin]
     if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # hya-app runs executable Bundle sidecars under Bun; without it those
       # tests fail with "Bun must be available".
       - uses: ./.github/actions/setup-bun
-      # The full test build is the largest one; drop preinstalled SDKs the gate
-      # never uses, in the background, so the build has disk headroom.
-      - name: free runner disk
-        run: sudo sh -c 'nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup >/dev/null 2>&1 &'
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: taiki-e/install-action@893d6ee8d714b6c7dfe2bcd94e5759e9a7958a7e # v2.90.10
         with:
           tool: nextest
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: download nextest archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          cache-on-failure: true
-      # hya-e2e runs in its own job after `build-bin`.
+          name: ci-nextest-archive
+          path: ${{ runner.temp }}
+      # Run all workspace unit/integration tests from the precompiled archive
+      # without invoking rustc; hya-e2e runs in parallel in its own job.
       - name: test
-        run: cargo nextest run --profile ci --workspace --exclude hya-e2e
+        run: |
+          cargo-nextest nextest run \
+            --archive-file "${RUNNER_TEMP}/ci-nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --profile ci \
+            -E 'not package(hya-e2e)'
 
   e2e:
     needs: [changes, build-bin]
     if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Bundle and JavaScript Plugin scenarios run under Bun.
       - uses: ./.github/actions/setup-bun
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: taiki-e/install-action@893d6ee8d714b6c7dfe2bcd94e5759e9a7958a7e # v2.90.10
         with:
           tool: nextest
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-on-failure: true
       # Keep prebuilt `hya` and its lockstep `deps/libhya_*.so` outside
-      # `target/debug` so `cargo nextest` and `rust-cache` cannot clobber them.
+      # `target/debug` so archive extraction cannot interfere with them.
       - name: download prebuilt binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -202,10 +249,20 @@ jobs:
           path: ${{ runner.temp }}/ci-bins
       - name: make prebuilt binaries executable
         run: chmod +x "${RUNNER_TEMP}/ci-bins/hya" "${RUNNER_TEMP}/ci-bins/xtask" "${RUNNER_TEMP}/ci-bins/deps/"libhya_*.so
+      - name: download nextest archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-nextest-archive
+          path: ${{ runner.temp }}
       - name: agent process e2e (Track P)
         env:
           HYA_E2E_BACKEND_BIN: ${{ runner.temp }}/ci-bins/hya
-        run: cargo nextest run --profile ci-e2e -p hya-e2e
+        run: |
+          cargo-nextest nextest run \
+            --archive-file "${RUNNER_TEMP}/ci-nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --profile ci-e2e \
+            -E 'package(hya-e2e)'
 
   # Type checks and unit tests of the Bun packages need no Rust build, so they
   # run beside the terminal suite instead of in front of it.
