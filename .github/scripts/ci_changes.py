@@ -73,6 +73,8 @@ IGNORED_EXACT_FILES = {
     ".gitattributes",
     ".gitignore",
     ".github/PULL_REQUEST_TEMPLATE.md",
+    ".github/workflows/builtin-bundles.yml",
+    ".github/workflows/bundles.yml",
     ".github/workflows/install-smoke.yml",
     ".github/workflows/nightly.yml",
     ".github/workflows/release.yml",
@@ -84,11 +86,15 @@ IGNORED_EXACT_FILES = {
     "opencode.json",
 }
 
-# Directories that never affect any CI gate.
+# Directories that never affect the main `ci.yml` gate (meta-docs or covered by
+# independent bundle workflows such as `.github/workflows/bundles.yml`).
 IGNORED_PREFIXES = (
     ".agent-docs/",
     ".agents/",
     ".planning/",
+    "bundles/examples/",
+    "bundles/extra/",
+    "scripts/bundle-ci/",
 )
 
 # Generated docs checked by both `xtask gen-api` drift check and the docs site.
@@ -99,6 +105,7 @@ GENERATED_PROTOCOL_DOCS = {
 
 # Cross-boundary Rust crates / plugin adapters where backend & frontend meet.
 CONTRACT_PREFIXES = (
+    "bundles/builtin/basic-tui-components/",
     "crates/hya-api/",
     "crates/hya-backend/",
     "crates/hya-plugin/",
@@ -123,7 +130,7 @@ CONTRACT_EXACT_FILES = {
 # `tui` via `rust=True` so implicit backend <-> TUI regressions are caught).
 RUST_ONLY_PREFIXES = (
     ".config/",
-    "bundles/",
+    "bundles/builtin/",
     "crates/",
     "plugins/",
     "proto/",

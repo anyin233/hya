@@ -1,7 +1,8 @@
 kind: Bundle
+version_ref: hya
 identity:
   id: hya/argus-example
-  version: 0.43.54
+  version: 0.0.0
   publisher: hya
 workflow:
   id: argus

@@ -1,0 +1,385 @@
+name: builtin-bundles
+on:
+  push:
+    branches: [main]
+    paths:
+      - "bundles/builtin/**"
+      - "crates/hya-bundle/**"
+      - "crates/hya-tool/src/native_bundle.rs"
+      - "crates/hya-tool-loader/**"
+      - "crates/xtask/src/package_bundle.rs"
+      - "scripts/bundle-ci/**"
+      - ".github/workflows/builtin-bundles.yml"
+  pull_request:
+    paths:
+      - "bundles/builtin/**"
+      - "crates/hya-bundle/**"
+      - "crates/hya-tool/src/native_bundle.rs"
+      - "crates/hya-tool-loader/**"
+      - "crates/xtask/src/package_bundle.rs"
+      - "scripts/bundle-ci/**"
+      - ".github/workflows/builtin-bundles.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: builtin-bundles-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
+# Dedicated CI for the 13 first-party bundles under `bundles/builtin/**`.
+# Independent of `hya-e2e`, full workspace tests, and the full TUI suite.
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix_all: ${{ steps.scan.outputs.matrix_all }}
+      matrix_native: ${{ steps.scan.outputs.matrix_native }}
+      matrix_js_static: ${{ steps.scan.outputs.matrix_js_static }}
+      has_native: ${{ steps.scan.outputs.has_native }}
+      has_js_static: ${{ steps.scan.outputs.has_js_static }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-bun
+      - name: Self-test bundle CI scripts
+        run: bun test scripts/bundle-ci/
+      - name: Discover builtin bundles
+        id: scan
+        run: |
+          bun scripts/bundle-ci/discover.mjs \
+            --github-output "$GITHUB_OUTPUT" \
+            bundles/builtin
+
+  validate:
+    needs: discover
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-bun
+      - name: Static spec and descriptor validation across all builtin bundles
+        run: |
+          bun scripts/bundle-ci/verify.mjs --skip-check --skip-protocol bundles/builtin/*
+      - name: Check unique builtin identities and namespaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun scripts/bundle-ci/discover.mjs bundles/builtin | python3 - <<'PY'
+          import json
+          import sys
+
+          data = json.load(sys.stdin)
+          bundles = data["all"]
+          if len(bundles) != 13:
+              print(f"ERROR: expected 13 builtin bundles, found {len(bundles)}", file=sys.stderr)
+              sys.exit(1)
+
+          seen_ids = set()
+          seen_ns = set()
+          for b in bundles:
+              bid = b["id"]
+              ns = b["namespace"]
+              if not bid.startswith("hya/"):
+                  print(f"ERROR: builtin bundle id must start with 'hya/': {bid}", file=sys.stderr)
+                  sys.exit(1)
+              if bid in seen_ids:
+                  print(f"ERROR: duplicate builtin bundle id: {bid}", file=sys.stderr)
+                  sys.exit(1)
+              if ns in seen_ns:
+                  print(f"ERROR: duplicate builtin bundle namespace: {ns}", file=sys.stderr)
+                  sys.exit(1)
+              seen_ids.add(bid)
+              seen_ns.add(ns)
+
+          print(f"Validated {len(bundles)} builtin bundles with unique ids and namespaces.")
+          PY
+
+  build-packager:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+      - name: Build hya and xtask binaries
+        run: cargo build --locked -p hya-backend --bin hya -p xtask --bin xtask
+      - name: Stage packager binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="${RUNNER_TEMP}/builtin-ci-bins"
+          rm -rf "$stage"
+          mkdir -p "$stage"
+          cp target/debug/hya target/debug/xtask "$stage/"
+      - name: Upload packager binaries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: builtin-ci-bins
+          path: ${{ runner.temp }}/builtin-ci-bins
+          retention-days: 1
+          if-no-files-found: error
+
+  test-native:
+    needs: [discover, validate, build-packager]
+    if: ${{ needs.discover.outputs.has_native == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover.outputs.matrix_native) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+      - name: Download packager binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: builtin-ci-bins
+          path: ${{ runner.temp }}/builtin-ci-bins
+      - name: Make packager binaries executable
+        run: chmod +x "${RUNNER_TEMP}/builtin-ci-bins/hya" "${RUNNER_TEMP}/builtin-ci-bins/xtask"
+      - name: Clippy (${{ matrix.crate_name }})
+        run: cargo clippy --locked -p "${{ matrix.crate_name }}" --all-targets -- -D warnings
+      - name: Unit tests (${{ matrix.crate_name }})
+        run: cargo test --locked -p "${{ matrix.crate_name }}"
+      - name: Build cdylib, verify ABI symbols, and pack deterministic .hyabundle
+        shell: bash
+        env:
+          CRATE_NAME: ${{ matrix.crate_name }}
+          LIB_STEM: ${{ matrix.lib_stem }}
+          BUNDLE_NAME: ${{ matrix.name }}
+          BUNDLE_PATH: ${{ matrix.path }}
+          HAS_REWRITERS: ${{ matrix.has_rewriters }}
+        run: |
+          set -euo pipefail
+          cargo build --locked -p "$CRATE_NAME"
+          if [[ -f "target/debug/deps/lib${LIB_STEM}.so" ]]; then
+            lib="target/debug/deps/lib${LIB_STEM}.so"
+          else
+            lib="$(find "target/debug/build/${CRATE_NAME}" -name "lib${LIB_STEM}.so" -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2- || true)"
+          fi
+          test -n "$lib" && test -f "$lib"
+          echo "Located cdylib: $lib"
+
+          # Verify required lockstep v1 exported C ABI symbols.
+          syms="$(nm -D --defined-only "$lib")"
+          required_syms=(
+            hya_tool_bundle_abi_v1
+            hya_tool_bundle_register_v1
+            hya_tool_bundle_with_runtime_v1
+            hya_tool_bundle_share_deadline_v1
+          )
+          if [[ "$HAS_REWRITERS" == "true" ]]; then
+            required_syms+=(hya_tool_bundle_register_rewriters_v1)
+          fi
+          for sym in "${required_syms[@]}"; do
+            if ! grep -Eq "[[:space:]]${sym}$" <<< "$syms"; then
+              echo "ERROR: missing required exported ABI symbol '${sym}' in ${lib}" >&2
+              exit 1
+            fi
+            echo "Verified symbol: ${sym}"
+          done
+
+          # Pack twice to verify deterministic SHA-256 and inspect via hya.
+          out_dir="${RUNNER_TEMP}/staged-bundles"
+          mkdir -p "$out_dir"
+          pkg1="${out_dir}/hya-${BUNDLE_NAME}.hyabundle"
+          pkg2="${RUNNER_TEMP}/hya-${BUNDLE_NAME}.second.hyabundle"
+          "${RUNNER_TEMP}/builtin-ci-bins/xtask" package-native-tool-library "$BUNDLE_PATH" "$lib" "$pkg1"
+          "${RUNNER_TEMP}/builtin-ci-bins/xtask" package-native-tool-library "$BUNDLE_PATH" "$lib" "$pkg2"
+          sha1="$(sha256sum "$pkg1" | awk '{print $1}')"
+          sha2="$(sha256sum "$pkg2" | awk '{print $1}')"
+          test "$sha1" = "$sha2"
+          echo "Deterministic package SHA-256: $sha1"
+          "${RUNNER_TEMP}/builtin-ci-bins/hya" bundle info -f "$pkg1"
+      - name: Upload staged native bundle package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: builtin-pkg-${{ matrix.name }}
+          path: ${{ runner.temp }}/staged-bundles/hya-${{ matrix.name }}.hyabundle
+          retention-days: 1
+          if-no-files-found: error
+
+  test-js-static:
+    needs: [discover, validate, build-packager]
+    if: ${{ needs.discover.outputs.has_js_static == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover.outputs.matrix_js_static) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-bun
+      - name: Download packager binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: builtin-ci-bins
+          path: ${{ runner.temp }}/builtin-ci-bins
+      - name: Make packager binaries executable
+        run: chmod +x "${RUNNER_TEMP}/builtin-ci-bins/hya" "${RUNNER_TEMP}/builtin-ci-bins/xtask"
+      - name: Verify bundle (static, check, protocol smoke, deterministic pack)
+        shell: bash
+        env:
+          BUNDLE_NAME: ${{ matrix.name }}
+          BUNDLE_PATH: ${{ matrix.path }}
+        run: |
+          set -euo pipefail
+          bun scripts/bundle-ci/verify.mjs \
+            --pack-cmd "${RUNNER_TEMP}/builtin-ci-bins/xtask package-bundle {source} {output}" \
+            --verify-cmd "${RUNNER_TEMP}/builtin-ci-bins/hya bundle info -f {output}" \
+            "$BUNDLE_PATH"
+          out_dir="${RUNNER_TEMP}/staged-bundles"
+          mkdir -p "$out_dir"
+          "${RUNNER_TEMP}/builtin-ci-bins/xtask" package-bundle \
+            "$BUNDLE_PATH" \
+            "${out_dir}/hya-${BUNDLE_NAME}.hyabundle"
+      - name: Upload staged non-native bundle package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: builtin-pkg-${{ matrix.name }}
+          path: ${{ runner.temp }}/staged-bundles/hya-${{ matrix.name }}.hyabundle
+          retention-days: 1
+          if-no-files-found: error
+
+  bare-vs-full-smoke:
+    needs: [discover, build-packager, test-native, test-js-static]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download packager binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: builtin-ci-bins
+          path: ${{ runner.temp }}/builtin-ci-bins
+      - name: Download all staged builtin .hyabundle packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: builtin-pkg-*
+          path: ${{ runner.temp }}/staged-all
+          merge-multiple: true
+      - name: Verify hya exec --bare without any builtin bundles and verify installed builtin layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x "${RUNNER_TEMP}/builtin-ci-bins/hya"
+
+          # 1. Bare mode: isolated installed prefix containing ONLY bin/hya (no bundles/ dir at all).
+          bare_prefix="${RUNNER_TEMP}/bare-prefix"
+          bare_home="${RUNNER_TEMP}/bare-home"
+          rm -rf "$bare_prefix" "$bare_home"
+          mkdir -p "$bare_prefix/bin" "$bare_home"
+          cp "${RUNNER_TEMP}/builtin-ci-bins/hya" "$bare_prefix/bin/hya"
+
+          bare_out="$(
+            HOME="$bare_home" \
+            XDG_CONFIG_HOME="$bare_home/config" \
+            XDG_DATA_HOME="$bare_home/data" \
+            XDG_STATE_HOME="$bare_home/state" \
+            "$bare_prefix/bin/hya" --model hya/offline exec --bare "bare-smoke-ok"
+          )"
+          echo "$bare_out"
+          grep -q "bare-smoke-ok" <<< "$bare_out"
+
+          # 2. Full installed prefix: bin/hya + all 13 staged builtin .hyabundle archives.
+          full_prefix="${RUNNER_TEMP}/full-prefix"
+          full_home="${RUNNER_TEMP}/full-home"
+          rm -rf "$full_prefix" "$full_home"
+          mkdir -p "$full_prefix/bin" "$full_prefix/bundles" "$full_home"
+          cp "${RUNNER_TEMP}/builtin-ci-bins/hya" "$full_prefix/bin/hya"
+          cp "${RUNNER_TEMP}/staged-all/"hya-*.hyabundle "$full_prefix/bundles/"
+
+          pkg_count="$(find "$full_prefix/bundles" -maxdepth 1 -name 'hya-*.hyabundle' | wc -l)"
+          echo "Staged builtin packages: ${pkg_count}"
+          test "$pkg_count" -eq 13
+
+          for pkg in "$full_prefix/bundles/"hya-*.hyabundle; do
+            "$full_prefix/bin/hya" bundle info -f "$pkg" >/dev/null
+          done
+
+          list_out="$(
+            HOME="$full_home" \
+            XDG_CONFIG_HOME="$full_home/config" \
+            XDG_DATA_HOME="$full_home/data" \
+            XDG_STATE_HOME="$full_home/state" \
+            "$full_prefix/bin/hya" bundle list
+          )"
+          echo "$list_out"
+          for expected in \
+            hya/base-tools \
+            hya/extended-tools \
+            hya/network-tools \
+            hya/channel-tools \
+            hya/compaction \
+            hya/core-agents \
+            hya/core-skills \
+            hya/core-commands \
+            hya/agent-channels \
+            hya/goal-loop \
+            hya/plan-impl-review \
+            hya/basic-tui-components \
+            hya/code-mode; do
+            if ! grep -q "$expected" <<< "$list_out"; then
+              echo "ERROR: expected builtin bundle '${expected}' missing from 'hya bundle list'" >&2
+              exit 1
+            fi
+          done
+          echo "All 13 staged builtin bundles verified in bare-vs-full smoke."
+
+  builtin-bundles-gate:
+    name: builtin-bundles-gate
+    if: ${{ always() && !cancelled() }}
+    needs:
+      - discover
+      - validate
+      - build-packager
+      - test-native
+      - test-js-static
+      - bare-vs-full-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify builtin bundle CI jobs succeeded
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          for name, info in sorted(needs.items()):
+              print(f"{name}: {info.get('result')}")
+
+          for required in ("discover", "validate", "build-packager", "bare-vs-full-smoke"):
+              if needs.get(required, {}).get("result") != "success":
+                  print(f"ERROR: `{required}` job did not succeed.", file=sys.stderr)
+                  sys.exit(1)
+
+          bad = {
+              name: info.get("result")
+              for name, info in needs.items()
+              if info.get("result") not in ("success", "skipped")
+          }
+          if bad:
+              print(f"ERROR: required builtin-bundles job(s) did not succeed: {bad}", file=sys.stderr)
+              sys.exit(1)
+
+          print("All builtin-bundles CI checks passed.")
+          PY

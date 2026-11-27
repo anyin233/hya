@@ -4,6 +4,9 @@ identity:
   id: hya-extra/model-fallback
   version: 0.0.0
   publisher: hya-extra
+check:
+  command: [bun, test, --pass-with-no-tests]
+  timeout_secs: 120
 extensions:
   process:
     kind: bun

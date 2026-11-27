@@ -219,9 +219,9 @@ start; hya restarts it at the next root binding after a config edit. Restart
 hya after changing only the key file.
 
 `runtime.ts` is a byte-identical copy of
-`bundles/first-party/code-mode/runtime.ts`, which also serves the built-in
+`bundles/builtin/code-mode/runtime.ts`, which also serves the built-in
 code-mode tool; edit that file and copy it here. Run `bun test` in
-`bundles/first-party/code-mode/` for offline fake-host/fake-Jev and real-child
+`bundles/builtin/code-mode/` for offline fake-host/fake-Jev and real-child
 stdio tests of both tools. Only `runtime.ts` and the four prompts are packaged; tests,
 this README and `config.example.yml` are documentation/development files.
 See [Extra bundles](../../../docs/extra-bundles.md#hya-extraorchestrator) for
