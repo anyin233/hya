@@ -11,7 +11,7 @@ const docsBase = resolveDocsBase().replace(/\/$/, '');
 assert.ok(existsSync(path.join(pagesOutput, 'index.html')), 'Missing root landing page dist-pages/index.html');
 
 // 1. Verify root landing page local asset & docs entry links
-const landingHtml = readFileSync(path.join(pagesOutput, 'index.html'), 'utf8');
+const landingHtml = readFileSync(path.join(pagesOutput, 'index.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
 const brokenLanding = [];
 for (const [, rawUrl] of landingHtml.matchAll(/(?:href|src)="([^"#?]+)(?:[?#][^"]*)?"/g)) {
   if (/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(rawUrl)) continue;

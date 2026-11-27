@@ -11,12 +11,12 @@ Design principles:
    - Cross-boundary contract/adapter paths (`proto/`, `hya-api`, `hya-proto`,
      `hya-server`, `hya-backend`, `hya-plugin*`, `versions.toml`, generated
      contract files, `packages/*/package.json`) trigger both Rust and Frontend.
-2. Website / Docs isolation:
-   - Pure `public/**` landing-page changes run `web` (static JS/CSS/anchor
-     check) and `docs` (assembled Pages landing + `/docs/` build check), while
-     skipping all Rust/Frontend/TUI code jobs.
-   - Pure `docs/**` changes (excluding generated `docs/protocol/*`) run only
-     `docs`.
+2. Pages (`public/` + `docs/`) isolation:
+   - `public/**` (root landing page) and `docs/**` (Starlight documentation
+     mounted under `/docs/`, excluding generated `docs/protocol/*`) form one
+     unified GitHub Pages site (`dist-pages`) and run only the `docs` job
+     (`check_web.py` fast-fail + Starlight build + assembled Pages link check),
+     skipping all Rust/Frontend/TUI code builds.
    - Pure repository meta-docs (`README.md`, `AGENTS.md`, `.agents/**`, etc.)
      skip all heavy jobs and let `ci-gate` pass immediately.
 3. Fail-safe default:
@@ -41,7 +41,6 @@ class ScopeResult:
     rust: bool = False
     frontend: bool = False
     docs: bool = False
-    web: bool = False
 
     @property
     def build_bin(self) -> bool:
@@ -58,11 +57,10 @@ class ScopeResult:
             "build_bin": self.build_bin,
             "tui": self.tui,
             "docs": self.docs,
-            "web": self.web,
         }
 
 
-ALL_SCOPES = ScopeResult(rust=True, frontend=True, docs=True, web=True)
+ALL_SCOPES = ScopeResult(rust=True, frontend=True, docs=True)
 
 # Files that trigger EVERY CI scope (workflow/classifier changes).
 FULL_CI_FILES = {
@@ -160,7 +158,6 @@ def classify_paths(paths: list[str]) -> ScopeResult:
     rust = False
     frontend = False
     docs = False
-    web = False
 
     for raw in paths:
         path = normalize_path(raw)
@@ -175,19 +172,12 @@ def classify_paths(paths: list[str]) -> ScopeResult:
         if path == ".github/scripts/test_ci_changes.py":
             continue
 
-        # 3. Static web checker script -> run `web`.
-        if path == ".github/scripts/check_web.py":
-            web = True
-            continue
-
-        # 4. Landing page (`public/`): run static `web` check + assembled Pages `docs` check.
-        if path.startswith("public/"):
-            web = True
-            docs = True
-            continue
-
-        # 5. Documentation site (`docs/` & `docs.yml`).
-        if path == ".github/workflows/docs.yml":
+        # 3. GitHub Pages site (`public/` landing page + `docs/` Starlight site).
+        if (
+            path == ".github/scripts/check_web.py"
+            or path == ".github/workflows/docs.yml"
+            or path.startswith("public/")
+        ):
             docs = True
             continue
         if path in GENERATED_PROTOCOL_DOCS:
@@ -234,7 +224,7 @@ def classify_paths(paths: list[str]) -> ScopeResult:
         rust = True
         frontend = True
 
-    return ScopeResult(rust=rust, frontend=frontend, docs=docs, web=web)
+    return ScopeResult(rust=rust, frontend=frontend, docs=docs)
 
 
 def scope_from_dispatch(scope: str) -> ScopeResult | None:
@@ -243,7 +233,7 @@ def scope_from_dispatch(scope: str) -> ScopeResult | None:
         "rust": ScopeResult(rust=True),
         "frontend": ScopeResult(frontend=True),
         "docs": ScopeResult(docs=True),
-        "web": ScopeResult(web=True),
+        "web": ScopeResult(docs=True),
     }
     return mapping.get(scope)
 

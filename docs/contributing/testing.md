@@ -95,11 +95,10 @@ HYA_BIN=target/debug/hya bun packages/hya-tui-web/src/main.ts --port 7681 -- \
 
 | Change area | Jobs run |
 | --- | --- |
-| **`public/**`** (landing page) | `web` (`.github/scripts/check_web.py`: JS syntax, relative assets, anchors) + `docs` (assembled Pages build & link check) |
-| **`docs/**`** (non-generated) | `docs` (Astro tests, typecheck, build, link check) |
+| **`public/**` & `docs/**`** (GitHub Pages landing page + non-generated Starlight docs) | `docs` (`.github/scripts/check_web.py` fast-fail on `public/` JS/CSS/anchors + Astro tests, typecheck, assembled `dist-pages` build & link check) |
 | **Pure Bun/TUI frontend** (`packages/**` excluding manifests/generated contract) | `frontend`, `build-bin`, `tui` (skips Rust `lint`, `test`, `e2e`) |
 | **Pure Rust internals** (`crates/**`, `bundles/**`, etc.) | `lint`, `test`, `build-bin`, `e2e`, `tui` (keeps real backend ↔ TUI integration) |
 | **Cross-boundary contracts & adapters** (`proto/hya/v1/**`, `hya-api`, `hya-proto`, `hya-server`, `hya-backend`, `hya-plugin*`, `versions.toml`, `packages/*/package.json`, `frontend-version.ts`, `operations.json`) | Full Rust + Frontend + `tui` (plus `docs` when `proto/hya/v1/**` or `docs/protocol/*` changes) |
 | **Repo meta-docs** (`README.md`, `AGENTS.md`, `.agents/**`) | `changes` → `ci-gate` only |
 
-Manual runs via `workflow_dispatch` accept a `scope` input (`all`, `auto`, `rust`, `frontend`, `docs`, `web`, defaulting to `all`).
+Manual runs via `workflow_dispatch` accept a `scope` input (`all`, `auto`, `rust`, `frontend`, `docs`, defaulting to `all`).
