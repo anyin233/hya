@@ -1,0 +1,45 @@
+name: Bug report
+description: Something in hya behaves differently from what it should.
+type: Bug
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        New issues start at `needs-triage`. Triage either asks for details (`needs-info`) or sets a type label and `priority: P0`–`P3` and marks the issue `ready-for-develop`; maintainers and agents pick up work only from `ready-for-develop`.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence of commands or actions that shows the problem.
+      placeholder: |
+        1. hya ...
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: hya version
+      description: Output of `hya --version`.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and architecture, terminal, and the provider/model in use if relevant.
+      placeholder: Ubuntu 24.04 x86_64, kitty, anthropic/claude-sonnet-5-5
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or output
+      description: Error messages or relevant log lines. Remove secrets and tokens first.
+      render: text
