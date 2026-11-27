@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { decodeClientFrame, decodeServerFrame, encodeClientFrame, encodeServerFrame } from "../src/frames"
 
-describe("hya.v1 PTY frames", () => {
+describe("hya.v2 PTY frames", () => {
   test("output bytes travel as protojson base64", () => {
     const bytes = new TextEncoder().encode("\x1b[1mhé\x1b[0m")
     const text = encodeServerFrame({ output: bytes })

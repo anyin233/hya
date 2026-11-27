@@ -912,11 +912,10 @@ mod tests {
                 .unwrap();
             assert_eq!(answer.cause, Some(FinishCause::UserCancel));
         }
-        let member = hya_tool::extension::members_projection(
-            &engine.read_projection(root).await.unwrap(),
-        )
-        .pop()
-        .unwrap();
+        let member =
+            hya_tool::extension::members_projection(&engine.read_projection(root).await.unwrap())
+                .pop()
+                .unwrap();
         assert_eq!(member.summary, "stopped: cancelled by the user");
         built.shutdown().await.unwrap();
     }

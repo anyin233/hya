@@ -105,7 +105,9 @@ impl SessionEngine {
         // member path, so a handle alias cannot shadow one.
         let team = team_projection(&projection);
         let (normalized, channel_state) = match team.channels.get(normalized) {
-            Some(state) if state.members.contains(&handle) => (normalized.to_string(), state.clone()),
+            Some(state) if state.members.contains(&handle) => {
+                (normalized.to_string(), state.clone())
+            }
             // Unknown and not-a-member are deliberately indistinguishable.
             Some(_) => return Err(unknown_channel(&team, &handle, normalized)),
             None => {

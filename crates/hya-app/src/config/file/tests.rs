@@ -90,7 +90,8 @@ fn permission_catalog_scopes_and_v1_rejection() {
 #[test]
 fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
     let mut env = EnvGuard::new();
-    let dir = std::env::temp_dir().join(format!("hya-cfg-v2-bundle-{}", hya_proto::SessionId::new()));
+    let dir =
+        std::env::temp_dir().join(format!("hya-cfg-v2-bundle-{}", hya_proto::SessionId::new()));
     let cfg_path = dir.join("hya/config.yaml");
     std::fs::create_dir_all(dir.join("hya")).unwrap();
     std::fs::write(
@@ -132,7 +133,10 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
         file,
         config_file: Some(cfg_path.clone()),
     };
-    assert_eq!(settings.goal().evaluator_model.as_deref(), Some("deep/o3-mini"));
+    assert_eq!(
+        settings.goal().evaluator_model.as_deref(),
+        Some("deep/o3-mini")
+    );
     assert!(!settings.webfetch_enabled());
     let ws = resolve_websearch(&settings.file, &cfg_path);
     assert_eq!(

@@ -808,7 +808,10 @@ fn single_markdown_bundle_filename_markers_and_explicit_prompt() {
         Err(BundleError::InvalidManifest { detail, .. }) if detail.contains("api_version")
     ));
     assert!(matches!(
-        md(&markers.replace("kind: Bundle\nschema_version: 2\n", ""), "bundle.hya.md"),
+        md(
+            &markers.replace("kind: Bundle\nschema_version: 2\n", ""),
+            "bundle.hya.md"
+        ),
         Err(BundleError::InvalidManifest { .. })
     ));
 

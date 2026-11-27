@@ -50,12 +50,12 @@ test.skipIf(!backendBin)("OpenTUI gRPC transport drives a real hya backend", asy
       }
     }
     expect(connected).toBe(true)
-    expect((await client.request<{ ok: boolean }>("GET", "/v1/health")).ok).toBe(true)
+    expect((await client.request<{ ok: boolean }>("GET", "/v2/health")).ok).toBe(true)
     expect((await client.listModels()).some((model) => model.id === "hya/offline")).toBe(true)
     client.setBaseUrl(`http://127.0.0.1:${httpPort}`)
-    expect((await client.request<{ ok: boolean }>("GET", "/v1/health")).ok).toBe(true)
+    expect((await client.request<{ ok: boolean }>("GET", "/v2/health")).ok).toBe(true)
     client.setBaseUrl(`grpc://127.0.0.1:${grpcPort}`)
-    expect((await client.request<{ ok: boolean }>("GET", "/v1/health")).ok).toBe(true)
+    expect((await client.request<{ ok: boolean }>("GET", "/v2/health")).ok).toBe(true)
     expect(await client.listWorkflows()).toBeArray()
     expect(await client.listInteractions()).toEqual([])
     const session = await client.createSession("hya-main", "hya/offline", { workdir: root })
@@ -64,7 +64,7 @@ test.skipIf(!backendBin)("OpenTUI gRPC transport drives a real hya backend", asy
     const turn = await client.createTurn(session.id, "hello over grpc")
     expect(turn.id.length).toBeGreaterThan(0)
     const completed = await client.request<{ state: string }>(
-      "POST", `/v1/sessions/${session.id}/turns/${turn.id}/wait?timeoutMs=5000`, {},
+      "POST", `/v2/sessions/${session.id}/turns/${turn.id}/wait?timeoutMs=5000`, {},
     )
     expect(completed.state).not.toBe("TURN_STATE_RUNNING")
 
@@ -87,7 +87,7 @@ test.skipIf(!backendBin)("OpenTUI gRPC transport drives a real hya backend", asy
       await streaming
       // A message can finish while the turn still holds its session lease.
       const completed = await client.request<{ state: string }>(
-        "POST", `/v1/sessions/${session.id}/turns/${secondTurn.id}/wait?timeoutMs=5000`, {},
+        "POST", `/v2/sessions/${session.id}/turns/${secondTurn.id}/wait?timeoutMs=5000`, {},
       )
       expect(completed.state).not.toBe("TURN_STATE_RUNNING")
     } finally {

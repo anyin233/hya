@@ -57,7 +57,10 @@ impl Projection {
     ///
     /// # Errors
     /// Returns the JSON encoder error (not expected for reducer output).
-    pub fn encode_snapshot_with(&self, reducer_signature: &str) -> Result<Vec<u8>, serde_json::Error> {
+    pub fn encode_snapshot_with(
+        &self,
+        reducer_signature: &str,
+    ) -> Result<Vec<u8>, serde_json::Error> {
         serde_json::to_vec(&SnapshotRef {
             projection: self,
             todo_last_id: self.session.todo_last_id,

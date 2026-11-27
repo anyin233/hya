@@ -12,13 +12,13 @@ use hya_proto::{
 };
 use hya_runtime_abi::{
     ABI_VERSION_V2, AbiError, BundleApiInvocation, BundleApiResult, BundleCatalogSummary,
-    BundleClaimLease, BundleClaimRequest, BundleStateEntry, DriverRunOutcome,
-    ExtensionEventContext, ExtensionEntry, ExtensionKind, GoalDriver, GoalRunRequest, HookPoint,
-    HostBundleStorage, HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry,
-    HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner, LoopDriver, LoopRunRequest,
-    ModelCallRequest, ModelCallResponse, ModelStreamChunk, ModelWindowInfo, NativeAbiV2,
-    NativeApiEndpoint, NativeBundleApiHandler, NativeBundleApiReply, NativeBundleApiRequest,
-    NativeHook, NativePluginContext, NativeRegistrations, NativeService, NativeToolBeforeInput,
+    BundleClaimLease, BundleClaimRequest, BundleStateEntry, DriverRunOutcome, ExtensionEntry,
+    ExtensionEventContext, ExtensionKind, GoalDriver, GoalRunRequest, HookPoint, HostBundleStorage,
+    HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry, HostModelCaller,
+    HostRuntime, HostSessionStore, HostTurnRunner, LoopDriver, LoopRunRequest, ModelCallRequest,
+    ModelCallResponse, ModelStreamChunk, ModelWindowInfo, NativeAbiV2, NativeApiEndpoint,
+    NativeBundleApiHandler, NativeBundleApiReply, NativeBundleApiRequest, NativeHook,
+    NativePluginContext, NativeRegistrations, NativeService, NativeToolBeforeInput,
     NativeToolBeforeOutcome, ProjectionReducer, ServiceHealth, SessionListFilter,
     SessionSummaryMeta, TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus, UriContent,
     UriResolveCtx, UriSchemaHandler, abi_digest_v2, export_native_bundle_v2,
@@ -208,12 +208,7 @@ impl HostBundleStorage for InMemoryHostRuntime {
         Ok(entry)
     }
 
-    async fn delete_state(
-        &self,
-        bundle: &str,
-        scope: &str,
-        key: &str,
-    ) -> Result<bool, HostError> {
+    async fn delete_state(&self, bundle: &str, scope: &str, key: &str) -> Result<bool, HostError> {
         let mut states = self
             .states
             .lock()
@@ -393,8 +388,12 @@ impl HostModelCaller for InMemoryHostRuntime {
         _cancel: CancellationToken,
     ) -> Result<mpsc::Receiver<Result<ModelStreamChunk, HostError>>, HostError> {
         let (tx, rx) = mpsc::channel(4);
-        let _ = tx.send(Ok(ModelStreamChunk::TextDelta("hi".to_string()))).await;
-        let _ = tx.send(Ok(ModelStreamChunk::Finished(FinishReason::Stop))).await;
+        let _ = tx
+            .send(Ok(ModelStreamChunk::TextDelta("hi".to_string())))
+            .await;
+        let _ = tx
+            .send(Ok(ModelStreamChunk::Finished(FinishReason::Stop)))
+            .await;
         Ok(rx)
     }
 
@@ -780,7 +779,11 @@ fn ffi_export_macro_round_trip_and_error_handling() {
     // SAFETY: valid pointers.
     let rc = unsafe { hya_native_register_v2(&reject_ctx, &mut reject_regs, &mut reject_err) };
     assert_eq!(rc, 1);
-    assert!(reject_err.as_deref().is_some_and(|m| m.contains("rejected")));
+    assert!(
+        reject_err
+            .as_deref()
+            .is_some_and(|m| m.contains("rejected"))
+    );
 
     // Null pointer guard returns -1 cleanly.
     let mut null_err: Option<String> = None;
@@ -791,7 +794,8 @@ fn ffi_export_macro_round_trip_and_error_handling() {
 }
 
 #[tokio::test]
-async fn host_runtime_subtraits_and_extension_traits_dispatch_cleanly() -> Result<(), Box<dyn std::error::Error>> {
+async fn host_runtime_subtraits_and_extension_traits_dispatch_cleanly()
+-> Result<(), Box<dyn std::error::Error>> {
     let runtime: Arc<dyn HostRuntime> = Arc::new(InMemoryHostRuntime::default());
     let session = SessionId::new();
 
@@ -820,7 +824,13 @@ async fn host_runtime_subtraits_and_extension_traits_dispatch_cleanly() -> Resul
     let renewed = runtime.bundle_storage().renew_claim(&lease, 5_000).await?;
     assert_eq!(renewed.epoch, 1);
     runtime.bundle_storage().release_claim(&renewed).await?;
-    assert!(runtime.bundle_storage().read_claim("hya/test", "actor:main").await?.is_none());
+    assert!(
+        runtime
+            .bundle_storage()
+            .read_claim("hya/test", "actor:main")
+            .await?
+            .is_none()
+    );
 
     // HostEventBus + HostTurnRunner + HostModelCaller + HostCatalogReader + HostExtensionRegistry
     let mut rx = runtime.event_bus().subscribe()?;

@@ -32,14 +32,14 @@ use hya_proto::{
     AgentName, Envelope, Event, FinishCause, FinishReason, Message, MessageId, ModelRef, Part,
     PartId, SessionId, SessionKind, WorkflowRunId,
 };
-use hya_tool::extension::{ExtensionEvent, members_projection, team_projection};
-use hya_tool::{WorkflowMemberRole, WorkflowStageStatus};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
     ProviderRouter,
 };
 use hya_store::SessionStore;
+use hya_tool::extension::{ExtensionEvent, members_projection, team_projection};
 use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, Tool};
+use hya_tool::{WorkflowMemberRole, WorkflowStageStatus};
 use hya_workflow::{WorkflowSource, compile};
 use serde_json::json;
 use tokio::sync::{Notify, broadcast};
@@ -1327,7 +1327,10 @@ async fn resident_actor_identity_session_reuse_and_route_matching() {
             .await
             .unwrap()
             .iter()
-            .filter(|e| matches!(ExtensionEvent::from_event(&e.event), Some(ExtensionEvent::MailSent { .. })))
+            .filter(|e| matches!(
+                ExtensionEvent::from_event(&e.event),
+                Some(ExtensionEvent::MailSent { .. })
+            ))
             .count(),
         2
     );
@@ -1355,17 +1358,11 @@ async fn resident_actor_identity_session_reuse_and_route_matching() {
     assert_ne!(id_r.stages[0].session, id_r.stages[1].session);
     assert_ne!(id_r.stages[2].session, id_r.stages[3].session);
     assert_eq!(
-        team_projection(
-            &id_env
-                .eng
-                .read_projection(id_env.lead)
-                .await
-                .unwrap()
-        )
-        .roster
-        .values()
-        .filter(|e| e.agent_type.as_str() == "resident-planner")
-        .count(),
+        team_projection(&id_env.eng.read_projection(id_env.lead).await.unwrap())
+            .roster
+            .values()
+            .filter(|e| e.agent_type.as_str() == "resident-planner")
+            .count(),
         2
     );
 }
@@ -1666,15 +1663,13 @@ async fn loop_wrap_up_capacity_refusal_and_cancellation_never_complete_stage() {
             .execute(CancellationToken::new()),
     );
     v_gate.wait_entered().await;
-    let worker_handle = team_projection(
-        &env.eng.read_projection(env.lead).await.unwrap(),
-    )
-    .roster
-    .values()
-    .find(|e| e.agent_type.as_str() == "builder")
-    .unwrap()
-    .handle
-    .clone();
+    let worker_handle = team_projection(&env.eng.read_projection(env.lead).await.unwrap())
+        .roster
+        .values()
+        .find(|e| e.agent_type.as_str() == "builder")
+        .unwrap()
+        .handle
+        .clone();
     env.sup.end_member(env.lead, &worker_handle).await.unwrap();
     v_gate.unblock();
     w_gate.wait_entered().await;

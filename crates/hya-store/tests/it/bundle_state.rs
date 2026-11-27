@@ -10,7 +10,10 @@ use serde_json::json;
 async fn bundle_state_crud_and_bundle_isolation() {
     let store = SessionStore::connect_memory().await.unwrap();
 
-    assert_eq!(store.get_bundle_state("hya/team", "k1").await.unwrap(), None);
+    assert_eq!(
+        store.get_bundle_state("hya/team", "k1").await.unwrap(),
+        None
+    );
 
     store
         .set_bundle_state("hya/team", "k1", b"v1")
@@ -56,7 +59,10 @@ async fn bundle_state_crud_and_bundle_isolation() {
 
     assert!(store.delete_bundle_state("hya/team", "k1").await.unwrap());
     assert!(!store.delete_bundle_state("hya/team", "k1").await.unwrap());
-    assert_eq!(store.get_bundle_state("hya/team", "k1").await.unwrap(), None);
+    assert_eq!(
+        store.get_bundle_state("hya/team", "k1").await.unwrap(),
+        None
+    );
     assert_eq!(
         store.get_bundle_state("hya/workflow", "k1").await.unwrap(),
         Some(b"wf1".to_vec())
@@ -177,7 +183,10 @@ async fn bundle_state_prefix_listing_and_delete_treat_like_metacharacters_litera
     assert_eq!(entries[0].value, b"1");
     assert_eq!(entries[1].value, b"2");
 
-    let all_keys = store.list_bundle_state_keys("hya/demo", None).await.unwrap();
+    let all_keys = store
+        .list_bundle_state_keys("hya/demo", None)
+        .await
+        .unwrap();
     assert_eq!(
         all_keys,
         vec!["ns%a/one", "ns%a/two", "nsXa/three", "other/four"]
@@ -189,7 +198,10 @@ async fn bundle_state_prefix_listing_and_delete_treat_like_metacharacters_litera
         .unwrap();
     assert_eq!(deleted, 2);
     assert_eq!(
-        store.list_bundle_state_keys("hya/demo", None).await.unwrap(),
+        store
+            .list_bundle_state_keys("hya/demo", None)
+            .await
+            .unwrap(),
         vec!["nsXa/three", "other/four"]
     );
 }

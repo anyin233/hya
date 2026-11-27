@@ -165,8 +165,7 @@ async fn nested_spawn_reaches_root_tree_and_registers_two_generations_in_roster(
         assert_eq!(entry.mode, SubagentMode::Resident);
     }
     assert!(
-        team
-            .roster
+        team.roster
             .values()
             .all(|e| e.session != root || e.handle == "main")
     );

@@ -16,7 +16,7 @@ afterAll(() => rmSync(temp, { recursive: true, force: true }))
 
 const sha = (text: string) => createHash("sha256").update(text).digest("hex")
 let digestSeed = 0
-/** A catalog row as `GET /v1/tui-extensions` returns it. */
+/** A catalog row as `GET /v2/tui-extensions` returns it. */
 function catalogRow(id: string, files: Record<string, string>, permissions: string[], entry = "tui/main.ts") {
   return {
     bundleId: id, bundleVersion: "1.0.0", preparedDigest: sha(`${id}:${++digestSeed}`), apiVersion: 1, entry, sdk: "1.0.0", permissions,
@@ -369,7 +369,7 @@ export default defineTuiExtension({ activate(api) { let result = "none"; api.reg
     await success.action("acme/result-ok", { kind: "panel", id: "p" }, { name: "go", data: null })
     expect(await until(() => { const node = success.panelView("acme/result-ok#p", 40, 5).node; return node?.kind === "text" ? node : undefined }, "successful command result")).toEqual({ kind: "text", text: "ok:{\"switched\":true}" })
     await success.stopAll()
-    const failure = manager({ executeCommand: async () => { throw new HttpError(409, "POST", "/v1/x", "conflict: busy") } })
+    const failure = manager({ executeCommand: async () => { throw new HttpError(409, "POST", "/v2/x", "conflict: busy") } })
     await failure.load([catalogRow("acme/result-error", { "tui/main.ts": source }, ["tui.panel", "tui.action", "tui.project.control"])], local)
     await failure.action("acme/result-error", { kind: "panel", id: "p" }, { name: "go", data: null })
     expect(await until(() => { const node = failure.panelView("acme/result-error#p", 40, 5).node; return node?.kind === "text" ? node : undefined }, "failed command result")).toEqual({ kind: "text", text: "error:conflict: busy" })

@@ -452,18 +452,8 @@ mod workflow_error_regression {
                 400,
                 Grpc::InvalidArgument,
             ),
-            (
-                "WORKFLOW_NOT_FOUND",
-                "not_found",
-                404,
-                Grpc::NotFound,
-            ),
-            (
-                "WORKFLOW_NOT_SELECTED",
-                "not_found",
-                404,
-                Grpc::NotFound,
-            ),
+            ("WORKFLOW_NOT_FOUND", "not_found", 404, Grpc::NotFound),
+            ("WORKFLOW_NOT_SELECTED", "not_found", 404, Grpc::NotFound),
             (
                 "SESSION_NOT_FOUND",
                 "session_not_found",
@@ -500,12 +490,7 @@ mod workflow_error_regression {
                 503,
                 Grpc::Unavailable,
             ),
-            (
-                "WORKFLOW_OVERLOADED",
-                "unavailable",
-                503,
-                Grpc::Unavailable,
-            ),
+            ("WORKFLOW_OVERLOADED", "unavailable", 503, Grpc::Unavailable),
             ("WORKFLOW_INTERNAL", "internal", 500, Grpc::Internal),
             ("unknown", "internal", 500, Grpc::Internal),
         ] {

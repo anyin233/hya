@@ -445,11 +445,7 @@ impl SessionEngine {
             return Vec::new();
         };
         let team = hya_tool::extension::team_projection(&projection);
-        let Some(entry) = team
-            .roster
-            .values()
-            .find(|entry| entry.session == session)
-        else {
+        let Some(entry) = team.roster.values().find(|entry| entry.session == session) else {
             return Vec::new();
         };
         team.unread_incoming_mail(&entry.handle, entry.resident_cursor)

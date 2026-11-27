@@ -31,13 +31,13 @@ for (const failure of ["", "transport", "response", "list"]) {
       controller.key({ name: "r", sequence: "r", ctrl: false, meta: false, shift: false })
       await Bun.sleep(0)
       expect(store.state.bundlesView?.busy).toBeUndefined()
-      expect(calls[0]).toBe("/v1/bundles:refresh")
+      expect(calls[0]).toBe("/v2/bundles:refresh")
       if (failure) {
         expect(store.state.bundlesView?.notice?.tone).toBe("error")
         expect(store.state.bundlesView?.notice?.text).toContain(failure === "response" ? "acme/tools: invalid config" : `${failure === "list" ? "list" : "refresh"} unavailable`)
-        if (failure !== "list") expect(calls).toEqual(["/v1/bundles:refresh"])
+        if (failure !== "list") expect(calls).toEqual(["/v2/bundles:refresh"])
       } else {
-        expect(calls).toEqual(["/v1/bundles:refresh", "extensions", "/v1/bundles"])
+        expect(calls).toEqual(["/v2/bundles:refresh", "extensions", "/v2/bundles"])
         expect(store.state.bundlesView?.notice).toEqual({ tone: "ok", text: "Bundles refreshed" })
       }
     } finally { controller.dispose() }

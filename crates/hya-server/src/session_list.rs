@@ -135,15 +135,13 @@ fn turn_signal(event: &Event) -> Option<SessionId> {
         Event::MessageStarted { session, .. } | Event::MessageFinished { session, .. } => {
             Some(*session)
         }
-        Event::Extension { .. } => {
-            match hya_tool::extension::ExtensionEvent::from_event(event)? {
-                hya_tool::extension::ExtensionEvent::WorkflowRunStarted { session, .. }
-                | hya_tool::extension::ExtensionEvent::WorkflowRunFinished { session, .. } => {
-                    Some(session)
-                }
-                _ => None,
+        Event::Extension { .. } => match hya_tool::extension::ExtensionEvent::from_event(event)? {
+            hya_tool::extension::ExtensionEvent::WorkflowRunStarted { session, .. }
+            | hya_tool::extension::ExtensionEvent::WorkflowRunFinished { session, .. } => {
+                Some(session)
             }
-        }
+            _ => None,
+        },
         _ => None,
     }
 }

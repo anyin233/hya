@@ -375,9 +375,10 @@ where
             });
             continue;
         }
-        if let Some(overrider) = external_bundles.iter().find(|bundle| {
-            bundle.identity().id == identity || bundle.overrides() == Some(identity)
-        }) {
+        if let Some(overrider) = external_bundles
+            .iter()
+            .find(|bundle| bundle.identity().id == identity || bundle.overrides() == Some(identity))
+        {
             entries.push(BuiltinBundleEntry {
                 identity,
                 status: BuiltinBundleStatus::Overridden {

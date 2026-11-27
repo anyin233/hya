@@ -328,16 +328,19 @@ impl SessionEngine {
     /// Returns an invalid-operation error for members, or store failures.
     pub async fn ensure_session_delete_allowed(&self, session: SessionId) -> Result<(), CoreError> {
         let (root, depth) = self.session_lineage(session).await?;
-        if depth > 0 && self.replay(root).await?.iter().any(|envelope| {
-            matches!(
-                hya_tool::extension::ExtensionEvent::from_event(&envelope.event),
-                Some(hya_tool::extension::ExtensionEvent::AgentRegistered {
-                    agent_session, ..
-                }) if agent_session == session
-            )
-        }) {
+        if depth > 0
+            && self.replay(root).await?.iter().any(|envelope| {
+                matches!(
+                    hya_tool::extension::ExtensionEvent::from_event(&envelope.event),
+                    Some(hya_tool::extension::ExtensionEvent::AgentRegistered {
+                        agent_session, ..
+                    }) if agent_session == session
+                )
+            })
+        {
             return Err(CoreError::Invalid(
-                "cannot delete a team member session; archive the subagent or delete the root".into(),
+                "cannot delete a team member session; archive the subagent or delete the root"
+                    .into(),
             ));
         }
         Ok(())

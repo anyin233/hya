@@ -297,7 +297,7 @@ test("the default model for the next turn: the session's, else the pending choic
 })
 
 test("server errors show without the method and path", () => {
-  expect(errorText(new HttpError(400, "PUT", "/v1/providers/gw", "invalid_argument: base URL must be http(s)"))).toBe("invalid_argument: base URL must be http(s)")
+  expect(errorText(new HttpError(400, "PUT", "/v2/providers/gw", "invalid_argument: base URL must be http(s)"))).toBe("invalid_argument: base URL must be http(s)")
   expect(errorText(new Error("boom"))).toBe("boom")
   expect(errorText("plain")).toBe("plain")
 })

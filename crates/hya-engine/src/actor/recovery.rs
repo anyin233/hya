@@ -165,9 +165,7 @@ impl SessionEngine {
 fn map_recovered_resident_work(work: RecoveredResidentWork) -> ResidentRecovery {
     match work {
         RecoveredResidentWork::Idle => ResidentRecovery::Idle,
-        RecoveredResidentWork::Queued { inbox_cursor } => {
-            ResidentRecovery::Queued { inbox_cursor }
-        }
+        RecoveredResidentWork::Queued { inbox_cursor } => ResidentRecovery::Queued { inbox_cursor },
         RecoveredResidentWork::AbortedRunning {
             inbox_cursor,
             queued_after,

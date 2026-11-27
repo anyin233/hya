@@ -180,14 +180,7 @@ async fn bundle_claim_expiry_and_expire_sweep() {
     let store = SessionStore::connect_memory().await.unwrap();
 
     let short = store
-        .acquire_bundle_claim_at(
-            "hya/team",
-            "lease-short",
-            "run-1",
-            Some(500),
-            None,
-            1_000,
-        )
+        .acquire_bundle_claim_at("hya/team", "lease-short", "run-1", Some(500), None, 1_000)
         .await
         .unwrap();
     store

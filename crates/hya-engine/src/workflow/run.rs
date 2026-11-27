@@ -265,12 +265,15 @@ flowchart TD
             .await
             .unwrap()
             .into_iter()
-            .filter_map(|env| match hya_tool::extension::ExtensionEvent::from_event(&env.event) {
-                Some(hya_tool::extension::ExtensionEvent::WorkflowStageFinished {
-                    stage, ..
-                }) => Some(stage),
-                _ => None,
-            })
+            .filter_map(
+                |env| match hya_tool::extension::ExtensionEvent::from_event(&env.event) {
+                    Some(hya_tool::extension::ExtensionEvent::WorkflowStageFinished {
+                        stage,
+                        ..
+                    }) => Some(stage),
+                    _ => None,
+                },
+            )
             .collect();
         assert!(finished_stages.contains(&"fast".to_string()));
         assert!(finished_stages.contains(&"hold".to_string()));

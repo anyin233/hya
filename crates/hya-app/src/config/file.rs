@@ -83,9 +83,7 @@ pub struct EngineSettings {
 
 impl EngineSettings {
     fn resolved_config_file(&self) -> PathBuf {
-        self.config_file
-            .clone()
-            .unwrap_or_else(active_config_path)
+        self.config_file.clone().unwrap_or_else(active_config_path)
     }
 
     fn read_bundle_config_value(&self, bundle_ids: &[&str]) -> Option<serde_norway::Value> {

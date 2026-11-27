@@ -7,7 +7,9 @@ use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
-use hya_engine::{ApiMethod, ApiScope, BundleApiCall, BundleApiError, BundleApiOutcome, SourceApis};
+use hya_engine::{
+    ApiMethod, ApiScope, BundleApiCall, BundleApiError, BundleApiOutcome, SourceApis,
+};
 use hya_runtime_abi::{
     HostError, NativeApiEndpoint, NativeBundleApiHandler, NativeBundleApiReply,
     NativeBundleApiRequest,
@@ -67,7 +69,10 @@ impl NativeBundleApiHandler for WorkflowBundleApiHandler {
         Self::endpoints_list()
     }
 
-    async fn handle(&self, request: NativeBundleApiRequest) -> Result<NativeBundleApiReply, HostError> {
+    async fn handle(
+        &self,
+        request: NativeBundleApiRequest,
+    ) -> Result<NativeBundleApiReply, HostError> {
         match request.api.as_str() {
             "list_workflows" => {
                 let directory = request
@@ -185,7 +190,10 @@ impl NativeBundleApiHandler for MultiAgentBundleApiHandler {
         Self::endpoints_list()
     }
 
-    async fn handle(&self, request: NativeBundleApiRequest) -> Result<NativeBundleApiReply, HostError> {
+    async fn handle(
+        &self,
+        request: NativeBundleApiRequest,
+    ) -> Result<NativeBundleApiReply, HostError> {
         let Some(session) = request.session else {
             return Ok(api_error_reply(ApiError::invalid_argument(
                 "session is required",
@@ -270,8 +278,9 @@ fn parse_workflow_command(body: &Value) -> Result<WorkflowCommand, ApiError> {
             None
         } else {
             Some(
-                hya_proto::workflow::WorkflowRevision::from_str(expected_raw)
-                    .map_err(|error| ApiError::invalid_argument(format!("invalid revision: {error}")))?,
+                hya_proto::workflow::WorkflowRevision::from_str(expected_raw).map_err(|error| {
+                    ApiError::invalid_argument(format!("invalid revision: {error}"))
+                })?,
             )
         };
         return Ok(WorkflowCommand::Select {

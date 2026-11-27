@@ -169,12 +169,10 @@ async fn steer_denies_archived_group_mail_and_acks_incoming_only() {
             .await;
         assert!(s.drain(&eng2).await.unwrap().is_none());
         let (ack, consumed_incoming) = s.take_acknowledgement().unwrap();
-        assert!(
-            matches!(
-                hya_tool::extension::ExtensionEvent::from_event(&ack),
-                Some(hya_tool::extension::ExtensionEvent::MailConsumed { handle: target, through: 1, .. }) if target == handle
-            )
-        );
+        assert!(matches!(
+            hya_tool::extension::ExtensionEvent::from_event(&ack),
+            Some(hya_tool::extension::ExtensionEvent::MailConsumed { handle: target, through: 1, .. }) if target == handle
+        ));
         assert_eq!(consumed_incoming, incoming);
     }
 }

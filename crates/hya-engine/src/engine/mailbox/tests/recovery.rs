@@ -301,14 +301,9 @@ async fn resident_stop_commits_before_stale_alias_send_rechecks_the_dm() {
             if sender == "main" && channel.starts_with("DM-") && target == handle
     ));
     assert!(
-        !primary
-            .replay(root)
-            .await
-            .unwrap()
-            .iter()
-            .any(|e| matches!(
-                hya_tool::extension::ExtensionEvent::from_event(&e.event),
-                Some(hya_tool::extension::ExtensionEvent::MailSent { .. })
-            ))
+        !primary.replay(root).await.unwrap().iter().any(|e| matches!(
+            hya_tool::extension::ExtensionEvent::from_event(&e.event),
+            Some(hya_tool::extension::ExtensionEvent::MailSent { .. })
+        ))
     );
 }

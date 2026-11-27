@@ -1,6 +1,6 @@
 /**
  * The MCP view (`/mcp`, docs/tui.md "MCP servers"): pure state and keys over
- * `GET /v1/mcp` and its connect / disconnect / auth routes
+ * `GET /v2/mcp` and its connect / disconnect / auth routes
  * (components/McpView.tsx renders it; app/mcp.ts owns the calls).
  *
  * Screens: `list` (every configured server: name, state, tool count, error)
@@ -111,7 +111,7 @@ export function serverLine(server: McpServerStatus, width: number): string {
 }
 
 /**
- * A tool's label on the detail screen: `GET /v1/mcp` reports the
+ * A tool's label on the detail screen: `GET /v2/mcp` reports the
  * model-facing `mcp__<server>__<tool>` names; under `MCP › <server>` the
  * server's own tool name is enough.
  */

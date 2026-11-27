@@ -57,7 +57,13 @@ pub(super) async fn commit_episode_ending(
     claim: &ActorClaim,
     ending: &Ending,
     sidecar_error: Option<String>,
-) -> Result<(crate::store_bridge::ResidentArchiveOutcome, EpisodeFinalization), CoreError> {
+) -> Result<
+    (
+        crate::store_bridge::ResidentArchiveOutcome,
+        EpisodeFinalization,
+    ),
+    CoreError,
+> {
     use crate::store_bridge::{
         ResidentArchive, ResidentArchiveOutcome, ResidentArchiveOwner, SessionStoreExt as _,
     };

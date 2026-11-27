@@ -246,10 +246,7 @@ async fn fresh_schema_reopens_and_contains_only_current_tables() {
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(
-        state_columns,
-        vec!["bundle", "key", "value", "updated_at"]
-    );
+    assert_eq!(state_columns, vec!["bundle", "key", "value", "updated_at"]);
     pool.close().await;
 }
 

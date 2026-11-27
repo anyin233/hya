@@ -1,5 +1,5 @@
 // A logging HTTP pass-through for specs that assert which requests the TUI
-// makes (for example: no `GET /v1/interactions` polling while a subagent
+// makes (for example: no `GET /v2/interactions` polling while a subagent
 // asks). Point the TUI's `--server` at `proxy.url`; every request is
 // forwarded to `target` unchanged (SSE streams included) and logged.
 

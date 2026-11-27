@@ -336,7 +336,7 @@ export function askFrameRoute(event: StreamEvent, sessionId: string): "own" | "d
 
 /**
  * How the controller routes one frame of the global stream
- * (`GET /v1/events/stream`, app/controller.ts): only asks and resolves
+ * (`GET /v2/events/stream`, app/controller.ts): only asks and resolves
  * count (`ignore` for everything else — transcripts come from the open
  * session's own stream). `tree`: the asking session is the open session or
  * below it, so its own stream delivers the frame too (applying it twice is

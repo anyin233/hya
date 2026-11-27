@@ -4,7 +4,7 @@ import { resolve } from "node:path"
 export interface Options {
   /** Base URL of a running `hya serve`; unset with no `--grpc` = the TUI finds or starts its database's daemon (src/launch.ts). */
   server?: string
-  /** Direct hya.v1 gRPC listener (`--grpc HOST:PORT`); no daemon is started. */
+  /** Direct hya.v2 gRPC listener (`--grpc HOST:PORT`); no daemon is started. */
   grpc?: string
   /** Workspace directory: the `directory` scope of every scoped request (a started daemon runs in the home directory, not here). */
   directory: string
@@ -69,7 +69,7 @@ Options:
   --server URL      Connect to this hya server instead of the database's
                     daemon; with --db, a lost server is replaced by the
                     database's daemon
-  --grpc HOST:PORT  Connect directly to a hya.v1 gRPC listener; cannot be
+  --grpc HOST:PORT  Connect directly to a hya.v2 gRPC listener; cannot be
                     combined with --server or --db
   --dir PATH        Workspace directory (default: the current directory)
   --hya PATH        hya binary that starts the daemon; lookup order: --hya,

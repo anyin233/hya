@@ -35,7 +35,8 @@ impl Tool for TestV2Tool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: ToolName::new("v2_probe"),
-            description: "Probe ABI v2 tool runtime, deadline, and HostRuntime dispatch".to_string(),
+            description: "Probe ABI v2 tool runtime, deadline, and HostRuntime dispatch"
+                .to_string(),
             input_schema: json!({"type": "object"}),
             output_schema: None,
         }

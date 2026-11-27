@@ -22,9 +22,9 @@ mod host;
 
 pub use abi::{
     ABI_VERSION_V2, AbiDigestFn, IntoRegistrationResult, NativeAbiV2, NativePluginContext,
-    NativeRegistrations, RegisterV2Fn, SYMBOL_ABI_V2, SYMBOL_REGISTER_V2,
-    SYMBOL_SHARE_DEADLINE_V2, SYMBOL_WITH_RUNTIME_V2, ShareDeadlineFn, WithRuntimeFn,
-    abi_digest_v2, deadline_cell_v2, share_deadline_v2, with_runtime_v2,
+    NativeRegistrations, RegisterV2Fn, SYMBOL_ABI_V2, SYMBOL_REGISTER_V2, SYMBOL_SHARE_DEADLINE_V2,
+    SYMBOL_WITH_RUNTIME_V2, ShareDeadlineFn, WithRuntimeFn, abi_digest_v2, deadline_cell_v2,
+    share_deadline_v2, with_runtime_v2,
 };
 pub use error::{AbiError, HostError};
 pub use extensions::{

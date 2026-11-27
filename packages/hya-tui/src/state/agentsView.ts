@@ -1,6 +1,6 @@
 /**
  * The Agents view (`/agent`, docs/tui.md "Agents view"): pure state and keys
- * over `GET /v1/agent-models` (components/AgentsView.tsx renders it;
+ * over `GET /v2/agent-models` (components/AgentsView.tsx renders it;
  * app/agentsView.ts owns the calls and the pickers `m` and `t` open).
  *
  * One screen, three sections under titled divider rules: primary agents,

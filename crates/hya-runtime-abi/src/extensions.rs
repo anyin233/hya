@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_bundle::{ApiMethod, ApiScope};
-use hya_proto::{AgentName, Envelope, EventSeq, MessageId, ModelRef, PartId, SessionId, ToolCallId};
+use hya_proto::{
+    AgentName, Envelope, EventSeq, MessageId, ModelRef, PartId, SessionId, ToolCallId,
+};
 use hya_tool::{Action, Decision, Resource};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

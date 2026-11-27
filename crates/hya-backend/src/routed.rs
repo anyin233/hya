@@ -15,8 +15,8 @@ use anyhow::Context as _;
 use hya_api::v2 as pb;
 use hya_engine::completion::render_transcript;
 use hya_proto::{Envelope, Projection, SessionId};
-use hya_tool::{WorkflowCommandResult, WorkflowProjection, WorkflowRunResult, WorkflowRunStatus};
 use hya_sdk::{Sdk, SdkError};
+use hya_tool::{WorkflowCommandResult, WorkflowProjection, WorkflowRunResult, WorkflowRunStatus};
 
 use crate::exec_stream::{JsonStreamPrinter, StreamScope};
 use crate::stop_signals::StopSignal;
@@ -53,11 +53,7 @@ fn client(url: &str) -> anyhow::Result<(Sdk, String)> {
     ))
 }
 
-async fn create_session(
-    sdk: &Sdk,
-    workdir: &str,
-    model: Option<String>,
-) -> anyhow::Result<String> {
+async fn create_session(sdk: &Sdk, workdir: &str, model: Option<String>) -> anyhow::Result<String> {
     let session = sdk
         .create_session(pb::CreateSessionRequest {
             model: model.unwrap_or_default(),
@@ -315,7 +311,14 @@ pub(crate) async fn workflow(
     match route {
         WorkflowRoute::State => {
             let state_json = sdk
-                .invoke_session_bundle_api(&id, "hya/workflow", reqwest::Method::GET, "/state", None, None)
+                .invoke_session_bundle_api(
+                    &id,
+                    "hya/workflow",
+                    reqwest::Method::GET,
+                    "/state",
+                    None,
+                    None,
+                )
                 .await
                 .map_err(api)?;
             Ok(WorkflowCommandResult::State {

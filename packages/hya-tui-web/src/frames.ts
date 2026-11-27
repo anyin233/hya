@@ -1,6 +1,6 @@
-// Protojson codec for the hya.v1 `PtyClientFrame` / `PtyServerFrame` messages
-// (proto/hya/v1/pty.proto). Bytes fields travel as standard base64, so the
-// browser client speaks the same frame shapes as `/v1/pty/{id}/connect`.
+// Protojson codec for the hya.v2 `PtyClientFrame` / `PtyServerFrame` messages
+// (proto/hya/v2/pty.proto). Bytes fields travel as standard base64, so the
+// browser client speaks the same frame shapes as `/v2/pty/{id}/connect`.
 
 /** A file pasted or dropped into the page (ADR-0037); the host answers `uploaded` or `uploadFailed` with the same `id`. */
 export type Upload = { id: string; name: string; mime: string; data: Uint8Array }

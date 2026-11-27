@@ -865,16 +865,16 @@ impl WorkflowControl {
         request_hash: &str,
     ) -> Result<Option<WorkflowRunProjection>, WorkflowControlError> {
         let events = self.engine.replay(session).await?;
-        let Some(existing_hash) = events.iter().find_map(|envelope| {
-            match ExtensionEvent::from_event(&envelope.event) {
+        let Some(existing_hash) = events.iter().find_map(
+            |envelope| match ExtensionEvent::from_event(&envelope.event) {
                 Some(ExtensionEvent::WorkflowRunStarted {
                     run: existing,
                     request_hash,
                     ..
                 }) if existing == run => Some(request_hash),
                 _ => None,
-            }
-        }) else {
+            },
+        ) else {
             return Ok(None);
         };
         if existing_hash != request_hash {

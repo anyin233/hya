@@ -81,12 +81,11 @@ impl ProjectionReducer for ScriptExtensionReducer {
 #[test]
 fn snapshot_plus_tail_equals_full_replay_at_every_split() {
     let empty = ProjectionReducerRegistry::new();
-    let with_reducers = ProjectionReducerRegistry::new().with_reducer(Arc::new(
-        ScriptExtensionReducer {
+    let with_reducers =
+        ProjectionReducerRegistry::new().with_reducer(Arc::new(ScriptExtensionReducer {
             bundle: "hya/workflow",
             version: 1,
-        },
-    ));
+        }));
     for seed in 0..48_u64 {
         let session = format!("hysec_{:020}", u128::from(seed) + 100)
             .parse::<SessionId>()
@@ -94,7 +93,11 @@ fn snapshot_plus_tail_equals_full_replay_at_every_split() {
         let fork_of =
             (seed % 4 == 0).then(|| format!("hysec_{:020}", 99).parse::<SessionId>().unwrap());
         let log = envelopes(event_script::script(seed, session, fork_of, 90));
-        let reducers = if seed % 2 == 0 { &with_reducers } else { &empty };
+        let reducers = if seed % 2 == 0 {
+            &with_reducers
+        } else {
+            &empty
+        };
         let full = Projection::from_events_with(&log, reducers);
         for split in 0..=log.len() {
             assert_eq!(
@@ -113,12 +116,11 @@ fn decode_snapshot_rejects_garbage_and_reducer_mismatch() {
     assert!(Projection::decode_snapshot(b"{\"not\":\"a snapshot\"}").is_err());
     assert!(Projection::decode_snapshot(b"\xff").is_err());
 
-    let reducers = ProjectionReducerRegistry::new().with_reducer(Arc::new(
-        ScriptExtensionReducer {
+    let reducers =
+        ProjectionReducerRegistry::new().with_reducer(Arc::new(ScriptExtensionReducer {
             bundle: "hya/workflow",
             version: 1,
-        },
-    ));
+        }));
     let session = format!("hysec_{:020}", 1).parse::<SessionId>().unwrap();
     let log = envelopes(vec![Event::Extension {
         session,

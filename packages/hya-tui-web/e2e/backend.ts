@@ -112,7 +112,7 @@ export async function prepareBackend(root: string, setup: BackendSetup): Promise
     }).join("")
     await writeFile(
       join(hyaCfgDir, "config.yaml"),
-      `default_model: ${fakeModelRef}\n` +
+      `schema_version: 2\ndefault_model: ${fakeModelRef}\n` +
         agentsYaml(agentModels) +
         "providers:\n" +
         "  fake:\n" +
@@ -132,7 +132,7 @@ export async function prepareBackend(root: string, setup: BackendSetup): Promise
     // No fake model: the offline echo model, plus the MCP servers.
     const hyaCfgDir = join(env.config!, "hya")
     await mkdir(hyaCfgDir, { recursive: true })
-    await writeFile(join(hyaCfgDir, "config.yaml"), mcpYaml(mcpServers))
+    await writeFile(join(hyaCfgDir, "config.yaml"), `schema_version: 2\n${mcpYaml(mcpServers)}`)
   }
   return {
     dir,

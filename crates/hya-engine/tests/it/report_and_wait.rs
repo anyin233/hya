@@ -27,20 +27,20 @@ use hya_proto::{
     MemberRunStatus, MessageId, ModelRef, OwnerRunId, PartId, PartProjection, Role, RosterStatus,
     SessionId, ToolCallId, ToolName, ToolPartState, ToolSchema, UsagePurpose, scope,
 };
-use hya_tool::extension::{
-    ExtensionEvent, MemberProjection, handoff_projection, members_projection, team_projection,
-};
-use hya_tool::{ArchiveReason, ReportOutcome};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
     ProviderRouter,
 };
 use hya_store::SessionStore;
+use hya_tool::extension::{
+    ExtensionEvent, MemberProjection, handoff_projection, members_projection, team_projection,
+};
 use hya_tool::{
     Action, ChannelPolicySnapshot, LifecyclePlane, MailboxPlane, Mode, PermissionPlane,
     PermissionRules, Rule, Tool, ToolCtx, ToolError, WaitMemberState, WaitMode, WaitOutcome,
     WaitSpec, WaitWake,
 };
+use hya_tool::{ArchiveReason, ReportOutcome};
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -492,7 +492,10 @@ async fn report_gate_rejects_unread_mail_live_children_and_accepts_current_wake_
         )
         .await
         .unwrap();
-    assert!(team_projection(&e2.read_projection(r2).await.unwrap()).roster[&scout_h].resident_cursor < 2);
+    assert!(
+        team_projection(&e2.read_projection(r2).await.unwrap()).roster[&scout_h].resident_cursor
+            < 2
+    );
     s2.report_gate(r2, &scout_h).await.unwrap();
 }
 
@@ -560,10 +563,7 @@ async fn refused_report_is_dropped_until_member_reports_again() {
             .roster
             .contains_key(&handle)
     );
-    assert!(
-        handoff_projection(&engine.read_projection(child).await.unwrap())
-            .is_none()
-    );
+    assert!(handoff_projection(&engine.read_projection(child).await.unwrap()).is_none());
 
     sup.submit_report(root, &handle, ReportOutcome::Done, "FRESH REPORT".into())
         .await
@@ -599,10 +599,7 @@ async fn report_archives_end_to_end_mints_channels_and_revives_via_handle_and_dm
     );
     let dm = dm_for(&engine, root, &handle).await;
     assert_eq!(
-        (
-            team.channels[&dm].members.len(),
-            &team.channels[&dm].unit
-        ),
+        (team.channels[&dm].members.len(), &team.channels[&dm].unit),
         (2, &None)
     );
 
@@ -627,8 +624,7 @@ async fn report_archives_end_to_end_mints_channels_and_revives_via_handle_and_dm
             .iter()
             .any(|m| m.summary.contains("found three call sites"))
     );
-    let handoff = handoff_projection(&engine.read_projection(child).await.unwrap())
-        .unwrap();
+    let handoff = handoff_projection(&engine.read_projection(child).await.unwrap()).unwrap();
     assert!(handoff.degraded && handoff.doc.contains("Goal"));
     assert!(engine.replay(root).await.unwrap().iter().any(|e| matches!(
         ExtensionEvent::from_event(&e.event),
@@ -646,14 +642,10 @@ async fn report_archives_end_to_end_mints_channels_and_revives_via_handle_and_dm
             .roster
             .contains_key(&handle)
     );
-    assert!(
-        engine
-            .replay(root)
-            .await
-            .unwrap()
-            .iter()
-            .any(|e| matches!(ExtensionEvent::from_event(&e.event), Some(ExtensionEvent::AgentRestarted { .. })))
-    );
+    assert!(engine.replay(root).await.unwrap().iter().any(|e| matches!(
+        ExtensionEvent::from_event(&e.event),
+        Some(ExtensionEvent::AgentRestarted { .. })
+    )));
     wait_idle(&engine, root, &handle, child).await;
     assert!(transcript_has(&engine, child, "check the tests too").await);
 
@@ -936,14 +928,8 @@ async fn root_teardown_and_delete_session_cancel_busy_and_archive_descendants() 
     let proj = engine.read_projection(root).await.unwrap();
     let team = team_projection(&proj);
     assert!(!team.roster.keys().any(|p| p != "main"));
-    assert_eq!(
-        team.archived[&lead_h].reason,
-        ArchiveReason::RootTeardown
-    );
-    assert_eq!(
-        team.archived[&worker_h].reason,
-        ArchiveReason::RootTeardown
-    );
+    assert_eq!(team.archived[&lead_h].reason, ArchiveReason::RootTeardown);
+    assert_eq!(team.archived[&worker_h].reason, ArchiveReason::RootTeardown);
     assert!(!is_active(&engine, lead).await && !is_active(&engine, worker).await);
 
     let provider = Arc::new(ParkedMembers::default());
@@ -1105,20 +1091,21 @@ async fn steer_tool_result_injection_non_object_shapes_and_transactional_rollbac
                     )
             }));
             assert_eq!(
-                team_projection(&engine.read_projection(root).await.unwrap()).roster["main"].resident_cursor,
+                team_projection(&engine.read_projection(root).await.unwrap()).roster["main"]
+                    .resident_cursor,
                 0
             );
         } else {
             res.unwrap();
             assert!(
-                team_projection(&engine.read_projection(root).await.unwrap()).roster["main"].resident_cursor
+                team_projection(&engine.read_projection(root).await.unwrap()).roster["main"]
+                    .resident_cursor
                     >= 1
             );
-            assert!(
-                replay
-                    .iter()
-                    .any(|e| matches!(ExtensionEvent::from_event(&e.event), Some(ExtensionEvent::MailConsumed { .. })))
-            );
+            assert!(replay.iter().any(|e| matches!(
+                ExtensionEvent::from_event(&e.event),
+                Some(ExtensionEvent::MailConsumed { .. })
+            )));
             let delivered = replay
                 .iter()
                 .find_map(|e| match &e.event {
@@ -1210,8 +1197,7 @@ async fn steer_notice_multibyte_channel_id_harness_notice_and_bus_lag_resync() {
             .contains("LAGGED_MAIL_BODY")
     );
     assert_eq!(
-        team_projection(&lag_engine.read_projection(lag_root).await.unwrap())
-            .roster["main"]
+        team_projection(&lag_engine.read_projection(lag_root).await.unwrap()).roster["main"]
             .resident_cursor,
         1
     );
@@ -1227,7 +1213,9 @@ async fn channel_read_history_normalization_handle_dm_and_heartbeats_status() {
 
     assert!(
         support::poll_until(Duration::from_secs(5), || async {
-            team_projection(&engine.read_projection(root).await.unwrap()).roster[&handle].heartbeat_ms > 0
+            team_projection(&engine.read_projection(root).await.unwrap()).roster[&handle]
+                .heartbeat_ms
+                > 0
         })
         .await
     );
@@ -1290,14 +1278,10 @@ async fn channel_read_history_normalization_handle_dm_and_heartbeats_status() {
     let p = engine.read_projection(root).await.unwrap();
     let team_p = team_projection(&p);
     assert!(team_p.roster[&handle].resident_cursor >= team_p.inboxes[&handle].len() as u64);
-    assert!(
-        engine
-            .replay(root)
-            .await
-            .unwrap()
-            .iter()
-            .any(|e| matches!(ExtensionEvent::from_event(&e.event), Some(ExtensionEvent::MailConsumed { .. })))
-    );
+    assert!(engine.replay(root).await.unwrap().iter().any(|e| matches!(
+        ExtensionEvent::from_event(&e.event),
+        Some(ExtensionEvent::MailConsumed { .. })
+    )));
 
     for (raw, want) in [
         (
@@ -1373,7 +1357,8 @@ async fn channel_policy_denials_for_steer_report_public_send_and_unit_mail() {
         .await;
     assert!(steer.drain(&engine).await.unwrap().is_none());
     assert_eq!(
-        team_projection(&engine.read_projection(root).await.unwrap()).roster["main"].resident_cursor,
+        team_projection(&engine.read_projection(root).await.unwrap()).roster["main"]
+            .resident_cursor,
         0
     );
     let (plane, rx) = LifecyclePlane::new();
@@ -1442,14 +1427,16 @@ async fn channel_policy_denials_for_steer_report_public_send_and_unit_mail() {
                     ur,
                     ["first denied", "second denied"]
                         .into_iter()
-                        .map(|b| ExtensionEvent::MailSent {
-                            session: ur,
-                            from: "main".into(),
-                            to: MailEndpoint::Channel(group.clone()),
-                            kind: MailKind::Message,
-                            body: b.into(),
-                        }
-                        .into_event())
+                        .map(|b| {
+                            ExtensionEvent::MailSent {
+                                session: ur,
+                                from: "main".into(),
+                                to: MailEndpoint::Channel(group.clone()),
+                                kind: MailKind::Message,
+                                body: b.into(),
+                            }
+                            .into_event()
+                        })
                         .collect(),
                 )
                 .await
@@ -1684,10 +1671,11 @@ async fn handoff_policy_deterministic_skips_summarizer_while_default_invokes_it(
             engine.replay(child).await.unwrap(),
         );
         assert_eq!(
-            clog.iter().find_map(|e| match ExtensionEvent::from_event(&e.event) {
-                Some(ExtensionEvent::HandoffCommitted { degraded, .. }) => Some(degraded),
-                _ => None,
-            }),
+            clog.iter()
+                .find_map(|e| match ExtensionEvent::from_event(&e.event) {
+                    Some(ExtensionEvent::HandoffCommitted { degraded, .. }) => Some(degraded),
+                    _ => None,
+                }),
             Some(want_degraded)
         );
         assert_eq!(
@@ -2059,16 +2047,10 @@ async fn empty_or_length_cut_final_answer_leaves_member_idle_unreported() {
                         }
                     )
                 }) && !team.engine.turn_active(child)
-                    && team_projection(
-                        &team
-                            .engine
-                            .read_projection(team.root)
-                            .await
-                            .unwrap(),
-                    )
-                    .roster
-                    .get(&handle)
-                    .is_some_and(|e| e.status == RosterStatus::Idle)
+                    && team_projection(&team.engine.read_projection(team.root).await.unwrap())
+                        .roster
+                        .get(&handle)
+                        .is_some_and(|e| e.status == RosterStatus::Idle)
             })
             .await
         );
@@ -3160,9 +3142,8 @@ async fn wait_transactional_commit_mask_retry_nested_pages_and_paging_steering()
             .await
             .unwrap();
     }
-    let cursor = team_projection(&nt.engine.read_projection(nt.root).await.unwrap())
-        .inboxes[&rh]
-        .len();
+    let cursor =
+        team_projection(&nt.engine.read_projection(nt.root).await.unwrap()).inboxes[&rh].len();
     let mut bus = nt.engine.bus().subscribe();
     nt.provider.tool_batches.lock().unwrap().insert(
         reader,

@@ -3,7 +3,7 @@
 
 use axum::{Router, extract::OriginalUri, http::StatusCode};
 use hya_api::v2 as pb;
-use hya_sdk::{Client, ClientError, SdkError, Sdk};
+use hya_sdk::{Client, ClientError, Sdk, SdkError};
 use std::time::Duration;
 
 async fn serve(app: Router) -> (String, tokio::task::JoinHandle<()>) {
@@ -188,10 +188,7 @@ async fn prompt_rejects_admission_without_a_turn_id_before_waiting() {
         .prompt_text("test", "hi")
         .await
         .unwrap_err();
-    let sdk_error = Sdk::new(&base, "")
-        .prompt("test", "hi")
-        .await
-        .unwrap_err();
+    let sdk_error = Sdk::new(&base, "").prompt("test", "hi").await.unwrap_err();
     assert!(matches!(client_error, ClientError::Api { code, .. } if code == "invalid_response"));
     assert!(matches!(sdk_error, SdkError::Api { code, .. } if code == "invalid_response"));
     for _ in 0..2 {

@@ -162,13 +162,12 @@ impl SessionStore {
         let now = now_millis();
         let transitioned = match (expected, new_value) {
             (None, None) => {
-                let exists: Option<i64> = sqlx::query_scalar(
-                    "SELECT 1 FROM bundle_state WHERE bundle = ? AND key = ?",
-                )
-                .bind(bundle)
-                .bind(key)
-                .fetch_optional(&mut *tx)
-                .await?;
+                let exists: Option<i64> =
+                    sqlx::query_scalar("SELECT 1 FROM bundle_state WHERE bundle = ? AND key = ?")
+                        .bind(bundle)
+                        .bind(key)
+                        .fetch_optional(&mut *tx)
+                        .await?;
                 exists.is_none()
             }
             (None, Some(next)) => {

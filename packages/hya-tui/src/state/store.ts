@@ -19,6 +19,7 @@
 import { subagentRows } from "./subagents"
 import { batch, createSignal, type Accessor, type Setter } from "solid-js"
 import { apiOperationNames, operations } from "../api"
+import { normalizeStreamEvent, sessionMembers } from "../client"
 import type { VimMode } from "../composer/vim"
 import type {
   AgentModelState,
@@ -89,7 +90,7 @@ export interface AppState {
   readonly interactions: Interaction[]
   readonly agents: AgentSummary[]
   readonly models: ModelSummary[]
-  /** `GET /v1/providers` (id, protocol, key source, auth, model count): the Provider View's list. */
+  /** `GET /v2/providers` (id, protocol, key source, auth, model count): the Provider View's list. */
   readonly providers: ProviderSummary[]
   readonly backendCommands: CommandSummary[]
   readonly workflows: WorkflowSummary[]
@@ -228,7 +229,7 @@ export interface AppState {
   readonly backendStopped: boolean
   /** Live `CompactionApplied` events and permission mode switches rendered as transcript notices, oldest first (compactions from before the session was opened are derived from their summary messages at render: state/messages.ts `withDividers`). */
   readonly dividers: readonly Divider[]
-  /** Selectable permission modes (`GET /v1/permission-modes`); empty until read or on an older backend. */
+  /** Selectable permission modes (`GET /v2/permission-modes`); empty until read or on an older backend. */
   readonly permissionModes: PermissionModeInfo[]
   /** A mode chosen before any session exists; applied right after the session is created (app/modes.ts). */
   readonly pendingMode: string | undefined
@@ -320,14 +321,14 @@ export interface Catalog {
   sessions: SessionInfo[]
   interactions: Interaction[]
   models: ModelSummary[]
-  /** `GET /v1/agents`; kept current so the `/agent` picker (C12) reflects catalog changes, not just bootstrap. Omitted keeps the rows read before. */
+  /** `GET /v2/agents`; kept current so the `/agent` picker (C12) reflects catalog changes, not just bootstrap. Omitted keeps the rows read before. */
   agents?: AgentSummary[]
   workflows: WorkflowSummary[]
   providers: ProviderSummary[]
   commands: CommandSummary[]
-  /** `GET /v1/permission-modes`; omitted keeps the rows read before. */
+  /** `GET /v2/permission-modes`; omitted keeps the rows read before. */
   permissionModes?: PermissionModeInfo[]
-  /** `GET /v1/projects`; omitted keeps the rows read before. */
+  /** `GET /v2/projects`; omitted keeps the rows read before. */
   projects?: ProjectInfo[]
 }
 
@@ -365,7 +366,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     skillsView: undefined,
     contextFiles: undefined,
     startupReady: false,
-    apiOutput: "Use /api METHOD /v1/path [JSON object] to call any HTTP/JSON endpoint.\n\n" + operations(),
+    apiOutput: "Use /api METHOD /v2/path [JSON object] to call any HTTP/JSON endpoint.\n\n" + operations(),
     status: startupStatus,
     providerView: undefined,
     diffView: undefined,
@@ -628,7 +629,7 @@ export function createAppStore() {
         set("running", false)
         set("turnId", "")
         set("turnStartedAt", undefined)
-        set("members", session.members ?? [])
+        set("members", sessionMembers(session))
         set("children", new Map())
         set("dividers", [])
         set("liveRound", undefined)
@@ -749,7 +750,8 @@ export function createAppStore() {
     },
 
     /** Fold one stream event into the overlay (not yet visible; see `flushOverlay`). */
-    applyEvent(event: StreamEvent): OverlayEffect {
+    applyEvent(rawEvent: StreamEvent): OverlayEffect {
+      const event = normalizeStreamEvent(rawEvent)
       const effect = fold.apply(event)
       if (effect.durable) set("cursor", fold.lastSeq)
       // Members fold here, not in the overlay: they are session state, not transcript parts.
@@ -1004,7 +1006,7 @@ export function createAppStore() {
 
     /** Open, update, or (`undefined`) close the Provider View. */
     setProviderView(view: ProviderViewState | undefined): void { set("providerView", view) },
-    /** A catalog refresh (`GET /v1/providers`, `GET /v1/models`) without the rest of `applyCatalog`. */
+    /** A catalog refresh (`GET /v2/providers`, `GET /v2/models`) without the rest of `applyCatalog`. */
     setProviderCatalog(providers: ProviderSummary[], models: ModelSummary[]): void {
       batch(() => {
         set("providers", providers)

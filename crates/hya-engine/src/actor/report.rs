@@ -58,9 +58,7 @@ fn unread_mail_rejection(
     canonical: &str,
     read_through: u64,
 ) -> String {
-    let unread: Vec<_> = team
-        .unread_incoming_mail(canonical, read_through)
-        .collect();
+    let unread: Vec<_> = team.unread_incoming_mail(canonical, read_through).collect();
     let mut per_channel: BTreeMap<String, usize> = BTreeMap::new();
     let mut notices = 0usize;
     for message in &unread {

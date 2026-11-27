@@ -600,17 +600,16 @@ fn validate_process(command: &[String], timeout_ms: Option<u64>) -> Result<(), S
 pub(super) const RESERVED_OVERRIDE_TOOLS: [&str; 2] = ["todo", "rewrite"];
 
 /// Validate a bundle override target identity (`<publisher>/<name>`, non-self).
-pub(super) fn validate_override_target(
-    bundle_id: &str,
-    target: &str,
-) -> Result<(), BundleError> {
+pub(super) fn validate_override_target(bundle_id: &str, target: &str) -> Result<(), BundleError> {
     let invalid = |detail: &str| BundleError::InvalidOverride {
         bundle_id: bundle_id.to_string(),
         target: target.to_string(),
         detail: detail.to_string(),
     };
     let Some((publisher, name)) = target.split_once('/') else {
-        return Err(invalid("target must have `<publisher>/<name>` identity form"));
+        return Err(invalid(
+            "target must have `<publisher>/<name>` identity form",
+        ));
     };
     let valid_segment = |seg: &str| {
         !seg.is_empty()

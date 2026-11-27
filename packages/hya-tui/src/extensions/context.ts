@@ -4,6 +4,7 @@
  * (`sessions`, `projects`, `todos`, `status`) carry what those panes showed
  * when the TUI drew them itself; hya/basic-tui-components draws them now.
  */
+import { sessionMembers } from "../client"
 import { contextUsage, modelEffortLabel, modelReference, sessionTokens, todoStatusText, webLabel } from "../state/format"
 import { effectiveMode, modeDisplay } from "../state/modes"
 import { waitingKind } from "../state/prompts"
@@ -36,14 +37,17 @@ function sessionsSection(state: AppState): NonNullable<ExtensionContext["session
     waiting: Boolean(waitingKind(state.interactions, row.id)),
     ...(row.parent ? { parent: row.parent } : {}),
     ...(Number.isFinite(Date.parse(row.timeCreated ?? "")) ? { created: Date.parse(row.timeCreated ?? "") } : {}),
-    ...(row.members?.length ? {
-      members: row.members.flatMap((member) => member.child ? [{
-        child: member.child,
-        ...(member.handle ? { handle: member.handle } : {}),
-        ...(member.description ? { description: member.description } : {}),
-        ...(member.agent ? { agent: member.agent } : {}),
-      }] : []),
-    } : {}),
+    ...((() => {
+      const members = sessionMembers(row)
+      return members.length ? {
+        members: members.flatMap((member) => member.child ? [{
+          child: member.child,
+          ...(member.handle ? { handle: member.handle } : {}),
+          ...(member.description ? { description: member.description } : {}),
+          ...(member.agent ? { agent: member.agent } : {}),
+        }] : []),
+      } : {}
+    })()),
   }))
   return { ready: state.ready, ...(state.selected ? { selected: state.selected.id } : {}), items }
 }

@@ -364,7 +364,11 @@ fn build_unit_libraries(
 /// is costly to verify in unoptimized builds. Installed layouts carry no
 /// adjacent library, so they load the verified package beside `bin/`.
 #[cfg(unix)]
-pub(crate) fn library_source(parent: &std::path::Path, filename: &str, stem: &str) -> Option<LibrarySource> {
+pub(crate) fn library_source(
+    parent: &std::path::Path,
+    filename: &str,
+    stem: &str,
+) -> Option<LibrarySource> {
     let mut local = [parent.join("deps").join(filename), parent.join(filename)]
         .into_iter()
         .filter(|path| path.is_file())

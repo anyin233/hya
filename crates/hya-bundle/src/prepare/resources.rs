@@ -3,7 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use hya_proto::AgentName;
 
 use super::decode::{digest_bytes, resource_order, set_bundle_digest};
-use super::extensions::{RESERVED_OVERRIDE_TOOLS, validate_hook_local_id, validate_override_target};
+use super::extensions::{
+    RESERVED_OVERRIDE_TOOLS, validate_hook_local_id, validate_override_target,
+};
 use super::parse::{normalize_source_path, read_text_reference, split_markdown};
 use crate::error::BundleError;
 use crate::model::{
@@ -568,8 +570,9 @@ fn validate_tool_descriptor(
     if let Some(target) = descriptor.overrides.as_deref() {
         validate_override_target(bundle_id, target)?;
     }
-    let has_override =
-        descriptor.overrides.is_some() || resource_overrides.is_some() || manifest_overrides.is_some();
+    let has_override = descriptor.overrides.is_some()
+        || resource_overrides.is_some()
+        || manifest_overrides.is_some();
     if has_override {
         if RESERVED_OVERRIDE_TOOLS.contains(&descriptor.name.as_str()) {
             return Err(BundleError::ReservedToolOverride {

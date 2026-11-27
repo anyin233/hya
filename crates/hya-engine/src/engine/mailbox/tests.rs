@@ -182,14 +182,15 @@ async fn register_child(
         .await;
     // Mirror the supervisor's registration-time minting: one group channel
     // per unit (leader + children), reused across siblings.
-    let existing_group = hya_tool::extension::team_projection(&engine.read_projection(root).await.unwrap())
-        .channels
-        .iter()
-        .find(|(_, channel)| {
-            channel.kind == hya_proto::ChannelKind::Group
-                && channel.unit.as_deref() == Some(parent_path)
-        })
-        .map(|(key, _)| key.clone());
+    let existing_group =
+        hya_tool::extension::team_projection(&engine.read_projection(root).await.unwrap())
+            .channels
+            .iter()
+            .find(|(_, channel)| {
+                channel.kind == hya_proto::ChannelKind::Group
+                    && channel.unit.as_deref() == Some(parent_path)
+            })
+            .map(|(key, _)| key.clone());
     let child_path = scope::join_path(parent_path, leaf);
     match existing_group {
         Some(group) => {

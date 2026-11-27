@@ -8,8 +8,6 @@ use hya_proto::{
     AgentName, Event, FinishCause, FinishReason, MailEndpoint, MailKind, MessageId, ModelRef,
     SessionId,
 };
-use hya_tool::ReportOutcome;
-use hya_tool::extension::ExtensionEvent;
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
     ProviderRouter,
@@ -18,6 +16,8 @@ use hya_store::{
     SessionStore,
     bench::{Counts, snapshot},
 };
+use hya_tool::ReportOutcome;
+use hya_tool::extension::ExtensionEvent;
 use hya_tool::{Mode, PermissionPlane, PermissionRules};
 use serde::{Deserialize, Serialize};
 use serde_json::json;

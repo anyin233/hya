@@ -5,7 +5,7 @@
  * functions; app/modes.ts runs the switch (`UpdateSession`).
  *
  * Modes: `manual`, `yolo`, and bundle modes `<bundle-id>/<mode-id>` from
- * `GET /v1/permission-modes`.
+ * `GET /v2/permission-modes`.
  */
 import type { KeyLike } from "../keys/bindings"
 import type { PickerRow } from "./picker"

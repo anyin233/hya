@@ -253,7 +253,7 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
       : options.grpc && !options.remote
         ? {
             home: async () => {
-              await client.request("GET", "/v1/health")
+              await client.request("GET", "/v2/health")
               store.setBackend({ explicit: true })
               return { url: `grpc://${options.grpc}`, pid: 0, started: false }
             },

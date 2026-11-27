@@ -611,7 +611,10 @@ resources:
 "#
                 .as_slice(),
             ),
-            SourceFile::new("src/index.ts", b"export const read = () => {};\n".as_slice()),
+            SourceFile::new(
+                "src/index.ts",
+                b"export const read = () => {};\n".as_slice(),
+            ),
             SourceFile::new(
                 "tools/read.json",
                 br#"{"schema_version":1,"name":"read","description":"Custom read"}"#.as_slice(),
@@ -765,18 +768,15 @@ identity: { id: hya/base-tools, version: 1.0.0, publisher: hya }
         enable: Vec::new(),
         disable: vec!["hya/network-tools".to_string()],
     };
-    let report = resolve_first_party_bundles_with(
-        &full,
-        &[&project_override.bundles()[0]],
-        |id| match id {
+    let report =
+        resolve_first_party_bundles_with(&full, &[&project_override.bundles()[0]], |id| match id {
             "hya/base-tools" => Ok(Some(sample_catalog.clone())),
             "hya/extended-tools" => Err(BundleError::InvalidManifest {
                 source_name: id.to_string(),
                 detail: "corrupt".to_string(),
             }),
             _ => Ok(None),
-        },
-    );
+        });
     assert_eq!(report.entries.len(), FIRST_PARTY_BUNDLES.len());
     assert_eq!(
         report.status("hya/base-tools"),

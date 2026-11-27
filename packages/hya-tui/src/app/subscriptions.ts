@@ -1,4 +1,4 @@
-import type { HyaClient, MessageInfo, SessionInfo, StreamEvent, StreamFrame } from "../client"
+import { normalizeStreamEvent, sessionMembers, type HyaClient, type MessageInfo, type SessionInfo, type StreamEvent, type StreamFrame } from "../client"
 import { askSessionLabel, otherAskNotice } from "../state/format"
 import { childActivity } from "../state/members"
 import { askFrameRoute, globalAskRoute } from "../state/prompts"
@@ -79,15 +79,15 @@ export function createSubscriptions({ client, store, backend, turns, status, not
   async function refreshSession(): Promise<void> {
     const selected = store.state.selected
     if (!selected) return
-    const row = await client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(selected.id)}`)
+    const row = await client.request<SessionInfo>("GET", `/v2/sessions/${encodeURIComponent(selected.id)}`)
     const current = store.state.selected
     if (current?.id === row.id) {
       store.setSelected(sessionRow(current, row))
-      store.setMembers(row.members ?? [])
+      store.setMembers(sessionMembers(row))
     }
   }
 
-  /** `GET /v1/interactions` into the pending list (after a (re)subscribe or `resync`: frames before it are not replayed). */
+  /** `GET /v2/interactions` into the pending list (after a (re)subscribe or `resync`: frames before it are not replayed). */
   async function refreshInteractions(): Promise<void> {
     store.setInteractions(await client.listInteractions())
   }
@@ -106,7 +106,7 @@ export function createSubscriptions({ client, store, backend, turns, status, not
   }
 
   /**
-   * Re-read the provider/model catalog (`GET /v1/models` / `GET /v1/providers`)
+   * Re-read the provider/model catalog (`GET /v2/models` / `GET /v2/providers`)
    * and the open session's row: lighter than `refresh()`, so a
    * `catalogUpdated` frame does not also disturb the session list or
    * interactions. The session row carries the server-resolved effort, which a
@@ -161,7 +161,7 @@ export function createSubscriptions({ client, store, backend, turns, status, not
   async function readChild(id: string): Promise<void> {
     const generation = childGeneration
     const [session, messages] = await Promise.all([
-      client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(id)}`),
+      client.request<SessionInfo>("GET", `/v2/sessions/${encodeURIComponent(id)}`),
       client.listMessages(id),
     ])
     if (generation !== childGeneration || closing) return
@@ -170,7 +170,7 @@ export function createSubscriptions({ client, store, backend, turns, status, not
     store.setChild(id, {
       busy: session.busy === true,
       agent: session.agent,
-      members: session.members ?? [],
+      members: sessionMembers(session),
       ...(activity ? { activity } : {}),
       ...(last?.error || last?.finish === "FINISH_REASON_ERROR" ? { failed: true } : {}),
     })
@@ -213,7 +213,8 @@ export function createSubscriptions({ client, store, backend, turns, status, not
     })
   }
 
-  function applyEvent(event: StreamEvent): void {
+  function applyEvent(rawEvent: StreamEvent): void {
+    const event = normalizeStreamEvent(rawEvent)
     // Live, no seq, empty `session`: the provider/model catalog changed. Not
     // a transcript or ask frame, so it never reaches the store's fold —
     // debounced here instead of `scheduleRefresh()`'s projection re-read.
@@ -272,7 +273,7 @@ export function createSubscriptions({ client, store, backend, turns, status, not
       scheduleRefresh()
       return
     }
-    const event = frame.event
+    const event = frame.event ? normalizeStreamEvent(frame.event) : undefined
     if (!event) return
     const route = askFrameRoute(event, sessionId)
     if (route === "own") applyEvent(event)
@@ -333,7 +334,7 @@ export function createSubscriptions({ client, store, backend, turns, status, not
       trackChildren()
       return
     }
-    const event = frame.event
+    const event = frame.event ? normalizeStreamEvent(frame.event) : undefined
     if (!event) return
     // Live, no seq, empty `session`: never an ask, so `globalAskRoute` would
     // ignore it; debounced with the copy that may also arrive on the open

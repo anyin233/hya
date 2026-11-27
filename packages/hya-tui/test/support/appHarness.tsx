@@ -324,13 +324,13 @@ export class FakeBackend {
     }
 
     // SSE streams
-    if (method === "GET" && pathname === "/v1/events/stream") {
+    if (method === "GET" && pathname === "/v2/events/stream") {
       return makeSseResponse((sink) => {
         this.globalStreams.add(sink)
         return () => this.globalStreams.delete(sink)
       }, init?.signal ?? undefined)
     }
-    const streamMatch = /^\/v1\/sessions\/([^/]+)\/events\/stream$/.exec(pathname)
+    const streamMatch = /^\/v2\/sessions\/([^/]+)\/events\/stream$/.exec(pathname)
     if (method === "GET" && streamMatch) {
       const id = decodeURIComponent(streamMatch[1]!)
       return makeSseResponse((sink) => {
@@ -341,8 +341,8 @@ export class FakeBackend {
       }, init?.signal ?? undefined)
     }
 
-    if (method === "GET" && pathname === "/v1/health") return jsonResponse({ ok: true })
-    if (method === "GET" && pathname === "/v1/bootstrap") {
+    if (method === "GET" && pathname === "/v2/health") return jsonResponse({ ok: true })
+    if (method === "GET" && pathname === "/v2/bootstrap") {
       return jsonResponse({
         location: { version: this.version, directory: this.directory, pid: this.pid },
         agents: this.agents,
@@ -355,7 +355,7 @@ export class FakeBackend {
     }
 
     // Projects
-    if (method === "POST" && pathname === "/v1/projects/ensure") {
+    if (method === "POST" && pathname === "/v2/projects/ensure") {
       const path = String(body?.path ?? this.directory)
       let project = this.projects.find((p) => p.roots.some((r) => path === r || path.startsWith(`${r}/`)))
       let created = false
@@ -366,18 +366,18 @@ export class FakeBackend {
       }
       return jsonResponse({ project, created })
     }
-    if (method === "GET" && pathname === "/v1/projects/resolve") {
+    if (method === "GET" && pathname === "/v2/projects/resolve") {
       const path = url.searchParams.get("path") ?? ""
       const project = this.projects.find((p) => p.roots.some((r) => path === r || path.startsWith(`${r}/`)))
       return jsonResponse({ ...(project ? { project } : {}) })
     }
-    if (method === "GET" && pathname === "/v1/projects") return jsonResponse({ projects: this.projects })
-    if (method === "POST" && pathname === "/v1/projects") {
+    if (method === "GET" && pathname === "/v2/projects") return jsonResponse({ projects: this.projects })
+    if (method === "POST" && pathname === "/v2/projects") {
       const project: ProjectInfo = { id: `prj_${this.projects.length + 1}`, name: String(body?.name ?? "project"), roots: (body?.roots as string[]) ?? [], sessionCount: 0, busy: false }
       this.projects.push(project)
       return jsonResponse(project)
     }
-    const projectMatch = /^\/v1\/projects\/([^/]+)$/.exec(pathname)
+    const projectMatch = /^\/v2\/projects\/([^/]+)$/.exec(pathname)
     if (projectMatch) {
       const id = decodeURIComponent(projectMatch[1]!)
       const index = this.projects.findIndex((p) => p.id === id)
@@ -396,13 +396,13 @@ export class FakeBackend {
     }
 
     // Sessions
-    if (method === "GET" && pathname === "/v1/sessions") {
+    if (method === "GET" && pathname === "/v2/sessions") {
       const projectId = url.searchParams.get("projectId")
       const includeArchived = url.searchParams.get("includeArchived") === "true"
       const rows = this.sessions.filter((s) => (!projectId || s.projectId === projectId) && (includeArchived || !s.archived))
       return jsonResponse({ sessions: rows })
     }
-    if (method === "POST" && pathname === "/v1/sessions") {
+    if (method === "POST" && pathname === "/v2/sessions") {
       const id = `hysec_${++this.sessionCounter}`
       const modelStr = typeof body?.model === "string" && body.model ? body.model : "fake/model"
       const [providerId, ...rest] = modelStr.split("/")
@@ -426,7 +426,7 @@ export class FakeBackend {
       return jsonResponse({ session })
     }
 
-    const sessionAction = /^\/v1\/sessions\/([^/]+)(?:\/(.*))?$/.exec(pathname)
+    const sessionAction = /^\/v2\/sessions\/([^/]+)(?:\/(.*))?$/.exec(pathname)
     if (sessionAction) {
       const id = decodeURIComponent(sessionAction[1]!)
       const tail = sessionAction[2] ?? ""
@@ -458,8 +458,8 @@ export class FakeBackend {
       if (tail === "messages" && method === "GET") return jsonResponse({ messages: this.messages.get(id) ?? [] })
       if (tail === "events" && method === "GET") return jsonResponse({ events: [], nextSeq: session.lastSeq ?? "0" })
       if (tail === "todo" && method === "GET") return jsonResponse({ items: this.todos.get(id) ?? [] })
-      if (tail === "workflow" && method === "GET") return jsonResponse(this.workflowState.get(id) ?? {})
-      if (tail === "workflow" && method === "POST") return jsonResponse({ ok: true })
+      if ((tail === "workflow" || tail === "bundles/hya%2Fworkflow/state") && method === "GET") return jsonResponse(this.workflowState.get(id) ?? {})
+      if ((tail === "workflow" || tail === "bundles/hya%2Fworkflow/command") && method === "POST") return jsonResponse({ ok: true })
       if (tail === "turns" && method === "POST") {
         session.ephemeral = false
         if (this.seed.onTurn) return jsonResponse({ turn: await this.seed.onTurn(id, body ?? {}, this) })
@@ -547,14 +547,14 @@ export class FakeBackend {
       }
       if (tail === "summarize" && method === "POST") return jsonResponse({ summaryMessage: "msg_sum" })
       if (tail === "refresh-context" && method === "POST") return jsonResponse({ pending: true })
-      if (tail === "archive" && method === "POST") {
+      if ((tail === "archive" || tail === "bundles/hya%2Fmulti-agent/archive") && method === "POST") {
         const parent = this.sessions.find((s) => s.members?.some((m) => m.child === id))
         const member = parent?.members?.find((m) => m.child === id)
         if (member) member.archived = true
         if (parent) this.emitSession(parent.id, { memberLifecycleChanged: { child: id, ...(member?.handle ? { handle: member.handle } : {}), archived: true, archiveReason: "user" } })
         return jsonResponse({ handle: member?.handle ?? id, cancelledTurn: false, descendants: [] })
       }
-      if (tail === "steer" && method === "POST") {
+      if ((tail === "steer" || tail === "bundles/hya%2Fmulti-agent/steer") && method === "POST") {
         const parent = this.sessions.find((s) => s.members?.some((m) => m.child === id))
         const member = parent?.members?.find((m) => m.child === id)
         if (member && member.archived) {
@@ -566,8 +566,8 @@ export class FakeBackend {
     }
 
     // Interactions
-    if (method === "GET" && pathname === "/v1/interactions") return jsonResponse({ interactions: this.interactions })
-    const respondMatch = /^\/v1\/interactions\/([^/]+)\/respond$/.exec(pathname)
+    if (method === "GET" && pathname === "/v2/interactions") return jsonResponse({ interactions: this.interactions })
+    const respondMatch = /^\/v2\/interactions\/([^/]+)\/respond$/.exec(pathname)
     if (method === "POST" && respondMatch) {
       const id = decodeURIComponent(respondMatch[1]!)
       const existing = this.interactions.find((i) => i.id === id)
@@ -579,19 +579,19 @@ export class FakeBackend {
     }
 
     // Catalogs & views
-    if (method === "GET" && pathname === "/v1/models") return jsonResponse({ models: this.models })
-    if (method === "GET" && pathname === "/v1/agents") return jsonResponse({ agents: this.agents })
-    if (method === "GET" && pathname === "/v1/workflows") return jsonResponse({ workflows: this.workflows })
-    if (method === "GET" && pathname === "/v1/providers") return jsonResponse({ providers: this.providers })
-    if (method === "GET" && pathname === "/v1/commands") return jsonResponse({ commands: this.commands, diagnostics: this.commandDiagnostics })
-    if (method === "GET" && pathname === "/v1/skills") return jsonResponse({ skills: this.skills, diagnostics: this.skillDiagnostics })
-    if (method === "GET" && pathname === "/v1/permission-modes") return jsonResponse({ modes: this.permissionModes })
-    if (method === "GET" && pathname === "/v1/tui-extensions") return jsonResponse({ extensions: [] })
-    if (method === "GET" && pathname === "/v1/vcs") return jsonResponse(this.vcs)
-    if (method === "GET" && pathname === "/v1/vcs/diff") return jsonResponse({ diff: this.diff })
+    if (method === "GET" && pathname === "/v2/models") return jsonResponse({ models: this.models })
+    if (method === "GET" && pathname === "/v2/agents") return jsonResponse({ agents: this.agents })
+    if (method === "GET" && (pathname === "/v2/workflows" || pathname === "/v2/bundles/hya%2Fworkflow/api/workflows")) return jsonResponse({ workflows: this.workflows })
+    if (method === "GET" && pathname === "/v2/providers") return jsonResponse({ providers: this.providers })
+    if (method === "GET" && pathname === "/v2/commands") return jsonResponse({ commands: this.commands, diagnostics: this.commandDiagnostics })
+    if (method === "GET" && pathname === "/v2/skills") return jsonResponse({ skills: this.skills, diagnostics: this.skillDiagnostics })
+    if (method === "GET" && pathname === "/v2/permission-modes") return jsonResponse({ modes: this.permissionModes })
+    if (method === "GET" && pathname === "/v2/tui-extensions") return jsonResponse({ extensions: [] })
+    if (method === "GET" && pathname === "/v2/vcs") return jsonResponse(this.vcs)
+    if (method === "GET" && pathname === "/v2/vcs/diff") return jsonResponse({ diff: this.diff })
 
     // Providers write/test
-    const authMatch = /^\/v1\/auth\/([^/]+)$/.exec(pathname)
+    const authMatch = /^\/v2\/auth\/([^/]+)$/.exec(pathname)
     if (authMatch) {
       const id = decodeURIComponent(authMatch[1]!)
       const row = this.providers.find((p) => p.id === id)
@@ -604,7 +604,7 @@ export class FakeBackend {
         return jsonResponse({})
       }
     }
-    const providerMatch = /^\/v1\/providers\/([^/]+)(?:\/(.*))?$/.exec(pathname)
+    const providerMatch = /^\/v2\/providers\/([^/]+)(?:\/(.*))?$/.exec(pathname)
     if (providerMatch) {
       const id = decodeURIComponent(providerMatch[1]!)
       const tail = providerMatch[2] ?? ""
@@ -652,20 +652,20 @@ export class FakeBackend {
     }
 
     // Bundles
-    if (method === "GET" && pathname === "/v1/bundles") return jsonResponse({ bundles: this.bundles })
-    if (method === "POST" && pathname === "/v1/bundles:refresh") return jsonResponse({ bundles: this.bundles, errors: [] })
-    if (method === "POST" && pathname === "/v1/bundles:install") {
+    if (method === "GET" && pathname === "/v2/bundles") return jsonResponse({ bundles: this.bundles })
+    if (method === "POST" && pathname === "/v2/bundles:refresh") return jsonResponse({ bundles: this.bundles, errors: [] })
+    if (method === "POST" && pathname === "/v2/bundles:install") {
       const path = String(body?.path ?? "")
       const id = path.split("/").at(-1)?.replace(/\.hyabundle$/, "") || "user/bundle"
       this.bundles.push({ id: `e2e/${id}`, version: "1.0.0", scope: body?.project ? "project" : "user", state: "active", enabled: true, removable: true })
       return jsonResponse({ refresh: { bundles: this.bundles, errors: [] } })
     }
-    if (method === "POST" && pathname === "/v1/bundles:uninstall") {
+    if (method === "POST" && pathname === "/v2/bundles:uninstall") {
       const id = String(body?.bundleId ?? "")
       this.bundles = this.bundles.filter((b) => b.id !== id)
       return jsonResponse({})
     }
-    if (method === "POST" && pathname === "/v1/bundles:set-enabled") {
+    if (method === "POST" && pathname === "/v2/bundles:set-enabled") {
       const id = String(body?.bundleId ?? "")
       const enabled = body?.enabled === true
       for (const b of this.bundles) if (b.id === id) { b.enabled = enabled; b.state = enabled ? "active" : "disabled" }
@@ -673,8 +673,8 @@ export class FakeBackend {
     }
 
     // MCP
-    if (method === "GET" && pathname === "/v1/mcp") return jsonResponse({ servers: this.mcpServers })
-    const mcpMatch = /^\/v1\/mcp\/([^/]+)\/(connect|disconnect|auth|auth\/complete)$/.exec(pathname)
+    if (method === "GET" && pathname === "/v2/mcp") return jsonResponse({ servers: this.mcpServers })
+    const mcpMatch = /^\/v2\/mcp\/([^/]+)\/(connect|disconnect|auth|auth\/complete)$/.exec(pathname)
     if (mcpMatch) {
       const name = decodeURIComponent(mcpMatch[1]!)
       const row = this.mcpServers.find((s) => s.name === name) ?? { name }
@@ -684,8 +684,8 @@ export class FakeBackend {
     }
 
     // Saved rules
-    if (method === "GET" && pathname === "/v1/permissions/rules") return jsonResponse({ rules: this.savedRules })
-    const ruleMatch = /^\/v1\/permissions\/rules\/([^/]+)$/.exec(pathname)
+    if (method === "GET" && pathname === "/v2/permissions/rules") return jsonResponse({ rules: this.savedRules })
+    const ruleMatch = /^\/v2\/permissions\/rules\/([^/]+)$/.exec(pathname)
     if (method === "DELETE" && ruleMatch) {
       const id = decodeURIComponent(ruleMatch[1]!)
       this.savedRules = this.savedRules.filter((r) => r.id !== id)
@@ -693,8 +693,8 @@ export class FakeBackend {
     }
 
     // Agent models & efforts
-    if (method === "GET" && pathname === "/v1/agent-models") return jsonResponse({ agents: this.agentModels })
-    const agentConfigMatch = /^\/v1\/agent-models\/([^/]+)\/configuration$/.exec(pathname)
+    if (method === "GET" && pathname === "/v2/agent-models") return jsonResponse({ agents: this.agentModels })
+    const agentConfigMatch = /^\/v2\/agent-models\/([^/]+)\/configuration$/.exec(pathname)
     if (method === "PUT" && agentConfigMatch) {
       const agentId = decodeURIComponent(agentConfigMatch[1]!)
       const row = this.agentModels.find((a) => a.agentId === agentId)
@@ -706,7 +706,7 @@ export class FakeBackend {
       row.source = model ? "AGENT_MODEL_SOURCE_CONFIGURED" : "AGENT_MODEL_SOURCE_DEFAULT"
       return jsonResponse(row)
     }
-    const agentModelMatch = /^\/v1\/agent-models\/([^/]+)$/.exec(pathname)
+    const agentModelMatch = /^\/v2\/agent-models\/([^/]+)$/.exec(pathname)
     if (method === "PUT" && agentModelMatch) {
       const agentId = decodeURIComponent(agentModelMatch[1]!)
       const row = this.agentModels.find((a) => a.agentId === agentId)
@@ -718,8 +718,8 @@ export class FakeBackend {
       row.source = pref ? "AGENT_MODEL_SOURCE_REMEMBERED" : "AGENT_MODEL_SOURCE_DEFAULT"
       return jsonResponse(row)
     }
-    if (method === "GET" && pathname === "/v1/model-effort-preferences") return jsonResponse({ preferences: this.modelEffortPrefs })
-    const modelEffortMatch = /^\/v1\/model-effort-preferences\/([^/]+)\/([^/]+)$/.exec(pathname)
+    if (method === "GET" && pathname === "/v2/model-effort-preferences") return jsonResponse({ preferences: this.modelEffortPrefs })
+    const modelEffortMatch = /^\/v2\/model-effort-preferences\/([^/]+)\/([^/]+)$/.exec(pathname)
     if (method === "PUT" && modelEffortMatch) {
       const providerId = decodeURIComponent(modelEffortMatch[1]!)
       const modelId = decodeURIComponent(modelEffortMatch[2]!)
@@ -735,7 +735,7 @@ export class FakeBackend {
       }
       return jsonResponse({ providerId, modelId, ...(effort ? { effort } : {}) })
     }
-    const agentEffortMatch = /^\/v1\/agent-efforts\/([^/]+)$/.exec(pathname)
+    const agentEffortMatch = /^\/v2\/agent-efforts\/([^/]+)$/.exec(pathname)
     if (method === "PUT" && agentEffortMatch) {
       const agentId = decodeURIComponent(agentEffortMatch[1]!)
       const effort = String(body?.effort ?? "")
@@ -754,13 +754,13 @@ export class FakeBackend {
     }
 
     // Files
-    if (method === "GET" && pathname === "/v1/fs/find") {
+    if (method === "GET" && pathname === "/v2/fs/find") {
       const pattern = url.searchParams.get("pattern") ?? "*"
       const limit = Number(url.searchParams.get("limit") ?? "50")
       const paths = [...this.files.keys()].filter((p) => globMatch(p, pattern)).slice(0, limit)
       return jsonResponse({ paths })
     }
-    if (method === "GET" && pathname === "/v1/fs/read") {
+    if (method === "GET" && pathname === "/v2/fs/read") {
       const path = url.searchParams.get("path") ?? ""
       const bytes = this.files.get(path)
       if (!bytes) return errorResponse(404, "not_found", `file not found: ${path}`)

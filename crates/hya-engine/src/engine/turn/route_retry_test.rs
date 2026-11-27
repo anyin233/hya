@@ -4,10 +4,10 @@ use crate::workflow::{
 };
 use crate::{CreateSession, EventBus};
 use hya_proto::{MemberId, WorkflowRunId};
-use hya_tool::{WorkflowMemberRole, WorkflowRouteFailureClass};
 use hya_provider::{
     Capabilities, FakeProvider, FakeStep, Provider, ProviderRouter, ReasoningEffort,
 };
+use hya_tool::{WorkflowMemberRole, WorkflowRouteFailureClass};
 use std::sync::Mutex;
 
 #[derive(Default)]
@@ -202,10 +202,12 @@ async fn check_interrupted_route(
             .collect();
         assert!(matches!(
             &mapped[..],
-            [hya_tool::extension::ExtensionEvent::WorkflowStageRouteOutcome {
-                failure_class: WorkflowRouteFailureClass::Cancelled,
-                ..
-            }]
+            [
+                hya_tool::extension::ExtensionEvent::WorkflowStageRouteOutcome {
+                    failure_class: WorkflowRouteFailureClass::Cancelled,
+                    ..
+                }
+            ]
         ));
         return Ok(());
     }

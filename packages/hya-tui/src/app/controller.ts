@@ -28,13 +28,13 @@
  * `questionRequested` / `interactionResolved` frames of the open session and
  * of every subagent below it update the pending list at once (state/store.ts
  * `applyAsk`; state/prompts.ts `askFrameRoute`). Frames sent before the
- * subscription are not replayed, so `GET /v1/interactions` is read once
+ * subscription are not replayed, so `GET /v2/interactions` is read once
  * after every (re)subscribe and after a `resync`, besides the full catalog
  * refreshes (start, /refresh). `answer()` responds to a prompt
  * (app/prompts.ts).
  *
  * Asks of other sessions: from start, the global stream
- * (`GET /v1/events/stream`, subscribed past every durable seq so only
+ * (`GET /v2/events/stream`, subscribed past every durable seq so only
  * live frames arrive) feeds the ask and resolve frames of every session
  * into the pending list at once (state/prompts.ts `globalAskRoute`); an ask
  * of a session outside the open tree also sets a status notice naming the
@@ -296,7 +296,7 @@ export function createController({ client, store, directory, remote: startedRemo
   })
   const keeper = createSessionKeeper({
     client: {
-      getSession: (id) => client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(id)}`),
+      getSession: (id) => client.request<SessionInfo>("GET", `/v2/sessions/${encodeURIComponent(id)}`),
       archiveSession: async (id) => { await client.setArchived(id, true) },
     },
   })
@@ -371,7 +371,7 @@ export function createController({ client, store, directory, remote: startedRemo
   async function openSession(sessionId: string): Promise<void> {
     const listed = store.state.sessions.find((row) => row.id === sessionId)
     // A fresh read gives the current `lastSeq`, so the stream gap-fill stays small.
-    const session = await client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(sessionId)}`)
+    const session = await client.request<SessionInfo>("GET", `/v2/sessions/${encodeURIComponent(sessionId)}`)
       .catch((error: unknown) => {
         if (listed) return listed
         throw error
@@ -683,7 +683,7 @@ export function createController({ client, store, directory, remote: startedRemo
       case "project.set_roots": await client.updateProject(command.id, { roots: [...command.roots] }); await refreshProjects(); return undefined
       case "project.delete": await client.deleteProject(command.id); await refreshProjects(); return undefined
       case "fs.complete": {
-        // A root path being typed: the backend filesystem's first match (`/v1/fs/find`).
+        // A root path being typed: the backend filesystem's first match (`/v2/fs/find`).
         const candidates = await client.findFiles(`${command.input.replace(/\/+$/, "")}*`, 1)
         return { candidates, ...(candidates[0] ? { completion: candidates[0] } : {}) }
       }
@@ -715,7 +715,7 @@ export function createController({ client, store, directory, remote: startedRemo
   async function reviewPending(): Promise<void> {
     const pending = store.state.interactions.find((item) => item.session && !treeSessionIds(store.state.selected?.id ?? "", store.state.sessions, childSessionIds(store.state.members, store.state.messages)).has(item.session))
     if (!pending?.session) { status("No pending request in another session"); return }
-    const first = await client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(pending.session)}`)
+    const first = await client.request<SessionInfo>("GET", `/v2/sessions/${encodeURIComponent(pending.session)}`)
     const root = await keeper.rootOf(first)
     await resumer.resume(root)
   }

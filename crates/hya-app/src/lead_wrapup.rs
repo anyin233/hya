@@ -9,7 +9,9 @@
 
 use anyhow::Context as _;
 use hya_engine::{AgentSpec, CoreError, ResidentSupervisor, SessionEngine};
-use hya_proto::{FinishReason, MessageId, PartProjection, Projection, Role, RosterStatus, SessionId, scope};
+use hya_proto::{
+    FinishReason, MessageId, PartProjection, Projection, Role, RosterStatus, SessionId, scope,
+};
 use hya_tool::deadline::{RunDeadline, Stage};
 use hya_tool::extension::{RosterEntry, members_projection, team_projection, workflow_projection};
 use tokio_util::sync::CancellationToken;
@@ -928,8 +930,7 @@ mod tests {
             }))
             .unwrap(),
         );
-        ma3.roster
-            .insert(stage_worker.handle.clone(), stage_worker);
+        ma3.roster.insert(stage_worker.handle.clone(), stage_worker);
         p3.extensions.insert(
             hya_tool::extension::BUNDLE_MULTI_AGENT.into(),
             serde_json::to_value(&ma3).unwrap(),

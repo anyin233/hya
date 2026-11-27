@@ -297,7 +297,7 @@ describe("sessions picker, live session push, projects sidebar & view, model & e
       seed: {
         projects: [],
         onRequest: (method, path) => {
-          if (method === "GET" && path === "/v1/projects") return errorResponse(503, "unavailable", "remote offline")
+          if (method === "GET" && path === "/v2/projects") return errorResponse(503, "unavailable", "remote offline")
           return undefined
         },
       },
