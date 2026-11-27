@@ -1024,5 +1024,18 @@ fn invoke_register_v2(
             detail: error_out.unwrap_or_else(|| format!("register exited with status {code}")),
         });
     }
+    if let Some(reserved) = regs
+        .tools
+        .iter()
+        .find(|tool| hya_tool::is_reserved_kernel_tool(tool.name()))
+    {
+        return Err(AbiError::RegistrationFailed {
+            bundle: identity.to_string(),
+            detail: format!(
+                "tool `{}` is permanently kernel-exclusive and cannot be registered by a bundle",
+                reserved.name()
+            ),
+        });
+    }
     Ok(wrap_registrations_with_runtime(regs, checked.with_runtime))
 }

@@ -159,6 +159,7 @@ fn is_allowed_top_level_key(key: &str) -> bool {
             | "attachments"
             | "command"
             | "status"
+            | "still_running"
             | "timed_out"
             | "timeout"
     )

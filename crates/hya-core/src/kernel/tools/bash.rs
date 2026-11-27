@@ -1,3 +1,10 @@
+//! Standard `bash` tool for `hya-core`.
+//!
+//! Executes shell commands in isolated process groups with
+//! [`hya_tool::PermissionPlane`] (`Action::Bash`) authorization, run-budget
+//! awareness, yielding for long-running commands, and coding output caps.
+//! Per ADR-0026, `bash` is exempt from `ProjectScope` path boundaries.
+
 use std::ffi::OsString;
 use std::io::{self, SeekFrom};
 use std::os::unix::ffi::OsStringExt as _;
@@ -8,13 +15,18 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
+use hya_tool::path::display_path;
 use hya_tool::process_group::{BudgetGroup, GroupOutcome};
-use hya_tool::tool::obj_schema;
-use hya_tool::{Tool, ToolCtx, ToolError, deadline};
+use hya_tool::{
+    Action, Resource, Tool, ToolCtx, ToolError, ToolResultPolicy, cap_tool_output_with_policy,
+    deadline,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
 use tokio::process::Command;
+
+use super::{check_cancel, closed_obj_schema, workdir_normalized};
 
 /// Seconds a call waits for its command when it names no `timeout`.
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
@@ -43,9 +55,13 @@ static SHELL: LazyLock<PathBuf> = LazyLock::new(|| {
 pub(super) struct Bash;
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Args {
     command: String,
+    #[serde(default)]
     timeout: Option<u64>,
+    #[serde(default)]
+    cwd: Option<String>,
 }
 
 #[async_trait]
@@ -55,24 +71,46 @@ impl Tool for Bash {
     }
 
     fn schema(&self) -> ToolSchema {
-        obj_schema(
+        closed_obj_schema(
             "bash",
             "Run a shell command in the working directory with `bash -c` if Bash is on PATH, otherwise with `sh -c`. Returns combined stdout and stderr followed by one status line: `[exit code: N]`, `[still running: …]`, `[stopped: …]`, or `[not started: …]`. For output over 30,000 bytes, `output` shows the first 10,000 and last 20,000 bytes and names the file that holds all of it. `timeout` is how long this call waits. With a run time budget, one call waits at most a tenth of the budget. A command still running then is not stopped: the call returns what it has printed so far, and the command keeps running in the background, with its further output going to a file named in the result. Yielded commands are stopped when the run ends. Without a budget, a job started with `&` can outlive its shell; redirect its output to a file to keep it. If the end-of-budget cap ends the wait, Bash stops the command.",
             json!({
                 "command": {"type": "string", "description": "Shell command"},
                 "timeout": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_SECS, "description": "Seconds this call waits for the command. Default 300. With a run time budget, one call waits at most a tenth of the budget. A command still running then keeps running in the background, unless the end-of-budget cap ends the wait."},
+                "cwd": {"type": "string", "description": "Optional working directory relative to the session workdir or absolute"},
             }),
             &["command"],
         )
     }
 
+    fn result_policy(&self) -> ToolResultPolicy {
+        ToolResultPolicy::Coding
+    }
+
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        let Args { command, timeout } = super::args(input)?;
+        check_cancel(ctx)?;
+        let Args {
+            command,
+            timeout,
+            cwd: requested_cwd,
+        } = super::args(input)?;
         if timeout.is_some_and(|seconds| !(1..=MAX_TIMEOUT_SECS).contains(&seconds)) {
             return Err(ToolError::Input(format!(
                 "timeout must be between 1 and {MAX_TIMEOUT_SECS} seconds"
             )));
         }
+
+        // Per ADR-0026, Bash is exempt from ProjectScope path boundaries;
+        // authorization runs through `Action::Bash` with the full command.
+        ctx.permission
+            .assert(Action::Bash, Resource::Command(command.clone()))
+            .await?;
+        check_cancel(ctx)?;
+
+        let cwd = match requested_cwd.as_deref() {
+            Some(path) => super::resolve(&ctx.workdir, path),
+            None => workdir_normalized(&ctx.workdir),
+        };
         let requested = Duration::from_secs(timeout.unwrap_or(DEFAULT_TIMEOUT_SECS));
         // A private directory per call: a fixed name in a shared temp root could be pre-created by
         // another user. It is created before the budget check so that check covers everything after it.
@@ -110,11 +148,20 @@ impl Tool for Bash {
         if limit.is_zero() {
             // A command started now could still change files after the budget ended.
             let note = "The command was not started: the run's time budget has no time left.";
-            return Ok(json!({
-                "exit_code": null,
-                "output": with_status(String::new(), &format!("not started: {note}")),
-                "timed_out": note,
-            }));
+            return Ok(cap_tool_output_with_policy(
+                json!({
+                    "title": command,
+                    "exit_code": null,
+                    "output": with_status(String::new(), &format!("not started: {note}")),
+                    "timed_out": note,
+                    "metadata": {
+                        "timedOut": true,
+                        "cwd": display_path(&cwd),
+                        "truncated": false,
+                    },
+                }),
+                ToolResultPolicy::Coding,
+            ));
         }
         // Creating the timer here starts the clock before spawning the shell.
         let timer = tokio::time::sleep(limit);
@@ -122,7 +169,7 @@ impl Tool for Bash {
         process
             .arg("-c")
             .arg(&command)
-            .current_dir(&ctx.workdir)
+            .current_dir(&cwd)
             .env("PYTHONUNBUFFERED", "1")
             .stdin(Stdio::null())
             .stdout(file.try_clone()?)
@@ -133,27 +180,54 @@ impl Tool for Bash {
         let status =
             BudgetGroup::run(process, deadline, &cancel, timer, capped, exit.clone()).await?;
         let printed = std::fs::metadata(&path)?.len();
+        let truncated = printed > MAX_OUTPUT_BYTES;
         let output = read_output(&path, printed).await?;
-        if printed > MAX_OUTPUT_BYTES {
+        if truncated {
             job.dir = None;
         }
         let pgid = match status {
             GroupOutcome::Finished(status) => {
                 let code = json!(exit_code(status));
-                return Ok(json!({
-                    "exit_code": code,
-                    "output": with_status(output, &format!("exit code: {code}")),
-                }));
+                let mut metadata = json!({
+                    "exit": code,
+                    "cwd": display_path(&cwd),
+                    "truncated": truncated,
+                });
+                if truncated {
+                    metadata["outputPath"] = json!(display_path(&path));
+                }
+                return Ok(cap_tool_output_with_policy(
+                    json!({
+                        "title": command,
+                        "exit_code": code,
+                        "output": with_status(output, &format!("exit code: {code}")),
+                        "metadata": metadata,
+                    }),
+                    ToolResultPolicy::Coding,
+                ));
             }
             GroupOutcome::Stopped => {
                 let note = format!(
                     "The command was still running after {limit:?} (the run's time budget capped the timeout). Bash killed its process group."
                 );
-                return Ok(json!({
-                    "exit_code": null,
-                    "output": with_status(output, &format!("stopped: {note}")),
-                    "timed_out": note,
-                }));
+                let mut metadata = json!({
+                    "timedOut": true,
+                    "cwd": display_path(&cwd),
+                    "truncated": truncated,
+                });
+                if truncated {
+                    metadata["outputPath"] = json!(display_path(&path));
+                }
+                return Ok(cap_tool_output_with_policy(
+                    json!({
+                        "title": command,
+                        "exit_code": null,
+                        "output": with_status(output, &format!("stopped: {note}")),
+                        "timed_out": note,
+                        "metadata": metadata,
+                    }),
+                    ToolResultPolicy::Coding,
+                ));
             }
             GroupOutcome::Yielded(pgid) => pgid,
         };
@@ -166,15 +240,27 @@ impl Tool for Bash {
         } else {
             "the default; pass `timeout` in seconds to request a longer wait"
         };
-        let (out, exit) = (quoted(&path), quoted(&exit));
+        let (out, exit_quoted) = (quoted(&path), quoted(&exit));
         let note = format!(
-            "This call waited {limit:?} ({reason}). The command was still running then and was left running in the background as process group {pgid}; it was not stopped. All its output, what is shown above and whatever it prints from now on, goes to {out}. Its exit code is written to {exit} when it finishes or the run stops it. To follow it, run for example `tail -n 20 {out}` and `cat {exit}`. To wait again, sleep briefly in another call before reading the output. To stop it if it is no longer needed, run `kill -- -{pgid}`."
+            "This call waited {limit:?} ({reason}). The command was still running then and was left running in the background as process group {pgid}; it was not stopped. All its output, what is shown above and whatever it prints from now on, goes to {out}. Its exit code is written to {exit_quoted} when it finishes or the run stops it. To follow it, run for example `tail -n 20 {out}` and `cat {exit_quoted}`. To wait again, sleep briefly in another call before reading the output. To stop it if it is no longer needed, run `kill -- -{pgid}`."
         );
-        Ok(json!({
-            "exit_code": null,
-            "output": with_status(output, &format!("still running: {note}")),
-            "still_running": note,
-        }))
+        Ok(cap_tool_output_with_policy(
+            json!({
+                "title": command,
+                "exit_code": null,
+                "output": with_status(output, &format!("still running: {note}")),
+                "still_running": note,
+                "metadata": {
+                    "stillRunning": true,
+                    "pgid": pgid,
+                    "outputPath": display_path(&path),
+                    "exitPath": display_path(&exit),
+                    "cwd": display_path(&cwd),
+                    "truncated": truncated,
+                },
+            }),
+            ToolResultPolicy::Coding,
+        ))
     }
 }
 
