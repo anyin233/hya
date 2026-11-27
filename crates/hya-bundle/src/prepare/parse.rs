@@ -61,12 +61,24 @@ pub(super) fn parse_source(source: BundleSource) -> Result<ParsedSource, BundleE
         }
     };
 
+    if let Some(version) = manifest.schema_version
+        && version != 1
+        && version != 2
+    {
+        return Err(BundleError::InvalidManifest {
+            source_name: name,
+            detail: format!("unsupported schema_version `{version}`; expected 1 or 2"),
+        });
+    }
+
     resolve_version_reference(&mut manifest, &name)?;
 
     let markdown_prompt = markdown_prompt.filter(|body| !body.is_empty());
-    if markdown_prompt.is_some()
-        && (manifest.agents.len() != 1 || manifest.agents[0].prompt.is_some())
-    {
+    let single_inline_without_prompt = matches!(
+        manifest.agents.as_slice(),
+        [agent] if agent.path.is_none() && agent.prompt.is_none()
+    );
+    if markdown_prompt.is_some() && !single_inline_without_prompt {
         return Err(BundleError::InvalidManifest {
             source_name: name,
             detail: "a Markdown body requires exactly one agent without an explicit prompt".into(),

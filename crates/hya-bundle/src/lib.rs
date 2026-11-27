@@ -28,8 +28,9 @@ pub use model::{
     ChannelScope, ChannelTemplateKind, HandoffPolicy, ModelPolicy, PreparedAgent, PreparedApi,
     PreparedBundleApis, PreparedBundleIndex, PreparedBundleKind, PreparedBundlePermissionModes,
     PreparedBundleProcess, PreparedBundleSchemas, PreparedCatalog, PreparedChannelParticipant,
-    PreparedChannelTemplate, PreparedCheck, PreparedPermissionMode, PreparedProcessExtension,
-    PreparedProcessKind, PreparedResource, PreparedSchema, PreparedTuiExtension, PreparedWorkflow,
+    PreparedChannelTemplate, PreparedCheck, PreparedJsRuntimeMode, PreparedNativeCapability,
+    PreparedPermissionMode, PreparedProcessExtension, PreparedProcessKind, PreparedResource,
+    PreparedRuntime, PreparedRuntimeKind, PreparedSchema, PreparedTuiExtension, PreparedWorkflow,
     ResourceView,
 };
 pub use package::{

@@ -4,12 +4,20 @@ use hya_proto::AgentName;
 
 use super::decode::{digest_bytes, resource_order, set_bundle_digest};
 use super::extensions::validate_hook_local_id;
-use super::parse::{normalize_source_path, read_text_reference};
+use super::parse::{normalize_source_path, read_text_reference, split_markdown};
 use crate::error::BundleError;
-use crate::model::{Bundle, PreparedAgent, PreparedResource};
-use crate::source::{
-    SourceAgent, SourceExtensions, SourceMcpServer, SourceResource, SourceResources,
+use crate::model::{
+    AgentRole, Bundle, PreparedAgent, PreparedJsRuntimeMode, PreparedNativeCapability,
+    PreparedProcessExtension, PreparedResource, PreparedRuntime, PreparedRuntimeKind,
 };
+use crate::source::{
+    SourceAgent, SourceAgentEntry, SourceAgentFile, SourceExtensions, SourceHookCommand,
+    SourceHookFailureMode, SourceHookHandler, SourceHooksDescriptor, SourceMcpServer,
+    SourceResource, SourceResources, SourceToolDescriptor, SourceToolDescriptorAlias,
+    SourceToolDescriptorCollection,
+};
+
+const MAX_COMMAND_BYTES: usize = 256 * 1024;
 
 pub(super) fn resolve_catalog_references(bundles: &mut [Bundle]) -> Result<(), BundleError> {
     for bundle in bundles.iter_mut() {
@@ -20,6 +28,7 @@ pub(super) fn resolve_catalog_references(bundles: &mut [Bundle]) -> Result<(), B
             .tools()
             .iter()
             .chain(bundle.skills())
+            .chain(bundle.commands())
             .chain(bundle.mcp())
             .chain(bundle.hooks())
             .chain(bundle.extensions())
@@ -40,6 +49,7 @@ pub(super) fn resolve_catalog_references(bundles: &mut [Bundle]) -> Result<(), B
             .tools()
             .iter()
             .chain(bundle.skills())
+            .chain(bundle.commands())
             .chain(bundle.mcp())
             .chain(bundle.hooks())
             .chain(bundle.extensions())
@@ -172,28 +182,46 @@ fn resolve_resource_reference(
     })
 }
 
-type PreparedResourceSets = (
-    Vec<PreparedResource>,
-    Vec<PreparedResource>,
-    Vec<PreparedResource>,
-    Vec<PreparedResource>,
-    Vec<PreparedResource>,
-);
+pub(super) struct PreparedResourceSets {
+    pub tools: Vec<PreparedResource>,
+    pub skills: Vec<PreparedResource>,
+    pub commands: Vec<PreparedResource>,
+    pub mcp: Vec<PreparedResource>,
+    pub hooks: Vec<PreparedResource>,
+    pub extensions: Vec<PreparedResource>,
+}
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn prepare_resource_sets(
     bundle_id: &str,
     files: &BTreeMap<String, Vec<u8>>,
     resources: SourceResources,
     extensions: SourceExtensions,
+    assets: Vec<SourceResource>,
+    runtime: Option<&PreparedRuntime>,
+    process: Option<&PreparedProcessExtension>,
+    runtime_js_entry: Option<SourceResource>,
+    runtime_native_library: Option<SourceResource>,
 ) -> Result<PreparedResourceSets, BundleError> {
-    let tools = prepare_resources(bundle_id, "tool", files, resources.tools)?;
+    let tools = prepare_tool_resources(bundle_id, files, resources.tools)?;
     let skills = prepare_resources(bundle_id, "skill", files, resources.skills)?;
+    let commands = prepare_command_resources(bundle_id, files, resources.commands)?;
     let mcp = prepare_mcp_resources(bundle_id, files, resources.mcp)?;
-    let hooks = prepare_resources(bundle_id, "hook", files, resources.hooks)?;
-    let process_backed = extensions.process.is_some();
+    let hooks = prepare_hook_resources(bundle_id, files, resources.hooks)?;
+    let process_backed = process.is_some();
+    let managed_js = runtime.is_some_and(|rt| {
+        rt.kind == PreparedRuntimeKind::Js && rt.mode == Some(PreparedJsRuntimeMode::Managed)
+    });
+    let native_runtime = runtime.is_some_and(|rt| rt.kind == PreparedRuntimeKind::Native);
+    let native_hooks_declared = runtime.is_some_and(|rt| {
+        rt.kind == PreparedRuntimeKind::Native
+            && rt.capabilities.contains(&PreparedNativeCapability::Hooks)
+    });
     for hook in &hooks {
         validate_hook_local_id(bundle_id, &hook.local_id)?;
         if !process_backed
+            && !managed_js
+            && !native_hooks_declared
             && !matches!(
                 hook.local_id.as_str(),
                 "event" | "tool.execute.before" | "tool.execute.after"
@@ -206,12 +234,33 @@ pub(super) fn prepare_resource_sets(
         }
     }
     let mut executable_extensions = extensions.js;
+    let mut support_files = extensions.files;
+    support_files.extend(assets);
+    if let Some(mut entry) = runtime_js_entry {
+        let already_listed = executable_extensions
+            .iter()
+            .chain(&support_files)
+            .any(|res| normalize_source_path(bundle_id, &res.path).as_deref() == Ok(&entry.path));
+        if !already_listed {
+            let id_taken = executable_extensions
+                .iter()
+                .chain(&support_files)
+                .any(|res| res.id == entry.id || res.aliases.contains(&entry.id));
+            if id_taken {
+                entry.id = "runtime-entry".to_string();
+            }
+            executable_extensions.push(entry);
+        }
+    }
     let native_binaries = prepare_binary_resources(bundle_id, files, extensions.rust, "extension")?;
-    let native_libraries =
-        prepare_binary_resources(bundle_id, files, extensions.libraries, "library")?;
-    let library_backed = !native_libraries.is_empty();
+    let mut library_sources = extensions.libraries;
+    if let Some(lib) = runtime_native_library {
+        library_sources.push(lib);
+    }
+    let native_libraries = prepare_binary_resources(bundle_id, files, library_sources, "library")?;
+    let library_backed = !native_libraries.is_empty() || native_runtime;
     if process_backed {
-        executable_extensions.extend(extensions.files);
+        executable_extensions.extend(support_files);
         let mut extensions =
             prepare_resources(bundle_id, "extension", files, executable_extensions)?;
         extensions.extend(native_binaries);
@@ -228,9 +277,15 @@ pub(super) fn prepare_resource_sets(
                 }
             }
         }
-        return Ok((tools, skills, mcp, hooks, extensions));
+        return Ok(PreparedResourceSets {
+            tools,
+            skills,
+            commands,
+            mcp,
+            hooks,
+            extensions,
+        });
     }
-    let support_files = extensions.files;
     let mut extensions = prepare_resources(bundle_id, "extension", files, executable_extensions)?;
     let extension_path_counts = extensions
         .iter()
@@ -243,12 +298,15 @@ pub(super) fn prepare_resource_sets(
         .chain(&hooks)
         .map(|resource| resource.source_path.as_str())
         .collect::<BTreeSet<_>>();
+    let runtime_entry_path = runtime.and_then(|rt| rt.entry.as_deref());
     for resource in tools.iter().chain(&hooks) {
-        if library_backed
-            && tools
-                .iter()
-                .any(|tool| tool.stable_id == resource.stable_id)
-        {
+        let is_tool = tools
+            .iter()
+            .any(|tool| tool.stable_id == resource.stable_id);
+        if library_backed && (is_tool || native_hooks_declared) {
+            continue;
+        }
+        if managed_js && is_descriptor_path(&resource.source_path) {
             continue;
         }
         match extension_path_counts
@@ -272,6 +330,9 @@ pub(super) fn prepare_resource_sets(
         }
     }
     for extension in &extensions {
+        if runtime_entry_path == Some(extension.source_path.as_str()) {
+            continue;
+        }
         if !selected_extension_paths.contains(extension.source_path.as_str()) {
             return Err(BundleError::UnsupportedBundleFeature {
                 bundle_id: bundle_id.to_string(),
@@ -305,12 +366,397 @@ pub(super) fn prepare_resource_sets(
             }
         }
     }
-    Ok((tools, skills, mcp, hooks, extensions))
+    Ok(PreparedResourceSets {
+        tools,
+        skills,
+        commands,
+        mcp,
+        hooks,
+        extensions,
+    })
+}
+
+fn is_descriptor_path(path: &str) -> bool {
+    [".json", ".yaml", ".yml"]
+        .iter()
+        .any(|suffix| path.ends_with(suffix))
+}
+
+fn parse_descriptor_value(
+    bundle_id: &str,
+    path: &str,
+    content: &str,
+    kind_label: &str,
+) -> Result<serde_json::Value, BundleError> {
+    if path.ends_with(".json") {
+        serde_json::from_str(content)
+    } else {
+        serde_norway::from_str(content).map_err(|error| {
+            serde_json::Error::io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                error.to_string(),
+            ))
+        })
+    }
+    .map_err(|error| BundleError::InvalidManifest {
+        source_name: bundle_id.to_string(),
+        detail: format!("{kind_label} descriptor `{path}` failed to parse: {error}"),
+    })
+}
+
+fn prepare_tool_resources(
+    bundle_id: &str,
+    files: &BTreeMap<String, Vec<u8>>,
+    resources: Vec<SourceResource>,
+) -> Result<Vec<PreparedResource>, BundleError> {
+    let prepared = prepare_resources(bundle_id, "tool", files, resources)?;
+    for resource in &prepared {
+        if !is_descriptor_path(&resource.source_path) {
+            continue;
+        }
+        let value =
+            parse_descriptor_value(bundle_id, &resource.source_path, &resource.content, "tool")?;
+        let Some(object) = value.as_object() else {
+            return Err(BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!(
+                    "tool descriptor `{}` must be a JSON/YAML object",
+                    resource.source_path
+                ),
+            });
+        };
+        // Legacy `{}` placeholder used by v1 process/native declarations.
+        if object.is_empty() {
+            continue;
+        }
+        if object.contains_key("tools") {
+            let collection: SourceToolDescriptorCollection = serde_json::from_value(value)
+                .map_err(|error| BundleError::InvalidManifest {
+                    source_name: bundle_id.to_string(),
+                    detail: format!(
+                        "tool descriptor `{}` is invalid: {error}",
+                        resource.source_path
+                    ),
+                })?;
+            if let Some(version) = collection.schema_version
+                && version != 1
+            {
+                return Err(BundleError::InvalidManifest {
+                    source_name: bundle_id.to_string(),
+                    detail: format!(
+                        "tool descriptor `{}` has unsupported schema_version `{version}`",
+                        resource.source_path
+                    ),
+                });
+            }
+            if collection.tools.is_empty() {
+                return Err(BundleError::InvalidManifest {
+                    source_name: bundle_id.to_string(),
+                    detail: format!(
+                        "tool descriptor `{}` must declare at least one tool",
+                        resource.source_path
+                    ),
+                });
+            }
+            let mut matched = false;
+            for tool in &collection.tools {
+                validate_tool_descriptor(bundle_id, &resource.source_path, tool)?;
+                if tool.name == resource.local_id {
+                    matched = true;
+                }
+            }
+            if !matched {
+                return Err(BundleError::InvalidManifest {
+                    source_name: bundle_id.to_string(),
+                    detail: format!(
+                        "tool descriptor `{}` does not contain an entry named `{}`",
+                        resource.source_path, resource.local_id
+                    ),
+                });
+            }
+        } else {
+            let descriptor: SourceToolDescriptor =
+                serde_json::from_value(value).map_err(|error| BundleError::InvalidManifest {
+                    source_name: bundle_id.to_string(),
+                    detail: format!(
+                        "tool descriptor `{}` is invalid: {error}",
+                        resource.source_path
+                    ),
+                })?;
+            validate_tool_descriptor(bundle_id, &resource.source_path, &descriptor)?;
+            if descriptor.name != resource.local_id {
+                return Err(BundleError::InvalidManifest {
+                    source_name: bundle_id.to_string(),
+                    detail: format!(
+                        "tool descriptor `{}` declares name `{}` but manifest resource id is `{}`",
+                        resource.source_path, descriptor.name, resource.local_id
+                    ),
+                });
+            }
+        }
+    }
+    Ok(prepared)
+}
+
+fn validate_tool_descriptor(
+    bundle_id: &str,
+    path: &str,
+    descriptor: &SourceToolDescriptor,
+) -> Result<(), BundleError> {
+    let invalid = |detail: String| BundleError::InvalidManifest {
+        source_name: bundle_id.to_string(),
+        detail: format!("tool descriptor `{path}`: {detail}"),
+    };
+    if let Some(version) = descriptor.schema_version
+        && version != 1
+    {
+        return Err(invalid(format!("unsupported schema_version `{version}`")));
+    }
+    if descriptor.name.trim().is_empty() {
+        return Err(invalid("`name` must not be empty".to_string()));
+    }
+    if descriptor.description.trim().is_empty() {
+        return Err(invalid("`description` must not be empty".to_string()));
+    }
+    for alias in &descriptor.aliases {
+        match alias {
+            SourceToolDescriptorAlias::Name(name) => {
+                if name.trim().is_empty() {
+                    return Err(invalid("alias name must not be empty".to_string()));
+                }
+            }
+            SourceToolDescriptorAlias::Detailed { name, visibility } => {
+                if name.trim().is_empty() {
+                    return Err(invalid("alias name must not be empty".to_string()));
+                }
+                if let Some(vis) = visibility
+                    && !matches!(vis.as_str(), "public" | "hidden")
+                {
+                    return Err(invalid(format!(
+                        "alias `{name}` has invalid visibility `{vis}`; expected `public` or `hidden`"
+                    )));
+                }
+            }
+        }
+    }
+    if let Some(parameters) = &descriptor.parameters
+        && parameters.get("type").and_then(serde_json::Value::as_str) != Some("object")
+    {
+        return Err(invalid(
+            "`parameters` must be a JSON Schema object with `\"type\": \"object\"`".to_string(),
+        ));
+    }
+    if let Some(entrypoint) = &descriptor.entrypoint
+        && let Some(js) = &entrypoint.js
+    {
+        let module_path = js.split('#').next().unwrap_or("");
+        if module_path.is_empty() || normalize_source_path(bundle_id, module_path).is_err() {
+            return Err(invalid(format!(
+                "entrypoint.js `{js}` must begin with a valid relative path"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn prepare_hook_resources(
+    bundle_id: &str,
+    files: &BTreeMap<String, Vec<u8>>,
+    resources: Vec<SourceResource>,
+) -> Result<Vec<PreparedResource>, BundleError> {
+    let prepared = prepare_resources(bundle_id, "hook", files, resources)?;
+    for resource in &prepared {
+        if !is_descriptor_path(&resource.source_path) {
+            continue;
+        }
+        let value =
+            parse_descriptor_value(bundle_id, &resource.source_path, &resource.content, "hook")?;
+        let Some(object) = value.as_object() else {
+            return Err(BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!(
+                    "hook descriptor `{}` must be a JSON/YAML object",
+                    resource.source_path
+                ),
+            });
+        };
+        // Legacy `{}` placeholder used by v1 process declarations.
+        if object.is_empty() {
+            continue;
+        }
+        let descriptor: SourceHooksDescriptor =
+            serde_json::from_value(value).map_err(|error| BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!(
+                    "hook descriptor `{}` is invalid: {error}",
+                    resource.source_path
+                ),
+            })?;
+        let invalid = |detail: String| BundleError::InvalidManifest {
+            source_name: bundle_id.to_string(),
+            detail: format!("hook descriptor `{}`: {detail}", resource.source_path),
+        };
+        if let Some(version) = descriptor.schema_version
+            && version != 1
+        {
+            return Err(invalid(format!("unsupported schema_version `{version}`")));
+        }
+        if descriptor.hooks.is_empty() {
+            return Err(invalid(
+                "`hooks` must contain at least one entry".to_string(),
+            ));
+        }
+        let mut matched_event = false;
+        for entry in &descriptor.hooks {
+            validate_hook_local_id(bundle_id, &entry.event)?;
+            if entry.event == resource.local_id {
+                matched_event = true;
+            }
+            if let Some(matcher) = &entry.matcher
+                && matcher.trim().is_empty()
+            {
+                return Err(invalid("`matcher` must not be blank".to_string()));
+            }
+            if entry.event == "tool.execute.before"
+                && entry.failure_mode == Some(SourceHookFailureMode::FailOpen)
+            {
+                return Err(invalid(
+                    "`tool.execute.before` hooks must be fail_closed".to_string(),
+                ));
+            }
+            if let Some(timeout) = entry.timeout_ms
+                && !(1..=3_600_000).contains(&timeout)
+            {
+                return Err(invalid(format!(
+                    "timeout_ms must be 1..=3600000 (got {timeout})"
+                )));
+            }
+            match &entry.handler {
+                SourceHookHandler::Js { target } => {
+                    let module_path = target.split('#').next().unwrap_or("");
+                    if target.trim().is_empty()
+                        || module_path.is_empty()
+                        || normalize_source_path(bundle_id, module_path).is_err()
+                    {
+                        return Err(invalid(format!(
+                            "js handler target `{target}` must begin with a valid relative path"
+                        )));
+                    }
+                }
+                SourceHookHandler::Rpc { method } => {
+                    if method.trim().is_empty() {
+                        return Err(invalid(
+                            "rpc handler `method` must not be empty".to_string(),
+                        ));
+                    }
+                }
+                SourceHookHandler::Command { command } => match command {
+                    SourceHookCommand::Shell(cmd) if cmd.trim().is_empty() => {
+                        return Err(invalid(
+                            "command handler `command` must not be empty".to_string(),
+                        ));
+                    }
+                    SourceHookCommand::Argv(argv)
+                        if argv.is_empty() || argv.iter().any(|arg| arg.trim().is_empty()) =>
+                    {
+                        return Err(invalid(
+                            "command handler `command` argv must be non-empty without blank entries"
+                                .to_string(),
+                        ));
+                    }
+                    _ => {}
+                },
+                SourceHookHandler::Native { target } => {
+                    if target.trim().is_empty() {
+                        return Err(invalid(
+                            "native handler `target` must not be empty".to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+        if !matched_event {
+            return Err(invalid(format!(
+                "does not contain a hook entry for declared event `{}`",
+                resource.local_id
+            )));
+        }
+    }
+    Ok(prepared)
+}
+
+fn prepare_command_resources(
+    bundle_id: &str,
+    files: &BTreeMap<String, Vec<u8>>,
+    resources: Vec<SourceResource>,
+) -> Result<Vec<PreparedResource>, BundleError> {
+    let prepared = prepare_resources(bundle_id, "command", files, resources)?;
+    for resource in &prepared {
+        if resource.content.trim().is_empty() {
+            return Err(BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!("command `{}` must not be empty", resource.source_path),
+            });
+        }
+        if resource.content.len() > MAX_COMMAND_BYTES {
+            return Err(BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!(
+                    "command `{}` exceeds maximum size of {MAX_COMMAND_BYTES} bytes",
+                    resource.source_path
+                ),
+            });
+        }
+        if let Some((frontmatter, _body)) = split_markdown(&resource.content) {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct CommandFrontmatter {
+                #[allow(dead_code)]
+                #[serde(default)]
+                name: Option<String>,
+                #[allow(dead_code)]
+                #[serde(default)]
+                description: Option<String>,
+                #[allow(dead_code)]
+                #[serde(default)]
+                hints: Option<serde_json::Value>,
+                #[allow(dead_code)]
+                #[serde(default)]
+                subtask: Option<bool>,
+            }
+            let parsed: CommandFrontmatter =
+                serde_norway::from_str(frontmatter).map_err(|error| {
+                    BundleError::InvalidManifest {
+                        source_name: bundle_id.to_string(),
+                        detail: format!(
+                            "command `{}` has invalid YAML frontmatter: {error}",
+                            resource.source_path
+                        ),
+                    }
+                })?;
+            if let Some(hints) = parsed.hints {
+                let valid_hints = hints.is_string()
+                    || hints
+                        .as_array()
+                        .is_some_and(|items| items.iter().all(serde_json::Value::is_string));
+                if !valid_hints {
+                    return Err(BundleError::InvalidManifest {
+                        source_name: bundle_id.to_string(),
+                        detail: format!(
+                            "command `{}` frontmatter `hints` must be a string or list of strings",
+                            resource.source_path
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    Ok(prepared)
 }
 
 /// Prepare `resources.mcp` declarations: each entry names a JSON file that
 /// must parse into hya's `McpServerConfig` shape (stdio command or remote
-/// url). The bytes are retained verbatim; runtime spawning lands later.
+/// url with optional headers). The bytes are retained verbatim.
 fn prepare_mcp_resources(
     bundle_id: &str,
     files: &BTreeMap<String, Vec<u8>>,
@@ -324,7 +770,7 @@ fn prepare_mcp_resources(
                     source_name: bundle_id.to_string(),
                     detail: format!(
                         "MCP declaration `{}` must be a JSON object with `command`/`env`/`url`/\
-                         `transport`/`enabled`/`timeout_ms` fields: {error}",
+                         `headers`/`transport`/`enabled`/`timeout_ms` fields: {error}",
                         resource.source_path
                     ),
                 }
@@ -340,6 +786,15 @@ fn prepare_mcp_resources(
                 ),
             });
         }
+        if has_command && has_url {
+            return Err(BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!(
+                    "MCP declaration `{}` must declare either `command` or `url`, not both",
+                    resource.source_path
+                ),
+            });
+        }
         if has_command && server.command.iter().any(|arg| arg.trim().is_empty()) {
             return Err(BundleError::InvalidManifest {
                 source_name: bundle_id.to_string(),
@@ -349,8 +804,191 @@ fn prepare_mcp_resources(
                 ),
             });
         }
+        if has_url {
+            let url = server.url.as_deref().unwrap_or_default();
+            if !(url.starts_with("http://") || url.starts_with("https://"))
+                || url.chars().any(char::is_whitespace)
+            {
+                return Err(BundleError::InvalidManifest {
+                    source_name: bundle_id.to_string(),
+                    detail: format!(
+                        "MCP declaration `{}` url must be a valid http:// or https:// URL",
+                        resource.source_path
+                    ),
+                });
+            }
+        }
+        if server.headers.is_some() && !has_url {
+            return Err(BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!(
+                    "MCP declaration `{}` `headers` is only valid with a remote `url`",
+                    resource.source_path
+                ),
+            });
+        }
+        if let Some(transport) = server.transport.as_deref() {
+            let valid = if has_command {
+                transport == "stdio"
+            } else {
+                matches!(transport, "http" | "sse" | "streamable_http")
+            };
+            if !valid {
+                return Err(BundleError::InvalidManifest {
+                    source_name: bundle_id.to_string(),
+                    detail: format!(
+                        "MCP declaration `{}` has incompatible transport `{transport}`",
+                        resource.source_path
+                    ),
+                });
+            }
+        }
+        if server.timeout_ms == Some(0) {
+            return Err(BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!(
+                    "MCP declaration `{}` timeout_ms must be greater than 0",
+                    resource.source_path
+                ),
+            });
+        }
     }
     Ok(prepared)
+}
+
+/// Resolve one manifest `agents:` entry (inline declaration or standalone
+/// `agents/<id>.md` Markdown frontmatter file) into a normalized `SourceAgent`
+/// plus an optional `(body, source_path)` when defined by a Markdown file.
+pub(super) fn resolve_source_agent_entry(
+    bundle_id: &str,
+    files: &BTreeMap<String, Vec<u8>>,
+    entry: SourceAgentEntry,
+) -> Result<(SourceAgent, Option<(String, String)>), BundleError> {
+    if let Some(ref_path) = entry.path {
+        let has_inline_fields = entry.id.is_some()
+            || entry.description.is_some()
+            || entry.role.is_some()
+            || entry.color.is_some()
+            || entry.prompt.is_some()
+            || entry.model_policy != crate::model::ModelPolicy::default()
+            || entry.workdir.is_some()
+            || entry.spawn_lifecycle.is_some()
+            || entry.resource_profile.is_some()
+            || entry.resource_view != crate::model::ResourceView::default()
+            || !entry.can_spawn.is_empty()
+            || entry.private
+            || !entry.advertise.is_empty()
+            || entry.handoff != crate::model::HandoffPolicy::Model
+            || !entry.hook_refs.is_empty()
+            || entry.harness_access.is_some();
+        if has_inline_fields {
+            return Err(BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!(
+                    "agent file reference `{ref_path}` must not also declare inline agent fields"
+                ),
+            });
+        }
+        let path = normalize_source_path(bundle_id, &ref_path)?;
+        let Some(bytes) = files.get(&path) else {
+            return Err(BundleError::MissingReference {
+                bundle_id: bundle_id.to_string(),
+                path,
+            });
+        };
+        let text = std::str::from_utf8(bytes).map_err(|error| BundleError::InvalidManifest {
+            source_name: bundle_id.to_string(),
+            detail: format!("agent file `{path}` is not UTF-8: {error}"),
+        })?;
+        let (frontmatter, body) =
+            split_markdown(text).ok_or_else(|| BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!("agent file `{path}` requires YAML frontmatter"),
+            })?;
+        let file_agent: SourceAgentFile =
+            serde_norway::from_str(frontmatter).map_err(|error| BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!("agent file `{path}` has invalid frontmatter: {error}"),
+            })?;
+        if file_agent.prompt.is_some() {
+            return Err(BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!(
+                    "agent file `{path}` cannot declare `prompt`; put prompt text in the Markdown body"
+                ),
+            });
+        }
+        let id = match (file_agent.id, file_agent.name) {
+            (Some(id), Some(name)) if id != name => {
+                return Err(BundleError::InvalidManifest {
+                    source_name: bundle_id.to_string(),
+                    detail: format!(
+                        "agent file `{path}` declares conflicting `id` (`{id}`) and `name` (`{name}`)"
+                    ),
+                });
+            }
+            (Some(id), _) | (None, Some(id)) => id,
+            (None, None) => {
+                let filename = path.rsplit('/').next().unwrap_or("");
+                let stem = filename.strip_suffix(".md").unwrap_or(filename);
+                if stem.trim().is_empty() {
+                    return Err(BundleError::InvalidManifest {
+                        source_name: bundle_id.to_string(),
+                        detail: format!("agent file `{path}` requires an `id` or `name`"),
+                    });
+                }
+                stem.to_string()
+            }
+        };
+        let agent = SourceAgent {
+            id,
+            description: file_agent.description,
+            role: file_agent.role.unwrap_or(AgentRole::Subagent),
+            color: file_agent.color,
+            prompt: None,
+            model_policy: file_agent.model_policy,
+            workdir: file_agent.workdir,
+            spawn_lifecycle: file_agent.spawn_lifecycle,
+            resource_profile: file_agent.resource_profile,
+            resource_view: file_agent.resource_view,
+            can_spawn: file_agent.can_spawn,
+            private: file_agent.private,
+            advertise: file_agent.advertise,
+            handoff: file_agent.handoff,
+            hook_refs: file_agent.hook_refs,
+            harness_access: file_agent.harness_access,
+        };
+        return Ok((agent, Some((body.trim().to_string(), path))));
+    }
+    let id = entry.id.ok_or_else(|| BundleError::InvalidManifest {
+        source_name: bundle_id.to_string(),
+        detail: "inline agent declaration requires `id` (or `path` for an agent file)".to_string(),
+    })?;
+    let role = entry.role.ok_or_else(|| BundleError::InvalidManifest {
+        source_name: bundle_id.to_string(),
+        detail: format!("inline agent `{id}` requires `role`"),
+    })?;
+    Ok((
+        SourceAgent {
+            id,
+            description: entry.description,
+            role,
+            color: entry.color,
+            prompt: entry.prompt,
+            model_policy: entry.model_policy,
+            workdir: entry.workdir,
+            spawn_lifecycle: entry.spawn_lifecycle,
+            resource_profile: entry.resource_profile,
+            resource_view: entry.resource_view,
+            can_spawn: entry.can_spawn,
+            private: entry.private,
+            advertise: entry.advertise,
+            handoff: entry.handoff,
+            hook_refs: entry.hook_refs,
+            harness_access: entry.harness_access,
+        },
+        None,
+    ))
 }
 
 pub(super) fn validate_resource_views(
@@ -384,7 +1022,7 @@ pub(super) fn validate_resource_views(
 pub(super) fn prepare_agent(
     bundle_id: &str,
     files: &BTreeMap<String, Vec<u8>>,
-    markdown_prompt: Option<&str>,
+    markdown_prompt: Option<(&str, &str)>,
     mut source: SourceAgent,
     stable_agent_ids: &mut BTreeSet<String>,
 ) -> Result<PreparedAgent, BundleError> {
@@ -419,7 +1057,9 @@ pub(super) fn prepare_agent(
                 Some(path),
             )
         }
-        (None, Some(body)) => (Some(body.to_string()), Some("bundle.hya.md".to_string())),
+        (None, Some((body, source_path))) => {
+            (Some(body.to_string()), Some(source_path.to_string()))
+        }
         (None, None) => (None, None),
         (Some(_), Some(_)) => {
             return Err(BundleError::InvalidManifest {

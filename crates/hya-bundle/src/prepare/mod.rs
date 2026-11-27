@@ -12,12 +12,13 @@ use hya_workflow::is_valid_identifier;
 
 use self::decode::{digest_bytes, is_strictly_sorted, set_bundle_digest};
 use self::extensions::{
-    declared_process_extension, validate_declared_apis, validate_declared_permission_modes,
+    ResolvedRuntime, resolve_runtime, validate_declared_apis, validate_declared_permission_modes,
     validate_declared_schemas, validate_unsupported,
 };
 use self::parse::{parse_source, resolve_namespace, split_markdown, validate_identity};
 use self::resources::{
-    prepare_agent, prepare_resource_sets, resolve_catalog_references, validate_resource_views,
+    PreparedResourceSets, prepare_agent, prepare_resource_sets, resolve_catalog_references,
+    resolve_source_agent_entry, validate_resource_views,
 };
 use self::workflow::prepare_workflow;
 use crate::error::BundleError;
@@ -129,9 +130,30 @@ fn prepare_bundle(
         &manifest.namespace,
     )?);
     validate_unsupported(&bundle_id, &manifest.extensions)?;
-    let process = declared_process_extension(&bundle_id, &manifest.extensions)?;
-    let (tools, skills, mcp, hooks, extensions) =
-        prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
+    let ResolvedRuntime {
+        prepared: runtime,
+        process,
+        js_entry_resource,
+        native_library_resource,
+    } = resolve_runtime(&bundle_id, manifest.runtime.as_ref(), &manifest.extensions)?;
+    let PreparedResourceSets {
+        tools,
+        skills,
+        commands,
+        mcp,
+        hooks,
+        extensions,
+    } = prepare_resource_sets(
+        &bundle_id,
+        &files,
+        manifest.resources,
+        manifest.extensions,
+        manifest.assets,
+        runtime.as_ref(),
+        process.as_ref(),
+        js_entry_resource,
+        native_library_resource,
+    )?;
     let tui = prepare_tui(&bundle_id, manifest.tui.as_ref(), &extensions)?;
     let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
     let apis = validate_declared_apis(&bundle_id, &manifest.apis, process.as_ref(), &extensions)?;
@@ -141,11 +163,15 @@ fn prepare_bundle(
         process.as_ref(),
         &hooks,
     )?;
-    let mut source_agents = manifest.agents;
-    source_agents.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut source_agents = manifest
+        .agents
+        .into_iter()
+        .map(|entry| resolve_source_agent_entry(&bundle_id, &files, entry))
+        .collect::<Result<Vec<_>, _>>()?;
+    source_agents.sort_by(|(left, _), (right, _)| left.id.cmp(&right.id));
     let mut agents = Vec::with_capacity(source_agents.len());
     let mut local_agent_ids = BTreeSet::new();
-    for source_agent in source_agents {
+    for (source_agent, file_prompt) in source_agents {
         if manifest.workflow.is_some()
             && let Some(prompt) = &source_agent.prompt
             && !normalize_source_path(&bundle_id, prompt)?.starts_with("prompts/")
@@ -168,10 +194,22 @@ fn prepare_bundle(
                 name: source_agent.id,
             });
         }
+        let prompt_override = match (&file_prompt, markdown_prompt.as_deref()) {
+            (Some((body, path)), None) => Some((body.as_str(), path.as_str())),
+            (None, Some(body)) => Some((body, "bundle.hya.md")),
+            (None, None) => None,
+            (Some(_), Some(_)) => {
+                return Err(BundleError::InvalidManifest {
+                    source_name: bundle_id.clone(),
+                    detail: "Markdown bundle body cannot combine with standalone agent files"
+                        .to_string(),
+                });
+            }
+        };
         agents.push(prepare_agent(
             &bundle_id,
             &files,
-            markdown_prompt.as_deref(),
+            prompt_override,
             source_agent,
             stable_agent_ids,
         )?);
@@ -196,11 +234,13 @@ fn prepare_bundle(
         channels,
         tools,
         skills,
+        commands,
         mcp,
         hooks,
         extensions,
         schemas: schemas.clone(),
         process: process.clone(),
+        runtime,
         apis: apis.clone(),
         permission_modes: permission_modes.clone(),
         workflow,

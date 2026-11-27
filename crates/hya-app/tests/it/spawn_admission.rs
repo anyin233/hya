@@ -1192,6 +1192,8 @@ fn divergence_bundle(id: &str, role: AgentRole, prompt: &str, can_spawn: &[&str]
         schemas: vec![],
         process: None,
         apis: vec![],
+        commands: Vec::new(),
+        runtime: None,
         permission_modes: vec![],
     }
 }

@@ -302,6 +302,8 @@ fn bundle_with_agent(id: &str, ag: PreparedAgent, skills: Vec<PreparedResource>)
         schemas: Vec::new(),
         process: None,
         apis: Vec::new(),
+        commands: Vec::new(),
+        runtime: None,
         permission_modes: Vec::new(),
     }
 }

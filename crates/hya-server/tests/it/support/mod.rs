@@ -241,6 +241,8 @@ fn prepared_bundles(agents: &[AgentFixture]) -> Vec<Bundle> {
             schemas: vec![],
             process: None,
             apis: vec![],
+            commands: Vec::new(),
+            runtime: None,
             permission_modes: vec![],
         })
         .collect()

@@ -5,10 +5,14 @@ use super::parse::normalize_source_path;
 use crate::error::BundleError;
 use crate::model::{
     Bundle, PreparedApi, PreparedBundleApis, PreparedBundlePermissionModes, PreparedBundleProcess,
-    PreparedBundleSchemas, PreparedPermissionMode, PreparedProcessExtension, PreparedResource,
-    PreparedSchema,
+    PreparedBundleSchemas, PreparedJsRuntimeMode, PreparedNativeCapability, PreparedPermissionMode,
+    PreparedProcessExtension, PreparedProcessKind, PreparedResource, PreparedRuntime,
+    PreparedRuntimeKind, PreparedSchema,
 };
-use crate::source::SourceExtensions;
+use crate::source::{
+    SourceExtensions, SourceJsRuntimeMode, SourceNativeCapability, SourceResource, SourceRuntime,
+    SourceRuntimeKind,
+};
 
 /// Reserved internal handle schemes a manifest can never claim.
 const INTERNAL_SCHEMES: [&str; 3] = ["artifact", "skill", "local"];
@@ -610,6 +614,383 @@ pub(super) fn validate_unsupported(
         });
     }
     Ok(())
+}
+
+/// Resolved runtime preparation outputs derived from top-level `runtime:`
+/// and/or legacy `extensions.process`.
+pub(super) struct ResolvedRuntime {
+    pub prepared: Option<PreparedRuntime>,
+    pub process: Option<PreparedProcessExtension>,
+    pub js_entry_resource: Option<SourceResource>,
+    pub native_library_resource: Option<SourceResource>,
+}
+
+/// Validate and lift the optional top-level `runtime:` block together with
+/// legacy `extensions.{process, libraries, rust}` conflict checks.
+pub(super) fn resolve_runtime(
+    bundle_id: &str,
+    runtime: Option<&SourceRuntime>,
+    extensions: &SourceExtensions,
+) -> Result<ResolvedRuntime, BundleError> {
+    let invalid = |detail: String| BundleError::InvalidManifest {
+        source_name: bundle_id.to_string(),
+        detail,
+    };
+    let Some(runtime) = runtime else {
+        let process = declared_process_extension(bundle_id, extensions)?;
+        return Ok(ResolvedRuntime {
+            prepared: None,
+            process,
+            js_entry_resource: None,
+            native_library_resource: None,
+        });
+    };
+    if extensions.process.is_some() {
+        return Err(invalid(
+            "runtime: cannot declare both `runtime` and legacy `extensions.process`".to_string(),
+        ));
+    }
+    if !extensions.libraries.is_empty() {
+        return Err(invalid(
+            "runtime: cannot declare both `runtime` and legacy `extensions.libraries`".to_string(),
+        ));
+    }
+    if !extensions.rust.is_empty() {
+        return Err(invalid(
+            "runtime: cannot declare both `runtime` and legacy `extensions.rust`".to_string(),
+        ));
+    }
+
+    match runtime.kind {
+        SourceRuntimeKind::Static => {
+            if runtime.mode.is_some()
+                || runtime.entry.is_some()
+                || !runtime.command.is_empty()
+                || runtime.timeout_ms.is_some()
+                || runtime.abi_version.is_some()
+                || runtime.crate_dir.is_some()
+                || runtime.library.is_some()
+                || !runtime.capabilities.is_empty()
+            {
+                return Err(invalid(
+                    "runtime: `kind: static` must not set js or native runtime fields".to_string(),
+                ));
+            }
+            Ok(ResolvedRuntime {
+                prepared: Some(PreparedRuntime {
+                    kind: PreparedRuntimeKind::Static,
+                    mode: None,
+                    entry: None,
+                    abi_version: None,
+                    crate_dir: None,
+                    library: None,
+                    capabilities: Vec::new(),
+                }),
+                process: None,
+                js_entry_resource: None,
+                native_library_resource: None,
+            })
+        }
+        SourceRuntimeKind::Js => {
+            if runtime.abi_version.is_some()
+                || runtime.crate_dir.is_some()
+                || runtime.library.is_some()
+                || !runtime.capabilities.is_empty()
+            {
+                return Err(invalid(
+                    "runtime: `kind: js` must not set native fields (`abi_version`, `crate_dir`, `library`, `capabilities`)"
+                        .to_string(),
+                ));
+            }
+            if let Some(timeout) = runtime.timeout_ms
+                && !(1000..=3_600_000).contains(&timeout)
+            {
+                return Err(invalid(format!(
+                    "runtime.timeout_ms must be 1000..=3600000 (got {timeout})"
+                )));
+            }
+            let entry = runtime
+                .entry
+                .as_deref()
+                .map(|path| normalize_js_entry(bundle_id, path))
+                .transpose()?;
+            let mode = match runtime.mode {
+                Some(mode) => mode,
+                None if !runtime.command.is_empty() && entry.is_none() => {
+                    SourceJsRuntimeMode::Process
+                }
+                None if entry.is_some() && runtime.command.is_empty() => {
+                    SourceJsRuntimeMode::Managed
+                }
+                None => {
+                    return Err(invalid(
+                        "runtime: `kind: js` requires `mode` (`managed`, `process`, or `claude`)"
+                            .to_string(),
+                    ));
+                }
+            };
+            match mode {
+                SourceJsRuntimeMode::Managed => {
+                    if !runtime.command.is_empty() {
+                        return Err(invalid(
+                            "runtime: `kind: js` with `mode: managed` must not set `command`"
+                                .to_string(),
+                        ));
+                    }
+                    let Some(entry_path) = entry else {
+                        return Err(invalid(
+                            "runtime: `kind: js` with `mode: managed` requires `entry`".to_string(),
+                        ));
+                    };
+                    let js_entry_resource = Some(SourceResource {
+                        id: "runtime".to_string(),
+                        path: entry_path.clone(),
+                        aliases: Vec::new(),
+                    });
+                    Ok(ResolvedRuntime {
+                        prepared: Some(PreparedRuntime {
+                            kind: PreparedRuntimeKind::Js,
+                            mode: Some(PreparedJsRuntimeMode::Managed),
+                            entry: Some(entry_path),
+                            abi_version: None,
+                            crate_dir: None,
+                            library: None,
+                            capabilities: Vec::new(),
+                        }),
+                        process: None,
+                        js_entry_resource,
+                        native_library_resource: None,
+                    })
+                }
+                SourceJsRuntimeMode::Process => {
+                    if let Err(detail) = validate_process(&runtime.command, runtime.timeout_ms) {
+                        return Err(invalid(detail.replace("extensions.process", "runtime")));
+                    }
+                    let js_entry_resource = entry.as_ref().map(|path| SourceResource {
+                        id: "runtime".to_string(),
+                        path: path.clone(),
+                        aliases: Vec::new(),
+                    });
+                    Ok(ResolvedRuntime {
+                        prepared: Some(PreparedRuntime {
+                            kind: PreparedRuntimeKind::Js,
+                            mode: Some(PreparedJsRuntimeMode::Process),
+                            entry,
+                            abi_version: None,
+                            crate_dir: None,
+                            library: None,
+                            capabilities: Vec::new(),
+                        }),
+                        process: Some(PreparedProcessExtension {
+                            kind: PreparedProcessKind::Bun,
+                            command: runtime.command.clone(),
+                            timeout_ms: runtime.timeout_ms,
+                        }),
+                        js_entry_resource,
+                        native_library_resource: None,
+                    })
+                }
+                SourceJsRuntimeMode::Claude => {
+                    if entry.is_some() {
+                        return Err(invalid(
+                            "runtime: `kind: js` with `mode: claude` must not set `entry`"
+                                .to_string(),
+                        ));
+                    }
+                    if let Err(detail) = validate_process(&runtime.command, runtime.timeout_ms) {
+                        return Err(invalid(detail.replace("extensions.process", "runtime")));
+                    }
+                    Ok(ResolvedRuntime {
+                        prepared: Some(PreparedRuntime {
+                            kind: PreparedRuntimeKind::Js,
+                            mode: Some(PreparedJsRuntimeMode::Claude),
+                            entry: None,
+                            abi_version: None,
+                            crate_dir: None,
+                            library: None,
+                            capabilities: Vec::new(),
+                        }),
+                        process: Some(PreparedProcessExtension {
+                            kind: PreparedProcessKind::Claude,
+                            command: runtime.command.clone(),
+                            timeout_ms: runtime.timeout_ms,
+                        }),
+                        js_entry_resource: None,
+                        native_library_resource: None,
+                    })
+                }
+            }
+        }
+        SourceRuntimeKind::Native => {
+            if runtime.mode.is_some()
+                || runtime.entry.is_some()
+                || !runtime.command.is_empty()
+                || runtime.timeout_ms.is_some()
+            {
+                return Err(invalid(
+                    "runtime: `kind: native` must not set JS fields (`mode`, `entry`, `command`, `timeout_ms`)"
+                        .to_string(),
+                ));
+            }
+            let abi_version = runtime.abi_version.unwrap_or(1);
+            if abi_version != 1 && abi_version != 2 {
+                return Err(invalid(format!(
+                    "runtime.abi_version must be 1 or 2 (got {abi_version})"
+                )));
+            }
+            let crate_dir = runtime
+                .crate_dir
+                .as_deref()
+                .map(|path| normalize_source_path(bundle_id, path))
+                .transpose()?;
+            let library = runtime
+                .library
+                .as_deref()
+                .map(|path| normalize_source_path(bundle_id, path))
+                .transpose()?;
+            let mut seen = BTreeSet::new();
+            let mut capabilities = Vec::with_capacity(runtime.capabilities.len());
+            for capability in &runtime.capabilities {
+                let prepared = match capability {
+                    SourceNativeCapability::Tools => PreparedNativeCapability::Tools,
+                    SourceNativeCapability::Hooks => PreparedNativeCapability::Hooks,
+                    SourceNativeCapability::Rewriters => PreparedNativeCapability::Rewriters,
+                };
+                if !seen.insert(prepared) {
+                    return Err(invalid(format!(
+                        "runtime.capabilities: duplicate capability `{}`",
+                        prepared.as_str()
+                    )));
+                }
+                capabilities.push(prepared);
+            }
+            capabilities.sort();
+            let native_library_resource = library.as_ref().map(|path| SourceResource {
+                id: "runtime".to_string(),
+                path: path.clone(),
+                aliases: Vec::new(),
+            });
+            Ok(ResolvedRuntime {
+                prepared: Some(PreparedRuntime {
+                    kind: PreparedRuntimeKind::Native,
+                    mode: None,
+                    entry: None,
+                    abi_version: Some(abi_version),
+                    crate_dir,
+                    library,
+                    capabilities,
+                }),
+                process: None,
+                js_entry_resource: None,
+                native_library_resource,
+            })
+        }
+    }
+}
+
+fn normalize_js_entry(bundle_id: &str, path: &str) -> Result<String, BundleError> {
+    let normalized = normalize_source_path(bundle_id, path)?;
+    if ![".ts", ".js", ".mjs", ".cjs"]
+        .iter()
+        .any(|suffix| normalized.ends_with(suffix))
+    {
+        return Err(BundleError::InvalidManifest {
+            source_name: bundle_id.to_string(),
+            detail: format!("runtime.entry `{path}` must end with .ts, .js, .mjs, or .cjs"),
+        });
+    }
+    Ok(normalized)
+}
+
+/// Validate a decoded bundle's optional `PreparedRuntime` for canonical invariants.
+pub(super) fn validate_prepared_runtime(bundle: &Bundle) -> bool {
+    let Some(runtime) = bundle.runtime() else {
+        return true;
+    };
+    match runtime.kind {
+        PreparedRuntimeKind::Static => {
+            runtime.mode.is_none()
+                && runtime.entry.is_none()
+                && runtime.abi_version.is_none()
+                && runtime.crate_dir.is_none()
+                && runtime.library.is_none()
+                && runtime.capabilities.is_empty()
+                && bundle.process.is_none()
+        }
+        PreparedRuntimeKind::Js => {
+            if runtime.abi_version.is_some()
+                || runtime.crate_dir.is_some()
+                || runtime.library.is_some()
+                || !runtime.capabilities.is_empty()
+            {
+                return false;
+            }
+            let entry_ok = runtime.entry.as_deref().is_none_or(|entry| {
+                normalize_js_entry(&bundle.identity().id, entry).as_deref() == Ok(entry)
+                    && bundle
+                        .extensions()
+                        .iter()
+                        .any(|res| res.source_path == entry && res.binary_base64.is_none())
+            });
+            if !entry_ok {
+                return false;
+            }
+            match runtime.mode {
+                Some(PreparedJsRuntimeMode::Managed) => {
+                    runtime.entry.is_some() && bundle.process.is_none()
+                }
+                Some(PreparedJsRuntimeMode::Process) => bundle
+                    .process
+                    .as_ref()
+                    .is_some_and(|proc| proc.kind == PreparedProcessKind::Bun),
+                Some(PreparedJsRuntimeMode::Claude) => {
+                    runtime.entry.is_none()
+                        && bundle
+                            .process
+                            .as_ref()
+                            .is_some_and(|proc| proc.kind == PreparedProcessKind::Claude)
+                }
+                None => false,
+            }
+        }
+        PreparedRuntimeKind::Native => {
+            if runtime.mode.is_some()
+                || runtime.entry.is_some()
+                || bundle.process.is_some()
+                || !matches!(runtime.abi_version, Some(1 | 2))
+            {
+                return false;
+            }
+            if !runtime
+                .capabilities
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+            {
+                return false;
+            }
+            if let Some(crate_dir) = &runtime.crate_dir
+                && normalize_source_path(&bundle.identity().id, crate_dir).as_deref()
+                    != Ok(crate_dir.as_str())
+            {
+                return false;
+            }
+            if let Some(library) = &runtime.library {
+                if normalize_source_path(&bundle.identity().id, library).as_deref()
+                    != Ok(library.as_str())
+                {
+                    return false;
+                }
+                if !bundle.extensions().iter().any(|res| {
+                    res.source_path == *library
+                        && res.binary_base64.is_some()
+                        && res.stable_id.contains("/library/")
+                }) {
+                    return false;
+                }
+            }
+            true
+        }
+    }
 }
 
 /// Validate and lift the manifest's optional `extensions.process` declaration.
