@@ -1169,17 +1169,13 @@ fn is_hardcoded_secret_value(value: &str) -> bool {
         return false;
     }
     let lower = token.to_ascii_lowercase();
-    if lower.starts_with('<')
+    !(lower.starts_with('<')
         || lower.contains("example")
         || lower.contains("placeholder")
         || lower.contains("your_")
         || lower.contains("your-")
         || lower.contains("changeme")
-        || lower.contains("replace")
-    {
-        return false;
-    }
-    true
+        || lower.contains("replace"))
 }
 
 fn find_hardcoded_secret(text: &str) -> Option<&'static str> {

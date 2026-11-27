@@ -342,6 +342,13 @@ pub(crate) struct SourceWorkflow {
     pub path: String,
 }
 
+fn deserialize_present_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    String::deserialize(deserializer).map(Some)
+}
+
 /// Either an inline agent declaration in `bundle.yaml` or a reference to a
 /// standalone Markdown frontmatter file (`- path: agents/<id>.md`).
 ///
@@ -354,7 +361,10 @@ pub(crate) struct SourceAgentEntry {
     #[serde(default)]
     pub path: Option<String>,
     /// Stable agent id (required for inline definitions).
-    #[serde(default)]
+    ///
+    /// Uses `String::deserialize` when the key is present so YAML 1.1 barewords
+    /// such as `null` keep round-tripping verbatim as `"null"` instead of `None`.
+    #[serde(default, deserialize_with = "deserialize_present_string")]
     pub id: Option<String>,
     pub description: Option<String>,
     #[serde(default)]

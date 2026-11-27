@@ -2997,7 +2997,7 @@ async fn disjoint_engine_turns(process: bool) {
         "disjoint-turns",
         vec![
             SourceFile::new("bundle.yaml", manifest),
-            SourceFile::new("tool.json", r#"{"type":"object"}"#),
+            SourceFile::new("tool.json", "{}"),
             SourceFile::new(
                 "main.js",
                 r#"

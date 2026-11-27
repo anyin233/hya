@@ -73,11 +73,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bun scripts/bundle-ci/discover.mjs bundles/builtin | python3 - <<'PY'
+          discovered="$(bun scripts/bundle-ci/discover.mjs bundles/builtin)"
+          DISCOVERED="$discovered" python3 - <<'PY'
           import json
+          import os
           import sys
 
-          data = json.load(sys.stdin)
+          data = json.loads(os.environ["DISCOVERED"])
           bundles = data["all"]
           if len(bundles) != 13:
               print(f"ERROR: expected 13 builtin bundles, found {len(bundles)}", file=sys.stderr)
