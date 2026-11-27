@@ -1,12 +1,7 @@
 //! Exposure policies for the four trusted tool-family bundles.
 //!
-//! Each family's `exposure.yaml` is read from its first-party bundle when the
+//! Each family's policy is read from its first-party bundle when the
 //! process first needs it; nothing is compiled into the binary.
-
-#![allow(
-    deprecated,
-    reason = "Decode and validate legacy preset schemes until their public type can be removed"
-)]
 
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
@@ -31,7 +26,6 @@ pub struct BaseToolsPreset {
     bundle_digest: String,
     prepared_catalog_bytes: &'static [u8],
     protected_names: Vec<String>,
-    schemes: Vec<BaseToolScheme>,
     tools: Vec<BaseToolExposure>,
     file_operations_rule: Option<FileOperationsRule>,
 }
@@ -43,17 +37,6 @@ pub struct BaseToolsPreset {
 struct FileOperationsRule {
     text: String,
     tools: Vec<String>,
-}
-
-/// One builtin URI scheme declaration retained by the preset owner.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-#[deprecated(note = "Declare URI schemes as bundle schema resources instead")]
-pub struct BaseToolScheme {
-    scheme: String,
-    tool: String,
-    #[serde(default)]
-    writable: bool,
 }
 
 /// Exposure policy for one Rust-implemented builtin.
@@ -88,15 +71,13 @@ pub struct BaseToolAlias {
     visibility: AliasVisibility,
 }
 
-/// The companion `exposure.yaml` document of one tool-family bundle.
+/// The companion policy document of one tool-family bundle.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ExposurePolicy {
     schema_version: u32,
     identity: String,
     protected_names: Vec<String>,
-    #[serde(default)]
-    schemes: Vec<BaseToolScheme>,
     tools: Vec<BaseToolExposure>,
     #[serde(default)]
     file_operations_rule: Option<FileOperationsRule>,
@@ -127,7 +108,6 @@ fn load_preset(identity: &str) -> Result<BaseToolsPreset, String> {
         identity: policy.identity,
         bundle_digest: bundle.digest().to_string(),
         prepared_catalog_bytes: catalog.bytes(),
-        schemes: policy.schemes,
         protected_names: policy.protected_names,
         tools: policy.tools,
         file_operations_rule: policy.file_operations_rule,
@@ -179,13 +159,6 @@ fn validate_policy(policy: &ExposurePolicy, identity: &str) -> Result<(), String
         .find(|name| !names.contains(name.as_str()))
     {
         return Err(format!("protected name is not canonical: {protected}"));
-    }
-    if let Some(scheme) = policy
-        .schemes
-        .iter()
-        .find(|scheme| !names.contains(scheme.tool.as_str()))
-    {
-        return Err(format!("scheme tool is not canonical: {}", scheme.tool));
     }
     if let Some(tool) = policy.tools.iter().find(|tool| {
         tool.prompt
@@ -306,11 +279,6 @@ impl BaseToolsPreset {
     pub fn tools(&self) -> &[BaseToolExposure] {
         &self.tools
     }
-    /// URI schemes owned by builtin tools.
-    #[must_use]
-    pub fn schemes(&self) -> &[BaseToolScheme] {
-        &self.schemes
-    }
     /// Find a builtin declaration by canonical name.
     #[must_use]
     pub fn tool(&self, name: &str) -> Option<&BaseToolExposure> {
@@ -372,24 +340,6 @@ impl BaseToolAlias {
     }
 }
 
-impl BaseToolScheme {
-    /// URI scheme text before `://`.
-    #[must_use]
-    pub fn scheme(&self) -> &str {
-        &self.scheme
-    }
-    /// Canonical builtin tool that owns the scheme.
-    #[must_use]
-    pub fn tool(&self) -> &str {
-        &self.tool
-    }
-    /// Whether writes through this scheme are allowed.
-    #[must_use]
-    pub fn writable(&self) -> bool {
-        self.writable
-    }
-}
-
 /// Return every tool-family policy in stable family order.
 ///
 /// # Panics
@@ -439,12 +389,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_scheme_and_public_alias_still_parse() {
+    #[allow(
+        deprecated,
+        reason = "Verify legacy public alias visibility still parses in transitional exposure.yaml"
+    )]
+    fn public_alias_parses_and_legacy_schemes_field_is_rejected() {
         let policy: ExposurePolicy = serde_norway::from_str(
             "schema_version: 1
 identity: hya/base-tools
 protected_names: []
-schemes: [{ scheme: example, tool: read, writable: true }]
 tools:
   - name: read
     schema_version: 1
@@ -454,17 +407,23 @@ tools:
         )
         .unwrap();
         assert_eq!(validate_policy(&policy, "hya/base-tools"), Ok(()));
-        let [scheme] = policy.schemes.as_slice() else {
-            panic!("expected one legacy scheme")
-        };
-        assert_eq!(
-            (scheme.scheme(), scheme.tool(), scheme.writable()),
-            ("example", "read", true)
-        );
         assert_eq!(
             policy.tools[0].aliases[0].visibility(),
             AliasVisibility::Public
         );
+
+        let with_schemes: Result<ExposurePolicy, _> = serde_norway::from_str(
+            "schema_version: 1
+identity: hya/base-tools
+protected_names: []
+schemes: [{ scheme: example, tool: read, writable: true }]
+tools:
+  - name: read
+    schema_version: 1
+    permission: read_only
+",
+        );
+        assert!(with_schemes.is_err());
     }
 
     fn tools(yaml: &str) -> Vec<BaseToolExposure> {
