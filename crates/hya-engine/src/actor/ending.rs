@@ -57,7 +57,10 @@ pub(super) async fn commit_episode_ending(
     claim: &ActorClaim,
     ending: &Ending,
     sidecar_error: Option<String>,
-) -> Result<(hya_store::ResidentArchiveOutcome, EpisodeFinalization), CoreError> {
+) -> Result<(crate::store_bridge::ResidentArchiveOutcome, EpisodeFinalization), CoreError> {
+    use crate::store_bridge::{
+        ResidentArchive, ResidentArchiveOutcome, ResidentArchiveOwner, SessionStoreExt as _,
+    };
     let (handle, child, cancel, handoff_policy) = {
         let state = team.lock();
         let slot = state
@@ -75,8 +78,7 @@ pub(super) async fn commit_episode_ending(
         )
     };
     let projection = team.engine.read_projection_shared(team.root).await?;
-    let expected_work = projection
-        .team
+    let expected_work = hya_tool::extension::team_projection(&projection)
         .roster
         .get(&handle)
         .map(|entry| (entry.resident_cursor, entry.resident_work));
@@ -124,10 +126,10 @@ pub(super) async fn commit_episode_ending(
         .engine
         .store()
         .finalize_resident_archive(
-            hya_store::ResidentArchiveOwner::Claim(claim),
+            ResidentArchiveOwner::Claim(claim),
             team.root,
             &handle,
-            hya_store::ResidentArchive {
+            ResidentArchive {
                 actor: child,
                 generation: handoff.generation,
                 doc: handoff.doc,
@@ -141,7 +143,7 @@ pub(super) async fn commit_episode_ending(
             },
         )
         .await?;
-    if outcome == hya_store::ResidentArchiveOutcome::Refused {
+    if outcome == ResidentArchiveOutcome::Refused {
         team.engine.publish_resident_finalization(envelopes);
         Ok((outcome, Vec::new()))
     } else {
@@ -195,7 +197,11 @@ pub(super) async fn finish_episode(
         team.lock()
             .routing_mail
             .extend(envelopes.iter().filter_map(|envelope| {
-                matches!(envelope.event, Event::MailSent { .. }).then_some(envelope.seq.0)
+                matches!(
+                    ExtensionEvent::from_event(&envelope.event),
+                    Some(ExtensionEvent::MailSent { .. })
+                )
+                .then_some(envelope.seq.0)
             }));
     }
     if let Some(slot) = team.take_episode(claim.actor_id, Some(claim)) {
@@ -203,31 +209,31 @@ pub(super) async fn finish_episode(
             let activation_result = result
                 .as_ref()
                 .map(|envelopes| {
-                    if let Some((outcome, text)) =
-                        envelopes.iter().find_map(|envelope| match &envelope.event {
-                            Event::SubagentReported {
+                    if let Some((outcome, text)) = envelopes.iter().find_map(|envelope| {
+                        match ExtensionEvent::from_event(&envelope.event) {
+                            Some(ExtensionEvent::SubagentReported {
                                 child,
                                 outcome,
                                 report,
                                 ..
-                            } if *child == claim.actor_id => Some((*outcome, report.clone())),
+                            }) if child == claim.actor_id => Some((outcome, report)),
                             _ => None,
-                        })
-                    {
+                        }
+                    }) {
                         ActivationResult::Reported { outcome, text }
                     } else {
                         let (reason, status, mut note) = ending.forced_fields();
-                        if let Some(summary) =
-                            envelopes.iter().find_map(|envelope| match &envelope.event {
-                                Event::MemberFinished {
+                        if let Some(summary) = envelopes.iter().find_map(|envelope| {
+                            match ExtensionEvent::from_event(&envelope.event) {
+                                Some(ExtensionEvent::MemberFinished {
                                     child: Some(child),
                                     summary,
                                     ..
-                                } if *child == claim.actor_id => Some(summary),
+                                }) if child == claim.actor_id => Some(summary),
                                 _ => None,
-                            })
-                        {
-                            note.clone_from(summary);
+                            }
+                        }) {
+                            note = summary;
                         }
                         ActivationResult::Ended {
                             reason,
@@ -273,27 +279,20 @@ pub(crate) fn resolve_member_target(
     raw: &str,
 ) -> Result<MemberTarget, CoreError> {
     let token = raw.trim().trim_start_matches('@');
+    let team = hya_tool::extension::team_projection(projection);
     let live = |handle: &str| {
-        projection
-            .team
-            .roster
-            .get(handle)
-            .map(|entry| MemberTarget {
-                handle: handle.to_string(),
-                session: entry.session,
-                live: true,
-            })
+        team.roster.get(handle).map(|entry| MemberTarget {
+            handle: handle.to_string(),
+            session: entry.session,
+            live: true,
+        })
     };
     let archived = |handle: &str| {
-        projection
-            .team
-            .archived
-            .get(handle)
-            .map(|entry| MemberTarget {
-                handle: handle.to_string(),
-                session: entry.session,
-                live: false,
-            })
+        team.archived.get(handle).map(|entry| MemberTarget {
+            handle: handle.to_string(),
+            session: entry.session,
+            live: false,
+        })
     };
     let found = if token.is_empty() {
         None
@@ -305,9 +304,7 @@ pub(crate) fn resolve_member_target(
                 live: true,
             })
         } else {
-            projection
-                .team
-                .roster
+            team.roster
                 .values()
                 .find(|entry| entry.session == session)
                 .map(|entry| MemberTarget {
@@ -316,9 +313,7 @@ pub(crate) fn resolve_member_target(
                     live: true,
                 })
                 .or_else(|| {
-                    projection
-                        .team
-                        .archived
+                    team.archived
                         .values()
                         .find(|entry| entry.session == session)
                         .map(|entry| MemberTarget {
@@ -341,22 +336,14 @@ pub(crate) fn resolve_member_target(
             .or_else(|| live(&relative))
             .or_else(|| archived(&relative))
             .or_else(|| {
-                let mut leaves = projection
-                    .team
-                    .roster
-                    .keys()
-                    .filter(|key| scope::leaf(key) == token);
+                let mut leaves = team.roster.keys().filter(|key| scope::leaf(key) == token);
                 match (leaves.next(), leaves.next()) {
                     (Some(only), None) => live(only),
                     _ => None,
                 }
             })
             .or_else(|| {
-                let mut leaves = projection
-                    .team
-                    .archived
-                    .keys()
-                    .filter(|key| scope::leaf(key) == token);
+                let mut leaves = team.archived.keys().filter(|key| scope::leaf(key) == token);
                 match (leaves.next(), leaves.next()) {
                     (Some(only), None) => archived(only),
                     _ => None,
@@ -365,8 +352,7 @@ pub(crate) fn resolve_member_target(
     };
     found.ok_or_else(|| {
         let prefix = format!("{caller}{}", scope::PATH_SEPARATOR);
-        let mine: Vec<&str> = projection
-            .team
+        let mine: Vec<&str> = team
             .roster
             .keys()
             .filter(|key| key.starts_with(&prefix))
@@ -475,8 +461,7 @@ impl ResidentSupervisor {
         ending: Ending,
     ) -> Result<(), CoreError> {
         let projection = self.engine.read_projection_shared(root).await?;
-        let mut members = projection
-            .team
+        let mut members = hya_tool::extension::team_projection(&projection)
             .roster
             .iter()
             .filter(|(path, _)| path.as_str() != scope::ROOT_HANDLE)
@@ -497,6 +482,7 @@ impl ResidentSupervisor {
         actor: SessionId,
         ending: &Ending,
     ) -> Result<(), CoreError> {
+        use crate::store_bridge::{ResidentArchive, ResidentArchiveOwner, SessionStoreExt as _};
         let _write = self.claim_writes.lock().await;
         if self.team_with_resident(actor).is_some() {
             return Err(CoreError::Invalid(
@@ -509,10 +495,10 @@ impl ResidentSupervisor {
             .engine
             .store()
             .finalize_resident_archive(
-                hya_store::ResidentArchiveOwner::Takeover,
+                ResidentArchiveOwner::Takeover,
                 root,
                 handle,
-                hya_store::ResidentArchive {
+                ResidentArchive {
                     actor,
                     generation: handoff.generation,
                     doc: handoff.doc,
@@ -561,21 +547,15 @@ impl ResidentSupervisor {
             (live, captured)
         };
         let projection = self.engine.read_projection_shared(root).await?;
-        let child = live.or_else(|| {
-            projection
-                .team
-                .roster
-                .get(handle)
-                .map(|entry| entry.session)
-        });
-        let mut descendants: BTreeMap<_, _> = projection
-            .team
+        let team = hya_tool::extension::team_projection(&projection);
+        let child = live.or_else(|| team.roster.get(handle).map(|entry| entry.session));
+        let mut descendants: BTreeMap<_, _> = team
             .roster
             .iter()
             .filter(|(path, _)| path.starts_with(&prefix))
             .map(|(path, entry)| (path.clone(), entry.session))
             .collect();
-        let archived = projection.team.archived.contains_key(handle);
+        let archived = team.archived.contains_key(handle);
         drop(projection);
         descendants.extend(
             captured
@@ -625,8 +605,7 @@ impl ResidentSupervisor {
         // committed before release, including descendants of those late children.
         loop {
             let projection = self.engine.read_projection_shared(root).await?;
-            let mut descendants: Vec<_> = projection
-                .team
+            let mut descendants: Vec<_> = hya_tool::extension::team_projection(&projection)
                 .roster
                 .iter()
                 .filter(|(path, _)| path.starts_with(&prefix))
@@ -681,13 +660,13 @@ impl ResidentSupervisor {
                 resolved.handle
             )));
         }
-        let mut descendants: Vec<(String, SessionId)> = projection
-            .team
-            .roster
-            .iter()
-            .filter(|(path, _)| path.starts_with(&prefix))
-            .map(|(path, entry)| (path.clone(), entry.session))
-            .collect();
+        let mut descendants: Vec<(String, SessionId)> =
+            hya_tool::extension::team_projection(&projection)
+                .roster
+                .iter()
+                .filter(|(path, _)| path.starts_with(&prefix))
+                .map(|(path, entry)| (path.clone(), entry.session))
+                .collect();
         descendants.sort_by_key(|(path, _)| {
             std::cmp::Reverse(path.matches(scope::PATH_SEPARATOR).count())
         });
@@ -739,15 +718,16 @@ impl ResidentSupervisor {
             drop(write);
             return await_episode(done).await.map(|()| false);
         }
+        use crate::store_bridge::{ResidentArchive, ResidentArchiveOwner, SessionStoreExt as _};
         let handoff = self.engine.degraded_terminal_handoff(child).await;
         let (_, envelopes) = self
             .engine
             .store()
             .finalize_resident_archive(
-                hya_store::ResidentArchiveOwner::Takeover,
+                ResidentArchiveOwner::Takeover,
                 root,
                 handle,
-                hya_store::ResidentArchive {
+                ResidentArchive {
                     actor: child,
                     generation: handoff.generation,
                     doc: handoff.doc,

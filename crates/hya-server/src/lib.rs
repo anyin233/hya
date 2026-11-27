@@ -219,9 +219,16 @@ fn spawn_project_busy_watcher(state: ServerState) {
 fn turn_boundary_session(event: &hya_proto::Event) -> Option<hya_proto::SessionId> {
     match event {
         hya_proto::Event::MessageStarted { session, .. }
-        | hya_proto::Event::MessageFinished { session, .. }
-        | hya_proto::Event::WorkflowRunStarted { session, .. }
-        | hya_proto::Event::WorkflowRunFinished { session, .. } => Some(*session),
+        | hya_proto::Event::MessageFinished { session, .. } => Some(*session),
+        hya_proto::Event::Extension { .. } => {
+            match hya_tool::extension::ExtensionEvent::from_event(event)? {
+                hya_tool::extension::ExtensionEvent::WorkflowRunStarted { session, .. }
+                | hya_tool::extension::ExtensionEvent::WorkflowRunFinished { session, .. } => {
+                    Some(session)
+                }
+                _ => None,
+            }
+        }
         _ => None,
     }
 }

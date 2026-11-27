@@ -55,7 +55,12 @@ fn rewrite_count(envelopes: &[Envelope]) -> usize {
 fn eviction_count(envelopes: &[Envelope]) -> usize {
     envelopes
         .iter()
-        .filter(|e| matches!(e.event, Event::ContextEvicted { .. }))
+        .filter(|e| {
+            matches!(
+                hya_tool::extension::ExtensionEvent::from_event(&e.event),
+                Some(hya_tool::extension::ExtensionEvent::ContextEvicted { .. })
+            )
+        })
         .count()
 }
 
@@ -516,14 +521,14 @@ async fn context_status_reports_round_occupancy_and_accounting_mode() {
     let envelopes = engine.store().replay(session).await.unwrap();
     let statuses: Vec<_> = envelopes
         .iter()
-        .filter_map(|e| match &e.event {
-            Event::ContextStatus {
+        .filter_map(|e| match hya_tool::extension::ExtensionEvent::from_event(&e.event) {
+            Some(hya_tool::extension::ExtensionEvent::ContextStatus {
                 tokens,
                 source,
                 mode,
                 threshold,
                 ..
-            } => Some((*tokens, *source, *mode, *threshold)),
+            }) => Some((tokens, source, mode, threshold)),
             _ => None,
         })
         .collect();
@@ -534,13 +539,8 @@ async fn context_status_reports_round_occupancy_and_accounting_mode() {
         (mode, source, threshold),
         (TokenAccountingMode::Auto, TokenSource::Estimate, 160_000)
     );
-    let folded = engine
-        .store()
-        .read_projection(session)
-        .await
-        .unwrap()
-        .session
-        .context_status
+    let projection = engine.read_projection(session).await.unwrap();
+    let folded = hya_tool::extension::context_status_projection(&projection)
         .expect("context status");
     assert_eq!(
         (folded.tokens, folded.source, folded.mode, folded.threshold),
@@ -716,14 +716,21 @@ async fn stale_tool_outputs_spill_mid_turn_and_escalate_to_rewrite_when_needed()
         .await
         .unwrap()
         .iter()
-        .filter_map(|e| match e.event {
-            Event::ContextEvicted { .. } => Some("spill"),
-            Event::ContextCompacted {
-                strategy: hya_proto::CompactionStrategy::Rewrite,
-                ..
-            } => Some("rewrite"),
-            Event::StepStarted { .. } => Some("step"),
-            _ => None,
+        .filter_map(|e| {
+            if matches!(
+                hya_tool::extension::ExtensionEvent::from_event(&e.event),
+                Some(hya_tool::extension::ExtensionEvent::ContextEvicted { .. })
+            ) {
+                return Some("spill");
+            }
+            match e.event {
+                Event::ContextCompacted {
+                    strategy: hya_proto::CompactionStrategy::Rewrite,
+                    ..
+                } => Some("rewrite"),
+                Event::StepStarted { .. } => Some("step"),
+                _ => None,
+            }
         })
         .collect();
     assert_eq!(
@@ -1714,14 +1721,12 @@ async fn quiescence_and_mail_queue_behind_leads_active_turn() {
             assert!(
                 support::poll_until(Duration::from_secs(5), || async {
                     provider.streams_for(scout) == 1
-                        && engine
-                            .read_projection(root)
-                            .await
-                            .unwrap()
-                            .team
-                            .roster
-                            .get("main/scout")
-                            .map(|e| e.status)
+                        && hya_tool::extension::team_projection(
+                            &engine.read_projection(root).await.unwrap(),
+                        )
+                        .roster
+                        .get("main/scout")
+                        .map(|e| e.status)
                             == Some(RosterStatus::Idle)
                 })
                 .await
@@ -1922,11 +1927,7 @@ async fn consumed_results_suppress_redundant_synthesis_while_unseen_mail_wakes()
         .register_existing_resident(root, other, "other".into(), agent.clone(), None)
         .await
         .unwrap();
-    let other_dm = engine
-        .read_projection(root)
-        .await
-        .unwrap()
-        .team
+    let other_dm = hya_tool::extension::team_projection(&engine.read_projection(root).await.unwrap())
         .channels
         .iter()
         .find(|(_, c)| c.kind == hya_proto::ChannelKind::Dm && c.members.contains("main/other"))
@@ -2047,7 +2048,8 @@ async fn concurrent_turns_serialize_queued_cancel_claim_error_and_sibling_concur
     }
     assert!(
         support::poll_until(Duration::from_secs(5), || async {
-            let team = engine.read_projection(root).await.unwrap().team;
+            let team =
+                hya_tool::extension::team_projection(&engine.read_projection(root).await.unwrap());
             team.roster.get("main/worker-a").map(|e| e.status) == Some(RosterStatus::Idle)
                 && team.roster.get("main/worker-b").map(|e| e.status) == Some(RosterStatus::Idle)
         })

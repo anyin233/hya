@@ -1,8 +1,10 @@
-use hya_proto::{MailEndpoint, MailKind, SessionId, scope};
+use hya_proto::{ActorClaim, MailEndpoint, MailKind, SessionId, scope};
 use hya_tool::MailReceipt;
+use hya_tool::extension::team_projection;
 
 use crate::engine::SessionEngine;
 use crate::error::CoreError;
+use crate::store_bridge::SessionStoreExt as _;
 
 impl SessionEngine {
     /// Send mail from `from_session` to a handle or `#channel`. Appends a single
@@ -33,7 +35,7 @@ impl SessionEngine {
         to: MailEndpoint,
         kind: MailKind,
         body: String,
-        actor_claim: Option<&hya_store::ActorClaim>,
+        actor_claim: Option<&ActorClaim>,
         channel_policy: Option<hya_tool::ChannelPolicySnapshot>,
     ) -> Result<MailReceipt, CoreError> {
         self.mail_send_checked(
@@ -58,19 +60,19 @@ impl SessionEngine {
         to: MailEndpoint,
         kind: MailKind,
         body: String,
-        actor_claim: Option<&hya_store::ActorClaim>,
+        actor_claim: Option<&ActorClaim>,
         channel_policy: Option<hya_tool::ChannelPolicySnapshot>,
         user_steer: bool,
     ) -> Result<MailReceipt, CoreError> {
         let root = self.team_root(from_session).await?;
         let from = self.resolve_handle(root, from_session).await?;
         let policy_projection = self.read_projection_shared(root).await?;
+        let team = team_projection(&policy_projection);
         let channel = match to {
             MailEndpoint::Channel(channel) => channel.trim().to_string(),
-            MailEndpoint::Handle(handle) => policy_projection
-                .team
+            MailEndpoint::Handle(handle) => team
                 .resolve_dm(&from, &handle)
-                .ok_or_else(|| hya_store::StoreError::MailAuthorizationRejected {
+                .ok_or_else(|| CoreError::MailAuthorizationRejected {
                     sender: from.clone(),
                     channel: format!("direct:{handle}"),
                     reason:
@@ -82,8 +84,7 @@ impl SessionEngine {
         // A subagent the user stopped (`cancel_user_turn`) is not restarted
         // by mail from above it: the user decides when it continues.
         if !user_steer && let Some(reviver) = self.archive_reviver() {
-            let peer = policy_projection
-                .team
+            let peer = team
                 .channels
                 .get(&channel)
                 .filter(|state| {
@@ -112,19 +113,19 @@ impl SessionEngine {
             .store()
             .append_channel_mail(
                 root,
+                actor_claim,
                 from.clone(),
                 channel.clone(),
                 kind,
                 body.clone(),
-                actor_claim,
                 channel_policy,
             )
             .await;
         let (envelope, recipients) = match append {
             Ok(result) => result,
-            Err(ref error @ hya_store::StoreError::MailRevivalRequired { ref target, .. }) => {
+            Err(ref error @ CoreError::MailRevivalRequired { ref target, .. }) => {
                 let Some(supervisor) = self.resident_supervisor() else {
-                    return Err(error.clone().into());
+                    return Err(error.clone());
                 };
                 let recipients = supervisor
                     .revive_episode(
@@ -144,7 +145,7 @@ impl SessionEngine {
                     recipients,
                 });
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error),
         };
         self.publish_envelope(envelope);
         Ok(MailReceipt {
@@ -174,7 +175,7 @@ impl SessionEngine {
         &self,
         from_session: SessionId,
         body: String,
-        actor_claim: Option<&hya_store::ActorClaim>,
+        actor_claim: Option<&ActorClaim>,
         channel_policy: Option<hya_tool::ChannelPolicySnapshot>,
     ) -> Result<MailReceipt, CoreError> {
         let root = self.team_root(from_session).await?;
@@ -182,8 +183,7 @@ impl SessionEngine {
         // ADR-0016: broadcast rides the unit's minted group channel
         // (`announce-{8}`, leader-only posting).
         let projection = self.read_projection_shared(root).await?;
-        let Some(group) = projection
-            .team
+        let Some(group) = team_projection(&projection)
             .channels
             .iter()
             .find(|(_, channel)| {
@@ -202,11 +202,11 @@ impl SessionEngine {
             .store()
             .append_channel_mail(
                 root,
+                actor_claim,
                 from.clone(),
                 group.clone(),
                 MailKind::Announcement,
                 body,
-                actor_claim,
                 channel_policy,
             )
             .await?;
@@ -222,16 +222,19 @@ impl SessionEngine {
         &self,
         from_session: SessionId,
         body: String,
-        actor_claim: Option<&hya_store::ActorClaim>,
+        actor_claim: Option<&ActorClaim>,
         channel_policy: Option<hya_tool::ChannelPolicySnapshot>,
     ) -> Result<MailReceipt, CoreError> {
         let root = self.team_root(from_session).await?;
         let from = self.resolve_handle(root, from_session).await?;
         let projection = self.read_projection_shared(root).await?;
-        let leads_unit = projection.team.channels.iter().any(|(_, channel)| {
-            channel.kind == hya_proto::ChannelKind::Group
-                && channel.unit.as_deref() == Some(from.as_str())
-        });
+        let leads_unit = team_projection(&projection)
+            .channels
+            .iter()
+            .any(|(_, channel)| {
+                channel.kind == hya_proto::ChannelKind::Group
+                    && channel.unit.as_deref() == Some(from.as_str())
+            });
         drop(projection);
         if leads_unit {
             return self

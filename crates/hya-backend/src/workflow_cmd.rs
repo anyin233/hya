@@ -5,10 +5,13 @@ use anyhow::Context as _;
 use clap::Subcommand;
 use hya_app::{WorkflowCommand as ControlCommand, WorkflowCommandResult, WorkflowInvocation};
 use hya_proto::{
-    WorkflowInfo, WorkflowMemberRole, WorkflowModelAssignment, WorkflowModelResolvedCandidate,
-    WorkflowProjection, WorkflowRevision, WorkflowRouteFailureClass, WorkflowRunProjection,
+    WorkflowInfo, WorkflowModelAssignment, WorkflowModelResolvedCandidate, WorkflowRevision,
+    WorkflowSummary,
+};
+use hya_tool::{
+    WorkflowMemberRole, WorkflowProjection, WorkflowRouteFailureClass, WorkflowRunProjection,
     WorkflowRunResult, WorkflowRunStatus, WorkflowStagePlan, WorkflowStageRouteOutcome,
-    WorkflowStageStatus, WorkflowSummary,
+    WorkflowStageStatus,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -549,8 +552,8 @@ mod tests {
     use hya_proto::{
         AgentName, MemberId, ModelRef, OwnerRunId, SessionId, WorkflowIdentity,
         WorkflowModelCandidate, WorkflowRunId, WorkflowSourceId, WorkflowStageInfo,
-        WorkflowStageProjection,
     };
+    use hya_tool::WorkflowStageProjection;
 
     use super::*;
 

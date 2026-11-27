@@ -24,8 +24,6 @@ use std::collections::BTreeSet;
 use std::hash::{BuildHasher, Hasher};
 use std::sync::OnceLock;
 
-use crate::{Projection, scope};
-
 /// The checked-in operator name list: one lowercase ASCII name per line.
 ///
 /// Snapshot of the prts.wiki operator list (干员一览, `data-en` attributes)
@@ -151,32 +149,6 @@ pub fn mint_leaf(prefix: &str, taken: &BTreeSet<String>, rng: &mut dyn HandleRng
         .map(|ordinal| format!("{}-{ordinal}", pair(0, count.min(2) - 1)))
         .find(free)
         .unwrap_or_default()
-}
-
-/// The leaf of every handle `projection`'s team ever registered: live roster,
-/// archived rows, inbox owners, and channel members — plus the reserved
-/// `main` and `harness`.
-#[must_use]
-pub fn team_leaves(projection: &Projection) -> BTreeSet<String> {
-    let team = &projection.team;
-    let mut leaves: BTreeSet<String> = [scope::ROOT_HANDLE, scope::HARNESS_HANDLE]
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-    let handles = team
-        .roster
-        .keys()
-        .chain(team.archived.keys())
-        .chain(team.inboxes.keys())
-        .chain(
-            team.channels
-                .values()
-                .flat_map(|channel| channel.members.iter()),
-        );
-    for handle in handles {
-        leaves.insert(scope::leaf(handle).to_string());
-    }
-    leaves
 }
 
 #[cfg(test)]

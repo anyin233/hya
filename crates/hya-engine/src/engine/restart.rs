@@ -6,6 +6,7 @@ use hya_proto::FinishCause;
 
 use super::{SessionEngine, TurnDrainReport};
 use crate::error::CoreError;
+use crate::store_bridge::SessionStoreExt as _;
 
 impl SessionEngine {
     /// Inject a queued restore once and return the restore prompt the next
@@ -17,7 +18,7 @@ impl SessionEngine {
     ) -> Result<Option<hya_proto::MessageId>, CoreError> {
         let Some((prompt, envelopes)) = self
             .store
-            .take_restart_resume(session, self.runtime_owner)
+            .take_restart_resume_with_subagents(session, self.runtime_owner)
             .await?
         else {
             return Ok(None);

@@ -3,29 +3,25 @@
 //! re-delivered events are no-ops.
 
 mod compaction;
+mod extension;
 mod helpers;
 mod session;
 mod snapshot;
-mod team;
 #[cfg(test)]
 mod tests;
-mod workflow;
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use self::team::team_is_empty;
 use crate::event::{Envelope, Event};
 
-pub use compaction::ContextStatusProjection;
+pub use extension::{ProjectionReducer, ProjectionReducerRegistry};
 pub use session::{
-    HandoffProjection, MessageError, MessageProjection, PartProjection, SessionArchiveError,
-    SessionProjection, session_archive_event,
+    MessageError, MessageProjection, PartProjection, SessionArchiveError, SessionProjection,
+    session_archive_event,
 };
 pub use snapshot::PROJECTION_REDUCER_VERSION;
-pub use team::{
-    ArchivedEntry, ChannelProjection, MailMessage, MemberProjection, ResidentWorkProjection,
-    RosterEntry, TeamProjection,
-};
 
 fn is_zero(value: &u64) -> bool {
     *value == 0
@@ -37,54 +33,67 @@ impl Clone for Projection {
         crate::bench::projection_clone(self);
         Self {
             session: self.session.clone(),
-            team: self.team.clone(),
+            extensions: self.extensions.clone(),
             last_seq: self.last_seq,
         }
     }
 }
 
-/// Full folded view: one session transcript plus optional team mailbox/roster state.
+/// Full folded view: one session transcript plus per-bundle extension state.
 #[cfg_attr(not(feature = "lifecycle-bench"), derive(Clone))]
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Projection {
     /// Session transcript and metadata.
     pub session: SessionProjection,
-    /// Team-scoped mailbox/channel/roster state. Empty on sessions that are not a
-    /// team root / carry no mail events.
-    #[serde(default, skip_serializing_if = "team_is_empty")]
-    pub team: TeamProjection,
+    /// Per-bundle extension state folded from [`Event::Extension`] events,
+    /// keyed by bundle id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extensions: BTreeMap<String, serde_json::Value>,
     /// Highest durable `EventSeq` applied; live `seq == 0` does not advance this.
     pub last_seq: u64,
 }
 
 impl Projection {
-    /// Fold a slice of envelopes in order into a fresh projection.
+    /// Fold a slice of envelopes in order into a fresh projection without
+    /// bundle extension reducers (unknown bundles preserve raw extension entries).
     #[must_use]
     pub fn from_events(envs: &[Envelope]) -> Self {
+        Self::from_events_with(envs, &ProjectionReducerRegistry::new())
+    }
+
+    /// Fold a slice of envelopes in order into a fresh projection using `reducers`.
+    #[must_use]
+    pub fn from_events_with(envs: &[Envelope], reducers: &ProjectionReducerRegistry) -> Self {
         let mut p = Self::default();
         for e in envs {
-            p.apply(e);
+            p.apply_with(e, reducers);
         }
         p
     }
 
-    /// Apply one envelope: `seq == 0` is live-only (no `last_seq` advance);
-    /// `seq <= last_seq` is a durable no-op; otherwise fold and advance `last_seq`.
+    /// Apply one envelope without bundle extension reducers: `seq == 0` is
+    /// live-only (no `last_seq` advance); `seq <= last_seq` is a durable no-op;
+    /// otherwise fold and advance `last_seq`.
     pub fn apply(&mut self, env: &Envelope) {
+        self.apply_with(env, &ProjectionReducerRegistry::new());
+    }
+
+    /// Apply one envelope using `reducers` for [`Event::Extension`].
+    pub fn apply_with(&mut self, env: &Envelope, reducers: &ProjectionReducerRegistry) {
         if env.seq.0 == 0 {
-            self.apply_event(&env.event);
+            self.apply_event(&env.event, reducers);
             self.stamp_message_time(&env.event, env.ts_millis);
             return;
         }
         if env.seq.0 <= self.last_seq {
             return;
         }
-        self.apply_event(&env.event);
+        self.apply_event(&env.event, reducers);
         self.stamp_message_time(&env.event, env.ts_millis);
         self.last_seq = env.seq.0;
     }
 
-    fn apply_event(&mut self, e: &Event) {
+    fn apply_event(&mut self, e: &Event, reducers: &ProjectionReducerRegistry) {
         match e {
             Event::SessionCreated {
                 session,
@@ -147,57 +156,6 @@ impl Projection {
             Event::ModelSwitched { model, .. } => {
                 self.session.model = Some(model.clone());
             }
-            Event::WorkflowSelected { workflow, .. } => self.apply_workflow_selected(workflow),
-            Event::WorkflowRunStarted {
-                run,
-                workflow,
-                request_hash,
-                owner,
-                stages,
-                ..
-            } => self.apply_workflow_run_started(run, workflow, request_hash, owner, stages),
-            Event::WorkflowStageStarted { run, stage, .. } => {
-                self.apply_workflow_stage_started(run, stage)
-            }
-            Event::WorkflowStageMemberLinked {
-                run,
-                stage,
-                member,
-                role,
-                iteration,
-                ..
-            } => self.apply_workflow_stage_member_linked(run, stage, member, role, iteration),
-            Event::WorkflowStageRouteOutcome {
-                session,
-                run,
-                stage: stage_id,
-                member,
-                role,
-                iteration,
-                step,
-                candidate_index,
-                model,
-                reasoning,
-                failure_class,
-            } => self.apply_workflow_stage_route_outcome(
-                session,
-                run,
-                stage_id,
-                member,
-                role,
-                iteration,
-                step,
-                candidate_index,
-                model,
-                reasoning,
-                failure_class,
-            ),
-            Event::WorkflowStageFinished {
-                run, stage, status, ..
-            } => self.apply_workflow_stage_finished(run, stage, status),
-            Event::WorkflowRunFinished {
-                run, status, error, ..
-            } => self.apply_workflow_run_finished(run, status, error),
             Event::MessageStarted {
                 message,
                 role,
@@ -309,102 +267,6 @@ impl Projection {
                 state: next,
                 ..
             } => self.apply_tool_part_updated(message, part, next),
-            Event::MemberSpawned {
-                member,
-                child,
-                subagent_type,
-                description,
-                depth,
-                directive,
-                tool_call,
-                ..
-            } => self.apply_member_spawned(
-                member,
-                child,
-                subagent_type,
-                description,
-                depth,
-                directive,
-                tool_call,
-            ),
-            Event::MemberStatusChanged { member, status, .. } => {
-                self.apply_member_status_changed(member, status)
-            }
-            Event::MemberFinished {
-                member,
-                status,
-                summary,
-                child,
-                ..
-            } => self.apply_member_finished(member, status, summary, child),
-            Event::AgentRegistered {
-                session: _,
-                agent_session,
-                handle,
-                parent,
-                agent_type,
-                mode,
-            } => self.apply_agent_registered(agent_session, handle, parent, agent_type, mode),
-            Event::AgentActivityChanged {
-                handle,
-                status,
-                current_task,
-                ..
-            } => self.apply_agent_activity_changed(handle, status, current_task),
-            Event::ResidentWorkStarted {
-                actor_session,
-                handle,
-                epoch,
-                inbox_through,
-                ..
-            } => self.apply_resident_work_started(actor_session, handle, epoch, inbox_through),
-            Event::AgentHeartbeat {
-                handle,
-                heartbeat_ms,
-                ..
-            } => self.apply_agent_heartbeat(handle, heartbeat_ms),
-            Event::ChannelJoined { .. } => {}
-            Event::ChannelCreated {
-                channel,
-                kind,
-                unit,
-                members,
-                ..
-            } => self.apply_channel_created(channel, kind, unit, members),
-            Event::SubagentReported {
-                member,
-                outcome,
-                report,
-                ..
-            } => self.apply_subagent_reported(member, outcome, report),
-            Event::HandoffCommitted {
-                generation,
-                doc,
-                degraded,
-                ..
-            } => self.apply_handoff_committed(generation, doc, degraded),
-            Event::AgentArchived {
-                handle,
-                child,
-                reason,
-                ..
-            } => self.apply_agent_archived(handle, child, reason),
-            Event::MailConsumed {
-                handle, through, ..
-            }
-            | Event::ResidentWorkFinished {
-                handle,
-                inbox_through: through,
-                ..
-            } => self.apply_mail_consumed(handle, through, e),
-            Event::AgentRestarted { handle, .. } => self.apply_agent_restarted(handle),
-            Event::MailSent {
-                from,
-                to,
-                kind,
-                body,
-                ..
-            } => self.apply_mail_sent(from, to, kind, body),
             Event::ContextCompacted {
                 message: marker,
                 to_message,
@@ -412,7 +274,6 @@ impl Projection {
                 ..
             } => self.apply_context_compacted(marker, to_message, step_cut),
             Event::TextEnd { .. }
-            | Event::SessionStatus { .. }
             | Event::ToolInputDelta { .. }
             | Event::CommandExecuted { .. }
             | Event::StepFinished { .. }
@@ -420,7 +281,6 @@ impl Projection {
                 failed_message: None,
                 ..
             } => {}
-            Event::ContextEvicted { parts, .. } => self.apply_context_evicted(parts),
             Event::SessionForked {
                 source,
                 before_message,
@@ -447,14 +307,39 @@ impl Projection {
             Event::TodosUpdated { todos, .. } => {
                 self.replace_todos(todos.clone());
             }
-            // Latest occupancy wins: clients read one current figure, not a history.
-            Event::ContextStatus {
-                tokens,
-                source,
-                mode,
-                threshold,
-                ..
-            } => self.apply_context_status(tokens, source, mode, threshold),
+            Event::Extension {
+                session,
+                bundle,
+                kind,
+                payload,
+            } => {
+                if let Some(reducer) = reducers.get(bundle) {
+                    reducer.fold_extension(self, *session, kind, payload);
+                } else {
+                    self.record_raw_extension(bundle, kind, payload);
+                }
+            }
+        }
+    }
+
+    fn record_raw_extension(&mut self, bundle: &str, kind: &str, payload: &serde_json::Value) {
+        let entry = self
+            .extensions
+            .entry(bundle.to_owned())
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        let item = serde_json::json!({
+            "kind": kind,
+            "payload": payload,
+        });
+        match entry {
+            serde_json::Value::Array(items) => items.push(item),
+            other => {
+                let previous = std::mem::replace(other, serde_json::Value::Array(Vec::new()));
+                if let serde_json::Value::Array(items) = other {
+                    items.push(previous);
+                    items.push(item);
+                }
+            }
         }
     }
 }

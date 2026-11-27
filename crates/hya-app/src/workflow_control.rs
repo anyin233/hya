@@ -11,12 +11,14 @@ use hya_engine::{
     prepare_workflow_run_for_actor,
 };
 use hya_proto::{
-    Envelope, Event, ModelRef, OwnerRunId, SessionId, WorkflowCommand, WorkflowCommandResult,
-    WorkflowDelivery, WorkflowIdentity, WorkflowProjection, WorkflowRevision, WorkflowRunId,
-    WorkflowRunProjection, WorkflowRunResult, WorkflowRunStatus, WorkflowStagePlan,
-    WorkflowSummary,
+    Envelope, Event, ModelRef, OwnerRunId, SessionId, WorkflowIdentity, WorkflowRevision,
+    WorkflowRunId, WorkflowSummary,
 };
-use hya_tool::ToolOperation;
+use hya_tool::extension::{ExtensionEvent, projection_reducers, workflow_projection};
+use hya_tool::{
+    ToolOperation, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowProjection,
+    WorkflowRunProjection, WorkflowRunResult, WorkflowRunStatus, WorkflowStagePlan,
+};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
@@ -108,9 +110,7 @@ impl WorkflowControlError {
             Self::Busy { .. } => Code::WorkflowBusy,
             Self::RuntimeUnavailable => Code::WorkflowRuntimeUnavailable,
             Self::OperationConflict { .. } => Code::WorkflowOperationConflict,
-            Self::Core(hya_engine::CoreError::Store(hya_store::StoreError::CapacityExceeded {
-                ..
-            })) => Code::WorkflowOverloaded,
+            Self::Core(hya_engine::CoreError::CapacityExceeded { .. }) => Code::WorkflowOverloaded,
             Self::Execution(_) | Self::Core(_) => Code::Internal,
         }
     }
@@ -446,10 +446,11 @@ impl WorkflowControl {
             .select_workflow(
                 actor_claim.as_ref(),
                 session,
-                Event::WorkflowSelected {
+                ExtensionEvent::WorkflowSelected {
                     session,
                     workflow: entry.identity().clone(),
-                },
+                }
+                .into_event(),
             )
             .await?
         {
@@ -474,7 +475,7 @@ impl WorkflowControl {
         }
         let (workdir, binding) = self.session_binding(session, captured_binding).await?;
         let catalog = self.catalog(&workdir, &binding).await?;
-        let mut state = projection.session.workflow.clone().unwrap_or_default();
+        let mut state = workflow_projection(&projection).unwrap_or_default();
         decorate_projection(&catalog, &mut state);
         Ok(state)
     }
@@ -515,15 +516,12 @@ impl WorkflowControl {
         let Some(caller) = projection.session.agent.as_ref().map(ToString::to_string) else {
             return Err(WorkflowControlError::SessionNotFound { session });
         };
-        let selected = projection
-            .session
-            .workflow
+        let workflow_proj = workflow_projection(&projection);
+        let selected = workflow_proj
             .as_ref()
             .and_then(|state| state.selection.as_ref())
             .cloned();
-        let active_run = projection
-            .session
-            .workflow
+        let active_run = workflow_proj
             .as_ref()
             .and_then(|state| state.run.as_ref())
             .filter(|run| run.status == WorkflowRunStatus::Running)
@@ -630,14 +628,15 @@ impl WorkflowControl {
             .admit_workflow_run(
                 actor_claim.as_ref(),
                 session,
-                Event::WorkflowRunStarted {
+                ExtensionEvent::WorkflowRunStarted {
                     session,
                     run,
                     workflow: entry.identity().clone(),
                     request_hash: request_hash.clone(),
                     owner: self.owner,
                     stages,
-                },
+                }
+                .into_event(),
             )
             .await?;
         match admission {
@@ -735,7 +734,7 @@ impl WorkflowControl {
                     .record_workflow_event_for_actor(
                         None,
                         session,
-                        Event::WorkflowRunFinished {
+                        ExtensionEvent::WorkflowRunFinished {
                             session,
                             run,
                             status: if cancel.is_cancelled() {
@@ -744,7 +743,8 @@ impl WorkflowControl {
                                 WorkflowRunStatus::Failed
                             },
                             error: Some(detail.clone()),
-                        },
+                        }
+                        .into_event(),
                     )
                     .await?;
                 return Err(map_workflow_error_with_detail(error, detail));
@@ -759,12 +759,13 @@ impl WorkflowControl {
             .record_workflow_event_for_actor(
                 None,
                 session,
-                Event::WorkflowRunFinished {
+                ExtensionEvent::WorkflowRunFinished {
                     session,
                     run,
                     status,
                     error: None,
-                },
+                }
+                .into_event(),
             )
             .await?;
         let run_projection = self
@@ -869,13 +870,15 @@ impl WorkflowControl {
         request_hash: &str,
     ) -> Result<Option<WorkflowRunProjection>, WorkflowControlError> {
         let events = self.engine.replay(session).await?;
-        let Some(existing_hash) = events.iter().find_map(|envelope| match &envelope.event {
-            Event::WorkflowRunStarted {
-                run: existing,
-                request_hash,
-                ..
-            } if *existing == run => Some(request_hash.as_str()),
-            _ => None,
+        let Some(existing_hash) = events.iter().find_map(|envelope| {
+            match ExtensionEvent::from_event(&envelope.event) {
+                Some(ExtensionEvent::WorkflowRunStarted {
+                    run: existing,
+                    request_hash,
+                    ..
+                }) if existing == run => Some(request_hash),
+                _ => None,
+            }
         }) else {
             return Ok(None);
         };
@@ -1002,21 +1005,19 @@ fn historical_run(events: &[Envelope], run: WorkflowRunId) -> Option<WorkflowRun
         .filter(|envelope| workflow_event_run(&envelope.event) == Some(run))
         .cloned()
         .collect::<Vec<_>>();
-    hya_proto::Projection::from_events(&filtered)
-        .session
-        .workflow
-        .and_then(|workflow| workflow.run)
+    let projection = hya_proto::Projection::from_events_with(&filtered, &projection_reducers());
+    workflow_projection(&projection).and_then(|workflow| workflow.run)
 }
 
 /// Return the Workflow run identity carried by one lifecycle event.
 fn workflow_event_run(event: &Event) -> Option<WorkflowRunId> {
-    match event {
-        Event::WorkflowRunStarted { run, .. }
-        | Event::WorkflowStageStarted { run, .. }
-        | Event::WorkflowStageMemberLinked { run, .. }
-        | Event::WorkflowStageRouteOutcome { run, .. }
-        | Event::WorkflowStageFinished { run, .. }
-        | Event::WorkflowRunFinished { run, .. } => Some(*run),
+    match ExtensionEvent::from_event(event)? {
+        ExtensionEvent::WorkflowRunStarted { run, .. }
+        | ExtensionEvent::WorkflowStageStarted { run, .. }
+        | ExtensionEvent::WorkflowStageMemberLinked { run, .. }
+        | ExtensionEvent::WorkflowStageRouteOutcome { run, .. }
+        | ExtensionEvent::WorkflowStageFinished { run, .. }
+        | ExtensionEvent::WorkflowRunFinished { run, .. } => Some(run),
         _ => None,
     }
 }
@@ -1108,6 +1109,7 @@ mod tests {
     };
     use hya_engine::WorkflowError;
     use hya_proto::{ModelRef, WorkflowIdentity, WorkflowRevision, WorkflowSourceId};
+    use hya_tool::extension::ExtensionEvent;
     use std::collections::BTreeMap;
 
     /// Invalid runtime topology is rejected as source validation before admission.
@@ -1127,14 +1129,10 @@ mod tests {
     #[test]
     fn w1_capacity_refusals_keep_overload_code_before_and_after_admission() {
         for preflight in [false, true] {
-            let error = WorkflowError::Engine(hya_engine::CoreError::Store(
-                hya_store::StoreError::CapacityExceeded {
-                    root: hya_proto::SessionId::new(),
-                    live: 1,
-                    requested: 2,
-                    limit: 2,
-                },
-            ));
+            let error = WorkflowError::Engine(hya_engine::CoreError::CapacityExceeded {
+                requested: 2,
+                limit: 2,
+            });
             let error = if preflight {
                 map_workflow_preflight_error(error)
             } else {
@@ -1148,19 +1146,20 @@ mod tests {
     #[test]
     fn historical_run_classifier_includes_route_outcomes() {
         let run = hya_proto::WorkflowRunId::new();
-        let event = hya_proto::Event::WorkflowStageRouteOutcome {
+        let event = ExtensionEvent::WorkflowStageRouteOutcome {
             session: hya_proto::SessionId::new(),
             run,
             stage: "execute".to_string(),
             member: hya_proto::MemberId::new(),
-            role: hya_proto::WorkflowMemberRole::Worker,
+            role: hya_tool::WorkflowMemberRole::Worker,
             iteration: 0,
             step: 0,
             candidate_index: 0,
             model: hya_proto::ModelRef::new("fake/model"),
             reasoning: "none".to_string(),
-            failure_class: hya_proto::WorkflowRouteFailureClass::None,
-        };
+            failure_class: hya_tool::WorkflowRouteFailureClass::None,
+        }
+        .into_event();
 
         assert_eq!(workflow_event_run(&event), Some(run));
     }

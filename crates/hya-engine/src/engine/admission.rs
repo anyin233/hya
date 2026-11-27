@@ -1,5 +1,4 @@
-use hya_proto::{Envelope, Event, FinishReason, MessageId, PartId, Role, SessionId};
-use hya_store::{ActorClaim, RecoveredActorClaim};
+use hya_proto::{ActorClaim, Envelope, Event, FinishReason, MessageId, PartId, Role, SessionId};
 
 use super::SessionEngine;
 use crate::TurnBinding;
@@ -7,6 +6,10 @@ use crate::error::CoreError;
 use crate::hooks::{
     CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, HookDispatcher, MessageUserBeforeInput,
     MessageUserBeforeOutcome,
+};
+use crate::store_bridge::{
+    RecoveredActorClaim, RecoveredResidentWork, ResidentArchive, ResidentArchiveOwner,
+    SessionStoreExt as _,
 };
 
 impl SessionEngine {
@@ -75,7 +78,7 @@ impl SessionEngine {
         recovered: &RecoveredActorClaim,
         root: SessionId,
         handle: &str,
-    ) -> Result<hya_store::RecoveredResidentWork, CoreError> {
+    ) -> Result<RecoveredResidentWork, CoreError> {
         let outcome = self
             .store
             .recover_resident_actor(recovered, root, handle)
@@ -95,8 +98,7 @@ impl SessionEngine {
         // Without a supervisor there can be no in-memory episode. The store's
         // runtime-owner check remains authoritative for orphan Takeover.
         let projection = self.read_projection_shared(root).await?;
-        let mut members = projection
-            .team
+        let mut members = hya_tool::extension::team_projection(&projection)
             .roster
             .iter()
             .filter(|(path, _)| path.as_str() != hya_proto::ROOT_HANDLE)
@@ -109,15 +111,15 @@ impl SessionEngine {
             let (_, envelopes) = self
                 .store
                 .finalize_resident_archive(
-                    hya_store::ResidentArchiveOwner::Takeover,
+                    ResidentArchiveOwner::Takeover,
                     root,
                     &handle,
-                    hya_store::ResidentArchive {
+                    ResidentArchive {
                         actor: member,
                         generation: handoff.generation,
                         doc: handoff.doc,
                         degraded: handoff.degraded,
-                        reason: hya_proto::ArchiveReason::RootTeardown,
+                        reason: hya_tool::ArchiveReason::RootTeardown,
                         note: "root turn teardown".into(),
                         member_status: hya_proto::MemberRunStatus::Cancelled,
                         report: None,
@@ -168,7 +170,12 @@ impl SessionEngine {
         // or claim, its event survives archive/revive and needs no episode lock.
         if depth > 0
             && self.replay(root).await?.iter().any(|envelope| {
-                matches!(envelope.event, Event::AgentRegistered { agent_session, .. } if agent_session == session)
+                matches!(
+                    hya_tool::extension::ExtensionEvent::from_event(&envelope.event),
+                    Some(hya_tool::extension::ExtensionEvent::AgentRegistered {
+                        agent_session, ..
+                    }) if agent_session == session
+                )
             })
         {
             return Err(CoreError::Invalid(

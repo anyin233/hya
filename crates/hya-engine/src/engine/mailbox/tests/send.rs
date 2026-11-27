@@ -127,10 +127,7 @@ async fn mail_auth_rejects_missing_unknown_skip_level_and_unregistered_senders()
     );
     assert_eq!(eng.replay(o.root).await.unwrap().len(), before);
     assert!(
-        !eng.read_projection(o.root)
-            .await
-            .unwrap()
-            .team
+        !hya_tool::extension::team_projection(&eng.read_projection(o.root).await.unwrap())
             .inboxes
             .contains_key("missing-1")
     );
@@ -182,11 +179,7 @@ async fn mail_auth_dm_direction_relative_parent_and_bundle_policy_restrictions()
     assert_eq!(eng.replay(o.root).await.unwrap().len(), before);
 
     // Relative parent handle obeys child policy bit, not parent bit.
-    let wdm = eng
-        .read_projection(o.root)
-        .await
-        .unwrap()
-        .team
+    let wdm = hya_tool::extension::team_projection(&eng.read_projection(o.root).await.unwrap())
         .resolve_dm(&o.worker_1.path, "lead-1")
         .unwrap();
     eng.update_session_channel_policy(
@@ -250,9 +243,7 @@ async fn mail_auth_dm_direction_relative_parent_and_bundle_policy_restrictions()
                 Some(policy)
             )
             .await,
-        Err(CoreError::Store(
-            hya_store::StoreError::MailAuthorizationRejected { .. }
-        ))
+        Err(CoreError::MailAuthorizationRejected { .. })
     ));
 }
 
@@ -261,16 +252,20 @@ async fn mail_auth_group_vs_dm_with_released_claim_and_terminal_member() {
     // 1) Released claim still receives group announce, but DM (channel & handle) rejects.
     let eng = engine().await;
     let o = org(&eng).await;
+    use crate::store_bridge::SessionStoreExt as _;
     eng.store().release_claim(&o.lead_2._claim).await.unwrap();
     let r = eng.mail_announce(o.root, "all hands".into()).await.unwrap();
-    let replay = hya_proto::Projection::from_events(&eng.replay(o.root).await.unwrap());
-    let delivered = replay
-        .team
+    let replay = hya_proto::Projection::from_events_with(
+        &eng.replay(o.root).await.unwrap(),
+        &hya_tool::extension::projection_reducers(),
+    );
+    let team = hya_tool::extension::team_projection(&replay);
+    let delivered = team
         .inboxes
         .values()
         .filter(|i| {
             i.iter()
-                .any(|idx| replay.team.mail[*idx].body == "all hands")
+                .any(|idx| team.mail[*idx].body == "all hands")
         })
         .count();
     assert_eq!((r.recipients, delivered), (3, 3));
@@ -346,11 +341,7 @@ async fn parent_sentinel_routes_direct_parent_dm_for_lazy_root_and_depth_two() {
 async fn announce_and_group_posts_reach_direct_reports_and_reject_impersonation_or_leaf() {
     let eng = engine().await;
     let o = org(&eng).await;
-    let group = eng
-        .read_projection(o.root)
-        .await
-        .unwrap()
-        .team
+    let group = hya_tool::extension::team_projection(&eng.read_projection(o.root).await.unwrap())
         .channels
         .into_iter()
         .find(|(_, s)| s.kind == hya_proto::ChannelKind::Group && s.unit.as_deref() == Some("main"))

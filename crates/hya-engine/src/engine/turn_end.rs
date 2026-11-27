@@ -14,13 +14,13 @@
 use std::time::Duration;
 
 use hya_proto::{
-    Event, FinishCause, FinishReason, MemberRunStatus, MessageId, PartProjection, Role,
+    ActorClaim, Event, FinishCause, FinishReason, MemberRunStatus, MessageId, PartProjection, Role,
     RosterStatus, SessionId, SubagentMode, ToolPartState,
 };
-use hya_store::ActorClaim;
 
 use super::SessionEngine;
 use crate::error::CoreError;
+use crate::store_bridge::SessionStoreExt as _;
 
 /// How long a graceful stop waits for cancelled turns to end on their own
 /// before closing whatever is still open itself.
@@ -82,6 +82,10 @@ pub(crate) fn error_code(error: &CoreError) -> &'static str {
         CoreError::AgentDefinitionMissing { .. } => "agent_definition_missing",
         CoreError::Invalid(_) | CoreError::BundleRefresh(_) => "invalid",
         CoreError::TurnAlreadyActive { .. } => "turn_already_active",
+        CoreError::CapacityExceeded { .. } => "capacity_exceeded",
+        CoreError::MailAuthorizationRejected { .. } => "mail_authorization_rejected",
+        CoreError::MailRevivalRequired { .. } => "mail_revival_required",
+        CoreError::MailboxRejected(_) => "mailbox_rejected",
         // The failure keeps its own code; the bundle id is in the text.
         CoreError::BundleRuntime { source, .. } => error_code(source),
     }
@@ -413,7 +417,7 @@ impl SessionEngine {
                 _ => None,
             })
             .collect();
-        for member in &projection.session.members {
+        for member in hya_tool::extension::members_projection(&projection) {
             if matches!(
                 member.status,
                 MemberRunStatus::Spawning | MemberRunStatus::Running
@@ -424,13 +428,14 @@ impl SessionEngine {
                 self.emit_for_actor(
                     actor_claim,
                     session,
-                    Event::MemberFinished {
+                    hya_tool::extension::ExtensionEvent::MemberFinished {
                         session,
                         member: member.member,
                         status: MemberRunStatus::Cancelled,
                         summary: reason.to_string(),
                         child: member.child,
-                    },
+                    }
+                    .into_event(),
                 )
                 .await?;
             }
@@ -477,8 +482,7 @@ impl SessionEngine {
         if projection.session.parent.is_some() {
             return;
         }
-        let members: Vec<String> = projection
-            .team
+        let members: Vec<String> = hya_tool::extension::team_projection(&projection)
             .roster
             .values()
             .filter(|entry| {

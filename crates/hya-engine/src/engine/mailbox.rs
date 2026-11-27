@@ -29,7 +29,8 @@ pub struct ChannelHistoryRead {
     /// padding stripped): the echo that teaches the correct spelling.
     pub warning: Option<String>,
 }
-use hya_proto::{AgentName, Event, RosterStatus, SessionId, SubagentMode, scope};
+use hya_proto::{ActorClaim, AgentName, RosterStatus, SessionId, SubagentMode, scope};
+use hya_tool::extension::{ExtensionEvent, team_projection};
 
 use crate::engine::SessionEngine;
 use crate::error::CoreError;
@@ -61,12 +62,13 @@ impl SessionEngine {
     ) -> Result<(), CoreError> {
         self.emit(
             root,
-            Event::AgentActivityChanged {
+            ExtensionEvent::AgentActivityChanged {
                 session: root,
                 handle,
                 status,
                 current_task,
-            },
+            }
+            .into_event(),
         )
         .await
     }
@@ -83,15 +85,11 @@ impl SessionEngine {
     pub(crate) async fn ensure_root_registered_for_actor(
         &self,
         root: SessionId,
-        actor_claim: Option<&hya_store::ActorClaim>,
+        actor_claim: Option<&ActorClaim>,
     ) -> Result<String, CoreError> {
         let projection = self.read_projection_shared(root).await?;
-        if let Some(entry) = projection
-            .team
-            .roster
-            .values()
-            .find(|entry| entry.session == root)
-        {
+        let team = team_projection(&projection);
+        if let Some(entry) = team.roster.values().find(|entry| entry.session == root) {
             return Ok(entry.handle.clone());
         }
         let agent_type = projection
@@ -105,14 +103,15 @@ impl SessionEngine {
         self.emit_for_actor(
             actor_claim,
             root,
-            Event::AgentRegistered {
+            ExtensionEvent::AgentRegistered {
                 session: root,
                 agent_session: root,
                 handle: MAIN_HANDLE.to_string(),
                 parent: None,
                 agent_type,
                 mode: SubagentMode::Transient,
-            },
+            }
+            .into_event(),
         )
         .await?;
         Ok(MAIN_HANDLE.to_string())
@@ -127,8 +126,7 @@ impl SessionEngine {
         session: SessionId,
     ) -> Result<String, CoreError> {
         let projection = self.read_projection_shared(root).await?;
-        if let Some(entry) = projection
-            .team
+        if let Some(entry) = team_projection(&projection)
             .roster
             .values()
             .find(|entry| entry.session == session)
@@ -179,8 +177,7 @@ pub(crate) fn dm_channel_between(
     from: &str,
     parent: &str,
 ) -> Option<String> {
-    projection
-        .team
+    team_projection(projection)
         .channels
         .iter()
         .find(|(_, channel)| {

@@ -123,12 +123,13 @@ impl SessionEngine {
         // as user prompts — steer must not duplicate those. An interactive
         // root turn claims nothing, so its durable backlog (which nothing else
         // will surface) becomes steer's to deliver.
-        let cursor = projection.team.roster.get(&handle).map_or(0, |entry| {
+        let team = hya_tool::extension::team_projection(&projection);
+        let cursor = team.roster.get(&handle).map_or(0, |entry| {
             entry.resident_work.map_or(entry.resident_cursor, |work| {
                 entry.resident_cursor.max(work.inbox_through)
             })
         });
-        let (channels, channel_roles) = topology(&projection, &handle);
+        let (channels, channel_roles) = topology(&team, &handle);
         let mut mailbox = SteerMailbox {
             root,
             pending_ack: None,
@@ -143,8 +144,7 @@ impl SessionEngine {
             durable: false,
             dirty: false,
         };
-        mailbox.queue = projection
-            .team
+        mailbox.queue = team
             .unread_incoming_mail(&mailbox.handle, cursor)
             .filter(|message| mailbox.allows_steer(&message.from, &message.to))
             .map(|message| SteeredMail {
@@ -153,8 +153,7 @@ impl SessionEngine {
                 channel: message.to.channel().map(str::to_string),
             })
             .collect();
-        mailbox.through = projection
-            .team
+        mailbox.through = team
             .inboxes
             .get(&mailbox.handle)
             .map_or(cursor, |inbox| inbox.len() as u64);
@@ -165,21 +164,20 @@ impl SessionEngine {
 /// The acting handle's channel memberships and role per channel.
 #[allow(clippy::type_complexity)]
 fn topology(
-    projection: &hya_proto::Projection,
+    team: &hya_tool::extension::TeamProjection,
     handle: &str,
 ) -> (
     Vec<String>,
     HashMap<String, (ChannelTemplateKind, ChannelParticipantRole)>,
 ) {
-    let channels: Vec<String> = projection
-        .team
+    let channels: Vec<String> = team
         .channels
         .iter()
         .filter(|(_, channel)| channel.members.contains(handle))
         .map(|(key, _)| key.clone())
         .collect();
     let mut channel_roles = HashMap::new();
-    for (id, channel) in &projection.team.channels {
+    for (id, channel) in &team.channels {
         if channel.members.contains(handle) {
             let topology = if channel.kind == hya_proto::ChannelKind::Group {
                 (
@@ -234,11 +232,14 @@ impl SteerMailbox {
         loop {
             match self.bus.try_recv() {
                 Ok(envelope) => {
-                    if let Event::MailSent {
-                        session, from, to, ..
-                    } = &envelope.event
-                        && from != &self.handle
-                        && (*session == self.root || self.reaches(to))
+                    if let Some(hya_tool::extension::ExtensionEvent::MailSent {
+                        session,
+                        from,
+                        to,
+                        ..
+                    }) = hya_tool::extension::ExtensionEvent::from_event(&envelope.event)
+                        && from != self.handle
+                        && (session == self.root || self.reaches(&to))
                     {
                         self.dirty = true;
                     }
@@ -259,25 +260,24 @@ impl SteerMailbox {
     async fn resync_from_log(&mut self, engine: &SessionEngine) -> Result<bool, CoreError> {
         // Cached fold: this must cost the root's new events, not its whole log.
         let projection = engine.read_projection_shared(self.root).await?;
-        (self.channels, self.channel_roles) = topology(&projection, &self.handle);
-        let durable = projection.team.roster.get(&self.handle).map_or(0, |entry| {
+        let team = hya_tool::extension::team_projection(&projection);
+        (self.channels, self.channel_roles) = topology(&team, &self.handle);
+        let durable = team.roster.get(&self.handle).map_or(0, |entry| {
             entry.resident_work.map_or(entry.resident_cursor, |work| {
                 entry.resident_cursor.max(work.inbox_through)
             })
         });
         self.committed_through = self.committed_through.max(durable);
-        let Some(inbox) = projection.team.inboxes.get(&self.handle) else {
+        let Some(inbox) = team.inboxes.get(&self.handle) else {
             self.queue.clear();
             self.through = self.committed_through;
             return Ok(false);
         };
-        let consumed_incoming = projection
-            .team
+        let consumed_incoming = team
             .unread_incoming_mail(&self.handle, self.committed_through)
             .next()
             .is_some();
-        let pending = projection
-            .team
+        let pending = team
             .unread_incoming_mail(&self.handle, self.committed_through)
             .filter(|message| self.allows_steer(&message.from, &message.to))
             .map(|message| SteeredMail {
@@ -343,11 +343,12 @@ impl SteerMailbox {
         let handle = self.handle.clone();
         let through = self.through;
         self.pending_ack = Some((
-            Event::MailConsumed {
+            hya_tool::extension::ExtensionEvent::MailConsumed {
                 session: root,
                 handle,
                 through,
-            },
+            }
+            .into_event(),
             consumed_incoming,
         ));
         self.committed_through = through;

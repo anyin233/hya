@@ -1,7 +1,8 @@
-use hya_proto::{AgentName, Event, FinishReason, MessageId, ModelRef, Role, SessionId};
+use hya_proto::{ActorClaim, AgentName, Event, FinishReason, MessageId, ModelRef, Role, SessionId};
 use hya_provider::{Capabilities, CompletionRequest, EventStream, ProviderError, ProviderRouter};
-use hya_store::ActorClaim;
-use hya_tool::{Action, AgentDef, Mode, PermissionPlane, ResolvedTool, Rule};
+use hya_tool::{
+    Action, AgentDef, Mode, PermissionPlane, ResolvedTool, Rule, WorkflowRouteFailureClass,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -192,8 +193,8 @@ async fn shutdown_sidecar(handle: &mut Option<Box<dyn SidecarHandle>>) -> Result
         Ok(())
     }
 }
-fn workflow_provider_failure_class(error: &ProviderError) -> hya_proto::WorkflowRouteFailureClass {
-    use hya_proto::WorkflowRouteFailureClass as Class;
+fn workflow_provider_failure_class(error: &ProviderError) -> WorkflowRouteFailureClass {
+    use WorkflowRouteFailureClass as Class;
     match error {
         ProviderError::Transport(_) => Class::Transport,
         ProviderError::HttpStatus { status, .. } => {
@@ -218,14 +219,12 @@ fn workflow_provider_failure_class(error: &ProviderError) -> hya_proto::Workflow
 fn workflow_failure_class(
     error: &CoreError,
     cancel: &CancellationToken,
-) -> hya_proto::WorkflowRouteFailureClass {
+) -> WorkflowRouteFailureClass {
     match error {
         CoreError::Provider(error) => workflow_provider_failure_class(error),
-        CoreError::Cancelled if cancel.is_cancelled() => {
-            hya_proto::WorkflowRouteFailureClass::Cancelled
-        }
-        CoreError::Cancelled => hya_proto::WorkflowRouteFailureClass::Aborted,
-        _ => hya_proto::WorkflowRouteFailureClass::Internal,
+        CoreError::Cancelled if cancel.is_cancelled() => WorkflowRouteFailureClass::Cancelled,
+        CoreError::Cancelled => WorkflowRouteFailureClass::Aborted,
+        _ => WorkflowRouteFailureClass::Internal,
     }
 }
 
@@ -777,9 +776,9 @@ impl SessionEngine {
         if let Some(route) = workflow_route.as_ref() {
             let failure = match &outcome {
                 Ok(FinishReason::Cancelled) => Some(if cancel.is_cancelled() {
-                    hya_proto::WorkflowRouteFailureClass::Cancelled
+                    WorkflowRouteFailureClass::Cancelled
                 } else {
-                    hya_proto::WorkflowRouteFailureClass::Aborted
+                    WorkflowRouteFailureClass::Aborted
                 }),
                 Err(error) => Some(workflow_failure_class(error, &cancel)),
                 Ok(_) => None,

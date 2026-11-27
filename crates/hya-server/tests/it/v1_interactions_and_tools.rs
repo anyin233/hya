@@ -14,9 +14,10 @@ use hya_api::v1 as pb;
 use hya_engine::{EventBus, SessionEngine};
 use hya_proto::{
     AgentName, Envelope, Event, FinishReason, MemberId, MemberRunStatus, Message, MessageId,
-    ModelRef, Part, PermissionRequestId, QuestionRequestId, ReportOutcome, Role, SessionId,
-    ToolCallId,
+    ModelRef, Part, PermissionRequestId, QuestionRequestId, Role, SessionId, ToolCallId,
 };
+use hya_tool::extension::ExtensionEvent;
+use hya_tool::{ArchiveReason, ReportOutcome};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
     ProviderRouter,
@@ -921,13 +922,16 @@ async fn member_updates_reports_and_archival_revival_match_across_sse_grpc_and_r
 
     let member = MemberId::new();
     let handle = "main/lead/helper";
-    let reg = |s: SessionId, h: &str, p: Option<&str>| Event::AgentRegistered {
-        session: root,
-        agent_session: s,
-        handle: h.into(),
-        parent: p.map(str::to_owned),
-        agent_type: AgentName::new("build"),
-        mode: hya_proto::SubagentMode::Resident,
+    let reg = |s: SessionId, h: &str, p: Option<&str>| {
+        ExtensionEvent::AgentRegistered {
+            session: root,
+            agent_session: s,
+            handle: h.into(),
+            parent: p.map(str::to_owned),
+            agent_type: AgentName::new("build"),
+            mode: hya_proto::SubagentMode::Resident,
+        }
+        .into_event()
     };
     let emit = |ev: Event| {
         let engine = engine.clone();
@@ -955,7 +959,7 @@ async fn member_updates_reports_and_archival_revival_match_across_sse_grpc_and_r
         reg(root, "main", None),
         reg(lead, "lead", Some("main")),
         reg(child, "helper", Some("main/lead")),
-        Event::MemberSpawned {
+        ExtensionEvent::MemberSpawned {
             session: lead,
             member,
             child: Some(child),
@@ -964,20 +968,23 @@ async fn member_updates_reports_and_archival_revival_match_across_sse_grpc_and_r
             depth: 2,
             directive: "review".into(),
             tool_call: Some(ToolCallId::new()),
-        },
-        Event::MemberStatusChanged {
+        }
+        .into_event(),
+        ExtensionEvent::MemberStatusChanged {
             session: lead,
             member,
             status: MemberRunStatus::Running,
-        },
-        Event::SubagentReported {
+        }
+        .into_event(),
+        ExtensionEvent::SubagentReported {
             session: lead,
             member,
             child,
             handle: handle.into(),
             outcome: ReportOutcome::Done,
             report: "review complete".into(),
-        },
+        }
+        .into_event(),
     ] {
         emit(ev).await;
     }
@@ -1012,21 +1019,23 @@ async fn member_updates_reports_and_archival_revival_match_across_sse_grpc_and_r
     for (archived, ev) in [
         (
             true,
-            Event::AgentArchived {
+            ExtensionEvent::AgentArchived {
                 session: root,
                 child,
                 handle: handle.into(),
-                reason: hya_proto::ArchiveReason::Reported,
-            },
+                reason: ArchiveReason::Reported,
+            }
+            .into_event(),
         ),
         (
             false,
-            Event::AgentRestarted {
+            ExtensionEvent::AgentRestarted {
                 session: root,
                 child,
                 handle: handle.into(),
                 epoch: hya_proto::ActorEpoch::INITIAL,
-            },
+            }
+            .into_event(),
         ),
     ] {
         if !archived {

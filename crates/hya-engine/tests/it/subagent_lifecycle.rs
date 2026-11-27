@@ -22,18 +22,21 @@ use hya_engine::{
     ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, CompactionConfig,
     CoreError, CreateSession, EventBus, HookDispatcher, MessageUserBeforeInput,
     MessageUserBeforeOutcome, ResidentRecovery, ResidentSupervisor, RuntimeSource, RuntimeSourceId,
-    SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,
-    SubagentGovernor, SubagentLimits, SummarizeOptions, Summarizer, TaskSpawnOrigin,
+    SessionEngine, SessionStoreExt as _, SidecarEnvironment, SidecarHandle, SidecarLifecycle,
+    SidecarStart, SubagentGovernor, SubagentLimits, SummarizeOptions, Summarizer, TaskSpawnOrigin,
     TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
     ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, TurnBinding, run_lifecycle_service,
     run_mailbox_service,
 };
 use hya_proto::{
-    ActorEpoch, AgentName, ArchiveReason, ChannelKind, Envelope, Event, FinishCause, FinishReason,
-    MailEndpoint, MailKind, MemberRunStatus, Message, MessageId, ModelRef, Part, PartId,
-    PartProjection, ReportOutcome, Role, RosterStatus, SessionId, SessionKind, SubagentMode,
-    ToolCallId, ToolName, ToolSchema, scope,
+    ActorEpoch, AgentName, ChannelKind, Envelope, Event, FinishCause, FinishReason, MailEndpoint,
+    MailKind, MemberRunStatus, Message, MessageId, ModelRef, Part, PartId, PartProjection, Role,
+    RosterStatus, SessionId, SessionKind, SubagentMode, ToolCallId, ToolName, ToolSchema, scope,
 };
+use hya_tool::extension::{
+    ExtensionEvent, handoff_projection, members_projection, projection_reducers, team_projection,
+};
+use hya_tool::{ArchiveReason, ReportOutcome};
 use hya_provider::{
     Capabilities, CompletionRequest, DevProvider, EventStream, FakeProvider, FakeStep, Provider,
     ProviderError, ProviderRouter,
@@ -759,11 +762,7 @@ async fn roster_status(
     root: SessionId,
     leaf: &str,
 ) -> Option<RosterStatus> {
-    engine
-        .read_projection(root)
-        .await
-        .unwrap()
-        .team
+    team_projection(&engine.read_projection(root).await.unwrap())
         .roster
         .get(&format!("main/{leaf}"))
         .map(|e| e.status)
@@ -791,17 +790,17 @@ async fn wait_activity(
 ) -> (RosterStatus, Option<String>) {
     tokio::time::timeout(END_BOUND, async {
         loop {
-            if let Event::AgentActivityChanged {
+            if let Some(ExtensionEvent::AgentActivityChanged {
                 session,
                 handle: h,
                 status,
                 current_task,
-            } = &events.recv().await.unwrap().event
-                && *session == root
+            }) = ExtensionEvent::from_event(&events.recv().await.unwrap().event)
+                && session == root
                 && h == handle
-                && want(*status, current_task.as_deref())
+                && want(status, current_task.as_deref())
             {
-                return (*status, current_task.clone());
+                return (status, current_task);
             }
         }
     })
@@ -822,13 +821,13 @@ async fn wait_loss_and_failure(
                 _ = terminated.notified(), if !term_seen => term_seen = true,
                 env = events.recv(), if !fail_seen => {
                     if matches!(
-                        &env.unwrap().event,
-                        Event::AgentActivityChanged {
+                        ExtensionEvent::from_event(&env.unwrap().event),
+                        Some(ExtensionEvent::AgentActivityChanged {
                             session,
                             handle: h,
                             status: RosterStatus::Failed,
                             current_task: Some(t),
-                        } if *session == root && h == handle && t.starts_with("activation sidecar lost")
+                        }) if session == root && h == handle && t.starts_with("activation sidecar lost")
                     ) {
                         fail_seen = true;
                     }
@@ -852,9 +851,9 @@ async fn assert_sidecar_failed(
         events
             .iter()
             .filter(|e| matches!(
-                &e.event,
-                Event::SubagentReported { child: c, outcome: ReportOutcome::Failed, report, .. }
-                    if *c == child && report.contains("activation sidecar lost")
+                ExtensionEvent::from_event(&e.event),
+                Some(ExtensionEvent::SubagentReported { child: c, outcome: ReportOutcome::Failed, report, .. })
+                    if c == child && report.contains("activation sidecar lost")
             ))
             .count(),
         1
@@ -863,8 +862,8 @@ async fn assert_sidecar_failed(
         events
             .iter()
             .filter(|e| matches!(
-                &e.event,
-                Event::MailSent { from, body, .. } if from == handle && body.contains("activation sidecar lost")
+                ExtensionEvent::from_event(&e.event),
+                Some(ExtensionEvent::MailSent { from, body, .. }) if from == handle && body.contains("activation sidecar lost")
             ))
             .count(),
         1
@@ -872,10 +871,10 @@ async fn assert_sidecar_failed(
     assert!(
         !events
             .iter()
-            .any(|e| matches!(&e.event, Event::AgentRestarted { child: c, .. } if *c == child))
+            .any(|e| matches!(ExtensionEvent::from_event(&e.event), Some(ExtensionEvent::AgentRestarted { child: c, .. }) if c == child))
     );
     assert_eq!(
-        engine.read_projection(root).await.unwrap().team.archived[handle].reason,
+        team_projection(&engine.read_projection(root).await.unwrap()).archived[handle].reason,
         ArchiveReason::Reported
     );
     assert!(!is_active(engine, child).await);
@@ -921,12 +920,13 @@ async fn assert_revives(
     .await
     .expect("revived episode must admit committed mail");
     assert!(engine.replay(root).await.unwrap().iter().any(|e| matches!(
-        &e.event,
-        Event::AgentRestarted { child: c, epoch, .. } if *c == child && *epoch > ActorEpoch::INITIAL
+        ExtensionEvent::from_event(&e.event),
+        Some(ExtensionEvent::AgentRestarted { child: c, epoch, .. }) if c == child && epoch > ActorEpoch::INITIAL
     )));
     let proj = engine.read_projection(root).await.unwrap();
-    assert_eq!(proj.team.roster[handle].session, child);
-    assert!(!proj.team.archived.contains_key(handle));
+    let team = team_projection(&proj);
+    assert_eq!(team.roster[handle].session, child);
+    assert!(!team.archived.contains_key(handle));
     assert!(is_active(engine, child).await);
 }
 
@@ -1066,7 +1066,7 @@ async fn observability_isolation_and_verbatim_spawn_directive() {
         1
     );
 
-    let recorded = &engine.read_projection(lead).await.unwrap().session.members[0];
+    let recorded = &members_projection(&engine.read_projection(lead).await.unwrap())[0];
     assert_eq!(
         (
             &recorded.directive,
@@ -1386,7 +1386,7 @@ async fn sidecar_ack_precedes_running_state_for_initial_and_mailbox_wakes() {
     );
     assert_eq!(polls.load(Ordering::SeqCst), 0);
 
-    let row = engine.read_projection(lead).await.unwrap().session.members[0].clone();
+    let row = members_projection(&engine.read_projection(lead).await.unwrap())[0].clone();
     assert_eq!(row.status, MemberRunStatus::Spawning);
     let child = row.child.unwrap();
     assert!(
@@ -1450,7 +1450,7 @@ async fn sidecar_ack_precedes_running_state_for_initial_and_mailbox_wakes() {
             .is_empty()
     );
     assert_eq!(
-        engine.read_projection(lead).await.unwrap().team.roster[&handle].status,
+        team_projection(&engine.read_projection(lead).await.unwrap()).roster[&handle].status,
         RosterStatus::Idle
     );
 
@@ -1641,8 +1641,9 @@ async fn explicit_idle_and_running_resident_stop_fences_drops_mail_and_revives()
     );
     assert!(!is_active(&engine, child).await && sup.episode_count() == 0);
     let proj = engine.read_projection(root).await.unwrap();
+    let team = team_projection(&proj);
     assert!(
-        !proj.team.roster.contains_key(&handle) && proj.team.archived[&handle].session == child
+        !team.roster.contains_key(&handle) && team.archived[&handle].session == child
     );
     assert_revives(&engine, root, child, &handle, "after idle stop").await;
     sup.end_member(root, &handle).await.unwrap();
@@ -1766,7 +1767,7 @@ async fn resident_registration_failure_claim_fencing_and_pre_stop_mail_persisten
         .is_err()
     );
     assert!(!is_active(&primary, failing).await && sup.team_cancel(root).is_none());
-    assert!(!primary.replay(root).await.unwrap().iter().any(|e| matches!(&e.event, Event::AgentRegistered { handle, .. } if handle == "registration-failure-1")));
+    assert!(!primary.replay(root).await.unwrap().iter().any(|e| matches!(ExtensionEvent::from_event(&e.event), Some(ExtensionEvent::AgentRegistered { handle, .. }) if handle == "registration-failure-1")));
     sqlx::query("DROP TRIGGER fail_reg")
         .execute(&mut conn)
         .await
@@ -1803,16 +1804,18 @@ async fn resident_registration_failure_claim_fencing_and_pre_stop_mail_persisten
     task.await.unwrap();
     assert!(!is_active(&primary, child).await);
     let mut before_archive = hya_proto::Projection::default();
+    let reducers = projection_reducers();
     for env in primary.replay(root).await.unwrap() {
-        if matches!(&env.event, Event::AgentArchived { handle: a, .. } if a == &handle) {
+        if matches!(ExtensionEvent::from_event(&env.event), Some(ExtensionEvent::AgentArchived { handle: a, .. }) if a == handle) {
             break;
         }
-        before_archive.apply(&env);
+        before_archive.apply_with(&env, &reducers);
     }
+    let before_team = team_projection(&before_archive);
     assert_eq!(
         (
-            before_archive.team.inboxes[&handle].len(),
-            before_archive.team.roster[&handle].resident_cursor
+            before_team.inboxes[&handle].len(),
+            before_team.roster[&handle].resident_cursor
         ),
         (1, 0)
     );
@@ -1830,7 +1833,7 @@ async fn resident_registration_failure_claim_fencing_and_pre_stop_mail_persisten
         .unwrap();
     assert!(matches!(
         sup.end_member(root, &fenced_handle).await,
-        Err(CoreError::Store(hya_store::StoreError::StaleActorClaim { actor_id })) if actor_id == fenced
+        Err(CoreError::Store(hya_store::StoreError::StaleBundleClaim { claim_key, .. })) if claim_key == fenced.to_string()
     ));
     assert!(
         primary
@@ -1840,7 +1843,7 @@ async fn resident_registration_failure_claim_fencing_and_pre_stop_mail_persisten
             .is_ok()
     );
     assert_eq!(
-        primary.read_projection(root).await.unwrap().team.roster[&fenced_handle].status,
+        team_projection(&primary.read_projection(root).await.unwrap()).roster[&fenced_handle].status,
         RosterStatus::Idle
     );
 }
@@ -1886,8 +1889,9 @@ async fn message_budget_kill_terminates_sidecar_and_removes_resident_slot() {
     );
     assert!(!is_active(&engine, child).await && sup.team_cancel(root).is_none());
     let proj = engine.read_projection(root).await.unwrap();
+    let team = team_projection(&proj);
     assert!(
-        !proj.team.roster.contains_key(&handle) && proj.team.archived[&handle].session == child
+        !team.roster.contains_key(&handle) && team.archived[&handle].session == child
     );
 }
 
@@ -2155,7 +2159,7 @@ async fn resident_prework_sidecar_loss_preserves_pending_mail_and_revives() {
             .await
             .unwrap();
         tokio::time::timeout(END_BOUND, async {
-            while !matches!(&events.recv().await.unwrap().event, Event::AgentArchived { child: c, .. } if *c == child) {}
+            while !matches!(ExtensionEvent::from_event(&events.recv().await.unwrap().event), Some(ExtensionEvent::AgentArchived { child: c, .. }) if c == child) {}
         })
         .await
         .unwrap();
@@ -2171,8 +2175,7 @@ async fn resident_prework_sidecar_loss_preserves_pending_mail_and_revives() {
         let proj = engine.read_projection(child).await.unwrap();
         assert!(proj.session.messages.is_empty());
         assert!(
-            proj.session
-                .handoff
+            handoff_projection(&proj)
                 .unwrap()
                 .doc
                 .contains(&format!("5. Pending tasks - [mail from main] {directive}"))
@@ -2231,9 +2234,8 @@ async fn running_resident_sidecar_loss_aborts_and_handles_terminate_failure() {
         assert_sidecar_failed(&engine, &sup, root, child, &handle).await;
         if fail_terminate {
             let proj = engine.read_projection(root).await.unwrap();
-            let summary = &proj
-                .session
-                .members
+            let members = members_projection(&proj);
+            let summary = &members
                 .iter()
                 .find(|m| m.child == Some(child))
                 .unwrap()
@@ -2290,7 +2292,7 @@ async fn running_resident_sidecar_loss_never_takes_over_claim_or_runs_recovery_t
         .await
         .unwrap();
     sqlx::query(
-        "CREATE TRIGGER reject_recover_claim BEFORE UPDATE OF epoch, owner_run_id ON resident_actor_claim \
+        "CREATE TRIGGER reject_recover_claim BEFORE UPDATE OF epoch, owner ON bundle_claim \
          WHEN OLD.state = 'active' AND NEW.state = 'active' AND NEW.epoch = OLD.epoch + 1 \
          BEGIN SELECT RAISE(ABORT, 'test recover claim boundary'); END;",
     )
@@ -2299,7 +2301,7 @@ async fn running_resident_sidecar_loss_never_takes_over_claim_or_runs_recovery_t
     .unwrap();
     sqlx::query(&format!(
         "CREATE TRIGGER reject_recovery_tx BEFORE INSERT ON event_log \
-         WHEN instr(NEW.payload, '\"type\":\"agent_activity_changed\"') > 0 \
+         WHEN instr(NEW.payload, '\"kind\":\"agent_activity_changed\"') > 0 \
            AND instr(NEW.payload, '\"session\":\"{root}\"') > 0 \
            AND instr(NEW.payload, '\"current_task\":\"aborted by resident recovery\"') > 0 \
          BEGIN SELECT RAISE(ABORT, 'test recovery transaction boundary'); END;"
@@ -2316,11 +2318,18 @@ async fn running_resident_sidecar_loss_never_takes_over_claim_or_runs_recovery_t
     assert_eq!(
         root_events
             .iter()
-            .filter(|e| matches!(&e.event, Event::AgentActivityChanged { handle: h, status: RosterStatus::Failed, current_task: Some(t), .. } if h == &handle && t.starts_with("activation sidecar lost")))
+            .filter(|e| matches!(
+                ExtensionEvent::from_event(&e.event),
+                Some(ExtensionEvent::AgentActivityChanged { handle: h, status: RosterStatus::Failed, current_task: Some(t), .. })
+                    if h == handle && t.starts_with("activation sidecar lost")
+            ))
             .count(),
         1
     );
-    assert!(!root_events.iter().any(|e| matches!(&e.event, Event::AgentActivityChanged { current_task: Some(t), .. } if t == "aborted by resident recovery")));
+    assert!(!root_events.iter().any(|e| matches!(
+        ExtensionEvent::from_event(&e.event),
+        Some(ExtensionEvent::AgentActivityChanged { current_task: Some(t), .. }) if t == "aborted by resident recovery"
+    )));
     assert_eq!(
         (
             cfg.terminates.load(Ordering::SeqCst),
@@ -2490,9 +2499,10 @@ async fn resident_message_budget_kill_cancels_team_and_archives_members() {
     assert!(
         support::poll_until(Duration::from_secs(5), || async {
             let p = engine.read_projection(root).await.unwrap();
+            let team = team_projection(&p);
             ["main/worker-1", "main/worker-2"]
                 .iter()
-                .all(|h| !p.team.roster.contains_key(*h) && p.team.archived.contains_key(*h))
+                .all(|h| !team.roster.contains_key(*h) && team.archived.contains_key(*h))
         })
         .await
     );
@@ -2521,7 +2531,7 @@ async fn resident_initial_task_survives_claim_takeover_and_parent_dm_policy() {
     let prev_cancel = sup.team_cancel(root).unwrap();
     assert_eq!(assistant_turns(&engine, child).await, 0);
     assert!(
-        engine.read_projection(root).await.unwrap().team.roster[&handle]
+        team_projection(&engine.read_projection(root).await.unwrap()).roster[&handle]
             .resident_work
             .is_none()
     );
@@ -2608,7 +2618,8 @@ async fn resident_initial_task_survives_claim_takeover_and_parent_dm_policy() {
         .await
         .unwrap();
     let proj = p_engine.read_projection(p_root).await.unwrap();
-    let mail = &proj.team.mail[proj.team.inboxes["main/worker"][0]];
+    let p_team = team_projection(&proj);
+    let mail = &p_team.mail[p_team.inboxes["main/worker"][0]];
     assert_eq!(
         (mail.from.as_str(), mail.body.as_str()),
         ("main", "inspect parser")
@@ -2616,7 +2627,7 @@ async fn resident_initial_task_survives_claim_takeover_and_parent_dm_policy() {
     let MailEndpoint::Channel(dm) = &mail.to else {
         panic!("directive must name its DM channel");
     };
-    assert_eq!(proj.team.channels[dm].kind, ChannelKind::Dm);
+    assert_eq!(p_team.channels[dm].kind, ChannelKind::Dm);
     assert!(
         p_engine
             .read_projection(p_child)
@@ -2639,7 +2650,7 @@ async fn resident_initial_task_survives_claim_takeover_and_parent_dm_policy() {
     assert!(
         support::poll_until(Duration::from_secs(5), || async {
             assistant_turns(&p_engine, p_child).await >= 1
-                && p_engine.read_projection(p_root).await.unwrap().team.roster["main/worker"]
+                && team_projection(&p_engine.read_projection(p_root).await.unwrap()).roster["main/worker"]
                     .resident_work
                     .is_none()
         })
@@ -2770,10 +2781,11 @@ async fn handle_naming_prefix_sanitization_nesting_and_seeded_reproducibility() 
         let (child, handle) = spawn_named(&team, team.root, agent_id, subagent_type).await;
         assert_named(&handle, "main", expected_prefix);
         let proj = team.engine.read_projection(team.root).await.unwrap();
-        assert_eq!(proj.team.roster[&handle].session, child);
+        let t = team_projection(&proj);
+        assert_eq!(t.roster[&handle].session, child);
         assert_eq!(
-            proj.team.resolve_dm("main", scope::leaf(&handle)),
-            proj.team.resolve_dm("main", &handle)
+            t.resolve_dm("main", scope::leaf(&handle)),
+            t.resolve_dm("main", &handle)
         );
     }
     let (dev, dev_handle) = spawn_named(&team, team.root, "hya-scout", Some("dev")).await;
@@ -2811,10 +2823,11 @@ async fn handle_naming_never_reuses_archived_leaf_and_preserves_legacy_counter_h
     );
     send_mail(&team.engine, team.root, &first_h, "resume").await;
     let proj = team.engine.read_projection(team.root).await.unwrap();
+    let t = team_projection(&proj);
     assert_eq!(
         (
-            proj.team.roster[&first_h].session,
-            proj.team.roster[&second_h].session
+            t.roster[&first_h].session,
+            t.roster[&second_h].session
         ),
         (first, second)
     );
@@ -2827,24 +2840,28 @@ async fn handle_naming_never_reuses_archived_leaf_and_preserves_legacy_counter_h
         .store()
         .append_event(
             legacy.root,
-            &Event::AgentRegistered {
+            &ExtensionEvent::AgentRegistered {
                 session: legacy.root,
                 agent_session: old,
                 handle: "scout-1".into(),
                 parent: Some("main".into()),
                 agent_type: AgentName::new("scout"),
                 mode: SubagentMode::Resident,
-            },
+            }
+            .into_event(),
         )
         .await
         .unwrap();
     let (_, new_h) = spawn_named(&legacy, legacy.root, "hya-scout", Some("scout")).await;
     assert_named(&new_h, "main", "scout");
-    let replayed =
-        hya_proto::Projection::from_events(&legacy.engine.replay(legacy.root).await.unwrap());
-    assert_eq!(replayed.team.roster["main/scout-1"].session, old);
-    assert!(replayed.team.roster.contains_key(&new_h));
-    assert_eq!(replayed.team.resolve_dm("main", "scout-1"), None);
+    let replayed = hya_proto::Projection::from_events_with(
+        &legacy.engine.replay(legacy.root).await.unwrap(),
+        &projection_reducers(),
+    );
+    let replayed_team = team_projection(&replayed);
+    assert_eq!(replayed_team.roster["main/scout-1"].session, old);
+    assert!(replayed_team.roster.contains_key(&new_h));
+    assert_eq!(replayed_team.resolve_dm("main", "scout-1"), None);
     let err = legacy
         .engine
         .mail_send(
@@ -3040,11 +3057,7 @@ async fn narrow_bundle_member_gets_coordination_tools_reads_dm_and_reports() {
 
     assert!(
         support::poll_until(Duration::from_secs(5), || async {
-            engine
-                .read_projection(root)
-                .await
-                .unwrap()
-                .team
+            team_projection(&engine.read_projection(root).await.unwrap())
                 .archived
                 .get(&handle)
                 .is_some_and(|e| e.reason == ArchiveReason::Reported)
@@ -3052,8 +3065,8 @@ async fn narrow_bundle_member_gets_coordination_tools_reads_dm_and_reports() {
         .await
     );
     let proj = engine.read_projection(root).await.unwrap();
-    let dm = proj
-        .team
+    let team = team_projection(&proj);
+    let dm = team
         .channels
         .iter()
         .find(|(_, ch)| ch.kind == ChannelKind::Dm && ch.members.contains(&handle))
@@ -3074,9 +3087,9 @@ async fn narrow_bundle_member_gets_coordination_tools_reads_dm_and_reports() {
         .unwrap();
     assert!(gate.contains(&format!("#{dm}")) && gate.contains(&format!("read channel://{dm}")));
     assert!(
-        proj.team.inboxes["main"]
+        team.inboxes["main"]
             .iter()
-            .any(|i| proj.team.mail[*i].body.contains("SCOUT_FINAL_REPORT"))
+            .any(|i| team.mail[*i].body.contains("SCOUT_FINAL_REPORT"))
     );
 
     let tools_of = |r: &CompletionRequest| -> BTreeSet<String> {

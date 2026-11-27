@@ -28,15 +28,20 @@ use hya_plugin::protocol::Frame;
 use hya_plugin::{PluginHost, PreparedPlugin};
 use hya_proto::{
     Event, FinishReason, MailEndpoint, MailKind, MessageId, OwnerRunId, RosterStatus, SubagentMode,
-    ToolName, ToolSchema, WorkflowIdentity, WorkflowRevision, WorkflowStagePlan,
+    ToolName, ToolSchema, WorkflowIdentity, WorkflowRevision,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
 };
+use hya_tool::extension::{
+    ExtensionEvent, projection_reducers, team_projection, workflow_projection,
+};
 use hya_tool::{
-    AgentDef, FormatterPlane, InlineAgent, InteractionPlane, LspPlane, MailboxPlane, Mode,
-    PermissionModel, PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnMember, SpawnerPlane,
-    Tool, ToolCtx, ToolError, ToolOperation, ToolPermission, WebSearchPlane, handle::ArtifactPlane,
+    AgentDef, ArchiveReason, FormatterPlane, InlineAgent, InteractionPlane, LspPlane, MailboxPlane,
+    Mode, PermissionModel, PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnMember,
+    SpawnerPlane, Tool, ToolCtx, ToolError, ToolOperation, ToolPermission, WebSearchPlane,
+    WorkflowCommand, WorkflowCommandResult, WorkflowRunStatus, WorkflowStagePlan,
+    handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -785,7 +790,7 @@ async fn workflow_control_cold_run_and_shutdown_invariants() {
         .execute(
             root,
             Default::default(),
-            hya_proto::WorkflowCommand::Run {
+            WorkflowCommand::Run {
                 name: Some("cold".into()),
                 expected_revision: None,
                 inputs: BTreeMap::new(),
@@ -797,7 +802,7 @@ async fn workflow_control_cold_run_and_shutdown_invariants() {
         .unwrap();
     assert!(matches!(
         result,
-        hya_proto::WorkflowCommandResult::Run { .. }
+        WorkflowCommandResult::Run { .. }
     ));
 
     built.shutdown().await.unwrap();
@@ -817,7 +822,7 @@ async fn workflow_control_cold_run_and_shutdown_invariants() {
         .execute(
             root,
             Default::default(),
-            hya_proto::WorkflowCommand::List,
+            WorkflowCommand::List,
             CancellationToken::new(),
         )
         .await
@@ -904,7 +909,7 @@ fn review_workflow_catalog_does_not_block_runtime_worker() {
         spawn_workflow_supervisor(receiver, control.clone(), built.lifecycle.stop.clone());
         let request = plane.execute(
             ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-            hya_proto::WorkflowCommand::List,
+            WorkflowCommand::List,
             CancellationToken::new(),
         );
         tokio::pin!(request);
@@ -913,7 +918,7 @@ fn review_workflow_catalog_does_not_block_runtime_worker() {
             Duration::from_millis(200),
             plane.execute(
                 ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-                hya_proto::WorkflowCommand::State,
+                WorkflowCommand::State,
                 CancellationToken::new(),
             ),
         )
@@ -1148,7 +1153,7 @@ async fn built_shutdown_cancels_started_workflow_while_reads_stay_unblocked() {
                 delivery: WorkflowDelivery::Started,
                 ..Default::default()
             },
-            hya_proto::WorkflowCommand::Run {
+            WorkflowCommand::Run {
                 name: Some("hold".into()),
                 expected_revision: None,
                 inputs: BTreeMap::new(),
@@ -1163,8 +1168,8 @@ async fn built_shutdown_cancels_started_workflow_while_reads_stay_unblocked() {
         .unwrap();
     // List/State reads must not block behind a running workflow.
     for command in [
-        hya_proto::WorkflowCommand::List,
-        hya_proto::WorkflowCommand::State,
+        WorkflowCommand::List,
+        WorkflowCommand::State,
     ] {
         tokio::time::timeout(
             Duration::from_millis(250),
@@ -1182,8 +1187,8 @@ async fn built_shutdown_cancels_started_workflow_while_reads_stay_unblocked() {
     assert!(control.active_run(lead).unwrap().is_none());
     let state = engine.read_projection(lead).await.unwrap();
     assert_eq!(
-        state.session.workflow.unwrap().run.unwrap().status,
-        hya_proto::WorkflowRunStatus::Cancelled
+        workflow_projection(&state).unwrap().run.unwrap().status,
+        WorkflowRunStatus::Cancelled
     );
 }
 
@@ -1287,7 +1292,7 @@ async fn runtime_store_ownership_contention_and_startup_recovery() {
     store
         .append_event(
             wf_session,
-            &Event::WorkflowRunStarted {
+            &ExtensionEvent::WorkflowRunStarted {
                 session: wf_session,
                 run: hya_proto::WorkflowRunId::new(),
                 workflow: WorkflowIdentity {
@@ -1308,7 +1313,8 @@ async fn runtime_store_ownership_contention_and_startup_recovery() {
                     verifier_model: None,
                     selected_verifier_model: None,
                 }],
-            },
+            }
+            .into_event(),
         )
         .await
         .unwrap();
@@ -1321,16 +1327,15 @@ async fn runtime_store_ownership_contention_and_startup_recovery() {
         Err(hya_store::StoreError::RuntimeOwnerBusy)
     ));
     assert_ne!(next.engine().runtime_owner(), first_owner);
-    let wf = store
-        .read_projection(wf_session)
-        .await
-        .unwrap()
-        .session
-        .workflow
+    let wf_proj = hya_proto::Projection::from_events_with(
+        &store.replay(wf_session).await.unwrap(),
+        &projection_reducers(),
+    );
+    let wf = workflow_projection(&wf_proj)
         .unwrap()
         .run
         .unwrap();
-    assert_eq!(wf.status, hya_proto::WorkflowRunStatus::Interrupted);
+    assert_eq!(wf.status, WorkflowRunStatus::Interrupted);
     assert_eq!(wf.error.as_deref(), Some("backend startup recovery"));
     next.shutdown().await.unwrap();
     store.claim_runtime_owner(OwnerRunId::new()).unwrap();
@@ -1697,40 +1702,43 @@ async fn engine_build_fences_residents_but_defers_queued_work_until_start() {
         .commit_resident_mutation(
             &queued_claim,
             queued_root,
-            vec![Event::AgentRegistered {
+            vec![ExtensionEvent::AgentRegistered {
                 session: queued_root,
                 agent_session: queued_actor,
                 handle: "queued-1".into(),
                 parent: Some("main".into()),
                 agent_type: agent.name.clone(),
                 mode: SubagentMode::Resident,
-            }],
+            }
+            .into_event()],
         )
         .await
         .unwrap();
     store
         .append_event(
             queued_root,
-            &Event::ChannelCreated {
+            &ExtensionEvent::ChannelCreated {
                 session: queued_root,
                 channel: "DM-12345678".into(),
                 kind: hya_proto::ChannelKind::Dm,
                 unit: None,
                 members: vec!["main".into(), "main/queued-1".into()],
-            },
+            }
+            .into_event(),
         )
         .await
         .unwrap();
     store
         .append_event(
             queued_root,
-            &Event::MailSent {
+            &ExtensionEvent::MailSent {
                 session: queued_root,
                 from: "main".into(),
                 to: MailEndpoint::Channel("DM-12345678".into()),
                 kind: MailKind::Message,
                 body: "resume me".into(),
-            },
+            }
+            .into_event(),
         )
         .await
         .unwrap();
@@ -1744,21 +1752,23 @@ async fn engine_build_fences_residents_but_defers_queued_work_until_start() {
             &running_claim,
             running_root,
             vec![
-                Event::AgentRegistered {
+                ExtensionEvent::AgentRegistered {
                     session: running_root,
                     agent_session: running_actor,
                     handle: "running-1".into(),
                     parent: Some("main".into()),
                     agent_type: agent.name.clone(),
                     mode: SubagentMode::Resident,
-                },
-                Event::ResidentWorkStarted {
+                }
+                .into_event(),
+                ExtensionEvent::ResidentWorkStarted {
                     session: running_root,
                     actor_session: running_actor,
                     handle: "main/running-1".into(),
                     epoch: running_claim.epoch,
                     inbox_through: 0,
-                },
+                }
+                .into_event(),
             ],
         )
         .await
@@ -1783,26 +1793,29 @@ async fn engine_build_fences_residents_but_defers_queued_work_until_start() {
     .await
     .unwrap();
     assert_eq!(built.resident_supervisor().episode_count(), 0);
-    let before = store.read_projection(queued_root).await.unwrap();
-    assert_eq!(before.team.roster["main/queued-1"].resident_cursor, 0);
-    assert!(before.team.roster["main/queued-1"].resident_work.is_none());
+    let before = built.engine().read_projection(queued_root).await.unwrap();
+    let before_team = team_projection(&before);
+    assert_eq!(before_team.roster["main/queued-1"].resident_cursor, 0);
+    assert!(before_team.roster["main/queued-1"].resident_work.is_none());
 
     built.resident_supervisor().start_recovered().await.unwrap();
-    let running = store.read_projection(running_root).await.unwrap();
+    let running = built.engine().read_projection(running_root).await.unwrap();
+    let running_team = team_projection(&running);
     assert_eq!(
-        running.team.roster["main/running-1"].status,
+        running_team.roster["main/running-1"].status,
         RosterStatus::Failed
     );
     assert!(
-        running.team.roster["main/running-1"]
+        running_team.roster["main/running-1"]
             .resident_work
             .is_none()
     );
 
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let queued = store.read_projection(queued_root).await.unwrap();
-            let entry = &queued.team.roster["main/queued-1"];
+            let queued = built.engine().read_projection(queued_root).await.unwrap();
+            let team = team_projection(&queued);
+            let entry = &team.roster["main/queued-1"];
             if entry.resident_cursor == 1 || entry.resident_work.is_some() {
                 break;
             }
@@ -3461,12 +3474,12 @@ export default {
             loop {
                 let envelope = bus.recv().await.unwrap();
                 if matches!(
-                    &envelope.event,
-                    Event::AgentActivityChanged {
-                        handle: h,
+                    ExtensionEvent::from_event(&envelope.event),
+                    Some(ExtensionEvent::AgentActivityChanged {
+                        handle: ref h,
                         status: RosterStatus::Idle,
                         ..
-                    } if h == &handle
+                    }) if h == &handle
                 ) {
                     break;
                 }
@@ -3582,45 +3595,47 @@ async fn startup_recovery_rebuilds_executable_resident_sidecar_before_queued_mai
         .commit_resident_mutation(
             &claim,
             root,
-            vec![Event::AgentRegistered {
+            vec![ExtensionEvent::AgentRegistered {
                 session: root,
                 agent_session: actor,
                 handle: "installed-resident-1".into(),
                 parent: Some("main".into()),
                 agent_type: AgentName::new(stable_id),
                 mode: SubagentMode::Resident,
-            }],
+            }
+            .into_event()],
         )
         .await
         .unwrap();
     store
         .append_event(
             root,
-            &Event::ChannelCreated {
+            &ExtensionEvent::ChannelCreated {
                 session: root,
                 channel: "DM-12345678".into(),
                 kind: hya_proto::ChannelKind::Dm,
                 unit: None,
                 members: vec!["main".into(), "main/installed-resident-1".into()],
-            },
+            }
+            .into_event(),
         )
         .await
         .unwrap();
     store
         .append_event(
             root,
-            &Event::MailSent {
+            &ExtensionEvent::MailSent {
                 session: root,
                 from: "main".into(),
                 to: MailEndpoint::Channel("DM-12345678".into()),
                 kind: MailKind::Message,
                 body: "startup recovery executable mail".into(),
-            },
+            }
+            .into_event(),
         )
         .await
         .unwrap();
 
-    let observed_store = store.clone();
     let mut built = build_session_engine(
         store,
         router,
@@ -3639,14 +3654,13 @@ async fn startup_recovery_rebuilds_executable_resident_sidecar_before_queued_mai
     built.resident_supervisor().start_recovered().await.unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let projection = observed_store.read_projection(root).await.unwrap();
-            if projection
-                .team
+            let projection = built.engine().read_projection(root).await.unwrap();
+            let team = team_projection(&projection);
+            if team
                 .archived
                 .get("main/installed-resident-1")
-                .is_some_and(|e| e.reason == hya_proto::ArchiveReason::Reported)
-                || projection
-                    .team
+                .is_some_and(|e| e.reason == ArchiveReason::Reported)
+                || team
                     .roster
                     .get("main/installed-resident-1")
                     .is_some_and(|e| e.resident_cursor >= 1)

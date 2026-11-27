@@ -1283,29 +1283,32 @@ async fn member_turns_mutations_and_mail_steering_refused_over_http_and_grpc() {
     .parse()
     .unwrap();
     for event in [
-        Event::AgentRegistered {
+        hya_tool::extension::ExtensionEvent::AgentRegistered {
             session: root2,
             agent_session: root2,
             handle: "main".into(),
             parent: None,
             agent_type: AgentName::new("build"),
             mode: SubagentMode::Transient,
-        },
-        Event::AgentRegistered {
+        }
+        .into_event(),
+        hya_tool::extension::ExtensionEvent::AgentRegistered {
             session: root2,
             agent_session: child2,
             handle: "worker-1".into(),
             parent: Some("main".into()),
             agent_type: AgentName::new("build"),
             mode: SubagentMode::Resident,
-        },
-        Event::ChannelCreated {
+        }
+        .into_event(),
+        hya_tool::extension::ExtensionEvent::ChannelCreated {
             session: root2,
             channel: "DM-12345678".into(),
             kind: hya_proto::ChannelKind::Dm,
             unit: None,
             members: vec!["main".into(), "main/worker-1".into()],
-        },
+        }
+        .into_event(),
     ] {
         mail_state
             .engine
@@ -1326,7 +1329,7 @@ async fn member_turns_mutations_and_mail_steering_refused_over_http_and_grpc() {
         (StatusCode::FORBIDDEN, &json!("permission_denied"))
     );
     let msg = body["error"]["message"].as_str().unwrap();
-    assert!(msg.contains("sender `main`") && msg.contains("DM-12345678"));
+    assert!(msg.contains("main -> DM-12345678"), "unexpected: {msg}");
     let grpc_err = pb::session_server::Session::steer_subagent(
         &V1Grpc::new(mail_state.clone()),
         tonic::Request::new(pb::SteerSubagentRequest {

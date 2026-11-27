@@ -965,7 +965,10 @@ async fn usage_projection_records_reported_and_never_estimates_missing() {
 
 #[tokio::test]
 async fn bundle_usage_tree_scope_folds_descendants_and_merges_totals() {
-    let store = SessionStore::connect_memory().await.unwrap();
+    let store = SessionStore::connect_memory()
+        .await
+        .unwrap()
+        .with_projection_reducers(hya_tool::extension::projection_reducers());
     let (root, child, grandchild) = (SessionId::new(), SessionId::new(), SessionId::new());
     for (session, parent, agent) in [
         (root, None, "build"),
@@ -992,7 +995,7 @@ async fn bundle_usage_tree_scope_folds_descendants_and_merges_totals() {
         store
             .append_event(
                 parent,
-                &Event::MemberSpawned {
+                &hya_tool::extension::ExtensionEvent::MemberSpawned {
                     session: parent,
                     member: MemberId::new(),
                     child: Some(c),
@@ -1001,7 +1004,8 @@ async fn bundle_usage_tree_scope_folds_descendants_and_merges_totals() {
                     depth: 1,
                     directive: String::new(),
                     tool_call: None,
-                },
+                }
+                .into_event(),
             )
             .await
             .unwrap();

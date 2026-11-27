@@ -1,4 +1,5 @@
-use hya_proto::{ActorClaim, Event, RosterStatus, SessionId, scope};
+use hya_proto::{ActorClaim, RosterStatus, SessionId, scope};
+use hya_tool::extension::{ChannelProjection, ExtensionEvent, TeamProjection, team_projection};
 
 use super::ChannelHistoryRead;
 use crate::engine::SessionEngine;
@@ -15,12 +16,11 @@ impl SessionEngine {
         let root = self.team_root(session).await?;
         let handle = self.resolve_handle(root, session).await?;
         let projection = self.read_projection_shared(root).await?;
-        let cursor = projection
-            .team
+        let team = team_projection(&projection);
+        let cursor = team
             .roster
             .get(&handle)
             .map_or(0, |entry| entry.resident_cursor);
-        let team = &projection.team;
         let unread_indices: std::collections::HashSet<_> = team
             .inboxes
             .get(&handle)
@@ -31,7 +31,7 @@ impl SessionEngine {
             .filter(|&index| team.mail[index].from != handle)
             .collect();
         let mut rows = Vec::new();
-        for (id, channel) in &projection.team.channels {
+        for (id, channel) in &team.channels {
             let member = channel.members.contains(&handle);
             if !member {
                 continue;
@@ -58,7 +58,7 @@ impl SessionEngine {
                         .cloned();
                     let peer_live = peer
                         .as_ref()
-                        .is_some_and(|peer| projection.team.roster.contains_key(peer));
+                        .is_some_and(|peer| team.roster.contains_key(peer));
                     if peer_live {
                         rows.push(hya_tool::ChannelRow {
                             id: id.clone(),
@@ -103,15 +103,16 @@ impl SessionEngine {
         // A real channel id always wins. Channel ids are minted `DM-…` /
         // `announce-…` keys or qualified `<unit>#<name>` keys, never a bare
         // member path, so a handle alias cannot shadow one.
-        let (normalized, channel_state) = match projection.team.channels.get(normalized) {
-            Some(state) if state.members.contains(&handle) => (normalized.to_string(), state),
+        let team = team_projection(&projection);
+        let (normalized, channel_state) = match team.channels.get(normalized) {
+            Some(state) if state.members.contains(&handle) => (normalized.to_string(), state.clone()),
             // Unknown and not-a-member are deliberately indistinguishable.
-            Some(_) => return Err(unknown_channel(&projection, &handle, normalized)),
+            Some(_) => return Err(unknown_channel(&team, &handle, normalized)),
             None => {
                 // A member handle (canonical, or a leaf) names the caller's
                 // DM with that member.
-                let Some((id, state)) = dm_with_handle(&projection, &handle, normalized) else {
-                    return Err(unknown_channel(&projection, &handle, normalized));
+                let Some((id, state)) = dm_with_handle(&team, &handle, normalized) else {
+                    return Err(unknown_channel(&team, &handle, normalized));
                 };
                 let alias = format!(
                     "`#{normalized}` is a member handle, not a channel: showing your DM with it, `{id}` (read it as `read channel://{id}`)"
@@ -132,23 +133,19 @@ impl SessionEngine {
             .rev()
             .take(last_n)
             .map(|index| {
-                let message = &projection.team.mail[*index];
+                let message = &team.mail[*index];
                 (message.from.clone(), message.body.clone())
             })
             .collect();
-        let inbox = projection.team.inboxes.get(&handle);
+        let inbox = team.inboxes.get(&handle);
         let inbox_len = inbox.map_or(0, |inbox| inbox.len() as u64);
-        let cursor = projection
-            .team
+        let cursor = team
             .roster
             .get(&handle)
             .map_or(0, |entry| entry.resident_cursor);
         // Whether this read showed every unread message: only then has the
         // caller seen what the cursor commit below consumes.
-        let mut unread = projection
-            .team
-            .unread_incoming_mail(&handle, cursor)
-            .peekable();
+        let mut unread = team.unread_incoming_mail(&handle, cursor).peekable();
         let incoming = unread.peek().is_some();
         let showed_all_unread = unread.all(|unread| {
             messages
@@ -161,11 +158,12 @@ impl SessionEngine {
             self.emit_for_actor(
                 actor_claim,
                 root,
-                Event::MailConsumed {
+                ExtensionEvent::MailConsumed {
                     session: root,
                     handle: handle.clone(),
                     through: inbox_len,
-                },
+                }
+                .into_event(),
             )
             .await?;
             // Explicit reads consume mail before the next automatic steer
@@ -199,7 +197,7 @@ impl SessionEngine {
         let projection = self.read_projection_shared(root).await?;
         let now = u64::try_from(hya_proto::now_millis()).unwrap_or(0);
         let mut rows = Vec::new();
-        for (path, entry) in &projection.team.roster {
+        for (path, entry) in &team_projection(&projection).roster {
             if scope::parent_path(path) != Some(handle.as_str()) {
                 continue;
             }
@@ -227,22 +225,21 @@ fn roster_status_label(status: RosterStatus) -> &'static str {
 
 /// The caller's DM channel with the member `raw` names (canonical handle, or
 /// a leaf resolved team-wide or under the caller), if one exists.
-fn dm_with_handle<'a>(
-    projection: &'a hya_proto::Projection,
+fn dm_with_handle(
+    team: &TeamProjection,
     caller: &str,
     raw: &str,
-) -> Option<(String, &'a hya_proto::ChannelProjection)> {
-    let id = projection.team.resolve_dm(caller, raw)?;
-    let state = &projection.team.channels[&id];
+) -> Option<(String, ChannelProjection)> {
+    let id = team.resolve_dm(caller, raw)?;
+    let state = team.channels.get(&id)?.clone();
     Some((id, state))
 }
 
 /// "Unknown channel" for a `channel://` read, naming the caller's own
 /// channels (never anyone else's) and `list_channel`.
-fn unknown_channel(projection: &hya_proto::Projection, caller: &str, raw: &str) -> CoreError {
+fn unknown_channel(team: &TeamProjection, caller: &str, raw: &str) -> CoreError {
     const LISTED: usize = 8;
-    let mut mine: Vec<String> = projection
-        .team
+    let mut mine: Vec<String> = team
         .channels
         .iter()
         .filter(|(_, channel)| channel.members.iter().any(|member| member == caller))

@@ -313,7 +313,7 @@ impl SessionEngine {
                 degraded: true,
             };
         };
-        let previous = projection.session.handoff.clone();
+        let previous = hya_tool::extension::handoff_projection(&projection);
         let generation = previous
             .as_ref()
             .map_or(1, |handoff| handoff.generation.saturating_add(1));
@@ -382,8 +382,7 @@ fn prepare_degraded_handoff_doc(
         .filter(|(_, text)| !text.trim().is_empty())
         .collect();
     let carry = |number: u8| {
-        let Some(previous) = projection.and_then(|projection| projection.session.handoff.as_ref())
-        else {
+        let Some(previous) = projection.and_then(hya_tool::extension::handoff_projection) else {
             return "unknown".into();
         };
         let prefix = format!("{number}. ");
@@ -445,17 +444,15 @@ impl SessionEngine {
         let Ok(projection) = self.read_projection_shared(root).await else {
             return Vec::new();
         };
-        let Some(entry) = projection
-            .team
+        let team = hya_tool::extension::team_projection(&projection);
+        let Some(entry) = team
             .roster
             .values()
             .find(|entry| entry.session == session)
         else {
             return Vec::new();
         };
-        projection
-            .team
-            .unread_incoming_mail(&entry.handle, entry.resident_cursor)
+        team.unread_incoming_mail(&entry.handle, entry.resident_cursor)
             .map(|mail| format!("[mail from {}] {}", mail.from, mail.body))
             .collect()
     }
@@ -465,10 +462,7 @@ impl SessionEngine {
     pub async fn degraded_terminal_handoff(&self, session: SessionId) -> TerminalHandoff {
         match self.read_projection_shared(session).await {
             Ok(projection) => {
-                let generation = projection
-                    .session
-                    .handoff
-                    .as_ref()
+                let generation = hya_tool::extension::handoff_projection(&projection)
                     .map_or(1, |handoff| handoff.generation.saturating_add(1));
                 TerminalHandoff {
                     generation,

@@ -11,14 +11,14 @@
 //! replay of every log.
 
 use hya_proto::{
-    Envelope, Event, FinishCause, FinishReason, MemberRunStatus, OwnerRunId, PartProjection,
-    Projection, Role, SessionId, ToolCallId, ToolPartState,
+    Envelope, Event, FinishCause, FinishReason, OwnerRunId, PartProjection, Projection, Role,
+    SessionId, ToolPartState,
 };
 use sqlx::Row as _;
 
 use crate::{SessionStore, StoreError, append_event_in_transaction, replay_projection};
 
-/// Reason text written on tool parts and member rows closed by crash recovery.
+/// Reason text written on tool parts closed by crash recovery.
 pub const INTERRUPTED_REASON: &str = "interrupted: the process stopped before this turn finished";
 
 /// What one crash-recovery pass repaired.
@@ -28,17 +28,14 @@ pub struct InterruptedTurnRecovery {
     pub sessions: usize,
     /// Assistant messages closed with `cause: interrupted`.
     pub messages: usize,
-    /// Events appended in total (tool errors, member finishes, message finishes).
+    /// Events appended in total (tool errors and message finishes).
     pub events: usize,
 }
 
 /// Terminal events that close every open assistant message of `session`:
 /// `ToolError` for each pending/running tool part, then one
 /// `MessageFinished { Cancelled }` per open assistant message carrying `cause`.
-/// `MemberFinished { Cancelled }` is also emitted for each spawning/running
-/// member row with no spawning call or whose spawning call is still open.
-/// A resident whose spawning call already returned is recovered separately.
-pub(crate) fn open_turn_terminal_events(
+pub fn open_turn_terminal_events(
     session: SessionId,
     projection: &Projection,
     reason: &str,
@@ -46,41 +43,6 @@ pub(crate) fn open_turn_terminal_events(
     cause: Option<FinishCause>,
 ) -> Vec<Event> {
     let mut events = Vec::new();
-    // Tool calls the dying turn still had open. A member spawned by a call
-    // that already returned is a resident (ADR-0015) that outlives this turn
-    // and is recovered on its own, so its row stays open.
-    let open_calls: Vec<ToolCallId> = projection
-        .session
-        .messages
-        .iter()
-        .filter(|message| message.role == Role::Assistant && message.finish.is_none())
-        .flat_map(|message| message.parts.iter())
-        .filter_map(|part| match part {
-            PartProjection::Tool {
-                call,
-                state: ToolPartState::Pending { .. } | ToolPartState::Running { .. },
-                ..
-            } => Some(*call),
-            _ => None,
-        })
-        .collect();
-    for member in &projection.session.members {
-        if matches!(
-            member.status,
-            MemberRunStatus::Spawning | MemberRunStatus::Running
-        ) && member
-            .tool_call
-            .is_none_or(|call| open_calls.contains(&call))
-        {
-            events.push(Event::MemberFinished {
-                session,
-                member: member.member,
-                status: MemberRunStatus::Cancelled,
-                summary: reason.to_string(),
-                child: member.child,
-            });
-        }
-    }
     for message in &projection.session.messages {
         if message.role != Role::Assistant || message.finish.is_some() {
             continue;

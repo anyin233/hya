@@ -3,9 +3,10 @@
 //! `StreamEvent` projection used by replay and both live streams.
 
 use hya_api::v1 as pb;
-use hya_proto::projection::{MemberProjection, MessageProjection, PartProjection, Projection};
-use hya_proto::{ArchiveReason, Envelope, Event, Role, TeamProjection};
-use hya_proto::{FinishCause, FinishReason, MemberRunStatus, ReportOutcome, ToolPartState};
+use hya_proto::projection::{MessageProjection, PartProjection, Projection};
+use hya_proto::{Envelope, Event, FinishCause, FinishReason, MemberRunStatus, Role, ToolPartState};
+use hya_tool::extension::{ExtensionEvent, MemberProjection, TeamProjection, members_projection};
+use hya_tool::{ArchiveReason, ReportOutcome};
 
 /// Map a domain finish reason to the wire enum.
 pub(crate) fn finish_reason(finish: FinishReason) -> i32 {
@@ -203,8 +204,7 @@ pub(crate) fn session_info(
         // Effective (root-inherited) mode; filled in by the caller, which
         // can walk the lineage.
         permission_mode: String::new(),
-        members: session
-            .members
+        members: members_projection(projection)
             .iter()
             .map(|member| member_info(member, team))
             .collect(),
@@ -705,85 +705,6 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             error_message: message_text.clone(),
             ..Default::default()
         }),
-        Event::MemberSpawned {
-            member,
-            child,
-            subagent_type,
-            description,
-            depth,
-            tool_call,
-            ..
-        } => P::MemberUpdated(pb::MemberInfo {
-            member: member.to_string(),
-            child: child.as_ref().map(ToString::to_string).unwrap_or_default(),
-            agent: subagent_type.to_string(),
-            description: description.clone(),
-            status: pb::MemberStatus::Spawning as i32,
-            summary: String::new(),
-            call_id: tool_call
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
-            depth: *depth,
-            handle: String::new(),
-            ..Default::default()
-        }),
-        Event::MemberStatusChanged { member, status, .. } => P::MemberUpdated(pb::MemberInfo {
-            member: member.to_string(),
-            status: member_status(*status),
-            ..Default::default()
-        }),
-        Event::MemberFinished {
-            member,
-            status,
-            summary,
-            child,
-            ..
-        } => P::MemberUpdated(pb::MemberInfo {
-            member: member.to_string(),
-            child: child.as_ref().map(ToString::to_string).unwrap_or_default(),
-            status: member_status(*status),
-            summary: summary.clone(),
-            ..Default::default()
-        }),
-        // A resident member's terminal report (ADR-0015) closes its row.
-        Event::SubagentReported {
-            member,
-            child,
-            handle,
-            outcome,
-            report,
-            ..
-        } => P::MemberUpdated(pb::MemberInfo {
-            member: member.to_string(),
-            child: child.to_string(),
-            handle: handle.clone(),
-            status: member_status(match outcome {
-                ReportOutcome::Done => MemberRunStatus::Done,
-                ReportOutcome::Failed => MemberRunStatus::Failed,
-            }),
-            summary: report.clone(),
-            ..Default::default()
-        }),
-        Event::AgentArchived {
-            child,
-            handle,
-            reason,
-            ..
-        } => P::MemberLifecycleChanged(pb::MemberLifecycleChanged {
-            child: child.to_string(),
-            handle: handle.clone(),
-            archived: true,
-            archive_reason: archive_reason(*reason).to_owned(),
-        }),
-        Event::AgentRestarted { child, handle, .. } => {
-            P::MemberLifecycleChanged(pb::MemberLifecycleChanged {
-                child: child.to_string(),
-                handle: handle.clone(),
-                archived: false,
-                archive_reason: String::new(),
-            })
-        }
         Event::Error {
             code,
             message: text,
@@ -852,13 +773,96 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
                 parts,
             })
         }
-        Event::WorkflowSelected { .. }
-        | Event::WorkflowRunStarted { .. }
-        | Event::WorkflowStageStarted { .. }
-        | Event::WorkflowStageFinished { .. }
-        | Event::WorkflowRunFinished { .. } => {
-            P::WorkflowUpdated(pb::WorkflowUpdated { state: None })
-        }
+        Event::Extension { .. } => match ExtensionEvent::from_event(&envelope.event)? {
+            ExtensionEvent::MemberSpawned {
+                member,
+                child,
+                subagent_type,
+                description,
+                depth,
+                tool_call,
+                ..
+            } => P::MemberUpdated(pb::MemberInfo {
+                member: member.to_string(),
+                child: child.as_ref().map(ToString::to_string).unwrap_or_default(),
+                agent: subagent_type.to_string(),
+                description,
+                status: pb::MemberStatus::Spawning as i32,
+                summary: String::new(),
+                call_id: tool_call
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default(),
+                depth,
+                handle: String::new(),
+                ..Default::default()
+            }),
+            ExtensionEvent::MemberStatusChanged { member, status, .. } => {
+                P::MemberUpdated(pb::MemberInfo {
+                    member: member.to_string(),
+                    status: member_status(status),
+                    ..Default::default()
+                })
+            }
+            ExtensionEvent::MemberFinished {
+                member,
+                status,
+                summary,
+                child,
+                ..
+            } => P::MemberUpdated(pb::MemberInfo {
+                member: member.to_string(),
+                child: child.as_ref().map(ToString::to_string).unwrap_or_default(),
+                status: member_status(status),
+                summary,
+                ..Default::default()
+            }),
+            ExtensionEvent::SubagentReported {
+                member,
+                child,
+                handle,
+                outcome,
+                report,
+                ..
+            } => P::MemberUpdated(pb::MemberInfo {
+                member: member.to_string(),
+                child: child.to_string(),
+                handle,
+                status: member_status(match outcome {
+                    ReportOutcome::Done => MemberRunStatus::Done,
+                    ReportOutcome::Failed => MemberRunStatus::Failed,
+                }),
+                summary: report,
+                ..Default::default()
+            }),
+            ExtensionEvent::AgentArchived {
+                child,
+                handle,
+                reason,
+                ..
+            } => P::MemberLifecycleChanged(pb::MemberLifecycleChanged {
+                child: child.to_string(),
+                handle,
+                archived: true,
+                archive_reason: archive_reason(reason).to_owned(),
+            }),
+            ExtensionEvent::AgentRestarted { child, handle, .. } => {
+                P::MemberLifecycleChanged(pb::MemberLifecycleChanged {
+                    child: child.to_string(),
+                    handle,
+                    archived: false,
+                    archive_reason: String::new(),
+                })
+            }
+            ExtensionEvent::WorkflowSelected { .. }
+            | ExtensionEvent::WorkflowRunStarted { .. }
+            | ExtensionEvent::WorkflowStageStarted { .. }
+            | ExtensionEvent::WorkflowStageFinished { .. }
+            | ExtensionEvent::WorkflowRunFinished { .. } => {
+                P::WorkflowUpdated(pb::WorkflowUpdated { state: None })
+            }
+            _ => return None,
+        },
         _ => return None,
     };
     Some(pb::StreamEvent {
@@ -951,7 +955,7 @@ mod tests {
     #[test]
     fn member_info_resolves_handle_from_roster_entry_by_child_session() {
         let child = SessionId::new();
-        let member = hya_proto::MemberProjection {
+        let member = MemberProjection {
             member: hya_proto::MemberId::new(),
             child: Some(child),
             subagent_type: hya_proto::AgentName::new("explore"),
@@ -962,7 +966,7 @@ mod tests {
             directive: String::new(),
             tool_call: None,
         };
-        let entry = hya_proto::RosterEntry {
+        let entry = hya_tool::extension::RosterEntry {
             handle: "main/explorer-1".to_owned(),
             session: child,
             agent_type: hya_proto::AgentName::new("explore"),
@@ -990,7 +994,7 @@ mod tests {
         ] {
             team.archived.insert(
                 "main/explorer-1".into(),
-                hya_proto::ArchivedEntry {
+                hya_tool::extension::ArchivedEntry {
                     handle: "main/explorer-1".into(),
                     session: child,
                     agent_type: hya_proto::AgentName::new("explore"),

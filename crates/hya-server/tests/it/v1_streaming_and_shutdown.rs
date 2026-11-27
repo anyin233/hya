@@ -599,11 +599,12 @@ async fn delete_session_enforces_team_ownership_and_joins_live_episodes() {
                 && engine.store().session_exists(grandchild).await.unwrap()
         );
         let proj = engine.read_projection(root).await.unwrap();
+        let team = hya_tool::extension::team_projection(&proj);
         if archived {
             assert_eq!(
                 (
                     supervisor.episode_count(),
-                    proj.team.archived[&handle].session
+                    team.archived[&handle].session
                 ),
                 (0, child)
             );
@@ -611,7 +612,7 @@ async fn delete_session_enforces_team_ownership_and_joins_live_episodes() {
             assert_eq!(
                 (
                     supervisor.episode_count(),
-                    proj.team.roster[&handle].session
+                    team.roster[&handle].session
                 ),
                 (2, child)
             );
@@ -620,6 +621,7 @@ async fn delete_session_enforces_team_ownership_and_joins_live_episodes() {
 
         public_delete(state, root, grpc).await.unwrap();
         assert_eq!(supervisor.episode_count(), 0);
+        use hya_engine::SessionStoreExt as _;
         assert!(
             supervisor.team_cancel(root).is_none()
                 && !engine.turn_active(child)

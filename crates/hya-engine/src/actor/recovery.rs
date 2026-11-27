@@ -6,9 +6,10 @@ use super::{
     SlotStatus, TeamEvent, WorkflowActivation, await_episode,
 };
 use crate::ChannelPolicy;
+use crate::store_bridge::{RecoveredActorClaim, RecoveredResidentWork, SessionStoreExt as _};
 use crate::{AgentSpec, CoreError, SessionEngine};
 use hya_proto::{ActorClaim, OwnerRunId, SessionId, SubagentMode};
-use hya_store::{RecoveredActorClaim, SessionStore};
+use hya_store::SessionStore;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -68,8 +69,7 @@ impl ResidentSupervisor {
             let root_projection = engine.read_projection_shared(root).await.map_err(|error| {
                 ResidentRecoveryError::new("replay recovered resident roster", error)
             })?;
-            let entry = root_projection
-                .team
+            let entry = hya_tool::extension::team_projection(&root_projection)
                 .roster
                 .values()
                 .find(|entry| entry.session == actor_id && entry.mode == SubagentMode::Resident)
@@ -149,7 +149,7 @@ impl SessionEngine {
     /// Returns store/validation failures.
     pub async fn recover_resident_actor(
         &self,
-        recovered: &hya_store::RecoveredActorClaim,
+        recovered: &RecoveredActorClaim,
         root: SessionId,
         handle: &str,
     ) -> Result<ResidentRecoveryReport, CoreError> {
@@ -162,13 +162,13 @@ impl SessionEngine {
     }
 }
 
-fn map_recovered_resident_work(work: hya_store::RecoveredResidentWork) -> ResidentRecovery {
+fn map_recovered_resident_work(work: RecoveredResidentWork) -> ResidentRecovery {
     match work {
-        hya_store::RecoveredResidentWork::Idle => ResidentRecovery::Idle,
-        hya_store::RecoveredResidentWork::Queued { inbox_cursor } => {
+        RecoveredResidentWork::Idle => ResidentRecovery::Idle,
+        RecoveredResidentWork::Queued { inbox_cursor } => {
             ResidentRecovery::Queued { inbox_cursor }
         }
-        hya_store::RecoveredResidentWork::AbortedRunning {
+        RecoveredResidentWork::AbortedRunning {
             inbox_cursor,
             queued_after,
         } => ResidentRecovery::AbortedRunning {
@@ -221,22 +221,15 @@ impl ResidentSupervisor {
         activation: Option<WorkflowActivation>,
     ) -> Result<usize, CoreError> {
         let projection = self.engine.read_projection_shared(root).await?;
+        let team_proj = hya_tool::extension::team_projection(&projection);
         // A concurrent sender may already have installed the new episode.
-        let child = projection
-            .team
+        let child = team_proj
             .roster
             .get(target)
             .map(|entry| entry.session)
-            .or_else(|| {
-                projection
-                    .team
-                    .archived
-                    .get(target)
-                    .map(|entry| entry.session)
-            })
+            .or_else(|| team_proj.archived.get(target).map(|entry| entry.session))
             .ok_or_else(|| CoreError::Invalid(format!("resident not found: {target}")))?;
-        let parent_session = projection
-            .team
+        let parent_session = team_proj
             .roster
             .get(parent)
             .map_or(root, |entry| entry.session);
@@ -295,7 +288,10 @@ impl ResidentSupervisor {
         let live = loop {
             let current = self.engine.read_projection_shared(root).await?;
             // A live roster wins: never wait for a concurrent revival's episode.
-            if current.team.roster.contains_key(target) {
+            if hya_tool::extension::team_projection(&current)
+                .roster
+                .contains_key(target)
+            {
                 break true;
             }
             let previous = self.team_with_resident(child).and_then(|previous| {
@@ -359,7 +355,7 @@ impl ResidentSupervisor {
             .await?;
         let activation = if let Some(activation) = activation {
             let projection = self.engine.read_projection_shared(root).await?;
-            let boundary = projection.team.inboxes[target].len();
+            let boundary = hya_tool::extension::team_projection(&projection).inboxes[target].len();
             Some((activation, boundary))
         } else {
             None
@@ -473,7 +469,7 @@ impl ResidentSupervisor {
         handle: String,
         agent: AgentSpec,
         runtime: ResolvedResidentRuntime,
-        claim: hya_store::RecoveredActorClaim,
+        claim: RecoveredActorClaim,
         disposition: ResidentRecovery,
     ) {
         self.recovered
@@ -535,7 +531,7 @@ impl ResidentSupervisor {
             {
                 Ok(()) => count += 1,
                 // Restore tools may end or replace a staged claim before installation.
-                Err(CoreError::Store(hya_store::StoreError::StaleActorClaim { .. })) => {}
+                Err(CoreError::Store(hya_store::StoreError::StaleBundleClaim { .. })) => {}
                 Err(error) => return Err(error),
             }
         }
@@ -549,7 +545,7 @@ impl ResidentSupervisor {
         handle: String,
         agent: AgentSpec,
         resolved: ResolvedResidentRuntime,
-        recovered: hya_store::RecoveredActorClaim,
+        recovered: RecoveredActorClaim,
         disposition: ResidentRecovery,
     ) -> Result<(), CoreError> {
         let (binding, agents, resources, sidecar_factory) = resolved;
@@ -562,8 +558,8 @@ impl ResidentSupervisor {
             .validate_actor_claim(&recovered.claim)
             .await?;
         let projection = self.engine.read_projection_shared(root).await?;
-        let cursor = projection
-            .team
+        let team_proj = hya_tool::extension::team_projection(&projection);
+        let cursor = team_proj
             .roster
             .get(&handle)
             .filter(|entry| entry.session == recovered.claim.actor_id)
@@ -575,8 +571,7 @@ impl ResidentSupervisor {
                     queued_after: true,
                     ..
                 }
-        ) || projection
-            .team
+        ) || team_proj
             .unread_incoming_mail(&handle, cursor)
             .next()
             .is_some();

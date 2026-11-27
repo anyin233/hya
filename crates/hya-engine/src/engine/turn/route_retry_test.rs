@@ -3,7 +3,8 @@ use crate::workflow::{
     WorkflowModelRoute, WorkflowModelRouteCandidate, WorkflowRouteRecorder, WorkflowTurnRouteSpec,
 };
 use crate::{CreateSession, EventBus};
-use hya_proto::{MemberId, WorkflowMemberRole, WorkflowRouteFailureClass, WorkflowRunId};
+use hya_proto::{MemberId, WorkflowRunId};
+use hya_tool::{WorkflowMemberRole, WorkflowRouteFailureClass};
 use hya_provider::{
     Capabilities, FakeProvider, FakeStep, Provider, ProviderRouter, ReasoningEffort,
 };
@@ -195,9 +196,13 @@ async fn check_interrupted_route(
                 .len(),
             if cancel_on_reopen { 3 } else { 2 }
         );
+        let mapped: Vec<_> = outcomes
+            .iter()
+            .filter_map(hya_tool::extension::ExtensionEvent::from_event)
+            .collect();
         assert!(matches!(
-            &outcomes[..],
-            [Event::WorkflowStageRouteOutcome {
+            &mapped[..],
+            [hya_tool::extension::ExtensionEvent::WorkflowStageRouteOutcome {
                 failure_class: WorkflowRouteFailureClass::Cancelled,
                 ..
             }]
@@ -211,8 +216,12 @@ async fn check_interrupted_route(
         &*provider.calls.lock().unwrap_or_else(|e| e.into_inner()),
         &[ModelRef::new("a"), ModelRef::new("b"), ModelRef::new("b")]
     );
+    let mapped: Vec<_> = outcomes
+        .iter()
+        .filter_map(hya_tool::extension::ExtensionEvent::from_event)
+        .collect();
     assert!(
-        matches!(&outcomes[..], [Event::WorkflowStageRouteOutcome { candidate_index: 1, step: 0, model, failure_class: WorkflowRouteFailureClass::Decode, .. }] if model.as_str() == "b")
+        matches!(&mapped[..], [hya_tool::extension::ExtensionEvent::WorkflowStageRouteOutcome { candidate_index: 1, step: 0, model, failure_class: WorkflowRouteFailureClass::Decode, .. }] if model.as_str() == "b")
     );
     Ok(())
 }

@@ -69,10 +69,11 @@ pub async fn run_residents(
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let projection = engine.read_projection(root).await.expect("root projection");
-                if projection.team.archived.contains_key(handle) {
+                let team = hya_tool::extension::team_projection(&projection);
+                if team.archived.contains_key(handle) {
                     break;
                 }
-                let row = projection.team.roster.get(handle).expect("resident row");
+                let row = team.roster.get(handle).expect("resident row");
                 let child_projection = engine
                     .read_projection(*child)
                     .await

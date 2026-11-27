@@ -7,12 +7,35 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
-use hya_proto::SessionId;
+use hya_proto::{Projection, SessionId, scope};
 
 pub use hya_proto::handle_naming::{
     HandleRng, PAIR_NAME_ATTEMPTS, SINGLE_NAME_ATTEMPTS, SplitMix64, mint_leaf, operator_names,
-    team_leaves,
 };
+
+/// Collect every handle leaf already used in a team's history.
+#[must_use]
+pub fn team_leaves(projection: &Projection) -> BTreeSet<String> {
+    let team = hya_tool::extension::team_projection(projection);
+    let mut leaves: BTreeSet<String> = [scope::ROOT_HANDLE, scope::HARNESS_HANDLE]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let handles = team
+        .roster
+        .keys()
+        .chain(team.archived.keys())
+        .chain(team.inboxes.keys())
+        .chain(
+            team.channels
+                .values()
+                .flat_map(|channel| channel.members.iter()),
+        );
+    for handle in handles {
+        leaves.insert(scope::leaf(handle).to_string());
+    }
+    leaves
+}
 
 /// Process-wide RNG and uncommitted reservations. Durable team history owns
 /// uniqueness after registration; aborted preparations release their names too.

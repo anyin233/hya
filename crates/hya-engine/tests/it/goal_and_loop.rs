@@ -34,7 +34,6 @@ use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
     ProviderRouter,
 };
-use hya_store::StoreError;
 use hya_tool::PermissionRules;
 use tokio_util::sync::CancellationToken;
 
@@ -380,13 +379,10 @@ impl IterationExecutor for WrapFailure {
             token.cancel();
             return Err(CoreError::Cancelled);
         }
-        Err(StoreError::CapacityExceeded {
-            root: SessionId::new(),
-            live: 1,
+        Err(CoreError::CapacityExceeded {
             requested: 1,
             limit: 1,
-        }
-        .into())
+        })
     }
 }
 
@@ -599,10 +595,7 @@ async fn goal_wrap_up_failure_propagates_capacity_and_preserves_cancellation() {
         )
         .await;
     assert!(
-        matches!(
-            cap_res,
-            Err(CoreError::Store(StoreError::CapacityExceeded { .. }))
-        ),
+        matches!(cap_res, Err(CoreError::CapacityExceeded { .. })),
         "{cap_res:?}"
     );
 

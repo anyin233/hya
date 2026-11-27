@@ -218,6 +218,10 @@ impl From<hya_engine::CoreError> for V1Error {
         let code = match &error {
             hya_engine::CoreError::TurnAlreadyActive { .. } => Code::SessionBusy,
             hya_engine::CoreError::Invalid(_) => Code::InvalidArgument,
+            hya_engine::CoreError::CapacityExceeded { .. }
+            | hya_engine::CoreError::MailboxRejected(_)
+            | hya_engine::CoreError::MailRevivalRequired { .. } => Code::FailedPrecondition,
+            hya_engine::CoreError::MailAuthorizationRejected { .. } => Code::PermissionDenied,
             _ => Code::Internal,
         };
         Self::new(code, error.to_string())
@@ -233,10 +237,7 @@ impl From<hya_store::StoreError> for V1Error {
             | E::ProjectRootNotAbsolute { .. }
             | E::ProjectRootInvalid { .. } => Code::InvalidArgument,
             E::ProjectNotFound { .. } => Code::NotFound,
-            E::ProjectInUse { .. } | E::MailboxRejected(_) | E::MailRevivalRequired { .. } => {
-                Code::FailedPrecondition
-            }
-            E::MailAuthorizationRejected { .. } => Code::PermissionDenied,
+            E::ProjectInUse { .. } => Code::FailedPrecondition,
             _ => Code::Internal,
         };
         Self::new(code, error.to_string())
@@ -529,7 +530,7 @@ mod mail_error_tests {
     fn mail_errors_share_http_and_grpc_client_codes() {
         for (error, expected, http, grpc) in [
             (
-                hya_store::StoreError::MailAuthorizationRejected {
+                hya_engine::CoreError::MailAuthorizationRejected {
                     sender: "main/outsider".into(),
                     channel: "DM-test1234".into(),
                     reason: "sender is not a channel member".into(),
@@ -539,13 +540,13 @@ mod mail_error_tests {
                 tonic::Code::PermissionDenied,
             ),
             (
-                hya_store::StoreError::MailboxRejected("report gate is closed".into()),
+                hya_engine::CoreError::MailboxRejected("report gate is closed".into()),
                 Code::FailedPrecondition,
                 409,
                 tonic::Code::FailedPrecondition,
             ),
             (
-                hya_store::StoreError::MailRevivalRequired {
+                hya_engine::CoreError::MailRevivalRequired {
                     sender: "main".into(),
                     channel: "direct:main/worker".into(),
                     target: "main/worker".into(),
@@ -556,15 +557,11 @@ mod mail_error_tests {
             ),
         ] {
             let message = error.to_string();
-            for mapped in [
-                ApiError::from(error.clone()),
-                ApiError::from(hya_engine::CoreError::Store(error)),
-            ] {
-                assert_eq!(mapped.code, expected);
-                assert_eq!(mapped.grpc_status().code(), grpc);
-                assert_eq!(mapped.grpc_status().message(), message);
-                assert_eq!(mapped.into_response().status().as_u16(), http);
-            }
+            let mapped = ApiError::from(error);
+            assert_eq!(mapped.code, expected);
+            assert_eq!(mapped.grpc_status().code(), grpc);
+            assert_eq!(mapped.grpc_status().message(), message);
+            assert_eq!(mapped.into_response().status().as_u16(), http);
         }
     }
 }

@@ -52,10 +52,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use hya_proto::{
-    ActorClaim, ArchiveReason, Event, MailEndpoint, MemberRunStatus, MessageId, Projection, Role,
-    RosterStatus, SessionId, scope,
+    ActorClaim, Event, MailEndpoint, MemberRunStatus, MessageId, Projection, Role, RosterStatus,
+    SessionId, scope,
 };
-use hya_tool::{WaitMail, WaitMember, WaitMemberState, WaitMode, WaitOutcome, WaitSpec, WaitWake};
+use hya_tool::extension::{
+    ExtensionEvent, handoff_projection, members_projection, team_projection,
+};
+use hya_tool::{
+    ArchiveReason, WaitMail, WaitMember, WaitMemberState, WaitMode, WaitOutcome, WaitSpec, WaitWake,
+};
 
 use crate::engine::{SessionEngine, dm_channel_between};
 use crate::error::CoreError;
@@ -113,11 +118,11 @@ pub(crate) async fn wait_for_members(
     let (root, _) = engine.session_lineage(caller).await?;
     let caller_path = engine.resolve_handle(root, caller).await?;
     let projection = engine.read_projection_shared(root).await?;
+    let team = team_projection(&projection);
     let resolved = wait_targets(&projection, root, &caller_path, &spec.targets)?;
     let mut targets = Vec::with_capacity(resolved.len());
     for (handle, session) in resolved {
-        let done_at_start = projection
-            .team
+        let done_at_start = team
             .roster
             .get(&handle)
             .filter(|entry| entry.session == session)
@@ -132,7 +137,7 @@ pub(crate) async fn wait_for_members(
     // Mail past this inbox index is new to the caller: in-turn steering and
     // earlier waits advance the durable cursor as they deliver mail, and a
     // resident wake records what it injected.
-    let cursor = projection.team.roster.get(&caller_path).map_or(0, |entry| {
+    let cursor = team.roster.get(&caller_path).map_or(0, |entry| {
         entry.resident_work.map_or(entry.resident_cursor, |work| {
             entry.resident_cursor.max(work.inbox_through)
         })
@@ -234,15 +239,16 @@ pub(crate) async fn wait_for_members(
                 inbox.through = inbox.mail_indices[fits];
             }
             let ack = (inbox.through > cursor).then(|| {
-                let consumed_incoming = projection.team.inboxes[&caller_path]
-                    [cursor..inbox.through]
+                let team = team_projection(&projection);
+                let consumed_incoming = team.inboxes[&caller_path][cursor..inbox.through]
                     .iter()
-                    .any(|index| projection.team.mail[*index].from != caller_path);
-                let event = Event::MailConsumed {
+                    .any(|index| team.mail[*index].from != caller_path);
+                let event = ExtensionEvent::MailConsumed {
                     session: root,
                     handle: caller_path.clone(),
                     through: u64::try_from(inbox.through).unwrap_or(u64::MAX),
-                };
+                }
+                .into_event();
                 hya_tool::WaitMailAck {
                     event,
                     mark: mark.unwrap_or_default(),
@@ -287,8 +293,7 @@ fn wait_targets(
     requested: &[String],
 ) -> Result<Vec<(String, SessionId)>, CoreError> {
     if requested.is_empty() {
-        return Ok(projection
-            .team
+        return Ok(team_projection(projection)
             .roster
             .iter()
             .filter(|(path, _)| scope::parent_path(path) == Some(caller_path))
@@ -329,11 +334,7 @@ fn terminal_status(status: RosterStatus) -> bool {
 /// The member's latest terminal handoff generation (0: never archived).
 async fn handoff_generation(engine: &SessionEngine, session: SessionId) -> Result<u32, CoreError> {
     let projection = engine.read_projection_shared(session).await?;
-    Ok(projection
-        .session
-        .handoff
-        .as_ref()
-        .map_or(0, |handoff| handoff.generation))
+    Ok(handoff_projection(&projection).map_or(0, |handoff| handoff.generation))
 }
 
 /// Sort the targets by standing against the call's baseline.
@@ -346,9 +347,9 @@ async fn evaluate(
     targets: &[Target],
 ) -> Result<Standing, CoreError> {
     let mut standing = Standing::default();
+    let team = team_projection(projection);
     for target in targets {
-        let live = projection
-            .team
+        let live = team
             .roster
             .get(&target.handle)
             .filter(|entry| entry.session == target.session);
@@ -360,8 +361,7 @@ async fn evaluate(
                     .member_busy(root, target.session)
                     .unwrap_or(false);
             // A member idle while its own subagents run is waiting on them.
-            let leads_live = projection
-                .team
+            let leads_live = team
                 .roster
                 .keys()
                 .any(|path| scope::parent_path(path) == Some(target.handle.as_str()));
@@ -395,9 +395,7 @@ async fn evaluate(
         let reason = if live.is_some() {
             None
         } else {
-            projection
-                .team
-                .archived
+            team.archived
                 .get(&target.handle)
                 .filter(|entry| entry.session == target.session)
                 .map(|entry| entry.reason)
@@ -475,13 +473,11 @@ async fn terminal_row(
         return Ok(None);
     };
     let parent_projection = engine.read_projection_shared(parent).await?;
-    Ok(parent_projection
-        .session
-        .members
-        .iter()
+    Ok(members_projection(&parent_projection)
+        .into_iter()
         .rev()
         .find(|row| row.child == Some(child))
-        .map(|row| (row.status, row.summary.clone())))
+        .map(|row| (row.status, row.summary)))
 }
 
 /// The member's last assistant message: the turn a stall notice is about.
@@ -523,17 +519,14 @@ fn scan_inbox(
     standing: &Standing,
     wake_on_mail: bool,
 ) -> InboxScan {
-    let inbox = projection
-        .team
-        .inboxes
-        .get(caller_path)
-        .map_or(&[][..], Vec::as_slice);
+    let team = team_projection(projection);
+    let inbox = team.inboxes.get(caller_path).map_or(&[][..], Vec::as_slice);
     let mut mail = Vec::new();
     let mut mail_indices = Vec::new();
     let mut through = cursor.min(inbox.len());
     let mut contiguous = true;
     for (index, mail_index) in inbox.iter().enumerate().skip(cursor) {
-        let message = &projection.team.mail[*mail_index];
+        let message = &team.mail[*mail_index];
         let own = message.from == caller_path;
         let finish_report = standing
             .reports
@@ -581,17 +574,19 @@ fn scan_inbox(
 /// Team-lifecycle events on the team root or the caller's own log.
 fn relevant(event: &Event, root: SessionId, caller: SessionId) -> bool {
     let lifecycle = matches!(
-        event,
-        Event::MailSent { .. }
-            | Event::MailConsumed { .. }
-            | Event::AgentActivityChanged { .. }
-            | Event::AgentArchived { .. }
-            | Event::AgentRestarted { .. }
-            | Event::AgentRegistered { .. }
-            | Event::ResidentWorkStarted { .. }
-            | Event::ResidentWorkFinished { .. }
-            | Event::SubagentReported { .. }
-            | Event::MemberFinished { .. }
+        ExtensionEvent::from_event(event),
+        Some(
+            ExtensionEvent::MailSent { .. }
+                | ExtensionEvent::MailConsumed { .. }
+                | ExtensionEvent::AgentActivityChanged { .. }
+                | ExtensionEvent::AgentArchived { .. }
+                | ExtensionEvent::AgentRestarted { .. }
+                | ExtensionEvent::AgentRegistered { .. }
+                | ExtensionEvent::ResidentWorkStarted { .. }
+                | ExtensionEvent::ResidentWorkFinished { .. }
+                | ExtensionEvent::SubagentReported { .. }
+                | ExtensionEvent::MemberFinished { .. }
+        )
     );
     lifecycle
         && event

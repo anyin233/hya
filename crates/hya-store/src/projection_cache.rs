@@ -30,10 +30,13 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use futures::TryStreamExt as _;
-use hya_proto::{Envelope, EventSeq, PROJECTION_REDUCER_VERSION, Projection, SessionId};
+use hya_proto::{
+    Envelope, EventSeq, PROJECTION_REDUCER_VERSION, Projection, ProjectionReducer,
+    ProjectionReducerRegistry, SessionId,
+};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row as _, SqliteConnection};
 
@@ -48,6 +51,7 @@ const MAX_CACHED_PROJECTIONS: usize = 256;
 /// Shared in-process projection cache (one per opened database).
 pub(crate) struct ProjectionCache {
     entries: Mutex<HashMap<SessionId, Entry>>,
+    reducers: RwLock<Arc<ProjectionReducerRegistry>>,
     clock: AtomicU64,
     snapshot_interval: AtomicU64,
 }
@@ -74,6 +78,7 @@ pub(crate) struct Base {
 pub(crate) struct PreparedFold {
     projection: Arc<Projection>,
     tail: Vec<Envelope>,
+    reducers: Arc<ProjectionReducerRegistry>,
     applied: u64,
     rebuilt: bool,
 }
@@ -89,7 +94,7 @@ impl PreparedFold {
         if !self.tail.is_empty() {
             let projection = Arc::make_mut(&mut self.projection);
             for envelope in self.tail {
-                projection.apply(&envelope);
+                projection.apply_with(&envelope, &self.reducers);
             }
         }
         Folded {
@@ -113,9 +118,43 @@ impl ProjectionCache {
     pub(crate) fn new() -> Self {
         Self {
             entries: Mutex::new(HashMap::new()),
+            reducers: RwLock::new(Arc::new(ProjectionReducerRegistry::new())),
             clock: AtomicU64::new(0),
             snapshot_interval: AtomicU64::new(DEFAULT_SNAPSHOT_INTERVAL),
         }
+    }
+
+    pub(crate) fn reducers(&self) -> Arc<ProjectionReducerRegistry> {
+        Arc::clone(
+            &self
+                .reducers
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    pub(crate) fn set_reducers(&self, next: ProjectionReducerRegistry) {
+        let mut entries = self.entries();
+        let mut guard = self
+            .reducers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if guard.signature() != next.signature() {
+            entries.clear();
+        }
+        *guard = Arc::new(next);
+    }
+
+    pub(crate) fn register_reducer(&self, reducer: Arc<dyn ProjectionReducer>) {
+        let mut entries = self.entries();
+        let mut guard = self
+            .reducers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut next = (**guard).clone();
+        next.register(reducer);
+        entries.clear();
+        *guard = Arc::new(next);
     }
 
     fn entries(&self) -> std::sync::MutexGuard<'_, HashMap<SessionId, Entry>> {
@@ -199,17 +238,21 @@ impl ProjectionCache {
     /// Advance an active cached fold (or initialize one from `SessionCreated`).
     pub(crate) fn apply_envelope(&self, session: SessionId, env: &Envelope, init_on_create: bool) {
         let now = self.tick();
+        let reducers = self.reducers();
         let mut entries = self.entries();
         if let Some(entry) = entries.get_mut(&session) {
             if env.seq.0 > entry.projection.last_seq {
-                Arc::make_mut(&mut entry.projection).apply(env);
+                Arc::make_mut(&mut entry.projection).apply_with(env, &reducers);
                 entry.unpersisted = entry.unpersisted.saturating_add(1);
                 entry.last_used = now;
             }
             return;
         }
         if init_on_create && matches!(env.event, hya_proto::Event::SessionCreated { .. }) {
-            let proj = Arc::new(Projection::from_events(std::slice::from_ref(env)));
+            let proj = Arc::new(Projection::from_events_with(
+                std::slice::from_ref(env),
+                &reducers,
+            ));
             self.insert(&mut entries, session, proj, 0, 1);
         }
     }
@@ -223,6 +266,7 @@ impl ProjectionCache {
         mut unpersisted: u64,
         tail: &[Envelope],
     ) -> (Folded, u64, u64) {
+        let reducers = Arc::clone(&prepared.reducers);
         let mut entries = self.entries();
         if entries
             .get(&session)
@@ -237,7 +281,7 @@ impl ProjectionCache {
         } else {
             unpersisted = unpersisted.saturating_add(folded.applied);
         }
-        unpersisted = unpersisted.saturating_add(apply_tail(&mut folded.projection, tail));
+        unpersisted = unpersisted.saturating_add(apply_tail(&mut folded.projection, tail, &reducers));
         if let Some(existing) = entries.get_mut(&session)
             && existing.projection.last_seq >= folded.projection.last_seq
         {
@@ -273,10 +317,11 @@ impl ProjectionCache {
         prepared: PreparedFold,
         tail: &[Envelope],
     ) -> Folded {
+        let reducers = Arc::clone(&prepared.reducers);
         let mut folded = prepared.finish();
         folded.applied = folded
             .applied
-            .saturating_add(apply_tail(&mut folded.projection, tail));
+            .saturating_add(apply_tail(&mut folded.projection, tail, &reducers));
         folded
     }
 
@@ -290,7 +335,11 @@ impl ProjectionCache {
     }
 }
 
-fn apply_tail(projection: &mut Arc<Projection>, tail: &[Envelope]) -> u64 {
+fn apply_tail(
+    projection: &mut Arc<Projection>,
+    tail: &[Envelope],
+    reducers: &ProjectionReducerRegistry,
+) -> u64 {
     let last_seq = projection.last_seq;
     if !tail.iter().any(|env| env.seq.0 > last_seq) {
         return 0;
@@ -299,7 +348,7 @@ fn apply_tail(projection: &mut Arc<Projection>, tail: &[Envelope]) -> u64 {
     let proj = Arc::make_mut(projection);
     for env in tail {
         if env.seq.0 > proj.last_seq {
-            proj.apply(env);
+            proj.apply_with(env, reducers);
             applied = applied.saturating_add(1);
         }
     }
@@ -327,10 +376,11 @@ fn decode_row(row: &SqliteRow, session: SessionId) -> Result<Envelope, StoreErro
 }
 
 /// The durable snapshot of `session`, when one exists under the running
-/// reducer version and decodes.
+/// reducer version and signature and decodes.
 pub(crate) async fn load_snapshot(
     conn: &mut SqliteConnection,
     session: SessionId,
+    expected_signature: &str,
 ) -> Result<Option<Projection>, StoreError> {
     let row = sqlx::query(
         "SELECT reducer_version, last_seq, payload FROM projection_snapshot WHERE session_id = ?",
@@ -347,7 +397,7 @@ pub(crate) async fn load_snapshot(
     }
     let last_seq: i64 = row.try_get("last_seq")?;
     let payload: &[u8] = row.try_get("payload")?;
-    match Projection::decode_snapshot(payload) {
+    match Projection::decode_snapshot_with(payload, expected_signature) {
         Ok(projection) if seq_param(projection.last_seq) == last_seq => Ok(Some(projection)),
         Ok(_) => Ok(None),
         Err(error) => {
@@ -363,6 +413,7 @@ pub(crate) async fn fold(
     conn: &mut SqliteConnection,
     session: SessionId,
     base: Option<Arc<Projection>>,
+    reducers: Arc<ProjectionReducerRegistry>,
 ) -> Result<PreparedFold, StoreError> {
     let key = session.storage_key();
     if let Some(base) = base.filter(|base| base.last_seq > 0) {
@@ -395,6 +446,7 @@ pub(crate) async fn fold(
             return Ok(PreparedFold {
                 projection: base,
                 tail,
+                reducers,
                 applied,
                 rebuilt: false,
             });
@@ -408,13 +460,14 @@ pub(crate) async fn fold(
                 .bind(&key)
                 .fetch(&mut *conn);
         while let Some(row) = rows.try_next().await? {
-            projection.apply(&decode_row(&row, session)?);
+            projection.apply_with(&decode_row(&row, session)?, &reducers);
             applied += 1;
         }
     }
     Ok(PreparedFold {
         projection: Arc::new(projection),
         tail: Vec::new(),
+        reducers,
         applied,
         rebuilt: true,
     })
@@ -457,11 +510,14 @@ pub(crate) async fn transaction_base(
     cache: &ProjectionCache,
     conn: &mut SqliteConnection,
     session: SessionId,
+    expected_signature: &str,
 ) -> Result<Option<Arc<Projection>>, StoreError> {
     if let Some(base) = cache.get(session) {
         return Ok(Some(base.projection));
     }
-    Ok(load_snapshot(conn, session).await?.map(Arc::new))
+    Ok(load_snapshot(conn, session, expected_signature)
+        .await?
+        .map(Arc::new))
 }
 
 #[cfg(test)]

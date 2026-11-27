@@ -268,7 +268,7 @@ mod tests {
 
     #[tokio::test]
     async fn o1_headless_start_recovers_crashed_members_without_root_turns() -> anyhow::Result<()> {
-        use hya_proto::{Event, MailEndpoint, MailKind, Role, SessionId};
+        use hya_proto::{MailEndpoint, MailKind, Role, SessionId};
         let test = "startup::tests::o1_headless_start_recovers_crashed_members_without_root_turns";
         let mode = std::env::var("HYA_TEST_RECOVERY_CHILD").unwrap_or_default();
         if mode.is_empty() {
@@ -335,13 +335,14 @@ mod tests {
                     .store()
                     .append_event(
                         headless.session,
-                        &Event::MailSent {
+                        &hya_tool::extension::ExtensionEvent::MailSent {
                             session: headless.session,
                             from: "harness".into(),
                             to: MailEndpoint::Handle(target),
                             kind: MailKind::Message,
                             body: "RECOVER_HEADLESS_WORK".into(),
-                        },
+                        }
+                        .into_event(),
                     )
                     .await?;
             }
@@ -363,8 +364,8 @@ mod tests {
                 );
                 let mut bus = engine.bus().subscribe();
                 let projection = engine.read_projection(root).await?;
-                let child = projection
-                    .team
+                let team = hya_tool::extension::team_projection(&projection);
+                let child = team
                     .roster
                     .values()
                     .find(|entry| entry.session != root)

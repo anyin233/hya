@@ -170,19 +170,19 @@ async fn subagent_roster_spawn_batch_nested_and_model_routing() {
     let single_events = env.events(s_single, None).await.unwrap();
     let dm = single_events
         .iter()
-        .find_map(|e| match &e.event {
-            Event::MailSent {
+        .find_map(|e| match hya_tool::extension::ExtensionEvent::from_event(&e.event) {
+            Some(hya_tool::extension::ExtensionEvent::MailSent {
                 from,
                 to: hya_proto::MailEndpoint::Channel(ch),
                 body,
                 ..
-            } if from == "main" && body == "do the child work" => Some(ch),
+            }) if from == "main" && body == "do the child work" => Some(ch),
             _ => None,
         })
         .expect("DM MailSent event");
     assert!(single_events.iter().any(|e| matches!(
-        &e.event,
-        Event::ChannelCreated { channel, kind: hya_proto::ChannelKind::Dm, .. } if channel == dm
+        hya_tool::extension::ExtensionEvent::from_event(&e.event),
+        Some(hya_tool::extension::ExtensionEvent::ChannelCreated { ref channel, kind: hya_proto::ChannelKind::Dm, .. }) if channel == &dm
     )));
 
     // 3. T2.1 (batch spawn: two distinct children with independent outputs).

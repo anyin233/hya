@@ -11,8 +11,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_proto::event::FileStamp;
-use hya_proto::{AgentName, MessageId, SessionId, ToolSchema};
-use hya_store::ActorClaim;
+use hya_proto::{ActorClaim, AgentName, MessageId, SessionId, ToolSchema};
 use hya_tool::{GrantScope, NestedTools, ToolCtx, ToolError};
 use serde_json::Value;
 use tokio::sync::Mutex;

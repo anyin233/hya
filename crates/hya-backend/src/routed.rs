@@ -14,10 +14,8 @@ use std::time::Duration;
 use anyhow::Context as _;
 use hya_api::v1 as pb;
 use hya_engine::completion::render_transcript;
-use hya_proto::{
-    Envelope, Projection, SessionId, WorkflowCommandResult, WorkflowProjection, WorkflowRunResult,
-    WorkflowRunStatus,
-};
+use hya_proto::{Envelope, Projection, SessionId};
+use hya_tool::{WorkflowCommandResult, WorkflowProjection, WorkflowRunResult, WorkflowRunStatus};
 use hya_sdk_v1::{SdkError, V1Sdk};
 
 use crate::exec_stream::{JsonStreamPrinter, StreamScope};

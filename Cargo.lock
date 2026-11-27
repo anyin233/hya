@@ -1501,6 +1501,7 @@ dependencies = [
  "hya-proto",
  "hya-sdk-v1",
  "hya-store",
+ "hya-tool",
  "libc",
  "rcgen",
  "reqwest",
@@ -1686,6 +1687,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "hya-runtime-abi"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "hya-bundle",
+ "hya-context",
+ "hya-proto",
+ "hya-tool",
+ "hya-tool-error",
+ "hya-version",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "hya-sdk-v1"
 version = "0.0.0"
 dependencies = [
@@ -1818,7 +1838,9 @@ dependencies = [
  "hya-extended-tools",
  "hya-network-tools",
  "hya-proto",
+ "hya-runtime-abi",
  "hya-tool",
+ "hya-tool-error",
  "libc",
  "serde",
  "serde_json",

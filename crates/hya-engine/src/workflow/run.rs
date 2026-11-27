@@ -161,7 +161,6 @@ impl PreparedWorkflowRun {
 mod tests {
     use super::*;
     use crate::{CreateSession, EventBus};
-    use hya_proto::Event;
     use hya_proto::{AgentName, ModelRef, SessionKind};
     use hya_provider::{DevProvider, ProviderRouter};
     use hya_store::SessionStore;
@@ -266,8 +265,10 @@ flowchart TD
             .await
             .unwrap()
             .into_iter()
-            .filter_map(|env| match env.event {
-                Event::WorkflowStageFinished { stage, .. } => Some(stage),
+            .filter_map(|env| match hya_tool::extension::ExtensionEvent::from_event(&env.event) {
+                Some(hya_tool::extension::ExtensionEvent::WorkflowStageFinished {
+                    stage, ..
+                }) => Some(stage),
                 _ => None,
             })
             .collect();

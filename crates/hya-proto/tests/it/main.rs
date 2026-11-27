@@ -8,4 +8,3 @@ mod revert_projection;
 mod session_archive;
 mod session_ephemeral;
 mod session_project;
-mod workflow_projection;

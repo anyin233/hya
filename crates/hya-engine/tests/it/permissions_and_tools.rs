@@ -1237,9 +1237,10 @@ async fn session_lifecycle_and_agent_spawn_hooks_fire_best_effort() {
         tool_call: None,
     };
     run_residents(engine.clone(), lead, vec![turn], CancellationToken::new()).await;
-    let child = engine.read_projection(lead).await.unwrap().session.members[0]
-        .child
-        .unwrap();
+    let child = hya_tool::extension::members_projection(&engine.read_projection(lead).await.unwrap())
+        [0]
+    .child
+    .unwrap();
     assert!(
         hooks
             .calls()

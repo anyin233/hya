@@ -326,18 +326,13 @@ async fn preflight_workflow_capacity(
             ),
         });
     }
-    let live = engine
-        .store()
-        .live_member_count(root)
-        .await
-        .map_err(CoreError::from)?;
+    use crate::store_bridge::SessionStoreExt as _;
+    let live = engine.store().live_member_count(root).await?;
     if wanted > limit.saturating_sub(live) {
-        return Err(CoreError::from(hya_store::StoreError::CapacityExceeded {
-            root,
-            live,
+        return Err(CoreError::CapacityExceeded {
             requested: wanted,
             limit,
-        })
+        }
         .into());
     }
     Ok(())

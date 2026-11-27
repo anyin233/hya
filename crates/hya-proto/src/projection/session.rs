@@ -2,22 +2,20 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::compaction::ContextStatusProjection;
+use super::Projection;
 use super::helpers::{find_part, push_part, tool_input, upsert_tool};
-use super::{MemberProjection, Projection};
 use crate::event::{Event, FileStamp, SessionKind};
 use crate::ids::{ConfigGeneration, MessageId, PartId, ProjectId, SessionId, ToolCallId};
 use crate::message::{FinishCause, FinishReason, Role, TokenUsage, ToolPartState};
 use crate::model::{AgentName, ModelRef, ToolName};
 use crate::revert::{FileChangeRecord, FileRestore, RevertProjection};
 use crate::usage::{MessageUsage, SessionUsage};
-use crate::workflow::WorkflowProjection;
 
 fn is_zero_usize(value: &usize) -> bool {
     *value == 0
 }
 
-/// Folded view of one session's transcript and metadata (not the team mailbox).
+/// Folded view of one session's transcript and metadata.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SessionProjection {
     /// Session id once `SessionCreated` has been applied.
@@ -58,10 +56,6 @@ pub struct SessionProjection {
     pub title: Option<String>,
     /// Opaque session metadata object.
     pub metadata: Option<serde_json::Value>,
-    /// Latest terminal handoff document (ADR-0015): the only state an agent
-    /// carries between episodes; revival seeds model context from it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handoff: Option<HandoffProjection>,
     /// Archive stamp (unix epoch milliseconds) while this root session is
     /// archived; `None` when it is not (never archived or
     /// unarchived). See [`SessionProjection::is_archived`].
@@ -75,17 +69,6 @@ pub struct SessionProjection {
     pub ephemeral: bool,
     /// Ordered transcript messages.
     pub messages: Vec<MessageProjection>,
-    /// Subagents spawned by this session, folded from member lifecycle events.
-    /// Empty for sessions that never spawned subagents.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub members: Vec<MemberProjection>,
-    /// Durable Workflow control state; independent from transcript messages.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workflow: Option<WorkflowProjection>,
-    /// Latest window-occupancy report for the session, folded from the newest
-    /// `ContextStatus` event. `None` until a streaming round has reported.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_status: Option<ContextStatusProjection>,
     /// Source session when this session was forked (`SessionForked`).
     ///
     /// Copied messages carry the source's `MessageFinished.tokens`; the usage
@@ -245,7 +228,7 @@ pub enum PartProjection {
         /// Current tool phase and payloads.
         state: ToolPartState,
         /// Text requests send instead of the completed output, set by
-        /// [`Event::ContextEvicted`]. `state` keeps the full output.
+        /// compaction eviction reducers. `state` keeps the full output.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         eviction_notice: Option<String>,
         /// Opaque provider-native metadata recorded when the call was requested.
@@ -264,18 +247,6 @@ impl PartProjection {
             | PartProjection::Tool { id, .. } => *id,
         }
     }
-}
-
-/// Latest terminal handoff folded onto a child session (ADR-0015).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct HandoffProjection {
-    /// Episode generation of this document.
-    pub generation: u32,
-    /// Full six-section state document.
-    pub doc: String,
-    /// A deterministic degraded fallback produced this document.
-    #[serde(default)]
-    pub degraded: bool,
 }
 
 impl SessionProjection {
@@ -771,14 +742,6 @@ impl Projection {
         if let Some(PartProjection::Tool { state, .. }) = find_part(self, *message, *part) {
             *state = next.clone();
         }
-    }
-
-    pub(super) fn apply_handoff_committed(&mut self, generation: &u32, doc: &str, degraded: &bool) {
-        self.session.handoff = Some(HandoffProjection {
-            generation: *generation,
-            doc: doc.to_owned(),
-            degraded: *degraded,
-        });
     }
 
     pub(super) fn apply_error(&mut self, message: &MessageId, code: &str, text: &str) {

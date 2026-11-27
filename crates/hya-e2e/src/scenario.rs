@@ -572,23 +572,25 @@ impl E2eEnv {
         // session -> [(child, subagent_type)]
         let mut nodes: std::collections::BTreeMap<String, Vec<(String, String)>> =
             std::collections::BTreeMap::new();
-        let mut roster: std::collections::BTreeMap<String, hya_proto::projection::RosterEntry> =
+        let mut roster: std::collections::BTreeMap<String, hya_tool::extension::RosterEntry> =
             std::collections::BTreeMap::new();
         let mut queue: Vec<(hya_proto::SessionId, usize)> = vec![(*session, 0)];
         let mut seen: std::collections::BTreeSet<String> =
             std::collections::BTreeSet::from([session.to_string()]);
+        let reducers = hya_tool::extension::projection_reducers();
         while let Some((current, depth)) = queue.pop() {
             let envelopes = self.events(current, None).await?;
-            let projection = hya_proto::Projection::from_events(&envelopes);
+            let projection = hya_proto::Projection::from_events_with(&envelopes, &reducers);
             if depth == 0 {
-                for entry in projection.team.roster.into_values() {
+                let team = hya_tool::extension::team_projection(&projection);
+                for entry in team.roster.into_values() {
                     roster.insert(entry.session.to_string(), entry);
                 }
             }
             if depth >= DEPTH_LIMIT {
                 continue;
             }
-            for member in &projection.session.members {
+            for member in &hya_tool::extension::members_projection(&projection) {
                 let Some(child) = member.child else {
                     continue;
                 };
@@ -605,7 +607,7 @@ impl E2eEnv {
         fn assemble(
             key: &str,
             nodes: &std::collections::BTreeMap<String, Vec<(String, String)>>,
-            roster: &mut std::collections::BTreeMap<String, hya_proto::projection::RosterEntry>,
+            roster: &mut std::collections::BTreeMap<String, hya_tool::extension::RosterEntry>,
         ) -> Value {
             let mut children = Vec::new();
             if let Some(spawns) = nodes.get(key) {

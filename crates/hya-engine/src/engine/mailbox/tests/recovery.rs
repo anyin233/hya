@@ -141,10 +141,7 @@ async fn mail_auth_revival_requires_authorized_parent_and_deduplicates_concurren
         );
         assert_eq!(eng.replay(root).await.unwrap().len(), before);
         assert!(
-            eng.read_projection(root)
-                .await
-                .unwrap()
-                .team
+            hya_tool::extension::team_projection(&eng.read_projection(root).await.unwrap())
                 .archived
                 .contains_key(&handle)
         );
@@ -165,9 +162,8 @@ async fn mail_auth_revival_requires_authorized_parent_and_deduplicates_concurren
         });
         hooks.entered.notified().await;
         let proj = eng.read_projection(root).await.unwrap();
-        assert!(
-            proj.team.roster.contains_key(&handle) && !proj.team.archived.contains_key(&handle)
-        );
+        let team = hya_tool::extension::team_projection(&proj);
+        assert!(team.roster.contains_key(&handle) && !team.archived.contains_key(&handle));
         let ch_res = eng
             .mail_send(
                 root,
@@ -192,7 +188,12 @@ async fn mail_auth_revival_requires_authorized_parent_and_deduplicates_concurren
             .await
             .unwrap()
             .iter()
-            .filter(|e| matches!(&e.event, Event::AgentRestarted { .. }))
+            .filter(|e| {
+                matches!(
+                    hya_tool::extension::ExtensionEvent::from_event(&e.event),
+                    Some(hya_tool::extension::ExtensionEvent::AgentRestarted { .. })
+                )
+            })
             .count();
         hooks.release.notify_one();
         assert_eq!(reviving.await.unwrap().unwrap().recipients, 1);
@@ -283,6 +284,7 @@ async fn resident_stop_commits_before_stale_alias_send_rechecks_the_dm() {
     });
     entered.notified().await;
 
+    use crate::store_bridge::SessionStoreExt as _;
     sup.end_member(root, &handle).await.unwrap();
     assert!(
         !primary
@@ -295,7 +297,7 @@ async fn resident_stop_commits_before_stale_alias_send_rechecks_the_dm() {
     release.notify_one();
     assert!(matches!(
         send.await.unwrap(),
-        Err(CoreError::Store(hya_store::StoreError::MailRevivalRequired { sender, channel, target }))
+        Err(CoreError::MailRevivalRequired { sender, channel, target })
             if sender == "main" && channel.starts_with("DM-") && target == handle
     ));
     assert!(
@@ -304,6 +306,9 @@ async fn resident_stop_commits_before_stale_alias_send_rechecks_the_dm() {
             .await
             .unwrap()
             .iter()
-            .any(|e| matches!(&e.event, Event::MailSent { .. }))
+            .any(|e| matches!(
+                hya_tool::extension::ExtensionEvent::from_event(&e.event),
+                Some(hya_tool::extension::ExtensionEvent::MailSent { .. })
+            ))
     );
 }

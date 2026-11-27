@@ -16,14 +16,17 @@ use async_trait::async_trait;
 use futures::{StreamExt as _, stream};
 use hya_engine::{
     AgentSpec, BoundSidecarFactory, CoreError, CreateSession, EventBus, ResidentRecovery,
-    ResidentSupervisor, RuntimeCatalogRefresh, RuntimeRegistry, SessionEngine, SidecarEnvironment,
-    SidecarHandle, SidecarStart, SubagentGovernor, SubagentLimits, TurnBinding,
+    ResidentSupervisor, RuntimeCatalogRefresh, RuntimeRegistry, SessionEngine,
+    SessionStoreExt as _, SidecarEnvironment, SidecarHandle, SidecarStart, SubagentGovernor,
+    SubagentLimits, TurnBinding,
 };
 use hya_proto::{
-    AgentName, ArchiveReason, Envelope, Event, FinishCause, FinishReason, MailEndpoint, MailKind,
-    MemberId, MemberRunStatus, MessageId, ModelRef, PartId, PartProjection, Role, RosterStatus,
-    SessionId, SubagentMode, ToolCallId, ToolName, ToolPartState, ToolSchema,
+    AgentName, Envelope, Event, FinishCause, FinishReason, MailEndpoint, MailKind, MemberId,
+    MemberRunStatus, MessageId, ModelRef, PartId, PartProjection, Role, RosterStatus, SessionId,
+    SubagentMode, ToolCallId, ToolName, ToolPartState, ToolSchema,
 };
+use hya_tool::ArchiveReason;
+use hya_tool::extension::{ExtensionEvent, members_projection, team_projection};
 use hya_provider::{
     Capabilities, CompletionRequest, DevProvider, EventStream, FakeProvider, FakeStep, Provider,
     ProviderError, ProviderRouter,
@@ -616,11 +619,7 @@ async fn roster_status(
     root: SessionId,
     leaf: &str,
 ) -> Option<RosterStatus> {
-    engine
-        .read_projection(root)
-        .await
-        .unwrap()
-        .team
+    team_projection(&engine.read_projection(root).await.unwrap())
         .roster
         .values()
         .find(|e| hya_proto::scope::leaf(&e.handle) == leaf)
@@ -628,7 +627,7 @@ async fn roster_status(
 }
 
 async fn harness_mail_to(engine: &SessionEngine, root: SessionId, leaf: &str) -> Vec<String> {
-    let team = engine.read_projection(root).await.unwrap().team;
+    let team = team_projection(&engine.read_projection(root).await.unwrap());
     team.inboxes
         .get(&format!("main/{leaf}"))
         .map(|inbox| {
@@ -655,7 +654,7 @@ async fn restore_prompt_count(engine: &SessionEngine, session: SessionId) -> usi
 async fn pending_prompt(engine: &SessionEngine, session: SessionId) -> String {
     engine
         .store()
-        .take_restart_resume(session, engine.runtime_owner())
+        .take_restart_resume_with_subagents(session, engine.runtime_owner())
         .await
         .unwrap()
         .unwrap()
@@ -1158,7 +1157,7 @@ async fn drain_closes_every_session_turn_with_cause_and_archives_members() {
         assert_eq!(open_tool_parts(&engine, session).await, 0);
         assert!(!engine.turn_active(session));
     }
-    let team = engine.read_projection(root).await.unwrap().team;
+    let team = team_projection(&engine.read_projection(root).await.unwrap());
     for leaf in ["worker-a", "worker-b"] {
         assert_eq!(
             team.archived[&format!("main/{leaf}")].reason,
@@ -1346,7 +1345,7 @@ async fn archive_member_and_user_archive_cancel_busy_turn_with_cause_archived() 
             vec![(FinishReason::Cancelled, Some(FinishCause::Archived))]
         );
         assert_eq!(open_tool_parts(&engine, worker).await, 0);
-        let team = engine.read_projection(root).await.unwrap().team;
+        let team = team_projection(&engine.read_projection(root).await.unwrap());
         assert!(!team.roster.contains_key("main/worker"));
         assert_eq!(
             team.archived["main/worker"].reason,
@@ -1411,7 +1410,7 @@ async fn interrupting_lead_or_subagent_stops_until_user_acts_and_idle_stops_noth
     engine.resume_after_user_stop(root);
     assert!(
         support::poll_until(Duration::from_secs(5), || async {
-            let team = engine.read_projection(root).await.unwrap().team;
+            let team = team_projection(&engine.read_projection(root).await.unwrap());
             provider.streams_for(first) == 2
                 && provider.streams_for(second) == 2
                 && ["main/first", "main/second"].iter().all(|h| {
@@ -2083,17 +2082,18 @@ async fn stale_claim_fences_tool_and_child_mutations() {
             output: json!({"stale": true}),
             time_ms: 1,
         },
-        Event::MemberFinished {
+        ExtensionEvent::MemberFinished {
             session: root,
             member: MemberId::new(),
             status: MemberRunStatus::Done,
             summary: "late".into(),
             child: Some(SessionId::new()),
-        },
+        }
+        .into_event(),
     ] {
         assert!(matches!(
             engine.commit_resident_mutation(&old_claim, root, vec![stale_event]).await,
-            Err(CoreError::Store(StoreError::StaleActorClaim { actor_id })) if actor_id == root
+            Err(CoreError::Store(StoreError::StaleBundleClaim { claim_key, .. })) if claim_key == root.to_string()
         ));
     }
     assert!(
@@ -2131,28 +2131,31 @@ async fn queued_resident_resumes_running_aborts_and_repeat_recovery_is_idempoten
         .await
         .unwrap();
     for event in [
-        Event::AgentRegistered {
+        ExtensionEvent::AgentRegistered {
             session: q_root,
             agent_session: q_actor,
             handle: "queued-1".into(),
             parent: Some("main".into()),
             agent_type: AgentName::new("queued"),
             mode: SubagentMode::Resident,
-        },
-        Event::ChannelCreated {
+        }
+        .into_event(),
+        ExtensionEvent::ChannelCreated {
             session: q_root,
             channel: "DM-1".into(),
             kind: hya_proto::ChannelKind::Dm,
             unit: None,
             members: vec!["main".into(), "main/queued-1".into()],
-        },
-        Event::MailSent {
+        }
+        .into_event(),
+        ExtensionEvent::MailSent {
             session: q_root,
             from: "main".into(),
             to: MailEndpoint::Channel("DM-1".into()),
             kind: MailKind::Message,
             body: "queued".into(),
-        },
+        }
+        .into_event(),
     ] {
         store.append_event(q_root, &event).await.unwrap();
     }
@@ -2190,7 +2193,7 @@ async fn queued_resident_resumes_running_aborts_and_repeat_recovery_is_idempoten
             input: json!({"path": "README.md"}),
             provider_data: None,
         },
-        Event::MemberSpawned {
+        ExtensionEvent::MemberSpawned {
             session: r_actor,
             member,
             child: Some(SessionId::new()),
@@ -2199,38 +2202,43 @@ async fn queued_resident_resumes_running_aborts_and_repeat_recovery_is_idempoten
             depth: 2,
             directive: String::new(),
             tool_call: None,
-        },
-        Event::MemberStatusChanged {
+        }
+        .into_event(),
+        ExtensionEvent::MemberStatusChanged {
             session: r_actor,
             member,
             status: MemberRunStatus::Running,
-        },
+        }
+        .into_event(),
     ] {
         store.append_event(r_actor, &event).await.unwrap();
     }
     for event in [
-        Event::AgentRegistered {
+        ExtensionEvent::AgentRegistered {
             session: r_root,
             agent_session: r_actor,
             handle: "running-1".into(),
             parent: Some("main".into()),
             agent_type: AgentName::new("running"),
             mode: SubagentMode::Resident,
-        },
-        Event::ChannelCreated {
+        }
+        .into_event(),
+        ExtensionEvent::ChannelCreated {
             session: r_root,
             channel: "DM-1".into(),
             kind: hya_proto::ChannelKind::Dm,
             unit: None,
             members: vec!["main".into(), "main/running-1".into()],
-        },
-        Event::MailSent {
+        }
+        .into_event(),
+        ExtensionEvent::MailSent {
             session: r_root,
             from: "main".into(),
             to: MailEndpoint::Channel("DM-1".into()),
             kind: MailKind::Message,
             body: "running".into(),
-        },
+        }
+        .into_event(),
     ] {
         store.append_event(r_root, &event).await.unwrap();
     }
@@ -2239,19 +2247,21 @@ async fn queued_resident_resumes_running_aborts_and_repeat_recovery_is_idempoten
             &r_claim,
             r_root,
             vec![
-                Event::ResidentWorkStarted {
+                ExtensionEvent::ResidentWorkStarted {
                     session: r_root,
                     actor_session: r_actor,
                     handle: "main/running-1".into(),
                     epoch: r_claim.epoch,
                     inbox_through: 1,
-                },
-                Event::AgentActivityChanged {
+                }
+                .into_event(),
+                ExtensionEvent::AgentActivityChanged {
                     session: r_root,
                     handle: "main/running-1".into(),
                     status: RosterStatus::Busy,
                     current_task: Some("mail".into()),
-                },
+                }
+                .into_event(),
             ],
         )
         .await
@@ -2259,13 +2269,14 @@ async fn queued_resident_resumes_running_aborts_and_repeat_recovery_is_idempoten
     store
         .append_event(
             r_root,
-            &Event::MailSent {
+            &ExtensionEvent::MailSent {
                 session: r_root,
                 from: "main".into(),
                 to: MailEndpoint::Channel("DM-1".into()),
                 kind: MailKind::Message,
                 body: "after".into(),
-            },
+            }
+            .into_event(),
         )
         .await
         .unwrap();
@@ -2283,7 +2294,8 @@ async fn queued_resident_resumes_running_aborts_and_repeat_recovery_is_idempoten
         }
     );
     let proj_after = store.read_projection(r_root).await.unwrap();
-    let entry = &proj_after.team.roster["main/running-1"];
+    let team_after = team_projection(&proj_after);
+    let entry = &team_after.roster["main/running-1"];
     assert_eq!(
         (
             entry.status,
@@ -2294,7 +2306,7 @@ async fn queued_resident_resumes_running_aborts_and_repeat_recovery_is_idempoten
     );
     let actor_proj = store.read_projection(r_actor).await.unwrap();
     assert_eq!(
-        actor_proj.session.members[0].status,
+        members_projection(&actor_proj)[0].status,
         MemberRunStatus::Cancelled
     );
     assert_eq!(
@@ -2320,11 +2332,11 @@ async fn queued_resident_resumes_running_aborts_and_repeat_recovery_is_idempoten
             .unwrap()
             .iter()
             .filter(|e| matches!(
-                e.event,
-                Event::AgentActivityChanged {
+                ExtensionEvent::from_event(&e.event),
+                Some(ExtensionEvent::AgentActivityChanged {
                     status: RosterStatus::Failed,
                     ..
-                }
+                })
             ))
             .count(),
         1
@@ -2349,28 +2361,31 @@ async fn resident_recovery_rolls_back_actor_and_root_failure_atomically() {
         .await
         .unwrap();
     for event in [
-        Event::AgentRegistered {
+        ExtensionEvent::AgentRegistered {
             session: root,
             agent_session: actor,
             handle: "recovery-atomic-1".into(),
             parent: Some("main".into()),
             agent_type: AgentName::new("resident"),
             mode: SubagentMode::Resident,
-        },
-        Event::ChannelCreated {
+        }
+        .into_event(),
+        ExtensionEvent::ChannelCreated {
             session: root,
             channel: "DM-1".into(),
             kind: hya_proto::ChannelKind::Dm,
             unit: None,
             members: vec!["main".into(), handle.into()],
-        },
-        Event::MailSent {
+        }
+        .into_event(),
+        ExtensionEvent::MailSent {
             session: root,
             from: "main".into(),
             to: MailEndpoint::Channel("DM-1".into()),
             kind: MailKind::Message,
             body: "recovery".into(),
-        },
+        }
+        .into_event(),
     ] {
         store.append_event(root, &event).await.unwrap();
     }
@@ -2392,19 +2407,21 @@ async fn resident_recovery_rolls_back_actor_and_root_failure_atomically() {
             &old_claim,
             root,
             vec![
-                Event::ResidentWorkStarted {
+                ExtensionEvent::ResidentWorkStarted {
                     session: root,
                     actor_session: actor,
                     handle: handle.into(),
                     epoch: old_claim.epoch,
                     inbox_through: 1,
-                },
-                Event::AgentActivityChanged {
+                }
+                .into_event(),
+                ExtensionEvent::AgentActivityChanged {
                     session: root,
                     handle: handle.into(),
                     status: RosterStatus::Busy,
                     current_task: Some("mail".into()),
-                },
+                }
+                .into_event(),
             ],
         )
         .await
@@ -2420,7 +2437,7 @@ async fn resident_recovery_rolls_back_actor_and_root_failure_atomically() {
         .unwrap();
     sqlx::query(&format!(
         "CREATE TRIGGER test_recovery_fail BEFORE INSERT ON event_log \
-         WHEN instr(NEW.payload, '\"type\":\"agent_activity_changed\"') > 0 \
+         WHEN instr(NEW.payload, '\"kind\":\"agent_activity_changed\"') > 0 \
          AND instr(NEW.payload, '\"session\":\"{root}\"') > 0 \
          AND instr(NEW.payload, '\"current_task\":\"aborted by resident recovery\"') > 0 \
          BEGIN SELECT RAISE(ABORT, 'test recovery root failure'); END;"

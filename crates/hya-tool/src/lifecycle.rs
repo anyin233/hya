@@ -14,14 +14,42 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::tool::obj_schema;
-use hya_proto::{ActorClaim, ReportOutcome, SessionId, ToolSchema};
-use serde::Serialize;
+use hya_proto::{ActorClaim, SessionId, ToolSchema};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::mailbox::ChannelPolicySnapshot;
 use crate::tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
+
+/// Terminal subagent report outcome (ADR-0015).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportOutcome {
+    /// Task completed successfully.
+    Done,
+    /// Task failed; the report carries the blocker.
+    Failed,
+}
+
+/// Why an agent left the live roster (ADR-0015). Archive is the sole exit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveReason {
+    /// Terminal report accepted (model-issued or engine-synthesized).
+    Reported,
+    /// Legacy (before 0.41.0): parent `kill` tool. Kept so old logs decode.
+    Killed,
+    /// Root-turn teardown force-archive.
+    RootTeardown,
+    /// The parent (or an ancestor) archived the member with the `archive`
+    /// tool; any in-flight turn was cancelled first.
+    ArchivedByParent,
+    /// A graceful stop (end of a one-shot run, SIGINT/SIGTERM, `serve`
+    /// shutdown) archived the member so a later run can wake it with mail.
+    Shutdown,
+}
 
 /// One lifecycle request from a tool call to the supervisor.
 #[derive(Debug)]
@@ -744,8 +772,14 @@ impl WaitAckSlot {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         match &state.ack.as_ref()?.event {
-            hya_proto::Event::MailConsumed { through, .. } => {
-                Some(usize::try_from(*through).unwrap_or(usize::MAX))
+            hya_proto::Event::Extension {
+                bundle,
+                kind,
+                payload,
+                ..
+            } if bundle == crate::extension::BUNDLE_CHANNELS && kind == "mail_consumed" => {
+                let through = payload.get("through").and_then(Value::as_u64)?;
+                Some(usize::try_from(through).unwrap_or(usize::MAX))
             }
             _ => None,
         }

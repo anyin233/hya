@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_proto::{
-    ActorClaim, Event, MemberId, ReportOutcome, SessionId, WorkflowMemberRole, WorkflowRunId,
-};
+use hya_proto::{ActorClaim, MemberId, SessionId, WorkflowRunId};
+use hya_tool::extension::ExtensionEvent;
+use hya_tool::{ReportOutcome, WorkflowMemberRole};
 use hya_workflow::{MAX_PREDECESSOR_OUTPUT_BYTES, VerifySpec, WorkflowStage};
 use tokio_util::sync::CancellationToken;
 
@@ -74,7 +74,7 @@ pub(super) async fn activate_resident_stage(
             StageStatus::Cancelled,
             "Workflow activation cancelled".into(),
         ),
-        Err(error @ CoreError::Store(_)) => {
+        Err(error @ (CoreError::Store(_) | CoreError::CapacityExceeded { .. })) => {
             return Err(error.into());
         }
         Err(error) => (StageStatus::Failed, error.to_string()),
@@ -313,14 +313,15 @@ impl IterationExecutor for LoopWorkerExecutor {
                 .record_workflow_event_for_actor(
                     self.actor_claim.as_ref(),
                     self.lead,
-                    Event::WorkflowStageMemberLinked {
+                    ExtensionEvent::WorkflowStageMemberLinked {
                         session: self.lead,
                         run,
                         stage: self.stage_id.clone(),
                         member,
                         role: WorkflowMemberRole::Worker,
                         iteration,
-                    },
+                    }
+                    .into_event(),
                 )
                 .await?;
         }
@@ -422,14 +423,15 @@ impl IterationGate for VerifierGate {
                     .record_workflow_event_for_actor(
                         self.actor_claim.as_ref(),
                         self.lead,
-                        Event::WorkflowStageMemberLinked {
+                        ExtensionEvent::WorkflowStageMemberLinked {
                             session: self.lead,
                             run,
                             stage: self.stage_id.clone(),
                             member,
                             role: WorkflowMemberRole::Verifier,
                             iteration,
-                        },
+                        }
+                        .into_event(),
                     )
                     .await?;
             }

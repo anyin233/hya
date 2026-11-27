@@ -9,7 +9,8 @@ use std::collections::BTreeMap;
 use crate::{ApiError, ServerState};
 use hya_api::error::Code;
 use hya_api::v1::CommandTurn;
-use hya_proto::{SessionId, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery};
+use hya_proto::SessionId;
+use hya_tool::{WorkflowCommand, WorkflowCommandResult, WorkflowDelivery};
 
 /// Parse and, when applicable, execute one `/workflow` command.
 //

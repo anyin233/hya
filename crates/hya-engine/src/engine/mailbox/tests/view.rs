@@ -15,6 +15,7 @@ impl crate::engine::TurnBoundaryObserver for MailObserver {
 
 #[tokio::test]
 async fn superseded_channel_reader_cannot_advance_the_inbox_cursor() {
+    use crate::store_bridge::SessionStoreExt as _;
     let eng = Arc::new(engine().await);
     let o = org(&eng).await;
     let caller = o.lead_1.session;
@@ -100,9 +101,10 @@ async fn cursor_cleanup_marks_only_incoming_work_for_wait_and_read() {
                 .unwrap();
             }
             let p = eng.read_projection(o.root).await.unwrap();
+            let team = hya_tool::extension::team_projection(&p);
             assert_eq!(
-                p.team.roster["main"].resident_cursor,
-                p.team.inboxes["main"].len() as u64
+                team.roster["main"].resident_cursor,
+                team.inboxes["main"].len() as u64
             );
             assert_eq!(
                 *obs.0.lock().unwrap(),
@@ -133,12 +135,13 @@ async fn steer_denies_archived_group_mail_and_acks_incoming_only() {
     eng.store()
         .append_event(
             o.root,
-            &Event::AgentArchived {
+            &hya_tool::extension::ExtensionEvent::AgentArchived {
                 session: o.root,
                 handle: o.worker_1.path,
                 child: o.worker_1.session,
-                reason: hya_proto::ArchiveReason::ArchivedByParent,
-            },
+                reason: hya_tool::ArchiveReason::ArchivedByParent,
+            }
+            .into_event(),
         )
         .await
         .unwrap();
@@ -167,7 +170,10 @@ async fn steer_denies_archived_group_mail_and_acks_incoming_only() {
         assert!(s.drain(&eng2).await.unwrap().is_none());
         let (ack, consumed_incoming) = s.take_acknowledgement().unwrap();
         assert!(
-            matches!(ack, Event::MailConsumed { handle: target, through: 1, .. } if target == handle)
+            matches!(
+                hya_tool::extension::ExtensionEvent::from_event(&ack),
+                Some(hya_tool::extension::ExtensionEvent::MailConsumed { handle: target, through: 1, .. }) if target == handle
+            )
         );
         assert_eq!(consumed_incoming, incoming);
     }

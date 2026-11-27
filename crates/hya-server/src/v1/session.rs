@@ -292,7 +292,8 @@ async fn projection_info_at(
         root_projection = st.engine.read_projection_shared(parent).await?;
         current = parent;
     }
-    let mut info = session_info(&projection, started, updated, &root_projection.team);
+    let team = hya_tool::extension::team_projection(&root_projection);
+    let mut info = session_info(&projection, started, updated, &team);
     if let Some(model) = projection.session.model.as_ref() {
         // Same resolver as the turn loop, including the session Agent's
         // runtime/configured effort. An authored bundle `model_policy`
@@ -548,7 +549,10 @@ async fn fork_session(
     if envs.is_empty() {
         return Err(V1Error::session_not_found(&id));
     }
-    let projection = hya_proto::Projection::from_events(&envs);
+    let projection = hya_proto::Projection::from_events_with(
+        &envs,
+        &hya_tool::extension::projection_reducers(),
+    );
     // A fork taken from an unused ephemeral session keeps the source.
     st.engine.set_session_ephemeral(source, false).await?;
     let at = if !request.message_id.is_empty() {

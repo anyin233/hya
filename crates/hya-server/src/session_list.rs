@@ -132,10 +132,18 @@ pub(crate) fn spawn_busy_tracker(state: ServerState) {
 /// Engine events that can coincide with a busy transition.
 fn turn_signal(event: &Event) -> Option<SessionId> {
     match event {
-        Event::MessageStarted { session, .. }
-        | Event::MessageFinished { session, .. }
-        | Event::WorkflowRunStarted { session, .. }
-        | Event::WorkflowRunFinished { session, .. } => Some(*session),
+        Event::MessageStarted { session, .. } | Event::MessageFinished { session, .. } => {
+            Some(*session)
+        }
+        Event::Extension { .. } => {
+            match hya_tool::extension::ExtensionEvent::from_event(event)? {
+                hya_tool::extension::ExtensionEvent::WorkflowRunStarted { session, .. }
+                | hya_tool::extension::ExtensionEvent::WorkflowRunFinished { session, .. } => {
+                    Some(session)
+                }
+                _ => None,
+            }
+        }
         _ => None,
     }
 }

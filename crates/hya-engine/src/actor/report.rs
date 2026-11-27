@@ -18,27 +18,26 @@ pub(super) async fn report_gate_projection(
     canonical: &str,
 ) -> Result<Arc<hya_proto::Projection>, CoreError> {
     let projection = engine.read_projection_shared(root).await?;
-    let entry = projection.team.roster.get(canonical).ok_or_else(|| {
+    let team = hya_tool::extension::team_projection(&projection);
+    let entry = team.roster.get(canonical).ok_or_else(|| {
         CoreError::Invalid(format!("resident `{canonical}` is not on the roster"))
     })?;
     // Mail the current resident wake injected into this turn was read there.
     let read_through = entry.resident_work.map_or(entry.resident_cursor, |work| {
         entry.resident_cursor.max(work.inbox_through)
     });
-    if projection
-        .team
+    if team
         .unread_incoming_mail(canonical, read_through)
         .next()
         .is_some()
     {
         return Err(CoreError::Invalid(unread_mail_rejection(
-            &projection,
+            &team,
             canonical,
             read_through,
         )));
     }
-    let live_children = projection
-        .team
+    let live_children = team
         .roster
         .keys()
         .any(|path| scope::parent_path(path) == Some(canonical));
@@ -55,12 +54,11 @@ pub(super) async fn report_gate_projection(
 /// run's subagent guessed `#main/scout-1`, `#mail`, `#inbox`… because the old
 /// error named no channel.
 fn unread_mail_rejection(
-    projection: &hya_proto::Projection,
+    team: &hya_tool::extension::TeamProjection,
     canonical: &str,
     read_through: u64,
 ) -> String {
-    let unread: Vec<_> = projection
-        .team
+    let unread: Vec<_> = team
         .unread_incoming_mail(canonical, read_through)
         .collect();
     let mut per_channel: BTreeMap<String, usize> = BTreeMap::new();

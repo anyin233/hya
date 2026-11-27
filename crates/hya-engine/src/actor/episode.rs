@@ -343,7 +343,7 @@ pub(super) async fn episode_task(
                     }
                     continue;
                 }
-                Ok((hya_store::ResidentArchiveOutcome::Refused, _)) => {
+                Ok((crate::store_bridge::ResidentArchiveOutcome::Refused, _)) => {
                     let mut state = team.lock();
                     if let Some(slot) = state
                         .residents
@@ -610,18 +610,20 @@ pub(super) async fn episode_task(
                                         claim,
                                         team.root,
                                         vec![
-                                            Event::ResidentWorkFinished {
+                                            ExtensionEvent::ResidentWorkFinished {
                                                 session: team.root,
                                                 handle: handle.clone(),
                                                 epoch: claim.epoch,
                                                 inbox_through,
-                                            },
-                                            Event::AgentActivityChanged {
+                                            }
+                                            .into_event(),
+                                            ExtensionEvent::AgentActivityChanged {
                                                 session: team.root,
                                                 handle,
                                                 status: RosterStatus::Idle,
                                                 current_task: None,
-                                            },
+                                            }
+                                            .into_event(),
                                         ],
                                     )
                                     .await
@@ -773,10 +775,8 @@ impl TeamActor {
         let Ok(parent_projection) = self.engine.read_projection_shared(parent).await else {
             return;
         };
-        let Some(row) = parent_projection
-            .session
-            .members
-            .iter()
+        let Some(row) = hya_tool::extension::members_projection(&parent_projection)
+            .into_iter()
             .find(|row| row.child == Some(session))
         else {
             return;
@@ -793,11 +793,14 @@ impl TeamActor {
                     .commit_resident_mutation(
                         claim,
                         parent,
-                        vec![Event::MemberStatusChanged {
-                            session: parent,
-                            member,
-                            status: MemberRunStatus::Running,
-                        }],
+                        vec![
+                            ExtensionEvent::MemberStatusChanged {
+                                session: parent,
+                                member,
+                                status: MemberRunStatus::Running,
+                            }
+                            .into_event(),
+                        ],
                     )
                     .await
             }
@@ -872,8 +875,7 @@ impl TeamActor {
         let mut resumed_prompt = None;
         let mut prompt_answered = false;
         if claim.is_some()
-            && let Some(work) = projection
-                .team
+            && let Some(work) = hya_tool::extension::team_projection(&projection)
                 .roster
                 .get(&handle)
                 .and_then(|entry| entry.resident_work)
@@ -923,11 +925,12 @@ impl TeamActor {
                     .emit_for_actor(
                         claim.as_ref(),
                         self.root,
-                        Event::MailConsumed {
+                        ExtensionEvent::MailConsumed {
                             session: self.root,
                             handle: handle.clone(),
                             through: inbox_len as u64,
-                        },
+                        }
+                        .into_event(),
                     )
                     .await?;
             }
@@ -1002,12 +1005,13 @@ impl TeamActor {
                 mail_owed,
             });
         }
+        use crate::store_bridge::{ResidentWorkPrompt, SessionStoreExt as _};
         let prompt = match resumed_prompt {
-            Some(message) => hya_store::ResidentWorkPrompt::Resume {
+            Some(message) => ResidentWorkPrompt::Resume {
                 message,
                 append: text,
             },
-            None => hya_store::ResidentWorkPrompt::Text(text),
+            None => ResidentWorkPrompt::Text(text),
         };
         let (admitted_prompt, envelopes) = self
             .engine
@@ -1118,11 +1122,11 @@ impl TeamActor {
         }
         Ok(if finish == FinishReason::Cancelled {
             let projection = self.engine.read_projection_shared(session).await?;
-            let root = self.engine.read_projection_shared(self.root).await?;
-            let mail_owed = root.team.roster.get(&handle).is_some_and(|entry| {
+            let root_proj = self.engine.read_projection_shared(self.root).await?;
+            let team = hya_tool::extension::team_projection(&root_proj);
+            let mail_owed = team.roster.get(&handle).is_some_and(|entry| {
                 entry.resident_work.is_some()
-                    || root
-                        .team
+                    || team
                         .unread_incoming_mail(&handle, entry.resident_cursor)
                         .next()
                         .is_some()

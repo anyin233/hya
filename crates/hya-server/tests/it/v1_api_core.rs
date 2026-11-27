@@ -305,8 +305,8 @@ impl hya_server::WorkflowControl for RecordingWorkflowControl {
     fn execute(
         &self,
         _: hya_proto::SessionId,
-        _: hya_proto::WorkflowCommand,
-        _: hya_proto::WorkflowDelivery,
+        _: hya_tool::WorkflowCommand,
+        _: hya_tool::WorkflowDelivery,
     ) -> hya_server::WorkflowControlFuture<'_> {
         Box::pin(async {
             Err(hya_server::WorkflowControlError::new(

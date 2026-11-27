@@ -202,7 +202,10 @@ pub async fn session_usage_report(
         let projection = store.read_projection_shared(current).await?;
         let state = &projection.session;
         if scope != UsageScope::Session {
-            for child in state.members.iter().filter_map(|member| member.child) {
+            for child in hya_tool::extension::members_projection(&projection)
+                .iter()
+                .filter_map(|member| member.child)
+            {
                 if seen.insert(child) {
                     queue.push_back(child);
                 }

@@ -19,9 +19,9 @@ use hya_engine::resident::{
 use hya_engine::{
     AgentSpec, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest, BoundWorkflowSender,
     CategoryRegistry, CoreError, DRAIN_DEADLINE, EventBus, ModelSummarizer, ResidentSupervisor,
-    RuntimeRegistry, RuntimeSourceKind, SessionEngine, SubagentGovernor, Summarizer,
-    TerminalHandoffOptions, TokenAccounting, TurnBinding, TurnDrainReport, run_lifecycle_service,
-    run_mailbox_service,
+    RuntimeRegistry, RuntimeSourceKind, SessionEngine, SessionStoreExt as _, SubagentGovernor,
+    Summarizer, TerminalHandoffOptions, TokenAccounting, TurnBinding, TurnDrainReport,
+    run_lifecycle_service, run_mailbox_service,
 };
 
 // Single discovery/date implementation lives in hya-engine; re-export for callers.
@@ -29,7 +29,8 @@ pub use hya_engine::{discover_context_files, today};
 use hya_mcp::McpServerConfig;
 use hya_plugin::HostInfo;
 use hya_plugin::config::PluginSpec;
-use hya_proto::{AgentName, FinishCause, ModelRef, OwnerRunId, SessionId, WorkflowDelivery};
+use hya_proto::{AgentName, FinishCause, ModelRef, OwnerRunId, SessionId};
+use hya_tool::WorkflowDelivery;
 use hya_provider::{DevProvider, ProviderCatalogSnapshot, ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
 use hya_tool::{
@@ -558,7 +559,7 @@ impl hya_server::WorkflowControl for crate::WorkflowControl {
     fn execute(
         &self,
         session: SessionId,
-        command: hya_proto::WorkflowCommand,
+        command: hya_tool::WorkflowCommand,
         delivery: WorkflowDelivery,
     ) -> hya_server::WorkflowControlFuture<'_> {
         Box::pin(async move {
@@ -580,7 +581,7 @@ impl hya_server::WorkflowControl for crate::WorkflowControl {
     fn decorate(
         &self,
         session: SessionId,
-        state: hya_proto::WorkflowProjection,
+        state: hya_tool::WorkflowProjection,
     ) -> hya_server::WorkflowDecorationFuture<'_> {
         Box::pin(async move {
             crate::WorkflowControl::decorate(self, session, state)

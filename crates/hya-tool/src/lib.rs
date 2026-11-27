@@ -23,6 +23,8 @@
 mod agents;
 /// Wall-clock budget and staged notices for a headless run.
 pub mod deadline;
+/// Domain extension event codecs, projection structs, and reducers (v2 bridge).
+pub mod extension;
 mod formatter;
 /// Internal resource URLs (`artifact://`, `skill://`, `local://`) for
 /// agent-owned payloads. Ordinary filesystem paths are unaffected.
@@ -61,7 +63,11 @@ mod websearch;
 /// User-authored workflow plane and the `workflow` tool.
 pub mod workflow_plane;
 pub use workflow_plane::{
-    WorkflowHostError, WorkflowPlane, WorkflowRequest, WorkflowRequestSink, WorkflowSendError,
+    WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowHostError,
+    WorkflowMemberProjection, WorkflowMemberRole, WorkflowPlane, WorkflowProjection,
+    WorkflowRequest, WorkflowRequestSink, WorkflowRouteFailureClass, WorkflowRunProjection,
+    WorkflowRunResult, WorkflowRunStatus, WorkflowSendError, WorkflowStagePlan,
+    WorkflowStageProjection, WorkflowStageRouteOutcome, WorkflowStageStatus,
 };
 
 pub use agents::AgentDef;
@@ -74,10 +80,10 @@ pub use interaction::{
     QuestionPrompt, QuestionReply, QuestionRequest,
 };
 pub use lifecycle::{
-    ArchiveReceipt, LifecyclePlane, LifecycleRequest, REPORT_ALREADY_ACCEPTED, ReportLatch,
-    WAIT_DEFAULT_TIMEOUT_SECS, WAIT_MAX_TIMEOUT_SECS, WAIT_OUTPUT_BUDGET_CHARS, WaitAckSlot,
-    WaitMail, WaitMailAck, WaitMember, WaitMemberState, WaitMode, WaitOutcome, WaitSpec, WaitWake,
-    wait_tool_schema,
+    ArchiveReason, ArchiveReceipt, LifecyclePlane, LifecycleRequest, REPORT_ALREADY_ACCEPTED,
+    ReportLatch, ReportOutcome, WAIT_DEFAULT_TIMEOUT_SECS, WAIT_MAX_TIMEOUT_SECS,
+    WAIT_OUTPUT_BUDGET_CHARS, WaitAckSlot, WaitMail, WaitMailAck, WaitMember, WaitMemberState,
+    WaitMode, WaitOutcome, WaitSpec, WaitWake, wait_tool_schema,
 };
 pub use lsp_plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 pub use mailbox::{

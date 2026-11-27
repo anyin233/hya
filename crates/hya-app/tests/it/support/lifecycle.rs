@@ -422,18 +422,17 @@ impl Harness {
             "task failed: {result:?}"
         );
         let projection = self.engine.read_projection(self.root).await.unwrap();
-        let member = projection.session.members.last().unwrap();
+        let members = hya_tool::extension::members_projection(&projection);
+        let member = members.last().unwrap();
         let child = member.child.unwrap();
-        let handle = projection
-            .team
+        let team = hya_tool::extension::team_projection(&projection);
+        let handle = team
             .roster
             .iter()
             .find(|(_, entry)| entry.session == child)
             .map(|(h, _)| h.clone())
             .or_else(|| {
-                projection
-                    .team
-                    .archived
+                team.archived
                     .iter()
                     .find(|(_, entry)| entry.session == child)
                     .map(|(h, _)| h.clone())
@@ -489,10 +488,10 @@ impl Harness {
         // Real DM mail appears in both peers' histories. Bind its script to
         // the recipient so a concurrent main synthesis cannot steal the round.
         let projection = self.engine.read_projection(self.root).await.unwrap();
+        let team = hya_tool::extension::team_projection(&projection);
         let target = match MailEndpoint::parse(handle) {
             MailEndpoint::Handle(path) => Some(path),
-            MailEndpoint::Channel(channel) => projection
-                .team
+            MailEndpoint::Channel(channel) => team
                 .channels
                 .get(&channel)
                 .and_then(|channel| {
@@ -504,15 +503,12 @@ impl Harness {
                 .cloned(),
         };
         if let Some(target) = target {
-            let session = projection
-                .team
+            let session = team
                 .roster
                 .get(&target)
                 .map(|entry| entry.session)
                 .or_else(|| {
-                    projection
-                        .team
-                        .archived
+                    team.archived
                         .get(&target)
                         .map(|entry| entry.session)
                 });
@@ -565,8 +561,12 @@ impl Harness {
     }
 
     pub async fn archived(&self, handle: &str) {
-        self.until(self.root, |p| p.team.archived.contains_key(handle))
-            .await;
+        self.until(self.root, |p| {
+            hya_tool::extension::team_projection(p)
+                .archived
+                .contains_key(handle)
+        })
+        .await;
     }
 
     pub async fn idle(&self, child: SessionId, handle: &str) {
@@ -578,7 +578,7 @@ impl Harness {
         })
         .await;
         self.until(self.root, |p| {
-            p.team
+            hya_tool::extension::team_projection(p)
                 .roster
                 .get(handle)
                 .is_some_and(|r| r.status == hya_proto::RosterStatus::Idle)
@@ -594,7 +594,7 @@ impl Harness {
         ))
         .await
         .unwrap();
-        sqlx::query(&format!("CREATE TRIGGER m4_reject BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = '{tag}' BEGIN SELECT RAISE(ABORT, 'M4 injected {tag}'); END")).execute(&mut db).await.unwrap();
+        sqlx::query(&format!("CREATE TRIGGER m4_reject BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.kind') = '{tag}' BEGIN SELECT RAISE(ABORT, 'M4 injected {tag}'); END")).execute(&mut db).await.unwrap();
     }
 
     pub async fn heal(&self) {
@@ -617,8 +617,8 @@ impl Harness {
         ))
         .await
         .unwrap();
-        sqlx::query_scalar("SELECT epoch FROM resident_actor_claim WHERE actor_id = ?")
-            .bind(child.storage_key())
+        sqlx::query_scalar("SELECT epoch FROM bundle_claim WHERE bundle = 'hya/multi-agent' AND claim_key = ?")
+            .bind(child.to_string())
             .fetch_one(&mut db)
             .await
             .unwrap()
@@ -631,7 +631,7 @@ impl Harness {
             .unwrap();
     }
 
-    pub async fn workflow(&self, nodes: &str, graph: &str) -> hya_proto::WorkflowCommandResult {
+    pub async fn workflow(&self, nodes: &str, graph: &str) -> hya_app::WorkflowCommandResult {
         let directory = self.dir.join(".hya/workflows");
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join("m4.hya.md"), format!("---\nkind: Workflow\nname: m4\ndescription: Lifecycle fixture\nnodes:\n{nodes}---\nflowchart TD\n{graph}\n")).unwrap();
@@ -640,7 +640,7 @@ impl Harness {
             self.built.workflow_control().execute(
                 self.root,
                 hya_app::WorkflowInvocation::default(),
-                hya_proto::WorkflowCommand::Run {
+                hya_app::WorkflowCommand::Run {
                     name: Some("m4".into()),
                     expected_revision: None,
                     inputs: BTreeMap::new(),
@@ -749,7 +749,7 @@ pub async fn crash_seed_if_requested(test: &str, queue_main: bool) {
                 .await
         });
         gate.arrived().await;
-        let team = h.engine.read_projection(h.root).await.unwrap().team;
+        let team = hya_tool::extension::team_projection(&h.engine.read_projection(h.root).await.unwrap());
         let members = team
             .roster
             .iter()

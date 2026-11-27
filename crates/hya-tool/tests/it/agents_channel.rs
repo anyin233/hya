@@ -8,14 +8,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use hya_proto::{
-    ChannelKind, MailEndpoint, MailKind, OperationId, SessionId, ToolCallId, WorkflowCommand,
-    WorkflowCommandResult, WorkflowProjection, WorkflowRevision,
+    ChannelKind, MailEndpoint, MailKind, OperationId, SessionId, ToolCallId, WorkflowRevision,
 };
 use hya_tool::{
     Action, ChannelRow, InteractionPlane, MailReceipt, MailboxPlane, MailboxRequest, MemberOutcome,
     MemberStatusRow, QuestionAnswer, QuestionKind, SpawnMember, SpawnerPlane, ToolError,
-    ToolOperation, WorkflowHostError, WorkflowPlane, WorkflowRequest, WorkflowRequestSink,
-    WorkflowSendError,
+    ToolOperation, WorkflowCommand, WorkflowCommandResult, WorkflowHostError, WorkflowPlane,
+    WorkflowProjection, WorkflowRequest, WorkflowRequestSink, WorkflowSendError,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;

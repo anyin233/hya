@@ -74,6 +74,8 @@ pub mod resident;
 pub mod runtime_registry;
 /// Bundle sidecar lifecycle for executable public packages.
 pub mod sidecar;
+/// Domain store operations over `hya-store` v2 primitives.
+pub mod store_bridge;
 /// Filesystem and trusted builtin skill discovery for full-mode hosts.
 pub mod skill_catalog;
 /// Session title generation helpers.
@@ -150,6 +152,11 @@ pub use runtime_registry::{
 };
 pub use sidecar::{
     BoundSidecarFactory, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,
+};
+pub use store_bridge::{
+    EpisodeRegistration, RecoveredActorClaim, RecoveredResidentOutcome, RecoveredResidentWork,
+    ResidentArchive, ResidentArchiveOutcome, ResidentArchiveOwner, ResidentWorkPrompt,
+    SessionStoreExt, WorkflowAdmissionOutcome, WorkflowSelectionOutcome,
 };
 pub use terminal_handoff::{
     ModelSummarizer, SummarizeOptions, Summarizer, TerminalHandoff, TerminalHandoffOptions,

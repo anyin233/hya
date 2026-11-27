@@ -61,8 +61,7 @@ impl SessionEngine {
         let parent_session = if parent == scope::ROOT_HANDLE {
             root
         } else {
-            projection
-                .team
+            hya_tool::extension::team_projection(&projection)
                 .roster
                 .get(parent)
                 .map(|entry| entry.session)
@@ -125,8 +124,8 @@ pub trait ArchiveReviver: Send + Sync {
         &self,
         root: SessionId,
         handle: &str,
-        archive: hya_store::ResidentArchive,
-    ) -> Result<hya_store::ResidentArchiveOutcome, CoreError> {
+        archive: crate::store_bridge::ResidentArchive,
+    ) -> Result<crate::store_bridge::ResidentArchiveOutcome, CoreError> {
         let _ = (root, handle, archive);
         Err(CoreError::Invalid(
             "resident orphan has no supervisor".into(),

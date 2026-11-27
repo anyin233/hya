@@ -94,8 +94,7 @@ async fn wait_member_turn_done(engine: &SessionEngine, member: &str) {
             .messages
             .iter()
             .any(|m| m.role == hya_proto::Role::Assistant);
-        let idle = projection
-            .team
+        let idle = hya_tool::extension::team_projection(&projection)
             .roster
             .values()
             .find(|e| e.session == session)
@@ -638,9 +637,9 @@ async fn admission_overload_and_registration_failures_leave_zero_side_effects() 
         .unwrap();
     sqlx::query(
         "CREATE TRIGGER fail_root_reg BEFORE INSERT ON event_log
-         WHEN json_extract(NEW.payload, '$.type') = 'agent_registered'
-           AND json_extract(NEW.payload, '$.handle') = 'main'
-           AND json_extract(NEW.payload, '$.agent_session') = json_extract(NEW.payload, '$.session')
+         WHEN json_extract(NEW.payload, '$.kind') = 'agent_registered'
+           AND json_extract(NEW.payload, '$.payload.handle') = 'main'
+           AND json_extract(NEW.payload, '$.payload.agent_session') = json_extract(NEW.payload, '$.session')
          BEGIN SELECT RAISE(ABORT, 'root reg failure'); END;",
     )
     .execute(&mut conn)
@@ -666,6 +665,7 @@ async fn admission_overload_and_registration_failures_leave_zero_side_effects() 
         fixture.engine.store().list_sessions().await.unwrap().len(),
         1
     );
+    use hya_engine::SessionStoreExt as _;
     assert!(
         fixture
             .engine
@@ -687,8 +687,8 @@ async fn admission_overload_and_registration_failures_leave_zero_side_effects() 
         .unwrap();
     sqlx::query(
         "CREATE TRIGGER reject_second BEFORE INSERT ON event_log
-         WHEN json_extract(NEW.payload, '$.type') = 'mail_sent'
-           AND json_extract(NEW.payload, '$.body') = 'reject second'
+         WHEN json_extract(NEW.payload, '$.kind') = 'mail_sent'
+           AND json_extract(NEW.payload, '$.payload.body') = 'reject second'
          BEGIN SELECT RAISE(ABORT, 'second failed'); END;",
     )
     .execute(&mut conn2)
@@ -779,16 +779,15 @@ async fn member_row_concurrent_batch_live_provider_and_supervisor_io_shutdown() 
         .read_projection(fixture.parent)
         .await
         .unwrap();
-    let row = proj
-        .session
-        .members
+    let members = hya_tool::extension::members_projection(&proj);
+    let row = members
         .iter()
         .find(|r| r.child == Some(child0))
         .unwrap();
     assert_eq!(row.tool_call, Some(call));
     assert_eq!(row.description, "survey repo");
     assert_eq!(
-        proj.team
+        hya_tool::extension::team_projection(&proj)
             .roster
             .values()
             .find(|e| e.session == child0)
@@ -1100,13 +1099,12 @@ async fn guidance_is_ephemeral_immutable_and_propagates_across_turns_and_nested_
                 .read_projection(fixture.parent)
                 .await
                 .unwrap();
-            let c = proj
-                .team
+            let team = hya_tool::extension::team_projection(&proj);
+            let c = team
                 .roster
                 .iter()
                 .find(|(_, e)| e.agent_type.as_str() == "quick");
-            let g = proj
-                .team
+            let g = team
                 .roster
                 .iter()
                 .find(|(_, e)| e.agent_type.as_str() == "plan");

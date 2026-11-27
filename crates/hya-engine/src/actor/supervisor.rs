@@ -70,8 +70,9 @@ impl ArchiveReviver for ResidentSupervisor {
         &self,
         root: SessionId,
         handle: &str,
-        archive: hya_store::ResidentArchive,
-    ) -> Result<hya_store::ResidentArchiveOutcome, CoreError> {
+        archive: crate::store_bridge::ResidentArchive,
+    ) -> Result<crate::store_bridge::ResidentArchiveOutcome, CoreError> {
+        use crate::store_bridge::{ResidentArchiveOwner, SessionStoreExt as _};
         let _write = self.claim_writes.lock().await;
         if self.team_with_resident(archive.actor).is_some() {
             return Err(CoreError::Invalid(
@@ -81,12 +82,7 @@ impl ArchiveReviver for ResidentSupervisor {
         let (outcome, envelopes) = self
             .engine
             .store()
-            .finalize_resident_archive(
-                hya_store::ResidentArchiveOwner::Takeover,
-                root,
-                handle,
-                archive,
-            )
+            .finalize_resident_archive(ResidentArchiveOwner::Takeover, root, handle, archive)
             .await?;
         self.engine.publish_resident_finalization(envelopes);
         Ok(outcome)
@@ -259,13 +255,13 @@ impl ResidentSupervisor {
     }
 
     pub(super) fn route_envelope(&self, envelope: hya_proto::Envelope) {
-        match envelope.event {
-            Event::MailSent {
+        match ExtensionEvent::from_event(&envelope.event) {
+            Some(ExtensionEvent::MailSent {
                 session: root,
                 from,
                 to,
                 ..
-            } => {
+            }) => {
                 // Select and enqueue under the map lock, excluding retirement.
                 if let Some(team) = self.teams().get(&root) {
                     team.enqueue(TeamEvent::Mail {
@@ -275,9 +271,9 @@ impl ResidentSupervisor {
                     });
                 }
             }
-            Event::AgentHeartbeat { .. } => {}
-            event => {
-                if let Some(actor) = event.session()
+            Some(ExtensionEvent::AgentHeartbeat { .. }) => {}
+            _ => {
+                if let Some(actor) = envelope.event.session()
                     && let Some(team) = self.team_with_resident(actor)
                 {
                     team.enqueue(TeamEvent::Activity(actor));
@@ -486,6 +482,7 @@ impl ResidentSupervisor {
                     roots.push(team.root);
                 }
             }
+            use crate::store_bridge::SessionStoreExt as _;
             let mut orphans = Vec::new();
             match self.engine.store().active_actor_ids().await {
                 Ok(actors) => {
@@ -497,10 +494,13 @@ impl ResidentSupervisor {
                             Ok((root, _)) => match self.engine.read_projection_shared(root).await {
                                 Ok(projection) => {
                                     if let Some((handle, _)) =
-                                        projection.team.roster.iter().find(|(handle, entry)| {
-                                            handle.as_str() != scope::ROOT_HANDLE
-                                                && entry.session == actor
-                                        })
+                                        hya_tool::extension::team_projection(&projection)
+                                            .roster
+                                            .iter()
+                                            .find(|(handle, entry)| {
+                                                handle.as_str() != scope::ROOT_HANDLE
+                                                    && entry.session == actor
+                                            })
                                     {
                                         orphans.push((root, handle.clone(), actor));
                                     }
@@ -722,17 +722,17 @@ impl ResidentSupervisor {
                 release.notified().await;
             }
         }
+        use crate::store_bridge::SessionStoreExt as _;
         let write = self.claim_writes.lock().await;
         let projection = self.engine.read_projection_shared(root).await?;
-        let target = projection
-            .team
+        let team_proj = hya_tool::extension::team_projection(&projection);
+        let target = team_proj
             .roster
             .values()
             .find(|entry| entry.session == member)
             .map(|entry| entry.handle.clone())
             .or_else(|| {
-                projection
-                    .team
+                team_proj
                     .archived
                     .values()
                     .find(|entry| entry.session == member)
@@ -742,7 +742,7 @@ impl ResidentSupervisor {
         let dm = crate::engine::dm_channel_between(&projection, &from, &target)
             .ok_or_else(|| CoreError::Invalid("resident member has no parent DM channel".into()))?;
         let (done, receiver) = oneshot::channel();
-        let live = projection.team.roster.contains_key(&target);
+        let live = team_proj.roster.contains_key(&target);
         drop(projection);
         if live {
             let lease = self.engine.try_begin_turn(member)?;
@@ -769,17 +769,18 @@ impl ResidentSupervisor {
                 .store()
                 .append_channel_mail(
                     root,
+                    parent_claim,
                     from,
                     dm.clone(),
                     hya_proto::MailKind::Message,
                     directive,
-                    parent_claim,
                     None,
                 )
                 .await?
                 .0;
+            let root_proj = self.engine.read_projection_shared(root).await?;
             let boundary =
-                self.engine.read_projection_shared(root).await?.team.inboxes[&target].len();
+                hya_tool::extension::team_projection(&root_proj).inboxes[&target].len();
             {
                 let mut state = team.lock();
                 let slot = state.residents.get_mut(&member).ok_or_else(|| {

@@ -399,8 +399,14 @@ fn session_list_event(event: &hya_proto::Event) -> ListEvent {
                 ListEvent::Never
             }
         }
-        hya_proto::Event::AgentArchived { .. } | hya_proto::Event::AgentRestarted { .. } => {
-            ListEvent::Always
+        hya_proto::Event::Extension { .. } => {
+            match hya_tool::extension::ExtensionEvent::from_event(event) {
+                Some(
+                    hya_tool::extension::ExtensionEvent::AgentArchived { .. }
+                    | hya_tool::extension::ExtensionEvent::AgentRestarted { .. },
+                ) => ListEvent::Always,
+                _ => ListEvent::Never,
+            }
         }
         hya_proto::Event::SessionTitled { session, .. }
         | hya_proto::Event::AgentSwitched { session, .. }

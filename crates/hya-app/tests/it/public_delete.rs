@@ -184,6 +184,7 @@ flowchart TD
     built.shutdown().await.unwrap();
     assert_eq!(supervisor.episode_count(), 0);
     assert!(supervisor.team_cancel(root).is_none());
+    use hya_engine::SessionStoreExt as _;
     assert!(engine.store().active_actor_ids().await.unwrap().is_empty());
     assert!(engine.store().list_sessions().await.unwrap().is_empty());
     for session in sessions {

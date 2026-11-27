@@ -10,12 +10,13 @@
 #[cfg(feature = "lifecycle-bench")]
 pub mod bench;
 
+mod bundle_claim;
+mod bundle_state;
 mod connect;
 /// Typed store errors for the session store.
 pub mod error;
 mod file_blob;
 mod handoff;
-mod mailbox;
 mod materialize;
 mod paths;
 mod permission;
@@ -23,15 +24,16 @@ mod preferences;
 mod project;
 mod projection_cache;
 mod recovery;
-mod resident_claim;
 mod runtime_owner;
-mod workflow;
 mod write_queue;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use hya_proto::{Envelope, Event, EventSeq, ProjectId, Projection, SessionId, now_millis};
+use hya_proto::{
+    Envelope, Event, EventSeq, ProjectId, Projection, ProjectionReducer, ProjectionReducerRegistry,
+    SessionId, now_millis,
+};
 use projection_cache::ProjectionCache;
 use sqlx::Row;
 
@@ -39,26 +41,22 @@ use connect::MemoryFallbackInfo;
 pub(crate) use connect::run_on_detached_thread;
 use runtime_owner::RuntimeOwnerState;
 
+pub use bundle_claim::BundleClaim;
+pub use bundle_state::BundleStateEntry;
 pub use error::StoreError;
 pub use handoff::PendingResume;
-pub use hya_proto::{ActorClaim, OwnerRunId};
-pub use mailbox::{
-    RecoveredResidentOutcome, RecoveredResidentWork, ResidentArchive, ResidentArchiveOutcome,
-    ResidentArchiveOwner,
-};
+pub use hya_proto::OwnerRunId;
 pub use paths::user_cache_dir;
 pub use permission::SavedPermission;
 pub use preferences::{AgentEffortPreference, AgentModelPreference, ModelEffortPreference};
 pub use project::{Project, ProjectSummary, normalize_project_path};
-pub use recovery::{INTERRUPTED_REASON, InterruptedTurnRecovery};
-pub use resident_claim::{EpisodeRegistration, RecoveredActorClaim, ResidentWorkPrompt};
+pub use recovery::{INTERRUPTED_REASON, InterruptedTurnRecovery, open_turn_terminal_events};
 pub use runtime_owner::{DatabasePaths, database_paths, validate_database_arg};
-pub use workflow::{WorkflowAdmissionOutcome, WorkflowSelectionOutcome};
 pub use write_queue::{
     EXIT_DRAIN_TIMEOUT, ExitDrainReport, OPEN_TIMEOUT, READ_TIMEOUT, StoreHealth, WRITE_TIMEOUT,
 };
 
-/// SQLite-backed session event log, resident claims, and related tables.
+/// SQLite-backed session event log, bundle storage/claims, and related tables.
 ///
 /// Construct with [`SessionStore::connect`] (file) or [`SessionStore::connect_memory`].
 /// Projection is folded on read via `hya_proto::Projection` — there is no separate
@@ -120,6 +118,32 @@ impl SessionStore {
         self
     }
 
+    /// Configure the [`ProjectionReducerRegistry`] used when folding
+    /// [`Event::Extension`] events on read and replay. Clears any stale
+    /// in-process cache entries if the reducer signature changed.
+    #[must_use]
+    pub fn with_projection_reducers(self, reducers: ProjectionReducerRegistry) -> Self {
+        self.projections.set_reducers(reducers);
+        self
+    }
+
+    /// Replace the active [`ProjectionReducerRegistry`] for this store.
+    pub fn set_projection_reducers(&self, reducers: ProjectionReducerRegistry) {
+        self.projections.set_reducers(reducers);
+    }
+
+    /// Register one bundle [`ProjectionReducer`] on this store, invalidating
+    /// in-process cached projections so subsequent reads fold with it.
+    pub fn register_projection_reducer(&self, reducer: Arc<dyn ProjectionReducer>) {
+        self.projections.register_reducer(reducer);
+    }
+
+    /// Return the currently active [`ProjectionReducerRegistry`].
+    #[must_use]
+    pub fn projection_reducers(&self) -> Arc<ProjectionReducerRegistry> {
+        self.projections.reducers()
+    }
+
     /// Begin a writer transaction for composing event appends with auxiliary rows.
     /// Publish appended envelopes only after committing the returned transaction.
     pub async fn begin_transaction(&self) -> Result<StoreTransaction<'_>, StoreError> {
@@ -163,6 +187,23 @@ impl SessionStore {
         let mut tx = self.begin_transaction().await?;
         let mut envelopes = Vec::with_capacity(events.len());
         for event in events {
+            envelopes.push(append_event_in_transaction(&mut tx, session, event).await?);
+        }
+        tx.commit().await?;
+        Ok(envelopes)
+    }
+
+    /// Append an owned cross-session batch in order, returning envelopes only after commit.
+    pub async fn append_events_batch(
+        &self,
+        batch: Vec<(SessionId, Event)>,
+    ) -> Result<Vec<Envelope>, StoreError> {
+        if let Some(queue) = &self.write_queue {
+            return queue.submit(Vec::new(), batch).await;
+        }
+        let mut tx = self.begin_transaction().await?;
+        let mut envelopes = Vec::with_capacity(batch.len());
+        for (session, event) in batch {
             envelopes.push(append_event_in_transaction(&mut tx, session, event).await?);
         }
         tx.commit().await?;
@@ -444,15 +485,6 @@ impl SessionStore {
                     .await?;
             }
         }
-        for tree_key in &tree_keys {
-            sqlx::query(
-                "DELETE FROM resident_actor_claim WHERE actor_id = ? OR root_session_id = ?",
-            )
-            .bind(tree_key.as_slice())
-            .bind(tree_key.as_slice())
-            .execute(&mut *tx)
-            .await?;
-        }
         // Remove the complete tree in one statement to satisfy the self FK.
         sqlx::query(
             "WITH RECURSIVE tree(id) AS ( \
@@ -501,8 +533,68 @@ impl SessionStore {
 
     /// Advance the cached fold of `session` before a writer transaction folds
     /// it, so the transaction reads only the tail.
-    pub(crate) async fn warm_projection(&self, session: SessionId) -> Result<(), StoreError> {
+    pub async fn warm_projection(&self, session: SessionId) -> Result<(), StoreError> {
         self.cached_projection(session).await.map(drop)
+    }
+
+    /// Fold one Session log inside an existing writer transaction, seeing
+    /// uncommitted events appended in `tx`.
+    pub async fn replay_projection_in_transaction(
+        &self,
+        tx: &mut StoreTransaction<'_>,
+        session: SessionId,
+    ) -> Result<Arc<Projection>, StoreError> {
+        replay_projection(&self.projections, tx, session).await
+    }
+
+    /// Replay all persisted + uncommitted envelopes for `session` inside an open transaction.
+    pub async fn replay_in_transaction(
+        tx: &mut StoreTransaction<'_>,
+        session: SessionId,
+    ) -> Result<Vec<Envelope>, StoreError> {
+        let rows =
+            sqlx::query("SELECT seq, ts, payload FROM event_log WHERE session_id = ? ORDER BY seq")
+                .bind(session.storage_key())
+                .fetch_all(&mut **tx)
+                .await?;
+        let mut envelopes = Vec::with_capacity(rows.len());
+        for row in rows {
+            let seq: i64 = row.try_get("seq")?;
+            let ts_millis: i64 = row.try_get("ts")?;
+            let payload: String = row.try_get("payload")?;
+            envelopes.push(Envelope {
+                seq: EventSeq(seq.max(0) as u64),
+                ts_millis,
+                event: decode_event(&payload, session, seq)?,
+            });
+        }
+        Ok(envelopes)
+    }
+
+    /// Find distinct session ids whose event log contains an [`Event::Extension`]
+    /// matching `(bundle, kind)`.
+    pub async fn find_sessions_with_extension_event(
+        tx: &mut StoreTransaction<'_>,
+        bundle: &str,
+        kind: &str,
+    ) -> Result<Vec<SessionId>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT DISTINCT session_id FROM event_log \
+             WHERE json_extract(payload, '$.type') = 'extension' \
+               AND json_extract(payload, '$.bundle') = ? \
+               AND json_extract(payload, '$.kind') = ? \
+             ORDER BY session_id",
+        )
+        .bind(bundle)
+        .bind(kind)
+        .fetch_all(&mut **tx)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let key: Vec<u8> = row.try_get("session_id")?;
+                decode_session_key(&key)
+            })
+            .collect()
     }
 
     async fn load_prepared_projection(
@@ -511,11 +603,13 @@ impl SessionStore {
         base_override: Option<projection_cache::Base>,
     ) -> Result<(projection_cache::PreparedFold, u64, u64), StoreError> {
         let mut conn = self.read_pool_checked()?.acquire().await?;
+        let reducers = self.projections.reducers();
+        let signature = reducers.signature();
         let base = match base_override {
             Some(base) => Some(base),
             None => match self.projections.get(session) {
                 Some(base) => Some(base),
-                None => projection_cache::load_snapshot(&mut conn, session)
+                None => projection_cache::load_snapshot(&mut conn, session, &signature)
                     .await?
                     .map(|projection| projection_cache::Base {
                         persisted_seq: projection.last_seq,
@@ -527,8 +621,13 @@ impl SessionStore {
         let (persisted_seq, unpersisted) = base
             .as_ref()
             .map_or((0, 0), |base| (base.persisted_seq, base.unpersisted));
-        let prepared =
-            projection_cache::fold(&mut conn, session, base.map(|base| base.projection)).await?;
+        let prepared = projection_cache::fold(
+            &mut conn,
+            session,
+            base.map(|base| base.projection),
+            reducers,
+        )
+        .await?;
         Ok((prepared, persisted_seq, unpersisted))
     }
 
@@ -669,7 +768,8 @@ impl SessionStore {
             && last_seq > persisted_seq
             && unpersisted >= self.projections.snapshot_interval()
         {
-            match projection.encode_snapshot() {
+            let signature = self.projections.reducers().signature();
+            match projection.encode_snapshot_with(&signature) {
                 Ok(payload) => {
                     if let Some(mut wconn) = self.writer_pool.try_acquire() {
                         // Best effort: a busy writer or failed write only means a later read folds more.
@@ -848,18 +948,12 @@ impl SessionStore {
 }
 
 pub(crate) fn validate_event_for_append(event: &Event) -> Result<(), StoreError> {
-    if let Event::MailSent {
-        from,
-        to: hya_proto::MailEndpoint::Handle(handle),
-        ..
-    } = event
-        && from != hya_proto::scope::HARNESS_HANDLE
+    if let Event::Extension { bundle, kind, .. } = event
+        && (bundle.trim().is_empty() || kind.trim().is_empty())
     {
-        return Err(StoreError::MailAuthorizationRejected {
-            sender: from.clone(),
-            channel: format!("direct:{handle}"),
-            reason: "agent mail must target a channel".into(),
-        });
+        return Err(StoreError::InvalidEvent(
+            "extension event `bundle` and `kind` must be non-empty".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -911,10 +1005,11 @@ pub(crate) async fn insert_event_in_tx(
             cause: Some(hya_proto::FinishCause::Shutdown),
             ..
         } => {
-            let base = projection_cache::load_snapshot(tx, session)
+            let empty_reducers = Arc::new(ProjectionReducerRegistry::new());
+            let base = projection_cache::load_snapshot(tx, session, "")
                 .await?
                 .map(Arc::new);
-            let proj = projection_cache::fold(tx, session, base)
+            let proj = projection_cache::fold(tx, session, base, empty_reducers)
                 .await?
                 .finish()
                 .projection;
@@ -1048,8 +1143,12 @@ pub(crate) async fn replay_projection(
     tx: &mut StoreTransaction<'_>,
     session: SessionId,
 ) -> Result<Arc<Projection>, StoreError> {
-    let base = projection_cache::transaction_base(cache, tx, session).await?;
-    let folded = projection_cache::fold(tx, session, base).await?.finish();
+    let reducers = cache.reducers();
+    let signature = reducers.signature();
+    let base = projection_cache::transaction_base(cache, tx, session, &signature).await?;
+    let folded = projection_cache::fold(tx, session, base, reducers)
+        .await?
+        .finish();
     Ok(folded.projection)
 }
 

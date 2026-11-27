@@ -1,6 +1,5 @@
 use async_trait::async_trait;
-use hya_proto::{Event, SessionId};
-use hya_store::ActorClaim;
+use hya_proto::{ActorClaim, Event, SessionId};
 
 use super::SessionEngine;
 use crate::error::CoreError;

@@ -43,10 +43,11 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use hya_proto::{
-    ActorClaim, ArchiveReason, Event, FinishCause, FinishReason, MailEndpoint, MemberRunStatus,
-    OwnerRunId, ReportOutcome, RosterStatus, SessionId, ToolCallId, scope,
+    ActorClaim, Event, FinishCause, FinishReason, MailEndpoint, MemberRunStatus, OwnerRunId,
+    RosterStatus, SessionId, ToolCallId, scope,
 };
-use hya_tool::{AgentDef, ArchiveReceipt, ResolvedTool};
+use hya_tool::extension::ExtensionEvent;
+use hya_tool::{AgentDef, ArchiveReason, ArchiveReceipt, ReportOutcome, ResolvedTool};
 use tokio::sync::{Notify, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -313,7 +314,7 @@ struct RecoveredResident {
     handle: String,
     agent: AgentSpec,
     runtime: ResolvedResidentRuntime,
-    claim: hya_store::RecoveredActorClaim,
+    claim: crate::store_bridge::RecoveredActorClaim,
     disposition: ResidentRecovery,
 }
 

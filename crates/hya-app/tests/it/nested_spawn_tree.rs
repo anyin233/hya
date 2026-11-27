@@ -11,7 +11,7 @@ use hya_engine::{
     AgentSpec, BoundSpawnSender, CategoryRegistry, CreateSession, EventBus, ResidentSupervisor,
     SessionEngine,
 };
-use hya_proto::{AgentName, Event, MemberId, ModelRef, SessionId, SubagentMode};
+use hya_proto::{AgentName, MemberId, ModelRef, SessionId, SubagentMode};
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, SpawnMember};
@@ -108,19 +108,15 @@ async fn nested_spawn_reaches_root_tree_and_registers_two_generations_in_roster(
         loop {
             let root_proj = engine.read_projection(root).await.unwrap();
             let child_proj = engine.read_projection(child).await.unwrap();
-            let linked = root_proj
-                .session
-                .members
+            let linked = hya_tool::extension::members_projection(&root_proj)
                 .iter()
                 .any(|m| m.child == Some(child))
-                && child_proj
-                    .session
-                    .members
+                && hya_tool::extension::members_projection(&child_proj)
                     .iter()
                     .any(|m| m.child == Some(grandchild));
-            let settled = root_proj.team.roster.len() >= 2
-                && root_proj
-                    .team
+            let root_team = hya_tool::extension::team_projection(&root_proj);
+            let settled = root_team.roster.len() >= 2
+                && root_team
                     .roster
                     .values()
                     .all(|e| e.status == hya_proto::RosterStatus::Idle);
@@ -138,7 +134,7 @@ async fn nested_spawn_reaches_root_tree_and_registers_two_generations_in_roster(
         .store()
         .append_event(
             root,
-            &Event::MemberSpawned {
+            &hya_tool::extension::ExtensionEvent::MemberSpawned {
                 session: root,
                 member: MemberId::new(),
                 child: None,
@@ -147,18 +143,19 @@ async fn nested_spawn_reaches_root_tree_and_registers_two_generations_in_roster(
                 depth: 1,
                 directive: String::new(),
                 tool_call: None,
-            },
+            }
+            .into_event(),
         )
         .await
         .unwrap();
 
     let projection = engine.read_projection(root).await.unwrap();
+    let team = hya_tool::extension::team_projection(&projection);
     for (session, agent_type) in [
         (child, AgentName::new("explore")),
         (grandchild, AgentName::new("plan")),
     ] {
-        let entry = projection
-            .team
+        let entry = team
             .roster
             .values()
             .find(|e| e.session == session)
@@ -168,8 +165,7 @@ async fn nested_spawn_reaches_root_tree_and_registers_two_generations_in_roster(
         assert_eq!(entry.mode, SubagentMode::Resident);
     }
     assert!(
-        projection
-            .team
+        team
             .roster
             .values()
             .all(|e| e.session != root || e.handle == "main")

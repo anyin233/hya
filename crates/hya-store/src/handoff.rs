@@ -1,8 +1,8 @@
 //! Durable restore prompts for sessions interrupted by a process stop.
 
 use hya_proto::{
-    Envelope, Event, FinishCause, FinishReason, MessageId, OwnerRunId, PartId, PartProjection,
-    Role, SessionId, ToolPartState,
+    Envelope, Event, FinishReason, MessageId, OwnerRunId, PartId, PartProjection, Role, SessionId,
+    ToolPartState,
 };
 use sqlx::Row;
 
@@ -50,6 +50,18 @@ impl SessionStore {
         &self,
         session: SessionId,
         owner: OwnerRunId,
+    ) -> Result<Option<(MessageId, Vec<Envelope>)>, StoreError> {
+        self.take_restart_resume_with_suffix(session, owner, None)
+            .await
+    }
+
+    /// Variant of [`Self::take_restart_resume`] appending an optional extra
+    /// suffix paragraph (such as interrupted subagent handles) to the restore prompt.
+    pub async fn take_restart_resume_with_suffix(
+        &self,
+        session: SessionId,
+        owner: OwnerRunId,
+        suffix: Option<&str>,
     ) -> Result<Option<(MessageId, Vec<Envelope>)>, StoreError> {
         self.require_runtime_owner(owner)?;
         let mut tx = self.begin_transaction().await?;
@@ -119,44 +131,8 @@ impl SessionStore {
              successes; side effects may have happened before interruption. Review the existing \
              transcript and decide what to redo, then continue the task."
         );
-        let candidates = projection
-            .team
-            .roster
-            .values()
-            .map(|entry| (&entry.handle, entry.session))
-            .chain(
-                projection
-                    .team
-                    .archived
-                    .values()
-                    .filter(|entry| entry.reason == hya_proto::ArchiveReason::Shutdown)
-                    .map(|entry| (&entry.handle, entry.session)),
-            );
-        let mut children = Vec::new();
-        for (handle, child) in candidates {
-            if child == session {
-                continue;
-            }
-            let child = replay_projection(&self.projections, &mut tx, child).await?;
-            if child
-                .session
-                .messages
-                .iter()
-                .rev()
-                .find(|message| message.role == Role::Assistant)
-                .is_some_and(|message| {
-                    message.finish == Some(FinishReason::Cancelled)
-                        && message.cause == Some(FinishCause::Shutdown)
-                })
-            {
-                children.push(handle.as_str());
-            }
-        }
-        if !children.is_empty() {
-            text.push_str(&format!(
-                "\n\nInterrupted subagents: {}. Their recovery is managed by the supervisor.",
-                children.join(", ")
-            ));
+        if let Some(extra) = suffix.filter(|s| !s.is_empty()) {
+            text.push_str(extra);
         }
         let message = MessageId::new();
         let part = PartId::new();
@@ -210,6 +186,8 @@ impl SessionStore {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use hya_proto::FinishCause;
+
     use super::*;
 
     async fn interrupted(store: &SessionStore) -> (SessionId, MessageId) {

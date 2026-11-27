@@ -27,7 +27,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_arguments)]
 
 use hya_proto::{
-    AgentName, Envelope, Event, EventSeq, FinishReason, MailEndpoint, MailKind, MessageId,
+    AgentName, Envelope, Event, EventSeq, FinishReason, MessageId,
     ModelRef, PartId, Projection, Role, SessionId, SessionKind,
 };
 use hya_store::{ExitDrainReport, SavedPermission, SessionStore, StoreError, StoreHealth};
@@ -163,7 +163,7 @@ async fn assert_parity_with_healthy_store(
     assert_eq!(actual_proj.session.id, healthy_proj.session.id);
     assert_eq!(actual_proj.session.title, healthy_proj.session.title);
     assert_eq!(actual_proj.session.agent, healthy_proj.session.agent);
-    assert_eq!(actual_proj.team, healthy_proj.team);
+    assert_eq!(actual_proj.extensions, healthy_proj.extensions);
     assert_eq!(
         actual_proj.session.messages.len(),
         healthy_proj.session.messages.len()
@@ -725,20 +725,19 @@ async fn logical_error_returns_to_caller_without_degrading() {
         .unwrap();
 
     // 1. Pre-queue logical validation error.
-    let mail_err = store
+    let ext_err = store
         .append_event(
             session,
-            &Event::MailSent {
+            &Event::Extension {
                 session,
-                from: "worker".into(),
-                to: MailEndpoint::Handle("lead".into()),
-                kind: MailKind::Message,
-                body: "direct handle rejected".into(),
+                bundle: String::new(),
+                kind: "msg".into(),
+                payload: serde_json::json!({}),
             },
         )
         .await
         .unwrap_err();
-    assert!(!mail_err.to_string().is_empty());
+    assert!(!ext_err.to_string().is_empty());
     assert_eq!(store.health(), StoreHealth::Healthy);
 
     // 2. SQLite-level logical abort inside the single writer task.
@@ -2856,7 +2855,7 @@ async fn open_fallback_handles_stall_and_unwritable_paths_without_masking_errors
     }
     assert!(matches!(
         SessionStore::connect_runtime_or_memory(legacy_db.to_str().unwrap()).await,
-        Err(StoreError::UnsupportedDatabase)
+        Err(StoreError::UnsupportedDatabase { .. })
     ));
 
     let sym_db = case.dir.join("sym.db");

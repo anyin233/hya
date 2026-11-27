@@ -8,10 +8,8 @@
 use std::path::PathBuf;
 
 use futures::future::BoxFuture;
-use hya_proto::{
-    SessionId, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowProjection,
-    WorkflowRunId, WorkflowSummary,
-};
+use hya_proto::{SessionId, WorkflowRunId, WorkflowSummary};
+use hya_tool::{WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowProjection};
 
 /// Structured failure returned by the Workflow control port.
 ///

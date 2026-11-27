@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::{ApiError, ServerState};
 use hya_api::v1 as pb;
 use hya_api::v1::submit_workflow_command_request::Command;
-use hya_proto::workflow::{WorkflowCommand, WorkflowCommandResult};
+use hya_tool::{WorkflowCommand, WorkflowCommandResult};
 
 use super::V1Error;
 use super::request_scope;
@@ -71,7 +71,7 @@ async fn get_state(
         &st,
         session,
         WorkflowCommand::State,
-        hya_proto::WorkflowDelivery::Started,
+        hya_tool::WorkflowDelivery::Started,
     )
     .await?;
     Ok(Json(map_state(&result)))
@@ -111,7 +111,7 @@ async fn submit_command(
         None => return Err(V1Error::invalid_argument("missing workflow command")),
     };
     let result =
-        crate::workflow::execute(&st, session, command, hya_proto::WorkflowDelivery::Started)
+        crate::workflow::execute(&st, session, command, hya_tool::WorkflowDelivery::Started)
             .await?;
     let response = match result {
         WorkflowCommandResult::List { .. } => {

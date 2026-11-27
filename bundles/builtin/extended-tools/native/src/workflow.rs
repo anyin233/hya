@@ -1,8 +1,8 @@
 //! Workflow tool implementation.
 use async_trait::async_trait;
-use hya_proto::{ToolSchema, WorkflowCommand, WorkflowRevision, WorkflowRunId};
+use hya_proto::{ToolSchema, WorkflowRevision, WorkflowRunId};
 use hya_tool::tool::obj_schema;
-use hya_tool::{Action, Resource, Tool, ToolCtx, ToolError};
+use hya_tool::{Action, Resource, Tool, ToolCtx, ToolError, WorkflowCommand};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

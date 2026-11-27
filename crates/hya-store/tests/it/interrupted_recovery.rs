@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_proto::{
-    Event, FinishCause, FinishReason, MemberId, MemberRunStatus, MessageId, OwnerRunId, PartId,
-    PartProjection, Role, SessionId, ToolCallId, ToolPartState,
+    Event, FinishCause, FinishReason, MessageId, OwnerRunId, PartId, PartProjection, Role,
+    SessionId, ToolCallId, ToolPartState,
 };
 use hya_store::SessionStore;
 
@@ -34,7 +34,7 @@ fn remove_db(path: &str) {
     }
 }
 
-/// One session whose assistant turn died mid-tool-call with a running member,
+/// One session whose assistant turn died mid-tool-call,
 /// plus one session whose turn finished cleanly.
 fn crashed_log(open: SessionId, done: SessionId) -> Vec<(SessionId, Event)> {
     let open_message = MessageId::new();
@@ -62,19 +62,6 @@ fn crashed_log(open: SessionId, done: SessionId) -> Vec<(SessionId, Event)> {
                 name: "bash".into(),
                 input: serde_json::json!({"command": "sleep 100"}),
                 provider_data: None,
-            },
-        ),
-        (
-            open,
-            Event::MemberSpawned {
-                session: open,
-                member: MemberId::new(),
-                child: None,
-                subagent_type: "general".into(),
-                description: "worker".into(),
-                depth: 1,
-                directive: "work".into(),
-                tool_call: None,
             },
         ),
         (
@@ -128,13 +115,6 @@ async fn assert_recovered(store: &SessionStore, open: SessionId, done: SessionId
             ..
         }
     )));
-    assert!(
-        projection
-            .session
-            .members
-            .iter()
-            .all(|member| member.status == MemberRunStatus::Cancelled)
-    );
     let done_events = store.replay(done).await.unwrap();
     assert_eq!(
         finish_events(&done_events),
@@ -190,95 +170,4 @@ async fn recovery_requires_the_runtime_owner_claim() {
             .await
             .is_err()
     );
-}
-
-/// A resident spawned by a `task` call that already returned outlives its
-/// parent's turn (ADR-0015): crash recovery closes the parent's open turn but
-/// leaves that member row alone — the resident is recovered separately and
-/// its row stays live. A row whose spawning call is still open is cancelled.
-#[tokio::test]
-async fn recovery_keeps_member_rows_whose_task_call_already_returned() {
-    let path = temp_db();
-    let open = SessionId::new();
-    let message = MessageId::new();
-    let (finished_part, finished_call) = (PartId::new(), ToolCallId::new());
-    let (open_part, open_call) = (PartId::new(), ToolCallId::new());
-    let (resident, orphan) = (MemberId::new(), MemberId::new());
-    let spawned = |member, call| Event::MemberSpawned {
-        session: open,
-        member,
-        child: Some(SessionId::new()),
-        subagent_type: "general".into(),
-        description: "worker".into(),
-        depth: 1,
-        directive: "work".into(),
-        tool_call: Some(call),
-    };
-    let events = vec![
-        Event::MessageStarted {
-            session: open,
-            message,
-            role: Role::Assistant,
-            agent: None,
-            model: None,
-        },
-        Event::ToolCallRequested {
-            session: open,
-            message,
-            part: finished_part,
-            call: finished_call,
-            name: "task".into(),
-            input: serde_json::json!({"description": "a", "prompt": "a"}),
-            provider_data: None,
-        },
-        spawned(resident, finished_call),
-        Event::MemberStatusChanged {
-            session: open,
-            member: resident,
-            status: MemberRunStatus::Running,
-        },
-        Event::ToolResult {
-            session: open,
-            message,
-            part: finished_part,
-            call: finished_call,
-            output: serde_json::json!({"output": "spawned"}),
-            time_ms: 1,
-        },
-        Event::ToolCallRequested {
-            session: open,
-            message,
-            part: open_part,
-            call: open_call,
-            name: "task".into(),
-            input: serde_json::json!({"description": "b", "prompt": "b"}),
-            provider_data: None,
-        },
-        spawned(orphan, open_call),
-    ];
-    {
-        let store = SessionStore::connect(&path).await.unwrap();
-        store.claim_runtime_owner(OwnerRunId::new()).unwrap();
-        for event in &events {
-            store.append_event(open, event).await.unwrap();
-        }
-    }
-
-    let store = SessionStore::connect(&path).await.unwrap();
-    let owner = OwnerRunId::new();
-    store.claim_runtime_owner(owner).unwrap();
-    store.recover_interrupted_turns(owner).await.unwrap();
-    let projection = store.read_projection(open).await.unwrap();
-    let status = |member| {
-        projection
-            .session
-            .members
-            .iter()
-            .find(|row| row.member == member)
-            .map(|row| row.status)
-    };
-    assert_eq!(status(resident), Some(MemberRunStatus::Running));
-    assert_eq!(status(orphan), Some(MemberRunStatus::Cancelled));
-    drop(store);
-    remove_db(&path);
 }
