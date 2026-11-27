@@ -1,3 +1,7 @@
+//! Expose workspace release versions and compiler metadata from `versions.toml`.
+
+#![allow(clippy::expect_used)]
+
 use std::{env, fs, path::PathBuf, process::Command};
 
 fn main() {
