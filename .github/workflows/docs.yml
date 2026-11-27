@@ -1,15 +1,16 @@
 name: docs
 
+# PR and push verification of the landing page and documentation site runs inside
+# `.github/workflows/ci.yml` (`web` / `docs` jobs, gated by `ci-gate`). This
+# workflow is dedicated to publishing GitHub Pages from `main` so `pages: write`
+# / `id-token: write` stay isolated from the main CI gate.
 on:
   push:
+    branches: [main]
     paths:
       - 'public/**'
       - 'docs/**'
-      - '.github/workflows/docs.yml'
-  pull_request:
-    paths:
-      - 'public/**'
-      - 'docs/**'
+      - 'proto/hya/v1/**'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -17,8 +18,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: docs-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: docs-deploy
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -48,7 +49,6 @@ jobs:
           path: docs/site/dist-pages
 
   deploy:
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
