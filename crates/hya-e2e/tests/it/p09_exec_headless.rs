@@ -20,8 +20,8 @@ const NOTICE: &str = "HEADLESS RUN —";
 const SEED: u64 = 39;
 
 fn worker_handle() -> String {
-    let mut rng = hya_engine::handle_naming::SplitMix64::seeded(SEED);
-    let leaf = hya_engine::handle_naming::mint_leaf("hya-task", &BTreeSet::new(), &mut rng);
+    let mut rng = hya_proto::handle_naming::SplitMix64::seeded(SEED);
+    let leaf = hya_proto::handle_naming::mint_leaf("hya-task", &BTreeSet::new(), &mut rng);
     format!("main/{leaf}")
 }
 

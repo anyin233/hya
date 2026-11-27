@@ -1498,7 +1498,6 @@ dependencies = [
  "futures",
  "hya-api",
  "hya-bundle",
- "hya-engine",
  "hya-proto",
  "hya-sdk-v1",
  "hya-store",
