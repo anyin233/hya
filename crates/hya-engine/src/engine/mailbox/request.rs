@@ -70,15 +70,15 @@ impl SessionEngine {
         let team = team_projection(&policy_projection);
         let channel = match to {
             MailEndpoint::Channel(channel) => channel.trim().to_string(),
-            MailEndpoint::Handle(handle) => team
-                .resolve_dm(&from, &handle)
-                .ok_or_else(|| CoreError::MailAuthorizationRejected {
+            MailEndpoint::Handle(handle) => team.resolve_dm(&from, &handle).ok_or_else(|| {
+                CoreError::MailAuthorizationRejected {
                     sender: from.clone(),
                     channel: format!("direct:{handle}"),
                     reason:
                         "no DM channel with that target; run `list_channel` to see your channels"
                             .into(),
-                })?,
+                }
+            })?,
         };
         let to = MailEndpoint::Channel(channel.clone());
         // A subagent the user stopped (`cancel_user_turn`) is not restarted

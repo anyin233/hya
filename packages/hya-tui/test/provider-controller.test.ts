@@ -62,7 +62,7 @@ test("the add-provider wizard sends the key only to the server, opens the new pr
 
 test("a server error keeps the wizard open on the step it names", async () => {
   const h = harness({
-    upsertProvider: async () => { throw new HttpError(400, "PUT", "/v1/providers/gw", "invalid_argument: base URL must be http(s)://host") },
+    upsertProvider: async () => { throw new HttpError(400, "PUT", "/v2/providers/gw", "invalid_argument: base URL must be http(s)://host") },
   }, { providers: [offline], models: [offlineModel] })
   h.providers.open()
   await settle()

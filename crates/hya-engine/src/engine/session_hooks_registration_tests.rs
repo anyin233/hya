@@ -544,11 +544,7 @@ async fn revived_resident_ignores_stale_init_hooks() {
         *pause.lock().unwrap() = None;
         let proj = eng.read_projection(root).await.unwrap();
         let team = hya_tool::extension::team_projection(&proj);
-        let (handle, entry) = team
-            .roster
-            .iter()
-            .find(|(_, e)| e.session != root)
-            .unwrap();
+        let (handle, entry) = team.roster.iter().find(|(_, e)| e.session != root).unwrap();
         let handle = handle.clone();
         let child = entry.session;
         sup.archive_member(root, &handle, "superseded")
@@ -604,14 +600,16 @@ async fn revived_resident_ignores_stale_init_hooks() {
             .await
             .unwrap()
             .into_iter()
-            .filter_map(|e| match hya_tool::extension::ExtensionEvent::from_event(&e.event) {
-                Some(hya_tool::extension::ExtensionEvent::AgentActivityChanged {
-                    handle: a,
-                    status,
-                    ..
-                }) if a == handle => Some(status),
-                _ => None,
-            })
+            .filter_map(
+                |e| match hya_tool::extension::ExtensionEvent::from_event(&e.event) {
+                    Some(hya_tool::extension::ExtensionEvent::AgentActivityChanged {
+                        handle: a,
+                        status,
+                        ..
+                    }) if a == handle => Some(status),
+                    _ => None,
+                },
+            )
             .collect();
         assert_eq!(
             &activity[activity.len() - 2..],

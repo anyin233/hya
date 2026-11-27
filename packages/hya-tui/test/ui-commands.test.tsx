@@ -180,8 +180,8 @@ describe("command pane, overlay, and height", () => {
     await app.waitFor(() => app!.store.state.paneLayout.active === "pane-1", "composer focused")
 
     // Nested /api completion
-    await app.type("/api GET /v1/hea")
-    await app.waitForText("/api GET /v1/health")
+    await app.type("/api GET /v2/hea")
+    await app.waitForText("/api GET /v2/health")
     app.controller.ui.command?.open("/open")
     await app.render()
     await app.waitForText("▸ /open")
@@ -248,7 +248,7 @@ describe("command pane, overlay, and height", () => {
     await app.render()
     await app.press("RETURN")
     await app.waitForText("API commands")
-    await app.waitForText("/v1/health")
+    await app.waitForText("/v2/health")
 
     // Narrow viewport keeps sidebars hidden even after /sidebar toggle.
     await app.resize(80, 37)

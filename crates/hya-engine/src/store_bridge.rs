@@ -346,7 +346,8 @@ async fn append_resolved_channel_mail(
             }
         }
         let active_claims =
-            SessionStore::list_active_bundle_claims_in_tx_at(tx, CLAIM_BUNDLE, now_millis()).await?;
+            SessionStore::list_active_bundle_claims_in_tx_at(tx, CLAIM_BUNDLE, now_millis())
+                .await?;
         let active: HashSet<String> = active_claims.into_iter().map(|c| c.claim_key).collect();
         for member in &state.members {
             if !team.mail_recipient_is_live(member) {
@@ -708,7 +709,9 @@ impl SessionStoreExt for SessionStore {
             )));
         }
         let agent_type = archived.agent_type.clone();
-        let actor_projection = self.replay_projection_in_transaction(&mut tx, actor).await?;
+        let actor_projection = self
+            .replay_projection_in_transaction(&mut tx, actor)
+            .await?;
         let handoff = handoff_projection(&actor_projection).ok_or_else(|| {
             CoreError::Store(StoreError::BundleClaimData(
                 "archived resident has no handoff".into(),
@@ -718,7 +721,10 @@ impl SessionStoreExt for SessionStore {
             "{context_marker}\nPRIOR HANDOFF (generation {})\n{}",
             handoff.generation, handoff.doc
         );
-        let cursor = team.inboxes.get(&target).map_or(0, |inbox| inbox.len() as u64);
+        let cursor = team
+            .inboxes
+            .get(&target)
+            .map_or(0, |inbox| inbox.len() as u64);
         check_capacity(&mut tx, root, 1, capacity).await?;
         let claim = try_claim_new_in_tx(&mut tx, root, actor, owner).await?;
         let message = MessageId::new();
@@ -816,7 +822,9 @@ impl SessionStoreExt for SessionStore {
         let (admitted, text) = match prompt {
             ResidentWorkPrompt::Text(text) => (None, text),
             ResidentWorkPrompt::Resume { message, append } => {
-                let projection = self.replay_projection_in_transaction(&mut tx, session).await?;
+                let projection = self
+                    .replay_projection_in_transaction(&mut tx, session)
+                    .await?;
                 let tail = projection
                     .session
                     .messages
@@ -849,7 +857,10 @@ impl SessionStoreExt for SessionStore {
                     let root_projection =
                         self.replay_projection_in_transaction(&mut tx, root).await?;
                     let team = team_projection(&root_projection);
-                    if let Some(work) = team.roster.get(handle).and_then(|entry| entry.resident_work)
+                    if let Some(work) = team
+                        .roster
+                        .get(handle)
+                        .and_then(|entry| entry.resident_work)
                     {
                         events.push(
                             ExtensionEvent::ResidentWorkFinished {
@@ -1066,9 +1077,11 @@ impl SessionStoreExt for SessionStore {
                 }) = ExtensionEvent::from_event(&event)
                 {
                     let team = team_projection(&projection);
-                    if let Some((existing, _)) = team.channels.iter().find(|(_, entry)| {
-                        entry.kind == ChannelKind::Group && entry.unit == unit
-                    }) {
+                    if let Some((existing, _)) = team
+                        .channels
+                        .iter()
+                        .find(|(_, entry)| entry.kind == ChannelKind::Group && entry.unit == unit)
+                    {
                         event = ExtensionEvent::ChannelCreated {
                             session,
                             channel: existing.clone(),
@@ -1209,9 +1222,17 @@ impl SessionStoreExt for SessionStore {
             fence_actor_claim(&mut tx, claim).await?;
         }
         let projection = self.replay_projection_in_transaction(&mut tx, root).await?;
-        let (envelope, recipients) =
-            append_resolved_channel_mail(&mut tx, root, from, channel, kind, body, &projection, policy)
-                .await?;
+        let (envelope, recipients) = append_resolved_channel_mail(
+            &mut tx,
+            root,
+            from,
+            channel,
+            kind,
+            body,
+            &projection,
+            policy,
+        )
+        .await?;
         tx.commit().await?;
         Ok((envelope, recipients))
     }
@@ -1395,7 +1416,8 @@ impl SessionStoreExt for SessionStore {
                         &owned_claim
                     }
                     Err(StoreError::BundleClaimUnavailable { .. }) => {
-                        let projection = self.replay_projection_in_transaction(&mut tx, root).await?;
+                        let projection =
+                            self.replay_projection_in_transaction(&mut tx, root).await?;
                         if team_projection(&projection)
                             .archived
                             .get(handle)
@@ -1442,7 +1464,8 @@ impl SessionStoreExt for SessionStore {
         let actor = self
             .replay_projection_in_transaction(&mut tx, claim.actor_id)
             .await?;
-        let generation = handoff_projection(&actor).map_or(1, |handoff| handoff.generation.saturating_add(1));
+        let generation =
+            handoff_projection(&actor).map_or(1, |handoff| handoff.generation.saturating_add(1));
         let mut refusal = if archive
             .expected_work
             .is_some_and(|work| work != (entry.resident_cursor, entry.resident_work))
@@ -1563,8 +1586,9 @@ impl SessionStoreExt for SessionStore {
                     .roster
                     .get(parent_path)
                     .map_or(root, |entry| entry.session);
-                let parent_projection =
-                    self.replay_projection_in_transaction(&mut tx, parent).await?;
+                let parent_projection = self
+                    .replay_projection_in_transaction(&mut tx, parent)
+                    .await?;
                 let member = members_projection(&parent_projection)
                     .iter()
                     .find(|row| row.child == Some(claim.actor_id))
@@ -1663,16 +1687,18 @@ impl SessionStoreExt for SessionStore {
             fence_actor_claim(&mut tx, claim).await?;
         }
         let events = SessionStore::replay_in_transaction(&mut tx, session).await?;
-        if let Some(existing_hash) = events.iter().find_map(|envelope| {
-            match ExtensionEvent::from_event(&envelope.event) {
-                Some(ExtensionEvent::WorkflowRunStarted {
-                    run: existing,
-                    request_hash,
-                    ..
-                }) if existing == run => Some(request_hash),
-                _ => None,
-            }
-        }) {
+        if let Some(existing_hash) =
+            events.iter().find_map(
+                |envelope| match ExtensionEvent::from_event(&envelope.event) {
+                    Some(ExtensionEvent::WorkflowRunStarted {
+                        run: existing,
+                        request_hash,
+                        ..
+                    }) if existing == run => Some(request_hash),
+                    _ => None,
+                },
+            )
+        {
             tx.commit().await?;
             return Ok(if existing_hash == request_hash {
                 WorkflowAdmissionOutcome::Existing
@@ -1711,7 +1737,9 @@ impl SessionStoreExt for SessionStore {
         if let Some(claim) = actor_claim {
             fence_actor_claim(&mut tx, claim).await?;
         }
-        let projection = self.replay_projection_in_transaction(&mut tx, session).await?;
+        let projection = self
+            .replay_projection_in_transaction(&mut tx, session)
+            .await?;
         if let Some(active) = workflow_projection(&projection).and_then(|wf| wf.run)
             && active.status == WorkflowRunStatus::Running
         {
@@ -1739,7 +1767,9 @@ impl SessionStoreExt for SessionStore {
         .await?;
         let mut recovered = Vec::new();
         for session in sessions {
-            let projection = self.replay_projection_in_transaction(&mut tx, session).await?;
+            let projection = self
+                .replay_projection_in_transaction(&mut tx, session)
+                .await?;
             let Some(run) = workflow_projection(&projection).and_then(|wf| wf.run) else {
                 continue;
             };

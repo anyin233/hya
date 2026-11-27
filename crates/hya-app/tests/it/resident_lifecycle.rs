@@ -6,7 +6,9 @@
 use crate::support;
 
 use async_trait::async_trait;
-use hya_engine::{BoundSidecarFactory, CoreError, SessionStoreExt as _, SidecarHandle, SidecarStart};
+use hya_engine::{
+    BoundSidecarFactory, CoreError, SessionStoreExt as _, SidecarHandle, SidecarStart,
+};
 use hya_proto::{Event, FinishReason, Role, ToolPartState};
 use hya_tool::extension::{ExtensionEvent, members_projection, team_projection};
 use hya_tool::{ArchiveReason, ReportOutcome};
@@ -110,7 +112,10 @@ async fn sidecar_start_failure_reports_failure_to_parent() {
     let root = h.engine.read_projection(h.root).await.unwrap();
     let events = h.engine.replay(h.root).await.unwrap();
     h.shutdown().await;
-    assert_eq!(team_projection(&root).archived[&handle].reason, ArchiveReason::Reported);
+    assert_eq!(
+        team_projection(&root).archived[&handle].reason,
+        ArchiveReason::Reported
+    );
     assert!(
         events.iter().any(|e| matches!(
             ExtensionEvent::from_event(&e.event),
@@ -168,7 +173,8 @@ async fn sidecar_failed_episode_revives_with_new_mail_and_preserved_tools() {
     .await;
     h.idle(child, &handle).await;
     assert_eq!(
-        team_projection(&h.engine.read_projection(h.root).await.unwrap()).roster[&handle].resident_cursor,
+        team_projection(&h.engine.read_projection(h.root).await.unwrap()).roster[&handle]
+            .resident_cursor,
         2
     );
 
@@ -184,11 +190,10 @@ async fn sidecar_failed_episode_revives_with_new_mail_and_preserved_tools() {
     control.die().await;
     h.archived(&handle).await;
 
-    let doc = hya_tool::extension::handoff_projection(
-        &h.engine.read_projection(child).await.unwrap(),
-    )
-    .unwrap()
-    .doc;
+    let doc =
+        hya_tool::extension::handoff_projection(&h.engine.read_projection(child).await.unwrap())
+            .unwrap()
+            .doc;
     assert!(doc.contains("UNREAD_BEFORE_LOSS"));
     assert!(doc.contains("INTERRUPTED_BEFORE_LOSS"));
     assert!(!doc.contains("COMPLETED_BEFORE_LOSS"));
@@ -715,14 +720,10 @@ async fn root_teardown_during_loss_sidecar_stop_wins_without_report_mail() {
             ..
         }) if actor == child
     )));
-    assert!(
-        !tail
-            .iter()
-            .any(|e| matches!(
-                ExtensionEvent::from_event(e),
-                Some(ExtensionEvent::MailSent { .. } | ExtensionEvent::SubagentReported { .. })
-            ))
-    );
+    assert!(!tail.iter().any(|e| matches!(
+        ExtensionEvent::from_event(e),
+        Some(ExtensionEvent::MailSent { .. } | ExtensionEvent::SubagentReported { .. })
+    )));
 }
 
 #[derive(Clone)]

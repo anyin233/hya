@@ -441,9 +441,9 @@ async fn shared_snapshots_are_isolated_while_unique_cache_advances_in_place() {
 
 #[tokio::test]
 async fn pluggable_projection_reducer_folds_known_bundles_and_invalidates_snapshot_on_registry_change()
-{
-    use std::sync::Arc;
+ {
     use hya_proto::{ProjectionReducer, ProjectionReducerRegistry};
+    use std::sync::Arc;
 
     struct CounterReducer;
     impl ProjectionReducer for CounterReducer {
@@ -541,7 +541,10 @@ async fn pluggable_projection_reducer_folds_known_bundles_and_invalidates_snapsh
         .unwrap();
 
     let folded = store.read_projection(session).await.unwrap();
-    assert_eq!(folded.extensions["hya/counter"], serde_json::json!({ "total": 10 }));
+    assert_eq!(
+        folded.extensions["hya/counter"],
+        serde_json::json!({ "total": 10 })
+    );
     assert_eq!(
         folded.extensions["custom/unknown"],
         serde_json::json!([{ "kind": "ping", "payload": { "msg": "keep-me" } }])

@@ -138,10 +138,7 @@ impl fmt::Display for AbiError {
                 )
             }
             Self::RegistrationFailed { bundle, detail } => {
-                write!(
-                    f,
-                    "native bundle `{bundle}` registration failed: {detail}"
-                )
+                write!(f, "native bundle `{bundle}` registration failed: {detail}")
             }
             Self::RuntimeBridge(detail) => {
                 write!(f, "native runtime bridge error: {detail}")

@@ -35,10 +35,10 @@ async function cellPoint(term: Tui, row: number, col: number): Promise<{ x: numb
 }
 
 const projectBundleYaml = `kind: Bundle
+schema_version: 2
 identity: { id: e2e/tui-panel, version: 1.0.0, publisher: e2e }
-extensions:
-  files:
-    - { id: panel, path: tui/main.ts }
+assets:
+  - { id: panel, path: tui/main.ts }
 tui:
   api_version: 1
   entry: tui/main.ts
@@ -165,7 +165,7 @@ test.describe(".hyabundle package install and disk-inspector", () => {
     try {
       const archive = join(directory, "disk-inspector.hyabundle")
       execFileSync(locateXtask(), ["package-bundle", join(repo, "plugins/disk-inspector"), archive])
-      const install = await fetch(`${backend.url}/v1/bundles:install`, {
+      const install = await fetch(`${backend.url}/v2/bundles:install`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ directory: backend.dir, path: archive, project: false }),
@@ -176,7 +176,7 @@ test.describe(".hyabundle package install and disk-inspector", () => {
       expect(change.refresh?.errors ?? [], installed).toEqual([])
       expect(change.refresh?.bundles?.map((bundle: { id: string }) => bundle.id), installed).toContain("hya-extra/disk-inspector")
 
-      const info = await fetch(`${backend.url}/v1/bundles/hya-extra%2Fdisk-inspector/api/info`)
+      const info = await fetch(`${backend.url}/v2/bundles/hya-extra%2Fdisk-inspector/api/info`)
       expect(info.ok).toBe(true)
       expect(await info.json()).toMatchObject({ contractVersion: 1, capabilities: { scans: false, volumes: false, cancel: false } })
 

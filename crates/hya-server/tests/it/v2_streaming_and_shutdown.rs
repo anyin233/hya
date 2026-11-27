@@ -602,18 +602,12 @@ async fn delete_session_enforces_team_ownership_and_joins_live_episodes() {
         let team = hya_tool::extension::team_projection(&proj);
         if archived {
             assert_eq!(
-                (
-                    supervisor.episode_count(),
-                    team.archived[&handle].session
-                ),
+                (supervisor.episode_count(), team.archived[&handle].session),
                 (0, child)
             );
         } else {
             assert_eq!(
-                (
-                    supervisor.episode_count(),
-                    team.roster[&handle].session
-                ),
+                (supervisor.episode_count(), team.roster[&handle].session),
                 (2, child)
             );
             assert!(engine.turn_active(child) && engine.turn_active(grandchild));

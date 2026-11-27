@@ -521,16 +521,18 @@ async fn context_status_reports_round_occupancy_and_accounting_mode() {
     let envelopes = engine.store().replay(session).await.unwrap();
     let statuses: Vec<_> = envelopes
         .iter()
-        .filter_map(|e| match hya_tool::extension::ExtensionEvent::from_event(&e.event) {
-            Some(hya_tool::extension::ExtensionEvent::ContextStatus {
-                tokens,
-                source,
-                mode,
-                threshold,
-                ..
-            }) => Some((tokens, source, mode, threshold)),
-            _ => None,
-        })
+        .filter_map(
+            |e| match hya_tool::extension::ExtensionEvent::from_event(&e.event) {
+                Some(hya_tool::extension::ExtensionEvent::ContextStatus {
+                    tokens,
+                    source,
+                    mode,
+                    threshold,
+                    ..
+                }) => Some((tokens, source, mode, threshold)),
+                _ => None,
+            },
+        )
         .collect();
     assert_eq!(statuses.len(), 1);
     let (tokens, source, mode, threshold) = statuses[0];
@@ -540,8 +542,8 @@ async fn context_status_reports_round_occupancy_and_accounting_mode() {
         (TokenAccountingMode::Auto, TokenSource::Estimate, 160_000)
     );
     let projection = engine.read_projection(session).await.unwrap();
-    let folded = hya_tool::extension::context_status_projection(&projection)
-        .expect("context status");
+    let folded =
+        hya_tool::extension::context_status_projection(&projection).expect("context status");
     assert_eq!(
         (folded.tokens, folded.source, folded.mode, folded.threshold),
         (tokens, source, mode, threshold)
@@ -1927,13 +1929,14 @@ async fn consumed_results_suppress_redundant_synthesis_while_unseen_mail_wakes()
         .register_existing_resident(root, other, "other".into(), agent.clone(), None)
         .await
         .unwrap();
-    let other_dm = hya_tool::extension::team_projection(&engine.read_projection(root).await.unwrap())
-        .channels
-        .iter()
-        .find(|(_, c)| c.kind == hya_proto::ChannelKind::Dm && c.members.contains("main/other"))
-        .unwrap()
-        .0
-        .clone();
+    let other_dm =
+        hya_tool::extension::team_projection(&engine.read_projection(root).await.unwrap())
+            .channels
+            .iter()
+            .find(|(_, c)| c.kind == hya_proto::ChannelKind::Dm && c.members.contains("main/other"))
+            .unwrap()
+            .0
+            .clone();
     engine
         .mail_send(
             root,

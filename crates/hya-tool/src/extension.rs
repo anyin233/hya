@@ -1085,7 +1085,12 @@ impl ExtensionEvent {
 
     /// Decode `(session, bundle, kind, payload)` into a typed [`ExtensionEvent`].
     #[must_use]
-    pub fn from_parts(session: SessionId, bundle: &str, kind: &str, payload: &Value) -> Option<Self> {
+    pub fn from_parts(
+        session: SessionId,
+        bundle: &str,
+        kind: &str,
+        payload: &Value,
+    ) -> Option<Self> {
         match (bundle, kind) {
             (BUNDLE_COMPACTION, "context_evicted") => {
                 let wire: ContextEvictedWire = serde_json::from_value(payload.clone()).ok()?;
@@ -1523,7 +1528,8 @@ impl ProjectionReducer for WorkflowProjectionReducer {
             ExtensionEvent::WorkflowStageStarted { run, stage, .. } => {
                 if let Some(current) = wf.run.as_mut().filter(|r| r.id == run)
                     && current.status == WorkflowRunStatus::Running
-                    && let Some(existing) = current.stages.iter_mut().find(|row| row.plan.id == stage)
+                    && let Some(existing) =
+                        current.stages.iter_mut().find(|row| row.plan.id == stage)
                     && !existing.status.is_terminal()
                 {
                     existing.status = WorkflowStageStatus::Running;
@@ -1539,11 +1545,11 @@ impl ProjectionReducer for WorkflowProjectionReducer {
             } => {
                 if let Some(current) = wf.run.as_mut().filter(|r| r.id == run)
                     && current.status == WorkflowRunStatus::Running
-                    && let Some(stage_row) = current.stages.iter_mut().find(|row| row.plan.id == stage)
-                    && !stage_row
-                        .members
-                        .iter()
-                        .any(|row| row.member == member && row.role == role && row.iteration == iteration)
+                    && let Some(stage_row) =
+                        current.stages.iter_mut().find(|row| row.plan.id == stage)
+                    && !stage_row.members.iter().any(|row| {
+                        row.member == member && row.role == role && row.iteration == iteration
+                    })
                 {
                     stage_row.members.push(WorkflowMemberProjection {
                         member,
@@ -1838,17 +1844,20 @@ impl ProjectionReducer for MultiAgentProjectionReducer {
                     .inboxes
                     .get(&path)
                     .map_or(0, |inbox| inbox.len() as u64);
-                let entry = state.roster.entry(path.clone()).or_insert_with(|| RosterEntry {
-                    handle: path,
-                    session: agent_session,
-                    agent_type: agent_type.clone(),
-                    mode,
-                    status: RosterStatus::default(),
-                    current_task: None,
-                    resident_cursor: cursor,
-                    heartbeat_ms: 0,
-                    resident_work: None,
-                });
+                let entry = state
+                    .roster
+                    .entry(path.clone())
+                    .or_insert_with(|| RosterEntry {
+                        handle: path,
+                        session: agent_session,
+                        agent_type: agent_type.clone(),
+                        mode,
+                        status: RosterStatus::default(),
+                        current_task: None,
+                        resident_cursor: cursor,
+                        heartbeat_ms: 0,
+                        resident_work: None,
+                    });
                 entry.session = agent_session;
                 entry.agent_type = agent_type;
                 entry.mode = mode;

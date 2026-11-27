@@ -281,7 +281,8 @@ impl ProjectionCache {
         } else {
             unpersisted = unpersisted.saturating_add(folded.applied);
         }
-        unpersisted = unpersisted.saturating_add(apply_tail(&mut folded.projection, tail, &reducers));
+        unpersisted =
+            unpersisted.saturating_add(apply_tail(&mut folded.projection, tail, &reducers));
         if let Some(existing) = entries.get_mut(&session)
             && existing.projection.last_seq >= folded.projection.last_seq
         {
@@ -319,9 +320,10 @@ impl ProjectionCache {
     ) -> Folded {
         let reducers = Arc::clone(&prepared.reducers);
         let mut folded = prepared.finish();
-        folded.applied = folded
-            .applied
-            .saturating_add(apply_tail(&mut folded.projection, tail, &reducers));
+        folded.applied =
+            folded
+                .applied
+                .saturating_add(apply_tail(&mut folded.projection, tail, &reducers));
         folded
     }
 

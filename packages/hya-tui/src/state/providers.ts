@@ -198,7 +198,7 @@ export const providerKeyRows: readonly ProviderKeyRow[] = [
 
 // ---- Formatting -----------------------------------------------------------
 
-/** The server's error text without the `METHOD /v1/path:` prefix. */
+/** The server's error text without the `METHOD /v2/path:` prefix. */
 export function errorText(error: unknown): string {
   if (error instanceof HttpError) return error.detail
   if (error instanceof Error) return error.message

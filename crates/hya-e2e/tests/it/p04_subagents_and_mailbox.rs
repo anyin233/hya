@@ -170,15 +170,17 @@ async fn subagent_roster_spawn_batch_nested_and_model_routing() {
     let single_events = env.events(s_single, None).await.unwrap();
     let dm = single_events
         .iter()
-        .find_map(|e| match hya_tool::extension::ExtensionEvent::from_event(&e.event) {
-            Some(hya_tool::extension::ExtensionEvent::MailSent {
-                from,
-                to: hya_proto::MailEndpoint::Channel(ch),
-                body,
-                ..
-            }) if from == "main" && body == "do the child work" => Some(ch),
-            _ => None,
-        })
+        .find_map(
+            |e| match hya_tool::extension::ExtensionEvent::from_event(&e.event) {
+                Some(hya_tool::extension::ExtensionEvent::MailSent {
+                    from,
+                    to: hya_proto::MailEndpoint::Channel(ch),
+                    body,
+                    ..
+                }) if from == "main" && body == "do the child work" => Some(ch),
+                _ => None,
+            },
+        )
         .expect("DM MailSent event");
     assert!(single_events.iter().any(|e| matches!(
         hya_tool::extension::ExtensionEvent::from_event(&e.event),

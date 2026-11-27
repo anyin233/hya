@@ -780,10 +780,7 @@ async fn member_row_concurrent_batch_live_provider_and_supervisor_io_shutdown() 
         .await
         .unwrap();
     let members = hya_tool::extension::members_projection(&proj);
-    let row = members
-        .iter()
-        .find(|r| r.child == Some(child0))
-        .unwrap();
+    let row = members.iter().find(|r| r.child == Some(child0)).unwrap();
     assert_eq!(row.tool_call, Some(call));
     assert_eq!(row.description, "survey repo");
     assert_eq!(

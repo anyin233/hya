@@ -332,17 +332,21 @@ async fn concurrent_mail_revives_deduplicate_and_preserve_fast_archive() {
     let evs = eng.replay(r).await.unwrap();
     let restarted = evs
         .iter()
-        .rposition(|e| matches!(
-            ExtensionEvent::from_event(&e.event),
-            Some(ExtensionEvent::AgentRestarted { .. })
-        ))
+        .rposition(|e| {
+            matches!(
+                ExtensionEvent::from_event(&e.event),
+                Some(ExtensionEvent::AgentRestarted { .. })
+            )
+        })
         .unwrap();
     let archived = evs
         .iter()
-        .rposition(|e| matches!(
-            ExtensionEvent::from_event(&e.event),
-            Some(ExtensionEvent::AgentArchived { .. })
-        ))
+        .rposition(|e| {
+            matches!(
+                ExtensionEvent::from_event(&e.event),
+                Some(ExtensionEvent::AgentArchived { .. })
+            )
+        })
         .unwrap();
     assert!(restarted < archived && !active_ids(&eng).await.contains(&child));
     drop(lead);
@@ -394,7 +398,8 @@ async fn list_channels_and_steer_count_incoming_only_ignoring_outgoing_copy() {
     let root_rows = mailbox.for_session(r).list_channels().await.unwrap();
     assert!(!root_rows.is_empty() && root_rows.iter().all(|row| row.unread == 0));
 
-    let through = team_projection(&eng.read_projection(r).await.unwrap()).inboxes[&handle].len() as u64;
+    let through =
+        team_projection(&eng.read_projection(r).await.unwrap()).inboxes[&handle].len() as u64;
     eng.store()
         .append_event(
             r,
@@ -684,7 +689,9 @@ async fn activation_rest_waits_for_followup_mail_live_children_and_skips_consume
                     ExtensionEvent::from_event(&events.recv().await.unwrap().event),
                     Some(ExtensionEvent::ResidentWorkFinished { handle: ref f, .. }) if f == &handle
                 ) {}
-            }).await.unwrap();
+            })
+            .await
+            .unwrap();
             let team = sup.team_with_resident(child).unwrap();
             let claim = team.lock().residents[&child].claim;
             team.settle_activation(child, claim.as_ref()).await.unwrap();
@@ -1202,14 +1209,16 @@ async fn resident_mail_live_and_catch_up_deliver_only_incoming_work() {
                 .store()
                 .append_events(
                     r,
-                    vec![ExtensionEvent::MailSent {
-                        session: r,
-                        from: from.into(),
-                        to: MailEndpoint::Channel(dm.clone()),
-                        kind: MailKind::Message,
-                        body: body.into(),
-                    }
-                    .into_event()],
+                    vec![
+                        ExtensionEvent::MailSent {
+                            session: r,
+                            from: from.into(),
+                            to: MailEndpoint::Channel(dm.clone()),
+                            kind: MailKind::Message,
+                            body: body.into(),
+                        }
+                        .into_event(),
+                    ],
                 )
                 .await
                 .unwrap();

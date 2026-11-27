@@ -779,8 +779,7 @@ impl ResidentSupervisor {
                 .await?
                 .0;
             let root_proj = self.engine.read_projection_shared(root).await?;
-            let boundary =
-                hya_tool::extension::team_projection(&root_proj).inboxes[&target].len();
+            let boundary = hya_tool::extension::team_projection(&root_proj).inboxes[&target].len();
             {
                 let mut state = team.lock();
                 let slot = state.residents.get_mut(&member).ok_or_else(|| {

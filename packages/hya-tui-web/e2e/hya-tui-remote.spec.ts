@@ -148,7 +148,7 @@ test.describe("/connect-remote", () => {
     await expect.poll(() => term.find("Created remote-project")).toBeNull()
 
     const session = await statusSessionId(term)
-    const readMessages = async () => (await api<{ messages: unknown[] }>({ url: remote.url, dir: remote.root }, "GET", `/v1/sessions/${session}/messages`)).messages
+    const readMessages = async () => (await api<{ messages: unknown[] }>({ url: remote.url, dir: remote.root }, "GET", `/v2/sessions/${session}/messages`)).messages
     await term.type("@shots/remote-ui.png what is this")
     await term.waitForText("[image] remote-ui.png · 3 KB", 10_000)
     await term.press("Enter")

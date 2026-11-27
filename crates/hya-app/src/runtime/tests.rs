@@ -805,10 +805,7 @@ async fn workflow_control_cold_run_and_shutdown_invariants() {
         )
         .await
         .unwrap();
-    assert!(matches!(
-        result,
-        WorkflowCommandResult::Run { .. }
-    ));
+    assert!(matches!(result, WorkflowCommandResult::Run { .. }));
 
     built.shutdown().await.unwrap();
     assert!(built.lifecycle.tasks.is_empty());
@@ -1172,10 +1169,7 @@ async fn built_shutdown_cancels_started_workflow_while_reads_stay_unblocked() {
         .await
         .unwrap();
     // List/State reads must not block behind a running workflow.
-    for command in [
-        WorkflowCommand::List,
-        WorkflowCommand::State,
-    ] {
+    for command in [WorkflowCommand::List, WorkflowCommand::State] {
         tokio::time::timeout(
             Duration::from_millis(250),
             control.execute(lead, Default::default(), command, CancellationToken::new()),
@@ -1336,10 +1330,7 @@ async fn runtime_store_ownership_contention_and_startup_recovery() {
         &store.replay(wf_session).await.unwrap(),
         &projection_reducers(),
     );
-    let wf = workflow_projection(&wf_proj)
-        .unwrap()
-        .run
-        .unwrap();
+    let wf = workflow_projection(&wf_proj).unwrap().run.unwrap();
     assert_eq!(wf.status, WorkflowRunStatus::Interrupted);
     assert_eq!(wf.error.as_deref(), Some("backend startup recovery"));
     next.shutdown().await.unwrap();
@@ -1715,15 +1706,17 @@ async fn engine_build_fences_residents_but_defers_queued_work_until_start() {
         .commit_resident_mutation(
             &queued_claim,
             queued_root,
-            vec![ExtensionEvent::AgentRegistered {
-                session: queued_root,
-                agent_session: queued_actor,
-                handle: "queued-1".into(),
-                parent: Some("main".into()),
-                agent_type: agent.name.clone(),
-                mode: SubagentMode::Resident,
-            }
-            .into_event()],
+            vec![
+                ExtensionEvent::AgentRegistered {
+                    session: queued_root,
+                    agent_session: queued_actor,
+                    handle: "queued-1".into(),
+                    parent: Some("main".into()),
+                    agent_type: agent.name.clone(),
+                    mode: SubagentMode::Resident,
+                }
+                .into_event(),
+            ],
         )
         .await
         .unwrap();
@@ -3609,15 +3602,17 @@ async fn startup_recovery_rebuilds_executable_resident_sidecar_before_queued_mai
         .commit_resident_mutation(
             &claim,
             root,
-            vec![ExtensionEvent::AgentRegistered {
-                session: root,
-                agent_session: actor,
-                handle: "installed-resident-1".into(),
-                parent: Some("main".into()),
-                agent_type: AgentName::new(stable_id),
-                mode: SubagentMode::Resident,
-            }
-            .into_event()],
+            vec![
+                ExtensionEvent::AgentRegistered {
+                    session: root,
+                    agent_session: actor,
+                    handle: "installed-resident-1".into(),
+                    parent: Some("main".into()),
+                    agent_type: AgentName::new(stable_id),
+                    mode: SubagentMode::Resident,
+                }
+                .into_event(),
+            ],
         )
         .await
         .unwrap();

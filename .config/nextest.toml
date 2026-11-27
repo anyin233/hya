@@ -18,6 +18,8 @@ archive.include = [
   { path = "debug/build/hya-compaction/ci-archive/out/libhya_compaction.so", relative-to = "target", on-missing = "error" },
   { path = "debug/examples/libreplacement_tools.so", relative-to = "target", on-missing = "error" },
   { path = "debug/examples/libwrong_abi_tools.so", relative-to = "target", on-missing = "error" },
+  { path = "debug/examples/libtest_v2_bundle.so", relative-to = "target", on-missing = "error" },
+  { path = "debug/examples/libwrong_abi_v2_bundle.so", relative-to = "target", on-missing = "error" },
 ]
 
 [profile.ci-e2e]

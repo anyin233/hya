@@ -1,5 +1,5 @@
 import { packageRoot } from "./packageRoot"
-/** Native hya.v1 gRPC transport for the shared OpenTUI workflows. */
+/** Native hya.v2 gRPC transport for the shared OpenTUI workflows. */
 import * as grpc from "@grpc/grpc-js"
 import * as protoLoader from "@grpc/proto-loader"
 import { readdirSync } from "node:fs"
@@ -52,14 +52,14 @@ const operations = operationRows()
 
 /** Translate a generated HTTP binding into its exact gRPC service and request. */
 export function resolveGrpcOperation(method: string, path: string, body: unknown, directory: string): GrpcOperation {
-  if (!path.startsWith("/v1/") || path.startsWith("//")) throw new Error("API path must start with /v1/")
+  if (!path.startsWith("/v2/") || path.startsWith("//")) throw new Error("API path must start with /v2/")
   const url = new URL(path, "http://hya.invalid")
   const match = operations
     .filter((row) => row.httpMethod === method.toUpperCase())
     .map((row) => ({ row, segments: row.pattern.exec(url.pathname) }))
     .find(({ segments }) => segments !== null)
   if (!match || !match.segments || !match.row.service || !match.row.rpcMethod) {
-    throw new Error(`No hya.v1 gRPC operation for ${method.toUpperCase()} ${url.pathname}`)
+    throw new Error(`No hya.v2 gRPC operation for ${method.toUpperCase()} ${url.pathname}`)
   }
   if (body !== undefined && (body === null || typeof body !== "object" || Array.isArray(body))) {
     throw new Error("gRPC request body must be a JSON object")
@@ -104,7 +104,7 @@ class NativeGrpcWire implements GrpcWire {
 
   constructor(endpoint: string) {
     const protoRoot = resolve(packageRoot, "src/proto")
-    const protoDir = resolve(protoRoot, "hya/v1")
+    const protoDir = resolve(protoRoot, "hya/v2")
     this.definitions = protoLoader.loadSync(
       readdirSync(protoDir).filter((name) => name.endsWith(".proto")).map((name) => resolve(protoDir, name)),
       { includeDirs: [protoRoot], keepCase: false, longs: String, enums: String, defaults: false },
@@ -113,9 +113,9 @@ class NativeGrpcWire implements GrpcWire {
   }
 
   private method(service: string, name: string): WireMethod {
-    const definition = this.definitions[`hya.v1.${service}`] as Record<string, WireMethod> | undefined
+    const definition = this.definitions[`hya.v2.${service}`] as Record<string, WireMethod> | undefined
     const method = definition?.[name]
-    if (!method) throw new Error(`Unknown hya.v1 gRPC method ${service}.${name}`)
+    if (!method) throw new Error(`Unknown hya.v2 gRPC method ${service}.${name}`)
     return method
   }
 

@@ -204,11 +204,15 @@ fn tool_resource_ids(bundle: &Bundle) -> Result<Vec<String>, BundleError> {
     else {
         return Ok(Vec::new());
     };
-    let parsed: ExposureHeader =
-        serde_norway::from_str(&exposure.content).map_err(|error| BundleError::InvalidManifest {
+    let parsed: ExposureHeader = serde_norway::from_str(&exposure.content).map_err(|error| {
+        BundleError::InvalidManifest {
             source_name: bundle.identity().id.clone(),
-            detail: format!("invalid tool descriptor asset `{}`: {error}", exposure.source_path),
-        })?;
+            detail: format!(
+                "invalid tool descriptor asset `{}`: {error}",
+                exposure.source_path
+            ),
+        }
+    })?;
     Ok(parsed.tools.into_iter().map(|tool| tool.name).collect())
 }
 

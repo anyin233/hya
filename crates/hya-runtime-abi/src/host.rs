@@ -196,12 +196,7 @@ pub trait HostBundleStorage: Send + Sync {
     ) -> Result<BundleStateEntry, HostError>;
 
     /// Delete one `bundle_state` entry, returning `true` if a row was removed.
-    async fn delete_state(
-        &self,
-        bundle: &str,
-        scope: &str,
-        key: &str,
-    ) -> Result<bool, HostError>;
+    async fn delete_state(&self, bundle: &str, scope: &str, key: &str) -> Result<bool, HostError>;
 
     /// List all `bundle_state` entries under `(bundle, scope)` matching an optional key prefix.
     async fn list_state(

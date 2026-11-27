@@ -31,8 +31,7 @@ impl<'a> Inbox<'a> {
     }
 
     pub(super) fn incoming(&self, cursor: usize) -> impl Iterator<Item = &MailMessage> {
-        self.team
-            .unread_incoming_mail(self.handle, cursor as u64)
+        self.team.unread_incoming_mail(self.handle, cursor as u64)
     }
 
     pub(super) fn resident_mail<'b>(

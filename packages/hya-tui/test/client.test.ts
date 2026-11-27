@@ -26,14 +26,14 @@ test("creates a session and admits a prompt through scoped v1 requests", async (
   expect(turn.id).toBe("msg_1")
   expect(calls).toEqual([
     {
-      url: "http://127.0.0.1:8080/v1/sessions",
+      url: "http://127.0.0.1:8080/v2/sessions",
       method: "POST",
       header: null,
       // A local start: the server reuses the Project containing the cwd or creates one (EnsureProjectForPath).
       body: { agent: "hya-main", model: "offline/echo", workdir: "/work", kind: "SESSION_KIND_PROJECT" },
     },
     {
-      url: "http://127.0.0.1:8080/v1/sessions/hysec_1/turns",
+      url: "http://127.0.0.1:8080/v2/sessions/hysec_1/turns",
       method: "POST",
       header: null,
       body: { prompt: { text: "hello" } },
@@ -62,7 +62,7 @@ test("getVcsStatus scopes GetVcsStatus to the client's directory", async () => {
   const client = new HyaClient("http://127.0.0.1:8080/", "/work/dir", fetcher)
   const status = await client.getVcsStatus()
   expect(status).toEqual({ branch: "main", dirty: 2 })
-  expect(calls).toEqual(["http://127.0.0.1:8080/v1/vcs?directory=%2Fwork%2Fdir"])
+  expect(calls).toEqual(["http://127.0.0.1:8080/v2/vcs?directory=%2Fwork%2Fdir"])
 })
 
 test("decodes SSE frames split across transport chunks", () => {
@@ -107,11 +107,11 @@ test("an SSE deletion hides streamed and stale projected text before message fin
 })
 
 test("parses only scoped JSON API commands", () => {
-  expect(parseApiCommand('/api POST /v1/sessions {"agent":"hya-main"}')).toEqual({
-    method: "POST", path: "/v1/sessions", body: { agent: "hya-main" },
+  expect(parseApiCommand('/api POST /v2/sessions {"agent":"hya-main"}')).toEqual({
+    method: "POST", path: "/v2/sessions", body: { agent: "hya-main" },
   })
-  expect(() => parseApiCommand("/api GET https://example.com/")).toThrow("/v1/")
-  expect(() => parseApiCommand("/api GET /v1/sessions {} ")).toThrow("GET")
+  expect(() => parseApiCommand("/api GET https://example.com/")).toThrow("/v2/")
+  expect(() => parseApiCommand("/api GET /v2/sessions {} ")).toThrow("GET")
 })
 
 test("loads later transcript pages so new messages stay visible", async () => {
@@ -148,7 +148,7 @@ test("provider routes: upsert, refresh, key set/remove, model override set/remov
       signal = init?.signal ?? undefined
       return Response.json({ ok: true, text: "Hi", finishReason: "length", latencyMs: 12 })
     }
-    if (path.includes("/v1/auth/")) return Response.json({ status: "AUTH_STATUS_CREDENTIALED", discovery: { ok: true, result: "models", modelCount: 1 } })
+    if (path.includes("/v2/auth/")) return Response.json({ status: "AUTH_STATUS_CREDENTIALED", discovery: { ok: true, result: "models", modelCount: 1 } })
     return Response.json({ provider: { summary: { id: "gw" } }, discovery: { ok: false, result: "unavailable", errorMessage: "refused" } })
   }
   const client = new HyaClient("http://127.0.0.1:8080", "/work", fetcher)
@@ -163,7 +163,7 @@ test("provider routes: upsert, refresh, key set/remove, model override set/remov
   const abort = new AbortController()
   expect(await client.testProviderModel("gw", "vendor/m:1", abort.signal)).toEqual({ ok: true, text: "Hi", finishReason: "length", latencyMs: 12 })
   expect(signal).toBe(abort.signal)
-  const base = "http://127.0.0.1:8080/v1"
+  const base = "http://127.0.0.1:8080/v2"
   expect(calls).toEqual([
     { method: "PUT", path: `${base}/providers/gw`, body: { kind: "openai", baseUrl: "http://h/v1", apiKey: "sk-secret" } },
     { method: "PUT", path: `${base}/providers/gw`, body: { kind: "openai", baseUrl: "http://h/v1" } },
@@ -180,11 +180,11 @@ test("provider routes: upsert, refresh, key set/remove, model override set/remov
 test("reports empty HTTP errors", async () => {
   const failed = new HyaClient("http://127.0.0.1:8080", "/work", async () =>
     new Response(null, { status: 503, statusText: "Service Unavailable" }))
-  await expect(failed.bootstrap()).rejects.toThrow("GET /v1/bootstrap?directory=%2Fwork: HTTP 503 Service Unavailable")
+  await expect(failed.bootstrap()).rejects.toThrow("GET /v2/bootstrap?directory=%2Fwork: HTTP 503 Service Unavailable")
 
   const invalid = new HyaClient("http://127.0.0.1:8080", "/work", async () =>
     new Response("gateway error", { status: 502, statusText: "Bad Gateway" }))
-  await expect(invalid.bootstrap()).rejects.toThrow("GET /v1/bootstrap?directory=%2Fwork: HTTP 502 Bad Gateway")
+  await expect(invalid.bootstrap()).rejects.toThrow("GET /v2/bootstrap?directory=%2Fwork: HTTP 502 Bad Gateway")
 })
 
 test("admits a shell turn and finds files through scoped v1 requests", async () => {
@@ -207,12 +207,12 @@ test("admits a shell turn and finds files through scoped v1 requests", async () 
   expect(await client.findFiles("**/*ma in*", 20)).toEqual(["src/main.ts"])
   expect(calls).toEqual([
     {
-      url: "http://h/v1/sessions/hysec_1/turns",
+      url: "http://h/v2/sessions/hysec_1/turns",
       method: "POST",
       header: null,
       body: { shell: { command: "echo hi", agent: "hya-main", model: { providerId: "fake", modelId: "model" } } },
     },
-    { url: "http://h/v1/fs/find?pattern=**%2F*ma%20in*&limit=20&directory=%2Fwork", method: "GET", header: null, body: undefined },
+    { url: "http://h/v2/fs/find?pattern=**%2F*ma%20in*&limit=20&directory=%2Fwork", method: "GET", header: null, body: undefined },
   ])
 })
 
@@ -225,8 +225,8 @@ test("streamSession opts in to descendant ask frames with includeDescendants=tru
   await client.streamSession("hysec_1", "4", () => undefined, new AbortController().signal, undefined, true)
   await client.streamSession("hysec_1", "4", () => undefined, new AbortController().signal)
   expect(urls).toEqual([
-    "http://127.0.0.1:1/v1/sessions/hysec_1/events/stream?sinceSeq=4&includeDescendants=true",
-    "http://127.0.0.1:1/v1/sessions/hysec_1/events/stream?sinceSeq=4",
+    "http://127.0.0.1:1/v2/sessions/hysec_1/events/stream?sinceSeq=4&includeDescendants=true",
+    "http://127.0.0.1:1/v2/sessions/hysec_1/events/stream?sinceSeq=4",
   ])
 })
 
@@ -239,7 +239,7 @@ test("streamGlobal subscribes with interactionsOnly=true (live ask frames and ca
   })
   let opened = false
   await client.streamGlobal((frame) => { frames.push(frame) }, new AbortController().signal, () => { opened = true })
-  expect(urls).toEqual(["http://127.0.0.1:1/v1/events/stream?interactionsOnly=true"])
+  expect(urls).toEqual(["http://127.0.0.1:1/v2/events/stream?interactionsOnly=true"])
   expect(opened).toBe(true)
   expect(frames).toEqual([{ event: { session: "hysec_9", permissionRequested: { interaction: { id: "perm_1", title: "bash" } } } }])
 })
@@ -264,11 +264,11 @@ test("revertSession and forkSession post RevertSession / ForkSession bodies", as
   expect(fork.session.forkedFrom?.session).toBe("hysec_1")
   await client.forkSession("hysec_1")
   expect(calls).toEqual([
-    { url: "http://127.0.0.1:8080/v1/sessions/hysec_1/revert", method: "POST", body: {} },
-    { url: "http://127.0.0.1:8080/v1/sessions/hysec_1/revert", method: "POST", body: { messageId: "msg_2" } },
-    { url: "http://127.0.0.1:8080/v1/sessions/hysec_1/revert", method: "POST", body: { undo: true } },
-    { url: "http://127.0.0.1:8080/v1/sessions/hysec_1/fork", method: "POST", body: { messageId: "msg_2" } },
-    { url: "http://127.0.0.1:8080/v1/sessions/hysec_1/fork", method: "POST", body: {} },
+    { url: "http://127.0.0.1:8080/v2/sessions/hysec_1/revert", method: "POST", body: {} },
+    { url: "http://127.0.0.1:8080/v2/sessions/hysec_1/revert", method: "POST", body: { messageId: "msg_2" } },
+    { url: "http://127.0.0.1:8080/v2/sessions/hysec_1/revert", method: "POST", body: { undo: true } },
+    { url: "http://127.0.0.1:8080/v2/sessions/hysec_1/fork", method: "POST", body: { messageId: "msg_2" } },
+    { url: "http://127.0.0.1:8080/v2/sessions/hysec_1/fork", method: "POST", body: {} },
   ])
 })
 
@@ -305,14 +305,14 @@ test("setDirectory changes the directory scope of later scoped requests", async 
   client.setDirectory("/docs")
   expect(client.directory).toBe("/docs")
   await client.getVcsStatus()
-  expect(calls).toEqual([{ url: "http://h/v1/vcs?directory=%2Fdocs", method: "GET", header: null, body: undefined }])
+  expect(calls).toEqual([{ url: "http://h/v2/vcs?directory=%2Fdocs", method: "GET", header: null, body: undefined }])
 })
 
 test("Project rpcs use the v1 routes and unwrap their responses", async () => {
   const { calls, fetcher } = recordingFetcher((url, method) => {
-    if (url.includes("/v1/projects?")) return { projects: [project], page: { hasMore: false } }
-    if (url.includes("/v1/projects/resolve")) return url.includes("nowhere") ? {} : { project }
-    if (url.endsWith("/v1/projects/ensure")) return { project, created: true }
+    if (url.includes("/v2/projects?")) return { projects: [project], page: { hasMore: false } }
+    if (url.includes("/v2/projects/resolve")) return url.includes("nowhere") ? {} : { project }
+    if (url.endsWith("/v2/projects/ensure")) return { project, created: true }
     if (method === "DELETE") return {}
     return project
   })
@@ -326,14 +326,14 @@ test("Project rpcs use the v1 routes and unwrap their responses", async () => {
   expect(await client.resolveProject("/nowhere")).toBeUndefined()
   expect(await client.ensureProjectForPath("/work")).toEqual({ project, created: true })
   expect(calls.map((call) => [call.method, call.url.replace("http://h", ""), call.body])).toEqual([
-    ["GET", "/v1/projects?page.limit=500", undefined],
-    ["GET", "/v1/projects/prj_1", undefined],
-    ["POST", "/v1/projects", { name: "work", roots: ["/work", "/docs"] }],
-    ["PATCH", "/v1/projects/prj_1", { name: "renamed" }],
-    ["DELETE", "/v1/projects/prj_1", undefined],
-    ["GET", "/v1/projects/resolve?path=%2Fwork%2Fsub", undefined],
-    ["GET", "/v1/projects/resolve?path=%2Fnowhere", undefined],
-    ["POST", "/v1/projects/ensure", { path: "/work" }],
+    ["GET", "/v2/projects?page.limit=500", undefined],
+    ["GET", "/v2/projects/prj_1", undefined],
+    ["POST", "/v2/projects", { name: "work", roots: ["/work", "/docs"] }],
+    ["PATCH", "/v2/projects/prj_1", { name: "renamed" }],
+    ["DELETE", "/v2/projects/prj_1", undefined],
+    ["GET", "/v2/projects/resolve?path=%2Fwork%2Fsub", undefined],
+    ["GET", "/v2/projects/resolve?path=%2Fnowhere", undefined],
+    ["POST", "/v2/projects/ensure", { path: "/work" }],
   ])
 })
 
@@ -343,8 +343,8 @@ test("listSessions filters by Project", async () => {
   expect((await client.listSessions({ projectId: "prj_1" })).map((row) => row.id)).toEqual(["s"])
   await client.listSessions()
   expect(calls.map((call) => call.url.replace("http://h", ""))).toEqual([
-    "/v1/sessions?page.limit=500&projectId=prj_1",
-    "/v1/sessions?page.limit=500",
+    "/v2/sessions?page.limit=500&projectId=prj_1",
+    "/v2/sessions?page.limit=500",
   ])
 })
 
@@ -353,7 +353,7 @@ test("readFile sends its own scope and cap and decodes the size; an empty scope 
   const fetcher: FetchLike = async (input, init) => {
     const url = String(input)
     calls.push({ url, header: new Headers(init?.headers).get("x-hya-directory") })
-    if (url.includes("/v1/fs/read")) return Response.json({ content: Buffer.from([1, 2, 3]).toString("base64"), mime: "image/png" })
+    if (url.includes("/v2/fs/read")) return Response.json({ content: Buffer.from([1, 2, 3]).toString("base64"), mime: "image/png" })
     return Response.json({ paths: [] })
   }
   const client = new HyaClient("http://127.0.0.1:8080", "", fetcher)
@@ -361,8 +361,8 @@ test("readFile sends its own scope and cap and decodes the size; an empty scope 
   const read = await client.readFile("shots/a b.png", { directory: "/srv/app", maxBytes: 11 })
   expect(read).toEqual({ data: "AQID", size: 3, text: false, mime: "image/png" })
   expect(calls).toEqual([
-    { url: "http://127.0.0.1:8080/v1/fs/find?pattern=**%2F*a*&limit=5", header: null },
-    { url: "http://127.0.0.1:8080/v1/fs/read?path=shots%2Fa%20b.png&maxBytes=11&directory=%2Fsrv%2Fapp", header: null },
+    { url: "http://127.0.0.1:8080/v2/fs/find?pattern=**%2F*a*&limit=5", header: null },
+    { url: "http://127.0.0.1:8080/v2/fs/read?path=shots%2Fa%20b.png&maxBytes=11&directory=%2Fsrv%2Fapp", header: null },
   ])
 })
 
@@ -380,21 +380,21 @@ test("a bridge token goes in x-hya-bridge-token on every request and stream; non
 
   const plain = new HyaClient("http://127.0.0.1:1", "/w", fetcher)
   expect(plain.token).toBeUndefined()
-  await plain.request("GET", "/v1/projects")
+  await plain.request("GET", "/v2/projects")
   await plain.streamGlobal(() => undefined, new AbortController().signal)
 
   const bridged = new HyaClient("http://127.0.0.1:2", "/w", fetcher, token)
   expect(bridged.token).toBe(token)
-  await bridged.request("GET", "/v1/projects")
+  await bridged.request("GET", "/v2/projects")
   await bridged.streamGlobal(() => undefined, new AbortController().signal)
   await bridged.streamSession("hysec_1", "0", () => undefined, new AbortController().signal)
 
   // The token belongs to one bridge URL: a new base URL replaces or clears it.
   bridged.setBaseUrl("http://127.0.0.1:3", "b".repeat(64))
-  await bridged.request("GET", "/v1/projects")
+  await bridged.request("GET", "/v2/projects")
   bridged.setBaseUrl("http://127.0.0.1:4")
   expect(bridged.token).toBeUndefined()
-  await bridged.request("GET", "/v1/projects")
+  await bridged.request("GET", "/v2/projects")
   await bridged.streamGlobal(() => undefined, new AbortController().signal)
   // An empty token counts as none.
   bridged.setBaseUrl("http://127.0.0.1:5", "")
@@ -432,17 +432,17 @@ test("every scoped call names the scope in its directory field and no request or
   await client.streamSession("hysec_1", "0", () => undefined, new AbortController().signal)
   await client.streamGlobal(() => undefined, new AbortController().signal)
   expect(calls.map((call) => [call.method, call.url.replace("http://h", ""), call.body])).toEqual([
-    ["GET", "/v1/bootstrap?directory=%2Fwork%20dir", undefined],
-    ["GET", "/v1/agents?page.limit=500&directory=%2Fwork%20dir", undefined],
-    ["GET", "/v1/commands?page.limit=500&directory=%2Fwork%20dir", undefined],
-    ["GET", "/v1/workflows?page.limit=500&directory=%2Fwork%20dir", undefined],
-    ["GET", "/v1/permission-modes?directory=%2Fwork%20dir", undefined],
-    ["GET", "/v1/fs/find?pattern=*&limit=1&directory=%2Fwork%20dir", undefined],
-    ["GET", "/v1/fs/read?path=a.txt&directory=%2Fwork%20dir", undefined],
-    ["GET", "/v1/vcs?directory=%2Fwork%20dir", undefined],
-    ["GET", "/v1/vcs/diff?directory=%2Fwork%20dir", undefined],
-    ["GET", "/v1/agent-models?session=hysec_1&directory=%2Fwork%20dir", undefined],
-    ["PUT", "/v1/agent-models/hya-task", { directory: "/work dir" }],
+    ["GET", "/v2/bootstrap?directory=%2Fwork%20dir", undefined],
+    ["GET", "/v2/agents?page.limit=500&directory=%2Fwork%20dir", undefined],
+    ["GET", "/v2/commands?page.limit=500&directory=%2Fwork%20dir", undefined],
+    ["GET", "/v2/bundles/hya%2Fworkflow/api/workflows?directory=%2Fwork%20dir", undefined],
+    ["GET", "/v2/permission-modes?directory=%2Fwork%20dir", undefined],
+    ["GET", "/v2/fs/find?pattern=*&limit=1&directory=%2Fwork%20dir", undefined],
+    ["GET", "/v2/fs/read?path=a.txt&directory=%2Fwork%20dir", undefined],
+    ["GET", "/v2/vcs?directory=%2Fwork%20dir", undefined],
+    ["GET", "/v2/vcs/diff?directory=%2Fwork%20dir", undefined],
+    ["GET", "/v2/agent-models?session=hysec_1&directory=%2Fwork%20dir", undefined],
+    ["PUT", "/v2/agent-models/hya-task", { directory: "/work dir" }],
   ])
   expect(calls.every((call) => call.header === null)).toBe(true)
   expect(streamed).toEqual([null, null])
@@ -456,10 +456,10 @@ test("an empty scope (remote start before a Project) names no directory", async 
   await client.getVcsStatus()
   await client.setAgentModel("hya-task", undefined)
   expect(calls.map((call) => [call.url.replace("http://h", ""), call.body, call.header])).toEqual([
-    ["/v1/bootstrap", undefined, null],
-    ["/v1/agents?page.limit=500", undefined, null],
-    ["/v1/vcs", undefined, null],
-    ["/v1/agent-models/hya-task", {}, null],
+    ["/v2/bootstrap", undefined, null],
+    ["/v2/agents?page.limit=500", undefined, null],
+    ["/v2/vcs", undefined, null],
+    ["/v2/agent-models/hya-task", {}, null],
   ])
 })
 
@@ -472,7 +472,7 @@ for (const errors of [[], [{ bundleId: "acme/tools", message: "bad config" }]]) 
     })
     if (errors.length) await expect(client.refreshBundles()).rejects.toThrow("acme/tools: bad config")
     else await client.refreshBundles()
-    expect(calls).toEqual([["http://backend/v1/bundles:refresh", "POST", { directory: "/work" }]])
+    expect(calls).toEqual([["http://backend/v2/bundles:refresh", "POST", { directory: "/work" }]])
   })
 }
 
@@ -483,17 +483,17 @@ test("listSkills and listCommandCatalog name the session, keep the diagnostics, 
     urls.push(url)
     if (url.includes("session=hysec_old")) return Response.json({ error: { code: "invalid_argument", message: "unknown field session" } }, { status: 400 })
     if (url.includes("session=hysec_gone")) return Response.json({ error: { code: "not_found", message: "session not found" } }, { status: 404 })
-    if (url.includes("/v1/skills")) return Response.json({ skills: [{ name: "guide", bundleId: "me/kit" }], diagnostics: [{ path: "/x", kind: "name", message: "/x: bad" }], page: {} })
+    if (url.includes("/v2/skills")) return Response.json({ skills: [{ name: "guide", bundleId: "me/kit" }], diagnostics: [{ path: "/x", kind: "name", message: "/x: bad" }], page: {} })
     return Response.json({ commands: [{ name: "skill:guide", source: "skill", scope: "bundle" }], diagnostics: [], page: {} })
   })
   expect(await client.listSkills("hysec_1")).toEqual({ skills: [{ name: "guide", bundleId: "me/kit" }], diagnostics: [{ path: "/x", kind: "name", message: "/x: bad" }] })
-  expect(urls.at(-1)).toBe("http://h/v1/skills?page.limit=500&session=hysec_1&directory=%2Fw")
+  expect(urls.at(-1)).toBe("http://h/v2/skills?page.limit=500&session=hysec_1&directory=%2Fw")
   expect((await client.listCommandCatalog("hysec_1")).commands[0]?.scope).toBe("bundle")
   urls.length = 0
   expect((await client.listSkills("hysec_old")).skills).toHaveLength(1)
-  expect(urls).toEqual(["http://h/v1/skills?page.limit=500&session=hysec_old&directory=%2Fw", "http://h/v1/skills?page.limit=500&directory=%2Fw"])
+  expect(urls).toEqual(["http://h/v2/skills?page.limit=500&session=hysec_old&directory=%2Fw", "http://h/v2/skills?page.limit=500&directory=%2Fw"])
   // A session deleted while it was open: the directory's catalog.
   expect((await client.listCommandCatalog("hysec_gone")).commands).toHaveLength(1)
-  expect(urls.at(-1)).toBe("http://h/v1/commands?page.limit=500&directory=%2Fw")
+  expect(urls.at(-1)).toBe("http://h/v2/commands?page.limit=500&directory=%2Fw")
   expect(await client.refreshSessionContext("hysec_1")).toEqual({ pending: false })
 })

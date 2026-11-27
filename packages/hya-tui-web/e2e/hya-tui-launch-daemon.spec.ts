@@ -67,11 +67,11 @@ async function backendOf(workspace: Workspace): Promise<Backend> {
 }
 
 async function sessionInfo(backend: Backend, id: string): Promise<{ id: string; title?: string; archived?: boolean; busy?: boolean }> {
-  return api(backend, "GET", `/v1/sessions/${id}`)
+  return api(backend, "GET", `/v2/sessions/${id}`)
 }
 
 async function listedIds(url: string, query = ""): Promise<string[]> {
-  const { sessions } = await (await fetch(`${url}/v1/sessions${query}`)).json() as { sessions?: { id: string }[] }
+  const { sessions } = await (await fetch(`${url}/v2/sessions${query}`)).json() as { sessions?: { id: string }[] }
   return (sessions ?? []).map((row) => row.id)
 }
 
@@ -132,10 +132,10 @@ test.describe("daemon lifecycle, archive/resume, and empty-session cleanup", () 
     const pid = await statusPid(term)
     const backend = await backendOf(workspace)
     // Seed an earlier session of the directory so --continue falls back to it.
-    const { session: older } = await api<{ session: { id: string } }>(backend, "POST", "/v1/sessions", {
+    const { session: older } = await api<{ session: { id: string } }>(backend, "POST", "/v2/sessions", {
       agent: "hya-main", model: fakeModelRef, workdir: backend.dir,
     })
-    await api(backend, "PATCH", `/v1/sessions/${older.id}`, { title: "Older work" })
+    await api(backend, "PATCH", `/v2/sessions/${older.id}`, { title: "Older work" })
 
     await prompt(term, "remember this")
     await term.waitForText("Launched and replying.", 20_000)

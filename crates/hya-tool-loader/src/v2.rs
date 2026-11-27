@@ -27,11 +27,11 @@ use hya_runtime_abi::{
     NativeMessageUserBeforeInput, NativeModelFallbackInput, NativePermissionApproveInput,
     NativePlannerOutput, NativePluginContext, NativeRegistrations, NativeService,
     NativeSessionLifecycleInput, NativeTextCompleteInput, NativeToolAfterInput,
-    NativeToolAfterOutcome, NativeToolBeforeInput, NativeToolBeforeOutcome,
-    NativeVerifierVerdict, RegisterV2Fn, SYMBOL_ABI_V2, SYMBOL_REGISTER_V2,
-    SYMBOL_SHARE_DEADLINE_V2, SYMBOL_WITH_RUNTIME_V2, ServiceHealth, ShareDeadlineFn,
-    ToolVisibilityInput, ToolVisibilityOutcome, UriContent, UriResolveCtx, UriSchemaHandler,
-    abi_digest_v2, deadline_cell_v2,
+    NativeToolAfterOutcome, NativeToolBeforeInput, NativeToolBeforeOutcome, NativeVerifierVerdict,
+    RegisterV2Fn, SYMBOL_ABI_V2, SYMBOL_REGISTER_V2, SYMBOL_SHARE_DEADLINE_V2,
+    SYMBOL_WITH_RUNTIME_V2, ServiceHealth, ShareDeadlineFn, ToolVisibilityInput,
+    ToolVisibilityOutcome, UriContent, UriResolveCtx, UriSchemaHandler, abi_digest_v2,
+    deadline_cell_v2,
 };
 use hya_tool::{Action, Decision, Resource, Tool};
 use serde_json::Value;
@@ -82,9 +82,7 @@ async fn poll_future_with_runtime<R>(
                 (&mut state as *mut GenericPollState<R>).cast(),
             );
         }
-        state
-            .result
-            .unwrap_or_else(|| Poll::Ready(bridge_error()))
+        state.result.unwrap_or_else(|| Poll::Ready(bridge_error()))
     })
     .await
 }
@@ -94,7 +92,9 @@ async fn poll_host_result<T>(
     with_runtime: RuntimeEntry,
 ) -> Result<T, HostError> {
     let handle = tokio::runtime::Handle::try_current().map_err(|error| {
-        HostError::Unavailable(format!("native bundle extension needs a Tokio runtime: {error}"))
+        HostError::Unavailable(format!(
+            "native bundle extension needs a Tokio runtime: {error}"
+        ))
     })?;
     poll_future_with_runtime(future, with_runtime, &handle, || {
         Err(HostError::Internal(
@@ -363,7 +363,11 @@ impl GoalDriver for GoalDriverAdapter {
         request: GoalRunRequest,
         cancel: CancellationToken,
     ) -> Result<DriverRunOutcome, HostError> {
-        poll_host_result(self.inner.run_goal(runtime, request, cancel), self.with_runtime).await
+        poll_host_result(
+            self.inner.run_goal(runtime, request, cancel),
+            self.with_runtime,
+        )
+        .await
     }
 }
 
@@ -384,7 +388,11 @@ impl LoopDriver for LoopDriverAdapter {
         request: LoopRunRequest,
         cancel: CancellationToken,
     ) -> Result<DriverRunOutcome, HostError> {
-        poll_host_result(self.inner.run_loop(runtime, request, cancel), self.with_runtime).await
+        poll_host_result(
+            self.inner.run_loop(runtime, request, cancel),
+            self.with_runtime,
+        )
+        .await
     }
 }
 

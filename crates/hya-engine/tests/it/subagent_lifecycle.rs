@@ -33,19 +33,19 @@ use hya_proto::{
     MailKind, MemberRunStatus, Message, MessageId, ModelRef, Part, PartId, PartProjection, Role,
     RosterStatus, SessionId, SessionKind, SubagentMode, ToolCallId, ToolName, ToolSchema, scope,
 };
-use hya_tool::extension::{
-    ExtensionEvent, handoff_projection, members_projection, projection_reducers, team_projection,
-};
-use hya_tool::{ArchiveReason, ReportOutcome};
 use hya_provider::{
     Capabilities, CompletionRequest, DevProvider, EventStream, FakeProvider, FakeStep, Provider,
     ProviderError, ProviderRouter,
 };
 use hya_store::{SessionStore, bench};
+use hya_tool::extension::{
+    ExtensionEvent, handoff_projection, members_projection, projection_reducers, team_projection,
+};
 use hya_tool::{
     Action, LifecyclePlane, MailboxPlane, MemberOutcome, Mode, PermissionPlane, PermissionRules,
     ResolvedTool, Resource, Rule, Tool, ToolCtx, ToolError, ToolPermission,
 };
+use hya_tool::{ArchiveReason, ReportOutcome};
 use serde_json::{Value, json};
 use sqlx::{Connection, SqliteConnection};
 use tokio::sync::{Barrier, Notify, broadcast, mpsc};
@@ -1644,9 +1644,7 @@ async fn explicit_idle_and_running_resident_stop_fences_drops_mail_and_revives()
     assert!(!is_active(&engine, child).await && sup.episode_count() == 0);
     let proj = engine.read_projection(root).await.unwrap();
     let team = team_projection(&proj);
-    assert!(
-        !team.roster.contains_key(&handle) && team.archived[&handle].session == child
-    );
+    assert!(!team.roster.contains_key(&handle) && team.archived[&handle].session == child);
     assert_revives(&engine, root, child, &handle, "after idle stop").await;
     sup.end_member(root, &handle).await.unwrap();
 
@@ -1808,7 +1806,8 @@ async fn resident_registration_failure_claim_fencing_and_pre_stop_mail_persisten
     let mut before_archive = hya_proto::Projection::default();
     let reducers = projection_reducers();
     for env in primary.replay(root).await.unwrap() {
-        if matches!(ExtensionEvent::from_event(&env.event), Some(ExtensionEvent::AgentArchived { handle: a, .. }) if a == handle) {
+        if matches!(ExtensionEvent::from_event(&env.event), Some(ExtensionEvent::AgentArchived { handle: a, .. }) if a == handle)
+        {
             break;
         }
         before_archive.apply_with(&env, &reducers);
@@ -1845,7 +1844,8 @@ async fn resident_registration_failure_claim_fencing_and_pre_stop_mail_persisten
             .is_ok()
     );
     assert_eq!(
-        team_projection(&primary.read_projection(root).await.unwrap()).roster[&fenced_handle].status,
+        team_projection(&primary.read_projection(root).await.unwrap()).roster[&fenced_handle]
+            .status,
         RosterStatus::Idle
     );
 }
@@ -1892,9 +1892,7 @@ async fn message_budget_kill_terminates_sidecar_and_removes_resident_slot() {
     assert!(!is_active(&engine, child).await && sup.team_cancel(root).is_none());
     let proj = engine.read_projection(root).await.unwrap();
     let team = team_projection(&proj);
-    assert!(
-        !team.roster.contains_key(&handle) && team.archived[&handle].session == child
-    );
+    assert!(!team.roster.contains_key(&handle) && team.archived[&handle].session == child);
 }
 
 #[tokio::test]
@@ -2827,10 +2825,7 @@ async fn handle_naming_never_reuses_archived_leaf_and_preserves_legacy_counter_h
     let proj = team.engine.read_projection(team.root).await.unwrap();
     let t = team_projection(&proj);
     assert_eq!(
-        (
-            t.roster[&first_h].session,
-            t.roster[&second_h].session
-        ),
+        (t.roster[&first_h].session, t.roster[&second_h].session),
         (first, second)
     );
 

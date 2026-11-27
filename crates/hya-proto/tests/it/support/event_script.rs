@@ -240,11 +240,13 @@ impl Script {
                 }
             }
             15..=20 => {
-                let bundle = ["hya/workflow", "hya/multi-agent", "hya/compaction"][self.rng.below(3)];
+                let bundle =
+                    ["hya/workflow", "hya/multi-agent", "hya/compaction"][self.rng.below(3)];
                 let kind = ["tick", "status", "checkpoint"][self.rng.below(3)];
                 let n = self.rng.next() % 1_000;
                 if self.handles.len() < 4 {
-                    self.handles.push(format!("main/worker-{}", self.handles.len() + 1));
+                    self.handles
+                        .push(format!("main/worker-{}", self.handles.len() + 1));
                 }
                 let handle = self.handles[self.rng.below(self.handles.len())].clone();
                 Event::Extension {

@@ -532,10 +532,8 @@ async fn fork_session(
     if envs.is_empty() {
         return Err(V2Error::session_not_found(&id));
     }
-    let projection = hya_proto::Projection::from_events_with(
-        &envs,
-        &hya_tool::extension::projection_reducers(),
-    );
+    let projection =
+        hya_proto::Projection::from_events_with(&envs, &hya_tool::extension::projection_reducers());
     // A fork taken from an unused ephemeral session keeps the source.
     st.engine.set_session_ephemeral(source, false).await?;
     let at = if !request.message_id.is_empty() {

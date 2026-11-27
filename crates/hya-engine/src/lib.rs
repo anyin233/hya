@@ -74,10 +74,10 @@ pub mod resident;
 pub mod runtime_registry;
 /// Bundle sidecar lifecycle for executable public packages.
 pub mod sidecar;
-/// Domain store operations over `hya-store` v2 primitives.
-pub mod store_bridge;
 /// Filesystem and trusted builtin skill discovery for full-mode hosts.
 pub mod skill_catalog;
+/// Domain store operations over `hya-store` v2 primitives.
+pub mod store_bridge;
 /// Session title generation helpers.
 pub mod title;
 /// Token accounting: local estimation and provider-usage reliability.

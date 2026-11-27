@@ -16,14 +16,13 @@ use hya_proto::{
     AgentName, Envelope, Event, FinishReason, MemberId, MemberRunStatus, Message, MessageId,
     ModelRef, Part, PermissionRequestId, QuestionRequestId, Role, SessionId, ToolCallId,
 };
-use hya_tool::extension::ExtensionEvent;
-use hya_tool::{ArchiveReason, ReportOutcome};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
     ProviderRouter,
 };
 use hya_server::router;
 use hya_store::{SavedPermission, SessionStore};
+use hya_tool::extension::ExtensionEvent;
 use hya_tool::interaction::{
     QuestionInfo, QuestionKind, QuestionOption, QuestionPrompt, QuestionRequest,
 };
@@ -31,6 +30,7 @@ use hya_tool::permission::{
     Action, AskRequest, Decision, Invocation, InvocationPolicy, InvocationRule, Mode,
     PermissionModel, PermissionTarget, RememberScope, Resource,
 };
+use hya_tool::{ArchiveReason, ReportOutcome};
 use hya_tool::{PermissionPlane, PermissionRules, Rule};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
@@ -993,9 +993,7 @@ async fn member_updates_reports_and_archival_revival_match_across_sse_grpc_and_r
     }
     let updates: Vec<Value> = payloads(&member_collector.await.unwrap())
         .into_iter()
-        .filter(|(k, v, _)| {
-            k == "extensionEvent" && v["bundle"] == json!("hya/multi-agent")
-        })
+        .filter(|(k, v, _)| k == "extensionEvent" && v["bundle"] == json!("hya/multi-agent"))
         .map(|(_, v, d)| {
             assert!(d);
             v

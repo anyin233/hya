@@ -263,10 +263,7 @@ async fn mail_auth_group_vs_dm_with_released_claim_and_terminal_member() {
     let delivered = team
         .inboxes
         .values()
-        .filter(|i| {
-            i.iter()
-                .any(|idx| team.mail[*idx].body == "all hands")
-        })
+        .filter(|i| i.iter().any(|idx| team.mail[*idx].body == "all hands"))
         .count();
     assert_eq!((r.recipients, delivered), (3, 3));
     assert_eq!(inbox(&eng, o.root, &o.lead_2.path).await, ["all hands"]);

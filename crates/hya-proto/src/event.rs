@@ -10,9 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{
-    ConfigGeneration, EventSeq, MessageId, PartId, ProjectId, SessionId, ToolCallId,
-};
+use crate::ids::{ConfigGeneration, EventSeq, MessageId, PartId, ProjectId, SessionId, ToolCallId};
 use crate::message::{FinishCause, FinishReason, Role, TokenUsage, ToolPartState, UsagePurpose};
 use crate::model::{AgentName, ModelRef, ToolName};
 

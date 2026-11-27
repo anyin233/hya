@@ -185,11 +185,7 @@ impl HttpTransport {
         body: Option<&Value>,
     ) -> Result<Value, ClientError> {
         let rel = path.trim_start_matches('/');
-        let route = format!(
-            "/v2/bundles/{}/api/{}",
-            encode_component(bundle),
-            rel,
-        );
+        let route = format!("/v2/bundles/{}/api/{}", encode_component(bundle), rel,);
         self.call_optional_json(method, &route, query, body).await
     }
 

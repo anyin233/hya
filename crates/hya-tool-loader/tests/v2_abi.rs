@@ -7,23 +7,21 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use hya_bundle::{Bundle, BundleIdentity, PreparedAgent};
-use hya_context::rewrite::{
-    CompactionHooks, ModelHost, RewriteCtx, SessionLog, Transcript,
-};
+use hya_context::rewrite::{CompactionHooks, ModelHost, RewriteCtx, SessionLog, Transcript};
 use hya_proto::{
     ActorClaim, AgentName, Envelope, Event, EventSeq, FinishReason, Message, MessageId, ModelRef,
     Projection, SessionId, ToolCallId, ToolSchema,
 };
 use hya_runtime_abi::{
     AbiError, BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,
-    BundleClaimRequest, BundleStateEntry, DriverRunOutcome, ExtensionEventContext, ExtensionEntry,
+    BundleClaimRequest, BundleStateEntry, DriverRunOutcome, ExtensionEntry, ExtensionEventContext,
     ExtensionKind, GoalRunRequest, HostBundleStorage, HostCatalogReader, HostError, HostEventBus,
     HostExtensionRegistry, HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner,
     LoopRunRequest, ModelCallRequest, ModelCallResponse, ModelStreamChunk, ModelWindowInfo,
     NativeBundleApiRequest, NativeCompactionBeforeInput, NativeCompactionDecision,
     NativeCompactionTrigger, NativeToolBeforeInput, NativeToolBeforeOutcome, SessionListFilter,
-    SessionSummaryMeta, ToolVisibilityInput, ToolVisibilityOutcome, TurnOutcome,
-    TurnSpawnRequest, TurnStartRequest, TurnStatus, UriResolveCtx,
+    SessionSummaryMeta, ToolVisibilityInput, ToolVisibilityOutcome, TurnOutcome, TurnSpawnRequest,
+    TurnStartRequest, TurnStatus, UriResolveCtx,
 };
 use hya_tool::handle::ArtifactPlane;
 use hya_tool::{
@@ -569,9 +567,7 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
 
     // Tool execution + scoped deadline cell + Tokio sleep inside cdylib + HostRuntime KV write
     let _deadline = hya_tool::deadline::install_scoped(std::time::Duration::from_secs(42));
-    let tool_out = regs.tools[0]
-        .execute(&ctx, json!({"hello": "v2"}))
-        .await?;
+    let tool_out = regs.tools[0].execute(&ctx, json!({"hello": "v2"})).await?;
     assert_eq!(tool_out["bundle_id"], "hya/probe");
     assert_eq!(tool_out["written_version"], 1);
     assert_eq!(tool_out["read_value"], json!({"hello": "v2"}));

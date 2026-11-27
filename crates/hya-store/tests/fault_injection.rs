@@ -27,8 +27,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_arguments)]
 
 use hya_proto::{
-    AgentName, Envelope, Event, EventSeq, FinishReason, MessageId,
-    ModelRef, PartId, Projection, Role, SessionId, SessionKind,
+    AgentName, Envelope, Event, EventSeq, FinishReason, MessageId, ModelRef, PartId, Projection,
+    Role, SessionId, SessionKind,
 };
 use hya_store::{ExitDrainReport, SavedPermission, SessionStore, StoreError, StoreHealth};
 #[cfg(target_os = "linux")]

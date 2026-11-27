@@ -57,7 +57,7 @@ function harness(replies: Reply[] = [], shell: (command: string) => Promise<Turn
   return { store, runner, sent, shells, cancels, delays, emit, turn }
 }
 
-const busy = () => new HttpError(409, "POST", `/v1/sessions/${S}/turns`, "session_busy: session busy")
+const busy = () => new HttpError(409, "POST", `/v2/sessions/${S}/turns`, "session_busy: session busy")
 
 test("an idle prompt is sent at once and marks the turn running", async () => {
   const { store, runner, sent } = harness([{ id: "msg_u1", state: "TURN_STATE_RUNNING" }])
@@ -283,7 +283,7 @@ test("a shell turn that fails after a cancel request is reported cancelled", asy
   const pending = runner.submit("sleep 30", { shell: true })
   await Bun.sleep(0)
   await runner.cancel()
-  fail(new HttpError(500, "POST", "/v1/sessions/x/turns", "cancelled: turn cancelled"))
+  fail(new HttpError(500, "POST", "/v2/sessions/x/turns", "cancelled: turn cancelled"))
   await pending
   expect(store.state.running).toBe(false)
   expect(store.state.status).toBe("Cancelled · Ready")

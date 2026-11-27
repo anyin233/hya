@@ -507,11 +507,7 @@ impl Harness {
                 .roster
                 .get(&target)
                 .map(|entry| entry.session)
-                .or_else(|| {
-                    team.archived
-                        .get(&target)
-                        .map(|entry| entry.session)
-                });
+                .or_else(|| team.archived.get(&target).map(|entry| entry.session));
             if let Some(session) = session {
                 let scripts = self.provider.scripts.lock().unwrap();
                 let mut sessions = self.provider.script_sessions.lock().unwrap();
@@ -617,11 +613,13 @@ impl Harness {
         ))
         .await
         .unwrap();
-        sqlx::query_scalar("SELECT epoch FROM bundle_claim WHERE bundle = 'hya/multi-agent' AND claim_key = ?")
-            .bind(child.to_string())
-            .fetch_one(&mut db)
-            .await
-            .unwrap()
+        sqlx::query_scalar(
+            "SELECT epoch FROM bundle_claim WHERE bundle = 'hya/multi-agent' AND claim_key = ?",
+        )
+        .bind(child.to_string())
+        .fetch_one(&mut db)
+        .await
+        .unwrap()
     }
 
     pub async fn shutdown(&mut self) {
@@ -749,7 +747,8 @@ pub async fn crash_seed_if_requested(test: &str, queue_main: bool) {
                 .await
         });
         gate.arrived().await;
-        let team = hya_tool::extension::team_projection(&h.engine.read_projection(h.root).await.unwrap());
+        let team =
+            hya_tool::extension::team_projection(&h.engine.read_projection(h.root).await.unwrap());
         let members = team
             .roster
             .iter()

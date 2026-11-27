@@ -1,6 +1,6 @@
 /**
  * The Bundles view (`/bundles`, docs/tui.md "Bundles"): pure state and keys
- * over `GET /v1/bundles` merged with the TUI's own extension state
+ * over `GET /v2/bundles` merged with the TUI's own extension state
  * (extensions/manager.ts). components/BundlesView.tsx renders it;
  * app/bundles.ts owns the calls and preferences.
  *

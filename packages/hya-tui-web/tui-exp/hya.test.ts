@@ -49,7 +49,7 @@ async function withHya(name: string, body: (terminal: PtyTerminal) => Promise<vo
       env: { HYA_TUI_CONFIG: join(dirname(backend.dir), "config/hya/tui.json") },
     })
     await terminal.waitForText("Message, !shell, or @file · / commands", 20_000)
-    await terminal.waitFor(async () => ((await api<{ sessions?: unknown[] }>(backend, "GET", "/v1/sessions")).sessions?.length ?? 0) > 0, "initial session")
+    await terminal.waitFor(async () => ((await api<{ sessions?: unknown[] }>(backend, "GET", "/v2/sessions")).sessions?.length ?? 0) > 0, "initial session")
     timings.launchToReadyMs = performance.now() - launch
     const actions = performance.now()
     await body(terminal)

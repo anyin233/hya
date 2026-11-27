@@ -105,7 +105,9 @@ pub(crate) fn package_native_library(
         }
         runtime.insert("library".into(), json!(library_path));
     } else if root.contains_key("extensions") {
-        bail!("tool-family source uses legacy `extensions`; migrate to `schema_version: 2` and `runtime`");
+        bail!(
+            "tool-family source uses legacy `extensions`; migrate to `schema_version: 2` and `runtime`"
+        );
     } else {
         root.insert(
             "runtime".into(),
