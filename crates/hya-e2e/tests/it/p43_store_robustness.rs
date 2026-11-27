@@ -92,7 +92,8 @@ impl IsolatedRunEnv {
 
         if let Some(base_url) = fake_base_url {
             let config = format!(
-                r#"default_model: fake/model
+                r#"schema_version: 2
+default_model: fake/model
 providers:
   fake:
     kind: openai-compatible
@@ -1119,7 +1120,7 @@ async fn p43_signal_exit_paths_drain_store() {
     let mcp_env = IsolatedRunEnv::new("sig-startup", None);
     let mcp_ready = mcp_env.root.join("mcp.started");
     let cfg = format!(
-        "default_model: hya/offline\nmcp:\n  slow:\n    command: [\"sh\", \"-c\", \"touch '{}' && sleep 30\"]\n",
+        "schema_version: 2\ndefault_model: hya/offline\nmcp:\n  slow:\n    command: [\"sh\", \"-c\", \"touch '{}' && sleep 30\"]\n",
         mcp_ready.display()
     );
     fs::write(mcp_env.xdg_config_home.join("hya/config.yaml"), cfg).expect("write mcp config");

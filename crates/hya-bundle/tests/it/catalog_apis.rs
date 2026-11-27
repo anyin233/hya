@@ -25,7 +25,7 @@ fn rehash(doc: &mut serde_json::Value) -> (Vec<u8>, String) {
 
 fn skill_bundle(root: &str, bundle_id: &str, agent_id: &str, content: &str) -> BundleSource {
     let manifest = format!(
-        "kind: Bundle\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\nresources:\n  skills:\n    - id: docs\n      path: resources/skills/docs.md\nagents:\n  - id: {agent_id}\n    role: main\n"
+        "kind: Bundle\nschema_version: 2\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\nresources:\n  skills:\n    - id: docs\n      path: resources/skills/docs.md\nagents:\n  - id: {agent_id}\n    role: main\n"
     );
     BundleSource::new(
         root,
@@ -43,7 +43,7 @@ fn workflow_bundle(
     extra_node_yaml: &str,
 ) -> BundleSource {
     let manifest = format!(
-        "kind: Bundle\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\nworkflow:\n  id: {workflow_id}\n  path: workflows/{workflow_id}.hya.md\nagents:\n  - id: {agent_id}\n    role: subagent\n    prompt: prompts/{agent_id}.md\n"
+        "kind: Bundle\nschema_version: 2\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\nworkflow:\n  id: {workflow_id}\n  path: workflows/{workflow_id}.hya.md\nagents:\n  - id: {agent_id}\n    role: subagent\n    prompt: prompts/{agent_id}.md\n"
     );
     let workflow = format!(
         "---\nkind: Workflow\nname: {workflow_id}\ndescription: Catalog Workflow.\nnodes:\n  run:\n    agent: {agent_id}\n    directive: Run the stage.\n{extra_node_yaml}---\nflowchart TD\n  run\n"
@@ -66,7 +66,7 @@ fn workflow_bundle(
 
 fn api_bundle(with_agents: bool, process: bool, apis: Option<&str>) -> BundleSource {
     let process = if process {
-        "extensions:\n  process:\n    kind: bun\n    command: [bun, run, '${BUNDLE_ROOT}/api.ts']\n  files:\n    - id: api\n      path: api.ts\n    - id: in-schema\n      path: schemas/in.json\n    - id: bad-schema\n      path: schemas/bad.json\n"
+        "runtime:\n  kind: js\n  mode: process\n  entry: api.ts\n  command: [bun, run, '${BUNDLE_ROOT}/api.ts']\nassets:\n  - id: in-schema\n    path: schemas/in.json\n  - id: bad-schema\n    path: schemas/bad.json\n"
     } else {
         ""
     };
@@ -77,7 +77,7 @@ fn api_bundle(with_agents: bool, process: bool, apis: Option<&str>) -> BundleSou
         ""
     };
     let manifest = format!(
-        "kind: Bundle\nidentity:\n  id: hya/api-demo\n  version: 1.0.0\n  publisher: hya\n{process}{apis}{body}"
+        "kind: Bundle\nschema_version: 2\nidentity:\n  id: hya/api-demo\n  version: 1.0.0\n  publisher: hya\n{process}{apis}{body}"
     );
     BundleSource::new(
         "api-demo",
@@ -96,7 +96,7 @@ fn api_row(id: &str, method: &str, scope: &str, path: &str) -> String {
 
 fn mode_bundle(with_agents: bool, process: bool, hook: bool, modes: Option<&str>) -> BundleSource {
     let process = if process {
-        "extensions:\n  process:\n    kind: bun\n    command: [bun, run, '${BUNDLE_ROOT}/approver.ts']\n  files:\n    - id: approver\n      path: approver.ts\n"
+        "runtime:\n  kind: js\n  mode: process\n  entry: approver.ts\n  command: [bun, run, '${BUNDLE_ROOT}/approver.ts']\n"
     } else {
         ""
     };
@@ -112,7 +112,7 @@ fn mode_bundle(with_agents: bool, process: bool, hook: bool, modes: Option<&str>
         ""
     };
     let manifest = format!(
-        "kind: Bundle\nidentity:\n  id: hya/approver\n  version: 1.0.0\n  publisher: hya\n{process}{hook}{modes}{body}"
+        "kind: Bundle\nschema_version: 2\nidentity:\n  id: hya/approver\n  version: 1.0.0\n  publisher: hya\n{process}{hook}{modes}{body}"
     );
     BundleSource::new(
         "approver",
@@ -188,6 +188,7 @@ fn catalog_indexes_mcp_and_rejects_unsupported_hook_or_duplicate_bundle() {
         content: content.into(),
         binary_base64: None,
         aliases: Vec::new(),
+        overrides: None,
     });
     let catalog = BundleCatalog::from_prepared(&[bundle]).expect("mcp indexes");
     assert_eq!(
@@ -203,7 +204,7 @@ fn catalog_indexes_mcp_and_rejects_unsupported_hook_or_duplicate_bundle() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                b"kind: Bundle\nidentity: { id: hya/catalog-hook, version: 1.0.0, publisher: hya }\nresources:\n  hooks: [{ id: event, path: extensions/runtime.js }]\nextensions:\n  js: [{ id: runtime, path: extensions/runtime.js }]\nagents: [{ id: catalog-hook, role: main, hook_refs: [bundle:hya/catalog-hook/hook/event] }]\n".as_slice(),
+                b"kind: Bundle\nschema_version: 2\nidentity: { id: hya/catalog-hook, version: 1.0.0, publisher: hya }\nruntime: { kind: js, mode: managed, entry: extensions/runtime.js }\nresources:\n  hooks: [{ id: event, path: extensions/runtime.js }]\nagents: [{ id: catalog-hook, role: main, hook_refs: [bundle:hya/catalog-hook/hook/event] }]\n".as_slice(),
             ),
             SourceFile::new("extensions/runtime.js", b"export default {};\n".as_slice()),
         ],
@@ -227,7 +228,7 @@ fn catalog_indexes_mcp_and_rejects_unsupported_hook_or_duplicate_bundle() {
             vec![SourceFile::new(
                 "bundle.yaml",
                 format!(
-                    "kind: Bundle\nidentity: {{ id: hya/duplicate-package, version: 1.0.0, publisher: hya }}\nagents: [{{ id: {agent}, role: main }}]\n"
+                    "kind: Bundle\nschema_version: 2\nidentity: {{ id: hya/duplicate-package, version: 1.0.0, publisher: hya }}\nagents: [{{ id: {agent}, role: main }}]\n"
                 ),
             )],
         ))
@@ -420,7 +421,7 @@ fn agent_bearing_bundles_with_explicit_process_may_declare_apis() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                b"kind: Bundle\nidentity: { id: hya/decl-demo, version: 1.0.0, publisher: hya }\napis:\n  - { id: usage, method: GET, scope: session, path: /usage, description: Token usage }\n  - { id: health, method: GET, scope: global, path: /health }\nextensions:\n  js: [{ id: runtime, path: extensions/runtime.js }]\n  process: { kind: bun, command: [bun, run, extensions/runtime.ts] }\nagents: [{ id: decl-lead, role: main }]\n".as_slice(),
+                b"kind: Bundle\nschema_version: 2\nidentity: { id: hya/decl-demo, version: 1.0.0, publisher: hya }\nruntime: { kind: js, mode: process, entry: extensions/runtime.js, command: [bun, run, extensions/runtime.ts] }\napis:\n  - { id: usage, method: GET, scope: session, path: /usage, description: Token usage }\n  - { id: health, method: GET, scope: global, path: /health }\nagents: [{ id: decl-lead, role: main }]\n".as_slice(),
             ),
             SourceFile::new("extensions/runtime.js", b"export default {}".as_slice()),
         ],
@@ -443,7 +444,7 @@ fn apis_reject_missing_process_invalid_ids_paths_methods_scopes_and_duplicates()
         false,
         Some(&api_row("usage", "GET", "session", "/usage")),
     ));
-    assert!(missing_proc.contains("apis") && missing_proc.contains("extensions.process"));
+    assert!(missing_proc.contains("apis") && missing_proc.contains("mode: process"));
 
     for id in ["''", "a/b", "-lead", "'has space'", "per%cent"] {
         let detail = invalid_detail(api_bundle(
@@ -640,7 +641,7 @@ fn permission_modes_require_process_hook_and_reject_invalid_declarations() {
         false,
         Some(&mode_row("careful", "Careful")),
     ));
-    assert!(no_proc.contains("permission_modes") && no_proc.contains("extensions.process"));
+    assert!(no_proc.contains("permission_modes") && no_proc.contains("mode: process"));
     let no_hook = invalid_detail(mode_bundle(
         false,
         true,

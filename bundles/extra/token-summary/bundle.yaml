@@ -1,4 +1,5 @@
 kind: Bundle
+schema_version: 2
 version_ref: hya
 identity:
   id: hya-extra/token-summary
@@ -7,18 +8,17 @@ identity:
 check:
   command: [bun, test, --pass-with-no-tests]
   timeout_secs: 120
-# An explicit `extensions.process` is spawned with its argv as-is (no Bun
+# An explicit `runtime` with `mode: process` is spawned with its argv as-is (no Bun
 # adapter is injected), so summary.ts speaks the hya plugin protocol v1
 # (newline-delimited JSON-RPC 2.0 over stdio) itself.
-extensions:
-  process:
-    kind: bun
-    command: [bun, run, '${BUNDLE_ROOT}/summary.ts']
-  files:
-    - id: summary
-      path: summary.ts
-    - id: usage-schema
-      path: schemas/usage.json
+runtime:
+  kind: js
+  mode: process
+  entry: summary.ts
+  command: [bun, run, '${BUNDLE_ROOT}/summary.ts']
+assets:
+  - id: usage-schema
+    path: schemas/usage.json
 resources:
   tools:
     - id: token_summary

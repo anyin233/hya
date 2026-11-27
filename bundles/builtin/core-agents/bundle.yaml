@@ -1,13 +1,13 @@
 kind: Bundle
+schema_version: 2
 version_ref: hya
 identity:
   id: hya/core-agents
   version: 0.0.0
   publisher: hya
-extensions:
-  files:
-    - id: policy
-      path: policy.yaml
+assets:
+  - id: policy
+    path: policy.yaml
 agents:
   - id: hya-main
     description: Default primary agent. Owns the request end to end and delegates focused work to hya-scout, hya-task, and hya-reviewer.

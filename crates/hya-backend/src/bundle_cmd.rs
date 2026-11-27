@@ -2406,7 +2406,8 @@ mod refresh_tests {
             vec![
                 hya_bundle::SourceFile::new(
                     "bundle.yaml",
-                    br#"kind: Bundle
+                    br#"schema_version: 2
+kind: Bundle
 identity: { id: hya/decl-demo, version: 1.0.0, publisher: hya }
 schemas: [{ scheme: db, tool: query, writable: false }]
 apis:
@@ -2419,10 +2420,9 @@ resources:
   tools: [{ id: query, path: extensions/runtime.js }]
   mcp: [{ id: vecdb, path: mcp/vecdb.json }]
   hooks: [{ id: permission.approve, path: hooks/permission-approve.json }]
-extensions:
-  js: [{ id: runtime, path: extensions/runtime.js }]
-  files: [{ id: item-schema, path: schemas/item.json }]
-  process: { kind: bun, command: [bun, run, extensions/runtime.ts] }
+runtime: { kind: js, mode: process, entry: extensions/runtime.js, command: [bun, run, extensions/runtime.ts] }
+assets:
+  - { id: item-schema, path: schemas/item.json }
 agents: [{ id: decl-lead, role: main, resource_view: { allow: [query, runtime] } }]
 "#,
                 ),

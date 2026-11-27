@@ -1767,7 +1767,7 @@ async fn root_mail_and_synthesis_wakes_stopped_during_binding_own_prompt() {
             "wake-bind",
             vec![hya_bundle::SourceFile::new(
                 "bundle.yaml",
-                "kind: Bundle\nidentity: { id: test/wake-bind, version: 1.0.0, publisher: test }\n",
+                "schema_version: 2\nkind: Bundle\nidentity: { id: test/wake-bind, version: 1.0.0, publisher: test }\n",
             )],
         ))
         .unwrap();

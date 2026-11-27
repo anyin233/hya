@@ -26,7 +26,7 @@ impl RefreshHarness {
         let root =
             std::env::temp_dir().join(format!("hya-refresh-{}", hya_proto::SessionId::new()));
         std::fs::create_dir_all(&root)?;
-        std::fs::write(root.join("config.yaml"), "plugins: {}\n")?;
+        std::fs::write(root.join("config.yaml"), "schema_version: 2\nplugins: {}\n")?;
         let registry = Arc::new(RuntimeRegistry::new(
             hya_tool_loader::builtins(),
             crate::runtime::builtin_agent_catalog()?,
@@ -38,7 +38,7 @@ impl RefreshHarness {
             )),
             reconciler: reconciler.clone(),
             config_file: root.join("config.yaml"),
-            applied: tokio::sync::Mutex::new(Some("plugins: {}\n".into())),
+            applied: tokio::sync::Mutex::new(Some("schema_version: 2\nplugins: {}\n".into())),
             pure: false,
         });
         let (permission, _) = hya_tool::PermissionPlane::new(hya_tool::PermissionRules::default());
@@ -70,7 +70,7 @@ impl RefreshHarness {
             .collect();
         std::fs::write(
             self.root.join("config.yaml"),
-            serde_json::to_string(&json!({"plugins": plugins}))?,
+            serde_json::to_string(&json!({"schema_version": 2, "plugins": plugins}))?,
         )?;
         Ok(())
     }
@@ -346,7 +346,7 @@ for line in sys.stdin:
         "child",
         vec![hya_bundle::SourceFile::new(
             "bundle.hya.md",
-            "---\nkind: Bundle\nidentity: { id: acme/child, version: 1.0.0, publisher: acme }\nagents: [{ id: hooked-child, role: subagent }]\n---\nChild.\n",
+            "---\nkind: Bundle\nschema_version: 2\nidentity: { id: acme/child, version: 1.0.0, publisher: acme }\nagents: [{ id: hooked-child, role: subagent }]\n---\nChild.\n",
         )],
     ))?;
     let runtime = h.engine.runtime_registry().clone();

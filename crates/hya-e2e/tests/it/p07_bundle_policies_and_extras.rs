@@ -279,7 +279,7 @@ for line in sys.stdin:
         "channel-policy",
         vec![SourceFile::new(
             "bundle.yaml",
-            "kind: Bundle\nidentity: { id: acme/channel-policy, version: 1.0.0, publisher: acme }\nchannels:\n  - id: child-dm\n    kind: parent_dm\n    participants: [{ kind: role, role: child }]\n    capabilities: [report, steer, follow_up, resident_mail]\n    scope: vertical\n    retention: team_session\n",
+            "schema_version: 2\nkind: Bundle\nidentity: { id: acme/channel-policy, version: 1.0.0, publisher: acme }\nchannels:\n  - id: child-dm\n    kind: parent_dm\n    participants: [{ kind: role, role: child }]\n    capabilities: [report, steer, follow_up, resident_mail]\n    scope: vertical\n    retention: team_session\n",
         )],
     );
     install_source(&env, tmp.path(), "channel-policy.hyabundle", &chan_source);

@@ -187,7 +187,8 @@ pub(crate) fn materialize_root(spec: &BackendSpec) -> Result<MaterializedRoot, E
         .map(|mode| format!("tools:\n  code:\n    mode: {mode}\n"))
         .unwrap_or_default();
     let config = format!(
-        r#"default_model: {model_ref}
+        r#"schema_version: 2
+default_model: {model_ref}
 providers:
   {provider}:
     kind: openai-compatible

@@ -61,14 +61,23 @@ pub(super) fn parse_source(source: BundleSource) -> Result<ParsedSource, BundleE
         }
     };
 
-    if let Some(version) = manifest.schema_version
-        && version != 1
-        && version != 2
-    {
-        return Err(BundleError::InvalidManifest {
-            source_name: name,
-            detail: format!("unsupported schema_version `{version}`; expected 1 or 2"),
-        });
+    match manifest.schema_version {
+        Some(2) => {}
+        Some(version) => {
+            return Err(BundleError::InvalidManifest {
+                source_name: name,
+                detail: format!(
+                    "unsupported schema_version `{version}`; only hyabundle schema_version `2` is supported"
+                ),
+            });
+        }
+        None => {
+            return Err(BundleError::InvalidManifest {
+                source_name: name,
+                detail: "missing required `schema_version: 2`; legacy v1 manifests are no longer supported"
+                    .to_string(),
+            });
+        }
     }
 
     resolve_version_reference(&mut manifest, &name)?;

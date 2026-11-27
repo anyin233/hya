@@ -1,4 +1,5 @@
 kind: Bundle
+schema_version: 2
 version_ref: hya
 identity:
   id: hya/code-mode
@@ -7,14 +8,12 @@ identity:
 check:
   command: [bun, test, --pass-with-no-tests]
   timeout_secs: 120
-extensions:
-  process:
-    kind: bun
-    command: [bun, run, '${BUNDLE_ROOT}/runtime.ts', run]
-    timeout_ms: 3600000
-  files:
-    - id: runtime
-      path: runtime.ts
+runtime:
+  kind: js
+  mode: process
+  entry: runtime.ts
+  command: [bun, run, '${BUNDLE_ROOT}/runtime.ts', run]
+  timeout_ms: 3600000
 resources:
   tools:
     - id: run

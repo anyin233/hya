@@ -877,13 +877,15 @@ pub async fn install_sidecar_bundle() {
                 "bundle.hya.md",
                 br#"---
 kind: Bundle
+schema_version: 2
 identity: { id: hya/m4-sidecar, version: 1.0.0, publisher: hya-tests }
+runtime:
+  kind: js
+  mode: managed
+  entry: extensions/runtime.js
 resources:
   tools:
     - { id: echo, path: extensions/runtime.js }
-extensions:
-  js:
-    - { id: runtime, path: extensions/runtime.js }
 agents:
   - id: m4-sidecar-worker
     role: subagent

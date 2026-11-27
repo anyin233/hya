@@ -1,4 +1,5 @@
 kind: Bundle
+schema_version: 2
 version_ref: hya
 identity:
   id: hya-extra/jev-model-router
@@ -7,16 +8,14 @@ identity:
 check:
   command: [bun, test, --pass-with-no-tests]
   timeout_secs: 120
-# An explicit `extensions.process` is spawned with its argv as-is (no Bun
+# An explicit `runtime` with `mode: process` is spawned with its argv as-is (no Bun
 # adapter is injected), so router.ts speaks the hya plugin protocol v1
 # (newline-delimited JSON-RPC 2.0 over stdio) itself.
-extensions:
-  process:
-    kind: bun
-    command: [bun, run, '${BUNDLE_ROOT}/router.ts']
-  files:
-    - id: router
-      path: router.ts
+runtime:
+  kind: js
+  mode: process
+  entry: router.ts
+  command: [bun, run, '${BUNDLE_ROOT}/router.ts']
 resources:
   hooks:
     - id: chat.params

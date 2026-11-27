@@ -38,7 +38,7 @@ mod tests_support {
             vec![hya_bundle::SourceFile::new(
                 "bundle.yaml",
                 format!(
-                    "kind: Bundle\nidentity: {{ id: acme/channel-restriction, version: 1.0.0, publisher: acme }}\nchannels:\n{channels}\n"
+                    "schema_version: 2\nkind: Bundle\nidentity: {{ id: acme/channel-restriction, version: 1.0.0, publisher: acme }}\nchannels:\n{channels}\n"
                 ),
             )],
         );
@@ -92,6 +92,7 @@ mod tests_support {
             commands: Vec::new(),
             runtime: None,
             permission_modes: vec![],
+            overrides: None,
         };
         extra.push(bundle);
         let catalog = hya_bundle::BundleCatalog::from_prepared(&extra).expect("catalog valid");

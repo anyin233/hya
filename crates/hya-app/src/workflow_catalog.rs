@@ -596,7 +596,7 @@ mod tests {
         let workflow_source = "---\nkind: Workflow\nname: demo\ndescription: Digest revision regression.\nnodes:\n  execute:\n    agent: worker\n    directive: Execute.\n---\nflowchart TD\n  execute\n";
         let prepare = |command: &str| {
             let manifest = format!(
-                "kind: Bundle\nidentity: {{id: hya/demo, version: 1.0.0, publisher: hya}}\nagents: [{{id: worker, role: subagent}}]\nworkflow: {{id: demo, path: workflows/demo.hya.md}}\nextensions:\n  process: {{kind: rust, command: [{command}]}}\n"
+                "kind: Bundle\nschema_version: 2\nidentity: {{id: hya/demo, version: 1.0.0, publisher: hya}}\nagents: [{{id: worker, role: subagent}}]\nworkflow: {{id: demo, path: workflows/demo.hya.md}}\nruntime: {{kind: js, mode: process, command: [{command}]}}\n"
             );
             prepare_package(BundleSource::new(
                 "revision",

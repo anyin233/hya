@@ -10,8 +10,7 @@ use crate::model::{
     PreparedRuntimeKind, PreparedSchema,
 };
 use crate::source::{
-    SourceExtensions, SourceJsRuntimeMode, SourceNativeCapability, SourceResource, SourceRuntime,
-    SourceRuntimeKind,
+    SourceJsRuntimeMode, SourceNativeCapability, SourceResource, SourceRuntime, SourceRuntimeKind,
 };
 
 /// Reserved internal handle schemes a manifest can never claim.
@@ -156,7 +155,7 @@ pub(super) fn validate_declared_apis(
     if process.is_none() {
         return Err(invalid(
             "apis: a bundle may declare API endpoints only with an explicit \
-             `extensions.process` that serves them"
+             `runtime` (`mode: process`) that serves them"
                 .to_string(),
         ));
     }
@@ -385,7 +384,7 @@ pub(super) fn validate_declared_permission_modes(
     if process.is_none() {
         return Err(invalid(
             "permission_modes: a bundle may declare permission modes only with an explicit \
-             `extensions.process` that approves them"
+             `runtime` (`mode: process`) that approves them"
                 .to_string(),
         ));
     }
@@ -597,27 +596,70 @@ fn validate_process(command: &[String], timeout_ms: Option<u64>) -> Result<(), S
     Ok(())
 }
 
-/// Native executable files require a Rust process extension.
-pub(super) fn validate_unsupported(
+/// Kernel/core tools that cannot be overridden by any bundle (`todo` and `rewrite`).
+pub(super) const RESERVED_OVERRIDE_TOOLS: [&str; 2] = ["todo", "rewrite"];
+
+/// Validate a bundle override target identity (`<publisher>/<name>`, non-self).
+pub(super) fn validate_override_target(
     bundle_id: &str,
-    extensions: &SourceExtensions,
+    target: &str,
 ) -> Result<(), BundleError> {
-    if !extensions.rust.is_empty()
-        && !extensions
-            .process
-            .as_ref()
-            .is_some_and(|process| matches!(process.kind, crate::source::SourceProcessKind::Rust))
-    {
-        return Err(BundleError::UnsupportedBundleFeature {
-            bundle_id: bundle_id.to_string(),
-            feature: "extensions.rust".to_string(),
-        });
+    let invalid = |detail: &str| BundleError::InvalidOverride {
+        bundle_id: bundle_id.to_string(),
+        target: target.to_string(),
+        detail: detail.to_string(),
+    };
+    let Some((publisher, name)) = target.split_once('/') else {
+        return Err(invalid("target must have `<publisher>/<name>` identity form"));
+    };
+    let valid_segment = |seg: &str| {
+        !seg.is_empty()
+            && seg
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    };
+    if !valid_segment(publisher) || !valid_segment(name) || name.contains('/') {
+        return Err(invalid(
+            "target must be `<publisher>/<name>` using ASCII alphanumeric, `-`, `_`, or `.`",
+        ));
+    }
+    if target == bundle_id {
+        return Err(invalid("a bundle cannot override itself"));
     }
     Ok(())
 }
 
-/// Resolved runtime preparation outputs derived from top-level `runtime:`
-/// and/or legacy `extensions.process`.
+/// Validate manifest-level and tool-level `overrides` declarations, enforcing
+/// that `todo` and `rewrite` can never be overridden by any bundle.
+pub(super) fn validate_overrides(
+    bundle_id: &str,
+    manifest_overrides: Option<&str>,
+    tools: &[crate::model::PreparedResource],
+) -> Result<(), BundleError> {
+    if let Some(target) = manifest_overrides {
+        validate_override_target(bundle_id, target)?;
+    }
+    for tool in tools {
+        if let Some(target) = tool.overrides.as_deref() {
+            validate_override_target(bundle_id, target)?;
+        }
+        if tool.overrides.is_some() || manifest_overrides.is_some() {
+            for candidate in std::iter::once(tool.local_id.as_str())
+                .chain(tool.aliases.iter().map(String::as_str))
+            {
+                if RESERVED_OVERRIDE_TOOLS.contains(&candidate) {
+                    return Err(BundleError::ReservedToolOverride {
+                        bundle_id: bundle_id.to_string(),
+                        tool: candidate.to_string(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Resolved runtime preparation outputs derived from top-level `runtime:`.
 pub(super) struct ResolvedRuntime {
     pub prepared: Option<PreparedRuntime>,
     pub process: Option<PreparedProcessExtension>,
@@ -625,41 +667,23 @@ pub(super) struct ResolvedRuntime {
     pub native_library_resource: Option<SourceResource>,
 }
 
-/// Validate and lift the optional top-level `runtime:` block together with
-/// legacy `extensions.{process, libraries, rust}` conflict checks.
+/// Validate and lift the optional top-level `runtime:` block.
 pub(super) fn resolve_runtime(
     bundle_id: &str,
     runtime: Option<&SourceRuntime>,
-    extensions: &SourceExtensions,
 ) -> Result<ResolvedRuntime, BundleError> {
     let invalid = |detail: String| BundleError::InvalidManifest {
         source_name: bundle_id.to_string(),
         detail,
     };
     let Some(runtime) = runtime else {
-        let process = declared_process_extension(bundle_id, extensions)?;
         return Ok(ResolvedRuntime {
             prepared: None,
-            process,
+            process: None,
             js_entry_resource: None,
             native_library_resource: None,
         });
     };
-    if extensions.process.is_some() {
-        return Err(invalid(
-            "runtime: cannot declare both `runtime` and legacy `extensions.process`".to_string(),
-        ));
-    }
-    if !extensions.libraries.is_empty() {
-        return Err(invalid(
-            "runtime: cannot declare both `runtime` and legacy `extensions.libraries`".to_string(),
-        ));
-    }
-    if !extensions.rust.is_empty() {
-        return Err(invalid(
-            "runtime: cannot declare both `runtime` and legacy `extensions.rust`".to_string(),
-        ));
-    }
 
     match runtime.kind {
         SourceRuntimeKind::Static => {
@@ -746,6 +770,7 @@ pub(super) fn resolve_runtime(
                         id: "runtime".to_string(),
                         path: entry_path.clone(),
                         aliases: Vec::new(),
+                        overrides: None,
                     });
                     Ok(ResolvedRuntime {
                         prepared: Some(PreparedRuntime {
@@ -770,6 +795,7 @@ pub(super) fn resolve_runtime(
                         id: "runtime".to_string(),
                         path: path.clone(),
                         aliases: Vec::new(),
+                        overrides: None,
                     });
                     Ok(ResolvedRuntime {
                         prepared: Some(PreparedRuntime {
@@ -869,6 +895,7 @@ pub(super) fn resolve_runtime(
                 id: "runtime".to_string(),
                 path: path.clone(),
                 aliases: Vec::new(),
+                overrides: None,
             });
             Ok(ResolvedRuntime {
                 prepared: Some(PreparedRuntime {
@@ -991,31 +1018,6 @@ pub(super) fn validate_prepared_runtime(bundle: &Bundle) -> bool {
             true
         }
     }
-}
-
-/// Validate and lift the manifest's optional `extensions.process` declaration.
-pub(super) fn declared_process_extension(
-    bundle_id: &str,
-    extensions: &SourceExtensions,
-) -> Result<Option<PreparedProcessExtension>, BundleError> {
-    let Some(process) = &extensions.process else {
-        return Ok(None);
-    };
-    if let Err(detail) = validate_process(&process.command, process.timeout_ms) {
-        return Err(BundleError::InvalidManifest {
-            source_name: bundle_id.to_string(),
-            detail,
-        });
-    }
-    Ok(Some(PreparedProcessExtension {
-        kind: match process.kind {
-            crate::source::SourceProcessKind::Rust => crate::model::PreparedProcessKind::Rust,
-            crate::source::SourceProcessKind::Bun => crate::model::PreparedProcessKind::Bun,
-            crate::source::SourceProcessKind::Claude => crate::model::PreparedProcessKind::Claude,
-        },
-        command: process.command.clone(),
-        timeout_ms: process.timeout_ms,
-    }))
 }
 
 pub(crate) fn validate_hook_local_id(bundle_id: &str, local_id: &str) -> Result<(), BundleError> {

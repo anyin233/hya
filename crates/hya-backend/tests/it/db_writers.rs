@@ -276,7 +276,7 @@ fn direct_writers_clear_metadata_after_run_and_hold_lock_while_active() -> TestR
     std::fs::write(
         s.0.0.join("config/hya/config.yaml"),
         format!(
-            "default_model: stall/m\nproviders:\n  stall:\n    kind: openai-completion\n    base_url: {provider}\n    api_key: test\n    models: [m]\n"
+            "schema_version: 2\ndefault_model: stall/m\nproviders:\n  stall:\n    kind: openai-completion\n    base_url: {provider}\n    api_key: test\n    models: [m]\n"
         ),
     )?;
     let mut exec = s

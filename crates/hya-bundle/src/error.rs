@@ -67,6 +67,26 @@ pub enum BundleError {
         /// What the author should do instead.
         guidance: String,
     },
+    /// A bundle or tool attempted to override a reserved kernel/core tool (`todo` or `rewrite`).
+    #[error(
+        "bundle `{bundle_id}` cannot override reserved tool `{tool}` (`todo` and `rewrite` are reserved)"
+    )]
+    ReservedToolOverride {
+        /// Bundle identity id.
+        bundle_id: String,
+        /// Reserved tool name that cannot be overridden.
+        tool: String,
+    },
+    /// An `overrides` declaration is malformed or invalid in context.
+    #[error("bundle `{bundle_id}` has invalid overrides `{target}`: {detail}")]
+    InvalidOverride {
+        /// Bundle identity id.
+        bundle_id: String,
+        /// Offending overrides target.
+        target: String,
+        /// Explanation of why it was rejected.
+        detail: String,
+    },
     /// `kind` is not `Bundle`.
     #[error(
         "unsupported bundle kind `{found}` in `{source_name}`; the bundle format changed: use `kind: Bundle` with `agents: []` instead of `agent:`"

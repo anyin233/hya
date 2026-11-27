@@ -448,7 +448,7 @@ async fn failed_fetches_do_not_fail_upsert_and_bad_input_is_rejected() {
     let _lock = env_lock().await;
     let env = env(
         "failures",
-        Some("default_model: hya/offline\nproviders: {}\n"),
+        Some("schema_version: 2\ndefault_model: hya/offline\nproviders: {}\n"),
     );
     let (base_url, _fake) = fake_provider().await;
     let (offline, _) = hya_app::offline_router(None);
@@ -528,7 +528,7 @@ async fn deferred_discovery_publishes_one_global_catalog_notice() {
     let _env = env(
         "deferred-notice",
         Some(&format!(
-            "providers:\n  gw:\n    kind: openai\n    base_url: {base_url}\n    models: [configured]\n"
+            "schema_version: 2\nproviders:\n  gw:\n    kind: openai\n    base_url: {base_url}\n    models: [configured]\n"
         )),
     );
     let store = SessionStore::connect_memory().await.unwrap();
@@ -588,7 +588,7 @@ async fn model_cache_restores_metadata_merges_pinned_and_queues_miss() {
     let env_hit = env(
         "cache-rich",
         Some(
-            "default_model: gateway/rich-model\nproviders:\n  gateway:\n    kind: openai\n    base_url: http://127.0.0.1:9/v1\n    models: []\n",
+            "schema_version: 2\ndefault_model: gateway/rich-model\nproviders:\n  gateway:\n    kind: openai\n    base_url: http://127.0.0.1:9/v1\n    models: []\n",
         ),
     );
     seed_cache(
@@ -637,7 +637,7 @@ async fn model_cache_restores_metadata_merges_pinned_and_queues_miss() {
     let _env_merge = env(
         "cache-merge",
         Some(
-            "default_model: gateway/shared\nproviders:\n  gateway:\n    kind: openai\n    base_url: http://127.0.0.1:9/v1\n    models:\n      - id: shared\n        name: Shared (config)\n        limit:\n          output: 2048\n      - pinned\n",
+            "schema_version: 2\ndefault_model: gateway/shared\nproviders:\n  gateway:\n    kind: openai\n    base_url: http://127.0.0.1:9/v1\n    models:\n      - id: shared\n        name: Shared (config)\n        limit:\n          output: 2048\n      - pinned\n",
         ),
     );
     seed_cache(
@@ -677,7 +677,7 @@ async fn model_cache_restores_metadata_merges_pinned_and_queues_miss() {
     let _env_miss = env(
         "cache-pinned-miss",
         Some(
-            "default_model: gateway/pinned\nproviders:\n  gateway:\n    kind: openai\n    base_url: http://127.0.0.1:9/v1\n    models: [pinned]\n",
+            "schema_version: 2\ndefault_model: gateway/pinned\nproviders:\n  gateway:\n    kind: openai\n    base_url: http://127.0.0.1:9/v1\n    models: [pinned]\n",
         ),
     );
     let started = Instant::now();

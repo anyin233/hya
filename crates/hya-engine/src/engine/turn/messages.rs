@@ -246,7 +246,7 @@ mod tests {
             vec![SourceFile::new(
                 "bundle.yaml",
                 format!(
-                    "kind: Bundle\nidentity: {{ id: acme/advertise, version: 1.0.0, publisher: acme }}\nagents:\n  - id: selective-agent\n    role: main\n    can_spawn: [hya-scout]\n    {fields}\n"
+                    "schema_version: 2\nkind: Bundle\nidentity: {{ id: acme/advertise, version: 1.0.0, publisher: acme }}\nagents:\n  - id: selective-agent\n    role: main\n    can_spawn: [hya-scout]\n    {fields}\n"
                 ),
             )],
         ))?;

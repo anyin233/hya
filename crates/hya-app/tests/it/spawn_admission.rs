@@ -1162,6 +1162,7 @@ fn divergence_bundle(id: &str, role: AgentRole, prompt: &str, can_spawn: &[&str]
             publisher: "hya-tests".into(),
         },
         namespace: None,
+        overrides: None,
         digest: format!("test-only-{id}"),
         agents: vec![PreparedAgent {
             private: false,

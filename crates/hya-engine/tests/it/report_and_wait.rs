@@ -195,7 +195,7 @@ async fn restricted_engine(channels: &str) -> Arc<SessionEngine> {
         "channel-restriction",
         vec![SourceFile::new(
             "bundle.yaml",
-            format!("kind: Bundle\nidentity: {{ id: acme/channel-restriction, version: 1.0.0, publisher: acme }}\nchannels:\n{channels}\n"),
+            format!("schema_version: 2\nkind: Bundle\nidentity: {{ id: acme/channel-restriction, version: 1.0.0, publisher: acme }}\nchannels:\n{channels}\n"),
         )],
     ))
     .unwrap();
@@ -1634,7 +1634,7 @@ async fn handoff_policy_deterministic_skips_summarizer_while_default_invokes_it(
             "handoff-policy",
             vec![SourceFile::new(
                 "bundle.yaml",
-                format!("kind: Bundle\nidentity: {{ id: acme/handoff-policy, version: 1.0.0, publisher: acme }}\nagents: [{{ id: quick-scout, role: subagent{field} }}]\n"),
+                format!("schema_version: 2\nkind: Bundle\nidentity: {{ id: acme/handoff-policy, version: 1.0.0, publisher: acme }}\nagents: [{{ id: quick-scout, role: subagent{field} }}]\n"),
             )],
         ))
         .unwrap();
@@ -1792,7 +1792,7 @@ struct ReportTurnTeam {
 }
 
 async fn report_turn_team(provider: Arc<ReportTurnProvider>) -> ReportTurnTeam {
-    const BUNDLE: &str = "kind: Bundle\nidentity: { id: acme/report-turn, version: 1.0.0, publisher: acme }\nagents:\n  - id: lead\n    role: main\n    can_spawn: [scout]\n    resource_view: { allow: [harness:tool/grep] }\n  - id: scout\n    role: subagent\n    resource_view: { allow: [harness:tool/grep, harness:tool/glob] }\n";
+    const BUNDLE: &str = "schema_version: 2\nkind: Bundle\nidentity: { id: acme/report-turn, version: 1.0.0, publisher: acme }\nagents:\n  - id: lead\n    role: main\n    can_spawn: [scout]\n    resource_view: { allow: [harness:tool/grep] }\n  - id: scout\n    role: subagent\n    resource_view: { allow: [harness:tool/grep, harness:tool/glob] }\n";
     let prepared = prepare_package(BundleSource::new(
         "report-turn",
         vec![SourceFile::new("bundle.yaml", BUNDLE)],
@@ -3372,7 +3372,7 @@ fn restriction_catalog(identity: &str, channels: &str) -> BundleCatalog {
         "restriction",
         vec![SourceFile::new(
             "bundle.yaml",
-            format!("kind: Bundle\nidentity: {{ id: {identity}, version: 1.0.0, publisher: acme }}\nagents: [{{id: reviewer, role: subagent}}]\nchannels:\n{channels}\n"),
+            format!("schema_version: 2\nkind: Bundle\nidentity: {{ id: {identity}, version: 1.0.0, publisher: acme }}\nagents: [{{id: reviewer, role: subagent}}]\nchannels:\n{channels}\n"),
         )],
     ))
     .unwrap();

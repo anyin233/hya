@@ -377,7 +377,7 @@ fn workflow_bundle(bundle_id: &str, workflow_id: &str, prompt: &str) -> BundleSo
             SourceFile::new(
                 "bundle.yaml",
                 format!(
-                    "kind: Bundle\nidentity: {{ id: {bundle_id}, version: 1.0.0, publisher: hya }}\nworkflow: {{ id: {workflow_id}, path: workflows/{workflow_id}.hya.md }}\nagents: [{{ id: catalog-worker, role: subagent, prompt: prompts/w.md }}]\n"
+                    "kind: Bundle\nschema_version: 2\nidentity: {{ id: {bundle_id}, version: 1.0.0, publisher: hya }}\nworkflow: {{ id: {workflow_id}, path: workflows/{workflow_id}.hya.md }}\nagents: [{{ id: catalog-worker, role: subagent, prompt: prompts/w.md }}]\n"
                 ),
             ),
             SourceFile::new(

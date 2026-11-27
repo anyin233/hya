@@ -76,10 +76,12 @@ pub use hya_tool::{
     WorkflowRunResult,
 };
 pub use installed_bundle_refresh::{
-    InstalledBundleRefresh, bundle_registry_path, first_party_catalogs,
+    InstalledBundleRefresh, bundle_registry_path, first_party_catalogs, first_party_catalogs_for,
 };
 pub use lead_wrapup::run_headless_lead;
-pub use preset_inventory::{TrustedPresetDescriptor, trusted_preset_inventory};
+pub use preset_inventory::{
+    TrustedPresetDescriptor, trusted_preset_inventory, trusted_preset_inventory_for,
+};
 pub use project_scope::ProjectScopeRefresh;
 pub use provider_control::ProviderManager;
 pub use runtime::{

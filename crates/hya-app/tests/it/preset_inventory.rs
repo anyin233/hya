@@ -79,4 +79,27 @@ fn inventory_exposes_immutable_noninstallable_presets_and_internal_bundles() {
             .all(|bundle| bundle.identity().id != "hya/core-agents"),
         "trusted presets must not enter the installable BundleCatalog"
     );
+
+    // Bare profile omits all built-in presets cleanly; selective enable/disable filters without panicking.
+    let bare = hya_app::trusted_preset_inventory_for(&hya_bundle::BuiltinBundleSelection::bare())
+        .expect("bare inventory");
+    assert!(bare.is_empty());
+
+    let selective = hya_app::trusted_preset_inventory_for(&hya_bundle::BuiltinBundleSelection {
+        profile: hya_bundle::BuiltinBundleProfile::Bare,
+        enable: vec![
+            "hya/base-tools".to_string(),
+            "hya/core-skills".to_string(),
+            "hya/unknown-preset".to_string(),
+        ],
+        disable: vec!["hya/core-skills".to_string()],
+    })
+    .expect("selective inventory");
+    assert_eq!(
+        selective
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        ["hya/base-tools"]
+    );
 }

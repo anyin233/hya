@@ -758,7 +758,7 @@ mod tests {
         std::fs::create_dir_all(second.join(".hya/bundles/catalog/workflows")).unwrap();
         std::fs::write(
             second.join(".hya/bundles/catalog/bundle.yaml"),
-            "kind: Bundle\nidentity: {id: test/catalog, version: 1.0.0, publisher: test}\nagents: [{id: catalog-worker, role: subagent}]\nworkflow: {id: echo-input, path: workflows/echo-input.hya.md}\n",
+            "schema_version: 2\nkind: Bundle\nidentity: {id: test/catalog, version: 1.0.0, publisher: test}\nagents: [{id: catalog-worker, role: subagent}]\nworkflow: {id: echo-input, path: workflows/echo-input.hya.md}\n",
         )
         .unwrap();
         std::fs::write(

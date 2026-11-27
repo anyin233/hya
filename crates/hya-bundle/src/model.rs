@@ -261,6 +261,9 @@ pub struct PreparedResource {
     pub binary_base64: Option<String>,
     /// Alternate local names that resolve to this resource inside the bundle.
     pub aliases: Vec<String>,
+    /// Target bundle identity whose tool this tool resource overrides (e.g. `hya/bare`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<String>,
 }
 
 impl PreparedResource {
@@ -400,6 +403,9 @@ pub struct Bundle {
     /// Provider-facing namespace (declared or identity-derived).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
+    /// Target bundle identity overridden by this bundle (e.g. `hya/bare`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<String>,
     /// Digest of this bundle's canonical content for integrity checks.
     pub digest: String,
     /// All Agents this bundle defines.
@@ -546,6 +552,10 @@ impl Bundle {
     /// Standardized top-level runtime declaration, if declared.
     pub fn runtime(&self) -> Option<&PreparedRuntime> {
         self.runtime.as_ref()
+    }
+    /// Target bundle identity overridden by this bundle, if declared.
+    pub fn overrides(&self) -> Option<&str> {
+        self.overrides.as_deref()
     }
 }
 
@@ -699,7 +709,7 @@ pub struct PreparedBundleIndex {
 }
 
 /// One decoded Bundle with derived runtime lookups and its canonical stored bytes.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PreparedCatalog {
     pub(crate) bundle: std::sync::Arc<Bundle>,
     pub(crate) index: Vec<PreparedBundleIndex>,

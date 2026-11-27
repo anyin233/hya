@@ -1,17 +1,16 @@
 kind: Bundle
+schema_version: 2
 version_ref: hya
 identity:
   id: hya-extra/orchestrator
   version: 0.0.0
   publisher: hya-extra
-extensions:
-  process:
-    kind: bun
-    command: [bun, run, '${BUNDLE_ROOT}/runtime.ts', workflow]
-    timeout_ms: 3600000
-  files:
-    - id: runtime
-      path: runtime.ts
+runtime:
+  kind: js
+  mode: process
+  entry: runtime.ts
+  command: [bun, run, '${BUNDLE_ROOT}/runtime.ts', workflow]
+  timeout_ms: 3600000
 resources:
   tools:
     - id: workflow

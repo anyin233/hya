@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use hya_proto::AgentName;
 
 use super::decode::{digest_bytes, resource_order, set_bundle_digest};
-use super::extensions::validate_hook_local_id;
+use super::extensions::{RESERVED_OVERRIDE_TOOLS, validate_hook_local_id, validate_override_target};
 use super::parse::{normalize_source_path, read_text_reference, split_markdown};
 use crate::error::BundleError;
 use crate::model::{
@@ -11,10 +11,9 @@ use crate::model::{
     PreparedProcessExtension, PreparedResource, PreparedRuntime, PreparedRuntimeKind,
 };
 use crate::source::{
-    SourceAgent, SourceAgentEntry, SourceAgentFile, SourceExtensions, SourceHookCommand,
-    SourceHookFailureMode, SourceHookHandler, SourceHooksDescriptor, SourceMcpServer,
-    SourceResource, SourceResources, SourceToolDescriptor, SourceToolDescriptorAlias,
-    SourceToolDescriptorCollection,
+    SourceAgent, SourceAgentEntry, SourceAgentFile, SourceHookCommand, SourceHookFailureMode,
+    SourceHookHandler, SourceHooksDescriptor, SourceMcpServer, SourceResource, SourceResources,
+    SourceToolDescriptor, SourceToolDescriptorAlias, SourceToolDescriptorCollection,
 };
 
 const MAX_COMMAND_BYTES: usize = 256 * 1024;
@@ -196,14 +195,14 @@ pub(super) fn prepare_resource_sets(
     bundle_id: &str,
     files: &BTreeMap<String, Vec<u8>>,
     resources: SourceResources,
-    extensions: SourceExtensions,
     assets: Vec<SourceResource>,
+    manifest_overrides: Option<&str>,
     runtime: Option<&PreparedRuntime>,
     process: Option<&PreparedProcessExtension>,
     runtime_js_entry: Option<SourceResource>,
     runtime_native_library: Option<SourceResource>,
 ) -> Result<PreparedResourceSets, BundleError> {
-    let tools = prepare_tool_resources(bundle_id, files, resources.tools)?;
+    let tools = prepare_tool_resources(bundle_id, files, resources.tools, manifest_overrides)?;
     let skills = prepare_resources(bundle_id, "skill", files, resources.skills)?;
     let commands = prepare_command_resources(bundle_id, files, resources.commands)?;
     let mcp = prepare_mcp_resources(bundle_id, files, resources.mcp)?;
@@ -233,18 +232,15 @@ pub(super) fn prepare_resource_sets(
             });
         }
     }
-    let mut executable_extensions = extensions.js;
-    let mut support_files = extensions.files;
-    support_files.extend(assets);
+    let mut executable_extensions = Vec::new();
+    let support_files = assets;
     if let Some(mut entry) = runtime_js_entry {
-        let already_listed = executable_extensions
+        let already_listed = support_files
             .iter()
-            .chain(&support_files)
             .any(|res| normalize_source_path(bundle_id, &res.path).as_deref() == Ok(&entry.path));
         if !already_listed {
-            let id_taken = executable_extensions
+            let id_taken = support_files
                 .iter()
-                .chain(&support_files)
                 .any(|res| res.id == entry.id || res.aliases.contains(&entry.id));
             if id_taken {
                 entry.id = "runtime-entry".to_string();
@@ -252,8 +248,7 @@ pub(super) fn prepare_resource_sets(
             executable_extensions.push(entry);
         }
     }
-    let native_binaries = prepare_binary_resources(bundle_id, files, extensions.rust, "extension")?;
-    let mut library_sources = extensions.libraries;
+    let mut library_sources = Vec::new();
     if let Some(lib) = runtime_native_library {
         library_sources.push(lib);
     }
@@ -263,7 +258,6 @@ pub(super) fn prepare_resource_sets(
         executable_extensions.extend(support_files);
         let mut extensions =
             prepare_resources(bundle_id, "extension", files, executable_extensions)?;
-        extensions.extend(native_binaries);
         extensions.extend(native_libraries);
         extensions.sort_by(resource_order);
         let mut names = BTreeSet::new();
@@ -408,9 +402,13 @@ fn prepare_tool_resources(
     bundle_id: &str,
     files: &BTreeMap<String, Vec<u8>>,
     resources: Vec<SourceResource>,
+    manifest_overrides: Option<&str>,
 ) -> Result<Vec<PreparedResource>, BundleError> {
-    let prepared = prepare_resources(bundle_id, "tool", files, resources)?;
-    for resource in &prepared {
+    let mut prepared = prepare_resources(bundle_id, "tool", files, resources)?;
+    for resource in &mut prepared {
+        if let Some(target) = resource.overrides.as_deref() {
+            validate_override_target(bundle_id, target)?;
+        }
         if !is_descriptor_path(&resource.source_path) {
             continue;
         }
@@ -425,7 +423,7 @@ fn prepare_tool_resources(
                 ),
             });
         };
-        // Legacy `{}` placeholder used by v1 process/native declarations.
+        // Empty `{}` placeholder used by native/process tool stubs.
         if object.is_empty() {
             continue;
         }
@@ -440,6 +438,7 @@ fn prepare_tool_resources(
                 })?;
             if let Some(version) = collection.schema_version
                 && version != 1
+                && version != 2
             {
                 return Err(BundleError::InvalidManifest {
                     source_name: bundle_id.to_string(),
@@ -460,9 +459,21 @@ fn prepare_tool_resources(
             }
             let mut matched = false;
             for tool in &collection.tools {
-                validate_tool_descriptor(bundle_id, &resource.source_path, tool)?;
+                validate_tool_descriptor(
+                    bundle_id,
+                    &resource.source_path,
+                    tool,
+                    manifest_overrides,
+                    resource.overrides.as_deref(),
+                )?;
                 if tool.name == resource.local_id {
                     matched = true;
+                    merge_tool_override(
+                        bundle_id,
+                        &resource.source_path,
+                        &mut resource.overrides,
+                        tool.overrides.as_deref(),
+                    )?;
                 }
             }
             if !matched {
@@ -483,7 +494,13 @@ fn prepare_tool_resources(
                         resource.source_path
                     ),
                 })?;
-            validate_tool_descriptor(bundle_id, &resource.source_path, &descriptor)?;
+            validate_tool_descriptor(
+                bundle_id,
+                &resource.source_path,
+                &descriptor,
+                manifest_overrides,
+                resource.overrides.as_deref(),
+            )?;
             if descriptor.name != resource.local_id {
                 return Err(BundleError::InvalidManifest {
                     source_name: bundle_id.to_string(),
@@ -493,15 +510,50 @@ fn prepare_tool_resources(
                     ),
                 });
             }
+            merge_tool_override(
+                bundle_id,
+                &resource.source_path,
+                &mut resource.overrides,
+                descriptor.overrides.as_deref(),
+            )?;
         }
     }
     Ok(prepared)
+}
+
+fn merge_tool_override(
+    bundle_id: &str,
+    path: &str,
+    resource_override: &mut Option<String>,
+    descriptor_override: Option<&str>,
+) -> Result<(), BundleError> {
+    let Some(target) = descriptor_override else {
+        return Ok(());
+    };
+    validate_override_target(bundle_id, target)?;
+    if let Some(existing) = resource_override.as_deref()
+        && existing != target
+    {
+        return Err(BundleError::InvalidOverride {
+            bundle_id: bundle_id.to_string(),
+            target: target.to_string(),
+            detail: format!(
+                "tool descriptor `{path}` overrides `{target}` which conflicts with manifest overrides `{existing}`"
+            ),
+        });
+    }
+    if resource_override.is_none() {
+        *resource_override = Some(target.to_string());
+    }
+    Ok(())
 }
 
 fn validate_tool_descriptor(
     bundle_id: &str,
     path: &str,
     descriptor: &SourceToolDescriptor,
+    manifest_overrides: Option<&str>,
+    resource_overrides: Option<&str>,
 ) -> Result<(), BundleError> {
     let invalid = |detail: String| BundleError::InvalidManifest {
         source_name: bundle_id.to_string(),
@@ -509,8 +561,34 @@ fn validate_tool_descriptor(
     };
     if let Some(version) = descriptor.schema_version
         && version != 1
+        && version != 2
     {
         return Err(invalid(format!("unsupported schema_version `{version}`")));
+    }
+    if let Some(target) = descriptor.overrides.as_deref() {
+        validate_override_target(bundle_id, target)?;
+    }
+    let has_override =
+        descriptor.overrides.is_some() || resource_overrides.is_some() || manifest_overrides.is_some();
+    if has_override {
+        if RESERVED_OVERRIDE_TOOLS.contains(&descriptor.name.as_str()) {
+            return Err(BundleError::ReservedToolOverride {
+                bundle_id: bundle_id.to_string(),
+                tool: descriptor.name.clone(),
+            });
+        }
+        for alias in &descriptor.aliases {
+            let alias_name = match alias {
+                SourceToolDescriptorAlias::Name(name) => name.as_str(),
+                SourceToolDescriptorAlias::Detailed { name, .. } => name.as_str(),
+            };
+            if RESERVED_OVERRIDE_TOOLS.contains(&alias_name) {
+                return Err(BundleError::ReservedToolOverride {
+                    bundle_id: bundle_id.to_string(),
+                    tool: alias_name.to_string(),
+                });
+            }
+        }
     }
     if descriptor.name.trim().is_empty() {
         return Err(invalid("`name` must not be empty".to_string()));
@@ -1156,6 +1234,18 @@ fn prepare_resources(
                 detail: format!("resource `{path}` is not UTF-8: {error}"),
             })?
             .to_string();
+        if kind != "tool"
+            && let Some(target) = resource.overrides
+        {
+            return Err(BundleError::InvalidOverride {
+                bundle_id: bundle_id.to_string(),
+                target,
+                detail: format!(
+                    "`overrides` is only supported on tool resources or the bundle manifest (found on `{kind}` `{}`)",
+                    resource.id
+                ),
+            });
+        }
         let local_id = resource.id;
         prepared.push(PreparedResource {
             stable_id: format!("bundle:{bundle_id}/{kind}/{local_id}"),
@@ -1165,6 +1255,7 @@ fn prepare_resources(
             content,
             binary_base64: None,
             aliases: resource.aliases,
+            overrides: resource.overrides,
         });
     }
     prepared.sort_by(|left, right| left.local_id.cmp(&right.local_id));
@@ -1187,6 +1278,16 @@ fn prepare_binary_resources(
                 name: resource.id,
             });
         }
+        if let Some(target) = resource.overrides {
+            return Err(BundleError::InvalidOverride {
+                bundle_id: bundle_id.to_string(),
+                target,
+                detail: format!(
+                    "`overrides` is not supported on binary `{kind}` resource `{}`",
+                    resource.id
+                ),
+            });
+        }
         let path = normalize_source_path(bundle_id, &resource.path)?;
         let bytes = files
             .get(&path)
@@ -1202,6 +1303,7 @@ fn prepare_binary_resources(
             content: String::new(),
             binary_base64: Some(base64::engine::general_purpose::STANDARD.encode(bytes)),
             aliases: Vec::new(),
+            overrides: None,
         });
     }
     prepared.sort_by(|left, right| left.local_id.cmp(&right.local_id));

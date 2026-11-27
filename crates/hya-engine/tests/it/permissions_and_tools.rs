@@ -179,7 +179,7 @@ fn approver_runtime(seen: Arc<Mutex<Vec<PermissionApproveInput>>>) -> Arc<Runtim
         "approver",
         vec![SourceFile::new(
             "bundle.yaml",
-            "kind: Bundle\nidentity: { id: acme/approver, version: 1.0.0, publisher: acme }\n",
+            "schema_version: 2\nkind: Bundle\nidentity: { id: acme/approver, version: 1.0.0, publisher: acme }\n",
         )],
     ))
     .unwrap();
@@ -755,6 +755,7 @@ fn nested_catalog() -> Arc<AgentCatalog> {
         commands: Vec::new(),
         runtime: None,
         permission_modes: vec![],
+        overrides: None,
     };
     let bundles = BundleCatalog::from_prepared(&[bundle]).unwrap();
     Arc::new(AgentCatalog::new(Arc::new(bundles)).unwrap())

@@ -116,6 +116,7 @@ fn make_bundle(bundle_id: &str, agent: PreparedAgent, skills: Vec<PreparedResour
         commands: Vec::new(),
         runtime: None,
         permission_modes: vec![],
+        overrides: None,
     }
 }
 
@@ -128,6 +129,7 @@ fn bundle_skill(bundle_id: &str, local_id: &str, desc: &str, body: &str) -> Prep
         content: format!("---\nname: {local_id}\ndescription: {desc}\n---\n{body}\n"),
         binary_base64: None,
         aliases: Vec::new(),
+        overrides: None,
     }
 }
 
@@ -655,7 +657,7 @@ async fn agent_catalog_bundle_resolution_shadowing_and_spawn_authorization() {
         "set-runtime",
         vec![SourceFile::new(
             "bundle.yaml",
-            "kind: Bundle\nidentity: { id: acme/team, version: 1.0.0, publisher: acme }\nagents:\n  - { id: team-lead, role: main, can_spawn: [team-worker] }\n  - { id: team-worker, role: subagent }\n",
+            "schema_version: 2\nkind: Bundle\nidentity: { id: acme/team, version: 1.0.0, publisher: acme }\nagents:\n  - { id: team-lead, role: main, can_spawn: [team-worker] }\n  - { id: team-worker, role: subagent }\n",
         )],
     ))
     .unwrap();
@@ -3004,17 +3006,17 @@ fn runtime_registry_plugin_hook_order_and_schema_claims() {
     };
     let pb_pkg = pkg(
         "plugin-b",
-        "kind: Bundle\nidentity: { id: acme/plugin-b, version: 1.0.0, publisher: acme }\n",
+        "schema_version: 2\nkind: Bundle\nidentity: { id: acme/plugin-b, version: 1.0.0, publisher: acme }\n",
         None,
     );
     let pa_pkg = pkg(
         "plugin-a",
-        "kind: Bundle\nidentity: { id: acme/plugin-a, version: 1.0.0, publisher: acme }\n",
+        "schema_version: 2\nkind: Bundle\nidentity: { id: acme/plugin-a, version: 1.0.0, publisher: acme }\n",
         None,
     );
     let ow_pkg = pkg(
         "owner",
-        "kind: Bundle\nidentity: { id: acme/owner, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [fixture] }\nresources:\n  hooks: [{ id: chat.params, path: hook.json }]\nagents:\n  - { id: hooked-agent, role: main, hook_refs: [chat.params] }\n  - { id: plain-agent, role: main }\n",
+        "schema_version: 2\nkind: Bundle\nidentity: { id: acme/owner, version: 1.0.0, publisher: acme }\nruntime: { kind: js, mode: process, command: [fixture] }\nresources:\n  hooks: [{ id: chat.params, path: hook.json }]\nagents:\n  - { id: hooked-agent, role: main, hook_refs: [chat.params] }\n  - { id: plain-agent, role: main }\n",
         Some(("hook.json", "{}")),
     );
     let hreg = local_runtime(
@@ -3821,7 +3823,7 @@ async fn round_rebind_initial_context_member_isolation_and_hooks() {
         "hook",
         vec![SourceFile::new(
             "bundle.yaml",
-            "kind: Bundle\nidentity: { id: acme/hot-hook, version: 1.0.0, publisher: acme }\n",
+            "schema_version: 2\nkind: Bundle\nidentity: { id: acme/hot-hook, version: 1.0.0, publisher: acme }\n",
         )],
     ))
     .unwrap();

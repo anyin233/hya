@@ -125,6 +125,7 @@ pub fn agent_catalog_with_tui(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
             content: "export default 42;\n".to_string(),
             binary_base64: None,
             aliases: Vec::new(),
+            overrides: None,
         },
         PreparedResource {
             local_id: "module".to_string(),
@@ -134,6 +135,7 @@ pub fn agent_catalog_with_tui(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
             content: "export const answer = 42;\n".to_string(),
             binary_base64: None,
             aliases: Vec::new(),
+            overrides: None,
         },
         PreparedResource {
             local_id: "native".to_string(),
@@ -143,6 +145,7 @@ pub fn agent_catalog_with_tui(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
             content: String::new(),
             binary_base64: Some("AA==".to_string()),
             aliases: Vec::new(),
+            overrides: None,
         },
     ];
     {
@@ -206,6 +209,7 @@ fn prepared_bundles(agents: &[AgentFixture]) -> Vec<Bundle> {
                         ),
                         binary_base64: None,
                         aliases: Vec::new(),
+                        overrides: None,
                     }]
                 })
                 .unwrap_or_default(),
@@ -244,6 +248,7 @@ fn prepared_bundles(agents: &[AgentFixture]) -> Vec<Bundle> {
             commands: Vec::new(),
             runtime: None,
             permission_modes: vec![],
+            overrides: None,
         })
         .collect()
 }

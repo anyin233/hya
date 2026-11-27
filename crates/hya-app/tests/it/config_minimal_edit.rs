@@ -13,6 +13,7 @@ use serde_norway::Value;
 
 const FIXTURE: &str = "\
 # hya config: hand-written
+schema_version: 2
 default_model: gw/plain   # the everyday model
 
 # Providers I use
@@ -122,7 +123,7 @@ fn provider_upserts_preserve_comments_and_create_missing_sections() {
     );
     assert_eq!(
         edited(
-            "# my codex\nproviders:\n  codex:   # oauth\n    kind: openai-codex\n    base_url: https://old.example/codex # stale\n\n# tail comment\n",
+            "# my codex\nschema_version: 2\nproviders:\n  codex:   # oauth\n    kind: openai-codex\n    base_url: https://old.example/codex # stale\n\n# tail comment\n",
             |p| upsert_oauth_provider(
                 p,
                 "codex",
@@ -131,16 +132,16 @@ fn provider_upserts_preserve_comments_and_create_missing_sections() {
             )
             .unwrap(),
         ),
-        "# my codex\nproviders:\n  codex:   # oauth\n    kind: openai-codex\n    base_url: https://chatgpt.com/backend-api/codex # stale\n    models: []\n\n# tail comment\n"
+        "# my codex\nschema_version: 2\nproviders:\n  codex:   # oauth\n    kind: openai-codex\n    base_url: https://chatgpt.com/backend-api/codex # stale\n    models: []\n\n# tail comment\n"
     );
     for (input, expected) in [
         (
-            "# only this\ndefault_model: hya/offline\n",
-            "# only this\ndefault_model: hya/offline\nproviders:\n  fresh:\n    kind: openai\n    base_url: https://x.example/v1\n    models: []\n",
+            "# only this\nschema_version: 2\ndefault_model: hya/offline\n",
+            "# only this\nschema_version: 2\ndefault_model: hya/offline\nproviders:\n  fresh:\n    kind: openai\n    base_url: https://x.example/v1\n    models: []\n",
         ),
         (
-            "default_model: hya/offline\nproviders: {}   # none yet\nmcp: {}\n",
-            "default_model: hya/offline\nproviders:   # none yet\n  fresh:\n    kind: openai\n    base_url: https://x.example/v1\n    models: []\nmcp: {}\n",
+            "schema_version: 2\ndefault_model: hya/offline\nproviders: {}   # none yet\nmcp: {}\n",
+            "schema_version: 2\ndefault_model: hya/offline\nproviders:   # none yet\n  fresh:\n    kind: openai\n    base_url: https://x.example/v1\n    models: []\nmcp: {}\n",
         ),
     ] {
         assert_eq!(
@@ -156,7 +157,7 @@ fn provider_upserts_preserve_comments_and_create_missing_sections() {
     upsert_provider_entry(&nested, "fresh", "openai", "https://x.example/v1").unwrap();
     assert_eq!(
         std::fs::read_to_string(&nested).unwrap(),
-        "default_model: hya/offline\nproviders:\n  fresh:\n    kind: openai\n    base_url: https://x.example/v1\n    models: []\nmcp: {}\nplugins: {}\npermission:\n  model: default\n  rules: []\n"
+        "schema_version: 2\ndefault_model: hya/offline\nproviders:\n  fresh:\n    kind: openai\n    base_url: https://x.example/v1\n    models: []\nmcp: {}\nplugins: {}\nbundles:\n  builtin:\n    profile: full\n    enable: []\n    disable: []\npermission:\n  model: default\n  rules: []\n"
     );
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -241,31 +242,31 @@ fn model_entry_edits_and_removals_patch_in_place() {
     // Map with only id collapses back to string; removing sole model leaves `models: []`.
     assert_eq!(
         edited(
-            "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      # solo\n      - id: solo   # mine\n        name: Solo\n      - other\n",
+            "schema_version: 2\nproviders:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      # solo\n      - id: solo   # mine\n        name: Solo\n      - other\n",
             set("gw", "solo", name("")),
         ),
-        "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      # solo\n      - solo   # mine\n      - other\n"
+        "schema_version: 2\nproviders:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      # solo\n      - solo   # mine\n      - other\n"
     );
     assert_eq!(
         edited(
-            "providers:\n  gw:   # main\n    kind: openai\n    base_url: https://gw.example/v1\n    models:  # all\n      - only\n# end\n",
+            "schema_version: 2\nproviders:\n  gw:   # main\n    kind: openai\n    base_url: https://gw.example/v1\n    models:  # all\n      - only\n# end\n",
             |p| assert!(remove_model_entry(p, "gw", "only").unwrap()),
         ),
-        "providers:\n  gw:   # main\n    kind: openai\n    base_url: https://gw.example/v1\n    models: []  # all\n# end\n"
+        "schema_version: 2\nproviders:\n  gw:   # main\n    kind: openai\n    base_url: https://gw.example/v1\n    models: []  # all\n# end\n"
     );
 }
 
 #[test]
 fn formatting_styles_fallbacks_rejections_and_permissions() {
     // Compact sequence style preserved.
-    let compact = "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n    - plain\n    - id: m\n      name: M\ndefault_model: gw/m\n";
+    let compact = "schema_version: 2\nproviders:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n    - plain\n    - id: m\n      name: M\ndefault_model: gw/m\n";
     assert_eq!(
         edited(compact, set("gw", "plain", name("Plain"))),
-        "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n    - id: plain\n      name: Plain\n    - id: m\n      name: M\ndefault_model: gw/m\n"
+        "schema_version: 2\nproviders:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n    - id: plain\n      name: Plain\n    - id: m\n      name: M\ndefault_model: gw/m\n"
     );
     assert_eq!(
         edited(compact, set("gw", "new", ModelEntryOverride::default())),
-        "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n    - plain\n    - id: m\n      name: M\n    - new\ndefault_model: gw/m\n"
+        "schema_version: 2\nproviders:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n    - plain\n    - id: m\n      name: M\n    - new\ndefault_model: gw/m\n"
     );
 
     // CRLF preserved.
@@ -282,15 +283,15 @@ fn formatting_styles_fallbacks_rejections_and_permissions() {
     // Flow-style provider rewritten locally in block style.
     assert_eq!(
         edited(
-            "# keep me\nproviders:\n  gw: {kind: openai, base_url: https://gw.example/v1, models: [a]}  # flow\n  other:\n    kind: google   # g\n    base_url: https://g.example\n    models: []\n",
+            "# keep me\nschema_version: 2\nproviders:\n  gw: {kind: openai, base_url: https://gw.example/v1, models: [a]}  # flow\n  other:\n    kind: google   # g\n    base_url: https://g.example\n    models: []\n",
             set("gw", "b", ModelEntryOverride::default()),
         ),
-        "# keep me\nproviders:\n  gw:  # flow\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      - a\n      - b\n  other:\n    kind: google   # g\n    base_url: https://g.example\n    models: []\n"
+        "# keep me\nschema_version: 2\nproviders:\n  gw:  # flow\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      - a\n      - b\n  other:\n    kind: google   # g\n    base_url: https://g.example\n    models: []\n"
     );
 
     // Anchors fall back to full semantic rewrite.
     let anchored = edited(
-        "# lost on fallback\ndefault_model: &dm gw/m\nlast_model: *dm\nproviders:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models: [m]\n",
+        "# lost on fallback\nschema_version: 2\ndefault_model: &dm gw/m\nlast_model: *dm\nproviders:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models: [m]\n",
         set("gw", "n", ModelEntryOverride::default()),
     );
     assert!(!anchored.contains('#'));

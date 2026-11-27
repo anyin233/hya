@@ -707,7 +707,7 @@ for line in sys.stdin:
         let prepared = prepare_package(BundleSource::new(
             "mcp-env",
             vec![
-                SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: acme/mcp-env, version: 1.0.0, publisher: acme }\nresources:\n  mcp: [{ id: probe, path: mcp/probe.json }]\nextensions:\n  files: [{ id: server, path: server.py }]\n"),
+                SourceFile::new("bundle.yaml", "kind: Bundle\nschema_version: 2\nidentity: { id: acme/mcp-env, version: 1.0.0, publisher: acme }\nresources:\n  mcp: [{ id: probe, path: mcp/probe.json }]\nassets:\n  - { id: server, path: server.py }\n"),
                 SourceFile::new("mcp/probe.json", declaration),
                 SourceFile::new("server.py", script),
             ],
@@ -751,7 +751,7 @@ for line in sys.stdin:
         let spawning = prepare_package(BundleSource::new(
             "spawning",
             vec![
-                SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: acme/spawning, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\n  files: [{ id: runtime, path: runtime.py }]\n"),
+                SourceFile::new("bundle.yaml", "kind: Bundle\nschema_version: 2\nidentity: { id: acme/spawning, version: 1.0.0, publisher: acme }\nruntime: { kind: js, mode: process, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\nassets: [{ id: runtime, path: runtime.py }]\n"),
                 SourceFile::new("runtime.py", "pass\n"),
             ],
         ))
@@ -759,7 +759,7 @@ for line in sys.stdin:
         let skills_only = prepare_package(BundleSource::new(
             "skills-only",
             vec![
-                SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: acme/skills-only, version: 1.0.0, publisher: acme }\nresources:\n  skills: [{ id: guide, path: skills/guide/SKILL.md }]\n"),
+                SourceFile::new("bundle.yaml", "kind: Bundle\nschema_version: 2\nidentity: { id: acme/skills-only, version: 1.0.0, publisher: acme }\nresources:\n  skills: [{ id: guide, path: skills/guide/SKILL.md }]\n"),
                 SourceFile::new("skills/guide/SKILL.md", "---\nname: guide\ndescription: guide\n---\nbody\n"),
             ],
         ))
@@ -816,7 +816,7 @@ for line in sys.stdin:
             let native = prepare_package(BundleSource::new(
                 "native-executable",
                 vec![
-                    SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: acme/native-run, version: 1.0.0, publisher: acme }\nextensions:\n  files: [{ id: a-shared-source, path: bin/provider }]\n  rust: [{ id: provider, path: bin/provider }]\n  process: { kind: rust, command: ['${BUNDLE_ROOT}/bin/provider'] }\n"),
+                    SourceFile::new("bundle.yaml", "kind: Bundle\nschema_version: 2\nidentity: { id: acme/native-run, version: 1.0.0, publisher: acme }\nruntime: { kind: native, abi_version: 1, library: bin/provider }\nassets: [{ id: a-shared-source, path: bin/provider }]\n"),
                     SourceFile::new("bin/provider", b"#!/bin/sh\nprintf native-ok\n"),
                 ],
             ))
@@ -842,7 +842,7 @@ for line in sys.stdin:
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    format!("kind: Bundle\nidentity: {{ id: acme/apis, version: 1.0.0, publisher: acme }}\nextensions:\n  process: {{ kind: bun, command: [python3, '${{BUNDLE_ROOT}}/runtime.py'] }}\n  files: [{{ id: runtime, path: runtime.py }}, {{ id: usage-schema, path: usage.json }}]\n{manifest_apis}"),
+                    format!("kind: Bundle\nschema_version: 2\nidentity: {{ id: acme/apis, version: 1.0.0, publisher: acme }}\nruntime: {{ kind: js, mode: process, command: [python3, '${{BUNDLE_ROOT}}/runtime.py'] }}\nassets: [{{ id: runtime, path: runtime.py }}, {{ id: usage-schema, path: usage.json }}]\n{manifest_apis}"),
                 ),
                 SourceFile::new("runtime.py", script),
                 SourceFile::new("usage.json", r#"{"type":"object"}"#),
@@ -913,7 +913,7 @@ for line in sys.stdin:
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    "kind: Bundle\nidentity: { id: acme/approver, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: bun, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\n  files: [{ id: runtime, path: runtime.py }]\nresources:\n  hooks: [{ id: permission.approve, path: hooks/approve.json }]\npermission_modes:\n  - { id: careful, title: Careful, description: Approves reads }\n",
+                    "kind: Bundle\nschema_version: 2\nidentity: { id: acme/approver, version: 1.0.0, publisher: acme }\nruntime: { kind: js, mode: process, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\nassets: [{ id: runtime, path: runtime.py }]\nresources:\n  hooks: [{ id: permission.approve, path: hooks/approve.json }]\npermission_modes:\n  - { id: careful, title: Careful, description: Approves reads }\n",
                 ),
                 SourceFile::new("runtime.py", script),
                 SourceFile::new("hooks/approve.json", "{}"),

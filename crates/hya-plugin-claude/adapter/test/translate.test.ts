@@ -71,8 +71,10 @@ describe("translatePlugin", () => {
     expect(manifest).toContain(`prompt: "prompts/reviewer.md"`)
     expect(manifest).toContain('model: "anthropic/claude-sonnet"')
     expect(manifest).toContain('"harness:tool/read"')
-    expect(manifest).toContain("process:")
-    expect(manifest).toContain("kind: claude")
+    expect(manifest).toContain("schema_version: 2")
+    expect(manifest).toContain("runtime:")
+    expect(manifest).toContain("kind: js")
+    expect(manifest).toContain("mode: claude")
   })
 
   test("emits an agentless Plugin when agents/ is absent", async () => {

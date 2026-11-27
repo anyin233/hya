@@ -309,6 +309,7 @@ fn catalog_with_agents(stable_ids: &[&str]) -> Arc<AgentCatalog> {
                 publisher: "hya-tests".to_string(),
             },
             namespace: None,
+            overrides: None,
             digest: format!("test-only-{stable_id}"),
             agents: vec![PreparedAgent {
                 private: false,
@@ -375,6 +376,7 @@ fn catalog_with_worker_policy(model_policy: ModelPolicy) -> Arc<AgentCatalog> {
             publisher: "hya-tests".to_string(),
         },
         namespace: None,
+        overrides: None,
         digest: "test-only-worker".to_string(),
         agents: vec![agent],
         tools: Vec::new(),
@@ -482,6 +484,7 @@ fn materialized_resource(
         content: format!("{marker} {source_path}\n"),
         binary_base64: None,
         aliases: Vec::new(),
+        overrides: None,
     }
 }
 
@@ -498,6 +501,7 @@ fn materialized_bundle(marker: &str) -> Bundle {
             publisher: "hya-tests".to_string(),
         },
         namespace: None,
+        overrides: None,
         digest: format!("{marker}-bundle-digest"),
         agents: vec![PreparedAgent {
             private: false,
@@ -573,6 +577,7 @@ fn disjoint_materialized_bundle(marker: &str) -> Bundle {
             publisher: "hya-tests".to_string(),
         },
         namespace: None,
+        overrides: None,
         digest: format!("{marker}-disjoint-bundle-digest"),
         agents: vec![PreparedAgent {
             private: false,
@@ -1358,7 +1363,7 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
     std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
     std::fs::write(
         &config_path,
-        "reasoning: high\npermission:\n  model: allow\n",
+        "schema_version: 2\nreasoning: high\npermission:\n  model: allow\n",
     )
     .unwrap();
     let rt = resolve_runtime(None).await;
@@ -1371,7 +1376,7 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
             .model(),
         PermissionModel::Danger
     );
-    std::fs::write(&config_path, "reasoning: low\n").unwrap();
+    std::fs::write(&config_path, "schema_version: 2\nreasoning: low\n").unwrap();
     let agent = agent_base_with_model(&rt.model, None);
     let mut built = build_session_engine(
         SessionStore::connect_memory().await.unwrap(),
@@ -1396,7 +1401,7 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
 
     std::fs::write(
         &config_path,
-        "permission:\n  rules:\n    - target: tool\n      selector: '('\n      permission: allow\n",
+        "schema_version: 2\npermission:\n  rules:\n    - target: tool\n      selector: '('\n      permission: allow\n",
     )
     .unwrap();
     assert_eq!(
@@ -1404,10 +1409,18 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
         PermissionModel::Strict
     );
 
-    // 3. Websearch + webfetch independent exposure.
-    std::fs::write(
+    // 3. Websearch + webfetch independent exposure via per-bundle config.
+    std::fs::write(&config_path, "schema_version: 2\n").unwrap();
+    let net_loc = crate::bundle_config::bundle_config_location(
         &config_path,
-        "tools:\n  websearch:\n    provider: parallel\n    endpoint: https://search.example.test/mcp\n    key: secret\n    enabled: false\n  webfetch:\n    enabled: false\n",
+        "hya/network-tools",
+        crate::bundle_config::BundleConfigScope::User,
+    )
+    .unwrap();
+    std::fs::create_dir_all(net_loc.dir()).unwrap();
+    std::fs::write(
+        net_loc.file(),
+        "websearch:\n  provider: parallel\n  endpoint: https://search.example.test/mcp\n  key: secret\n  enabled: false\nwebfetch:\n  enabled: false\n",
     )
     .unwrap();
     let ws_rt = resolve_runtime_strict(None).await.unwrap();
@@ -1445,7 +1458,7 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
     // 4. Selected model reasoning default stays in catalog, not baked into root Agent.
     std::fs::write(
         &config_path,
-        "default_model: gateway/gpt-5.6-sol\nproviders:\n  gateway:\n    kind: openai-response\n    base_url: https://example.test/v1\n    api_key: test\n    models:\n      - id: gpt-5.6-sol\n        reasoning:\n          default: medium\n          variants: [low, medium]\n",
+        "schema_version: 2\ndefault_model: gateway/gpt-5.6-sol\nproviders:\n  gateway:\n    kind: openai-response\n    base_url: https://example.test/v1\n    api_key: test\n    models:\n      - id: gpt-5.6-sol\n        reasoning:\n          default: medium\n          variants: [low, medium]\n",
     )
     .unwrap();
     let reasoning_rt = resolve_runtime(None).await;
@@ -1556,7 +1569,7 @@ async fn built_engine_lazily_refreshes_installed_catalog_at_root_binding() {
         "runtime-installed",
         vec![SourceFile::new(
             "bundle.hya.md",
-            b"---\nkind: Bundle\nidentity:\n  id: hya/runtime-installed-test\n  version: 1.0.0\n  publisher: hya\nagents:\n  - id: runtime-installed-agent\n    role: main\n---\nYou are the runtime-installed agent.\n",
+            b"---\nkind: Bundle\nschema_version: 2\nidentity:\n  id: hya/runtime-installed-test\n  version: 1.0.0\n  publisher: hya\nagents:\n  - id: runtime-installed-agent\n    role: main\n---\nYou are the runtime-installed agent.\n",
         )],
     ))
     .unwrap();
@@ -2591,6 +2604,7 @@ fn sidecar_materialization_scoping_and_validation_invariants() {
             content,
             binary_base64: None,
             aliases: Vec::new(),
+            overrides: None,
         }
     };
     let selected = make_skill("selected");
@@ -2997,14 +3011,14 @@ async fn one_bundle_process_enforces_disjoint_views_in_engine_turns() {
 async fn disjoint_engine_turns(process: bool) {
     let root = tempdir();
     let staging = tempdir();
-    let extensions = if process {
-        "  files: [{ id: main, path: main.py }]\n  process: {kind: rust, command: [python3, '${BUNDLE_ROOT}/main.py']}"
+    let runtime_block = if process {
+        "runtime: { kind: js, mode: process, command: [python3, '${BUNDLE_ROOT}/main.py'] }\nassets: [{ id: main, path: main.py }]"
     } else {
-        "  js: [{ id: main, path: main.js }]"
+        "runtime: { kind: js, mode: managed, entry: main.js }"
     };
     let tool_path = if process { "tool.json" } else { "main.js" };
     let manifest = format!(
-        "kind: Bundle\nidentity: {{id: test/disjoint-turns, version: 1.0.0, publisher: test}}\nagents:\n  - {{id: alpha, role: main, resource_view: {{allow: [alpha]}}}}\n  - {{id: beta, role: main, resource_view: {{allow: [beta]}}}}\nresources:\n  tools:\n    - {{id: alpha, path: {tool_path}}}\n    - {{id: beta, path: {tool_path}}}\nextensions:\n{extensions}\n"
+        "kind: Bundle\nschema_version: 2\nidentity: {{id: test/disjoint-turns, version: 1.0.0, publisher: test}}\n{runtime_block}\nagents:\n  - {{id: alpha, role: main, resource_view: {{allow: [alpha]}}}}\n  - {{id: beta, role: main, resource_view: {{allow: [beta]}}}}\nresources:\n  tools:\n    - {{id: alpha, path: {tool_path}}}\n    - {{id: beta, path: {tool_path}}}\n"
     );
     let prepared = prepare_package(BundleSource::new(
         "disjoint-turns",
@@ -3522,7 +3536,7 @@ async fn startup_recovery_rebuilds_executable_resident_sidecar_before_queued_mai
         vec![
             SourceFile::new(
                 "bundle.hya.md",
-                b"---\nkind: Bundle\nidentity:\n  id: hya/runtime-installed-resident\n  version: 1.0.0\n  publisher: hya\nresources:\n  tools:\n    - id: echo\n      path: extensions/runtime.js\nextensions:\n  js:\n    - id: runtime\n      path: extensions/runtime.js\nagents:\n  - id: runtime-installed-resident-agent\n    role: subagent\n    resource_view:\n      allow:\n        - bundle:hya/runtime-installed-resident/tool/echo\n---\nYou are the installed resident agent.\n",
+                b"---\nkind: Bundle\nschema_version: 2\nidentity:\n  id: hya/runtime-installed-resident\n  version: 1.0.0\n  publisher: hya\nruntime:\n  kind: js\n  mode: managed\n  entry: extensions/runtime.js\nresources:\n  tools:\n    - id: echo\n      path: extensions/runtime.js\nagents:\n  - id: runtime-installed-resident-agent\n    role: subagent\n    resource_view:\n      allow:\n        - bundle:hya/runtime-installed-resident/tool/echo\n---\nYou are the installed resident agent.\n",
             ),
             SourceFile::new(
                 "extensions/runtime.js",

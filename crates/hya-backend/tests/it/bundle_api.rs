@@ -95,7 +95,7 @@ async fn bundles_api_lifecycle_and_project_root_inventory_refresh() -> TestResul
         vec![
             hya_bundle::SourceFile::new(
                 "bundle.yaml",
-                b"kind: Bundle\nidentity: { id: e2e/tui-panel, version: 1.0.0, publisher: e2e }\nextensions:\n  files: [{ id: panel, path: tui/main.ts }]\ntui: { api_version: 1, entry: tui/main.ts, sdk: 1.0.0, permissions: [tui.panel] }\n".to_vec(),
+                b"schema_version: 2\nkind: Bundle\nidentity: { id: e2e/tui-panel, version: 1.0.0, publisher: e2e }\nassets: [{ id: panel, path: tui/main.ts }]\ntui: { api_version: 1, entry: tui/main.ts, sdk: 1.0.0, permissions: [tui.panel] }\n".to_vec(),
             ),
             hya_bundle::SourceFile::new("tui/main.ts", b"export default {}\n".to_vec()),
         ],
@@ -212,7 +212,7 @@ async fn bundles_api_lifecycle_and_project_root_inventory_refresh() -> TestResul
         std::fs::write(
             b.join("bundle.yaml"),
             format!(
-                "kind: Bundle\nidentity: {{ id: inventory/{name}, version: 1.0.0, publisher: inventory }}\nnamespace: {ns}\nresources:\n  skills: [{{ id: inv-demo, path: skill.md }}]\n"
+                "schema_version: 2\nkind: Bundle\nidentity: {{ id: inventory/{name}, version: 1.0.0, publisher: inventory }}\nnamespace: {ns}\nresources:\n  skills: [{{ id: inv-demo, path: skill.md }}]\n"
             ),
         )?;
         std::fs::write(

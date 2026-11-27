@@ -338,6 +338,7 @@ fn sidecar_bundle() -> Bundle {
             content: "export default {}".into(),
             binary_base64: None,
             aliases: vec![],
+            overrides: None,
         }],
         skills: vec![],
         mcp: vec![],
@@ -352,6 +353,7 @@ fn sidecar_bundle() -> Bundle {
         commands: Vec::new(),
         runtime: None,
         permission_modes: vec![],
+        overrides: None,
     }
 }
 
@@ -1535,7 +1537,7 @@ async fn sidecar_hooks_mutate_tool_isolate_child_events_and_compose_with_plugin_
         "plugin",
         vec![SourceFile::new(
             "bundle.yaml",
-            "kind: Bundle\nidentity: { id: acme/router, version: 1.0.0, publisher: acme }\n",
+            "schema_version: 2\nkind: Bundle\nidentity: { id: acme/router, version: 1.0.0, publisher: acme }\n",
         )],
     ))
     .unwrap();
@@ -2583,7 +2585,7 @@ async fn resident_initial_task_survives_claim_takeover_and_parent_dm_policy() {
         "deny-dm-wakes",
         vec![SourceFile::new(
             "bundle.yaml",
-            "kind: Bundle\nidentity: { id: test/deny-dm-wakes, version: 1.0.0, publisher: test }\nchannels:\n  - { id: dm, kind: parent_dm, participants: [{kind: role, role: child}], capabilities: [], scope: vertical, retention: team_session }\n",
+            "schema_version: 2\nkind: Bundle\nidentity: { id: test/deny-dm-wakes, version: 1.0.0, publisher: test }\nchannels:\n  - { id: dm, kind: parent_dm, participants: [{kind: role, role: child}], capabilities: [], scope: vertical, retention: team_session }\n",
         )],
     ))
     .unwrap();
@@ -2967,7 +2969,7 @@ impl Provider for CoordScriptProvider {
 
 #[tokio::test]
 async fn narrow_bundle_member_gets_coordination_tools_reads_dm_and_reports() {
-    const BUNDLE: &str = "kind: Bundle\nidentity: { id: acme/coordination, version: 1.0.0, publisher: acme }\nagents:\n  - id: lead\n    role: main\n    can_spawn: [scout]\n    resource_view: { allow: [harness:tool/grep] }\n  - id: scout\n    role: subagent\n    resource_view: { allow: [harness:tool/grep, harness:tool/glob] }\n";
+    const BUNDLE: &str = "schema_version: 2\nkind: Bundle\nidentity: { id: acme/coordination, version: 1.0.0, publisher: acme }\nagents:\n  - id: lead\n    role: main\n    can_spawn: [scout]\n    resource_view: { allow: [harness:tool/grep] }\n  - id: scout\n    role: subagent\n    resource_view: { allow: [harness:tool/grep, harness:tool/glob] }\n";
     let prepared = prepare_package(BundleSource::new(
         "coordination",
         vec![SourceFile::new("bundle.yaml", BUNDLE)],

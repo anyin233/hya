@@ -422,7 +422,7 @@ async fn plugin_respawn_session_hooks_invalidation_and_eviction() {
     std::fs::create_dir_all(&bdir).unwrap();
     std::fs::write(
         bdir.join("bundle.hya.md"),
-        "---\nkind: Bundle\nidentity: { id: hya/tools, version: 1.0.0, publisher: hya }\nagents: [{ id: tools-agent, role: main }]\n---\nTools.\n",
+        "---\nkind: Bundle\nschema_version: 2\nidentity: { id: hya/tools, version: 1.0.0, publisher: hya }\nagents: [{ id: tools-agent, role: main }]\n---\nTools.\n",
     )
     .unwrap();
     assert_eq!(

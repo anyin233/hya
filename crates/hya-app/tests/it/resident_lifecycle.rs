@@ -247,7 +247,7 @@ async fn promptless_catalog_agent_keeps_host_base_after_revive() {
         "review-promptless",
         vec![hya_bundle::SourceFile::new(
             "bundle.yaml",
-            "kind: Bundle\nidentity: { id: test/review-promptless, version: 1.0.0, publisher: test }\nagents:\n  - id: review-worker\n    role: subagent\n",
+            "kind: Bundle\nschema_version: 2\nidentity: { id: test/review-promptless, version: 1.0.0, publisher: test }\nagents:\n  - id: review-worker\n    role: subagent\n",
         )],
     ))
     .unwrap();

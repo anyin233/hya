@@ -102,6 +102,7 @@ pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> 
             commands: Vec::new(),
             runtime: None,
             permission_modes: vec![],
+            overrides: None,
         })
         .collect::<Vec<_>>();
     let catalog = BundleCatalog::from_prepared(&bundles);

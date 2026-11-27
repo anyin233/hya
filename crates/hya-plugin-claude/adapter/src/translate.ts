@@ -375,6 +375,7 @@ function renderManifest(
   supportFiles: readonly { readonly path: string; readonly content: string }[],
 ): string {
   const lines: string[] = []
+  lines.push("schema_version: 2")
   lines.push("kind: Bundle")
   lines.push("identity:")
   lines.push(`  id: ${yamlString(`claude/${namespace}`)}`)
@@ -409,20 +410,20 @@ function renderManifest(
       lines.push(`      path: ${yamlString(hooksDescriptorPath)}`)
     }
   }
-  lines.push("extensions:")
-  lines.push("  files:")
-  lines.push(`    - id: ${yamlString("claude-runtime")}`)
-  lines.push(`      path: ${yamlString(runtimePath)}`)
+  lines.push("runtime:")
+  lines.push("  kind: js")
+  lines.push("  mode: claude")
+  lines.push(`  command: [${yamlString("--bundle-runtime")}, ${yamlString(runtimePath)}]`)
+  lines.push("assets:")
+  lines.push(`  - id: ${yamlString("claude-runtime")}`)
+  lines.push(`    path: ${yamlString(runtimePath)}`)
   const usedFileIds = new Set<string>(["claude-runtime"])
   for (const file of supportFiles) {
     const relative = file.path.replace(/^claude-plugin\//, "")
     const id = uniqueId(sanitizeToken(relative) || "source", usedFileIds)
-    lines.push(`    - id: ${yamlString(id)}`)
-    lines.push(`      path: ${yamlString(file.path)}`)
+    lines.push(`  - id: ${yamlString(id)}`)
+    lines.push(`    path: ${yamlString(file.path)}`)
   }
-  lines.push("  process:")
-  lines.push("    kind: claude")
-  lines.push(`    command: [${yamlString("--bundle-runtime")}, ${yamlString(runtimePath)}]`)
   if (agents.length > 0) {
     lines.push("agents:")
     for (const agent of agents) {

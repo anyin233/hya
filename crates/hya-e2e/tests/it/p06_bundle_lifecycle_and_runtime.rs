@@ -142,7 +142,8 @@ async fn bundle_cli_agent_plugin_schemas_and_claude() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Bundle
+                br#"schema_version: 2
+kind: Bundle
 identity: { id: acme/plugin-e2e, version: 1.0.0, publisher: acme }
 resources:
   skills:
@@ -194,17 +195,17 @@ resources:
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Bundle
+                br#"schema_version: 2
+kind: Bundle
 identity: { id: hya/schema-demo, version: 1.0.0, publisher: hya }
 schemas: [{ scheme: db, tool: query, writable: false }]
 resources:
   tools: [{ id: query, path: tool.json }]
   mcp: [{ id: vecdb, path: mcp.json }]
-extensions:
-  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
-  files:
-    - { id: runtime, path: runtime.py }
-    - { id: mcp-runtime, path: mcp.py }
+runtime: { kind: js, mode: process, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
+assets:
+  - { id: runtime, path: runtime.py }
+  - { id: mcp-runtime, path: mcp.py }
 agents:
   - id: schema-lead
     role: main
@@ -251,7 +252,7 @@ for line in sys.stdin:
     .into_owned();
     for expected in [
         "schema=db tool=query writable=false",
-        "process=rust command=python3 ${BUNDLE_ROOT}/runtime.py",
+        "process=bun command=python3 ${BUNDLE_ROOT}/runtime.py",
         "mcp=bundle:hya/schema-demo/mcp/vecdb",
     ] {
         assert!(info_schema.lines().any(|l| l == expected), "{info_schema}");
@@ -398,13 +399,13 @@ for line in sys.stdin:
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Bundle
+                br#"schema_version: 2
+kind: Bundle
 identity: { id: acme/process-fixture, version: 1.0.0, publisher: acme }
-extensions:
-  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
-  files:
-    - { id: runtime, path: runtime.py }
-    - { id: mcp-runtime, path: mcp.py }
+runtime: { kind: js, mode: process, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
+assets:
+  - { id: runtime, path: runtime.py }
+  - { id: mcp-runtime, path: mcp.py }
 resources:
   tools: [{ id: echo, path: tool.json }]
   mcp: [{ id: echo, path: mcp.json }]
@@ -467,13 +468,13 @@ resources:
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Bundle
+                br#"schema_version: 2
+kind: Bundle
 identity: { id: acme/private-process, version: 1.0.0, publisher: acme }
-extensions:
-  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
-  files:
-    - { id: runtime, path: runtime.py }
-    - { id: mcp-runtime, path: mcp.py }
+runtime: { kind: js, mode: process, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
+assets:
+  - { id: runtime, path: runtime.py }
+  - { id: mcp-runtime, path: mcp.py }
 resources:
   tools: [{ id: echo, path: declaration.json }]
   hooks: [{ id: tool.execute.before, path: declaration.json }]
@@ -541,12 +542,12 @@ for line in sys.stdin:
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Bundle
+                br#"schema_version: 2
+kind: Bundle
 identity: { id: acme/js-plugin, version: 1.0.0, publisher: acme }
 resources:
   tools: [{ id: echo, path: extensions/runtime.js }]
-extensions:
-  js: [{ id: runtime, path: extensions/runtime.js }]
+runtime: { kind: js, mode: managed, entry: extensions/runtime.js }
 "#,
             ),
             SourceFile::new(
@@ -577,11 +578,11 @@ extensions:
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Bundle
+                br#"schema_version: 2
+kind: Bundle
 identity: { id: acme/lineage, version: 1.0.0, publisher: acme }
-extensions:
-  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
-  files: [{ id: runtime, path: runtime.py }]
+runtime: { kind: js, mode: process, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
+assets: [{ id: runtime, path: runtime.py }]
 resources:
   hooks: [{ id: chat.params, path: hook.json }]
 "#,
@@ -609,7 +610,7 @@ for line in sys.stdin:
         "team",
         vec![SourceFile::new(
             "bundle.yaml",
-            b"kind: Bundle\nidentity: { id: acme/team, version: 1.0.0, publisher: acme }\nagents: [{ id: team-agent, role: main }]\n",
+            b"schema_version: 2\nkind: Bundle\nidentity: { id: acme/team, version: 1.0.0, publisher: acme }\nagents: [{ id: team-agent, role: main }]\n",
         )],
     );
     write_and_install(&env, tmp.path(), "lineage.hyabundle", &lineage_source);
@@ -642,11 +643,11 @@ for line in sys.stdin:
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Bundle
+                br#"schema_version: 2
+kind: Bundle
 identity: { id: acme/fallback, version: 1.0.0, publisher: acme }
-extensions:
-  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
-  files: [{ id: runtime, path: runtime.py }]
+runtime: { kind: js, mode: process, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
+assets: [{ id: runtime, path: runtime.py }]
 resources:
   hooks:
     - { id: chat.params, path: hook.json }
@@ -846,13 +847,13 @@ for line in sys.stdin:
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"kind: Bundle
+                br#"schema_version: 2
+kind: Bundle
 identity: { id: acme/usage-apis, version: 1.0.0, publisher: acme }
-extensions:
-  process: { kind: bun, command: [python3, '${BUNDLE_ROOT}/apis.py'] }
-  files:
-    - { id: runtime, path: apis.py }
-    - { id: item-schema, path: schemas/item.json }
+runtime: { kind: js, mode: process, command: [python3, '${BUNDLE_ROOT}/apis.py'] }
+assets:
+  - { id: runtime, path: apis.py }
+  - { id: item-schema, path: schemas/item.json }
 resources:
   tools: [{ id: usage_probe, path: tool.json }]
 apis:

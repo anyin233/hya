@@ -756,7 +756,7 @@ mod disabled_tests {
                 vec![hya_bundle::SourceFile::new(
                     "bundle.yaml",
                     format!(
-                        "kind: Bundle\nidentity: {{ id: {id}, version: {version}, publisher: test }}\nnamespace: shared\n"
+                        "kind: Bundle\nschema_version: 2\nidentity: {{ id: {id}, version: {version}, publisher: test }}\nnamespace: shared\n"
                     ),
                 )],
             ))?;

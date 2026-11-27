@@ -57,6 +57,7 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
             commands: Vec::new(),
             runtime: None,
             permission_modes: vec![],
+            overrides: None,
         })
         .collect::<Vec<_>>();
     let bundles = bundles.into_iter().collect::<Vec<_>>();

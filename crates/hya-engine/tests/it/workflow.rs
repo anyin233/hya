@@ -580,6 +580,7 @@ fn sidecar_probe_catalog() -> Arc<AgentCatalog> {
                     content: "// bound sidecar".into(),
                     binary_base64: None,
                     aliases: vec![],
+                    overrides: None,
                 }]
             } else {
                 vec![]
@@ -597,6 +598,7 @@ fn sidecar_probe_catalog() -> Arc<AgentCatalog> {
             commands: Vec::new(),
             runtime: None,
             permission_modes: vec![],
+            overrides: None,
         })
         .collect();
     let bc = hya_bundle::BundleCatalog::from_prepared(&bundles).unwrap();
@@ -1790,7 +1792,7 @@ async fn workflow_worker_and_verifier_deadline_notices_follow_offered_report_too
             hya_tool::deadline::install(Duration::from_secs(30));
             let workflow = compile_wf("deadline.hya.md", "---\nkind: Workflow\nname: deadline\ndescription: Offered report capability\nnodes:\n  loop:\n    agent: hya-task\n    directive: Work.\n    mode: loop\n    verify:\n      agent: hya-reviewer\n      until: Finished.\n      max_iterations: 2\n---\nflowchart TD\n  loop\n");
             let denied_catalog = {
-                let src = hya_bundle::BundleSource::new("denied-report", vec![hya_bundle::SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: acme/denied-report, version: 1.0.0, publisher: acme }\nchannels:\n  - { id: dm, kind: parent_dm, participants: [{kind: role, role: child}], capabilities: [send, steer, follow_up, resident_mail], scope: vertical, retention: team_session }\n")]);
+                let src = hya_bundle::BundleSource::new("denied-report", vec![hya_bundle::SourceFile::new("bundle.yaml", "schema_version: 2\nkind: Bundle\nidentity: { id: acme/denied-report, version: 1.0.0, publisher: acme }\nchannels:\n  - { id: dm, kind: parent_dm, participants: [{kind: role, role: child}], capabilities: [send, steer, follow_up, resident_mail], scope: vertical, retention: team_session }\n")]);
                 let bc = hya_bundle::BundleCatalog::from_prepared(hya_bundle::prepare_package(src).unwrap().bundles()).unwrap();
                 Arc::new(AgentCatalog::new(Arc::new(bc)).unwrap())
             };

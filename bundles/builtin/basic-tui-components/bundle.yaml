@@ -1,18 +1,18 @@
 kind: Bundle
+schema_version: 2
 version_ref: hya
 identity:
   id: hya/basic-tui-components
   version: 0.0.0
   publisher: hya
-extensions:
-  files:
-    - { id: main, path: tui/main.ts }
-    - { id: sessions, path: tui/sessions.ts }
-    - { id: todos, path: tui/todos.ts }
-    - { id: projects, path: tui/projects.ts }
-    - { id: project-view, path: tui/projectView.ts }
-    - { id: context, path: tui/context.ts }
-    - { id: text, path: tui/text.ts }
+assets:
+  - { id: main, path: tui/main.ts }
+  - { id: sessions, path: tui/sessions.ts }
+  - { id: todos, path: tui/todos.ts }
+  - { id: projects, path: tui/projects.ts }
+  - { id: project-view, path: tui/projectView.ts }
+  - { id: context, path: tui/context.ts }
+  - { id: text, path: tui/text.ts }
 tui:
   api_version: 1
   entry: tui/main.ts
