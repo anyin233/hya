@@ -1,0 +1,38 @@
+name: Task
+description: A fully specified piece of work (maintainers and agents).
+type: Task
+labels: ["needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A task needs everything triage checks before `ready-for-develop`: what to build, observable acceptance criteria, and its blockers. Triage adds the type label (`refactor`, `chore`, `perf`, …) and `priority: P0`–`P3`.
+  - type: input
+    id: parent
+    attributes:
+      label: Parent
+      description: Parent PRD or tracking issue, if any (`#<n>`).
+  - type: textarea
+    id: what-to-build
+    attributes:
+      label: What to build
+      description: The change and why it is needed. Cite the affected crate, package, or path.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Observable checks that mean this is done, including the tests that cover them.
+      value: |
+        - [ ] 
+    validations:
+      required: true
+  - type: input
+    id: blocked-by
+    attributes:
+      label: Blocked by
+      description: Issues that must close first (`#<n>, #<n>`), or `None`.
+      value: None
+    validations:
+      required: true

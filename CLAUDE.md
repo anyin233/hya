@@ -23,7 +23,7 @@ Issues are tracked in GitHub Issues for `chrono-foundry/hya`; external PRs are n
 
 ### Triage labels
 
-Triage uses the canonical label vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `.agents/agents/triage-labels.md`.
+Triage labels are `needs-triage`, `needs-info`, and `ready-for-develop` (for humans and agents alike); won't-fix issues are closed as not planned. See `.agents/agents/triage-labels.md`.
 
 ### Domain docs
 
