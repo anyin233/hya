@@ -1366,6 +1366,8 @@ mod tests {
             schemas: vec![],
             process: None,
             apis: vec![],
+            commands: Vec::new(),
+            runtime: None,
             permission_modes: vec![],
         };
         let registry = Arc::new(RuntimeRegistry::new(

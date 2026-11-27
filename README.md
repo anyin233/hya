@@ -48,7 +48,7 @@ and in [`docs/`](docs/README.md).
 
 ## Status
 
-`hya` is under active development (unified version `0.50.0`, minimum compatible
+`hya` is under active development (unified version `0.51.0`, minimum compatible
 backend `0.46.0` for remote/daemon connections).
 
 ## License

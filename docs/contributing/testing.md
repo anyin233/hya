@@ -97,7 +97,12 @@ HYA_BIN=target/debug/hya bun packages/hya-tui-web/src/main.ts --port 7681 -- \
 | --- | --- |
 | **`public/**` & `docs/**`** (GitHub Pages landing page + non-generated Starlight docs) | `docs` (`.github/scripts/check_web.py` fast-fail on `public/` JS/CSS/anchors + Astro tests, typecheck, assembled `dist-pages` build & link check) |
 | **Pure Bun/TUI frontend** (`packages/**` excluding manifests/generated contract) | `frontend`, `build-bin`, `tui` (skips Rust `lint`, `test`, `e2e`) |
-| **Pure Rust internals** (`crates/**`, `bundles/**`, etc.) | `lint`, `test`, `build-bin`, `e2e`, `tui` (keeps real backend ↔ TUI integration) |
+| **Pure Rust internals** (`crates/**`, `bundles/builtin/**`, etc.) | `lint`, `test`, `build-bin`, `e2e`, `tui` (keeps real backend ↔ TUI integration) |
+
+Bundle verification runs in two additional independent workflows (see **[`hyabundle` Specification](../extend/hyabundle-spec.md#8-independent-bundle-ci-architecture)** and **[ADR-0038](../adr/0038-hyabundle-standard-and-independent-ci.md)**):
+
+- **`.github/workflows/builtin-bundles.yml` (`builtin-bundles`):** Dedicated to `bundles/builtin/**` (static validation, per-crate native tests + `cdylib` ABI checks, JS/static matrix + JSON-RPC smoke, and bare-vs-full smoke).
+- **`.github/workflows/bundles.yml` (`bundles`):** Dedicated to `bundles/extra/**` and `bundles/examples/**` (backed by `scripts/bundle-ci/` with zero dependency on Hya's core Rust/E2E/TUI suites).
 | **Cross-boundary contracts & adapters** (`proto/hya/v1/**`, `hya-api`, `hya-proto`, `hya-server`, `hya-backend`, `hya-plugin*`, `versions.toml`, `packages/*/package.json`, `frontend-version.ts`, `operations.json`) | Full Rust + Frontend + `tui` (plus `docs` when `proto/hya/v1/**` or `docs/protocol/*` changes) |
 | **Repo meta-docs** (`README.md`, `AGENTS.md`, `.agents/**`) | `changes` → `ci-gate` only |
 

@@ -1,4 +1,4 @@
-// hya/basic-tui-components (bundles/first-party/basic-tui-components): the
+// hya/basic-tui-components (bundles/builtin/basic-tui-components): the
 // panes the TUI no longer builds in, run the way the TUI runs them — bundled
 // with the SDK and driven over the wire inside the QuickJS VM.
 import { beforeAll, expect, test } from "bun:test";
@@ -7,7 +7,7 @@ import { ExtensionVm, bundleExtension } from "../src/host";
 import type { CommandResult, ExtensionContext, HostCommand, KeyEvent, TuiMethod, TuiMethodMap } from "../src/protocol";
 import type { RenderNode } from "../src/render";
 
-const entry = join(import.meta.dir, "../../../bundles/first-party/basic-tui-components/tui/main.ts");
+const entry = join(import.meta.dir, "../../../bundles/builtin/basic-tui-components/tui/main.ts");
 let script = "";
 beforeAll(async () => { script = await bundleExtension(entry); });
 

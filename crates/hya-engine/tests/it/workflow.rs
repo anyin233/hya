@@ -592,6 +592,8 @@ fn sidecar_probe_catalog() -> Arc<AgentCatalog> {
             schemas: vec![],
             process: None,
             apis: vec![],
+            commands: Vec::new(),
+            runtime: None,
             permission_modes: vec![],
         })
         .collect();

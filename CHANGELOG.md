@@ -1,4 +1,6 @@
-# 0.50.0
+# 0.51.0
 
-- Editors can launch `hya acp` to stream conversations, display tool calls, answer permissions and cancel turns over Agent Client Protocol v1. Each editor session can attach its own stdio MCP servers, which stop when the editor sends `session/close`.
-- A turn that fails because the provider rejected its credentials (expired login, HTTP 401 or 403) now reports error code `provider_auth` instead of `provider_error`.
+- **Standardized `hyabundle` (`schema_version: 2`) format and descriptors.** Bundles can now declare `runtime: { kind: static | js | native }`, `assets:`, first-class `resources.commands`, Markdown frontmatter `agents/*.md`, and unified `tools/`, `hooks/`, and `mcp/` descriptors (`stdio`, `http`, and `sse`), while keeping `schema_version: 1` manifests readable.
+- **Unified `bundles/builtin/` layout.** All 13 built-in first-party bundles (previously split across `bundles/presets/`, `bundles/first-party/`, and `bundles/internal/`) now live under `bundles/builtin/`, separate from optional `bundles/extra/` and `bundles/examples/` bundles, while preserving zero-bundle `hya exec --bare` bootability (ADR-0038).
+- **Self-contained bundle CLI (`pack` & `verify`).** Added `hya bundle pack <source-dir> <output.hyabundle>` for deterministic archive packaging without `xtask`, and extended `hya bundle verify` to inspect both source directories and `.hyabundle` archives with `--strict` schema/descriptor/secret checks and `--protocol-smoke` JSON-RPC 2.0 handshake parity checks.
+- **Independent Bundle CI & portable verifier.** Added zero-dependency `scripts/bundle-ci/` verification tooling and dedicated `.github/workflows/builtin-bundles.yml` and `.github/workflows/bundles.yml` workflows so extra and example bundles validate independently of the core Rust/E2E/TUI workspace CI.

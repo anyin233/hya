@@ -66,6 +66,7 @@ export default defineConfig({
           { label: 'Skills & Slash Commands', slug: 'extend/skills-and-commands' },
           { label: 'Authoring Workflows & Evaluators', slug: 'extend/authoring-workflows' },
           { label: 'Creating Bundles (.hyabundle)', slug: 'extend/bundles' },
+          { label: 'hyabundle Specification', slug: 'extend/hyabundle-spec' },
           { label: 'Plugins, Tools & Hooks', slug: 'extend/plugins-and-hooks' },
           { label: 'TUI Extensions (@hya/tui-sdk)', slug: 'extend/tui-extensions' },
         ],

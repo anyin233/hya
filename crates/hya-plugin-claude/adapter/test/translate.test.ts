@@ -147,6 +147,29 @@ describe("translatePlugin", () => {
     })
     const translation = translatePlugin(dir)
     expect(translation.hookGroups["tool.execute.before"]).toHaveLength(1)
+    expect(translation.manifestYaml).toContain('path: "hooks/hooks.json"')
+    const hookDescriptor = translation.files.find((file) => file.path === "hooks/hooks.json")
+    expect(hookDescriptor).toBeDefined()
+    const parsed = JSON.parse(hookDescriptor?.content ?? "{}") as {
+      schema_version: number
+      hooks: {
+        event: string
+        matcher?: string
+        handler: { kind: string; method: string }
+        failure_mode?: string
+        timeout_ms?: number
+      }[]
+    }
+    expect(parsed.schema_version).toBe(1)
+    expect(parsed.hooks).toEqual([
+      {
+        event: "tool.execute.before",
+        matcher: "Read",
+        handler: { kind: "rpc", method: "hook/tool.execute.before" },
+        failure_mode: "fail_closed",
+        timeout_ms: 60000,
+      },
+    ])
   })
 })
 

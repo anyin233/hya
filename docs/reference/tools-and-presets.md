@@ -82,28 +82,31 @@ In full mode, Hya loads four native tool-family bundles alongside the kernel's `
 
 ---
 
-## 4. The 13 First-Party Bundles
+## 4. The 13 Built-in Bundles (`bundles/builtin/`)
 
-Every Hya installation ships with 13 trusted first-party bundles:
+Every Hya installation ships with 13 trusted first-party bundles sourced from `bundles/builtin/` and packaged under `<prefix>/bundles/hya-<name>.hyabundle` (skipped in `hya exec --bare`, which runs only the 6 kernel tools). See the **[`hyabundle` Specification](../extend/hyabundle-spec.md)** and **[ADR-0038](../adr/0038-hyabundle-standard-and-independent-ci.md)** for full paths, runtimes, and loading precedence.
 
-| Bundle ID | Role |
-| --- | --- |
-| `hya/base-tools`, `hya/extended-tools`, `hya/network-tools`, `hya/channel-tools` | The four native Rust tool families above. |
-| `hya/core-agents` | Built-in agent definitions (`hya-main`, `hya-plan`, `hya-task`, `hya-scout`, `hya-reviewer`, `hya-title`). |
-| `hya/core-skills` | Built-in fallback skills (`agent-bundle-authoring`, `secure-self-update`). |
-| `hya/core-commands` | Built-in slash command templates (`/init`, `/review`). |
-| `hya/agent-channels` | Default vertical parent/child and unit broadcast channel policy. |
-| `hya/goal-loop` | Goal evaluator and Loop verifier/planner prompts and private helper agents. |
-| `hya/plan-impl-review` | Built-in `plan-impl-review` Workflow DAG and stage agents. |
-| `hya/basic-tui-components` | Standard TUI panels (Projects view/sidebar, Sessions, Todos, Context). |
-| `hya/code-mode` | Optional `code-mode__run` JavaScript batch tool (`tools.code.mode`, off by default). |
-| `hya/compaction` | Internal native bundle running `shake` and `remote` context reduction before Kernel `Rewrite`. |
+| Bundle ID | Source path | Runtime | Role |
+| --- | --- | --- | --- |
+| `hya/base-tools` | `bundles/builtin/base-tools` | Native (`cdylib`) | Core file, search, shell, patch, and `ask_user` tools (10 tools). |
+| `hya/extended-tools` | `bundles/builtin/extended-tools` | Native (`cdylib`) | Code intelligence (`lsp`), skills, subagents, workflows, and project activity (9 tools). |
+| `hya/network-tools` | `bundles/builtin/network-tools` | Native (`cdylib`) | Web fetch and web search (`webfetch`, `websearch`). |
+| `hya/channel-tools` | `bundles/builtin/channel-tools` | Native (`cdylib`) | Team mailbox tools (`send`, `list_channel`, `wait`, `report`). |
+| `hya/compaction` | `bundles/builtin/compaction` | Native (`cdylib`) | Context `Rewriter` running `shake` and `remote` compaction before Kernel `Rewrite`. |
+| `hya/core-agents` | `bundles/builtin/core-agents` | Static | Built-in agent definitions (`hya-main`, `hya-plan`, `hya-task`, `hya-scout`, `hya-reviewer`, `hya-title`). |
+| `hya/core-skills` | `bundles/builtin/core-skills` | Static | Built-in fallback skills (`agent-bundle-authoring`, `secure-self-update`). |
+| `hya/core-commands` | `bundles/builtin/core-commands` | Static | Built-in slash command templates (`/init`, `/review`). |
+| `hya/agent-channels` | `bundles/builtin/agent-channels` | Static | Default vertical parent/child and unit broadcast channel policy. |
+| `hya/goal-loop` | `bundles/builtin/goal-loop` | Static | Goal evaluator and Loop verifier/planner prompts and private helper agents. |
+| `hya/plan-impl-review` | `bundles/builtin/plan-impl-review` | Static | Built-in `plan-impl-review` Workflow DAG and stage agents. |
+| `hya/basic-tui-components` | `bundles/builtin/basic-tui-components` | JS / TUI | Standard TUI panels (Projects view/sidebar, Sessions, Todos, Context). |
+| `hya/code-mode` | `bundles/builtin/code-mode` | JS (`process: bun`) | Optional `code-mode__run` JavaScript batch tool (`tools.code.mode`, off by default). |
 
 ---
 
-## 5. Optional Extra Bundles (`bundles/extra/`)
+## 5. Optional Extra & Example Bundles (`bundles/extra/`, `bundles/examples/`)
 
-Source checkouts also include six optional bundles under `bundles/extra/` that you can package (`cargo run -p xtask -- package-bundle ...`) and install when needed:
+Source checkouts also include six optional official bundles under `bundles/extra/` (plus runnable examples such as `bundles/examples/argus-example`) that you can package with `hya bundle pack <dir> <out.hyabundle>`, verify with `hya bundle verify --strict --protocol-smoke`, and install when needed:
 
 | Bundle ID | What it adds |
 | --- | --- |

@@ -346,6 +346,8 @@ fn sidecar_bundle() -> Bundle {
         schemas: vec![],
         process: None,
         apis: vec![],
+        commands: Vec::new(),
+        runtime: None,
         permission_modes: vec![],
     }
 }

@@ -115,6 +115,35 @@ class ClassifyPathsTests(unittest.TestCase):
         self.assertFalse(res.frontend)
         self.assertFalse(res.build_bin)
 
+    def test_extra_and_example_bundles_skip_main_ci(self) -> None:
+        res = classify_paths([
+            "bundles/extra/jev-model-router/router.ts",
+            "bundles/extra/token-summary/bundle.yaml",
+            "bundles/examples/argus-example/bundle.yaml",
+            "scripts/bundle-ci/verify.mjs",
+            ".github/workflows/bundles.yml",
+            ".github/workflows/builtin-bundles.yml",
+        ])
+        self.assertEqual(res, ScopeResult())
+        self.assertFalse(res.rust)
+        self.assertFalse(res.frontend)
+        self.assertFalse(res.build_bin)
+        self.assertFalse(res.tui)
+        self.assertFalse(res.docs)
+
+    def test_builtin_bundles_trigger_rust_and_tui_in_main_ci(self) -> None:
+        res = classify_paths(["bundles/builtin/base-tools/native/src/lib.rs"])
+        self.assertEqual(res, ScopeResult(rust=True))
+        self.assertTrue(res.build_bin)
+        self.assertTrue(res.tui)
+        self.assertFalse(res.frontend)
+
+    def test_builtin_tui_bundle_triggers_both_rust_and_frontend(self) -> None:
+        res = classify_paths(["bundles/builtin/basic-tui-components/tui/main.ts"])
+        self.assertEqual(res, ScopeResult(rust=True, frontend=True))
+        self.assertTrue(res.build_bin)
+        self.assertTrue(res.tui)
+
 
 class CheckWebHelpersTests(unittest.TestCase):
     def test_collect_ids_ignores_inert_templates_and_comments(self) -> None:

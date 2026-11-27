@@ -43,7 +43,7 @@ fn repository_root() -> PathBuf {
 
 fn stage_package(directory: &Path, identity: &str, source_identity: &str) -> PathBuf {
     let name = source_identity.strip_prefix("hya/").expect("hya identity");
-    let source = BundleSource::read_directory(first_party_source_root().join("presets").join(name))
+    let source = BundleSource::read_directory(first_party_source_root().join("builtin").join(name))
         .expect("read in-tree source");
     std::fs::create_dir_all(directory).expect("create bundles directory");
     let package = directory.join(format!(
@@ -150,7 +150,7 @@ fn installed_layout_loads_package_beside_bin_and_cargo_layout_prefers_in_tree() 
     let catalog = load_first_party(&source.expect("package source"), "hya/core-skills")
         .expect("load installed package");
     let expected = prepare_package(
-        BundleSource::read_directory(first_party_source_root().join("presets/core-skills"))
+        BundleSource::read_directory(first_party_source_root().join("builtin/core-skills"))
             .expect("read source"),
     )
     .expect("prepare source");
@@ -167,7 +167,7 @@ fn installed_layout_loads_package_beside_bin_and_cargo_layout_prefers_in_tree() 
         assert_eq!(
             first_party_source(&directory, "hya/core-skills"),
             Some(FirstPartySource::Directory(
-                first_party_source_root().join("presets/core-skills")
+                first_party_source_root().join("builtin/core-skills")
             )),
             "{}",
             directory.display()
@@ -224,9 +224,9 @@ fn no_crate_compiles_first_party_bundle_content_into_the_binary() {
     let mut offenders = Vec::new();
     let mut stack = vec![workspace.join("crates")];
     stack.extend(
-        std::fs::read_dir(first_party_source_root().join("presets"))
-            .expect("list presets")
-            .map(|entry| entry.expect("preset entry").path().join("native")),
+        std::fs::read_dir(first_party_source_root().join("builtin"))
+            .expect("list builtin")
+            .map(|entry| entry.expect("builtin entry").path().join("native")),
     );
     while let Some(path) = stack.pop() {
         if path.is_dir() {
@@ -285,8 +285,8 @@ fn orchestrator_runtime_is_a_copy_of_the_code_mode_runtime() {
     let bundles = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bundles");
     let read = |path: &str| std::fs::read(bundles.join(path)).expect("runtime source");
     assert!(
-        read("first-party/code-mode/runtime.ts") == read("extra/orchestrator/runtime.ts"),
-        "copy bundles/first-party/code-mode/runtime.ts to bundles/extra/orchestrator/runtime.ts"
+        read("builtin/code-mode/runtime.ts") == read("extra/orchestrator/runtime.ts"),
+        "copy bundles/builtin/code-mode/runtime.ts to bundles/extra/orchestrator/runtime.ts"
     );
 }
 
@@ -550,7 +550,7 @@ fn docs_capture_authoring_sidecar_and_cli_contracts() {
     let authoring_paths = [
         repository_root().join("docs/extend/bundles.md"),
         repository_root()
-            .join("bundles/presets/core-skills/resources/skills/agent-bundle-authoring/SKILL.md"),
+            .join("bundles/builtin/core-skills/resources/skills/agent-bundle-authoring/SKILL.md"),
     ];
     let authoring_markers = [
         "`hook_refs`",

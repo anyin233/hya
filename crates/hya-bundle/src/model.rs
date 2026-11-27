@@ -287,6 +287,105 @@ pub struct PreparedCheck {
     pub timeout_secs: u64,
 }
 
+/// Standardized runtime archetype declared by a bundle (`runtime.kind`).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreparedRuntimeKind {
+    /// Declarative bundle with no executable code.
+    #[default]
+    Static,
+    /// JavaScript/TypeScript runtime (managed Bun adapter, process, or Claude adapter).
+    Js,
+    /// Native Rust dynamic library loaded via the native bundle ABI.
+    Native,
+}
+
+impl PreparedRuntimeKind {
+    /// Exact manifest spelling of this runtime kind.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Static => "static",
+            Self::Js => "js",
+            Self::Native => "native",
+        }
+    }
+}
+
+/// Execution mode for a JS bundle (`runtime.mode`).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreparedJsRuntimeMode {
+    /// Hosted inside the managed Bun adapter.
+    Managed,
+    /// Dedicated NDJSON JSON-RPC 2.0 child process.
+    Process,
+    /// Claude Code plugin adapter process.
+    Claude,
+}
+
+impl PreparedJsRuntimeMode {
+    /// Exact manifest spelling of this JS runtime mode.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Managed => "managed",
+            Self::Process => "process",
+            Self::Claude => "claude",
+        }
+    }
+}
+
+/// Native dynamic library capability declared in `runtime.capabilities`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreparedNativeCapability {
+    /// Registers native tools via `hya_tool_bundle_register_v1`.
+    Tools,
+    /// Registers native hooks via `hya_tool_bundle_register_hooks_v1`.
+    Hooks,
+    /// Registers native context rewriters via `hya_tool_bundle_register_rewriters_v1`.
+    Rewriters,
+}
+
+impl PreparedNativeCapability {
+    /// Exact manifest spelling of this capability.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Tools => "tools",
+            Self::Hooks => "hooks",
+            Self::Rewriters => "rewriters",
+        }
+    }
+}
+
+/// Validated top-level `runtime:` block preserved in a prepared Bundle.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedRuntime {
+    /// Runtime archetype (`static` | `js` | `native`).
+    pub kind: PreparedRuntimeKind,
+    /// JS execution mode (`managed` | `process` | `claude`), when `kind == Js`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<PreparedJsRuntimeMode>,
+    /// Canonical relative TS/JS entrypoint path, when declared for `kind == Js`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+    /// Native ABI version (`1` or `2`), when `kind == Native`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abi_version: Option<u32>,
+    /// Source-tree crate directory hint, when `kind == Native`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crate_dir: Option<String>,
+    /// Packaged dynamic library path inside the bundle, when `kind == Native`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library: Option<String>,
+    /// Sorted, unique native capabilities, when `kind == Native`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<PreparedNativeCapability>,
+}
+
 /// One complete prepared bundle, including every executable and policy declaration.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -314,11 +413,14 @@ pub struct Bundle {
     pub tools: Vec<PreparedResource>,
     /// Prepared Skill resources.
     pub skills: Vec<PreparedResource>,
+    /// Prepared slash command resources.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<PreparedResource>,
     /// Prepared MCP declarations.
     pub mcp: Vec<PreparedResource>,
     /// Prepared hook resources.
     pub hooks: Vec<PreparedResource>,
-    /// Prepared JS/Rust extension entrypoints.
+    /// Prepared JS/Rust extension entrypoints and runtime assets.
     pub extensions: Vec<PreparedResource>,
     /// Optional bundle-owned frontend extension.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -327,6 +429,9 @@ pub struct Bundle {
     pub schemas: Vec<PreparedSchema>,
     /// Explicit provider process.
     pub process: Option<PreparedProcessExtension>,
+    /// Standardized top-level runtime declaration, when declared in the manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<PreparedRuntime>,
     /// HTTP API declarations.
     pub apis: Vec<PreparedApi>,
     /// Permission modes owned by this bundle.
@@ -408,6 +513,7 @@ impl Bundle {
         match kind {
             crate::ExportKind::Tool => &self.tools,
             crate::ExportKind::Skill => &self.skills,
+            crate::ExportKind::Command => &self.commands,
             crate::ExportKind::Mcp => &self.mcp,
             crate::ExportKind::Hook => &self.hooks,
             crate::ExportKind::Extension => &self.extensions,
@@ -421,6 +527,10 @@ impl Bundle {
     pub fn skills(&self) -> &[PreparedResource] {
         &self.skills
     }
+    /// Prepared slash command resources.
+    pub fn commands(&self) -> &[PreparedResource] {
+        &self.commands
+    }
     /// Prepared mcp resources.
     pub fn mcp(&self) -> &[PreparedResource] {
         &self.mcp
@@ -432,6 +542,10 @@ impl Bundle {
     /// Prepared extensions resources.
     pub fn extensions(&self) -> &[PreparedResource] {
         &self.extensions
+    }
+    /// Standardized top-level runtime declaration, if declared.
+    pub fn runtime(&self) -> Option<&PreparedRuntime> {
+        self.runtime.as_ref()
     }
 }
 

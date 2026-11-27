@@ -62,6 +62,6 @@ flowchart LR
     Rewrite --> Send
 ```
 
-- **`shake` (`ContextEvicted`):** Owned by the internal native bundle `bundles/internal/compaction`. Evicts completed tool outputs outside the last `keep_recent` (default `6`) messages/steps, spilling bodies ≥ 512 bytes to `artifact://...` so the model can still `read` them back if needed. Eviction notices are persisted on `PartProjection::Tool.eviction_notice` so prompt prefixes stay byte-stable for provider KV caching!
+- **`shake` (`ContextEvicted`):** Owned by the built-in native bundle `bundles/builtin/compaction`. Evicts completed tool outputs outside the last `keep_recent` (default `6`) messages/steps, spilling bodies ≥ 512 bytes to `artifact://...` so the model can still `read` them back if needed. Eviction notices are persisted on `PartProjection::Tool.eviction_notice` so prompt prefixes stay byte-stable for provider KV caching!
 - **`remote` (`ContextCompacted { strategy: native }`):** Calls upstream `/responses/compact` on routes that support native window folding, persisting `HYA_COMPACTED_CONTEXT` plus the active `todo` list.
 - **Manual `/compact` & `/summarize`:** Acquires the session turn lease, tries `remote` first, and falls back to Kernel `Rewrite` (`threshold: 0`, marked `manual: true`).

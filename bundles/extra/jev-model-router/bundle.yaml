@@ -4,6 +4,9 @@ identity:
   id: hya-extra/jev-model-router
   version: 0.0.0
   publisher: hya-extra
+check:
+  command: [bun, test, --pass-with-no-tests]
+  timeout_secs: 120
 # An explicit `extensions.process` is spawned with its argv as-is (no Bun
 # adapter is injected), so router.ts speaks the hya plugin protocol v1
 # (newline-delimited JSON-RPC 2.0 over stdio) itself.

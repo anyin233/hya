@@ -1,0 +1,13 @@
+kind: Bundle
+version_ref: hya
+identity:
+  id: hya/compaction
+  version: 0.0.0
+  publisher: hya
+namespace: compaction
+runtime:
+  kind: native
+  abi_version: 1
+  crate_dir: native
+  capabilities:
+    - rewriters

@@ -1,0 +1,192 @@
+name: bundles
+on:
+  push:
+    branches: [main]
+    paths:
+      - "bundles/extra/**"
+      - "bundles/examples/**"
+      - "scripts/bundle-ci/**"
+      - ".github/workflows/bundles.yml"
+  pull_request:
+    paths:
+      - "bundles/extra/**"
+      - "bundles/examples/**"
+      - "scripts/bundle-ci/**"
+      - ".github/workflows/bundles.yml"
+  workflow_dispatch:
+    inputs:
+      bundle_roots:
+        description: "Space-separated bundle root directories to verify"
+        required: false
+        default: "bundles/extra bundles/examples"
+        type: string
+      hya_release_url:
+        description: "Optional URL to a hya release archive for deterministic .hyabundle pack verification"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bundles-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# Portable, Rust-free Bundle CI for `bundles/extra/**` and `bundles/examples/**`.
+# Zero dependency on Hya's Rust workspace, `hya-e2e`, or TUI tests — designed so
+# this workflow + `scripts/bundle-ci/` can be lifted verbatim into a standalone
+# Marketplace repository.
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix_all: ${{ steps.scan.outputs.matrix_all }}
+      has_all: ${{ steps.scan.outputs.has_all }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Install Bun
+        shell: bash
+        env:
+          BUN_VERSION: "1.4.2"
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            if curl -fsSL --retry 3 https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"; then
+              break
+            fi
+            (( attempt == 4 )) && exit 1
+            sleep $(( attempt * 10 ))
+          done
+          test "$("$HOME/.bun/bin/bun" --version)" = "${BUN_VERSION}"
+          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+      - name: Self-test portable bundle CI scripts
+        run: bun test scripts/bundle-ci/
+      - name: Discover bundles to verify
+        id: scan
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BUNDLE_ROOTS: ${{ inputs.bundle_roots || 'bundles/extra bundles/examples' }}
+        run: |
+          set -euo pipefail
+          read -r -a roots <<< "$BUNDLE_ROOTS"
+          changed_args=()
+          if [[ "$EVENT_NAME" == "pull_request" && -n "$PR_BASE_SHA" && -n "$PR_HEAD_SHA" ]]; then
+            changed_file="${RUNNER_TEMP}/changed-files.txt"
+            if git diff --no-renames --name-only "${PR_BASE_SHA}...${PR_HEAD_SHA}" > "$changed_file"; then
+              if grep -Eq '^(scripts/bundle-ci/|\.github/workflows/bundles\.yml$)' "$changed_file"; then
+                echo "CI tooling changed; running full bundle matrix."
+              else
+                changed_args=(--changed-files "$changed_file")
+              fi
+            fi
+          fi
+          bun scripts/bundle-ci/discover.mjs \
+            --allow-empty \
+            --github-output "$GITHUB_OUTPUT" \
+            "${changed_args[@]}" \
+            "${roots[@]}"
+
+  verify-bundle:
+    needs: discover
+    if: ${{ needs.discover.outputs.has_all == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover.outputs.matrix_all) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Bun
+        shell: bash
+        env:
+          BUN_VERSION: "1.4.2"
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            if curl -fsSL --retry 3 https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"; then
+              break
+            fi
+            (( attempt == 4 )) && exit 1
+            sleep $(( attempt * 10 ))
+          done
+          test "$("$HOME/.bun/bin/bun" --version)" = "${BUN_VERSION}"
+          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+      - name: Optional hya binary setup for deterministic pack check
+        id: pack-bin
+        shell: bash
+        env:
+          HYA_RELEASE_URL: ${{ inputs.hya_release_url || vars.HYA_BUNDLE_PACK_RELEASE_URL || '' }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$HYA_RELEASE_URL" ]]; then
+            mkdir -p "${RUNNER_TEMP}/hya-bin"
+            curl -fsSL "$HYA_RELEASE_URL" | tar -xz -C "${RUNNER_TEMP}/hya-bin" --strip-components=1
+            hya_bin="${RUNNER_TEMP}/hya-bin/bin/hya"
+            test -x "$hya_bin"
+            echo "hya_bin=${hya_bin}" >> "$GITHUB_OUTPUT"
+          elif command -v hya >/dev/null 2>&1; then
+            echo "hya_bin=$(command -v hya)" >> "$GITHUB_OUTPUT"
+          else
+            echo "No prebuilt hya binary configured; skipping optional .hyabundle pack step."
+            echo "hya_bin=" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Verify bundle (static spec, self-check, protocol smoke, optional pack)
+        shell: bash
+        env:
+          BUNDLE_PATH: ${{ matrix.path }}
+          HYA_BIN: ${{ steps.pack-bin.outputs.hya_bin }}
+        run: |
+          set -euo pipefail
+          extra_args=()
+          if [[ -n "$HYA_BIN" ]]; then
+            extra_args=(
+              --pack-cmd "$HYA_BIN"
+              --verify-cmd "$HYA_BIN bundle verify --strict --protocol-smoke {output}"
+            )
+          fi
+          bun scripts/bundle-ci/verify.mjs "${extra_args[@]}" "$BUNDLE_PATH"
+
+  bundles-gate:
+    name: bundles-gate
+    if: ${{ always() && !cancelled() }}
+    needs:
+      - discover
+      - verify-bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify external bundle checks succeeded
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          for name, info in sorted(needs.items()):
+              print(f"{name}: {info.get('result')}")
+
+          if needs.get("discover", {}).get("result") != "success":
+              print("ERROR: `discover` job did not succeed.", file=sys.stderr)
+              sys.exit(1)
+
+          bad = {
+              name: info.get("result")
+              for name, info in needs.items()
+              if info.get("result") not in ("success", "skipped")
+          }
+          if bad:
+              print(f"ERROR: required bundle CI job(s) did not succeed: {bad}", file=sys.stderr)
+              sys.exit(1)
+
+          print("All bundle CI checks passed.")
+          PY

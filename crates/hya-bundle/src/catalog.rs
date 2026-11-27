@@ -15,6 +15,8 @@ pub enum ExportKind {
     Tool,
     /// Bundle-local skill resource.
     Skill,
+    /// Bundle-local slash command resource.
+    Command,
     /// Bundle-local MCP declaration (each entry's content is a validated
     /// `McpServerConfig`-shaped JSON file; runtime spawning lands later).
     Mcp,
@@ -29,6 +31,7 @@ impl ExportKind {
         match self {
             Self::Tool => "tool",
             Self::Skill => "skill",
+            Self::Command => "command",
             Self::Mcp => "mcp",
             Self::Hook => "hook",
             Self::Extension => "extension",
@@ -118,6 +121,7 @@ impl BundleCatalog {
             for kind in [
                 ExportKind::Tool,
                 ExportKind::Skill,
+                ExportKind::Command,
                 ExportKind::Mcp,
                 ExportKind::Hook,
                 ExportKind::Extension,

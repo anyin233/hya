@@ -47,7 +47,7 @@ log. It has no permissions, hooks, or subagents.
 _Avoid_: minimal mode, safe mode
 
 **Internal bundle**:
-A first-party `.hyabundle` under `bundles/internal/` that carries a full-mode
+A first-party `.hyabundle` under `bundles/builtin/` (such as `bundles/builtin/compaction`) that carries a full-mode
 feature outside the kernel. It extends the kernel and never replaces its
 logic: `hya/compaction` registers context-reduction steps (`shake`, `remote`)
 that run before the kernel's own Rewrite. Full mode loads them; bare mode does

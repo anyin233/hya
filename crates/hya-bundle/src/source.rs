@@ -183,10 +183,16 @@ impl SourceCheck {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourceManifest {
     pub kind: String,
+    /// Optional manifest schema version (`1` or `2`; defaults to `1`).
+    #[serde(default)]
+    pub schema_version: Option<u32>,
     /// Aggregate release version to resolve for this source manifest.
     #[serde(default)]
     pub version_ref: Option<String>,
     pub identity: BundleIdentity,
+    /// Optional standardized runtime declaration (`static` | `js` | `native`).
+    #[serde(default)]
+    pub runtime: Option<SourceRuntime>,
     /// Optional source-root self-check.
     #[serde(default)]
     pub check: Option<SourceCheck>,
@@ -200,24 +206,79 @@ pub(crate) struct SourceManifest {
     pub resources: SourceResources,
     #[serde(default)]
     pub extensions: SourceExtensions,
-    /// HTTP endpoints served by the explicit `extensions.process`.
+    /// Runtime data files materialized alongside the bundle (successor to `extensions.files`).
+    #[serde(default)]
+    pub assets: Vec<SourceResource>,
+    /// HTTP endpoints served by the explicit process runtime.
     #[serde(default)]
     pub apis: Vec<SourceApi>,
-    /// Session permission modes approved by the explicit `extensions.process`.
+    /// Session permission modes approved by the explicit process runtime.
     #[serde(default)]
     pub permission_modes: Vec<SourcePermissionMode>,
     /// Optional bundle-owned frontend extension.
     #[serde(default)]
     pub tui: Option<SourceTuiExtension>,
-    /// The complete Agent set this bundle defines.
+    /// The complete Agent set this bundle defines (inline or standalone `.md` file references).
     #[serde(default)]
-    pub agents: Vec<SourceAgent>,
+    pub agents: Vec<SourceAgentEntry>,
     /// Channel policies/templates. Concrete channel ids are minted by the runtime.
     #[serde(default)]
     pub channels: Vec<PreparedChannelTemplate>,
     /// Optional packaged Workflow.
     #[serde(default)]
     pub workflow: Option<SourceWorkflow>,
+}
+
+/// Standardized runtime archetype (`runtime.kind`).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SourceRuntimeKind {
+    #[default]
+    Static,
+    Js,
+    Native,
+}
+
+/// Execution mode for `runtime.kind: js`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SourceJsRuntimeMode {
+    Managed,
+    Process,
+    Claude,
+}
+
+/// Native dynamic library capability declared in `runtime.capabilities`.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SourceNativeCapability {
+    Tools,
+    Hooks,
+    Rewriters,
+}
+
+/// Top-level `runtime:` block in `bundle.yaml`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceRuntime {
+    #[serde(default)]
+    pub kind: SourceRuntimeKind,
+    #[serde(default)]
+    pub mode: Option<SourceJsRuntimeMode>,
+    #[serde(default)]
+    pub entry: Option<String>,
+    #[serde(default)]
+    pub command: Vec<String>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub abi_version: Option<u32>,
+    #[serde(default)]
+    pub crate_dir: Option<String>,
+    #[serde(default)]
+    pub library: Option<String>,
+    #[serde(default)]
+    pub capabilities: Vec<SourceNativeCapability>,
 }
 
 /// One `apis:` entry: an HTTP endpoint the bundle's explicit
@@ -281,13 +342,33 @@ pub(crate) struct SourceWorkflow {
     pub path: String,
 }
 
+fn deserialize_present_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    String::deserialize(deserializer).map(Some)
+}
+
+/// Either an inline agent declaration in `bundle.yaml` or a reference to a
+/// standalone Markdown frontmatter file (`- path: agents/<id>.md`).
+///
+/// Deserialized natively through `serde_norway` so field paths and
+/// `deny_unknown_fields` diagnostics stay exact.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct SourceAgent {
-    /// Stable agent id.
-    pub id: String,
+pub(crate) struct SourceAgentEntry {
+    /// Relative path to a standalone `agents/<id>.md` frontmatter file.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Stable agent id (required for inline definitions).
+    ///
+    /// Uses `String::deserialize` when the key is present so YAML 1.1 barewords
+    /// such as `null` keep round-tripping verbatim as `"null"` instead of `None`.
+    #[serde(default, deserialize_with = "deserialize_present_string")]
+    pub id: Option<String>,
     pub description: Option<String>,
-    pub role: AgentRole,
+    #[serde(default)]
+    pub role: Option<AgentRole>,
     pub color: Option<String>,
     pub prompt: Option<String>,
     #[serde(default)]
@@ -315,6 +396,65 @@ pub(crate) struct SourceAgent {
     pub harness_access: Option<IgnoredAny>,
 }
 
+/// YAML frontmatter shape of a standalone `agents/<id>.md` file.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceAgentFile {
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Claude Code Plugin compatibility alias for `id`.
+    #[serde(default)]
+    pub name: Option<String>,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub role: Option<AgentRole>,
+    pub color: Option<String>,
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub model_policy: ModelPolicy,
+    pub workdir: Option<String>,
+    #[serde(default)]
+    pub spawn_lifecycle: Option<IgnoredAny>,
+    pub resource_profile: Option<Value>,
+    #[serde(default)]
+    pub resource_view: ResourceView,
+    #[serde(default)]
+    pub can_spawn: Vec<String>,
+    #[serde(default)]
+    pub private: bool,
+    #[serde(default)]
+    pub advertise: Vec<Value>,
+    #[serde(default)]
+    pub handoff: HandoffPolicy,
+    #[serde(default)]
+    pub hook_refs: Vec<String>,
+    #[serde(default)]
+    pub harness_access: Option<IgnoredAny>,
+}
+
+#[derive(Debug)]
+pub(crate) struct SourceAgent {
+    /// Stable agent id.
+    pub id: String,
+    pub description: Option<String>,
+    pub role: AgentRole,
+    pub color: Option<String>,
+    pub prompt: Option<String>,
+    pub model_policy: ModelPolicy,
+    pub workdir: Option<String>,
+    /// Removed in 0.41.0: every subagent is a resident actor.
+    pub spawn_lifecycle: Option<IgnoredAny>,
+    pub resource_profile: Option<Value>,
+    pub resource_view: ResourceView,
+    pub can_spawn: Vec<String>,
+    pub private: bool,
+    pub advertise: Vec<Value>,
+    pub handoff: HandoffPolicy,
+    pub hook_refs: Vec<String>,
+    /// Removed with the single-agent format; the tool plane is host-controlled.
+    pub harness_access: Option<IgnoredAny>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct SourceResources {
@@ -322,6 +462,7 @@ pub(crate) struct SourceResources {
     pub skills: Vec<SourceResource>,
     pub mcp: Vec<SourceResource>,
     pub hooks: Vec<SourceResource>,
+    pub commands: Vec<SourceResource>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -367,7 +508,8 @@ pub(crate) enum SourceProcessKind {
 }
 
 /// Connection shape of one `resources.mcp` declaration file: the same fields
-/// as hya's `McpServerConfig` (stdio `command` argv or remote `url`).
+/// as hya's `McpServerConfig` (stdio `command` argv or remote `url` with
+/// optional `headers`).
 ///
 /// The other fields pin the accepted shape under `deny_unknown_fields`.
 /// Preparation preserves the raw resource text for the runtime to read.
@@ -381,15 +523,135 @@ pub(crate) struct SourceMcpServer {
     pub env: Option<std::collections::BTreeMap<String, String>>,
     #[serde(default)]
     pub url: Option<String>,
-    #[allow(dead_code)]
+    #[serde(default)]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
     #[serde(default)]
     pub transport: Option<String>,
     #[allow(dead_code)]
     #[serde(default)]
     pub enabled: Option<bool>,
-    #[allow(dead_code)]
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+}
+
+/// Permission tier declared in a structured tool descriptor (`tools/<id>.json`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SourceToolPermission {
+    ReadOnly,
+    Tool,
+    Command,
+    Interactive,
+}
+
+/// Alias entry in a structured tool descriptor: either a bare name or a
+/// `{ name, visibility? }` object.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum SourceToolDescriptorAlias {
+    Name(String),
+    Detailed {
+        name: String,
+        #[serde(default)]
+        visibility: Option<String>,
+    },
+}
+
+/// Runtime entrypoint bindings declared in a structured tool descriptor.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceToolDescriptorEntrypoint {
+    #[serde(default)]
+    pub js: Option<String>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub native: Option<String>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub rpc: Option<String>,
+}
+
+/// Structured tool descriptor (`tools/<id>.json` or `tools/<id>.yaml`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceToolDescriptor {
+    #[serde(default)]
+    pub schema_version: Option<u32>,
+    pub name: String,
+    pub description: String,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub permission: Option<SourceToolPermission>,
+    #[serde(default)]
+    pub aliases: Vec<SourceToolDescriptorAlias>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub prompt_hint: Option<String>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub protected: bool,
+    #[serde(default)]
+    pub parameters: Option<Value>,
+    #[serde(default)]
+    pub entrypoint: Option<SourceToolDescriptorEntrypoint>,
+}
+
+/// Multi-tool descriptor file (`tools/tools.yaml` or `tools/tools.json`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceToolDescriptorCollection {
+    #[serde(default)]
+    pub schema_version: Option<u32>,
+    pub tools: Vec<SourceToolDescriptor>,
+}
+
+/// Failure handling mode in a structured hook descriptor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SourceHookFailureMode {
+    FailClosed,
+    FailOpen,
+}
+
+/// Shell command specification for a `command` hook handler.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum SourceHookCommand {
+    Shell(String),
+    Argv(Vec<String>),
+}
+
+/// Structured hook handler target (`js` | `rpc` | `command` | `native`).
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum SourceHookHandler {
+    Js { target: String },
+    Rpc { method: String },
+    Command { command: SourceHookCommand },
+    Native { target: String },
+}
+
+/// One hook binding inside `hooks/hooks.json` or `hooks/<id>.json`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceHookEntry {
+    pub event: String,
+    #[serde(default)]
+    pub matcher: Option<String>,
+    pub handler: SourceHookHandler,
+    #[serde(default)]
+    pub failure_mode: Option<SourceHookFailureMode>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+/// Structured hook descriptor (`hooks/hooks.json` or `hooks/<id>.yaml`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceHooksDescriptor {
+    #[serde(default)]
+    pub schema_version: Option<u32>,
+    pub hooks: Vec<SourceHookEntry>,
 }
 
 pub(crate) struct ParsedSource {

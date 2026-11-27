@@ -332,6 +332,8 @@ fn catalog_with_agents(stable_ids: &[&str]) -> Arc<AgentCatalog> {
             schemas: vec![],
             process: None,
             apis: vec![],
+            commands: Vec::new(),
+            runtime: None,
             permission_modes: vec![],
         })
         .collect::<Vec<_>>();
@@ -380,6 +382,8 @@ fn catalog_with_worker_policy(model_policy: ModelPolicy) -> Arc<AgentCatalog> {
         schemas: vec![],
         process: None,
         apis: vec![],
+        commands: Vec::new(),
+        runtime: None,
         permission_modes: vec![],
     };
     Arc::new(to_agent_catalog(
@@ -532,6 +536,8 @@ fn materialized_bundle(marker: &str) -> Bundle {
         schemas: vec![],
         process: None,
         apis: vec![],
+        commands: Vec::new(),
+        runtime: None,
         permission_modes: vec![],
     }
 }
@@ -593,6 +599,8 @@ fn disjoint_materialized_bundle(marker: &str) -> Bundle {
         schemas: vec![],
         process: None,
         apis: vec![],
+        commands: Vec::new(),
+        runtime: None,
         permission_modes: vec![],
     }
 }
@@ -2989,7 +2997,7 @@ async fn disjoint_engine_turns(process: bool) {
         "disjoint-turns",
         vec![
             SourceFile::new("bundle.yaml", manifest),
-            SourceFile::new("tool.json", r#"{"type":"object"}"#),
+            SourceFile::new("tool.json", "{}"),
             SourceFile::new(
                 "main.js",
                 r#"

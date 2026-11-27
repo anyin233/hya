@@ -113,6 +113,8 @@ fn make_bundle(bundle_id: &str, agent: PreparedAgent, skills: Vec<PreparedResour
         schemas: vec![],
         process: None,
         apis: vec![],
+        commands: Vec::new(),
+        runtime: None,
         permission_modes: vec![],
     }
 }

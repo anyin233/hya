@@ -405,13 +405,32 @@ async fn catalog_precedence_folded_revisions_and_first_party_selection() {
     let installed_old =
         prepare_package(workflow_bundle("hya/cat-inst", "collision", "OLD")).unwrap();
     let first_party = prepare_package(BundleSource::new(
-        "bundles/first-party/plan-impl-review",
+        "bundles/builtin/plan-impl-review",
         vec![
-            SourceFile::new("bundle.yaml", include_bytes!("../../../../bundles/first-party/plan-impl-review/bundle.yaml")),
-            SourceFile::new("workflows/plan-impl-review.hya.md", include_bytes!("../../../../bundles/first-party/plan-impl-review/workflows/plan-impl-review.hya.md")),
-            SourceFile::new("prompts/planner.md", include_bytes!("../../../../bundles/first-party/plan-impl-review/prompts/planner.md")),
-            SourceFile::new("prompts/implementer.md", include_bytes!("../../../../bundles/first-party/plan-impl-review/prompts/implementer.md")),
-            SourceFile::new("prompts/reviewer.md", include_bytes!("../../../../bundles/first-party/plan-impl-review/prompts/reviewer.md")),
+            SourceFile::new(
+                "bundle.yaml",
+                include_bytes!("../../../../bundles/builtin/plan-impl-review/bundle.yaml"),
+            ),
+            SourceFile::new(
+                "workflows/plan-impl-review.hya.md",
+                include_bytes!(
+                    "../../../../bundles/builtin/plan-impl-review/workflows/plan-impl-review.hya.md"
+                ),
+            ),
+            SourceFile::new(
+                "prompts/planner.md",
+                include_bytes!("../../../../bundles/builtin/plan-impl-review/prompts/planner.md"),
+            ),
+            SourceFile::new(
+                "prompts/implementer.md",
+                include_bytes!(
+                    "../../../../bundles/builtin/plan-impl-review/prompts/implementer.md"
+                ),
+            ),
+            SourceFile::new(
+                "prompts/reviewer.md",
+                include_bytes!("../../../../bundles/builtin/plan-impl-review/prompts/reviewer.md"),
+            ),
         ],
     ))
     .unwrap();

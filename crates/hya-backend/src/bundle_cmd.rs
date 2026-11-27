@@ -1,5 +1,9 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
 
 use anyhow::Context as _;
 use clap::{Args, Subcommand};
@@ -9,8 +13,12 @@ use hya_app::bundle_registry::{
     LoadedBundleRegistryRecord, NamespaceInstallPolicy,
 };
 use hya_app::project_bundles::{ProjectBundle, find_project_bundle, plan_project_install};
-use hya_bundle::{Bundle, PreparedCatalog, PublicPackageInspection};
+use hya_bundle::{
+    Bundle, BundleSource, PreparedCatalog, PreparedProcessKind, PublicPackageInspection,
+    SourceFile, inspect_public_package, prepare_package, write_public_package,
+};
 use hya_server::BundleListing;
+use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
 
 /// Where a bundle command reads or writes: `--user` (the installed-bundle
 /// registry, the default for install/remove/verify) or `--project`
@@ -118,14 +126,31 @@ pub(crate) enum BundleCommand {
         #[arg(short = 'y', long)]
         yes: bool,
     },
-    /// Check that a package would install into a scope, without installing it.
+    /// Deterministically pack a bundle source directory into a `.hyabundle` archive.
+    Pack {
+        /// Bundle source directory containing `bundle.yaml` or `bundle.hya.md`.
+        #[arg(value_name = "SOURCE_DIR")]
+        source: PathBuf,
+        /// Output `.hyabundle` package path.
+        #[arg(value_name = "OUTPUT")]
+        output: PathBuf,
+    },
+    /// Check that a package (`.hyabundle`) or source directory is valid and
+    /// would install into a scope, without installing it.
     Verify {
-        /// Bundle package (`.hyabundle`).
+        /// Bundle package (`.hyabundle`) or source directory.
         #[arg(value_name = "PACKAGE")]
         package: PathBuf,
         /// Check as `install --overwrite` would.
         #[arg(long)]
         overwrite: bool,
+        /// Validate strict schema, descriptors, determinism, and secret hygiene.
+        #[arg(long)]
+        strict: bool,
+        /// Spawn a process bundle in an isolated copy and verify JSON-RPC 2.0
+        /// `initialize` (matching declared tools/hooks/apis) and `shutdown`.
+        #[arg(long)]
+        protocol_smoke: bool,
         #[command(flatten)]
         scope: ScopeArgs,
     },
@@ -182,11 +207,23 @@ pub(crate) async fn run(command: BundleCommand, db: String) -> anyhow::Result<()
         BundleCommand::List { scope } => list(scope.filter()).await,
         BundleCommand::Search { query, scope } => search(&query, scope.filter()).await,
         BundleCommand::Remove { name, scope, yes } => remove(&name, scope.target(), yes, &db).await,
+        BundleCommand::Pack { source, output } => pack(&source, &output),
         BundleCommand::Verify {
             package,
             overwrite,
+            strict,
+            protocol_smoke,
             scope,
-        } => verify(&package, policy(overwrite), scope.target()).await,
+        } => {
+            verify(
+                &package,
+                policy(overwrite),
+                scope.target(),
+                strict,
+                protocol_smoke,
+            )
+            .await
+        }
         BundleCommand::Info {
             name: Some(name),
             file: None,
@@ -683,17 +720,74 @@ async fn install(
     prove_activation(db, scope, &identity.id, &digest).await
 }
 
-/// Check that `package` would install into `scope`, printing what install
-/// would do. Writes nothing: no registry, no project directory.
+/// Deterministically pack a bundle source directory into a public `.hyabundle` archive.
+fn pack(source: &Path, output: &Path) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        source.is_dir(),
+        "bundle pack source must be a directory: {}",
+        source.display()
+    );
+    bundle_admin::validate_package_path(output)?;
+    let bundle_source = BundleSource::read_directory(source)
+        .with_context(|| format!("read bundle source directory {}", source.display()))?;
+    let bytes = write_public_package(&bundle_source)
+        .with_context(|| format!("pack bundle source {}", source.display()))?;
+    let inspected = inspect_public_package(&bytes).context("verify packed bundle archive")?;
+    let [bundle] = inspected.bundles() else {
+        anyhow::bail!("packed package must contain exactly one bundle");
+    };
+    let parent = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)
+        .with_context(|| format!("create package output directory {}", parent.display()))?;
+    let temporary = parent.join(format!(
+        ".{}.tmp-{}",
+        output
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("bundle.hyabundle"),
+        std::process::id()
+    ));
+    fs::write(&temporary, &bytes)
+        .with_context(|| format!("write temporary package {}", temporary.display()))?;
+    if let Err(error) = fs::rename(&temporary, output) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error).with_context(|| format!("activate package output {}", output.display()));
+    }
+    let identity = bundle.identity();
+    println!("packed {} {}", identity.id, identity.version);
+    println!("output={}", output.display());
+    println!("bytes={}", bytes.len());
+    println!("prepared_digest={}", inspected.digest());
+    Ok(())
+}
+
+/// Check that `package` (a `.hyabundle` file or bundle source directory) is valid
+/// and would install into `scope`, without installing it.
 async fn verify(
     package: &Path,
     policy: NamespaceInstallPolicy,
     scope: Scope,
+    strict: bool,
+    protocol_smoke: bool,
 ) -> anyhow::Result<()> {
+    if package.is_dir() {
+        return verify_directory(package, policy, scope, strict, protocol_smoke).await;
+    }
     let public = bundle_admin::inspect_installable(package)?;
     self_check(&public).await?;
     let [bundle] = public.prepared.bundles() else {
         anyhow::bail!("public package must contain exactly one bundle");
+    };
+    if strict {
+        verify_strict_bundle(bundle, None, &public.files)?;
+    }
+    let smoke_status = if protocol_smoke {
+        Some(run_protocol_smoke(&public.prepared, bundle, None, Some(&public.files)).await?)
+    } else {
+        None
     };
     let registry = match scope {
         Scope::User => bundle_admin::existing_registry().await?,
@@ -712,7 +806,830 @@ async fn verify(
     for displaced in preview.displaced {
         println!("removes={displaced}");
     }
+    if strict {
+        println!("strict=passed");
+    }
+    if let Some(status) = smoke_status {
+        println!("protocol_smoke={status}");
+    }
     Ok(())
+}
+
+async fn verify_directory(
+    dir: &Path,
+    policy: NamespaceInstallPolicy,
+    scope: Scope,
+    strict: bool,
+    protocol_smoke: bool,
+) -> anyhow::Result<()> {
+    let source = BundleSource::read_directory(dir)
+        .with_context(|| format!("read bundle source directory {}", dir.display()))?;
+    let prepared = prepare_package(source.clone())
+        .with_context(|| format!("prepare bundle source directory {}", dir.display()))?;
+    let [bundle] = prepared.bundles() else {
+        anyhow::bail!("bundle source must contain exactly one bundle");
+    };
+    run_directory_self_check(dir, bundle).await?;
+
+    let archive_a = write_public_package(&source)
+        .with_context(|| format!("pack bundle source directory {}", dir.display()))?;
+    let round_trip = inspect_public_package(&archive_a)
+        .with_context(|| format!("verify packed archive for {}", dir.display()))?;
+    anyhow::ensure!(
+        round_trip.digest() == prepared.digest(),
+        "packed archive prepared digest differs from directory source"
+    );
+    if strict {
+        let archive_b = write_public_package(&source)
+            .with_context(|| format!("re-pack bundle source directory {}", dir.display()))?;
+        anyhow::ensure!(
+            archive_a == archive_b,
+            "strict check failed: packing `{}` is not deterministic",
+            dir.display()
+        );
+        verify_strict_bundle(bundle, Some(dir), &[])?;
+    }
+    let smoke_status = if protocol_smoke {
+        Some(run_protocol_smoke(&prepared, bundle, Some(dir), None).await?)
+    } else {
+        None
+    };
+
+    let identity = bundle.identity();
+    let is_preset = hya_app::trusted_preset_inventory()
+        .context("decode trusted presets")?
+        .iter()
+        .any(|preset| preset.id == identity.id);
+
+    println!("verified {} {}", identity.id, identity.version);
+    println!("format=source");
+    println!("kind={}", bundle.kind().as_str());
+    println!("prepared_digest={}", prepared.digest());
+    println!("scope={}", scope.as_str());
+    if is_preset {
+        println!("action=builtin-source");
+    } else {
+        let staged = tempfile::tempdir().context("create temp dir for directory verify preview")?;
+        let pkg_path = staged.path().join("verify.hyabundle");
+        fs::write(&pkg_path, &archive_a).context("write temp package for preview")?;
+        let public = bundle_admin::inspect_package(&pkg_path)?;
+        let registry = match scope {
+            Scope::User => bundle_admin::existing_registry().await?,
+            Scope::Project => None,
+        };
+        let preview = preview_install(&public, policy, scope, registry.as_ref()).await?;
+        println!("target={}", preview.target);
+        println!("action={}", action_label(&preview.action));
+        for displaced in preview.displaced {
+            println!("removes={displaced}");
+        }
+    }
+    if strict {
+        println!("strict=passed");
+    }
+    if let Some(status) = smoke_status {
+        println!("protocol_smoke={status}");
+    }
+    Ok(())
+}
+
+async fn run_directory_self_check(dir: &Path, bundle: &Bundle) -> anyhow::Result<()> {
+    let Some(check) = bundle.check() else {
+        println!("self-check: none declared");
+        return Ok(());
+    };
+    let (program, args) = check
+        .command
+        .split_first()
+        .context("check.command is empty")?;
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(args)
+        .current_dir(dir)
+        .env("HYA_BUNDLE_ID", &bundle.identity().id)
+        .env("HYA_BUNDLE_VERSION", &bundle.identity().version)
+        .env("HYA_BUNDLE_ROOT", dir)
+        .stdin(Stdio::null())
+        .kill_on_drop(true);
+    let shown = check.command.join(" ");
+    let output = tokio::time::timeout(Duration::from_secs(check.timeout_secs), command.output())
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "self-check `{shown}` timed out after {} s",
+                check.timeout_secs
+            )
+        })?
+        .with_context(|| format!("run self-check `{shown}`"))?;
+    if !output.status.success() {
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let lines: Vec<&str> = text.lines().collect();
+        let tail = lines[lines.len().saturating_sub(40)..].join("\n");
+        anyhow::bail!("self-check `{shown}` failed ({})\n{tail}", output.status);
+    }
+    println!("self-check: passed (`{shown}`)");
+    Ok(())
+}
+
+/// Strict static checks: SemVer, non-empty publisher, structured v2 descriptors,
+/// MCP placeholder whitelist, skill/command bounds, and secret hygiene scan.
+fn verify_strict_bundle(
+    bundle: &Bundle,
+    source_dir: Option<&Path>,
+    packaged_files: &[SourceFile],
+) -> anyhow::Result<()> {
+    let identity = bundle.identity();
+    anyhow::ensure!(
+        !identity.publisher.trim().is_empty(),
+        "strict check failed: identity.publisher must not be empty"
+    );
+    semver::Version::parse(&identity.version).with_context(|| {
+        format!(
+            "strict check failed: identity.version `{}` is not valid SemVer",
+            identity.version
+        )
+    })?;
+
+    // Check if the manifest declares schema_version: 2 so we can forbid empty `{}` placeholders.
+    let manifest_text = if let Some(dir) = source_dir {
+        let yaml = dir.join("bundle.yaml");
+        if yaml.is_file() {
+            fs::read_to_string(&yaml).ok()
+        } else {
+            None
+        }
+    } else {
+        packaged_files
+            .iter()
+            .find(|f| f.path() == "bundle.yaml")
+            .and_then(|f| std::str::from_utf8(f.bytes()).ok().map(String::from))
+    };
+    let is_schema_v2 = manifest_text.as_deref().is_some_and(|text| {
+        text.lines().any(|line| {
+            let trimmed = line.trim();
+            trimmed == "schema_version: 2" || trimmed.starts_with("schema_version: 2 ")
+        })
+    });
+
+    if is_schema_v2 {
+        for tool in bundle.tools() {
+            if is_empty_json_object(&tool.content) {
+                anyhow::bail!(
+                    "strict check failed: schema_version 2 tool descriptor `{}` must not be an empty `{{}}` placeholder",
+                    tool.source_path
+                );
+            }
+        }
+        for hook in bundle.hooks() {
+            if is_empty_json_object(&hook.content) {
+                anyhow::bail!(
+                    "strict check failed: schema_version 2 hook descriptor `{}` must not be an empty `{{}}` placeholder",
+                    hook.source_path
+                );
+            }
+        }
+    }
+
+    for skill in bundle.skills() {
+        anyhow::ensure!(
+            !skill.content.trim().is_empty(),
+            "strict check failed: skill `{}` must not be empty",
+            skill.source_path
+        );
+        anyhow::ensure!(
+            skill.content.len() <= 256 * 1024,
+            "strict check failed: skill `{}` exceeds 256 KiB",
+            skill.source_path
+        );
+    }
+
+    for command in bundle.commands() {
+        anyhow::ensure!(
+            !command.content.trim().is_empty(),
+            "strict check failed: command `{}` must not be empty",
+            command.source_path
+        );
+        anyhow::ensure!(
+            command.content.len() <= 256 * 1024,
+            "strict check failed: command `{}` exceeds 256 KiB",
+            command.source_path
+        );
+    }
+
+    for mcp in bundle.mcp() {
+        validate_mcp_strict(&mcp.source_path, &mcp.content)?;
+    }
+
+    // Secret hygiene scan across all text files in the bundle.
+    let mut scan_targets: Vec<(String, String)> = Vec::new();
+    if let Some(text) = manifest_text {
+        scan_targets.push(("bundle.yaml".to_string(), text));
+    }
+    if let Some(dir) = source_dir {
+        for example in ["config.example.yml", "config.example.yaml"] {
+            let path = dir.join(example);
+            if path.is_file()
+                && let Ok(text) = fs::read_to_string(&path)
+            {
+                scan_targets.push((example.to_string(), text));
+            }
+        }
+    }
+    for agent in bundle.agents() {
+        if let Some(prompt) = &agent.prompt {
+            let path = agent
+                .prompt_source
+                .clone()
+                .unwrap_or_else(|| format!("agent:{}", agent.id));
+            scan_targets.push((path, prompt.clone()));
+        }
+    }
+    for resource in bundle
+        .tools()
+        .iter()
+        .chain(bundle.skills())
+        .chain(bundle.commands())
+        .chain(bundle.mcp())
+        .chain(bundle.hooks())
+        .chain(bundle.extensions())
+    {
+        if resource.binary_base64.is_none() {
+            scan_targets.push((resource.source_path.clone(), resource.content.clone()));
+        }
+    }
+    for (path, text) in &scan_targets {
+        if let Some(reason) = find_hardcoded_secret(text) {
+            anyhow::bail!("strict check failed: potential secret in `{path}` ({reason})");
+        }
+    }
+    Ok(())
+}
+
+fn is_empty_json_object(content: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(content)
+        .ok()
+        .and_then(|value| value.as_object().map(|map| map.is_empty()))
+        .unwrap_or(false)
+}
+
+fn validate_mcp_strict(path: &str, content: &str) -> anyhow::Result<()> {
+    let value: serde_json::Value =
+        serde_json::from_str(content).with_context(|| format!("parse MCP `{path}`"))?;
+    let Some(obj) = value.as_object() else {
+        anyhow::bail!("strict check failed: MCP `{path}` must be a JSON object");
+    };
+    if let Some(command) = obj.get("command").and_then(serde_json::Value::as_array) {
+        for arg in command.iter().filter_map(serde_json::Value::as_str) {
+            validate_placeholders(path, arg)?;
+        }
+    }
+    if let Some(url) = obj.get("url").and_then(serde_json::Value::as_str) {
+        validate_placeholders(path, url)?;
+    }
+    if let Some(env) = obj.get("env").and_then(serde_json::Value::as_object) {
+        for (key, val) in env {
+            if let Some(text) = val.as_str() {
+                validate_placeholders(path, text)?;
+                if is_sensitive_key(key) && is_hardcoded_secret_value(text) {
+                    anyhow::bail!(
+                        "strict check failed: MCP `{path}` env `{key}` appears to contain a hardcoded secret; use `${{env:...}}`"
+                    );
+                }
+            }
+        }
+    }
+    if let Some(headers) = obj.get("headers").and_then(serde_json::Value::as_object) {
+        for (key, val) in headers {
+            if let Some(text) = val.as_str() {
+                validate_placeholders(path, text)?;
+                if is_sensitive_key(key) && is_hardcoded_secret_value(text) {
+                    anyhow::bail!(
+                        "strict check failed: MCP `{path}` header `{key}` appears to contain a hardcoded secret; use `${{env:...}}`"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_placeholders(path: &str, text: &str) -> anyhow::Result<()> {
+    let mut rest = text;
+    while let Some(start) = rest.find("${") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find('}') else {
+            anyhow::bail!("strict check failed: unclosed placeholder in `{path}`: {text:?}");
+        };
+        let token = &after[..end];
+        let allowed = matches!(
+            token,
+            "BUNDLE_ROOT" | "BUNDLE_CONFIG_FILE" | "BUNDLE_CONFIG_DIR" | "CLAUDE_PLUGIN_ROOT"
+        ) || token.strip_prefix("env:").is_some_and(|var| {
+            !var.is_empty()
+                && var
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        });
+        if !allowed {
+            anyhow::bail!(
+                "strict check failed: unsupported placeholder `${{{token}}}` in `{path}`"
+            );
+        }
+        rest = &after[end + 1..];
+    }
+    Ok(())
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    lower == "authorization"
+        || lower.contains("token")
+        || lower.contains("secret")
+        || lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.contains("api-key")
+        || lower.contains("password")
+}
+
+fn is_hardcoded_secret_value(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.contains("${") || trimmed.starts_with('$') {
+        return false;
+    }
+    let token = trimmed
+        .strip_prefix("Bearer ")
+        .or_else(|| trimmed.strip_prefix("bearer "))
+        .unwrap_or(trimmed)
+        .trim();
+    if token.len() < 12 {
+        return false;
+    }
+    let lower = token.to_ascii_lowercase();
+    !(lower.starts_with('<')
+        || lower.contains("example")
+        || lower.contains("placeholder")
+        || lower.contains("your_")
+        || lower.contains("your-")
+        || lower.contains("changeme")
+        || lower.contains("replace"))
+}
+
+fn find_hardcoded_secret(text: &str) -> Option<&'static str> {
+    if text.contains("-----BEGIN ") && text.contains("PRIVATE KEY-----") {
+        return Some("PEM private key header");
+    }
+    for (prefix, min_tail, label) in [
+        ("sk-ant-", 16_usize, "Anthropic API key"),
+        ("sk-proj-", 16, "OpenAI project API key"),
+        ("github_pat_", 20, "GitHub fine-grained token"),
+        ("ghp_", 20, "GitHub personal access token"),
+        ("gho_", 20, "GitHub OAuth token"),
+        ("ghu_", 20, "GitHub user token"),
+        ("ghs_", 20, "GitHub server token"),
+        ("xoxb-", 16, "Slack bot token"),
+        ("xoxp-", 16, "Slack user token"),
+        ("AIza", 35, "Google API key"),
+    ] {
+        let mut search = text;
+        while let Some(pos) = search.find(prefix) {
+            let after = &search[pos + prefix.len()..];
+            let tail_len = after
+                .bytes()
+                .take_while(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+                .count();
+            if tail_len >= min_tail {
+                let tail = &after[..tail_len];
+                let lower = tail.to_ascii_lowercase();
+                if !lower.contains("example") && !lower.contains("placeholder") {
+                    return Some(label);
+                }
+            }
+            search = &search[pos + prefix.len()..];
+        }
+    }
+    // OpenAI legacy `sk-<20+ alnum>` keys (bounded by non-identifier char before `sk-`).
+    let bytes = text.as_bytes();
+    let mut idx = 0;
+    while idx + 3 < bytes.len() {
+        if &bytes[idx..idx + 3] == b"sk-"
+            && (idx == 0 || !(bytes[idx - 1].is_ascii_alphanumeric() || bytes[idx - 1] == b'_'))
+        {
+            let tail = &bytes[idx + 3..];
+            let alnum_len = tail
+                .iter()
+                .take_while(|byte| byte.is_ascii_alphanumeric())
+                .count();
+            if alnum_len >= 20 {
+                let lower = std::str::from_utf8(&tail[..alnum_len])
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                if !lower.starts_with("test")
+                    && !lower.contains("example")
+                    && !lower.contains("placeholder")
+                {
+                    return Some("API secret key");
+                }
+            }
+        }
+        idx += 1;
+    }
+    // AWS Access Key ID: `AKIA` + 16 uppercase alphanumerics.
+    let mut aws_idx = 0;
+    while aws_idx + 20 <= bytes.len() {
+        if &bytes[aws_idx..aws_idx + 4] == b"AKIA"
+            && (aws_idx == 0 || !bytes[aws_idx - 1].is_ascii_alphanumeric())
+            && bytes[aws_idx + 4..aws_idx + 20]
+                .iter()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+            && (aws_idx + 20 == bytes.len() || !bytes[aws_idx + 20].is_ascii_alphanumeric())
+        {
+            return Some("AWS access key ID");
+        }
+        aws_idx += 1;
+    }
+    None
+}
+
+/// Black-box JSON-RPC 2.0 protocol smoke check for process-backed bundles:
+/// materializes the bundle in an isolated temporary directory, spawns its
+/// configured process, sends `initialize`, verifies returned tools/hooks/apis
+/// match the manifest declarations, sends `shutdown`, and confirms clean exit.
+async fn run_protocol_smoke(
+    prepared: &PreparedCatalog,
+    bundle: &Bundle,
+    source_dir: Option<&Path>,
+    packaged_files: Option<&[SourceFile]>,
+) -> anyhow::Result<String> {
+    let bundle_id = &bundle.identity().id;
+    let Some(process) = prepared.bundle_process(bundle_id) else {
+        return Ok("skipped (no process runtime)".to_string());
+    };
+
+    let temp = tempfile::tempdir().context("create temp directory for protocol smoke")?;
+    let root = temp.path().join("bundle");
+    let config_dir = temp.path().join("config");
+    let config_file = config_dir.join("config.yml");
+    fs::create_dir_all(&root).context("create smoke bundle root")?;
+    fs::create_dir_all(&config_dir).context("create smoke config dir")?;
+    fs::write(&config_file, b"").context("write smoke config file")?;
+
+    materialize_for_smoke(&root, bundle, source_dir, packaged_files)?;
+
+    let mut command = expand_smoke_argv(&process.command, &root, &config_file, &config_dir);
+    match process.kind {
+        PreparedProcessKind::Bun => {
+            if command.first().is_some_and(|program| program == "bun")
+                && let Some(bun) = hya_app::plugins::find_bun()
+            {
+                command[0] = bun.to_string_lossy().into_owned();
+            }
+        }
+        PreparedProcessKind::Claude => {
+            let bun = hya_app::plugins::find_bun()
+                .context("protocol smoke for Claude bundle requires Bun")?;
+            let mut runner = vec![
+                bun.to_string_lossy().into_owned(),
+                "run".to_string(),
+                hya_app::plugins::claude_adapter_dir()
+                    .join("src/main.ts")
+                    .to_string_lossy()
+                    .into_owned(),
+                "--plugin-id".to_string(),
+                bundle.namespace().to_string(),
+            ];
+            runner.append(&mut command);
+            command = runner;
+        }
+        PreparedProcessKind::Rust => {}
+    }
+
+    let (program, args) = command
+        .split_first()
+        .context("protocol smoke: process command is empty")?;
+    let mut env = BTreeMap::new();
+    env.insert(
+        "HYA_BUNDLE_ROOT".to_string(),
+        root.to_string_lossy().into_owned(),
+    );
+    env.insert(
+        "CLAUDE_PLUGIN_ROOT".to_string(),
+        root.to_string_lossy().into_owned(),
+    );
+    env.insert(
+        "HYA_BUNDLE_CONFIG_FILE".to_string(),
+        config_file.to_string_lossy().into_owned(),
+    );
+    env.insert(
+        "HYA_BUNDLE_CONFIG_DIR".to_string(),
+        config_dir.to_string_lossy().into_owned(),
+    );
+    if let Ok(path) = std::env::var("PATH") {
+        env.insert("PATH".to_string(), path);
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        env.insert("HOME".to_string(), home);
+    }
+
+    let mut child = tokio::process::Command::new(program)
+        .args(args)
+        .current_dir(&root)
+        .env_clear()
+        .envs(&env)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .with_context(|| format!("protocol smoke: spawn `{}`", command.join(" ")))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .context("protocol smoke: child stdin missing")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("protocol smoke: child stdout missing")?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .context("protocol smoke: child stderr missing")?;
+
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        let _ = stderr.read_to_end(&mut buf).await;
+        if buf.len() > 8192 {
+            buf.drain(..buf.len() - 8192);
+        }
+        String::from_utf8_lossy(&buf).into_owned()
+    });
+
+    let mut reader = BufReader::new(stdout);
+    let init_request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocol_version": 1,
+            "host": {
+                "name": "hya",
+                "version": hya_version::VERSION,
+            }
+        }
+    });
+    let mut init_line = serde_json::to_string(&init_request)?;
+    init_line.push('\n');
+    stdin
+        .write_all(init_line.as_bytes())
+        .await
+        .context("protocol smoke: write initialize request")?;
+    stdin
+        .flush()
+        .await
+        .context("protocol smoke: flush initialize request")?;
+
+    let mut reply_line = String::new();
+    let read_result =
+        tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut reply_line))
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!("protocol smoke: timed out waiting for initialize response")
+            })?
+            .context("protocol smoke: read initialize response")?;
+    if read_result == 0 {
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+        let stderr_text = stderr_task.await.unwrap_or_default();
+        anyhow::bail!(
+            "protocol smoke: process exited before answering initialize\nstderr: {}",
+            stderr_text.trim()
+        );
+    }
+
+    let reply: serde_json::Value = serde_json::from_str(reply_line.trim()).with_context(|| {
+        format!(
+            "protocol smoke: initialize response is not valid JSON: {:?}",
+            reply_line.trim()
+        )
+    })?;
+    if reply.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
+        || reply.get("id").and_then(serde_json::Value::as_u64) != Some(1)
+    {
+        anyhow::bail!("protocol smoke: invalid JSON-RPC 2.0 initialize envelope: {reply}");
+    }
+    if let Some(error) = reply.get("error") {
+        anyhow::bail!("protocol smoke: initialize returned error: {error}");
+    }
+    let result = reply
+        .get("result")
+        .and_then(serde_json::Value::as_object)
+        .context("protocol smoke: initialize response missing `result` object")?;
+    if result
+        .get("protocol_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+    {
+        anyhow::bail!(
+            "protocol smoke: expected protocol_version 1, got {:?}",
+            result.get("protocol_version")
+        );
+    }
+    let plugin_id = result
+        .get("plugin")
+        .and_then(|p| p.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    anyhow::ensure!(
+        !plugin_id.trim().is_empty(),
+        "protocol smoke: initialize result missing non-empty `plugin.id`"
+    );
+
+    let mut actual_tools = BTreeSet::new();
+    if let Some(tools) = result.get("tools").and_then(serde_json::Value::as_array) {
+        for tool in tools {
+            let name = tool
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .filter(|name| !name.is_empty())
+                .context("protocol smoke: tool entry missing non-empty `name`")?;
+            let schema_type = tool
+                .get("inputSchema")
+                .and_then(|schema| schema.get("type"))
+                .and_then(serde_json::Value::as_str);
+            anyhow::ensure!(
+                schema_type == Some("object"),
+                "protocol smoke: tool `{name}` inputSchema.type must be `object`"
+            );
+            actual_tools.insert(name.to_string());
+        }
+    }
+    let actual_hooks: BTreeSet<String> = result
+        .get("hooks")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|hook| hook.get("name").and_then(serde_json::Value::as_str))
+        .map(String::from)
+        .collect();
+    let actual_apis: BTreeSet<String> = result
+        .get("apis")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|api| api.get("name").and_then(serde_json::Value::as_str))
+        .map(String::from)
+        .collect();
+
+    let declared_tools: BTreeSet<String> = bundle
+        .tools()
+        .iter()
+        .map(|tool| tool.local_id.clone())
+        .collect();
+    let declared_hooks: BTreeSet<String> = bundle
+        .hooks()
+        .iter()
+        .map(|hook| hook.local_id.clone())
+        .collect();
+    let declared_apis: BTreeSet<String> = prepared
+        .bundle_apis(bundle_id)
+        .iter()
+        .map(|api| api.id.clone())
+        .collect();
+
+    anyhow::ensure!(
+        declared_tools == actual_tools,
+        "protocol smoke: tools mismatch (manifest={declared_tools:?}, runtime={actual_tools:?})"
+    );
+    anyhow::ensure!(
+        declared_hooks == actual_hooks,
+        "protocol smoke: hooks mismatch (manifest={declared_hooks:?}, runtime={actual_hooks:?})"
+    );
+    anyhow::ensure!(
+        declared_apis == actual_apis,
+        "protocol smoke: apis mismatch (manifest={declared_apis:?}, runtime={actual_apis:?})"
+    );
+
+    // Send graceful shutdown and verify clean exit.
+    let shutdown_request = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\",\"params\":{}}\n";
+    let _ = stdin.write_all(shutdown_request.as_bytes()).await;
+    let _ = stdin.flush().await;
+    let mut shutdown_line = String::new();
+    let _ =
+        tokio::time::timeout(Duration::from_secs(2), reader.read_line(&mut shutdown_line)).await;
+    drop(stdin);
+
+    let status = match tokio::time::timeout(Duration::from_secs(2), child.wait()).await {
+        Ok(Ok(status)) => status,
+        Ok(Err(error)) => {
+            anyhow::bail!("protocol smoke: wait for child exit failed: {error}");
+        }
+        Err(_) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            anyhow::bail!("protocol smoke: process did not exit within 2s after shutdown");
+        }
+    };
+    let stderr_text = stderr_task.await.unwrap_or_default();
+    anyhow::ensure!(
+        status.success(),
+        "protocol smoke: process exited with non-zero status {status}\nstderr: {}",
+        stderr_text.trim()
+    );
+
+    Ok(format!(
+        "passed (tools={} hooks={} apis={})",
+        declared_tools.len(),
+        declared_hooks.len(),
+        declared_apis.len()
+    ))
+}
+
+fn materialize_for_smoke(
+    root: &Path,
+    bundle: &Bundle,
+    source_dir: Option<&Path>,
+    packaged_files: Option<&[SourceFile]>,
+) -> anyhow::Result<()> {
+    let executable_paths: BTreeSet<&str> = bundle
+        .extensions()
+        .iter()
+        .filter(|res| res.binary_base64.is_some() && !res.stable_id.contains("/library/"))
+        .map(|res| res.source_path.as_str())
+        .collect();
+    if let Some(files) = packaged_files {
+        for file in files {
+            let target = root.join(file.path());
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&target, file.bytes())?;
+            if executable_paths.contains(file.path()) {
+                fs::set_permissions(&target, fs::Permissions::from_mode(0o700))?;
+            }
+        }
+        return Ok(());
+    }
+    if let Some(dir) = source_dir {
+        for name in ["bundle.yaml", "bundle.hya.md"] {
+            let src = dir.join(name);
+            if src.is_file() {
+                fs::write(root.join(name), fs::read(&src)?)?;
+            }
+        }
+    }
+    for resource in bundle
+        .tools()
+        .iter()
+        .chain(bundle.skills())
+        .chain(bundle.commands())
+        .chain(bundle.mcp())
+        .chain(bundle.hooks())
+        .chain(bundle.extensions())
+    {
+        let target = root.join(&resource.source_path);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let bytes = resource
+            .source_bytes()
+            .context("decode prepared resource bytes")?;
+        fs::write(&target, bytes)?;
+        if executable_paths.contains(resource.source_path.as_str()) {
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    Ok(())
+}
+
+fn expand_smoke_argv(
+    command: &[String],
+    root: &Path,
+    config_file: &Path,
+    config_dir: &Path,
+) -> Vec<String> {
+    let root_str = root.to_string_lossy();
+    let cfg_file_str = config_file.to_string_lossy();
+    let cfg_dir_str = config_dir.to_string_lossy();
+    command
+        .iter()
+        .map(|arg| {
+            let expanded = arg
+                .replace("${BUNDLE_ROOT}", &root_str)
+                .replace("${CLAUDE_PLUGIN_ROOT}", &root_str)
+                .replace("${BUNDLE_CONFIG_FILE}", &cfg_file_str)
+                .replace("${BUNDLE_CONFIG_DIR}", &cfg_dir_str);
+            let path = Path::new(&expanded);
+            if path.is_relative() && root.join(path).is_file() {
+                root.join(path).to_string_lossy().into_owned()
+            } else {
+                expanded
+            }
+        })
+        .collect()
 }
 
 /// Project bundle directory of the current working directory:
@@ -1279,6 +2196,9 @@ fn write_static_info(
     for skill in bundle.skills() {
         let _ = writeln!(out, "skill{separator}{}", skill.stable_id);
     }
+    for command in bundle.commands() {
+        let _ = writeln!(out, "command{separator}{}", command.stable_id);
+    }
     for tool in bundle.tools() {
         let _ = writeln!(out, "tool{separator}{}", tool.stable_id);
     }
@@ -1715,5 +2635,250 @@ agents: [{ id: decl-lead, role: main, resource_view: { allow: [query, runtime] }
             .unwrap_err()
             .to_string();
         assert!(both.contains("not both") && neither.contains("requires a bundle package"));
+    }
+
+    #[test]
+    fn pack_writes_deterministic_archive_and_rejects_bad_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src-bundle");
+        std::fs::create_dir_all(src.join("commands")).unwrap();
+        std::fs::create_dir_all(src.join("agents")).unwrap();
+        std::fs::write(
+            src.join("bundle.yaml"),
+            "kind: Bundle\nschema_version: 2\nidentity: { id: acme/pack-demo, version: 1.2.3, publisher: acme }\nruntime: { kind: static }\nresources:\n  commands: [{ id: hello, path: commands/hello.md }]\nagents:\n  - path: agents/helper.md\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("commands/hello.md"),
+            "---\nname: hello\ndescription: Say hi\n---\nHello $ARGUMENTS\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("agents/helper.md"),
+            "---\nid: pack-helper\nrole: subagent\ndescription: Helper\n---\nBe helpful.\n",
+        )
+        .unwrap();
+        // Undeclared test/readme file should not prevent packing.
+        std::fs::write(src.join("README.md"), "# Demo\n").unwrap();
+
+        let out_a = dir.path().join("out/a.hyabundle");
+        let out_b = dir.path().join("out/b.hyabundle");
+        super::pack(&src, &out_a).unwrap();
+        super::pack(&src, &out_b).unwrap();
+        let bytes_a = std::fs::read(&out_a).unwrap();
+        let bytes_b = std::fs::read(&out_b).unwrap();
+        assert_eq!(bytes_a, bytes_b);
+        let inspected = hya_bundle::inspect_public_package(&bytes_a).unwrap();
+        assert_eq!(inspected.bundles()[0].identity().id, "acme/pack-demo");
+        assert_eq!(inspected.bundles()[0].commands().len(), 1);
+
+        // Reject bad output extension and non-dir source.
+        assert!(super::pack(&src, &dir.path().join("bad.zip")).is_err());
+        assert!(super::pack(&out_a, &dir.path().join("c.hyabundle")).is_err());
+    }
+
+    #[tokio::test]
+    async fn verify_strict_validates_descriptors_and_rejects_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("strict-bundle");
+        std::fs::create_dir_all(src.join("mcp")).unwrap();
+        std::fs::write(
+            src.join("bundle.yaml"),
+            "kind: Bundle\nschema_version: 2\nidentity: { id: acme/strict-ok, version: 1.0.0, publisher: acme }\nruntime: { kind: static }\nresources:\n  mcp: [{ id: docs, path: mcp/docs.json }]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("mcp/docs.json"),
+            r#"{"transport":"http","url":"https://mcp.example.com/v1","headers":{"Authorization":"Bearer ${env:DOCS_TOKEN}"}}"#,
+        )
+        .unwrap();
+
+        super::verify(
+            &src,
+            super::NamespaceInstallPolicy::DenyConflicts,
+            super::Scope::User,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Also verify packed .hyabundle with --strict.
+        let pkg = dir.path().join("strict-ok.hyabundle");
+        super::pack(&src, &pkg).unwrap();
+        super::verify(
+            &pkg,
+            super::NamespaceInstallPolicy::DenyConflicts,
+            super::Scope::User,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Hardcoded Bearer secret in MCP headers must fail --strict.
+        std::fs::write(
+            src.join("mcp/docs.json"),
+            r#"{"transport":"http","url":"https://mcp.example.com/v1","headers":{"Authorization":"Bearer supersecretliteralvalue12345678"}}"#,
+        )
+        .unwrap();
+        let err = super::verify(
+            &src,
+            super::NamespaceInstallPolicy::DenyConflicts,
+            super::Scope::User,
+            true,
+            false,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("hardcoded secret"), "{err}");
+
+        // Unknown placeholder in MCP must fail --strict.
+        std::fs::write(
+            src.join("mcp/docs.json"),
+            r#"{"transport":"http","url":"https://mcp.example.com/${UNKNOWN_VAR}"}"#,
+        )
+        .unwrap();
+        let err = super::verify(
+            &src,
+            super::NamespaceInstallPolicy::DenyConflicts,
+            super::Scope::User,
+            true,
+            false,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("unsupported placeholder"), "{err}");
+
+        // PEM private key in config.example.yml must fail --strict.
+        std::fs::write(
+            src.join("mcp/docs.json"),
+            r#"{"transport":"http","url":"https://mcp.example.com/v1"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("config.example.yml"),
+            "key: |\n  -----BEGIN PRIVATE KEY-----\n  MIIBVQIBADANBg==\n  -----END PRIVATE KEY-----\n",
+        )
+        .unwrap();
+        let err = super::verify(
+            &src,
+            super::NamespaceInstallPolicy::DenyConflicts,
+            super::Scope::User,
+            true,
+            false,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("PEM private key"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn verify_protocol_smoke_checks_initialize_declarations_and_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("smoke-bundle");
+        std::fs::create_dir_all(src.join("tools")).unwrap();
+        std::fs::create_dir_all(src.join("hooks")).unwrap();
+        std::fs::create_dir_all(src.join("schemas")).unwrap();
+        std::fs::write(
+            src.join("bundle.yaml"),
+            r#"kind: Bundle
+schema_version: 2
+identity: { id: acme/smoke, version: 1.0.0, publisher: acme }
+runtime:
+  kind: js
+  mode: process
+  command: [python3, '${BUNDLE_ROOT}/plugin.py']
+resources:
+  tools:
+    - { id: ping, path: tools/ping.json }
+  hooks:
+    - { id: session.start, path: hooks/hooks.json }
+apis:
+  - { id: health, method: GET, scope: global, path: /health, response_schema: schemas/health.json }
+assets:
+  - { id: plugin, path: plugin.py }
+  - { id: health-schema, path: schemas/health.json }
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("tools/ping.json"),
+            r#"{"schema_version":1,"name":"ping","description":"Ping tool.","permission":"read_only","parameters":{"type":"object"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("hooks/hooks.json"),
+            r#"{"schema_version":1,"hooks":[{"event":"session.start","handler":{"kind":"rpc","method":"hook/session.start"}}]}"#,
+        )
+        .unwrap();
+        std::fs::write(src.join("schemas/health.json"), r#"{"type":"object"}"#).unwrap();
+        let matching_plugin = r#"import json, sys
+for line in sys.stdin:
+    req = json.loads(line)
+    m = req.get("method")
+    rid = req.get("id")
+    if m == "initialize":
+        resp = {
+            "jsonrpc": "2.0",
+            "id": rid,
+            "result": {
+                "protocol_version": 1,
+                "plugin": {"id": "smoke", "version": "1.0.0", "kind": "bun"},
+                "tools": [{"name": "ping", "description": "Ping tool.", "inputSchema": {"type": "object"}}],
+                "hooks": [{"name": "session.start"}],
+                "apis": [{"name": "health"}]
+            }
+        }
+        sys.stdout.write(json.dumps(resp) + "\n")
+        sys.stdout.flush()
+    elif m == "shutdown":
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": rid, "result": {}}) + "\n")
+        sys.stdout.flush()
+        sys.exit(0)
+"#;
+        std::fs::write(src.join("plugin.py"), matching_plugin).unwrap();
+
+        // Directory source verify with --strict --protocol-smoke succeeds.
+        super::verify(
+            &src,
+            super::NamespaceInstallPolicy::DenyConflicts,
+            super::Scope::User,
+            true,
+            true,
+        )
+        .await
+        .unwrap();
+
+        // Packed .hyabundle verify with --strict --protocol-smoke also succeeds.
+        let pkg = dir.path().join("smoke.hyabundle");
+        super::pack(&src, &pkg).unwrap();
+        super::verify(
+            &pkg,
+            super::NamespaceInstallPolicy::DenyConflicts,
+            super::Scope::User,
+            true,
+            true,
+        )
+        .await
+        .unwrap();
+
+        // Mismatched tool declaration must fail --protocol-smoke.
+        let mismatch_plugin = matching_plugin.replace(r#""name": "ping""#, r#""name": "pong""#);
+        std::fs::write(src.join("plugin.py"), mismatch_plugin).unwrap();
+        let err = super::verify(
+            &src,
+            super::NamespaceInstallPolicy::DenyConflicts,
+            super::Scope::User,
+            false,
+            true,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("tools mismatch"), "{err}");
     }
 }

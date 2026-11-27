@@ -89,6 +89,8 @@ mod tests_support {
             schemas: vec![],
             process: None,
             apis: vec![],
+            commands: Vec::new(),
+            runtime: None,
             permission_modes: vec![],
         };
         extra.push(bundle);

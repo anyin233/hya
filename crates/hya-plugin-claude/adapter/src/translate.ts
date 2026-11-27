@@ -114,21 +114,64 @@ export function translatePlugin(dir: string): Translation {
   const mcp = collectMcpFiles(dir)
   const agents = collectAgents(source, dir)
   const hookGroups = parseClaudeHooks(readHooksDocument(dir)).groups
+  const hookNames = (Object.keys(hookGroups) as HookName[])
+    .filter((name) => hookGroups[name].length > 0)
+    .sort()
   const runtimePath = "runtime/claude-plugin.json"
+  const hooksDescriptorPath = "hooks/hooks.json"
   const supportFiles = collectSupportFiles(dir)
   const runtime = `${JSON.stringify({ format_version: 1, identity: {
     id: `claude/${namespace}`,
     version: source.manifest.version,
     publisher: "claude",
   }, namespace, skills, hookGroups }, null, 2)}\n`
+  const hookDescriptorFiles =
+    hookNames.length === 0
+      ? []
+      : [
+          {
+            path: hooksDescriptorPath,
+            content: `${JSON.stringify(
+              {
+                schema_version: 1,
+                hooks: hookNames.flatMap((event) =>
+                  hookGroups[event].flatMap((group) =>
+                    group.commands.map((cmd) => ({
+                      event,
+                      ...(group.matcher.trim().length > 0 ? { matcher: group.matcher.trim() } : {}),
+                      handler: { kind: "rpc" as const, method: `hook/${event}` },
+                      ...(event === "tool.execute.before"
+                        ? { failure_mode: "fail_closed" as const }
+                        : {}),
+                      timeout_ms: Math.min(Math.max(Math.round(cmd.timeoutSeconds * 1000), 1), 3_600_000),
+                    })),
+                  ),
+                ),
+              },
+              null,
+              2,
+            )}\n`,
+          },
+        ]
   const files = [
     ...skills.map((skill) => ({ path: skill.path, content: skill.content })),
     ...mcp.map((entry) => ({ path: entry.path, content: entry.content })),
     ...agents.map((agent) => ({ path: agent.promptPath, content: agent.prompt })),
+    ...hookDescriptorFiles,
     ...supportFiles,
     { path: runtimePath, content: runtime },
   ]
-  const manifestYaml = renderManifest(source, namespace, skills, mcp, agents, hookGroups, runtimePath, supportFiles)
+  const manifestYaml = renderManifest(
+    source,
+    namespace,
+    skills,
+    mcp,
+    agents,
+    hookNames,
+    hooksDescriptorPath,
+    runtimePath,
+    supportFiles,
+  )
   return {
     source,
     namespace,
@@ -326,7 +369,8 @@ function renderManifest(
   skills: readonly TranslatedSkill[],
   mcp: readonly TranslatedMcp[],
   agents: Translation["agents"],
-  hookGroups: Translation["hookGroups"],
+  hookNames: readonly HookName[],
+  hooksDescriptorPath: string,
   runtimePath: string,
   supportFiles: readonly { readonly path: string; readonly content: string }[],
 ): string {
@@ -356,16 +400,13 @@ function renderManifest(
       lines.push(`      path: ${yamlString(entry.path)}`)
     }
   }
-  const hookNames = (Object.keys(hookGroups) as HookName[])
-    .filter((name) => hookGroups[name].length > 0)
-    .sort()
   lines.push("  hooks:")
   if (hookNames.length === 0) {
     lines.push("    []")
   } else {
     for (const name of hookNames) {
       lines.push(`    - id: ${yamlString(name)}`)
-      lines.push(`      path: ${yamlString(runtimePath)}`)
+      lines.push(`      path: ${yamlString(hooksDescriptorPath)}`)
     }
   }
   lines.push("extensions:")

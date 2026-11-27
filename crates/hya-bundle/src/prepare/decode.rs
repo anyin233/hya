@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use super::extensions::{
     validate_hook_local_id, validate_native_binary_bindings, validate_prepared_api_rows,
     validate_prepared_permission_mode_rows, validate_prepared_process_rows,
-    validate_prepared_schema_rows,
+    validate_prepared_runtime, validate_prepared_schema_rows,
 };
 use super::parse::{normalize_source_path, validate_identity};
 use super::resources::validate_resource_views;
@@ -135,9 +135,11 @@ fn prepared_bundle_is_canonical(bundle: &Bundle) -> bool {
     let common = validate_identity(&bundle.identity().id, &bundle.identity().version).is_ok()
         && resources_are_canonical(bundle, "tool", bundle.tools())
         && resources_are_canonical(bundle, "skill", bundle.skills())
+        && resources_are_canonical(bundle, "command", bundle.commands())
         && resources_are_canonical(bundle, "mcp", bundle.mcp())
         && resources_are_canonical(bundle, "hook", bundle.hooks())
         && resources_are_canonical(bundle, "extension", bundle.extensions())
+        && validate_prepared_runtime(bundle)
         && bundle.agents().iter().all(agent_is_canonical)
         && bundle.tui().is_none_or(|tui| {
             validate_tui(tui, bundle.extensions()).is_ok()
@@ -205,6 +207,7 @@ fn validate_prepared_references(bundles: &[Bundle]) -> Result<(), BundleError> {
             .tools()
             .iter()
             .chain(bundle.skills())
+            .chain(bundle.commands())
             .chain(bundle.mcp())
             .chain(bundle.hooks())
             .chain(bundle.extensions())
@@ -223,6 +226,7 @@ fn validate_prepared_references(bundles: &[Bundle]) -> Result<(), BundleError> {
             .tools()
             .iter()
             .chain(bundle.skills())
+            .chain(bundle.commands())
             .chain(bundle.mcp())
             .chain(bundle.hooks())
             .chain(bundle.extensions())
@@ -332,6 +336,7 @@ fn validate_prepared_content_digests(bundle: &Bundle) -> Result<(), BundleError>
         .tools()
         .iter()
         .chain(bundle.skills())
+        .chain(bundle.commands())
         .chain(bundle.mcp())
         .chain(bundle.hooks())
         .chain(bundle.extensions())
