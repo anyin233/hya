@@ -6,7 +6,7 @@ use crate::source::BundleSource;
 
 #[test]
 fn tool_family_manifests_declare_every_native_source_file() -> Result<(), BundleError> {
-    let presets = crate::first_party_source_root().join("presets");
+    let builtin = crate::first_party_source_root().join("builtin");
     let mut missing = Vec::new();
     for family in [
         "base-tools",
@@ -14,7 +14,7 @@ fn tool_family_manifests_declare_every_native_source_file() -> Result<(), Bundle
         "network-tools",
         "channel-tools",
     ] {
-        let source = parse_source(BundleSource::read_directory(presets.join(family))?)?;
+        let source = parse_source(BundleSource::read_directory(builtin.join(family))?)?;
         let declared = source
             .manifest
             .extensions

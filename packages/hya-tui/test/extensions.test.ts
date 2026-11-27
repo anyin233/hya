@@ -423,7 +423,7 @@ export default defineTuiExtension({ activate(api) { let seen = ""; api.registerP
   }, 20_000)
 
   test("the first-party bundle renders sessions and switches projects from the keyboard", async () => {
-    const bundleDir = join(import.meta.dir, "../../../bundles/first-party/basic-tui-components")
+    const bundleDir = join(import.meta.dir, "../../../bundles/builtin/basic-tui-components")
     const yaml = readFileSync(join(bundleDir, "bundle.yaml"), "utf8")
     const files = [...yaml.matchAll(/path: (tui\/[^ }]+)/g)].map((match) => match[1]!)
     const permissions = [...yaml.slice(yaml.indexOf("\ntui:")).matchAll(/^    - (.+)$/gm)].map((match) => match[1]!)

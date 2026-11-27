@@ -4,6 +4,9 @@ identity:
   id: hya/code-mode
   version: 0.0.0
   publisher: hya
+check:
+  command: [bun, test, --pass-with-no-tests]
+  timeout_secs: 120
 extensions:
   process:
     kind: bun

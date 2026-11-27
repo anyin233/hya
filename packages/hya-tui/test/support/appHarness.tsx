@@ -1022,7 +1022,7 @@ let basicComponentsDir: string | undefined
 /** Load the real first-party `hya/basic-tui-components` extension once for suites testing Sessions/Projects/Todos/Context panes. */
 export async function loadBasicComponents(): Promise<void> {
   if (extensionManager.list().some((e) => e.id === "hya/basic-tui-components" && e.state === "running")) return
-  const bundleDir = join(import.meta.dir, "../../../../bundles/first-party/basic-tui-components")
+  const bundleDir = join(import.meta.dir, "../../../../bundles/builtin/basic-tui-components")
   const yaml = readFileSync(join(bundleDir, "bundle.yaml"), "utf8")
   const files = [...yaml.matchAll(/path: (tui\/[^ }]+)/g)].map((m) => m[1]!)
   const permissions = [...yaml.slice(yaml.indexOf("\ntui:")).matchAll(/^    - (.+)$/gm)].map((m) => m[1]!)

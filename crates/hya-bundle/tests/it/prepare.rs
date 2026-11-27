@@ -1012,7 +1012,7 @@ fn agent_channels_prepare_validate_reject_forged_and_first_party_preset() {
     // First-party agent-channels preset check.
     let preset_src = BundleSource::read_directory(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../bundles/presets/agent-channels"),
+            .join("../../bundles/builtin/agent-channels"),
     )
     .expect("read preset");
     let preset = prepare_package(preset_src).expect("prepare preset");
