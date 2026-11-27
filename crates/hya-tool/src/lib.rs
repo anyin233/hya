@@ -118,7 +118,8 @@ pub use spawn::{
     SpawnRequestSendError, SpawnRequestSink, SpawnerPlane, sanitize_handle_prefix,
 };
 pub use tool::{
-    AliasVisibility, DuplicateName, NamedTool, ResolvedTool, Tool, ToolCtx, ToolError,
-    ToolOperation, ToolPermission, ToolRegistry, ToolRegistrySnapshot, ToolResultPolicy,
+    AliasVisibility, DuplicateName, NamedTool, RESERVED_KERNEL_TOOLS, ResolvedTool, Tool, ToolCtx,
+    ToolError, ToolOperation, ToolPermission, ToolRegistry, ToolRegistrySnapshot, ToolResultPolicy,
+    is_reserved_kernel_tool,
 };
 pub use websearch::{WebSearchConfig, WebSearchPlane, WebSearchProvider};

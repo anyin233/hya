@@ -37,7 +37,8 @@ pub use extensions::{
     NativePlannerOutput, NativeService, NativeSessionLifecycleInput, NativeTextCompleteInput,
     NativeToolAfterInput, NativeToolAfterOutcome, NativeToolBeforeInput, NativeToolBeforeOutcome,
     NativeToolResult, NativeVerifierVerdict, ProjectionReducer, ServiceHealth, ToolVisibilityInput,
-    ToolVisibilityOutcome, UriContent, UriResolveCtx, UriSchemaHandler,
+    ToolVisibilityOutcome, UriContent, UriResolveCtx, UriSchemaHandleAdapter, UriSchemaHandler,
+    adapt_uri_schema_handler,
 };
 pub use host::{
     BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,

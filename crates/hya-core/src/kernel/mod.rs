@@ -11,7 +11,7 @@ pub mod prompt;
 pub mod request;
 mod rewrite;
 pub mod round;
-/// The kernel's six tools.
+/// The kernel's seven tools.
 pub mod tools;
 mod view;
 mod workspace;
@@ -384,7 +384,16 @@ impl ToolGate for Bare<'_> {
                 biased;
                 () = self.cancel.cancelled() => Err("cancelled".to_string()),
                 result = tool.execute(self.ctx, std::mem::take(&mut call.input)) => {
-                    result.map_err(|error| error.to_string())
+                    result
+                        .map(|output| {
+                            hya_tool::cap_tool_output_spilling(
+                                output,
+                                tool.result_policy(),
+                                &self.ctx.artifacts.store(&self.ctx.workdir),
+                                &call.name,
+                            )
+                        })
+                        .map_err(|error| error.to_string())
                 }
             },
         };
@@ -804,11 +813,19 @@ pub async fn run_with_watches(
         session,
         message,
     };
+    let schemas = tools
+        .iter()
+        .map(|tool| match tool.name() {
+            tools::REWRITE => tools::rewrite_schema(),
+            tools::TODO => tools::todo_schema(),
+            _ => tool.schema(),
+        })
+        .collect();
     let mut bare = Bare {
         scope: &scope,
         model,
         system,
-        schemas: tools.iter().map(|tool| tool.schema()).collect(),
+        schemas,
         tools,
         ctx,
         cancel,

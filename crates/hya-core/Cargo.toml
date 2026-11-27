@@ -14,6 +14,7 @@ workspace = true
 hya-bundle = { workspace = true }
 hya-proto = { workspace = true }
 hya-provider = { workspace = true }
+hya-runtime-abi = { workspace = true }
 hya-tool = { workspace = true }
 hya-tool-loader = { workspace = true }
 hya-context = { workspace = true }
@@ -23,6 +24,7 @@ tokio-util = { workspace = true }
 futures = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
+regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

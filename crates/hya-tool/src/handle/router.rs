@@ -3,14 +3,20 @@
 //! The router owns the scheme table. A [`HandleRef`] names a family and a
 //! resource; the router reads its bytes and applies the caller's projection.
 
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use async_trait::async_trait;
+use hya_proto::SessionId;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::HandleError;
 use super::artifact::{ArtifactId, ArtifactStore, write_atomic};
 use super::plane::ARTIFACT_DIR;
 use super::reference::{HandleRef, HandleScheme, Projection};
+use super::registry::{SchemeRegistry, SchemeRegistryError};
 use crate::SkillPlane;
 
 /// Workspace-relative directory holding agent scratch payloads.
@@ -18,6 +24,78 @@ const LOCAL_DIR: &str = ".hya/local";
 
 /// Subdirectory of the artifact root holding materialized projections.
 const VIEW_DIR: &str = ".views";
+
+/// Context passed to a [`DynamicUriHandler`] invoked through [`HandleRouter`].
+pub struct DynamicUriCtx<'a> {
+    /// Session id requesting the handle, if known.
+    pub session: Option<SessionId>,
+    /// Session working directory.
+    pub workdir: &'a Path,
+}
+
+/// Resolved content returned by [`DynamicUriHandler::read`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DynamicUriContent {
+    /// Resolved UTF-8 text body.
+    pub body: String,
+    /// IANA media type (e.g. `"text/plain"`, `"text/markdown"`, `"application/json"`).
+    pub media_type: String,
+    /// Optional structured metadata returned by the handler.
+    pub metadata: Option<Value>,
+}
+
+/// Async handler for a non-internal URI scheme registered on [`HandleRouter`].
+#[async_trait]
+pub trait DynamicUriHandler: Send + Sync {
+    /// URI scheme token before `://` (e.g. `"custom"`).
+    fn scheme(&self) -> &str;
+
+    /// Whether writes through [`DynamicUriHandler::write`] are permitted.
+    fn writable(&self) -> bool {
+        false
+    }
+
+    /// Resolve a full URI reference (e.g. `custom://item/1`).
+    async fn read(
+        &self,
+        ctx: DynamicUriCtx<'_>,
+        uri: &str,
+    ) -> Result<DynamicUriContent, HandleError>;
+
+    /// Write content to a URI reference when [`DynamicUriHandler::writable`] is `true`.
+    async fn write(
+        &self,
+        _ctx: DynamicUriCtx<'_>,
+        _uri: &str,
+        _content: &str,
+    ) -> Result<Value, HandleError> {
+        Err(HandleError::SchemeNotWritable(self.scheme().to_string()))
+    }
+}
+
+/// Outcome of resolving any handle URI (internal or dynamic) via [`HandleRouter::resolve_uri`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedHandle {
+    /// Resolved UTF-8 body.
+    pub body: String,
+    /// Scheme token before `://`.
+    pub scheme: String,
+    /// IANA media type of the body.
+    pub media_type: String,
+    /// Optional structured metadata supplied by a dynamic handler.
+    pub metadata: Option<Value>,
+    /// Present when resolved by one of the closed internal families.
+    pub internal: Option<HandleScheme>,
+}
+
+/// Outcome of routing a handle write via [`HandleRouter::write_uri`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WriteHandleOutcome {
+    /// Writable internal `local://` handle resolved to its validated workspace path.
+    LocalPath(PathBuf),
+    /// Writable dynamic URI handler completed the write and returned its structured reply.
+    Handled(Value),
+}
 
 /// A resolved handle body and what produced it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -30,7 +108,8 @@ pub struct HandleContent {
     pub media_type: String,
 }
 
-/// Resolves internal resource URLs for one session's working directory.
+/// Resolves internal resource URLs and registered dynamic URI schemes for one
+/// session's working directory.
 ///
 /// Holds no open handles, so tools take a clone per call.
 #[derive(Clone, Default)]
@@ -39,6 +118,7 @@ pub struct HandleRouter {
     local_root: PathBuf,
     workdir: PathBuf,
     skills: SkillPlane,
+    dynamic_handlers: Arc<BTreeMap<String, Arc<dyn DynamicUriHandler>>>,
 }
 
 impl std::fmt::Debug for HandleRouter {
@@ -47,6 +127,10 @@ impl std::fmt::Debug for HandleRouter {
             .field("artifacts", &self.artifacts)
             .field("local_root", &self.local_root)
             .field("workdir", &self.workdir)
+            .field(
+                "dynamic_schemes",
+                &self.dynamic_handlers.keys().collect::<Vec<_>>(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -61,6 +145,7 @@ impl HandleRouter {
             local_root: workdir.join(LOCAL_DIR),
             workdir,
             skills: SkillPlane::default(),
+            dynamic_handlers: Arc::default(),
         }
     }
 
@@ -78,10 +163,146 @@ impl HandleRouter {
         self
     }
 
+    /// Register one dynamic URI scheme handler on this router.
+    ///
+    /// # Errors
+    /// Returns [`SchemeRegistryError::ProtectedScheme`] if `handler` attempts to
+    /// claim `artifact`, `skill`, or `local`, or
+    /// [`SchemeRegistryError::AlreadyOwned`] if the scheme is already bound.
+    pub fn with_uri_handler(
+        mut self,
+        handler: Arc<dyn DynamicUriHandler>,
+    ) -> Result<Self, SchemeRegistryError> {
+        let scheme = handler.scheme().to_string();
+        if SchemeRegistry::is_internal_scheme(&scheme) {
+            return Err(SchemeRegistryError::ProtectedScheme(scheme));
+        }
+        let map = Arc::make_mut(&mut self.dynamic_handlers);
+        if map.contains_key(&scheme) {
+            return Err(SchemeRegistryError::AlreadyOwned {
+                owner: format!("uri-handler:{scheme}"),
+                scheme,
+            });
+        }
+        map.insert(scheme, handler);
+        Ok(self)
+    }
+
+    /// Install a shared map of dynamic URI scheme handlers.
+    #[must_use]
+    pub fn with_uri_handlers(
+        mut self,
+        handlers: Arc<BTreeMap<String, Arc<dyn DynamicUriHandler>>>,
+    ) -> Self {
+        self.dynamic_handlers = handlers;
+        self
+    }
+
+    /// Whether a dynamic URI handler is registered for `scheme`.
+    #[must_use]
+    pub fn has_uri_handler(&self, scheme: &str) -> bool {
+        self.dynamic_handlers.contains_key(scheme)
+    }
+
+    /// Look up the registered dynamic URI handler for `scheme`, if any.
+    #[must_use]
+    pub fn uri_handler(&self, scheme: &str) -> Option<&Arc<dyn DynamicUriHandler>> {
+        self.dynamic_handlers.get(scheme)
+    }
+
     /// Store that `artifact://` reads from and tools spill into.
     #[must_use]
     pub fn artifacts(&self) -> &ArtifactStore {
         &self.artifacts
+    }
+
+    /// Resolve an internal (`artifact://`, `skill://`, `local://`) or
+    /// dynamically registered URI handle.
+    ///
+    /// # Errors
+    /// Returns [`HandleError::NotAHandle`] when `uri` carries no `scheme://`
+    /// prefix, [`HandleError::UnknownScheme`] when the scheme is neither
+    /// internal nor registered, or the underlying resolution error.
+    pub async fn resolve_uri(
+        &self,
+        session: Option<SessionId>,
+        uri: &str,
+    ) -> Result<ResolvedHandle, HandleError> {
+        let (scheme, _) = uri
+            .split_once("://")
+            .ok_or_else(|| HandleError::NotAHandle(uri.to_string()))?;
+        if SchemeRegistry::is_internal_scheme(scheme) {
+            let reference: HandleRef = uri.parse()?;
+            let content = self.resolve(&reference)?;
+            return Ok(ResolvedHandle {
+                body: content.body,
+                scheme: content.scheme.as_str().to_string(),
+                media_type: content.media_type,
+                metadata: None,
+                internal: Some(content.scheme),
+            });
+        }
+        let Some(handler) = self.dynamic_handlers.get(scheme) else {
+            return Err(HandleError::UnknownScheme(scheme.to_string()));
+        };
+        let content = handler
+            .read(
+                DynamicUriCtx {
+                    session,
+                    workdir: &self.workdir,
+                },
+                uri,
+            )
+            .await?;
+        Ok(ResolvedHandle {
+            body: content.body,
+            scheme: scheme.to_string(),
+            media_type: content.media_type,
+            metadata: content.metadata,
+            internal: None,
+        })
+    }
+
+    /// Route a write to an internal (`local://`) or dynamically registered
+    /// writable URI handle.
+    ///
+    /// # Errors
+    /// Returns [`HandleError::NotAHandle`] when `uri` has no `scheme://` prefix,
+    /// [`HandleError::NotWritable`] / [`HandleError::SchemeNotWritable`] for
+    /// read-only schemes, [`HandleError::UnknownScheme`] for unregistered
+    /// schemes, or the handler's write error.
+    pub async fn write_uri(
+        &self,
+        session: Option<SessionId>,
+        uri: &str,
+        content: &str,
+    ) -> Result<WriteHandleOutcome, HandleError> {
+        let (scheme, _) = uri
+            .split_once("://")
+            .ok_or_else(|| HandleError::NotAHandle(uri.to_string()))?;
+        if SchemeRegistry::is_internal_scheme(scheme) {
+            let reference: HandleRef = uri.parse()?;
+            return Ok(WriteHandleOutcome::LocalPath(
+                self.write_target(&reference)?,
+            ));
+        }
+        let Some(handler) = self.dynamic_handlers.get(scheme) else {
+            return Err(HandleError::UnknownScheme(scheme.to_string()));
+        };
+        if !handler.writable() {
+            return Err(HandleError::SchemeNotWritable(scheme.to_string()));
+        }
+        let reply = handler
+            .write(
+                DynamicUriCtx {
+                    session,
+                    workdir: &self.workdir,
+                },
+                uri,
+                content,
+            )
+            .await?;
+        Ok(WriteHandleOutcome::Handled(reply))
     }
 
     /// Resolve a parsed handle to its body.

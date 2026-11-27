@@ -386,7 +386,12 @@ async fn bare_turn(session: SessionId, max_context: u32, scripts: Vec<Script>) -
 }
 
 fn tool_ctx(workdir: &Path, cancel: &CancellationToken) -> ToolCtx {
-    let (permission, _rx) = PermissionPlane::new(PermissionRules::new(Vec::new()));
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![
+        hya_tool::Rule::new(hya_tool::Action::Read, "*", hya_tool::Mode::Allow),
+        hya_tool::Rule::new(hya_tool::Action::Edit, "*", hya_tool::Mode::Allow),
+        hya_tool::Rule::new(hya_tool::Action::Bash, "*", hya_tool::Mode::Allow),
+        hya_tool::Rule::new(hya_tool::Action::Grep, "*", hya_tool::Mode::Allow),
+    ]));
     ToolCtx {
         nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: hya_tool::WorkflowPlane::disconnected(),
