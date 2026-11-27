@@ -61,6 +61,8 @@
     --stage-sm-dark: rgba(0, 0, 0, 0.45);
     --stage-lg-light: rgba(15, 21, 34, 0.12);
     --stage-lg-dark: rgba(0, 0, 0, 0.42);
+    --mascot-shadow-light: rgba(20, 27, 43, 0.1);
+    --mascot-shadow-dark: rgba(0, 0, 0, 0.44);
 
     --scrollbar-thumb-light: #6e788c;
     --scrollbar-thumb-dark: #7d8ba3;
@@ -71,8 +73,8 @@
     --tui-chrome-dark: #101621;
     --tui-bg-light: #0d121a;
     --tui-bg-dark: #090d14;
-    --tui-panel-light: #121924;
-    --tui-panel-dark: #0e141f;
+    --tui-panel-light: #0d121a;
+    --tui-panel-dark: #090d14;
     --tui-fg: #e8edf3;
     --tui-muted: #9caab9;
     --tui-focus: #73c8e8;
@@ -102,6 +104,7 @@
     --shadow-lg: var(--shadow-lg-light);
     --stage-sm: var(--stage-sm-light);
     --stage-lg: var(--stage-lg-light);
+    --mascot-shadow: var(--mascot-shadow-light);
     --scrollbar-thumb: var(--scrollbar-thumb-light);
     --scrollbar-track: var(--scrollbar-track-light);
     --tui-chrome: var(--tui-chrome-light);
@@ -129,6 +132,7 @@
         --shadow-lg: var(--shadow-lg-dark);
         --stage-sm: var(--stage-sm-dark);
         --stage-lg: var(--stage-lg-dark);
+        --mascot-shadow: var(--mascot-shadow-dark);
         --scrollbar-thumb: var(--scrollbar-thumb-dark);
         --scrollbar-track: var(--scrollbar-track-dark);
         --tui-chrome: var(--tui-chrome-dark);
@@ -157,6 +161,7 @@
       --shadow-lg: var(--shadow-lg-dark);
       --stage-sm: var(--stage-sm-dark);
       --stage-lg: var(--stage-lg-dark);
+      --mascot-shadow: var(--mascot-shadow-dark);
       --scrollbar-thumb: var(--scrollbar-thumb-dark);
       --scrollbar-track: var(--scrollbar-track-dark);
       --tui-chrome: var(--tui-chrome-dark);
@@ -184,6 +189,7 @@
       --shadow-lg: light-dark(var(--shadow-lg-light), var(--shadow-lg-dark));
       --stage-sm: light-dark(var(--stage-sm-light), var(--stage-sm-dark));
       --stage-lg: light-dark(var(--stage-lg-light), var(--stage-lg-dark));
+      --mascot-shadow: light-dark(var(--mascot-shadow-light), var(--mascot-shadow-dark));
       --scrollbar-thumb: light-dark(var(--scrollbar-thumb-light), var(--scrollbar-thumb-dark));
       --scrollbar-track: light-dark(var(--scrollbar-track-light), var(--scrollbar-track-dark));
       --tui-chrome: light-dark(var(--tui-chrome-light), var(--tui-chrome-dark));
@@ -210,8 +216,9 @@
     --sans: "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
     --mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, "Noto Sans Mono CJK SC", monospace;
 
-    --body-size: 1.02rem;
+    --body-size: clamp(1.02rem, 0.96rem + 0.16vw, 1.1rem);
     --body-lh: 1.74;
+    --shell-max: clamp(84rem, 88vw, 118rem);
     --radius: 10px;
     --radius-sm: 6px;
 
@@ -338,11 +345,11 @@
 /* ---------- 4. Layout Shells ---------- */
 @layer layout {
   .page-shell {
-    --shell-columns: minmax(0, 1.32fr) minmax(21rem, 32rem);
-    --shell-gap: clamp(2rem, 3.6vw, 4rem);
-    inline-size: min(100%, 84rem);
+    --shell-columns: minmax(0, 1fr) minmax(21rem, clamp(26.5rem, 26vw, 34rem));
+    --shell-gap: clamp(2rem, 3.4vw, 4.25rem);
+    inline-size: min(100%, var(--shell-max));
     margin-inline: auto;
-    padding-inline: 2rem;
+    padding-inline: clamp(1.5rem, 2.5vw, 3rem);
     padding-block-end: 4.5rem;
     display: grid;
     grid-template-columns: var(--shell-columns);
@@ -379,11 +386,12 @@
     min-block-size: 100svh;
     display: flex;
     align-items: safe center;
-    padding-block: 2rem;
+    padding-block: clamp(1.25rem, 3svh, 2.5rem);
   }
 
   .stage > .figure-frame {
     inline-size: 100%;
+    block-size: clamp(27.5rem, 72svh, 52rem);
   }
 }
 
@@ -437,11 +445,11 @@
   .sticky-nav {
     position: relative;
     z-index: 20;
-    padding: 0.9rem 2rem 0;
+    padding: 0.9rem clamp(1.5rem, 2.5vw, 3rem) 0;
   }
   .sticky-nav-inner {
     position: relative;
-    inline-size: min(100%, 84rem);
+    inline-size: min(100%, var(--shell-max));
     margin-inline: auto;
     display: flex;
     justify-content: space-between;
@@ -731,14 +739,40 @@
 
   /* Install Tab Box */
   .tab-box {
+    --hero-mascot-h: clamp(6.15rem, min(9.8vw, 13.6svh), 8.75rem);
+    position: relative;
     inline-size: 100%;
     max-inline-size: 46rem;
-    margin-block-start: 0.35rem;
+    margin-block-start: calc(var(--hero-mascot-h) * 0.62);
     text-align: start;
     border: 1px solid var(--line-strong);
     border-radius: var(--radius);
     background: var(--surface);
     box-shadow: var(--card-shadow);
+
+    @media (max-width: 34em) {
+      --hero-mascot-h: 4.65rem;
+    }
+  }
+  .hero-mascot {
+    position: absolute;
+    z-index: 3;
+    inset-inline-end: clamp(0.45rem, 2.2vw, 1.5rem);
+    inset-block-start: calc(var(--hero-mascot-h) * -0.6903);
+    block-size: var(--hero-mascot-h);
+    inline-size: auto;
+    aspect-ratio: 564 / 840;
+    pointer-events: none;
+    user-select: none;
+    filter: drop-shadow(0 5px 12px var(--mascot-shadow));
+
+    @media (max-width: 34em) {
+      inset-inline-end: 0.15rem;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      animation: fade-up 560ms 80ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
   }
   .tab-list {
     position: relative;
@@ -746,7 +780,7 @@
     gap: 0.15rem;
     overflow-x: auto;
     scroll-snap-type: inline proximity;
-    padding: 0.35rem 0.5rem 0;
+    padding: 0.42rem 5.25rem 0 0.5rem;
     border-block-end: 1px solid var(--line);
     border-start-start-radius: calc(var(--radius) - 1px);
     border-start-end-radius: calc(var(--radius) - 1px);
@@ -779,6 +813,11 @@
     font-weight: 500;
     cursor: pointer;
     transition: color 140ms ease;
+
+    @media (max-width: 34em) {
+      padding-inline: 0.62rem;
+      font-size: 0.8rem;
+    }
 
     &:hover,
     &[aria-selected="true"] {
@@ -942,14 +981,23 @@
 
   .media-frame {
     position: relative;
-    min-block-size: 27.5rem;
+    flex: 1 1 0%;
+    min-block-size: 0;
     background: var(--tui-bg);
     color: var(--tui-fg);
     display: flex;
     flex-direction: column;
   }
+  .stage .media-frame {
+    container: tui / size;
+  }
+  .section-inline-media .media-frame {
+    flex: 1 1 auto;
+    container: tui / inline-size;
+  }
   .media-content {
     flex: 1 1 auto;
+    min-block-size: 0;
     display: flex;
     flex-direction: column;
 
@@ -958,9 +1006,10 @@
     }
   }
 
-  /* 真实 Hya OpenTUI 界面组件 */
+  /* 真实 Hya OpenTUI 界面组件（随容器宽高渐进展示） */
   .hya-tui {
     flex: 1 1 auto;
+    min-block-size: 0;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -968,25 +1017,90 @@
     background: var(--tui-bg);
     color: var(--tui-fg);
     font-family: var(--mono);
-    font-size: clamp(0.7rem, 0.64rem + 0.18vw, 0.78rem);
+    font-size: clamp(0.71rem, 0.65rem + 0.16vw, 0.82rem);
     line-height: 1.48;
-    overflow-x: auto;
-    scrollbar-width: thin;
+    overflow: hidden;
+
+    @container tui (width >= 58rem) {
+      padding: 0.9rem 1rem 0.8rem;
+    }
   }
 
   .hya-tui-workspace {
     flex: 1 1 auto;
+    min-block-size: 0;
     display: grid;
-    grid-template-columns: 11em minmax(0, 1fr) 16.5em;
-    gap: 0.55em;
-    min-inline-size: 43em;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.65em;
+
+    @container tui (width >= 48rem) {
+      grid-template-columns: minmax(0, 1fr) 17.5em;
+    }
+    @container tui (width >= 58rem) {
+      grid-template-columns: 12em minmax(0, 1fr) 18em;
+    }
+    @container tui (width >= 66rem) {
+      grid-template-columns: 13em minmax(0, 1fr) 19em;
+    }
   }
+
   .hya-tui-split {
     flex: 1 1 auto;
+    min-block-size: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1.28fr) minmax(15.5em, 0.92fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 0.6em;
-    min-inline-size: 40em;
+
+    @container tui (width >= 40rem) {
+      grid-template-columns: minmax(0, 1.26fr) minmax(15.5em, 0.92fr);
+    }
+    @container tui (width >= 58rem) {
+      grid-template-columns: minmax(0, 1.18fr) 15.5em minmax(16.5em, 0.98fr);
+    }
+  }
+
+  .section-inline-media :is(.tui-if-md-h, .tui-if-lg-h, .tui-if-xl-h) {
+    display: none !important;
+  }
+  @container tui (width < 40rem) {
+    .tui-if-md-w {
+      display: none !important;
+    }
+  }
+  @container tui (width >= 40rem) {
+    .tui-hide-md-w {
+      display: none !important;
+    }
+  }
+  @container tui (width < 48rem) {
+    .tui-if-lg-w {
+      display: none !important;
+    }
+  }
+  @container tui (width >= 48rem) {
+    .tui-hide-lg-w {
+      display: none !important;
+    }
+  }
+  @container tui (width < 58rem) {
+    .tui-if-xl-w {
+      display: none !important;
+    }
+  }
+  @container tui (height < 31rem) {
+    .tui-if-md-h {
+      display: none !important;
+    }
+  }
+  @container tui (height < 37rem) {
+    .tui-if-lg-h {
+      display: none !important;
+    }
+  }
+  @container tui (height < 43rem) {
+    .tui-if-xl-h {
+      display: none !important;
+    }
   }
 
   .tui-col {
@@ -994,6 +1108,7 @@
     flex-direction: column;
     justify-content: space-between;
     min-inline-size: 0;
+    min-block-size: 0;
     gap: 0.45rem;
   }
   .tui-col-start {
@@ -1004,9 +1119,17 @@
     flex-direction: column;
     gap: 0.55rem;
     min-inline-size: 0;
+    min-block-size: 0;
+    overflow: hidden;
   }
   .tui-scroll-tight {
     gap: 0.4rem;
+
+    .tui-pane & div:not(:has(> div)) {
+      white-space: pre;
+      overflow: clip;
+      text-overflow: ellipsis;
+    }
   }
 
   .tui-pane {
@@ -1022,6 +1145,12 @@
     &.is-focused {
       border-color: var(--tui-focus);
     }
+
+    & > div:not(.tui-scroll, .tui-rule) {
+      white-space: pre;
+      overflow: clip;
+      text-overflow: ellipsis;
+    }
   }
   .tui-pane-between {
     justify-content: space-between;
@@ -1030,6 +1159,7 @@
     position: absolute;
     inset-block-start: -0.62em;
     inset-inline-start: 0.55rem;
+    max-inline-size: calc(100% - 1.1rem);
     padding-inline: 0.3rem;
     background: var(--tui-panel);
     color: var(--tui-fg);
@@ -1037,6 +1167,8 @@
     font-size: 0.94em;
     line-height: 1.1;
     white-space: nowrap;
+    overflow: clip;
+    text-overflow: ellipsis;
   }
   .tui-pane-foot {
     font-size: 0.9em;
@@ -1048,6 +1180,12 @@
     display: flex;
     flex-direction: column;
     gap: 0.16rem;
+
+    &:not(.tui-viewer-pane) > div:not(.tui-kv, .tui-passive-title) {
+      white-space: nowrap;
+      overflow: clip;
+      text-overflow: ellipsis;
+    }
   }
   .tui-passive-title {
     color: var(--tui-fg);
@@ -1060,13 +1198,6 @@
     background: var(--tui-panel);
     padding: 0.28rem 0.55rem;
     color: var(--tui-fg);
-  }
-  .tui-notice {
-    padding: 0.25rem 0.5rem;
-    border-inline-start: 2px solid rgba(115, 200, 232, 0.45);
-    background: rgba(115, 200, 232, 0.06);
-    color: var(--tui-muted);
-    font-size: 0.95em;
   }
   .tui-assistant {
     display: flex;
@@ -1127,19 +1258,218 @@
     }
   }
   .tui-rule {
-    color: var(--tui-border);
-    overflow: clip;
+    display: flex;
+    align-items: center;
+    block-size: 0.85em;
+    inline-size: 100%;
+
+    &::before {
+      content: "";
+      inline-size: 100%;
+      block-size: 1px;
+      background: var(--tui-border);
+    }
+  }
+  .tui-rule-short {
+    inline-size: 11rem;
+    max-inline-size: 100%;
+  }
+
+  /* ---------- 三屏实时动态演示：状态切换、Braille Spinner、打字机与真实 zsh 终端缓冲区 ---------- */
+  [data-tui-anim]:not([data-phase="1"]) .on-p1,
+  [data-tui-anim]:not([data-phase="2"]) .on-p2,
+  [data-tui-anim]:not([data-phase="3"]) .on-p3,
+  [data-tui-anim]:not([data-phase="4"]) .on-p4,
+  [data-tui-anim]:not([data-phase="5"]) .on-p5,
+  [data-tui-anim]:not([data-phase="1"], [data-phase="2"]) .on-p12,
+  [data-tui-anim]:not([data-phase="1"], [data-phase="3"]) .on-p13,
+  [data-tui-anim]:not([data-phase="2"], [data-phase="4"]) .on-p24,
+  [data-tui-anim]:not([data-phase="3"], [data-phase="4"]) .on-p34,
+  [data-tui-anim]:not([data-phase="1"], [data-phase="2"], [data-phase="3"]) .on-p123,
+  [data-tui-anim]:not([data-phase="2"], [data-phase="3"]) .on-p23,
+  [data-tui-anim]:not([data-phase="2"], [data-phase="3"], [data-phase="4"]) .on-p234 {
+    display: none !important;
+  }
+
+  .tui-divider {
+    color: var(--tui-muted);
+    font-size: 0.94em;
+    padding-block: 0.1rem;
     white-space: nowrap;
+    overflow: clip;
+    text-overflow: ellipsis;
+  }
+
+  .tui-viewer-pane {
+    padding-inline: 0.55rem;
+    gap: 0.35rem;
+    min-inline-size: 0;
+    min-block-size: 0;
+  }
+
+  .tui-command-overlay {
+    position: absolute;
+    z-index: 6;
+    inset-block-start: 1.35rem;
+    inset-inline: clamp(0.85rem, 8%, 5.5rem);
+    background: var(--tui-bg);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  }
+
+  .tui-ellipsis {
+    white-space: nowrap;
+    overflow: clip;
+    text-overflow: ellipsis;
+  }
+
+  .tui-working {
+    color: var(--tui-muted);
+    padding-inline: 0.2rem;
+    white-space: nowrap;
+    overflow: clip;
+    text-overflow: ellipsis;
+  }
+
+  /* 焦点随真实 keyboardOwner 切换（Subagents / Commands 聚焦时输入框降为普通边框） */
+  [data-tui-anim="pack"]:not([data-phase="2"]) .tui-focus-on-p2,
+  [data-tui-anim="runtime"][data-phase="1"] .tui-focus-on-p5 {
+    border-color: var(--tui-border);
+  }
+  [data-tui-anim="pack"]:not([data-phase="2"]) .tui-focus-except-p2 {
+    border-color: var(--tui-focus);
+  }
+
+  .tui-spin {
+    display: inline-block;
+
+    &::before {
+      content: "⠋";
+
+      @media (prefers-reduced-motion: no-preference) {
+        animation: braille-spin 720ms steps(1, end) infinite;
+      }
+    }
+  }
+
+  .tui-type {
+    display: inline-block;
+    vertical-align: bottom;
+    white-space: nowrap;
+
+    @media (prefers-reduced-motion: no-preference) {
+      animation: term-type 620ms steps(18, end) both;
+    }
+  }
+
+  /* Section 03：Hya 备用屏幕缓冲区 (Alternate Screen) ⇄ 真实 zsh 正常终端缓冲区切换 */
+  .tui-screen-stack {
+    display: grid;
+    padding: 0;
+  }
+  .tui-buffer-layer {
+    position: relative;
+    grid-area: 1 / 1;
+    min-inline-size: 0;
+    min-block-size: 0;
+    padding: 0.75rem 0.85rem 0.65rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+
+    @container tui (width >= 58rem) {
+      padding: 0.9rem 1rem 0.8rem;
+    }
+  }
+
+  /* 模拟真实终端 Alternate Screen 瞬切（无花哨缩放，干脆回到 shell） */
+  [data-tui-anim="runtime"]:not([data-phase="1"], [data-phase="5"]) .on-rt-tui {
+    visibility: hidden;
+    pointer-events: none;
+  }
+  [data-tui-anim="runtime"]:is([data-phase="1"], [data-phase="5"]) .on-rt-shell {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  /* 真实 oh-my-zsh 交互终端样式 */
+  .zsh-screen {
+    justify-content: flex-start;
+    gap: 0.28rem;
+    background: var(--tui-bg);
+    color: var(--tui-fg);
+    line-height: 1.52;
+    overflow: hidden;
+  }
+  .zsh-line {
+    white-space: nowrap;
+    overflow: clip;
+    text-overflow: ellipsis;
+  }
+  .zsh-out {
+    display: flex;
+    flex-direction: column;
+    gap: 0.08rem;
+    margin-block-end: 0.25rem;
+    white-space: nowrap;
+    overflow: clip;
+  }
+  .zsh-arrow {
+    color: #98c379;
+    font-weight: 700;
+  }
+  .zsh-dir {
+    color: #61afef;
+    font-weight: 700;
+  }
+  .zsh-git {
+    color: #7c97d6;
+    font-weight: 600;
+  }
+  .zsh-branch {
+    color: #e06c75;
+  }
+  .zsh-dirty {
+    color: #e5c07b;
+    font-weight: 700;
+  }
+  .zsh-block-cursor {
+    display: inline-block;
+    inline-size: 0.56em;
+    block-size: 1.05em;
+    vertical-align: -0.16em;
+    margin-inline-start: 1px;
+    background: #dfe6f0;
+
+    @media (prefers-reduced-motion: no-preference) {
+      animation: blink 1s steps(1, end) infinite;
+    }
+  }
+
+  @keyframes braille-spin {
+    0% { content: "⠋"; }
+    10% { content: "⠙"; }
+    20% { content: "⠹"; }
+    30% { content: "⠸"; }
+    40% { content: "⠼"; }
+    50% { content: "⠴"; }
+    60% { content: "⠦"; }
+    70% { content: "⠧"; }
+    80% { content: "⠇"; }
+    90% { content: "⠏"; }
+  }
+  @keyframes term-type {
+    from { clip-path: inset(0 100% 0 0); }
+    to { clip-path: inset(0 0 0 0); }
   }
 
   .tui-bottom {
-    margin-block-start: 0.55rem;
+    margin-block-start: 0.5rem;
     display: flex;
     flex-direction: column;
-    gap: 0.22rem;
+    gap: 0.18rem;
   }
   .tui-dock-row {
-    padding-inline: 0.25rem;
+    padding-inline: 0.4rem;
     white-space: nowrap;
     overflow: clip;
     text-overflow: ellipsis;
@@ -1153,25 +1483,55 @@
     align-items: center;
     justify-content: space-between;
     gap: 0.5rem;
-  }
-  .tui-composer-band {
-    display: flex;
-    flex-direction: column;
-    gap: 0.14rem;
+    white-space: nowrap;
+    overflow: clip;
+
+    & > span {
+      min-inline-size: 0;
+      max-inline-size: 100%;
+      overflow: clip;
+      text-overflow: ellipsis;
+    }
+
+    & .tui-type {
+      max-inline-size: calc(100% - 6px);
+      overflow: clip;
+      text-overflow: ellipsis;
+    }
   }
   .tui-statusline {
     display: flex;
     justify-content: space-between;
     gap: 0.75rem;
-    padding-inline: 0.2rem;
+    padding-inline: 0.4rem;
     color: var(--tui-muted);
     white-space: nowrap;
     overflow: clip;
+
+    & > span {
+      min-inline-size: 0;
+      overflow: clip;
+      text-overflow: ellipsis;
+    }
+
+    & > span:last-child {
+      flex: 0 1 auto;
+
+      @container tui (width < 42rem) {
+        display: none;
+      }
+    }
+
+    .hya-tui-split & > span:last-child {
+      @container tui (width < 62rem) {
+        display: none;
+      }
+    }
   }
   .tui-kv {
     display: grid;
-    grid-template-columns: 4.6rem minmax(0, 1fr);
-    gap: 0.35rem;
+    grid-template-columns: 9ch minmax(0, 1fr);
+    gap: 0;
     white-space: nowrap;
 
     & span:last-child {
@@ -1225,6 +1585,21 @@
 
     @media (prefers-reduced-motion: no-preference) {
       translate: 0 0.875rem;
+    }
+  }
+  .section-mascot {
+    margin-block-end: clamp(0.65rem, 1.2svh, 1.05rem);
+    pointer-events: none;
+    user-select: none;
+
+    & img {
+      inline-size: auto;
+      block-size: clamp(5.75rem, min(9.6vw, 14.5svh), 9.5rem);
+      filter: drop-shadow(0 6px 14px var(--mascot-shadow));
+
+      @media (min-width: 105em) and (min-height: 58em) {
+        block-size: clamp(7.5rem, min(8.8vw, 14svh), 10.25rem);
+      }
     }
   }
   .section-kicker {
@@ -1303,12 +1678,14 @@
 
   /* Footer */
   .site-footer {
-    margin-block-start: 3rem;
-    padding: 1.5rem 2rem 2.5rem;
+    --footer-pad-top: 1.5rem;
+    margin-block-start: 3.5rem;
+    padding: var(--footer-pad-top) clamp(1.5rem, 2.5vw, 3rem) 2.5rem;
     border-block-start: 1px solid var(--line);
   }
   .site-footer-inner {
-    inline-size: min(100%, 84rem);
+    position: relative;
+    inline-size: min(100%, var(--shell-max));
     margin-inline: auto;
     display: flex;
     justify-content: space-between;
@@ -1316,6 +1693,18 @@
     gap: 2rem;
     color: var(--muted);
     font-size: 0.85rem;
+  }
+  .footer-mascot {
+    position: absolute;
+    inset-inline-end: clamp(0.25rem, 1.5vw, 1rem);
+    inset-block-end: calc(100% + var(--footer-pad-top) + 2px);
+    block-size: clamp(2.65rem, 3.6vw, 3.4rem);
+    inline-size: auto;
+    aspect-ratio: 420 / 359;
+    opacity: 0.92;
+    pointer-events: none;
+    user-select: none;
+    filter: drop-shadow(0 4px 10px var(--mascot-shadow));
   }
   .footer-left {
     display: flex;
@@ -1388,7 +1777,8 @@
       margin-block: 1.15rem 1.35rem;
 
       & .media-frame {
-        min-block-size: auto;
+        block-size: auto;
+        min-block-size: 30rem;
       }
     }
     .section {
@@ -1430,7 +1820,8 @@
       align-self: flex-end;
     }
     .site-footer {
-      padding: 1.25rem 1rem 2rem;
+      --footer-pad-top: 1.25rem;
+      padding: var(--footer-pad-top) 1rem 2rem;
     }
     .site-footer-inner {
       flex-direction: column;

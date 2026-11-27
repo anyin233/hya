@@ -430,6 +430,165 @@
     });
   });
 
+  /* ---------- 5b. 三章节真实终端动态状态机（按激活章节独立驱动，离线章节零开销） ---------- */
+  const reduceMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const animTimelines = {
+    context: {
+      restPhase: "4",
+      frames: [
+        { phase: "1", ms: 2600 },
+        { phase: "2", ms: 1650 },
+        { phase: "3", ms: 2500 },
+        { phase: "4", ms: 3400 },
+      ],
+    },
+    pack: {
+      restPhase: "4",
+      frames: [
+        { phase: "1", ms: 2400 },
+        { phase: "2", ms: 2500 },
+        { phase: "3", ms: 2400 },
+        { phase: "4", ms: 3200 },
+      ],
+    },
+    runtime: {
+      restPhase: "5",
+      frames: [
+        { phase: "1", ms: 2600, shell: false },
+        { phase: "2", ms: 1850, shell: true },
+        { phase: "3", ms: 2800, shell: true },
+        { phase: "4", ms: 1750, shell: true },
+        { phase: "5", ms: 3400, shell: false },
+      ],
+    },
+  };
+
+  const sectionAnimKey = {
+    "long-horizon-context": "context",
+    multiagent: "pack",
+    runtime: "runtime",
+  };
+
+  let stageTimer = 0;
+  let stageStepIdx = 0;
+  const inlineTimers = new Map();
+  const inlineVisible = new Set();
+
+  function updateTitleForRuntime(sec, isShell) {
+    if (!sec || sec.id !== "runtime") return;
+    const text = isShell ? sec.dataset.shellTitle || "zsh — ~/shop-api" : sec.dataset.title || "hya · shop-api";
+    if (activeSection === sec && stageTitle) {
+      stageTitle.textContent = text;
+    }
+    const inlineTitle = sec.querySelector(".section-inline-media .stage-title-text");
+    if (inlineTitle) inlineTitle.textContent = text;
+  }
+
+  function applyAnimPhase(rootContainer, key, phase, isShell = false) {
+    if (!rootContainer) return;
+    rootContainer.querySelectorAll(`[data-tui-anim="${key}"]`).forEach((el) => {
+      el.dataset.phase = phase;
+    });
+    if (key === "runtime") {
+      const runtimeSec = document.getElementById("runtime");
+      if (rootContainer === stageMedia && activeSection?.id === "runtime" && stageTitle) {
+        stageTitle.textContent = isShell
+          ? runtimeSec?.dataset.shellTitle || "zsh — ~/shop-api"
+          : runtimeSec?.dataset.title || "hya · shop-api";
+      } else if (runtimeSec?.contains(rootContainer)) {
+        const inlineTitle = runtimeSec.querySelector(".section-inline-media .stage-title-text");
+        if (inlineTitle) {
+          inlineTitle.textContent = isShell
+            ? runtimeSec.dataset.shellTitle || "zsh — ~/shop-api"
+            : runtimeSec.dataset.title || "hya · shop-api";
+        }
+      }
+    }
+  }
+
+  function stopStageAnim() {
+    clearTimeout(stageTimer);
+    stageTimer = 0;
+  }
+
+  function startStageAnim() {
+    stopStageAnim();
+    const key = activeSection ? sectionAnimKey[activeSection.id] : null;
+    if (!key || !stageMedia) return;
+    const spec = animTimelines[key];
+    if (reduceMotionQuery.matches) {
+      applyAnimPhase(stageMedia, key, spec.restPhase, false);
+      return;
+    }
+    stageStepIdx = 0;
+    const tick = () => {
+      const frame = spec.frames[stageStepIdx % spec.frames.length];
+      applyAnimPhase(stageMedia, key, frame.phase, Boolean(frame.shell));
+      stageTimer = window.setTimeout(() => {
+        stageStepIdx = (stageStepIdx + 1) % spec.frames.length;
+        tick();
+      }, frame.ms);
+    };
+    tick();
+  }
+
+  function syncInlineAnims() {
+    sections.forEach((sec) => {
+      const key = sectionAnimKey[sec.id];
+      const inlineMedia = sec.querySelector(".section-inline-media");
+      if (!key || !inlineMedia) return;
+      const spec = animTimelines[key];
+      if (reduceMotionQuery.matches) {
+        clearTimeout(inlineTimers.get(sec.id));
+        inlineTimers.delete(sec.id);
+        applyAnimPhase(inlineMedia, key, spec.restPhase, false);
+        return;
+      }
+      const isDesktopStageVisible = stageMedia && getComputedStyle(stageMedia.closest(".stage")).display !== "none";
+      const wantRun = !isDesktopStageVisible && inlineVisible.has(sec.id);
+      if (wantRun && !inlineTimers.has(sec.id)) {
+        let idx = 0;
+        const step = () => {
+          const frame = spec.frames[idx % spec.frames.length];
+          applyAnimPhase(inlineMedia, key, frame.phase, Boolean(frame.shell));
+          inlineTimers.set(
+            sec.id,
+            window.setTimeout(() => {
+              idx = (idx + 1) % spec.frames.length;
+              step();
+            }, frame.ms)
+          );
+        };
+        step();
+      } else if (!wantRun && inlineTimers.has(sec.id)) {
+        clearTimeout(inlineTimers.get(sec.id));
+        inlineTimers.delete(sec.id);
+        updateTitleForRuntime(sec, false);
+      }
+    });
+  }
+
+  reduceMotionQuery.addEventListener("change", () => {
+    startStageAnim();
+    syncInlineAnims();
+  });
+
+  if ("IntersectionObserver" in window) {
+    const io = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const sec = entry.target.closest(".section");
+          if (!sec) return;
+          if (entry.isIntersecting) inlineVisible.add(sec.id);
+          else inlineVisible.delete(sec.id);
+        });
+        syncInlineAnims();
+      },
+      { threshold: 0.3 }
+    );
+    document.querySelectorAll(".section-inline-media").forEach((el) => io.observe(el));
+  }
+
   function setActive(sec) {
     if (!sec || sec === activeSection) return;
     activeSection = sec;
@@ -445,6 +604,7 @@
       stageMedia.replaceChildren(wrap);
     }
     if (stageTitle) stageTitle.textContent = sec.dataset.title || "hya";
+    startStageAnim();
   }
 
   if (sections.length) {
