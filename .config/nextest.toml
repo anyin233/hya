@@ -5,6 +5,20 @@ fail-fast = false
 slow-timeout = { period = "5s", terminate-after = 4 }
 status-level = "pass"
 final-status-level = "flaky"
+# Include the five lockstep first-party native bundle cdylibs in a fixed
+# Cargo 1.100 build-unit layout (`debug/build/<pkg>/ci-archive/out/`) plus
+# the two `hya-tool` cdylib example fixtures so both `NEXTEST_BIN_EXE_hya` and
+# archived test binaries can dlopen them on zero-compile runners without
+# packing intermediate rlib/rmeta files.
+archive.include = [
+  { path = "debug/build/hya-base-tools/ci-archive/out/libhya_base_tools.so", relative-to = "target", on-missing = "error" },
+  { path = "debug/build/hya-extended-tools/ci-archive/out/libhya_extended_tools.so", relative-to = "target", on-missing = "error" },
+  { path = "debug/build/hya-channel-tools/ci-archive/out/libhya_channel_tools.so", relative-to = "target", on-missing = "error" },
+  { path = "debug/build/hya-network-tools/ci-archive/out/libhya_network_tools.so", relative-to = "target", on-missing = "error" },
+  { path = "debug/build/hya-compaction/ci-archive/out/libhya_compaction.so", relative-to = "target", on-missing = "error" },
+  { path = "debug/examples/libreplacement_tools.so", relative-to = "target", on-missing = "error" },
+  { path = "debug/examples/libwrong_abi_tools.so", relative-to = "target", on-missing = "error" },
+]
 
 [profile.ci-e2e]
 fail-fast = false

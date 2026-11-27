@@ -102,3 +102,5 @@ HYA_BIN=target/debug/hya bun packages/hya-tui-web/src/main.ts --port 7681 -- \
 | **Repo meta-docs** (`README.md`, `AGENTS.md`, `.agents/**`) | `changes` → `ci-gate` only |
 
 Manual runs via `workflow_dispatch` accept a `scope` input (`all`, `auto`, `rust`, `frontend`, `docs`, defaulting to `all`).
+
+When `rust=true`, `build-bin` compiles `hya`, `xtask`, the five lockstep native bundle `cdylib`s, and every workspace test binary in a single `cargo nextest archive --profile ci --workspace` invocation, uploading `ci-bins` and `ci-nextest-archive`. Downstream `test`, `e2e`, and `tui` jobs fan out in parallel from those artifacts without compiling Rust again. Pure frontend runs (`rust=false`, `build_bin=true`) only build `hya` and `xtask` for `tui`.

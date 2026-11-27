@@ -10,10 +10,10 @@ use hya_relay::server::{RelayServer, RelayServerConfig};
 use serde_json::Value;
 use tokio::net::TcpListener;
 
-use crate::common::TestResult;
+use crate::common::{TestResult, hya_bin};
 
 fn doctor(target: &str) -> Result<std::process::Output, Box<dyn std::error::Error>> {
-    Ok(Command::new(env!("CARGO_BIN_EXE_hya"))
+    Ok(Command::new(hya_bin())
         .env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("NO_COLOR", "1")

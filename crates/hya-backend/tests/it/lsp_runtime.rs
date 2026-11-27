@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::common::{Scratch, TestResult};
+use crate::common::{Scratch, TestResult, hya_bin};
 
 #[tokio::test]
 async fn configured_language_server_exposes_workspace_symbols() -> TestResult {
@@ -31,7 +31,7 @@ async fn configured_language_server_exposes_workspace_symbols() -> TestResult {
             }
         }))?,
     )?;
-    let mut backend = tokio::process::Command::new(env!("CARGO_BIN_EXE_hya"))
+    let mut backend = tokio::process::Command::new(hya_bin())
         .args(["serve", "--bind", "127.0.0.1:0"])
         .env("HOME", scratch.0.join("home"))
         .env("XDG_CONFIG_HOME", &config)

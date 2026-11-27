@@ -325,7 +325,7 @@ impl BridgeProcess {
 
 fn bridge_command(args: &[&str]) -> (Command, Scratch) {
     let scratch = Scratch::new("hya-bridge").unwrap();
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_hya"));
+    let mut cmd = Command::new(crate::common::hya_bin());
     cmd.env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("HOME", &scratch.0)

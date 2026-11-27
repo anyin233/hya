@@ -4,6 +4,8 @@
 
 use std::process::{Command, Output};
 
+use crate::common;
+
 /// Reject a target that differs from the host before any build starts.
 #[test]
 fn release_rehearsal_requires_a_host_target() {
@@ -16,7 +18,7 @@ fn release_rehearsal_requires_a_host_target() {
     .into_iter()
     .find(|target| *target != host)
     .expect("a release target differs from the host");
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    let output = Command::new(common::xtask_bin())
         .args(["release-rehearsal"])
         .args([
             "--version",
@@ -35,7 +37,7 @@ fn release_rehearsal_requires_a_host_target() {
 /// Require an explicit no-publish guard before a rehearsal can run.
 #[test]
 fn release_rehearsal_requires_no_publish() {
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    let output = Command::new(common::xtask_bin())
         .args(["release-rehearsal", "--version", "0.36.9", "--target"])
         .arg(host_target())
         .output()
@@ -78,7 +80,7 @@ fn host_target() -> String {
 
 /// Run the no-publish command for `version` on the host target.
 fn run_rehearsal(version: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_xtask"))
+    Command::new(common::xtask_bin())
         .args(["release-rehearsal", "--version", version, "--target"])
         .arg(host_target())
         .arg("--no-publish")
