@@ -3,15 +3,18 @@
 
 from __future__ import annotations
 
+import pathlib
+import tempfile
 import unittest
 
+from check_web import collect_ids, iter_html_refs
 from ci_changes import ALL_SCOPES, ScopeResult, classify_paths
 
 
 class ClassifyPathsTests(unittest.TestCase):
-    def test_pure_website_runs_web_and_assembled_docs_only(self) -> None:
+    def test_pure_website_runs_unified_docs_job_only(self) -> None:
         res = classify_paths(["public/index.html", "public/style.css", "public/assets/hya-logo.png"])
-        self.assertEqual(res, ScopeResult(docs=True, web=True))
+        self.assertEqual(res, ScopeResult(docs=True))
         self.assertFalse(res.rust)
         self.assertFalse(res.frontend)
         self.assertFalse(res.build_bin)
@@ -20,7 +23,6 @@ class ClassifyPathsTests(unittest.TestCase):
     def test_pure_docs_only_runs_docs(self) -> None:
         res = classify_paths(["docs/guide/workflows.md", "docs/site/astro.config.mjs"])
         self.assertEqual(res, ScopeResult(docs=True))
-        self.assertFalse(res.web)
         self.assertFalse(res.build_bin)
         self.assertFalse(res.tui)
 
@@ -96,23 +98,45 @@ class ClassifyPathsTests(unittest.TestCase):
         res = classify_paths([".github/workflows/docs.yml"])
         self.assertEqual(res, ScopeResult(docs=True))
 
-    def test_web_checker_script_runs_web(self) -> None:
+    def test_web_checker_script_runs_docs(self) -> None:
         res = classify_paths([".github/scripts/check_web.py"])
-        self.assertEqual(res, ScopeResult(web=True))
+        self.assertEqual(res, ScopeResult(docs=True))
 
     def test_unknown_file_fails_safe_to_code_checks(self) -> None:
         res = classify_paths(["new-crate/src/lib.rs"])
         self.assertTrue(res.rust)
         self.assertTrue(res.frontend)
         self.assertFalse(res.docs)
-        self.assertFalse(res.web)
 
     def test_mixed_web_and_docs_skips_code(self) -> None:
         res = classify_paths(["public/index.html", "docs/README.md"])
-        self.assertEqual(res, ScopeResult(docs=True, web=True))
+        self.assertEqual(res, ScopeResult(docs=True))
         self.assertFalse(res.rust)
         self.assertFalse(res.frontend)
         self.assertFalse(res.build_bin)
+
+
+class CheckWebHelpersTests(unittest.TestCase):
+    def test_collect_ids_ignores_inert_templates_and_comments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            page = pathlib.Path(tmp) / "index.html"
+            page.write_text(
+                '<section id="live"></section>'
+                '<!-- <div id="commented"></div> -->'
+                '<template class="section-media"><div id="inside-tpl"></div></template>',
+                encoding="utf-8",
+            )
+            self.assertEqual(collect_ids(page), {"live"})
+
+    def test_iter_html_refs_includes_template_assets_and_srcset(self) -> None:
+        html = (
+            '<a href="#live"></a>'
+            '<template><img src="assets/a.webp" srcset="assets/a-1x.webp 1x, assets/a-2x.webp 2x"></template>'
+        )
+        self.assertEqual(
+            iter_html_refs(html),
+            ["#live", "assets/a.webp", "assets/a-1x.webp", "assets/a-2x.webp"],
+        )
 
 
 if __name__ == "__main__":

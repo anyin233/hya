@@ -1,5 +1,6 @@
 /target
 **/node_modules
+**/__pycache__/
 /.worktrees
 **/*.rs.bk
 *.pdb

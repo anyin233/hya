@@ -1,7 +1,7 @@
 name: docs
 
-# PR and push verification of the landing page and documentation site runs inside
-# `.github/workflows/ci.yml` (`web` / `docs` jobs, gated by `ci-gate`). This
+# PR and push verification of the `public/` landing page and `/docs/` site runs
+# inside `.github/workflows/ci.yml` (`docs` job, gated by `ci-gate`). This
 # workflow is dedicated to publishing GitHub Pages from `main` so `pages: write`
 # / `id-token: write` stay isolated from the main CI gate.
 on:
@@ -11,6 +11,7 @@ on:
       - 'public/**'
       - 'docs/**'
       - 'proto/hya/v1/**'
+      - '.github/scripts/check_web.py'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -38,6 +39,9 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
+      - name: Check public/ landing page static assets, anchors, and JS syntax
+        working-directory: ${{ github.workspace }}
+        run: python3 .github/scripts/check_web.py
       - run: npm ci
       - run: npm test
       - run: npm run check

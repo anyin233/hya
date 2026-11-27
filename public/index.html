@@ -159,6 +159,14 @@
       </div>
 
       <div class="tab-box" data-tabs>
+        <img
+          class="hero-mascot"
+          src="assets/mascot-hero.webp"
+          alt=""
+          width="564"
+          height="840"
+          decoding="async"
+        />
         <div
           class="tab-list"
           role="tablist"
@@ -275,45 +283,157 @@
           </figcaption>
 
           <div class="media-frame" data-stage-media>
-            <div class="hya-tui" lang="en">
-              <div class="tui-scroll">
-                <div class="tui-notice">
-                  Context rewritten · <span class="t-fg">2 user messages kept verbatim</span> · <span class="t-ok">4 todos carried forward</span>
-                </div>
+            <div class="media-content">
+              <div class="hya-tui" lang="en" data-tui-anim="context" data-phase="4">
+                <div class="hya-tui-workspace">
+                  <div class="tui-pane tui-if-xl-w">
+                    <span class="tui-pane-title">Projects</span>
+                    <div><span class="t-focus">▸ </span><span class="t-warn">● </span><span class="t-focus">q3-audit</span> <span class="t-muted">(2)</span></div>
+                    <div class="tui-rule" aria-hidden="true"></div>
+                    <div><span>    </span><span class="t-fg">billing-core</span> <span class="t-muted">(3)</span></div>
+                    <div class="tui-rule" aria-hidden="true"></div>
+                    <div><span>    </span><span class="t-fg">docs-site</span> <span class="t-muted">(1)</span></div>
+                    <div class="tui-rule tui-if-lg-h" aria-hidden="true"></div>
+                    <div class="tui-if-lg-h"><span>    </span><span class="t-fg">shared-sdk</span> <span class="t-muted">(2)</span></div>
+                  </div>
 
-                <div class="tui-assistant">
-                  <div class="tui-agent-head"><span class="t-muted">● </span><b>hya-main</b><span class="t-muted"> · anthropic/claude-sonnet-4-6</span></div>
+                  <div class="tui-col">
+                    <div class="tui-scroll">
+                      <div class="tui-user">Audit Q3 support tickets, group recurring root causes, and keep billing edge cases separate</div>
 
-                  <div class="tui-tool">
-                    <div class="tui-tool-name">todo</div>
-                    <div class="tui-tool-head"><span><span class="t-ok">✓</span> 4 items · 2 completed</span><span>3ms</span></div>
-                    <div class="tui-tool-body">
-                      <div class="tui-rule">────────────────</div>
-                      <div class="t-muted"><span class="t-ok">✓</span> Pull Q3 feedback and group recurring issues</div>
-                      <div class="t-muted"><span class="t-ok">✓</span> Clear raw search logs, keep summary counts</div>
-                      <div class="t-fg"><span class="t-focus">◐</span> Cross-check edge cases and draft findings</div>
-                      <div class="t-fg"><span class="t-muted">○</span> Write final action list</div>
+                      <div class="tui-assistant on-p12">
+                        <div class="tui-agent-head"><span class="t-muted">● </span><b>hya-main</b><span class="t-muted"> · anthropic/claude-sonnet-4-6</span></div>
+                        <div class="tui-tool">
+                          <div class="tui-tool-name">bash</div>
+                          <div class="tui-tool-head"><span><span class="t-ok">✓</span></span><span>410ms</span></div>
+                          <div class="tui-tool-args">wc -l data/q3-tickets/*.jsonl · 18,420 ticket rows scanned</div>
+                        </div>
+                        <div class="tui-tool">
+                          <div class="tui-tool-name">grep</div>
+                          <div class="tui-tool-head"><span><span class="t-ok">✓</span> 312 matches</span><span>190ms</span></div>
+                          <div class="tui-tool-args">pattern: "timeout|502|retry|proration" · data/q3-tickets/</div>
+                          <div class="tui-tool-body tui-if-md-h">
+                            <div class="tui-rule tui-rule-short" aria-hidden="true"></div>
+                            <div class="t-muted">tickets-07.jsonl:412 │ 502 upstream gateway retry after 15000ms</div>
+                            <div class="t-muted">tickets-08.jsonl:908 │ annual proration credit mismatch (-$14.20)</div>
+                            <div class="t-muted">… +310 raw log lines in context</div>
+                          </div>
+                        </div>
+                        <div class="tui-tool">
+                          <div class="tui-tool-name">todo</div>
+                          <div class="tui-tool-head"><span><span class="t-ok">✓</span> 4 items · 2 completed</span><span>3ms</span></div>
+                          <div class="tui-tool-body">
+                            <div class="tui-rule tui-rule-short" aria-hidden="true"></div>
+                            <div class="t-muted"><span class="t-ok">✓</span> Pull Q3 feedback and group recurring issues</div>
+                            <div class="t-muted"><span class="t-ok">✓</span> Save summary counts to notes/counts.json</div>
+                            <div class="t-fg"><span class="t-muted">◐</span> Cross-check edge cases and draft findings</div>
+                            <div class="t-fg"><span class="t-muted">○</span> Write final action list</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="tui-divider on-p34">── context compacted · 14 messages · rewrite ──</div>
+
+                      <div class="tui-assistant on-p34">
+                        <div class="tui-agent-head"><span class="t-muted">● </span><b>hya-main</b><span class="t-muted"> · anthropic/claude-sonnet-4-6</span></div>
+
+                        <div class="tui-tool">
+                          <div class="tui-tool-name">todo</div>
+                          <div class="tui-tool-head">
+                            <span class="on-p3"><span class="t-ok">✓</span> 4 items · 2 completed</span>
+                            <span class="on-p4"><span class="t-ok">✓</span> 4 items · 3 completed</span>
+                            <span>3ms</span>
+                          </div>
+                          <div class="tui-tool-body">
+                            <div class="tui-rule tui-rule-short" aria-hidden="true"></div>
+                            <div class="t-muted"><span class="t-ok">✓</span> Pull Q3 feedback and group recurring issues</div>
+                            <div class="t-muted"><span class="t-ok">✓</span> Save summary counts to notes/counts.json</div>
+                            <div class="on-p3 t-fg"><span class="t-muted">◐</span> Cross-check edge cases and draft findings</div>
+                            <div class="on-p4 t-muted"><span class="t-ok">✓</span> Cross-check edge cases and draft findings</div>
+                            <div class="on-p3 t-fg"><span class="t-muted">○</span> Write final action list</div>
+                            <div class="on-p4 t-fg"><span class="t-muted">◐</span> Write final action list</div>
+                          </div>
+                        </div>
+
+                        <div class="tui-tool">
+                          <div class="tui-tool-name">read</div>
+                          <div class="tui-tool-head">
+                            <span class="on-p3"><span class="tui-spin t-muted" aria-hidden="true"></span></span>
+                            <span class="on-p4"><span class="t-ok">✓</span></span>
+                            <span>4ms</span>
+                          </div>
+                          <div class="tui-tool-args">notes/brief.md · lines 1-36 (reloaded external edit)</div>
+                          <div class="tui-tool-body tui-if-md-h on-p4">
+                            <div class="tui-rule tui-rule-short" aria-hidden="true"></div>
+                            <div class="t-ok">+ Scope rule 1: isolate annual invoice proration credits</div>
+                            <div class="t-ok">+ Scope rule 2: tag SSO clock-skew retries (&gt; 30s)</div>
+                          </div>
+                        </div>
+
+                        <div class="tui-tool tui-if-lg-h on-p4">
+                          <div class="tui-tool-name">edit</div>
+                          <div class="tui-tool-head"><span><span class="t-ok">✓</span></span><span>6ms</span></div>
+                          <div class="tui-tool-args">reports/q3-findings.md · +9 -2</div>
+                        </div>
+
+                        <div class="tui-reply on-p4">Picked up your external edit to <code>brief.md</code>. Moving straight to the final action list with a clean 18% window.</div>
+                      </div>
+                    </div>
+
+                    <div class="tui-bottom">
+                      <div class="tui-working on-p2"><span class="tui-spin" aria-hidden="true"></span> 0:06 · Running rewrite · Esc to interrupt</div>
+                      <div class="tui-working on-p3"><span class="tui-spin" aria-hidden="true"></span> 0:02 · Running read notes/brief.md · Esc to interrupt</div>
+                      <div class="tui-dock-row on-p123"><span class="t-muted">◐</span> <span class="t-fg">Cross-check edge cases and draft findings</span></div>
+                      <div class="tui-dock-row on-p4"><span class="t-muted">◐</span> <span class="t-fg">Write final action list</span></div>
+                      <div class="tui-composer-box">
+                        <span><span class="t-cursor"></span><span class="t-muted">Message, !shell, or @file · / commands</span></span>
+                      </div>
+                      <div class="tui-statusline tui-hide-lg-w">
+                        <span class="on-p12"><span class="t-fg">claude-sonnet-4-6 · high</span> <span class="t-border">·</span> manual <span class="t-border">·</span> ⎇ main <span class="t-border">·</span> <span class="t-warn">ctx ━━━━─ 82%</span></span>
+                        <span class="on-p3"><span class="t-fg">claude-sonnet-4-6 · high</span> <span class="t-border">·</span> manual <span class="t-border">·</span> ⎇ main <span class="t-border">·</span> ctx ━──── 16%</span>
+                        <span class="on-p4"><span class="t-fg">claude-sonnet-4-6 · high</span> <span class="t-border">·</span> manual <span class="t-border">·</span> ⎇ main <span class="t-border">·</span> ctx ━──── 18%</span>
+                        <span>Q3 feedback audit</span>
+                      </div>
                     </div>
                   </div>
 
-                  <div class="tui-tool">
-                    <div class="tui-tool-name">read</div>
-                    <div class="tui-tool-head"><span><span class="t-ok">✓</span></span><span>4ms</span></div>
-                    <div class="tui-tool-args">notes/brief.md · lines 1-36 (reloaded external edit)</div>
-                  </div>
+                  <div class="tui-col tui-col-start tui-if-lg-w">
+                    <div class="tui-pane">
+                      <span class="tui-pane-title">Sessions</span>
+                      <div class="t-fg">▸ 1. Q3 feedback audit</div>
+                      <div class="t-muted">   hya-main · running</div>
+                      <div class="tui-rule" aria-hidden="true"></div>
+                      <div class="t-fg">  2. Raw CSV ingest</div>
+                      <div class="t-muted">   hya-main · archived</div>
+                    </div>
 
-                  <div class="tui-reply">Picked up your external edit to <code>brief.md</code>. Re-checking the edge cases against the two new scope rules now.</div>
-                </div>
-              </div>
+                    <div class="tui-passive-pane">
+                      <div class="tui-passive-title">Todos</div>
+                      <div class="t-muted"><span class="t-ok">✓</span> Pull Q3 feedback</div>
+                      <div class="t-muted"><span class="t-ok">✓</span> Save summary counts</div>
+                      <div class="on-p123 t-fg"><span class="t-muted">◐</span> Cross-check edge cases</div>
+                      <div class="on-p4 t-muted"><span class="t-ok">✓</span> Cross-check edge cases</div>
+                      <div class="on-p123 t-fg"><span class="t-muted">○</span> Write final action list</div>
+                      <div class="on-p4 t-fg"><span class="t-muted">◐</span> Write final action list</div>
+                    </div>
 
-              <div class="tui-bottom">
-                <div class="tui-dock-row"><span class="t-focus">◐</span> <span class="t-fg">Cross-check edge cases and draft findings</span> <span class="t-muted">(2/4)</span></div>
-                <div class="tui-composer-band">
-                  <div class="tui-statusline">
-                    <span><span class="t-fg">claude-sonnet-4-6 · high</span> <span class="t-border">·</span> mode manual <span class="t-border">·</span> Todos 2/4 <span class="t-border">·</span> <span class="t-ok">ctx 18%</span></span>
-                    <span>Q3 feedback audit</span>
+                    <div class="tui-passive-pane">
+                      <div class="tui-passive-title">Context</div>
+                      <div class="tui-kv"><span class="t-muted">Mode</span><span class="t-fg">manual</span></div>
+                      <div class="tui-kv"><span class="t-muted">Session</span><span class="t-fg">Q3 feedback audit</span></div>
+                      <div class="tui-kv"><span class="t-muted">Agent</span><span class="t-fg">hya-main</span></div>
+                      <div class="tui-kv"><span class="t-muted">Model</span><span class="t-fg">anthropic/claude-sonnet-4-6</span></div>
+                      <div class="tui-kv on-p12"><span class="t-muted">Messages</span><span class="t-fg">18</span></div>
+                      <div class="tui-kv on-p34"><span class="t-muted">Messages</span><span class="t-fg">5</span></div>
+                      <div class="tui-kv on-p12"><span class="t-muted">Context</span><span class="t-warn">82% · 164k/200k</span></div>
+                      <div class="tui-kv on-p3"><span class="t-muted">Context</span><span class="t-fg">16% · 32k/200k</span></div>
+                      <div class="tui-kv on-p4"><span class="t-muted">Context</span><span class="t-fg">18% · 36k/200k</span></div>
+                      <div class="tui-kv"><span class="t-muted">Dir</span><span class="t-fg">…/q3-audit</span></div>
+                      <div class="tui-kv"><span class="t-muted">Branch</span><span class="t-fg">main</span></div>
+                      <div class="tui-kv on-p123"><span class="t-muted">Todos</span><span class="t-fg">2/4</span></div>
+                      <div class="tui-kv on-p4"><span class="t-muted">Todos</span><span class="t-fg">3/4</span></div>
+                    </div>
                   </div>
-                  <div><span class="t-focus">╰─ </span><span class="t-cursor"></span><span class="t-muted">Message, !shell, or @file · / commands</span></div>
                 </div>
               </div>
             </div>
@@ -330,50 +450,170 @@
           data-title="hya · Q3 feedback audit"
         >
           <template class="section-media">
-            <div class="hya-tui" lang="en">
-              <div class="tui-scroll">
-                <div class="tui-notice">
-                  Context rewritten · <span class="t-fg">2 user messages kept verbatim</span> · <span class="t-ok">4 todos carried forward</span>
+            <div class="hya-tui" lang="en" data-tui-anim="context" data-phase="4">
+              <div class="hya-tui-workspace">
+                <div class="tui-pane tui-if-xl-w">
+                  <span class="tui-pane-title">Projects</span>
+                  <div><span class="t-focus">▸ </span><span class="t-warn">● </span><span class="t-focus">q3-audit</span> <span class="t-muted">(2)</span></div>
+                  <div class="tui-rule" aria-hidden="true"></div>
+                  <div><span>    </span><span class="t-fg">billing-core</span> <span class="t-muted">(3)</span></div>
+                  <div class="tui-rule" aria-hidden="true"></div>
+                  <div><span>    </span><span class="t-fg">docs-site</span> <span class="t-muted">(1)</span></div>
+                  <div class="tui-rule tui-if-lg-h" aria-hidden="true"></div>
+                  <div class="tui-if-lg-h"><span>    </span><span class="t-fg">shared-sdk</span> <span class="t-muted">(2)</span></div>
                 </div>
 
-                <div class="tui-assistant">
-                  <div class="tui-agent-head"><span class="t-muted">● </span><b>hya-main</b><span class="t-muted"> · anthropic/claude-sonnet-4-6</span></div>
+                <div class="tui-col">
+                  <div class="tui-scroll">
+                    <div class="tui-user">Audit Q3 support tickets, group recurring root causes, and keep billing edge cases separate</div>
 
-                  <div class="tui-tool">
-                    <div class="tui-tool-name">todo</div>
-                    <div class="tui-tool-head"><span><span class="t-ok">✓</span> 4 items · 2 completed</span><span>3ms</span></div>
-                    <div class="tui-tool-body">
-                      <div class="tui-rule">────────────────</div>
-                      <div class="t-muted"><span class="t-ok">✓</span> Pull Q3 feedback and group recurring issues</div>
-                      <div class="t-muted"><span class="t-ok">✓</span> Clear raw search logs, keep summary counts</div>
-                      <div class="t-fg"><span class="t-focus">◐</span> Cross-check edge cases and draft findings</div>
-                      <div class="t-fg"><span class="t-muted">○</span> Write final action list</div>
+                    <div class="tui-assistant on-p12">
+                      <div class="tui-agent-head"><span class="t-muted">● </span><b>hya-main</b><span class="t-muted"> · anthropic/claude-sonnet-4-6</span></div>
+                      <div class="tui-tool">
+                        <div class="tui-tool-name">bash</div>
+                        <div class="tui-tool-head"><span><span class="t-ok">✓</span></span><span>410ms</span></div>
+                        <div class="tui-tool-args">wc -l data/q3-tickets/*.jsonl · 18,420 ticket rows scanned</div>
+                      </div>
+                      <div class="tui-tool">
+                        <div class="tui-tool-name">grep</div>
+                        <div class="tui-tool-head"><span><span class="t-ok">✓</span> 312 matches</span><span>190ms</span></div>
+                        <div class="tui-tool-args">pattern: "timeout|502|retry|proration" · data/q3-tickets/</div>
+                        <div class="tui-tool-body tui-if-md-h">
+                          <div class="tui-rule tui-rule-short" aria-hidden="true"></div>
+                          <div class="t-muted">tickets-07.jsonl:412 │ 502 upstream gateway retry after 15000ms</div>
+                          <div class="t-muted">tickets-08.jsonl:908 │ annual proration credit mismatch (-$14.20)</div>
+                          <div class="t-muted">… +310 raw log lines in context</div>
+                        </div>
+                      </div>
+                      <div class="tui-tool">
+                        <div class="tui-tool-name">todo</div>
+                        <div class="tui-tool-head"><span><span class="t-ok">✓</span> 4 items · 2 completed</span><span>3ms</span></div>
+                        <div class="tui-tool-body">
+                          <div class="tui-rule tui-rule-short" aria-hidden="true"></div>
+                          <div class="t-muted"><span class="t-ok">✓</span> Pull Q3 feedback and group recurring issues</div>
+                          <div class="t-muted"><span class="t-ok">✓</span> Save summary counts to notes/counts.json</div>
+                          <div class="t-fg"><span class="t-muted">◐</span> Cross-check edge cases and draft findings</div>
+                          <div class="t-fg"><span class="t-muted">○</span> Write final action list</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="tui-divider on-p34">── context compacted · 14 messages · rewrite ──</div>
+
+                    <div class="tui-assistant on-p34">
+                      <div class="tui-agent-head"><span class="t-muted">● </span><b>hya-main</b><span class="t-muted"> · anthropic/claude-sonnet-4-6</span></div>
+
+                      <div class="tui-tool">
+                        <div class="tui-tool-name">todo</div>
+                        <div class="tui-tool-head">
+                          <span class="on-p3"><span class="t-ok">✓</span> 4 items · 2 completed</span>
+                          <span class="on-p4"><span class="t-ok">✓</span> 4 items · 3 completed</span>
+                          <span>3ms</span>
+                        </div>
+                        <div class="tui-tool-body">
+                          <div class="tui-rule tui-rule-short" aria-hidden="true"></div>
+                          <div class="t-muted"><span class="t-ok">✓</span> Pull Q3 feedback and group recurring issues</div>
+                          <div class="t-muted"><span class="t-ok">✓</span> Save summary counts to notes/counts.json</div>
+                          <div class="on-p3 t-fg"><span class="t-muted">◐</span> Cross-check edge cases and draft findings</div>
+                          <div class="on-p4 t-muted"><span class="t-ok">✓</span> Cross-check edge cases and draft findings</div>
+                          <div class="on-p3 t-fg"><span class="t-muted">○</span> Write final action list</div>
+                          <div class="on-p4 t-fg"><span class="t-muted">◐</span> Write final action list</div>
+                        </div>
+                      </div>
+
+                      <div class="tui-tool">
+                        <div class="tui-tool-name">read</div>
+                        <div class="tui-tool-head">
+                          <span class="on-p3"><span class="tui-spin t-muted" aria-hidden="true"></span></span>
+                          <span class="on-p4"><span class="t-ok">✓</span></span>
+                          <span>4ms</span>
+                        </div>
+                        <div class="tui-tool-args">notes/brief.md · lines 1-36 (reloaded external edit)</div>
+                        <div class="tui-tool-body tui-if-md-h on-p4">
+                          <div class="tui-rule tui-rule-short" aria-hidden="true"></div>
+                          <div class="t-ok">+ Scope rule 1: isolate annual invoice proration credits</div>
+                          <div class="t-ok">+ Scope rule 2: tag SSO clock-skew retries (&gt; 30s)</div>
+                        </div>
+                      </div>
+
+                      <div class="tui-tool tui-if-lg-h on-p4">
+                        <div class="tui-tool-name">edit</div>
+                        <div class="tui-tool-head"><span><span class="t-ok">✓</span></span><span>6ms</span></div>
+                        <div class="tui-tool-args">reports/q3-findings.md · +9 -2</div>
+                      </div>
+
+                      <div class="tui-reply on-p4">Picked up your external edit to <code>brief.md</code>. Moving straight to the final action list with a clean 18% window.</div>
                     </div>
                   </div>
 
-                  <div class="tui-tool">
-                    <div class="tui-tool-name">read</div>
-                    <div class="tui-tool-head"><span><span class="t-ok">✓</span></span><span>4ms</span></div>
-                    <div class="tui-tool-args">notes/brief.md · lines 1-36 (reloaded external edit)</div>
+                  <div class="tui-bottom">
+                    <div class="tui-working on-p2"><span class="tui-spin" aria-hidden="true"></span> 0:06 · Running rewrite · Esc to interrupt</div>
+                    <div class="tui-working on-p3"><span class="tui-spin" aria-hidden="true"></span> 0:02 · Running read notes/brief.md · Esc to interrupt</div>
+                    <div class="tui-dock-row on-p123"><span class="t-muted">◐</span> <span class="t-fg">Cross-check edge cases and draft findings</span></div>
+                    <div class="tui-dock-row on-p4"><span class="t-muted">◐</span> <span class="t-fg">Write final action list</span></div>
+                    <div class="tui-composer-box">
+                      <span><span class="t-cursor"></span><span class="t-muted">Message, !shell, or @file · / commands</span></span>
+                    </div>
+                    <div class="tui-statusline tui-hide-lg-w">
+                      <span class="on-p12"><span class="t-fg">claude-sonnet-4-6 · high</span> <span class="t-border">·</span> manual <span class="t-border">·</span> ⎇ main <span class="t-border">·</span> <span class="t-warn">ctx ━━━━─ 82%</span></span>
+                      <span class="on-p3"><span class="t-fg">claude-sonnet-4-6 · high</span> <span class="t-border">·</span> manual <span class="t-border">·</span> ⎇ main <span class="t-border">·</span> ctx ━──── 16%</span>
+                      <span class="on-p4"><span class="t-fg">claude-sonnet-4-6 · high</span> <span class="t-border">·</span> manual <span class="t-border">·</span> ⎇ main <span class="t-border">·</span> ctx ━──── 18%</span>
+                      <span>Q3 feedback audit</span>
+                    </div>
                   </div>
-
-                  <div class="tui-reply">Picked up your external edit to <code>brief.md</code>. Re-checking the edge cases against the two new scope rules now.</div>
                 </div>
-              </div>
 
-              <div class="tui-bottom">
-                <div class="tui-dock-row"><span class="t-focus">◐</span> <span class="t-fg">Cross-check edge cases and draft findings</span> <span class="t-muted">(2/4)</span></div>
-                <div class="tui-composer-band">
-                  <div class="tui-statusline">
-                    <span><span class="t-fg">claude-sonnet-4-6 · high</span> <span class="t-border">·</span> mode manual <span class="t-border">·</span> Todos 2/4 <span class="t-border">·</span> <span class="t-ok">ctx 18%</span></span>
-                    <span>Q3 feedback audit</span>
+                <div class="tui-col tui-col-start tui-if-lg-w">
+                  <div class="tui-pane">
+                    <span class="tui-pane-title">Sessions</span>
+                    <div class="t-fg">▸ 1. Q3 feedback audit</div>
+                    <div class="t-muted">   hya-main · running</div>
+                    <div class="tui-rule" aria-hidden="true"></div>
+                    <div class="t-fg">  2. Raw CSV ingest</div>
+                    <div class="t-muted">   hya-main · archived</div>
                   </div>
-                  <div><span class="t-focus">╰─ </span><span class="t-cursor"></span><span class="t-muted">Message, !shell, or @file · / commands</span></div>
+
+                  <div class="tui-passive-pane">
+                    <div class="tui-passive-title">Todos</div>
+                    <div class="t-muted"><span class="t-ok">✓</span> Pull Q3 feedback</div>
+                    <div class="t-muted"><span class="t-ok">✓</span> Save summary counts</div>
+                    <div class="on-p123 t-fg"><span class="t-muted">◐</span> Cross-check edge cases</div>
+                    <div class="on-p4 t-muted"><span class="t-ok">✓</span> Cross-check edge cases</div>
+                    <div class="on-p123 t-fg"><span class="t-muted">○</span> Write final action list</div>
+                    <div class="on-p4 t-fg"><span class="t-muted">◐</span> Write final action list</div>
+                  </div>
+
+                  <div class="tui-passive-pane">
+                    <div class="tui-passive-title">Context</div>
+                    <div class="tui-kv"><span class="t-muted">Mode</span><span class="t-fg">manual</span></div>
+                    <div class="tui-kv"><span class="t-muted">Session</span><span class="t-fg">Q3 feedback audit</span></div>
+                    <div class="tui-kv"><span class="t-muted">Agent</span><span class="t-fg">hya-main</span></div>
+                    <div class="tui-kv"><span class="t-muted">Model</span><span class="t-fg">anthropic/claude-sonnet-4-6</span></div>
+                    <div class="tui-kv on-p12"><span class="t-muted">Messages</span><span class="t-fg">18</span></div>
+                    <div class="tui-kv on-p34"><span class="t-muted">Messages</span><span class="t-fg">5</span></div>
+                    <div class="tui-kv on-p12"><span class="t-muted">Context</span><span class="t-warn">82% · 164k/200k</span></div>
+                    <div class="tui-kv on-p3"><span class="t-muted">Context</span><span class="t-fg">16% · 32k/200k</span></div>
+                    <div class="tui-kv on-p4"><span class="t-muted">Context</span><span class="t-fg">18% · 36k/200k</span></div>
+                    <div class="tui-kv"><span class="t-muted">Dir</span><span class="t-fg">…/q3-audit</span></div>
+                    <div class="tui-kv"><span class="t-muted">Branch</span><span class="t-fg">main</span></div>
+                    <div class="tui-kv on-p123"><span class="t-muted">Todos</span><span class="t-fg">2/4</span></div>
+                    <div class="tui-kv on-p4"><span class="t-muted">Todos</span><span class="t-fg">3/4</span></div>
+                  </div>
                 </div>
               </div>
             </div>
           </template>
 
+          <div class="section-mascot" aria-hidden="true">
+            <img
+              src="assets/mascot-context.webp"
+              alt=""
+              width="960"
+              height="799"
+              loading="lazy"
+              decoding="async"
+            />
+          </div>
           <span class="section-kicker">01</span>
           <h2 class="section-title">
             <span data-zh>不靠摘要硬撑的结构化记忆</span>
@@ -429,59 +669,148 @@
           data-title="hya · fix/auth"
         >
           <template class="section-media">
-            <div class="hya-tui" lang="en">
+            <div class="hya-tui" lang="en" data-tui-anim="pack" data-phase="4">
               <div class="hya-tui-split">
                 <div class="tui-col">
                   <div class="tui-scroll">
                     <div class="tui-user">Track down the intermittent login timeout, fix it, and add a regression test</div>
                     <div class="tui-assistant">
-                      <div class="tui-agent-head"><span class="t-muted">● </span><b>hya-main</b><span class="t-muted"> · openai/gpt-5.4:high</span></div>
+                      <div class="tui-agent-head"><span class="t-muted">● </span><b>hya-main</b><span class="t-muted"> · openai/gpt-5.4</span></div>
                       <div class="tui-tool">
                         <div class="tui-tool-name">task</div>
                         <div class="tui-tool-head"><span><span class="t-ok">✓</span> 2 subagents</span><span>16ms</span></div>
                         <div class="tui-tool-body">
                           <div class="t-fg">scout · trace gateway and pool logs</div>
-                          <div><span class="t-ok">✓ done</span> <span class="t-muted">  ↳ Redis reconnect loop has no upper timeout</span></div>
-                          <div class="t-muted">click to view · /open ses_01j9scout</div>
+                          <div class="on-p1"><span class="tui-spin t-muted" aria-hidden="true"></span> <span class="t-muted">running</span> <span class="t-muted">  ↳ grep connectWithBackoff · src/auth/</span></div>
+                          <div class="on-p234"><span class="t-ok">✓ done</span> <span class="t-muted">  ↳ Redis reconnect loop has no upper timeout</span></div>
+                          <div class="t-muted">click to view · /open hysec_01j9scout</div>
                         </div>
                         <div class="tui-tool-body">
                           <div class="t-fg">builder · cap reconnect timeout and add tests</div>
-                          <div><span class="t-focus">⠋ running</span> <span class="t-muted">  ↳ bun test auth/session.test.ts</span></div>
-                          <div class="t-muted">click to view · /open ses_01j9build</div>
+                          <div class="on-p1"><span class="tui-spin t-muted" aria-hidden="true"></span> <span class="t-muted">running</span> <span class="t-muted">  ↳ reading src/auth/session.ts</span></div>
+                          <div class="on-p23"><span class="tui-spin t-muted" aria-hidden="true"></span> <span class="t-muted">running</span> <span class="t-muted">  ↳ bun test auth/session.test.ts</span></div>
+                          <div class="on-p4"><span class="t-ok">✓ done</span> <span class="t-muted">  ↳ Capped retry budget · 24 passed, 0 failed</span></div>
+                          <div class="t-muted">click to view · /open hysec_01j9build</div>
                         </div>
                       </div>
                     </div>
+
+                    <div class="tui-user on-p34">Also check if the cache client shares that retry helper</div>
+                    <div class="tui-assistant on-p34">
+                      <div class="tui-agent-head"><span class="t-muted">● </span><b>hya-main</b><span class="t-muted"> · openai/gpt-5.4</span></div>
+                      <div class="tui-tool">
+                        <div class="tui-tool-name">task</div>
+                        <div class="tui-tool-head"><span><span class="t-ok">✓</span> resumed hysec_01j9scout</span><span>9ms</span></div>
+                        <div class="tui-tool-body">
+                          <div class="t-fg">scout · inspect cache retry helper from prior handoff</div>
+                          <div class="on-p3"><span class="tui-spin t-muted" aria-hidden="true"></span> <span class="t-muted">running</span> <span class="t-muted">  ↳ reading src/cache/client.ts</span></div>
+                          <div class="on-p4"><span class="t-ok">✓ done</span> <span class="t-muted">  ↳ Same helper at src/cache/client.ts:84</span></div>
+                        </div>
+                      </div>
+                      <div class="tui-reply on-p4 tui-if-md-h">Both <code>auth</code> and <code>cache</code> retry helpers are now capped at <code>3000ms</code>; regression suite passed.</div>
+                    </div>
                   </div>
                   <div class="tui-bottom">
-                    <div class="tui-composer-box">
-                      <span><span class="t-cursor"></span>Have scout check the cache client for the same bug too</span>
+                    <div class="tui-working on-p1"><span class="tui-spin" aria-hidden="true"></span> 0:04 · Waiting for subagent scout · Esc to interrupt</div>
+                    <div class="tui-working on-p2"><span class="tui-spin" aria-hidden="true"></span> 0:09 · Waiting for subagent builder · Esc to interrupt</div>
+                    <div class="tui-working on-p3"><span class="tui-spin" aria-hidden="true"></span> 0:02 · Waiting for subagent scout · Esc to interrupt</div>
+                    <div class="tui-composer-box tui-focus-on-p2">
+                      <span class="on-p1"><span class="t-muted">Message, !shell, or @file · / commands</span></span>
+                      <span class="on-p2"><span class="tui-type t-fg">Also check if the cache client shares that retry helper</span><span class="t-cursor"></span></span>
+                      <span class="on-p34"><span class="t-muted">Message, !shell, or @file · / commands</span></span>
                     </div>
                     <div class="tui-statusline">
-                      <span><span class="t-fg">gpt-5.4 · high</span> <span class="t-border">·</span> mode manual <span class="t-border">·</span> ⎇ fix/auth <span class="t-border">·</span> ctx 26%</span>
+                      <span><span class="t-fg">gpt-5.4 · high</span> <span class="t-border">·</span> manual <span class="t-border">·</span> ⎇ fix/auth <span class="t-border">·</span> ctx ━──── 26%</span>
+                      <span>Fix login timeout</span>
                     </div>
                   </div>
                 </div>
 
-                <div class="tui-pane tui-pane-between is-focused">
-                  <span class="tui-pane-title">Subagents · archived included</span>
+                <div class="tui-pane tui-pane-between tui-focus-except-p2 tui-if-md-w">
+                  <span class="tui-pane-title">Subagents</span>
                   <div class="tui-scroll tui-scroll-tight">
-                    <div>
+                    <div class="on-p1">
+                      <div class="t-focus">▸ scout · running</div>
+                      <div class="t-muted">  grep connectWithBackoff</div>
+                    </div>
+                    <div class="on-p24">
                       <div class="t-focus">▸ scout · done · archived</div>
                       <div class="t-muted">  main/hya-scout-skade · handoff</div>
                     </div>
-                    <div>
+                    <div class="on-p3">
+                      <div class="t-focus">▸ scout · running</div>
+                      <div class="t-muted">  resumed · src/cache/client.ts</div>
+                    </div>
+
+                    <div class="on-p123">
                       <div class="t-fg">  builder · running</div>
                       <div class="t-muted">  bun test auth/session.test.ts</div>
+                    </div>
+                    <div class="on-p4">
+                      <div class="t-fg">  builder · done · archived</div>
+                      <div class="t-muted">  main/hya-builder-vidar · handoff</div>
+                    </div>
+
+                    <div class="tui-if-md-h">
+                      <div class="on-p123">
+                        <div class="t-fg">  verifier · idle · archived</div>
+                        <div class="t-muted">  main/hya-verifier-tyr · queued</div>
+                      </div>
+                      <div class="on-p4">
+                        <div class="t-fg">  verifier · done · archived</div>
+                        <div class="t-muted">  24 passed · 0 failed</div>
+                      </div>
                     </div>
                   </div>
                   <div class="t-muted tui-pane-foot">
                     ↑↓ preview · Enter pin · n new · x interrupt · s steer · d archive
                   </div>
                 </div>
+
+                <div class="tui-passive-pane tui-viewer-pane tui-if-xl-w">
+                  <div class="tui-passive-title">Subagent · pane-8 · following</div>
+                  <div class="tui-scroll tui-scroll-tight">
+                    <div class="t-muted on-p13">hya-scout · hysec_01j9scout · running</div>
+                    <div class="t-muted on-p24">hya-scout · hysec_01j9scout · archived</div>
+                    <div class="tui-tool">
+                      <div class="tui-tool-name">read</div>
+                      <div class="tui-tool-head"><span><span class="t-ok">✓</span></span><span>4ms</span></div>
+                      <div class="tui-tool-args">src/auth/redisPool.ts · lines 118-146</div>
+                      <div class="tui-tool-body tui-if-md-h">
+                        <div class="tui-rule tui-rule-short" aria-hidden="true"></div>
+                        <div class="t-muted">128 │ while (!this.ready) &#123;</div>
+                        <div class="t-warn">129 │   await sleep(nextBackoffMs)</div>
+                        <div class="t-muted">130 │ &#125; // missing deadline</div>
+                      </div>
+                    </div>
+                    <div class="tui-reply on-p234">Handoff 1: <code>connectWithBackoff()</code> has no deadline on primary failover.</div>
+                    <div class="tui-divider on-p34">resumed from handoff (generation 1)</div>
+                    <div class="tui-tool on-p34">
+                      <div class="tui-tool-name">grep</div>
+                      <div class="tui-tool-head">
+                        <span class="on-p3"><span class="tui-spin t-muted" aria-hidden="true"></span></span>
+                        <span class="on-p4"><span class="t-ok">✓</span> 2 matches</span>
+                        <span>3ms</span>
+                      </div>
+                      <div class="tui-tool-args">connectWithBackoff · src/cache/client.ts:84</div>
+                    </div>
+                    <div class="tui-reply on-p4 tui-if-lg-h">Handoff 2: <code>src/cache/client.ts:84</code> imports the same helper.</div>
+                  </div>
+                </div>
               </div>
             </div>
           </template>
 
+          <div class="section-mascot" aria-hidden="true">
+            <img
+              src="assets/mascot-pack.webp"
+              alt=""
+              width="960"
+              height="789"
+              loading="lazy"
+              decoding="async"
+            />
+          </div>
           <span class="section-kicker">02</span>
           <h2 class="section-title">
             <span data-zh>随时叫醒续做的多 Agent 小队</span>
@@ -505,65 +834,194 @@
           id="runtime"
           tabindex="-1"
           data-title="hya · shop-api"
+          data-shell-title="zsh — ~/shop-api"
         >
           <template class="section-media">
-            <div class="hya-tui" lang="en">
-              <div class="hya-tui-workspace">
-                <div class="tui-pane">
-                  <span class="tui-pane-title">Projects</span>
-                  <div><span class="t-focus">▸ </span><span class="t-warn">● </span><span class="t-focus">shop-api</span> <span class="t-muted">(3)</span></div>
-                  <div class="tui-rule">───────────</div>
-                  <div><span>    </span><span class="t-fg">web-app</span> <span class="t-muted">(2)</span></div>
-                  <div class="tui-rule">───────────</div>
-                  <div><span>    </span><span class="t-fg">infra</span> <span class="t-muted">(1)</span></div>
+            <div class="hya-tui tui-screen-stack" lang="en" data-tui-anim="runtime" data-phase="5">
+              <!-- Screen Buffer A (Phase 1 & Phase 5): Alternate-Screen Hya OpenTUI -->
+              <div class="tui-buffer-layer on-rt-tui">
+                <!-- Real CommandPane overlay (CommandPane.tsx) when typing /to-background in Phase 1 -->
+                <div class="tui-pane is-focused tui-command-overlay on-p1">
+                  <span class="tui-pane-title">Commands</span>
+                  <div><span class="tui-type t-fg">/to-background</span><span class="t-cursor"></span></div>
+                  <div class="t-focus tui-ellipsis">▸ /to-background  Quit the TUI and leave the session running on the daemon</div>
+                  <div class="t-muted tui-ellipsis">Up/Down select · Shift+Up/Down history · Tab chooses · Enter chooses/runs · Esc returns</div>
                 </div>
 
-                <div class="tui-col">
-                  <div class="tui-scroll">
-                    <div class="tui-user">Finish the reconciliation job and pause for my sign-off if anything looks off</div>
-                    <div class="tui-assistant">
-                      <div class="tui-agent-head"><span class="t-muted">● </span><b>hya-main</b><span class="t-muted"> · anthropic/claude-sonnet-4-6</span></div>
-                      <div class="tui-tool">
-                        <div class="tui-tool-name">edit</div>
-                        <div class="tui-tool-head"><span><span class="t-ok">✓</span></span><span>12ms</span></div>
-                        <div class="tui-tool-args">src/billing/reconcile.ts · +2 -1</div>
-                        <div class="tui-tool-body">
-                          <div class="tui-rule">────────────────</div>
-                          <div class="t-err">- const batchSize = 5000</div>
-                          <div class="t-ok">+ const batchSize = 500</div>
-                          <div class="t-ok">+ const retryOnLock = true</div>
+                <div class="hya-tui-workspace">
+                  <div class="tui-pane tui-if-xl-w">
+                    <span class="tui-pane-title">Projects</span>
+                    <div><span class="t-focus">▸ </span><span class="t-warn on-p1">● </span><span class="on-p5">  </span><span class="t-focus">shop-api</span> <span class="t-muted">(3)</span></div>
+                    <div class="tui-rule" aria-hidden="true"></div>
+                    <div><span>    </span><span class="t-fg">web-app</span> <span class="t-muted">(2)</span></div>
+                    <div class="tui-rule" aria-hidden="true"></div>
+                    <div><span>    </span><span class="t-fg">infra</span> <span class="t-muted">(1)</span></div>
+                    <div class="tui-rule tui-if-lg-h" aria-hidden="true"></div>
+                    <div class="tui-if-lg-h"><span>    </span><span class="t-fg">billing-jobs</span> <span class="t-muted">(2)</span></div>
+                  </div>
+
+                  <div class="tui-col">
+                    <div class="tui-scroll">
+                      <div class="tui-user">Migrate billing_events index and run the full integration suite</div>
+                      <div class="tui-assistant">
+                        <div class="tui-agent-head"><span class="t-muted">● </span><b>hya-main</b><span class="t-muted"> · anthropic/claude-sonnet-4-6</span></div>
+
+                        <div class="tui-tool">
+                          <div class="tui-tool-name">todo</div>
+                          <div class="tui-tool-head">
+                            <span class="on-p1"><span class="t-ok">✓</span> 4 items · 0 completed</span>
+                            <span class="on-p5"><span class="t-ok">✓</span> 4 items · 4 completed</span>
+                            <span>2ms</span>
+                          </div>
+                          <div class="tui-tool-body">
+                            <div class="tui-rule tui-rule-short" aria-hidden="true"></div>
+                            <div class="on-p1 t-fg"><span class="t-muted">◐</span> Generate migrations/004_billing_idx.sql</div>
+                            <div class="on-p1 t-fg"><span class="t-muted">○</span> Apply migration on local database</div>
+                            <div class="on-p1 t-fg"><span class="t-muted">○</span> Run 128 integration tests</div>
+                            <div class="on-p1 t-fg"><span class="t-muted">○</span> Verify query plan &amp; write summary</div>
+
+                            <div class="on-p5 t-muted"><span class="t-ok">✓</span> Generate migrations/004_billing_idx.sql</div>
+                            <div class="on-p5 t-muted"><span class="t-ok">✓</span> Apply migration on local database</div>
+                            <div class="on-p5 t-muted"><span class="t-ok">✓</span> Run 128 integration tests (128 passed)</div>
+                            <div class="on-p5 t-muted"><span class="t-ok">✓</span> Verify query plan &amp; write summary</div>
+                          </div>
                         </div>
+
+                        <div class="tui-tool">
+                          <div class="tui-tool-name">edit</div>
+                          <div class="tui-tool-head">
+                            <span class="on-p1"><span class="tui-spin t-muted" aria-hidden="true"></span></span>
+                            <span class="on-p5"><span class="t-ok">✓</span></span>
+                            <span>11ms</span>
+                          </div>
+                          <div class="tui-tool-args">migrations/004_billing_idx.sql · +18 -0</div>
+                        </div>
+
+                        <div class="tui-tool on-p5 tui-if-md-h">
+                          <div class="tui-tool-name">bash</div>
+                          <div class="tui-tool-head"><span><span class="t-ok">✓</span></span><span>2.9s</span></div>
+                          <div class="tui-tool-args">bun test tests/billing/ · 128 passed, 0 failed</div>
+                        </div>
+
+                        <div class="tui-reply on-p5">Applied <code>004_billing_idx.sql</code> and verified all 128 integration tests while detached. Run <code>/undo</code> anytime to revert chat and files together.</div>
                       </div>
-                      <div class="tui-reply">Switched to smaller batches with lock retries and kept the run going in the background. Safe to close the terminal and check back later.</div>
+                    </div>
+
+                    <div class="tui-bottom">
+                      <div class="tui-working on-p1"><span class="tui-spin" aria-hidden="true"></span> 0:03 · Running edit migrations/004_billing_idx.sql · Esc to interrupt</div>
+                      <div class="tui-dock-row on-p1"><span class="t-muted">◐</span> <span class="t-fg">Generate migrations/004_billing_idx.sql</span></div>
+                      <div class="tui-composer-box tui-focus-on-p5">
+                        <span class="on-p1"><span class="t-muted">Message, !shell, or @file · / commands</span></span>
+                        <span class="on-p5"><span class="t-cursor"></span><span class="t-muted">Message, !shell, or @file · / commands</span></span>
+                      </div>
+                      <div class="tui-statusline tui-hide-lg-w">
+                        <span class="on-p1"><span class="t-fg">claude-sonnet-4-6 · high</span> <span class="t-border">·</span> manual <span class="t-border">·</span> ⎇ main <span class="t-border">·</span> ctx ━──── 14%</span>
+                        <span class="on-p5"><span class="t-fg">claude-sonnet-4-6 · high</span> <span class="t-border">·</span> manual <span class="t-border">·</span> ⎇ main <span class="t-border">·</span> ctx ━──── 24%</span>
+                        <span>Billing index migration</span>
+                      </div>
                     </div>
                   </div>
-                  <div class="tui-composer-box">
-                    <span><span class="t-cursor"></span>Message, !shell, or @file · / commands</span>
+
+                  <div class="tui-col tui-col-start tui-if-lg-w">
+                    <div class="tui-pane">
+                      <span class="tui-pane-title">Sessions</span>
+                      <div class="t-fg">▸ 1. Billing index migration</div>
+                      <div class="t-muted on-p1">   hya-main · running</div>
+                      <div class="t-muted on-p5">   hya-main</div>
+                      <div class="tui-rule" aria-hidden="true"></div>
+                      <div class="t-fg">  2. Refund API cleanup</div>
+                      <div class="t-muted">   hya-main · archived</div>
+                    </div>
+
+                    <div class="tui-passive-pane">
+                      <div class="tui-passive-title">Todos</div>
+                      <div class="on-p1 t-fg"><span class="t-muted">◐</span> Generate 004_billing_idx.sql</div>
+                      <div class="on-p1 t-fg"><span class="t-muted">○</span> Apply migration on local DB</div>
+                      <div class="on-p1 t-fg"><span class="t-muted">○</span> Run 128 integration tests</div>
+                      <div class="on-p5 t-muted"><span class="t-ok">✓</span> Generate 004_billing_idx.sql</div>
+                      <div class="on-p5 t-muted"><span class="t-ok">✓</span> Apply migration on local DB</div>
+                      <div class="on-p5 t-muted"><span class="t-ok">✓</span> Run 128 integration tests</div>
+                    </div>
+
+                    <div class="tui-passive-pane">
+                      <div class="tui-passive-title">Context</div>
+                      <div class="tui-kv"><span class="t-muted">Mode</span><span class="t-fg">manual</span></div>
+                      <div class="tui-kv"><span class="t-muted">Session</span><span class="t-fg">Billing index migration</span></div>
+                      <div class="tui-kv"><span class="t-muted">Agent</span><span class="t-fg">hya-main</span></div>
+                      <div class="tui-kv"><span class="t-muted">Model</span><span class="t-fg">anthropic/claude-sonnet-4-6</span></div>
+                      <div class="tui-kv on-p1"><span class="t-muted">Messages</span><span class="t-fg">3</span></div>
+                      <div class="tui-kv on-p5"><span class="t-muted">Messages</span><span class="t-fg">9</span></div>
+                      <div class="tui-kv on-p1"><span class="t-muted">Context</span><span class="t-fg">14% · 28k/200k</span></div>
+                      <div class="tui-kv on-p5"><span class="t-muted">Context</span><span class="t-fg">24% · 48k/200k</span></div>
+                      <div class="tui-kv"><span class="t-muted">Dir</span><span class="t-fg">…/shop-api</span></div>
+                      <div class="tui-kv"><span class="t-muted">Branch</span><span class="t-fg">main</span></div>
+                      <div class="tui-kv on-p1"><span class="t-muted">Todos</span><span class="t-fg">0/4</span></div>
+                      <div class="tui-kv on-p5"><span class="t-muted">Todos</span><span class="t-fg">4/4</span></div>
+                    </div>
                   </div>
                 </div>
+              </div>
 
-                <div class="tui-col tui-col-start">
-                  <div class="tui-pane">
-                    <span class="tui-pane-title">Sessions</span>
-                    <div class="t-fg">▸ 1. Billing reconciliation</div>
-                    <div class="t-muted">   hya-main · running</div>
-                    <div class="tui-rule">───────────────────</div>
-                    <div class="t-fg">  2. Refund API cleanup</div>
-                    <div class="t-muted">   hya-main · archived</div>
-                  </div>
-                  <div class="tui-passive-pane">
-                    <div class="tui-passive-title">Context</div>
-                    <div class="tui-kv"><span class="t-muted">Mode</span><span class="t-fg">manual</span></div>
-                    <div class="tui-kv"><span class="t-muted">Context</span><span class="t-fg">22% · 44k/200k</span></div>
-                    <div class="tui-kv"><span class="t-muted">Branch</span><span class="t-fg">main</span></div>
-                    <div class="tui-kv"><span class="t-muted">WebUI</span><span class="t-fg">127.0.0.1:3250</span></div>
-                    <div class="tui-kv"><span class="t-muted">Server</span><span class="t-ok">relay · connected</span></div>
-                  </div>
+              <!-- Screen Buffer B (Phases 2, 3, 4): Normal Interactive zsh Shell Buffer -->
+              <div class="tui-buffer-layer zsh-screen on-rt-shell">
+                <div class="zsh-line">
+                  <span class="zsh-arrow">➜</span>  <span class="zsh-dir">shop-api</span> <span class="zsh-git">git:(<span class="zsh-branch">main</span>)</span> <span class="t-fg">hya</span>
+                </div>
+                <div class="zsh-out t-muted">
+                  detached session hysec_01j9shop — turn continues on background server (pid 48210)
+                </div>
+
+                <!-- Phase 2+: hya serve status -->
+                <div class="zsh-line">
+                  <span class="zsh-arrow">➜</span>  <span class="zsh-dir">shop-api</span> <span class="zsh-git">git:(<span class="zsh-branch">main</span>)</span> <span class="zsh-dirty">✗</span> <span class="on-p2"><span class="tui-type t-fg">hya serve status</span><span class="zsh-block-cursor" aria-hidden="true"></span></span><span class="on-p34 t-fg">hya serve status</span>
+                </div>
+                <div class="zsh-out on-p34">
+                  <div class="t-fg">hya server pid 48210 running at http://127.0.0.1:41932</div>
+                  <div class="t-muted">  version  0.49.1</div>
+                  <div class="t-muted">  db       /Users/yanwei/.local/state/hya/sessions.db</div>
+                  <div class="t-muted">  uptime   4h 18m</div>
+                  <div class="t-muted tui-if-md-w">  relay    https://relay.ed-aisys.com (`hya serve relay status` for the connection)</div>
+                </div>
+
+                <!-- Phase 3+: git status -sb + hya sessions showing live background file & event changes -->
+                <div class="zsh-line on-p34">
+                  <span class="zsh-arrow">➜</span>  <span class="zsh-dir">shop-api</span> <span class="zsh-git">git:(<span class="zsh-branch">main</span>)</span> <span class="zsh-dirty">✗</span> <span class="t-fg">git status -sb</span>
+                </div>
+                <div class="zsh-out on-p34">
+                  <div><span class="t-ok">## main...origin/main</span></div>
+                  <div> <span class="t-err">M</span> src/billing/schema.ts</div>
+                  <div><span class="t-err">??</span> migrations/004_billing_idx.sql</div>
+                  <div class="tui-if-md-h"> <span class="t-err">M</span> tests/billing/index.test.ts</div>
+                </div>
+
+                <div class="zsh-line on-p34 tui-if-md-h">
+                  <span class="zsh-arrow">➜</span>  <span class="zsh-dir">shop-api</span> <span class="zsh-git">git:(<span class="zsh-branch">main</span>)</span> <span class="zsh-dirty">✗</span> <span class="t-fg">hya sessions</span>
+                </div>
+                <div class="zsh-out on-p34 tui-if-md-h">
+                  <div class="t-fg">hysec_01j9shop  events=158  started_ms=1764189120410</div>
+                </div>
+
+                <!-- Phase 3 idle prompt vs Phase 4 typing hya --continue -->
+                <div class="zsh-line on-p3">
+                  <span class="zsh-arrow">➜</span>  <span class="zsh-dir">shop-api</span> <span class="zsh-git">git:(<span class="zsh-branch">main</span>)</span> <span class="zsh-dirty">✗</span> <span class="zsh-block-cursor" aria-hidden="true"></span>
+                </div>
+                <div class="zsh-line on-p4">
+                  <span class="zsh-arrow">➜</span>  <span class="zsh-dir">shop-api</span> <span class="zsh-git">git:(<span class="zsh-branch">main</span>)</span> <span class="zsh-dirty">✗</span> <span class="tui-type t-fg">hya --continue</span><span class="zsh-block-cursor" aria-hidden="true"></span>
                 </div>
               </div>
             </div>
           </template>
 
+          <div class="section-mascot" aria-hidden="true">
+            <img
+              src="assets/mascot-workspace.webp"
+              alt=""
+              width="960"
+              height="750"
+              loading="lazy"
+              decoding="async"
+            />
+          </div>
           <span class="section-kicker">03</span>
           <h2 class="section-title">
             <span data-zh>不绑死窗口的本地常驻工作台</span>
@@ -587,6 +1045,15 @@
   <!-- ================= Footer ================= -->
   <footer class="site-footer">
     <div class="site-footer-inner">
+      <img
+        class="footer-mascot"
+        src="assets/mascot-footer.webp"
+        alt=""
+        width="420"
+        height="359"
+        loading="lazy"
+        decoding="async"
+      />
       <div class="footer-left">
         <div><a class="link" href="https://github.com/chrono-foundry/hya">Hya</a> &amp; Contributors · © 2026 · MIT / Apache-2.0</div>
       </div>

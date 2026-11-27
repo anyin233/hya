@@ -24,7 +24,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 WEB_DIR = ROOT / "public"
 
 COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
-ATTR_RE = re.compile(r"""(?:href|src)\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
+TEMPLATE_RE = re.compile(r"<template\b[^>]*>.*?</template>", re.IGNORECASE | re.DOTALL)
+ATTR_RE = re.compile(r"""(?:href|src|poster)\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
+SRCSET_RE = re.compile(r"""\bsrcset\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
 ID_RE = re.compile(r"""\bid\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
 CSS_URL_RE = re.compile(r"""url\(\s*["']?([^"')]+)["']?\s*\)""", re.IGNORECASE)
 
@@ -36,8 +38,19 @@ def strip_comments(html: str) -> str:
 
 
 def collect_ids(html_path: pathlib.Path) -> set[str]:
-    text = strip_comments(html_path.read_text(encoding="utf-8"))
-    return set(ID_RE.findall(text))
+    # Strip inert `<template>` fragments so `#anchor` links only match live DOM IDs.
+    live_dom = TEMPLATE_RE.sub("", strip_comments(html_path.read_text(encoding="utf-8")))
+    return set(ID_RE.findall(live_dom))
+
+
+def iter_html_refs(html_no_comments: str) -> list[str]:
+    refs = list(ATTR_RE.findall(html_no_comments))
+    for srcset in SRCSET_RE.findall(html_no_comments):
+        for candidate in srcset.split(","):
+            parts = candidate.strip().split()
+            if parts:
+                refs.append(parts[0])
+    return refs
 
 
 def main() -> int:
@@ -70,7 +83,7 @@ def main() -> int:
     for html_file in html_files:
         rel_html = html_file.relative_to(ROOT)
         text = strip_comments(html_file.read_text(encoding="utf-8"))
-        for ref in ATTR_RE.findall(text):
+        for ref in iter_html_refs(text):
             ref = ref.strip()
             if not ref or ref.startswith(EXTERNAL_SCHEMES):
                 continue
