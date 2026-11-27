@@ -41,6 +41,5 @@ webpki-roots = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
-hyper = { workspace = true, features = ["client"] }
 rcgen = { workspace = true }
 tokio = { workspace = true }
