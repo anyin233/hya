@@ -146,7 +146,10 @@ jobs:
           set -euo pipefail
           extra_args=()
           if [[ -n "$HYA_BIN" ]]; then
-            extra_args=(--pack-cmd "$HYA_BIN")
+            extra_args=(
+              --pack-cmd "$HYA_BIN"
+              --verify-cmd "$HYA_BIN bundle verify --strict --protocol-smoke {output}"
+            )
           fi
           bun scripts/bundle-ci/verify.mjs "${extra_args[@]}" "$BUNDLE_PATH"
 

@@ -207,6 +207,7 @@ jobs:
           test "$sha1" = "$sha2"
           echo "Deterministic package SHA-256: $sha1"
           "${RUNNER_TEMP}/builtin-ci-bins/hya" bundle info -f "$pkg1"
+          "${RUNNER_TEMP}/builtin-ci-bins/hya" bundle verify --strict "$BUNDLE_PATH"
       - name: Upload staged native bundle package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -241,12 +242,13 @@ jobs:
         run: |
           set -euo pipefail
           bun scripts/bundle-ci/verify.mjs \
-            --pack-cmd "${RUNNER_TEMP}/builtin-ci-bins/xtask package-bundle {source} {output}" \
+            --pack-cmd "${RUNNER_TEMP}/builtin-ci-bins/hya bundle pack {source} {output}" \
             --verify-cmd "${RUNNER_TEMP}/builtin-ci-bins/hya bundle info -f {output}" \
             "$BUNDLE_PATH"
+          "${RUNNER_TEMP}/builtin-ci-bins/hya" bundle verify --strict --protocol-smoke "$BUNDLE_PATH"
           out_dir="${RUNNER_TEMP}/staged-bundles"
           mkdir -p "$out_dir"
-          "${RUNNER_TEMP}/builtin-ci-bins/xtask" package-bundle \
+          "${RUNNER_TEMP}/builtin-ci-bins/hya" bundle pack \
             "$BUNDLE_PATH" \
             "${out_dir}/hya-${BUNDLE_NAME}.hyabundle"
       - name: Upload staged non-native bundle package

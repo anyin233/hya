@@ -5,15 +5,9 @@ identity:
   version: 0.0.0
   publisher: hya
 namespace: compaction
-extensions:
-  files:
-    - id: native-0
-      path: native/Cargo.toml
-    - id: native-1
-      path: native/src/config.rs
-    - id: native-2
-      path: native/src/evict.rs
-    - id: native-3
-      path: native/src/ladder.rs
-    - id: native-4
-      path: native/src/lib.rs
+runtime:
+  kind: native
+  abi_version: 1
+  crate_dir: native
+  capabilities:
+    - rewriters
