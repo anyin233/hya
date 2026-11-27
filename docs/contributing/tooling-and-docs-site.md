@@ -40,7 +40,7 @@ Open `http://localhost:4321`. Edits to `docs/**/*.md` hot-reload in the browser.
 
 ### Build & link verification gate
 
-`.github/workflows/docs.yml` runs these exact checks on every PR touching `public/` or `docs/` (assembling `public/` at `/` and Starlight under `/docs/` in `docs/site/dist-pages`, then deploying `main` to GitHub Pages):
+`.github/workflows/ci.yml` (`docs` and `web` jobs, gated by `ci-gate`) runs these checks on every PR and `main` push touching `public/`, `docs/`, or `proto/hya/v1/` (assembling `public/` at `/` and Starlight under `/docs/` in `docs/site/dist-pages`), and `.github/workflows/docs.yml` builds and deploys `main` to GitHub Pages:
 
 ```sh
 cd docs/site

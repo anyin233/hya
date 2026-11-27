@@ -1,6 +1,6 @@
 # Testing & Verification
 
-Hya's test suite is fast when you run the right layer. **Locally, verify only the components your change touches** (plus direct dependents when you change a public API). GitHub Actions CI (`.github/workflows/ci.yml`) runs the full workspace suite on every push and PR—do not burn 15 minutes running `cargo test --workspace` or all Playwright specs locally unless making a workspace-wide change.
+Hya's test suite is fast when you run the right layer. **Locally, verify only the components your change touches** (plus direct dependents when you change a public API). GitHub Actions CI (`.github/workflows/ci.yml`) runs checks on demand based on changed paths (gated by a single required `ci-gate` check)—do not burn 15 minutes running `cargo test --workspace` or all terminal specs locally unless making a workspace-wide change.
 
 ---
 
@@ -86,3 +86,20 @@ Never use `tmux` or `script` to eyeball TUI changes. Serve the TUI in the WebUI 
 HYA_BIN=target/debug/hya bun packages/hya-tui-web/src/main.ts --port 7681 -- \
   bun packages/hya-tui/src/main.ts --dir "$PWD"
 ```
+
+---
+
+## 5. On-demand GitHub Actions CI (`ci-gate`)
+
+`.github/workflows/ci.yml` starts with a lightweight `changes` job (`.github/scripts/ci_changes.py`) that classifies modified files into scopes and skips unaffected jobs, followed by a single required `ci-gate` job (`main` branch ruleset):
+
+| Change area | Jobs run |
+| --- | --- |
+| **`public/**`** (landing page) | `web` (`.github/scripts/check_web.py`: JS syntax, relative assets, anchors) + `docs` (assembled Pages build & link check) |
+| **`docs/**`** (non-generated) | `docs` (Astro tests, typecheck, build, link check) |
+| **Pure Bun/TUI frontend** (`packages/**` excluding manifests/generated contract) | `frontend`, `build-bin`, `tui` (skips Rust `lint`, `test`, `e2e`) |
+| **Pure Rust internals** (`crates/**`, `bundles/**`, etc.) | `lint`, `test`, `build-bin`, `e2e`, `tui` (keeps real backend ↔ TUI integration) |
+| **Cross-boundary contracts & adapters** (`proto/hya/v1/**`, `hya-api`, `hya-proto`, `hya-server`, `hya-backend`, `hya-plugin*`, `versions.toml`, `packages/*/package.json`, `frontend-version.ts`, `operations.json`) | Full Rust + Frontend + `tui` (plus `docs` when `proto/hya/v1/**` or `docs/protocol/*` changes) |
+| **Repo meta-docs** (`README.md`, `AGENTS.md`, `.agents/**`) | `changes` → `ci-gate` only |
+
+Manual runs via `workflow_dispatch` accept a `scope` input (`all`, `auto`, `rust`, `frontend`, `docs`, `web`, defaulting to `all`).
