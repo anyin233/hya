@@ -184,7 +184,8 @@ Manage `.hyabundle` packages in `--user` scope (default, `~/.local/share/hya/bun
 | `hya bundle remove [--user\|--project] [-y] <BUNDLE_ID>` | Uninstall a bundle (`uninstall` is an alias). |
 | `hya bundle enable <BUNDLE_ID>` / `disable <BUNDLE_ID>` | Enable or disable a bundle across scopes without uninstalling it. |
 | `hya bundle refresh` | Reload edited project bundles and `config.yml` files in the running daemon. |
-| `hya bundle verify [--user\|--project] [--overwrite] <PACKAGE>` | Dry-run all install and self-proof checks without writing to disk. |
+| `hya bundle pack <SOURCE_DIR> <OUTPUT.hyabundle>` | Build a deterministic public `.hyabundle` archive from a bundle source directory. |
+| `hya bundle verify [--user\|--project] [--overwrite] [--strict] [--protocol-smoke] <PACKAGE_OR_DIR>` | Dry-run install and self-proof checks against a `.hyabundle` archive or source directory (`--strict` checks schema/descriptors/secret hygiene; `--protocol-smoke` verifies JS JSON-RPC `initialize`/`shutdown` parity). |
 | `hya bundle list [--user\|--project]` | List builtin, user, and project bundles. |
 | `hya bundle info [--user\|--project] <BUNDLE_ID \| -f PACKAGE>` | Inspect bundle digests, agents, skills, tools, hooks, MCP servers, and APIs. |
 | `hya bundle search [--user\|--project] <QUERY>` | Case-insensitive search across bundle, agent, and skill IDs. |

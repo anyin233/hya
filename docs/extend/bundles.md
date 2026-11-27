@@ -7,7 +7,9 @@ A **Bundle** (`kind: Bundle`) is Hya's all-in-one package format. A single `.hya
 - **A compiled Workflow** with its stage agents,
 - **Custom HTTP endpoints** (`apis:`), **custom permission modes** (`permission_modes:`), **URI schemes** (`schemas:`), and **TUI panels** (`tui:`).
 
-Static bundles run zero extra processes. Executable bundles run out-of-process Bun, Rust, or Claude sidecars cleanly isolated from Hya's core engine.
+Static bundles run zero extra processes. Executable bundles run either out-of-process **JS Bundles** (Bun / Claude sidecars over stdio NDJSON JSON-RPC 2.0) cleanly isolated from Hya's core engine, or **Native Bundles** (compiled Rust dynamic libraries verified against Hya's ABI).
+
+For the complete normative format, all five descriptor file schemas, ABI contracts, loading precedence, and independent CI architecture, see the **[`hyabundle` Specification](hyabundle-spec.md)** and **[ADR-0038](../adr/0038-hyabundle-standard-and-independent-ci.md)**.
 
 ---
 
@@ -41,10 +43,13 @@ Package, verify, and install it:
 
 ```sh
 # Package the folder containing bundle.hya.md into a deterministic .hyabundle
-cargo run -p xtask -- package-bundle ./sql-helper sql-helper.hyabundle
+hya bundle pack ./sql-helper sql-helper.hyabundle
 
-# Dry-run verification and install (use --project to install into ./.hya/bundles/)
-hya bundle verify sql-helper.hyabundle
+# Dry-run verification (supports both directories and .hyabundle archives)
+hya bundle verify --strict ./sql-helper
+hya bundle verify --strict --protocol-smoke sql-helper.hyabundle
+
+# Install globally (or pass --project to install into ./.hya/bundles/)
 hya bundle install -y sql-helper.hyabundle
 
 # Use it right away inside Hya with `/agent sql-helper`!
@@ -98,16 +103,20 @@ Unknown YAML fields are rejected (`deny_unknown_fields`), so typos are caught at
 | Top-level key | Purpose |
 | --- | --- |
 | `kind` | Required. Always `Bundle`. |
+| `schema_version` | Optional. `2` for the standardized schema (`1` remains supported for legacy `extensions:` manifests). |
 | `identity` | Required `{ id: "<publisher>/<name>", version: "<semver>", publisher: "<name>" }`. |
+| `version_ref` | Optional (`hya`). Used by built-in bundles under `bundles/builtin/` to resolve `0.0.0` to `versions.toml`. |
 | `namespace` | Optional tool/schema prefix (defaults to `<name>`; cannot be `mcp`, `harness`, `builtin`, or `plugin`). |
-| `check` | Optional `{ command: [...], timeout_secs?: 1..600 }` run in an isolated copy during `verify` and `install`. |
-| `resources` | Optional `{ tools: [...], skills: [...], mcp: [...], hooks: [...] }` (`{ id, path, aliases? }`). |
-| `extensions` | Optional `{ js: [...], files: [...], rust: [...], process?: { kind, command, timeout_ms? } }`. |
-| `agents` | Optional list of Agent definitions (`id`, `role: main \| subagent`, `description?`, `prompt?`, `model_policy?`, `resource_view?`, `advertise?`, `handoff?: model \| deterministic`, `private?`, `can_spawn?`, `hook_refs?`). *(Note: legacy `spawn_lifecycle` is removed—all subagents are episodic resident actors.)* |
+| `runtime` | Optional standardized runtime declaration `{ kind: static \| js \| native, mode?, entry?, command?, timeout_ms?, abi_version?, crate_dir?, library?, capabilities? }`. Mutually exclusive with legacy `extensions.{process,libraries}`. |
+| `check` | Optional `{ command: [...], timeout_secs?: 1..600 }` run in an isolated copy during `verify`, `install`, and Bundle CI. |
+| `resources` | Optional `{ tools: [...], skills: [...], commands: [...], mcp: [...], hooks: [...] }` (`{ id, path, aliases? }`). See the **[Descriptor Schemas](hyabundle-spec.md#4-standardized-descriptor-file-schemas)**. |
+| `assets` | Optional list of runtime data files (`[{ id, path }]`, such as JSON Schemas or templates), replacing `extensions.files`. |
+| `extensions` | Legacy v1 runtime block `{ js: [...], files: [...], rust: [...], libraries: [...], process?: { kind, command, timeout_ms? } }`. |
+| `agents` | Optional list of standalone Markdown agent references (`{ path: "agents/<id>.md" }`) or inline Agent definitions (`id`, `role: main \| subagent`, `description?`, `prompt?`, `model_policy?`, `resource_view?`, `advertise?`, `handoff?: model \| deterministic`, `private?`, `can_spawn?`, `hook_refs?`). *(Note: legacy `spawn_lifecycle` is removed—all subagents are episodic resident actors.)* |
 | `workflow` | Optional `{ id, path: "workflows/*.hya.md" }` (requires `agents` to match the exact reachable closure). |
 | `channels` | Optional vertical channel policy templates (`kind: unit \| parent_dm`, `participants`, `capabilities`, `scope`, `retention: team_session`). |
 | `schemas` | Optional custom URI schemes (`[{ scheme, tool, writable? }]`) routed through `read`/`write` (e.g. `db://...`). |
-| `apis` | Optional custom HTTP/gRPC endpoints served by `extensions.process` (see below). |
+| `apis` | Optional custom HTTP/gRPC endpoints served by a `js` `process` runtime (`runtime:` or `extensions.process`). |
 | `permission_modes` | Optional custom session permission modes (`[{ id, title, description? }]`) backed by `permission.approve`. |
 | `tui` | Optional `{ api_version: 1, entry, sdk: "1.0.0", permissions: [...] }` (see **[TUI Extensions](tui-extensions.md)**). |
 

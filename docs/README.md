@@ -32,7 +32,7 @@ New to Hya, or looking up how to run a workflow, switch models, or connect from 
 - **[CLI Reference](reference/cli.md)** — Every `hya` command, flag, database lock rule, and exit code.
 - **[Configuration Reference](reference/configuration.md)** — Complete field dictionary for `~/.config/hya/config.yaml` and `~/.config/hya/tui.toml`.
 - **[Slash Commands & Keybindings](reference/commands-and-keybindings.md)** — Every `/command`, keyboard shortcut, and `/keybind` customization.
-- **[Built-in Tools, Agents & Bundles](reference/tools-and-presets.md)** — All 6 Kernel tools, 25 Registry tools, built-in agents, 13 presets, and `hya-extra/*` bundles.
+- **[Built-in Tools, Agents & Bundles](reference/tools-and-presets.md)** — All 6 Kernel tools, 25 Registry tools, built-in agents, 13 `bundles/builtin/` packages, and `hya-extra/*` bundles.
 - **[Environment Variables & File Paths](reference/env-and-paths.md)** — Every `HYA_*` variable and XDG file location on disk.
 - **[Troubleshooting](reference/troubleshooting.md)** — Quick fixes for busy ports, daemon locks, `403` host errors, offline mode, and relay setup.
 
@@ -46,6 +46,7 @@ Customize Hya or build your own apps and scripts on top of it—without touching
 - **[Authoring Skills & Slash Commands](extend/skills-and-commands.md)** — `SKILL.md` frontmatter, discovery precedence, and `.hya/commands/*.md` argument templates.
 - **[Authoring Workflows & Evaluators](extend/authoring-workflows.md)** — Writing `*.hya.md` Stage DAGs, loop verifiers, per-stage model routing, and custom Goal/Loop judges.
 - **[Creating Bundles (`.hyabundle`)](extend/bundles.md)** — Packaging agents, skills, tools, custom HTTP APIs (`apis:`), and permission modes—plus importing Claude Code plugins (`--claude`).
+- **[`hyabundle` Specification](extend/hyabundle-spec.md)** — Canonical `bundle.yaml` & descriptor schemas, JS vs Native ABI contracts, `bundles/builtin/` layout, loading precedence, and independent Bundle CI.
 - **[Sidecar Plugins, Custom Tools & Hooks](extend/plugins-and-hooks.md)** — Writing Bun JS modules or NDJSON JSON-RPC 2.0 plugins, `host/capability` calls, and all 19 hooks.
 - **[TUI Extensions (`@hya/tui-sdk`)](extend/tui-extensions.md)** — Building sandboxed custom UI panels, status items, renderers, and prompt interceptors.
 - **[`hya.v1` Protocol Overview](protocol/README.md)** · **[SDK & Client Integration](protocol/sdk.md)** · **[Generated API Reference](protocol/api-reference.md)** · **[OpenAPI Schema](protocol/openapi.json)** — Driving Hya over HTTP/JSON+SSE+WebSocket, gRPC, or Rust `hya-sdk-v1`.

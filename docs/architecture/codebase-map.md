@@ -99,9 +99,9 @@ flowchart BT
 | A `/v1` HTTP route, gRPC method, or error code | `proto/hya/v1/*.proto` → run `cargo run -p xtask -- gen-api` → `crates/hya-server` |
 | An LLM provider encoder/decoder or capability check | `crates/hya-provider` |
 | One of the 6 bare-mode kernel tools or `Rewrite` rules | `crates/hya-core/src/kernel` |
-| One of the 25 full-mode built-in tools | `bundles/presets/{base,extended,network,channel}-tools/native` |
+| One of the 25 full-mode built-in tools | `bundles/builtin/{base,extended,network,channel}-tools/native` |
 | Permission rules, `ProjectScope`, or the `Tool` trait | `crates/hya-tool` |
-| `shake` or `remote` context compaction | `bundles/internal/compaction/native` |
+| `shake` or `remote` context compaction | `bundles/builtin/compaction/native` |
 | SQLite tables, migrations, locks, or event batching | `crates/hya-store` |
 | `.hyabundle` manifest parsing or validation | `crates/hya-bundle` |
 | `*.hya.md` Workflow syntax or DAG compilation | `crates/hya-workflow` |
