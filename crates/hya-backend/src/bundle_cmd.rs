@@ -258,7 +258,7 @@ async fn set_enabled(bundle_id: &str, enabled: bool, db: &str) -> anyhow::Result
 async fn refresh_daemon(db: &str, bundle_id: Option<&str>) -> anyhow::Result<()> {
     if let Some(found) = crate::daemon::running(db).await {
         let refreshed = reqwest::Client::new()
-            .post(format!("{}/v1/bundles:refresh", found.url))
+            .post(format!("{}/v2/bundles:refresh", found.url))
             .json(&serde_json::json!({ "directory": std::env::current_dir()
                 .context("read the current directory")?.to_string_lossy() }))
             .send()
@@ -266,7 +266,7 @@ async fn refresh_daemon(db: &str, bundle_id: Option<&str>) -> anyhow::Result<()>
             .context("ask the backend to refresh its bundles")?
             .error_for_status()
             .context("backend rejected the bundle refresh")?
-            .json::<hya_api::v1::RefreshBundlesResponse>()
+            .json::<hya_api::v2::RefreshBundlesResponse>()
             .await
             .context("read the backend bundle refresh response")?;
         report_refresh_errors(bundle_id, &refreshed.errors)?;
@@ -281,7 +281,7 @@ async fn refresh_daemon(db: &str, bundle_id: Option<&str>) -> anyhow::Result<()>
 
 fn report_refresh_errors(
     id: Option<&str>,
-    errors: &[hya_api::v1::BundleRefreshError],
+    errors: &[hya_api::v2::BundleRefreshError],
 ) -> anyhow::Result<()> {
     let mut failures = Vec::new();
     for error in errors {
@@ -471,7 +471,7 @@ async fn prove_activation(db: &str, scope: Scope, id: &str, digest: &str) -> any
             .into_owned(),
     };
     let response = reqwest::Client::new()
-        .post(format!("{}/v1/bundles:refresh", found.url))
+        .post(format!("{}/v2/bundles:refresh", found.url))
         .json(&serde_json::json!({ "directory": directory }))
         .timeout(std::time::Duration::from_secs(120))
         .send()
@@ -486,7 +486,7 @@ async fn prove_activation(db: &str, scope: Scope, id: &str, digest: &str) -> any
         anyhow::bail!("installed but not activated: the backend answered {status}: {body}");
     }
     let body = response
-        .json::<hya_api::v1::RefreshBundlesResponse>()
+        .json::<hya_api::v2::RefreshBundlesResponse>()
         .await
         .context("read the bundle refresh response")?;
     report_refresh_errors(Some(id), &body.errors)
@@ -2326,7 +2326,7 @@ mod refresh_tests {
 
     #[test]
     fn explicit_refresh_reports_all_sources_but_targeted_changes_only_the_target() {
-        let errors = vec![hya_api::v1::BundleRefreshError {
+        let errors = vec![hya_api::v2::BundleRefreshError {
             bundle_id: "other".into(),
             message: "invalid config".into(),
         }];
@@ -2354,22 +2354,22 @@ mod refresh_tests {
         let url = format!("http://{}", listener.local_addr().unwrap());
         let app = axum::Router::new()
             .route(
-                "/v1/health",
+                "/v2/health",
                 axum::routing::get(|| async { axum::Json(serde_json::json!({"ok":true})) }),
             )
             .route(
-                "/v1/bundles:refresh",
+                "/v2/bundles:refresh",
                 axum::routing::post(
                     |axum::Json(req): axum::Json<serde_json::Value>| async move {
                         assert_eq!(
                             req["directory"],
                             std::env::current_dir().unwrap().to_string_lossy().as_ref()
                         );
-                        axum::Json(hya_api::v1::RefreshBundlesResponse {
+                        axum::Json(hya_api::v2::RefreshBundlesResponse {
                             scope: "global".into(),
                             generation: 1,
                             bundles: Vec::new(),
-                            errors: vec![hya_api::v1::BundleRefreshError {
+                            errors: vec![hya_api::v2::BundleRefreshError {
                                 bundle_id: "alpha".into(),
                                 message: "alpha failed to initialize".into(),
                             }],

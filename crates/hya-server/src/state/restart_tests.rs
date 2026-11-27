@@ -27,7 +27,7 @@ async fn server_state_is_built_once_per_configuration() {
     let (_, _, engine, agent, _) = fixture().await;
     let app = AppState::new(engine, agent);
     let _router = router(app.clone());
-    let _grpc = crate::V1Grpc::new(app.clone());
+    let _grpc = crate::V2Grpc::new(app.clone());
     let _server = crate::build(app.clone());
     let _again = router(app.clone());
     assert_eq!(app.server_builds(), 1);
@@ -52,7 +52,7 @@ async fn stop_while_a_run_is_reserved_waits_for_it_and_nothing_is_admitted() {
     let response = app
         .clone()
         .oneshot(
-            Request::get(format!("/v1/sessions/{session}"))
+            Request::get(format!("/v2/sessions/{session}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -174,7 +174,7 @@ async fn cancel_before_spawn_keeps_user_cause_even_if_shutdown_follows() {
         let response = app
             .clone()
             .oneshot(
-                Request::post(format!("/v1/sessions/{session}/turns/test/cancel"))
+                Request::post(format!("/v2/sessions/{session}/turns/test/cancel"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -319,7 +319,7 @@ async fn restored_turn_has_guidance_and_rejects_a_concurrent_client_turn() {
     let response = app
         .clone()
         .oneshot(
-            Request::post(format!("/v1/sessions/{session}/turns"))
+            Request::post(format!("/v2/sessions/{session}/turns"))
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"prompt":{"text":"racing prompt"}}"#))
                 .unwrap(),
@@ -329,7 +329,7 @@ async fn restored_turn_has_guidance_and_rejects_a_concurrent_client_turn() {
     let cancel = app
         .clone()
         .oneshot(
-            Request::post(format!("/v1/sessions/{session}/turns/{message}/cancel"))
+            Request::post(format!("/v2/sessions/{session}/turns/{message}/cancel"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -339,7 +339,7 @@ async fn restored_turn_has_guidance_and_rejects_a_concurrent_client_turn() {
     let cancel_busy = app
         .clone()
         .oneshot(
-            Request::post(format!("/v1/sessions/{busy}/turns/test/cancel"))
+            Request::post(format!("/v2/sessions/{busy}/turns/test/cancel"))
                 .body(Body::empty())
                 .unwrap(),
         )

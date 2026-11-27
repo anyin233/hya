@@ -255,7 +255,7 @@ pub(crate) async fn run(action: ServeRelayAction, db: &str) -> anyhow::Result<()
                 "extraCaPath": ca.map(|ca| ca.to_string_lossy().into_owned()).unwrap_or_default(),
                 "ephemeral": ephemeral,
             });
-            call(&url, reqwest::Method::POST, "/v1/relay/connect", Some(body))
+            call(&url, reqwest::Method::POST, "/v2/relay/connect", Some(body))
                 .await
                 .map(|value| {
                     if json {
@@ -274,7 +274,7 @@ pub(crate) async fn run(action: ServeRelayAction, db: &str) -> anyhow::Result<()
         ServeRelayAction::Disconnect { json } => call(
             &url,
             reqwest::Method::POST,
-            "/v1/relay/disconnect",
+            "/v2/relay/disconnect",
             Some(json!({})),
         )
         .await
@@ -286,7 +286,7 @@ pub(crate) async fn run(action: ServeRelayAction, db: &str) -> anyhow::Result<()
             }
         }),
         ServeRelayAction::Status { json } => {
-            call(&url, reqwest::Method::GET, "/v1/relay/status", None)
+            call(&url, reqwest::Method::GET, "/v2/relay/status", None)
                 .await
                 .map(|value| {
                     if json {
@@ -298,13 +298,13 @@ pub(crate) async fn run(action: ServeRelayAction, db: &str) -> anyhow::Result<()
                     }
                 })
         }
-        ServeRelayAction::Link => call(&url, reqwest::Method::GET, "/v1/relay/link", None)
+        ServeRelayAction::Link => call(&url, reqwest::Method::GET, "/v2/relay/link", None)
             .await
             .map(|value| println!("{}", value["link"].as_str().unwrap_or(""))),
         ServeRelayAction::Rotate { json } => call(
             &url,
             reqwest::Method::POST,
-            "/v1/relay/rotate",
+            "/v2/relay/rotate",
             Some(json!({})),
         )
         .await

@@ -82,7 +82,7 @@ pub(crate) async fn cmd_serve_action(
                 );
                 return;
             }
-            match serve_relay::call(&url, reqwest::Method::GET, "/v1/relay/link", None).await {
+            match serve_relay::call(&url, reqwest::Method::GET, "/v2/relay/link", None).await {
                 Ok(value) => serve_relay::print_link(value["link"].as_str().unwrap_or("")),
                 Err(error) => eprintln!("hya: could not read the relay link ({error:#})"),
             }

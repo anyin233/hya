@@ -59,7 +59,7 @@ async fn configured_language_server_exposes_workspace_symbols() -> TestResult {
     let symbols: Value = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()?
-        .get(format!("{url}/v1/fs/symbols"))
+        .get(format!("{url}/v2/fs/symbols"))
         .query(&[
             ("query", "qaSymbol"),
             ("directory", project.to_string_lossy().as_ref()),

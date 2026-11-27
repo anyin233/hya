@@ -18,6 +18,7 @@ hya-core = { workspace = true }
 hya-proto = { workspace = true }
 hya-provider = { workspace = true }
 hya-tool = { workspace = true }
+hya-runtime-abi = { workspace = true }
 hya-tool-loader = { workspace = true }
 hya-context = { workspace = true }
 hya-workflow = { workspace = true }

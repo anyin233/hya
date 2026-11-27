@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use hya_api::v1 as pb;
+use hya_api::v2 as pb;
 use hya_e2e::{
     E2eEnv, E2eEnvBuilder, E2eError, fake_requests_from, text_step, tool_step, unique_temp_dir,
 };
@@ -292,7 +292,7 @@ async fn manual_permissions_project_scope_and_yolo_switch() {
     // 5. T1.7: switching mid-session to `yolo` unblocks the pending ask and skips later asks.
     let yolo_session = env.create_session().await.expect("yolo session");
     let info = env
-        .get_json(&format!("/v1/sessions/{yolo_session}"))
+        .get_json(&format!("/v2/sessions/{yolo_session}"))
         .await
         .unwrap();
     assert_eq!(info["permissionMode"], json!("manual"));
@@ -316,7 +316,7 @@ async fn manual_permissions_project_scope_and_yolo_switch() {
             .await
             .expect("first shell asks");
         env.patch_json(
-            &format!("/v1/sessions/{yolo_session}"),
+            &format!("/v2/sessions/{yolo_session}"),
             &json!({ "permissionMode": "yolo" }),
         )
         .await

@@ -126,7 +126,7 @@ impl PermissionRequests {
         requests
     }
 
-    /// Subscribe to live v1 interaction events.
+    /// Subscribe to live v2 interaction events.
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<PendingEvent> {
         self.events.subscribe()
     }
@@ -707,7 +707,7 @@ mod shutdown_order_tests {
             let mut events = engine.bus().subscribe();
             let response = router
                 .oneshot(
-                    Request::post(format!("/v1/sessions/{session}/turns"))
+                    Request::post(format!("/v2/sessions/{session}/turns"))
                         .header("content-type", "application/json")
                         .body(Body::from(r#"{"prompt":{"text":"run"}}"#))
                         .unwrap(),

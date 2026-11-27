@@ -11,7 +11,7 @@ use axum::{
     http::{Method, Request, StatusCode},
 };
 use http_body_util::BodyExt;
-use hya_api::v1 as pb;
+use hya_api::v2 as pb;
 use hya_app::{InvocationPolicy, WebSearchConfig, agent_with_model, build_session_engine};
 use hya_engine::CreateSession;
 use hya_proto::{MessageId, ModelRef, SessionId};
@@ -136,7 +136,7 @@ flowchart TD
     let (status, response) = call(
         &app,
         Method::POST,
-        format!("/v1/sessions/{root}/workflow"),
+        format!("/v2/sessions/{root}/bundles/hya%2Fworkflow/command"),
         json!({"run": {"name": "paused"}}),
     )
     .await;
@@ -158,7 +158,7 @@ flowchart TD
     assert!(hya_server::WorkflowControl::active_run(control.as_ref(), root).is_some());
     if grpc {
         pb::session_server::Session::delete_session(
-            &hya_server::V1Grpc::new(state),
+            &hya_server::V2Grpc::new(state),
             tonic::Request::new(pb::DeleteSessionRequest {
                 session: root.to_string(),
             }),
@@ -169,7 +169,7 @@ flowchart TD
         let (status, response) = call(
             &app,
             Method::DELETE,
-            format!("/v1/sessions/{root}"),
+            format!("/v2/sessions/{root}"),
             Value::Null,
         )
         .await;

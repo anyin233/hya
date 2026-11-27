@@ -247,7 +247,7 @@ async fn command_turn(env: &E2eEnv, session: hya_proto::SessionId, body: Value) 
     let (status, value) = request_json(
         env,
         Method::POST,
-        &format!("/v1/sessions/{session}/turns"),
+        &format!("/v2/sessions/{session}/turns"),
         Some(body),
     )
     .await;
@@ -260,7 +260,7 @@ async fn command_turn(env: &E2eEnv, session: hya_proto::SessionId, body: Value) 
         .await
         .expect("v1 command turn completion");
     let messages = env
-        .get_json(&format!("/v1/sessions/{session}/messages"))
+        .get_json(&format!("/v2/sessions/{session}/messages"))
         .await
         .expect("v1 transcript");
     messages["messages"]
@@ -421,7 +421,7 @@ async fn mcp_and_custom_slash_skill_expansion_and_reload() {
     let (bad_status, bad_body) = request_json(
         &env,
         Method::POST,
-        "/v1/mcp",
+        "/v2/mcp",
         Some(json!({
             "name": "a__b",
             "command": {"command": "python3", "args": ["fixtures/mcp_echo.py"]}
@@ -434,7 +434,7 @@ async fn mcp_and_custom_slash_skill_expansion_and_reload() {
     // 3. T1.16: command & skill catalog discovery, precedence, expansion, explicit text bypass.
     let catalog = env
         .get_json(&format!(
-            "/v1/commands?directory={}",
+            "/v2/commands?directory={}",
             env.backend.workdir_str()
         ))
         .await
@@ -467,7 +467,7 @@ async fn mcp_and_custom_slash_skill_expansion_and_reload() {
 
     let skills = env
         .get_json(&format!(
-            "/v1/skills?directory={}",
+            "/v2/skills?directory={}",
             env.backend.workdir_str()
         ))
         .await
@@ -613,10 +613,10 @@ async fn mcp_and_custom_slash_skill_expansion_and_reload() {
     assert_eq!(s_stale, "/skill:user-playbook STALE");
 
     // 5. T1.22 (MCP disconnect/reconnect boundary).
-    env.post_json("/v1/mcp/echo/disconnect", &Value::Null)
+    env.post_json("/v2/mcp/echo/disconnect", &Value::Null)
         .await
         .unwrap();
-    let disc = env.get_json("/v1/mcp").await.unwrap();
+    let disc = env.get_json("/v2/mcp").await.unwrap();
     let disc_echo = disc["servers"]
         .as_array()
         .and_then(|rows| rows.iter().find(|r| r["name"] == "echo"))
@@ -628,7 +628,7 @@ async fn mcp_and_custom_slash_skill_expansion_and_reload() {
             .and_then(Value::as_array)
             .is_none_or(Vec::is_empty)
     );
-    env.post_json("/v1/mcp/echo/connect", &Value::Null)
+    env.post_json("/v2/mcp/echo/connect", &Value::Null)
         .await
         .unwrap();
     env.wait_mcp_connected("echo", TIMEOUT).await.unwrap();
@@ -951,7 +951,7 @@ async fn acp_stdio_permissions_and_session_mcp_lifecycle() {
             .to_string()
             .contains("allow [fixture](file:///fixture) after-link")
     );
-    let sessions = env.get_json("/v1/sessions").await.unwrap();
+    let sessions = env.get_json("/v2/sessions").await.unwrap();
     let rows = sessions["sessions"].as_array().unwrap();
     assert_eq!(rows.len(), 3, "failed discovery must not leave a session");
     let first = rows
@@ -964,6 +964,6 @@ async fn acp_stdio_permissions_and_session_mcp_lifecycle() {
         .unwrap();
     assert!(first["projectId"].is_string());
     assert_eq!(first["projectId"], second["projectId"]);
-    let global = env.get_json("/v1/mcp").await.unwrap();
+    let global = env.get_json("/v2/mcp").await.unwrap();
     assert!(!global.to_string().contains("mcp__peer__"));
 }

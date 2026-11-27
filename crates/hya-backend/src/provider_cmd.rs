@@ -4,7 +4,7 @@
 //!
 //! Declarations go to `config.yaml` (`providers.<id>`), keys to
 //! `auth/<id>.yaml`, and fetched models to the model cache, the same stores
-//! the TUI Provider View writes through `PUT /v1/providers/{id}`. A running
+//! the TUI Provider View writes through `PUT /v2/providers/{id}`. A running
 //! backend of the database is told to rebuild the provider, so it serves the
 //! change without a restart; `list --refresh` fetches through that backend,
 //! so its TUI and WebUI offer the refreshed models at once.
@@ -549,11 +549,11 @@ async fn sync_running_backend(db: &str, id: &str, action: SyncAction) {
     let client = reqwest::Client::new();
     let request = match action {
         SyncAction::Rebuild => client
-            .post(format!("{url}/v1/providers/{id}/refresh"))
+            .post(format!("{url}/v2/providers/{id}/refresh"))
             .json(&serde_json::json!({})),
         // Deleting the (already deleted) key rebuilds the provider without
         // it; a provider no longer in config.yaml loses its route and models.
-        SyncAction::Drop | SyncAction::DropKey => client.delete(format!("{url}/v1/auth/{id}")),
+        SyncAction::Drop | SyncAction::DropKey => client.delete(format!("{url}/v2/auth/{id}")),
     };
     match request
         .timeout(std::time::Duration::from_secs(30))
@@ -595,7 +595,7 @@ pub(crate) async fn refresh_through_backend(
             continue;
         }
         let response = client
-            .post(format!("{url}/v1/providers/{id}/refresh"))
+            .post(format!("{url}/v2/providers/{id}/refresh"))
             .json(&serde_json::json!({}))
             .timeout(std::time::Duration::from_secs(120))
             .send()

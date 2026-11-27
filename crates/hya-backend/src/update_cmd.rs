@@ -21,7 +21,7 @@ pub(crate) async fn run(args: &ReleaseInstallArgs, db: &str) -> anyhow::Result<(
         );
     } else if changes.bundles_changed {
         reqwest::Client::new()
-            .post(format!("{}/v1/bundles:refresh", found.url))
+            .post(format!("{}/v2/bundles:refresh", found.url))
             .json(&serde_json::json!({ "directory": std::env::current_dir()
                 .context("read the current directory")?.to_string_lossy() }))
             .send()

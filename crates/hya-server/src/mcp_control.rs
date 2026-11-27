@@ -30,7 +30,7 @@ pub trait McpControl: Send + Sync {
 
     /// Namespaced tool names (`mcp__server__tool`) each server currently
     /// publishes, keyed by server name, in the server's `tools/list` order.
-    /// `GET /v1/mcp` reports them for `CONNECTED` servers only.
+    /// `GET /v2/mcp` reports them for `CONNECTED` servers only.
     fn tools(&self) -> BoxFuture<'_, BTreeMap<String, Vec<String>>> {
         Box::pin(async { BTreeMap::new() })
     }

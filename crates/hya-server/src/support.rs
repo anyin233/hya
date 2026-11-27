@@ -1,5 +1,5 @@
 //! Shared server support modules: catalogs, guidance, PTY, worktrees, git,
-//! and the config bag used by the `/v1` binding and process state.
+//! and the config bag used by the `/v2` binding and process state.
 //! Re-homed from the retired Compat surface; route handlers there were
 //! deleted, helpers survive here unchanged.
 

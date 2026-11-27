@@ -4,7 +4,7 @@ use std::{os::unix::fs::PermissionsExt, path::Path, process::Stdio};
 
 use agent_client_protocol::v1::schema as acp;
 use anyhow::{Context, ensure};
-use hya_api::v1 as pb;
+use hya_api::v2 as pb;
 use tokio::{net::UnixListener, process::Command};
 use tokio_util::sync::{CancellationToken, DropGuard};
 

@@ -1,4 +1,4 @@
-//! Shared application state for the v1 HTTP and gRPC bindings.
+//! Shared application state for the v2 HTTP and gRPC bindings.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -257,7 +257,7 @@ impl AppState {
         self.reconfigured()
     }
 
-    /// Publish a Project-list change: the v1 global event stream (SSE and
+    /// Publish a Project-list change: the v2 global event stream (SSE and
     /// gRPC) delivers it as a live `projectsUpdated` frame.
     pub fn notify_projects_updated(&self) {
         let _ = self.projects_updates.send(());
@@ -335,7 +335,7 @@ impl AppState {
         self.reconfigured()
     }
 
-    /// Install the app-owned MCP control handle for v1 MCP routes.
+    /// Install the app-owned MCP control handle for v2 MCP routes.
     #[must_use]
     pub fn with_mcp_control(mut self, control: Arc<dyn McpControl>) -> Self {
         self.mcp_control = control;
@@ -372,7 +372,7 @@ impl AppState {
         self.reconfigured()
     }
 
-    /// Publish a provider-catalog change: every v1 event stream (global and
+    /// Publish a provider-catalog change: every v2 event stream (global and
     /// session, SSE and gRPC) delivers it as a live `catalogUpdated` frame
     /// with an empty `projectId`.
     pub fn notify_catalog_updated(&self) {
@@ -409,7 +409,7 @@ pub(crate) struct ServerState {
     pub(crate) stop: CancellationToken,
     #[cfg(test)]
     pub(crate) stream_conversions: Arc<std::sync::atomic::AtomicUsize>,
-    pub(crate) frames: crate::v1::events::FrameHub,
+    pub(crate) frames: crate::v2::events::FrameHub,
     pub(crate) engine: Arc<SessionEngine>,
     pub(crate) agent: Arc<AgentSpec>,
     pub(crate) runs: runs::RunRegistry,
@@ -448,7 +448,7 @@ impl ServerState {
             stop: app.handlers.stop.clone(),
             #[cfg(test)]
             stream_conversions: Arc::default(),
-            frames: crate::v1::events::FrameHub::new(app.engine.bus().capacity()),
+            frames: crate::v2::events::FrameHub::new(app.engine.bus().capacity()),
             engine: app.engine,
             agent: app.agent,
             runs: app.runs,

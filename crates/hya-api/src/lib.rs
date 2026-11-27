@@ -1,9 +1,9 @@
-//! `hya-api` — the hya v1 dual-protocol contract crate.
+//! `hya-api` — the hya v2 dual-protocol contract crate.
 //!
 //! This crate is the single source of truth binding shared by the HTTP
 //! (axum, JSON+SSE) and gRPC (tonic) transports. It contains:
 //!
-//! - [`v1`] — generated Rust types, clients, and servers for the `hya.v1`
+//! - [`v2`] — generated Rust types, clients, and servers for the `hya.v2`
 //!   protobuf services, plus canonical protojson serde implementations.
 //!   Regenerate with `cargo run -p xtask -- gen-api`; the output is committed so
 //!   normal builds never need `protoc`.
@@ -18,7 +18,7 @@
 pub mod cursor;
 pub mod error;
 
-/// Generated protobuf code for the `hya.v1` contract.
+/// Generated protobuf code for the `hya.v2` contract.
 ///
 /// The `#![allow]` inner attributes keep generated code outside the
 /// hand-written lint contract (doc coverage and pedantic clippy gates
@@ -28,17 +28,17 @@ pub mod generated {
 
     /// The `hya` proto package.
     pub mod hya {
-        /// The `hya.v1` proto package: all v1 services and messages, plus
+        /// The `hya.v2` proto package: all v2 services and messages, plus
         /// canonical protojson serde implementations. Well-known protobuf
         /// types resolve to the `pbjson_types` crate.
-        pub mod v1 {
-            include!("gen/hya.v1.rs");
-            include!("gen/hya.v1.serde.rs");
+        pub mod v2 {
+            include!("gen/hya.v2.rs");
+            include!("gen/hya.v2.serde.rs");
         }
     }
 }
 
-pub use generated::hya::v1;
+pub use generated::hya::v2;
 
 #[cfg(test)]
 mod tests {
@@ -49,11 +49,11 @@ mod tests {
         // Compile-time reachability check for a representative type from
         // each generated family; keeps the include tree honest.
         fn assert_debug<T: std::fmt::Debug>() {}
-        assert_debug::<v1::SessionInfo>();
-        assert_debug::<v1::CreateTurnRequest>();
-        assert_debug::<v1::StreamFrame>();
-        assert_debug::<v1::Interaction>();
-        assert_debug::<v1::WorkflowState>();
-        assert_debug::<v1::TurnInfo>();
+        assert_debug::<v2::SessionInfo>();
+        assert_debug::<v2::CreateTurnRequest>();
+        assert_debug::<v2::StreamFrame>();
+        assert_debug::<v2::ExtensionEvent>();
+        assert_debug::<v2::Interaction>();
+        assert_debug::<v2::TurnInfo>();
     }
 }

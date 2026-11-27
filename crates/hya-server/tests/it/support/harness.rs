@@ -322,7 +322,7 @@ pub async fn create_session_with(app: &Router, extra: Value) -> (StatusCode, Val
             body[key] = value.clone();
         }
     }
-    post(app, "/v1/sessions", body).await
+    post(app, "/v2/sessions", body).await
 }
 
 pub async fn create_session_id(app: &Router, extra: Value) -> String {
@@ -330,13 +330,13 @@ pub async fn create_session_id(app: &Router, extra: Value) -> String {
 }
 
 pub async fn start_turn(app: &Router, session: &str, body: Value) -> String {
-    id_str(&ok_post(app, &format!("/v1/sessions/{session}/turns"), body).await["turn"]["id"])
+    id_str(&ok_post(app, &format!("/v2/sessions/{session}/turns"), body).await["turn"]["id"])
 }
 
 pub async fn wait_turn(app: &Router, session: &str, turn: &str) -> Value {
     ok_post(
         app,
-        &format!("/v1/sessions/{session}/turns/{turn}/wait?timeoutMs=10000"),
+        &format!("/v2/sessions/{session}/turns/{turn}/wait?timeoutMs=10000"),
         Value::Null,
     )
     .await
@@ -345,7 +345,7 @@ pub async fn wait_turn(app: &Router, session: &str, turn: &str) -> Value {
 pub async fn wait_not_busy(app: &Router, session: &str) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while tokio::time::Instant::now() < deadline {
-        if get_json(app, &format!("/v1/sessions/{session}")).await.1["busy"] != json!(true) {
+        if get_json(app, &format!("/v2/sessions/{session}")).await.1["busy"] != json!(true) {
             return;
         }
         tokio::time::sleep(Duration::from_millis(5)).await;

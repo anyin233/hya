@@ -547,6 +547,24 @@ impl RuntimeSource {
         self
     }
 
+    /// Attach API endpoints backed by native ABI v2
+    /// [`hya_runtime_abi::NativeBundleApiHandler`] instances.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Invalid`] if any declared native endpoint path
+    /// template is invalid or duplicated.
+    pub fn with_native_apis(
+        mut self,
+        handlers: Vec<Arc<dyn hya_runtime_abi::NativeBundleApiHandler>>,
+    ) -> Result<Self, crate::CoreError> {
+        let (apis, provider) = crate::bundle_apis::source_apis_from_native_handlers(
+            self.id.configured_id(),
+            handlers,
+        )?;
+        self = self.with_apis(apis, provider);
+        Ok(self)
+    }
+
     /// Attach the session permission modes this source's process approves
     /// through its `permission.approve` hook (sorted by id).
     #[must_use]

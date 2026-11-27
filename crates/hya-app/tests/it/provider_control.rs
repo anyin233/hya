@@ -204,7 +204,7 @@ async fn upsert_fetches_models_saves_keys_and_edits_models_live() {
     let (status, body) = send(
         &app,
         Method::PUT,
-        "/v1/providers/gw",
+        "/v2/providers/gw",
         json!({"kind": "openai", "baseUrl": base_url, "apiKey": "sk-first"}),
     )
     .await;
@@ -250,7 +250,7 @@ async fn upsert_fetches_models_saves_keys_and_edits_models_live() {
     let (status, probe) = send(
         &app,
         Method::POST,
-        "/v1/providers/gw/test",
+        "/v2/providers/gw/test",
         json!({"modelId": "alpha"}),
     )
     .await;
@@ -274,7 +274,7 @@ async fn upsert_fetches_models_saves_keys_and_edits_models_live() {
     let (status, body) = send(
         &app,
         Method::PUT,
-        "/v1/providers/gw",
+        "/v2/providers/gw",
         json!({"kind": "openai", "baseUrl": new_url}),
     )
     .await;
@@ -289,7 +289,7 @@ async fn upsert_fetches_models_saves_keys_and_edits_models_live() {
     let (status, body) = send(
         &app,
         Method::PUT,
-        "/v1/auth/gw",
+        "/v2/auth/gw",
         json!({"apiKey": "sk-second"}),
     )
     .await;
@@ -302,7 +302,7 @@ async fn upsert_fetches_models_saves_keys_and_edits_models_live() {
         send(
             &app,
             Method::POST,
-            "/v1/providers/gw/test",
+            "/v2/providers/gw/test",
             json!({"modelId": "alpha"})
         )
         .await
@@ -321,7 +321,7 @@ async fn upsert_fetches_models_saves_keys_and_edits_models_live() {
         Some("Bearer sk-second")
     );
 
-    let (status, body) = send(&app, Method::DELETE, "/v1/auth/gw", Value::Null).await;
+    let (status, body) = send(&app, Method::DELETE, "/v2/auth/gw", Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["provider"]["summary"]["keySource"], "none");
     assert_eq!(
@@ -333,7 +333,7 @@ async fn upsert_fetches_models_saves_keys_and_edits_models_live() {
         send(
             &app,
             Method::POST,
-            "/v1/providers/gw/test",
+            "/v2/providers/gw/test",
             json!({"modelId": "alpha"})
         )
         .await
@@ -349,7 +349,7 @@ async fn upsert_fetches_models_saves_keys_and_edits_models_live() {
     let (status, body) = send(
         &app,
         Method::PUT,
-        "/v1/providers/gw/models",
+        "/v2/providers/gw/models",
         json!({"modelId": "alpha", "displayName": "Alpha (mine)", "outputLimit": 1024}),
     )
     .await;
@@ -362,7 +362,7 @@ async fn upsert_fetches_models_saves_keys_and_edits_models_live() {
     let (status, body) = send(
         &app,
         Method::PUT,
-        "/v1/providers/gw/models",
+        "/v2/providers/gw/models",
         json!({"modelId": "alpha", "contextLimit": 32000}),
     )
     .await;
@@ -375,7 +375,7 @@ async fn upsert_fetches_models_saves_keys_and_edits_models_live() {
     let (status, body) = send(
         &app,
         Method::PUT,
-        "/v1/providers/gw/models",
+        "/v2/providers/gw/models",
         json!({"modelId": "alpha", "displayName": "", "outputLimit": 0}),
     )
     .await;
@@ -388,7 +388,7 @@ async fn upsert_fetches_models_saves_keys_and_edits_models_live() {
     let (status, body) = send(
         &app,
         Method::PUT,
-        "/v1/providers/gw/models",
+        "/v2/providers/gw/models",
         json!({"modelId": "bare/m"}),
     )
     .await;
@@ -401,7 +401,7 @@ async fn upsert_fetches_models_saves_keys_and_edits_models_live() {
     let (status, body) = send(
         &app,
         Method::DELETE,
-        "/v1/providers/gw/models?modelId=alpha",
+        "/v2/providers/gw/models?modelId=alpha",
         Value::Null,
     )
     .await;
@@ -414,7 +414,7 @@ async fn upsert_fetches_models_saves_keys_and_edits_models_live() {
         send(
             &app,
             Method::DELETE,
-            "/v1/providers/gw/models?modelId=alpha",
+            "/v2/providers/gw/models?modelId=alpha",
             Value::Null
         )
         .await
@@ -422,10 +422,10 @@ async fn upsert_fetches_models_saves_keys_and_edits_models_live() {
         StatusCode::NOT_FOUND
     );
 
-    let (status, body) = send(&app, Method::POST, "/v1/providers/gw/refresh", Value::Null).await;
+    let (status, body) = send(&app, Method::POST, "/v2/providers/gw/refresh", Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["discovery"]["modelCount"], 2);
-    let (status, list) = send(&app, Method::GET, "/v1/providers", Value::Null).await;
+    let (status, list) = send(&app, Method::GET, "/v2/providers", Value::Null).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         !list["providers"]
@@ -434,7 +434,7 @@ async fn upsert_fetches_models_saves_keys_and_edits_models_live() {
             .iter()
             .any(|row| row["id"] == "hya")
     );
-    let (status, listed) = send(&app, Method::GET, "/v1/auth", Value::Null).await;
+    let (status, listed) = send(&app, Method::GET, "/v2/auth", Value::Null).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         listed
@@ -457,7 +457,7 @@ async fn failed_fetches_do_not_fail_upsert_and_bad_input_is_rejected() {
     let (status, body) = send(
         &app,
         Method::PUT,
-        "/v1/providers/gw",
+        "/v2/providers/gw",
         json!({"kind": "anthropic", "baseUrl": "http://127.0.0.1:9/v1"}),
     )
     .await;
@@ -472,7 +472,7 @@ async fn failed_fetches_do_not_fail_upsert_and_bad_input_is_rejected() {
     let (status, body) = send(
         &app,
         Method::PUT,
-        "/v1/providers/rejected",
+        "/v2/providers/rejected",
         json!({"kind": "openai", "baseUrl": base_url, "apiKey": "bad-key"}),
     )
     .await;
@@ -489,7 +489,7 @@ async fn failed_fetches_do_not_fail_upsert_and_bad_input_is_rejected() {
         json!({"kind": "openai", "baseUrl": "https://user:pw@x.example"}),
         json!({"kind": "openai", "baseUrl": "not a url"}),
     ] {
-        let (status, body) = send(&app, Method::PUT, "/v1/providers/other", payload.clone()).await;
+        let (status, body) = send(&app, Method::PUT, "/v2/providers/other", payload.clone()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{payload}: {body}");
     }
     assert!(
@@ -501,7 +501,7 @@ async fn failed_fetches_do_not_fail_upsert_and_bad_input_is_rejected() {
         send(
             &app,
             Method::POST,
-            "/v1/providers/nope/refresh",
+            "/v2/providers/nope/refresh",
             Value::Null
         )
         .await
@@ -512,7 +512,7 @@ async fn failed_fetches_do_not_fail_upsert_and_bad_input_is_rejected() {
         send(
             &app,
             Method::PUT,
-            "/v1/providers/nope/models",
+            "/v2/providers/nope/models",
             json!({"modelId": "m"})
         )
         .await
@@ -549,7 +549,7 @@ async fn deferred_discovery_publishes_one_global_catalog_notice() {
         .unwrap();
     assert_eq!(notice["type"], "catalog.updated");
     assert_eq!(notice["properties"], json!({}));
-    let (status, body) = send(&router, Method::GET, "/v1/providers/gw", Value::Null).await;
+    let (status, body) = send(&router, Method::GET, "/v2/providers/gw", Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(model(&body, "alpha").is_some(), "{body}");
     assert!(matches!(

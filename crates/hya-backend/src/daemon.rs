@@ -73,7 +73,7 @@ pub(crate) fn log_path(db: &str) -> Option<PathBuf> {
 }
 
 /// The live server of `db`: discovery belonging to the kernel lock holder whose
-/// URL answers `GET /v1/health` with `ok: true`.
+/// URL answers `GET /v2/health` with `ok: true`.
 pub(crate) async fn running(db: &str) -> Option<Discovery> {
     let found = db_lock::holder(db).ok()??.discovery?;
     db_lock::probe(&found.url, PROBE_TIMEOUT)

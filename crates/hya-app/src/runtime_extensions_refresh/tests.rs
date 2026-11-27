@@ -535,7 +535,7 @@ async fn http_refresh_reports_partial_publication_and_retries() -> anyhow::Resul
     let mut notices = state.subscribe_catalog_updates();
     let app = hya_server::router(state);
     let req = || {
-        axum::http::Request::post("/v1/bundles:refresh")
+        axum::http::Request::post("/v2/bundles:refresh")
             .header("content-type", "application/json")
             .body(Body::from("{\"directory\":\"\"}"))
     };

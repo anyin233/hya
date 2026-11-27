@@ -227,7 +227,7 @@ async fn app(
     release: Arc<Notify>,
 ) -> Result<Response<AppBody>, Infallible> {
     Ok(match req.uri().path() {
-        "/v1/health" => full(
+        "/v2/health" => full(
             StatusCode::OK,
             "application/json",
             r#"{"ok":true,"version":"test"}"#,
@@ -444,7 +444,7 @@ async fn http_sse_websocket_and_sigterm_cross_the_bridge() {
     let client = bridge.client();
     assert_eq!(
         client
-            .get(format!("{url}/v1/health"))
+            .get(format!("{url}/v2/health"))
             .send()
             .await
             .unwrap()
@@ -535,10 +535,10 @@ async fn unauthenticated_requests_are_refused_and_token_is_stripped() {
     let (before, url) = (host.incoming.load(Ordering::SeqCst), bridge.url());
     let http = reqwest::Client::builder().timeout(WAIT).build().unwrap();
     for req in [
-        http.get(format!("{url}/v1/health")),
-        http.get(format!("{url}/v1/health"))
+        http.get(format!("{url}/v2/health")),
+        http.get(format!("{url}/v2/health"))
             .header(TOKEN_HEADER, "0".repeat(64)),
-        http.get(format!("{url}/v1/health"))
+        http.get(format!("{url}/v2/health"))
             .header("authorization", format!("Bearer {}", bridge.token)),
     ] {
         let resp = req.send().await.unwrap();
@@ -559,7 +559,7 @@ async fn unauthenticated_requests_are_refused_and_token_is_stripped() {
     assert_eq!(
         bridge
             .client()
-            .get(format!("{url}/v1/health"))
+            .get(format!("{url}/v2/health"))
             .send()
             .await
             .unwrap()
@@ -590,7 +590,7 @@ async fn offline_rotated_and_rejected_links_fail_without_leaking_secrets() {
     let offline = bridge_json(&offline_link).await;
     let resp = offline
         .client()
-        .get(format!("{}/v1/health", offline.url()))
+        .get(format!("{}/v2/health", offline.url()))
         .send()
         .await
         .unwrap();
@@ -614,7 +614,7 @@ async fn offline_rotated_and_rejected_links_fail_without_leaking_secrets() {
     let rot = spawn_bridge(cmd, scratch, None, false).await;
     assert_eq!(
         rot.client()
-            .get(format!("{}/v1/health", rot.url()))
+            .get(format!("{}/v2/health", rot.url()))
             .send()
             .await
             .unwrap()
@@ -689,7 +689,7 @@ async fn truncated_tampered_env_listen_and_exit_with_stdin() {
     assert_eq!(
         bridge
             .client()
-            .get(format!("http://127.0.0.1:{port}/v1/health"))
+            .get(format!("http://127.0.0.1:{port}/v2/health"))
             .send()
             .await
             .unwrap()

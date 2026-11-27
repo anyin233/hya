@@ -189,7 +189,7 @@ resources:
     );
 
     // 3. T2.19: bundle schemas surface through `bundle schema`, `bundle info`, `read(db://...)`,
-    // and `GET /v1/runtime/schemas`.
+    // and `GET /v2/runtime/schemas`.
     let schema_source = BundleSource::new(
         "schema-demo",
         vec![
@@ -270,7 +270,7 @@ for line in sys.stdin:
         fake_requests_from(&env.fake.requests().unwrap(), before + 1)
             .contains("BUNDLE_SCHEMA_READ_EXECUTED")
     );
-    let runtime_schemas = env.get_json("/v1/runtime/schemas").await.unwrap();
+    let runtime_schemas = env.get_json("/v2/runtime/schemas").await.unwrap();
     let claim = runtime_schemas["schemas"]
         .as_array()
         .unwrap()
@@ -757,7 +757,7 @@ for line in sys.stdin:
 
 /// T2.29 — bundle-declared HTTP APIs (`apis:`): session-scoped `session.usage` tree &
 /// single-session reads, global `POST`/`PUT`/`GET`/`DELETE`, `kind: bun` tool capability,
-/// `/v1/bundle-apis` schema discovery, and stable `bundle_api_*` host error codes.
+/// `/v2/bundle-apis` schema discovery, and stable `bundle_api_*` host error codes.
 #[tokio::test]
 async fn bundle_apis_session_usage_and_global_state() {
     const PROMPT: u64 = 100;
@@ -909,7 +909,7 @@ apis:
     let followup = fake_requests_from(&env.fake.requests().unwrap(), 1);
     assert!(followup.contains("USAGE_PROBE_OK") && followup.contains("tool_call"));
 
-    let (status, listed) = call(&env, reqwest::Method::GET, "/v1/bundle-apis", None).await;
+    let (status, listed) = call(&env, reqwest::Method::GET, "/v2/bundle-apis", None).await;
     assert_eq!(status, 200);
     let ours: Vec<_> = listed["apis"]
         .as_array()
@@ -922,7 +922,7 @@ apis:
         api["api"] == "put-item" && api["requestSchema"] == json!({"type": "object"})
     }));
 
-    let usage_path = format!("/v1/sessions/{session}/bundles/{BUNDLE_SEGMENT}/usage");
+    let usage_path = format!("/v2/sessions/{session}/bundles/{BUNDLE_SEGMENT}/usage");
     let mut report = Value::Null;
     for _ in 0..300 {
         let (status, body) = call(&env, reqwest::Method::GET, &usage_path, None).await;
@@ -977,7 +977,7 @@ apis:
     assert_eq!(status, 400);
     assert_eq!(refused["error"]["code"], -32602);
 
-    let global = format!("/v1/bundles/{BUNDLE_SEGMENT}/api");
+    let global = format!("/v2/bundles/{BUNDLE_SEGMENT}/api");
     let (status, echoed) = call(
         &env,
         reqwest::Method::POST,
@@ -1016,20 +1016,20 @@ apis:
     for (method, path, expected_status, expected_code) in [
         (
             reqwest::Method::GET,
-            format!("/v1/sessions/{session}/bundles/{BUNDLE_SEGMENT}/missing"),
+            format!("/v2/sessions/{session}/bundles/{BUNDLE_SEGMENT}/missing"),
             404,
             "bundle_api_not_found",
         ),
         (
             reqwest::Method::GET,
-            format!("/v1/sessions/{session}/bundles/acme%2Fabsent/usage"),
+            format!("/v2/sessions/{session}/bundles/acme%2Fabsent/usage"),
             404,
             "bundle_api_not_found",
         ),
         (
             reqwest::Method::GET,
             format!(
-                "/v1/sessions/{}/bundles/{BUNDLE_SEGMENT}/usage",
+                "/v2/sessions/{}/bundles/{BUNDLE_SEGMENT}/usage",
                 hya_proto::SessionId::new()
             ),
             404,

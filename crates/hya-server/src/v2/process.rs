@@ -1,0 +1,168 @@
+//! `/v2` process domain: health, location, config, and
+//! the aggregated bootstrap snapshot.
+
+use std::collections::BTreeMap;
+
+use axum::Router;
+use axum::extract::{Query, State};
+use axum::routing::get;
+
+use super::Json;
+use serde_json::Value;
+
+use crate::ServerState;
+use hya_api::v2 as pb;
+
+use super::{V2Error, catalog_scope, request_scope};
+
+pub(crate) fn router() -> Router<ServerState> {
+    Router::new()
+        .route("/v2/health", get(health))
+        .route("/v2/location", get(location))
+        .route(
+            "/v2/config",
+            get(get_config).patch(axum::routing::patch(update_config)),
+        )
+        .route("/v2/bootstrap", get(bootstrap))
+}
+
+/// Liveness and version. A server that has started shutting down answers
+/// `unavailable`, so a client probing it after its stream ended knows the
+/// server is going away (ADR-0023).
+async fn health(State(st): State<ServerState>) -> Result<Json<pb::GetHealthResponse>, V2Error> {
+    if st.streams.is_closing() {
+        return Err(V2Error::unavailable("the server is shutting down"));
+    }
+    Ok(Json(pb::GetHealthResponse {
+        ok: true,
+        version: hya_version::BACKEND_VERSION.to_owned(),
+    }))
+}
+
+async fn location(
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::LocationInfo>, V2Error> {
+    let request: pb::GetLocationRequest = super::query_request(&[], &query)?;
+    let scope = request_scope(&request.directory)?;
+    Ok(Json(location_info(scope.as_deref())))
+}
+
+/// The backend has no working directory of its own (ADR-0024): `directory`
+/// echoes the request's scope, empty when it named none.
+fn location_info(scope: Option<&std::path::Path>) -> pb::LocationInfo {
+    pb::LocationInfo {
+        directory: scope
+            .map(|scope| scope.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        hostname: hostname(),
+        pid: std::process::id(),
+        version: hya_version::BACKEND_VERSION.to_owned(),
+    }
+}
+
+fn hostname() -> String {
+    let mut buffer = [0u8; 256];
+    // SAFETY: gethostname writes at most `buffer.len()` bytes into the
+    // provided buffer and the return value is checked before reading.
+    let status = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
+    if status != 0 {
+        return "unknown".to_owned();
+    }
+    let end = buffer
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(buffer.len());
+    String::from_utf8_lossy(&buffer[..end]).into_owned()
+}
+
+async fn get_config(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::GetConfigResponse>, V2Error> {
+    let _request: pb::GetConfigRequest = super::query_request(&[], &query)?;
+    Ok(Json(pb::GetConfigResponse {
+        values: Some(super::convert::to_struct(st.global.config().await)),
+    }))
+}
+
+async fn update_config(
+    State(st): State<ServerState>,
+    Json(request): Json<pb::UpdateConfigRequest>,
+) -> Result<Json<pb::GetConfigResponse>, V2Error> {
+    let patch = request
+        .patch
+        .as_ref()
+        .map(super::convert::from_struct)
+        .unwrap_or_else(|| Value::Object(Default::default()));
+    if !patch.is_object() {
+        return Err(V2Error::invalid_argument("config patch must be an object"));
+    }
+    let current = st.global.config().await;
+    let merged = merge_objects(current, patch);
+    st.global.update_config(merged.clone()).await;
+    Ok(Json(pb::GetConfigResponse {
+        values: Some(super::convert::to_struct(merged)),
+    }))
+}
+
+/// Deep-merge `patch` into `base`; non-object leaves in `patch` replace.
+fn merge_objects(base: Value, patch: Value) -> Value {
+    match (base, patch) {
+        (Value::Object(mut base), Value::Object(patch)) => {
+            for (key, value) in patch {
+                let merged = match base.remove(&key) {
+                    Some(existing) => merge_objects(existing, value),
+                    None => value,
+                };
+                base.insert(key, merged);
+            }
+            Value::Object(base)
+        }
+        (_, patch) => patch,
+    }
+}
+
+async fn bootstrap(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::Bootstrap>, V2Error> {
+    let request: pb::GetBootstrapRequest = super::query_request(&[], &query)?;
+    // Without a scope the catalog rows are the global (project-less) view.
+    let place = catalog_scope(&st, &request.directory).await?;
+
+    let agents = super::catalog::agent_rows(&st, &place).await?;
+    let snapshot = st.engine.provider_catalog_snapshot();
+    let models = super::catalog::model_rows(&snapshot);
+    let providers = super::catalog::provider_rows(&st, &snapshot).await;
+    let commands = super::catalog::command_rows(&st, &place);
+    let skills = super::catalog::skill_rows(&st, &place);
+    let tools = super::catalog::tool_rows(&st);
+    // What a full-mode session here reads into its initial context (`--pure` reads none).
+    let context_files = match place.workdir() {
+        Some(workdir) if !st.pure_guidance => hya_engine::context_file_entries(workdir)
+            .into_iter()
+            .map(|entry| pb::ContextFile {
+                path: entry.path.to_string_lossy().into_owned(),
+                scope: entry.scope.to_owned(),
+                bytes: entry.bytes,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    Ok(Json(pb::Bootstrap {
+        location: Some(location_info(place.workdir())),
+        config: Some(super::convert::to_struct(st.global.config().await)),
+        agents,
+        models,
+        providers,
+        commands,
+        skills,
+        tools,
+        interactions: Vec::new(),
+        saved_rules: super::catalog::saved_rule_rows(&st).await,
+        formatter_available: !st.formatter_status.is_empty(),
+        sessions_cursor: String::new(),
+        context_files,
+    }))
+}

@@ -1358,7 +1358,7 @@ dependencies = [
  "hya-proto",
  "hya-provider",
  "hya-relay",
- "hya-sdk-v1",
+ "hya-sdk",
  "hya-server",
  "hya-store",
  "hya-tool",
@@ -1499,7 +1499,7 @@ dependencies = [
  "hya-api",
  "hya-bundle",
  "hya-proto",
- "hya-sdk-v1",
+ "hya-sdk",
  "hya-store",
  "hya-tool",
  "libc",
@@ -1531,6 +1531,7 @@ dependencies = [
  "hya-network-tools",
  "hya-proto",
  "hya-provider",
+ "hya-runtime-abi",
  "hya-store",
  "hya-tool",
  "hya-tool-loader",
@@ -1706,7 +1707,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hya-sdk-v1"
+name = "hya-sdk"
 version = "0.0.0"
 dependencies = [
  "async-trait",
@@ -1723,6 +1724,7 @@ dependencies = [
  "hya-store",
  "hya-tool",
  "hya-tool-loader",
+ "pbjson-types",
  "reqwest",
  "serde",
  "serde_json",
@@ -1748,6 +1750,7 @@ dependencies = [
  "hya-proto",
  "hya-provider",
  "hya-relay",
+ "hya-runtime-abi",
  "hya-store",
  "hya-tool",
  "hya-tool-loader",

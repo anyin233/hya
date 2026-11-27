@@ -21,7 +21,7 @@ use hya_e2e::{FakeLlm, ScriptStep, default_backend_bin, parse_listen_url, text_s
 use hya_proto::{
     AgentName, Envelope, Event, ModelRef, PartProjection, Projection, Role, SessionId, SessionKind,
 };
-use hya_sdk_v1::V1Sdk;
+use hya_sdk::Sdk;
 use hya_store::SessionStore;
 use serde_json::json;
 use sqlx::Connection as _;
@@ -920,11 +920,11 @@ async fn p43_serve_shutdown_and_short_command_report_exit_durability() {
             .expect("serve became ready")
             .expect("ready url channel");
 
-        let sdk = V1Sdk::for_local_daemon(&url, env.project.to_string_lossy().into_owned())
-            .expect("build V1Sdk");
+        let sdk = Sdk::for_local_daemon(&url, env.project.to_string_lossy().into_owned())
+            .expect("build Sdk");
         let created = sdk
-            .create_session(hya_api::v1::CreateSessionRequest {
-                kind: hya_api::v1::SessionKind::Temporary as i32,
+            .create_session(hya_api::v2::CreateSessionRequest {
+                kind: hya_api::v2::SessionKind::Temporary as i32,
                 title: "before-replace".into(),
                 ..Default::default()
             })
@@ -932,8 +932,8 @@ async fn p43_serve_shutdown_and_short_command_report_exit_durability() {
             .expect("create session on healthy serve");
         assert!(healthy_db.is_file(), "healthy serve db must exist on disk");
 
-        let prompt_sdk = V1Sdk::for_local_daemon(&url, env.project.to_string_lossy().into_owned())
-            .expect("build prompt V1Sdk");
+        let prompt_sdk = Sdk::for_local_daemon(&url, env.project.to_string_lossy().into_owned())
+            .expect("build prompt Sdk");
         let sid = created.id.clone();
         let prompt_task = tokio::spawn(async move {
             prompt_sdk

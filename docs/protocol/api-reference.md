@@ -1,9 +1,9 @@
-# hya API v1 Reference
+# hya API v2 Reference
 
-Generated from `proto/hya/v1` by `cargo run -p xtask -- gen-api`; do not edit by hand.
+Generated from `proto/hya/v2` by `cargo run -p xtask -- gen-api`; do not edit by hand.
 The same contract is served over HTTP/JSON+SSE and gRPC. Every rpc lists its
 HTTP binding (`method path`) and its fully-qualified gRPC method
-(`hya.v1.<Service>.<Rpc>`).
+(`hya.v2.<Service>.<Rpc>`).
 
 Conventions: pagination uses opaque cursors; errors use the stable code
 table (`hya_api::error`); timestamps are RFC 3339 strings in JSON. An `ANY`
@@ -29,7 +29,6 @@ path segment.
 - [RelayControl service](#service-relaycontrol)
 - [Session service](#service-session)
 - [Turn service](#service-turn)
-- [Workflow service](#service-workflow)
 - [Worktrees service](#service-worktrees)
 - [Messages](#messages)
 - [Enums](#enums)
@@ -43,12 +42,12 @@ control handle.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
-| `ListAgentModels` | `GET /v1/agent-models` | `hya.v1.AgentModels.ListAgentModels` | `ListAgentModelsRequest` | `ListAgentModelsResponse` |
-| `SetAgentModel` | `PUT /v1/agent-models/{agent_id}` | `hya.v1.AgentModels.SetAgentModel` | `SetAgentModelRequest` | `AgentModelState` |
-| `SaveAgentModelConfiguration` | `PUT /v1/agent-models/{agent_id}/configuration` | `hya.v1.AgentModels.SaveAgentModelConfiguration` | `SaveAgentModelConfigurationRequest` | `AgentModelState` |
-| `ListModelEffortPreferences` | `GET /v1/model-effort-preferences` | `hya.v1.AgentModels.ListModelEffortPreferences` | `ListModelEffortPreferencesRequest` | `ListModelEffortPreferencesResponse` |
-| `SetModelEffortPreference` | `PUT /v1/model-effort-preferences/{provider_id}/{model_id}` | `hya.v1.AgentModels.SetModelEffortPreference` | `SetModelEffortPreferenceRequest` | `ModelEffortPreference` |
-| `SetAgentEffort` | `PUT /v1/agent-efforts/{agent_id}` | `hya.v1.AgentModels.SetAgentEffort` | `SetAgentEffortRequest` | `AgentEffort` |
+| `ListAgentModels` | `GET /v2/agent-models` | `hya.v2.AgentModels.ListAgentModels` | `ListAgentModelsRequest` | `ListAgentModelsResponse` |
+| `SetAgentModel` | `PUT /v2/agent-models/{agent_id}` | `hya.v2.AgentModels.SetAgentModel` | `SetAgentModelRequest` | `AgentModelState` |
+| `SaveAgentModelConfiguration` | `PUT /v2/agent-models/{agent_id}/configuration` | `hya.v2.AgentModels.SaveAgentModelConfiguration` | `SaveAgentModelConfigurationRequest` | `AgentModelState` |
+| `ListModelEffortPreferences` | `GET /v2/model-effort-preferences` | `hya.v2.AgentModels.ListModelEffortPreferences` | `ListModelEffortPreferencesRequest` | `ListModelEffortPreferencesResponse` |
+| `SetModelEffortPreference` | `PUT /v2/model-effort-preferences/{provider_id}/{model_id}` | `hya.v2.AgentModels.SetModelEffortPreference` | `SetModelEffortPreferenceRequest` | `ModelEffortPreference` |
+| `SetAgentEffort` | `PUT /v2/agent-efforts/{agent_id}` | `hya.v2.AgentModels.SetAgentEffort` | `SetAgentEffortRequest` | `AgentEffort` |
 
 ### `AgentModels.ListAgentModels`
 
@@ -83,13 +82,13 @@ spawn's own `effort` still wins. Emits a live `catalogUpdated` frame.
 
 Credential surface for model providers. This is hya's real auth system
 (per-provider credentials in the user auth directory); it does not cover
-third-party service connectors, which are out of scope for v1.
+third-party service connectors, which are out of scope for v2.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
-| `ListProviderAuth` | `GET /v1/auth` | `hya.v1.Auth.ListProviderAuth` | `ListProviderAuthRequest` | `ListProviderAuthResponse` |
-| `SetProviderAuth` | `PUT /v1/auth/{provider_id}` | `hya.v1.Auth.SetProviderAuth` | `SetProviderAuthRequest` | `SetProviderAuthResponse` |
-| `RemoveProviderAuth` | `DELETE /v1/auth/{provider_id}` | `hya.v1.Auth.RemoveProviderAuth` | `RemoveProviderAuthRequest` | `RemoveProviderAuthResponse` |
+| `ListProviderAuth` | `GET /v2/auth` | `hya.v2.Auth.ListProviderAuth` | `ListProviderAuthRequest` | `ListProviderAuthResponse` |
+| `SetProviderAuth` | `PUT /v2/auth/{provider_id}` | `hya.v2.Auth.SetProviderAuth` | `SetProviderAuthRequest` | `SetProviderAuthResponse` |
+| `RemoveProviderAuth` | `DELETE /v2/auth/{provider_id}` | `hya.v2.Auth.RemoveProviderAuth` | `RemoveProviderAuthRequest` | `RemoveProviderAuthResponse` |
 
 ### `Auth.ListProviderAuth`
 
@@ -111,18 +110,17 @@ Delete the stored credentials for a provider and rebuild its route live
 
 ## Service `BundleApi`
 
-Endpoints that installed bundles register for themselves (manifest
-`apis:`), answered by the bundle's `extensions.process` over the plugin
-`api/request` request. A session-scoped endpoint is mounted under one
-session and its process may read that session's data through a
-request-scoped read-only capability; a global endpoint is not tied to any
-session. Write methods only change state the bundle process owns itself.
+Endpoints that installed or native bundles register for themselves
+(manifest `apis:` or `NativeBundleApiHandler`), answered by the bundle's
+JS process or native ABI v2 handler. A session-scoped endpoint is mounted
+under one session and may read that session's data; a global endpoint is
+not tied to any session.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
-| `ListBundleApis` | `GET /v1/bundle-apis` | `hya.v1.BundleApi.ListBundleApis` | `ListBundleApisRequest` | `ListBundleApisResponse` |
-| `InvokeSessionBundleApi` | `ANY /v1/sessions/{session}/bundles/{bundle}/{path}` | `hya.v1.BundleApi.InvokeSessionBundleApi` | `InvokeSessionBundleApiRequest` | `BundleApiResponse` |
-| `InvokeGlobalBundleApi` | `ANY /v1/bundles/{bundle}/api/{path}` | `hya.v1.BundleApi.InvokeGlobalBundleApi` | `InvokeGlobalBundleApiRequest` | `BundleApiResponse` |
+| `ListBundleApis` | `GET /v2/bundle-apis` | `hya.v2.BundleApi.ListBundleApis` | `ListBundleApisRequest` | `ListBundleApisResponse` |
+| `InvokeSessionBundleApi` | `ANY /v2/sessions/{session}/bundles/{bundle}/{path}` | `hya.v2.BundleApi.InvokeSessionBundleApi` | `InvokeSessionBundleApiRequest` | `BundleApiResponse` |
+| `InvokeGlobalBundleApi` | `ANY /v2/bundles/{bundle}/api/{path}` | `hya.v2.BundleApi.InvokeGlobalBundleApi` | `InvokeGlobalBundleApiRequest` | `BundleApiResponse` |
 
 ### `BundleApi.ListBundleApis`
 
@@ -160,25 +158,25 @@ rebuilds that provider's route and the catalog, and emits
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
-| `ListAgents` | `GET /v1/agents` | `hya.v1.Catalog.ListAgents` | `ListAgentsRequest` | `ListAgentsResponse` |
-| `ListModels` | `GET /v1/models` | `hya.v1.Catalog.ListModels` | `ListModelsRequest` | `ListModelsResponse` |
-| `ListProviders` | `GET /v1/providers` | `hya.v1.Catalog.ListProviders` | `ListProvidersRequest` | `ListProvidersResponse` |
-| `GetProvider` | `GET /v1/providers/{provider_id}` | `hya.v1.Catalog.GetProvider` | `GetProviderRequest` | `ProviderInfo` |
-| `UpsertProvider` | `PUT /v1/providers/{provider_id}` | `hya.v1.Catalog.UpsertProvider` | `UpsertProviderRequest` | `ProviderUpdate` |
-| `RefreshProvider` | `POST /v1/providers/{provider_id}/refresh` | `hya.v1.Catalog.RefreshProvider` | `RefreshProviderRequest` | `ProviderUpdate` |
-| `RefreshBundles` | `POST /v1/bundles:refresh` | `hya.v1.Catalog.RefreshBundles` | `RefreshBundlesRequest` | `RefreshBundlesResponse` |
-| `ListBundles` | `GET /v1/bundles` | `hya.v1.Catalog.ListBundles` | `ListBundlesRequest` | `ListBundlesResponse` |
-| `InstallBundle` | `POST /v1/bundles:install` | `hya.v1.Catalog.InstallBundle` | `InstallBundleRequest` | `BundleChange` |
-| `UninstallBundle` | `POST /v1/bundles:uninstall` | `hya.v1.Catalog.UninstallBundle` | `UninstallBundleRequest` | `BundleChange` |
-| `SetBundleEnabled` | `POST /v1/bundles:set-enabled` | `hya.v1.Catalog.SetBundleEnabled` | `SetBundleEnabledRequest` | `BundleChange` |
-| `SetProviderModel` | `PUT /v1/providers/{provider_id}/models` | `hya.v1.Catalog.SetProviderModel` | `SetProviderModelRequest` | `ProviderUpdate` |
-| `RemoveProviderModel` | `DELETE /v1/providers/{provider_id}/models` | `hya.v1.Catalog.RemoveProviderModel` | `RemoveProviderModelRequest` | `ProviderUpdate` |
-| `TestProviderModel` | `POST /v1/providers/{provider_id}/test` | `hya.v1.Catalog.TestProviderModel` | `TestProviderModelRequest` | `TestProviderModelResponse` |
-| `ListCommands` | `GET /v1/commands` | `hya.v1.Catalog.ListCommands` | `ListCommandsRequest` | `ListCommandsResponse` |
-| `ListSkills` | `GET /v1/skills` | `hya.v1.Catalog.ListSkills` | `ListSkillsRequest` | `ListSkillsResponse` |
-| `ListTools` | `GET /v1/tools` | `hya.v1.Catalog.ListTools` | `ListToolsRequest` | `ListToolsResponse` |
-| `ListPermissionModes` | `GET /v1/permission-modes` | `hya.v1.Catalog.ListPermissionModes` | `ListPermissionModesRequest` | `ListPermissionModesResponse` |
-| `ListTuiExtensions` | `GET /v1/tui-extensions` | `hya.v1.Catalog.ListTuiExtensions` | `ListTuiExtensionsRequest` | `ListTuiExtensionsResponse` |
+| `ListAgents` | `GET /v2/agents` | `hya.v2.Catalog.ListAgents` | `ListAgentsRequest` | `ListAgentsResponse` |
+| `ListModels` | `GET /v2/models` | `hya.v2.Catalog.ListModels` | `ListModelsRequest` | `ListModelsResponse` |
+| `ListProviders` | `GET /v2/providers` | `hya.v2.Catalog.ListProviders` | `ListProvidersRequest` | `ListProvidersResponse` |
+| `GetProvider` | `GET /v2/providers/{provider_id}` | `hya.v2.Catalog.GetProvider` | `GetProviderRequest` | `ProviderInfo` |
+| `UpsertProvider` | `PUT /v2/providers/{provider_id}` | `hya.v2.Catalog.UpsertProvider` | `UpsertProviderRequest` | `ProviderUpdate` |
+| `RefreshProvider` | `POST /v2/providers/{provider_id}/refresh` | `hya.v2.Catalog.RefreshProvider` | `RefreshProviderRequest` | `ProviderUpdate` |
+| `RefreshBundles` | `POST /v2/bundles:refresh` | `hya.v2.Catalog.RefreshBundles` | `RefreshBundlesRequest` | `RefreshBundlesResponse` |
+| `ListBundles` | `GET /v2/bundles` | `hya.v2.Catalog.ListBundles` | `ListBundlesRequest` | `ListBundlesResponse` |
+| `InstallBundle` | `POST /v2/bundles:install` | `hya.v2.Catalog.InstallBundle` | `InstallBundleRequest` | `BundleChange` |
+| `UninstallBundle` | `POST /v2/bundles:uninstall` | `hya.v2.Catalog.UninstallBundle` | `UninstallBundleRequest` | `BundleChange` |
+| `SetBundleEnabled` | `POST /v2/bundles:set-enabled` | `hya.v2.Catalog.SetBundleEnabled` | `SetBundleEnabledRequest` | `BundleChange` |
+| `SetProviderModel` | `PUT /v2/providers/{provider_id}/models` | `hya.v2.Catalog.SetProviderModel` | `SetProviderModelRequest` | `ProviderUpdate` |
+| `RemoveProviderModel` | `DELETE /v2/providers/{provider_id}/models` | `hya.v2.Catalog.RemoveProviderModel` | `RemoveProviderModelRequest` | `ProviderUpdate` |
+| `TestProviderModel` | `POST /v2/providers/{provider_id}/test` | `hya.v2.Catalog.TestProviderModel` | `TestProviderModelRequest` | `TestProviderModelResponse` |
+| `ListCommands` | `GET /v2/commands` | `hya.v2.Catalog.ListCommands` | `ListCommandsRequest` | `ListCommandsResponse` |
+| `ListSkills` | `GET /v2/skills` | `hya.v2.Catalog.ListSkills` | `ListSkillsRequest` | `ListSkillsResponse` |
+| `ListTools` | `GET /v2/tools` | `hya.v2.Catalog.ListTools` | `ListToolsRequest` | `ListToolsResponse` |
+| `ListPermissionModes` | `GET /v2/permission-modes` | `hya.v2.Catalog.ListPermissionModes` | `ListPermissionModesRequest` | `ListPermissionModesResponse` |
+| `ListTuiExtensions` | `GET /v2/tui-extensions` | `hya.v2.Catalog.ListTuiExtensions` | `ListTuiExtensionsRequest` | `ListTuiExtensionsResponse` |
 
 ### `Catalog.ListAgents`
 
@@ -306,9 +304,9 @@ Replay and live-stream surface.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
-| `ListEvents` | `GET /v1/sessions/{session}/events` | `hya.v1.Events.ListEvents` | `ListEventsRequest` | `ListEventsResponse` |
-| `StreamSessionEvents` | `GET /v1/sessions/{session}/events/stream (stream)` | `hya.v1.Events.StreamSessionEvents` | `StreamSessionEventsRequest` | `StreamFrame` |
-| `StreamGlobalEvents` | `GET /v1/events/stream (stream)` | `hya.v1.Events.StreamGlobalEvents` | `StreamGlobalEventsRequest` | `StreamFrame` |
+| `ListEvents` | `GET /v2/sessions/{session}/events` | `hya.v2.Events.ListEvents` | `ListEventsRequest` | `ListEventsResponse` |
+| `StreamSessionEvents` | `GET /v2/sessions/{session}/events/stream (stream)` | `hya.v2.Events.StreamSessionEvents` | `StreamSessionEventsRequest` | `StreamFrame` |
+| `StreamGlobalEvents` | `GET /v2/events/stream (stream)` | `hya.v2.Events.StreamGlobalEvents` | `StreamGlobalEventsRequest` | `StreamFrame` |
 
 ### `Events.ListEvents`
 
@@ -336,11 +334,11 @@ Filesystem reads for frontends (tree views, editors, go-to-symbol).
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
-| `ReadFile` | `GET /v1/fs/read` | `hya.v1.Files.ReadFile` | `ReadFileRequest` | `ReadFileResponse` |
-| `ListDirectory` | `GET /v1/fs/list` | `hya.v1.Files.ListDirectory` | `ListDirectoryRequest` | `ListDirectoryResponse` |
-| `FindFiles` | `GET /v1/fs/find` | `hya.v1.Files.FindFiles` | `FindFilesRequest` | `FindFilesResponse` |
-| `SearchText` | `GET /v1/fs/search` | `hya.v1.Files.SearchText` | `SearchTextRequest` | `SearchTextResponse` |
-| `SearchSymbols` | `GET /v1/fs/symbols` | `hya.v1.Files.SearchSymbols` | `SearchSymbolsRequest` | `SearchSymbolsResponse` |
+| `ReadFile` | `GET /v2/fs/read` | `hya.v2.Files.ReadFile` | `ReadFileRequest` | `ReadFileResponse` |
+| `ListDirectory` | `GET /v2/fs/list` | `hya.v2.Files.ListDirectory` | `ListDirectoryRequest` | `ListDirectoryResponse` |
+| `FindFiles` | `GET /v2/fs/find` | `hya.v2.Files.FindFiles` | `FindFilesRequest` | `FindFilesResponse` |
+| `SearchText` | `GET /v2/fs/search` | `hya.v2.Files.SearchText` | `SearchTextRequest` | `SearchTextResponse` |
+| `SearchSymbols` | `GET /v2/fs/symbols` | `hya.v2.Files.SearchSymbols` | `SearchSymbolsRequest` | `SearchSymbolsResponse` |
 
 ### `Files.ReadFile`
 
@@ -373,10 +371,10 @@ Interaction surface shared by permission and question requests.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
-| `ListInteractions` | `GET /v1/interactions` | `hya.v1.Interactions.ListInteractions` | `ListInteractionsRequest` | `ListInteractionsResponse` |
-| `RespondInteraction` | `POST /v1/interactions/{request}/respond` | `hya.v1.Interactions.RespondInteraction` | `RespondInteractionRequest` | `RespondInteractionResponse` |
-| `ListSavedRules` | `GET /v1/permissions/rules` | `hya.v1.Interactions.ListSavedRules` | `ListSavedRulesRequest` | `ListSavedRulesResponse` |
-| `DeleteSavedRule` | `DELETE /v1/permissions/rules/{rule}` | `hya.v1.Interactions.DeleteSavedRule` | `DeleteSavedRuleRequest` | `DeleteSavedRuleResponse` |
+| `ListInteractions` | `GET /v2/interactions` | `hya.v2.Interactions.ListInteractions` | `ListInteractionsRequest` | `ListInteractionsResponse` |
+| `RespondInteraction` | `POST /v2/interactions/{request}/respond` | `hya.v2.Interactions.RespondInteraction` | `RespondInteractionRequest` | `RespondInteractionResponse` |
+| `ListSavedRules` | `GET /v2/permissions/rules` | `hya.v2.Interactions.ListSavedRules` | `ListSavedRulesRequest` | `ListSavedRulesResponse` |
+| `DeleteSavedRule` | `DELETE /v2/permissions/rules/{rule}` | `hya.v2.Interactions.DeleteSavedRule` | `DeleteSavedRuleRequest` | `DeleteSavedRuleResponse` |
 
 ### `Interactions.ListInteractions`
 
@@ -406,7 +404,7 @@ with client-side behavior.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
-| `IngestLog` | `POST /v1/logs` | `hya.v1.Logs.IngestLog` | `IngestLogRequest` | `IngestLogResponse` |
+| `IngestLog` | `POST /v2/logs` | `hya.v2.Logs.IngestLog` | `IngestLogRequest` | `IngestLogResponse` |
 
 ### `Logs.IngestLog`
 
@@ -421,14 +419,14 @@ observed state.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
-| `OpenMcpSession` | `POST /v1/mcp/session (stream)` | `hya.v1.Mcp.OpenMcpSession` | `OpenMcpSessionRequest` | `OpenMcpSessionResponse` |
-| `GetMcpStatus` | `GET /v1/mcp` | `hya.v1.Mcp.GetMcpStatus` | `GetMcpStatusRequest` | `GetMcpStatusResponse` |
-| `AddMcpServer` | `POST /v1/mcp` | `hya.v1.Mcp.AddMcpServer` | `AddMcpServerRequest` | `McpServerStatus` |
-| `ConnectMcp` | `POST /v1/mcp/{name}/connect` | `hya.v1.Mcp.ConnectMcp` | `ConnectMcpRequest` | `McpServerStatus` |
-| `DisconnectMcp` | `POST /v1/mcp/{name}/disconnect` | `hya.v1.Mcp.DisconnectMcp` | `DisconnectMcpRequest` | `McpServerStatus` |
-| `StartMcpAuth` | `POST /v1/mcp/{name}/auth` | `hya.v1.Mcp.StartMcpAuth` | `StartMcpAuthRequest` | `StartMcpAuthResponse` |
-| `CompleteMcpAuth` | `POST /v1/mcp/{name}/auth/complete` | `hya.v1.Mcp.CompleteMcpAuth` | `CompleteMcpAuthRequest` | `McpServerStatus` |
-| `RemoveMcpAuth` | `DELETE /v1/mcp/{name}/auth` | `hya.v1.Mcp.RemoveMcpAuth` | `RemoveMcpAuthRequest` | `RemoveMcpAuthResponse` |
+| `OpenMcpSession` | `POST /v2/mcp/session (stream)` | `hya.v2.Mcp.OpenMcpSession` | `OpenMcpSessionRequest` | `OpenMcpSessionResponse` |
+| `GetMcpStatus` | `GET /v2/mcp` | `hya.v2.Mcp.GetMcpStatus` | `GetMcpStatusRequest` | `GetMcpStatusResponse` |
+| `AddMcpServer` | `POST /v2/mcp` | `hya.v2.Mcp.AddMcpServer` | `AddMcpServerRequest` | `McpServerStatus` |
+| `ConnectMcp` | `POST /v2/mcp/{name}/connect` | `hya.v2.Mcp.ConnectMcp` | `ConnectMcpRequest` | `McpServerStatus` |
+| `DisconnectMcp` | `POST /v2/mcp/{name}/disconnect` | `hya.v2.Mcp.DisconnectMcp` | `DisconnectMcpRequest` | `McpServerStatus` |
+| `StartMcpAuth` | `POST /v2/mcp/{name}/auth` | `hya.v2.Mcp.StartMcpAuth` | `StartMcpAuthRequest` | `StartMcpAuthResponse` |
+| `CompleteMcpAuth` | `POST /v2/mcp/{name}/auth/complete` | `hya.v2.Mcp.CompleteMcpAuth` | `CompleteMcpAuthRequest` | `McpServerStatus` |
+| `RemoveMcpAuth` | `DELETE /v2/mcp/{name}/auth` | `hya.v2.Mcp.RemoveMcpAuth` | `RemoveMcpAuthRequest` | `RemoveMcpAuthResponse` |
 
 ### `Mcp.OpenMcpSession`
 
@@ -485,10 +483,10 @@ event log via the shared projection — the only durable read model.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
-| `ListMessages` | `GET /v1/sessions/{session}/messages` | `hya.v1.Messages.ListMessages` | `ListMessagesRequest` | `ListMessagesResponse` |
-| `GetMessage` | `GET /v1/sessions/{session}/messages/{message}` | `hya.v1.Messages.GetMessage` | `GetMessageRequest` | `MessageInfo` |
-| `DeleteMessagePart` | `DELETE /v1/sessions/{session}/messages/{message}/parts/{part}` | `hya.v1.Messages.DeleteMessagePart` | `DeleteMessagePartRequest` | `DeleteMessagePartResponse` |
-| `GetSessionTodo` | `GET /v1/sessions/{session}/todo` | `hya.v1.Messages.GetSessionTodo` | `GetSessionTodoRequest` | `TodoList` |
+| `ListMessages` | `GET /v2/sessions/{session}/messages` | `hya.v2.Messages.ListMessages` | `ListMessagesRequest` | `ListMessagesResponse` |
+| `GetMessage` | `GET /v2/sessions/{session}/messages/{message}` | `hya.v2.Messages.GetMessage` | `GetMessageRequest` | `MessageInfo` |
+| `DeleteMessagePart` | `DELETE /v2/sessions/{session}/messages/{message}/parts/{part}` | `hya.v2.Messages.DeleteMessagePart` | `DeleteMessagePartRequest` | `DeleteMessagePartResponse` |
+| `GetSessionTodo` | `GET /v2/sessions/{session}/todo` | `hya.v2.Messages.GetSessionTodo` | `GetSessionTodoRequest` | `TodoList` |
 
 ### `Messages.ListMessages`
 
@@ -517,11 +515,11 @@ process disposal/upgrade, and the one-round-trip bootstrap snapshot.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
-| `GetHealth` | `GET /v1/health` | `hya.v1.Process.GetHealth` | `GetHealthRequest` | `GetHealthResponse` |
-| `GetLocation` | `GET /v1/location` | `hya.v1.Process.GetLocation` | `GetLocationRequest` | `LocationInfo` |
-| `GetConfig` | `GET /v1/config` | `hya.v1.Process.GetConfig` | `GetConfigRequest` | `GetConfigResponse` |
-| `UpdateConfig` | `PATCH /v1/config` | `hya.v1.Process.UpdateConfig` | `UpdateConfigRequest` | `GetConfigResponse` |
-| `GetBootstrap` | `GET /v1/bootstrap` | `hya.v1.Process.GetBootstrap` | `GetBootstrapRequest` | `Bootstrap` |
+| `GetHealth` | `GET /v2/health` | `hya.v2.Process.GetHealth` | `GetHealthRequest` | `GetHealthResponse` |
+| `GetLocation` | `GET /v2/location` | `hya.v2.Process.GetLocation` | `GetLocationRequest` | `LocationInfo` |
+| `GetConfig` | `GET /v2/config` | `hya.v2.Process.GetConfig` | `GetConfigRequest` | `GetConfigResponse` |
+| `UpdateConfig` | `PATCH /v2/config` | `hya.v2.Process.UpdateConfig` | `UpdateConfigRequest` | `GetConfigResponse` |
+| `GetBootstrap` | `GET /v2/bootstrap` | `hya.v2.Process.GetBootstrap` | `GetBootstrapRequest` | `Bootstrap` |
 
 ### `Process.GetHealth`
 
@@ -558,19 +556,19 @@ first root is the primary root. Sessions belong to at most one Project.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
-| `ListProjects` | `GET /v1/projects` | `hya.v1.Project.ListProjects` | `ListProjectsRequest` | `ListProjectsResponse` |
-| `GetCurrentProject` | `GET /v1/projects/current` | `hya.v1.Project.GetCurrentProject` | `GetCurrentProjectRequest` | `ProjectInfo` |
-| `ResolveProject` | `GET /v1/projects/resolve` | `hya.v1.Project.ResolveProject` | `ResolveProjectRequest` | `ResolveProjectResponse` |
-| `EnsureProjectForPath` | `POST /v1/projects/ensure` | `hya.v1.Project.EnsureProjectForPath` | `EnsureProjectForPathRequest` | `EnsureProjectForPathResponse` |
-| `CreateProject` | `POST /v1/projects` | `hya.v1.Project.CreateProject` | `CreateProjectRequest` | `ProjectInfo` |
-| `GetProject` | `GET /v1/projects/{project}` | `hya.v1.Project.GetProject` | `GetProjectRequest` | `ProjectInfo` |
-| `UpdateProject` | `PATCH /v1/projects/{project}` | `hya.v1.Project.UpdateProject` | `UpdateProjectRequest` | `ProjectInfo` |
-| `DeleteProject` | `DELETE /v1/projects/{project}` | `hya.v1.Project.DeleteProject` | `DeleteProjectRequest` | `DeleteProjectResponse` |
-| `ListProjectDirectories` | `GET /v1/projects/{project}/directories` | `hya.v1.Project.ListProjectDirectories` | `ListProjectDirectoriesRequest` | `ListProjectDirectoriesResponse` |
-| `InitProjectGit` | `POST /v1/projects/{project}/init-git` | `hya.v1.Project.InitProjectGit` | `InitProjectGitRequest` | `InitProjectGitResponse` |
-| `GetVcsStatus` | `GET /v1/vcs` | `hya.v1.Project.GetVcsStatus` | `GetVcsStatusRequest` | `VcsStatus` |
-| `GetVcsDiff` | `GET /v1/vcs/diff` | `hya.v1.Project.GetVcsDiff` | `GetVcsDiffRequest` | `GetVcsDiffResponse` |
-| `ApplyPatch` | `POST /v1/vcs/apply` | `hya.v1.Project.ApplyPatch` | `ApplyPatchRequest` | `ApplyPatchResponse` |
+| `ListProjects` | `GET /v2/projects` | `hya.v2.Project.ListProjects` | `ListProjectsRequest` | `ListProjectsResponse` |
+| `GetCurrentProject` | `GET /v2/projects/current` | `hya.v2.Project.GetCurrentProject` | `GetCurrentProjectRequest` | `ProjectInfo` |
+| `ResolveProject` | `GET /v2/projects/resolve` | `hya.v2.Project.ResolveProject` | `ResolveProjectRequest` | `ResolveProjectResponse` |
+| `EnsureProjectForPath` | `POST /v2/projects/ensure` | `hya.v2.Project.EnsureProjectForPath` | `EnsureProjectForPathRequest` | `EnsureProjectForPathResponse` |
+| `CreateProject` | `POST /v2/projects` | `hya.v2.Project.CreateProject` | `CreateProjectRequest` | `ProjectInfo` |
+| `GetProject` | `GET /v2/projects/{project}` | `hya.v2.Project.GetProject` | `GetProjectRequest` | `ProjectInfo` |
+| `UpdateProject` | `PATCH /v2/projects/{project}` | `hya.v2.Project.UpdateProject` | `UpdateProjectRequest` | `ProjectInfo` |
+| `DeleteProject` | `DELETE /v2/projects/{project}` | `hya.v2.Project.DeleteProject` | `DeleteProjectRequest` | `DeleteProjectResponse` |
+| `ListProjectDirectories` | `GET /v2/projects/{project}/directories` | `hya.v2.Project.ListProjectDirectories` | `ListProjectDirectoriesRequest` | `ListProjectDirectoriesResponse` |
+| `InitProjectGit` | `POST /v2/projects/{project}/init-git` | `hya.v2.Project.InitProjectGit` | `InitProjectGitRequest` | `InitProjectGitResponse` |
+| `GetVcsStatus` | `GET /v2/vcs` | `hya.v2.Project.GetVcsStatus` | `GetVcsStatusRequest` | `VcsStatus` |
+| `GetVcsDiff` | `GET /v2/vcs/diff` | `hya.v2.Project.GetVcsDiff` | `GetVcsDiffRequest` | `GetVcsDiffResponse` |
+| `ApplyPatch` | `POST /v2/vcs/apply` | `hya.v2.Project.ApplyPatch` | `ApplyPatchRequest` | `ApplyPatchResponse` |
 
 ### `Project.ListProjects`
 
@@ -662,13 +660,13 @@ PTY session surface for embedded terminals.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
-| `ListShells` | `GET /v1/pty/shells` | `hya.v1.Pty.ListShells` | `ListShellsRequest` | `ListShellsResponse` |
-| `CreatePty` | `POST /v1/pty` | `hya.v1.Pty.CreatePty` | `CreatePtyRequest` | `PtySession` |
-| `GetPty` | `GET /v1/pty/{id}` | `hya.v1.Pty.GetPty` | `GetPtyRequest` | `PtySession` |
-| `UpdatePty` | `PUT /v1/pty/{id}` | `hya.v1.Pty.UpdatePty` | `UpdatePtyRequest` | `PtySession` |
-| `DeletePty` | `DELETE /v1/pty/{id}` | `hya.v1.Pty.DeletePty` | `DeletePtyRequest` | `DeletePtyResponse` |
-| `CreateConnectToken` | `POST /v1/pty/{id}/connect-token` | `hya.v1.Pty.CreateConnectToken` | `CreateConnectTokenRequest` | `CreateConnectTokenResponse` |
-| `StreamPty` | `GET /v1/pty/{id}/connect (stream)` | `hya.v1.Pty.StreamPty` | `stream PtyClientFrame` | `PtyServerFrame` |
+| `ListShells` | `GET /v2/pty/shells` | `hya.v2.Pty.ListShells` | `ListShellsRequest` | `ListShellsResponse` |
+| `CreatePty` | `POST /v2/pty` | `hya.v2.Pty.CreatePty` | `CreatePtyRequest` | `PtySession` |
+| `GetPty` | `GET /v2/pty/{id}` | `hya.v2.Pty.GetPty` | `GetPtyRequest` | `PtySession` |
+| `UpdatePty` | `PUT /v2/pty/{id}` | `hya.v2.Pty.UpdatePty` | `UpdatePtyRequest` | `PtySession` |
+| `DeletePty` | `DELETE /v2/pty/{id}` | `hya.v2.Pty.DeletePty` | `DeletePtyRequest` | `DeletePtyResponse` |
+| `CreateConnectToken` | `POST /v2/pty/{id}/connect-token` | `hya.v2.Pty.CreateConnectToken` | `CreateConnectTokenRequest` | `CreateConnectTokenResponse` |
+| `StreamPty` | `GET /v2/pty/{id}/connect (stream)` | `hya.v2.Pty.StreamPty` | `stream PtyClientFrame` | `PtyServerFrame` |
 
 ### `Pty.ListShells`
 
@@ -719,11 +717,11 @@ or `Sec-Fetch-Site` header).
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
-| `ConnectRelay` | `POST /v1/relay/connect` | `hya.v1.RelayControl.ConnectRelay` | `ConnectRelayRequest` | `ConnectRelayResponse` |
-| `DisconnectRelay` | `POST /v1/relay/disconnect` | `hya.v1.RelayControl.DisconnectRelay` | `DisconnectRelayRequest` | `RelayStatus` |
-| `GetRelayStatus` | `GET /v1/relay/status` | `hya.v1.RelayControl.GetRelayStatus` | `GetRelayStatusRequest` | `RelayStatus` |
-| `GetRelayLink` | `GET /v1/relay/link` | `hya.v1.RelayControl.GetRelayLink` | `GetRelayLinkRequest` | `RelayLinkResponse` |
-| `RotateRelayKey` | `POST /v1/relay/rotate` | `hya.v1.RelayControl.RotateRelayKey` | `RotateRelayKeyRequest` | `RelayLinkResponse` |
+| `ConnectRelay` | `POST /v2/relay/connect` | `hya.v2.RelayControl.ConnectRelay` | `ConnectRelayRequest` | `ConnectRelayResponse` |
+| `DisconnectRelay` | `POST /v2/relay/disconnect` | `hya.v2.RelayControl.DisconnectRelay` | `DisconnectRelayRequest` | `RelayStatus` |
+| `GetRelayStatus` | `GET /v2/relay/status` | `hya.v2.RelayControl.GetRelayStatus` | `GetRelayStatusRequest` | `RelayStatus` |
+| `GetRelayLink` | `GET /v2/relay/link` | `hya.v2.RelayControl.GetRelayLink` | `GetRelayLinkRequest` | `RelayLinkResponse` |
+| `RotateRelayKey` | `POST /v2/relay/rotate` | `hya.v2.RelayControl.RotateRelayKey` | `RotateRelayKeyRequest` | `RelayLinkResponse` |
 
 ### `RelayControl.ConnectRelay`
 
@@ -768,18 +766,16 @@ every turn, message, and projection read hangs off a session id.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
-| `CreateSession` | `POST /v1/sessions` | `hya.v1.Session.CreateSession` | `CreateSessionRequest` | `CreateSessionResponse` |
-| `GetSession` | `GET /v1/sessions/{session}` | `hya.v1.Session.GetSession` | `GetSessionRequest` | `SessionInfo` |
-| `ListSessions` | `GET /v1/sessions` | `hya.v1.Session.ListSessions` | `ListSessionsRequest` | `ListSessionsResponse` |
-| `UpdateSession` | `PATCH /v1/sessions/{session}` | `hya.v1.Session.UpdateSession` | `UpdateSessionRequest` | `SessionInfo` |
-| `DeleteSession` | `DELETE /v1/sessions/{session}` | `hya.v1.Session.DeleteSession` | `DeleteSessionRequest` | `DeleteSessionResponse` |
-| `ForkSession` | `POST /v1/sessions/{session}/fork` | `hya.v1.Session.ForkSession` | `ForkSessionRequest` | `ForkSessionResponse` |
-| `CompactSession` | `POST /v1/sessions/{session}/compact` | `hya.v1.Session.CompactSession` | `CompactSessionRequest` | `CompactSessionResponse` |
-| `SummarizeSession` | `POST /v1/sessions/{session}/summarize` | `hya.v1.Session.SummarizeSession` | `SummarizeSessionRequest` | `SummarizeSessionResponse` |
-| `RefreshSessionContext` | `POST /v1/sessions/{session}/refresh-context` | `hya.v1.Session.RefreshSessionContext` | `RefreshSessionContextRequest` | `RefreshSessionContextResponse` |
-| `RevertSession` | `POST /v1/sessions/{session}/revert` | `hya.v1.Session.RevertSession` | `RevertSessionRequest` | `RevertSessionResponse` |
-| `ArchiveSubagent` | `POST /v1/sessions/{session}/archive` | `hya.v1.Session.ArchiveSubagent` | `ArchiveSubagentRequest` | `ArchiveSubagentResponse` |
-| `SteerSubagent` | `POST /v1/sessions/{session}/steer` | `hya.v1.Session.SteerSubagent` | `SteerSubagentRequest` | `SteerSubagentResponse` |
+| `CreateSession` | `POST /v2/sessions` | `hya.v2.Session.CreateSession` | `CreateSessionRequest` | `CreateSessionResponse` |
+| `GetSession` | `GET /v2/sessions/{session}` | `hya.v2.Session.GetSession` | `GetSessionRequest` | `SessionInfo` |
+| `ListSessions` | `GET /v2/sessions` | `hya.v2.Session.ListSessions` | `ListSessionsRequest` | `ListSessionsResponse` |
+| `UpdateSession` | `PATCH /v2/sessions/{session}` | `hya.v2.Session.UpdateSession` | `UpdateSessionRequest` | `SessionInfo` |
+| `DeleteSession` | `DELETE /v2/sessions/{session}` | `hya.v2.Session.DeleteSession` | `DeleteSessionRequest` | `DeleteSessionResponse` |
+| `ForkSession` | `POST /v2/sessions/{session}/fork` | `hya.v2.Session.ForkSession` | `ForkSessionRequest` | `ForkSessionResponse` |
+| `CompactSession` | `POST /v2/sessions/{session}/compact` | `hya.v2.Session.CompactSession` | `CompactSessionRequest` | `CompactSessionResponse` |
+| `SummarizeSession` | `POST /v2/sessions/{session}/summarize` | `hya.v2.Session.SummarizeSession` | `SummarizeSessionRequest` | `SummarizeSessionResponse` |
+| `RefreshSessionContext` | `POST /v2/sessions/{session}/refresh-context` | `hya.v2.Session.RefreshSessionContext` | `RefreshSessionContextRequest` | `RefreshSessionContextResponse` |
+| `RevertSession` | `POST /v2/sessions/{session}/revert` | `hya.v2.Session.RevertSession` | `RevertSessionRequest` | `RevertSessionResponse` |
 
 ### `Session.CreateSession`
 
@@ -850,37 +846,16 @@ calls changed; the next prompt or shell turn commits it. Fails with
 `session_busy` while a turn runs.
 
 
-### `Session.ArchiveSubagent`
-
-Archive a subagent session on the user's behalf, as its team lead's
-`archive` tool does: its in-flight turn is cancelled (cause
-`archived`), live descendants archive first, then it leaves the live
-roster (`archive_reason` `archived_by_parent`). Its transcript stays
-readable and `SteerSubagent` wakes it again under the same session.
-`invalid_argument` for a root session or an already archived subagent.
-To stop a subagent's turn without archiving it, use `CancelTurn` on its
-session.
-
-
-### `Session.SteerSubagent`
-
-Steer a subagent session with a message from the user. It is delivered
-on the DM from the subagent's parent, prefixed `[user] `: a running
-subagent sees it after its next tool call, an idle one wakes for it,
-and an archived one is revived by it. `invalid_argument` for a root
-session, empty text, or a subagent whose parent is archived.
-
-
 ## Service `Turn`
 
 Turn admission and control surface.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
-| `CreateTurn` | `POST /v1/sessions/{session}/turns` | `hya.v1.Turn.CreateTurn` | `CreateTurnRequest` | `CreateTurnResponse` |
-| `GetTurn` | `GET /v1/sessions/{session}/turns/{turn}` | `hya.v1.Turn.GetTurn` | `GetTurnRequest` | `TurnInfo` |
-| `WaitTurn` | `POST /v1/sessions/{session}/turns/{turn}/wait` | `hya.v1.Turn.WaitTurn` | `WaitTurnRequest` | `TurnInfo` |
-| `CancelTurn` | `POST /v1/sessions/{session}/turns/{turn}/cancel` | `hya.v1.Turn.CancelTurn` | `CancelTurnRequest` | `TurnInfo` |
+| `CreateTurn` | `POST /v2/sessions/{session}/turns` | `hya.v2.Turn.CreateTurn` | `CreateTurnRequest` | `CreateTurnResponse` |
+| `GetTurn` | `GET /v2/sessions/{session}/turns/{turn}` | `hya.v2.Turn.GetTurn` | `GetTurnRequest` | `TurnInfo` |
+| `WaitTurn` | `POST /v2/sessions/{session}/turns/{turn}/wait` | `hya.v2.Turn.WaitTurn` | `WaitTurnRequest` | `TurnInfo` |
+| `CancelTurn` | `POST /v2/sessions/{session}/turns/{turn}/cancel` | `hya.v2.Turn.CancelTurn` | `CancelTurnRequest` | `TurnInfo` |
 
 ### `Turn.CreateTurn`
 
@@ -906,32 +881,6 @@ Block until the turn reaches a terminal state or the timeout elapses.
 Request cancellation of a running turn (cooperative abort).
 
 
-## Service `Workflow`
-
-Workflow catalog and per-session execution surface.
-
-| RPC | HTTP | gRPC | Request | Response |
-|---|---|---|---|---|
-| `ListWorkflows` | `GET /v1/workflows` | `hya.v1.Workflow.ListWorkflows` | `ListWorkflowsRequest` | `ListWorkflowsResponse` |
-| `GetWorkflowState` | `GET /v1/sessions/{session}/workflow` | `hya.v1.Workflow.GetWorkflowState` | `GetWorkflowStateRequest` | `WorkflowState` |
-| `SubmitWorkflowCommand` | `POST /v1/sessions/{session}/workflow` | `hya.v1.Workflow.SubmitWorkflowCommand` | `SubmitWorkflowCommandRequest` | `SubmitWorkflowCommandResponse` |
-
-### `Workflow.ListWorkflows`
-
-List discovered workflow sources for a directory.
-
-
-### `Workflow.GetWorkflowState`
-
-Read the projected workflow state of one session.
-
-
-### `Workflow.SubmitWorkflowCommand`
-
-Submit one typed workflow command against a session (select source,
-run, inspect). Mirrors the slash-command `/workflow` surface.
-
-
 ## Service `Worktrees`
 
 Worktree create/list/delete surface backed by the engine's worktree
@@ -939,10 +888,10 @@ helpers.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
-| `ListWorktrees` | `GET /v1/worktrees` | `hya.v1.Worktrees.ListWorktrees` | `ListWorktreesRequest` | `ListWorktreesResponse` |
-| `CreateWorktree` | `POST /v1/worktrees` | `hya.v1.Worktrees.CreateWorktree` | `CreateWorktreeRequest` | `Worktree` |
-| `DeleteWorktree` | `DELETE /v1/worktrees/{worktree}` | `hya.v1.Worktrees.DeleteWorktree` | `DeleteWorktreeRequest` | `DeleteWorktreeResponse` |
-| `ResetWorktree` | `POST /v1/worktrees/{worktree}/reset` | `hya.v1.Worktrees.ResetWorktree` | `ResetWorktreeRequest` | `Worktree` |
+| `ListWorktrees` | `GET /v2/worktrees` | `hya.v2.Worktrees.ListWorktrees` | `ListWorktreesRequest` | `ListWorktreesResponse` |
+| `CreateWorktree` | `POST /v2/worktrees` | `hya.v2.Worktrees.CreateWorktree` | `CreateWorktreeRequest` | `Worktree` |
+| `DeleteWorktree` | `DELETE /v2/worktrees/{worktree}` | `hya.v2.Worktrees.DeleteWorktree` | `DeleteWorktreeRequest` | `DeleteWorktreeResponse` |
+| `ResetWorktree` | `POST /v2/worktrees/{worktree}/reset` | `hya.v2.Worktrees.ResetWorktree` | `ResetWorktreeRequest` | `Worktree` |
 
 ### `Worktrees.ListWorktrees`
 
@@ -1144,7 +1093,7 @@ One endpoint a published bundle registers.
 | `bundle` (1) | `string` | Bundle identity id (for example `hya-extra/token-summary`). |
 | `api` (2) | `string` | Endpoint id declared in the bundle manifest. |
 | `method` (3) | `string` | HTTP method: `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`. |
-| `scope` (4) | `string` | Mount scope: `session` (`/v1/sessions/{session}/bundles/{bundle}/...`) or `global` (`/v1/bundles/{bundle}/api/...`). |
+| `scope` (4) | `string` | Mount scope: `session` (`/v2/sessions/{session}/bundles/{bundle}/...`) or `global` (`/v2/bundles/{bundle}/api/...`). |
 | `path` (5) | `string` | Path template below the mount, for example `/items/{id}`. |
 | `description` (6) | `string` | Manifest description; empty when not declared. |
 | `request_schema` (7) | `google.protobuf.Value` | JSON Schema of the request body; absent when not declared. |
@@ -1758,7 +1707,7 @@ Pagination outcome attached to every paginated response.
 |---|---|---|
 | `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 | `since_seq` (2) | `uint64` | Skip durable events with `seq` at or below this watermark. Live-only frames (`seq = 0`) are always delivered. No history is replayed. |
-| `interactions_only` (3) | `bool` | Deliver only interaction and session-list frames: the live interaction frames (`permissionRequested`, `questionRequested`, `interactionResolved`) of every session, the process-wide `catalogUpdated` and `projectsUpdated` notices, and the session-list frames of root sessions — durable `sessionStarted` and `sessionUpdated` (title, agent, model, permission mode, archived), live `sessionUpdated.busy`, live `sessionDeleted`, and durable `memberLifecycleChanged` (actor archival/revival on the team root log). Every other engine event (text, tools, messages, and any child session's list changes) is skipped. A `resync` frame means session-list frames were lost: list the sessions again. For a client that follows one session on its session stream and needs only the asks of the others and live session and Project lists. |
+| `interactions_only` (3) | `bool` | Deliver only interaction and session-list frames: the live interaction frames (`permissionRequested`, `questionRequested`, `interactionResolved`) of every session, the process-wide `catalogUpdated` and `projectsUpdated` notices, and the session-list frames of root sessions — durable `sessionStarted` and `sessionUpdated` (title, agent, model, permission mode, archived), live `sessionUpdated.busy`, live `sessionDeleted`, and durable `extensionEvent` notices for team-root lifecycle transitions. Every other engine event (text, tools, messages, and any child session's list changes) is skipped. A `resync` frame means session-list frames were lost: list the sessions again. For a client that follows one session on its session stream and needs only the asks of the others and live session and Project lists. |
 
 ### `StreamFrame`
 
@@ -1798,31 +1747,29 @@ One curated projected event from the event log.
 | `question_requested` (13) | `oneof `payload`: QuestionRequested` | A question is pending. |
 | `interaction_resolved` (14) | `oneof `payload`: InteractionResolved` | A pending interaction was resolved. |
 | `todo_updated` (15) | `oneof `payload`: TodoUpdated` | The session todo list changed. |
-| `workflow_updated` (16) | `oneof `payload`: WorkflowUpdated` | The workflow projection changed. |
+| `extension_event` (16) | `oneof `payload`: ExtensionEvent` | A bundle-owned extension event was recorded. |
 | `tokens_recorded` (17) | `oneof `payload`: TokensRecorded` | Token usage was recorded for a round. |
 | `compaction_applied` (18) | `oneof `payload`: CompactionApplied` | A compaction strategy was applied to the context. |
 | `session_deleted` (19) | `oneof `payload`: SessionDeleted` | A root session was deleted (live-only, global stream). |
 | `part_replaced` (20) | `oneof `payload`: PartReplaced` | A text or reasoning part's whole text was set (the durable record of a streamed text part, or a plugin rewrite of it). |
 | `error_reported` (21) | `oneof `payload`: ErrorReported` | A runtime error was recorded; when it names a message, the turn that drove that message failed (`MessageInfo.error`). |
-| `member_updated` (22) | `oneof `payload`: MemberInfo` | A subagent spawned by this session was created or changed status (durable, on the parent session's stream). `member` is always set; the spawn frame carries every field, later frames carry `status` (and `summary`/`child` on finish) and leave the rest empty, so fold by `member`. |
-| `session_reverted` (23) | `oneof `payload`: SessionReverted` | The session was reverted (durable), or its pending revert was undone (`undone`). Re-read the session (`SessionInfo.revert`) and its messages: a revert hides `messageId` and every later message; an undo brings them back. A later `messageStarted` commits a pending revert. |
-| `parts_added` (24) | `oneof `payload`: PartsAdded` | Complete parts were added to a message in one step (durable): the images attached to a prompt turn, as `AttachmentPart`s without their bytes. Append them to the message after its text. |
-| `catalog_updated` (25) | `oneof `payload`: CatalogUpdated` | A catalog changed: the provider/model catalog (a provider was added, edited, or refreshed, a key was set or removed, or startup discovery finished; `project_id` empty), or one Project's catalog tier (its roots changed or it was deleted; `project_id` names it). Live-only and process-wide: `seq` is 0 and `session` is empty on every stream it reaches (global and session). Re-read `ListModels` / `ListProviders`, and the agent/command/skill catalogs of the affected scope (every scope when `project_id` is empty). |
-| `server_stopping` (26) | `oneof `payload`: ServerStopping` | The server is shutting down (ADR-0023): the last frame of every live stream (global and session, SSE and gRPC) before it ends, and the only frame of a stream opened while shutting down. Live-only and process-wide (`seq` 0, empty `session`). `reason` says whether a client should start the next server itself; see `ServerStopping`. |
-| `projects_updated` (27) | `oneof `payload`: ProjectsUpdated` | The Project list changed: a Project was created, updated, or deleted, a Project gained or lost a session, or a Project's `busy` flag changed. Live-only and process-wide, delivered on the global stream only (also with `interactions_only`): `seq` is 0 and `session` is empty. Re-read `ListProjects`. |
-| `member_lifecycle_changed` (28) | `oneof `payload`: MemberLifecycleChanged` | An actor archived or revived (durable, on the team root's log). Match members by child session, including nested members whose spawn belongs to another parent's log. This never changes the task outcome. |
-| `part_deleted` (29) | `oneof `payload`: PartDeleted` | A part was removed from a message (durable): a part deleted through `DeleteMessagePart`, or a part of a failed bare round attempt that is retried. Drop the part with this id from the message. |
+| `session_reverted` (22) | `oneof `payload`: SessionReverted` | The session was reverted (durable), or its pending revert was undone (`undone`). Re-read the session (`SessionInfo.revert`) and its messages: a revert hides `messageId` and every later message; an undo brings them back. A later `messageStarted` commits a pending revert. |
+| `parts_added` (23) | `oneof `payload`: PartsAdded` | Complete parts were added to a message in one step (durable): the images attached to a prompt turn, as `AttachmentPart`s without their bytes. Append them to the message after its text. |
+| `catalog_updated` (24) | `oneof `payload`: CatalogUpdated` | A catalog changed: the provider/model catalog (a provider was added, edited, or refreshed, a key was set or removed, or startup discovery finished; `project_id` empty), or one Project's catalog tier (its roots changed or it was deleted; `project_id` names it). Live-only and process-wide: `seq` is 0 and `session` is empty on every stream it reaches (global and session). Re-read `ListModels` / `ListProviders`, and the agent/command/skill catalogs of the affected scope (every scope when `project_id` is empty). |
+| `server_stopping` (25) | `oneof `payload`: ServerStopping` | The server is shutting down (ADR-0023): the last frame of every live stream (global and session, SSE and gRPC) before it ends, and the only frame of a stream opened while shutting down. Live-only and process-wide (`seq` 0, empty `session`). `reason` says whether a client should start the next server itself; see `ServerStopping`. |
+| `projects_updated` (26) | `oneof `payload`: ProjectsUpdated` | The Project list changed: a Project was created, updated, or deleted, a Project gained or lost a session, or a Project's `busy` flag changed. Live-only and process-wide, delivered on the global stream only (also with `interactions_only`): `seq` is 0 and `session` is empty. Re-read `ListProjects`. |
+| `part_deleted` (27) | `oneof `payload`: PartDeleted` | A part was removed from a message (durable): a part deleted through `DeleteMessagePart`, or a part of a failed bare round attempt that is retried. Drop the part with this id from the message. |
 
-### `MemberLifecycleChanged`
+### `ExtensionEvent`
 
-Actor lifecycle, separate from parent-local member task updates.
+Bundle-owned extension event emitted on a session stream.
 
 | Field | Type | Description |
 |---|---|---|
-| `child` (1) | `string` | Child session identifier; stable across archival and revival. |
-| `handle` (2) | `string` | Stable human-readable actor handle. |
-| `archived` (3) | `bool` | True on archival, false on revival. False may be omitted in protojson. |
-| `archive_reason` (4) | `string` | Same vocabulary as MemberInfo.archive_reason; empty on revival. |
+| `session_id` (1) | `string` | Owning session identifier. |
+| `bundle` (2) | `string` | Bundle identifier that emitted the event (for example `hya/multi-agent`). |
+| `kind` (3) | `string` | Bundle-defined event kind string. |
+| `payload` (4) | `google.protobuf.Value` | Bundle-defined JSON payload. |
 
 ### `CatalogUpdated`
 
@@ -2022,14 +1969,6 @@ The session todo list changed.
 | Field | Type | Description |
 |---|---|---|
 | `items` (1) | `repeated TodoItem` | Full replacement todo list (the same rows `GetSessionTodo` returns). |
-
-### `WorkflowUpdated`
-
-The workflow projection changed.
-
-| Field | Type | Description |
-|---|---|---|
-| `state` (1) | `WorkflowState` | Full replacement workflow state. |
 
 ### `TokensRecorded`
 
@@ -2453,7 +2392,7 @@ arguments, execution state, and (once finished) its output or error.
 
 | Field | Type | Description |
 |---|---|---|
-| `call_id` (1) | `string` | Engine-issued call id. It is `MemberInfo.call_id` of a subagent the call spawned. |
+| `call_id` (1) | `string` | Engine-issued call id. |
 | `tool` (2) | `string` | Canonical tool name. |
 | `input_json` (3) | `string` | Tool input as JSON text, in every state (empty while the arguments are still streaming and unparsed). |
 | `state` (4) | `ToolExecutionState` | Execution state of the call. |
@@ -2585,24 +2524,6 @@ A session's todo list projection.
 | Field | Type | Description |
 |---|---|---|
 | `items` (1) | `repeated TodoItem` | Ordered todo items. |
-
-### `MemberInfo`
-
-A subagent (member) spawned by a session, as recorded on the parent's log.
-
-| Field | Type | Description |
-|---|---|---|
-| `member` (1) | `string` | Member id within the parent session. |
-| `child` (2) | `string` | Child session id when known. |
-| `agent` (3) | `string` | Subagent type (agent name) of the spawn. |
-| `description` (4) | `string` | Short description of the delegated task. |
-| `status` (5) | `MemberStatus` | Latest lifecycle status. |
-| `summary` (6) | `string` | Bounded finish summary; empty until the member finished. |
-| `call_id` (7) | `string` | Tool call (`ToolCallPart.call_id`) that spawned the member; empty for members started without a tool call. |
-| `depth` (8) | `uint32` | Depth in the subagent tree (children of a root session are 1). |
-| `handle` (9) | `string` | Readable team roster handle for the child session, when known. |
-| `archived` (10) | `optional bool` | Actor archival, independent of the member's task outcome and the root chat session's archived flag. Absent when no actor binding is known. |
-| `archive_reason` (11) | `string` | Why the actor archived: reported, killed (legacy), root_teardown, archived_by_parent, or shutdown. Empty while active or unknown. |
 
 ### `RevertedFile`
 
@@ -3094,7 +3015,7 @@ Projection summary of one session.
 | `last_seq` (10) | `uint64` | Highest event sequence number recorded for this session. |
 | `busy` (11) | `bool` | Whether a run currently owns the session's admission slot (derived from the process run registry, not the durable log). |
 | `permission_mode` (12) | `string` | Effective permission mode of the session tree: `manual`, `yolo`, or `<bundle-id>/<mode-id>`. Recorded on the root session (children report the root's mode); the process default (`yolo` under `--yolo` or `permission.model: danger`, else `manual`) when none was set. |
-| `members` (13) | `repeated MemberInfo` | Subagents this session spawned, in spawn order, with their latest status (folded from the session's own log). The live counterpart is the `memberUpdated` stream event. |
+| `extensions` (13) | `google.protobuf.Struct` | Per-bundle extension state folded from `Event::Extension` events, keyed by bundle id (for example `hya/multi-agent`, `hya/workflow`). |
 | `usage` (14) | `TokenUsage` | Billed usage of the session: every provider call made for it (turn rounds plus title/summarizer side calls), summed. Never decreases (compaction, revert, and deletion keep billed usage). Unset when none. |
 | `forked_from` (15) | `ForkSource` | Source of a forked session; unset for sessions that are not forks. |
 | `revert` (16) | `SessionRevert` | Pending revert (`RevertSession`): its messages are hidden from `ListMessages` until an undo restores them or the next prompt or shell turn commits the revert. Unset when nothing is pending. |
@@ -3290,37 +3211,6 @@ components.
 | `session` (1) | `SessionInfo` | Projection summary after the revert (`revert` set after a revert, unset after an undo). |
 | `files` (2) | `repeated RevertedFile` | Files this call wrote (or could not restore). |
 
-### `ArchiveSubagentRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `session` (1) | `string` | Subagent (child) session identifier. |
-
-### `ArchiveSubagentResponse`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `handle` (1) | `string` | Team handle of the archived subagent. |
-| `cancelled_turn` (2) | `bool` | Whether an in-flight turn was cancelled. |
-| `descendants` (3) | `repeated string` | Handles of live descendants archived first (deepest first). |
-
-### `SteerSubagentRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `session` (1) | `string` | Subagent (child) session identifier. |
-| `text` (2) | `string` | Message text; surrounding whitespace is trimmed. |
-
-### `SteerSubagentResponse`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `from` (1) | `string` | Team handle the message was sent from (the subagent's parent). |
-
 ### `PromptTurn`
 
 A plain user prompt turn.
@@ -3426,155 +3316,6 @@ features return an empty id.
 | `only_if_current` (3) | `bool` | Cancel only the admitted turn identified by turn. A stale ID is a no-op. By default cancellation targets the current session execution. |
 | `session` (1) | `string` | Session identifier. |
 | `turn` (2) | `string` | Turn identifier. |
-
-### `WorkflowSummary`
-
-One discovered workflow source.
-
-| Field | Type | Description |
-|---|---|---|
-| `name` (1) | `string` | Declared workflow name. |
-| `revision` (2) | `string` | Current compiler revision of the source. |
-| `description` (3) | `string` | One-line description from the source frontmatter. |
-| `stage_count` (4) | `uint32` | Number of stages in the compiled plan. |
-
-### `ListWorkflowsRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `directory` (1) | `string` | Directory whose workflow sources should be listed. |
-| `page` (2) | `PageRequest` | Standard pagination controls. |
-
-### `ListWorkflowsResponse`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `workflows` (1) | `repeated WorkflowSummary` | Discovered workflow sources. |
-| `page` (2) | `PageInfo` | Pagination outcome. |
-
-### `GetWorkflowStateRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `session` (1) | `string` | Session identifier. |
-
-### `WorkflowStageRun`
-
-Execution state of one stage member.
-
-| Field | Type | Description |
-|---|---|---|
-| `stage` (1) | `string` | Stage name from the compiled plan. |
-| `member` (2) | `string` | Member/session id executing the stage when spawned. |
-| `agent` (3) | `string` | Agent name bound to the stage. |
-| `status` (4) | `WorkflowRunStatus` | Stage lifecycle status. |
-
-### `WorkflowState`
-
-Projected workflow state of a session.
-
-| Field | Type | Description |
-|---|---|---|
-| `session` (1) | `string` | Owning session identifier. |
-| `workflow` (2) | `string` | Selected workflow name; empty when none is selected. |
-| `revision` (3) | `string` | Selected compiler revision. |
-| `status` (4) | `WorkflowRunStatus` | Aggregate run status. |
-| `stages` (5) | `repeated WorkflowStageRun` | Stage execution rows in plan order. |
-| `error_code` (6) | `string` | Terminal failure code when status is FAILED. |
-| `raw_json` (7) | `string` | Opaque canonical projection JSON for tooling and replay parity. The internal shape is not a stable contract; prefer the typed fields. |
-
-### `WorkflowInfoCommand`
-
-`list` command: enumerate workflow sources.
-`info` command: inspect one compiled workflow.
-
-| Field | Type | Description |
-|---|---|---|
-| `name` (1) | `string` | Declared workflow name. |
-
-### `WorkflowSelectCommand`
-
-`select` command: persist one source/revision identity.
-
-| Field | Type | Description |
-|---|---|---|
-| `name` (1) | `string` | Declared workflow name. |
-| `expected_revision` (2) | `string` | Optional optimistic compiler revision to match. |
-
-### `WorkflowRunCommand`
-
-`run` command: start the selected or named workflow.
-
-| Field | Type | Description |
-|---|---|---|
-| `name` (1) | `string` | Declared workflow name; empty uses the durable selection. |
-| `inputs` (2) | `google.protobuf.Struct` | Workflow inputs as a JSON object. |
-
-### `SubmitWorkflowCommandRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `session` (1) | `string` | Session identifier the command applies to. |
-| `list` (2) | `oneof `command`: WorkflowListCommand` | Command payload; exactly one kind is set. List workflow sources. |
-| `info` (3) | `oneof `command`: WorkflowInfoCommand` | Inspect one compiled workflow. |
-| `select` (4) | `oneof `command`: WorkflowSelectCommand` | Select a workflow source. |
-| `run` (5) | `oneof `command`: WorkflowRunCommand` | Run the selected workflow. |
-
-### `WorkflowModelCandidate`
-
-One authored fallback candidate.
-
-| Field | Type | Description |
-|---|---|---|
-| `id` (1) | `string` | Base model identity (`provider/model`). |
-| `reasoning` (2) | `string` | Optional author-provided effort label. |
-
-### `WorkflowModelAssignment`
-
-Authored worker model assignment for a stage.
-
-| Field | Type | Description |
-|---|---|---|
-| `id` (1) | `string` | Preferred base model identity (`provider/model`). |
-| `reasoning` (2) | `string` | Optional preferred effort label. |
-| `fallback` (3) | `repeated WorkflowModelCandidate` | Ordered fallback tail. |
-
-### `WorkflowInfoResult`
-
-Result payload of the `info` command.
-
-| Field | Type | Description |
-|---|---|---|
-| `name` (1) | `string` | Compiled workflow name. |
-| `revision` (2) | `string` | Compiler revision of this graph. |
-| `stage_names` (3) | `repeated string` | Stage names in execution order. |
-| `stages` (4) | `repeated WorkflowStageInfo` | Stage metadata in execution order. |
-
-### `WorkflowStageInfo`
-
-Compiled stage metadata from the `info` result.
-
-| Field | Type | Description |
-|---|---|---|
-| `name` (1) | `string` | Compiled stage id. |
-| `agent` (2) | `string` | Target agent id. |
-| `level` (3) | `uint32` | Zero-based topological level. |
-| `worker_model` (4) | `WorkflowModelAssignment` | Authored worker model assignment when present. |
-| `verifier_model` (5) | `WorkflowModelAssignment` | Authored verifier model assignment when present. |
-
-### `SubmitWorkflowCommandResponse`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `list` (1) | `oneof `result`: ListWorkflowsResponse` | Command outcome; exactly one kind is set. Rows from the `list` command. |
-| `info` (2) | `oneof `result`: WorkflowInfoResult` | Compiled graph from the `info` command. |
-| `selected` (3) | `oneof `result`: WorkflowState` | State after the `select` command. |
-| `started` (4) | `oneof `result`: WorkflowState` | State after admitting the `run` command (status becomes RUNNING). |
 
 ### `Worktree`
 
@@ -3801,19 +3542,6 @@ Lifecycle status of a todo item.
 | `TODO_STATUS_COMPLETED` | 3 | Done. |
 | `TODO_STATUS_BLOCKED` | 4 | Waiting on an external unblock (dependency, user input, review). |
 
-### `MemberStatus`
-
-Lifecycle status of a spawned subagent (member).
-
-| Value | Number | Description |
-|---|---|---|
-| `MEMBER_STATUS_UNSPECIFIED` | 0 | Unset sentinel; never emitted by the server. |
-| `MEMBER_STATUS_SPAWNING` | 1 | The child session is being created or admitted. |
-| `MEMBER_STATUS_RUNNING` | 2 | The child is running a turn. |
-| `MEMBER_STATUS_DONE` | 3 | The child finished successfully. |
-| `MEMBER_STATUS_FAILED` | 4 | The child failed. |
-| `MEMBER_STATUS_CANCELLED` | 5 | The child was cancelled. |
-
 ### `VcsFileStatus`
 
 Change status of one file.
@@ -3875,17 +3603,4 @@ Terminal state of a turn.
 | `TURN_STATE_FINISHED` | 3 | Terminal success. |
 | `TURN_STATE_FAILED` | 4 | Terminal failure. |
 | `TURN_STATE_CANCELLED` | 5 | Cancelled by the client or a stop signal. |
-
-### `WorkflowRunStatus`
-
-Lifecycle status of a workflow run.
-
-| Value | Number | Description |
-|---|---|---|
-| `WORKFLOW_RUN_STATUS_UNSPECIFIED` | 0 | Unset sentinel; never emitted by the server. |
-| `WORKFLOW_RUN_STATUS_SELECTED` | 1 | Selected but not started. |
-| `WORKFLOW_RUN_STATUS_RUNNING` | 2 | Stages are executing. |
-| `WORKFLOW_RUN_STATUS_FINISHED` | 3 | All stages completed successfully. |
-| `WORKFLOW_RUN_STATUS_FAILED` | 4 | A stage failed terminally. |
-| `WORKFLOW_RUN_STATUS_CANCELLED` | 5 | Cancelled by command or shutdown. |
 

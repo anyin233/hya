@@ -1,6 +1,6 @@
-//! `gen-api` — regenerate the hya v1 dual-protocol contract.
+//! `gen-api` — regenerate the hya v2 dual-protocol contract.
 //!
-//! Runs the vendored `protoc` over `proto/hya/v1/*.proto` and emits:
+//! Runs the vendored `protoc` over `proto/hya/v2/*.proto` and emits:
 //!
 //! - Rust types + tonic clients/servers + pbjson protojson serde into
 //!   `crates/hya-api/src/gen/` (committed; normal builds need no protoc),
@@ -9,9 +9,9 @@
 //! - `packages/hya-tui/src/operations.json`, the TUI's `/api` operation
 //!   catalog (method, path, operation id, streaming), so the TUI package is
 //!   self-contained when it ships under `lib/hya/tui`,
-//! - `packages/hya-tui/src/proto/hya/v1/`, the same proto sources for the TUI
+//! - `packages/hya-tui/src/proto/hya/v2/`, the same proto sources for the TUI
 //!   gRPC client to load from the shipped package,
-//! - `crates/hya-server/src/v1/grpc_generated.rs`, the typed gRPC router
+//! - `crates/hya-server/src/v2/grpc_generated.rs`, the typed gRPC router
 //!   adapters (streaming and other irregular methods delegate explicitly),
 //! - a coverage check that every rpc declares exactly one
 //!   `// hya.http: METHOD /path` mapping and that no mapping collides.
@@ -33,7 +33,7 @@ use prost::Message;
 pub fn run(_args: Vec<String>) -> Result<()> {
     let root = workspace_root()?;
     let proto_dir = root.join("proto");
-    let v1_dir = proto_dir.join("hya").join("v1");
+    let v2_dir = proto_dir.join("hya").join("v2");
     let gen_dir = root.join("crates").join("hya-api").join("src").join("gen");
     fs::create_dir_all(&gen_dir).context("create gen dir")?;
     for entry in fs::read_dir(&gen_dir).context("list gen dir")? {
@@ -43,9 +43,9 @@ pub fn run(_args: Vec<String>) -> Result<()> {
         }
     }
 
-    let protos = proto_files(&v1_dir)?;
+    let protos = proto_files(&v2_dir)?;
     if protos.is_empty() {
-        bail!("no .proto files under {}", v1_dir.display());
+        bail!("no .proto files under {}", v2_dir.display());
     }
 
     let protoc = protoc_bin_vendored::protoc_bin_path()
@@ -53,7 +53,7 @@ pub fn run(_args: Vec<String>) -> Result<()> {
 
     let target = root.join("target").join("xtask");
     fs::create_dir_all(&target).context("create target/xtask")?;
-    let descriptor_path = target.join("hya-v1-descriptor.bin");
+    let descriptor_path = target.join("hya-v2-descriptor.bin");
     let descriptor = run_protoc_descriptor(&protoc, &proto_dir, &protos, &descriptor_path)?;
     fs::write(&descriptor_path, &descriptor).context("write descriptor set")?;
 
@@ -72,12 +72,12 @@ pub fn run(_args: Vec<String>) -> Result<()> {
         .register_descriptors(descriptor.as_slice())
         .context("register descriptors")?
         .out_dir(&gen_dir)
-        .build(&[".hya.v1"])
+        .build(&[".hya.v2"])
         .context("pbjson serde codegen")?;
 
     let contract = parse_contract(&protos)?;
     write_grpc_adapter(
-        &root.join("crates/hya-server/src/v1/grpc_generated.rs"),
+        &root.join("crates/hya-server/src/v2/grpc_generated.rs"),
         &contract,
     )?;
     let docs_dir = root.join("docs").join("protocol");
@@ -86,7 +86,11 @@ pub fn run(_args: Vec<String>) -> Result<()> {
     write_openapi(&docs_dir.join("openapi.json"), &contract)?;
     let tui_src = root.join("packages/hya-tui/src");
     write_tui_operations(&tui_src.join("operations.json"), &contract)?;
-    write_tui_protos(&tui_src.join("proto/hya/v1"), &protos)?;
+    let legacy_tui_v1 = tui_src.join("proto/hya/v1");
+    if legacy_tui_v1.try_exists()? {
+        fs::remove_dir_all(&legacy_tui_v1).context("remove legacy TUI v1 proto directory")?;
+    }
+    write_tui_protos(&tui_src.join("proto/hya/v2"), &protos)?;
 
     let mut emitted: Vec<String> = Vec::new();
     for entry in fs::read_dir(&gen_dir).context("list gen dir")? {
@@ -116,7 +120,7 @@ fn write_tui_protos(destination: &Path, protos: &[PathBuf]) -> Result<()> {
     let parent = destination.parent().context("missing TUI proto parent")?;
     fs::create_dir_all(parent).context("create TUI proto parent")?;
     let staging = tempfile::tempdir_in(parent).context("stage TUI protos")?;
-    let staged = staging.path().join("v1");
+    let staged = staging.path().join("v2");
     fs::create_dir(&staged).context("create staged TUI proto directory")?;
     for proto in protos {
         let name = proto.file_name().context("missing proto filename")?;
@@ -181,9 +185,9 @@ pub(crate) fn workspace_root() -> Result<PathBuf> {
     }
 }
 
-fn proto_files(v1_dir: &Path) -> Result<Vec<PathBuf>> {
+fn proto_files(v2_dir: &Path) -> Result<Vec<PathBuf>> {
     let mut protos = Vec::new();
-    for entry in fs::read_dir(v1_dir).context("list proto dir")? {
+    for entry in fs::read_dir(v2_dir).context("list proto dir")? {
         let path = entry.context("read proto dir entry")?.path();
         if path.extension().is_some_and(|ext| ext == "proto") {
             protos.push(path);
@@ -529,12 +533,12 @@ fn parse_enum_value_line(line: &str) -> Option<(String, String)> {
 
 fn write_api_reference(path: &Path, contract: &Contract) -> Result<()> {
     let mut out = String::new();
-    out.push_str("# hya API v1 Reference\n\n");
+    out.push_str("# hya API v2 Reference\n\n");
     out.push_str(
-        "Generated from `proto/hya/v1` by `cargo run -p xtask -- gen-api`; do not edit by hand.\n\
+        "Generated from `proto/hya/v2` by `cargo run -p xtask -- gen-api`; do not edit by hand.\n\
          The same contract is served over HTTP/JSON+SSE and gRPC. Every rpc lists its\n\
          HTTP binding (`method path`) and its fully-qualified gRPC method\n\
-         (`hya.v1.<Service>.<Rpc>`).\n\n\
+         (`hya.v2.<Service>.<Rpc>`).\n\n\
          Conventions: pagination uses opaque cursors; errors use the stable code\n\
          table (`hya_api::error`); timestamps are RFC 3339 strings in JSON. An `ANY`\n\
          binding accepts GET, POST, PUT, PATCH, and DELETE on one path (the request\n\
@@ -565,7 +569,7 @@ fn write_api_reference(path: &Path, contract: &Contract) -> Result<()> {
                 ""
             };
             out.push_str(&format!(
-                "| `{}` | `{} {}{}` | `hya.v1.{}.{}` | `{}` | `{}` |\n",
+                "| `{}` | `{} {}{}` | `hya.v2.{}.{}` | `{}` | `{}` |\n",
                 rpc.name,
                 rpc.method,
                 rpc.path,
@@ -638,7 +642,7 @@ fn write_api_reference(path: &Path, contract: &Contract) -> Result<()> {
 }
 
 fn trim_type(name: &str) -> String {
-    name.trim_start_matches("hya.v1.").to_owned()
+    name.trim_start_matches("hya.v2.").to_owned()
 }
 
 fn slug(name: &str) -> String {
@@ -661,7 +665,7 @@ fn write_openapi(path: &Path, contract: &Contract) -> Result<()> {
                     "operationId": operation_id,
                     "summary": rpc.comment.first().cloned().unwrap_or_default(),
                     "tags": [service.name],
-                    "x-grpc-method": format!("hya.v1.{}.{}", service.name, rpc.name),
+                    "x-grpc-method": format!("hya.v2.{}.{}", service.name, rpc.name),
                     "x-server-streaming": rpc.server_streaming,
                 });
                 if any && let Some(object) = operation.as_object_mut() {
@@ -709,9 +713,9 @@ fn write_openapi(path: &Path, contract: &Contract) -> Result<()> {
     let doc = serde_json::json!({
         "openapi": "3.1.0",
         "info": {
-            "title": "hya API v1",
-            "summary": "Generated from proto/hya/v1 by cargo run -p xtask -- gen-api; do not edit by hand.",
-            "version": "1.0.0",
+            "title": "hya API v2",
+            "summary": "Generated from proto/hya/v2 by cargo run -p xtask -- gen-api; do not edit by hand.",
+            "version": "2.0.0",
         },
         "paths": serde_json::Value::Object(paths),
         "components": { "schemas": serde_json::Value::Object(schemas) },
@@ -822,7 +826,7 @@ fn write_grpc_adapter(path: &Path, contract: &Contract) -> Result<()> {
     for service in &contract.services {
         writeln!(
             out,
-            "#[tonic::async_trait]\nimpl pb::{}_server::{} for V1Grpc {{",
+            "#[tonic::async_trait]\nimpl pb::{}_server::{} for V2Grpc {{",
             snake(&service.name),
             service.name
         )?;
@@ -958,7 +962,7 @@ mod tests {
         let proto = dir.join("demo.proto");
         fs::write(
             &proto,
-            format!("syntax = \"proto3\";\npackage hya.v1;\n{body}"),
+            format!("syntax = \"proto3\";\npackage hya.v2;\n{body}"),
         )?;
         let contract = parse_contract(&[proto]);
         fs::remove_dir_all(&dir)?;
@@ -969,12 +973,12 @@ mod tests {
     fn any_mapping_binds_every_method_and_collides_with_explicit_ones() -> Result<()> {
         let contract = contract_of(
             "any-ok",
-            "service Demo {\n  // hya.http: ANY /v1/demo/{path}\n  rpc Invoke(A) returns (B);\n  // hya.http: GET /v1/demo\n  rpc List(A) returns (B);\n}\n",
+            "service Demo {\n  // hya.http: ANY /v2/demo/{path}\n  rpc Invoke(A) returns (B);\n  // hya.http: GET /v2/demo\n  rpc List(A) returns (B);\n}\n",
         )?;
         assert_eq!(contract.services[0].rpcs[0].method, "ANY");
         let collision = contract_of(
             "any-collides",
-            "service Demo {\n  // hya.http: ANY /v1/demo/{path}\n  rpc Invoke(A) returns (B);\n  // hya.http: PATCH /v1/demo/{path}\n  rpc Patch(A) returns (B);\n}\n",
+            "service Demo {\n  // hya.http: ANY /v2/demo/{path}\n  rpc Invoke(A) returns (B);\n  // hya.http: PATCH /v2/demo/{path}\n  rpc Patch(A) returns (B);\n}\n",
         );
         let Err(error) = collision else {
             bail!("an ANY mapping must collide with PATCH on the same path");
@@ -985,7 +989,7 @@ mod tests {
         );
         let unknown = contract_of(
             "head",
-            "service Demo {\n  // hya.http: HEAD /v1/demo\n  rpc Head(A) returns (B);\n}\n",
+            "service Demo {\n  // hya.http: HEAD /v2/demo\n  rpc Head(A) returns (B);\n}\n",
         );
         assert!(unknown.is_err(), "unsupported methods are rejected");
         Ok(())

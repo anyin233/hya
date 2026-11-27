@@ -1,9 +1,9 @@
 //! `hya-server` — Axum HTTP and SSE surface over `hya-core`.
 //!
-//! Serves the consolidated `hya.v1` contract:
+//! Serves the consolidated `hya.v2` contract:
 //!
-//! - **HTTP/JSON + SSE + WebSocket** — the `/v1` routes generated from the
-//!   `hya.v1` IDL (`crates/hya-api`), plus the gRPC binding (`V1Grpc`)
+//! - **HTTP/JSON + SSE + WebSocket** — the `/v2` routes generated from the
+//!   `hya.v2` IDL (`crates/hya-api`), plus the gRPC binding (`V2Grpc`)
 //!   dispatching through the same router.
 //! - **One listener** — [`build`] makes a [`Server`] that serves both on
 //!   one port (`content-type: application/grpc*` goes to gRPC, everything
@@ -38,7 +38,7 @@ mod support;
 #[cfg(test)]
 #[path = "../tests/it/support/mod.rs"]
 mod test_support;
-mod v1;
+mod v2;
 mod workflow;
 mod workflow_control;
 
@@ -73,7 +73,7 @@ pub use server::{Server, build};
 pub use state::AppState;
 pub(crate) use state::ServerState;
 pub use streams::{ShutdownReason, StreamShutdown};
-pub use v1::V1Grpc;
+pub use v2::V2Grpc;
 
 /// Largest `CreateTurn` HTTP JSON body the server reads: room for the 20 MiB
 /// prompt-attachment budget after base64 (4/3) plus the rest of the request.
@@ -89,11 +89,11 @@ pub use workflow_control::{
     WorkflowControl, WorkflowControlError, WorkflowControlFuture, WorkflowDecorationFuture,
 };
 
-/// Build the full HTTP app: the `/v1` contract routes + CORS, behind the
+/// Build the full HTTP app: the `/v2` contract routes + CORS, behind the
 /// request admission guard (Host allowlist, no browsers over the relay;
 /// `host.rs`), which runs first — also for CORS preflights.
 ///
-/// Every router, gRPC binding ([`V1Grpc::new`]), and combined [`Server`]
+/// Every router, gRPC binding ([`V2Grpc::new`]), and combined [`Server`]
 /// ([`build`]) made from one `AppState` (or its clones) shares one server
 /// state, whose background drivers start once. To serve HTTP and gRPC on
 /// one listener use [`build`].
@@ -101,10 +101,10 @@ pub fn router(state: AppState) -> Router {
     let handlers = state.handlers.clone();
     let hosts = std::sync::Arc::new(state.allowed_hosts());
     let state = state.server_state();
-    v1::router()
+    v2::router()
         .with_state(state)
         .layer(axum::Extension(handlers))
-        .layer(axum::middleware::from_fn(v1::directory_header_guard))
+        .layer(axum::middleware::from_fn(v2::directory_header_guard))
         .layer(cors())
         .layer(axum::middleware::from_fn(move |request, next| {
             host::guard(hosts.clone(), request, next)
@@ -117,7 +117,7 @@ pub fn router(state: AppState) -> Router {
 /// catalog-scope notice relay. Called exactly once per server state
 /// ([`AppState::server_state`]), so HTTP and gRPC share one of each.
 pub(crate) fn spawn_background_drivers(state: &ServerState) {
-    v1::events::spawn_frame_hub(state);
+    v2::events::spawn_frame_hub(state);
     spawn_catalog_scope_notices(state);
     spawn_project_busy_watcher(state.clone());
     session_list::spawn_busy_tracker(state.clone());
@@ -240,5 +240,5 @@ fn cors() -> CorsLayer {
         .allow_methods(Any)
 }
 
-/// Shared HTTP and gRPC error using the stable v1 code table.
-pub use v1::ApiError;
+/// Shared HTTP and gRPC error using the stable v2 code table.
+pub use v2::ApiError;

@@ -9,7 +9,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt as _;
-use hya_api::v1 as pb;
+use hya_api::v2 as pb;
 
 use crate::common::Scratch;
 
@@ -79,7 +79,7 @@ async fn the_readiness_url_answers_http_and_grpc_and_the_extra_listener_shares_t
 
     let http = reqwest::Client::new();
     let health: serde_json::Value = http
-        .get(format!("{url}/v1/health"))
+        .get(format!("{url}/v2/health"))
         .send()
         .await
         .unwrap()
@@ -99,7 +99,7 @@ async fn the_readiness_url_answers_http_and_grpc_and_the_extra_listener_shares_t
     );
 
     let pty: serde_json::Value = http
-        .post(format!("{url}/v1/pty"))
+        .post(format!("{url}/v2/pty"))
         .json(&serde_json::json!({"shell": "/bin/sh", "cwd": scratch.0.to_string_lossy()}))
         .send()
         .await

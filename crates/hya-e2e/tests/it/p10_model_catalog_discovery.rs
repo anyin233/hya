@@ -1,6 +1,6 @@
 //! T2.15 — model catalog discovery, caching, anonymous rediscovery, credentialed
-//! 403 rejection, mixed-provider consistency across CLI / `/v1/models` /
-//! `/v1/providers` / `/v1/bootstrap`, and `hya/offline` fallback.
+//! 403 rejection, mixed-provider consistency across CLI / `/v2/models` /
+//! `/v2/providers` / `/v2/bootstrap`, and `hya/offline` fallback.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::BTreeSet;
@@ -269,11 +269,11 @@ async fn model_catalog_discovery_mixed_providers_and_offline_fallback() {
 
     let mut backend = start_backend(&binary, &root2.0).await;
     let expected = BTreeSet::from(["valid/discovered".to_string()]);
-    let (s, api_models) = get_json(&backend.url, "/v1/models").await;
+    let (s, api_models) = get_json(&backend.url, "/v2/models").await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(model_ids(&api_models), expected);
 
-    let (s, api_providers) = get_json(&backend.url, "/v1/providers").await;
+    let (s, api_providers) = get_json(&backend.url, "/v2/providers").await;
     assert_eq!(s, StatusCode::OK);
     let rows = api_providers["providers"].as_array().unwrap();
     assert_eq!(provider_row(rows, "valid")["result"], "models");
@@ -283,7 +283,7 @@ async fn model_catalog_discovery_mixed_providers_and_offline_fallback() {
     assert_eq!(rejected["result"], "unavailable");
     assert!(state.saw_auth.load(Ordering::SeqCst));
 
-    let (s, detail) = get_json(&backend.url, "/v1/providers/valid").await;
+    let (s, detail) = get_json(&backend.url, "/v2/providers/valid").await;
     assert_eq!(s, StatusCode::OK);
     let detail_ids: BTreeSet<String> = detail["models"]
         .as_array()
@@ -293,7 +293,7 @@ async fn model_catalog_discovery_mixed_providers_and_offline_fallback() {
         .collect();
     assert_eq!(detail_ids, expected);
 
-    let (s, bootstrap) = get_json(&backend.url, "/v1/bootstrap").await;
+    let (s, bootstrap) = get_json(&backend.url, "/v2/bootstrap").await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(model_ids(&bootstrap), expected);
     assert_eq!(std::fs::read(&cfg2).unwrap(), cfg2_bytes);

@@ -42,7 +42,7 @@ impl Api {
     ) -> Result<Option<Value>, Box<dyn std::error::Error>> {
         let body: Value = self
             .client
-            .get(format!("{}/v1/bundles", self.url))
+            .get(format!("{}/v2/bundles", self.url))
             .query(&[("directory", dir)])
             .send()
             .await?
@@ -60,7 +60,7 @@ impl Api {
     async fn has_tui_ext(&self, id: &str) -> Result<bool, Box<dyn std::error::Error>> {
         let body: Value = self
             .client
-            .get(format!("{}/v1/tui-extensions", self.url))
+            .get(format!("{}/v2/tui-extensions", self.url))
             .send()
             .await?
             .error_for_status()?
@@ -110,7 +110,7 @@ async fn bundles_api_lifecycle_and_project_root_inventory_refresh() -> TestResul
     assert!(basic["removable"] != true && basic["components"]["tui"] == true);
     assert_eq!(
         api.status(
-            "/v1/bundles:install",
+            "/v2/bundles:install",
             json!({"path": "tui-panel.hyabundle"})
         )
         .await?,
@@ -118,14 +118,14 @@ async fn bundles_api_lifecycle_and_project_root_inventory_refresh() -> TestResul
     );
 
     let (st, body) = api
-        .post("/v1/bundles:install", json!({"path": pkg}))
+        .post("/v2/bundles:install", json!({"path": pkg}))
         .await?;
     assert_eq!((st, body["bundleId"].as_str()), (200, Some(BUNDLE)));
     assert!(api.has_tui_ext(BUNDLE).await?);
 
     assert_eq!(
         api.status(
-            "/v1/bundles:set-enabled",
+            "/v2/bundles:set-enabled",
             json!({"bundleId": BUNDLE, "enabled": false})
         )
         .await?,
@@ -138,7 +138,7 @@ async fn bundles_api_lifecycle_and_project_root_inventory_refresh() -> TestResul
     assert!(!api.has_tui_ext(BUNDLE).await?);
     assert_eq!(
         api.status(
-            "/v1/bundles:set-enabled",
+            "/v2/bundles:set-enabled",
             json!({"bundleId": BUNDLE, "enabled": true})
         )
         .await?,
@@ -148,7 +148,7 @@ async fn bundles_api_lifecycle_and_project_root_inventory_refresh() -> TestResul
 
     assert_eq!(
         api.status(
-            "/v1/bundles:set-enabled",
+            "/v2/bundles:set-enabled",
             json!({"bundleId": "hya/core-agents", "enabled": false})
         )
         .await?,
@@ -156,19 +156,19 @@ async fn bundles_api_lifecycle_and_project_root_inventory_refresh() -> TestResul
     );
     assert_eq!(
         api.status(
-            "/v1/bundles:uninstall",
+            "/v2/bundles:uninstall",
             json!({"bundleId": "hya/goal-loop"})
         )
         .await?,
         409
     );
     assert_eq!(
-        api.status("/v1/bundles:uninstall", json!({"bundleId": BUNDLE}))
+        api.status("/v2/bundles:uninstall", json!({"bundleId": BUNDLE}))
             .await?,
         200
     );
     assert_eq!(
-        api.status("/v1/bundles:uninstall", json!({"bundleId": BUNDLE}))
+        api.status("/v2/bundles:uninstall", json!({"bundleId": BUNDLE}))
             .await?,
         404
     );
@@ -178,7 +178,7 @@ async fn bundles_api_lifecycle_and_project_root_inventory_refresh() -> TestResul
     let wd = work.to_string_lossy().into_owned();
     assert_eq!(
         api.status(
-            "/v1/bundles:install",
+            "/v2/bundles:install",
             json!({"directory": wd, "path": pkg, "project": true})
         )
         .await?,
@@ -191,7 +191,7 @@ async fn bundles_api_lifecycle_and_project_root_inventory_refresh() -> TestResul
     assert!(api.row("", BUNDLE, "project").await?.is_none());
     assert_eq!(
         api.status(
-            "/v1/bundles:uninstall",
+            "/v2/bundles:uninstall",
             json!({"directory": wd, "bundleId": BUNDLE, "project": true})
         )
         .await?,
@@ -226,7 +226,7 @@ async fn bundles_api_lifecycle_and_project_root_inventory_refresh() -> TestResul
 
     assert_eq!(
         api.status(
-            "/v1/projects",
+            "/v2/projects",
             json!({"name": "inventory", "roots": [first, second]})
         )
         .await?,
@@ -234,7 +234,7 @@ async fn bundles_api_lifecycle_and_project_root_inventory_refresh() -> TestResul
     );
     assert_eq!(
         api.status(
-            "/v1/bundles:set-enabled",
+            "/v2/bundles:set-enabled",
             json!({"bundleId": "inventory/disabled", "enabled": false})
         )
         .await?,
@@ -266,7 +266,7 @@ async fn bundles_api_lifecycle_and_project_root_inventory_refresh() -> TestResul
     );
 
     let (st, pub_resp) = api
-        .post("/v1/bundles:refresh", json!({"directory": nested}))
+        .post("/v2/bundles:refresh", json!({"directory": nested}))
         .await?;
     assert_eq!((st, pub_resp["scope"].as_str()), (200, Some("project")));
     let ids: Vec<&str> = pub_resp["bundles"]

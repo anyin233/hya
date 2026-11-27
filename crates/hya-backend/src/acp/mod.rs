@@ -8,8 +8,8 @@ use agent_client_protocol::{
     schema::ProtocolVersion,
     v1::{ConnectionTo, Responder, schema as acp},
 };
-use hya_api::v1 as pb;
-use hya_sdk_v1::V1Sdk;
+use hya_api::v2 as pb;
+use hya_sdk::Sdk;
 use std::{
     collections::HashMap,
     sync::{
@@ -28,7 +28,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 struct Session {
-    sdk: V1Sdk,
+    sdk: Sdk,
     id: String,
     active: Mutex<Option<CancellationToken>>,
     peers: Option<mcp::Peers>,
@@ -88,7 +88,7 @@ impl Agent {
                 .data("cwd must be an existing absolute directory".to_owned()));
         }
         let dir = args.cwd.to_str().ok_or_else(Error::invalid_params)?;
-        let sdk = V1Sdk::for_local_daemon(&self.url, dir).map_err(Error::into_internal_error)?;
+        let sdk = Sdk::for_local_daemon(&self.url, dir).map_err(Error::into_internal_error)?;
         let model = self.model.clone().unwrap_or_default();
         let (id, peers) = if args.mcp_servers.is_empty() {
             let info = sdk
@@ -174,9 +174,9 @@ fn turn_error(code: String, message: String) -> Error {
     Error::new(-32011, message).data(serde_json::json!({"code":code}))
 }
 
-fn api(error: hya_sdk_v1::SdkError) -> Error {
+fn api(error: hya_sdk::SdkError) -> Error {
     match error {
-        hya_sdk_v1::SdkError::Api { ref code, .. } if code == "session_busy" => busy(),
+        hya_sdk::SdkError::Api { ref code, .. } if code == "session_busy" => busy(),
         other => Error::into_internal_error(other),
     }
 }
@@ -208,7 +208,7 @@ pub(super) async fn run(db: String, model: Option<String>, pure: bool) -> anyhow
         .await?
         .discovery
         .url;
-    let bootstrap = V1Sdk::for_local_daemon(&url, "")?.bootstrap().await?;
+    let bootstrap = Sdk::for_local_daemon(&url, "")?.bootstrap().await?;
     let version = bootstrap
         .location
         .as_ref()

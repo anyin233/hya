@@ -1,4 +1,4 @@
-//! The runtime configuration bag shared by the `/v1` config routes and
+//! The runtime configuration bag shared by the `/v2` config routes and
 //! process state.
 
 use std::sync::Arc;

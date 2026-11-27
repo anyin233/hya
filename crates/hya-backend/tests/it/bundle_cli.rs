@@ -429,8 +429,8 @@ async fn bundle_live_daemon_activation_enable_disable_and_unreadable_isolation()
     assert_success("corrupt registry row", &corrupt);
 
     let daemon = BundleDaemon::start(root)?;
-    let refresh: hya_api::v1::RefreshBundlesResponse = reqwest::Client::new()
-        .post(format!("{}/v1/bundles:refresh", daemon.url))
+    let refresh: hya_api::v2::RefreshBundlesResponse = reqwest::Client::new()
+        .post(format!("{}/v2/bundles:refresh", daemon.url))
         .json(&serde_json::json!({}))
         .send()
         .await?

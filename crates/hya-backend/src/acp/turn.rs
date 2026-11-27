@@ -6,8 +6,8 @@ use futures::{
     future::BoxFuture,
     stream::{BoxStream, FuturesUnordered},
 };
-use hya_api::v1 as pb;
-use hya_sdk_v1::V1SessionMirror;
+use hya_api::v2 as pb;
+use hya_sdk::SessionMirror;
 use std::{
     collections::{HashMap, HashSet},
     time::Duration,
@@ -49,7 +49,7 @@ pub(super) async fn run(
         session,
         client,
         turn: turn.id.clone(),
-        mirror: V1SessionMirror::from_messages(Vec::new(), watermark),
+        mirror: SessionMirror::from_messages(Vec::new(), watermark),
         within: false,
         updates: Updates::default(),
         answered: HashSet::new(),
@@ -71,7 +71,7 @@ struct Output<'a> {
     client: Editor,
     turn: String,
     within: bool,
-    mirror: V1SessionMirror,
+    mirror: SessionMirror,
     updates: Updates,
     answered: HashSet<String>,
     replies: FuturesUnordered<BoxFuture<'a, Result<()>>>,
@@ -81,7 +81,7 @@ struct Output<'a> {
 impl Output<'_> {
     async fn drive(
         &mut self,
-        mut live: BoxStream<'_, std::result::Result<pb::StreamFrame, hya_sdk_v1::SdkError>>,
+        mut live: BoxStream<'_, std::result::Result<pb::StreamFrame, hya_sdk::SdkError>>,
         cancel: &CancellationToken,
     ) -> Result<acp::StopReason> {
         let sdk = &self.session.sdk;
@@ -279,7 +279,7 @@ async fn answer(session: &Session, client: Editor, ask: pb::Interaction) -> Resu
     };
     match session.sdk.respond_interaction(&ask.id, response).await {
         Ok(_) => Ok(()),
-        Err(hya_sdk_v1::SdkError::Api { code, .. }) if code == "not_found" => Ok(()),
+        Err(hya_sdk::SdkError::Api { code, .. }) if code == "not_found" => Ok(()),
         Err(e) => Err(api(e)),
     }
 }
