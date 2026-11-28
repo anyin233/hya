@@ -32,7 +32,6 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 pub use hya_proto::context::TODO_TOOL as TODO;
-pub use hya_runtime_abi::{UriSchemaHandleAdapter, adapt_uri_schema_handler};
 pub use hya_tool::{RESERVED_KERNEL_TOOLS as RESERVED, is_reserved_kernel_tool as is_reserved};
 
 /// Name of the tool whose calls the kernel loop handles itself.

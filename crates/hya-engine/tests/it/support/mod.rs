@@ -198,7 +198,11 @@ pub fn fixture_engine(
     permission: PermissionPlane,
     bus: EventBus,
 ) -> SessionEngine {
-    let regs = hya_core::bundles::load_internal().expect("load native rewriters");
+    let regs = hya_tool_loader::load_v2(
+        "hya/compaction",
+        Arc::new(hya_tool_loader::MinimalHostRuntime::empty()),
+    )
+    .expect("load native rewriters");
     let engine = SessionEngine::new(store, router, runtime, permission, bus)
         .with_rewriters(regs.rewriters)
         .with_tool_family_prompts(true)

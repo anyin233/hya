@@ -594,12 +594,12 @@ async fn handle_router_supports_internal_handles_and_custom_uri_schema_handlers(
     ro_handler.insert("ro://doc", "immutable custom doc");
 
     ctx = ctx
-        .with_uri_handler(kernel::tools::adapt_uri_schema_handler(
+        .with_uri_handler(hya_runtime_abi::adapt_uri_schema_handler(
             kv_handler.clone(),
             None,
         ))
         .unwrap()
-        .with_uri_handler(kernel::tools::adapt_uri_schema_handler(
+        .with_uri_handler(hya_runtime_abi::adapt_uri_schema_handler(
             ro_handler.clone(),
             None,
         ))
@@ -609,7 +609,7 @@ async fn handle_router_supports_internal_handles_and_custom_uri_schema_handlers(
     let protected = Arc::new(MemorySchemeHandler::new("artifact", false));
     assert_eq!(
         ctx.clone()
-            .with_uri_handler(kernel::tools::adapt_uri_schema_handler(protected, None))
+            .with_uri_handler(hya_runtime_abi::adapt_uri_schema_handler(protected, None))
             .err(),
         Some(SchemeRegistryError::ProtectedScheme("artifact".to_string()))
     );

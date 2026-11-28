@@ -6,10 +6,11 @@ use hya_provider::ProviderRouter;
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules};
 
-use super::{CoreError, EventBus, SessionEngine};
+use super::{EventBus, SessionEngine};
 
 #[tokio::test]
-async fn missing_native_rewriter_returns_startup_error() -> Result<(), Box<dyn std::error::Error>> {
+async fn missing_native_bundle_library_fails_startup_install()
+-> Result<(), Box<dyn std::error::Error>> {
     const CHILD: &str = "HYA_TEST_NATIVE_REWRITER_CHILD";
     if std::env::var_os(CHILD).is_some() {
         let engine = SessionEngine::new(
@@ -20,13 +21,14 @@ async fn missing_native_rewriter_returns_startup_error() -> Result<(), Box<dyn s
             EventBus::default(),
         );
         assert!(engine.rewriters.is_empty());
-        let Err(CoreError::BundleRuntime { bundle_id, source }) =
-            hya_core::bundles::load_internal()
-        else {
+        // The host's startup install path (`hya-app` runtime) for an enabled bundle.
+        let Err(error) = hya_tool_loader::load_native_bundles(
+            &["hya/compaction"],
+            Arc::new(hya_tool_loader::MinimalHostRuntime::empty()),
+        ) else {
             panic!("startup must return a bundle load error");
         };
-        assert_eq!(bundle_id, "hya/compaction");
-        assert!(source.to_string().contains("hya_compaction"));
+        assert!(error.contains("hya/compaction"), "{error}");
         return Ok(());
     }
 
@@ -39,7 +41,7 @@ async fn missing_native_rewriter_returns_startup_error() -> Result<(), Box<dyn s
         Command::new(child)
             .args([
                 "--exact",
-                "engine::native_rewriters_test::missing_native_rewriter_returns_startup_error",
+                "engine::native_rewriters_test::missing_native_bundle_library_fails_startup_install",
                 "--nocapture",
             ])
             .env(CHILD, "1")

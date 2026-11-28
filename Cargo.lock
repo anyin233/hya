@@ -1502,7 +1502,6 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "futures",
- "hya-bundle",
  "hya-coding-extras",
  "hya-compaction",
  "hya-context",

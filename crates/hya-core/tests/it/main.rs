@@ -6,9 +6,12 @@ mod replay_bare;
 mod standard_tools;
 
 #[test]
-fn internal_native_bundle_loads_its_rewriter_and_projection_reducer()
--> Result<(), hya_core::CoreError> {
-    let registrations = hya_core::bundles::load_internal()?;
+fn compaction_bundle_loads_its_rewriter_and_projection_reducer()
+-> Result<(), hya_runtime_abi::AbiError> {
+    let registrations = hya_tool_loader::load_v2(
+        "hya/compaction",
+        std::sync::Arc::new(hya_tool_loader::MinimalHostRuntime::empty()),
+    )?;
     assert!(registrations.tools.is_empty());
     assert_eq!(registrations.rewriters.len(), 1);
     assert_eq!(registrations.projection_reducers.len(), 1);
