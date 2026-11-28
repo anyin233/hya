@@ -26,9 +26,9 @@ supplies resources through the native JSON-RPC plugin ABI; it does not become
 a second Agent runtime. Evaluator hooks receive their documented evaluation
 inputs while the engine retains iteration and budget caps.
 
-`hya/core-agents`, `hya/agent-channels`, and the four tool-family presets
-(`hya/base-tools`, `hya/extended-tools`, `hya/network`,
-`hya/channel-tools`) are trusted embedded presets. Trust comes
+`hya/core-agents`, `hya/agent-channels`, and the native tool bundles
+(`hya/hashline`, `hya/coding-extras`, `hya/extended-tools`, `hya/network`)
+are trusted built-in bundles. Trust comes
 from the embedded source, never from a manifest claiming
 their identity. Public bundle agents retain the internal-public Harness plane
 plus selected resources from their own bundle. Ordinary core agents use the

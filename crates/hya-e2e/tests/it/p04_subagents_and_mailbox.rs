@@ -659,3 +659,122 @@ async fn wait_report_plain_answer_stall_archive_and_wake() {
         .await
         .expect("archived worker woken by mail");
 }
+
+/// Verify `hya/agent-channels` native ABI v2 `UriSchemaHandler` (`channel://`)
+/// resolves identically through BOTH `hya/hashline` `read` (default full mode)
+/// AND standard `hya-bare` `read` (`bundles.builtin.disable: [hya/hashline]`),
+/// and verify the read-only `BundleApi` endpoints (`/channels`,
+/// `/channels/{channel}/messages`, `/inbox`, `/team-status`).
+#[tokio::test]
+async fn channel_uri_read_works_with_both_hashline_and_bare_read_and_bundle_api() {
+    for (label, disable_hashline) in [("hashline", false), ("bare-read", true)] {
+        const SEED: u64 = 99;
+        let mut rng = hya_proto::handle_naming::SplitMix64::seeded(SEED);
+        let child_handle = format!(
+            "main/{}",
+            hya_proto::handle_naming::mint_leaf("hya-task", &BTreeSet::new(), &mut rng)
+        );
+        let prompt = format!("channel uri read probe ({label})");
+        let marker = format!("MARKER_URI_{}", label.replace('-', "_"));
+
+        let mut builder = E2eEnvBuilder::new()
+            .backend_env("HYA_HANDLE_SEED", SEED.to_string())
+            .route(
+                marker.clone(),
+                vec![
+                    tool_step(
+                        "send",
+                        json!({"channel": "^parent", "body": format!("HELLO_FROM_CHILD_{label}")}),
+                    ),
+                    tool_step(
+                        "report",
+                        json!({"result": format!("REPORT_OK_{label}"), "outcome": "done"}),
+                    ),
+                ],
+            );
+        if disable_hashline {
+            builder = builder.disable_builtin_bundle("hya/hashline");
+        }
+        let env = builder.build().await.expect("e2e env");
+
+        let session = env.create_session().await.unwrap();
+        env.fake
+            .route_session(
+                &prompt,
+                [
+                    tool_step(
+                        "task",
+                        json!({
+                            "description": "uri probe child",
+                            "prompt": "send DM and report",
+                            "subagent_type": "hya-task",
+                            "inline_agent": {
+                                "prompt": format!("{marker} send a message to parent then report")
+                            }
+                        }),
+                    ),
+                    tool_step("wait", json!({"timeout_secs": 30})),
+                    tool_step(
+                        "read",
+                        json!({"path": format!("channel://{child_handle}?last=5")}),
+                    ),
+                    text_step(format!("DONE_{label}")),
+                    text_step(format!("QUIESCE_{label}")),
+                ],
+            )
+            .unwrap();
+        env.prompt(session, &prompt).await.unwrap();
+
+        let dump = env.route_dump(&prompt).unwrap();
+        assert!(
+            dump.contains(&format!("HELLO_FROM_CHILD_{label}")),
+            "{label}: `read channel://{child_handle}?last=5` must resolve via HandleRouter: {dump}"
+        );
+
+        // Verify `hya/agent-channels` read-only BundleApi endpoints on the live server.
+        let channels_resp = env
+            .get_json(&format!(
+                "/v2/sessions/{session}/bundles/hya%2Fagent-channels/channels"
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("{label}: GET /channels failed: {e}"));
+        let channels = channels_resp["channels"]
+            .as_array()
+            .expect("channels array");
+        assert!(
+            !channels.is_empty(),
+            "{label}: expected at least group channel: {channels_resp}"
+        );
+        let group_id = channels[0]["id"].as_str().expect("channel id");
+
+        let messages_resp = env
+            .get_json(&format!(
+                "/v2/sessions/{session}/bundles/hya%2Fagent-channels/channels/{group_id}/messages?last=10"
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("{label}: GET /channels/{group_id}/messages failed: {e}"));
+        assert_eq!(
+            messages_resp["channel"], group_id,
+            "{label}: {messages_resp}"
+        );
+
+        let inbox_resp = env
+            .get_json(&format!(
+                "/v2/sessions/{session}/bundles/hya%2Fagent-channels/inbox"
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("{label}: GET /inbox failed: {e}"));
+        assert_eq!(inbox_resp["handle"], "main", "{label}: {inbox_resp}");
+
+        let status_resp = env
+            .get_json(&format!(
+                "/v2/sessions/{session}/bundles/hya%2Fagent-channels/team-status"
+            ))
+            .await
+            .unwrap_or_else(|e| panic!("{label}: GET /team-status failed: {e}"));
+        assert!(
+            status_resp["members"].is_array(),
+            "{label}: expected members array: {status_resp}"
+        );
+    }
+}

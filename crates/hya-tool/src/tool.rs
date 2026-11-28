@@ -111,6 +111,7 @@ impl ToolCtx {
         HandleRouter::new(&self.workdir)
             .with_skills(self.skills.clone())
             .with_artifacts(self.artifacts.store(&self.workdir))
+            .with_actor_claim(self.operation.actor_claim())
             .with_uri_handlers(Arc::clone(self.artifacts.uri_handlers()))
     }
 

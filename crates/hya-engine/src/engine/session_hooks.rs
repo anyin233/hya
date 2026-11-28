@@ -321,7 +321,7 @@ impl SessionEngine {
         binding: &TurnBinding,
         stable_agent_id: &str,
     ) {
-        let channel_policy = crate::ChannelPolicy::from_binding(binding)
+        let channel_policy = crate::channel_policy::from_binding(binding)
             .map(|policy| policy.snapshot_for(stable_agent_id))
             .unwrap_or_default();
         self.session_channel_policies
@@ -332,7 +332,9 @@ impl SessionEngine {
             .await;
     }
 
-    pub(crate) fn session_channel_policy(
+    /// Return the channel policy snapshot captured for `session`, if any.
+    #[must_use]
+    pub fn session_channel_policy(
         &self,
         session: SessionId,
     ) -> Option<hya_tool::ChannelPolicySnapshot> {

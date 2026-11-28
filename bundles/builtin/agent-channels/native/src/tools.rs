@@ -1,10 +1,16 @@
-//! Channel send and listing tool implementations.
+//! Model-facing tools exported by `hya/agent-channels`:
+//! `send`, `list_channel`, `report`, and mail-aware `wait`.
+
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use hya_proto::{ChannelKind, MailEndpoint, MailKind, ToolSchema};
 use hya_tool::tool::obj_schema;
-use hya_tool::{MailboxError, Tool, ToolCtx, ToolError};
+use hya_tool::{MailboxError, ReportOutcome, Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
+
+use crate::service::{AgentChannelsService, host_error_to_tool_error};
 
 fn channel_error(error: MailboxError) -> ToolError {
     match error {
@@ -15,19 +21,27 @@ fn channel_error(error: MailboxError) -> ToolError {
     }
 }
 
-pub struct SendTool;
+/// Send mail on a channel, peer DM, or default role channel (`send`).
+pub struct SendTool {
+    service: Arc<AgentChannelsService>,
+}
+
+impl SendTool {
+    /// Create a `send` tool backed by `service` (with [`hya_tool::MailboxPlane`] fallback
+    /// for disconnected unit-test harnesses).
+    #[must_use]
+    pub fn new(service: Arc<AgentChannelsService>) -> Self {
+        Self { service }
+    }
+}
 
 #[derive(Deserialize)]
 struct SendInput {
-    /// Channel address: `#channel`, a bare channel id (`DM-…`/`announce-…`),
-    /// a vertical peer handle, or `^parent`. Omit to use the default channel.
     #[serde(default)]
     channel: String,
     body: String,
 }
 
-/// Resolve the input's channel spelling to an endpoint; `None` means the
-/// sender's role-default channel.
 fn send_endpoint(raw: &str) -> Option<MailEndpoint> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -82,15 +96,48 @@ impl Tool for SendTool {
         if input.body.trim().is_empty() {
             return Err(ToolError::Input("message body is empty".to_string()));
         }
-        let receipt = match send_endpoint(&input.channel) {
-            Some(endpoint) => {
-                ctx.mailbox
-                    .send(endpoint, MailKind::Message, input.body)
-                    .await
+        let receipt = if let Ok(runtime) = self.service.runtime() {
+            let session = ctx.session.ok_or_else(|| {
+                ToolError::Other("mailbox is only available inside a running team".to_string())
+            })?;
+            let policy = ctx.mailbox.channel_policy().ok_or_else(|| {
+                ToolError::Input("channel policy snapshot missing for admitted send".to_string())
+            })?;
+            let claim = ctx.operation.actor_claim();
+            match send_endpoint(&input.channel) {
+                Some(endpoint) => AgentChannelsService::send(
+                    runtime.as_ref(),
+                    session,
+                    endpoint,
+                    MailKind::Message,
+                    input.body,
+                    claim,
+                    Some(policy),
+                    false,
+                )
+                .await
+                .map_err(host_error_to_tool_error)?,
+                None => AgentChannelsService::send_default(
+                    runtime.as_ref(),
+                    session,
+                    input.body,
+                    claim,
+                    Some(policy),
+                )
+                .await
+                .map_err(host_error_to_tool_error)?,
             }
-            None => ctx.mailbox.send_default(input.body).await,
-        }
-        .map_err(channel_error)?;
+        } else {
+            match send_endpoint(&input.channel) {
+                Some(endpoint) => {
+                    ctx.mailbox
+                        .send(endpoint, MailKind::Message, input.body)
+                        .await
+                }
+                None => ctx.mailbox.send_default(input.body).await,
+            }
+            .map_err(channel_error)?
+        };
         let address = send_address(&receipt.to);
         Ok(json!({
             "title": format!("Sent to {address}"),
@@ -110,7 +157,19 @@ impl Tool for SendTool {
     }
 }
 
-pub struct ListChannelTool;
+/// List visible channels and direct-child liveness (`list_channel`).
+pub struct ListChannelTool {
+    service: Arc<AgentChannelsService>,
+}
+
+impl ListChannelTool {
+    /// Create a `list_channel` tool backed by `service` (with [`hya_tool::MailboxPlane`]
+    /// fallback for disconnected unit-test harnesses).
+    #[must_use]
+    pub fn new(service: Arc<AgentChannelsService>) -> Self {
+        Self { service }
+    }
+}
 
 #[async_trait]
 impl Tool for ListChannelTool {
@@ -134,8 +193,22 @@ impl Tool for ListChannelTool {
     }
 
     async fn execute(&self, ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {
-        let rows = ctx.mailbox.list_channels().await.map_err(channel_error)?;
-        let team = ctx.mailbox.team_status().await.map_err(channel_error)?;
+        let (rows, team) = if let Ok(runtime) = self.service.runtime() {
+            let session = ctx.session.ok_or_else(|| {
+                ToolError::Other("mailbox is only available inside a running team".to_string())
+            })?;
+            let rows = AgentChannelsService::list_channels(runtime.as_ref(), session)
+                .await
+                .map_err(host_error_to_tool_error)?;
+            let team = AgentChannelsService::team_status(runtime.as_ref(), session)
+                .await
+                .map_err(host_error_to_tool_error)?;
+            (rows, team)
+        } else {
+            let rows = ctx.mailbox.list_channels().await.map_err(channel_error)?;
+            let team = ctx.mailbox.team_status().await.map_err(channel_error)?;
+            (rows, team)
+        };
         let rendered: Vec<String> = rows
             .iter()
             .map(|row| {
@@ -162,9 +235,6 @@ impl Tool for ListChannelTool {
                 }
             })
             .collect();
-        // Team section: the caller's direct children and their harness
-        // heartbeat freshness (ADR-0002 liveness). Omitted entirely when the
-        // caller leads nobody.
         let team_lines: Vec<String> = team
             .iter()
             .map(|row| {
@@ -216,5 +286,52 @@ impl Tool for ListChannelTool {
             );
         }
         Ok(result)
+    }
+}
+
+/// Terminal subagent report tool (`report`, ADR-0015).
+pub struct ReportTool;
+
+#[async_trait]
+impl Tool for ReportTool {
+    fn name(&self) -> &str {
+        "report"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        obj_schema(
+            "report",
+            "Submit your terminal report; it takes effect when this turn ends. The engine checks you have no unread mail and no live children (answer or archive them first). Submission ends your turn right after this tool round (no further model call). The engine then rechecks the gate, writes your state handoff, delivers the report to your parent, and archives you. If new mail, a live subagent, or a changed episode prevents archive, you receive a harness notice and must report again after handling it. Call it once per turn. Ending your turn with a final answer and no `report` submits that answer the same way with outcome `done`. Mail from your parent can wake you after archive for a new episode with that handoff context.",
+            json!({
+                "result": {
+                    "type": "string",
+                    "description": "The result summary your parent receives"
+                },
+                "outcome": {
+                    "type": "string",
+                    "enum": ["done", "failed"],
+                    "description": "Whether the task succeeded (default done)"
+                }
+            }),
+            &["result"],
+        )
+    }
+
+    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+        let result = input
+            .get("result")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .filter(|text| !text.trim().is_empty())
+            .ok_or_else(|| ToolError::Input("report requires a non-empty result".to_string()))?;
+        let outcome = match input.get("outcome").and_then(Value::as_str) {
+            Some("failed") => ReportOutcome::Failed,
+            _ => ReportOutcome::Done,
+        };
+        ctx.lifecycle.report(outcome, result).await?;
+        Ok(json!({
+            "title": "Report submitted",
+            "output": "Report submitted; it takes effect when this turn ends. If new mail or a live subagent prevents it, you will receive a harness notice and must report again. After archive, mail from your parent can wake you for a new episode with your state handoff.",
+        }))
     }
 }

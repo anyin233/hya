@@ -20,7 +20,7 @@ not_contains() {
   [[ "$haystack" != *"$needle"* ]] || fail "expected output not to contain: $needle"
 }
 
-first_party=(hashline coding-extras extended-tools network channel-tools compaction plan goal loop core-skills core-commands core-agents agent-channels workflow basic-tui-components)
+first_party=(hashline coding-extras extended-tools network compaction plan goal loop core-skills core-commands core-agents agent-channels workflow basic-tui-components)
 
 help=$(bash ./install.sh --help)
 [[ -x ./install.sh ]] || fail "install.sh must be executable"
@@ -73,7 +73,7 @@ dry_run=$(bash ./install.sh --dry-run --prefix /tmp/hya-install-test --profile d
 contains "$dry_run" "Permission preflight: /tmp/hya-install-test/bin /tmp/hya-install-test/bundles /tmp/hya-install-test/lib/hya"
 [[ "$dry_run" == *"Bun preflight: bun"*"cargo build --locked -p hya-backend --bins"* ]] || fail "Bun preflight must run before cargo build"
 contains "$dry_run" "cargo build --locked -p hya-backend --bins"
-contains "$dry_run" "cargo build --locked -p hya-hashline -p hya-coding-extras -p hya-extended-tools -p hya-network -p hya-channel-tools -p hya-compaction -p hya-plan -p hya-goal -p hya-loop -p hya-workflow-bundle --lib"
+contains "$dry_run" "cargo build --locked -p hya-hashline -p hya-coding-extras -p hya-extended-tools -p hya-network -p hya-agent-channels -p hya-compaction -p hya-plan -p hya-goal -p hya-loop -p hya-workflow-bundle --lib"
 contains "$dry_run" "stage-first-party-bundles --library-dir"
 contains "$dry_run" "stage-bun-programs --package-root"
 not_contains "$dry_run" "--profile debug"

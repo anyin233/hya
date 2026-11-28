@@ -320,7 +320,7 @@ jobs:
 
           pkg_count="$(find "$full_prefix/bundles" -maxdepth 1 -name 'hya-*.hyabundle' | wc -l)"
           echo "Staged builtin packages: ${pkg_count}"
-          test "$pkg_count" -eq 15
+          test "$pkg_count" -eq 14
 
           for pkg in "$full_prefix/bundles/"hya-*.hyabundle; do
             "$full_prefix/bin/hya" bundle info -f "$pkg" >/dev/null
@@ -339,7 +339,6 @@ jobs:
             hya/coding-extras \
             hya/extended-tools \
             hya/network \
-            hya/channel-tools \
             hya/compaction \
             hya/plan \
             hya/goal \
@@ -355,7 +354,7 @@ jobs:
               exit 1
             fi
           done
-          echo "All 15 staged builtin bundles verified in bare-vs-full smoke."
+          echo "All 14 staged builtin bundles verified in bare-vs-full smoke."
 
   builtin-bundles-gate:
     name: builtin-bundles-gate

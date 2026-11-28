@@ -13,9 +13,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use hya_bundle::{ApiMethod, Bundle, BundleIdentity, PreparedAgent};
 use hya_proto::{
-    ActorClaim, AgentName, Envelope, Event, EventSeq, FinishReason, MemberId, Message, MessageId,
-    ModelRef, OwnerRunId, ProjectId, Projection, SessionId, TokenUsage, ToolCallId, ToolName,
-    ToolSchema, UsagePurpose,
+    ActorClaim, AgentName, ChannelPolicySnapshot, Envelope, Event, EventSeq, FinishReason,
+    MemberId, Message, MessageId, ModelRef, OwnerRunId, ProjectId, Projection, SessionId,
+    TokenUsage, ToolCallId, ToolName, ToolSchema, UsagePurpose,
 };
 use hya_tool::{AgentDef, SkillCatalogEntry};
 use serde::{Deserialize, Serialize};
@@ -475,6 +475,41 @@ pub struct ManagedMemberActivationOutcome {
     pub route_outcomes: Vec<TurnRouteOutcome>,
 }
 
+/// Request to revive an archived direct child member and deliver mail to its DM.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemberMailRevivalRequest {
+    /// Team root session owning the channel log.
+    pub root: SessionId,
+    /// Sender session requesting delivery.
+    pub from_session: SessionId,
+    /// Canonical handle of the sender.
+    pub from_handle: String,
+    /// Canonical handle of the archived direct child.
+    pub target_handle: String,
+    /// Minted DM channel id between sender and target.
+    pub channel: String,
+    /// Message kind (`"message"` or `"announcement"`).
+    pub kind: hya_proto::MailKind,
+    /// Message body text.
+    pub body: String,
+    /// Optional actor claim fencing the sender's mutations.
+    pub actor_claim: Option<ActorClaim>,
+}
+
+/// Staged unread-mail acknowledgment to be committed atomically alongside a
+/// tool result (ADR-0001 / atomic tool-result + `mail_consumed` invariant).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StagedMailAck {
+    /// Team root session receiving the `mail_consumed` extension event.
+    pub root: SessionId,
+    /// Durable `Event::Extension` (`hya/agent-channels::mail_consumed`) to commit.
+    pub event: Event,
+    /// Updated local inbox watermark after acknowledgment.
+    pub mark: u64,
+    /// Whether incoming (non-self) unread mail was consumed.
+    pub consumed_incoming: bool,
+}
+
 /// Session creation and turn-driving capability without linking `hya-engine`.
 #[async_trait]
 pub trait HostTurnRunner: Send + Sync {
@@ -550,6 +585,55 @@ pub trait HostTurnRunner: Send + Sync {
     /// End a managed resident child member and release its live capacity slot.
     async fn end_managed_member(&self, _parent: SessionId, _handle: &str) -> Result<(), HostError> {
         Ok(())
+    }
+
+    /// Resolve the effective channel policy snapshot for `session`, if any.
+    async fn session_channel_policy(
+        &self,
+        _session: SessionId,
+    ) -> Result<Option<ChannelPolicySnapshot>, HostError> {
+        Ok(None)
+    }
+
+    /// Return the in-memory acknowledged inbox watermark for `session`, if tracked.
+    fn mail_mark(&self, _session: SessionId) -> Option<u64> {
+        None
+    }
+
+    /// Advance the in-memory mail watermark for `session` and notify listeners.
+    fn notify_mail_consumed(&self, _session: SessionId, _mark: u64, _consumed_incoming: bool) {}
+
+    /// Return `true` when `handle` under `root` is currently parked by an explicit
+    /// user stop/cancellation and should not receive in-flight resident wakeups.
+    fn is_member_stopped_by_user(&self, _root: SessionId, _handle: &str) -> bool {
+        false
+    }
+
+    /// Return `true` when unread-mail steering is currently suppressed for `session`
+    /// (for example after `report` latched or while a defer-steer batch is active).
+    fn is_mail_steer_suppressed(&self, _session: SessionId) -> bool {
+        false
+    }
+
+    /// Return the active fenced actor claim for the running turn on `session`, if any.
+    fn active_actor_claim(&self, _session: SessionId) -> Option<ActorClaim> {
+        None
+    }
+
+    /// Stage a `mail_consumed` acknowledgment to be committed atomically with the
+    /// current tool result on `session`.
+    fn stage_mail_steer_ack(&self, _session: SessionId, _ack: StagedMailAck) {}
+
+    /// Revive an archived direct child member and deliver its pending DM mail.
+    ///
+    /// Returns the delivered recipient count (`1`) on success.
+    async fn revive_archived_member_with_mail(
+        &self,
+        _request: MemberMailRevivalRequest,
+    ) -> Result<usize, HostError> {
+        Err(HostError::Unavailable(
+            "archived member revival is unavailable in this runtime".into(),
+        ))
     }
 }
 

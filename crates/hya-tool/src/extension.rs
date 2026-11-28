@@ -280,6 +280,9 @@ pub struct ChannelsExtensionState {
     /// Channels keyed by their minted id.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub channels: BTreeMap<String, ChannelProjection>,
+    /// Acknowledged inbox cursors per canonical handle (`mail_consumed`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cursors: BTreeMap<String, u64>,
 }
 
 /// Extension state folded under `projection.extensions["hya/multi-agent"]`.
@@ -1376,7 +1379,12 @@ fn write_extension<T: Serialize>(projection: &mut Projection, bundle: &str, valu
 #[must_use]
 pub fn team_projection(projection: &Projection) -> TeamProjection {
     let channels_state: ChannelsExtensionState = read_extension(projection, BUNDLE_CHANNELS);
-    let multi_state: MultiAgentExtensionState = read_extension(projection, BUNDLE_MULTI_AGENT);
+    let mut multi_state: MultiAgentExtensionState = read_extension(projection, BUNDLE_MULTI_AGENT);
+    for (handle, cursor) in &channels_state.cursors {
+        if let Some(entry) = multi_state.roster.get_mut(handle) {
+            entry.resident_cursor = entry.resident_cursor.max(*cursor);
+        }
+    }
     TeamProjection {
         mail: channels_state.mail,
         inboxes: channels_state.inboxes,
@@ -1720,6 +1728,9 @@ impl ProjectionReducer for AgentChannelsProjectionReducer {
             ExtensionEvent::MailConsumed {
                 handle, through, ..
             } => {
+                let cursor = state.cursors.entry(handle.clone()).or_insert(0);
+                *cursor = (*cursor).max(through);
+                write_extension(projection, BUNDLE_CHANNELS, &state);
                 if let Some(entry) = multi.roster.get_mut(&handle) {
                     entry.resident_cursor = entry.resident_cursor.max(through);
                     write_extension(projection, BUNDLE_MULTI_AGENT, &multi);

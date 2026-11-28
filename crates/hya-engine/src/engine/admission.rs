@@ -361,7 +361,7 @@ impl SessionEngine {
         crate::attachments::validate_prompt_attachments(&mut attachments)
             .map_err(|error| CoreError::Invalid(error.to_string()))?;
         let (binding, stable_id) = self.admission_binding(session).await?;
-        let channel_policy = crate::ChannelPolicy::from_binding(&binding)
+        let channel_policy = crate::channel_policy::from_binding(&binding)
             .map_err(CoreError::bundle)?
             .snapshot_for(&stable_id);
         let text = self
@@ -437,7 +437,7 @@ impl SessionEngine {
         binding: &TurnBinding,
         stable_id: &str,
     ) -> Result<MessageId, CoreError> {
-        let channel_policy = crate::ChannelPolicy::from_binding(binding)
+        let channel_policy = crate::channel_policy::from_binding(binding)
             .map_err(CoreError::bundle)?
             .snapshot_for(stable_id);
         let text = self

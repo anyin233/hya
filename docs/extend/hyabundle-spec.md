@@ -40,14 +40,14 @@ The repository organizes all bundles into **three top-level directories** (conso
 
 ```text
 bundles/
-├── builtin/        # 15 trusted first-party bundles upgrading hya --bare to full mode
+├── builtin/        # 14 trusted first-party bundles upgrading hya --bare to full mode
 ├── extra/          # 6 optional official extension bundles (Marketplace-ready)
 └── examples/       # Developer starter & workflow examples
 ```
 
-### 2.1 `bundles/builtin/` (15 Built-in Bundles)
+### 2.1 `bundles/builtin/` (14 Built-in Bundles)
 
-All 15 bundles in `bundles/builtin/` ship in every release archive under `<prefix>/bundles/hya-<name>.hyabundle` and are verified by the independent `builtin-bundles` CI workflow. (`skill` and `code-mode` have been promoted into `hya-bare` core — `crates/hya-core/src/kernel/tools/skill.rs` and `packages/hya-code-mode/` + `crates/hya-app/src/code_mode.rs` — per [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md).)
+All 14 bundles in `bundles/builtin/` ship in every release archive under `<prefix>/bundles/hya-<name>.hyabundle` and are verified by the independent `builtin-bundles` CI workflow. (`skill` and `code-mode` have been promoted into `hya-bare` core — `crates/hya-core/src/kernel/tools/skill.rs` and `packages/hya-code-mode/` + `crates/hya-app/src/code_mode.rs` — per [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md).)
 
 | Path | Legacy path | Bundle ID | Runtime | Capabilities | `bare` vs `full` loading role |
 | --- | --- | --- | --- | --- | --- |
@@ -55,14 +55,13 @@ All 15 bundles in `bundles/builtin/` ship in every release archive under `<prefi
 | `bundles/builtin/coding-extras` | *(extracted from `base-tools` & `extended-tools`)* | `hya/coding-extras` | **Native ABI v2** (`cdylib`) | 7 tools (`ls`, `glob`, `find`, `apply_patch`, `ask_user`, `lsp`, `project_activity`), `lsp-formatter` `NativeService`, and `tool.execute.after` + `tool.visibility` `NativeHook`s | **Full default** via `hya-tool-loader` (`load_v2`); disable via `bundles.builtin.disable: [hya/coding-extras]` or `--bare` |
 | `bundles/builtin/extended-tools` | `bundles/presets/extended-tools` | `hya/extended-tools` | **Native** (`cdylib`) | 5 tools: `list_agents`, `search_agent`, `task`, `archive`, `wait` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
 | `bundles/builtin/network` | `bundles/presets/network-tools` | `hya/network` | **Native ABI v2** (`cdylib`) | 2 tools (`webfetch`, `websearch`) + `NetworkService` + `ToolVisibility` hook (`config.yml`) | **Full default** via `hya-tool-loader`; disableable for air-gapped operation & skipped in `--bare` |
-| `bundles/builtin/channel-tools` | `bundles/presets/channel-tools` | `hya/channel-tools` | **Native** (`cdylib`) | 4 tools: `send`, `list_channel`, `wait`, `report` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
+| `bundles/builtin/agent-channels` | `bundles/presets/channel-tools` + `agent-channels` | `hya/agent-channels` | **Native ABI v2** (`cdylib`) + static `channels:` | 4 tools (`send`, `list_channel`, `report`, and mail-aware `wait` with `overrides: hya/extended-tools`), `AgentChannelsService` (`services`), `channel://` `UriSchemaHandler` (`schemas`), `unread-mail-steer` `NativeHook` (`hooks`), read-only `BundleApi` (`apis`), `ProjectionReducer`, and 2 default channel templates (`unit-default`, `parent-dm-default`) | **Full default** via `hya-tool-loader` (`load_v2`); skipped in `--bare` |
 | `bundles/builtin/compaction` | `bundles/internal/compaction` | `hya/compaction` | **Native ABI v2** (`cdylib`) | 1 `Rewriter` (`shake` + `remote`) + 1 `ProjectionReducer` (`Event::Extension`) | **Full required** via `hya_core::bundles::load_internal_with_runtime()`; skipped in `--bare` |
 | `bundles/builtin/plan` | *(extracted from `extended-tools` + `core-agents`)* | `hya/plan` | **Native ABI v2** (`cdylib`) | `hya-plan` read-only main agent, `plan_exit` tool (hidden alias `plan`), and `tool.visibility` native hook | **Full catalog + native ABI v2** via `hya-tool-loader` & `hya-app`; skipped in `--bare` |
 | `bundles/builtin/loop` | *(extracted from `goal-loop` + `hya-engine`)* | `hya/loop` | **Native ABI v2** (`cdylib`) | `LoopDriver` (`id: "loop"`), `LoopService` (`capabilities: [services, drivers]`), and `loop-verifier-prompt` / `loop-planner-prompt` skills | **Full catalog + native ABI v2** via `hya-tool-loader` & `HostRuntime::loop_driver()`; skipped in `--bare` |
 | `bundles/builtin/core-agents` | `bundles/presets/core-agents` | `hya/core-agents` | **Static** | 5 built-in agents (`hya-main`, `hya-task`, `hya-scout`, `hya-reviewer`, `hya-title`) + `policy.yaml` | **Full required** via `hya-engine::builtin_agents` |
 | `bundles/builtin/core-skills` | `bundles/presets/core-skills` | `hya/core-skills` | **Static** | 2 built-in skills (`agent-bundle-authoring`, `secure-self-update`) | **Full required** via `hya-engine::skill_catalog` |
 | `bundles/builtin/core-commands` | `bundles/presets/core-commands` | `hya/core-commands` | **Static** | 2 built-in slash commands (`/init`, `/review`) | **Full required** via `hya-server::support::command_catalog` |
-| `bundles/builtin/agent-channels` | `bundles/presets/agent-channels` | `hya/agent-channels` | **Static** | 2 vertical channel policies (`unit-default`, `parent-dm-default`) | **Full required** via `hya-engine::channel_policy` |
 | `bundles/builtin/goal` | *(extracted from `goal-loop` + `hya-engine`)* | `hya/goal` | **Native ABI v2** (`cdylib`) | `GoalDriver` (`drivers`) + `GoalDriverService` (`services`), 3 goal skills (`goal-contract`, `guided-goal`, `evaluator-prompt`), and 2 private agents (`hya-goal-guide`, `hya-goal-verifier`) | **Full catalog + native ABI v2** via `hya-tool-loader` & `hya-app`; skipped in `--bare` (`hya -p` errors cleanly when disabled) |
 | `bundles/builtin/workflow` | `bundles/first-party/plan-impl-review` + `extended-tools` | `hya/workflow` | **Native ABI v2** (`cdylib`) | `workflow` tool, `WorkflowService` (`services`) DAG execution & durable replay, `ProjectionReducer` (`extensions["hya/workflow"]`), `NativeBundleApiHandler` (`apis`: `GET /workflows`, `GET /state`, `POST /command`), `plan-impl-review` workflow + 3 private stage agents (`hya-pir-{planner,implementer,reviewer}`) | **Full catalog + native ABI v2** via `hya-tool-loader` & `hya-app`; skipped in `--bare` (`hya workflow` errors cleanly when disabled) |
 | `bundles/builtin/basic-tui-components` | `bundles/first-party/basic-tui-components` | `hya/basic-tui-components` | **JS / TUI** (`@hya/tui-sdk`) | Standard TUI panels (Projects, Sessions, Todos, Context) | **Full catalog** published by `hya-app::first_party_catalogs()`, loaded by `packages/hya-tui` |
@@ -478,8 +477,8 @@ flowchart TD
     Bare["hya --bare / hya serve --bare / hya exec --bare"] --> BareProfile["Unified SessionEngine (BuiltinBundleProfile::Bare)<br/>8 bare tools + code-mode (no agent()) + hya-bare agent<br/>Zero bundles/builtin/ loaded (optional user/project tiers)"]
 
     Full["hya / hya serve / hya exec (Full Mode)"] --> L1["1. Kernel Rewriters (hya-core)<br/>bundles/builtin/compaction"]
-    L1 --> L2["2. Native Tool Plane (hya-tool-loader)<br/>base, extended, network, channel-tools"]
-    L2 --> L3["3. Built-in Presets (immutable)<br/>core-agents, core-skills, core-commands, agent-channels"]
+    L1 --> L2["2. Native Tool Plane (hya-tool-loader)<br/>hashline, coding-extras, extended-tools, network, agent-channels"]
+    L2 --> L3["3. Built-in Presets (immutable)<br/>core-agents, core-skills, core-commands"]
     L3 --> L4["4. Built-in Catalogs (hya-app)<br/>plan, goal, loop, workflow, basic-tui-components"]
     L4 --> L5["5. Global Installed Registry<br/>$XDG_DATA_HOME/hya/bundles/registry.sqlite3"]
     L5 --> L6["6. Project Tier (highest precedence, ADR-0027)<br/>&lt;project-root&gt;/.hya/bundles/&lt;name&gt;/"]

@@ -16,33 +16,13 @@ mod request;
 #[cfg(test)]
 mod tests;
 
-/// One `channel://` read result.
-#[derive(Clone, Debug)]
-pub struct ChannelHistoryRead {
-    /// Channel id that was read (after normalization).
-    pub channel: String,
-    /// Newest-last (from, body) pairs.
-    pub messages: Vec<(String, String)>,
-    /// Unread messages remaining in the caller's inbox after this read.
-    pub unread_remaining: usize,
-    /// Set when the caller's id spelling was normalized (leading `#`s and/or
-    /// padding stripped): the echo that teaches the correct spelling.
-    pub warning: Option<String>,
-}
+pub(crate) use hya_agent_channels::{MAIN_HANDLE, dm_channel_between};
+
 use hya_proto::{ActorClaim, AgentName, RosterStatus, SessionId, SubagentMode, scope};
 use hya_tool::extension::{ExtensionEvent, team_projection};
 
 use crate::engine::SessionEngine;
 use crate::error::CoreError;
-
-/// The handle assigned to a team's root / main agent. Fixed (not derived from an
-/// ordinal) because there is exactly one main agent per team, and a stable,
-/// well-known handle keeps replay deterministic and lets members address it.
-///
-/// Aliases [`scope::ROOT_HANDLE`] rather than repeating the literal: the reducer
-/// derives every canonical path from that constant, so a second definition that
-/// drifted would silently split the root into two roster entries.
-pub(crate) const MAIN_HANDLE: &str = scope::ROOT_HANDLE;
 
 impl SessionEngine {
     /// The team-root session for `session` (walks the `parent` chain to the top).
@@ -166,24 +146,4 @@ impl SessionEngine {
         }
         self.resolve_handle(root, parent).await.unwrap_or(fallback)
     }
-}
-
-/// The DM channel registration minted between `from` and `parent`, if any.
-///
-/// Channel ids are their own keys (`DM-<8>`), members carry canonical paths,
-/// and membership identifies the pair.
-pub(crate) fn dm_channel_between(
-    projection: &hya_proto::Projection,
-    from: &str,
-    parent: &str,
-) -> Option<String> {
-    team_projection(projection)
-        .channels
-        .iter()
-        .find(|(_, channel)| {
-            channel.kind == hya_proto::ChannelKind::Dm
-                && channel.members.iter().any(|member| member == from)
-                && channel.members.iter().any(|member| member == parent)
-        })
-        .map(|(channel, _)| channel.clone())
 }

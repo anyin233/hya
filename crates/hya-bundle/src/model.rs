@@ -353,6 +353,8 @@ pub enum PreparedNativeCapability {
     Services,
     /// Registers headless iteration drivers via ABI v2 (`GoalDriver` or `LoopDriver`).
     Drivers,
+    /// Registers custom URI scheme handlers via ABI v2 (`UriSchemaHandler`).
+    Schemas,
     /// Registers native HTTP/gRPC bundle API endpoints via ABI v2 (`NativeBundleApiHandler`).
     Apis,
 }
@@ -367,6 +369,7 @@ impl PreparedNativeCapability {
             Self::Rewriters => "rewriters",
             Self::Services => "services",
             Self::Drivers => "drivers",
+            Self::Schemas => "schemas",
             Self::Apis => "apis",
         }
     }

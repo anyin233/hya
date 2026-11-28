@@ -41,7 +41,7 @@ pub unsafe extern "C" fn hya_tool_bundle_abi_v1(out: *mut u8) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hya_tool_bundle_register_v1(out: *mut Vec<Arc<dyn Tool>>) {
     let out = unsafe { &mut *out };
-    for name in ["send", "list_channel", "report", "wait"] {
+    for name in ["list_agents", "task", "search_agent", "archive", "wait"] {
         out.push(Arc::new(Replacement(name)));
     }
 }

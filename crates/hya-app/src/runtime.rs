@@ -943,14 +943,14 @@ fn enabled_native_tool_families(
             "hya/coding-extras",
             "hya/extended-tools",
             "hya/network",
-            "hya/channel-tools",
+            "hya/agent-channels",
         ]
     } else {
         &[
             "hya/hashline",
             "hya/coding-extras",
             "hya/extended-tools",
-            "hya/channel-tools",
+            "hya/agent-channels",
         ]
     };
     candidates
@@ -1068,6 +1068,9 @@ async fn build_session_engine_with_mcp_defer(
         started_services.push(service);
     }
     let mut all_native_hooks = native_registrations.hooks;
+    let native_uri_handlers = native_registrations.uri_schema_handlers;
+    let native_projection_reducers = native_registrations.projection_reducers;
+    let native_api_handlers = native_registrations.api_handlers;
     let mut loaded_v2_tools = false;
     if builtins.is_enabled("hya/plan")
         && hya_bundle::first_party_bundle_optional("hya/plan")
@@ -1360,6 +1363,7 @@ async fn build_session_engine_with_mcp_defer(
         .with_pure_context(options.pure)
         .with_tool_family_prompts(use_tool_family_prompts)
         .with_native_hook_list(all_native_hooks)
+        .with_uri_schema_handlers(native_uri_handlers, Arc::clone(&host_runtime))
         // Stop/start records use this store's runtime-owner claim.
         .with_runtime_owner(owner_run_id)
         .with_global_reasoning(settings.reasoning())
@@ -1395,6 +1399,25 @@ async fn build_session_engine_with_mcp_defer(
 
     let engine = Arc::new(engine_builder);
     app_host_runtime.attach_engine(&engine);
+    if !native_projection_reducers.is_empty() {
+        engine.register_native_projection_reducers(native_projection_reducers);
+    }
+    if !native_api_handlers.is_empty() {
+        let mut by_bundle: BTreeMap<String, Vec<Arc<dyn hya_runtime_abi::NativeBundleApiHandler>>> =
+            BTreeMap::new();
+        for handler in native_api_handlers {
+            by_bundle
+                .entry(handler.id().to_string())
+                .or_default()
+                .push(handler);
+        }
+        for (bundle_id, handlers) in by_bundle {
+            engine
+                .runtime_registry()
+                .register_native_bundle_apis(&bundle_id, handlers)
+                .map_err(|error| anyhow::anyhow!("register {bundle_id} native APIs: {error}"))?;
+        }
+    }
     let (agent_configuration, agent_efforts) = settings.agents()?;
     let agent_model_control = PersistentAgentModelControl::load(
         engine.store().clone(),

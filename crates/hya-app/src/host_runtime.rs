@@ -17,8 +17,9 @@ use hya_engine::{
     apply_agent_model_preference, apply_spawn_model_policy,
 };
 use hya_proto::{
-    ActorClaim, AgentName, Envelope, Event, EventSeq, FinishReason, Message, MessageId, ModelRef,
-    OwnerRunId, PartProjection, Projection, Role, SessionId, SessionKind, TokenUsage,
+    ActorClaim, AgentName, ChannelPolicySnapshot, Envelope, Event, EventSeq, FinishReason, Message,
+    MessageId, ModelRef, OwnerRunId, PartProjection, Projection, Role, SessionId, SessionKind,
+    TokenUsage,
 };
 use hya_provider::{CompletionRequest, ProviderRouter, ReasoningEffort};
 use hya_runtime_abi::{
@@ -27,11 +28,11 @@ use hya_runtime_abi::{
     HostBundleStorage, HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry,
     HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner, LoopDriver,
     ManagedMemberActivateRequest, ManagedMemberActivationOutcome, ManagedMemberActivationStatus,
-    ManagedMemberHandle, ManagedMemberSpawnRequest, ModelCallRequest, ModelCallResponse,
-    ModelRouteEntry, ModelStreamChunk, ModelToolCall, ModelWindowInfo, NativeGoalEvaluateVerdict,
-    NativeLoopPlanInput, NativePlannerOutput, NativeVerifierVerdict, ResolvedModelRoute,
-    ResolvedModelRouteCandidate, ScopeCatalogSnapshot, SessionListFilter, SessionSummaryMeta,
-    TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus,
+    ManagedMemberHandle, ManagedMemberSpawnRequest, MemberMailRevivalRequest, ModelCallRequest,
+    ModelCallResponse, ModelRouteEntry, ModelStreamChunk, ModelToolCall, ModelWindowInfo,
+    NativeGoalEvaluateVerdict, NativeLoopPlanInput, NativePlannerOutput, NativeVerifierVerdict,
+    ResolvedModelRoute, ResolvedModelRouteCandidate, ScopeCatalogSnapshot, SessionListFilter,
+    SessionSummaryMeta, StagedMailAck, TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus,
 };
 use hya_store::SessionStore;
 use hya_tool::{AgentDef, ReportOutcome, SkillCatalogEntry, SpawnMember};
@@ -680,77 +681,229 @@ impl HostSessionStore for AppHostRuntime {
     }
 }
 
+fn scoped_state_key(scope: &str, key: &str) -> String {
+    if scope.is_empty() {
+        key.to_string()
+    } else {
+        format!("{scope}:{key}")
+    }
+}
+
+fn strip_scope_prefix<'a>(scope: &str, stored_key: &'a str) -> Option<&'a str> {
+    if scope.is_empty() {
+        Some(stored_key)
+    } else {
+        stored_key.strip_prefix(&format!("{scope}:"))
+    }
+}
+
+fn store_claim_to_lease(row: hya_store::BundleClaim) -> BundleClaimLease {
+    BundleClaimLease {
+        bundle: row.bundle,
+        resource_key: row.claim_key,
+        owner_id: row.owner,
+        epoch: row.epoch,
+        expires_at_millis: row.expires_at.unwrap_or(i64::MAX),
+        metadata: row.metadata,
+    }
+}
+
+fn lease_to_store_claim(lease: &BundleClaimLease) -> hya_store::BundleClaim {
+    hya_store::BundleClaim {
+        bundle: lease.bundle.clone(),
+        claim_key: lease.resource_key.clone(),
+        owner: lease.owner_id.clone(),
+        epoch: lease.epoch,
+        expires_at: (lease.expires_at_millis != i64::MAX).then_some(lease.expires_at_millis),
+        metadata: lease.metadata.clone(),
+        acquired_at: 0,
+        updated_at: 0,
+    }
+}
+
 #[async_trait]
 impl HostBundleStorage for AppHostRuntime {
     async fn get_state(
         &self,
-        _bundle: &str,
-        _scope: &str,
-        _key: &str,
+        bundle: &str,
+        scope: &str,
+        key: &str,
     ) -> Result<Option<BundleStateEntry>, HostError> {
-        Ok(None)
+        let bundle = bundle.to_owned();
+        let scope = scope.to_owned();
+        let key = key.to_owned();
+        self.on_host(async move {
+            let stored_key = scoped_state_key(&scope, &key);
+            let row = self
+                .store
+                .get_bundle_state_entry(&bundle, &stored_key)
+                .await
+                .map_err(|error| HostError::Storage(error.to_string()))?;
+            row.map(|row| {
+                let value = serde_json::from_slice(&row.value)
+                    .map_err(|error| HostError::Storage(error.to_string()))?;
+                Ok(BundleStateEntry {
+                    bundle: row.bundle,
+                    scope,
+                    key,
+                    value,
+                    version: 1,
+                    updated_at_millis: row.updated_at,
+                })
+            })
+            .transpose()
+        })
+        .await
     }
 
     async fn put_state(
         &self,
-        _bundle: &str,
-        _scope: &str,
-        _key: &str,
-        _value: Value,
+        bundle: &str,
+        scope: &str,
+        key: &str,
+        value: Value,
         _expected_version: Option<u64>,
     ) -> Result<BundleStateEntry, HostError> {
-        Err(HostError::Unavailable(
-            "bundle_storage not wired on AppHostRuntime".into(),
-        ))
+        let bundle = bundle.to_owned();
+        let scope = scope.to_owned();
+        let key = key.to_owned();
+        self.on_host(async move {
+            let stored_key = scoped_state_key(&scope, &key);
+            self.store
+                .set_bundle_state_json(&bundle, &stored_key, &value)
+                .await
+                .map_err(|error| HostError::Storage(error.to_string()))?;
+            Ok(BundleStateEntry {
+                bundle,
+                scope,
+                key,
+                value,
+                version: 1,
+                updated_at_millis: hya_proto::now_millis(),
+            })
+        })
+        .await
     }
 
-    async fn delete_state(
-        &self,
-        _bundle: &str,
-        _scope: &str,
-        _key: &str,
-    ) -> Result<bool, HostError> {
-        Ok(false)
+    async fn delete_state(&self, bundle: &str, scope: &str, key: &str) -> Result<bool, HostError> {
+        let bundle = bundle.to_owned();
+        let stored_key = scoped_state_key(scope, key);
+        self.on_host(async move {
+            self.store
+                .delete_bundle_state(&bundle, &stored_key)
+                .await
+                .map_err(|error| HostError::Storage(error.to_string()))
+        })
+        .await
     }
 
     async fn list_state(
         &self,
-        _bundle: &str,
-        _scope: &str,
-        _prefix: Option<&str>,
+        bundle: &str,
+        scope: &str,
+        prefix: Option<&str>,
     ) -> Result<Vec<BundleStateEntry>, HostError> {
-        Ok(Vec::new())
+        let bundle = bundle.to_owned();
+        let scope = scope.to_owned();
+        let full_prefix = match (scope.is_empty(), prefix) {
+            (true, p) => p.map(str::to_owned),
+            (false, Some(p)) => Some(format!("{scope}:{p}")),
+            (false, None) => Some(format!("{scope}:")),
+        };
+        self.on_host(async move {
+            let rows = self
+                .store
+                .list_bundle_state(&bundle, full_prefix.as_deref())
+                .await
+                .map_err(|error| HostError::Storage(error.to_string()))?;
+            let mut out = Vec::with_capacity(rows.len());
+            for row in rows {
+                let Some(unscoped_key) = strip_scope_prefix(&scope, &row.key) else {
+                    continue;
+                };
+                let value = serde_json::from_slice(&row.value)
+                    .map_err(|error| HostError::Storage(error.to_string()))?;
+                out.push(BundleStateEntry {
+                    bundle: row.bundle,
+                    scope: scope.clone(),
+                    key: unscoped_key.to_string(),
+                    value,
+                    version: 1,
+                    updated_at_millis: row.updated_at,
+                });
+            }
+            Ok(out)
+        })
+        .await
     }
 
     async fn acquire_claim(
         &self,
-        _request: BundleClaimRequest,
+        request: BundleClaimRequest,
     ) -> Result<BundleClaimLease, HostError> {
-        Err(HostError::Unavailable(
-            "bundle_storage claims not wired on AppHostRuntime".into(),
-        ))
+        self.on_host(async move {
+            let ttl = (request.ttl_millis > 0).then_some(request.ttl_millis);
+            let row = self
+                .store
+                .acquire_bundle_claim(
+                    &request.bundle,
+                    &request.resource_key,
+                    &request.owner_id,
+                    ttl,
+                    Some(&request.metadata),
+                )
+                .await
+                .map_err(|error| HostError::Storage(error.to_string()))?;
+            Ok(store_claim_to_lease(row))
+        })
+        .await
     }
 
     async fn renew_claim(
         &self,
-        _lease: &BundleClaimLease,
-        _ttl_millis: u64,
+        lease: &BundleClaimLease,
+        ttl_millis: u64,
     ) -> Result<BundleClaimLease, HostError> {
-        Err(HostError::Unavailable(
-            "bundle_storage claims not wired on AppHostRuntime".into(),
-        ))
+        let claim = lease_to_store_claim(lease);
+        self.on_host(async move {
+            let ttl = (ttl_millis > 0).then_some(ttl_millis);
+            let row = self
+                .store
+                .renew_bundle_claim(&claim, ttl, None)
+                .await
+                .map_err(|error| HostError::Storage(error.to_string()))?;
+            Ok(store_claim_to_lease(row))
+        })
+        .await
     }
 
-    async fn release_claim(&self, _lease: &BundleClaimLease) -> Result<(), HostError> {
-        Ok(())
+    async fn release_claim(&self, lease: &BundleClaimLease) -> Result<(), HostError> {
+        let claim = lease_to_store_claim(lease);
+        self.on_host(async move {
+            self.store
+                .release_bundle_claim(&claim)
+                .await
+                .map_err(|error| HostError::Storage(error.to_string()))
+        })
+        .await
     }
 
     async fn read_claim(
         &self,
-        _bundle: &str,
-        _resource_key: &str,
+        bundle: &str,
+        resource_key: &str,
     ) -> Result<Option<BundleClaimLease>, HostError> {
-        Ok(None)
+        let bundle = bundle.to_owned();
+        let resource_key = resource_key.to_owned();
+        self.on_host(async move {
+            let row = self
+                .store
+                .get_bundle_claim_at(&bundle, &resource_key, hya_proto::now_millis())
+                .await
+                .map_err(|error| HostError::Storage(error.to_string()))?;
+            Ok(row.map(store_claim_to_lease))
+        })
+        .await
     }
 }
 
@@ -1122,6 +1275,60 @@ impl HostTurnRunner for AppHostRuntime {
                 .map_err(map_core_error)?;
             supervisor
                 .end_member(root, &handle)
+                .await
+                .map_err(map_core_error)
+        })
+        .await
+    }
+
+    async fn session_channel_policy(
+        &self,
+        session: SessionId,
+    ) -> Result<Option<ChannelPolicySnapshot>, HostError> {
+        Ok(self
+            .engine()
+            .ok()
+            .and_then(|engine| engine.session_channel_policy(session)))
+    }
+
+    fn mail_mark(&self, session: SessionId) -> Option<u64> {
+        self.engine()
+            .ok()
+            .and_then(|engine| engine.mail_mark(session))
+    }
+
+    fn notify_mail_consumed(&self, session: SessionId, mark: u64, consumed_incoming: bool) {
+        if let Ok(engine) = self.engine() {
+            engine.notify_mail_consumed(session, Some(mark), consumed_incoming);
+        }
+    }
+
+    fn is_member_stopped_by_user(&self, root: SessionId, handle: &str) -> bool {
+        self.engine()
+            .ok()
+            .is_some_and(|engine| engine.is_member_stopped_by_user(root, handle))
+    }
+
+    fn is_mail_steer_suppressed(&self, session: SessionId) -> bool {
+        self.engine()
+            .ok()
+            .is_some_and(|engine| engine.is_mail_steer_suppressed(session))
+    }
+
+    fn stage_mail_steer_ack(&self, session: SessionId, ack: StagedMailAck) {
+        if let Ok(engine) = self.engine() {
+            engine.stage_mail_steer_ack(session, ack);
+        }
+    }
+
+    async fn revive_archived_member_with_mail(
+        &self,
+        request: MemberMailRevivalRequest,
+    ) -> Result<usize, HostError> {
+        self.on_host(async move {
+            let engine = self.engine()?;
+            engine
+                .revive_archived_member_with_mail(request)
                 .await
                 .map_err(map_core_error)
         })

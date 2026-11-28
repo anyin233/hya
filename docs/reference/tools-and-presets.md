@@ -24,7 +24,7 @@ These core tools live directly inside Hya's core kernel (`hya-core`), alongside 
 
 ## 2. Registry Tools (Full mode — 23 bundle tools + core `bash` & `skill`)
 
-In full mode, Hya loads its native tool bundles (`hya/hashline`, `hya/coding-extras`, `hya/network`, and `hya/plan` over Lockstep Native ABI v2, plus the remaining transitional tool families `hya/extended-tools` and `hya/channel-tools`) alongside core `bash`, `skill`, and the kernel-exclusive `todo` and `rewrite`.
+In full mode, Hya loads its native tool bundles (`hya/hashline`, `hya/coding-extras`, `hya/network`, `hya/agent-channels`, `hya/plan`, and `hya/workflow` over Lockstep Native ABI v2, plus the remaining transitional tool family `hya/extended-tools`) alongside core `bash`, `skill`, and the kernel-exclusive `todo` and `rewrite`.
 
 ### `hya/hashline` (Content-Hashed File Tools — `overrides: hya/bare`)
 
@@ -156,14 +156,35 @@ Set `formatter: false` or `lsp: false` to disable either subsystem, or disable t
   - `websearch` input schema: `{ "query": string, "numResults"?: number, "livecrawl"?: "fallback" | "preferred", "type"?: "auto" | "fast" | "deep", "contextMaxCharacters"?: number }`
   - Native ABI v2 exports (`hya_native_register_v2`): tools `webfetch` & `websearch`, service `hya/network:service` (`NativeService` reading `HostCatalogReader::bundle_config("hya/network")`), and visibility hook `hya/network:visibility` (`HookPoint::ToolVisibility`).
 
-### `hya/channel-tools` (Parent ⇄ Child Team Messaging)
+### `hya/agent-channels` (Parent ⇄ Child Team Messaging, Mailbox & `channel://` URI Schema)
 
-| Tool | Default permission | What it does |
-| --- | --- | --- |
-| `send` | Allow | Send mail to a child's `#DM`, a parent (`^parent`), or a unit leader's `#announce` group channel. |
-| `list_channel` | Allow | List the caller's channels and unread message counts. |
-| `wait` | Allow | Block until child subagents finish/report **or** new mail arrives in the caller's inbox. |
-| `report` | Allow *(subagents only)* | Deliver a subagent's final report to its parent, write a state handoff, and archive the episode. |
+`hya/agent-channels` (`bundles/builtin/agent-channels/`, Lockstep Native ABI v2) unifies team mailbox delivery, declarative vertical channel policies (`unit-default` and `parent-dm-default`), the `channel://` `UriSchemaHandler`, in-turn unread-mail steering (`HookPoint::ToolExecuteAfter`), and read-only session `BundleApi` inspection endpoints into a single native+static bundle running solely over `Arc<dyn HostRuntime>`.
+
+| Tool | Default permission | Descriptor / Overrides | What it does |
+| --- | --- | --- | --- |
+| `send` | Allow (`tool`) | `tools/send.json` | Send mail to a child's `#DM`, a parent (`^parent`), or a unit leader's `#announce` group channel (reviving archived direct children). |
+| `list_channel` | Allow (`read_only`) | `tools/list_channel.json` | List the caller's visible channels, unread message counts, and direct-child heartbeat status. |
+| `wait` | Allow (`read_only`) | `tools/wait.json` (`overrides: hya/extended-tools`) | Block until child subagents finish/report **or** new mail arrives in the caller's inbox. |
+| `report` | Allow *(subagents only)* | `tools/report.json` | Deliver a subagent's final report to its parent, write a state handoff, and archive the episode. |
+
+- **Usage & configuration:**
+  - Loaded by default in `profile: full`; disable with `bundles.builtin.disable: [hya/agent-channels]` or `--bare` to omit team channels, `channel://` resolution, and unread-mail steering.
+  - Agents read channel history through the standard `read` tool (`read channel://<id>` or `read channel://<id>?last=N`, or `read channel://<member-handle>` for a DM alias). Because `ChannelUriSchemaHandler` registers directly on `HandleRouter`, `channel://` reads work identically whether `hya/hashline` `read` or standard `hya-bare` `read` is active.
+  - Example:
+    ```json
+    { "tool": "send", "input": { "channel": "main/scout-1", "body": "check crates/hya-engine" } }
+    { "tool": "read", "input": { "path": "channel://DM-aB12Cd34?last=5" } }
+    ```
+- **Interface definitions:**
+  - **Manifest capabilities:** `runtime: { kind: native, abi_version: 2, crate_dir: native, capabilities: [tools, hooks, services, schemas, apis] }` plus `channels: [unit-default, parent-dm-default]`.
+  - **URI schema (`UriSchemaHandler`):** `channel://<id>[?last=N]` (read-only; clamps `last` to `1..=50`, default `1`; returns `text/plain` messages plus structured metadata `{ type: "channel", channel, count, unreadRemaining, warning }` and commits `mail_consumed`).
+  - **Native hook (`NativeHook`):** `unread-mail-steer` on `HookPoint::ToolExecuteAfter` splices `[NEW MAIL · answer or acknowledge via dm]` notices into successful non-`wait`/`report` tool results and stages `mail_consumed` for atomic commit with `ToolResult`.
+  - **Projection reducer (`ProjectionReducer`):** Folds `hya/agent-channels` `Event::Extension` records (`channel_created`, `channel_joined`, `mail_sent`, `mail_consumed`) into `projection.extensions["hya/agent-channels"]` (`{ mail, inboxes, channels, cursors }`).
+  - **Session `BundleApi` endpoints** (`/v2/sessions/{session}/bundles/hya/agent-channels/...`):
+    - `GET /channels` (`channels.list`) → `{ "channels": [{ "id", "kind", "can_speak", "peer", "unread" }], "team": [{ "handle", "status", "last_active_seconds" }] }`
+    - `GET /channels/{channel}/messages?last=N` (`channels.messages`, read-only peek without advancing cursor, `last` default `20`, max `100`) → `{ "channel", "count", "unread_remaining", "warning", "messages": [{ "from", "body" }] }`
+    - `GET /inbox` (`channels.inbox`, read-only) → `{ "handle", "cursor", "total", "unread": [{ "from", "channel", "body" }] }`
+    - `GET /team-status` (`channels.team_status`) → `{ "members": [{ "handle", "status", "last_active_seconds" }] }`
 
 ---
 
@@ -184,7 +205,7 @@ Set `formatter: false` or `lsp: false` to disable either subsystem, or disable t
 
 ## 4. Built-in Bundles (`bundles/builtin/`)
 
-Every Hya installation ships with 15 trusted first-party bundles sourced from `bundles/builtin/` and packaged under `<prefix>/bundles/hya-<name>.hyabundle` (skipped in `--bare`, which runs only `hya-bare` core tools including `skill` and optional `code-mode`). See the **[`hyabundle` Specification](../extend/hyabundle-spec.md)** and **[ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)** for full paths, runtimes, and loading precedence.
+Every Hya installation ships with 14 trusted first-party bundles sourced from `bundles/builtin/` and packaged under `<prefix>/bundles/hya-<name>.hyabundle` (skipped in `--bare`, which runs only `hya-bare` core tools including `skill` and optional `code-mode`). See the **[`hyabundle` Specification](../extend/hyabundle-spec.md)** and **[ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)** for full paths, runtimes, and loading precedence.
 
 | Bundle ID | Source path | Runtime | Role |
 | --- | --- | --- | --- |
@@ -192,7 +213,7 @@ Every Hya installation ships with 15 trusted first-party bundles sourced from `b
 | `hya/coding-extras` | `bundles/builtin/coding-extras` | Native ABI v2 (`cdylib`) | Workspace search (`ls`, `glob`, `find`), `apply_patch`, `ask_user`, `lsp`, `project_activity`, `lsp-formatter` `NativeService`, and post-edit + visibility `NativeHook`s (7 tools). |
 | `hya/extended-tools` | `bundles/builtin/extended-tools` | Native (`cdylib`) | Subagents (5 tools; `skill` promoted to `hya-bare` core, `lsp`/`project_activity` moved to `hya/coding-extras`, `plan_exit` extracted to `hya/plan`, `workflow` extracted to `hya/workflow`). |
 | `hya/network` | `bundles/builtin/network` | Native ABI v2 (`cdylib`) | Web fetch and web search (`webfetch`, `websearch`) + per-bundle `config.yml` and air-gapped disable. |
-| `hya/channel-tools` | `bundles/builtin/channel-tools` | Native (`cdylib`) | Team mailbox tools (`send`, `list_channel`, `wait`, `report`). |
+| `hya/agent-channels` | `bundles/builtin/agent-channels` | Native ABI v2 (`cdylib`) + static | Unified team mailbox & channels (`send`, `list_channel`, `report`, mail-aware `wait` overriding `hya/extended-tools`), `channel://` `UriSchemaHandler`, `unread-mail-steer` `NativeHook`, read-only `BundleApi`, `ProjectionReducer`, and default vertical channel policies (`unit-default`, `parent-dm-default`). |
 | `hya/compaction` | `bundles/builtin/compaction` | Native ABI v2 (`cdylib`) | Context `Rewriter` (`shake` + `remote`) and `ProjectionReducer` (`Event::Extension`) before Kernel `Rewrite`. |
 | `hya/plan` | `bundles/builtin/plan` | Native ABI v2 (`cdylib`) | Read-only `hya-plan` agent, `plan_exit` tool (alias `plan`), and `tool.visibility` native hook. |
 | `hya/goal` | `bundles/builtin/goal` | Native ABI v2 (`cdylib`) | Autonomous goal-mode `GoalDriver` (`hya -p`), `GoalDriverService`, 3 goal skills (`goal-contract`, `guided-goal`, `evaluator-prompt`), and 2 private helper agents (`hya-goal-guide`, `hya-goal-verifier`). |
@@ -200,7 +221,6 @@ Every Hya installation ships with 15 trusted first-party bundles sourced from `b
 | `hya/core-agents` | `bundles/builtin/core-agents` | Static | Built-in agent definitions (`hya-main`, `hya-task`, `hya-scout`, `hya-reviewer`, `hya-title`). |
 | `hya/core-skills` | `bundles/builtin/core-skills` | Static | Built-in fallback skills (`agent-bundle-authoring`, `secure-self-update`). |
 | `hya/core-commands` | `bundles/builtin/core-commands` | Static | Built-in slash command templates (`/init`, `/review`). |
-| `hya/agent-channels` | `bundles/builtin/agent-channels` | Static | Default vertical parent/child and unit broadcast channel policy. |
 | `hya/workflow` | `bundles/builtin/workflow` | Native ABI v2 (`cdylib`) | Workflow DAG execution, durable replay, `workflow` tool, `ProjectionReducer` (`extensions["hya/workflow"]`), `BundleApi` (`/workflows`, `/state`, `/command`), and the built-in `plan-impl-review` Workflow + stage agents (`capabilities: [tools, services, apis]`). |
 | `hya/basic-tui-components` | `bundles/builtin/basic-tui-components` | JS / TUI | Standard TUI panels (Projects view/sidebar, Sessions, Todos, Context). |
 

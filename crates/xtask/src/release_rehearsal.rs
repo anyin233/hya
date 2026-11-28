@@ -96,7 +96,7 @@ const NATIVE_BUNDLE_CRATES: [&str; 10] = [
     "hya-coding-extras",
     "hya-extended-tools",
     "hya-network",
-    "hya-channel-tools",
+    "hya-agent-channels",
     "hya-compaction",
     "hya-plan",
     "hya-goal",

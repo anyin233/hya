@@ -58,6 +58,13 @@ impl ArtifactPlane {
         Ok(self)
     }
 
+    /// Remove all registered dynamic URI scheme handlers from this plane.
+    #[must_use]
+    pub fn clear_uri_handlers(mut self) -> Self {
+        self.uri_handlers = Arc::default();
+        self
+    }
+
     /// Registered dynamic URI scheme handlers carried by this plane.
     #[must_use]
     pub fn uri_handlers(&self) -> &Arc<BTreeMap<String, Arc<dyn DynamicUriHandler>>> {

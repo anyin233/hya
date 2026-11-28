@@ -22,7 +22,7 @@ pub(crate) const TOOL_FAMILIES: [&str; 5] = [
     "hya/coding-extras",
     "hya/extended-tools",
     "hya/network",
-    "hya/channel-tools",
+    "hya/agent-channels",
 ];
 
 /// Metadata that owns one family's builtin visibility, aliases, and defaults.
@@ -646,25 +646,25 @@ tools:
         );
         let accepted = check_family_exports(&[
             ("hya/extended-tools", &extended),
-            ("hya/channel-tools", &overriding),
+            ("hya/agent-channels", &overriding),
         ]);
         assert_eq!(accepted, Ok(()));
         for (label, other) in [("undeclared", &plain), ("wrong target", &wrong_target)] {
             let error = check_family_exports(&[
                 ("hya/extended-tools", &extended),
-                ("hya/channel-tools", other),
+                ("hya/agent-channels", other),
             ])
             .unwrap_err();
             assert!(error.contains("`wait`"), "{label}: {error}");
         }
         // Both sides claiming the override is as ambiguous as neither.
         let back = tools(
-            "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/channel-tools }",
+            "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/agent-channels }",
         );
         assert!(
             check_family_exports(&[
                 ("hya/extended-tools", &back),
-                ("hya/channel-tools", &overriding),
+                ("hya/agent-channels", &overriding),
             ])
             .is_err()
         );
@@ -680,12 +680,12 @@ tools:
 
     #[test]
     fn overrides_must_name_another_tool_family() {
-        for target in ["hya/channel-tools", "acme/unknown"] {
+        for target in ["hya/agent-channels", "acme/unknown"] {
             let policy: ExposurePolicy = serde_norway::from_str(&format!(
-                "schema_version: 1\nidentity: hya/channel-tools\nprotected_names: []\ntools:\n  - {{ name: wait, schema_version: 1, permission: read_only, overrides: {target} }}\n"
+                "schema_version: 1\nidentity: hya/agent-channels\nprotected_names: []\ntools:\n  - {{ name: wait, schema_version: 1, permission: read_only, overrides: {target} }}\n"
             ))
             .unwrap_or_else(|error| panic!("{error}"));
-            let error = validate_policy(&policy, "hya/channel-tools").unwrap_err();
+            let error = validate_policy(&policy, "hya/agent-channels").unwrap_err();
             assert!(error.contains("overrides"), "{target}: {error}");
         }
     }
@@ -715,8 +715,8 @@ tools:
             ),
             ("hya/network", 2, &["webfetch", "websearch"]),
             (
-                "hya/channel-tools",
-                1,
+                "hya/agent-channels",
+                2,
                 &["send", "list_channel", "report", "wait"],
             ),
         ];

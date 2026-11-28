@@ -14,7 +14,7 @@ archive.include = [
   { path = "debug/build/hya-hashline/ci-archive/out/libhya_hashline.so", relative-to = "target", on-missing = "error" },
   { path = "debug/build/hya-coding-extras/ci-archive/out/libhya_coding_extras.so", relative-to = "target", on-missing = "error" },
   { path = "debug/build/hya-extended-tools/ci-archive/out/libhya_extended_tools.so", relative-to = "target", on-missing = "error" },
-  { path = "debug/build/hya-channel-tools/ci-archive/out/libhya_channel_tools.so", relative-to = "target", on-missing = "error" },
+  { path = "debug/build/hya-agent-channels/ci-archive/out/libhya_agent_channels.so", relative-to = "target", on-missing = "error" },
   { path = "debug/build/hya-network/ci-archive/out/libhya_network.so", relative-to = "target", on-missing = "error" },
   { path = "debug/build/hya-compaction/ci-archive/out/libhya_compaction.so", relative-to = "target", on-missing = "error" },
   { path = "debug/build/hya-plan/ci-archive/out/libhya_plan.so", relative-to = "target", on-missing = "error" },

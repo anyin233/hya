@@ -44,7 +44,7 @@ pub mod compaction;
 /// Transitional iteration primitives for loop mode and workflow loop stages.
 pub mod completion;
 /// Harness coordination tools injected into every agent view at startup.
-mod coordination;
+pub(crate) use hya_agent_channels::coordination;
 /// Effective reasoning effort resolution shared by request and display layers.
 pub mod effort;
 /// Session engine, agent specs, and turn admission.

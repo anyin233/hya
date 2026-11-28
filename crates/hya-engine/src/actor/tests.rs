@@ -379,10 +379,11 @@ async fn list_channels_and_steer_count_incoming_only_ignoring_outgoing_copy() {
     )
     .await
     .unwrap();
-    let policy =
-        ChannelPolicy::from_binding(&eng.bind_runtime(std::path::Path::new("/tmp")).unwrap())
-            .unwrap()
-            .snapshot_for("hya-main");
+    let policy = crate::channel_policy::from_binding(
+        &eng.bind_runtime(std::path::Path::new("/tmp")).unwrap(),
+    )
+    .unwrap()
+    .snapshot_for("hya-main");
     assert!(
         eng.steer_mailbox_snapshot_with_policy(r, Some(policy))
             .await
@@ -443,9 +444,10 @@ async fn list_channels_and_steer_count_incoming_only_ignoring_outgoing_copy() {
 #[tokio::test]
 async fn mandatory_parent_delivery_requires_actual_parent_and_own_dm() {
     let eng = engine().await;
-    let policy =
-        ChannelPolicy::from_binding(&eng.bind_runtime(std::path::Path::new("/tmp")).unwrap())
-            .unwrap();
+    let policy = crate::channel_policy::from_binding(
+        &eng.bind_runtime(std::path::Path::new("/tmp")).unwrap(),
+    )
+    .unwrap();
     let mut team = TeamProjection::default();
     for (id, members) in [
         ("own", vec!["main/lead", "main/lead/child"]),
@@ -557,7 +559,9 @@ async fn stage_activation_keeps_one_supervisor_subscription() {
         ActivationResult::Settled { .. }
     ));
     drain_sup(&sup).await;
-    assert_eq!(during, subs + 1);
+    // Unread-mail steering runs via the `hya/agent-channels` NativeHook without
+    // opening a per-turn bus subscription, so only the supervisor subscription exists.
+    assert_eq!(during, subs);
 }
 
 #[tokio::test]

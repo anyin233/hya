@@ -15,18 +15,17 @@ const NATIVE_FAMILIES: [&str; 10] = [
     "coding-extras",
     "extended-tools",
     "network",
-    "channel-tools",
+    "agent-channels",
     "compaction",
     "plan",
     "goal",
     "loop",
     "workflow",
 ];
-const DATA_BUNDLES: [&str; 5] = [
+const DATA_BUNDLES: [&str; 4] = [
     "core-skills",
     "core-commands",
     "core-agents",
-    "agent-channels",
     "basic-tui-components",
 ];
 

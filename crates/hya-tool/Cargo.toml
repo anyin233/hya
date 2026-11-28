@@ -32,9 +32,10 @@ hya-tool-loader = { workspace = true }
 hya-hashline = { workspace = true }
 hya-coding-extras = { workspace = true }
 hya-extended-tools = { workspace = true }
-hya-channel-tools = { workspace = true }
+hya-agent-channels = { workspace = true }
 hya-network = { workspace = true }
 hya-plan = { workspace = true }
+hya-workflow-bundle = { workspace = true }
 
 [[example]]
 name = "replacement_tools"

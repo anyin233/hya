@@ -48,7 +48,8 @@ pub use ids::{
     TeamRunId, ToolCallId, WorkflowRunId,
 };
 pub use mail::{
-    CHANNEL_RANDOM_LEN, ChannelKind, MailEndpoint, MailKind, is_minted_channel_id, mint_channel_id,
+    CHANNEL_RANDOM_LEN, ChannelKind, ChannelPolicySnapshot, MailEndpoint, MailKind,
+    is_minted_channel_id, mint_channel_id,
 };
 pub use message::{
     FinishCause, FinishReason, MemberRunStatus, Message, Part, Role, RosterStatus, SubagentMode,

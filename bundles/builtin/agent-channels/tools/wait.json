@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "name": "wait",
+  "description": "Block until your subagents finish or new mail arrives for you.",
+  "permission": "read_only",
+  "overrides": "hya/extended-tools",
+  "prompt_hint": "block until your subagents finish or new mail arrives",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "targets": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Optional target subagent handles or member ids to wait for"
+      },
+      "mode": {
+        "type": "string",
+        "enum": ["any", "all"],
+        "description": "Wait for any target (default) or all targets"
+      },
+      "timeout_secs": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Maximum seconds to wait (0 returns immediately)"
+      }
+    },
+    "required": []
+  },
+  "entrypoint": {
+    "native": "wait"
+  }
+}

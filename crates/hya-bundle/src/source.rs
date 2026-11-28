@@ -258,6 +258,7 @@ pub(crate) enum SourceNativeCapability {
     Rewriters,
     Services,
     Drivers,
+    Schemas,
     Apis,
 }
 

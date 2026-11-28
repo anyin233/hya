@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "name": "report",
+  "description": "Submit your terminal report; it takes effect when this turn ends. The engine checks you have no unread mail and no live children (answer or archive them first). Submission ends your turn right after this tool round (no further model call).",
+  "permission": "tool",
+  "prompt_hint": "finish your subagent task with its result",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "result": {
+        "type": "string",
+        "description": "The result summary your parent receives"
+      },
+      "outcome": {
+        "type": "string",
+        "enum": ["done", "failed"],
+        "description": "Whether the task succeeded (default done)"
+      }
+    },
+    "required": ["result"]
+  },
+  "entrypoint": {
+    "native": "report"
+  }
+}

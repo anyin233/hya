@@ -1279,6 +1279,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
+name = "hya-agent-channels"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "hya-bundle",
+ "hya-proto",
+ "hya-runtime-abi",
+ "hya-tool",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "hya-api"
 version = "0.0.0"
 dependencies = [
@@ -1300,9 +1315,9 @@ dependencies = [
  "base64 0.22.1",
  "futures",
  "http-body-util",
+ "hya-agent-channels",
  "hya-api",
  "hya-bundle",
- "hya-channel-tools",
  "hya-child-io",
  "hya-coding-extras",
  "hya-core",
@@ -1399,17 +1414,6 @@ dependencies = [
  "sevenz-rust2",
  "sha2",
  "thiserror 1.0.69",
-]
-
-[[package]]
-name = "hya-channel-tools"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "hya-proto",
- "hya-tool",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -1533,8 +1537,8 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "futures",
+ "hya-agent-channels",
  "hya-bundle",
- "hya-channel-tools",
  "hya-coding-extras",
  "hya-compaction",
  "hya-context",
@@ -1885,7 +1889,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "futures",
- "hya-channel-tools",
+ "hya-agent-channels",
  "hya-coding-extras",
  "hya-context",
  "hya-extended-tools",
@@ -1896,6 +1900,7 @@ dependencies = [
  "hya-tool-error",
  "hya-tool-loader",
  "hya-version",
+ "hya-workflow-bundle",
  "image",
  "libc",
  "regex",
@@ -1922,8 +1927,8 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "futures",
+ "hya-agent-channels",
  "hya-bundle",
- "hya-channel-tools",
  "hya-coding-extras",
  "hya-context",
  "hya-extended-tools",

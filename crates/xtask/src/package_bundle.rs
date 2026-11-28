@@ -312,10 +312,10 @@ mod native_tests {
         ));
         let source = root.join("source");
         std::fs::create_dir_all(&source).unwrap();
-        std::fs::write(source.join("bundle.yaml"), "schema_version: 2\nkind: Bundle\nidentity: { id: hya/channel-tools, version: 1.0.0, publisher: hya }\nnamespace: channel-tools\nruntime:\n  kind: native\nassets: [{ id: exposure, path: exposure.yaml }]\n").unwrap();
-        std::fs::write(source.join("exposure.yaml"), "schema_version: 1\nidentity: hya/channel-tools\nprotected_names: []\ntools:\n  - { name: send, schema_version: 1, permission: tool }\n").unwrap();
+        std::fs::write(source.join("bundle.yaml"), "schema_version: 2\nkind: Bundle\nidentity: { id: hya/extended-tools, version: 1.0.0, publisher: hya }\nnamespace: extended-tools\nruntime:\n  kind: native\nassets: [{ id: exposure, path: exposure.yaml }]\n").unwrap();
+        std::fs::write(source.join("exposure.yaml"), "schema_version: 1\nidentity: hya/extended-tools\nprotected_names: []\ntools:\n  - { name: send, schema_version: 1, permission: tool }\n").unwrap();
         let library = root.join(format!(
-            "libhya_channel_tools{}",
+            "libhya_extended_tools{}",
             std::env::consts::DLL_SUFFIX
         ));
         let bytes = [0xcf, 0xfa, 0xed, 0xfe, 0, 0xff];
@@ -408,12 +408,12 @@ mod native_tests {
         std::fs::create_dir_all(source.join("tools")).unwrap();
         std::fs::write(
             source.join("bundle.yaml"),
-            "schema_version: 2\nkind: Bundle\nidentity: { id: hya/channel-tools, version: 1.0.0, publisher: hya }\nruntime:\n  kind: native\nassets: [{ id: exposure, path: exposure.yaml }]\n",
+            "schema_version: 2\nkind: Bundle\nidentity: { id: hya/extended-tools, version: 1.0.0, publisher: hya }\nruntime:\n  kind: native\nassets: [{ id: exposure, path: exposure.yaml }]\n",
         )
         .unwrap();
         std::fs::write(
             source.join("exposure.yaml"),
-            "schema_version: 1\nidentity: hya/channel-tools\nprotected_names: []\ntools:\n  - { name: fetch, schema_version: 1, permission: read_only }\n",
+            "schema_version: 1\nidentity: hya/extended-tools\nprotected_names: []\ntools:\n  - { name: fetch, schema_version: 1, permission: read_only }\n",
         )
         .unwrap();
         std::fs::write(

@@ -35,7 +35,7 @@ const PREPARED_FORMAT_VERSION: u32 = 4;
 
 /// Transitional Phase 0–4 legacy tool-family bundles that temporarily retain
 /// `exposure.yaml` until their tools migrate across Phases 2–4 (`CHR-22`–`CHR-31`).
-const TRANSITIONAL_EXPOSURE_BUNDLES: [&str; 2] = ["hya/extended-tools", "hya/channel-tools"];
+const TRANSITIONAL_EXPOSURE_BUNDLES: [&str; 1] = ["hya/extended-tools"];
 
 fn reject_removed_exposure(
     bundle_id: &str,

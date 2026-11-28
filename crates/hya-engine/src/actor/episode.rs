@@ -922,7 +922,8 @@ impl TeamActor {
         let inbox_len = inbox.len();
         let mail_owed = resumed_prompt.is_some()
             || inbox.incoming(durable_cursor.unwrap_or(0)).next().is_some();
-        let channel_policy = ChannelPolicy::from_binding(&binding).map_err(CoreError::bundle)?;
+        let channel_policy =
+            crate::channel_policy::from_binding(&binding).map_err(CoreError::bundle)?;
         let new_mail: Vec<(String, String)> = inbox
             .resident_mail(cursor, agent.name.as_str(), Some(&channel_policy))
             .map(|message| (message.from.clone(), message.body.clone()))

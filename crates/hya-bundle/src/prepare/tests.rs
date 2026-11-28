@@ -520,22 +520,20 @@ fn rejects_exposure_yaml_and_exposure_asset_except_transitional_tool_families()
     ));
 
     // 5. The two remaining transitional Phase 0–4 legacy tool-family bundles stay accepted.
-    for transitional_id in ["hya/extended-tools", "hya/channel-tools"] {
-        let manifest = format!(
-            "kind: Bundle\nschema_version: 2\nidentity: {{ id: {transitional_id}, version: 1.0.0, publisher: hya }}\nassets:\n  - {{ id: exposure, path: exposure.yaml }}\n"
-        );
-        let policy = format!(
-            "schema_version: 1\nidentity: {transitional_id}\nprotected_names: []\ntools: []\n"
-        );
-        let ok = prepare_package(BundleSource::new(
-            transitional_id,
-            vec![
-                SourceFile::new("bundle.yaml", manifest.into_bytes()),
-                SourceFile::new("exposure.yaml", policy.into_bytes()),
-            ],
-        ))?;
-        assert_eq!(ok.bundles()[0].identity().id, transitional_id);
-    }
+    let transitional_id = "hya/extended-tools";
+    let manifest = format!(
+        "kind: Bundle\nschema_version: 2\nidentity: {{ id: {transitional_id}, version: 1.0.0, publisher: hya }}\nassets:\n  - {{ id: exposure, path: exposure.yaml }}\n"
+    );
+    let policy =
+        format!("schema_version: 1\nidentity: {transitional_id}\nprotected_names: []\ntools: []\n");
+    let ok = prepare_package(BundleSource::new(
+        transitional_id,
+        vec![
+            SourceFile::new("bundle.yaml", manifest.into_bytes()),
+            SourceFile::new("exposure.yaml", policy.into_bytes()),
+        ],
+    ))?;
+    assert_eq!(ok.bundles()[0].identity().id, transitional_id);
     Ok(())
 }
 
@@ -828,7 +826,7 @@ identity: { id: hya/coding-extras, version: 1.0.0, publisher: hya }
         Some(BuiltinBundleStatus::Failed { .. })
     ));
     assert!(matches!(
-        report.status("hya/channel-tools"),
+        report.status("hya/agent-channels"),
         Some(BuiltinBundleStatus::Missing { .. })
     ));
     assert_eq!(report.loaded.len(), 1);

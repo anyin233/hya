@@ -52,7 +52,7 @@ fn install_sh_stages_every_first_party_bundle_beside_bin() {
         "hya-coding-extras",
         "hya-extended-tools",
         "hya-network",
-        "hya-channel-tools",
+        "hya-agent-channels",
         "hya-compaction",
         "hya-plan",
         "hya-goal",

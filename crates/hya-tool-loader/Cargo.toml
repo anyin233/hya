@@ -30,7 +30,7 @@ tokio-util = { workspace = true }
 hya-hashline = { workspace = true }
 hya-coding-extras = { workspace = true }
 hya-extended-tools = { workspace = true }
-hya-channel-tools = { workspace = true }
+hya-agent-channels = { workspace = true }
 hya-network = { workspace = true }
 hya-plan = { workspace = true }
 hya-goal = { workspace = true }

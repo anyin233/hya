@@ -101,6 +101,25 @@ pub(crate) struct TurnGate {
 }
 
 impl TurnGate {
+    pub(crate) fn mail_mark(&self, session: SessionId) -> Option<u64> {
+        self.observer()
+            .and_then(|observer| observer.mail_mark(session))
+    }
+
+    pub(crate) fn notify_mail_consumed(
+        &self,
+        session: SessionId,
+        mark: Option<u64>,
+        incoming: bool,
+    ) {
+        if incoming
+            && let Some(mark) = mark
+            && let Some(observer) = self.observer()
+        {
+            observer.mail_consumed(session, mark);
+        }
+    }
+
     fn state(&self) -> std::sync::MutexGuard<'_, GateState> {
         match self.state.lock() {
             Ok(guard) => guard,
@@ -471,27 +490,16 @@ impl SessionEngine {
     /// The turn-boundary observer's work mark for `session`: take it before
     /// snapshotting the inbox a read will consume, and pass it to
     /// [`notify_mail_consumed`](Self::notify_mail_consumed).
-    pub(crate) fn mail_mark(&self, session: SessionId) -> Option<u64> {
-        self.turn_gate
-            .observer()
-            .and_then(|observer| observer.mail_mark(session))
+    #[must_use]
+    pub fn mail_mark(&self, session: SessionId) -> Option<u64> {
+        self.turn_gate.mail_mark(session)
     }
 
     /// Notify the turn-boundary observer that this turn consumed its mail up
     /// to the snapshot taken after `mark` ([`mail_mark`](Self::mail_mark)).
     /// Outgoing-only cursor cleanup never acknowledges team work.
-    pub(crate) fn notify_mail_consumed(
-        &self,
-        session: SessionId,
-        mark: Option<u64>,
-        incoming: bool,
-    ) {
-        if incoming
-            && let Some(mark) = mark
-            && let Some(observer) = self.turn_gate.observer()
-        {
-            observer.mail_consumed(session, mark);
-        }
+    pub fn notify_mail_consumed(&self, session: SessionId, mark: Option<u64>, incoming: bool) {
+        self.turn_gate.notify_mail_consumed(session, mark, incoming);
     }
 
     /// Claim `session`'s turn, queueing behind an active one. `Ok(None)` when

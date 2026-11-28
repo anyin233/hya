@@ -46,8 +46,9 @@ pub use host::{
     HostCatalogReader, HostEventBus, HostExtensionRegistry, HostModelCaller, HostRuntime,
     HostSessionStore, HostTurnRunner, ManagedMemberActivateRequest, ManagedMemberActivationOutcome,
     ManagedMemberActivationStatus, ManagedMemberHandle, ManagedMemberSpawnRequest,
-    ModelCallRequest, ModelCallResponse, ModelRouteEntry, ModelStreamChunk, ModelToolCall,
-    ModelWindowInfo, ResolvedModelRoute, ResolvedModelRouteCandidate, ScopeCatalogSnapshot,
-    SessionListFilter, SessionSummaryMeta, TurnOutcome, TurnRouteFailureClass, TurnRouteOutcome,
-    TurnSpawnRequest, TurnStartRequest, TurnStatus,
+    MemberMailRevivalRequest, ModelCallRequest, ModelCallResponse, ModelRouteEntry,
+    ModelStreamChunk, ModelToolCall, ModelWindowInfo, ResolvedModelRoute,
+    ResolvedModelRouteCandidate, ScopeCatalogSnapshot, SessionListFilter, SessionSummaryMeta,
+    StagedMailAck, TurnOutcome, TurnRouteFailureClass, TurnRouteOutcome, TurnSpawnRequest,
+    TurnStartRequest, TurnStatus,
 };

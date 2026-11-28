@@ -802,6 +802,15 @@ impl WaitAckSlot {
         }
     }
 
+    /// Whether a `wait` invocation ran inside this tool call (directly or nested).
+    #[must_use]
+    pub fn saw_wait(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .saw_wait
+    }
+
     /// Claim all staged delivery once the outer tool's final result is known.
     pub fn take_state(&self) -> WaitAckState {
         std::mem::take(

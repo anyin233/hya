@@ -670,6 +670,7 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
     // UriSchemaHandler
     let uri_ctx = UriResolveCtx {
         session: Some(session),
+        actor_claim: None,
         workdir: &ctx.workdir,
         runtime: Some(runtime.as_ref()),
     };
@@ -682,6 +683,7 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
         .write(
             UriResolveCtx {
                 session: Some(session),
+                actor_claim: None,
                 workdir: &ctx.workdir,
                 runtime: Some(runtime.as_ref()),
             },

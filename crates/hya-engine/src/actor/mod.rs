@@ -61,7 +61,7 @@ use crate::hooks::{
     AgentSpawnInput, HookDispatcher, SessionLifecycleInput, scope_activation_hooks,
 };
 use crate::sidecar::{BoundSidecarFactory, SidecarHandle, SidecarStart};
-use crate::{AgentResourcePolicy, ChannelPolicy, TurnBinding};
+use crate::{AgentResourcePolicy, TurnBinding};
 
 /// Runtime pieces needed to resume a resident after process restart.
 pub type ResolvedResidentRuntime = (

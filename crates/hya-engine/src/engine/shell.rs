@@ -521,7 +521,7 @@ impl SessionEngine {
                     };
                     match authorized {
                         Ok(permission) => {
-                            let channel_policy = crate::ChannelPolicy::from_binding(binding)
+                            let channel_policy = crate::channel_policy::from_binding(binding)
                                 .map_err(CoreError::bundle)?
                                 .snapshot_for(agent.name.as_str());
                             let ctx = ToolCtx {

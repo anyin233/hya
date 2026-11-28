@@ -226,7 +226,7 @@ async fn mail_auth_dm_direction_relative_parent_and_bundle_policy_restrictions()
         "  - { id: dm, kind: parent_dm, participants: [{kind: role, role: child}], capabilities: [], scope: vertical, retention: team_session }",
     )).await;
     let ro = org(&restricted).await;
-    let policy = crate::ChannelPolicy::from_binding(
+    let policy = crate::channel_policy::from_binding(
         &restricted.bind_runtime(std::path::Path::new(".")).unwrap(),
     )
     .unwrap()
