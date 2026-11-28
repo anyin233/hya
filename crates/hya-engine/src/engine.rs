@@ -97,6 +97,8 @@ use terminal_handoff::{SummarizeOptions, Summarizer, TerminalHandoffOptions};
 pub(crate) use turn::TurnRequestContext;
 pub use turn::{ExplicitModelRoute, ExplicitModelRouteCandidate, ExplicitTurnRoute};
 
+use crate::orchestrator::SubagentGovernor as StreamGovernor;
+
 async fn authorize_tool_call(
     resolved: &ResolvedTool,
     input: &Value,
@@ -198,7 +200,7 @@ pub struct SessionEngine {
     // Shared bundle transient state. The legacy field name keeps constructor wiring intact.
     mail_steer_suppressed: channel_host::TransientState,
     staged_mail_acks: Arc<RwLock<HashMap<SessionId, hya_runtime_abi::StagedMailAck>>>,
-    governor: Option<crate::orchestrator::SubagentGovernor>,
+    governor: Option<StreamGovernor>,
     sidecar_environment: Option<Arc<dyn SidecarEnvironment>>,
     /// Revival seam (ADR-0015): a downward mail to an archived direct child
     /// routes here instead of failing the send. Interior-mutable because the

@@ -21,6 +21,7 @@ use crate::sidecar::{SidecarEnvironment, SidecarHandle, SidecarStart};
 use crate::{AgentResourcePolicy, TurnBinding};
 
 mod harness;
+mod hooks;
 pub(super) mod messages;
 #[cfg(test)]
 mod provider_snapshot_test;
@@ -58,7 +59,7 @@ struct TurnExecution<'a> {
     /// Whether this activation resolves Session/file defaults freshly.
     apply_default_overlays: bool,
     /// Request-local explicit model route, absent for ordinary Agent turns.
-    workflow_route: Option<&'a ExplicitTurnRoute>,
+    explicit_route: Option<&'a ExplicitTurnRoute>,
     /// Round-boundary rebind inputs, present for Root activations only.
     rebind: Option<TurnRebindInputs<'a>>,
     /// Per-turn fallback holding last successful SQL preference reads.
@@ -85,7 +86,7 @@ pub(crate) struct TurnRequestContext<'a> {
     guidance: Option<Arc<str>>,
     actor_claim: Option<&'a ActorClaim>,
     explicit_model: Option<ModelRef>,
-    workflow_route: Option<ExplicitTurnRoute>,
+    explicit_route: Option<ExplicitTurnRoute>,
     /// Turn claim already taken by the caller (resident wakes claim under the
     /// team lock). `None` claims — queueing behind an active turn — on entry.
     lease: Option<TurnLease>,
@@ -101,7 +102,7 @@ impl<'a> TurnRequestContext<'a> {
         external_dirs: &'a [PathBuf],
         guidance: Option<Arc<str>>,
         actor_claim: Option<&'a ActorClaim>,
-        workflow_route: Option<ExplicitTurnRoute>,
+        explicit_route: Option<ExplicitTurnRoute>,
     ) -> Self {
         Self {
             cancel,
@@ -109,7 +110,7 @@ impl<'a> TurnRequestContext<'a> {
             guidance,
             actor_claim,
             explicit_model: None,
-            workflow_route,
+            explicit_route,
             ran_known_tool: None,
             lease: None,
             admitted_prompt: None,
@@ -387,7 +388,7 @@ impl SessionEngine {
     /// The route remains request-local. Only pre-stream retryable failures can
     /// advance it, and a returned stream is never replayed on another model.
     /// Returns the stream with the selected candidate's index.
-    async fn stream_with_workflow_route(
+    async fn stream_with_explicit_route(
         &self,
         router: &ProviderRouter,
         request: &CompletionRequest,
@@ -698,7 +699,7 @@ impl SessionEngine {
         request.cancel = lease.bind_cancel(&caller_cancel);
         let actor_claim = request.actor_claim;
         let cancel = request.cancel.clone();
-        let workflow_route = request.workflow_route.clone();
+        let explicit_route = request.explicit_route.clone();
         let observer = self.turn_gate.observer();
         if let Some(observer) = observer.as_ref() {
             observer.turn_started(session);
@@ -735,7 +736,7 @@ impl SessionEngine {
             }
             Ok(_) => {}
         }
-        if let Some(route) = workflow_route.as_ref() {
+        if let Some(route) = explicit_route.as_ref() {
             let failure = match &outcome {
                 Ok(FinishReason::Cancelled) => Some(if cancel.is_cancelled() {
                     hya_runtime_abi::TurnRouteFailureClass::Cancelled
@@ -823,7 +824,7 @@ impl SessionEngine {
             external_dirs,
             guidance,
             actor_claim,
-            workflow_route,
+            explicit_route,
             explicit_model,
             ran_known_tool,
             lease: _,
@@ -1022,7 +1023,7 @@ impl SessionEngine {
                 // Same Arc for nested spawn scope; no re-discovery.
                 guidance: guidance.clone(),
                 apply_default_overlays,
-                workflow_route: workflow_route.as_ref(),
+                explicit_route: explicit_route.as_ref(),
                 explicit_model: explicit_model.as_ref(),
                 rebind: apply_default_overlays.then_some(TurnRebindInputs {
                     base_agent,
