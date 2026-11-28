@@ -1022,6 +1022,34 @@ async fn build_session_engine_with_mcp_defer(
     for (bundle_id, regs) in native_regs {
         native.add(&app_host_runtime, &bundle_id, regs)?;
     }
+    // Installed native bundles load the same way as first-party ones
+    // (`--pure` loads no installed extensions).
+    let installed = if options.pure {
+        Vec::new()
+    } else {
+        crate::bundle_registry::BundleRegistry::enabled_catalogs(
+            &crate::installed_bundle_refresh::bundle_registry_path(),
+        )
+        .await
+        .context("read installed bundles")?
+    };
+    for catalog in installed {
+        for bundle in catalog.bundles().iter().filter(|bundle| {
+            bundle.runtime().is_some_and(|runtime| {
+                runtime.kind == hya_bundle::PreparedRuntimeKind::Native
+                    && runtime.abi_version == Some(2)
+            })
+        }) {
+            let bundle_id = bundle.identity().id.clone();
+            let regs = hya_tool_loader::load_installed_native_bundle(
+                &registry,
+                bundle,
+                Arc::clone(&host_runtime),
+            )
+            .map_err(anyhow::Error::msg)?;
+            native.add(&app_host_runtime, &bundle_id, regs)?;
+        }
+    }
 
     let project_plugins = if options.pure {
         crate::project_plugins::ProjectPluginSettings::disabled()

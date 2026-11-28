@@ -156,6 +156,22 @@ pub fn register_v2_bundle_tools(
     let [bundle] = catalog.bundles() else {
         return Err(format!("{identity}: expected a single bundle"));
     };
+    register_bundle_tools(registry, bundle, bundle.identity().id.as_str(), regs)
+}
+
+/// Register `regs.tools` under `bundle`'s tool descriptors; the library must
+/// export exactly the declared tools.
+///
+/// # Errors
+/// The exported and declared tools differ, a descriptor is malformed, or a
+/// tool claims a kernel-exclusive name.
+pub fn register_bundle_tools(
+    registry: &ToolRegistry,
+    bundle: &Bundle,
+    origin: &'static str,
+    regs: &NativeRegistrations,
+) -> Result<(), String> {
+    let identity = bundle.identity().id.as_str();
     let metadata = parse_bundle_tool_metadata(bundle)?;
     let expected: BTreeSet<&str> = metadata.iter().map(|m| m.name.as_str()).collect();
     let actual: BTreeSet<&str> = regs.tools.iter().map(|t| t.name()).collect();
@@ -191,10 +207,48 @@ pub fn register_v2_bundle_tools(
             meta.aliases
                 .iter()
                 .map(|(alias, visibility)| (alias.as_str(), *visibility)),
-            bundle.identity().id.as_str(),
+            origin,
         );
     }
     Ok(())
+}
+
+/// Load an installed (not first-party) native ABI v2 bundle from its prepared
+/// form: stage its packaged library, load it, and register its tools.
+///
+/// # Errors
+/// The bundle carries no library, the library fails the ABI check or
+/// registration, or its tools disagree with its descriptors.
+#[cfg(unix)]
+pub fn load_installed_native_bundle(
+    registry: &ToolRegistry,
+    bundle: &Bundle,
+    runtime: Arc<dyn HostRuntime>,
+) -> Result<NativeRegistrations, String> {
+    let identity = bundle.identity().id.as_str();
+    let library_path = bundle
+        .runtime()
+        .and_then(|runtime| runtime.library.as_deref())
+        .ok_or_else(|| format!("{identity}: native runtime declares no `library`"))?;
+    let library = bundle
+        .extensions()
+        .iter()
+        .find(|resource| resource.source_path == library_path && resource.binary_base64.is_some())
+        .ok_or_else(|| format!("{identity}: package carries no library at {library_path}"))?;
+    let payload = library
+        .source_bytes()
+        .map_err(|error| format!("{identity}: {error}"))?;
+    let filename = std::path::Path::new(library_path)
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .ok_or_else(|| format!("{identity}: invalid library path {library_path}"))?;
+    let path = crate::native_bundle::stage_library(&payload, filename)?;
+    let regs = crate::v2::load_v2_from_path(identity, &path, runtime)
+        .map_err(|error| format!("load {identity}: {error}"))?;
+    // An installed bundle's tools stay registered for the process lifetime.
+    let origin: &'static str = Box::leak(identity.to_string().into_boxed_str());
+    register_bundle_tools(registry, bundle, origin, &regs)?;
+    Ok(regs)
 }
 
 /// Load a first-party ABI v2 native tool bundle and register its tools into

@@ -1327,14 +1327,11 @@ dependencies = [
  "hya-api",
  "hya-bundle",
  "hya-child-io",
- "hya-coding-extras",
  "hya-coding-extras-core",
  "hya-core",
  "hya-engine",
- "hya-hashline",
  "hya-mcp",
  "hya-multi-agent",
- "hya-network",
  "hya-plan",
  "hya-plugin",
  "hya-proto",
@@ -1432,6 +1429,16 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "hya-cli-driver-example"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "hya-runtime-abi",
+ "serde_json",
  "tokio-util",
 ]
 

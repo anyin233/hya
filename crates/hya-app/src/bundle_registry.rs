@@ -328,6 +328,29 @@ impl BundleRegistry {
         Ok(generation)
     }
 
+    /// Catalogs of the enabled installed bundles in the registry at `path`;
+    /// none when no registry file exists.
+    ///
+    /// # Errors
+    /// The registry cannot be opened or read.
+    pub async fn enabled_catalogs(
+        path: &std::path::Path,
+    ) -> Result<Vec<hya_bundle::PreparedCatalog>, BundleRegistryError> {
+        if !path.is_file() {
+            return Ok(Vec::new());
+        }
+        let registry = Self::connect(&path.to_string_lossy()).await?;
+        let disabled = registry.disabled_bundle_ids().await?;
+        Ok(registry
+            .snapshot_with_catalogs()
+            .await?
+            .bundles
+            .into_iter()
+            .filter(|loaded| !disabled.contains(&loaded.record.bundle_id))
+            .map(|loaded| loaded.prepared)
+            .collect())
+    }
+
     /// Transactional snapshot of generation + all installed bundle rows.
     pub async fn snapshot(&self) -> Result<BundleRegistrySnapshot, BundleRegistryError> {
         Ok(self.snapshot_with_catalogs().await?.into_public_snapshot())

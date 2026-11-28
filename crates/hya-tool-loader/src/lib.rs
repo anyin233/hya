@@ -19,7 +19,10 @@ pub use v2::{
     LoadedNativeBundles, MinimalHostRuntime, NativeBundleLoader, load_v2, load_v2_from_path,
     noop_host_runtime,
 };
-pub use v2_tools::{NATIVE_V2_TOOL_BUNDLES, load_and_register_v2_bundle, register_v2_bundle_tools};
+pub use v2_tools::{
+    NATIVE_V2_TOOL_BUNDLES, load_and_register_v2_bundle, load_installed_native_bundle,
+    register_bundle_tools, register_v2_bundle_tools,
+};
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;

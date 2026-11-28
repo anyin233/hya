@@ -270,6 +270,8 @@ cli:
 
 Preparation rejects an invalid name, a leaf without exactly one route, a `driver` route on a non-native bundle, an `api` route to an undeclared endpoint of a JS bundle, duplicate names or flags, and `conflicts_with` naming an unknown argument. At startup `hya` rejects a command that shadows a core command or that two enabled bundles both contribute.
 
+A user-installed native bundle (`runtime.library`) contributes commands the same way, and keeps them under `--bare`; [`bundles/examples/cli-driver-example`](../../bundles/examples/cli-driver-example) routes one command to a driver and one to a native BundleApi endpoint.
+
 ---
 
 ## 4. Standardized Descriptor File Schemas

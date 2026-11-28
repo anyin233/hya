@@ -505,7 +505,6 @@ fn extract_packaged_library(
     stem: &str,
     filename: &str,
 ) -> Result<std::path::PathBuf, String> {
-    use std::os::unix::fs::DirBuilderExt as _;
     let identity = format!(
         "hya/{}",
         stem.strip_prefix("hya_").unwrap_or(stem).replace('_', "-")
@@ -576,14 +575,22 @@ fn extract_packaged_library(
         ));
     }
     let payload = library.source_bytes().map_err(|error| error.to_string())?;
+    stage_library(&payload, filename)
+}
+
+/// Write verified library bytes where `dlopen` can load them: the private
+/// native cache, else a private per-process directory.
+#[cfg(unix)]
+pub(crate) fn stage_library(payload: &[u8], filename: &str) -> Result<std::path::PathBuf, String> {
+    use std::os::unix::fs::DirBuilderExt as _;
     // Keep a verified immutable inode across daemon starts. Recreating and
     // unlinking it forces the OS to revalidate the dynamic image every time.
     if let Some(root) = native_cache_root()
-        && let Ok(path) = cache_library(&root, &payload, filename)
+        && let Ok(path) = cache_library(&root, payload, filename)
     {
         return Ok(path);
     }
-    let digest = Sha256::digest(&payload);
+    let digest = Sha256::digest(payload);
     let prefix = digest
         .iter()
         .take(8)
@@ -603,8 +610,7 @@ fn extract_packaged_library(
     {
         Ok(mut file) => {
             use std::io::Write as _;
-            file.write_all(&payload)
-                .map_err(|error| error.to_string())?;
+            file.write_all(payload).map_err(|error| error.to_string())?;
             file.sync_all().map_err(|error| error.to_string())?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {

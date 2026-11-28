@@ -52,3 +52,5 @@ pub use host::{
     StagedMailAck, TurnOutcome, TurnRouteFailureClass, TurnRouteOutcome, TurnSpawnRequest,
     TurnStartRequest, TurnStatus,
 };
+/// HTTP method and mount scope of a [`NativeApiEndpoint`].
+pub use hya_bundle::{ApiMethod, ApiScope};

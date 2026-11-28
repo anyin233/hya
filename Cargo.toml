@@ -18,6 +18,7 @@ members = [
     "bundles/builtin/loop/native",
     "bundles/builtin/workflow/native/core",
     "bundles/builtin/workflow/native",
+    "bundles/examples/cli-driver-example/native",
 ]
 exclude = ["crates/hya-plugin-bun", "vendor/sevenz-rust2-0.20.2"]
 

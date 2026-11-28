@@ -120,8 +120,9 @@ jobs:
         with:
           cache-on-failure: true
       # When Rust tests are selected, build `hya`, `hya-migration`, `xtask`, all
-      # ten lockstep native bundle cdylibs, and every workspace test binary in
-      # ONE Cargo invocation, stage the ten `.so` files into the fixed
+      # ten lockstep native bundle cdylibs, the installable example bundle's
+      # cdylib, and every workspace test binary in ONE Cargo invocation, stage
+      # those `.so` files into the fixed
       # build-unit layout expected by `hya-tool-loader` on Cargo >= 1.100, and
       # archive them for zero-compile `test` and `e2e` jobs.
       - name: build workspace binaries and test archive
@@ -131,7 +132,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --locked --no-run --workspace
-          for stem in hya_hashline hya_coding_extras hya_multi_agent hya_agent_channels hya_network hya_compaction hya_plan hya_goal hya_loop hya_workflow_bundle; do
+          for stem in hya_hashline hya_coding_extras hya_multi_agent hya_agent_channels hya_network hya_compaction hya_plan hya_goal hya_loop hya_workflow_bundle hya_cli_driver_example; do
             pkg="${stem//_/-}"
             if [[ -f "target/debug/deps/lib${stem}.so" ]]; then
               lib="target/debug/deps/lib${stem}.so"

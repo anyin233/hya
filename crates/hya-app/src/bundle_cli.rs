@@ -25,31 +25,13 @@ pub async fn cli_contributions(bare: bool) -> anyhow::Result<Vec<CliContribution
     };
     let mut catalogs = crate::installed_bundle_refresh::first_party_catalogs_for(&selection)
         .context("load first-party bundle CLI contributions")?;
-    let registry_path = crate::installed_bundle_refresh::bundle_registry_path();
-    if registry_path.is_file() {
-        let registry = crate::bundle_registry::BundleRegistry::connect(
-            registry_path
-                .to_str()
-                .context("bundle registry path is not UTF-8")?,
+    catalogs.extend(
+        crate::bundle_registry::BundleRegistry::enabled_catalogs(
+            &crate::installed_bundle_refresh::bundle_registry_path(),
         )
         .await
-        .context("open the installed bundle registry")?;
-        let disabled = registry
-            .disabled_bundle_ids()
-            .await
-            .context("read disabled bundles")?;
-        let snapshot = registry
-            .snapshot_with_catalogs()
-            .await
-            .context("read installed bundles")?;
-        catalogs.extend(
-            snapshot
-                .bundles
-                .into_iter()
-                .filter(|loaded| !disabled.contains(&loaded.record.bundle_id))
-                .map(|loaded| loaded.prepared),
-        );
-    }
+        .context("read installed bundles")?,
+    );
     Ok(contributions_of(&catalogs))
 }
 

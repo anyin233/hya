@@ -1,0 +1,27 @@
+kind: Bundle
+schema_version: 2
+version_ref: hya
+identity:
+  id: hya/cli-driver-example
+  version: 0.0.0
+  publisher: hya
+runtime:
+  kind: native
+  abi_version: 2
+  crate_dir: native
+  capabilities:
+    - drivers
+    - apis
+cli:
+  - name: example-echo
+    about: Print text through the example bundle's `echo` driver.
+    driver: echo
+    args:
+      - { id: text, long: text, required: true, help: Text to print. }
+      - { id: times, long: times, value: integer, default: "1", help: How many times. }
+      - { id: loud, long: loud, value: flag, help: Print in upper case. }
+  - name: example-status
+    about: Ask the example bundle's BundleApi for its status.
+    api: status
+    args:
+      - { id: name, long: name, help: Name shown in the status line. }
