@@ -463,7 +463,6 @@ impl InstalledBundleRefresh {
         self.host_reads.as_ref()
     }
 
-    /// Installed and first-party catalogs of the last base publication.
     /// The installed rows the last base publication skipped, as
     /// `installed bundle <id>: <error>` lines.
     pub(crate) fn diagnostics(&self) -> Vec<String> {
@@ -474,6 +473,7 @@ impl InstalledBundleRefresh {
             .collect()
     }
 
+    /// Installed and first-party catalogs of the last base publication.
     pub(crate) fn base_catalogs(&self) -> Arc<BaseCatalogs> {
         Arc::clone(
             &self
