@@ -246,27 +246,13 @@ impl TurnToolGate<'_> {
             () = cancel.cancelled() => (Err(ToolError::Cancelled), hya_tool::ToolResultPolicy::Default),
             result = collect_tool => result?,
         };
-        let (changed, stamps) = Box::pin(file_capture.finish(
-            &engine.store,
-            session,
-            message,
-            tc.call,
-            result.as_ref().ok(),
-            (&engine.workspace_watches, binding.workdir()),
-        ))
-        .await?;
-        if let Some(changed) = changed {
-            engine.emit_for_actor(actor_claim, session, changed).await?;
-        }
-        let mut stamps_by_path = std::mem::take(&mut *nested_stamps.lock().await);
-        stamps_by_path.extend(stamps.into_iter().map(|file| (file.path.clone(), file)));
         let mut artifact_guard =
             BashArtifactGuard::capture(tc.name.as_str(), result.as_ref().ok(), binding.workdir());
         let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         engine.validate_actor_claim(actor_claim).await?;
-        let mut was_hook_replaced = false;
         let mut staged = Vec::new();
-        let result =
+        let mut hooks_unhealthy = false;
+        let replacement =
             if !cancel.is_cancelled() && !matches!(&result, Err(ToolError::Cancelled)) && has_hooks
             {
                 let was_permission_err = matches!(&result, Err(ToolError::Permission(_)));
@@ -294,24 +280,38 @@ impl TurnToolGate<'_> {
                 .await;
                 engine.set_mail_steer_suppressed(session, false);
                 staged = engine.take_staged_events(session);
-                if activation_hooks
+                hooks_unhealthy = activation_hooks
                     .as_ref()
-                    .is_some_and(|hooks| !hooks.is_healthy())
-                {
-                    return Err(CoreError::Cancelled);
-                }
-                if was_permission_err || native == original_native {
-                    result
-                } else {
-                    was_hook_replaced = true;
-                    match native {
-                        NativeToolResult::Ok { output, .. } => Ok(output),
-                        NativeToolResult::Err { message } => Err(ToolError::Other(message)),
-                    }
-                }
+                    .is_some_and(|hooks| !hooks.is_healthy());
+                (!was_permission_err && native != original_native).then(|| match native {
+                    NativeToolResult::Ok { output, .. } => Ok(output),
+                    NativeToolResult::Err { message } => Err(ToolError::Other(message)),
+                })
             } else {
-                result
+                None
             };
+        // Stamp after the after-hooks so a file they rewrote (a formatter) is
+        // the tool's own change, not an external one; the capture still sees
+        // the tool's own result.
+        let (changed, stamps) = Box::pin(file_capture.finish(
+            &engine.store,
+            session,
+            message,
+            tc.call,
+            result.as_ref().ok(),
+            (&engine.workspace_watches, binding.workdir()),
+        ))
+        .await?;
+        if let Some(changed) = changed {
+            engine.emit_for_actor(actor_claim, session, changed).await?;
+        }
+        if hooks_unhealthy {
+            return Err(CoreError::Cancelled);
+        }
+        let mut stamps_by_path = std::mem::take(&mut *nested_stamps.lock().await);
+        stamps_by_path.extend(stamps.into_iter().map(|file| (file.path.clone(), file)));
+        let was_hook_replaced = replacement.is_some();
+        let result = replacement.unwrap_or(result);
         let wait_state = wait_ack.take_state();
         let wait_ack = if wait_state.saw_wait {
             let intact = result.is_ok() && !was_hook_replaced && !cancel.is_cancelled();

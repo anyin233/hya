@@ -20,7 +20,8 @@ use hya_bundle::{
 use hya_engine::hooks::NativePermissionApproveInput;
 use hya_engine::hooks::{
     NativeCompactionAfterInput, NativeCompactionBeforeInput, NativeCompactionDecision,
-    ToolVisibilityInput, ToolVisibilityOutcome,
+    NativeToolAfterInput, NativeToolAfterOutcome, NativeToolResult, ToolVisibilityInput,
+    ToolVisibilityOutcome,
 };
 use hya_engine::{
     AgentCatalog, CreateSession, EventBus, NativeHook, RuntimePermissionMode, RuntimeRegistry,
@@ -961,6 +962,116 @@ async fn nested_workspace_state_is_sessions_file_revision() {
     } else {
         assert_eq!(states, json!([null, null, null]));
     }
+}
+
+/// Prefixes a header to every file a `write` call wrote, as a formatter hook
+/// would rewrite it.
+const FORMATTED_HEADER: &str = "// formatted\n";
+
+struct FormatAfterWrite {
+    workdir: std::path::PathBuf,
+}
+
+#[async_trait]
+impl NativeHook for FormatAfterWrite {
+    fn id(&self) -> &str {
+        "test.format-after-write"
+    }
+
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[hya_runtime_abi::HookPoint::ToolExecuteAfter]
+    }
+
+    async fn tool_execute_after(
+        &self,
+        input: NativeToolAfterInput,
+    ) -> Result<NativeToolAfterOutcome, hya_runtime_abi::HostError> {
+        if input.tool == "write" && matches!(input.result, NativeToolResult::Ok { .. }) {
+            let path = self.workdir.join(input.input["path"].as_str().unwrap());
+            let text = std::fs::read_to_string(&path).unwrap();
+            std::fs::write(&path, format!("{FORMATTED_HEADER}{text}")).unwrap();
+        }
+        Ok(NativeToolAfterOutcome::Continue {
+            result: input.result,
+        })
+    }
+}
+
+#[tokio::test]
+async fn after_hook_rewrites_are_stamped_as_the_tools_own_change() {
+    let dir = support::TestDir::new("after-hook-stamps");
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "write".into(),
+                input: json!({ "path": "a.txt", "content": "alpha\n" }),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![
+            FakeStep::ToolCall {
+                name: "read".into(),
+                input: json!({ "path": "a.txt" }),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![FakeStep::Finish(FinishReason::Stop)],
+    ]);
+    let engine = support::engine_with_provider(
+        Arc::new(provider),
+        PermissionRules::new(vec![
+            Rule::new(Action::Tool, "*", Mode::Allow),
+            Rule::new(Action::Edit, "**", Mode::Allow),
+            Rule::new(Action::Read, "**", Mode::Allow),
+        ]),
+    )
+    .await
+    .with_hook_list(vec![Arc::new(FormatAfterWrite {
+        workdir: dir.path().to_path_buf(),
+    }) as Arc<dyn NativeHook>]);
+    let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
+    engine
+        .admit_user_prompt(session, "write then read".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        engine
+            .run_turn(
+                session,
+                &support::agent_spec("build", "fake", dir.path()),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap(),
+        FinishReason::Stop
+    );
+
+    let written = std::fs::read_to_string(dir.path().join("a.txt")).unwrap();
+    assert!(written.starts_with(FORMATTED_HEADER), "{written:?}");
+    let events: Vec<_> = engine
+        .replay(session)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.event)
+        .collect();
+    let external: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, Event::FilesObserved { external: true, .. }))
+        .collect();
+    assert!(external.is_empty(), "{external:?}");
+    // The write's own stamp already holds the hook-rewritten file.
+    let write_stamp = events
+        .iter()
+        .find_map(|e| match e {
+            Event::FilesObserved { files, .. } => files.iter().find(|f| f.path.ends_with("/a.txt")),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        write_stamp.size,
+        Some(u64::try_from(written.len()).unwrap())
+    );
 }
 
 #[tokio::test]

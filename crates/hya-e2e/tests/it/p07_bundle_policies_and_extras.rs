@@ -1013,15 +1013,13 @@ async fn coding_extras_formats_after_write_edit_and_apply_patch() {
         .await;
         assert_eq!(env.read_project_file("a.txt").unwrap(), "BETA\n");
         assert_eq!(env.read_project_file("b.txt").unwrap(), "GAMMA\n");
-        // `apply_patch` formats inline, before the tool's file capture.
-        let external = externally_observed(&events, &["b.txt"]);
+        // `apply_patch` formats inline and the hook formats `write`/`edit`, both
+        // before the tool's file capture.
+        let external = externally_observed(&events, &["a.txt", "b.txt"]);
         assert!(
             external.is_empty(),
             "formatter output seen as external: {external:?}"
         );
-        // enabled by P3: the capture of a hook-formatted `write`/`edit` runs before
-        // `tool.execute.after`, so the next round's cut reports `a.txt` as external.
-        // assert!(externally_observed(&events, &["a.txt"]).is_empty());
     }
 
     // 2. `hya/hashline` disabled: the standard `write`/`edit` format the same way.
@@ -1032,7 +1030,7 @@ async fn coding_extras_formats_after_write_edit_and_apply_patch() {
             .await
             .expect("hashline-disabled env");
         configure_uppercase_formatter(&mut env);
-        let _events = run_rounds(
+        let events = run_rounds(
             &env,
             vec![
                 tool_step("write", json!({"path": "a.txt", "content": "alpha\n"})),
@@ -1046,8 +1044,11 @@ async fn coding_extras_formats_after_write_edit_and_apply_patch() {
         )
         .await;
         assert_eq!(env.read_project_file("a.txt").unwrap(), "BETA\n");
-        // enabled by P3 (see case 1):
-        // assert!(externally_observed(&_events, &["a.txt"]).is_empty());
+        let external = externally_observed(&events, &["a.txt"]);
+        assert!(
+            external.is_empty(),
+            "formatter output seen as external: {external:?}"
+        );
     }
 
     // 3. `hya/coding-extras` disabled: nothing formats.
