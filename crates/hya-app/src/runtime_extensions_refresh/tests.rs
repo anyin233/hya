@@ -39,6 +39,7 @@ impl RefreshHarness {
             reconciler: reconciler.clone(),
             config_file: root.join("config.yaml"),
             applied: tokio::sync::Mutex::new(Some("schema_version: 2\nplugins: {}\n".into())),
+            core_plugins: Vec::new(),
             pure: false,
         });
         let (permission, _) = hya_tool::PermissionPlane::new(hya_tool::PermissionRules::default());

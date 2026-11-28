@@ -1,8 +1,8 @@
-# Copy to <hya config dir>/bundles/hya%2Fcode-mode/config.yml,
-# or .hya/bundles/code-mode/config.yml for a project install.
-# This example is documentation only and is not packaged.
-# No judge block is needed for agents.run or saved workflows; models.classify rejects
-# clearly until a judge is configured. The process has a cleared environment.
+# Copy to <hya config dir>/code-mode/config.yml
+# (legacy <hya config dir>/bundles/hya%2Fcode-mode/config.yml is also checked).
+# This example is documentation only.
+# No judge block is needed for tools.*, agent()/agents.run, or saved scripts;
+# models.classify rejects clearly until a judge is configured. The process has a cleared environment.
 judge:
   endpoint: https://api.typesafe.ai/v1/systemone # default
   model: jev-1.14.0                           # default

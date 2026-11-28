@@ -336,14 +336,13 @@ jobs:
             hya/agent-channels \
             hya/goal-loop \
             hya/plan-impl-review \
-            hya/basic-tui-components \
-            hya/code-mode; do
+            hya/basic-tui-components; do
             if ! grep -q "$expected" <<< "$list_out"; then
               echo "ERROR: expected builtin bundle '${expected}' missing from 'hya bundle list'" >&2
               exit 1
             fi
           done
-          echo "All 13 staged builtin bundles verified in bare-vs-full smoke."
+          echo "All 12 staged builtin bundles verified in bare-vs-full smoke."
 
   builtin-bundles-gate:
     name: builtin-bundles-gate

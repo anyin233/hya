@@ -1041,18 +1041,27 @@ async fn build_session_engine_with_mcp_defer(
     let reconciler =
         Arc::new(RuntimeReconciler::new(runtime.clone()).with_io_tasks(lifecycle.io_tasks.clone()));
     let mcp_control = Arc::new(RuntimeMcpControl::new(reconciler.clone()));
-    let catalog_refresh = Arc::new(RuntimeExtensionsRefresh::new(
-        crate::ProjectScopeRefresh::new(Arc::new(
-            InstalledBundleRefresh::new(bundle_registry_path())
-                .with_code_mode(settings.code_mode() != config::CodeMode::Normal)
-                .with_builtin_selection(builtins)
-                .with_io_tasks(lifecycle.io_tasks.clone())
-                .with_host_reads(Arc::new(hya_engine::StoreSessionReads::new(store.clone()))),
-        ))
-        .with_project_plugins(project_plugins),
-        reconciler.clone(),
-        options.pure,
-    )?);
+    let code_mode_spec = crate::code_mode::plugin_spec_for_mode(
+        settings.code_mode(),
+        &crate::config::active_config_path(),
+        &builtins,
+        &[],
+    )
+    .context("prepare core code-mode runtime specification")?;
+    let catalog_refresh = Arc::new(
+        RuntimeExtensionsRefresh::new(
+            crate::ProjectScopeRefresh::new(Arc::new(
+                InstalledBundleRefresh::new(bundle_registry_path())
+                    .with_builtin_selection(builtins)
+                    .with_io_tasks(lifecycle.io_tasks.clone())
+                    .with_host_reads(Arc::new(hya_engine::StoreSessionReads::new(store.clone()))),
+            ))
+            .with_project_plugins(project_plugins),
+            reconciler.clone(),
+            options.pure,
+        )?
+        .with_core_plugins(code_mode_spec.iter().cloned().collect()),
+    );
 
     let rules = PermissionRules::new(vec![
         Rule::new(Action::Read, "*", Mode::Allow),
@@ -1145,10 +1154,16 @@ async fn build_session_engine_with_mcp_defer(
     engine
         .runtime_registry()
         .publish_agent_effort_configuration(agent_efforts);
-    let plugin_desired = plugins
+    let mut plugin_desired = plugins
         .into_iter()
         .map(|spec| DesiredSource::plugin(SourceId::plugin(spec.id.clone()), spec))
         .collect::<Vec<_>>();
+    if let Some(spec) = code_mode_spec {
+        let id = SourceId::plugin(spec.id.clone());
+        if !plugin_desired.iter().any(|existing| existing.id() == &id) {
+            plugin_desired.push(DesiredSource::plugin(id, spec));
+        }
+    }
     let mcp_desired = mcp
         .iter()
         .map(|(name, config)| DesiredSource::mcp(SourceId::mcp(name.clone()), config.clone()))

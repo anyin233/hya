@@ -71,10 +71,19 @@ pub(crate) const TUI_SDK_RUNTIME: BunRuntime = BunRuntime {
     directories: &["src"],
 };
 
+/// The core Code Mode VM runtime (`code-mode__run`).
+pub(crate) const CODE_MODE_RUNTIME: BunRuntime = BunRuntime {
+    source: "packages/hya-code-mode",
+    destination: "lib/hya/code-mode",
+    files: &["package.json", "runtime.ts"],
+    directories: &[],
+};
+
 /// Every Bun program in the release archive, in staging order.
-pub(crate) const PACKAGED_RUNTIMES: [&BunRuntime; 5] = [
+pub(crate) const PACKAGED_RUNTIMES: [&BunRuntime; 6] = [
     &BUN_ADAPTER_RUNTIME,
     &CLAUDE_ADAPTER_RUNTIME,
+    &CODE_MODE_RUNTIME,
     &TUI_SDK_RUNTIME,
     &TUI_RUNTIME,
     &TUI_WEB_RUNTIME,
@@ -130,11 +139,13 @@ fn stage_bun_programs(root: &Path, package: &Path, bun: &Path) -> Result<()> {
         for directory in runtime.directories {
             copy_directory_contents(&source.join(directory), &destination.join(directory))?;
         }
-        run_bun(
-            bun,
-            &destination,
-            &["install", "--frozen-lockfile", "--production"],
-        )?;
+        if runtime.files.contains(&"bun.lock") {
+            run_bun(
+                bun,
+                &destination,
+                &["install", "--frozen-lockfile", "--production"],
+            )?;
+        }
     }
     Ok(())
 }

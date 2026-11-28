@@ -1215,7 +1215,7 @@ describe("request-scoped stdio protocol", () => {
 
 });
 
-test("runtime copies are byte-identical", () => { expect(readFileSync(join(import.meta.dir, "runtime.ts"))).toEqual(readFileSync(join(import.meta.dir, "../../extra/orchestrator/runtime.ts"))); });
+test("runtime copies are byte-identical", () => { expect(readFileSync(join(import.meta.dir, "runtime.ts"))).toEqual(readFileSync(join(import.meta.dir, "../../bundles/extra/orchestrator/runtime.ts"))); });
 
 describe("full run personality", () => {
   test("tool and arbitrary worker calls share start-order trace and Script wording", async () => {
@@ -1331,4 +1331,131 @@ describe("pre-run check", () => {
     });
     expect(result.output).toMatch(/Script error: .*\(line 3\)/);
   });
+});
+
+describe("dynamic multi-agent gating (hya/multi-agent)", () => {
+  const echoTools: ToolSchema[] = [{ name: "echo", description: "echo", input_schema: { type: "object", properties: { value: { type: "number" } }, required: ["value"] } }];
+  const makeHost = (calls: any[]): Host => async (method, params) => {
+    if (method === "tools.list") return { tools: echoTools };
+    if (method === "workspace.state") return { state: "rev-1" };
+    calls.push(params);
+    return params.name === "task"
+      ? { output: { metadata: { members: [{ member: "main/worker", session: "child", status: "done", summary: "worker ok" }] } } }
+      : { output: params.input };
+  };
+
+  test("with multiAgent enabled, agent() and agents.run() are exposed and execute", async () => {
+    const calls: any[] = [];
+    const ctx: RunContext = {
+      personality: PERSONALITIES.run, session: "ma-on", call: "ma-on-1", configDir: directory, multiAgent: true, host: makeHost(calls),
+    };
+    const globals = await executeScript('return { hasAgent: "agent" in globalThis, agentType: typeof agent, hasAgents: "agents" in globalThis, runType: typeof agents.run };', ctx);
+    expect(globals.ok).toBe(true);
+    expect(globals.output).toContain('"hasAgent":true');
+    expect(globals.output).toContain('"agentType":"function"');
+    expect(globals.output).toContain('"hasAgents":true');
+    expect(globals.output).toContain('"runType":"function"');
+
+    const called = await executeScript('const t = await tools.echo({ value: 7 });\nconst a = await agent({ agent: "hya-scout", prompt: "inspect" });\nreturn { t, status: a.status, report: a.report };', { ...ctx, call: "ma-on-2" });
+    expect(called.ok).toBe(true);
+    expect(called.output).toContain('"value":7');
+    expect(called.output).toContain('"report":"worker ok"');
+    expect(calls.some((call) => call.name === "task" && call.input.tasks[0].subagent_type === "hya-scout")).toBe(true);
+
+    expect(checkScript('await agent({ agent: "hya-scout", prompt: "ok", extra: 1 });', echoTools, PERSONALITIES.run, { multiAgent: true })[0]?.message)
+      .toContain("agent: unknown argument `extra`");
+    expect(initializeResult(PERSONALITIES.run, { multiAgent: true }).tools[0].description).toContain("agents.run");
+  });
+
+  test("with multiAgent disabled, agent() and agents are hidden and rejected before running", async () => {
+    const calls: any[] = [];
+    const ctx: RunContext = {
+      personality: PERSONALITIES.run, session: "ma-off", call: "ma-off-1", configDir: directory, multiAgent: false, host: makeHost(calls),
+    };
+    const globals = await executeScript('const t = await tools.echo({ value: 9 });\nreturn { t, hasAgent: "agent" in globalThis, hasAgents: "agents" in globalThis, agentType: typeof agent, agentsType: typeof agents };', ctx);
+    expect(globals.ok).toBe(true);
+    expect(globals.output).toContain('"value":9');
+    expect(globals.output).toContain('"hasAgent":false');
+    expect(globals.output).toContain('"hasAgents":false');
+    expect(globals.output).toContain('"agentType":"undefined"');
+    expect(globals.output).toContain('"agentsType":"undefined"');
+    expect(calls).toEqual([{ name: "echo", input: { value: 9 } }]);
+
+    const beforeCalls = calls.length;
+    for (const script of [
+      'return await agent({ agent: "hya-scout", prompt: "nope" });',
+      'return await agents.run({ agent: "hya-scout", prompt: "nope" });',
+    ]) {
+      const blocked = await executeScript(script, { ...ctx, call: `ma-off-block-${calls.length}` });
+      expect(blocked.ok).toBe(false);
+      expect(blocked.output).toContain("hya/multi-agent");
+      expect(blocked.trace).toEqual([]);
+      expect(calls.length).toBe(beforeCalls);
+    }
+
+    // Locally bound `agent` still works when multi-agent is disabled.
+    const localBinding = await executeScript('const agent = 42; return agent;', { ...ctx, call: "ma-off-local" });
+    expect(localBinding.ok).toBe(true);
+    expect(localBinding.output).toContain("42");
+
+    // Pre-run unavailable-global message and initialize description omit worker agents.
+    const diag = checkScript('require("fs");', echoTools, PERSONALITIES.run, { multiAgent: false });
+    expect(diag[0]?.message).not.toContain("agents.run");
+    const init = initializeResult(PERSONALITIES.run, { multiAgent: false });
+    expect(init.plugin.id).toBe("code-mode");
+    expect(init.tools[0].description).not.toContain("agents.run");
+    expect(init.tools[0].description).not.toContain("worker agents");
+  });
+
+  test("child process respects HYA_CODE_MODE_MULTI_AGENT=0 and =1 over stdio", async () => {
+    for (const [envVal, expectAgent] of [["0", false], ["1", true]] as const) {
+      const child = Bun.spawn([process.execPath, "run", join(import.meta.dir, "runtime.ts"), "run"], {
+        cwd: import.meta.dir, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+        env: { HYA_BUNDLE_CONFIG_DIR: directory, HYA_CODE_MODE_MULTI_AGENT: envVal },
+      });
+      async function* frames() {
+        let buffer = "";
+        const decoder = new TextDecoder();
+        for await (const chunk of child.stdout) {
+          buffer += decoder.decode(chunk, { stream: true });
+          let nl: number;
+          while ((nl = buffer.indexOf("\n")) >= 0) {
+            yield JSON.parse(buffer.slice(0, nl));
+            buffer = buffer.slice(nl + 1);
+          }
+        }
+      }
+      const incoming = frames();
+      const send = (frame: any) => child.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...frame }) + "\n");
+      const next = async () => {
+        const frame = await incoming.next();
+        if (frame.done) throw new Error(`child exited: ${await new Response(child.stderr).text()}`);
+        return frame.value;
+      };
+      try {
+        send({ id: 1, method: "initialize", params: { protocol_version: 1, host: { name: "test", version: "1" } } });
+        const init = await next();
+        expect(init.result.tools[0].description.includes("agents.run")).toBe(expectAgent);
+
+        send({ id: 2, method: "tool/call", params: {
+          tool: "run", session: `stdio-ma-${envVal}`, call: `call-${envVal}`, host_capability: "tok",
+          input: { script: 'return { agent: typeof agent, agents: typeof agents };' },
+        } });
+        const list = await next();
+        expect(list.params.method).toBe("tools.list");
+        send({ id: list.id, result: { tools: echoTools } });
+        const reply = await next();
+        expect(reply.result.ok).toBe(true);
+        expect(reply.result.output).toContain(expectAgent ? '"agent":"function","agents":"object"' : '"agent":"undefined","agents":"undefined"');
+
+        send({ id: 3, method: "shutdown", params: {} });
+        await next();
+        expect(await child.exited).toBe(0);
+      } finally {
+        child.stdin.end();
+        child.kill();
+        await child.exited;
+      }
+    }
+  }, 10000);
 });

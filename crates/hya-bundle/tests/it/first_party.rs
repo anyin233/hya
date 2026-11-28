@@ -282,11 +282,11 @@ fn first_party_identity_versions_follow_the_hya_version() {
 
 #[test]
 fn orchestrator_runtime_is_a_copy_of_the_code_mode_runtime() {
-    let bundles = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bundles");
-    let read = |path: &str| std::fs::read(bundles.join(path)).expect("runtime source");
+    let root = repository_root();
+    let read = |path: &str| std::fs::read(root.join(path)).expect("runtime source");
     assert!(
-        read("builtin/code-mode/runtime.ts") == read("extra/orchestrator/runtime.ts"),
-        "copy bundles/builtin/code-mode/runtime.ts to bundles/extra/orchestrator/runtime.ts"
+        read("packages/hya-code-mode/runtime.ts") == read("bundles/extra/orchestrator/runtime.ts"),
+        "copy packages/hya-code-mode/runtime.ts to bundles/extra/orchestrator/runtime.ts"
     );
 }
 

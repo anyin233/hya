@@ -1,14 +1,17 @@
-//! Skill tool implementation.
+//! Core `skill` tool implementation (ADR-0039).
+
+use std::path::{Path, PathBuf};
+
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
 use hya_tool::tool::obj_schema;
 use hya_tool::{Action, Resource, SkillCatalogOrigin, Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
 
 const FILE_SAMPLE_LIMIT: usize = 10;
 
+/// Core tool that loads the full body of a discovered or bundled skill by name.
 pub struct SkillTool;
 
 #[derive(Deserialize)]

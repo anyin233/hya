@@ -1,0 +1,12 @@
+{
+  "name": "@hya/code-mode",
+  "version": "0.0.0",
+  "private": true,
+  "hya": {
+    "version-reference": "hya"
+  },
+  "type": "module",
+  "scripts": {
+    "test": "bun test"
+  }
+}

@@ -40,19 +40,19 @@ The repository organizes all bundles into **three top-level directories** (conso
 
 ```text
 bundles/
-├── builtin/        # 13 trusted first-party bundles upgrading hya --bare to full mode
+├── builtin/        # 12 trusted first-party bundles upgrading hya --bare to full mode
 ├── extra/          # 6 optional official extension bundles (Marketplace-ready)
 └── examples/       # Developer starter & workflow examples
 ```
 
-### 2.1 `bundles/builtin/` (13 Built-in Bundles)
+### 2.1 `bundles/builtin/` (12 Built-in Bundles)
 
-All 13 bundles in `bundles/builtin/` ship in every release archive under `<prefix>/bundles/hya-<name>.hyabundle` and are verified by the independent `builtin-bundles` CI workflow.
+All 12 bundles in `bundles/builtin/` ship in every release archive under `<prefix>/bundles/hya-<name>.hyabundle` and are verified by the independent `builtin-bundles` CI workflow. (`skill` and `code-mode` have been promoted into `hya-bare` core — `crates/hya-core/src/kernel/tools/skill.rs` and `packages/hya-code-mode/` + `crates/hya-app/src/code_mode.rs` — per [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md).)
 
 | Path | Legacy path | Bundle ID | Runtime | Capabilities | `bare` vs `full` loading role |
 | --- | --- | --- | --- | --- | --- |
-| `bundles/builtin/base-tools` | `bundles/presets/base-tools` | `hya/base-tools` | **Native** (`cdylib`) | 10 tools: `read`, `write`, `edit`, `ls`, `glob`, `find`, `grep`, `ask_user`, `bash`, `apply_patch` | **Full required** via `hya-tool-loader`; skipped in `--bare` (falls back to 6 kernel tools) |
-| `bundles/builtin/extended-tools` | `bundles/presets/extended-tools` | `hya/extended-tools` | **Native** (`cdylib`) | 9 tools: `lsp`, `skill`, `list_agents`, `search_agent`, `task`, `archive`, `workflow`, `plan_exit`, `project_activity` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
+| `bundles/builtin/base-tools` | `bundles/presets/base-tools` | `hya/base-tools` | **Native** (`cdylib`) | 10 tools: `read`, `write`, `edit`, `ls`, `glob`, `find`, `grep`, `ask_user`, `bash`, `apply_patch` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
+| `bundles/builtin/extended-tools` | `bundles/presets/extended-tools` | `hya/extended-tools` | **Native** (`cdylib`) | 9 tools: `lsp`, `list_agents`, `search_agent`, `task`, `archive`, `workflow`, `plan_exit`, `project_activity`, `wait` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
 | `bundles/builtin/network-tools` | `bundles/presets/network-tools` | `hya/network-tools` | **Native** (`cdylib`) | 2 tools: `webfetch`, `websearch` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
 | `bundles/builtin/channel-tools` | `bundles/presets/channel-tools` | `hya/channel-tools` | **Native** (`cdylib`) | 4 tools: `send`, `list_channel`, `wait`, `report` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
 | `bundles/builtin/compaction` | `bundles/internal/compaction` | `hya/compaction` | **Native** (`cdylib`) | 1 `Rewriter`: `shake` + `remote` context compaction | **Full required** via `hya_core::bundles::load_internal()`; skipped in `--bare` |
@@ -63,7 +63,6 @@ All 13 bundles in `bundles/builtin/` ship in every release archive under `<prefi
 | `bundles/builtin/goal-loop` | `bundles/first-party/goal-loop` | `hya/goal-loop` | **Static** | 5 skills + 2 private agents (`hya-goal-guide`, `hya-goal-verifier`) | **Full catalog** published by `hya-app::first_party_catalogs()` |
 | `bundles/builtin/plan-impl-review` | `bundles/first-party/plan-impl-review` | `hya/plan-impl-review` | **Static** | 1 workflow (`plan-impl-review`) + 3 private stage agents (planner, implementer, reviewer) | **Full catalog** published by `hya-app::first_party_catalogs()` |
 | `bundles/builtin/basic-tui-components` | `bundles/first-party/basic-tui-components` | `hya/basic-tui-components` | **JS / TUI** (`@hya/tui-sdk`) | Standard TUI panels (Projects, Sessions, Todos, Context) | **Full catalog** published by `hya-app::first_party_catalogs()`, loaded by `packages/hya-tui` |
-| `bundles/builtin/code-mode` | `bundles/first-party/code-mode` | `hya/code-mode` | **JS** (`process: bun`) | 1 tool (`code-mode__run`) + `runtime.test.ts` (`check: [bun, test]`) | **Full catalog** published by `hya-app::first_party_catalogs()`, gated by `tools.code.mode` |
 
 ### 2.2 `bundles/extra/` (6 Official Extra Bundles)
 
@@ -469,7 +468,7 @@ flowchart TD
     Full["hya / hya serve / hya exec (Full Mode)"] --> L1["1. Kernel Rewriters (hya-core)<br/>bundles/builtin/compaction"]
     L1 --> L2["2. Native Tool Plane (hya-tool-loader)<br/>base, extended, network, channel-tools"]
     L2 --> L3["3. Built-in Presets (immutable)<br/>core-agents, core-skills, core-commands, agent-channels"]
-    L3 --> L4["4. Built-in Catalogs (hya-app)<br/>goal-loop, plan-impl-review, basic-tui-components, code-mode"]
+    L3 --> L4["4. Built-in Catalogs (hya-app)<br/>goal-loop, plan-impl-review, basic-tui-components"]
     L4 --> L5["5. Global Installed Registry<br/>$XDG_DATA_HOME/hya/bundles/registry.sqlite3"]
     L5 --> L6["6. Project Tier (highest precedence, ADR-0027)<br/>&lt;project-root&gt;/.hya/bundles/&lt;name&gt;/"]
 ```

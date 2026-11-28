@@ -839,7 +839,7 @@ async fn code_mode_only_with_tools_and_default() {
             && f2.matches(MARKER).count() >= 2
     );
 
-    // 3. T2.52: default (`normal`) mode publishes no `code-mode__run` and lists `hya/code-mode` disabled.
+    // 3. T2.52: default (`normal`) mode publishes no `code-mode__run` and `hya/code-mode` is no longer a bundle.
     let cfg = std::fs::read_to_string(&config_path).unwrap();
     std::fs::write(
         &config_path,
@@ -863,9 +863,8 @@ async fn code_mode_only_with_tools_and_default() {
     let listed =
         String::from_utf8_lossy(&env.backend.bundle_cli(&["bundle", "list"]).unwrap().stdout)
             .into_owned();
-    let row = listed
-        .lines()
-        .find(|line| line.contains("hya/code-mode"))
-        .unwrap_or_else(|| panic!("hya/code-mode missing: {listed}"));
-    assert!(row.contains("disabled"), "{row}");
+    assert!(
+        !listed.contains("hya/code-mode"),
+        "promoted core code-mode must not appear as a bundle: {listed}"
+    );
 }

@@ -4,22 +4,24 @@ This page lists every tool, agent role, first-party bundle, and optional extra b
 
 ---
 
-## 1. Kernel Tools (always available, including `hya exec --bare`)
+## 1. Core `hya-bare` Tools & Code Mode (always available, including `--bare`)
 
-These six foundational tools live directly inside Hya's core kernel (`hya-core`):
+These core tools live directly inside Hya's core kernel (`hya-core`), alongside the optional core Code Mode runtime (`packages/hya-code-mode` + `crates/hya-app/src/code_mode.rs`):
 
 | Tool | Default permission | What it does |
 | --- | --- | --- |
-| `read` | Allow *(inside Project)* | Read text files (with `LINE#HASH` anchors), images (`png`/`jpeg`/`gif`/`webp`), PDFs, directories, `artifact://` spilled outputs, and `channel://` mail logs. |
+| `read` | Allow *(inside Project)* | Read text files (with `LINE#HASH` anchors when `hya/base-tools` / `hya/hashline` is loaded), images (`png`/`jpeg`/`gif`/`webp`), PDFs, directories, `artifact://` spilled outputs, and `channel://` mail logs. |
 | `write` | Ask | Create or overwrite a file on disk (runs post-edit formatter & LSP diagnostics in full mode). |
 | `edit` | Ask | Edit an existing file via exact text replacement or `LINE#HASH` line anchors. |
 | `bash` | Ask | Execute a shell command (supports `timeout`, `cwd`, `env`, and `pty: true`). |
 | `todo` | Allow | Replace/update the session's ordered checklist (`pending`, `in_progress`, `completed`, `blocked`). |
 | `rewrite` | Allow | Fold earlier steps in the current turn behind a clean marker while preserving user messages and todos. |
+| `skill` | Allow (`read_only`) | Load the full body of a discovered or bundled `SKILL.md` by name. |
+| `code-mode__run` | Ask *(opt-in via `tools.code.mode`)* | Run a traced JavaScript async program calling `tools.*` (`workspace.state` supported); dynamically exposes `agent()` / `agents.run` only when `hya/multi-agent` is loaded. |
 
 ---
 
-## 2. Registry Tools (Full mode — 25 canonical tools)
+## 2. Registry Tools (Full mode — 24 bundle tools + core `skill`)
 
 In full mode, Hya loads four native tool-family bundles alongside the kernel's `todo` and `rewrite`. (`read`, `write`, `edit`, and `bash` gain full-mode permission checks, `ProjectScope` folder containment, and LSP/formatter hooks.)
 
@@ -35,12 +37,11 @@ In full mode, Hya loads four native tool-family bundles alongside the kernel's `
 | `grep` | Allow | Fast regular-expression content search across files. |
 | `ask_user` | Interactive | Ask the user structured multiple-choice or free-text questions (omitted automatically in in-process headless runs). |
 
-### `hya/extended-tools` (Code Intelligence, Skills, Subagents & Workflows)
+### `hya/extended-tools` (Code Intelligence, Subagents & Workflows)
 
 | Tool | Default permission | What it does |
 | --- | --- | --- |
 | `lsp` | Allow | Query language servers (go-to-definition, references, hover, symbols, diagnostics). |
-| `skill` | Allow | Load the full body of a discovered or bundled `SKILL.md` by name. |
 | `list_agents` | Allow | List spawnable agent definitions in the active catalog. |
 | `search_agent` | Allow | Search available agents by keyword. |
 | `task` | Allow | Spawn one or more episodic resident subagents in parallel (`tasks[]`). |
@@ -82,14 +83,14 @@ In full mode, Hya loads four native tool-family bundles alongside the kernel's `
 
 ---
 
-## 4. The 13 Built-in Bundles (`bundles/builtin/`)
+## 4. Built-in Bundles (`bundles/builtin/`)
 
-Every Hya installation ships with 13 trusted first-party bundles sourced from `bundles/builtin/` and packaged under `<prefix>/bundles/hya-<name>.hyabundle` (skipped in `hya exec --bare`, which runs only the 6 kernel tools). See the **[`hyabundle` Specification](../extend/hyabundle-spec.md)** and **[ADR-0038](../adr/0038-hyabundle-standard-and-independent-ci.md)** for full paths, runtimes, and loading precedence.
+Every Hya installation ships with 12 trusted first-party bundles sourced from `bundles/builtin/` and packaged under `<prefix>/bundles/hya-<name>.hyabundle` (skipped in `--bare`, which runs only `hya-bare` core tools including `skill` and optional `code-mode`). See the **[`hyabundle` Specification](../extend/hyabundle-spec.md)** and **[ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)** for full paths, runtimes, and loading precedence.
 
 | Bundle ID | Source path | Runtime | Role |
 | --- | --- | --- | --- |
 | `hya/base-tools` | `bundles/builtin/base-tools` | Native (`cdylib`) | Core file, search, shell, patch, and `ask_user` tools (10 tools). |
-| `hya/extended-tools` | `bundles/builtin/extended-tools` | Native (`cdylib`) | Code intelligence (`lsp`), skills, subagents, workflows, and project activity (9 tools). |
+| `hya/extended-tools` | `bundles/builtin/extended-tools` | Native (`cdylib`) | Code intelligence (`lsp`), subagents, workflows, and project activity (9 tools; `skill` promoted to `hya-bare` core). |
 | `hya/network-tools` | `bundles/builtin/network-tools` | Native (`cdylib`) | Web fetch and web search (`webfetch`, `websearch`). |
 | `hya/channel-tools` | `bundles/builtin/channel-tools` | Native (`cdylib`) | Team mailbox tools (`send`, `list_channel`, `wait`, `report`). |
 | `hya/compaction` | `bundles/builtin/compaction` | Native (`cdylib`) | Context `Rewriter` running `shake` and `remote` compaction before Kernel `Rewrite`. |
@@ -100,7 +101,6 @@ Every Hya installation ships with 13 trusted first-party bundles sourced from `b
 | `hya/goal-loop` | `bundles/builtin/goal-loop` | Static | Goal evaluator and Loop verifier/planner prompts and private helper agents. |
 | `hya/plan-impl-review` | `bundles/builtin/plan-impl-review` | Static | Built-in `plan-impl-review` Workflow DAG and stage agents. |
 | `hya/basic-tui-components` | `bundles/builtin/basic-tui-components` | JS / TUI | Standard TUI panels (Projects view/sidebar, Sessions, Todos, Context). |
-| `hya/code-mode` | `bundles/builtin/code-mode` | JS (`process: bun`) | Optional `code-mode__run` JavaScript batch tool (`tools.code.mode`, off by default). |
 
 ---
 

@@ -542,9 +542,24 @@ function argumentDiagnostics(call: string, shape: CallShape, literal: ObjectLite
   return found;
 }
 
-export function checkScript(script: string, schemas: ToolSchema[], personality: Personality): Diagnostic[] {
+export interface CapabilityOptions {
+  multiAgent?: boolean;
+}
+export function parseMultiAgentEnv(value: string | undefined): boolean | undefined {
+  if (value === undefined || !value.trim()) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "1" || normalized === "true") return true;
+  if (normalized === "0" || normalized === "false") return false;
+  return undefined;
+}
+function multiAgentEnabled(personality: Personality, explicit?: boolean): boolean {
+  return personality.tools ? (explicit ?? true) : true;
+}
+
+export function checkScript(script: string, schemas: ToolSchema[], personality: Personality, options: CapabilityOptions = {}): Diagnostic[] {
   const syntax = syntaxDiagnostics(script);
   if (syntax.length) return syntax;
+  const multiAgent = multiAgentEnabled(personality, options.multiAgent);
   const tokens = tokenize(script);
   const bound = boundNames(tokens);
   const tools = new Map(schemas.map((schema) => [toolIdentifier(schema.name), schema]));
@@ -557,7 +572,14 @@ export function checkScript(script: string, schemas: ToolSchema[], personality: 
     if (previous?.value === "." && previous.kind === "punct") return;
     if (next?.value === ":" && (previous?.value === "{" || previous?.value === ",")) return;
     if (UNAVAILABLE.has(token.value) && !bound.has(token.value) && previous?.value !== "typeof") {
-      at(token, `\`${token.value}\` is not available: a script has no modules, process, network or timers, and reaches the outside only through ${personality.tools ? "tools.*, " : ""}agents.run and models.classify`);
+      const reachable = personality.tools
+        ? multiAgent ? "tools.*, agents.run and models.classify" : "tools.* and models.classify"
+        : "agents.run and models.classify";
+      at(token, `\`${token.value}\` is not available: a script has no modules, process, network or timers, and reaches the outside only through ${reachable}`);
+      return;
+    }
+    if (!multiAgent && (token.value === "agent" || token.value === "agents") && !bound.has(token.value) && previous?.value !== "typeof") {
+      at(token, `\`${token.value}\` is not available: \`hya/multi-agent\` is not loaded`);
       return;
     }
     if (token.value === "tools" && !bound.has("tools")) {
@@ -576,6 +598,11 @@ export function checkScript(script: string, schemas: ToolSchema[], personality: 
         required: Array.isArray(inputSchema.required) ? inputSchema.required : [],
         closed: inputSchema.additionalProperties === false,
       }, literal, name));
+      return;
+    }
+    if (multiAgent && personality.tools && token.value === "agent" && !bound.has("agent") && next?.value === "(") {
+      const literal = literalArgument(index + 1);
+      if (literal) found.push(...argumentDiagnostics("agent", { keys: AGENT_KEYS, required: ["agent", "prompt"], closed: true }, literal, token));
       return;
     }
     const method = tokens[index + 2];
@@ -661,6 +688,7 @@ export interface RunContext {
   args?: Record<string, unknown>;
   stored?: string | null;
   saveAs?: string;
+  multiAgent?: boolean;
 }
 export interface ScriptResult {
   ok: boolean;
@@ -733,6 +761,7 @@ export async function executeWorkflow(input: unknown, context: RunContext): Prom
 }
 export async function executeScript(script: string, context: RunContext): Promise<ScriptResult> {
   const personality = context.personality ?? PERSONALITIES.workflow;
+  const multiAgent = multiAgentEnabled(personality, context.multiAgent);
   const started = Date.now();
   const component = (value: string) => encodeURIComponent(value).replaceAll(".", "%2E");
   const traceDir = resolve(context.configDir ?? tmpdir(), "traces", component(context.session));
@@ -797,12 +826,12 @@ export async function executeScript(script: string, context: RunContext): Promis
     const run = async () => {
       const schemas: ToolSchema[] = personality.tools ? (await context.host("tools.list", {}, controller.signal)).tools : [];
       ensureActive();
-      const problems = checkScript(script, schemas, personality);
+      const problems = checkScript(script, schemas, personality, { multiAgent });
       if (problems.length) throw new Error(renderDiagnostics(script, problems));
       await new Promise<void>((resolveRun, rejectRun) => {
         // A worker lets the parent enforce the deadline even for a CPU loop
         // resumed after an await, outside vm.Script's synchronous timeout.
-        worker = new Worker(new URL(import.meta.url), { workerData: { script, args: context.args ?? {}, options, personality, schemas } });
+        worker = new Worker(new URL(import.meta.url), { workerData: { script, args: context.args ?? {}, options, personality, schemas, multiAgent } });
         worker.on("error", rejectRun);
         worker.on("exit", (code) => { if (active) rejectRun(new Error(`Script worker exited with code ${code}`)); });
         worker.on("message", (event) => {
@@ -819,6 +848,7 @@ export async function executeScript(script: string, context: RunContext): Promis
                     if (!record(input)) throw new Error(`tools.${event.name} expects an argument object`);
                     return (await context.host("tool.call", { name: event.name, input }, controller.signal)).output;
                   case "agent": {
+                    if (!multiAgent) throw new Error("agent() / agents.run is not available: hya/multi-agent is not loaded");
                     const prepared = prepareAgent(input, personality);
                     const start = Promise.withResolvers<void>();
                     const startController = new AbortController();
@@ -967,7 +997,7 @@ export async function executeScript(script: string, context: RunContext): Promis
 }
 
 async function runVMWorker(): Promise<void> {
-  const { script, args, options, personality, schemas }: { script: string; args: Record<string, unknown>; options: Options; personality: Personality; schemas: ToolSchema[] } = workerData;
+  const { script, args, options, personality, schemas, multiAgent = true }: { script: string; args: Record<string, unknown>; options: Options; personality: Personality; schemas: ToolSchema[]; multiAgent?: boolean } = workerData;
   const port = parentPort!;
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   let sequence = 0;
@@ -988,14 +1018,18 @@ async function runVMWorker(): Promise<void> {
     void result.catch(() => {});
     return result;
   };
-  const globals = {
+  const globals: Record<string, unknown> = {
     get tools(): never { throw new Error("A workflow can only call agents.run and models.classify"); },
     args,
-    agents: { run: invoke("agent", "agents.run") },
     models: { classify: invoke("classify", "models.classify") },
     text: (value: unknown) => port.postMessage({ type: "text", value: typeof value === "string" ? value : json(value) }),
     console: { log: (...values: unknown[]) => port.postMessage({ type: "log", value: values.map((value) => typeof value === "string" ? value : json(value)).join(" ") }) },
   };
+  if (multiAgent) {
+    const runAgentCall = invoke("agent", "agents.run");
+    globals.agents = { run: runAgentCall };
+    if (personality.tools) globals.agent = runAgentCall;
+  }
   if (personality.tools) {
     const tools = Object.create(null);
     for (const schema of schemas) {
@@ -1036,9 +1070,13 @@ export const INITIALIZE_RESULT = {
   }],
 };
 
-export function initializeResult(personality: Personality) {
+export function initializeResult(personality: Personality, options: CapabilityOptions = {}) {
+  const multiAgent = multiAgentEnabled(personality, options.multiAgent);
+  const runDescription = multiAgent
+    ? "Run a JavaScript program that calls your other tools and can start worker agents. Only what the program outputs comes back to you, so one call can run several tools, run them in parallel, branch on their results, and filter or combine them before you read them.\n\nInput is one of: `{script, args?, save_as?}` runs a program (`save_as` stores it under a name, also when it fails); `{run, args?}` runs a stored program with new `args`; `{list: true}` lists stored programs; `{show: name}` returns a stored program's source and last error so you can repair it.\n\n`script` is the body of an async function: top-level `await` and `return` work. It has no file, network, import, or timer access; it reaches the outside only through these globals:\n\n- `args`: the `args` object of the call, or `{}`.\n- `await tools.<name>(args)` calls a tool with the arguments you would pass it directly and resolves to the tool's result value. A character of the tool name that cannot be part of a JavaScript identifier becomes `_`. File and shell tools resolve to an object such as `{title, output, metadata}` whose `output` is the text you would see when calling the tool directly. A failed or denied call rejects with an `Error` carrying the tool's error text; use `Promise.allSettled` to keep the results of the calls that succeed.\n- `ALL_TOOLS` is `[{name, description}]` for every tool the program can call. `describeTool(name)` returns `{name, description, input_schema}` or `undefined`.\n- `await agents.run({agent, prompt, description?, result?, model?, effort?, timeout_secs?, cache?})` starts one worker agent you may spawn and waits for its report; it resolves to `{handle, session, status, report, result}`. `result` maps field names to descriptions: the worker must end its report with a `RESULT: {...}` line holding those fields, which comes back parsed as `result` (or `null`). A worker gets 600 seconds unless you pass `timeout_secs` (at most 1800); one that runs out is stopped. Start several with `Promise.all`.\n- `await models.classify({state, questions})` asks the configured judge model typed questions (`bool`, `choice`, `score`) about `state`; it rejects when no judge is configured.\n- `text(value)` adds an item to the output (a string as is, anything else as JSON); `return value` does the same. `console.log(...)` adds a line to a separate console block.\n- An optional first line sets limits: `// @options: {\"timeout_ms\": 1800000, \"max_output_chars\": 3000}` (at most 3000000 and 3600).\n\nOutput longer than `max_output_chars` keeps only its start and end, so select what you need inside the program: slice file text, filter matches, summarise command output. The result ends with one trace line per tool, agent, or judge call (source line, call, arguments, outcome, time). Calls are real: calls made before an error are not undone. Before anything runs, the program is checked for syntax errors, unknown tools, missing required arguments, and unavailable globals; a program that fails the check makes no call, and the result names the line and column to fix."
+    : "Run a JavaScript program that calls your other tools. Only what the program outputs comes back to you, so one call can run several tools, run them in parallel, branch on their results, and filter or combine them before you read them.\n\nInput is one of: `{script, args?, save_as?}` runs a program (`save_as` stores it under a name, also when it fails); `{run, args?}` runs a stored program with new `args`; `{list: true}` lists stored programs; `{show: name}` returns a stored program's source and last error so you can repair it.\n\n`script` is the body of an async function: top-level `await` and `return` work. It has no file, network, import, or timer access; it reaches the outside only through these globals:\n\n- `args`: the `args` object of the call, or `{}`.\n- `await tools.<name>(args)` calls a tool with the arguments you would pass it directly and resolves to the tool's result value. A character of the tool name that cannot be part of a JavaScript identifier becomes `_`. File and shell tools resolve to an object such as `{title, output, metadata}` whose `output` is the text you would see when calling the tool directly. A failed or denied call rejects with an `Error` carrying the tool's error text; use `Promise.allSettled` to keep the results of the calls that succeed.\n- `ALL_TOOLS` is `[{name, description}]` for every tool the program can call. `describeTool(name)` returns `{name, description, input_schema}` or `undefined`.\n- `await models.classify({state, questions})` asks the configured judge model typed questions (`bool`, `choice`, `score`) about `state`; it rejects when no judge is configured.\n- `text(value)` adds an item to the output (a string as is, anything else as JSON); `return value` does the same. `console.log(...)` adds a line to a separate console block.\n- An optional first line sets limits: `// @options: {\"timeout_ms\": 1800000, \"max_output_chars\": 3000}` (at most 3000000 and 3600).\n\nOutput longer than `max_output_chars` keeps only its start and end, so select what you need inside the program: slice file text, filter matches, summarise command output. The result ends with one trace line per tool or judge call (source line, call, arguments, outcome, time). Calls are real: calls made before an error are not undone. Before anything runs, the program is checked for syntax errors, unknown tools, missing required arguments, and unavailable globals; a program that fails the check makes no call, and the result names the line and column to fix.";
   return { ...INITIALIZE_RESULT, plugin: { ...INITIALIZE_RESULT.plugin, id: personality.plugin },
-    tools: [{ ...INITIALIZE_RESULT.tools[0], name: personality.name, description: personality.tools ? "Run a JavaScript program that calls your other tools and can start worker agents. Only what the program outputs comes back to you, so one call can run several tools, run them in parallel, branch on their results, and filter or combine them before you read them.\n\nInput is one of: `{script, args?, save_as?}` runs a program (`save_as` stores it under a name, also when it fails); `{run, args?}` runs a stored program with new `args`; `{list: true}` lists stored programs; `{show: name}` returns a stored program's source and last error so you can repair it.\n\n`script` is the body of an async function: top-level `await` and `return` work. It has no file, network, import, or timer access; it reaches the outside only through these globals:\n\n- `args`: the `args` object of the call, or `{}`.\n- `await tools.<name>(args)` calls a tool with the arguments you would pass it directly and resolves to the tool's result value. A character of the tool name that cannot be part of a JavaScript identifier becomes `_`. File and shell tools resolve to an object such as `{title, output, metadata}` whose `output` is the text you would see when calling the tool directly. A failed or denied call rejects with an `Error` carrying the tool's error text; use `Promise.allSettled` to keep the results of the calls that succeed.\n- `ALL_TOOLS` is `[{name, description}]` for every tool the program can call. `describeTool(name)` returns `{name, description, input_schema}` or `undefined`.\n- `await agents.run({agent, prompt, description?, result?, model?, effort?, timeout_secs?, cache?})` starts one worker agent you may spawn and waits for its report; it resolves to `{handle, session, status, report, result}`. `result` maps field names to descriptions: the worker must end its report with a `RESULT: {...}` line holding those fields, which comes back parsed as `result` (or `null`). A worker gets 600 seconds unless you pass `timeout_secs` (at most 1800); one that runs out is stopped. Start several with `Promise.all`.\n- `await models.classify({state, questions})` asks the configured judge model typed questions (`bool`, `choice`, `score`) about `state`; it rejects when no judge is configured.\n- `text(value)` adds an item to the output (a string as is, anything else as JSON); `return value` does the same. `console.log(...)` adds a line to a separate console block.\n- An optional first line sets limits: `// @options: {\"timeout_ms\": 1800000, \"max_output_chars\": 3000}` (at most 3000000 and 3600).\n\nOutput longer than `max_output_chars` keeps only its start and end, so select what you need inside the program: slice file text, filter matches, summarise command output. The result ends with one trace line per tool, agent, or judge call (source line, call, arguments, outcome, time). Calls are real: calls made before an error are not undone. Before anything runs, the program is checked for syntax errors, unknown tools, missing required arguments, and unavailable globals; a program that fails the check makes no call, and the result names the line and column to fix." : INITIALIZE_RESULT.tools[0].description }] };
+    tools: [{ ...INITIALIZE_RESULT.tools[0], name: personality.name, description: personality.tools ? runDescription : INITIALIZE_RESULT.tools[0].description }] };
 }
 
 interface Frame {
@@ -1079,6 +1117,7 @@ async function main(): Promise<void> {
   const name = process.argv[2];
   if (name !== "workflow" && name !== "run") throw new Error("Expected personality: workflow or run");
   const personality = PERSONALITIES[name];
+  const multiAgent = multiAgentEnabled(personality, parseMultiAgentEnv(process.env.HYA_CODE_MODE_MULTI_AGENT));
   let judge: JudgeConfig | null = null;
   let judgeError: string | undefined;
   try {
@@ -1096,7 +1135,7 @@ async function main(): Promise<void> {
     const error = (code: number, message: string) => write({ jsonrpc: "2.0", id: frame.id, error: { code, message } });
     if (frame.id === undefined || frame.id === null) return;
     switch (frame.method) {
-      case "initialize": respond(initializeResult(personality)); return;
+      case "initialize": respond(initializeResult(personality, { multiAgent })); return;
       case "shutdown":
         closing = true;
         await Promise.all(active);
@@ -1111,7 +1150,7 @@ async function main(): Promise<void> {
         const start = Date.now();
         try {
           const result = await executeWorkflow(p.input, {
-            session: p.session, call: p.call, configDir: process.env.HYA_BUNDLE_CONFIG_DIR, judge, judgeError, personality,
+            session: p.session, call: p.call, configDir: process.env.HYA_BUNDLE_CONFIG_DIR, judge, judgeError, personality, multiAgent,
             host: (method, params, signal) => cap.call(p.host_capability, p.session, p.call, method, params, signal),
           });
           respond({ ok: result.ok, output: result.output, time_ms: Date.now() - start });

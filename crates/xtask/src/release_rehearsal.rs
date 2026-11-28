@@ -46,6 +46,9 @@ fn require_host_target(target: &str, host: &str) -> Result<()> {
 /// would only surface when `bun install --frozen-lockfile` runs during packaging.
 fn validate_bun_lockfile(root: &Path) -> Result<()> {
     for runtime in PACKAGED_RUNTIMES {
+        if !runtime.files.contains(&"bun.lock") {
+            continue;
+        }
         let lockfile = read_text(root, &format!("{}/bun.lock", runtime.source))?;
         let version = parse_bun_lockfile_version(&lockfile)
             .with_context(|| format!("read {}/bun.lock", runtime.source))?;
@@ -1550,6 +1553,7 @@ mod tests {
         validate_newest_changelog(&read_text(&root, "CHANGELOG.md")?, "CHANGELOG.md", &version)?;
 
         for path in [
+            "packages/hya-code-mode/package.json",
             "packages/hya-tui/package.json",
             "packages/hya-tui-web/package.json",
             "crates/hya-plugin-bun/adapter/package.json",

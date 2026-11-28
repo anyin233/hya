@@ -512,7 +512,6 @@ tools:
                 "hya/extended-tools",
                 &[
                     "lsp",
-                    "skill",
                     "list_agents",
                     "task",
                     "workflow",
@@ -562,7 +561,6 @@ tools:
             ("find", ToolPermission::ReadOnly, &[]),
             ("grep", ToolPermission::ReadOnly, &[]),
             ("lsp", ToolPermission::ReadOnly, &[]),
-            ("skill", ToolPermission::ReadOnly, &[]),
             ("list_agents", ToolPermission::ReadOnly, &[]),
             ("task", ToolPermission::Task, &[]),
             ("workflow", ToolPermission::Tool, &[]),

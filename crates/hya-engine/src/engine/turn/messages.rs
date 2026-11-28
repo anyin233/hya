@@ -48,7 +48,12 @@ pub(super) fn system_prompt(
         .iter()
         .filter_map(|schema| {
             let name = schema.name.as_str();
-            hya_tool_loader::tool_prompt(name).map(|line| (name, line))
+            hya_tool_loader::tool_prompt(name)
+                .or_else(|| {
+                    (name == crate::kernel::tools::SKILL)
+                        .then_some(crate::kernel::tools::SKILL_PROMPT)
+                })
+                .map(|line| (name, line))
         })
         .collect::<Vec<_>>();
     let kernel = crate::kernel::prompt::compose(
@@ -540,7 +545,7 @@ mod tests {
             .into_iter()
             .map(|s| s.name.to_string())
             .collect();
-        assert_eq!(builtins.len(), 25);
+        assert_eq!(builtins.len(), 24);
         for (model, gpt) in [
             ("openai/gpt-5.5", true),
             ("x/y/gpt-6.2-sol#high", true),
