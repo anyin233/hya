@@ -2,7 +2,7 @@
 # See CONTEXT.md for the full architecture and agent-spec contract.
 [workspace]
 resolver = "3"
-members = ["crates/*", "bundles/builtin/hashline/native", "bundles/builtin/coding-extras/native", "bundles/builtin/extended-tools/native", "bundles/builtin/channel-tools/native", "bundles/builtin/network/native", "bundles/builtin/compaction/native", "bundles/builtin/plan/native"]
+members = ["crates/*", "bundles/builtin/hashline/native", "bundles/builtin/coding-extras/native", "bundles/builtin/extended-tools/native", "bundles/builtin/channel-tools/native", "bundles/builtin/network/native", "bundles/builtin/compaction/native", "bundles/builtin/plan/native", "bundles/builtin/goal/native", "bundles/builtin/loop/native"]
 exclude = ["crates/hya-plugin-bun", "vendor/sevenz-rust2-0.20.2"]
 
 [workspace.package]
@@ -30,6 +30,8 @@ hya-channel-tools = { path = "bundles/builtin/channel-tools/native" }
 hya-network = { path = "bundles/builtin/network/native" }
 hya-compaction = { path = "bundles/builtin/compaction/native" }
 hya-plan = { path = "bundles/builtin/plan/native" }
+hya-goal = { path = "bundles/builtin/goal/native" }
+hya-loop = { path = "bundles/builtin/loop/native" }
 hya-store = { path = "crates/hya-store" }
 hya-core = { path = "crates/hya-core" }
 hya-engine = { path = "crates/hya-engine" }

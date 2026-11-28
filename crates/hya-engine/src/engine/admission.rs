@@ -282,7 +282,8 @@ impl SessionEngine {
             .await
     }
 
-    pub(crate) async fn admit_user_prompt_with_binding(
+    /// Admit a user prompt using a pre-captured runtime [`TurnBinding`].
+    pub async fn admit_user_prompt_with_binding(
         &self,
         session: SessionId,
         text: String,

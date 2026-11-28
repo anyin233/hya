@@ -8,6 +8,7 @@ mod config_minimal_edit;
 mod formatter;
 mod hashline_fallback;
 mod installed_bundle_refresh;
+mod loop_driver;
 mod nested_spawn_tree;
 mod plugin_adapter;
 mod preset_inventory;

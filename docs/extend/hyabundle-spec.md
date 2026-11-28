@@ -40,14 +40,14 @@ The repository organizes all bundles into **three top-level directories** (conso
 
 ```text
 bundles/
-├── builtin/        # 14 trusted first-party bundles upgrading hya --bare to full mode
+├── builtin/        # 15 trusted first-party bundles upgrading hya --bare to full mode
 ├── extra/          # 6 optional official extension bundles (Marketplace-ready)
 └── examples/       # Developer starter & workflow examples
 ```
 
-### 2.1 `bundles/builtin/` (14 Built-in Bundles)
+### 2.1 `bundles/builtin/` (15 Built-in Bundles)
 
-All 14 bundles in `bundles/builtin/` ship in every release archive under `<prefix>/bundles/hya-<name>.hyabundle` and are verified by the independent `builtin-bundles` CI workflow. (`skill` and `code-mode` have been promoted into `hya-bare` core — `crates/hya-core/src/kernel/tools/skill.rs` and `packages/hya-code-mode/` + `crates/hya-app/src/code_mode.rs` — per [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md).)
+All 15 bundles in `bundles/builtin/` ship in every release archive under `<prefix>/bundles/hya-<name>.hyabundle` and are verified by the independent `builtin-bundles` CI workflow. (`skill` and `code-mode` have been promoted into `hya-bare` core — `crates/hya-core/src/kernel/tools/skill.rs` and `packages/hya-code-mode/` + `crates/hya-app/src/code_mode.rs` — per [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md).)
 
 | Path | Legacy path | Bundle ID | Runtime | Capabilities | `bare` vs `full` loading role |
 | --- | --- | --- | --- | --- | --- |
@@ -58,11 +58,12 @@ All 14 bundles in `bundles/builtin/` ship in every release archive under `<prefi
 | `bundles/builtin/channel-tools` | `bundles/presets/channel-tools` | `hya/channel-tools` | **Native** (`cdylib`) | 4 tools: `send`, `list_channel`, `wait`, `report` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
 | `bundles/builtin/compaction` | `bundles/internal/compaction` | `hya/compaction` | **Native ABI v2** (`cdylib`) | 1 `Rewriter` (`shake` + `remote`) + 1 `ProjectionReducer` (`Event::Extension`) | **Full required** via `hya_core::bundles::load_internal_with_runtime()`; skipped in `--bare` |
 | `bundles/builtin/plan` | *(extracted from `extended-tools` + `core-agents`)* | `hya/plan` | **Native ABI v2** (`cdylib`) | `hya-plan` read-only main agent, `plan_exit` tool (hidden alias `plan`), and `tool.visibility` native hook | **Full catalog + native ABI v2** via `hya-tool-loader` & `hya-app`; skipped in `--bare` |
+| `bundles/builtin/loop` | *(extracted from `goal-loop` + `hya-engine`)* | `hya/loop` | **Native ABI v2** (`cdylib`) | `LoopDriver` (`id: "loop"`), `LoopService` (`capabilities: [services, drivers]`), and `loop-verifier-prompt` / `loop-planner-prompt` skills | **Full catalog + native ABI v2** via `hya-tool-loader` & `HostRuntime::loop_driver()`; skipped in `--bare` |
 | `bundles/builtin/core-agents` | `bundles/presets/core-agents` | `hya/core-agents` | **Static** | 5 built-in agents (`hya-main`, `hya-task`, `hya-scout`, `hya-reviewer`, `hya-title`) + `policy.yaml` | **Full required** via `hya-engine::builtin_agents` |
 | `bundles/builtin/core-skills` | `bundles/presets/core-skills` | `hya/core-skills` | **Static** | 2 built-in skills (`agent-bundle-authoring`, `secure-self-update`) | **Full required** via `hya-engine::skill_catalog` |
 | `bundles/builtin/core-commands` | `bundles/presets/core-commands` | `hya/core-commands` | **Static** | 2 built-in slash commands (`/init`, `/review`) | **Full required** via `hya-server::support::command_catalog` |
 | `bundles/builtin/agent-channels` | `bundles/presets/agent-channels` | `hya/agent-channels` | **Static** | 2 vertical channel policies (`unit-default`, `parent-dm-default`) | **Full required** via `hya-engine::channel_policy` |
-| `bundles/builtin/goal-loop` | `bundles/first-party/goal-loop` | `hya/goal-loop` | **Static** | 5 skills + 2 private agents (`hya-goal-guide`, `hya-goal-verifier`) | **Full catalog** published by `hya-app::first_party_catalogs()` |
+| `bundles/builtin/goal` | *(extracted from `goal-loop` + `hya-engine`)* | `hya/goal` | **Native ABI v2** (`cdylib`) | `GoalDriver` (`drivers`) + `GoalDriverService` (`services`), 3 goal skills (`goal-contract`, `guided-goal`, `evaluator-prompt`), and 2 private agents (`hya-goal-guide`, `hya-goal-verifier`) | **Full catalog + native ABI v2** via `hya-tool-loader` & `hya-app`; skipped in `--bare` (`hya -p` errors cleanly when disabled) |
 | `bundles/builtin/plan-impl-review` | `bundles/first-party/plan-impl-review` | `hya/plan-impl-review` | **Static** | 1 workflow (`plan-impl-review`) + 3 private stage agents (planner, implementer, reviewer) | **Full catalog** published by `hya-app::first_party_catalogs()` |
 | `bundles/builtin/basic-tui-components` | `bundles/first-party/basic-tui-components` | `hya/basic-tui-components` | **JS / TUI** (`@hya/tui-sdk`) | Standard TUI panels (Projects, Sessions, Todos, Context) | **Full catalog** published by `hya-app::first_party_catalogs()`, loaded by `packages/hya-tui` |
 
@@ -153,7 +154,7 @@ runtime:
   abi_version: 2                # 1 = lockstep ABI v1; 2 = Lockstep Native ABI v2 (hya-runtime-abi)
   crate_dir: native             # Source build directory (not packed as source files into .hyabundle)
   library: native/libacme_my_bundle.so  # Target dynamic library path inside packaged .hyabundle
-  capabilities: [tools, hooks, services]  # Declared native capabilities: tools | hooks | rewriters | services | apis | reducers | uri_handlers | goal_drivers | loop_drivers
+  capabilities: [tools, hooks, services, drivers]  # Declared native capabilities: tools | hooks | rewriters | services | drivers
 
 # Self-check contract executed by CI and `hya bundle verify`
 # Tip: use `--pass-with-no-tests` with `bun test` so stripped `.hyabundle` archives (which omit `*.test.ts`) still verify cleanly.

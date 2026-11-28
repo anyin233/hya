@@ -217,6 +217,58 @@ for line in sys.stdin:
     );
     std::fs::remove_dir_all(&plugin_dir).unwrap();
 
+    // 2b. `hya -p` errors cleanly in `--bare` mode and when `hya/goal` is disabled.
+    let bare_goal = Command::new(&env.backend.binary)
+        .args(["--bare", "-p", "verify bare failure"])
+        .env("XDG_CONFIG_HOME", &env.backend.xdg_config_home)
+        .env("XDG_DATA_HOME", &env.backend.xdg_data_home)
+        .env(
+            "XDG_CACHE_HOME",
+            env.backend.xdg_config_home.with_file_name("cache"),
+        )
+        .current_dir(&env.backend.project)
+        .output()
+        .await
+        .expect("spawn bare goal run");
+    assert!(
+        !bare_goal.status.success(),
+        "hya --bare -p must fail when hya/goal is absent"
+    );
+    let bare_stderr = String::from_utf8_lossy(&bare_goal.stderr);
+    assert!(
+        bare_stderr.contains("hya/goal") && bare_stderr.contains("--bare"),
+        "expected actionable hya/goal error in --bare stderr, got: {bare_stderr}"
+    );
+
+    let disabled_cfg_dir = tmp.path().join("disabled-goal-xdg");
+    std::fs::create_dir_all(disabled_cfg_dir.join("hya")).unwrap();
+    std::fs::write(
+        disabled_cfg_dir.join("hya/config.yaml"),
+        "schema_version: 2\nbundles:\n  builtin:\n    profile: full\n    disable: [hya/goal]\n",
+    )
+    .unwrap();
+    let disabled_goal = Command::new(&env.backend.binary)
+        .args(["-p", "verify disabled hya/goal failure"])
+        .env("XDG_CONFIG_HOME", &disabled_cfg_dir)
+        .env("XDG_DATA_HOME", &env.backend.xdg_data_home)
+        .env(
+            "XDG_CACHE_HOME",
+            env.backend.xdg_config_home.with_file_name("cache"),
+        )
+        .current_dir(&env.backend.project)
+        .output()
+        .await
+        .expect("spawn disabled-goal run");
+    assert!(
+        !disabled_goal.status.success(),
+        "hya -p must fail when hya/goal is disabled in config.yaml"
+    );
+    let disabled_stderr = String::from_utf8_lossy(&disabled_goal.stderr);
+    assert!(
+        disabled_stderr.contains("hya/goal") && disabled_stderr.contains("bundles.builtin"),
+        "expected actionable hya/goal disabled error in stderr, got: {disabled_stderr}"
+    );
+
     // 3. T2.25: installed channel policy denies child sends; uninstall restores default delivery.
     const FIRST: &str = "spawn restricted worker";
     const SECOND: &str = "spawn restored worker";

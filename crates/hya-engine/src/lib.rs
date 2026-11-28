@@ -41,7 +41,7 @@ pub mod category;
 pub mod channel_policy;
 /// Combined compaction configuration and handoff types.
 pub mod compaction;
-/// Goal-mode iteration driver, safety caps, and independent evaluators.
+/// Transitional iteration primitives for loop mode and workflow loop stages.
 pub mod completion;
 /// Harness coordination tools injected into every agent view at startup.
 mod coordination;
@@ -55,8 +55,6 @@ pub mod handle_naming;
 pub mod hooks;
 /// Team mailbox service loop (event-sourced mail/channels).
 pub mod lifecycle;
-/// Loop-mode verifier/planner traits and drive helpers.
-pub mod loop_mode;
 pub mod mailbox;
 mod member_wait;
 /// Subagent concurrency governor and team budgets.
@@ -108,10 +106,7 @@ pub use category::{
 };
 pub use channel_policy::{AGENT_CHANNELS_PRESET_ID, ChannelPolicy};
 pub use compaction::CompactionConfig;
-pub use completion::{GateOutcome, IterationGate, validate_goal_condition};
-pub use completion::{
-    GoalEvaluator, IterationDriver, ModelGoalEvaluator, RunOutcome, SafetyCaps, Verdict, run_goal,
-};
+pub use completion::{GateOutcome, IterationDriver, IterationGate, RunOutcome, SafetyCaps};
 pub use effort::{AgentEffortSource, EffectiveEffort, EffortSource, agent_effort, resolve_effort};
 pub use engine::terminal_handoff;
 pub use engine::{
@@ -126,18 +121,13 @@ pub use error::CoreError;
 pub use hooks::{
     AgentSpawnInput, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
     CommandExecuteBeforeOutcome, CompactionAfterInput, CompactionBeforeInput, CompactionDecision,
-    CompactionTrigger, HookChain, HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome,
-    ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome, NativeHookDispatcher,
-    NoopHookHost, SessionLifecycleInput, TextCompleteInput, TextCompleteOutcome,
-    ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    CompactionTrigger, EvidenceQuality, HookChain, HookDispatcher, MessageUserBeforeInput,
+    MessageUserBeforeOutcome, ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome,
+    NativeHookDispatcher, NoopHookHost, PlannerOutput, SessionLifecycleInput, TextCompleteInput,
+    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
+    ToolExecuteBeforeOutcome, ToolOutcomeNative, VerifierVerdict,
 };
 pub use lifecycle::run_lifecycle_service;
-pub use loop_mode::{
-    EvidenceQuality, HookLoopPlanner, HookLoopVerifier, LoopConfig, LoopGate, LoopPlanner,
-    LoopPredicate, LoopPredicateOutcome, LoopVerifier, PlannerOutput, PredicateMode,
-    VerifierVerdict, drive_loop, run_loop, validate_budget,
-};
 pub use mailbox::run_mailbox_service;
 pub use orchestrator::{SubagentGovernor, SubagentLimits};
 pub use permission_mode::{PublishedPermissionMode, RuntimePermissionMode, SessionPermissionMode};

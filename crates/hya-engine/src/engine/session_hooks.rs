@@ -315,7 +315,7 @@ impl SessionEngine {
     /// Record `session`'s channel policy and make its captured lifecycle/event
     /// hooks `binding`'s chain for `stable_agent_id` (creating the record on a
     /// first capture; see [`self`] for the swap contract).
-    pub(crate) async fn capture_session_bundle_hooks(
+    pub async fn capture_session_bundle_hooks(
         &self,
         session: SessionId,
         binding: &TurnBinding,

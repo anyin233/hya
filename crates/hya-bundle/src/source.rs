@@ -257,6 +257,7 @@ pub(crate) enum SourceNativeCapability {
     Hooks,
     Rewriters,
     Services,
+    Drivers,
 }
 
 /// Top-level `runtime:` block in `bundle.yaml`.

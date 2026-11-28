@@ -21,23 +21,39 @@ fn builtin_agent_catalog_includes_first_party_workflow_bundle() {
             .is_some(),
         "first-party Workflow must be cataloged"
     );
-    let goal_loop = catalog
+    let goal = catalog
         .bundles()
         .bundles()
         .iter()
-        .find(|bundle| bundle.identity().id == "hya/goal-loop")
-        .expect("goal-loop first-party bundle");
-    assert_eq!(goal_loop.kind(), hya_bundle::PreparedBundleKind::Bundle);
-    assert_eq!(goal_loop.agents().len(), 2);
-    for skill in [
-        "goal-contract",
-        "guided-goal",
-        "evaluator-prompt",
-        "loop-verifier-prompt",
-        "loop-planner-prompt",
-    ] {
+        .find(|bundle| bundle.identity().id == "hya/goal")
+        .expect("goal first-party bundle");
+    assert_eq!(goal.kind(), hya_bundle::PreparedBundleKind::Bundle);
+    assert_eq!(goal.agents().len(), 2);
+    for skill in ["goal-contract", "guided-goal", "evaluator-prompt"] {
         assert!(
-            goal_loop
+            goal.skills()
+                .iter()
+                .any(|resource| resource.local_id == skill)
+        );
+    }
+    assert!(
+        catalog
+            .bundles()
+            .bundles()
+            .iter()
+            .all(|bundle| bundle.identity().id != "hya/goal-loop"),
+        "legacy hya/goal-loop must be retired once hya/goal and hya/loop are extracted"
+    );
+    let loop_bundle = catalog
+        .bundles()
+        .bundles()
+        .iter()
+        .find(|bundle| bundle.identity().id == "hya/loop")
+        .expect("loop first-party bundle");
+    assert_eq!(loop_bundle.kind(), hya_bundle::PreparedBundleKind::Bundle);
+    for skill in ["loop-verifier-prompt", "loop-planner-prompt"] {
+        assert!(
+            loop_bundle
                 .skills()
                 .iter()
                 .any(|resource| resource.local_id == skill)

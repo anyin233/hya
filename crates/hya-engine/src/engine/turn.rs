@@ -580,7 +580,8 @@ impl SessionEngine {
             .await
     }
 
-    pub(crate) async fn run_bound_turn(
+    /// Execute one turn using a pre-captured runtime [`TurnBinding`].
+    pub async fn run_bound_turn(
         &self,
         session: SessionId,
         agent: &AgentSpec,

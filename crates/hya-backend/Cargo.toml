@@ -17,6 +17,7 @@ semver = "1"
 tempfile = "3"
 agent-client-protocol = { version = "=5.6.1", features = ["stdio"] }
 hya-bundle = { workspace = true }
+hya-runtime-abi = { workspace = true }
 hya-version = { workspace = true }
 hya-api = { workspace = true }
 hya-engine = { workspace = true }

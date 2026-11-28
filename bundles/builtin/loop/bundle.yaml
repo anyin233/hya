@@ -1,0 +1,21 @@
+kind: Bundle
+schema_version: 2
+version_ref: hya
+identity:
+  id: hya/loop
+  version: 0.0.0
+  publisher: hya
+namespace: loop
+runtime:
+  kind: native
+  abi_version: 2
+  crate_dir: native
+  capabilities:
+    - services
+    - drivers
+resources:
+  skills:
+    - id: loop-verifier-prompt
+      path: skills/loop-verifier-prompt/SKILL.md
+    - id: loop-planner-prompt
+      path: skills/loop-planner-prompt/SKILL.md

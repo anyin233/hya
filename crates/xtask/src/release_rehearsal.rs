@@ -91,7 +91,7 @@ fn host_target(root: &Path) -> Result<String> {
 const BINARY_NAME: &str = "hya";
 /// Crates whose release `cdylib` the native bundles (tool families and
 /// internal bundles) package.
-const NATIVE_BUNDLE_CRATES: [&str; 7] = [
+const NATIVE_BUNDLE_CRATES: [&str; 9] = [
     "hya-hashline",
     "hya-coding-extras",
     "hya-extended-tools",
@@ -99,6 +99,8 @@ const NATIVE_BUNDLE_CRATES: [&str; 7] = [
     "hya-channel-tools",
     "hya-compaction",
     "hya-plan",
+    "hya-goal",
+    "hya-loop",
 ];
 
 /// Production dependencies the staged TUI must contain (besides its native package).

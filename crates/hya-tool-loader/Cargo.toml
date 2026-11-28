@@ -33,6 +33,8 @@ hya-extended-tools = { workspace = true }
 hya-channel-tools = { workspace = true }
 hya-network = { workspace = true }
 hya-plan = { workspace = true }
+hya-goal = { workspace = true }
+hya-loop = { workspace = true }
 hya-tool-error = { workspace = true }
 
 [[example]]

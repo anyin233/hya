@@ -247,18 +247,18 @@ async fn installed_goal_loop_override_uninstall_restores_first_party_prompt() {
     std::fs::create_dir_all(&workdir).unwrap();
     let binding = runtime.bind_turn(&workdir).unwrap();
     let builtin_prompt = binding
-        .bundle_skill_content("hya/goal-loop", "evaluator-prompt")
+        .bundle_skill_content("hya/goal", "evaluator-prompt")
         .unwrap();
     assert!(!builtin_prompt.contains("OVERRIDE_EVALUATOR_PROMPT"));
 
     install(
         &registry,
         BundleSource::new(
-            "goal-loop-override",
+            "goal-override",
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    "kind: Bundle\nschema_version: 2\nidentity: { id: hya/goal-loop, version: 9.0.0, publisher: test }\nnamespace: goal-loop\nresources:\n  skills: [{ id: evaluator-prompt, path: evaluator.md }]\n",
+                    "kind: Bundle\nschema_version: 2\nidentity: { id: hya/goal, version: 9.0.0, publisher: test }\nnamespace: goal\nresources:\n  skills: [{ id: evaluator-prompt, path: evaluator.md }]\n",
                 ),
                 SourceFile::new(
                     "evaluator.md",
@@ -274,18 +274,18 @@ async fn installed_goal_loop_override_uninstall_restores_first_party_prompt() {
         runtime
             .bind_turn(&workdir)
             .unwrap()
-            .bundle_skill_content("hya/goal-loop", "evaluator-prompt")
+            .bundle_skill_content("hya/goal", "evaluator-prompt")
             .unwrap()
             .contains("OVERRIDE_EVALUATOR_PROMPT")
     );
 
-    registry.uninstall("hya/goal-loop").await.unwrap();
+    registry.uninstall("hya/goal").await.unwrap();
     refresh.refresh_if_changed(&runtime).await.unwrap();
     assert_eq!(
         runtime
             .bind_turn(&workdir)
             .unwrap()
-            .bundle_skill_content("hya/goal-loop", "evaluator-prompt"),
+            .bundle_skill_content("hya/goal", "evaluator-prompt"),
         Some(builtin_prompt)
     );
 }

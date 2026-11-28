@@ -9,6 +9,7 @@ mod common;
 mod compat_agent_cli;
 mod db_ownership;
 mod db_writers;
+mod loop_cli;
 mod lsp_runtime;
 mod provider_cli;
 mod proxy_cli;

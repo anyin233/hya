@@ -115,13 +115,16 @@ impl EngineSettings {
             .load_with_builtin(&self.file.agents)
     }
 
-    /// Goal evaluator settings resolved from the `hya/goal-loop` bundle config.
+    /// Goal evaluator settings resolved from the `hya/goal` (or legacy
+    /// `hya/goal-loop`) bundle config.
     pub fn goal(&self) -> GoalSettings {
-        if !self.file.bundles.builtin.is_enabled("hya/goal-loop") {
+        if !self.file.bundles.builtin.is_enabled("hya/goal")
+            && !self.file.bundles.builtin.is_enabled("hya/goal-loop")
+        {
             return GoalSettings::default();
         }
         let block = self
-            .read_bundle_config_value(&["hya/goal-loop", "hya/goal"])
+            .read_bundle_config_value(&["hya/goal", "hya/goal-loop"])
             .and_then(|val| decode_bundle_section::<GoalFile>(&val, Some("goal")));
         GoalSettings::from_block(block)
     }

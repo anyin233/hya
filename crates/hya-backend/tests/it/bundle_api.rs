@@ -155,11 +155,8 @@ async fn bundles_api_lifecycle_and_project_root_inventory_refresh() -> TestResul
         409
     );
     assert_eq!(
-        api.status(
-            "/v2/bundles:uninstall",
-            json!({"bundleId": "hya/goal-loop"})
-        )
-        .await?,
+        api.status("/v2/bundles:uninstall", json!({"bundleId": "hya/goal"}))
+            .await?,
         409
     );
     assert_eq!(

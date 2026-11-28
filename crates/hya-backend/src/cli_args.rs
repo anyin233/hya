@@ -439,12 +439,15 @@ pub(crate) enum Command {
 
 /// Resolve the effective loop budget from the parsed flags: `--budget`
 /// outranks the `--max-iterations` alias, the default mirrors
-/// [`hya_engine::LoopConfig::default`], and every request is clamped into the
-/// range `validate_budget` enforces.
+/// [`hya_app::DEFAULT_LOOP_BUDGET`], and every request is clamped into the
+/// `1..=100` range enforced by `hya/loop`.
 #[must_use]
 pub(crate) fn loop_budget(budget: Option<u32>, max_iterations: Option<u32>) -> u32 {
-    let default = hya_engine::LoopConfig::default().budget;
-    hya_engine::loop_mode::clamp_budget(budget.or(max_iterations).unwrap_or(default))
+    hya_app::clamp_loop_budget(
+        budget
+            .or(max_iterations)
+            .unwrap_or(hya_app::DEFAULT_LOOP_BUDGET),
+    )
 }
 
 /// Build the deterministic loop predicate from `--while`/`--until`: exactly
@@ -453,22 +456,22 @@ pub(crate) fn build_loop_predicate(
     while_command: Option<String>,
     until_command: Option<String>,
     workdir: &std::path::Path,
-) -> Result<Option<hya_engine::loop_mode::LoopPredicate>, String> {
+) -> Result<Option<hya_app::LoopPredicateSpec>, String> {
     match (while_command, until_command) {
         (Some(_), Some(_)) => Err(
             "--while and --until are mutually exclusive; give exactly one loop condition"
                 .to_string(),
         ),
-        (Some(command), None) => Ok(Some(hya_engine::loop_mode::LoopPredicate::new(
+        (Some(command), None) => Ok(Some(hya_app::LoopPredicateSpec {
             command,
-            hya_engine::loop_mode::PredicateMode::While,
-            workdir.to_path_buf(),
-        ))),
-        (None, Some(command)) => Ok(Some(hya_engine::loop_mode::LoopPredicate::new(
+            mode: hya_app::LoopPredicateMode::While,
+            workdir: workdir.to_path_buf(),
+        })),
+        (None, Some(command)) => Ok(Some(hya_app::LoopPredicateSpec {
             command,
-            hya_engine::loop_mode::PredicateMode::Until,
-            workdir.to_path_buf(),
-        ))),
+            mode: hya_app::LoopPredicateMode::Until,
+            workdir: workdir.to_path_buf(),
+        })),
         (None, None) => Ok(None),
     }
 }
@@ -885,7 +888,7 @@ mod tests {
 
     #[test]
     fn parses_goal_loop_budget_and_predicate_flags() {
-        use hya_engine::loop_mode::{LoopConfig, PredicateMode, validate_budget};
+        use hya_app::{DEFAULT_LOOP_BUDGET, HARD_MAX_LOOP_BUDGET, LoopPredicateMode};
 
         assert_eq!(
             p("hya -p ship --evaluator-model deep/o3-mini")
@@ -908,7 +911,7 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(super::loop_budget(None, None), LoopConfig::default().budget);
+        assert_eq!(super::loop_budget(None, None), DEFAULT_LOOP_BUDGET);
         assert_eq!(
             (
                 super::loop_budget(Some(5), Some(9)),
@@ -917,13 +920,7 @@ mod tests {
             ),
             (5, 9, 1)
         );
-        assert!(
-            validate_budget(&LoopConfig {
-                budget: super::loop_budget(None, Some(500)),
-                ..LoopConfig::default()
-            })
-            .is_ok()
-        );
+        assert_eq!(super::loop_budget(None, Some(500)), HARD_MAX_LOOP_BUDGET);
 
         let dir = std::env::temp_dir();
         assert_eq!(
@@ -931,14 +928,14 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .mode,
-            PredicateMode::While
+            LoopPredicateMode::While
         );
         assert_eq!(
             super::build_loop_predicate(None, Some("y".into()), &dir)
                 .unwrap()
                 .unwrap()
                 .mode,
-            PredicateMode::Until
+            LoopPredicateMode::Until
         );
         assert!(
             super::build_loop_predicate(None, None, &dir)
