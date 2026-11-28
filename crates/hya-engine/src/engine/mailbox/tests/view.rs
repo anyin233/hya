@@ -45,7 +45,7 @@ async fn superseded_channel_reader_cannot_advance_the_inbox_cursor() {
     eng.store().recover_claim(caller, owner).await.unwrap();
     let before = eng.replay(o.root).await.unwrap();
     let res = AgentChannelsService::read_channel_history(
-        eng.channel_host_runtime().as_ref(),
+        eng.host_runtime().as_ref(),
         Some(old),
         caller,
         &ch,
@@ -85,7 +85,7 @@ async fn cursor_cleanup_marks_only_incoming_work_for_wait_and_read() {
                 )
                 .unwrap();
                 AgentChannelsService::read_channel_history(
-                    eng.channel_host_runtime().as_ref(),
+                    eng.host_runtime().as_ref(),
                     None,
                     o.root,
                     &ch,
@@ -145,7 +145,7 @@ async fn steer_skips_archived_members_and_acks_incoming_only() {
         )
         .await
         .unwrap();
-    let host = eng.channel_host_runtime();
+    let host = eng.host_runtime();
     assert_eq!(
         AgentChannelsService::prepare_unread_steer(host.as_ref(), o.worker_1.session)
             .await
@@ -163,7 +163,7 @@ async fn steer_skips_archived_members_and_acks_incoming_only() {
     )
     .await
     .unwrap();
-    let host2 = eng2.channel_host_runtime();
+    let host2 = eng2.host_runtime();
     for (session, handle, incoming) in [
         (o2.root, "main", false),
         (o2.lead_1.session, o2.lead_1.path.as_str(), true),

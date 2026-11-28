@@ -252,7 +252,7 @@ pub async fn fixture_engine(
     let engine = SessionEngine::new(store, router, runtime, permission, bus)
         .with_rewriters(regs.rewriters)
         .with_tool_family_prompts(true);
-    let host = engine.channel_host_runtime();
+    let host = engine.host_runtime();
     for service in &channels.services {
         service
             .start(Arc::clone(&host))
@@ -300,7 +300,7 @@ pub async fn engine_with_router_and_runtime(
 /// `session` now, under the session's cached channel policy.
 pub async fn steer_notice(engine: &SessionEngine, session: SessionId) -> Option<String> {
     hya_agent_channels_core::AgentChannelsService::prepare_unread_steer(
-        engine.channel_host_runtime().as_ref(),
+        engine.host_runtime().as_ref(),
         session,
     )
     .await
@@ -316,7 +316,7 @@ pub async fn read_channel(
     last: Option<usize>,
 ) -> Result<hya_agent_channels_core::ChannelHistoryRead, hya_runtime_abi::HostError> {
     hya_agent_channels_core::AgentChannelsService::read_channel_history(
-        engine.channel_host_runtime().as_ref(),
+        engine.host_runtime().as_ref(),
         None,
         session,
         channel,

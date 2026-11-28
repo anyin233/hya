@@ -1,10 +1,8 @@
 //! Lightweight [`HostRuntime`] adapter backed by [`SessionEngine`]'s shared
 //! store, bus, turn-gate, and reviver handles.
 //!
-//! Used by [`SessionEngine::new`] when wiring the default `hya/agent-channels`
-//! native bundle (`ChannelUriSchemaHandler` and `UnreadMailSteerHook`) in
-//! standalone engine tests; full `hya-app` runtimes install the complete
-//! `AppHostRuntime` honoring `BuiltinBundleSelection`.
+//! [`SessionEngine::host_runtime`] hands it to engine fixtures and to the
+//! `hya-app` host runtime, which delegates its session-tree calls here.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock, Weak};
@@ -143,7 +141,7 @@ pub(super) fn subscribe_transient(
 
 /// Minimal [`HostRuntime`] exposing store, bus, bundle claims, and turn-runner
 /// mailbox hooks directly from `SessionEngine`'s shared `Arc` fields.
-pub(crate) struct EngineChannelsHostRuntime {
+pub(crate) struct EngineHostRuntime {
     pub(crate) store: SessionStore,
     pub(crate) bus: EventBus,
     pub(crate) runtime_owner: OwnerRunId,
@@ -166,7 +164,7 @@ impl SessionTreeSnapshot {
     }
 }
 
-impl EngineChannelsHostRuntime {
+impl EngineHostRuntime {
     fn supervisor(&self) -> Option<Arc<ResidentSupervisor>> {
         self.reviver
             .read()
@@ -259,7 +257,7 @@ fn strip_scope_prefix<'a>(scope: &str, stored_key: &'a str) -> Option<&'a str> {
 }
 
 #[async_trait]
-impl HostSessionStore for EngineChannelsHostRuntime {
+impl HostSessionStore for EngineHostRuntime {
     async fn session_exists(&self, session: SessionId) -> Result<bool, HostError> {
         self.store
             .read_projection_shared(session)
@@ -400,7 +398,7 @@ impl HostSessionStore for EngineChannelsHostRuntime {
 }
 
 #[async_trait]
-impl HostBundleStorage for EngineChannelsHostRuntime {
+impl HostBundleStorage for EngineHostRuntime {
     fn get_transient_state(
         &self,
         bundle: &str,
@@ -594,7 +592,7 @@ impl HostBundleStorage for EngineChannelsHostRuntime {
 }
 
 #[async_trait]
-impl HostTurnRunner for EngineChannelsHostRuntime {
+impl HostTurnRunner for EngineHostRuntime {
     async fn spawn_session(&self, _request: TurnSpawnRequest) -> Result<SessionId, HostError> {
         Err(HostError::Unavailable(
             "engine-channels host runtime".into(),
@@ -982,7 +980,7 @@ impl HostTurnRunner for EngineChannelsHostRuntime {
 }
 
 #[async_trait]
-impl HostModelCaller for EngineChannelsHostRuntime {
+impl HostModelCaller for EngineHostRuntime {
     async fn complete(
         &self,
         _request: ModelCallRequest,
@@ -1017,7 +1015,7 @@ impl HostModelCaller for EngineChannelsHostRuntime {
 }
 
 #[async_trait]
-impl HostEventBus for EngineChannelsHostRuntime {
+impl HostEventBus for EngineHostRuntime {
     fn publish(&self, envelope: Envelope) -> Result<(), HostError> {
         self.bus.publish(envelope);
         Ok(())
@@ -1049,7 +1047,7 @@ impl HostEventBus for EngineChannelsHostRuntime {
 }
 
 #[async_trait]
-impl HostCatalogReader for EngineChannelsHostRuntime {
+impl HostCatalogReader for EngineHostRuntime {
     async fn list_agents(&self, _session: Option<SessionId>) -> Result<Vec<AgentDef>, HostError> {
         Ok(Vec::new())
     }
@@ -1087,7 +1085,7 @@ impl HostCatalogReader for EngineChannelsHostRuntime {
 }
 
 #[async_trait]
-impl HostExtensionRegistry for EngineChannelsHostRuntime {
+impl HostExtensionRegistry for EngineHostRuntime {
     async fn list_extensions(
         &self,
         _kind: Option<ExtensionKind>,
@@ -1121,7 +1119,7 @@ impl HostExtensionRegistry for EngineChannelsHostRuntime {
     }
 }
 
-impl HostRuntime for EngineChannelsHostRuntime {
+impl HostRuntime for EngineHostRuntime {
     fn session_store(&self) -> &dyn HostSessionStore {
         self
     }
@@ -1217,7 +1215,7 @@ mod tests {
         let child = create(Some(root)).await.unwrap();
         let leaf = create(Some(child)).await.unwrap();
         let sibling = create(Some(root)).await.unwrap();
-        let host = engine.channel_host_runtime();
+        let host = engine.host_runtime();
         let turns = host.turn_runner();
 
         assert_eq!(
@@ -1306,7 +1304,7 @@ mod tests {
             .await
             .unwrap();
 
-        let host = engine.channel_host_runtime();
+        let host = engine.host_runtime();
         let turns = host.turn_runner();
         assert_eq!(turns.list_child_sessions(child).await.unwrap(), vec![leaf]);
         let receipt = turns.archive_subagent(child).await.unwrap();

@@ -999,7 +999,7 @@ impl HostTurnRunner for AppHostRuntime {
     async fn list_child_sessions(&self, parent: SessionId) -> Result<Vec<SessionId>, HostError> {
         self.on_host(async move {
             self.engine()?
-                .channel_host_runtime()
+                .host_runtime()
                 .turn_runner()
                 .list_child_sessions(parent)
                 .await
@@ -1010,7 +1010,7 @@ impl HostTurnRunner for AppHostRuntime {
     async fn archive_session_tree(&self, root: SessionId) -> Result<SessionTreeArchive, HostError> {
         self.on_host(async move {
             self.engine()?
-                .channel_host_runtime()
+                .host_runtime()
                 .turn_runner()
                 .archive_session_tree(root)
                 .await
@@ -1418,7 +1418,7 @@ impl HostTurnRunner for AppHostRuntime {
         self.on_host(async move {
             let engine = self.engine()?;
             engine
-                .channel_host_runtime()
+                .host_runtime()
                 .turn_runner()
                 .archive_subagent(child)
                 .await

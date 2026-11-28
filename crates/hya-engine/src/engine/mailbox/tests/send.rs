@@ -44,7 +44,7 @@ async fn mail_auth_non_member_rejected_by_engine_and_send_tool() {
     .with_extension(hya_tool::ParentSession(o.root));
     ctx.session = Some(o.lead_2.session);
     let service = Arc::new(hya_agent_channels_core::AgentChannelsService::with_runtime(
-        eng.channel_host_runtime(),
+        eng.host_runtime(),
     ));
     let tool_res = hya_agent_channels_core::SendTool::new(service)
         .execute(

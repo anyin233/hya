@@ -744,7 +744,7 @@ async fn forced_stop_handoff_carries_prior_facts_and_is_searchable() {
     assert!(h.doc.starts_with("1. Goal - ") && h.doc.contains("5. Pending tasks - "));
 
     let rows = hya_multi_agent_core::MultiAgentService::search_archived(
-        engine.channel_host_runtime().as_ref(),
+        engine.host_runtime().as_ref(),
         root,
         "quartz",
     )
@@ -1162,7 +1162,7 @@ async fn channel_read_history_normalization_handle_dm_and_heartbeats_status() {
             .count(),
         2
     );
-    let rows = AgentChannelsService::team_status(engine.channel_host_runtime().as_ref(), root)
+    let rows = AgentChannelsService::team_status(engine.host_runtime().as_ref(), root)
         .await
         .unwrap();
     assert_eq!(
@@ -1171,7 +1171,7 @@ async fn channel_read_history_normalization_handle_dm_and_heartbeats_status() {
     );
     assert!(
         rows[0].last_active_seconds.is_some()
-            && AgentChannelsService::team_status(engine.channel_host_runtime().as_ref(), child)
+            && AgentChannelsService::team_status(engine.host_runtime().as_ref(), child)
                 .await
                 .unwrap()
                 .is_empty()

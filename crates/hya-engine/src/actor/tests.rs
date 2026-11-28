@@ -369,7 +369,7 @@ async fn list_channels_and_steer_count_incoming_only_ignoring_outgoing_copy() {
     .unwrap()
     .snapshot_for("hya-main");
     eng.update_session_channel_policy(r, policy);
-    let host = eng.channel_host_runtime();
+    let host = eng.host_runtime();
     assert!(
         AgentChannelsService::prepare_unread_steer(host.as_ref(), r)
             .await
@@ -736,15 +736,9 @@ async fn activation_rest_waits_for_followup_mail_live_children_and_skips_consume
         .unwrap()
         .on_mail("main", &MailEndpoint::Channel(dm.clone()))
         .await;
-    AgentChannelsService::read_channel_history(
-        eng.channel_host_runtime().as_ref(),
-        None,
-        child,
-        &dm,
-        None,
-    )
-    .await
-    .unwrap();
+    AgentChannelsService::read_channel_history(eng.host_runtime().as_ref(), None, child, &dm, None)
+        .await
+        .unwrap();
     release.notify_one();
     assert!(matches!(
         waiter.wait().await.unwrap(),

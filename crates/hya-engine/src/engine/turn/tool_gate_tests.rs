@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use super::append_steer_notice;
-use crate::engine::{AgentSpec, SessionEngine, channel_host};
+use crate::engine::{AgentSpec, SessionEngine, host_runtime};
 use crate::{CreateSession, EventBus};
 
 const BUNDLE: &str = "test/staged";
@@ -102,9 +102,9 @@ impl NativeHook for SuppressionProbe {
         input: NativeToolAfterInput,
     ) -> Result<NativeToolAfterOutcome, HostError> {
         let value = self.host.bundle_storage().get_transient_state(
-            channel_host::STEER_STATE_BUNDLE,
+            host_runtime::STEER_STATE_BUNDLE,
             input.session,
-            channel_host::STEER_SUPPRESSION_KEY,
+            host_runtime::STEER_SUPPRESSION_KEY,
         )?;
         self.seen.lock().unwrap().push(value);
         Ok(NativeToolAfterOutcome::Continue {
@@ -163,7 +163,7 @@ async fn staged_extension_events_commit_with_the_tool_result_and_run_callbacks_a
     let engine = engine(provider, PermissionRules::default()).await;
     let callbacks = Arc::new(Mutex::new(Vec::new()));
     let engine = engine.clone().with_hooks(Arc::new(StagingHook {
-        host: engine.channel_host_runtime(),
+        host: engine.host_runtime(),
         bus: engine.bus().clone(),
         callbacks: Arc::clone(&callbacks),
     }));
@@ -206,7 +206,7 @@ async fn shell_tool_after_hooks_see_steer_suppressed() {
     let engine = engine(FakeProvider::scripted(vec![]), rules).await;
     let seen = Arc::new(Mutex::new(Vec::new()));
     let engine = engine.clone().with_hooks(Arc::new(SuppressionProbe {
-        host: engine.channel_host_runtime(),
+        host: engine.host_runtime(),
         seen: Arc::clone(&seen),
     }));
     let (session, agent) = root_session(&engine, "hya-main").await;
@@ -218,9 +218,9 @@ async fn shell_tool_after_hooks_see_steer_suppressed() {
     assert_eq!(*seen.lock().unwrap(), vec![Some(Value::Bool(true))]);
     assert_eq!(
         engine.get_transient_state(
-            channel_host::STEER_STATE_BUNDLE,
+            host_runtime::STEER_STATE_BUNDLE,
             session,
-            channel_host::STEER_SUPPRESSION_KEY,
+            host_runtime::STEER_SUPPRESSION_KEY,
         ),
         None
     );

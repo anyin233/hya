@@ -43,10 +43,10 @@ impl FixedSystemAgent {
 
 mod admission;
 mod agent_binding;
-mod channel_host;
 mod events;
 mod file_snapshot;
 mod fork;
+mod host_runtime;
 mod mailbox;
 mod member_control;
 mod members;
@@ -195,9 +195,9 @@ pub struct SessionEngine {
     /// Captured per-session lifecycle/event hooks ([`session_hooks`]).
     session_bundle_hooks: Arc<RwLock<session_hooks::SessionHookMap>>,
     session_channel_policies: Arc<RwLock<HashMap<SessionId, hya_tool::ChannelPolicySnapshot>>>,
-    transient_state: channel_host::TransientState,
+    transient_state: host_runtime::TransientState,
     /// Extension events staged by after-hooks of the tool result in flight.
-    staged_events: channel_host::StagedEvents,
+    staged_events: host_runtime::StagedEvents,
     governor: Option<StreamGovernor>,
     sidecar_environment: Option<Arc<dyn SidecarEnvironment>>,
     /// Revival seam (ADR-0015): a downward mail to an archived direct child
@@ -382,7 +382,7 @@ impl SessionEngine {
     #[must_use]
     pub fn with_legacy_coordination(mut self) -> Self {
         let multi_service = Arc::new(hya_multi_agent_core::MultiAgentService::with_runtime(
-            self.channel_host_runtime(),
+            self.host_runtime(),
         ));
         self = self.with_hooks(Arc::new(
             hya_multi_agent_core::MultiAgentLifecycleHook::new(Arc::clone(&multi_service)),
@@ -533,7 +533,7 @@ impl SessionEngine {
         session: SessionId,
         key: &str,
     ) -> Option<Value> {
-        channel_host::get_transient(&self.transient_state, bundle, session, key)
+        host_runtime::get_transient(&self.transient_state, bundle, session, key)
     }
 
     /// Set a process-local bundle value or remove it with `None`.
@@ -544,7 +544,7 @@ impl SessionEngine {
         key: &str,
         value: Option<Value>,
     ) {
-        channel_host::set_transient(&self.transient_state, bundle, session, key, value);
+        host_runtime::set_transient(&self.transient_state, bundle, session, key, value);
     }
 
     /// Subscribe to changes of a process-local bundle value.
@@ -554,15 +554,15 @@ impl SessionEngine {
         session: SessionId,
         key: &str,
     ) -> tokio::sync::watch::Receiver<Option<Value>> {
-        channel_host::subscribe_transient(&self.transient_state, bundle, session, key)
+        host_runtime::subscribe_transient(&self.transient_state, bundle, session, key)
     }
 
     /// Suppress or re-enable in-turn unread-mail steering for `session`.
     pub fn set_mail_steer_suppressed(&self, session: SessionId, suppressed: bool) {
         self.set_transient_state(
-            channel_host::STEER_STATE_BUNDLE,
+            host_runtime::STEER_STATE_BUNDLE,
             session,
-            channel_host::STEER_SUPPRESSION_KEY,
+            host_runtime::STEER_SUPPRESSION_KEY,
             suppressed.then_some(Value::Bool(true)),
         );
     }
@@ -581,7 +581,7 @@ impl SessionEngine {
         payload: Value,
         on_commit: Option<Box<dyn FnOnce() + Send>>,
     ) -> Result<(), hya_runtime_abi::HostError> {
-        channel_host::stage_event(
+        host_runtime::stage_event(
             &self.staged_events,
             during,
             target,
@@ -601,7 +601,7 @@ impl SessionEngine {
     }
 
     /// Stop accepting staged events for `session` and return them in order.
-    pub(crate) fn take_staged_events(&self, session: SessionId) -> Vec<channel_host::StagedEvent> {
+    pub(crate) fn take_staged_events(&self, session: SessionId) -> Vec<host_runtime::StagedEvent> {
         self.staged_events
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -649,8 +649,8 @@ impl SessionEngine {
     /// Build a lightweight [`hya_runtime_abi::HostRuntime`] backed by this
     /// engine's store, bus, turn gate, and reviver handles.
     #[must_use]
-    pub fn channel_host_runtime(&self) -> Arc<dyn hya_runtime_abi::HostRuntime> {
-        Arc::new(channel_host::EngineChannelsHostRuntime {
+    pub fn host_runtime(&self) -> Arc<dyn hya_runtime_abi::HostRuntime> {
+        Arc::new(host_runtime::EngineHostRuntime {
             store: self.store.clone(),
             bus: self.bus.clone(),
             runtime_owner: self.runtime_owner,
