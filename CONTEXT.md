@@ -54,6 +54,14 @@ that run before the kernel's own Rewrite. Full mode loads them; bare mode does
 not.
 _Avoid_: plugin, module
 
+**Injection point**:
+A generic place where a bundle adds behavior to the core: a tool, rewriter,
+hook, service, BundleApi route, projection reducer, URI scheme, driver, CLI
+command, or TUI contribution (ADR-0040). The core never names the bundle or
+its concepts, and first-party bundles use the same points as third-party
+ones. Each point exists because a bundle uses it.
+_Avoid_: extension slot, plugin hook
+
 ## Sessions, Agents & Bundles
 
 **Session**:

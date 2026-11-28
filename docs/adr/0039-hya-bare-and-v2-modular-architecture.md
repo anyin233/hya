@@ -20,7 +20,7 @@ This ADR records the clean-sheet **v2** architecture: `hya` as a complete `hya-b
 
 ### 1. Single Binary, Composable Startup (`hya-bare` + `bundles/builtin/` = `hya-full`)
 
-- **`hya` is `hya-bare`.** Enabled bundles from `bundles/builtin/` compose `hya-full` by default at runtime.
+- **`hya` is `hya-bare`.** Enabled bundles from `bundles/builtin/` compose `hya-full` by default at runtime. [ADR-0040](0040-context-kernel-is-the-only-core.md) refines this principle: the core is the context kernel plus generic injection points, and bare to full is a composition of enabled bundles, not a mode.
 - **Global `--bare`:** `--bare` is promoted to a global CLI flag covering `hya exec`, `hya serve`, and interactive TUI/WebUI (`packages/hya-tui` + `packages/hya-tui-web`). Under `--bare`, zero `bundles/builtin/` modules or TUI bundles are loaded.
 - **Profile & override control in `config.yaml` v2:** `config.yaml` (`schema_version: 2`) controls built-in composition via:
 
