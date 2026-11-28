@@ -28,7 +28,7 @@ To replace the legacy split across four separate extension mechanisms (`extensio
 ### 1.2 Core Invariants
 
 1. **Declaration separated from implementation:** Regardless of runtime (`js`, `native`, or `static`), every exported tool, hook, MCP server, agent, skill, and slash command is declared via standardized descriptor files. Hya can statically validate schemas, index catalogs, display permission postures, register MCP endpoints, and clamp agent tool views without spawning a process or loading a dynamic library.
-2. **Minimal `hya --bare` bootability:** Built-in bundles under `bundles/builtin/` upgrade the minimal 3-primitive kernel (`hya-core`) into full mode, yet `hya exec --bare` must always boot and run with its 6 built-in kernel tools and zero dependency on `bundles/builtin/`.
+2. **Minimal `hya --bare` bootability:** Built-in bundles under `bundles/builtin/` upgrade `BuiltinBundleProfile::Bare` into full mode, yet `hya --bare`, `hya serve --bare`, and `hya exec --bare` must always boot and run with the 8 standard bare tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill`) and zero dependency on `bundles/builtin/`.
 3. **Packaged artifact separated from source tree:** Source directories may hold tests (`*.test.ts`), Rust source trees (`native/src/`), and READMEs. Packaging into `.hyabundle` includes only the declared closure and target runtime artifacts (JS entrypoints or compiled platform dynamic libraries), ensuring compact, deterministic, and optionally closed-source distribution.
 4. **Portable, independent CI:** Bundle verification does not depend on Hya's main workspace test suite, `hya-e2e`, or TUI suites. External and community bundles (`bundles/extra/`, `bundles/examples/`, or future standalone Marketplace repositories) validate with zero Hya source-tree coupling.
 
@@ -463,7 +463,7 @@ hya bundle install --project -y ./my-bundle.hyabundle
 
 ```mermaid
 flowchart TD
-    Bare["hya exec --bare"] --> KernelOnly["hya-core 3-primitive kernel<br/>(6 built-in tools, zero bundle loads)"]
+    Bare["hya --bare / hya serve --bare / hya exec --bare"] --> BareProfile["Unified SessionEngine (BuiltinBundleProfile::Bare)<br/>8 bare tools + code-mode (no agent()) + hya-bare agent<br/>Zero bundles/builtin/ loaded (optional user/project tiers)"]
 
     Full["hya / hya serve / hya exec (Full Mode)"] --> L1["1. Kernel Rewriters (hya-core)<br/>bundles/builtin/compaction"]
     L1 --> L2["2. Native Tool Plane (hya-tool-loader)<br/>base, extended, network, channel-tools"]

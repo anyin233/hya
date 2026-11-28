@@ -259,7 +259,10 @@ impl TurnBinding {
     pub fn handoff_policy(&self, stable_id: &str) -> Result<HandoffPolicy, BundleError> {
         let definition = self.snapshot.catalog.require(stable_id)?;
         match definition.origin.bundle_id() {
-            None => Ok(crate::builtin_agents::preset_agent(stable_id)
+            None => Ok(self
+                .snapshot
+                .catalog
+                .preset_agent(stable_id)
                 .map(|agent| agent.handoff)
                 .unwrap_or_default()),
             Some(id) => self

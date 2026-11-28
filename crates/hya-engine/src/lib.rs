@@ -90,8 +90,8 @@ mod test_support;
 
 pub use agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
 pub use builtin_agents::{
-    CORE_AGENTS_PRESET_ID, CoreAgentsPreset, MAIN_AGENT_ID, SpawnScope, TASK_AGENT_ID,
-    builtin_agent_ids, core_agents_preset, preset_agent,
+    BARE_AGENT_ID, CORE_AGENTS_PRESET_ID, CoreAgentsPreset, MAIN_AGENT_ID, SpawnScope,
+    TASK_AGENT_ID, builtin_agent_ids, core_agents_preset, preset_agent,
 };
 pub use bundle_apis::{
     ApiMethod, ApiPathTemplate, ApiScope, BundleApiCall, BundleApiError, BundleApiOutcome,

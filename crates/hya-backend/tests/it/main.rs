@@ -1,6 +1,7 @@
 //! Integration tests for `hya-backend`, built as one binary; each module covers one area.
 
 mod bare_launch;
+mod bare_runtime;
 mod bridge_cli;
 mod bundle_api;
 mod bundle_cli;

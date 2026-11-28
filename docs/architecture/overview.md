@@ -21,7 +21,7 @@ Nothing maintains a separate "shadow state" table that can drift out of sync. Wh
 
 ### 2. A tiny three-primitive Kernel underneath Full Mode
 
-At the bottom of the runtime sits `hya-core::kernel`—a minimal agent loop with just three context operations (**Model append**, **Tool append**, and **Rewrite**) and six built-in tools (`bash`, `read`, `write`, `edit`, `todo`, `rewrite`). You can run that kernel completely by itself with `hya exec --bare`.
+At the bottom of the runtime sits `hya-core::kernel`—a minimal agent loop with just three context operations (**Model append**, **Tool append**, and **Rewrite**) and seven built-in kernel tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`). Passing the global `--bare` flag (`hya --bare`, `hya serve --bare`, `hya exec --bare`) runs the unified `SessionEngine` on top of that kernel with `BuiltinBundleProfile::Bare` (adding `skill`, built-in `code-mode` without `agent()`, `AGENTS.md`/MCP/plugin adapters, and the minimal `hya-bare` agent—while loading zero built-in bundles). Add `--pure` (`hya exec --bare --pure`) to also skip external `AGENTS.md`, disk skills, MCP, and plugins for pure kernel benchmarks.
 
 Full mode (`hya-engine`) does **not** fork or replace that loop. Instead, it wraps the kernel with permissions, multi-root workspace checks, hooks, MCP servers, episodic subagents, Workflows, and gentler context-reduction steps (`hya/compaction`).
 

@@ -48,10 +48,11 @@ const KILL_WAIT: Duration = Duration::from_secs(5);
 pub(crate) struct DaemonSpec {
     /// The database (a file path; in-memory stores cannot be shared).
     pub(crate) db: String,
-    /// `--model`, `--yolo`, `--pure` of the command that starts it; they
+    /// `--model`, `--yolo`, `--bare`, `--pure` of the command that starts it; they
     /// shape that daemon for every client until it stops.
     pub(crate) model: Option<String>,
     pub(crate) yolo: bool,
+    pub(crate) bare: bool,
     pub(crate) pure: bool,
     /// `--allow-host` names the daemon accepts besides loopback (Host
     /// allowlist; docs/cli.md "Allowed Host names").
@@ -209,6 +210,9 @@ fn serve_command(spec: &DaemonSpec, relay: &RelayFlags, dir: &std::path::Path) -
     }
     if spec.yolo {
         command.arg("--yolo");
+    }
+    if spec.bare {
+        command.arg("--bare");
     }
     if spec.pure {
         command.arg("--pure");
@@ -500,6 +504,7 @@ mod tests {
             db: "/state/hya/sessions.db".into(),
             model: Some("hya/echo".into()),
             yolo: true,
+            bare: true,
             pure: true,
             allow_hosts: vec!["hya.example.lan".into()],
             exe: PathBuf::from("/bin/hya"),
@@ -517,7 +522,7 @@ mod tests {
         let args: Vec<&str> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
         assert_eq!(
             args.join(" "),
-            "serve --bind 127.0.0.1:0 --db /state/hya/sessions.db --model hya/echo --yolo --pure --allow-host hya.example.lan"
+            "serve --bind 127.0.0.1:0 --db /state/hya/sessions.db --model hya/echo --yolo --bare --pure --allow-host hya.example.lan"
         );
         let removed: Vec<_> = cmd
             .get_envs()
@@ -532,6 +537,7 @@ mod tests {
         let plain = DaemonSpec {
             model: None,
             yolo: false,
+            bare: false,
             pure: false,
             allow_hosts: Vec::new(),
             ..spec
@@ -558,6 +564,7 @@ mod tests {
             db: String::new(),
             model: None,
             yolo: false,
+            bare: false,
             pure: false,
             allow_hosts: Vec::new(),
             exe: PathBuf::from("/nonexistent/hya"),

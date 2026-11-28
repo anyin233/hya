@@ -40,14 +40,15 @@ hya [OPTIONS] [COMMAND]
 | `--allow-host <HOST>` | Loopback only | Extra `Host` header name accepted by the server (repeatable, e.g. `--allow-host hya.lan`). |
 | `--resume [<ID>]` | — | Reopen a specific session ID in bare `hya`, or open the session picker when `<ID>` is omitted. |
 | `--yolo` | `false` | Auto-approve every tool and command without asking. |
-| `--pure` | `false` | Ignore external context (`AGENTS.md`, MCP servers, plugins, and disk skills). |
+| `--bare` | `false` | Run with `BuiltinBundleProfile::Bare` across `hya`, `hya serve` (including `start`/`restart` and daemon auto-start), `hya exec`, `-p`, `hya loop`, `hya acp`, `hya agent list`, and `hya workflow`: loads zero built-in bundles (`bundles/builtin/`), exposes the 8 standard bare tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill`) plus built-in `code-mode` (without `agent()`), uses the minimal `hya-bare` default agent, and retains `AGENTS.md`, disk skills, MCP, and user/project bundle/plugin adapters. Combine with `--pure` (`hya exec --bare --pure`) to also skip external `AGENTS.md`, disk skills, MCP, and user/project plugins. |
+| `--pure` | `false` | Ignore external context (`AGENTS.md`, MCP servers, user/project plugins, disk skills, and `code-mode` sidecar). Can be combined with `--bare`. |
 | `--db <PATH>` | Command-dependent | SQLite database file path (`""` or `":memory:"` for in-memory on `exec` and foreground `serve`). |
 
 ---
 
 ## Interactive launch (bare `hya`)
 
-Running `hya` on an interactive terminal finds (or starts) the background daemon for `~/.local/state/hya/sessions.db`, starts the WebUI on `http://127.0.0.1:3250`, and opens the terminal UI in your current directory.
+Running `hya` on an interactive terminal finds (or starts) the background daemon for `~/.local/state/hya/sessions.db`, starts the WebUI on `http://127.0.0.1:3250`, and opens the terminal UI in your current directory. Passing `hya --bare` starts the auto-launched daemon with `--bare` (zero built-in bundles, `hya-bare` default agent, standard bare tools, and zero built-in TUI bundles).
 
 If `stdin` or `stdout` is not a terminal (for example inside a pipe or CI script), bare `hya` prints a short version and usage banner and exits `0`.
 
@@ -75,8 +76,9 @@ hya exec [OPTIONS] <PROMPT | ->
 | --- | --- |
 | `--json` | Stream committed `Event` envelopes as newline-delimited JSON (JSONL) on `stdout`. |
 | `--include-subagents` | With `--json` (in-process full mode), include events from spawned child and grandchild subagent sessions. |
-| `--bare` | Run the minimal 3-primitive kernel alone (`bash`, `read`, `write`, `edit`, `todo`, `rewrite`) with no bundles, plugins, MCP, or permissions. Conflicts with `--pure`. |
 | `--time-budget <SECS>` | Wall-clock budget in seconds; injects progress, wrap-up, and final-window notices and caps per-call `bash` waits. |
+
+Global flags such as `--bare` and `--pure` can be placed either before or after `exec` (e.g., `hya exec --bare "fix tests"` or `hya --bare --pure exec "benchmark prompt"`).
 
 ### `hya -p` / `--prompt` (Goal mode)
 
@@ -101,10 +103,10 @@ Iterates toward `--target` up to `--budget` rounds (default `10`). With `--until
 ### Foreground server
 
 ```sh
-hya serve [--bind 127.0.0.1:8080] [--db ./sessions.db] [--allow-host <HOST>]... [--relay <URL>]
+hya serve [--bind 127.0.0.1:8080] [--db ./sessions.db] [--bare] [--allow-host <HOST>]... [--relay <URL>]
 ```
 
-Serves both `/v1` HTTP/JSON+SSE+WebSocket and `hya.v1` gRPC on `--bind` (default `127.0.0.1:8080`, in-memory DB unless `--db` is given). Prints `hya server listening on <url>` on `stdout` when ready.
+Serves both `/v1` HTTP/JSON+SSE+WebSocket and `hya.v1` gRPC on `--bind` (default `127.0.0.1:8080`, in-memory DB unless `--db` is given). Prints `hya server listening on <url>` on `stdout` when ready. Adding `--bare` starts the server on `BuiltinBundleProfile::Bare` with zero `bundles/builtin/` loaded (`hya-bare` default agent, standard bare tools, and an empty built-in bundle catalog).
 
 ### Background daemon lifecycle
 
@@ -112,10 +114,10 @@ Uses `~/.local/state/hya/sessions.db` unless `--db <PATH>` is given:
 
 | Command | Description |
 | --- | --- |
-| `hya serve start [--json]` | Start the detached background daemon if not already running. Accepts `--relay`, `--relay-transport`, `--relay-ca`, `--relay-ephemeral`, `--relay-heartbeat`, and `--allow-host`. |
+| `hya serve start [--bare] [--json]` | Start the detached background daemon if not already running. Accepts `--bare`, `--relay`, `--relay-transport`, `--relay-ca`, `--relay-ephemeral`, `--relay-heartbeat`, and `--allow-host`. |
 | `hya serve status [--json]` | Print URL, PID, version, database path, uptime, log path, and relay status (exits `1` if stopped). |
 | `hya serve stop [--force] [--timeout <SECS>]` | Drain active turns and stop the daemon cleanly (default timeout `45`s; `--force` sends `SIGKILL` after timeout). |
-| `hya serve restart [--json] [--force] [--timeout <SECS>]` | Stop the running daemon and start a fresh one, preserving relay and `--allow-host` settings and restoring interrupted sessions. |
+| `hya serve restart [--bare] [--json] [--force] [--timeout <SECS>]` | Stop the running daemon and start a fresh one, preserving relay and `--allow-host` settings and restoring interrupted sessions. |
 
 ---
 

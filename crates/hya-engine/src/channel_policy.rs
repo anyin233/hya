@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 use hya_bundle::{
     BundleCatalog, BundleError, ChannelCapability, ChannelParticipantRole, ChannelTemplateKind,
-    PreparedChannelParticipant, PreparedChannelTemplate, first_party_bundle,
+    PreparedChannelParticipant, PreparedChannelTemplate, first_party_bundle_optional,
 };
 use hya_tool::ChannelPolicySnapshot;
 
@@ -23,6 +23,16 @@ pub struct ChannelPolicy {
 }
 
 impl ChannelPolicy {
+    /// Empty policy with zero channel capabilities (bare mode / no `hya/agent-channels`).
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            unit_defaults: BTreeSet::new(),
+            parent_dm_defaults: BTreeSet::new(),
+            restrictions: Vec::new(),
+        }
+    }
+
     /// Compile policy from the trusted first-party preset and installed declarations.
     pub fn from_bundle_catalog(catalog: &BundleCatalog) -> Result<Self, BundleError> {
         let (unit_defaults, parent_dm_defaults) = trusted_defaults()?;
@@ -91,6 +101,9 @@ impl ChannelPolicy {
 
     /// Compile policy from the immutable catalog retained by an admitted turn.
     pub fn from_binding(binding: &TurnBinding) -> Result<Self, BundleError> {
+        if binding.agent_catalog().is_bare() {
+            return Ok(Self::empty());
+        }
         Self::from_bundle_catalog(binding.bundle_catalog())
     }
 
@@ -153,8 +166,11 @@ fn trusted_defaults() -> Result<&'static TrustedDefaults, BundleError> {
     static DEFAULTS: OnceLock<Result<TrustedDefaults, String>> = OnceLock::new();
     DEFAULTS
         .get_or_init(|| {
-            let preset =
-                first_party_bundle(AGENT_CHANNELS_PRESET_ID).map_err(|error| error.to_string())?;
+            let Some(preset) = first_party_bundle_optional(AGENT_CHANNELS_PRESET_ID)
+                .map_err(|error| error.to_string())?
+            else {
+                return Ok((BTreeSet::new(), BTreeSet::new()));
+            };
             let channels = preset
                 .bundles()
                 .first()

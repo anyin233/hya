@@ -5,11 +5,13 @@ use anyhow::Context as _;
 use crate::cli_args::RelayFlags;
 use crate::{db_lock, serve_relay};
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn cmd_serve(
     bind: String,
     db: String,
     model_override: Option<String>,
     yolo: bool,
+    bare: bool,
     pure: bool,
     relay: RelayFlags,
     allow_hosts: Vec<String>,
@@ -18,7 +20,8 @@ pub(crate) async fn cmd_serve(
     let hosts = crate::cli_args::serve_host_policy(&bind, &allow_hosts)?;
     // Restored turns can run tools during bootstrap, so catch stop signals already.
     let terminate = install_termination_signals().context("install termination handlers")?;
-    let prepared = prepare_server(&bind, db, model_override, yolo, pure, &relay, &hosts).await?;
+    let prepared =
+        prepare_server(&bind, db, model_override, yolo, bare, pure, &relay, &hosts).await?;
     let link = match relay_settings {
         Some(settings) => match prepared.relay.connect(settings).await {
             Ok(link) => Some(link),
@@ -44,11 +47,13 @@ pub(crate) async fn cmd_serve(
 
 /// `hya serve start|status|stop|restart` (ADR-0023): control the backend
 /// daemon of `db` (already resolved to the durable default when unset).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn cmd_serve_action(
     action: crate::cli_args::ServeAction,
     db: String,
     model: Option<String>,
     yolo: bool,
+    bare: bool,
     pure: bool,
     parent_relay: RelayFlags,
     allow_hosts: Vec<String>,
@@ -94,6 +99,7 @@ pub(crate) async fn cmd_serve_action(
             db: db.clone(),
             model: model.clone(),
             yolo,
+            bare,
             pure,
             allow_hosts,
             exe: std::env::current_exe().context("find the hya binary")?,
@@ -345,6 +351,7 @@ pub(crate) async fn prepare_server(
     db: String,
     model_override: Option<String>,
     yolo: bool,
+    bare: bool,
     pure: bool,
     relay_flags: &RelayFlags,
     hosts: &hya_server::HostPolicy,
@@ -369,6 +376,7 @@ pub(crate) async fn prepare_server(
         &db,
         model_override,
         yolo,
+        bare,
         pure,
         relay_flags,
         hosts,
@@ -392,6 +400,7 @@ async fn prepare_server_with_store(
     db: &str,
     model_override: Option<String>,
     yolo: bool,
+    bare: bool,
     pure: bool,
     relay_flags: &RelayFlags,
     hosts: &hya_server::HostPolicy,
@@ -402,7 +411,8 @@ async fn prepare_server_with_store(
     let config = hya_app::resolve_runtime(model_override)
         .await
         .with_yolo(yolo)
-        .with_pure(pure);
+        .with_pure(pure)
+        .with_bare(bare);
     emit_startup_mark("runtime_resolved", None);
     let engine = hya_app::ServerEngine::build(store, config).await?;
     let mut lock = if has_file_store {
@@ -543,6 +553,7 @@ mod tests {
             "127.0.0.1:0",
             db.to_string_lossy().into_owned(),
             Some("hya/offline".into()),
+            false,
             false,
             true,
             &RelayFlags::default(),

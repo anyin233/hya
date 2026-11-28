@@ -581,9 +581,15 @@ async fn daemon_stop_start_restore_and_db_uri_rejection() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-async fn run_bare(env: &HeadlessEnv, db: Option<&Path>, json: bool, prompt: &str) -> Output {
+async fn run_bare(
+    env: &HeadlessEnv,
+    db: Option<&Path>,
+    json: bool,
+    extra: &[&str],
+    prompt: &str,
+) -> Output {
     let mut cmd = env.command();
-    cmd.args(["--model", "fake/model"]);
+    cmd.args(["--model", "fake/model", "--yolo"]);
     if let Some(db) = db {
         cmd.arg("--db").arg(db);
     }
@@ -591,6 +597,7 @@ async fn run_bare(env: &HeadlessEnv, db: Option<&Path>, json: bool, prompt: &str
     if json {
         cmd.arg("--json");
     }
+    cmd.args(extra);
     cmd.arg(prompt);
     let output = tokio::time::timeout(Duration::from_secs(20), cmd.output())
         .await
@@ -604,8 +611,9 @@ async fn run_bare(env: &HeadlessEnv, db: Option<&Path>, json: bool, prompt: &str
     output
 }
 
-/// T1.15 (bare kernel) — `exec --bare` writes todos, triggers the completion check,
-/// streams valid JSONL matching `tail-session`, supports in-memory mode, and reads stdin `-`.
+/// T1.15 (bare profile) — `exec --bare` writes todos, triggers the completion check
+/// under `--time-budget`, streams valid JSONL matching `tail-session`, supports
+/// in-memory mode, and reads stdin `-`.
 #[tokio::test]
 async fn bare_exec_todo_stdin_json_and_tail_session() {
     let env = E2eEnvBuilder::new()
@@ -625,7 +633,14 @@ async fn bare_exec_todo_stdin_json_and_tail_session() {
         ])
         .unwrap();
     let db = env.project.join("bare.db");
-    let output = run_bare(&env, Some(&db), true, "track a completion criterion").await;
+    let output = run_bare(
+        &env,
+        Some(&db),
+        true,
+        &["--time-budget", "300"],
+        "track a completion criterion",
+    )
+    .await;
     let stdout = std::str::from_utf8(&output.stdout).unwrap();
     assert!(stdout.ends_with('\n'));
     let envelopes: Vec<Envelope> = stdout
@@ -656,13 +671,13 @@ async fn bare_exec_todo_stdin_json_and_tail_session() {
         &e.event,
         Event::TextReplace { text, .. } if text == "BARE_TODO_WRITTEN"
     )));
-    assert!(matches!(
-        envelopes.last().unwrap().event,
-        Event::MessageFinished {
-            role: Role::Assistant,
-            ..
-        }
-    ));
+    assert_eq!(
+        envelopes.iter().rev().find_map(|e| match e.event {
+            Event::MessageFinished { role, .. } => Some(role),
+            _ => None,
+        }),
+        Some(Role::Assistant)
+    );
 
     let requests = env.fake.requests().unwrap();
     assert_eq!(requests.len(), 3);
@@ -699,7 +714,7 @@ async fn bare_exec_todo_stdin_json_and_tail_session() {
     env.fake
         .push_scripts([text_step("IN_MEMORY_BARE_OK")])
         .unwrap();
-    let mem_out = run_bare(&env, None, true, "in memory bare").await;
+    let mem_out = run_bare(&env, None, true, &[], "in memory bare").await;
     let mem_str = std::str::from_utf8(&mem_out.stdout).unwrap();
     assert!(mem_str.contains("IN_MEMORY_BARE_OK"));
 
@@ -713,7 +728,7 @@ async fn bare_exec_todo_stdin_json_and_tail_session() {
     std::fs::write(&input, format!("{prompt}\n")).unwrap();
     let mut stdin_cmd = env.command();
     stdin_cmd
-        .args(["--model", "fake/model", "--db"])
+        .args(["--model", "fake/model", "--yolo", "--db"])
         .arg(env.root.join("stdin.db"))
         .args(["exec", "--bare", "-"])
         .stdin(std::fs::File::open(&input).unwrap());
@@ -726,9 +741,10 @@ async fn bare_exec_todo_stdin_json_and_tail_session() {
         "{}",
         String::from_utf8_lossy(&stdin_out.stderr)
     );
-    assert_eq!(
-        String::from_utf8_lossy(&stdin_out.stdout).trim(),
-        "STDIN_PROMPT_RECEIVED"
+    let stdin_stdout = String::from_utf8_lossy(&stdin_out.stdout);
+    assert!(
+        stdin_stdout.contains("STDIN_PROMPT_RECEIVED"),
+        "{stdin_stdout}"
     );
     let stdin_req = &env.fake.requests().unwrap()[reqs_before];
     let user_msg = stdin_req["messages"]

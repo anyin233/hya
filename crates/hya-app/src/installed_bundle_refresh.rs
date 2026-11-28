@@ -7,8 +7,7 @@ use crate::bundle_registry::BundleRegistry;
 use async_trait::async_trait;
 use hya_bundle::{BundleCatalog, PreparedBundleSchemas, PreparedCatalog};
 use hya_engine::{
-    AgentCatalog, CoreError, RuntimeCatalogRefresh, RuntimeRegistry, RuntimeSource,
-    RuntimeSourceKind, ScopeKey,
+    CoreError, RuntimeCatalogRefresh, RuntimeRegistry, RuntimeSource, RuntimeSourceKind, ScopeKey,
 };
 use hya_plugin::{PluginContributionSet, SkillContribution};
 use sha2::Digest as _;
@@ -431,6 +430,11 @@ impl InstalledBundleRefresh {
         self
     }
 
+    /// Active built-in bundle selection governing first-party bundle loading.
+    pub(crate) fn builtin_selection(&self) -> &hya_bundle::BuiltinBundleSelection {
+        &self.builtin_selection
+    }
+
     /// Resolve user-scope bundle configuration beside `config_file` (the Hya
     /// `config.yaml`, which need not exist) instead of the active one.
     #[must_use]
@@ -659,7 +663,11 @@ impl InstalledBundleRefresh {
         };
         let static_sources = composition.runtime_sources();
         let agent_catalog = Arc::new(
-            AgentCatalog::new(Arc::clone(&composition.bundles)).map_err(CoreError::bundle)?,
+            crate::runtime::agent_catalog_for_selection(
+                Arc::clone(&composition.bundles),
+                &self.builtin_selection,
+            )
+            .map_err(CoreError::bundle)?,
         );
         runtime
             .refresh(|candidate| {

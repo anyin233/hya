@@ -13,7 +13,6 @@
 mod acp;
 mod agent_cmd;
 mod auth_cmd;
-mod bare;
 mod bridge;
 mod bundle_cmd;
 mod cli_args;
@@ -117,12 +116,14 @@ enum ExecOutput {
 /// `hya exec` on `db`, respecting the database lock
 /// ([`db_writer`]): through the server that owns a file database, else
 /// in process while holding its lock (in-memory stores are not locked).
+#[allow(clippy::too_many_arguments)]
 async fn exec_entry(
     prompt: String,
     model_override: Option<String>,
     db: &str,
     yolo: bool,
     output: ExecOutput,
+    bare: bool,
     pure: bool,
     time_budget: Option<u64>,
 ) -> anyhow::Result<()> {
@@ -134,6 +135,14 @@ async fn exec_entry(
                     db,
                     &server,
                     "--include-subagents requires an in-process JSON stream",
+                );
+            }
+            if bare {
+                db_writer::exit_unroutable(
+                    "exec",
+                    db,
+                    &server,
+                    "--bare cannot apply to a running server (it loaded its own bundle profile)",
                 );
             }
             if pure {
@@ -170,6 +179,7 @@ async fn exec_entry(
                 store,
                 yolo,
                 output,
+                bare,
                 pure,
                 time_budget,
             )
@@ -196,12 +206,14 @@ pub(crate) async fn ensure_project_for_workdir(
     Ok(project.id)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_exec(
     prompt: String,
     model_override: Option<String>,
     store: SessionStore,
     yolo: bool,
     output: ExecOutput,
+    bare: bool,
     pure: bool,
     time_budget: Option<u64>,
 ) -> anyhow::Result<()> {
@@ -211,7 +223,8 @@ async fn cmd_exec(
     }
     let exit_store = store.clone();
     let mut headless =
-        start_headless_with_signals(&mut signals, store, model_override, yolo, pure, None).await?;
+        start_headless_with_signals(&mut signals, store, model_override, yolo, bare, pure, None)
+            .await?;
     let body_result: anyhow::Result<(
         anyhow::Result<hya_proto::FinishReason>,
         Option<stop_signals::StopSignal>,
@@ -333,12 +346,14 @@ async fn cmd_exec(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_goal(
     goal: String,
     max_iterations: u32,
     evaluator_model_flag: Option<String>,
     model_override: Option<String>,
     yolo: bool,
+    bare: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
     let mut signals = StopSignals::install()?;
@@ -347,6 +362,7 @@ async fn cmd_goal(
         open_store("").await?,
         model_override,
         yolo,
+        bare,
         pure,
         None,
     )
@@ -393,6 +409,7 @@ async fn cmd_loop(
     evaluator_model_flag: Option<String>,
     model_override: Option<String>,
     yolo: bool,
+    bare: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
     let mut signals = StopSignals::install()?;
@@ -401,6 +418,7 @@ async fn cmd_loop(
         open_store("").await?,
         model_override,
         yolo,
+        bare,
         pure,
         None,
     )
@@ -501,6 +519,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let allow_hosts = cli_args::bare_allow_hosts(&cli)?;
     let model = cli_args::merge_model_effort(cli.model.clone(), cli.effort.clone())?;
     let yolo = cli.yolo;
+    let bare = cli.bare;
     let pure = cli.pure;
     let db = cli.db.clone();
     if let Some(goal) = cli.prompt {
@@ -510,6 +529,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             cli.evaluator_model.clone(),
             model,
             yolo,
+            bare,
             pure,
         )
         .await
@@ -528,14 +548,14 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 // The link (read before the TUI owns the terminal) is the
                 // credential: only its redacted form is ever printed.
                 let (connect, connect_relay_ca) = match connect {
-                    Some(bare) => {
-                        if bridge::exposed_in_argv(&bare.source) {
+                    Some(bare_conn) => {
+                        if bridge::exposed_in_argv(&bare_conn.source) {
                             eprintln!("hya: {}", bridge::ARGV_WARNING);
                         }
-                        let link = bridge::read_link(&bare.source, "--connect")?;
+                        let link = bridge::read_link(&bare_conn.source, "--connect")?;
                         (
-                            Some(bridge::with_transport(link, bare.transport)),
-                            bare.relay_ca,
+                            Some(bridge::with_transport(link, bare_conn.transport)),
+                            bare_conn.relay_ca,
                         )
                     }
                     None => (None, None),
@@ -547,6 +567,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     resume,
                     model,
                     yolo,
+                    bare,
                     pure,
                     state_dir: state_dir(),
                     connect,
@@ -568,23 +589,13 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Some(Command::Acp) => {
             anyhow::ensure!(!yolo, "hya acp uses the daemon's permission policy");
-            acp::run(absolute_db(resolve_interactive_db(&db)), model, pure).await
-        }
-        Some(Command::Exec { bare: true, .. }) if pure => {
-            // `conflicts_with` does not see a global `--pure` given before `exec`.
-            <Cli as clap::CommandFactory>::command()
-                .error(
-                    clap::error::ErrorKind::ArgumentConflict,
-                    "the argument '--bare' cannot be used with '--pure'",
-                )
-                .exit()
+            acp::run(absolute_db(resolve_interactive_db(&db)), model, bare, pure).await
         }
         Some(Command::Exec {
             mut prompt,
             json,
             include_subagents,
             time_budget,
-            bare,
         }) => {
             if prompt == "-" {
                 prompt.clear();
@@ -596,18 +607,14 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 }
                 anyhow::ensure!(!prompt.is_empty(), "empty exec prompt on stdin");
             }
-            if bare {
-                bare::exec_entry(prompt, model, &db, time_budget, json).await
+            let output = if include_subagents {
+                ExecOutput::TreeJson
+            } else if json {
+                ExecOutput::Json
             } else {
-                let output = if include_subagents {
-                    ExecOutput::TreeJson
-                } else if json {
-                    ExecOutput::Json
-                } else {
-                    ExecOutput::Transcript
-                };
-                exec_entry(prompt, model, &db, yolo, output, pure, time_budget).await
-            }
+                ExecOutput::Transcript
+            };
+            exec_entry(prompt, model, &db, yolo, output, bare, pure, time_budget).await
         }
         Some(Command::Serve {
             action: Some(action),
@@ -622,6 +629,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 absolute_db(resolve_interactive_db(&path)),
                 model,
                 yolo,
+                bare,
                 pure,
                 relay,
                 allow_host,
@@ -641,6 +649,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 command_db.unwrap_or_else(|| db.clone()),
                 model,
                 yolo,
+                bare,
                 pure,
                 relay,
                 allow_host,
@@ -656,12 +665,12 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Provider { command }) => {
             provider_cmd::run(command, absolute_db(resolve_interactive_db(&db))).await
         }
-        Some(Command::Agent { command }) => agent_cmd::run(command),
+        Some(Command::Agent { command }) => agent_cmd::run(command, bare),
         Some(Command::Bundle { command }) => {
             bundle_cmd::run(command, absolute_db(resolve_interactive_db(&db))).await
         }
         Some(Command::Workflow { command }) => {
-            workflow_cmd::run(command, model, &db, yolo, pure).await
+            workflow_cmd::run(command, model, &db, yolo, bare, pure).await
         }
         Some(Command::Models {
             provider,
@@ -776,6 +785,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 evaluator_model,
                 model,
                 yolo,
+                bare,
                 pure,
             )
             .await

@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use hya_bundle::{AgentRole, BundleCatalog, BundleError, ModelPolicy};
 
-use crate::builtin_agents::{CoreAgentsPreset, SpawnScope, builtin_digest, core_agents_preset};
+use crate::builtin_agents::{BuiltinAgents, SpawnScope, core_agents_preset};
 
 /// Where a resolved agent came from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -78,7 +78,7 @@ impl AgentDefinition<'_> {
 /// Built-ins plus installed bundles, resolved as one namespace.
 #[derive(Debug)]
 pub struct AgentCatalog {
-    preset: CoreAgentsPreset,
+    preset: BuiltinAgents,
     bundles: Arc<BundleCatalog>,
 }
 
@@ -90,11 +90,40 @@ impl AgentCatalog {
     /// declares an agent id that a built-in already owns.
     pub fn new(bundles: Arc<BundleCatalog>) -> Result<Self, BundleError> {
         let catalog = Self {
-            preset: core_agents_preset()?,
+            preset: BuiltinAgents::Core(core_agents_preset()?),
             bundles,
         };
         catalog.validate()?;
         Ok(catalog)
+    }
+
+    /// Build a bare-mode catalog backed by the minimal compiled-in `hya-bare`
+    /// default agent and zero first-party agent bundles (ADR-0039).
+    ///
+    /// # Errors
+    /// Returns [`BundleError::BuiltinAgentIdShadowed`] when an installed bundle
+    /// claims `hya-bare`.
+    pub fn new_bare(bundles: Arc<BundleCatalog>) -> Result<Self, BundleError> {
+        let catalog = Self {
+            preset: BuiltinAgents::Bare,
+            bundles,
+        };
+        catalog.validate()?;
+        Ok(catalog)
+    }
+
+    /// Whether this catalog uses the minimal `hya-bare` agent instead of
+    /// `hya/core-agents`.
+    #[must_use]
+    pub const fn is_bare(&self) -> bool {
+        self.preset.is_bare()
+    }
+
+    /// Default primary agent id for this catalog (`hya-bare` in bare mode,
+    /// `hya-main` when `hya/core-agents` is loaded).
+    #[must_use]
+    pub const fn default_agent_id(&self) -> &'static str {
+        self.preset.default_agent_id()
     }
 
     /// Reject installed bundles that shadow a built-in agent id.
@@ -121,7 +150,7 @@ impl AgentCatalog {
     /// Digest of the compiled-in roster, for the runtime semantic fingerprint.
     #[must_use]
     pub fn builtin_digest(&self) -> &'static [u8; 32] {
-        builtin_digest()
+        self.preset.digest_bytes()
     }
 
     /// Domain-separated semantic identity of the whole agent surface.
@@ -141,7 +170,7 @@ impl AgentCatalog {
         };
         let mut identity = Vec::new();
         append_section(&mut identity, AGENT_CATALOG_IDENTITY_DOMAIN_V1);
-        append_section(&mut identity, builtin_digest());
+        append_section(&mut identity, self.preset.digest_bytes());
         append_section(&mut identity, &bundle_identity);
         Some(identity)
     }
@@ -297,7 +326,7 @@ impl AgentCatalog {
         Ok(CallerScope::Bundle(&agent.can_spawn))
     }
 
-    fn preset_agent(&self, reference: &str) -> Option<&hya_bundle::PreparedAgent> {
+    pub(crate) fn preset_agent(&self, reference: &str) -> Option<&hya_bundle::PreparedAgent> {
         let id = reference
             .strip_prefix("bundle:hya/core-agents/agent/")
             .unwrap_or(reference);

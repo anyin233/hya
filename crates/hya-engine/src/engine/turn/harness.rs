@@ -144,7 +144,14 @@ impl SessionEngine {
         // Digests of the system prompt and tool list, recorded with the
         // binding at turn start and again whenever a round's differ.
         let tools = self.offered_tools(&resources, depth, &model);
-        let system = system_prompt(agent, &workdir, Some(&initial_context), &tools, depth);
+        let system = system_prompt(
+            agent,
+            &workdir,
+            Some(&initial_context),
+            &tools,
+            depth,
+            self.use_tool_family_prompts,
+        );
         let recorded_digests = prompt_digests(&system, &tools)?;
         events.push(Event::TurnBindingRecorded {
             session,
@@ -495,6 +502,7 @@ impl Harness for TurnHarness<'_> {
                 projection.session.initial_context.as_deref(),
                 &tools,
                 self.depth,
+                engine.use_tool_family_prompts,
             )),
             &tools,
             self.router.reasoning_replay_policy(&self.model),
@@ -559,6 +567,7 @@ impl Harness for TurnHarness<'_> {
             view.projection.session.initial_context.as_deref(),
             &tools,
             self.depth,
+            engine.use_tool_family_prompts,
         );
         let digests = prompt_digests(&system, &tools)?;
         if digests != self.recorded_digests {
