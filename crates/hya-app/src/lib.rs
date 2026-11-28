@@ -14,6 +14,7 @@ pub mod agent_model_control;
 pub mod auth;
 /// Per-bundle `config.yml` location, environment contract, and scope resolver.
 pub mod bundle_admin;
+mod bundle_cli;
 pub mod bundle_config;
 mod bundle_install;
 /// SQLite registry and install types for user bundles.
@@ -59,6 +60,7 @@ mod workflow_inspect;
 pub use agent_model_control::{
     AgentModelControlError, AgentModelIdentity, PersistentAgentModelControl,
 };
+pub use bundle_cli::{CliContribution, cli_contributions};
 pub use headless::prepare_driver;
 pub use hya_coding_extras_core::BuiltinFormatterProvider;
 /// Formatter plane construction from optional formatter config (owned by `hya/coding-extras`).

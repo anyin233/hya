@@ -228,6 +228,9 @@ pub(crate) struct SourceManifest {
     /// Optional packaged Workflow.
     #[serde(default)]
     pub workflow: Option<SourceWorkflow>,
+    /// `hya` CLI commands this bundle contributes.
+    #[serde(default)]
+    pub cli: Vec<crate::cli::CliCommand>,
 }
 
 /// Standardized runtime archetype (`runtime.kind`).

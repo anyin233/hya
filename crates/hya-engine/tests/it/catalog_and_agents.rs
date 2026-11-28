@@ -115,6 +115,7 @@ fn make_bundle(bundle_id: &str, agent: PreparedAgent, skills: Vec<PreparedResour
         commands: Vec::new(),
         runtime: None,
         permission_modes: vec![],
+        cli: Vec::new(),
         overrides: None,
     }
 }

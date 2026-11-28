@@ -57,6 +57,7 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
             commands: Vec::new(),
             runtime: None,
             permission_modes: vec![],
+            cli: Vec::new(),
             overrides: None,
         })
         .collect::<Vec<_>>();

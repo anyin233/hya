@@ -14,6 +14,7 @@ mod acp;
 mod agent_cmd;
 mod auth_cmd;
 mod bridge;
+mod bundle_cli;
 mod bundle_cmd;
 mod cli_args;
 mod daemon;
@@ -40,7 +41,6 @@ pub use hya_app::{auth, config, formatter_config, permission, plugins};
 use std::io::{Read as _, Write as _};
 
 use anyhow::Context as _;
-use clap::Parser;
 use hya_app::{prepare_driver, run_headless_lead};
 use hya_engine::render_transcript;
 use hya_proto::{ProjectId, SessionId};
@@ -399,6 +399,72 @@ async fn cmd_driver(
     Ok(())
 }
 
+/// Call a bundle's BundleApi endpoint `api` headlessly with `{"args": …}`
+/// and print the reply's `{stdout, stderr, exit_code}`.
+async fn cmd_bundle_api(
+    bundle: &str,
+    api: &str,
+    args: serde_json::Value,
+    model_override: Option<String>,
+    yolo: bool,
+    bare: bool,
+    pure: bool,
+) -> anyhow::Result<()> {
+    let mut signals = StopSignals::install()?;
+    let headless = start_headless_with_signals(
+        &mut signals,
+        open_store("").await?,
+        model_override,
+        yolo,
+        bare,
+        pure,
+        None,
+    )
+    .await?;
+    let (reply, stop) = headless
+        .run(async move |headless| {
+            let engine = headless.built.engine();
+            let endpoint = engine
+                .runtime_registry()
+                .published_bundle_apis()
+                .into_iter()
+                .find(|published| published.bundle == bundle)
+                .and_then(|published| {
+                    published
+                        .apis
+                        .into_iter()
+                        .find(|endpoint| endpoint.id == api)
+                })
+                .with_context(|| format!("bundle `{bundle}` serves no API endpoint `{api}`"))?;
+            let call = hya_engine::BundleApiCall {
+                bundle: bundle.to_string(),
+                method: endpoint.method,
+                session: (endpoint.scope == hya_engine::ApiScope::Session)
+                    .then_some(headless.session),
+                path: endpoint.path.as_str().to_string(),
+                query: Default::default(),
+                body: serde_json::json!({ "args": args }),
+            };
+            let cancel = CancellationToken::new();
+            let work = async move { engine.invoke_bundle_api(call).await };
+            let (reply, stop) =
+                run_until_stopped(&headless.built, &mut signals, &cancel, work).await;
+            Ok((reply, stop))
+        })
+        .await?;
+    exit_if_stopped(stop);
+    let reply = reply.map_err(|error| anyhow::anyhow!("{bundle} {api}: {error}"))?;
+    let report: hya_runtime_abi::DriverReport = serde_json::from_value(reply.body.clone())
+        .with_context(|| format!("{bundle} {api} replied without stdout/stderr/exit_code"))?;
+    print!("{}", report.stdout);
+    eprint!("{}", report.stderr);
+    let _ = std::io::stdout().flush();
+    if report.exit_code != 0 {
+        std::process::exit(report.exit_code);
+    }
+    Ok(())
+}
+
 async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let session: SessionId = id.parse().context("parse session id")?;
     let store = SessionStore::connect_read_only(&db)
@@ -421,12 +487,67 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
 }
 
 fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("build the Tokio runtime")?
-        .block_on(run(cli))
+        .block_on(async {
+            match bundle_cli::parse(std::env::args_os().collect()).await? {
+                bundle_cli::Parsed::Core(cli) => run(cli).await,
+                bundle_cli::Parsed::Prompt { cli, route, args } => {
+                    run_prompt(cli, route, args).await
+                }
+                bundle_cli::Parsed::Bundle { cli, route, args } => {
+                    run_bundle_command(cli, route, args).await
+                }
+            }
+        })
+}
+
+/// `hya -p <PROMPT>` through the prompt driver an enabled bundle declares.
+async fn run_prompt(
+    cli: Cli,
+    route: Option<bundle_cli::Route>,
+    args: serde_json::Value,
+) -> anyhow::Result<()> {
+    let model = cli_args::merge_model_effort(cli.model.clone(), cli.effort.clone())?;
+    match route {
+        Some(route) => {
+            let label = route.label().to_string();
+            run_route(route, args, model, cli.yolo, cli.bare, cli.pure)
+                .await
+                .inspect_err(|error| eprintln!("{label} error: {error:#}"))
+        }
+        None => run(cli).await,
+    }
+}
+
+/// A bundle-contributed `hya <command>`.
+async fn run_bundle_command(
+    cli: Cli,
+    route: bundle_cli::Route,
+    args: serde_json::Value,
+) -> anyhow::Result<()> {
+    let model = cli_args::merge_model_effort(cli.model.clone(), cli.effort.clone())?;
+    run_route(route, args, model, cli.yolo, cli.bare, cli.pure).await
+}
+
+async fn run_route(
+    route: bundle_cli::Route,
+    args: serde_json::Value,
+    model: Option<String>,
+    yolo: bool,
+    bare: bool,
+    pure: bool,
+) -> anyhow::Result<()> {
+    match route {
+        bundle_cli::Route::Driver(driver) => {
+            cmd_driver(&driver, args, model, yolo, bare, pure).await
+        }
+        bundle_cli::Route::Api { bundle, api } => {
+            cmd_bundle_api(&bundle, &api, args, model, yolo, bare, pure).await
+        }
+    }
 }
 
 async fn run(cli: Cli) -> anyhow::Result<()> {

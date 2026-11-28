@@ -21,6 +21,8 @@
 
 ---
 
+Enabled bundles can add their own commands (`cli:` in `bundle.yaml`, see **[`hyabundle` CLI commands](../extend/hyabundle-spec.md#cli-commands-cli)**). They appear in `hya --help` and disappear when their bundle is disabled; `hya --bare` has none from built-in bundles.
+
 ## Global options
 
 ```text

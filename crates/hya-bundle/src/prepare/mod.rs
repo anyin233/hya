@@ -197,6 +197,14 @@ fn prepare_bundle(
         process.as_ref(),
         &hooks,
     )?;
+    crate::cli::validate_cli(
+        &bundle_id,
+        &manifest.cli,
+        &apis.iter().map(|api| api.id.as_str()).collect(),
+        runtime
+            .as_ref()
+            .is_some_and(|rt| rt.kind == crate::PreparedRuntimeKind::Native),
+    )?;
     let mut source_agents = manifest
         .agents
         .into_iter()
@@ -278,6 +286,7 @@ fn prepare_bundle(
         runtime,
         apis: apis.clone(),
         permission_modes: permission_modes.clone(),
+        cli: manifest.cli,
         workflow,
     };
     set_bundle_digest(&mut bundle)?;

@@ -310,6 +310,7 @@ fn bundle_with_agent(id: &str, ag: PreparedAgent, skills: Vec<PreparedResource>)
         commands: Vec::new(),
         runtime: None,
         permission_modes: Vec::new(),
+        cli: Vec::new(),
         overrides: None,
     }
 }

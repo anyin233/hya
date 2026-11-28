@@ -454,6 +454,9 @@ pub struct Bundle {
     pub apis: Vec<PreparedApi>,
     /// Permission modes owned by this bundle.
     pub permission_modes: Vec<PreparedPermissionMode>,
+    /// `hya` CLI commands this bundle contributes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cli: Vec<crate::cli::CliCommand>,
 }
 
 /// One compiled Workflow source retained in a prepared Bundle.
@@ -564,6 +567,11 @@ impl Bundle {
     /// Standardized top-level runtime declaration, if declared.
     pub fn runtime(&self) -> Option<&PreparedRuntime> {
         self.runtime.as_ref()
+    }
+    /// `hya` CLI commands this bundle contributes.
+    #[must_use]
+    pub fn cli(&self) -> &[crate::cli::CliCommand] {
+        &self.cli
     }
     /// Target bundle identity overridden by this bundle, if declared.
     pub fn overrides(&self) -> Option<&str> {

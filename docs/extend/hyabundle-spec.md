@@ -206,6 +206,7 @@ channels: []                    # Vertical/unit communication channel policies
 schemas: []                     # Custom URI schemes (e.g. db:// -> bundle tool, or native UriSchemaHandler)
 apis: []                        # Custom HTTP/gRPC endpoints (JS process mode OR Native ABI v2 NativeBundleApiHandler)
 permission_modes: []            # Custom permission modes paired with hook/permission.approve
+cli: []                         # `hya` commands this bundle contributes (see "CLI commands" below)
 tui:                            # Sandboxed TUI extension (@hya/tui-sdk v2; may be combined with runtime.kind: native)
   api_version: 2
   entry: tui/main.ts
@@ -222,6 +223,52 @@ assets:
 #### Strict `schema_version: 2` Enforcement
 
 Hya v2 accepts **`schema_version: 2` manifests exclusively** ([ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)). Legacy v1 manifests (`extensions.*` blocks, omitted `schema_version`, or legacy exposure policy files) are rejected at parse time; run `hya-migration run` to upgrade existing v1 user or project bundles (see **[Migrating from Hya v1 to v2](../guide/migration-v1-to-v2.md)**). Native bundles are never required to list `native/src/*.rs` files under `assets:`.
+
+#### CLI commands (`cli:`)
+
+A bundle can add commands to the `hya` command line ([ADR-0040](../adr/0040-context-kernel-is-the-only-core.md)). When the bundle is enabled, `hya --help` lists them and `hya <name> …` runs them; when it is disabled (or with `--bare` for built-in bundles) they do not exist. Each command routes to one of the bundle's own extension points:
+
+- `driver: <name>` runs the bundle's native driver `<bundle-id>:<name>` in a headless in-memory session. The driver receives the parsed arguments as `DriverRequest::args` and returns a `DriverReport` (`stdout`, `stderr`, `exit_code`), which `hya` prints and exits with. Only `runtime.kind: native` bundles have drivers.
+- `api: <endpoint-id>` calls one of the bundle's BundleApi endpoints with the JSON body `{"args": {…}}`; the reply body must be `{"stdout": …, "stderr": …, "exit_code": …}`. This works for JS (`apis:`) and native (`NativeBundleApiHandler`) bundles alike.
+
+`kind: prompt` instead claims `hya -p/--prompt <PROMPT>` and adds its arguments as top-level flags; the driver receives the prompt as `args.prompt`. At most one enabled bundle may claim `-p`; without one, `hya -p` runs one headless turn.
+
+```yaml
+cli:
+  - name: echo                  # hya echo …   ([a-z][a-z0-9-]*, not a core command)
+    about: Print text through the bundle's driver.
+    driver: echo                # or `api: <endpoint-id>`
+    args:
+      - id: text                # key in the JSON arguments
+        long: text              # --text; omit long/short for a positional argument
+        required: true
+        help: Text to print.
+      - id: times
+        long: times
+        value: integer          # string (default) | integer | flag | list
+        default: "1"
+      - { id: loud, long: loud, value: flag, conflicts_with: [quiet] }
+      - { id: quiet, long: quiet, value: flag }
+      - { id: tag, long: tag, value: list, aliases: [label], value_name: TAG }
+  - name: group                 # a command with subcommands has no route itself
+    subcommands:
+      - { name: list, api: list }
+  - kind: prompt                # claims `hya -p`
+    driver: goal
+    args:
+      - { id: max_iterations, long: max-iterations, value: integer, default: "6" }
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `kind` | `command` (default) \| `prompt` | Adds `hya <name>`, or claims `hya -p`. |
+| `name` | string | Subcommand name (`kind: command` only). |
+| `about` | string | Help text. |
+| `driver` / `api` | string | The route of a leaf command (exactly one). |
+| `args[]` | list | `id`, `long`, `short`, `value` (`string`, `integer`, `flag`, `list`), `required`, `default`, `help`, `value_name`, `aliases`, `conflicts_with` (argument ids). Missing optional values are `null` in the JSON arguments; a flag is `true`/`false`; a list is an array. |
+| `subcommands[]` | list | Nested commands with the same shape (no `kind: prompt`). |
+
+Preparation rejects an invalid name, a leaf without exactly one route, a `driver` route on a non-native bundle, an `api` route to an undeclared endpoint of a JS bundle, duplicate names or flags, and `conflicts_with` naming an unknown argument. At startup `hya` rejects a command that shadows a core command or that two enabled bundles both contribute.
 
 ---
 
