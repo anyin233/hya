@@ -1297,6 +1297,12 @@ async fn search_archived_lists_own_archived_direct_children_by_query() {
         MultiAgentService::search_archived(&host, root, "QUARTZ")
             .await
             .unwrap(),
+        vec![worker_row.clone()]
+    );
+    assert_eq!(
+        MultiAgentService::search_archived(&host, root, "wire")
+            .await
+            .unwrap(),
         vec![worker_row]
     );
     assert_eq!(
