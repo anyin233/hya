@@ -1,7 +1,7 @@
 //! Lightweight [`HostRuntime`] adapter backed by [`SessionEngine`]'s shared
 //! store, bus, turn-gate, and reviver handles.
 //!
-//! Used by [`SessionEngine::try_new`] when wiring the default `hya/agent-channels`
+//! Used by [`SessionEngine::new`] when wiring the default `hya/agent-channels`
 //! native bundle (`ChannelUriSchemaHandler` and `UnreadMailSteerHook`) in
 //! standalone engine tests; full `hya-app` runtimes install the complete
 //! `AppHostRuntime` honoring `BuiltinBundleSelection`.
