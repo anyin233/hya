@@ -51,7 +51,7 @@ assets:
 tui:
   api_version: 2
   entry: tui/main.ts
-  sdk: "2.0.0"
+  sdk: "2.1.0"
   permissions:
     - tui.render
     - tui.status_item

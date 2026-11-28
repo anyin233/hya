@@ -4,10 +4,8 @@
  * model of one prompt, its option keys, and the `RespondInteraction` body of
  * each choice.
  *
- * - The queue holds the asks of the open session and of its subagent
- *   sessions (children by `SessionInfo.parent`, and the open session's
- *   members and `task` outputs before the session list knows them), oldest
- *   first. One is shown at a time (`1 of N`).
+ * - The queue holds asks from the open session and its descendants via
+ *   `SessionInfo.parent`, oldest first. One is shown at a time (`1 of N`).
  * - A permission prompt renders the waiting call like its tool card
  *   (`toolCard()` over `payload.tool` / `payload.input`): bash the command,
  *   edit / write / patch the path and a diff, read / webfetch the path or
@@ -56,9 +54,9 @@ export interface PromptView {
   summary?: string
   /** Tool of the waiting call. */
   tool?: string
-  /** Who asks: the agent, or `subagent <agent> · <task>`. */
+  /** Who asks: the agent, or `child session <agent> · <task>`. */
   asker: string
-  subagent: boolean
+  child: boolean
   /** Details of the waiting call (permission), clipped to `promptBodyLines`. */
   body: ToolLine[]
   options: PromptOption[]
@@ -116,20 +114,6 @@ function clipBody(lines: ToolLine[], max = promptBodyLines): ToolLine[] {
   return [...lines.slice(0, head), { text: `… ${hidden} lines hidden`, tone: "muted" }, ...lines.slice(lines.length - tail)]
 }
 
-/** Child session ids referenced in `task` tool outputs of `messages` before the session list refreshes. */
-export function taskChildIds(messages: readonly MessageInfo[]): string[] {
-  const ids = new Set<string>()
-  for (const message of messages) {
-    for (const part of message.parts ?? []) {
-      if (part.toolCall?.tool !== "task") continue
-      const task = toolCard(part.toolCall).task
-      if (task?.child) ids.add(task.child)
-      for (const member of task?.members ?? []) if (member.child) ids.add(member.child)
-    }
-  }
-  return [...ids]
-}
-
 /** Whether any live descendant session of the open session is currently busy. */
 export function hasBusyDescendant(state: { selected: SessionInfo | undefined; sessions: readonly SessionInfo[] }): boolean {
   const root = state.selected?.id
@@ -138,9 +122,9 @@ export function hasBusyDescendant(state: { selected: SessionInfo | undefined; se
   return state.sessions.some((session) => session.id !== root && tree.has(session.id) && !session.archived && session.busy === true)
 }
 
-/** The open session and every session below it: `parent` links, plus `direct` children the list may not have yet. */
-export function treeSessionIds(root: string, sessions: readonly SessionInfo[], direct: readonly string[] = []): Set<string> {
-  const tree = new Set([root, ...direct])
+/** The open session and every session below it via `parent` links. */
+export function treeSessionIds(root: string, sessions: readonly SessionInfo[]): Set<string> {
+  const tree = new Set([root])
   let grew = true
   while (grew) {
     grew = false
@@ -158,7 +142,7 @@ export function treeSessionIds(root: string, sessions: readonly SessionInfo[], d
 export function promptQueue(interactions: readonly Interaction[], context: PromptContext): Interaction[] {
   const selected = context.selected
   if (!selected) return []
-  const tree = treeSessionIds(selected.id, context.sessions, taskChildIds(context.messages))
+  const tree = treeSessionIds(selected.id, context.sessions)
   return interactions.filter((item) => item.session !== undefined && tree.has(item.session))
 }
 
@@ -189,13 +173,13 @@ export function mergeInteractions(listed: readonly Interaction[], known: Readonl
 }
 
 /** Who asks: the agent of the open session, or the child session. */
-function asker(session: string, context: PromptContext): { asker: string; subagent: boolean } {
+function asker(session: string, context: PromptContext): { asker: string; child: boolean } {
   const selected = context.selected
   const listed = context.sessions.find((row) => row.id === session)
-  if (selected && session === selected.id && !selected.parent) return { asker: selected.agent || "agent", subagent: false }
+  if (selected && session === selected.id && !selected.parent) return { asker: selected.agent || "agent", child: false }
   const agent = listed?.agent || (session === selected?.id ? selected.agent : "")
-  const label = ["subagent", agent].filter(Boolean).join(" ")
-  return { asker: listed?.title ? `${label} · ${listed.title}` : label, subagent: true }
+  const label = ["child session", agent].filter(Boolean).join(" ")
+  return { asker: listed?.title ? `${label} · ${listed.title}` : label, child: true }
 }
 
 /** The first question of a waiting `ask_user` call whose text is `title`: header and option labels. */
@@ -342,7 +326,7 @@ export function currentPrompt(state: PromptContext & { interactions: readonly In
  * How the controller routes one frame of the open session's stream, which
  * is subscribed with `includeDescendants=true`: `own` frames (the open
  * session's, or with no session) are folded as usual; a descendant's
- * (subagent's) `permissionRequested` / `questionRequested` /
+ * (child's) `permissionRequested` / `questionRequested` /
  * `interactionResolved` is `descendantAsk` (only the pending list changes);
  * any other frame of another session is ignored.
  */
@@ -367,5 +351,5 @@ export function globalAskRoute(event: StreamEvent, context: PromptContext): "tre
   const selected = context.selected
   const asking = event.session || event.permissionRequested?.interaction?.session || event.questionRequested?.interaction?.session
   if (!selected || !asking) return "other"
-  return treeSessionIds(selected.id, context.sessions, taskChildIds(context.messages)).has(asking) ? "tree" : "other"
+  return treeSessionIds(selected.id, context.sessions).has(asking) ? "tree" : "other"
 }

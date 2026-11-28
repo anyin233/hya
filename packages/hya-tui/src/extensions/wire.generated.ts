@@ -10,7 +10,7 @@
 export const MAX_FRAME_BYTES = 2 * 1024 * 1024;
 
 /** Version of this authoring SDK, independent of backend/frontend releases. */
-export const TUI_EXTENSION_SDK_VERSION = "2.0.0" as const;
+export const TUI_EXTENSION_SDK_VERSION = "2.1.0" as const;
 /** Incompatible wire changes advance this integer. */
 export const TUI_EXTENSION_API_VERSION = 2 as const;
 export const JSONRPC_VERSION = "2.0" as const;
@@ -190,7 +190,7 @@ export interface Contributions {
   /** Slash commands registered by this extension (invoked via `tui/command`). */
   readonly commands: readonly SlashCommandDescriptor[];
   readonly status_items: readonly { readonly id: string; readonly label: string; readonly priority: number }[];
-  readonly renderers: readonly { readonly id: string; readonly target: "tool_call" | "composer"; readonly mode: "replace" | "decorate"; readonly priority: number }[];
+  readonly renderers: readonly { readonly id: string; readonly target: "tool_call" | "composer"; readonly mode: "replace" | "decorate"; readonly priority: number; readonly tools?: readonly string[] }[];
   readonly formatters: readonly { readonly id: string; readonly priority: number }[];
   readonly interceptors: readonly { readonly id: string; readonly target: "submit"; readonly priority: number }[];
 }
@@ -212,6 +212,14 @@ export interface ToolCallInput {
   readonly input?: JsonValue;
   readonly output?: JsonValue;
   readonly error?: string;
+}
+
+/** Presentation of a named tool call. The host owns expansion and status layout. */
+export interface ToolCardPresentation {
+  readonly summary: string;
+  readonly body?: RenderNode;
+  readonly statusChip?: string;
+  readonly expandedByDefault?: boolean;
 }
 
 /** `tui/format` input: the tool output value and the text the host (or a lower-priority formatter) produced. */
@@ -284,7 +292,7 @@ export type PaneHostCommand =
     };
 
 export type HostCommand =
-  | { readonly command: "session.open"; readonly id: string; readonly token?: string }
+  | { readonly command: "session.open"; readonly id: string; readonly exact?: boolean; readonly token?: string }
   | { readonly command: "session.menu"; readonly id: string }
   | { readonly command: "session.new_temporary"; readonly token?: string }
   | { readonly command: "project.switch"; readonly id: string; readonly token?: string }
@@ -327,7 +335,7 @@ export interface TuiMethodMap {
   "tui/render": {
     params: { readonly surface: SurfaceRef; readonly width: number; readonly height: number; readonly now: number; readonly input?: JsonValue };
     /** `null` root: hide (panel, pane, status) or fall back to the built-in rendering (renderer). */
-    result: { readonly root: RenderNode | null };
+    result: { readonly root: RenderNode | null; readonly card?: Omit<ToolCardPresentation, "body"> };
   };
   "tui/format": {
     params: { readonly formatter: string; readonly input: FormatInput; readonly width: number };

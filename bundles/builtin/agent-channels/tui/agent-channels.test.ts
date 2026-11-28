@@ -96,7 +96,7 @@ test("agent-channels renders send/list_channel/report cards and unread mail stat
         output: "Delivered to 2 peers",
       } as unknown as JsonValue,
     });
-    expect(flatten(sendCard.root).join("\n")).toContain("send → #unit-default");
+    expect(sendCard.card?.summary).toBe("send → #unit-default");
     expect(flatten(sendCard.root).join("\n")).toContain("Start review pass");
 
     // list_channel card
@@ -113,7 +113,7 @@ test("agent-channels renders send/list_channel/report cards and unread mail stat
         output: "#unit-default (unread: 2)\nDM-scout (unread: 0)",
       } as unknown as JsonValue,
     });
-    expect(flatten(listCard.root).join("\n")).toContain("channels · snapshot");
+    expect(listCard.card?.summary).toBe("channels · snapshot");
     expect(flatten(listCard.root).join("\n")).toContain("#unit-default (unread: 2)");
 
     // report card
@@ -130,7 +130,7 @@ test("agent-channels renders send/list_channel/report cards and unread mail stat
         input: { outcome: "done", result: "All checks green" },
       } as unknown as JsonValue,
     });
-    expect(flatten(reportCard.root).join("\n")).toContain("report · done");
+    expect(reportCard.card?.summary).toBe("report · done");
     expect(flatten(reportCard.root).join("\n")).toContain("All checks green");
 
     // Non-channel tools fall back cleanly.

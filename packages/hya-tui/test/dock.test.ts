@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { builtinPreset } from "../src/config/presets"
-import { dockRowCount, subagentDockRows, todoDockRows } from "../src/state/dock"
+import { dockRowCount, childDockRows, todoDockRows } from "../src/state/dock"
 import { chatPaneLayout, defaultPaneLayout } from "../src/state/panes"
 import { bandRule, statusLineShown } from "../src/state/statusline"
 import { createAppStore } from "../src/state/store"
@@ -42,16 +42,16 @@ test("the todo rows yield to a visible Todos pane and are off outside dock and w
   expect(todoDockRows(store.state, 120)).toEqual([])
 })
 
-test("running subagents: one row each, waiting ones in the warning tone, at most three", () => {
+test("busy child sessions: one row each, waiting ones in the warning tone, at most three", () => {
   const store = dockStore()
   const child = (n: number, busy = true) => ({ id: `hysec_c${n}`, parent: "hysec_1", agent: "scout", title: `hya-scout-${n}`, workdir: "/w", busy })
   store.setSessions([store.state.selected!, child(1, true), child(2, false)])
-  expect(subagentDockRows(store.state, 120).map((row) => `${row.glyph} ${row.text}`)).toEqual(["↳ hya-scout-1"])
+  expect(childDockRows(store.state).map((row) => `${row.glyph} ${row.text}`)).toEqual(["↳ hya-scout-1"])
   store.setSessions([store.state.selected!, child(1), child(3), child(4), child(5)])
-  expect(subagentDockRows(store.state, 120).map((row) => row.text)).toEqual(["hya-scout-1", "hya-scout-3", "+2 more · /subagents"])
+  expect(childDockRows(store.state).map((row) => row.text)).toEqual(["hya-scout-1", "hya-scout-3", "+2 more"])
   expect(dockRowCount(store.state, 120)).toBe(3)
   store.setStructure({ ...builtinPreset("dock"), subagents: { enabled: false } })
-  expect(subagentDockRows(store.state, 120)).toEqual([])
+  expect(childDockRows(store.state)).toEqual([])
 })
 
 test("a band status line needs the band input; the band rule carries border info", () => {

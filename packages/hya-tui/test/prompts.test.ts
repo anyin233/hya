@@ -34,7 +34,7 @@ test("bash asks show the command; options are allow once, always allow (with the
   const view = promptView(permission("perm_1", "hysec_p", {
     action: "bash", resource: "echo hello", always: ["echo hello *"], callId: "call_1", tool: "bash", input: { command: "echo hello" },
   }, "bash echo hello"), context(), 0, 1)
-  expect(view).toMatchObject({ id: "perm_1", kind: "permission", title: "bash echo hello", asker: "hya-main", subagent: false, tool: "bash", position: 0, total: 1 })
+  expect(view).toMatchObject({ id: "perm_1", kind: "permission", title: "bash echo hello", asker: "hya-main", child: false, tool: "bash", position: 0, total: 1 })
   expect(texts(view.body)).toEqual(["$ echo hello"])
   // The headline reads like the tool card: tool and summary.
   expect(view.headline).toBe("bash  echo hello")
@@ -148,17 +148,9 @@ test("the queue holds the asks of the open session and its subagent sessions, ol
     session("hysec_c", { parent: "hysec_p", agent: "hya-task" }),
     session("hysec_g", { parent: "hysec_c", agent: "hya-scout" }),
     session("hysec_other"),
+    session("hysec_new", { parent: "hysec_p" }),
   ]
-  const messages: MessageInfo[] = [{
-    id: "m1", role: "ROLE_ASSISTANT", parts: [{
-      id: "p1", toolCall: {
-        tool: "task", state: "TOOL_EXECUTION_STATE_OK",
-        inputJson: JSON.stringify({ subagent_type: "hya-scout", description: "survey" }),
-        outputJson: JSON.stringify({ metadata: { sessionId: "hysec_new" } }),
-      },
-    }],
-  }]
-  const tree = treeSessionIds("hysec_p", sessions, ["hysec_new"])
+  const tree = treeSessionIds("hysec_p", sessions)
   expect([...tree].sort()).toEqual(["hysec_c", "hysec_g", "hysec_new", "hysec_p"])
   const interactions = [
     permission("perm_other", "hysec_other", { action: "bash", resource: "x" }),
@@ -166,7 +158,7 @@ test("the queue holds the asks of the open session and its subagent sessions, ol
     question("que_p", "hysec_p", "Why?"),
     permission("perm_new", "hysec_new", { action: "bash", resource: "n" }),
   ]
-  const queue = promptQueue(interactions, context({ sessions, messages }))
+  const queue = promptQueue(interactions, context({ sessions }))
   expect(queue.map((item) => item.id)).toEqual(["perm_c", "que_p", "perm_new"])
   // In a subagent's view only that subtree asks.
   expect(promptQueue(interactions, context({ selected: sessions[1], sessions })).map((item) => item.id)).toEqual(["perm_c"])
@@ -176,10 +168,10 @@ test("the queue holds the asks of the open session and its subagent sessions, ol
 test("a subagent's ask is labelled with the subagent and its title", () => {
   const sessions = [session("hysec_p"), session("hysec_c", { parent: "hysec_p", agent: "hya-task", title: "survey the repo" })]
   const view = promptView(permission("perm_c", "hysec_c", { action: "bash", resource: "ls", tool: "bash", input: { command: "ls" } }), context({ sessions }), 1, 2)
-  expect(view).toMatchObject({ asker: "subagent hya-task · survey the repo", subagent: true, position: 1, total: 2 })
+  expect(view).toMatchObject({ asker: "child session hya-task · survey the repo", child: true, position: 1, total: 2 })
   // Before the session list knows the child: still marked as a subagent ask.
   const early = promptView(permission("perm_c", "hysec_c", { action: "bash", resource: "ls" }), context(), 0, 1)
-  expect(early).toMatchObject({ asker: "subagent", subagent: true })
+  expect(early).toMatchObject({ asker: "child session", child: true })
 })
 
 test("listed rows keep the options and header a live frame carried; resolved ids stay hidden", () => {

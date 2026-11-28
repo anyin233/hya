@@ -354,7 +354,11 @@ export function validateContributions(value: unknown, permissions: readonly Exte
     if (renderer.target !== "tool_call" && renderer.target !== "composer") return `renderer ${String(renderer.id)}: unknown target ${String(renderer.target)}`
     if (renderer.mode !== "replace" && renderer.mode !== "decorate") return `renderer ${String(renderer.id)}: mode must be replace or decorate`
     if (renderer.target === "composer" && renderer.mode === "replace") return `renderer ${String(renderer.id)}: the composer can only be decorated`
-    checkedRenderers.push({ id: renderer.id as string, target: renderer.target, mode: renderer.mode, priority: (renderer.priority as number | undefined) ?? 0 })
+    const tools = renderer.tools
+    if (tools !== undefined && (renderer.target !== "tool_call" || renderer.mode !== "replace"
+      || !Array.isArray(tools) || tools.length === 0 || tools.length > renderLimits.maxContributions
+      || tools.some((tool) => typeof tool !== "string" || !tool || tool.length > 128))) return `renderer ${String(renderer.id)}: invalid tool names`
+    checkedRenderers.push({ ...(tools === undefined ? {} : { tools: tools as string[] }), id: renderer.id as string, target: renderer.target, mode: renderer.mode, priority: (renderer.priority as number | undefined) ?? 0 })
   }
   for (const interceptor of interceptors) if (interceptor.target !== "submit") return `interceptor ${String(interceptor.id)}: unknown target ${String(interceptor.target)}`
   return {

@@ -131,10 +131,10 @@ describe("Agents View (/agent)", () => {
 
     await runCmd(app, "/agent")
     await app.waitForText("── Primary agents")
-    await app.waitForText("── Subagents")
+    await app.waitForText("── Child agents")
     await app.waitForText("── System agents")
-    expect(app.find("── Primary agents")!.row).toBeLessThan(app.find("── Subagents")!.row)
-    expect(app.find("── Subagents")!.row).toBeLessThan(app.find("── System agents")!.row)
+    expect(app.find("── Primary agents")!.row).toBeLessThan(app.find("── Child agents")!.row)
+    expect(app.find("── Child agents")!.row).toBeLessThan(app.find("── System agents")!.row)
 
     // `m` on config-pinned hya-main saves configuration.
     await app.waitForText(/hya-main\s+fake\/beta\s+configured/)

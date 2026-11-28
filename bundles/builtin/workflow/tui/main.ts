@@ -13,6 +13,16 @@ export default defineTuiExtension({
       }
       return true;
     });
+    api.registerToolRenderer({
+      id: "workflow-tool",
+      tools: ["workflow", "workflow__workflow"],
+      render: (call) => {
+        const output = call.output;
+        const detail = output && typeof output === "object" && "output" in output ? output.output : output;
+        const text = typeof detail === "string" ? detail : JSON.stringify(detail, null, 2);
+        return { summary: call.summary, ...(text ? { body: { kind: "text", text: text.slice(0, 2048) } } : {}) };
+      },
+    });
     registerWorkflowsPane(api, ui);
     registerWorkflowCommands(api, ui);
   },

@@ -4,8 +4,8 @@
  * app/agentsView.ts owns the calls and the pickers `m` and `t` open).
  *
  * One screen, three sections under titled divider rules: primary agents,
- * subagents, and system agents (the hidden `compaction`, `summary`, `title`).
- * Enter selects a primary agent for the session; subagents and system agents
+ * child agents, and system agents (the hidden `compaction`, `summary`, `title`).
+ * Enter selects a primary agent for the session; child agents and system agents
  * only run when the harness starts them, so Enter on them notices why. `m`
  * picks the agent's default model (a remembered preference, or the owning
  * config file for a `configured` agent), `t` its default thinking effort, and
@@ -61,20 +61,20 @@ export const agentsViewKeyRows: readonly AgentsViewKeyRow[] = [
   { keys: "Esc", description: "Cancel a running call, clear the filter, close the view" },
 ]
 
-export type AgentSection = "primary" | "subagent" | "system"
+export type AgentSection = "primary" | "child" | "system"
 
 const sectionTitles: Record<AgentSection, string> = {
   primary: "Primary agents",
-  subagent: "Subagents",
+  child: "Child agents",
   system: "System agents",
 }
 
-const sectionOrder: readonly AgentSection[] = ["primary", "subagent", "system"]
+const sectionOrder: readonly AgentSection[] = ["primary", "child", "system"]
 
 /** Hidden agents are system agents; the rest split by their selector mode. */
 export function agentSection(row: AgentModelState): AgentSection {
   if (row.hidden) return "system"
-  return row.mode === "subagent" ? "subagent" : "primary"
+  return row.mode === "subagent" ? "child" : "primary"
 }
 
 /** One line of the view: a section's divider rule or an agent row. */
@@ -221,7 +221,7 @@ export function agentsViewKey(view: AgentsViewState, key: KeyLike, rows: readonl
   if (isEnter(key)) {
     const section = agentSection(row)
     if (section === "primary") return { type: "select", agent: row.agentId }
-    return notice(view, `${row.agentId} is a ${section === "system" ? "system agent" : "subagent"}; only primary agents run a session`)
+    return notice(view, `${row.agentId} is a ${section === "system" ? "system agent" : "child agent"}; only primary agents run a session`)
   }
   if (key.sequence === "m") return { type: "pickModel", agent: row.agentId }
   if (key.sequence === "t") return { type: "pickEffort", agent: row.agentId }

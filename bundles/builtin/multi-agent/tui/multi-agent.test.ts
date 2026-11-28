@@ -45,7 +45,7 @@ async function open(
     extension_id: "hya/multi-agent",
     permissions: [
       "tui.panel", "tui.action", "tui.keys", "tui.session.read", "tui.sessions.read",
-      "tui.bundle_api", "tui.extension_state.read", "tui.transcript.embed",
+      "tui.bundle_api", "tui.extension_state.read", "tui.transcript.embed", "tui.render", "tui.transcript.read",
     ],
   });
   const activated = await call("tui/activate", { context });
@@ -160,6 +160,32 @@ test("multi-agent registers subagents pane, subagent-viewer with transcript node
     });
     expect(archived.notice).toContain("Archived hya-scout-1");
     expect(archived.notice).toContain("1 nested subagent");
+  } finally {
+    vm.dispose();
+  }
+});
+
+test("task cards keep legacy batch members and failed launches visible", async () => {
+  const { vm, call, contributions } = await open({ terminal: { columns: 100, rows: 30 } });
+  try {
+    expect(contributions.renderers.find((renderer) => renderer.id === "task-card")?.tools).toContain("task");
+    const card = await call("tui/render", {
+      surface: { kind: "renderer", id: "task-card" },
+      width: 100, height: 30, now: 0,
+      input: {
+        id: "call", tool: "task", status: "completed", summary: "",
+        input: { members: [{ description: "inspect routes" }, { description: "inspect tests" }] },
+        output: { metadata: { members: [
+          { member: "main/legacy", session: "hysec_legacy" },
+          { status: "error", summary: "capacity exhausted" },
+        ] } },
+      },
+    });
+    expect(card.card?.summary).toBe("hya-task · inspect routes · 2 members");
+    expect(flattenText(card.root)).toEqual([
+      "main/legacy · inspect routes", "done", "click to view · /open hysec_legacy",
+      "hya-task · inspect tests", "failed  ↳ capacity exhausted",
+    ]);
   } finally {
     vm.dispose();
   }

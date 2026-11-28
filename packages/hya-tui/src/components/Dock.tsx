@@ -1,6 +1,6 @@
 /**
  * The dock between the transcript and the input (ADR-0036): pending asks of
- * other sessions, running subagents, open todos, the permission/question
+ * other sessions, busy child sessions, open todos, the permission/question
  * prompt, and the yolo confirmation, in that order. Each group takes rows
  * only while it has something to say; the input stays anchored at the bottom
  * of its pane, so a group appearing or going away moves the transcript's
@@ -8,7 +8,7 @@
  */
 import { For, Show } from "solid-js"
 import { useApp } from "../app/context"
-import { subagentDockRows, todoDockRows, type DockRow } from "../state/dock"
+import { childDockRows, todoDockRows, type DockRow } from "../state/dock"
 import { colors } from "../theme"
 import { ModeConfirm } from "./ModeConfirm"
 import { PendingBlock } from "./PendingBlock"
@@ -31,12 +31,12 @@ function DockRows(props: { rows: DockRow[] }) {
 
 export function Dock(props: { width: number }) {
   const { store } = useApp()
-  const subagents = () => subagentDockRows(store.state, store.state.columns)
+  const children = () => childDockRows(store.state)
   const todos = () => todoDockRows(store.state, store.state.columns)
   return (
     <>
       <PendingBlock width={props.width} />
-      <Show when={subagents().length > 0}><DockRows rows={subagents()} /></Show>
+      <Show when={children().length > 0}><DockRows rows={children()} /></Show>
       <Show when={todos().length > 0}><DockRows rows={todos()} /></Show>
       <PromptDock />
       <ModeConfirm />

@@ -1,9 +1,8 @@
 /**
  * The dock above the input (ADR-0036 `todos` and `subagents` components,
- * docs/tui-config.md "Dock"): open todos and running subagents, one borderless
- * row each, between the pending block and the prompt. A row group shows only
- * with something to say, and never while a visible pane of the workspace
- * already shows the same facts (deduplication). Pure: rows and their count
+ * docs/tui-config.md "Dock"): open todos and busy child sessions, one borderless
+ * row each, between the pending block and the prompt. The todo rows yield
+ * to the visible workspace Todos pane. The rows and their count
  * for the layout.
  */
 import { extensionManager } from "../extensions/manager"
@@ -18,8 +17,8 @@ export interface DockRow {
   tone: "activity" | "muted" | "warning" | "success"
 }
 
-/** Running subagent rows shown at most; the rest fold into `+N more`. */
-export const maxSubagentRows = 3
+/** Busy child session rows shown at most; the rest fold into `+N more`. */
+export const maxChildRows = 3
 
 /** Whether a pane of `kind` is drawn right now (the workspace's sidebars). */
 function paneVisible(state: AppState, columns: number, kind: PaneKind): boolean {
@@ -51,20 +50,13 @@ export function todoDockRows(state: AppState, columns: number): DockRow[] {
   return rows
 }
 
-/** Whether an extension panel `<bundle>#<pane>` is drawn right now. */
-function extensionPaneVisible(state: AppState, columns: number, panelKey: string): boolean {
-  if (!state.structure.sidebar.enabled) return false
-  return paneLeaves(visiblePaneRoot(state.paneLayout.root, columns, state.sidebar, state.projectsSidebar, extensionManager.visiblePaneOptions())).some((pane) => pane.kind === "extension" && pane.panel === panelKey)
-}
-
 /**
  * Busy or waiting descendant sessions of the open session, at most
- * `maxSubagentRows`; empty when the component is off or the
- * `hya/multi-agent#subagents` pane is visible.
+ * `maxChildRows`; empty when the component is off.
  */
-export function subagentDockRows(state: AppState, columns: number): DockRow[] {
+export function childDockRows(state: AppState): DockRow[] {
   const root = state.selected?.id
-  if (!root || !state.structure.subagents.enabled || extensionPaneVisible(state, columns, "hya/multi-agent#subagents")) return []
+  if (!root || !state.structure["subagents"].enabled) return []
   const tree = treeSessionIds(root, state.sessions)
   const live = state.sessions
     .filter((session) => session.id !== root && tree.has(session.id) && !session.archived)
@@ -76,16 +68,16 @@ export function subagentDockRows(state: AppState, columns: number): DockRow[] {
         waiting: Boolean(waiting),
       }]
     })
-  const rows = live.slice(0, live.length > maxSubagentRows ? maxSubagentRows - 1 : maxSubagentRows).map((row): DockRow => ({
+  const rows = live.slice(0, live.length > maxChildRows ? maxChildRows - 1 : maxChildRows).map((row): DockRow => ({
     glyph: "↳",
     text: `${row.label}${row.waiting ? " · waiting for an answer" : ""}`,
     tone: row.waiting ? "warning" : "activity",
   }))
-  if (live.length > rows.length) rows.push({ glyph: "…", text: `+${live.length - rows.length} more · /subagents`, tone: "muted" })
+  if (live.length > rows.length) rows.push({ glyph: "…", text: `+${live.length - rows.length} more`, tone: "muted" })
   return rows
 }
 
-/** Rows the dock's todo and subagent groups take (the layout reserves them). */
+/** Rows the dock's todo and child session groups take (the layout reserves them). */
 export function dockRowCount(state: AppState, columns: number): number {
-  return todoDockRows(state, columns).length + subagentDockRows(state, columns).length
+  return todoDockRows(state, columns).length + childDockRows(state).length
 }

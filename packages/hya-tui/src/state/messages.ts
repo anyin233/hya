@@ -333,8 +333,8 @@ export function transcriptViews(state: AppState): MessageView[] {
 }
 
 /** Whether a tool card is expanded: its own toggle, else the global `/tools` switch, else only shell-turn cards. */
-export function toolExpanded(state: Pick<AppState, "tools" | "toolToggles">, block: Extract<Block, { kind: "tool" }>): boolean {
-  return state.toolToggles.get(block.id) ?? state.tools ?? block.shell === true
+export function toolExpanded(state: Pick<AppState, "tools" | "toolToggles">, block: Extract<Block, { kind: "tool" }>, expandedByDefault = false): boolean {
+  return state.toolToggles.get(block.id) ?? state.tools ?? (expandedByDefault || block.shell === true)
 }
 
 /** Whether a reasoning part is expanded: its own toggle, else the global `/thinking` switch. */

@@ -4,7 +4,6 @@
  * (`sessions`, `projects`, `todos`, `status`) carry what those panes showed
  * when the TUI drew them itself; hya/basic-tui-components draws them now.
  */
-import type { SessionInfo } from "../client"
 import { contextUsage, modelEffortLabel, modelReference, sessionTokens, todoStatusText, webLabel } from "../state/format"
 import { effectiveMode, modeDisplay } from "../state/modes"
 import { waitingKind } from "../state/prompts"
@@ -26,32 +25,6 @@ type TodoStatus = NonNullable<ExtensionContext["todos"]>[number]["status"]
 const todoStatuses: readonly string[] = ["pending", "in_progress", "blocked", "completed"] satisfies TodoStatus[]
 const isTodoStatus = (status: string): status is TodoStatus => todoStatuses.includes(status)
 
-/** Extract optional child handle labels from v2 `extensions["hya/multi-agent"]` for sidebar rendering. */
-function extensionMembers(row: SessionInfo): { child: string; handle?: string; description?: string; agent?: string }[] {
-  const ext = row.extensions?.["hya/multi-agent"]
-  if (!ext || typeof ext !== "object" || Array.isArray(ext)) return []
-  const state = ext as {
-    members?: Array<Record<string, unknown>>
-    roster?: Record<string, { handle?: string; session?: string }>
-    archived?: Record<string, { handle?: string; session?: string }>
-  }
-  const handles = new Map<string, string>()
-  for (const [handle, entry] of Object.entries(state.roster ?? {})) {
-    if (entry?.session) handles.set(entry.session, entry.handle || handle)
-  }
-  for (const [handle, entry] of Object.entries(state.archived ?? {})) {
-    if (entry?.session && !handles.has(entry.session)) handles.set(entry.session, entry.handle || handle)
-  }
-  return (state.members ?? []).flatMap((raw) => {
-    const child = typeof raw.child === "string" && raw.child ? raw.child : undefined
-    if (!child) return []
-    const handle = handles.get(child) ?? (typeof raw.handle === "string" ? raw.handle : undefined)
-    const description = typeof raw.description === "string" ? raw.description : undefined
-    const agent = typeof raw.subagent_type === "string" ? raw.subagent_type : typeof raw.agent === "string" ? raw.agent : undefined
-    return [{ child, ...(handle ? { handle } : {}), ...(description ? { description } : {}), ...(agent ? { agent } : {}) }]
-  })
-}
-
 function sessionsSection(state: AppState): NonNullable<ExtensionContext["sessions"]> {
   const items = sessionsInScope(state.sessions, state.activeProjectId, false).map((row) => ({
     id: row.id,
@@ -63,10 +36,6 @@ function sessionsSection(state: AppState): NonNullable<ExtensionContext["session
     waiting: Boolean(waitingKind(state.interactions, row.id)),
     ...(row.parent ? { parent: row.parent } : {}),
     ...(Number.isFinite(Date.parse(row.timeCreated ?? "")) ? { created: Date.parse(row.timeCreated ?? "") } : {}),
-    ...((() => {
-      const members = extensionMembers(row)
-      return members.length ? { members } : {}
-    })()),
   }))
   return { ready: state.ready, ...(state.selected ? { selected: state.selected.id } : {}), items }
 }

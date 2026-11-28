@@ -3,11 +3,9 @@ import { extensionManager } from "../extensions/manager"
 const builtinTools = new Set([
   "bash", "shell", "read", "edit", "multiedit", "write", "apply_patch", "patch",
   "grep", "glob", "find", "ls", "lsp", "webfetch", "fetch", "websearch", "search",
-  "skill", "ask_user", "question", "task", "workflow", "list_agents", "search_agent", "archive", "plan_exit", "project_activity", "wait", "todo__update_content",
-  "send", "list_channel", "report",
+  "skill", "ask_user", "question", "todo__update_content",
   "todo", "todo__read", "todo__write", "todo__update", "todo__update_status", "todo__replace",
   "todo__add", "todo__remove", "todo__clear",
-  "spawn", "spawn_agent",
  ])
 /**
  * The tool-card view model: one `ToolCallPart` (docs/protocol/README.md
@@ -21,8 +19,7 @@ const builtinTools = new Set([
  * `read` (path, line range), `edit` / `write` / `apply_patch` (path and a
  * diff), `grep` / `glob` / `find` / `ls` (pattern, scope, count), the
  * `todo` tool (the list), `webfetch` / `websearch`, `skill`, `ask_user`,
- * `task` (agent and description; see state/members.ts for the child), and
- * anything else (MCP `ns__tool` included) as the name and compact arguments.
+ * and anything else (MCP `ns__tool` included) as the name and compact arguments.
  *
  * Pure TypeScript (no Solid).
  */
@@ -36,23 +33,6 @@ export type Tone = "fg" | "muted" | "add" | "remove" | "hunk" | "error"
 export interface ToolLine {
   text: string
   tone: Tone
-}
-
-export interface TaskMemberInfo {
-  /** Subagent type (`subagent_type`, default `hya-task`). */
-  agent: string
-  description: string
-  /** Child session id, from the output's `metadata.sessionId`. */
-  child?: string
-  /** Runtime handle, not the internal roster member id. */
-  name?: string
-  status?: string
-  summary?: string
-}
-
-export interface TaskInfo extends TaskMemberInfo {
-  /** Every batch entry, including failed launches without a session. */
-  members?: TaskMemberInfo[]
 }
 
 export interface ToolCardView {
@@ -72,9 +52,10 @@ export interface ToolCardView {
   body: ToolLine[]
   /** Output shown below the divider when expanded. */
   output?: ToolLine[]
+  /** Raw tool result JSON for extension renderers. */
+  resultJson?: string
   /** Shell command (bash), when known. */
   command?: string
-  task?: TaskInfo
 }
 
 /** Most body lines an expanded card shows; longer bodies keep head and tail. */
@@ -250,7 +231,6 @@ interface Summary {
   summary: string
   body: ToolLine[]
   command?: string
-  task?: TaskInfo
 }
 
 /** The input's main string field while the arguments still stream. */
@@ -361,34 +341,7 @@ function describe(tool: string, input: Json, output: unknown, raw: string, shell
       const question = [str(first.header), str(first.question)].filter(Boolean).join(": ")
       return { summary: question, body: clipLines(textLines(text)) }
     }
-    case "task": {
-      const batch = Array.isArray(input.tasks) ? input.tasks : input.members
-      const members = Array.isArray(batch) ? batch.map(record) : []
-      const agent = (members.length ? str(members[0]?.subagent_type) : str(input.subagent_type)) || str(meta.subagent_type) || "hya-task"
-      const description = (members.length ? str(members[0]?.description) : str(input.description)) ?? str(out.title) ?? ""
-      const child = str(meta.sessionId) || str(meta.session)
-      const name = str(meta.handle) || str(meta.member)
-      const outcomes = Array.isArray(meta.members) ? meta.members.map(record) : undefined
-      const entries = Array.isArray(batch) || outcomes ? Array.from({ length: Math.max(members.length, outcomes?.length ?? 0) }, (_, index): TaskMemberInfo => {
-        const spec = members[index] ?? {}
-        const result = outcomes?.[index] ?? {}
-        const child = str(result.sessionId) || str(result.session)
-        const name = str(result.handle) || str(result.member)
-        const status = str(result.status)
-        const summary = str(result.summary)
-        return {
-          agent: str(result.subagent_type) || str(spec.subagent_type) || "hya-task",
-          description: str(result.description) ?? str(spec.description) ?? "",
-          ...(child ? { child } : {}), ...(name ? { name } : {}),
-          ...(status ? { status } : {}), ...(summary ? { summary } : {}),
-        }
-      }) : undefined
-      return {
-        summary: [agent, description, members.length > 1 ? `${members.length} members` : ""].filter(Boolean).join(" · "),
-        body: [],
-        task: { agent, description, ...(child ? { child } : {}), ...(name ? { name } : {}), ...(entries ? { members: entries } : {}) },
-      }
-    }
+
   }
   if (tool === "todo" && typeof output === "string") {
     return { summary: text?.split("\n", 1)[0] ?? "", body: clipLines(textLines(text ?? "", "fg")) }
@@ -430,9 +383,9 @@ export function toolCard(call: ToolCallPart, options: { command?: string } = {})
   // presentation row from the output section of the new card.
   const outputLines = described.command && described.body[0]?.text === `$ ${described.command}` ? described.body.slice(1) : described.body
   const card: ToolCardView = { tool, status, summary: described.summary, ...(displayArgs ? { displayArgs } : {}), args, body: described.body, output: outputLines }
+  if (call.outputJson !== undefined) card.resultJson = call.outputJson
   if (status === "done" && ms !== undefined && Number.isFinite(ms)) card.duration = formatDuration(ms)
   if (status === "failed") card.error = call.errorMessage || "failed"
   if (described.command !== undefined) card.command = described.command
-  if (described.task) card.task = described.task
   return card
 }

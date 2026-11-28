@@ -37,11 +37,15 @@ assets:
   - { id: tui-subagents, path: tui/subagents.ts }
   - { id: tui-viewer, path: tui/viewer.ts }
   - { id: tui-commands, path: tui/commands.ts }
+  - { id: tui-tools, path: tui/tools.ts }
 tui:
   api_version: 2
   entry: tui/main.ts
-  sdk: "2.0.0"
+  sdk: "2.1.0"
   permissions:
+    - tui.session.control
+    - tui.render
+    - tui.transcript.read
     - tui.panel
     - tui.action
     - tui.keys

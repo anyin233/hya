@@ -4,6 +4,8 @@ import { registerSubagentsPane } from "./subagents";
 import { registerSubagentViewer } from "./viewer";
 import { registerSubagentCommands } from "./commands";
 
+import { registerToolCards } from "./tools";
+
 export default defineTuiExtension({
   activate(api: TuiExtensionApi): void {
     const ui = createUiState();
@@ -16,6 +18,7 @@ export default defineTuiExtension({
       }
       return true;
     });
+    registerToolCards(api);
     registerSubagentsPane(api, ui);
     registerSubagentViewer(api, ui);
     registerSubagentCommands(api, ui);

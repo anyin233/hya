@@ -108,7 +108,7 @@ import { loadPaneLayout, savePreferences, type TuiPreferences } from "../prefs"
 import type { StructureControl } from "./structure"
 import { notificationBody, notificationSequence, shouldNotify, type NotifyKind } from "../notify"
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
-import { taskChildIds, treeSessionIds, type PromptChoice } from "../state/prompts"
+import { treeSessionIds, type PromptChoice } from "../state/prompts"
 import { activeProject, newestTopLevelSession, noProjectStatus, projectScope, sessionPlacement } from "../state/projects"
 import { extensionManager, type CommandOrigin } from "../extensions/manager"
 import { isJson, resolveBundleApiRequest, type HostCommand, type JsonValue, type PaneHostCommand, type ResolvedBundleApiRequest } from "../extensions/wire"
@@ -756,7 +756,7 @@ export function createController({ client, store, directory, remote: startedRemo
    */
   async function hostCommand(command: HostCommand, origin: CommandOrigin): Promise<JsonValue | undefined> {
     switch (command.command) {
-      case "session.open": await openRootSession(command.id); return undefined
+      case "session.open": await (command.exact ? openSession(command.id) : openRootSession(command.id)); return undefined
       case "session.menu": openSessionContext(command.id, origin.point); return undefined
       case "session.new_temporary": await actions.newTemporarySession(); return undefined
       case "project.switch": await switchProject(command.id); return undefined
@@ -810,7 +810,7 @@ export function createController({ client, store, directory, remote: startedRemo
 
   /** The oldest waiting request outside the open tree: /pending opens its root session so the normal prompt can answer it. */
   async function reviewPending(): Promise<void> {
-    const pending = store.state.interactions.find((item) => item.session && !treeSessionIds(store.state.selected?.id ?? "", store.state.sessions, taskChildIds(store.state.messages)).has(item.session))
+    const pending = store.state.interactions.find((item) => item.session && !treeSessionIds(store.state.selected?.id ?? "", store.state.sessions).has(item.session))
     if (!pending?.session) { status("No pending request in another session"); return }
     const first = await client.request<SessionInfo>("GET", `/v2/sessions/${encodeURIComponent(pending.session)}`)
     const root = await keeper.rootOf(first)
