@@ -269,6 +269,7 @@ pub(crate) enum SourceNativeCapability {
     Drivers,
     Schemas,
     Apis,
+    Providers,
 }
 
 /// Top-level `runtime:` block in `bundle.yaml`.

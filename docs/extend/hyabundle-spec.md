@@ -157,7 +157,7 @@ runtime:
   abi_version: 2                # Required: 2 (Lockstep Native ABI v2 via crates/hya-runtime-abi)
   crate_dir: native             # Source build directory (not packed as source files into .hyabundle)
   library: native/libacme_my_bundle.so  # Target dynamic library path inside packaged .hyabundle
-  capabilities: [tools, hooks, rewriters, services, apis, schemas, drivers]
+  capabilities: [tools, hooks, rewriters, services, apis, schemas, drivers, providers]
 
 # Self-check contract executed by CI and `hya bundle verify`
 # Tip: use `--pass-with-no-tests` with `bun test` so stripped `.hyabundle` archives (which omit `*.test.ts`) still verify cleanly.
