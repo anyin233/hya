@@ -17,7 +17,6 @@ use tokio::sync::Notify;
 
 use crate::agent_catalog::AgentDefinition;
 use crate::bus::EventBus;
-use crate::compaction::CompactionConfig;
 use crate::error::CoreError;
 use crate::sidecar::SidecarEnvironment;
 use crate::tokens::TokenAccounting;
@@ -180,7 +179,6 @@ pub struct SessionEngine {
     bus: EventBus,
     summarizer: Option<Arc<dyn Summarizer>>,
     handoff_options: TerminalHandoffOptions,
-    rewriter_keep_recent: usize,
     token_accounting: TokenAccounting,
     /// Context-reduction extensions the kernel runs before its own Rewrite,
     /// before each round and on `/summarize`.
@@ -241,7 +239,6 @@ impl Clone for SessionEngine {
             bus: self.bus.clone(),
             summarizer: self.summarizer.clone(),
             handoff_options: self.handoff_options,
-            rewriter_keep_recent: self.rewriter_keep_recent,
             token_accounting: self.token_accounting.clone(),
             rewriters: Arc::clone(&self.rewriters),
             hooks: Arc::clone(&self.hooks),
@@ -321,7 +318,6 @@ impl SessionEngine {
             bus,
             summarizer: None,
             handoff_options: TerminalHandoffOptions::default(),
-            rewriter_keep_recent: CompactionConfig::default().keep_recent,
             token_accounting: TokenAccounting::default(),
             rewriters: Arc::from([]),
             hooks: Arc::new(crate::hooks::HookChain::default()),
@@ -827,25 +823,6 @@ impl SessionEngine {
         self
     }
 
-    /// Set both the terminal handoff summarizer and rewriter retention.
-    ///
-    /// Use [`Self::with_terminal_handoff`] and [`Self::with_rewriter_keep_recent`]
-    /// to configure the two independently.
-    #[must_use]
-    pub fn with_compaction(
-        self,
-        summarizer: Arc<dyn Summarizer>,
-        config: CompactionConfig,
-    ) -> Self {
-        self.with_terminal_handoff(
-            summarizer,
-            TerminalHandoffOptions {
-                max_output_tokens: config.summary_max_tokens,
-            },
-        )
-        .with_rewriter_keep_recent(config.keep_recent)
-    }
-
     /// Set the terminal handoff generator and its output budget.
     #[must_use]
     pub fn with_terminal_handoff(
@@ -855,13 +832,6 @@ impl SessionEngine {
     ) -> Self {
         self.summarizer = Some(summarizer);
         self.handoff_options = options;
-        self
-    }
-
-    /// Keep tool outputs from this many recent messages when shake runs.
-    #[must_use]
-    pub fn with_rewriter_keep_recent(mut self, keep_recent: usize) -> Self {
-        self.rewriter_keep_recent = keep_recent;
         self
     }
 

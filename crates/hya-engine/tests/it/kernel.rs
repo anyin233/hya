@@ -3046,7 +3046,7 @@ async fn before_round_rewriter_extensions_spare_or_fall_through_to_kernel_rewrit
                 overhead_tokens: 0,
                 pressure: None,
                 workdir: &fx.dir,
-                config: &serde_json::Value::Null,
+                token_accounting: hya_context::tokens::TokenAccountingMode::Auto,
                 log: &log,
                 transcript: &transcript,
                 models: None,

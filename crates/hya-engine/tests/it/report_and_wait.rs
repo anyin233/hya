@@ -18,9 +18,9 @@ use hya_bundle::{
     prepare_package,
 };
 use hya_engine::{
-    AgentCatalog, AgentSpec, ChannelPolicy, CompactionConfig, CoreError, EventBus,
-    ResidentSupervisor, SessionEngine, SessionStoreExt as _, SubagentGovernor, SubagentLimits,
-    SummarizeOptions, Summarizer, TurnBinding, TurnLease, run_lifecycle_service,
+    AgentCatalog, AgentSpec, ChannelPolicy, CoreError, EventBus, ResidentSupervisor,
+    SessionEngine, SessionStoreExt as _, SubagentGovernor, SubagentLimits, SummarizeOptions,
+    Summarizer, TerminalHandoffOptions, TurnBinding, TurnLease, run_lifecycle_service,
 };
 use hya_proto::{
     ChannelKind, Event, FinishCause, FinishReason, MailEndpoint, MailKind, MemberId,
@@ -496,7 +496,7 @@ async fn refused_report_is_dropped_until_member_reports_again() {
     let engine = Arc::new(
         support::engine_with_provider(Arc::new(EmptyStub), PermissionRules::default())
             .await
-            .with_compaction(summary.clone(), CompactionConfig::default()),
+            .with_terminal_handoff(summary.clone(), TerminalHandoffOptions::default()),
     );
     let root = root_team(&engine).await;
     let sup = ResidentSupervisor::start(engine.clone());
@@ -759,7 +759,7 @@ async fn forced_stop_handoff_carries_prior_facts_and_is_searchable() {
     let s_engine = Arc::new(
         support::engine_with_provider(Arc::new(EmptyStub), PermissionRules::default())
             .await
-            .with_compaction(summary.clone(), CompactionConfig::default()),
+            .with_terminal_handoff(summary.clone(), TerminalHandoffOptions::default()),
     );
     let s_root = root_team(&s_engine).await;
     let s_sup = ResidentSupervisor::start(s_engine.clone());
@@ -1570,7 +1570,7 @@ async fn handoff_policy_deterministic_skips_summarizer_while_default_invokes_it(
                 PermissionRules::default(),
             )
             .await
-            .with_compaction(summary.clone(), CompactionConfig::default()),
+            .with_terminal_handoff(summary.clone(), TerminalHandoffOptions::default()),
         );
         let root = root_team(&engine).await;
         let sup = ResidentSupervisor::start(engine.clone());

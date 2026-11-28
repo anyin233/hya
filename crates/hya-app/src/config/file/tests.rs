@@ -158,12 +158,8 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
 
     let ctx = settings.context();
     assert_eq!(
-        (
-            ctx.compaction.keep_recent,
-            ctx.compaction.summary_max_tokens,
-            ctx.token_accounting
-        ),
-        (12, 8_192, TokenAccountingMode::Estimate)
+        (ctx.summary_max_tokens, ctx.token_accounting),
+        (8_192, TokenAccountingMode::Estimate)
     );
     assert_eq!(
         resolve_context_settings(None).token_accounting,
@@ -174,12 +170,8 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
     env.set("HYA_TOKEN_ACCOUNTING", "provider");
     let ctx_over = settings.context();
     assert_eq!(
-        (
-            ctx_over.compaction.summary_max_tokens,
-            ctx_over.token_accounting,
-            ctx_over.compaction.keep_recent
-        ),
-        (2_048, TokenAccountingMode::Provider, 12)
+        (ctx_over.summary_max_tokens, ctx_over.token_accounting),
+        (2_048, TokenAccountingMode::Provider)
     );
     env.set("HYA_TOKEN_ACCOUNTING", "banana");
     assert_eq!(

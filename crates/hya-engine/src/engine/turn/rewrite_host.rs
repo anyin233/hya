@@ -24,17 +24,6 @@ use crate::hooks::{
     NativeCompactionAfterInput, NativeCompactionBeforeInput, NativeCompactionTrigger,
 };
 
-impl SessionEngine {
-    /// The settings `RewriteCtx::config` carries to the compaction bundle:
-    /// the kept tail and the token-accounting mode.
-    pub(in crate::engine) fn rewriter_config(&self) -> serde_json::Value {
-        serde_json::json!({
-            "keep_recent": self.rewriter_keep_recent,
-            "token_accounting": self.token_accounting.mode().as_str(),
-        })
-    }
-}
-
 /// The window of `model`'s route, when it advertises one.
 pub(in crate::engine) fn model_window(
     router: &ProviderRouter,

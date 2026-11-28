@@ -39,13 +39,13 @@ use hya_engine::{
     AgentCatalog, AgentDefinition, AgentEffortSource, AgentModelConfiguration, AgentOrigin,
     AgentSpec, ApiMethod, ApiPathTemplate, ApiScope, BoundSidecarFactory, BundleApiCall,
     BundleApiError, BundleApiProvider, BundleApiReply, BundleApiRequest, CatalogScope,
-    CatalogScopeCacheConfig, CategoryEntry, CategoryRegistry, CompactionConfig, CoreError,
-    CreateSession, EventBus, HookChain, MAX_BUNDLE_API_BODY_BYTES, ModelSummarizer, NativeHook,
-    RuntimeCandidate, RuntimeCatalogRefresh, RuntimePermissionMode, RuntimeRefreshError,
-    RuntimeRegistry, RuntimeSource, RuntimeSourceExport, RuntimeSourceId, RuntimeSourceKind,
-    RuntimeSourceOwner, ScopeKey, ScopeOverlay, SessionEngine, SidecarEnvironment, SidecarHandle,
-    SidecarLifecycle, SidecarStart, SourceApi, SourceApis, SourceSchema, Summarizer, TurnBinding,
-    apply_agent_model_preference, resolve_configured_agent_model,
+    CatalogScopeCacheConfig, CategoryEntry, CategoryRegistry, CoreError, CreateSession, EventBus,
+    HookChain, MAX_BUNDLE_API_BODY_BYTES, ModelSummarizer, NativeHook, RuntimeCandidate,
+    RuntimeCatalogRefresh, RuntimePermissionMode, RuntimeRefreshError, RuntimeRegistry,
+    RuntimeSource, RuntimeSourceExport, RuntimeSourceId, RuntimeSourceKind, RuntimeSourceOwner,
+    ScopeKey, ScopeOverlay, SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle,
+    SidecarStart, SourceApi, SourceApis, SourceSchema, Summarizer, TerminalHandoffOptions,
+    TurnBinding, apply_agent_model_preference, resolve_configured_agent_model,
 };
 use hya_proto::{
     AgentName, CompactionStrategy, ConfigGeneration, Envelope, Event, FinishReason, MessageId,
@@ -987,13 +987,8 @@ async fn fixed_system_native_compact_and_manual_compaction_turn_lease() {
     ));
     let engine = engine_with_router_and_runtime(router, builtin_test_runtime(), allow_all())
         .await
-        .with_compaction(
-            summarizer,
-            CompactionConfig {
-                keep_recent: 1,
-                ..CompactionConfig::default()
-            },
-        );
+        .with_terminal_handoff(summarizer, TerminalHandoffOptions::default())
+        .with_rewriters(support::compaction_rewriters(1));
 
     let sess = create_root_session(&engine, "hya-main", "session-model", dir.path()).await;
     let tok = hya_engine::tokens::TokenAccounting::default();

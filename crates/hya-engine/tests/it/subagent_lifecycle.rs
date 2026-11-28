@@ -23,11 +23,11 @@ use hya_engine::hooks::{
     NativeToolBeforeOutcome,
 };
 use hya_engine::{
-    AgentCatalog, AgentSpec, BoundSidecarFactory, BoundSpawnSender, CompactionConfig, CoreError,
-    CreateSession, EventBus, NativeHook, ResidentRecovery, ResidentSupervisor, RuntimeSource,
-    RuntimeSourceId, SessionEngine, SessionStoreExt as _, SidecarEnvironment, SidecarHandle,
-    SidecarLifecycle, SidecarStart, SubagentGovernor, SubagentLimits, SummarizeOptions, Summarizer,
-    TaskSpawnOrigin, TurnBinding, run_lifecycle_service,
+    AgentCatalog, AgentSpec, BoundSidecarFactory, BoundSpawnSender, CoreError, CreateSession,
+    EventBus, NativeHook, ResidentRecovery, ResidentSupervisor, RuntimeSource, RuntimeSourceId,
+    SessionEngine, SessionStoreExt as _, SidecarEnvironment, SidecarHandle, SidecarLifecycle,
+    SidecarStart, SubagentGovernor, SubagentLimits, SummarizeOptions, Summarizer, TaskSpawnOrigin,
+    TerminalHandoffOptions, TurnBinding, run_lifecycle_service,
 };
 use hya_proto::{
     ActorEpoch, AgentName, ChannelKind, Envelope, Event, FinishCause, FinishReason, MailEndpoint,
@@ -1076,13 +1076,11 @@ async fn observability_isolation_and_verbatim_spawn_directive() {
     let engine = Arc::new(
         support::engine_with_provider(provider, PermissionRules::default())
             .await
-            .with_compaction(
+            .with_terminal_handoff(
                 Arc::new(LeakProbeSummarizer),
-                CompactionConfig {
-                    keep_recent: 0,
-                    ..Default::default()
-                },
-            ),
+                TerminalHandoffOptions::default(),
+            )
+            .with_rewriters(support::compaction_rewriters(0)),
     );
     let agent = support::agent_spec("hya-main", "fake", workdir.path());
     let lead = support::create_root_session(&engine, "hya-main", "fake", workdir.path()).await;

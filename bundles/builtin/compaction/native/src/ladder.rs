@@ -14,50 +14,25 @@ use hya_proto::{
     CompactionStrategy, Event, FinishReason, Message, MessageId, PartId, Role, SessionId,
 };
 use hya_runtime_abi::HostRuntime;
-use hya_tool::extension::{BUNDLE_COMPACTION, ExtensionEvent};
+use hya_tool::extension::ExtensionEvent;
 
 use crate::config::Config;
 use crate::evict::{ArtifactEvictionSink, evict_stale_tool_outputs, has_spillable_tool_output};
 
-async fn resolve_config(
-    cx: &RewriteCtx<'_>,
-    runtime: Option<&Arc<dyn HostRuntime>>,
-) -> Result<Config, ToolError> {
-    if !cx.config.is_null() {
-        return Config::from_value(cx.config);
-    }
-    if let Some(runtime) = runtime
-        && let Ok(value) = runtime
-            .catalog_reader()
-            .bundle_config(BUNDLE_COMPACTION)
-            .await
-    {
-        return Config::from_value(&value);
-    }
-    Ok(Config::default())
-}
-
 async fn try_compact_window(
     cx: &RewriteCtx<'_>,
-    runtime: Option<&Arc<dyn HostRuntime>>,
+    runtime: &Arc<dyn HostRuntime>,
     messages: &[Message],
 ) -> Option<String> {
-    if let Some(models) = cx.models {
-        return models
-            .compact_window(cx.model, messages)
-            .await
-            .ok()
-            .flatten();
-    }
-    if let Some(runtime) = runtime {
-        return runtime
+    match cx.models {
+        Some(models) => models.compact_window(cx.model, messages).await.ok(),
+        None => runtime
             .model_caller()
             .compact_window(cx.model, messages)
             .await
-            .ok()
-            .flatten();
+            .ok(),
     }
-    None
+    .flatten()
 }
 
 /// Over the threshold, run `shake`, then `remote` while the request is still
@@ -66,10 +41,10 @@ async fn try_compact_window(
 /// `true` when the log changed.
 pub(crate) async fn walk(
     cx: &RewriteCtx<'_>,
-    runtime: Option<&Arc<dyn HostRuntime>>,
+    runtime: &Arc<dyn HostRuntime>,
+    config: Config,
 ) -> Result<bool, ToolError> {
-    let config = resolve_config(cx, runtime).await?;
-    let accounting = TokenAccounting::new(config.token_accounting)
+    let accounting = TokenAccounting::new(cx.token_accounting)
         .with_tool_images(cx.window.is_some_and(|window| window.sends_tool_images));
     let session = cx.session;
     let mut messages = cx.transcript.messages(cx.projection).await?;
@@ -176,7 +151,7 @@ pub(crate) async fn walk(
 /// leaves the fold to the kernel.
 pub(crate) async fn compact_now(
     cx: &RewriteCtx<'_>,
-    runtime: Option<&Arc<dyn HostRuntime>>,
+    runtime: &Arc<dyn HostRuntime>,
 ) -> Result<bool, ToolError> {
     let messages = cx.transcript.messages(cx.projection).await?;
     let Some(body) = try_compact_window(cx, runtime, &messages).await else {

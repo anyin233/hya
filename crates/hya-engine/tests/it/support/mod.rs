@@ -269,6 +269,25 @@ pub async fn fixture_engine(
     engine
 }
 
+/// The `hya/compaction` rewriters with `keep_recent` set through the bundle's
+/// own config (each load binds its own runtime, so tests do not share it).
+pub fn compaction_rewriters(keep_recent: usize) -> Vec<Arc<dyn hya_context::rewrite::Rewriter>> {
+    hya_tool_loader::load_v2(
+        "hya/compaction",
+        Arc::new(hya_tool_loader::MinimalHostRuntime::with_bundle_config(
+            move |id| {
+                if id == "hya/compaction" {
+                    json!({ "keep_recent": keep_recent })
+                } else {
+                    Value::Null
+                }
+            },
+        )),
+    )
+    .expect("load native rewriters")
+    .rewriters
+}
+
 /// Compact `SessionEngine` with in-memory SQLite, builtin tools, and zero retry backoff.
 pub async fn engine_with_provider(
     provider: Arc<dyn Provider>,

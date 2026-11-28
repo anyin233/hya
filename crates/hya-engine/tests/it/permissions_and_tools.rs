@@ -22,8 +22,9 @@ use hya_engine::hooks::{
     NativeCompactionAfterInput, NativeCompactionBeforeInput, NativeCompactionDecision,
 };
 use hya_engine::{
-    AgentCatalog, CompactionConfig, CreateSession, EventBus, NativeHook, RuntimePermissionMode,
-    RuntimeRegistry, RuntimeSource, RuntimeSourceId, SessionEngine, SummarizeOptions, Summarizer,
+    AgentCatalog, CreateSession, EventBus, NativeHook, RuntimePermissionMode, RuntimeRegistry,
+    RuntimeSource, RuntimeSourceId, SessionEngine, SummarizeOptions, Summarizer,
+    TerminalHandoffOptions,
 };
 use hya_proto::{
     AgentName, Event, FinishReason, MessageId, ModelRef, PartProjection, Role, SessionId, ToolName,
@@ -1221,7 +1222,7 @@ async fn session_lifecycle_and_agent_spawn_hooks_fire_best_effort() {
             PermissionRules::default(),
         )
         .await
-        .with_compaction(Arc::new(NoSummarizer), CompactionConfig::default())
+        .with_terminal_handoff(Arc::new(NoSummarizer), TerminalHandoffOptions::default())
         .with_hooks(hooks.clone()),
     );
     let lead = support::create_root_session(&engine, "hya-task", "fake", dir.path()).await;

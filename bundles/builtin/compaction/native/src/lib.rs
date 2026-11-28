@@ -13,40 +13,68 @@ mod evict;
 mod ladder;
 mod reducer;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use hya_context::rewrite::{RewriteCtx, Rewriter, ToolError};
-use hya_runtime_abi::{HostRuntime, NativePluginContext, NativeRegistrations};
+use hya_runtime_abi::{HostError, HostRuntime, NativePluginContext, NativeRegistrations};
+use hya_tool::extension::BUNDLE_COMPACTION;
+use serde_json::Value;
+
+use crate::config::{Config, KEEP_RECENT_ENV};
 
 pub use reducer::{CompactionProjectionReducer, CompactionReducerState, LastEvictionSummary};
 
-/// The `shake` and `remote` steps as an ABI v2 [`Rewriter`] extension backed by
-/// an optional host runtime handle.
-#[derive(Default)]
+/// The `shake` and `remote` steps as an ABI v2 [`Rewriter`] extension bound to
+/// the host runtime.
 pub struct CompactionRewriter {
-    runtime: Option<Arc<dyn HostRuntime>>,
+    runtime: Arc<dyn HostRuntime>,
+    config: OnceLock<Config>,
 }
 
 impl CompactionRewriter {
-    /// Construct a rewriter bound to the host's [`HostRuntime`] (for fallback
-    /// `HostModelCaller` and `HostCatalogReader::bundle_config` access).
+    /// Construct a rewriter bound to the host's [`HostRuntime`] (for its
+    /// `config.yml` through `HostCatalogReader::bundle_config` and the
+    /// fallback `HostModelCaller`).
     #[must_use]
     pub fn new(runtime: Arc<dyn HostRuntime>) -> Self {
         Self {
-            runtime: Some(runtime),
+            runtime,
+            config: OnceLock::new(),
         }
+    }
+
+    /// The bundle's settings, read on first use: its `config.yml`, then
+    /// `HYA_COMPACTION_KEEP_RECENT`.
+    async fn config(&self) -> Result<Config, ToolError> {
+        if let Some(config) = self.config.get() {
+            return Ok(*config);
+        }
+        let value = match self
+            .runtime
+            .catalog_reader()
+            .bundle_config(BUNDLE_COMPACTION)
+            .await
+        {
+            Ok(value) => value,
+            Err(HostError::NotFound(_) | HostError::Unavailable(_)) => Value::Null,
+            Err(error) => return Err(error.into()),
+        };
+        let config =
+            Config::from_value(&value)?.apply_env(std::env::var(KEEP_RECENT_ENV).ok().as_deref());
+        Ok(*self.config.get_or_init(|| config))
     }
 }
 
 #[async_trait]
 impl Rewriter for CompactionRewriter {
     async fn before_round(&self, cx: RewriteCtx<'_>) -> Result<bool, ToolError> {
-        ladder::walk(&cx, self.runtime.as_ref()).await
+        let config = self.config().await?;
+        ladder::walk(&cx, &self.runtime, config).await
     }
 
     async fn rewrite_now(&self, cx: RewriteCtx<'_>) -> Result<bool, ToolError> {
-        ladder::compact_now(&cx, self.runtime.as_ref()).await
+        ladder::compact_now(&cx, &self.runtime).await
     }
 }
 
@@ -462,7 +490,7 @@ mod tests {
     #[tokio::test]
     async fn abi_v2_registration_rewriter_host_runtime_and_projection_reducer() {
         let host = TestHost::new(
-            json!({ "compaction": { "keep_recent": 1, "token_accounting": "estimate" } }),
+            json!({ "compaction": { "keep_recent": 1 } }),
             Some("REMOTE_COMPACT_MARKER"),
         );
         let runtime: Arc<dyn HostRuntime> = host.clone();
@@ -490,7 +518,8 @@ mod tests {
         let projection = Projection::default();
         let model = ModelRef::new("test/model");
 
-        // Pass `config: Value::Null` and `models: None` to exercise HostRuntime fallbacks.
+        // `keep_recent` comes from the host's `bundle_config`; `models: None`
+        // exercises the `HostModelCaller` fallback.
         let changed = regs.rewriters[0]
             .before_round(RewriteCtx {
                 session,
@@ -504,7 +533,7 @@ mod tests {
                     threshold: 1_000,
                 }),
                 workdir: &dir,
-                config: &Value::Null,
+                token_accounting: TokenAccountingMode::Estimate,
                 log: &log,
                 transcript: &transcript,
                 models: None,
@@ -585,7 +614,7 @@ mod tests {
                 overhead_tokens: 0,
                 pressure: None,
                 workdir: &dir,
-                config: &Value::Null,
+                token_accounting: TokenAccountingMode::Estimate,
                 log: &log2,
                 transcript: &transcript,
                 models: None,

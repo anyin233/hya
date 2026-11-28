@@ -560,7 +560,7 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
         overhead_tokens: 0,
         pressure: None,
         workdir: &ctx.workdir,
-        config: &Value::Null,
+        token_accounting: hya_context::tokens::TokenAccountingMode::Auto,
         log: &DummySessionLog,
         transcript: &DummyTranscript,
         models: Some(&DummyModelHost),

@@ -39,8 +39,6 @@ pub mod catalog_scope;
 pub mod category;
 /// Trusted defaults and restrictive bundle policy for runtime channels.
 pub mod channel_policy;
-/// Combined compaction configuration and handoff types.
-pub mod compaction;
 /// Harness coordination tools injected into every agent view at startup.
 pub(crate) use hya_agent_channels_core::coordination;
 /// Effective reasoning effort resolution shared by request and display layers.
@@ -100,7 +98,6 @@ pub use category::{
     resolve_dispatch_model,
 };
 pub use channel_policy::{AGENT_CHANNELS_PRESET_ID, ChannelPolicy};
-pub use compaction::CompactionConfig;
 pub use effort::{AgentEffortSource, EffectiveEffort, EffortSource, agent_effort, resolve_effort};
 pub use engine::terminal_handoff;
 pub use engine::{

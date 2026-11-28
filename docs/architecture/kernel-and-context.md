@@ -135,7 +135,7 @@ flowchart LR
 - **`remote` (`ContextCompacted { strategy: native }`):** Calls upstream `/responses/compact` on routes that support native window folding (falling back to `HostModelCaller::compact_window` on `Arc<dyn HostRuntime>`), persisting `HYA_COMPACTED_CONTEXT` plus the active `todo` list.
 - **Manual `/compact` & `/summarize`:** Acquires the session turn lease, tries `remote` first, and falls back to Kernel `Rewrite` (`threshold: 0`, marked `manual: true`).
 - **Configuration & ABI v2 Interfaces (`hya/compaction`):**
-  - Per-bundle config file: `~/.config/hya/bundles/hya%2Fcompaction/config.yml` (loaded via `HostCatalogReader::bundle_config("hya/compaction")` or env overrides `HYA_COMPACTION_KEEP_RECENT`, `HYA_COMPACTION_SUMMARY_MAX_TOKENS`, `HYA_TOKEN_ACCOUNTING`).
+  - Per-bundle config file: `~/.config/hya/bundles/hya%2Fcompaction/config.yml`. The rewriter reads `keep_recent` itself on first use (`HostCatalogReader::bundle_config("hya/compaction")`, then `HYA_COMPACTION_KEEP_RECENT`); hya-app reads `summary_max_tokens` (env `HYA_COMPACTION_SUMMARY_MAX_TOKENS`) for the terminal handoff and `token_accounting` (env `HYA_TOKEN_ACCOUNTING`), which reaches rewriters as `RewriteCtx::token_accounting`.
     ```yaml
     compaction:
       keep_recent: 6

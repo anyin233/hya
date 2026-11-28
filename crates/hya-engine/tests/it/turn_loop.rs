@@ -14,8 +14,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
 use hya_engine::{
-    AgentSpec, CompactionConfig, CoreError, CreateSession, EventBus, ResidentSupervisor,
-    SessionEngine, SubagentGovernor, SubagentLimits, Summarizer, TokenAccountingMode, TokenSource,
+    AgentSpec, CoreError, CreateSession, EventBus, ResidentSupervisor, SessionEngine,
+    SubagentGovernor, SubagentLimits, Summarizer, TerminalHandoffOptions, TokenAccountingMode,
+    TokenSource,
 };
 use hya_proto::{
     AgentName, Envelope, Event, FinishReason, MailEndpoint, MailKind, Message, MessageId,
@@ -431,13 +432,8 @@ async fn tool_output_eviction_avoids_rewrite_sticks_and_matches_after_restart() 
                 EventBus::default(),
             )
             .await
-            .with_compaction(
-                Arc::new(NoSummarizer),
-                CompactionConfig {
-                    keep_recent: 1,
-                    ..CompactionConfig::default()
-                },
-            )
+            .with_terminal_handoff(Arc::new(NoSummarizer), TerminalHandoffOptions::default())
+            .with_rewriters(support::compaction_rewriters(1))
         }
     };
     let agent = support::agent_spec("build", "fake", dir.path());
@@ -507,7 +503,7 @@ async fn context_status_reports_round_occupancy_and_accounting_mode() {
         PermissionRules::default(),
     )
     .await
-    .with_compaction(Arc::new(NoSummarizer), CompactionConfig::default());
+    .with_terminal_handoff(Arc::new(NoSummarizer), TerminalHandoffOptions::default());
     let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
     engine
         .admit_user_prompt(session, "hello".into())
@@ -636,13 +632,8 @@ async fn stale_tool_outputs_spill_mid_turn_and_escalate_to_rewrite_when_needed()
     .with_max_context(30_000);
     let engine = support::engine_with_provider(Arc::new(provider), read_rules())
         .await
-        .with_compaction(
-            Arc::new(NoSummarizer),
-            CompactionConfig {
-                keep_recent: 1,
-                ..CompactionConfig::default()
-            },
-        );
+        .with_terminal_handoff(Arc::new(NoSummarizer), TerminalHandoffOptions::default())
+        .with_rewriters(support::compaction_rewriters(1));
     let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
     engine
         .admit_user_prompt(session, "read three times".into())
@@ -694,13 +685,8 @@ async fn stale_tool_outputs_spill_mid_turn_and_escalate_to_rewrite_when_needed()
     };
     let engine = support::engine_with_provider(Arc::new(route), read_rules())
         .await
-        .with_compaction(
-            Arc::new(NoSummarizer),
-            CompactionConfig {
-                keep_recent: 2,
-                ..CompactionConfig::default()
-            },
-        );
+        .with_terminal_handoff(Arc::new(NoSummarizer), TerminalHandoffOptions::default())
+        .with_rewriters(support::compaction_rewriters(2));
     let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
     let agent = support::agent_spec("build", "fake", dir.path());
     engine.admit_user_prompt(session, prompt).await.unwrap();
@@ -841,13 +827,8 @@ async fn kernel_rewrite_runs_before_preflight_rejects_under_threshold_provider_c
         PermissionRules::new(vec![Rule::new(Action::Read, "/**", Mode::Allow)]),
     )
     .await
-    .with_compaction(
-        Arc::new(NoSummarizer),
-        CompactionConfig {
-            keep_recent: 1,
-            ..CompactionConfig::default()
-        },
-    );
+    .with_terminal_handoff(Arc::new(NoSummarizer), TerminalHandoffOptions::default())
+    .with_rewriters(support::compaction_rewriters(1));
     let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
     engine
         .admit_user_prompt(session, "work".into())

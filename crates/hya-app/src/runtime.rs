@@ -1209,10 +1209,9 @@ async fn build_session_engine_with_mcp_defer(
         .with_terminal_handoff(
             summarizer,
             TerminalHandoffOptions {
-                max_output_tokens: context_settings.compaction.summary_max_tokens,
+                max_output_tokens: context_settings.summary_max_tokens,
             },
         )
-        .with_rewriter_keep_recent(context_settings.compaction.keep_recent)
         .with_token_accounting(TokenAccounting::new(context_settings.token_accounting))
         .with_formatter(settings.formatter())
         .with_lsp(settings.lsp()?)

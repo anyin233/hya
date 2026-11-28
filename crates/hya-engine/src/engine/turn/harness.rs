@@ -472,7 +472,6 @@ impl Harness for EngineHarness<'_> {
             self.router.reasoning_replay_policy(&self.model),
         );
         let errors = HostErrors::default();
-        let config = engine.rewriter_config();
         let log = TurnLog {
             engine,
             actor_claim: self.actor_claim,
@@ -496,7 +495,7 @@ impl Harness for EngineHarness<'_> {
             overhead_tokens,
             pressure: None,
             workdir: &workdir,
-            config: &config,
+            token_accounting: engine.token_accounting.mode(),
             log: &log,
             transcript: &transcript,
             models: Some(&models),
