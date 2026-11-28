@@ -20,6 +20,7 @@ use hya_proto::{
     AgentName, ModelRef, PartProjection, Role, SessionId, SessionKind, ToolName, ToolSchema,
 };
 use hya_provider::{Provider, ProviderRouter};
+use hya_runtime_abi::NativeRegistrations;
 use hya_store::SessionStore;
 use hya_tool::{
     PermissionPlane, PermissionRules, SkillDiscovery, Tool, ToolCtx, ToolError, ToolRegistry,
@@ -133,18 +134,60 @@ pub fn builtin_only_catalog() -> Arc<AgentCatalog> {
     Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("builtin-only agent catalog"))
 }
 
+/// A runtime plus the `hya/agent-channels` registrations from the load that
+/// produced its tools, so [`fixture_engine`] starts the service those tools hold.
+pub struct TestRuntime {
+    pub runtime: Arc<RuntimeRegistry>,
+    pub channels: NativeRegistrations,
+}
+
+/// A custom registry plus a separate `hya/agent-channels` load: the hook, URI
+/// handler, and reducer work, while channels tools in `runtime` (if any) hold
+/// a service that is never started.
+impl From<Arc<RuntimeRegistry>> for TestRuntime {
+    fn from(runtime: Arc<RuntimeRegistry>) -> Self {
+        let mut channels = hya_tool_loader::load_v2(
+            "hya/agent-channels",
+            Arc::new(hya_tool_loader::MinimalHostRuntime::empty()),
+        )
+        .expect("load hya/agent-channels");
+        channels.tools.clear();
+        Self { runtime, channels }
+    }
+}
+
+fn multi_agent_catalog() -> Arc<AgentCatalog> {
+    let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").expect("hya/multi-agent");
+    let bundles =
+        BundleCatalog::from_verified_catalogs(&[multi_agent]).expect("multi-agent catalog");
+    Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("multi-agent agent catalog"))
+}
+
 /// Default runtime for root/main turn integration fixtures.
 ///
 /// Uses the compiled-in built-in roster plus `hya/multi-agent` and
 /// workdir/root-only skill discovery (never reading `$HOME`) so tests stay
 /// hermetic and parallel-safe.
 pub fn test_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegistry> {
-    let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").expect("hya/multi-agent");
-    let bundles =
-        BundleCatalog::from_verified_catalogs(&[multi_agent]).expect("multi-agent catalog");
-    let catalog =
-        Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("multi-agent agent catalog"));
-    test_runtime_with_catalog(tools, catalog)
+    test_runtime_with_catalog(tools, multi_agent_catalog())
+}
+
+/// [`test_runtime`] over every builtin tool bundle.
+pub fn builtin_test_runtime() -> TestRuntime {
+    builtin_test_runtime_with_catalog(multi_agent_catalog())
+}
+
+/// [`test_runtime_with_catalog`] over every builtin tool bundle.
+pub fn builtin_test_runtime_with_catalog(catalog: Arc<AgentCatalog>) -> TestRuntime {
+    let (tools, bundles) = hya_tool_loader::builtin_bundles().expect("builtin bundles");
+    let channels = bundles
+        .into_iter()
+        .find_map(|(id, regs)| (id == "hya/agent-channels").then_some(regs))
+        .expect("hya/agent-channels registrations");
+    TestRuntime {
+        runtime: test_runtime_with_catalog(Arc::new(tools), catalog),
+        channels,
+    }
 }
 
 /// Runtime backed by a custom agent catalog and workdir/root-only skill discovery.
@@ -193,13 +236,14 @@ pub fn kernel_engine_with_registry(
 }
 
 /// Compose real native extensions for the fixtures that exercise them.
-pub fn fixture_engine(
+pub async fn fixture_engine(
     store: SessionStore,
     router: Arc<ProviderRouter>,
-    runtime: Arc<RuntimeRegistry>,
+    runtime: impl Into<TestRuntime>,
     permission: PermissionPlane,
     bus: EventBus,
 ) -> SessionEngine {
+    let TestRuntime { runtime, channels } = runtime.into();
     let regs = hya_tool_loader::load_v2(
         "hya/compaction",
         Arc::new(hya_tool_loader::MinimalHostRuntime::empty()),
@@ -207,9 +251,22 @@ pub fn fixture_engine(
     .expect("load native rewriters");
     let engine = SessionEngine::new(store, router, runtime, permission, bus)
         .with_rewriters(regs.rewriters)
-        .with_tool_family_prompts(true)
+        .with_tool_family_prompts(true);
+    let host = engine.channel_host_runtime();
+    for service in &channels.services {
+        service
+            .start(Arc::clone(&host))
+            .await
+            .expect("start agent-channels service");
+    }
+    let engine = channels
+        .hooks
+        .into_iter()
+        .fold(engine, SessionEngine::with_hooks)
+        .with_uri_schema_handlers(channels.uri_schema_handlers, host)
         .with_legacy_coordination();
     engine.register_native_projection_reducers(regs.projection_reducers);
+    engine.register_native_projection_reducers(channels.projection_reducers);
     engine
 }
 
@@ -220,7 +277,7 @@ pub async fn engine_with_provider(
 ) -> SessionEngine {
     engine_with_router_and_runtime(
         Arc::new(ProviderRouter::new().with(provider)),
-        test_runtime(Arc::new(hya_tool_loader::builtins())),
+        builtin_test_runtime(),
         rules,
     )
     .await
@@ -229,12 +286,13 @@ pub async fn engine_with_provider(
 /// Compact `SessionEngine` with custom router/runtime and zero retry backoff.
 pub async fn engine_with_router_and_runtime(
     router: Arc<ProviderRouter>,
-    runtime: Arc<RuntimeRegistry>,
+    runtime: impl Into<TestRuntime>,
     rules: PermissionRules,
 ) -> SessionEngine {
     let store = SessionStore::connect_memory().await.expect("memory store");
     let (permission, _rx) = PermissionPlane::new(rules);
     fixture_engine(store, router, runtime, permission, EventBus::default())
+        .await
         .with_round_retry_waits(&ZERO_RETRY_WAITS)
 }
 

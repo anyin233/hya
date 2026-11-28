@@ -391,7 +391,7 @@ async fn model_tool_authorizes_after_lookup_and_before_hook_with_call_correlatio
         SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
             Arc::new(ProviderRouter::new().with(Arc::new(provider))),
-            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+            support::builtin_test_runtime().runtime,
             permission,
             EventBus::default(),
         )
@@ -692,8 +692,7 @@ async fn removed_plugin_hooks_leave_fresh_bindings_but_remain_live_on_old_bindin
         ))
         .unwrap(),
     );
-    let registry =
-        support::test_runtime_with_catalog(Arc::new(hya_tool_loader::builtins()), catalog);
+    let registry = support::builtin_test_runtime_with_catalog(catalog).runtime;
     let source_id = RuntimeSourceId::bundle("acme/rewrite");
     let counts = Arc::new(HookCounts::default());
     registry
@@ -861,7 +860,7 @@ async fn scope_hook_harness(cache: Option<CatalogScopeCacheConfig>) -> ScopeHook
     let config = Arc::new(ScopeProbe::default());
     let mut engine = support::engine_with_router_and_runtime(
         Arc::new(ProviderRouter::new()),
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+        support::builtin_test_runtime(),
         PermissionRules::default(),
     )
     .await
@@ -1135,7 +1134,7 @@ async fn grant_scope_falls_back_to_session_for_temporary_unassigned_and_deleted_
 async fn empty_engine() -> SessionEngine {
     support::engine_with_router_and_runtime(
         Arc::new(ProviderRouter::new()),
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+        support::builtin_test_runtime(),
         PermissionRules::default(),
     )
     .await

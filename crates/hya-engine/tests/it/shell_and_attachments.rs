@@ -124,7 +124,7 @@ async fn policy_shell_engine(
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         router,
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+        support::builtin_test_runtime().runtime,
         permission,
         EventBus::default(),
     );

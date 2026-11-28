@@ -8,9 +8,9 @@
 use crate::support;
 use support::resident::{ResidentTurn, run_residents};
 use support::{
-    MarkerTool, TestDir, ZERO_RETRY_WAITS, agent_spec, builtin_only_catalog, create_root_session,
-    discover_local_skills, engine_with_router_and_runtime, test_catalog, test_runtime,
-    test_runtime_with_catalog,
+    MarkerTool, TestDir, ZERO_RETRY_WAITS, agent_spec, builtin_only_catalog, builtin_test_runtime,
+    builtin_test_runtime_with_catalog, create_root_session, discover_local_skills,
+    engine_with_router_and_runtime, test_catalog, test_runtime,
 };
 
 use std::borrow::Cow;
@@ -239,7 +239,7 @@ fn allow_all() -> PermissionRules {
 async fn eng_with(cat: Arc<AgentCatalog>, provider: Arc<dyn Provider>) -> SessionEngine {
     engine_with_router_and_runtime(
         Arc::new(ProviderRouter::new().with(provider)),
-        test_runtime_with_catalog(Arc::new(hya_tool_loader::builtins()), cat),
+        builtin_test_runtime_with_catalog(cat),
         allow_all(),
     )
     .await
@@ -985,19 +985,15 @@ async fn fixed_system_native_compact_and_manual_compaction_turn_lease() {
         router.clone(),
         ModelRef::new("summarizer-fallback"),
     ));
-    let engine = engine_with_router_and_runtime(
-        router,
-        test_runtime(Arc::new(hya_tool_loader::builtins())),
-        allow_all(),
-    )
-    .await
-    .with_compaction(
-        summarizer,
-        CompactionConfig {
-            keep_recent: 1,
-            ..CompactionConfig::default()
-        },
-    );
+    let engine = engine_with_router_and_runtime(router, builtin_test_runtime(), allow_all())
+        .await
+        .with_compaction(
+            summarizer,
+            CompactionConfig {
+                keep_recent: 1,
+                ..CompactionConfig::default()
+            },
+        );
 
     let sess = create_root_session(&engine, "hya-main", "session-model", dir.path()).await;
     let tok = hya_engine::tokens::TokenAccounting::default();
@@ -1406,7 +1402,7 @@ async fn agent_effort_precedence_between_round_updates_and_corrupt_propagation()
     let roster_eng = SessionEngine::new(
         store.clone(),
         Arc::new(ProviderRouter::new()),
-        test_runtime(Arc::new(hya_tool_loader::builtins())),
+        builtin_test_runtime().runtime,
         perm,
         EventBus::default(),
     );

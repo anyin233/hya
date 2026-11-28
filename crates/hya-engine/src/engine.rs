@@ -380,50 +380,14 @@ impl SessionEngine {
         self
     }
 
-    /// Wire the inline coordination adapters used by engine fixtures.
+    /// Wire the inline `hya/multi-agent` adapters used by engine fixtures.
     ///
     /// Application runtimes install the corresponding native registrations.
     #[doc(hidden)]
     #[must_use]
     pub fn with_legacy_coordination(mut self) -> Self {
-        let channels_runtime: Arc<dyn hya_runtime_abi::HostRuntime> =
-            Arc::new(channel_host::EngineChannelsHostRuntime {
-                store: self.store.clone(),
-                bus: self.bus.clone(),
-                runtime_owner: self.runtime_owner,
-                session_channel_policies: Arc::clone(&self.session_channel_policies),
-                transient_state: Arc::clone(&self.transient_state),
-                staged_events: Arc::clone(&self.staged_events),
-                reviver: Arc::clone(&self.reviver),
-                turn_gate: Arc::clone(&self.turn_gate),
-            });
-        let channels_service =
-            Arc::new(hya_agent_channels_core::AgentChannelsService::with_runtime(
-                Arc::clone(&channels_runtime),
-            ));
-        self = self.with_hooks(Arc::new(hya_agent_channels_core::UnreadMailSteerHook::new(
-            Arc::clone(&channels_service),
-        )));
-        let channel_uri: Arc<dyn hya_runtime_abi::UriSchemaHandler> = Arc::new(
-            hya_agent_channels_core::ChannelUriSchemaHandler::new(channels_service),
-        );
-        if let Ok(updated) =
-            self.schemas
-                .clone()
-                .with_uri_handler(hya_runtime_abi::adapt_uri_schema_handler(
-                    channel_uri,
-                    Some(Arc::clone(&channels_runtime)),
-                ))
-        {
-            self.schemas = updated;
-        }
-        self.store
-            .register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
-                inner: Arc::new(hya_agent_channels_core::AgentChannelsProjectionReducer),
-            }));
-
         let multi_service = Arc::new(hya_multi_agent_core::MultiAgentService::with_runtime(
-            Arc::clone(&channels_runtime),
+            self.channel_host_runtime(),
         ));
         self = self.with_hooks(Arc::new(
             hya_multi_agent_core::MultiAgentLifecycleHook::new(Arc::clone(&multi_service)),

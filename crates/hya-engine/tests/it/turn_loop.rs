@@ -254,7 +254,7 @@ async fn cancel_provider_error_and_usage_record_on_assistant_projection() {
     // 3. Unresolved model surfaces error and still closes assistant message with Error.
     let engine = support::engine_with_router_and_runtime(
         Arc::new(ProviderRouter::new()),
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+        support::builtin_test_runtime(),
         PermissionRules::default(),
     )
     .await;
@@ -421,24 +421,28 @@ async fn tool_output_eviction_avoids_rewrite_sticks_and_matches_after_restart() 
             "/**",
             Mode::Allow,
         )]));
-        support::fixture_engine(
-            store,
-            Arc::new(ProviderRouter::new().with(provider.clone())),
-            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
-            perm,
-            EventBus::default(),
-        )
-        .with_compaction(
-            Arc::new(NoSummarizer),
-            CompactionConfig {
-                keep_recent: 1,
-                ..CompactionConfig::default()
-            },
-        )
+        let provider = provider.clone();
+        async move {
+            support::fixture_engine(
+                store,
+                Arc::new(ProviderRouter::new().with(provider)),
+                support::builtin_test_runtime(),
+                perm,
+                EventBus::default(),
+            )
+            .await
+            .with_compaction(
+                Arc::new(NoSummarizer),
+                CompactionConfig {
+                    keep_recent: 1,
+                    ..CompactionConfig::default()
+                },
+            )
+        }
     };
     let agent = support::agent_spec("build", "fake", dir.path());
 
-    let engine = build_engine(SessionStore::connect(&db).await.unwrap());
+    let engine = build_engine(SessionStore::connect(&db).await.unwrap()).await;
     let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
     for prompt in ["read big".to_string(), "now summarize ".repeat(3_000)] {
         engine.admit_user_prompt(session, prompt).await.unwrap();
@@ -466,7 +470,7 @@ async fn tool_output_eviction_avoids_rewrite_sticks_and_matches_after_restart() 
 
     // Reopened engine sends the identical evicted request without re-evicting,
     // and a follow-up prompt stays sticky without escalating to rewrite.
-    let engine = build_engine(SessionStore::connect(&db).await.unwrap());
+    let engine = build_engine(SessionStore::connect(&db).await.unwrap()).await;
     engine
         .run_turn(session, &agent, CancellationToken::new())
         .await
@@ -2085,7 +2089,7 @@ async fn todo_list_survives_restart_and_builds_on_prior_state() {
         support::fixture_engine(
             store.clone(),
             Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted_turns(script)))),
-            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+            support::builtin_test_runtime(),
             perm,
             EventBus::default(),
         )
@@ -2105,14 +2109,16 @@ async fn todo_list_survives_restart_and_builds_on_prior_state() {
     let first = make_engine(call_todo(json!({"ops": [
         {"op": "add", "content": "first"},
         {"op": "add", "content": "second"}
-    ]})));
+    ]})))
+    .await;
     let session = support::create_root_session(&first, "build", "fake", dir.path()).await;
     run(&first, session, dir.path()).await;
     drop(first);
 
     let second = make_engine(call_todo(
         json!({"ops": [{"op": "status", "id": "2", "status": "completed"}]}),
-    ));
+    ))
+    .await;
     run(&second, session, dir.path()).await;
 
     let proj = store.read_projection(session).await.unwrap();

@@ -36,10 +36,24 @@ use base_tools::TOOL_FAMILIES;
 /// from all trusted native tool bundles (ABI v2 and transitional ABI v1).
 #[must_use]
 pub fn builtins() -> ToolRegistry {
+    builtin_bundles()
+        .map(|(registry, _)| registry)
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Load every trusted native tool bundle [`builtins`] installs, returning the
+/// tool registry and each bundle's other registrations from the same load, so
+/// a caller can start the services those tools hold.
+///
+/// # Errors
+///
+/// Returns a diagnostic string when a bundle's native library cannot be
+/// loaded or disagrees with its bundle policy.
+pub fn builtin_bundles() -> Result<(ToolRegistry, Vec<(String, NativeRegistrations)>), String> {
     let mut all = Vec::with_capacity(TOOL_FAMILIES.len() + NATIVE_V2_TOOL_BUNDLES.len());
     all.extend_from_slice(&TOOL_FAMILIES);
     all.extend_from_slice(&NATIVE_V2_TOOL_BUNDLES);
-    from_tool_families(&all)
+    load_native_bundles(&all, Arc::new(MinimalHostRuntime::empty()))
 }
 
 /// Non-panicking selective loader for a subset of the trusted native tool

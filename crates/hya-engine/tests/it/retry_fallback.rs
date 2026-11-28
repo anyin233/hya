@@ -180,7 +180,7 @@ async fn retry_fixture(
     let mut engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         Arc::new(ProviderRouter::new().with(Arc::new(provider))),
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+        support::builtin_test_runtime().runtime,
         PermissionPlane::new(PermissionRules::default()).0,
         EventBus::default(),
     );
@@ -697,7 +697,7 @@ async fn fallback_fixture(
         .fold(ProviderRouter::new(), |r, p| r.with(Arc::new(p)));
     let mut engine = support::engine_with_router_and_runtime(
         Arc::new(router),
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+        support::builtin_test_runtime(),
         PermissionRules::new(vec![Rule::new(Action::Read, "/**", Mode::Allow)]),
     )
     .await;

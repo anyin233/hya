@@ -185,7 +185,7 @@ fn approver_runtime(seen: Arc<Mutex<Vec<NativePermissionApproveInput>>>) -> Arc<
 #[tokio::test]
 async fn permission_modes_toggle_danger_default_and_reject_unknown() {
     let dir = support::TestDir::new("perm-modes");
-    let rt = || support::test_runtime(Arc::new(hya_tool_loader::builtins()));
+    let rt = || support::builtin_test_runtime().runtime;
 
     // 1. Default model starts manual; yolo skips asks; switching back to manual asks again.
     let (engine, mut asks) = mode_engine(
@@ -270,7 +270,7 @@ async fn permission_modes_toggle_danger_default_and_reject_unknown() {
 #[tokio::test]
 async fn permission_modes_subagent_inheritance_and_mid_turn_switch() {
     let dir = support::TestDir::new("perm-inherit");
-    let rt = || support::test_runtime(Arc::new(hya_tool_loader::builtins()));
+    let rt = || support::builtin_test_runtime().runtime;
 
     // 1. Subagent mode change writes to root and child inherits it.
     let (engine, mut asks) = mode_engine(&["printf child"], PermissionModel::Default, rt()).await;
@@ -1302,7 +1302,7 @@ async fn compaction_commit_is_atomic_single_transaction() {
                 FakeStep::Finish(FinishReason::Stop),
             ]]))),
         ),
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+        support::builtin_test_runtime().runtime,
         perm,
         EventBus::default(),
     );

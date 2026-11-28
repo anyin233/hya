@@ -18,8 +18,8 @@ use hya_bundle::{
 };
 use hya_engine::{
     AgentCatalog, AgentSpec, ChannelPolicy, CompactionConfig, CoreError, EventBus,
-    ResidentSupervisor, RuntimeRegistry, SessionEngine, SessionStoreExt as _, SubagentGovernor,
-    SubagentLimits, SummarizeOptions, Summarizer, TurnBinding, TurnLease, run_lifecycle_service,
+    ResidentSupervisor, SessionEngine, SessionStoreExt as _, SubagentGovernor, SubagentLimits,
+    SummarizeOptions, Summarizer, TurnBinding, TurnLease, run_lifecycle_service,
     run_mailbox_service,
 };
 use hya_proto::{
@@ -209,7 +209,7 @@ async fn restricted_engine(channels: &str) -> Arc<SessionEngine> {
     Arc::new(
         support::engine_with_router_and_runtime(
             Arc::new(ProviderRouter::new().with(Arc::new(EmptyStub))),
-            support::test_runtime_with_catalog(Arc::new(hya_tool_loader::builtins()), catalog),
+            support::builtin_test_runtime_with_catalog(catalog),
             PermissionRules::default(),
         )
         .await,
@@ -1162,10 +1162,11 @@ async fn steer_notice_multibyte_channel_id_harness_notice_and_bus_lag_resync() {
         support::fixture_engine(
             SessionStore::connect_memory().await.unwrap(),
             Arc::new(ProviderRouter::new().with(Arc::new(EmptyStub))),
-            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+            support::builtin_test_runtime(),
             perm,
             EventBus::new(4),
         )
+        .await
         .with_round_retry_waits(&support::ZERO_RETRY_WAITS),
     );
     let lag_root = root_team(&lag_engine).await;
@@ -1516,10 +1517,11 @@ async fn resident_member_row_lifecycle_cancel_failed_turn_and_failed_shutdown_ro
         let tmp = support::fixture_engine(
             store.clone(),
             Arc::new(ProviderRouter::new().with(Arc::new(EmptyStub))),
-            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+            support::builtin_test_runtime(),
             perm,
             EventBus::default(),
-        );
+        )
+        .await;
         root_team(&tmp).await
     };
     let (perm, _) = PermissionPlane::new(PermissionRules::default());
@@ -1527,10 +1529,11 @@ async fn resident_member_row_lifecycle_cancel_failed_turn_and_failed_shutdown_ro
         support::fixture_engine(
             store,
             Arc::new(ProviderRouter::new().with(Arc::new(FailingMembers(root_id)))),
-            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+            support::builtin_test_runtime(),
             perm,
             EventBus::default(),
         )
+        .await
         .with_round_retry_waits(&support::ZERO_RETRY_WAITS),
     );
     let f_sup = ResidentSupervisor::start(f_engine.clone());
@@ -1576,10 +1579,11 @@ async fn resident_member_row_lifecycle_cancel_failed_turn_and_failed_shutdown_ro
         support::fixture_engine(
             file_store,
             Arc::new(ProviderRouter::new().with(Arc::new(EmptyStub))),
-            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+            support::builtin_test_runtime(),
             perm2,
             EventBus::default(),
         )
+        .await
         .with_round_retry_waits(&support::ZERO_RETRY_WAITS),
     );
     let t_root = root_team(&t_engine).await;
@@ -1636,7 +1640,7 @@ async fn handoff_policy_deterministic_skips_summarizer_while_default_invokes_it(
         let engine = Arc::new(
             support::engine_with_router_and_runtime(
                 Arc::new(ProviderRouter::new().with(Arc::new(EmptyStub))),
-                support::test_runtime_with_catalog(Arc::new(hya_tool_loader::builtins()), catalog),
+                support::builtin_test_runtime_with_catalog(catalog),
                 PermissionRules::default(),
             )
             .await
@@ -1799,7 +1803,7 @@ async fn report_turn_team(provider: Arc<ReportTurnProvider>) -> ReportTurnTeam {
     let engine = Arc::new(
         support::engine_with_router_and_runtime(
             Arc::new(ProviderRouter::new().with(provider.clone())),
-            support::test_runtime_with_catalog(Arc::new(hya_tool_loader::builtins()), catalog),
+            support::builtin_test_runtime_with_catalog(catalog),
             PermissionRules::new(vec![Rule::new(Action::Read, "*", Mode::Allow)]),
         )
         .await
@@ -2159,7 +2163,7 @@ struct WaitTeam {
 async fn wait_team() -> WaitTeam {
     wait_team_with(
         SubagentLimits::default(),
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+        support::builtin_test_runtime(),
         "hya-main",
     )
     .await
@@ -2167,7 +2171,7 @@ async fn wait_team() -> WaitTeam {
 
 async fn wait_team_with(
     limits: SubagentLimits,
-    runtime: Arc<RuntimeRegistry>,
+    runtime: support::TestRuntime,
     agent: &str,
 ) -> WaitTeam {
     let provider = Arc::new(GateProvider::default());
@@ -2413,7 +2417,7 @@ async fn wait_returns_on_member_report_any_mode_and_budget_kill() {
             per_team_message_budget: 1,
             ..Default::default()
         },
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+        support::builtin_test_runtime(),
         "hya-main",
     )
     .await;
@@ -2991,7 +2995,7 @@ async fn mail_reader_team() -> WaitTeam {
     tools.register(Arc::new(ReadPagesTool)).unwrap();
     wait_team_with(
         Default::default(),
-        support::test_runtime_with_catalog(Arc::new(tools), catalog),
+        support::test_runtime_with_catalog(Arc::new(tools), catalog).into(),
         "mail-reader",
     )
     .await

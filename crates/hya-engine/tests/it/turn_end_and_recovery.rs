@@ -488,7 +488,7 @@ fn next_engine(engine: &SessionEngine, provider: Arc<ScriptProvider>) -> Session
     SessionEngine::new(
         engine.store().clone(),
         Arc::new(ProviderRouter::new().with(provider)),
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+        support::builtin_test_runtime().runtime,
         perm,
         EventBus::default(),
     )
@@ -2051,7 +2051,7 @@ async fn recovery_engine(store: SessionStore) -> SessionEngine {
     SessionEngine::new(
         store,
         Arc::new(ProviderRouter::new()),
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+        support::builtin_test_runtime().runtime,
         permission,
         EventBus::default(),
     )

@@ -980,10 +980,10 @@ async fn sidecar_bundle_engine(
     let catalog = Arc::new(
         AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(&bundles).unwrap())).unwrap(),
     );
-    let runtime =
-        support::test_runtime_with_catalog(Arc::new(hya_tool_loader::builtins()), catalog);
+    let runtime = support::builtin_test_runtime_with_catalog(catalog);
     if let Some(hooks) = plugin_hooks {
         runtime
+            .runtime
             .refresh(|c| {
                 c.upsert_sources(vec![
                     RuntimeSource::new(
@@ -1767,7 +1767,7 @@ async fn resident_registration_failure_claim_fencing_and_pre_stop_mail_persisten
             SessionEngine::new(
                 store,
                 Arc::new(ProviderRouter::new().with(Arc::new(StaticFake("MEMBERTEXT")))),
-                support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+                support::builtin_test_runtime().runtime,
                 perm,
                 EventBus::default(),
             )
@@ -2302,7 +2302,7 @@ async fn running_resident_sidecar_loss_never_takes_over_claim_or_runs_recovery_t
                 entered: entered_tx,
                 release: release.clone(),
             }))),
-            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+            support::builtin_test_runtime().runtime,
             perm,
             EventBus::default(),
         )
@@ -2633,7 +2633,7 @@ async fn resident_initial_task_survives_claim_takeover_and_parent_dm_policy() {
     let p_engine = Arc::new(
         support::engine_with_router_and_runtime(
             Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new()))),
-            support::test_runtime_with_catalog(Arc::new(hya_tool_loader::builtins()), catalog),
+            support::builtin_test_runtime_with_catalog(catalog),
             PermissionRules::default(),
         )
         .await,
@@ -3019,7 +3019,7 @@ async fn narrow_bundle_member_gets_coordination_tools_reads_dm_and_reports() {
     let engine = Arc::new(
         support::engine_with_router_and_runtime(
             Arc::new(ProviderRouter::new().with(provider.clone())),
-            support::test_runtime_with_catalog(Arc::new(hya_tool_loader::builtins()), catalog),
+            support::builtin_test_runtime_with_catalog(catalog),
             PermissionRules::new(vec![Rule::new(Action::Read, "*", Mode::Allow)]),
         )
         .await
@@ -3271,7 +3271,7 @@ async fn actor_stream_deltas_execute_no_sql() {
                 SessionEngine::new(
                     store,
                     Arc::new(ProviderRouter::new().with(Arc::new(DeltaSqlProvider(counts)))),
-                    support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+                    support::builtin_test_runtime().runtime,
                     perm,
                     EventBus::default(),
                 )
