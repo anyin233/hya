@@ -16,7 +16,7 @@ use crate::resident::resolve_member_target;
 
 /// Prefix on a steer message, so the subagent (and its parent, reading the
 /// DM history) can tell the user wrote it, not the parent agent.
-pub use hya_multi_agent::USER_STEER_PREFIX;
+pub use hya_multi_agent_core::USER_STEER_PREFIX;
 
 impl SessionEngine {
     /// Archive the subagent running in `child`, as its team lead would with

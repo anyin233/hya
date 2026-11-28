@@ -1,7 +1,7 @@
 //! Thin engine facade delegating channel list/read/status queries to
-//! [`hya_agent_channels::AgentChannelsService`] through [`HostRuntime`].
+//! [`hya_agent_channels_core::AgentChannelsService`] through [`HostRuntime`].
 
-use hya_agent_channels::{AgentChannelsService, ChannelHistoryRead};
+use hya_agent_channels_core::{AgentChannelsService, ChannelHistoryRead};
 use hya_proto::{ActorClaim, SessionId};
 use hya_runtime_abi::HostError;
 

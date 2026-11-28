@@ -1,8 +1,8 @@
-//! Bridge from [`TurnBinding`] onto [`hya_agent_channels::ChannelPolicy`].
+//! Bridge from [`TurnBinding`] onto [`hya_agent_channels_core::ChannelPolicy`].
 
 use hya_bundle::BundleError;
 
-pub use hya_agent_channels::{AGENT_CHANNELS_PRESET_ID, ChannelPolicy};
+pub use hya_agent_channels_core::{AGENT_CHANNELS_PRESET_ID, ChannelPolicy};
 
 use crate::TurnBinding;
 

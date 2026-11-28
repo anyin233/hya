@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_coding_extras::{CodingExtrasState, coding_extras_hooks};
+use hya_coding_extras_core::{CodingExtrasState, coding_extras_hooks};
 use hya_engine::{AgentCatalog, EventBus, NativeHookDispatcher, RuntimeRegistry, SessionEngine};
 use hya_proto::{
     Event, FinishReason, MessageId, ModelRef, PartProjection, SessionId, ToolPartState,

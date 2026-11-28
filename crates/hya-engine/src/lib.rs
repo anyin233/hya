@@ -42,7 +42,7 @@ pub mod channel_policy;
 /// Combined compaction configuration and handoff types.
 pub mod compaction;
 /// Harness coordination tools injected into every agent view at startup.
-pub(crate) use hya_agent_channels::coordination;
+pub(crate) use hya_agent_channels_core::coordination;
 /// Effective reasoning effort resolution shared by request and display layers.
 pub mod effort;
 /// Session engine, agent specs, and turn admission.

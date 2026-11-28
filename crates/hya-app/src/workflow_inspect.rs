@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use hya_engine::{AgentCatalog, CatalogScope};
-use hya_workflow_bundle::{WorkflowCatalog, WorkflowCatalogRoots};
+use hya_workflow_bundle_core::{WorkflowCatalog, WorkflowCatalogRoots};
 
 use crate::{ProjectScopeRefresh, bundle_admin, first_party_catalogs};
 

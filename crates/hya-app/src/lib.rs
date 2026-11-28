@@ -64,12 +64,12 @@ pub use headless::{
     LoopPredicateMode, LoopPredicateSpec, LoopRunOptions, clamp_loop_budget, prepare_goal_driver,
     prepare_loop, resolve_goal_driver,
 };
-pub use hya_coding_extras::BuiltinFormatterProvider;
+pub use hya_coding_extras_core::BuiltinFormatterProvider;
 /// Formatter plane construction from optional formatter config (owned by `hya/coding-extras`).
-pub use hya_coding_extras::formatter::config as formatter_config;
+pub use hya_coding_extras_core::formatter::config as formatter_config;
 pub use hya_proto::{WorkflowInfo, WorkflowStageInfo, WorkflowSummary};
 pub use hya_tool::{InvocationPolicy, WorkflowCommand, WorkflowCommandResult, WorkflowRunResult};
-pub use hya_workflow_bundle::{
+pub use hya_workflow_bundle_core::{
     WorkflowCatalog, WorkflowCatalogOwner, WorkflowCatalogRoots, WorkflowControlError,
 };
 pub use installed_bundle_refresh::{

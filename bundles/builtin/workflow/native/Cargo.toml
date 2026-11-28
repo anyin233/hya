@@ -14,17 +14,5 @@ crate-type = ["rlib", "cdylib"]
 workspace = true
 
 [dependencies]
-async-trait = { workspace = true }
-futures = { workspace = true }
-hya-bundle = { workspace = true }
-hya-proto = { workspace = true }
 hya-runtime-abi = { workspace = true }
-hya-tool = { workspace = true }
-hya-workflow = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-sha2 = { workspace = true }
-thiserror = { workspace = true }
-tokio = { workspace = true }
-tokio-util = { workspace = true }
-tracing = { workspace = true }
+hya-workflow-bundle-core = { workspace = true }

@@ -184,7 +184,7 @@ impl EngineSettings {
                     .and_then(|sub| serde_norway::from_value(sub).ok())
             })
             .unwrap_or_default();
-        hya_coding_extras::build_formatter_plane(raw)
+        hya_coding_extras_core::build_formatter_plane(raw)
     }
 
     pub(crate) fn lsp(&self) -> anyhow::Result<hya_tool::LspPlane> {
@@ -198,7 +198,8 @@ impl EngineSettings {
                     .cloned()
                     .and_then(|sub| serde_norway::from_value(sub).ok())
             });
-        hya_coding_extras::build_lsp_plane(selection).map_err(|error| anyhow::anyhow!("{error}"))
+        hya_coding_extras_core::build_lsp_plane(selection)
+            .map_err(|error| anyhow::anyhow!("{error}"))
     }
 }
 

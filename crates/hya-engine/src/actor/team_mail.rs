@@ -13,7 +13,7 @@ impl TeamActor {
             return Vec::new();
         };
         let team = hya_tool::extension::team_projection(&projection);
-        let handles = hya_agent_channels::mail_recipient_handles(&team, from, to);
+        let handles = hya_agent_channels_core::mail_recipient_handles(&team, from, to);
         let st = self.lock();
         handles
             .into_iter()
