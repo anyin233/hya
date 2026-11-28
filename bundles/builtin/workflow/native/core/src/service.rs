@@ -166,6 +166,20 @@ impl WorkflowService {
         Ok(catalog.summaries())
     }
 
+    /// Build the catalog `hya workflow list|info` show for the client's `cwd`.
+    pub(crate) async fn cli_catalog(
+        &self,
+        cwd: &Path,
+    ) -> Result<WorkflowCatalog, WorkflowControlError> {
+        let scope = self
+            .runtime()?
+            .catalog_reader()
+            .resolve_scope_catalog(None, Some(cwd))
+            .await?;
+        let roots = WorkflowCatalogRoots::for_scope(Some(cwd), &scope.project_roots);
+        WorkflowCatalog::from_bundles(roots, &scope.bundles)
+    }
+
     /// Execute one typed [`WorkflowCommand`] against `session`.
     ///
     /// # Errors
@@ -241,6 +255,29 @@ impl WorkflowService {
             }
             result = &mut execution => result,
         }
+    }
+
+    /// [`Self::execute`] in this service's task set, so the command keeps
+    /// running when the caller stops waiting for it.
+    ///
+    /// # Errors
+    /// Returns the command's [`WorkflowControlError`], or
+    /// [`WorkflowControlError::Execution`] when its task panicked.
+    pub async fn execute_detached(
+        self: &Arc<Self>,
+        session: SessionId,
+        invocation: WorkflowInvocation,
+        command: WorkflowCommand,
+    ) -> Result<WorkflowCommandResult, WorkflowControlError> {
+        let service = Arc::clone(self);
+        self.tasks
+            .spawn(async move {
+                service
+                    .execute(session, invocation, command, CancellationToken::new())
+                    .await
+            })
+            .await
+            .map_err(|error| WorkflowControlError::Execution(format!("Workflow task: {error}")))?
     }
 
     async fn session_catalog(

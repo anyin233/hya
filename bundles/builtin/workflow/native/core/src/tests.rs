@@ -1087,3 +1087,162 @@ async fn tool_without_a_started_service_reports_no_session() {
         "{error:?}"
     );
 }
+
+async fn cli_call(
+    api: &WorkflowBundleApiHandler,
+    endpoint: &str,
+    session: Option<SessionId>,
+    args: Value,
+    cwd: &Path,
+) -> hya_runtime_abi::DriverReport {
+    let reply = api
+        .handle(NativeBundleApiRequest {
+            api: endpoint.into(),
+            method: ApiMethod::Post,
+            scope: if session.is_some() {
+                ApiScope::Session
+            } else {
+                ApiScope::Global
+            },
+            path: format!("/cli/{}", endpoint.trim_start_matches("cli_")),
+            path_params: BTreeMap::new(),
+            query: BTreeMap::new(),
+            body: json!({ "args": args, "cwd": cwd.display().to_string() }),
+            session,
+        })
+        .await
+        .unwrap();
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    serde_json::from_value(reply.body).unwrap()
+}
+
+#[tokio::test]
+async fn cli_endpoints_print_what_hya_workflow_printed() {
+    let root = test_root("cli");
+    let wf_dir = workflow_project_dir(&root);
+    std::fs::create_dir_all(&wf_dir).unwrap();
+    std::fs::write(wf_dir.join("demo.hya.md"), DEMO_WORKFLOW).unwrap();
+    let runtime = Arc::new(MockHostRuntime::new(root.clone()));
+    let session = SessionId::new();
+    runtime.seed_session(session, "hya-main", &root);
+    runtime.push_reply("planned");
+    runtime.push_reply("executed");
+    let service = Arc::new(WorkflowService::new());
+    service.start(runtime.clone()).await.unwrap();
+    let api = WorkflowBundleApiHandler::new(Arc::clone(&service));
+
+    let list = cli_call(&api, "cli_list", None, json!({}), &root).await;
+    assert_eq!(list.exit_code, 0, "{list:?}");
+    assert!(list.stdout.starts_with("demo\n"), "{}", list.stdout);
+    assert!(
+        list.stdout.contains("(Stages: plan, execute)"),
+        "{}",
+        list.stdout
+    );
+    let json_list = cli_call(&api, "cli_list", None, json!({ "json": true }), &root).await;
+    let parsed: WorkflowCommandResult = serde_json::from_str(&json_list.stdout).unwrap();
+    assert!(
+        matches!(parsed, WorkflowCommandResult::List { workflows } if workflows[0].name == "demo")
+    );
+    assert!(json_list.stdout.ends_with("}\n"));
+
+    let info = cli_call(&api, "cli_info", None, json!({ "name": "demo" }), &root).await;
+    assert!(
+        info.stdout
+            .contains("execute (after plan) <- Agent `worker` [once]"),
+        "{}",
+        info.stdout
+    );
+    let missing = cli_call(&api, "cli_info", None, json!({ "name": "nope" }), &root).await;
+    assert_eq!(
+        (
+            missing.stdout.as_str(),
+            missing.stderr.as_str(),
+            missing.exit_code
+        ),
+        (
+            "",
+            "Error: WORKFLOW_NOT_FOUND: Workflow `nope` was not found\n",
+            1
+        )
+    );
+
+    let bad_revision = cli_call(
+        &api,
+        "cli_use",
+        Some(session),
+        json!({ "name": "demo", "revision": "zz", "session": session.to_string() }),
+        &root,
+    )
+    .await;
+    assert_eq!(
+        bad_revision.stderr,
+        "Error: invalid Workflow revision `zz`: Workflow revision must contain exactly 64 hexadecimal characters\n"
+    );
+    let selected = cli_call(
+        &api,
+        "cli_use",
+        Some(session),
+        json!({ "name": "demo", "session": session.to_string() }),
+        &root,
+    )
+    .await;
+    assert_eq!(selected.exit_code, 0, "{selected:?}");
+    assert!(
+        selected
+            .stdout
+            .starts_with("selected workflow: demo (revision "),
+        "{}",
+        selected.stdout
+    );
+
+    let nameless = cli_call(
+        &api,
+        "cli_run",
+        Some(session),
+        json!({ "input": ["topic=x"] }),
+        &root,
+    )
+    .await;
+    assert_eq!(
+        nameless.stderr,
+        "Error: workflow run requires NAME unless --session identifies an owning Session\n"
+    );
+    let run = cli_call(
+        &api,
+        "cli_run",
+        Some(session),
+        json!({ "input": ["topic=rust"], "session": session.to_string() }),
+        &root,
+    )
+    .await;
+    assert!(
+        run.stdout.starts_with("workflow demo: completed\n"),
+        "{run:?}"
+    );
+    assert_eq!((run.stderr.as_str(), run.exit_code), ("", 0));
+
+    let state = cli_call(
+        &api,
+        "cli_state",
+        Some(session),
+        json!({ "session": session.to_string() }),
+        &root,
+    )
+    .await;
+    assert!(
+        state.stdout.contains("latest run: demo ("),
+        "{}",
+        state.stdout
+    );
+    let unknown = cli_call(&api, "cli_state", Some(SessionId::new()), json!({}), &root).await;
+    assert!(
+        unknown
+            .stderr
+            .starts_with("Error: session_not_found: Session `"),
+        "{unknown:?}"
+    );
+
+    service.stop().await.unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+}

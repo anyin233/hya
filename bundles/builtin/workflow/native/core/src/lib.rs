@@ -11,6 +11,8 @@ use std::sync::Arc;
 pub mod api;
 /// Workflow filesystem & bundle catalog discovery.
 pub mod catalog;
+/// `hya workflow` command endpoints of the BundleApi handler.
+mod cli;
 /// Compiler for user-authored Workflow documents.
 pub mod compile;
 /// Workflow DAG preflight, scheduling, and loop verification.
