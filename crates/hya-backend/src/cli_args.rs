@@ -84,8 +84,7 @@ pub(crate) struct Cli {
     /// Auto-approve every tool action (edit/write/shell anywhere). Use with care.
     #[arg(long, global = true)]
     pub(crate) yolo: bool,
-    /// Run in bare mode (`BuiltinBundleProfile::Bare`): load zero built-in
-    /// bundles, using only the 8 standard bare tools (`read`, `write`, `edit`,
+    /// Enable no built-in bundles: use only the 8 standard bare tools (`read`, `write`, `edit`,
     /// `bash`, `grep`, `todo`, `rewrite`, `skill`), core `code-mode` (without
     /// `agent()`), `AGENTS.md`, skills, MCP, user/project bundles & plugins,
     /// and the minimal `hya-bare` default agent.

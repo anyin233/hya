@@ -11,7 +11,7 @@ use hya_app::{
     InvocationPolicy, agent_with_model, build_session_engine_pure, config::EngineSettings,
     open_store, prepare_driver,
 };
-use hya_bundle::{BuiltinBundleProfile, BuiltinBundleSelection};
+use hya_bundle::BuiltinBundleSelection;
 use hya_engine::CreateSession;
 use hya_proto::{FinishReason, SessionKind};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
@@ -141,9 +141,8 @@ async fn loop_driver_is_absent_with_an_actionable_error_when_bare_or_disabled() 
         (
             "disabled",
             BuiltinBundleSelection {
-                profile: BuiltinBundleProfile::Full,
-                enable: Vec::new(),
                 disable: vec!["hya/loop".to_string()],
+                ..BuiltinBundleSelection::full()
             },
         ),
     ] {

@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use hya_app::compose_builtin_tool_registry;
-use hya_bundle::{BuiltinBundleProfile, BuiltinBundleSelection};
+use hya_bundle::BuiltinBundleSelection;
 use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolCtx};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -144,7 +144,13 @@ bundles:
     }
     let parsed: Wrapper = serde_norway::from_str(yaml).expect("parse v2 config.yaml snippet");
     let disabled_selection = parsed.bundles.builtin;
-    assert_eq!(disabled_selection.profile, BuiltinBundleProfile::Full);
+    assert_eq!(
+        disabled_selection,
+        BuiltinBundleSelection {
+            disable: vec!["hya/hashline".to_string()],
+            ..BuiltinBundleSelection::full()
+        }
+    );
     assert!(!disabled_selection.is_enabled("hya/hashline"));
     assert!(disabled_selection.unknown_identities().is_empty());
 

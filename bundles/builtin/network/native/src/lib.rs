@@ -64,9 +64,7 @@ mod tests {
     use std::time::Duration;
 
     use async_trait::async_trait;
-    use hya_bundle::{
-        BuiltinBundleProfile, BuiltinBundleSelection, Bundle, BundleIdentity, PreparedAgent,
-    };
+    use hya_bundle::{BuiltinBundleSelection, Bundle, BundleIdentity, PreparedAgent};
     use hya_proto::{
         ActorClaim, AgentName, Envelope, Event, EventSeq, FinishReason, Message, ModelRef,
         Projection, SessionId,
@@ -791,9 +789,8 @@ mod tests {
     #[test]
     fn air_gapped_selection_disables_hya_network_cleanly() {
         let air_gapped = BuiltinBundleSelection {
-            profile: BuiltinBundleProfile::Full,
-            enable: Vec::new(),
             disable: vec![BUNDLE_ID.to_string()],
+            ..BuiltinBundleSelection::full()
         };
         assert!(!air_gapped.is_enabled(BUNDLE_ID));
         assert!(!air_gapped.enabled_identities().contains(&BUNDLE_ID));

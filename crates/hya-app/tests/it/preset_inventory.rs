@@ -85,13 +85,13 @@ fn inventory_exposes_immutable_noninstallable_presets_and_internal_bundles() {
     assert!(bare.is_empty());
 
     let selective = hya_app::trusted_preset_inventory_for(&hya_bundle::BuiltinBundleSelection {
-        profile: hya_bundle::BuiltinBundleProfile::Bare,
         enable: vec![
             "hya/coding-extras".to_string(),
             "hya/core-skills".to_string(),
             "hya/unknown-preset".to_string(),
         ],
         disable: vec!["hya/core-skills".to_string()],
+        ..hya_bundle::BuiltinBundleSelection::bare()
     })
     .expect("selective inventory");
     assert_eq!(
