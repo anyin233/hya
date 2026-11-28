@@ -163,6 +163,9 @@ pub struct SessionEngine {
     interaction: InteractionPlane,
     spawner: BoundSpawnSender,
     native_services: Arc<RwLock<Vec<Arc<dyn hya_runtime_abi::NativeService>>>>,
+    /// Every ABI v2 reducer registered so far; the store adapters are rebuilt
+    /// from all of them, so owners and observers may register in any order.
+    native_reducers: Arc<RwLock<Vec<Arc<dyn hya_runtime_abi::ProjectionReducer>>>>,
     project_activity: hya_tool::ProjectActivityPlane,
     lifecycle: LifecyclePlane,
     /// Mints subagent handle leaves (`<prefix>-<operator>`); injectable RNG.
@@ -224,6 +227,7 @@ impl Clone for SessionEngine {
             interaction: self.interaction.clone(),
             spawner: self.spawner.clone(),
             native_services: Arc::clone(&self.native_services),
+            native_reducers: Arc::clone(&self.native_reducers),
             project_activity: self.project_activity.clone(),
             lifecycle: self.lifecycle.clone(),
             handle_namer: self.handle_namer.clone(),
@@ -299,6 +303,7 @@ impl SessionEngine {
             interaction,
             spawner,
             native_services: Arc::new(RwLock::new(Vec::new())),
+            native_reducers: Arc::new(RwLock::new(Vec::new())),
             project_activity,
             lifecycle,
             handle_namer: Arc::new(crate::handle_naming::HandleNamer::default()),
@@ -358,10 +363,9 @@ impl SessionEngine {
         self = self.with_hooks(Arc::new(
             hya_multi_agent_core::MultiAgentLifecycleHook::new(Arc::clone(&multi_service)),
         ));
-        self.store
-            .register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter::owned(Arc::new(
-                hya_multi_agent_core::MultiAgentProjectionReducer,
-            ))));
+        self.register_native_projection_reducers(vec![Arc::new(
+            hya_multi_agent_core::MultiAgentProjectionReducer,
+        )]);
         let _ = self.runtime.register_native_bundle_apis(
             hya_tool::extension::BUNDLE_MULTI_AGENT,
             vec![Arc::new(
@@ -689,21 +693,27 @@ impl SessionEngine {
     /// instances on the underlying event store.
     ///
     /// A reducer's [`observed_bundles`](hya_runtime_abi::ProjectionReducer::observed_bundles)
-    /// also receive those bundles' events, after the owner folds them.
+    /// also receive those bundles' events, after the owner folds them. Calls
+    /// accumulate: a reducer and its observers may arrive in separate calls.
     pub fn register_native_projection_reducers(
         &self,
         reducers: Vec<Arc<dyn hya_runtime_abi::ProjectionReducer>>,
     ) {
+        let mut all = self
+            .native_reducers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        all.extend(reducers);
         let mut adapters: std::collections::BTreeMap<String, AbiV2ProjectionReducerAdapter> =
             std::collections::BTreeMap::new();
-        for reducer in &reducers {
+        for reducer in all.iter() {
             let bundle = reducer.bundle_id().to_string();
             adapters
                 .entry(bundle.clone())
                 .or_insert_with(|| AbiV2ProjectionReducerAdapter::observing(bundle))
                 .inner = Some(Arc::clone(reducer));
         }
-        for reducer in &reducers {
+        for reducer in all.iter() {
             for observed in reducer.observed_bundles() {
                 adapters
                     .entry((*observed).to_string())
@@ -895,14 +905,6 @@ struct AbiV2ProjectionReducerAdapter {
 }
 
 impl AbiV2ProjectionReducerAdapter {
-    fn owned(inner: Arc<dyn hya_runtime_abi::ProjectionReducer>) -> Self {
-        Self {
-            bundle: inner.bundle_id().to_string(),
-            inner: Some(inner),
-            observers: Vec::new(),
-        }
-    }
-
     fn observing(bundle: String) -> Self {
         Self {
             bundle,

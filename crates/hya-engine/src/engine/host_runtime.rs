@@ -1557,40 +1557,52 @@ mod tests {
 
     #[tokio::test]
     async fn observed_reducers_fold_other_bundles_events_into_their_own_state() {
-        let engine = test_engine(SessionStore::connect_memory().await.unwrap());
-        engine.register_native_projection_reducers(vec![
+        let owner = || -> Arc<dyn hya_runtime_abi::ProjectionReducer> {
             Arc::new(CountingReducer {
                 bundle: "t/owner",
                 observed: &[],
-            }),
+            })
+        };
+        let observer = || -> Arc<dyn hya_runtime_abi::ProjectionReducer> {
             Arc::new(CountingReducer {
                 bundle: "t/observer",
                 observed: &["t/owner", "t/absent"],
-            }),
-        ]);
-        let session = SessionId::new();
-        let store = engine.host_runtime();
-        let store = store.session_store();
-        store
-            .append_events(
-                session,
-                None,
-                vec![
-                    ping(session, "t/owner"),
-                    ping(session, "t/absent"),
-                    ping(session, "t/observer"),
-                ],
-            )
-            .await
-            .unwrap();
-        let projection = store.read_projection(session).await.unwrap();
-        assert_eq!(
-            projection.extensions["t/owner"],
-            serde_json::json!({"t/owner": 1})
-        );
-        assert_eq!(
-            projection.extensions["t/observer"],
-            serde_json::json!({"t/owner": 1, "t/absent": 1, "t/observer": 1})
-        );
+            })
+        };
+        // One call, and two calls in either order, fold the same state.
+        for calls in [
+            vec![vec![owner(), observer()]],
+            vec![vec![owner()], vec![observer()]],
+            vec![vec![observer()], vec![owner()]],
+        ] {
+            let engine = test_engine(SessionStore::connect_memory().await.unwrap());
+            for reducers in calls {
+                engine.register_native_projection_reducers(reducers);
+            }
+            let session = SessionId::new();
+            let store = engine.host_runtime();
+            let store = store.session_store();
+            store
+                .append_events(
+                    session,
+                    None,
+                    vec![
+                        ping(session, "t/owner"),
+                        ping(session, "t/absent"),
+                        ping(session, "t/observer"),
+                    ],
+                )
+                .await
+                .unwrap();
+            let projection = store.read_projection(session).await.unwrap();
+            assert_eq!(
+                projection.extensions["t/owner"],
+                serde_json::json!({"t/owner": 1})
+            );
+            assert_eq!(
+                projection.extensions["t/observer"],
+                serde_json::json!({"t/owner": 1, "t/absent": 1, "t/observer": 1})
+            );
+        }
     }
 }
