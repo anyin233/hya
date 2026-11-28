@@ -51,6 +51,7 @@ pub struct AppState {
     streams: StreamShutdown,
     pure_guidance: bool,
     auto_title: bool,
+    core_commands: bool,
     runs: runs::RunRegistry,
     #[cfg(test)]
     turn_spawn_barrier: Option<(hya_proto::SessionId, Arc<tokio::sync::Barrier>)>,
@@ -167,6 +168,7 @@ impl AppState {
             streams: StreamShutdown::default(),
             pure_guidance: false,
             auto_title: false,
+            core_commands: true,
             runs: runs::RunRegistry::default(),
             #[cfg(test)]
             turn_spawn_barrier: None,
@@ -292,6 +294,14 @@ impl AppState {
     #[must_use]
     pub fn with_pure_guidance(mut self, pure: bool) -> Self {
         self.pure_guidance = pure;
+        self.reconfigured()
+    }
+
+    /// Control whether prompt-template commands from `hya/core-commands` are
+    /// loaded (disabled in bare mode so zero builtin bundles are touched).
+    #[must_use]
+    pub fn with_core_commands(mut self, enabled: bool) -> Self {
+        self.core_commands = enabled;
         self.reconfigured()
     }
 
@@ -432,6 +442,7 @@ pub(crate) struct ServerState {
     pub(crate) streams: StreamShutdown,
     pub(crate) pure_guidance: bool,
     pub(crate) auto_title: bool,
+    pub(crate) core_commands: bool,
     pub(crate) session_list: SessionListHub,
     pub(crate) relay: RelayHost,
     pub(crate) ephemeral_grace: crate::EphemeralGrace,
@@ -471,6 +482,7 @@ impl ServerState {
             streams: app.streams,
             pure_guidance: app.pure_guidance,
             auto_title: app.auto_title,
+            core_commands: app.core_commands,
             session_list: app.session_list,
             relay: app.relay,
             ephemeral_grace: app.ephemeral_grace,

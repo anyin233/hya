@@ -24,7 +24,25 @@ Every round in `hya-core` updates Context through strictly three primitives:
 | **2. Tool append** | Deterministic observations from outside the model: a tool result paired with a call, or a user prompt. Invalid JSON tool arguments, unknown tools, and cancellations become structured `ToolError`s—never synthesized fake outputs. | `ToolResult`, `ToolError`, `TodosUpdated`, `FilesChanged`, `FilesObserved`, user `Message*` |
 | **3. Rewrite** | Destructive context reset when the window fills up (or when the model calls `rewrite`): drops visible history before the current step and inserts a clean system marker repeating all prior user messages verbatim plus the current `todo` list ($g$). Dropped messages stay safely in SQLite for human replay. | System marker message + `ContextCompacted { strategy: rewrite }` |
 
-Running `hya exec --bare` runs this exact kernel loop alone—seven standard tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`), a minimal `<cwd>` system prompt, zero built-in bundles, and zero sidecar processes (see [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)).
+Passing the global `--bare` flag (`hya --bare`, `hya serve --bare`, or `hya exec --bare`) runs the unified `SessionEngine` with `BuiltinBundleProfile::Bare`—zero built-in bundles loaded (even when `bundles/builtin/` is completely absent), the 8 standard bare tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill`), built-in `code-mode` (without `agent()`), the minimal `hya-bare` default agent, and standard `AGENTS.md`/skills/MCP/user-bundle adapters. Combining `--bare` with `--pure` (`hya exec --bare --pure`) also skips external `AGENTS.md`, disk skills, MCP servers, user/project plugins, and the `code-mode` sidecar for pure kernel benchmarks (see [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)).
+
+### Global `--bare` Runtime Profile (`BuiltinBundleProfile::Bare`)
+
+| Surface / Capability | Full Mode (`profile: full`) | Global `--bare` (`BuiltinBundleProfile::Bare`) | `--bare --pure` |
+| --- | --- | --- | --- |
+| Engine & Kernel loop | `SessionEngine` on `hya-core::kernel` | `SessionEngine::new_bare` on `hya-core::kernel` | `SessionEngine::new_bare` on `hya-core::kernel` |
+| Built-in bundles (`bundles/builtin/`) | Loaded per `bundles.builtin` selection | **None loaded** (zero disk dependency on `bundles/builtin/`) | **None loaded** |
+| Default agent | `hya-main` (from `hya/core-agents`) | `hya-bare` (`hya_engine::BARE_AGENT_ID`) | `hya-bare` |
+| Core tools | Built-in tool-family bundles + kernel `todo`/`rewrite` + `skill` | 8 standard bare tools: `read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill` | 8 standard bare tools (`skill` catalog empty) |
+| Built-in `code-mode` | Enabled when configured (`agent()` gated on `hya/multi-agent`) | Enabled when configured (no `agent()`) | Disabled |
+| Context & external extensions | `AGENTS.md`, disk skills, MCP, user/project bundles & plugins | `AGENTS.md`, disk skills, MCP, user/project bundles & plugins | **Skipped** |
+| Compaction | `shake` + `remote` (`hya/compaction`) → Kernel `Rewrite` | Kernel `Rewrite` only | Kernel `Rewrite` only |
+
+- **CLI usage:** `hya --bare` (interactive TUI/WebUI + auto-started `--bare` daemon), `hya serve --bare` / `hya serve start --bare` (HTTP/gRPC server), `hya exec --bare "<prompt>"`, `hya exec --bare --pure "<prompt>"`, `hya --bare agent list`.
+- **Rust / config interfaces:**
+  - `hya_app::RuntimeConfig::with_bare(bool)` applies `BuiltinBundleProfile::Bare` (equivalent to `bundles.builtin.profile: bare` in `config.yaml`).
+  - `hya_engine::BARE_AGENT_ID` (`"hya-bare"`), `hya_engine::AgentCatalog::new_bare()`, and `hya_engine::SessionEngine::new_bare(...)` construct the bare engine without calling `hya_core::bundles::load_internal()` or reading `bundles/builtin/`.
+  - `hya_server::AppState::with_core_commands(bool)` disables `hya/core-commands` loading in bare servers (`GET /v2/commands` returns only workspace/skill/bundle commands; `GET /v2/agents` returns `hya-bare`; `GET /v2/bundles` reports zero built-in bundles).
 
 ---
 

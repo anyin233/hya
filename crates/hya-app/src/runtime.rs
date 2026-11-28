@@ -53,20 +53,82 @@ use crate::{InstalledBundleRefresh, bundle_registry_path, plugins};
 /// Catalog materialization and export validation for Bundle sidecars.
 pub use crate::bundle_runtime::sidecar;
 
+/// Whether `hya/core-agents` is both enabled by `selection` and present on disk.
+pub(crate) fn core_agents_available(selection: &hya_bundle::BuiltinBundleSelection) -> bool {
+    selection.is_enabled("hya/core-agents")
+        && hya_bundle::first_party_bundle_optional("hya/core-agents")
+            .ok()
+            .flatten()
+            .is_some()
+}
+
+/// Build an [`AgentCatalog`] over `bundles` honoring `selection`: uses
+/// `hya/core-agents` when enabled and present, otherwise the minimal compiled-in
+/// `hya-bare` default agent (zero first-party bundle loads).
+pub(crate) fn agent_catalog_for_selection(
+    bundles: Arc<BundleCatalog>,
+    selection: &hya_bundle::BuiltinBundleSelection,
+) -> Result<AgentCatalog, hya_bundle::BundleError> {
+    if core_agents_available(selection) {
+        AgentCatalog::new(bundles)
+    } else {
+        AgentCatalog::new_bare(bundles)
+    }
+}
+
 /// Agent catalog for a process before installed bundles are refreshed.
 ///
-/// Rust-native built-in agents and the build-prepared first-party WorkflowBundle
-/// are published together. Installed rows are merged later by the root refresh.
-/// The first-party payload is decoded and verified before the runtime starts.
+/// Honors the active `config.yaml` [`hya_bundle::BuiltinBundleSelection`].
 pub fn builtin_agent_catalog() -> anyhow::Result<Arc<AgentCatalog>> {
-    let first_party = crate::installed_bundle_refresh::first_party_catalogs()
+    builtin_agent_catalog_for(&crate::config::configured_builtin_bundles())
+}
+
+/// Agent catalog for an explicit [`hya_bundle::BuiltinBundleSelection`].
+///
+/// Under `BuiltinBundleProfile::Bare` (or when `bundles/builtin/` is absent),
+/// loads zero first-party bundles and publishes only the minimal `hya-bare`
+/// default agent.
+pub fn builtin_agent_catalog_for(
+    selection: &hya_bundle::BuiltinBundleSelection,
+) -> anyhow::Result<Arc<AgentCatalog>> {
+    let first_party = crate::installed_bundle_refresh::first_party_catalogs_for(selection)
         .context("decode embedded first-party bundles")?;
     let first_party_refs = first_party.iter().collect::<Vec<_>>();
     let bundles = BundleCatalog::from_verified_catalogs(&first_party_refs)
         .context("build first-party bundle catalog")?;
-    let catalog =
-        AgentCatalog::new(Arc::new(bundles)).context("build agent catalog over built-ins")?;
+    let catalog = agent_catalog_for_selection(Arc::new(bundles), selection)
+        .context("build agent catalog over built-ins")?;
     Ok(Arc::new(catalog))
+}
+
+/// Register the six registry-backed standard `hya-bare` primitives (`read`,
+/// `write`, `edit`, `bash`, `grep`, `skill`) whenever an overriding tool-family
+/// bundle has not already registered them. `todo` and `rewrite` remain
+/// permanently kernel-exclusive and are never registered in [`ToolRegistry`].
+fn register_missing_bare_tools(registry: &hya_tool::ToolRegistry) {
+    for tool in hya_core::kernel::tools::bare_tools() {
+        let name = tool.name();
+        if hya_core::kernel::tools::is_reserved(name) || registry.resolve(name).is_some() {
+            continue;
+        }
+        let permission = match name {
+            "read" | "grep" | "skill" => hya_tool::ToolPermission::ReadOnly,
+            "bash" => hya_tool::ToolPermission::Command,
+            _ => hya_tool::ToolPermission::Tool,
+        };
+        registry.register_builtin(tool, permission, [], "hya/bare");
+    }
+}
+
+/// Standalone [`hya_tool::ToolRegistry`] containing the six registry-backed
+/// standard `hya-bare` tools (`read`, `write`, `edit`, `bash`, `grep`, `skill`).
+/// Combined with the two kernel-exclusive primitives (`todo`, `rewrite`), this
+/// forms the complete 8-tool `hya-bare` surface (ADR-0039).
+#[must_use]
+pub fn bare_tool_registry() -> hya_tool::ToolRegistry {
+    let registry = hya_tool::ToolRegistry::default();
+    register_missing_bare_tools(&registry);
+    registry
 }
 
 /// Host identity sent to plugins during `initialize` (`name` + crate version).
@@ -122,6 +184,33 @@ fn caller_workdir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Agent base for server and interactive TUI sessions using `runtime`'s active
+/// built-in bundle selection (`hya-bare` when `hya/core-agents` is disabled or
+/// absent, otherwise `hya-main`).
+pub fn agent_base_for_runtime(
+    runtime: &RuntimeConfig,
+    reasoning: Option<ReasoningEffort>,
+) -> AgentSpec {
+    let name = if core_agents_available(runtime.settings.builtin_bundles()) {
+        BUILTIN_DEFAULT_AGENT_ID
+    } else {
+        hya_engine::BARE_AGENT_ID
+    };
+    AgentSpec {
+        name: AgentName::new(name),
+        ..agent_base_with_model(&runtime.model, reasoning)
+    }
+}
+
+/// Agent base for direct-mode commands, honoring `runtime`'s active built-in
+/// bundle selection (`hya-bare` in bare mode, `hya-main` in full mode).
+pub fn agent_for_runtime(runtime: &RuntimeConfig, reasoning: Option<ReasoningEffort>) -> AgentSpec {
+    AgentSpec {
+        workdir: caller_workdir(),
+        ..agent_base_for_runtime(runtime, reasoning)
+    }
+}
+
 /// Agent base for direct-mode commands, with the caller's working directory.
 pub fn agent_with_model(model: &str, reasoning: Option<ReasoningEffort>) -> AgentSpec {
     AgentSpec {
@@ -158,10 +247,10 @@ pub async fn resolve_headless_agent_name(
     explicit: Option<&str>,
     default_agent: Option<&str>,
 ) -> Result<AgentName, CoreError> {
+    let binding = engine.bind_root_runtime(workdir).await?;
     let candidate = explicit
         .or(default_agent)
-        .unwrap_or(BUILTIN_DEFAULT_AGENT_ID);
-    let binding = engine.bind_root_runtime(workdir).await?;
+        .unwrap_or_else(|| binding.agent_catalog().default_agent_id());
     binding
         .resolve_agent(candidate)
         .map(|definition| AgentName::new(definition.stable_id))
@@ -258,6 +347,23 @@ impl RuntimeConfig {
             self.plugins.clear();
         }
         self.pure = pure;
+        self
+    }
+
+    /// `--bare` mode (`BuiltinBundleProfile::Bare`): disable all built-in
+    /// first-party bundles, use the 8 standard bare tools (`read`, `write`,
+    /// `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill`), core `code-mode`
+    /// without `agent()`, and the minimal `hya-bare` default agent while
+    /// keeping `AGENTS.md`, filesystem skills, MCP, and user/project bundles
+    /// and plugins active (unless `--pure` is also set).
+    #[must_use]
+    pub fn with_bare(mut self, bare: bool) -> Self {
+        if bare {
+            self.settings
+                .set_builtin_bundles(hya_bundle::BuiltinBundleSelection::bare());
+            self.websearch.enabled = false;
+            self.default_agent = None;
+        }
         self
     }
 }
@@ -993,6 +1099,7 @@ async fn build_session_engine_with_mcp_defer(
     })
     .collect();
     let registry = hya_tool_loader::from_tool_families(&enabled_families);
+    register_missing_bare_tools(&registry);
     if !builtins.is_enabled("hya/network-tools") || !settings.webfetch_enabled() {
         registry.remove("webfetch");
     }
@@ -1012,9 +1119,9 @@ async fn build_session_engine_with_mcp_defer(
         )
     };
     let defer_mcp = options.defer_mcp && !mcp.is_empty();
-    let catalog = builtin_agent_catalog()?;
-    // The startup catalog holds only the first-party bundle, so its schema
-    // rows come straight from the same prepared document.
+    let catalog = builtin_agent_catalog_for(&builtins)?;
+    // The startup catalog holds only the enabled first-party bundles, so its
+    // schema rows come straight from the same prepared document.
     let first_party = crate::installed_bundle_refresh::first_party_catalogs_for(&builtins)?;
     let schema_rows = first_party
         .iter()
@@ -1024,14 +1131,21 @@ async fn build_session_engine_with_mcp_defer(
         catalog.bundles().as_ref(),
         &schema_rows,
     )?;
-    let runtime = Arc::new(
-        RuntimeRegistry::new(registry, catalog)
-            .with_skill_discovery(
-                hya_engine::skill_catalog::discover,
-                hya_engine::skill_catalog::builtin_skills,
-            )
-            .with_pure_skills(options.pure),
-    );
+    let use_core_skills = builtins.is_enabled("hya/core-skills")
+        && hya_bundle::first_party_bundle_optional("hya/core-skills")
+            .ok()
+            .flatten()
+            .is_some();
+    let runtime_registry = RuntimeRegistry::new(registry, catalog);
+    let runtime_registry = if use_core_skills {
+        runtime_registry.with_skill_discovery(
+            hya_engine::skill_catalog::discover,
+            hya_engine::skill_catalog::builtin_skills,
+        )
+    } else {
+        runtime_registry.with_skill_discovery(hya_engine::skill_catalog::discover_native, Vec::new)
+    };
+    let runtime = Arc::new(runtime_registry.with_pure_skills(options.pure));
     if !static_sources.is_empty() {
         runtime.refresh(|candidate| {
             candidate.replace_sources_of_kind(RuntimeSourceKind::Bundle, static_sources)
@@ -1041,13 +1155,19 @@ async fn build_session_engine_with_mcp_defer(
     let reconciler =
         Arc::new(RuntimeReconciler::new(runtime.clone()).with_io_tasks(lifecycle.io_tasks.clone()));
     let mcp_control = Arc::new(RuntimeMcpControl::new(reconciler.clone()));
-    let code_mode_spec = crate::code_mode::plugin_spec_for_mode(
-        settings.code_mode(),
-        &crate::config::active_config_path(),
-        &builtins,
-        &[],
-    )
-    .context("prepare core code-mode runtime specification")?;
+    let code_mode_spec = if options.pure {
+        None
+    } else {
+        crate::code_mode::plugin_spec_for_mode(
+            settings.code_mode(),
+            &crate::config::active_config_path(),
+            &builtins,
+            &[],
+        )
+        .context("prepare core code-mode runtime specification")?
+    };
+    let load_compaction = builtins.is_enabled("hya/compaction");
+    let use_tool_family_prompts = !enabled_families.is_empty();
     let catalog_refresh = Arc::new(
         RuntimeExtensionsRefresh::new(
             crate::ProjectScopeRefresh::new(Arc::new(
@@ -1085,18 +1205,23 @@ async fn build_session_engine_with_mcp_defer(
         lifecycle.io_tasks.clone(),
     ));
     let context_settings = settings.context();
-    let engine = match SessionEngine::try_new(store.clone(), router, runtime, permission, bus) {
-        Ok(engine) => engine,
-        Err(error) => {
-            store.release_runtime_owner(owner_run_id)?;
-            return Err(error).context("load internal native rewriters at startup");
+    let engine = if load_compaction {
+        match SessionEngine::try_new(store.clone(), router, runtime, permission, bus) {
+            Ok(engine) => engine,
+            Err(error) => {
+                store.release_runtime_owner(owner_run_id)?;
+                return Err(error).context("load internal native rewriters at startup");
+            }
         }
+    } else {
+        SessionEngine::new_bare(store.clone(), router, runtime, permission, bus)
     };
     let summarizer: Arc<dyn Summarizer> =
         Arc::new(ModelSummarizer::for_engine(&engine, agent.model.clone()));
     let engine_builder = engine
         .with_base_system_prompt(agent.system_prompt.clone())
         .with_pure_context(options.pure)
+        .with_tool_family_prompts(use_tool_family_prompts)
         // Stop/start records use this store's runtime-owner claim.
         .with_runtime_owner(owner_run_id)
         .with_global_reasoning(settings.reasoning())
@@ -1307,6 +1432,9 @@ pub struct ServerEngine {
     agent: Arc<AgentSpec>,
     default_agent: Option<String>,
     pure: bool,
+    builtin_selection: hya_bundle::BuiltinBundleSelection,
+    use_core_agents: bool,
+    use_core_commands: bool,
     pending_discovery: Vec<config::PendingCatalogDiscovery>,
 }
 
@@ -1314,7 +1442,14 @@ impl ServerEngine {
     /// Build the server engine from its resolved provider and tool policy.
     pub async fn build(store: SessionStore, runtime: RuntimeConfig) -> anyhow::Result<Self> {
         // The server retains the base. Per-turn guidance is resolved by the harness.
-        let agent = Arc::new(agent_base_with_model(&runtime.model, None));
+        let builtin_selection = runtime.settings.builtin_bundles().clone();
+        let use_core_agents = core_agents_available(&builtin_selection);
+        let use_core_commands = builtin_selection.is_enabled("hya/core-commands")
+            && hya_bundle::first_party_bundle_optional("hya/core-commands")
+                .ok()
+                .flatten()
+                .is_some();
+        let agent = Arc::new(agent_base_for_runtime(&runtime, None));
         let tool_config = (runtime.websearch, runtime.permission, runtime.settings);
         let built = build_session_engine_with_mcp_defer(
             store,
@@ -1334,6 +1469,9 @@ impl ServerEngine {
             agent,
             default_agent: runtime.default_agent,
             pure: runtime.pure,
+            builtin_selection,
+            use_core_agents,
+            use_core_commands,
             pending_discovery: runtime.pending_discovery,
         })
     }
@@ -1349,14 +1487,17 @@ impl ServerEngine {
         let provider_manager = crate::ProviderManager::new(Arc::clone(&engine));
         let state = hya_server::AppState::new(engine, self.agent)
             .with_provider_control(Arc::new(provider_manager.clone()))
-            .with_bundle_control(Arc::new(crate::bundle_admin::BundleManager))
+            .with_bundle_control(Arc::new(
+                crate::bundle_admin::BundleManager::with_selection(self.builtin_selection),
+            ))
             .with_question_requests(questions)
             .with_mcp_control(self.built.mcp_control())
             .with_workflow_control(Arc::new(self.built.workflow_control()))
             .with_agent_model_control(Arc::new(self.built.agent_model_control()))
             .with_default_agent(self.default_agent)
             .with_pure_guidance(self.pure)
-            .with_auto_title(true)
+            .with_auto_title(self.use_core_agents)
+            .with_core_commands(self.use_core_commands)
             .with_allowed_hosts(hosts)
             .with_permission_requests(asks);
         Ok(ServerRuntime {

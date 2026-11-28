@@ -12,7 +12,6 @@ pub mod agent_model_config;
 pub mod agent_model_control;
 /// Provider credential files under `~/.config/hya/auth/`.
 pub mod auth;
-mod bare;
 /// Per-bundle `config.yml` location, environment contract, and scope resolver.
 pub mod bundle_admin;
 pub mod bundle_config;
@@ -69,7 +68,6 @@ pub mod workflow_control;
 pub use agent_model_control::{
     AgentModelControlError, AgentModelIdentity, PersistentAgentModelControl,
 };
-pub use bare::{BareEventSink, run_bare};
 pub use formatter::BuiltinFormatterProvider;
 pub use headless::{HeadlessEvaluatorRoute, prepare_goal, prepare_loop};
 pub use hya_proto::{WorkflowInfo, WorkflowStageInfo, WorkflowSummary};
@@ -89,11 +87,12 @@ pub use provider_control::ProviderManager;
 pub use runtime::{
     BUILTIN_DEFAULT_AGENT_ID, BuiltSessionEngine, HARNESS_AGENT_BASE, HyaRuntime, OfflineNotice,
     RuntimeConfig, RuntimeOptions, RuntimeStoreOpenError, RuntimeTaskOwner, ServerEngine,
-    ServerRuntime, agent_base_with_model, agent_with_model, agent_with_model_pure,
-    build_session_engine, build_session_engine_pure, builtin_agent_catalog, discover_context_files,
-    host_info, offline_router, open_runtime_store, open_runtime_store_or_memory, open_store,
-    open_store_or_memory, resolve_headless_agent_name, resolve_runtime, spawn_team_supervisor,
-    today, with_built_session_engine,
+    ServerRuntime, agent_base_for_runtime, agent_base_with_model, agent_for_runtime,
+    agent_with_model, agent_with_model_pure, bare_tool_registry, build_session_engine,
+    build_session_engine_pure, builtin_agent_catalog, builtin_agent_catalog_for,
+    discover_context_files, host_info, offline_router, open_runtime_store,
+    open_runtime_store_or_memory, open_store, open_store_or_memory, resolve_headless_agent_name,
+    resolve_runtime, spawn_team_supervisor, today, with_built_session_engine,
 };
 pub use workflow_catalog::{
     FIRST_PARTY_BUNDLE_ID, ResolvedWorkflow, WorkflowCatalog, WorkflowCatalogOwner,

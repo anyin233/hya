@@ -96,6 +96,11 @@ impl EngineSettings {
         &self.file.bundles.builtin
     }
 
+    /// Override the active built-in bundle selection (for example `--bare`).
+    pub fn set_builtin_bundles(&mut self, selection: BuiltinBundleSelection) {
+        self.file.bundles.builtin = selection;
+    }
+
     pub(crate) fn agents(
         &self,
     ) -> anyhow::Result<(

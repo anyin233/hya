@@ -3754,3 +3754,178 @@ async fn catalog_scope_sweeper_evicts_idle_scopes_until_stopped() {
         .unwrap()
         .unwrap();
 }
+
+#[tokio::test]
+async fn bare_profile_builds_unified_session_engine_with_eight_bare_tools_and_hya_bare_agent() {
+    let home = tempdir();
+    let empty_bundles = tempdir();
+    let mut env = EnvGuard::with_home(&home, &home);
+    env.set(
+        "HYA_FIRST_PARTY_SOURCE_ROOT",
+        empty_bundles.to_string_lossy().as_ref(),
+    );
+
+    let workdir = tempdir();
+    std::fs::write(workdir.join("AGENTS.md"), "# Bare Test\nBARE_APP_MARKER\n").unwrap();
+    write_skill(
+        &workdir.join(".hya/skills/unit-skill"),
+        "unit-skill",
+        "Bare runtime unit skill.",
+        "Skill body.",
+    );
+
+    let bare_settings = || {
+        let mut settings = config::EngineSettings::default();
+        settings.set_builtin_bundles(hya_bundle::BuiltinBundleSelection::bare());
+        settings
+    };
+
+    let rt = resolve_runtime(None).await.with_bare(true);
+    let resolved_agent = agent_base_for_runtime(&rt, None);
+    assert_eq!(resolved_agent.name.as_str(), hya_engine::BARE_AGENT_ID);
+    assert!(!resolved_agent.system_prompt.is_empty());
+    assert!(!resolved_agent.system_prompt.contains("hya-main"));
+
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let provider_bare = ToolViewProvider {
+        inner: FakeProvider::scripted_turns(vec![vec![
+            FakeStep::Text("BARE_UNIT_OK".into()),
+            FakeStep::Finish(FinishReason::Stop),
+        ]]),
+        requests: Arc::clone(&requests),
+    };
+    let agent = AgentSpec {
+        name: AgentName::new(hya_engine::BARE_AGENT_ID),
+        model: ModelRef::new("fake/model"),
+        system_prompt: String::new(),
+        workdir: workdir.clone(),
+        reasoning: None,
+    };
+
+    // 1. Bare mode (non-pure): 8 standard bare tools, `hya-bare` default agent,
+    //    AGENTS.md + local skill discovery, zero builtin bundles.
+    let mut built = build_session_engine(
+        SessionStore::connect_memory().await.unwrap(),
+        ProviderRouter::new().with(Arc::new(provider_bare)),
+        &agent,
+        BTreeMap::new(),
+        Vec::new(),
+        (
+            WebSearchConfig::default(),
+            InvocationPolicy::default(),
+            bare_settings(),
+        ),
+    )
+    .await
+    .unwrap();
+
+    let binding = built.engine().bind_runtime(&workdir).unwrap();
+    let registry_names: std::collections::BTreeSet<String> = binding
+        .tool_schemas()
+        .into_iter()
+        .map(|schema| schema.name.as_str().to_owned())
+        .collect();
+    assert_eq!(
+        registry_names,
+        ["bash", "edit", "grep", "read", "skill", "write"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        "todo/rewrite must remain kernel-exclusive and absent from ToolRegistry"
+    );
+    assert!(!registry_names.contains("todo"));
+    assert!(!registry_names.contains("rewrite"));
+
+    let session = built
+        .engine()
+        .create(CreateSession {
+            parent: None,
+            agent: agent.name.clone(),
+            model: agent.model.clone(),
+            workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    built
+        .engine()
+        .admit_user_prompt(session, "hi bare".into())
+        .await
+        .unwrap();
+    built
+        .engine()
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+    built.shutdown().await.unwrap();
+
+    // 2. Bare + pure mode: skips AGENTS.md and external disk skills.
+    let provider_pure = ToolViewProvider {
+        inner: FakeProvider::scripted_turns(vec![vec![
+            FakeStep::Text("BARE_PURE_UNIT_OK".into()),
+            FakeStep::Finish(FinishReason::Stop),
+        ]]),
+        requests: Arc::clone(&requests),
+    };
+    let mut pure_built = build_session_engine_pure(
+        SessionStore::connect_memory().await.unwrap(),
+        ProviderRouter::new().with(Arc::new(provider_pure)),
+        &agent,
+        BTreeMap::new(),
+        Vec::new(),
+        (
+            WebSearchConfig::default(),
+            InvocationPolicy::default(),
+            bare_settings(),
+        ),
+    )
+    .await
+    .unwrap();
+    let pure_session = pure_built
+        .engine()
+        .create(CreateSession {
+            parent: None,
+            agent: agent.name.clone(),
+            model: agent.model.clone(),
+            workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    pure_built
+        .engine()
+        .admit_user_prompt(pure_session, "hi bare pure".into())
+        .await
+        .unwrap();
+    pure_built
+        .engine()
+        .run_turn(pure_session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+    pure_built.shutdown().await.unwrap();
+
+    let captured = requests.lock().unwrap();
+    assert_eq!(captured.len(), 2);
+    let expected_offered: std::collections::BTreeSet<String> = [
+        "bash", "edit", "grep", "read", "rewrite", "skill", "todo", "write",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    for req in captured.iter() {
+        let offered: std::collections::BTreeSet<String> = req
+            .tools
+            .iter()
+            .map(|t| t.name.as_str().to_owned())
+            .collect();
+        assert_eq!(offered, expected_offered);
+    }
+    let bare_sys = captured[0].system.as_deref().unwrap_or("");
+    let pure_sys = captured[1].system.as_deref().unwrap_or("");
+    assert!(bare_sys.contains("BARE_APP_MARKER"), "{bare_sys}");
+    assert!(bare_sys.contains("unit-skill"), "{bare_sys}");
+    assert!(!pure_sys.contains("BARE_APP_MARKER"), "{pure_sys}");
+    assert!(!pure_sys.contains("unit-skill"), "{pure_sys}");
+}

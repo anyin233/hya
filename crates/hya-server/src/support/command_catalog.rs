@@ -43,8 +43,11 @@ fn core_commands() -> &'static [(CoreCommand, String)] {
 }
 
 fn load_core_commands() -> Result<Vec<(CoreCommand, String)>, String> {
-    let catalog =
-        hya_bundle::first_party_bundle(CORE_COMMANDS_BUNDLE).map_err(|error| error.to_string())?;
+    let Some(catalog) = hya_bundle::first_party_bundle_optional(CORE_COMMANDS_BUNDLE)
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(Vec::new());
+    };
     let [bundle] = catalog.bundles() else {
         return Err("expected one bundle".to_string());
     };
@@ -119,32 +122,51 @@ pub(crate) fn list(st: &crate::ServerState, place: &CatalogPlace) -> Vec<Command
 
 /// [`list`] with the diagnostics of the command files it skipped.
 pub(crate) fn listing(st: &crate::ServerState, place: &CatalogPlace) -> CommandListing {
-    listing_with_skills(place, crate::support::skill_catalog::list(st, place))
+    listing_with_skills_and_builtins(
+        place,
+        crate::support::skill_catalog::list(st, place),
+        st.core_commands,
+    )
 }
 
 /// [`listing`] with `skills` as the `skill:<name>` rows (a session's own
 /// skill view, bundle skills included).
+#[cfg(test)]
 pub(crate) fn listing_with_skills(
     place: &CatalogPlace,
     skills: Vec<crate::support::skill_catalog::SkillInfo>,
 ) -> CommandListing {
+    listing_with_skills_and_builtins(place, skills, true)
+}
+
+/// [`listing`] with caller-supplied `skills` and optional `hya/core-commands`
+/// prompt templates (omitted in bare mode).
+pub(crate) fn listing_with_skills_and_builtins(
+    place: &CatalogPlace,
+    skills: Vec<crate::support::skill_catalog::SkillInfo>,
+    include_core_commands: bool,
+) -> CommandListing {
     let workdir = place.workdir();
-    let mut commands = core_commands()
-        .iter()
-        .map(|(command, template)| CommandInfo {
-            hints: command.hints.clone(),
-            ..command_info(
-                command.name.clone(),
-                command.description.clone(),
-                match workdir {
-                    Some(workdir) => template.replace("${path}", &workdir.to_string_lossy()),
-                    None => template.clone(),
-                },
-                Vec::new(),
-                command.subtask,
-            )
-        })
-        .collect::<Vec<_>>();
+    let mut commands = if include_core_commands {
+        core_commands()
+            .iter()
+            .map(|(command, template)| CommandInfo {
+                hints: command.hints.clone(),
+                ..command_info(
+                    command.name.clone(),
+                    command.description.clone(),
+                    match workdir {
+                        Some(workdir) => template.replace("${path}", &workdir.to_string_lossy()),
+                        None => template.clone(),
+                    },
+                    Vec::new(),
+                    command.subtask,
+                )
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     commands.extend([
         command_info(
             "help",
@@ -249,7 +271,7 @@ pub(crate) async fn expand_session_prompt(
         .await
         .skills;
     expand_in(
-        listing_with_skills(place, skills).commands,
+        listing_with_skills_and_builtins(place, skills, st.core_commands).commands,
         command,
         arguments,
     )

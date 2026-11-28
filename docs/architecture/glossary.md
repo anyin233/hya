@@ -11,7 +11,7 @@ Shared terms used across Hya's codebase, APIs, and documentation (aligned with r
 - **Tool append:** Adding a deterministic outside observation (a tool result/error paired with a call, or user input).
 - **Rewrite:** The kernel's destructive context reset (triggered past 80% window occupancy or via the `rewrite` tool) that drops earlier steps behind a marker repeating all removed user prompts and the current `todo` list.
 - **Compaction (`hya/compaction`):** Full-mode native extension steps (`shake` tool-output eviction to `artifact://` and `remote` provider `/responses/compact`) that run *before* the kernel's `Rewrite`.
-- **Bare mode (`hya exec --bare`):** Running `hya-core::kernel` alone with its six tools (`bash`, `read`, `write`, `edit`, `todo`, `rewrite`) and zero bundles, permissions, or subagents.
+- **Bare mode (`hya --bare`, `hya serve --bare`, `hya exec --bare`):** Running the unified `SessionEngine` with `BuiltinBundleProfile::Bare`—zero built-in bundles loaded, the 8 standard bare tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill`), built-in `code-mode` (without `agent()`), the minimal `hya-bare` default agent, and standard `AGENTS.md`/skills/MCP/plugin adapters. Combine with `--pure` (`hya exec --bare --pure`) to skip external context and plugins.
 
 ---
 

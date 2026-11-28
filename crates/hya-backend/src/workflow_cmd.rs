@@ -91,6 +91,7 @@ pub(crate) async fn run(
     model_override: Option<String>,
     db: &str,
     yolo: bool,
+    bare: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
     let (command, json_output, is_run, session) = match command {
@@ -175,6 +176,8 @@ pub(crate) async fn run(
                 } => {
                     let reason = if expected_revision.is_some() {
                         Some("`workflow run --revision` cannot be sent to it")
+                    } else if bare {
+                        Some("--bare cannot apply to it (it loaded its own bundle profile)")
                     } else if pure {
                         Some("--pure cannot apply to it (it loaded its own context)")
                     } else if yolo {
@@ -202,6 +205,7 @@ pub(crate) async fn run(
         store,
         model_override,
         yolo,
+        bare,
         pure,
         session,
     )
@@ -601,6 +605,7 @@ mod tests {
             },
             None,
             db.to_str().unwrap(),
+            false,
             false,
             false,
         )

@@ -708,7 +708,11 @@ async fn list_commands(
             let skills = crate::support::skill_catalog::session_listing(&st, session, &place)
                 .await
                 .skills;
-            crate::support::command_catalog::listing_with_skills(&place, skills)
+            crate::support::command_catalog::listing_with_skills_and_builtins(
+                &place,
+                skills,
+                st.core_commands,
+            )
         }
         None => {
             let place = catalog_scope(&st, &request.directory).await?;

@@ -19,6 +19,7 @@ pub(crate) async fn start(
     store: SessionStore,
     model: Option<String>,
     yolo: bool,
+    bare: bool,
     pure: bool,
 ) -> anyhow::Result<StartedEngine> {
     let exit_store = store.clone();
@@ -31,13 +32,10 @@ pub(crate) async fn start(
     let runtime = hya_app::resolve_runtime(model)
         .await
         .with_yolo(yolo)
-        .with_pure(pure);
+        .with_pure(pure)
+        .with_bare(bare);
     hya_app::startup_trace::mark("runtime_resolved", None);
-    let agent = if pure {
-        hya_app::agent_with_model_pure(&runtime.model, None)
-    } else {
-        hya_app::agent_with_model(&runtime.model, None)
-    };
+    let agent = hya_app::agent_for_runtime(&runtime, None);
     let evaluator_router = runtime.router.clone();
     let evaluator_model = config::resolve_evaluator_model(
         None,
@@ -126,6 +124,7 @@ impl HeadlessSession {
         store: SessionStore,
         model: Option<String>,
         yolo: bool,
+        bare: bool,
         pure: bool,
         session: Option<SessionId>,
     ) -> anyhow::Result<Self> {
@@ -136,7 +135,7 @@ impl HeadlessSession {
             default_agent,
             evaluator_router,
             evaluator_model,
-        } = start(store, model, yolo, pure).await?;
+        } = start(store, model, yolo, bare, pure).await?;
         let prepared = async {
             let engine = built.engine();
             let asks = built.take_asks().context("asks receiver missing")?;
@@ -242,6 +241,7 @@ mod tests {
             hya_store::SessionStore::connect_memory().await?,
             Some("hya/offline".into()),
             false,
+            false,
             true,
             None,
         )
@@ -311,9 +311,15 @@ mod tests {
         } else {
             None
         };
-        let headless =
-            super::HeadlessSession::start(store, Some("hya/offline".into()), true, true, session)
-                .await?;
+        let headless = super::HeadlessSession::start(
+            store,
+            Some("hya/offline".into()),
+            true,
+            false,
+            true,
+            session,
+        )
+        .await?;
         let engine = headless.built.engine();
         if mode == "seed" {
             let supervisor = headless.built.resident_supervisor();

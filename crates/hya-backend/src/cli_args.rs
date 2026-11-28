@@ -92,6 +92,15 @@ pub(crate) struct Cli {
     /// Auto-approve every tool action (edit/write/shell anywhere). Use with care.
     #[arg(long, global = true)]
     pub(crate) yolo: bool,
+    /// Run in bare mode (`BuiltinBundleProfile::Bare`): load zero built-in
+    /// bundles, using only the 8 standard bare tools (`read`, `write`, `edit`,
+    /// `bash`, `grep`, `todo`, `rewrite`, `skill`), core `code-mode` (without
+    /// `agent()`), `AGENTS.md`, skills, MCP, user/project bundles & plugins,
+    /// and the minimal `hya-bare` default agent.
+    #[arg(long, global = true)]
+    pub(crate) bare: bool,
+    /// Skip external `AGENTS.md` context, MCP servers, disk skills, and plugins.
+    /// Combine with `--bare` (`--bare --pure`) for pure kernel benchmarks.
     #[arg(long, global = true)]
     pub(crate) pure: bool,
     /// SQLite database path. Applies to headless exec persistence, serve,
@@ -263,19 +272,13 @@ pub(crate) enum Command {
         #[arg(long)]
         json: bool,
         /// Include durable events from every descendant in the local JSONL stream.
-        #[arg(long, requires = "json", conflicts_with = "bare")]
+        #[arg(long, requires = "json")]
         include_subagents: bool,
         /// Wall-clock budget in seconds for in-process runs, including --bare.
         /// Enables deadline notices and caps tool timeouts. The outside harness
         /// enforces the process deadline.
         #[arg(long, value_name = "SECS", value_parser = clap::value_parser!(u64).range(1..))]
         time_budget: Option<u64>,
-        /// Run the three-primitive kernel alone with six built-in tools, its
-        /// minimal system prompt, no bundles or permission checks. Prints
-        /// the final text unless --json is set. Supports --time-budget and
-        /// always runs in process against `--db`.
-        #[arg(long, conflicts_with = "pure")]
-        bare: bool,
     },
     /// Start the HTTP + SSE server.
     Serve {
@@ -990,5 +993,25 @@ mod tests {
             Some(Command::Oauth { command: crate::auth_cmd::OauthCommand::Login { ref provider, loopback: true, browser: true, no_browser: false, model: Some(ref m), .. } })
                 if provider == "codex" && m == "gpt-5.3-codex"
         ));
+
+        // Global `--bare` routes across interactive `hya`, `serve`, `serve start|restart`,
+        // `exec`, and composes cleanly with `--pure` for kernel benchmarks.
+        for cmd in [
+            "hya --bare",
+            "hya --bare --port 0",
+            "hya --bare serve",
+            "hya serve --bare",
+            "hya serve --bare start",
+            "hya serve start --bare",
+            "hya serve restart --bare",
+            "hya --bare exec hi",
+            "hya exec --bare hi",
+            "hya exec --bare --pure hi",
+            "hya --bare --pure exec hi",
+        ] {
+            assert!(p(cmd).bare, "{cmd}");
+        }
+        let bare_pure = p("hya exec --bare --pure hi");
+        assert!(bare_pure.bare && bare_pure.pure);
     }
 }

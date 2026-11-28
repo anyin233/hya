@@ -117,41 +117,17 @@ impl StopSignals {
         )
         .await;
     }
-
-    /// Drive `work` until completion or stop signal, cancelling `cancel` and waiting up to
-    /// `deadline` (if any) while honoring a second `SIGINT` for immediate exit.
-    pub(crate) async fn run_cancellable<T>(
-        &mut self,
-        store: &SessionStore,
-        cancel: &CancellationToken,
-        deadline: Option<Duration>,
-        work: impl Future<Output = T>,
-    ) -> (Option<T>, Option<StopSignal>) {
-        tokio::pin!(work);
-        let stop = tokio::select! {
-            output = &mut work => return (Some(output), None),
-            stop = self.recv() => stop,
-        };
-        eprintln!("hya: stopping — draining in-flight turns (Ctrl-C again to exit now)");
-        cancel.cancel();
-        let finish = async {
-            match deadline {
-                Some(limit) => tokio::time::timeout(limit, &mut work).await.ok(),
-                None => Some(work.await),
-            }
-        };
-        let output = self.allow_immediate_interrupt(store, finish).await;
-        (output, Some(stop))
-    }
 }
 
 /// Start a [`crate::startup::HeadlessSession`] while guarding the startup window with
 /// `signals`; on signal, drains and reports the store before exiting with 130/143.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn start_headless_with_signals(
     signals: &mut StopSignals,
     store: SessionStore,
     model_override: Option<String>,
     yolo: bool,
+    bare: bool,
     pure: bool,
     session: Option<SessionId>,
 ) -> anyhow::Result<crate::startup::HeadlessSession> {
@@ -160,6 +136,7 @@ pub(crate) async fn start_headless_with_signals(
             store.clone(),
             model_override,
             yolo,
+            bare,
             pure,
             session,
         ) => return res,

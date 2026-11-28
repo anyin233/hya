@@ -9,8 +9,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use hya_bundle::{BundleCatalog, PreparedCatalog};
 use hya_engine::{
-    AgentCatalog, CatalogScope, CoreError, RuntimeCatalogRefresh, RuntimeRegistry, ScopeKey,
-    ScopeOverlay,
+    CatalogScope, CoreError, RuntimeCatalogRefresh, RuntimeRegistry, ScopeKey, ScopeOverlay,
 };
 use hya_proto::ModelRef;
 use sha2::Digest as _;
@@ -380,7 +379,13 @@ impl ProjectScopeRefresh {
                         && !project_bundle_dirs.contains_key(source.id().configured_id())
                 }),
         );
-        let catalog = Arc::new(AgentCatalog::new(Arc::new(bundles)).map_err(CoreError::bundle)?);
+        let catalog = Arc::new(
+            crate::runtime::agent_catalog_for_selection(
+                Arc::new(bundles),
+                self.installed.builtin_selection(),
+            )
+            .map_err(CoreError::bundle)?,
+        );
         runtime
             .publish_scope(
                 key.clone(),
