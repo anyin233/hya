@@ -1,21 +1,16 @@
-//! Agent, channel, and workflow tool contracts.
+//! Agent and channel tool contracts.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_proto::{
-    ChannelKind, MailEndpoint, MailKind, OperationId, SessionId, ToolCallId, WorkflowRevision,
-};
+use hya_proto::{ChannelKind, MailEndpoint, MailKind, OperationId, SessionId, ToolCallId};
 use hya_tool::handle::{DynamicUriContent, DynamicUriCtx, DynamicUriHandler, HandleError};
 use hya_tool::{
     Action, ChannelRow, MailReceipt, MailboxPlane, MailboxRequest, MemberOutcome, MemberStatusRow,
-    SpawnMember, SpawnerPlane, ToolError, ToolOperation, WorkflowCommand, WorkflowCommandResult,
-    WorkflowHostError, WorkflowPlane, WorkflowProjection, WorkflowRequest, WorkflowRequestSink,
-    WorkflowSendError,
+    SpawnMember, SpawnerPlane, ToolError, ToolOperation,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -219,142 +214,6 @@ async fn send_and_list_channel_routing_team_status_and_hash_read() {
     let empty_lc = list_channel.execute(&ctx2, json!({})).await.unwrap();
     assert!(empty_lc.get("team").is_none());
     svc2.abort();
-}
-
-#[derive(Default)]
-struct CaptureWorkflowSink {
-    commands: Mutex<Vec<WorkflowCommand>>,
-    operations: Mutex<Vec<ToolOperation>>,
-    state: WorkflowProjection,
-}
-
-impl WorkflowRequestSink for CaptureWorkflowSink {
-    fn try_send(&self, request: WorkflowRequest) -> Result<(), WorkflowSendError> {
-        self.commands.lock().unwrap().push(request.command);
-        self.operations.lock().unwrap().push(request.operation);
-        let _ = request.reply.send(Ok(WorkflowCommandResult::State {
-            state: self.state.clone(),
-        }));
-        Ok(())
-    }
-}
-
-struct RejectingWorkflowSink;
-
-impl WorkflowRequestSink for RejectingWorkflowSink {
-    fn try_send(&self, request: WorkflowRequest) -> Result<(), WorkflowSendError> {
-        let _ = request.reply.send(Err(WorkflowHostError::new(
-            "WORKFLOW_BUSY",
-            "another run is active",
-        )));
-        Ok(())
-    }
-}
-
-#[tokio::test]
-async fn workflow_commands_route_fields_defaults_and_host_errors() {
-    let tool = hya_tool_loader::builtins().get("workflow").unwrap();
-    let session = SessionId::new();
-    let run = hya_proto::WorkflowRunId::new();
-    let member = hya_proto::MemberId::new();
-    let revision = WorkflowRevision::from_bytes([7; 32]);
-    let state: WorkflowProjection = serde_json::from_value(json!({
-        "run": {
-            "id": run,
-            "workflow": { "source": "test:routed", "name": "routed", "revision": revision.to_string() },
-            "request_hash": "hash",
-            "owner": hya_proto::OwnerRunId::new(),
-            "status": "running",
-            "stages": [{
-                "id": "execute", "agent": "general", "mode": "once", "level": 0,
-                "worker_model": { "id": "fake/primary", "reasoning": "high", "fallback": [{"id": "fake/fallback", "reasoning": "medium"}] },
-                "selected_worker_model": { "index": 0, "id": "fake/primary", "reasoning": "high" },
-                "status": "running",
-                "members": [{"member": member, "role": "worker", "iteration": 0}],
-                "route_outcomes": [{
-                    "session": session, "run": run, "stage": "execute", "member": member,
-                    "role": "worker", "iteration": 0, "step": 0, "candidate_index": 0,
-                    "model": "fake/primary", "reasoning": "high", "failure_class": "none"
-                }]
-            }]
-        }
-    }))
-    .unwrap();
-    let sink = Arc::new(CaptureWorkflowSink {
-        state,
-        ..Default::default()
-    });
-    let mut ctx = ctx_with(vec![allow(Action::Task, "*")], std::env::temp_dir()).with_extension(
-        WorkflowPlane::from_sink(Arc::clone(&sink) as Arc<dyn hya_tool::WorkflowRequestSink>)
-            .for_session(session),
-    );
-    ctx.session = Some(session);
-
-    for input in [
-        json!({}),
-        json!({"action": "info", "name": "alpha"}),
-        json!({"action": "select", "name": "alpha", "expected_revision": revision.to_string()}),
-        json!({"action": "state"}),
-        json!({"action": "run", "name": "alpha", "expected_revision": revision.to_string(), "inputs": {"count": 3, "message": "hello"}}),
-    ] {
-        let res = tool.execute(&ctx, input).await.unwrap();
-        assert_eq!(res["kind"], "state");
-        assert_eq!(
-            res["state"]["run"]["stages"][0]["worker_model"]["fallback"][0]["id"],
-            "fake/fallback"
-        );
-        assert_eq!(
-            res["state"]["run"]["stages"][0]["route_outcomes"][0]["failure_class"],
-            "none"
-        );
-    }
-    assert_eq!(
-        *sink.commands.lock().unwrap(),
-        vec![
-            WorkflowCommand::List,
-            WorkflowCommand::Info {
-                name: "alpha".into()
-            },
-            WorkflowCommand::Select {
-                name: "alpha".into(),
-                expected_revision: Some(revision)
-            },
-            WorkflowCommand::State,
-            WorkflowCommand::Run {
-                name: Some("alpha".into()),
-                expected_revision: Some(revision),
-                inputs: BTreeMap::from([
-                    ("count".into(), "3".into()),
-                    ("message".into(), "hello".into())
-                ]),
-                run: None,
-            },
-        ]
-    );
-    assert_eq!(
-        sink.operations.lock().unwrap().as_slice(),
-        &[ctx.operation; 5]
-    );
-
-    assert!(
-        tool.execute(&ctx, json!({"action": "other"}))
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("expected list|info|select|run|state")
-    );
-
-    ctx.extensions
-        .insert(WorkflowPlane::from_sink(Arc::new(RejectingWorkflowSink)).for_session(session));
-    let err = tool
-        .execute(&ctx, json!({"action": "state"}))
-        .await
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        ToolError::WorkflowControl { ref code, ref message }
-            if code == "WORKFLOW_BUSY" && message == "another run is active"
-    ));
 }
 
 #[test]
