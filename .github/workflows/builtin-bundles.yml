@@ -164,6 +164,7 @@ jobs:
         env:
           CRATE_NAME: ${{ matrix.crate_name }}
           LIB_STEM: ${{ matrix.lib_stem }}
+          ABI_VERSION: ${{ matrix.abi_version }}
           BUNDLE_NAME: ${{ matrix.name }}
           BUNDLE_PATH: ${{ matrix.path }}
           HAS_REWRITERS: ${{ matrix.has_rewriters }}
@@ -178,16 +179,25 @@ jobs:
           test -n "$lib" && test -f "$lib"
           echo "Located cdylib: $lib"
 
-          # Verify required lockstep v1 exported C ABI symbols.
+          # Verify required lockstep exported C ABI symbols (v1 or v2).
           syms="$(nm -D --defined-only "$lib")"
-          required_syms=(
-            hya_tool_bundle_abi_v1
-            hya_tool_bundle_register_v1
-            hya_tool_bundle_with_runtime_v1
-            hya_tool_bundle_share_deadline_v1
-          )
-          if [[ "$HAS_REWRITERS" == "true" ]]; then
-            required_syms+=(hya_tool_bundle_register_rewriters_v1)
+          if [[ "${ABI_VERSION:-1}" == "2" ]]; then
+            required_syms=(
+              hya_native_abi_v2
+              hya_native_register_v2
+              hya_native_with_runtime_v2
+              hya_native_share_deadline_v2
+            )
+          else
+            required_syms=(
+              hya_tool_bundle_abi_v1
+              hya_tool_bundle_register_v1
+              hya_tool_bundle_with_runtime_v1
+              hya_tool_bundle_share_deadline_v1
+            )
+            if [[ "$HAS_REWRITERS" == "true" ]]; then
+              required_syms+=(hya_tool_bundle_register_rewriters_v1)
+            fi
           fi
           for sym in "${required_syms[@]}"; do
             if ! grep -Eq "[[:space:]]${sym}$" <<< "$syms"; then
@@ -325,6 +335,7 @@ jobs:
           )"
           echo "$list_out"
           for expected in \
+            hya/hashline \
             hya/base-tools \
             hya/extended-tools \
             hya/network-tools \
@@ -342,7 +353,7 @@ jobs:
               exit 1
             fi
           done
-          echo "All 12 staged builtin bundles verified in bare-vs-full smoke."
+          echo "All 13 staged builtin bundles verified in bare-vs-full smoke."
 
   builtin-bundles-gate:
     name: builtin-bundles-gate

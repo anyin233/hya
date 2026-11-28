@@ -7,49 +7,6 @@ use hya_tool::path::display_path;
 use hya_tool::{ToolCtx, ToolError};
 
 const MAX_PER_FILE: usize = 20;
-const MAX_PROJECT_FILES: usize = 5;
-
-pub(crate) async fn touch_and_diagnostics(ctx: &ToolCtx, path: &Path) -> Result<Value, ToolError> {
-    ctx.lsp
-        .touch_file(path, "document")
-        .await
-        .map_err(|error| ToolError::Other(error.to_string()))?;
-    ctx.lsp
-        .diagnostics(&ctx.workdir, &[path])
-        .await
-        .map_err(|error| ToolError::Other(error.to_string()))
-}
-
-pub(crate) fn append_edit_diagnostics(output: &mut String, file: &Path, diagnostics: &Value) {
-    if let Some(block) = report_for_path(file, diagnostics) {
-        output.push_str("\n\nLSP errors detected in this file, please fix:\n");
-        output.push_str(&block);
-    }
-}
-
-pub(crate) fn append_write_diagnostics(output: &mut String, file: &Path, diagnostics: &Value) {
-    let current = path_key(file);
-    if let Some(block) = report_for_key(&current, diagnostics.get(&current)) {
-        output.push_str("\n\nLSP errors detected in this file, please fix:\n");
-        output.push_str(&block);
-    }
-
-    let Some(files) = diagnostics.as_object() else {
-        return;
-    };
-    let mut count = 0usize;
-    for (path, issues) in files {
-        if path == &current || count >= MAX_PROJECT_FILES {
-            continue;
-        }
-        let Some(block) = report_for_key(path, Some(issues)) else {
-            continue;
-        };
-        count += 1;
-        output.push_str("\n\nLSP errors detected in other files:\n");
-        output.push_str(&block);
-    }
-}
 
 pub(crate) fn append_patch_diagnostics(
     output: &mut String,

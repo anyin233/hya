@@ -10,12 +10,13 @@ These core tools live directly inside Hya's core kernel (`hya-core`), alongside 
 
 | Tool | Default permission | What it does |
 | --- | --- | --- |
-| `read` | Allow *(inside Project)* | Read text files (with `LINE#HASH` anchors when `hya/base-tools` / `hya/hashline` is loaded), images (`png`/`jpeg`/`gif`/`webp`), PDFs, directories, `artifact://` spilled outputs, and `channel://` mail logs. |
-| `write` | Ask | Create or overwrite a file on disk (runs post-edit formatter & LSP diagnostics in full mode). |
-| `edit` | Ask | Edit an existing file via exact text replacement or `LINE#HASH` line anchors. |
+| `read` | Allow *(inside Project)* | Read text files (with `LINE#HASH` anchors when `hya/hashline` is enabled; standard verbatim/offset text when disabled or under `--bare`), images (`png`/`jpeg`/`gif`/`webp`), directories, internal handles (`artifact://`, `skill://`, `local://`), and any registered custom URI scheme via `HandleRouter`. |
+| `write` | Ask | Create or overwrite a file on disk, `local://<name>`, or any registered writable custom URI scheme (post-edit formatting/LSP run via hooks rather than hardcoded calls). |
+| `edit` | Ask | Edit an existing file via standard exact text replacement (`hya-bare`) or content-hashed `LINE#HASH` anchors (`hya/hashline`). |
 | `bash` | Ask | Execute a shell command (supports `timeout`, `cwd`, `env`, and `pty: true`). |
-| `todo` | Allow | Replace/update the session's ordered checklist (`pending`, `in_progress`, `completed`, `blocked`). |
-| `rewrite` | Allow | Fold earlier steps in the current turn behind a clean marker while preserving user messages and todos. |
+| `grep` | Allow | Search file contents with a regex or literal pattern (returns `path:line:text` in `hya-bare` or hashline-anchored matches when `hya/hashline` is enabled). |
+| `todo` | Allow | Replace/update the session's ordered checklist (`pending`, `in_progress`, `completed`, `blocked`). Permanently kernel-exclusive; cannot be overridden. |
+| `rewrite` | Allow | Fold earlier steps in the current turn behind a clean marker while preserving user messages and todos. Permanently kernel-exclusive; cannot be overridden. |
 | `skill` | Allow (`read_only`) | Load the full body of a discovered or bundled `SKILL.md` by name. |
 | `code-mode__run` | Ask *(opt-in via `tools.code.mode`)* | Run a traced JavaScript async program calling `tools.*` (`workspace.state` supported); dynamically exposes `agent()` / `agents.run` only when `hya/multi-agent` is loaded. |
 
@@ -23,19 +24,43 @@ These core tools live directly inside Hya's core kernel (`hya-core`), alongside 
 
 ## 2. Registry Tools (Full mode — 24 bundle tools + core `skill`)
 
-In full mode, Hya loads four native tool-family bundles alongside the kernel's `todo` and `rewrite`. (`read`, `write`, `edit`, and `bash` gain full-mode permission checks, `ProjectScope` folder containment, and LSP/formatter hooks.)
+In full mode, Hya loads five native tool bundles (`hya/hashline` over Lockstep Native ABI v2 plus the transitional tool families) alongside the kernel-exclusive `todo` and `rewrite`.
 
-### `hya/base-tools` (File, Search, Shell & User Questions)
+### `hya/hashline` (Content-Hashed File Tools — `overrides: hya/bare`)
+
+`hya/hashline` is a Lockstep Native ABI v2 bundle (`bundles/builtin/hashline/`, `schema_version: 2`, exported via `export_native_bundle_v2!` / `hya_native_register_v2`) that overrides `hya-bare`'s standard `read`, `write`, `edit`, and `grep` with `HashlineRuntime`-backed `LINE#HASH` line-addressed primitives. Custom URI schemes delegate generically through `HandleRouter` (`DynamicUriHandler` / `UriSchemaHandler`), and post-edit formatting/LSP run through host/bundle hooks rather than hardcoded library calls.
+
+**Opting out (falling back to standard `hya-bare` file tools):**
+
+```yaml
+# ~/.config/hya/config.yaml
+schema_version: 2
+bundles:
+  builtin:
+    profile: full
+    disable:
+      - hya/hashline
+```
+
+When `hya/hashline` is disabled (or under `--bare` / `profile: bare`), `hya/hashline` is not loaded and `hya-bare`'s standard `read`, `write`, `edit`, and `grep` take over cleanly.
+
+| Tool | Default permission | Descriptor / Overrides | What it does |
+| --- | --- | --- | --- |
+| `read` | Allow (`read_only`, `protected: true`) | `tools/read.json` (`overrides: hya/bare`) | Read UTF-8 files with `LINE#HASH` anchors (or `raw: true`), directories, images/PDFs, internal handles, and custom `HandleRouter` URIs. |
+| `write` | Ask (`tool`) | `tools/write.json` (`overrides: hya/bare`) | Atomic whole-file write with optional copied hashline prefix stripping, `local://` scratch handles, and writable custom `HandleRouter` URIs. |
+| `edit` | Ask (`tool`) | `tools/edit.json` (`overrides: hya/bare`) | Strict hashline edits (`replace`, `append`, `prepend` by `LINE#HASH` anchor, or `replace_text`) with stale-anchor recovery. |
+| `grep` | Allow (`read_only`) | `tools/grep.json` (`overrides: hya/bare`) | Regex or literal content search returning hashline-anchored matches and recording recovery snapshots. |
+
+### `hya/base-tools` (Directory Search, Shell, Patch & User Questions)
 
 | Tool | Default permission | What it does |
 | --- | --- | --- |
-| `read`, `write`, `edit`, `bash` | See above | Full-mode file and shell tools with multi-root `ProjectScope` enforcement. |
-| `apply_patch` | Ask | Multi-file unified patch tool (advertised automatically to `gpt*` / `*codex*` models; hidden alias `patch` works for all models). |
-| `ls` | Allow | List entries in a directory. |
-| `glob` | Allow | Fast breadth-first filename glob matching (up to 100 matches, 30s traversal cap). |
-| `find` | Allow | Structured directory/file search with 30s traversal cap. |
-| `grep` | Allow | Fast regular-expression content search across files. |
-| `ask_user` | Interactive | Ask the user structured multiple-choice or free-text questions (omitted automatically in in-process headless runs). |
+| `bash` | Ask (`command`, alias `shell`) | Full-mode shell execution with PTY support and multi-root `ProjectScope`. |
+| `apply_patch` | Ask (`tool`, alias `patch`) | Multi-file unified patch tool (advertised automatically to `gpt*` / `*codex*` models; hidden alias `patch` works for all models). |
+| `ls` | Allow (`read_only`) | List entries in a directory. |
+| `glob` | Allow (`read_only`) | Fast breadth-first filename glob matching (up to 100 matches, 30s traversal cap). |
+| `find` | Allow (`read_only`) | Structured directory/file search with 30s traversal cap. |
+| `ask_user` | Interactive (`tool`, alias `question`) | Ask the user structured multiple-choice or free-text questions (omitted automatically in in-process headless runs). |
 
 ### `hya/extended-tools` (Code Intelligence, Subagents & Workflows)
 
@@ -85,11 +110,12 @@ In full mode, Hya loads four native tool-family bundles alongside the kernel's `
 
 ## 4. Built-in Bundles (`bundles/builtin/`)
 
-Every Hya installation ships with 12 trusted first-party bundles sourced from `bundles/builtin/` and packaged under `<prefix>/bundles/hya-<name>.hyabundle` (skipped in `--bare`, which runs only `hya-bare` core tools including `skill` and optional `code-mode`). See the **[`hyabundle` Specification](../extend/hyabundle-spec.md)** and **[ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)** for full paths, runtimes, and loading precedence.
+Every Hya installation ships with 13 trusted first-party bundles sourced from `bundles/builtin/` and packaged under `<prefix>/bundles/hya-<name>.hyabundle` (skipped in `--bare`, which runs only `hya-bare` core tools including `skill` and optional `code-mode`). See the **[`hyabundle` Specification](../extend/hyabundle-spec.md)** and **[ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)** for full paths, runtimes, and loading precedence.
 
 | Bundle ID | Source path | Runtime | Role |
 | --- | --- | --- | --- |
-| `hya/base-tools` | `bundles/builtin/base-tools` | Native (`cdylib`) | Core file, search, shell, patch, and `ask_user` tools (10 tools). |
+| `hya/hashline` | `bundles/builtin/hashline` | Native ABI v2 (`cdylib`) | Hashline-addressed `read`, `write`, `edit`, and `grep` + `HashlineRuntime` (`overrides: hya/bare`, 4 tools). |
+| `hya/base-tools` | `bundles/builtin/base-tools` | Native (`cdylib`) | Directory search, shell, patch, and `ask_user` tools (6 tools). |
 | `hya/extended-tools` | `bundles/builtin/extended-tools` | Native (`cdylib`) | Code intelligence (`lsp`), subagents, workflows, and project activity (9 tools; `skill` promoted to `hya-bare` core). |
 | `hya/network-tools` | `bundles/builtin/network-tools` | Native (`cdylib`) | Web fetch and web search (`webfetch`, `websearch`). |
 | `hya/channel-tools` | `bundles/builtin/channel-tools` | Native (`cdylib`) | Team mailbox tools (`send`, `list_channel`, `wait`, `report`). |

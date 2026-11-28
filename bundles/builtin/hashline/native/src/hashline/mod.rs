@@ -1077,48 +1077,7 @@ impl<'runtime> HashlineMutation<'runtime> {
         })
     }
 
-    /// Restore the original BOM and line-ending style after formatter output.
-    pub(super) async fn restore_after_formatter(&mut self) -> Result<(), MutationWriteError> {
-        let outcome = {
-            let Some(original) = self.original.as_ref() else {
-                return Err(MutationWriteError::Io(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "edit target was not loaded before formatter synchronization",
-                )));
-            };
-            let current = fs::load_resolved_text(&self.target, &self.resolved)
-                .await
-                .map_err(MutationWriteError::Io)?;
-            if current.path != self.target {
-                return Err(MutationWriteError::Io(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "edit target changed while restoring formatter output",
-                )));
-            }
-            if current.bom == original.bom
-                && current.ending == original.ending
-                && !current.mixed_endings
-                && !current.invalid_utf8
-            {
-                return Ok(());
-            }
-            match fs::atomic_write(&self.requested_path, &current.text, original).await {
-                Ok(outcome) => outcome,
-                Err(fs::AtomicWriteError::Io(error)) => {
-                    return Err(MutationWriteError::Io(error));
-                }
-                Err(fs::AtomicWriteError::Committed { outcome, error }) => {
-                    return Err(MutationWriteError::Committed {
-                        path: outcome.path,
-                        error,
-                    });
-                }
-            }
-        };
-        self.refresh_after_commit(&outcome).await
-    }
-
-    /// Reload final bytes without changing state, for formatter and LSP order.
+    /// Reload final bytes without changing state.
     pub(super) async fn reload(&mut self) -> io::Result<MutationText> {
         let loaded = fs::load_resolved_text(&self.target, &self.resolved).await?;
         if loaded.path != self.target {

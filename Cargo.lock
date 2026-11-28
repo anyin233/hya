@@ -1308,6 +1308,7 @@ dependencies = [
  "hya-core",
  "hya-engine",
  "hya-extended-tools",
+ "hya-hashline",
  "hya-mcp",
  "hya-network-tools",
  "hya-plugin",
@@ -1384,20 +1385,15 @@ name = "hya-base-tools"
 version = "0.0.0"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
  "hya-proto",
  "hya-tool",
- "image",
  "libc",
  "pty-process",
- "regex",
  "serde",
  "serde_json",
- "sha2",
  "similar",
  "tokio",
  "tokio-util",
- "xxhash-rust",
 ]
 
 [[package]]
@@ -1471,6 +1467,7 @@ dependencies = [
  "hya-bundle",
  "hya-compaction",
  "hya-context",
+ "hya-hashline",
  "hya-proto",
  "hya-provider",
  "hya-runtime-abi",
@@ -1530,6 +1527,7 @@ dependencies = [
  "hya-context",
  "hya-core",
  "hya-extended-tools",
+ "hya-hashline",
  "hya-network-tools",
  "hya-proto",
  "hya-provider",
@@ -1561,6 +1559,27 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "hya-hashline"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "hya-proto",
+ "hya-runtime-abi",
+ "hya-tool",
+ "image",
+ "libc",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "similar",
+ "tokio",
+ "tokio-util",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -1805,6 +1824,7 @@ dependencies = [
  "hya-channel-tools",
  "hya-context",
  "hya-extended-tools",
+ "hya-hashline",
  "hya-network-tools",
  "hya-proto",
  "hya-tool-error",
@@ -1841,6 +1861,7 @@ dependencies = [
  "hya-channel-tools",
  "hya-context",
  "hya-extended-tools",
+ "hya-hashline",
  "hya-network-tools",
  "hya-proto",
  "hya-runtime-abi",

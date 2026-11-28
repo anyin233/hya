@@ -41,6 +41,7 @@ fn inventory_exposes_immutable_noninstallable_presets_and_internal_bundles() {
             "hya/core-commands",
             "hya/core-skills",
             "hya/extended-tools",
+            "hya/hashline",
             "hya/network-tools",
         ]
     );

@@ -22,7 +22,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_proto::{ToolName, ToolSchema};
-use hya_tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
+use hya_tool::handle::{DynamicUriContent, DynamicUriCtx, DynamicUriHandler, HandleError};
+use hya_tool::{MailboxPlane, Tool, ToolCtx, ToolError, ToolResultPolicy};
 use serde_json::{Value, json};
 
 /// Canonical names of the coordination tools the harness injects.
@@ -109,6 +110,93 @@ impl Tool for ChannelReadTool {
             }
         };
         self.inner.execute(ctx, json!({ "path": path })).await
+    }
+}
+
+/// Dynamic `HandleRouter` handler for `channel://<id>[?last=N]` backed by the
+/// session's [`MailboxPlane`]. Keeps `channel://` routing out of `read`
+/// implementations (`hya/hashline` and `hya/bare`) until `team-comms` registers
+/// the scheme as a standalone ABI v2 bundle.
+pub(crate) struct ChannelUriHandler(pub(crate) MailboxPlane);
+
+fn parse_channel_uri(uri: &str) -> Result<(String, Option<usize>), HandleError> {
+    let rest = uri
+        .strip_prefix("channel://")
+        .ok_or_else(|| HandleError::MalformedPath(format!("invalid channel URI `{uri}`")))?;
+    let (id, query) = match rest.split_once('?') {
+        Some((id, query)) => (id, Some(query)),
+        None => (rest, None),
+    };
+    let last = query.and_then(|text| {
+        text.split('&')
+            .find_map(|pair| pair.strip_prefix("last="))
+            .and_then(|v| v.parse::<usize>().ok())
+    });
+    let id = id.trim().to_string();
+    if id.is_empty() {
+        return Err(HandleError::MalformedPath(
+            "channel:// URI requires a non-empty channel id".to_string(),
+        ));
+    }
+    Ok((id, last))
+}
+
+#[async_trait]
+impl DynamicUriHandler for ChannelUriHandler {
+    fn scheme(&self) -> &'static str {
+        "channel"
+    }
+
+    async fn read(
+        &self,
+        _ctx: DynamicUriCtx<'_>,
+        uri: &str,
+    ) -> Result<DynamicUriContent, HandleError> {
+        let (channel, last) = parse_channel_uri(uri)?;
+        let (channel, messages, unread_remaining, warning) = self
+            .0
+            .read_channel(channel, last)
+            .await
+            .map_err(|error| match error {
+                hya_tool::MailboxError::Unavailable => HandleError::Handler(
+                    "channel:// reads are only available inside a running team".to_string(),
+                ),
+                hya_tool::MailboxError::Overloaded(message)
+                | hya_tool::MailboxError::Rejected(message) => HandleError::Handler(message),
+            })?;
+        let count = messages.len();
+        let rendered: Vec<String> = messages
+            .iter()
+            .map(|(from, body)| format!("[{from}] {body}"))
+            .collect();
+        let body = if rendered.is_empty() {
+            format!("#{channel} has no messages yet.")
+        } else {
+            rendered.join("\n")
+        };
+        let output = match warning.as_deref() {
+            Some(warning) => format!("[warning] {warning}\n{body}"),
+            None => body,
+        };
+        let tail = if unread_remaining > 0 {
+            format!(
+                "\n\n{unread_remaining} unread message(s) remain in your inbox — run `list_channel` \
+                 for per-channel counts."
+            )
+        } else {
+            String::new()
+        };
+        Ok(DynamicUriContent {
+            body: format!("{output}{tail}"),
+            media_type: "text/plain".to_string(),
+            metadata: Some(json!({
+                "type": "channel",
+                "channel": channel,
+                "count": count,
+                "unreadRemaining": unread_remaining,
+                "warning": warning,
+            })),
+        })
     }
 }
 

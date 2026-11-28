@@ -20,7 +20,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use crate::fs_tools::assert_external_search_target;
+use crate::assert_external_search_target;
 use crate::hashline::{
     HashlineRuntime, MAX_SNAPSHOT_BYTES, MAX_SNAPSHOT_TARGETS, ReadRuntimeError,
 };

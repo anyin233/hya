@@ -90,9 +90,10 @@ pub use runtime::{
     ServerRuntime, agent_base_for_runtime, agent_base_with_model, agent_for_runtime,
     agent_with_model, agent_with_model_pure, bare_tool_registry, build_session_engine,
     build_session_engine_pure, builtin_agent_catalog, builtin_agent_catalog_for,
-    discover_context_files, host_info, offline_router, open_runtime_store,
-    open_runtime_store_or_memory, open_store, open_store_or_memory, resolve_headless_agent_name,
-    resolve_runtime, spawn_team_supervisor, today, with_built_session_engine,
+    compose_builtin_tool_registry, discover_context_files, host_info, offline_router,
+    open_runtime_store, open_runtime_store_or_memory, open_store, open_store_or_memory,
+    resolve_headless_agent_name, resolve_runtime, spawn_team_supervisor, today,
+    with_built_session_engine,
 };
 pub use workflow_catalog::{
     FIRST_PARTY_BUNDLE_ID, ResolvedWorkflow, WorkflowCatalog, WorkflowCatalogOwner,

@@ -224,21 +224,10 @@ fn namespaced_names_compose_validate_and_register() {
 fn builtin_bundle_ownership_and_removed_kill_tool() {
     let registry = hya_tool_loader::builtins();
     for (bundle, names) in [
+        ("hya/hashline", ["read", "write", "edit", "grep"].as_slice()),
         (
             "hya/base-tools",
-            [
-                "read",
-                "write",
-                "edit",
-                "ls",
-                "glob",
-                "find",
-                "grep",
-                "ask_user",
-                "bash",
-                "apply_patch",
-            ]
-            .as_slice(),
+            ["ls", "glob", "find", "ask_user", "bash", "apply_patch"].as_slice(),
         ),
         (
             "hya/extended-tools",

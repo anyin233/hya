@@ -2,7 +2,7 @@
 # See CONTEXT.md for the full architecture and agent-spec contract.
 [workspace]
 resolver = "3"
-members = ["crates/*", "bundles/builtin/base-tools/native", "bundles/builtin/extended-tools/native", "bundles/builtin/channel-tools/native", "bundles/builtin/network-tools/native", "bundles/builtin/compaction/native"]
+members = ["crates/*", "bundles/builtin/hashline/native", "bundles/builtin/base-tools/native", "bundles/builtin/extended-tools/native", "bundles/builtin/channel-tools/native", "bundles/builtin/network-tools/native", "bundles/builtin/compaction/native"]
 exclude = ["crates/hya-plugin-bun", "vendor/sevenz-rust2-0.20.2"]
 
 [workspace.package]
@@ -23,6 +23,7 @@ hya-runtime-abi = { path = "crates/hya-runtime-abi" }
 hya-tool-loader = { path = "crates/hya-tool-loader" }
 hya-context = { path = "crates/hya-context" }
 hya-tool-error = { path = "crates/hya-tool-error" }
+hya-hashline = { path = "bundles/builtin/hashline/native" }
 hya-base-tools = { path = "bundles/builtin/base-tools/native" }
 hya-extended-tools = { path = "bundles/builtin/extended-tools/native" }
 hya-channel-tools = { path = "bundles/builtin/channel-tools/native" }

@@ -49,6 +49,7 @@ export const ALLOWED_TOP_LEVEL_KEYS = new Set([
   "version_ref",
   "identity",
   "namespace",
+  "overrides",
   "runtime",
   "check",
   "schemas",
@@ -198,6 +199,7 @@ function readNativeCrateMeta(bundleDir, manifest) {
     crate_dir: crateDir,
     crate_name: crateName,
     lib_stem: libStem,
+    abi_version: manifest?.runtime?.abi_version ?? 1,
     has_exposure: existsSync(join(bundleDir, "exposure.yaml")),
     has_rewriters: hasRewriters,
   };
@@ -309,6 +311,7 @@ export function discoverBundles(rootDirs, options = {}) {
       entry.crate_dir = nativeMeta.crate_dir;
       entry.crate_name = nativeMeta.crate_name;
       entry.lib_stem = nativeMeta.lib_stem;
+      entry.abi_version = nativeMeta.abi_version;
       entry.has_exposure = nativeMeta.has_exposure;
       entry.has_rewriters = nativeMeta.has_rewriters;
     }

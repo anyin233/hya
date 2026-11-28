@@ -19,6 +19,7 @@ use crate::{
 
 /// Identities of every trusted first-party bundle, in load order.
 pub const FIRST_PARTY_BUNDLES: &[&str] = &[
+    "hya/hashline",
     "hya/base-tools",
     "hya/extended-tools",
     "hya/network-tools",

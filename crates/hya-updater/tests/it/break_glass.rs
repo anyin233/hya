@@ -48,6 +48,7 @@ fn install_sh_stages_every_first_party_bundle_beside_bin() {
         String::from_utf8_lossy(&output.stderr)
     );
     for family in [
+        "hya-hashline",
         "hya-base-tools",
         "hya-extended-tools",
         "hya-network-tools",

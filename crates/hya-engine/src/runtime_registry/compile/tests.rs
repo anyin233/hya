@@ -21,8 +21,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 // ---------------------------------------------------------------------------
 
 static NEXT_TEMP_SKILL_DIR: AtomicU64 = AtomicU64::new(0);
-const WITHOUT_CHANNEL_TOOLS: [&str; 3] =
-    ["hya/base-tools", "hya/extended-tools", "hya/network-tools"];
+const WITHOUT_CHANNEL_TOOLS: [&str; 4] = [
+    "hya/hashline",
+    "hya/base-tools",
+    "hya/extended-tools",
+    "hya/network-tools",
+];
 
 fn catalog_from(bundles: &[Bundle]) -> Arc<AgentCatalog> {
     Arc::new(AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(bundles).unwrap())).unwrap())

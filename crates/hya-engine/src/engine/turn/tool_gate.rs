@@ -208,6 +208,14 @@ impl TurnToolGate<'_> {
                                 roots: workspace.roots.clone(),
                                 cancel: cancel.clone(),
                             };
+                            if !ctx.handles().has_uri_handler("channel") {
+                                let handler = Arc::new(crate::coordination::ChannelUriHandler(
+                                    ctx.mailbox.clone(),
+                                ));
+                                if let Ok(with_channel) = ctx.clone().with_uri_handler(handler) {
+                                    ctx = with_channel;
+                                }
+                            }
                             let nested = super::super::nested_tools::TurnNestedTools {
                                 engine: Arc::clone(
                                     nested_engine.get_or_insert_with(|| Arc::new(engine.clone())),

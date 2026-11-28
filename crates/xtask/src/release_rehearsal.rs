@@ -91,7 +91,8 @@ fn host_target(root: &Path) -> Result<String> {
 const BINARY_NAME: &str = "hya";
 /// Crates whose release `cdylib` the native bundles (tool families and
 /// internal bundles) package.
-const NATIVE_BUNDLE_CRATES: [&str; 5] = [
+const NATIVE_BUNDLE_CRATES: [&str; 6] = [
+    "hya-hashline",
     "hya-base-tools",
     "hya-extended-tools",
     "hya-network-tools",

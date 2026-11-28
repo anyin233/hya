@@ -5,11 +5,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use hya_proto::SessionId;
 use hya_tool::{
-    Action, FormatterError, FormatterPlane, FormatterProvider, FormatterStatus, LspPlane,
-    ToolError, ToolResultPolicy, cap_tool_output_with_policy,
+    Action, FormatterPlane, LspPlane, ToolError, ToolResultPolicy, cap_tool_output_with_policy,
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -26,22 +24,6 @@ const RECOVERY_EXTERNAL: &str =
     "EXTERNAL\nbeta\ngamma\ndelta\nfive\nsix\nseven\neight\nalpha\nbeta\ngamma\ndelta\n";
 const RECOVERY_FINAL: &str =
     "EXTERNAL\nbeta\ngamma\ndelta\nfive\nsix\nseven\neight\nalpha\nBETA\ngamma\ndelta\n";
-
-struct CancellingFormatter {
-    cancel: CancellationToken,
-}
-
-#[async_trait]
-impl FormatterProvider for CancellingFormatter {
-    async fn status(&self, _workdir: &Path) -> Result<Vec<FormatterStatus>, FormatterError> {
-        Ok(Vec::new())
-    }
-
-    async fn format_file(&self, _workdir: &Path, _file: &Path) -> Result<bool, FormatterError> {
-        self.cancel.cancel();
-        Ok(false)
-    }
-}
 
 fn assert_write_metadata(result: &Value, target: &Path, bytes: usize, existed: bool) {
     assert_eq!(result["ok"], true);
@@ -779,7 +761,8 @@ async fn write_formatter_lsp_ordering_and_post_commit_failures() {
     let _guard = TempDirGuard::new(&dir);
     let tool = hya_tool_loader::builtins().get("write").unwrap();
 
-    // Formatter rewrites before preview and LSP touch; diagnostics surface.
+    // `hya/hashline` delegates post-edit formatting and LSP diagnostics to hooks
+    // rather than invoking `ctx.formatter` or `ctx.lsp` directly inside `write`.
     let target = dir.join("main.rs");
     let diagnostics = error_diagnostics(&target, "bad write");
     let touches = Arc::new(Mutex::new(Vec::new()));
@@ -789,7 +772,7 @@ async fn write_formatter_lsp_ordering_and_post_commit_failures() {
         FormatterPlane::new(Arc::new(RewritingFormatter)),
         LspPlane::new(Arc::new(RecordingLsp {
             touches: Arc::clone(&touches),
-            diagnostics: diagnostics.clone(),
+            diagnostics,
         })),
         CancellationToken::new(),
         None,
@@ -798,15 +781,11 @@ async fn write_formatter_lsp_ordering_and_post_commit_failures() {
         .execute(&ctx, json!({ "path": "main.rs", "content": "raw\n" }))
         .await
         .unwrap();
-    assert_eq!(tokio::fs::read(&target).await.unwrap(), b"formatted\n");
-    assert_eq!(ok["metadata"]["diagnostics"], diagnostics);
-    assert!(ok["output"].as_str().unwrap().contains("formatted"));
-    assert!(ok["output"].as_str().unwrap().contains("bad write"));
-    let calls = touches.lock().await;
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].content, "formatted\n");
+    assert_eq!(tokio::fs::read(&target).await.unwrap(), b"raw\n");
+    assert_eq!(ok["metadata"]["diagnostics"], json!({}));
+    assert!(touches.lock().await.is_empty());
 
-    // Post-commit formatter and LSP failures both report "File changed" with committed bytes.
+    // Attached failing formatter/LSP planes are not invoked directly by `write`.
     let fail_fmt = ctx_with_planes(
         vec![allow(Action::Edit, "*")],
         dir.clone(),
@@ -817,15 +796,12 @@ async fn write_formatter_lsp_ordering_and_post_commit_failures() {
         CancellationToken::new(),
         None,
     );
-    let fmt_err = tool
-        .execute(
-            &fail_fmt,
-            json!({ "path": "fmt-fail.txt", "content": "committed\n" }),
-        )
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(fmt_err.contains("File changed"));
+    tool.execute(
+        &fail_fmt,
+        json!({ "path": "fmt-fail.txt", "content": "committed\n" }),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         tokio::fs::read(dir.join("fmt-fail.txt")).await.unwrap(),
         b"committed\n"
@@ -840,15 +816,12 @@ async fn write_formatter_lsp_ordering_and_post_commit_failures() {
         CancellationToken::new(),
         None,
     );
-    let lsp_err = tool
-        .execute(
-            &fail_lsp,
-            json!({ "path": "lsp-fail.txt", "content": "committed\n" }),
-        )
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(lsp_err.contains("File changed") && lsp_err.contains("LSP"));
+    tool.execute(
+        &fail_lsp,
+        json!({ "path": "lsp-fail.txt", "content": "committed\n" }),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         tokio::fs::read(dir.join("lsp-fail.txt")).await.unwrap(),
         b"committed\n"
@@ -909,66 +882,53 @@ async fn write_cancellation_and_snapshot_recovery_lifecycle() {
         .to_string();
     assert!(stale.contains("E_STALE_ANCHOR"));
 
-    // 2) Normal Write and post-commit cancelled Write both record snapshot for stale recovery.
-    for (file, cancel_after_commit) in [("snap.txt", false), ("cancel-after.txt", true)] {
-        let sid = SessionId::new();
-        let cancel = CancellationToken::new();
-        let formatter = if cancel_after_commit {
-            FormatterPlane::new(Arc::new(CancellingFormatter {
-                cancel: cancel.clone(),
-            }))
-        } else {
-            FormatterPlane::default()
-        };
-        let wctx = ctx_with_planes(
-            vec![allow(Action::Edit, "*")],
-            dir.clone(),
-            formatter,
-            LspPlane::default(),
-            cancel,
-            Some(sid),
-        );
-        let res = write
-            .execute(&wctx, json!({ "path": file, "content": RECOVERY_SOURCE }))
-            .await;
-        if cancel_after_commit {
-            assert!(matches!(res, Err(ToolError::Cancelled)));
-        } else {
-            res.unwrap();
-        }
-        assert_eq!(
-            tokio::fs::read(dir.join(file)).await.unwrap(),
-            RECOVERY_SOURCE.as_bytes()
-        );
+    // 2) Normal Write records snapshot for stale recovery.
+    let file = "snap.txt";
+    let sid = SessionId::new();
+    let wctx = ctx_with_planes(
+        vec![allow(Action::Edit, "*")],
+        dir.clone(),
+        FormatterPlane::default(),
+        LspPlane::default(),
+        CancellationToken::new(),
+        Some(sid),
+    );
+    write
+        .execute(&wctx, json!({ "path": file, "content": RECOVERY_SOURCE }))
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::fs::read(dir.join(file)).await.unwrap(),
+        RECOVERY_SOURCE.as_bytes()
+    );
 
-        tokio::fs::write(dir.join(file), RECOVERY_EXTERNAL)
-            .await
-            .unwrap();
-        let ectx = ctx_with_planes(
-            vec![allow(Action::Edit, "*")],
-            dir.clone(),
-            FormatterPlane::default(),
-            LspPlane::default(),
-            CancellationToken::new(),
-            Some(sid),
-        );
-        let recovered = edit
-            .execute(
-                &ectx,
-                json!({
-                    "path": file,
-                    "edits": [
-                        {"op": "replace", "pos": "2#JB", "lines": ["beta"]},
-                        {"op": "replace", "pos": "10#JB", "lines": ["BETA"]}
-                    ]
-                }),
-            )
-            .await
-            .unwrap();
-        assert_eq!(recovered["metadata"]["recovered"], true);
-        assert_eq!(
-            tokio::fs::read(dir.join(file)).await.unwrap(),
-            RECOVERY_FINAL.as_bytes()
-        );
-    }
+    tokio::fs::write(dir.join(file), RECOVERY_EXTERNAL)
+        .await
+        .unwrap();
+    let ectx = ctx_with_planes(
+        vec![allow(Action::Edit, "*")],
+        dir.clone(),
+        FormatterPlane::default(),
+        LspPlane::default(),
+        CancellationToken::new(),
+        Some(sid),
+    );
+    let recovered = edit
+        .execute(
+            &ectx,
+            json!({
+                "path": file,
+                "edits": [
+                    {"op": "replace", "pos": "2#JB", "lines": ["beta"]},
+                    {"op": "replace", "pos": "10#JB", "lines": ["BETA"]}
+                ]
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(recovered["metadata"]["recovered"], true);
+    assert_eq!(
+        tokio::fs::read(dir.join(file)).await.unwrap(),
+        RECOVERY_FINAL.as_bytes()
+    );
 }

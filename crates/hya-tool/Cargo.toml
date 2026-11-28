@@ -29,6 +29,7 @@ regex = { workspace = true }
 [dev-dependencies]
 futures = { workspace = true }
 hya-tool-loader = { workspace = true }
+hya-hashline = { workspace = true }
 hya-base-tools = { workspace = true }
 hya-extended-tools = { workspace = true }
 hya-channel-tools = { workspace = true }

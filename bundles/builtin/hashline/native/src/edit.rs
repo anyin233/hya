@@ -12,7 +12,6 @@ use crate::hashline::{
     MutationBeginError, MutationText, MutationWriteError, PreparedEdit, append_bounded_notices,
     bound_output,
 };
-use crate::lsp_post_edit;
 use crate::read_media::{ReadFileKind, classify_file};
 use hya_tool::path::{absolutize, display_path, normalize, resolve_file};
 use hya_tool::{Action, Resource};
@@ -75,7 +74,7 @@ impl EditTool {
         }
         let path = resolve_file(workdir, path);
         let read = async {
-            crate::fs_tools::assert_external_directory(ctx, &path, false).await?;
+            crate::assert_external_directory(ctx, &path, false).await?;
             ctx.permission
                 .assert(Action::Read, Resource::Path(display_path(&path)))
                 .await?;
@@ -201,7 +200,7 @@ against the current file. Shell sed/grep output carries no hashes; call read fir
         };
         let requested_path = resolve_file(&workdir, request.path());
 
-        crate::fs_tools::assert_external_directory(ctx, &requested_path, false).await?;
+        crate::assert_external_directory(ctx, &requested_path, false).await?;
         ctx.permission
             .assert(Action::Edit, Resource::Path(display_path(&requested_path)))
             .await?;
@@ -274,35 +273,6 @@ against the current file. Shell sed/grep output carries no hashes; call read fir
             }
         };
 
-        if let Err(error) = ctx
-            .formatter
-            .format_file(&workdir, mutation.target_path())
-            .await
-        {
-            return Err(reconcile_committed_stage(
-                &mut mutation,
-                prepared.payload_digest,
-                ctx.cancel.is_cancelled(),
-                "formatter failure",
-                error.to_string(),
-            )
-            .await);
-        }
-        if ctx.cancel.is_cancelled() {
-            return Err(
-                reconcile_cancelled_after_commit(&mut mutation, prepared.payload_digest).await,
-            );
-        }
-        if let Err(error) = mutation.restore_after_formatter().await {
-            return Err(reconcile_committed_stage(
-                &mut mutation,
-                prepared.payload_digest,
-                ctx.cancel.is_cancelled(),
-                "BOM/line-ending restoration failure",
-                error.to_string(),
-            )
-            .await);
-        }
         if ctx.cancel.is_cancelled() {
             return Err(
                 reconcile_cancelled_after_commit(&mut mutation, prepared.payload_digest).await,
@@ -322,25 +292,6 @@ against the current file. Shell sed/grep output carries no hashes; call read fir
                 .await);
             }
         };
-        if ctx.cancel.is_cancelled() {
-            return Err(
-                reconcile_cancelled_after_commit(&mut mutation, prepared.payload_digest).await,
-            );
-        }
-        let diagnostics =
-            match lsp_post_edit::touch_and_diagnostics(ctx, mutation.target_path()).await {
-                Ok(diagnostics) => diagnostics,
-                Err(error) => {
-                    return Err(reconcile_committed_stage(
-                        &mut mutation,
-                        prepared.payload_digest,
-                        ctx.cancel.is_cancelled(),
-                        "LSP integration failure",
-                        error.to_string(),
-                    )
-                    .await);
-                }
-            };
         if ctx.cancel.is_cancelled() {
             return Err(
                 reconcile_cancelled_after_commit(&mut mutation, prepared.payload_digest).await,
@@ -366,7 +317,6 @@ against the current file. Shell sed/grep output carries no hashes; call read fir
             prepared: &prepared,
             write: &write,
             preview,
-            diagnostics,
             workdir: &workdir,
         }))
     }
@@ -437,13 +387,11 @@ struct EditSuccessContext<'borrow, 'runtime> {
     write: &'borrow crate::hashline::WriteResult,
     /// Optional bounded preview of the changed region.
     preview: Option<EditPreview>,
-    /// LSP diagnostics gathered after the mutation.
-    diagnostics: Value,
     /// Normalized working directory used for the result title.
     workdir: &'borrow Path,
 }
 
-/// Build a bounded successful Edit envelope from final post-format bytes.
+/// Build a bounded successful Edit envelope from final bytes.
 ///
 /// # Parameters
 /// - `context`: Borrowed mutation facts and owned result metadata.
@@ -458,7 +406,6 @@ fn success_result(context: EditSuccessContext<'_, '_>) -> Value {
         prepared,
         write,
         preview,
-        diagnostics,
         workdir,
     } = context;
     let mut warnings = prepared.warnings.clone();
@@ -471,7 +418,6 @@ fn success_result(context: EditSuccessContext<'_, '_>) -> Value {
     if prepared.recovered && !output.contains("Recovered stale anchors") {
         output = format!("Recovered stale anchors.\n\n{output}");
     }
-    lsp_post_edit::append_edit_diagnostics(&mut output, mutation.target_path(), &diagnostics);
     let (output, _) = append_bounded_notices(output, &warnings);
     let output = bound_output(output);
 
@@ -512,7 +458,7 @@ fn success_result(context: EditSuccessContext<'_, '_>) -> Value {
             "classification": "applied",
             "recovered": prepared.recovered,
             "warnings": warnings,
-            "diagnostics": diagnostics,
+            "diagnostics": {},
             "diff": patch,
             "filediff": {
                 "file": display_path(mutation.target_path()),

@@ -1,0 +1,26 @@
+{
+  "schema_version": 2,
+  "name": "write",
+  "description": "Write content to a file (creating parent dirs), `local://<name>`, or any registered writable custom URI handle.",
+  "permission": "tool",
+  "overrides": "hya/bare",
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "path": {
+        "type": "string"
+      },
+      "content": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path",
+      "content"
+    ]
+  },
+  "entrypoint": {
+    "native": "write"
+  }
+}

@@ -21,6 +21,7 @@ hya-engine = { workspace = true }
 hya-provider = { workspace = true }
 hya-tool = { workspace = true }
 hya-tool-loader = { workspace = true }
+hya-hashline = { workspace = true }
 hya-base-tools = { workspace = true }
 hya-workflow = { workspace = true }
 hya-store = { workspace = true }

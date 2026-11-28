@@ -1,0 +1,46 @@
+{
+  "schema_version": 2,
+  "name": "grep",
+  "description": "Search file contents with a regex or literal pattern, returning hashline-anchored matches.",
+  "permission": "read_only",
+  "prompt_hint": "search file contents with a regular expression",
+  "overrides": "hya/bare",
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "pattern": {
+        "type": "string"
+      },
+      "path": {
+        "type": "string"
+      },
+      "glob": {
+        "type": "string",
+        "maxLength": 4096
+      },
+      "ignoreCase": {
+        "type": "boolean"
+      },
+      "literal": {
+        "type": "boolean"
+      },
+      "context": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 5
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200
+      }
+    },
+    "required": [
+      "pattern"
+    ]
+  },
+  "entrypoint": {
+    "native": "grep"
+  }
+}

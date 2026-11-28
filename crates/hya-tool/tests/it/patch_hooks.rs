@@ -146,20 +146,37 @@ async fn post_edit_formatter_runs_before_lsp_across_write_edit_and_apply_patch()
             .execute(&ctx, input)
             .await
             .unwrap();
-        assert_eq!(
-            tokio::fs::read_to_string(&target).await.unwrap(),
-            "formatted\n",
-            "{tool_name}"
-        );
-        assert_eq!(out["metadata"]["diagnostics"], diagnostics, "{tool_name}");
-        assert!(
-            out["output"].as_str().unwrap().contains(diag_msg),
-            "{tool_name}"
-        );
-        let calls = touches.lock().await;
-        assert_eq!(calls.len(), 1, "{tool_name}");
-        assert_eq!(calls[0].file, target);
-        assert_eq!(calls[0].content, "formatted\n");
+        if tool_name == "apply_patch" {
+            assert_eq!(
+                tokio::fs::read_to_string(&target).await.unwrap(),
+                "formatted\n",
+                "{tool_name}"
+            );
+            assert_eq!(out["metadata"]["diagnostics"], diagnostics, "{tool_name}");
+            assert!(
+                out["output"].as_str().unwrap().contains(diag_msg),
+                "{tool_name}"
+            );
+            let calls = touches.lock().await;
+            assert_eq!(calls.len(), 1, "{tool_name}");
+            assert_eq!(calls[0].file, target);
+            assert_eq!(calls[0].content, "formatted\n");
+        } else {
+            // `hya/hashline` delegates post-edit formatting/LSP to hooks rather
+            // than calling `ctx.formatter`/`ctx.lsp` directly inside `write`/`edit`.
+            let expected = if tool_name == "write" {
+                "raw\n"
+            } else {
+                "new\n"
+            };
+            assert_eq!(
+                tokio::fs::read_to_string(&target).await.unwrap(),
+                expected,
+                "{tool_name}"
+            );
+            assert_eq!(out["metadata"]["diagnostics"], json!({}), "{tool_name}");
+            assert!(touches.lock().await.is_empty(), "{tool_name}");
+        }
     }
 }
 
@@ -216,9 +233,14 @@ async fn formatter_bom_restoration_across_write_edit_and_apply_patch() {
             .execute(&ctx, input)
             .await
             .unwrap();
+        let expected: &[u8] = if tool_name == "apply_patch" {
+            b"\xEF\xBB\xBFformatted\n"
+        } else {
+            b"\xEF\xBB\xBFnew\n"
+        };
         assert_eq!(
             tokio::fs::read(&target).await.unwrap(),
-            b"\xEF\xBB\xBFformatted\n",
+            expected,
             "{tool_name}"
         );
     }

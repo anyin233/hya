@@ -34,9 +34,9 @@ use hya_provider::{DevProvider, ProviderCatalogSnapshot, ProviderRouter, Reasoni
 use hya_store::SessionStore;
 use hya_tool::WorkflowDelivery;
 use hya_tool::{
-    Action, AskRequest, InteractionPlane, InvocationPolicy, LifecyclePlane, MailboxPlane, Mode,
-    PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, Rule, SpawnError,
-    WebSearchConfig, WebSearchPlane,
+    Action, AliasVisibility, AskRequest, InteractionPlane, InvocationPolicy, LifecyclePlane,
+    MailboxPlane, Mode, PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, Rule,
+    SpawnError, ToolPermission, ToolRegistry, WebSearchConfig, WebSearchPlane,
 };
 #[cfg(test)]
 use sha2::{Digest, Sha256};
@@ -1050,6 +1050,65 @@ fn category_model_fallbacks(categories: &CategoryRegistry) -> HashMap<ModelRef, 
     fallbacks
 }
 
+fn enabled_native_tool_families(
+    selection: &hya_bundle::BuiltinBundleSelection,
+) -> Vec<&'static str> {
+    [
+        "hya/hashline",
+        "hya/base-tools",
+        "hya/extended-tools",
+        "hya/network-tools",
+        "hya/channel-tools",
+    ]
+    .into_iter()
+    .filter(|id| {
+        selection.is_enabled(id)
+            && hya_bundle::first_party_bundle_optional(id)
+                .ok()
+                .flatten()
+                .is_some()
+    })
+    .collect()
+}
+
+/// Compose the built-in [`ToolRegistry`] for `selection` (`config.yaml` -> `bundles.builtin`).
+///
+/// Enabled native bundles load first (`hya/hashline` via ABI v2 overriding
+/// `hya/bare`'s standard `read`/`write`/`edit`/`grep`, plus any enabled
+/// transitional tool families). Any non-kernel-exclusive `hya/bare` standard
+/// primitive (`read`, `write`, `edit`, `bash`, `grep`, `skill`) not overridden
+/// by an enabled bundle is registered from `hya-core` with origin `"hya/bare"`.
+///
+/// Kernel-exclusive primitives (`todo`, `rewrite`) are never registered into
+/// [`ToolRegistry`] and remain permanently owned by the kernel loop.
+///
+/// # Errors
+/// Returns a diagnostic message if an enabled native bundle cannot be loaded
+/// or disagrees with its declared tool policy.
+pub fn compose_builtin_tool_registry(
+    selection: &hya_bundle::BuiltinBundleSelection,
+) -> Result<ToolRegistry, String> {
+    let enabled_families = enabled_native_tool_families(selection);
+    let registry = hya_tool_loader::try_from_tool_families(&enabled_families)?;
+    for tool in hya_core::kernel::tools::bare_tools() {
+        let name = tool.name();
+        if hya_core::kernel::tools::is_reserved(name) || registry.resolve(name).is_some() {
+            continue;
+        }
+        let (permission, aliases): (ToolPermission, &[(&str, AliasVisibility)]) = match name {
+            "read" | "grep" | "skill" => (ToolPermission::ReadOnly, &[]),
+            "write" | "edit" => (ToolPermission::Tool, &[]),
+            "bash" => (
+                ToolPermission::Command,
+                &[("shell", AliasVisibility::Hidden)],
+            ),
+            _ => (ToolPermission::Tool, &[]),
+        };
+        registry.register_builtin(tool, permission, aliases.iter().copied(), "hya/bare");
+    }
+    Ok(registry)
+}
+
 async fn build_session_engine_with_mcp_defer(
     store: SessionStore,
     router: ProviderRouter,
@@ -1083,23 +1142,9 @@ async fn build_session_engine_with_mcp_defer(
     let (websearch, invocation_policy, settings) = tool_config;
     let builtins = settings.builtin_bundles().clone();
     let router = Arc::new(router);
-    let enabled_families: Vec<&'static str> = [
-        "hya/base-tools",
-        "hya/extended-tools",
-        "hya/network-tools",
-        "hya/channel-tools",
-    ]
-    .into_iter()
-    .filter(|id| {
-        builtins.is_enabled(id)
-            && hya_bundle::first_party_bundle_optional(id)
-                .ok()
-                .flatten()
-                .is_some()
-    })
-    .collect();
-    let registry = hya_tool_loader::from_tool_families(&enabled_families);
-    register_missing_bare_tools(&registry);
+    let enabled_families = enabled_native_tool_families(&builtins);
+    let registry = compose_builtin_tool_registry(&builtins)
+        .map_err(|error| anyhow::anyhow!("compose built-in tool registry: {error}"))?;
     if !builtins.is_enabled("hya/network-tools") || !settings.webfetch_enabled() {
         registry.remove("webfetch");
     }

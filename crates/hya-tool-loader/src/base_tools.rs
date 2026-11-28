@@ -1,18 +1,24 @@
-//! Exposure policies for the four trusted tool-family bundles.
+//! Exposure policies for the trusted built-in native tool bundles.
 //!
-//! Each family's policy is read from its first-party bundle when the
-//! process first needs it; nothing is compiled into the binary.
+//! Each bundle's policy is read from its first-party bundle when the
+//! process first needs it (structured `tools/*.{json,yaml}` descriptors for
+//! ABI v2 bundles, or transitional `exposure.yaml` for legacy tool families);
+//! nothing is compiled into the binary.
 
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
-use hya_bundle::first_party_bundle;
+use hya_bundle::{Bundle, first_party_bundle};
 use serde::Deserialize;
 
 use hya_tool::{AliasVisibility, ToolPermission};
 
+/// Core kernel identity that native bundles such as `hya/hashline` may override.
+pub(crate) const BARE_CORE_IDENTITY: &str = "hya/bare";
+
 /// Tool-family bundles in stable registry order.
-pub(crate) const TOOL_FAMILIES: [&str; 4] = [
+pub(crate) const TOOL_FAMILIES: [&str; 5] = [
+    "hya/hashline",
     "hya/base-tools",
     "hya/extended-tools",
     "hya/network-tools",
@@ -87,6 +93,53 @@ const fn default_exposed() -> bool {
     true
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum DescriptorPermission {
+    ReadOnly,
+    Tool,
+    Command,
+    Interactive,
+}
+
+impl From<DescriptorPermission> for ToolPermission {
+    fn from(value: DescriptorPermission) -> Self {
+        match value {
+            DescriptorPermission::ReadOnly => Self::ReadOnly,
+            DescriptorPermission::Tool | DescriptorPermission::Interactive => Self::Tool,
+            DescriptorPermission::Command => Self::Command,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum DescriptorAlias {
+    Name(String),
+    Detailed {
+        name: String,
+        #[serde(default)]
+        visibility: Option<AliasVisibility>,
+    },
+}
+
+#[derive(Deserialize)]
+struct StructuredToolDescriptor {
+    #[serde(default)]
+    schema_version: Option<u32>,
+    name: String,
+    #[serde(default)]
+    permission: Option<DescriptorPermission>,
+    #[serde(default)]
+    aliases: Vec<DescriptorAlias>,
+    #[serde(default)]
+    prompt_hint: Option<String>,
+    #[serde(default)]
+    protected: bool,
+    #[serde(default)]
+    overrides: Option<String>,
+}
+
 fn load_preset(identity: &str) -> Result<BaseToolsPreset, String> {
     let catalog = first_party_bundle(identity).map_err(|error| error.to_string())?;
     let [bundle] = catalog.bundles() else {
@@ -95,19 +148,106 @@ fn load_preset(identity: &str) -> Result<BaseToolsPreset, String> {
     if !bundle.agents().is_empty() || bundle.workflow().is_some() {
         return Err("tool family must be an agentless Bundle".to_string());
     }
-    let asset = bundle
+    if let Some(asset) = bundle
         .extensions()
         .iter()
         .find(|asset| asset.local_id == "exposure")
-        .ok_or("tool family has no exposure policy")?;
-    let policy: ExposurePolicy =
-        serde_norway::from_str(&asset.content).map_err(|error| error.to_string())?;
+    {
+        let policy: ExposurePolicy =
+            serde_norway::from_str(&asset.content).map_err(|error| error.to_string())?;
+        validate_policy(&policy, identity)?;
+        return Ok(BaseToolsPreset {
+            schema_version: policy.schema_version,
+            identity: policy.identity,
+            bundle_digest: bundle.digest().to_string(),
+            prepared_catalog_bytes: catalog.bytes(),
+            protected_names: policy.protected_names,
+            tools: policy.tools,
+            file_operations_rule: policy.file_operations_rule,
+        });
+    }
+    load_v2_tool_preset(bundle, catalog.bytes(), identity)
+}
+
+fn load_v2_tool_preset(
+    bundle: &Bundle,
+    prepared_catalog_bytes: &'static [u8],
+    identity: &str,
+) -> Result<BaseToolsPreset, String> {
+    if bundle.tools().is_empty() {
+        return Err("native tool bundle has no exposure policy or declared tools".to_string());
+    }
+    let mut protected_names = Vec::new();
+    let mut tools = Vec::with_capacity(bundle.tools().len());
+    for resource in bundle.tools() {
+        let descriptor: StructuredToolDescriptor = if resource.source_path.ends_with(".json") {
+            serde_json::from_str(&resource.content).map_err(|error| {
+                format!(
+                    "parse JSON tool descriptor `{}`: {error}",
+                    resource.source_path
+                )
+            })?
+        } else {
+            serde_norway::from_str(&resource.content).map_err(|error| {
+                format!(
+                    "parse YAML tool descriptor `{}`: {error}",
+                    resource.source_path
+                )
+            })?
+        };
+        if descriptor.name != resource.local_id {
+            return Err(format!(
+                "tool descriptor `{}` declares `{}` but resource id is `{}`",
+                resource.source_path, descriptor.name, resource.local_id
+            ));
+        }
+        if descriptor.protected {
+            protected_names.push(descriptor.name.clone());
+        }
+        let aliases = descriptor
+            .aliases
+            .into_iter()
+            .map(|alias| match alias {
+                DescriptorAlias::Name(name) => BaseToolAlias {
+                    name,
+                    visibility: AliasVisibility::Hidden,
+                },
+                DescriptorAlias::Detailed { name, visibility } => BaseToolAlias {
+                    name,
+                    visibility: visibility.unwrap_or(AliasVisibility::Hidden),
+                },
+            })
+            .collect();
+        let overrides = descriptor
+            .overrides
+            .or_else(|| resource.overrides.clone())
+            .or_else(|| bundle.overrides().map(str::to_owned));
+        tools.push(BaseToolExposure {
+            name: descriptor.name,
+            schema_version: descriptor.schema_version.unwrap_or(1),
+            permission: descriptor
+                .permission
+                .map(ToolPermission::from)
+                .unwrap_or(ToolPermission::Tool),
+            exposed: true,
+            aliases,
+            overrides,
+            prompt: descriptor.prompt_hint,
+        });
+    }
+    let policy = ExposurePolicy {
+        schema_version: 2,
+        identity: identity.to_string(),
+        protected_names,
+        tools,
+        file_operations_rule: None,
+    };
     validate_policy(&policy, identity)?;
     Ok(BaseToolsPreset {
         schema_version: policy.schema_version,
         identity: policy.identity,
         bundle_digest: bundle.digest().to_string(),
-        prepared_catalog_bytes: catalog.bytes(),
+        prepared_catalog_bytes,
         protected_names: policy.protected_names,
         tools: policy.tools,
         file_operations_rule: policy.file_operations_rule,
@@ -115,9 +255,9 @@ fn load_preset(identity: &str) -> Result<BaseToolsPreset, String> {
 }
 
 fn validate_policy(policy: &ExposurePolicy, identity: &str) -> Result<(), String> {
-    if policy.schema_version != 1 || policy.identity != identity {
+    if (policy.schema_version != 1 && policy.schema_version != 2) || policy.identity != identity {
         return Err(format!(
-            "exposure policy must be schema 1 for `{identity}`, found `{}` v{}",
+            "exposure policy must be schema 1 or 2 for `{identity}`, found `{}` v{}",
             policy.identity, policy.schema_version
         ));
     }
@@ -131,24 +271,28 @@ fn validate_policy(policy: &ExposurePolicy, identity: &str) -> Result<(), String
     }
     let mut exports = names.clone();
     for tool in &policy.tools {
+        if hya_tool::is_reserved_kernel_tool(&tool.name) {
+            return Err(format!(
+                "tool `{}` is permanently kernel-exclusive and cannot be declared by `{identity}`",
+                tool.name
+            ));
+        }
         if tool.schema_version == 0 {
             return Err(format!("zero schema version for {}", tool.name));
         }
-        if let Some(alias) = tool
-            .aliases
-            .iter()
-            .find(|alias| !exports.insert(alias.name.as_str()))
-        {
-            return Err(format!("duplicate alias {}", alias.name));
+        if let Some(alias) = tool.aliases.iter().find(|alias| {
+            hya_tool::is_reserved_kernel_tool(&alias.name) || !exports.insert(alias.name.as_str())
+        }) {
+            return Err(format!("duplicate or reserved alias {}", alias.name));
         }
     }
     if let Some(tool) = policy.tools.iter().find(|tool| {
-        tool.overrides
-            .as_deref()
-            .is_some_and(|target| target == identity || !TOOL_FAMILIES.contains(&target))
+        tool.overrides.as_deref().is_some_and(|target| {
+            target == identity || (target != BARE_CORE_IDENTITY && !TOOL_FAMILIES.contains(&target))
+        })
     }) {
         return Err(format!(
-            "`{}` overrides `{}`, which is not another tool family",
+            "`{}` overrides `{}`, which is not `hya/bare` or another tool family",
             tool.name,
             tool.overrides.as_deref().unwrap_or_default()
         ));
@@ -404,7 +548,10 @@ pub fn file_operations_rule(offered: impl Fn(&str) -> bool) -> Option<&'static s
 /// Return the foundational `hya/base-tools` policy for compatibility.
 #[must_use]
 pub fn base_tools_preset() -> &'static BaseToolsPreset {
-    &tool_bundle_presets()[0]
+    tool_bundle_presets()
+        .iter()
+        .find(|preset| preset.identity() == "hya/base-tools")
+        .unwrap_or_else(|| &tool_bundle_presets()[0])
 }
 
 #[cfg(test)]
@@ -517,24 +664,16 @@ tools:
     #[test]
     fn embedded_tool_family_presets_match_runtime_bundles_and_registry_authority() {
         let presets = tool_bundle_presets();
-        let expected_families: [(&str, &[&str]); 4] = [
+        let expected_families: [(&str, u32, &[&str]); 5] = [
+            ("hya/hashline", 2, &["read", "write", "edit", "grep"]),
             (
                 "hya/base-tools",
-                &[
-                    "read",
-                    "write",
-                    "edit",
-                    "ls",
-                    "glob",
-                    "find",
-                    "grep",
-                    "ask_user",
-                    "bash",
-                    "apply_patch",
-                ],
+                1,
+                &["ls", "glob", "find", "ask_user", "bash", "apply_patch"],
             ),
             (
                 "hya/extended-tools",
+                1,
                 &[
                     "lsp",
                     "list_agents",
@@ -547,18 +686,21 @@ tools:
                     "wait",
                 ],
             ),
-            ("hya/network-tools", &["webfetch", "websearch"]),
+            ("hya/network-tools", 1, &["webfetch", "websearch"]),
             (
                 "hya/channel-tools",
+                1,
                 &["send", "list_channel", "report", "wait"],
             ),
         ];
         assert_eq!(presets.len(), expected_families.len());
         assert_eq!(base_tools_preset().identity(), "hya/base-tools");
 
-        for (preset, (identity, expected_names)) in presets.iter().zip(expected_families) {
+        for (preset, (identity, expected_schema_version, expected_names)) in
+            presets.iter().zip(expected_families)
+        {
             assert_eq!(preset.identity(), identity);
-            assert_eq!(preset.schema_version(), 1);
+            assert_eq!(preset.schema_version(), expected_schema_version);
             assert_eq!(preset.bundle_digest().len(), 64);
             assert!(!preset.prepared_catalog_bytes().is_empty());
 
@@ -575,6 +717,15 @@ tools:
                 expected_names.iter().copied().collect(),
                 "{identity}"
             );
+        }
+
+        let hashline = presets
+            .iter()
+            .find(|preset| preset.identity() == "hya/hashline")
+            .unwrap();
+        assert!(hashline.is_protected("read"));
+        for tool in hashline.tools() {
+            assert_eq!(tool.overrides(), Some("hya/bare"), "{}", tool.name());
         }
 
         let frozen: &[(&str, ToolPermission, &[&str])] = &[
@@ -641,7 +792,11 @@ tools:
         assert_eq!(advertised, expected_exposed);
 
         for tool in presets.iter().flat_map(|p| p.tools()) {
-            assert_eq!(tool.schema_version(), 1);
+            assert!(
+                tool.schema_version() == 1 || tool.schema_version() == 2,
+                "{}",
+                tool.name()
+            );
             let resolved = registry.resolve(tool.name()).unwrap();
             assert_eq!(resolved.permission, tool.permission(), "{}", tool.name());
             for alias in tool.aliases() {

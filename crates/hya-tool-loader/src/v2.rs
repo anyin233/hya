@@ -15,12 +15,21 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use hya_bundle::{FirstPartySource, first_party_bundle, first_party_source, load_first_party};
+use hya_bundle::{
+    Bundle, FirstPartySource, PreparedAgent, first_party_bundle, first_party_source,
+    load_first_party,
+};
 use hya_context::rewrite::Rewriter;
-use hya_proto::{Envelope, ModelRef, SessionId};
+use hya_proto::{
+    ActorClaim, AgentName, Envelope, Event, EventSeq, Message, ModelRef, Projection, SessionId,
+};
 use hya_runtime_abi::{
-    AbiDigestFn, AbiError, DriverRunOutcome, GoalDriver, GoalRunRequest, HookPoint, HostError,
-    HostRuntime, LoopDriver, LoopRunRequest, NativeAgentSpawnInput, NativeApiEndpoint,
+    AbiDigestFn, AbiError, BundleApiInvocation, BundleApiResult, BundleCatalogSummary,
+    BundleClaimLease, BundleClaimRequest, BundleStateEntry, DriverRunOutcome, ExtensionEntry,
+    ExtensionKind, GoalDriver, GoalRunRequest, HookPoint, HostBundleStorage, HostCatalogReader,
+    HostError, HostEventBus, HostExtensionRegistry, HostModelCaller, HostRuntime, HostSessionStore,
+    HostTurnRunner, LoopDriver, LoopRunRequest, ModelCallRequest, ModelCallResponse,
+    ModelStreamChunk, ModelWindowInfo, NativeAgentSpawnInput, NativeApiEndpoint,
     NativeBundleApiHandler, NativeBundleApiReply, NativeBundleApiRequest, NativeChatParamsInput,
     NativeCommandBeforeInput, NativeCompactionAfterInput, NativeCompactionBeforeInput,
     NativeCompactionDecision, NativeGoalEvaluateVerdict, NativeHook, NativeLoopPlanInput,
@@ -29,13 +38,14 @@ use hya_runtime_abi::{
     NativeSessionLifecycleInput, NativeTextCompleteInput, NativeToolAfterInput,
     NativeToolAfterOutcome, NativeToolBeforeInput, NativeToolBeforeOutcome, NativeVerifierVerdict,
     RegisterV2Fn, SYMBOL_ABI_V2, SYMBOL_REGISTER_V2, SYMBOL_SHARE_DEADLINE_V2,
-    SYMBOL_WITH_RUNTIME_V2, ServiceHealth, ShareDeadlineFn, ToolVisibilityInput,
-    ToolVisibilityOutcome, UriContent, UriResolveCtx, UriSchemaHandler, abi_digest_v2,
-    deadline_cell_v2,
+    SYMBOL_WITH_RUNTIME_V2, ServiceHealth, SessionListFilter, SessionSummaryMeta, ShareDeadlineFn,
+    ToolVisibilityInput, ToolVisibilityOutcome, TurnOutcome, TurnSpawnRequest, TurnStartRequest,
+    TurnStatus, UriContent, UriResolveCtx, UriSchemaHandler, abi_digest_v2, deadline_cell_v2,
 };
-use hya_tool::{Action, Decision, Resource, Tool};
+use hya_tool::{Action, AgentDef, Decision, Resource, SkillCatalogEntry, Tool};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::native_bundle::{
@@ -1038,4 +1048,340 @@ fn invoke_register_v2(
         });
     }
     Ok(wrap_registrations_with_runtime(regs, checked.with_runtime))
+}
+
+/// Minimal [`HostRuntime`] whose capability planes return [`HostError::Unavailable`].
+///
+/// Used when loading pure-tool ABI v2 bundles (such as `hya/hashline`) in contexts
+/// that assemble only a [`hya_tool::ToolRegistry`] without a full host engine.
+#[must_use]
+pub fn noop_host_runtime() -> Arc<dyn HostRuntime> {
+    static NOOP: OnceLock<Arc<dyn HostRuntime>> = OnceLock::new();
+    Arc::clone(NOOP.get_or_init(|| Arc::new(NoopHostRuntime)))
+}
+
+struct NoopHostRuntime;
+
+fn noop_unavailable() -> HostError {
+    HostError::Unavailable("host runtime is not wired for standalone tool-registry loading".into())
+}
+
+#[async_trait]
+impl HostSessionStore for NoopHostRuntime {
+    async fn session_exists(&self, _session: SessionId) -> Result<bool, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn read_events(
+        &self,
+        _session: SessionId,
+        _after_seq: Option<EventSeq>,
+        _limit: Option<usize>,
+    ) -> Result<Vec<Envelope>, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn append_events(
+        &self,
+        _session: SessionId,
+        _claim: Option<ActorClaim>,
+        _events: Vec<Event>,
+    ) -> Result<Vec<Envelope>, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn append_extension_event(
+        &self,
+        _session: SessionId,
+        _bundle: &str,
+        _kind: &str,
+        _payload: Value,
+        _claim: Option<ActorClaim>,
+    ) -> Result<Envelope, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn read_projection(&self, _session: SessionId) -> Result<Arc<Projection>, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn read_extension_state(
+        &self,
+        _session: SessionId,
+        _bundle: &str,
+    ) -> Result<Option<Value>, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn session_metadata(
+        &self,
+        _session: SessionId,
+    ) -> Result<Option<SessionSummaryMeta>, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn list_sessions(
+        &self,
+        _filter: SessionListFilter,
+    ) -> Result<Vec<SessionSummaryMeta>, HostError> {
+        Err(noop_unavailable())
+    }
+}
+
+#[async_trait]
+impl HostBundleStorage for NoopHostRuntime {
+    async fn get_state(
+        &self,
+        _bundle: &str,
+        _scope: &str,
+        _key: &str,
+    ) -> Result<Option<BundleStateEntry>, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn put_state(
+        &self,
+        _bundle: &str,
+        _scope: &str,
+        _key: &str,
+        _value: Value,
+        _expected_version: Option<u64>,
+    ) -> Result<BundleStateEntry, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn delete_state(
+        &self,
+        _bundle: &str,
+        _scope: &str,
+        _key: &str,
+    ) -> Result<bool, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn list_state(
+        &self,
+        _bundle: &str,
+        _scope: &str,
+        _prefix: Option<&str>,
+    ) -> Result<Vec<BundleStateEntry>, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn acquire_claim(
+        &self,
+        _request: BundleClaimRequest,
+    ) -> Result<BundleClaimLease, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn renew_claim(
+        &self,
+        _lease: &BundleClaimLease,
+        _ttl_millis: u64,
+    ) -> Result<BundleClaimLease, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn release_claim(&self, _lease: &BundleClaimLease) -> Result<(), HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn read_claim(
+        &self,
+        _bundle: &str,
+        _resource_key: &str,
+    ) -> Result<Option<BundleClaimLease>, HostError> {
+        Err(noop_unavailable())
+    }
+}
+
+#[async_trait]
+impl HostTurnRunner for NoopHostRuntime {
+    async fn spawn_session(&self, _request: TurnSpawnRequest) -> Result<SessionId, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn run_turn(
+        &self,
+        _request: TurnStartRequest,
+        _cancel: CancellationToken,
+    ) -> Result<TurnOutcome, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn spawn_session_and_run(
+        &self,
+        _request: TurnSpawnRequest,
+        _cancel: CancellationToken,
+    ) -> Result<TurnOutcome, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn steer_turn(&self, _session: SessionId, _message: String) -> Result<(), HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn cancel_turn(
+        &self,
+        _session: SessionId,
+        _reason: Option<String>,
+    ) -> Result<bool, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn turn_status(&self, _session: SessionId) -> Result<TurnStatus, HostError> {
+        Err(noop_unavailable())
+    }
+}
+
+#[async_trait]
+impl HostModelCaller for NoopHostRuntime {
+    async fn complete(
+        &self,
+        _request: ModelCallRequest,
+        _cancel: CancellationToken,
+    ) -> Result<ModelCallResponse, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn stream(
+        &self,
+        _request: ModelCallRequest,
+        _cancel: CancellationToken,
+    ) -> Result<mpsc::Receiver<Result<ModelStreamChunk, HostError>>, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn compact_window(
+        &self,
+        _model: &ModelRef,
+        _messages: &[Message],
+    ) -> Result<Option<String>, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn model_window(&self, _model: &ModelRef) -> Result<Option<ModelWindowInfo>, HostError> {
+        Err(noop_unavailable())
+    }
+}
+
+#[async_trait]
+impl HostEventBus for NoopHostRuntime {
+    fn publish(&self, _envelope: Envelope) -> Result<(), HostError> {
+        Err(noop_unavailable())
+    }
+
+    fn subscribe(&self) -> Result<broadcast::Receiver<Envelope>, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn publish_extension(
+        &self,
+        _session: SessionId,
+        _bundle: &str,
+        _kind: &str,
+        _payload: Value,
+    ) -> Result<(), HostError> {
+        Err(noop_unavailable())
+    }
+}
+
+#[async_trait]
+impl HostCatalogReader for NoopHostRuntime {
+    async fn list_agents(&self, _session: Option<SessionId>) -> Result<Vec<AgentDef>, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn get_agent(
+        &self,
+        _name: &AgentName,
+        _session: Option<SessionId>,
+    ) -> Result<Option<PreparedAgent>, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn list_skills(
+        &self,
+        _session: Option<SessionId>,
+    ) -> Result<Vec<SkillCatalogEntry>, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn list_bundles(&self) -> Result<Vec<BundleCatalogSummary>, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn get_bundle(&self, _id: &str) -> Result<Option<Bundle>, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn bundle_config(&self, _bundle_id: &str) -> Result<Value, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn global_config(&self) -> Result<Value, HostError> {
+        Err(noop_unavailable())
+    }
+}
+
+#[async_trait]
+impl HostExtensionRegistry for NoopHostRuntime {
+    async fn list_extensions(
+        &self,
+        _kind: Option<ExtensionKind>,
+    ) -> Result<Vec<ExtensionEntry>, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn has_bundle(&self, _bundle_id: &str) -> Result<bool, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn invoke_bundle_api(
+        &self,
+        _call: BundleApiInvocation,
+    ) -> Result<BundleApiResult, HostError> {
+        Err(noop_unavailable())
+    }
+
+    async fn invoke_tool(
+        &self,
+        _session: Option<SessionId>,
+        _tool_name: &str,
+        _input: Value,
+        _cancel: CancellationToken,
+    ) -> Result<Value, HostError> {
+        Err(noop_unavailable())
+    }
+}
+
+impl HostRuntime for NoopHostRuntime {
+    fn session_store(&self) -> &dyn HostSessionStore {
+        self
+    }
+
+    fn bundle_storage(&self) -> &dyn HostBundleStorage {
+        self
+    }
+
+    fn turn_runner(&self) -> &dyn HostTurnRunner {
+        self
+    }
+
+    fn model_caller(&self) -> &dyn HostModelCaller {
+        self
+    }
+
+    fn event_bus(&self) -> &dyn HostEventBus {
+        self
+    }
+
+    fn catalog_reader(&self) -> &dyn HostCatalogReader {
+        self
+    }
+
+    fn extension_registry(&self) -> &dyn HostExtensionRegistry {
+        self
+    }
 }

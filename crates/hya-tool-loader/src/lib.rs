@@ -14,30 +14,53 @@ pub use hya_runtime_abi::{
 };
 pub use hya_tool::{AliasVisibility, native_bundle::Registrations};
 pub use native_bundle::{load, loaded_library_sources};
-pub use v2::{LoadedNativeBundles, NativeBundleLoader, load_v2, load_v2_from_path};
+pub use v2::{
+    LoadedNativeBundles, NativeBundleLoader, load_v2, load_v2_from_path, noop_host_runtime,
+};
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
+use hya_bundle::first_party_bundle;
 use hya_tool::{Tool, ToolRegistry};
 
 use base_tools::TOOL_FAMILIES;
 
 /// Install the full set of canonical builtins (and their hidden aliases)
-/// from all four trusted tool families.
+/// from all trusted native tool bundles (ABI v2 and transitional ABI v1).
 #[must_use]
 pub fn builtins() -> ToolRegistry {
     from_tool_families(&TOOL_FAMILIES)
 }
 
-/// Non-panicking selective loader for a subset of the trusted v1 tool families.
+/// Non-panicking selective loader for a subset of the trusted native tool
+/// bundles, dispatching ABI v2 bundles (such as `hya/hashline`) through
+/// [`load_v2`] and transitional ABI v1 tool families through [`load`].
 ///
 /// # Errors
 ///
-/// Returns a diagnostic string when `identities` contains an unknown family,
-/// when a family's native library cannot be loaded, or when its exported tools
+/// Returns a diagnostic string when `identities` contains an unknown bundle,
+/// when a bundle's native library cannot be loaded, or when its exported tools
 /// disagree with its bundle policy.
 pub fn try_from_tool_families(identities: &[&str]) -> Result<ToolRegistry, String> {
+    if identities.is_empty() {
+        return Ok(ToolRegistry::default());
+    }
+    try_from_tool_families_with_runtime(identities, noop_host_runtime())
+}
+
+/// Non-panicking selective loader for trusted native tool bundles using an
+/// explicit [`HostRuntime`] for ABI v2 registrations.
+///
+/// # Errors
+///
+/// Returns a diagnostic string when `identities` contains an unknown bundle,
+/// when a bundle's native library cannot be loaded, or when its exported tools
+/// disagree with its bundle policy.
+pub fn try_from_tool_families_with_runtime(
+    identities: &[&str],
+    runtime: Arc<dyn HostRuntime>,
+) -> Result<ToolRegistry, String> {
     if identities.is_empty() {
         return Ok(ToolRegistry::default());
     }
@@ -53,9 +76,20 @@ pub fn try_from_tool_families(identities: &[&str]) -> Result<ToolRegistry, Strin
         if !identities.contains(&identity) {
             continue;
         }
-        let tools = load(identity)
-            .map_err(|error| format!("load {identity}: {error}"))?
-            .tools;
+        let is_v2 = first_party_bundle(identity)
+            .ok()
+            .and_then(|catalog| catalog.bundles().first())
+            .and_then(|bundle| bundle.runtime())
+            .is_some_and(|rt| rt.abi_version == Some(2));
+        let tools = if is_v2 {
+            load_v2(identity, Arc::clone(&runtime))
+                .map_err(|error| format!("load {identity}: {error}"))?
+                .tools
+        } else {
+            load(identity)
+                .map_err(|error| format!("load {identity}: {error}"))?
+                .tools
+        };
         let names = tools
             .iter()
             .map(|tool| tool.name().to_string())

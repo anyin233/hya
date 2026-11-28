@@ -546,7 +546,7 @@ async fn capture_request(
 
 #[tokio::test]
 async fn tool_filtering_base_tools_gpt_patch_websearch_human_and_variants() {
-    // 1. Base tools replace kernel tools except kernel-owned `rewrite` and `todo`.
+    // 1. Native bundles replace kernel tools except kernel-owned `rewrite` and `todo`.
     let registry = hya_tool_loader::builtins();
     for tool in hya_engine::kernel::tools::builtin() {
         let name = tool.name();
@@ -558,9 +558,13 @@ async fn tool_filtering_base_tools_gpt_patch_websearch_human_and_variants() {
         {
             assert!(registry.get(name).is_none(), "{name}");
         } else {
+            let expected = match name {
+                "read" | "write" | "edit" | "grep" => "hya/hashline",
+                _ => "hya/base-tools",
+            };
             assert_eq!(
                 registry.builtin_bundle_origin(name),
-                Some("hya/base-tools"),
+                Some(expected),
                 "{name}"
             );
         }

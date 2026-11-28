@@ -6,13 +6,12 @@ use crate::hashline::{
     HashlineMutation, HashlineRuntime, MAX_READ_BYTES, MutationBeginError, MutationText,
     MutationWriteError, append_bounded_notices, bound_output,
 };
-use crate::lsp_post_edit;
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
-use hya_tool::handle::{HandleError, HandleRef};
+use hya_tool::handle::{HandleError, HandleRef, SchemeRegistry, WriteHandleOutcome};
 use hya_tool::path::{absolutize, display_path, normalize, resolve_file};
 use hya_tool::{Action, Resource};
-use hya_tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
+use hya_tool::{Tool, ToolCtx, ToolError, ToolResultPolicy, cap_tool_output_with_policy};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -56,8 +55,8 @@ impl Tool for WriteTool {
             concat!(
                 "Write content to a file (creating parent dirs).\n\n",
                 "`path` also accepts `local://<name>` to stash an agent scratch payload ",
-                "outside the transcript; pass that handle around and `read` it back when ",
-                "the body is actually needed. `artifact://` and `skill://` are read-only. ",
+                "outside the transcript, or any registered writable custom URI scheme. ",
+                "`artifact://` and `skill://` are read-only. ",
                 "An ordinary filesystem path is written exactly as it always was."
             ),
             json!({
@@ -76,11 +75,61 @@ impl Tool for WriteTool {
         check_cancel(ctx)?;
         let input: WriteInput =
             serde_json::from_value(input).map_err(|error| ToolError::Input(error.to_string()))?;
+
+        // Delegate non-internal URI schemes generically through `HandleRouter`.
+        if let Some((scheme, _)) = input.path.split_once("://")
+            && !SchemeRegistry::is_internal_scheme(scheme)
+        {
+            let router = ctx.handles();
+            let Some(handler) = router.uri_handler(scheme) else {
+                return Err(crate::map_handle_error(HandleError::UnknownScheme(
+                    scheme.to_string(),
+                )));
+            };
+            if !handler.writable() {
+                return Err(crate::map_handle_error(HandleError::SchemeNotWritable(
+                    scheme.to_string(),
+                )));
+            }
+            ctx.permission
+                .assert(Action::Edit, Resource::Path(input.path.clone()))
+                .await?;
+            check_cancel(ctx)?;
+            let (content, _stripped) = strip_hashline_display_prefixes(&input.content);
+            return match router.write_uri(ctx.session, &input.path, &content).await {
+                Ok(WriteHandleOutcome::Handled(reply)) => {
+                    let output = reply
+                        .get("output")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| {
+                            format!("Wrote {} bytes to {}.", content.len(), input.path)
+                        });
+                    Ok(cap_tool_output_with_policy(
+                        json!({
+                            "ok": true,
+                            "bytes": content.len(),
+                            "title": input.path,
+                            "output": output,
+                            "metadata": {
+                                "path": input.path,
+                                "bytes": content.len(),
+                                "diagnostics": {},
+                            },
+                        }),
+                        ToolResultPolicy::Coding,
+                    ))
+                }
+                Ok(WriteHandleOutcome::LocalPath(_)) => unreachable!("checked non-internal scheme"),
+                Err(error) => Err(crate::map_handle_error(error)),
+            };
+        }
+
         let workdir = normalize(&absolutize(&ctx.workdir));
         let requested_path = resolve_write_target(ctx, &workdir, &input.path)?;
 
         // Judge the Project-root boundary (symlinks resolved) before any I/O.
-        crate::fs_tools::assert_external_directory(ctx, &requested_path, false).await?;
+        crate::assert_external_directory(ctx, &requested_path, false).await?;
         ctx.permission
             .assert(Action::Edit, Resource::Path(display_path(&requested_path)))
             .await?;
@@ -117,32 +166,6 @@ impl Tool for WriteTool {
         if ctx.cancel.is_cancelled() {
             return Err(reconcile_cancelled_after_commit(&mut mutation).await);
         }
-        if let Err(error) = ctx
-            .formatter
-            .format_file(&workdir, mutation.target_path())
-            .await
-        {
-            return Err(reconcile_after_commit(
-                &mut mutation,
-                "formatter failure",
-                error.to_string(),
-            )
-            .await);
-        }
-        if ctx.cancel.is_cancelled() {
-            return Err(reconcile_cancelled_after_commit(&mut mutation).await);
-        }
-        if let Err(error) = mutation.restore_after_formatter().await {
-            return Err(reconcile_after_commit(
-                &mut mutation,
-                "BOM/line-ending restoration failure",
-                error.to_string(),
-            )
-            .await);
-        }
-        if ctx.cancel.is_cancelled() {
-            return Err(reconcile_cancelled_after_commit(&mut mutation).await);
-        }
 
         let final_text = match mutation.reload().await {
             Ok(final_text) => final_text,
@@ -175,22 +198,6 @@ impl Tool for WriteTool {
             return Err(reconcile_cancelled_after_commit(&mut mutation).await);
         }
 
-        let diagnostics =
-            match lsp_post_edit::touch_and_diagnostics(ctx, mutation.target_path()).await {
-                Ok(diagnostics) => diagnostics,
-                Err(error) => {
-                    return Err(reconcile_after_commit(
-                        &mut mutation,
-                        "LSP integration failure",
-                        error.to_string(),
-                    )
-                    .await);
-                }
-            };
-        if ctx.cancel.is_cancelled() {
-            return Err(reconcile_cancelled_after_commit(&mut mutation).await);
-        }
-
         mutation.record_write(&final_text);
         Ok(success_result(WriteSuccessContext {
             write: &write,
@@ -200,7 +207,6 @@ impl Tool for WriteTool {
             executable,
             chmod_warning,
             stripped,
-            diagnostics,
             workdir: &workdir,
         }))
     }
@@ -265,13 +271,11 @@ struct WriteSuccessContext<'a> {
     chmod_warning: Option<String>,
     /// Whether copied hashline display prefixes were stripped.
     stripped: bool,
-    /// LSP diagnostics gathered after the write.
-    diagnostics: Value,
     /// Normalized working directory used for the result title.
     workdir: &'a Path,
 }
 
-/// Build a successful bounded Write envelope from final post-formatter facts.
+/// Build a successful bounded Write envelope from final facts.
 ///
 /// # Parameters
 /// - `context`: Borrowed write facts and owned result metadata.
@@ -287,7 +291,6 @@ fn success_result(context: WriteSuccessContext<'_>) -> Value {
         executable,
         chmod_warning,
         stripped,
-        diagnostics,
         workdir,
     } = context;
     let mut warnings = loaded.warnings.clone();
@@ -308,13 +311,12 @@ fn success_result(context: WriteSuccessContext<'_>) -> Value {
     let mut output = "Wrote file successfully.".to_string();
     // The call already carries the content; repeating it doubles its cost in
     // every later model call. Show the file only when it ended up different
-    // (formatter, stripped display prefixes, line-ending restoration).
+    // (stripped display prefixes, line-ending restoration).
     if final_text.text != submitted {
         output.push_str("\n\nThe file on disk differs from the content you sent:\n<content>\n");
         output.push_str(&display_text);
         output.push_str("\n</content>");
     }
-    lsp_post_edit::append_write_diagnostics(&mut output, &write.path, &diagnostics);
     let (output, _) = append_bounded_notices(output, &warnings);
     let output = bound_output(output);
     let path = display_path(&write.path);
@@ -332,7 +334,7 @@ fn success_result(context: WriteSuccessContext<'_>) -> Value {
             "hardLink": final_text.hard_link,
             "executable": executable,
             "warnings": warnings,
-            "diagnostics": diagnostics,
+            "diagnostics": {},
             "preview": preview,
             "truncated": truncated,
             "display": {

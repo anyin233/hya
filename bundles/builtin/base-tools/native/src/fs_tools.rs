@@ -8,7 +8,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use crate::grep;
 use hya_tool::path::{display_path, resolve_file};
 use hya_tool::tool::obj_schema;
 use hya_tool::{Action, ProjectScope, Resource, Tool, ToolCtx, ToolError, glob_match};
@@ -187,8 +186,8 @@ impl Tool for GlobTool {
                     .file_name()
                     .map(|name| name.to_string_lossy())
                     .unwrap_or_default();
-                if grep::wildcard_match(&input.pattern, &relative)
-                    || grep::wildcard_match(&input.pattern, &name)
+                if wildcard_match(&input.pattern, &relative)
+                    || wildcard_match(&input.pattern, &name)
                 {
                     total = total.saturating_add(1);
                     bounded.insert(path);
@@ -400,6 +399,121 @@ impl Tool for FindTool {
         }
         Ok(result)
     }
+}
+
+/// Match a slash-aware glob using `*`, `?`, bracket classes, and `**`.
+fn wildcard_match(pattern: &str, value: &str) -> bool {
+    let pattern = pattern.as_bytes();
+    let value = value.as_bytes();
+    let mut states = vec![false; value.len().saturating_add(1)];
+    let mut next = vec![false; value.len().saturating_add(1)];
+    states[0] = true;
+    let mut pattern_index = 0usize;
+
+    while pattern_index < pattern.len() {
+        next.fill(false);
+        if pattern.get(pattern_index..pattern_index.saturating_add(3)) == Some(b"**/") {
+            let mut reachable = false;
+            for value_index in 0..=value.len() {
+                reachable |= states[value_index];
+                next[value_index] |= states[value_index];
+                if reachable && value.get(value_index) == Some(&b'/') {
+                    next[value_index + 1] = true;
+                }
+            }
+            pattern_index = pattern_index.saturating_add(3);
+        } else if pattern.get(pattern_index..pattern_index.saturating_add(2)) == Some(b"**") {
+            let mut reachable = false;
+            for value_index in 0..=value.len() {
+                reachable |= states[value_index];
+                next[value_index] = reachable;
+            }
+            pattern_index = pattern_index.saturating_add(2);
+        } else if pattern[pattern_index] == b'*' {
+            let mut reachable = false;
+            for value_index in 0..=value.len() {
+                reachable |= states[value_index];
+                next[value_index] = reachable;
+                if value.get(value_index) == Some(&b'/') {
+                    reachable = false;
+                }
+            }
+            pattern_index = pattern_index.saturating_add(1);
+        } else if let Some(literal) = escaped_literal(pattern, pattern_index) {
+            for value_index in 0..value.len() {
+                if states[value_index] && value[value_index] == literal {
+                    next[value_index + 1] = true;
+                }
+            }
+            pattern_index = pattern_index.saturating_add(2);
+        } else if pattern[pattern_index] == b'?' {
+            for value_index in 0..value.len() {
+                if states[value_index] && value[value_index] != b'/' {
+                    next[value_index + 1] = true;
+                }
+            }
+            pattern_index = pattern_index.saturating_add(1);
+        } else if let Some((_, next_pattern_index)) =
+            bracket_class_matches(pattern, pattern_index, 0)
+        {
+            for value_index in 0..value.len() {
+                if !states[value_index] || value[value_index] == b'/' {
+                    continue;
+                }
+                if bracket_class_matches(pattern, pattern_index, value[value_index])
+                    .is_some_and(|(matched, _)| matched)
+                {
+                    next[value_index + 1] = true;
+                }
+            }
+            pattern_index = next_pattern_index;
+        } else {
+            let literal = pattern[pattern_index];
+            for value_index in 0..value.len() {
+                if states[value_index] && value[value_index] == literal {
+                    next[value_index + 1] = true;
+                }
+            }
+            pattern_index = pattern_index.saturating_add(1);
+        }
+        std::mem::swap(&mut states, &mut next);
+    }
+
+    states[value.len()]
+}
+
+fn escaped_literal(pattern: &[u8], start: usize) -> Option<u8> {
+    (pattern.get(start) == Some(&b'\\')).then(|| pattern.get(start + 1).copied())?
+}
+
+fn bracket_class_matches(pattern: &[u8], start: usize, value: u8) -> Option<(bool, usize)> {
+    if pattern.get(start) != Some(&b'[') || pattern.get(start + 1) == Some(&b']') {
+        return None;
+    }
+    let mut index = start + 1;
+    let negated = matches!(pattern.get(index), Some(b'!' | b'^'));
+    if negated {
+        index += 1;
+    }
+    let mut matched = false;
+    while index < pattern.len() {
+        if pattern[index] == b']' {
+            return Some((if negated { !matched } else { matched }, index + 1));
+        }
+        if index + 2 < pattern.len() && pattern[index + 1] == b'-' && pattern[index + 2] != b']' {
+            let (lower, upper) = if pattern[index] <= pattern[index + 2] {
+                (pattern[index], pattern[index + 2])
+            } else {
+                (pattern[index + 2], pattern[index])
+            };
+            matched |= lower <= value && value <= upper;
+            index += 3;
+        } else {
+            matched |= pattern[index] == value;
+            index += 1;
+        }
+    }
+    None
 }
 
 #[cfg(test)]

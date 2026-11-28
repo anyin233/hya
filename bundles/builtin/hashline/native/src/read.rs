@@ -12,7 +12,7 @@ use crate::hashline::{
     DEFAULT_READ_LIMIT, HashlineRuntime, MAX_READ_BYTES, ReadOptions, ReadResult, ReadRuntimeError,
 };
 use crate::read_media::{ReadFileKind, attachment_value, classify_file};
-use hya_tool::handle::{HandleError, HandleRef};
+use hya_tool::handle::{HandleError, HandleRef, ResolvedHandle, SchemeRegistry};
 use hya_tool::path::{absolutize, display_path, normalize, resolve_file};
 use hya_tool::{Action, Resource};
 use hya_tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
@@ -67,12 +67,11 @@ impl Tool for ReadTool {
             "read",
             concat!(
                 "Read a file or directory's contents.\n\n",
-                "`path` also accepts an internal handle naming an agent-owned resource: ",
+                "`path` also accepts a handle URI naming an agent-owned or extension resource: ",
                 "`artifact://<id>` for tool output spilled out of the transcript, ",
                 "`skill://<name>` for a skill body, `local://<path>` for a scratch payload, ",
-                "`channel://<id>` for team mail history (add `?last=N` for N messages; ",
-                "a member handle such as `channel://main/scout-suzuran` reads your DM with it). ",
-                "A handle may carry one projection so you retrieve a slice instead of the ",
+                "or any registered custom URI scheme. ",
+                "An internal handle may carry one projection so you retrieve a slice instead of the ",
                 "whole body: `?lines=N`, `?lines=N-M`, `?head=N`, `?tail=N`, ",
                 "`?grep=<pattern>`, or `?q=<.dotted.path>` against a JSON body.\n\n",
                 "Handles are a separate namespace from the workspace — an ordinary ",
@@ -105,43 +104,30 @@ impl Tool for ReadTool {
             ));
         }
 
-        // ADR-0016 channel plane: `channel://<id>[?last=N]` reads team mail
-        // history (and marks the inbox seen); a bare `#<id>` is the same
-        // mistake models made before this existed — reject it with the
-        // correct spelling instead of a file-not-found.
-        if let Some(control) = read_channel_control(file_path) {
-            return execute_channel_read(ctx, control).await;
-        }
-        if file_path.trim_start().starts_with('#')
-            && hya_proto::is_minted_channel_id(file_path.trim_start_matches('#'))
+        // Delegate non-internal URI schemes generically through `HandleRouter`
+        // (`DynamicUriHandler` / `UriSchemaHandler`); internal schemes
+        // (`artifact://`, `skill://`, `local://`) flow through `resolve_read_target`
+        // so they receive full hashline formatting and paging.
+        if let Some((scheme, _)) = file_path.split_once("://")
+            && !SchemeRegistry::is_internal_scheme(scheme)
         {
-            return Err(ToolError::Input(format!(
-                "`{file_path}` is a channel id, not a file. Read mail history with                  `channel://{}?last=N` (omit `?last` for the latest message).",
-                file_path.trim_start_matches('#')
-            )));
+            let resolved = ctx
+                .handles()
+                .resolve_uri(ctx.session, file_path)
+                .await
+                .map_err(crate::map_handle_error)?;
+            check_cancel(ctx)?;
+            ctx.permission
+                .assert(Action::Read, Resource::Path(file_path.to_string()))
+                .await?;
+            check_cancel(ctx)?;
+            return dynamic_handle_value(file_path, resolved, input.offset, input.limit);
         }
 
         let workdir = normalize(&absolutize(&ctx.workdir));
-        // `#<member handle>` (or any `#…` that names no file, so an editor's
-        // `#draft#` file still reads): a channel read, where the engine
-        // resolves a member handle to the caller's DM with that member.
-        if file_path.trim_start().starts_with('#')
-            && !tokio::fs::try_exists(workdir.join(file_path.trim()))
-                .await
-                .unwrap_or(false)
-        {
-            return execute_channel_read(
-                ctx,
-                ChannelReadControl {
-                    channel: file_path.trim().to_string(),
-                    last: None,
-                },
-            )
-            .await;
-        }
         let path = resolve_read_target(ctx, &workdir, file_path)?;
         check_cancel(ctx)?;
-        let external_result = crate::fs_tools::assert_external_directory(ctx, &path, false).await;
+        let external_result = crate::assert_external_directory(ctx, &path, false).await;
         check_cancel(ctx)?;
         external_result?;
         check_cancel(ctx)?;
@@ -1126,31 +1112,70 @@ fn directory_footer(shown: usize, total: usize, offset: usize, truncated: bool) 
     }
 }
 
-#[cfg(test)]
-mod channel_tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
-
-    use super::*;
-
-    #[test]
-    fn channel_control_parses_id_last_and_defaults() {
-        let plain = read_channel_control("channel://DM-aB12Cd34").unwrap();
-        assert_eq!(plain.channel, "DM-aB12Cd34");
-        assert_eq!(plain.last, None);
-
-        let history = read_channel_control("channel://announce-aB12Cd34?last=20").unwrap();
-        assert_eq!(history.channel, "announce-aB12Cd34");
-        assert_eq!(history.last, Some(20));
-
-        assert!(
-            read_channel_control("channel://").is_none(),
-            "empty id rejected"
-        );
-        assert!(
-            read_channel_control("artifact://x").is_none(),
-            "other schemes untouched"
-        );
+/// Render a resolved dynamic URI handle (`DynamicUriHandler` / `UriSchemaHandler`)
+/// into a bounded coding envelope.
+fn dynamic_handle_value(
+    uri: &str,
+    resolved: ResolvedHandle,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<Value, ToolError> {
+    let lines: Vec<&str> = if resolved.body.is_empty() {
+        Vec::new()
+    } else {
+        let mut split: Vec<&str> = resolved.body.split('\n').collect();
+        if resolved.body.ends_with('\n') {
+            split.pop();
+        }
+        split
+    };
+    let total_lines = lines.len();
+    let line_start = offset.unwrap_or(1).max(1);
+    if total_lines > 0 && line_start > total_lines {
+        return Err(ToolError::Input(format!(
+            "[E_BAD_READ] Offset {line_start} is out of range for this handle ({total_lines} lines)"
+        )));
     }
+    let slice_start = line_start.saturating_sub(1);
+    let page_limit = limit.unwrap_or(total_lines.saturating_sub(slice_start).max(1));
+    let selected = if total_lines == 0 {
+        &[][..]
+    } else {
+        &lines[slice_start..total_lines.min(slice_start.saturating_add(page_limit))]
+    };
+    let line_end = if selected.is_empty() {
+        0
+    } else {
+        line_start.saturating_add(selected.len()).saturating_sub(1)
+    };
+    let truncated = line_end < total_lines;
+    let next_offset = truncated.then(|| line_end.saturating_add(1));
+    let body = if offset.is_none() && limit.is_none() {
+        resolved.body
+    } else {
+        selected.join("\n")
+    };
+    let bounded = if body.len() <= MAX_READ_BYTES {
+        body
+    } else {
+        truncate_utf8_prefix(&body, MAX_READ_BYTES)
+    };
+    let metadata = json!({
+        "path": uri,
+        "lineStart": if total_lines == 0 { 0 } else { line_start },
+        "lineEnd": line_end,
+        "totalLines": total_lines,
+        "truncated": truncated,
+        "nextOffset": next_offset,
+    });
+    Ok(hya_tool::cap_tool_output_with_policy(
+        json!({
+            "title": uri,
+            "output": bounded,
+            "metadata": metadata,
+        }),
+        ToolResultPolicy::Coding,
+    ))
 }
 
 #[cfg(test)]
@@ -1171,91 +1196,5 @@ mod tests {
         assert!(serde_json::to_vec(&content).unwrap().len() <= MAX_READ_BYTES);
         assert!(serde_json::to_vec(&fitted.entries).unwrap().len() <= MAX_READ_BYTES);
         assert_eq!(fitted.next_offset, Some(fitted.entries.len() + 1));
-    }
-}
-
-/// A parsed `channel://` read request.
-struct ChannelReadControl {
-    /// Channel id without the leading `#`.
-    channel: String,
-    /// Message count (newest-last); `None` = the latest message only.
-    last: Option<usize>,
-}
-
-/// Parse `channel://<id>` / `channel://<id>?last=N`.
-fn read_channel_control(requested: &str) -> Option<ChannelReadControl> {
-    let rest = requested.strip_prefix("channel://")?;
-    let (id, query) = match rest.split_once('?') {
-        Some((id, query)) => (id, Some(query)),
-        None => (rest, None),
-    };
-    let last = query.map(|text| {
-        text.split('&')
-            .find_map(|pair| pair.strip_prefix("last="))
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(1)
-    });
-    let id = id.trim().to_string();
-    if id.is_empty() {
-        return None;
-    }
-    Some(ChannelReadControl { channel: id, last })
-}
-
-/// Serve a `channel://` read over the mailbox plane.
-async fn execute_channel_read(
-    ctx: &ToolCtx,
-    control: ChannelReadControl,
-) -> Result<Value, ToolError> {
-    let (channel, messages, unread_remaining, warning) = ctx
-        .mailbox
-        .read_channel(control.channel.clone(), control.last)
-        .await
-        .map_err(map_mailbox_error)?;
-    let count = messages.len();
-    let rendered: Vec<String> = messages
-        .iter()
-        .map(|(from, body)| format!("[{from}] {body}"))
-        .collect();
-    let body = if rendered.is_empty() {
-        format!("#{channel} has no messages yet.")
-    } else {
-        rendered.join("\n")
-    };
-    // Echo the correction whenever the engine had to normalize the id, so the
-    // model learns the exact spelling instead of repeating `##X` / `#X`.
-    let output = match &warning {
-        Some(warning) => format!("[warning] {warning}\n{body}"),
-        None => body,
-    };
-    let tail = if unread_remaining > 0 {
-        format!(
-            "\n\n{unread_remaining} unread message(s) remain in your inbox — run `list_channel` \
-             for per-channel counts."
-        )
-    } else {
-        String::new()
-    };
-    Ok(json!({
-        "title": format!("#{channel} · {count} message(s)"),
-        "output": format!("{output}{tail}"),
-        "metadata": {
-            "type": "channel",
-            "channel": channel,
-            "count": count,
-            "unreadRemaining": unread_remaining,
-            "warning": warning,
-        },
-    }))
-}
-
-/// Map mailbox plane failures to read tool errors.
-fn map_mailbox_error(error: hya_tool::MailboxError) -> ToolError {
-    match error {
-        hya_tool::MailboxError::Unavailable => ToolError::Other(
-            "channel:// reads are only available inside a running team".to_string(),
-        ),
-        hya_tool::MailboxError::Overloaded(message) => ToolError::Overloaded(message),
-        hya_tool::MailboxError::Rejected(message) => ToolError::Input(message),
     }
 }

@@ -1,0 +1,29 @@
+kind: Bundle
+schema_version: 2
+version_ref: hya
+identity:
+  id: hya/hashline
+  version: 0.0.0
+  publisher: hya
+namespace: hashline
+overrides: hya/bare
+runtime:
+  kind: native
+  abi_version: 2
+  crate_dir: native
+  capabilities:
+    - tools
+resources:
+  tools:
+    - id: read
+      path: tools/read.json
+      overrides: hya/bare
+    - id: write
+      path: tools/write.json
+      overrides: hya/bare
+    - id: edit
+      path: tools/edit.json
+      overrides: hya/bare
+    - id: grep
+      path: tools/grep.json
+      overrides: hya/bare
