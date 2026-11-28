@@ -34,6 +34,9 @@ exempt = [
     "HostChannelError",
     "HostChannelOptions",
     "hostChannel",
+    # `@hya/tui-sdk` text-formatter contributions (not code formatters).
+    "formatters",
+    "FormatterContribution",
 ]
 
 # Violations still being moved out (Phase 7); each issue removes its entries.
@@ -181,7 +184,6 @@ exempt = [
 "packages/hya-tui/src/components/Dock.tsx" = ["subagent"]
 "packages/hya-tui/src/extensions/context.ts" = ["subagent"]
 "packages/hya-tui/src/extensions/manager.ts" = ["channel"]
-"packages/hya-tui/src/extensions/wire.ts" = ["formatter"]
 "packages/hya-tui/src/state/activity.ts" = ["subagent"]
 "packages/hya-tui/src/state/agentsView.ts" = ["subagent"]
 "packages/hya-tui/src/state/dock.ts" = ["subagent"]
