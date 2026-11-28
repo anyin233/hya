@@ -23,7 +23,10 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::HostError;
-use crate::extensions::{GoalDriver, NativeGoalEvaluateVerdict};
+use crate::extensions::{
+    GoalDriver, LoopDriver, NativeGoalEvaluateVerdict, NativeLoopPlanInput, NativePlannerOutput,
+    NativeVerifierVerdict,
+};
 
 // ---------------------------------------------------------------------------
 // HostSessionStore
@@ -628,6 +631,35 @@ pub trait HostExtensionRegistry: Send + Sync {
     ) -> Result<Option<NativeGoalEvaluateVerdict>, HostError> {
         Ok(None)
     }
+
+    /// Consult registered `loop.should_stop` hooks for `session` (`Ok(None)` when none stop).
+    async fn invoke_loop_should_stop(
+        &self,
+        _session: SessionId,
+        _target: &str,
+        _transcript: &str,
+    ) -> Result<Option<String>, HostError> {
+        Ok(None)
+    }
+
+    /// Invoke registered `loop.verifier` hooks for `session` (`Ok(None)` when unregistered).
+    async fn invoke_loop_verify(
+        &self,
+        _session: SessionId,
+        _target: &str,
+        _transcript: &str,
+    ) -> Result<Option<NativeVerifierVerdict>, HostError> {
+        Ok(None)
+    }
+
+    /// Invoke registered `loop.planner` hooks for `session` (`Ok(None)` when unregistered).
+    async fn invoke_loop_plan(
+        &self,
+        _session: SessionId,
+        _input: NativeLoopPlanInput,
+    ) -> Result<Option<NativePlannerOutput>, HostError> {
+        Ok(None)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -665,6 +697,11 @@ pub trait HostRuntime: Send + Sync {
     /// Look up the active [`GoalDriver`] registered by a loaded native bundle
     /// (such as `hya/goal`), returning `None` when disabled or in `--bare` mode.
     fn goal_driver(&self) -> Option<Arc<dyn GoalDriver>> {
+        None
+    }
+
+    /// Return the active [`LoopDriver`] registered by `hya/loop`, if loaded.
+    fn loop_driver(&self) -> Option<Arc<dyn LoopDriver>> {
         None
     }
 }

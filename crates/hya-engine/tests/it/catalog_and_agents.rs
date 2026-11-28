@@ -37,16 +37,15 @@ use hya_engine::{
     BundleApiError, BundleApiProvider, BundleApiReply, BundleApiRequest, CatalogScope,
     CatalogScopeCacheConfig, CategoryEntry, CategoryRegistry, ChatParamsInput, ChatParamsOutcome,
     CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, CompactionConfig, CoreError,
-    CreateSession, EventBus, EvidenceQuality, HookChain, HookDispatcher, LoopConfig, LoopPlanner,
-    LoopVerifier, MAX_BUNDLE_API_BODY_BYTES, MessageUserBeforeInput, MessageUserBeforeOutcome,
-    ModelSummarizer, PlannerOutput, RunOutcome, RuntimeCandidate, RuntimeCatalogRefresh,
-    RuntimePermissionMode, RuntimeRefreshError, RuntimeRegistry, RuntimeSource,
-    RuntimeSourceExport, RuntimeSourceId, RuntimeSourceKind, RuntimeSourceOwner, ScopeKey,
-    ScopeOverlay, SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,
-    SourceApi, SourceApis, SourceSchema, Summarizer, TextCompleteInput, TextCompleteOutcome,
-    ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, TurnBinding, VerifierVerdict, apply_agent_model_preference,
-    resolve_configured_agent_model, run_loop,
+    CreateSession, EventBus, HookChain, HookDispatcher, MAX_BUNDLE_API_BODY_BYTES,
+    MessageUserBeforeInput, MessageUserBeforeOutcome, ModelSummarizer, RuntimeCandidate,
+    RuntimeCatalogRefresh, RuntimePermissionMode, RuntimeRefreshError, RuntimeRegistry,
+    RuntimeSource, RuntimeSourceExport, RuntimeSourceId, RuntimeSourceKind, RuntimeSourceOwner,
+    ScopeKey, ScopeOverlay, SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle,
+    SidecarStart, SourceApi, SourceApis, SourceSchema, Summarizer, TextCompleteInput,
+    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
+    ToolExecuteBeforeOutcome, TurnBinding, apply_agent_model_preference,
+    resolve_configured_agent_model,
 };
 use hya_proto::{
     AgentName, CompactionStrategy, ConfigGeneration, Envelope, Event, FinishReason, MessageId,
@@ -3403,45 +3402,7 @@ async fn runtime_catalog_refresh_entry_points_and_loop_reuse() {
         (FinishReason::Stop, 1)
     );
 
-    // Part C: run_loop refreshes once at admission and reuses binding across 2 iterations.
-    struct TwoIterVerifier(AtomicUsize);
-    #[async_trait]
-    impl LoopVerifier for TwoIterVerifier {
-        async fn grade(&self, _: &str, _: &str) -> Result<VerifierVerdict, CoreError> {
-            let sat = self.0.fetch_add(1, Ordering::SeqCst) == 1;
-            Ok(VerifierVerdict {
-                score: if sat { 100 } else { 0 },
-                satisfied: sat,
-                evidence_quality: if sat {
-                    EvidenceQuality::Verified
-                } else {
-                    EvidenceQuality::ClaimOnly
-                },
-                critical_gaps: if sat { vec![] } else { vec!["continue".into()] },
-                iteration_summary: "iter".into(),
-                reason: String::new(),
-            })
-        }
-    }
-    struct StaticPlanner;
-    #[async_trait]
-    impl LoopPlanner for StaticPlanner {
-        async fn plan_next(
-            &self,
-            _: &str,
-            _: &[String],
-            _: &VerifierVerdict,
-            _: &str,
-        ) -> Result<PlannerOutput, CoreError> {
-            Ok(PlannerOutput {
-                directive: "continue".into(),
-                continuity_brief: String::new(),
-                planner_notes: String::new(),
-                strategy_change: false,
-                change_note: String::new(),
-            })
-        }
-    }
+    // Part C: capturing a TurnBinding once at admission reuses the binding across 2 child turns.
     let c_loop = Arc::new(AtomicUsize::new(0));
     let (cat_a, cat_b) = (
         test_catalog(&[("loop-agent", AgentRole::Main, &[])]),
@@ -3464,23 +3425,46 @@ async fn runtime_catalog_refresh_entry_points_and_loop_reuse() {
             Ok(true)
         },
     )));
-    let out = run_loop(
-        eng_l,
-        lead,
-        agent_spec("loop-agent", "fake", dir.path()),
-        "target".into(),
-        Arc::new(TwoIterVerifier(AtomicUsize::new(0))),
-        Arc::new(StaticPlanner),
-        LoopConfig {
-            budget: 2,
-            ..LoopConfig::default()
-        },
-        CancellationToken::new(),
-        None,
-    )
-    .await
-    .unwrap();
-    assert!(matches!(out, RunOutcome::Achieved { iterations: 2, .. }));
+    let agent = agent_spec("loop-agent", "fake", dir.path());
+    let binding = eng_l
+        .bind_session_runtime(lead, &agent.workdir)
+        .await
+        .unwrap();
+    for directive in ["iter 1", "iter 2"] {
+        let child = eng_l
+            .create(CreateSession {
+                parent: Some(lead),
+                agent: agent.name.clone(),
+                model: agent.model.clone(),
+                workdir: agent.workdir.to_string_lossy().into_owned(),
+                project: None,
+                kind: SessionKind::Project,
+            })
+            .await
+            .unwrap();
+        eng_l
+            .capture_session_bundle_hooks(child, &binding, agent.name.as_str())
+            .await;
+        eng_l
+            .admit_user_prompt_with_binding(
+                child,
+                directive.to_string(),
+                &binding,
+                agent.name.as_str(),
+            )
+            .await
+            .unwrap();
+        eng_l
+            .run_bound_turn(
+                child,
+                &agent,
+                binding.clone(),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+    }
     assert_eq!(c_loop.load(Ordering::SeqCst), 1);
 }
 

@@ -2,7 +2,6 @@
 
 use crate::error::CoreError;
 use crate::hooks::*;
-use crate::loop_mode::{PlannerOutput, VerifierVerdict};
 use async_trait::async_trait;
 use hya_proto::Envelope;
 use hya_proto::SessionId;

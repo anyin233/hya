@@ -351,7 +351,7 @@ pub enum PreparedNativeCapability {
     Rewriters,
     /// Registers long-lived native services via ABI v2 (`NativeService`).
     Services,
-    /// Registers iterative drivers via ABI v2 (`GoalDriver` or `LoopDriver`).
+    /// Registers headless iteration drivers via ABI v2 (`GoalDriver` or `LoopDriver`).
     Drivers,
 }
 

@@ -615,6 +615,13 @@ impl BuiltSessionEngine {
         Arc::clone(&self.mcp_control)
     }
 
+    /// Return the active [`hya_runtime_abi::LoopDriver`] registered by `hya/loop`,
+    /// or `None` when `hya/loop` is disabled or running in `--bare` mode.
+    #[must_use]
+    pub fn loop_driver(&self) -> Option<Arc<dyn hya_runtime_abi::LoopDriver>> {
+        self.host_runtime.loop_driver()
+    }
+
     /// Admit every daemon restore before starting recovered resident episodes.
     /// The restore turn owns its root lease before recovered child mail can wake main.
     pub async fn resume_interrupted(
@@ -1312,7 +1319,7 @@ async fn build_session_engine_with_mcp_defer(
             .is_some()
     {
         let regs = hya_tool_loader::load_v2("hya/goal", Arc::clone(&host_runtime))
-            .map_err(|error| anyhow::anyhow!("load native bundle hya/goal: {error}"))?;
+            .map_err(|error| anyhow::anyhow!("load first-party native bundle hya/goal: {error}"))?;
         for service in &regs.services {
             if let Err(error) = service.start(Arc::clone(&host_runtime)).await {
                 for started in started_services.into_iter().rev() {
@@ -1328,7 +1335,32 @@ async fn build_session_engine_with_mcp_defer(
         if let Some(driver) = regs.goal_drivers.into_iter().next() {
             app_host_runtime.attach_goal_driver(driver);
         }
+        all_native_hooks.extend(regs.hooks);
         started_services.extend(regs.services);
+    }
+    if builtins.is_enabled("hya/loop")
+        && hya_bundle::first_party_bundle_optional("hya/loop")
+            .ok()
+            .flatten()
+            .is_some()
+    {
+        let regs = hya_tool_loader::load_v2("hya/loop", Arc::clone(&host_runtime))
+            .map_err(|error| anyhow::anyhow!("load first-party native bundle hya/loop: {error}"))?;
+        for service in &regs.services {
+            if let Err(error) = service.start(Arc::clone(&host_runtime)).await {
+                for started in started_services.into_iter().rev() {
+                    let _ = started.stop().await;
+                }
+                store.release_runtime_owner(owner_run_id)?;
+                return Err(anyhow::anyhow!(
+                    "start native service `{}`: {error}",
+                    service.id()
+                ));
+            }
+        }
+        started_services.extend(regs.services);
+        all_native_hooks.extend(regs.hooks);
+        app_host_runtime.set_loop_drivers(regs.loop_drivers);
     }
     let native_services: Arc<[Arc<dyn hya_runtime_abi::NativeService>]> = started_services.into();
     register_missing_bare_tools(&registry);

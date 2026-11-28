@@ -338,3 +338,48 @@ pub enum GoalEvaluateReply {
     /// iteration of the cap instead of erroring the run or looping forever.
     Malformed,
 }
+
+/// How strongly a transcript supports a loop target (`loop.verifier` hook payload).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum EvidenceQuality {
+    /// No relevant evidence.
+    Missing,
+    /// Claims without support.
+    ClaimOnly,
+    /// Partial supporting evidence.
+    Supported,
+    /// Fully verified against the target.
+    Verified,
+}
+
+/// Structured verdict returned by `loop.verifier` hook providers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifierVerdict {
+    /// Score 0–100 used with loop satisfaction thresholds.
+    pub score: u8,
+    /// Whether the verifier considers the target satisfied.
+    pub satisfied: bool,
+    /// Evidence quality band.
+    pub evidence_quality: EvidenceQuality,
+    /// Remaining gaps the planner should address.
+    pub critical_gaps: Vec<String>,
+    /// Short summary of this iteration's work.
+    pub iteration_summary: String,
+    /// Free-form reason string.
+    pub reason: String,
+}
+
+/// Planner output returned by `loop.planner` hook providers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlannerOutput {
+    /// Next directive for the worker turn.
+    pub directive: String,
+    /// Continuity notes for the worker.
+    pub continuity_brief: String,
+    /// Notes retained across iterations.
+    pub planner_notes: String,
+    /// Whether strategy changed this step.
+    pub strategy_change: bool,
+    /// Explanation of strategy change.
+    pub change_note: String,
+}

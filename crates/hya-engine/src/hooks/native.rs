@@ -18,13 +18,13 @@ use hya_tool::{Action, Decision, Resource};
 use super::{
     AgentSpawnInput, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
     CommandExecuteBeforeOutcome, CompactionAfterInput, CompactionBeforeInput, CompactionDecision,
-    CompactionTrigger, GoalEvaluateReply, HookDispatcher, MessageUserBeforeInput,
+    CompactionTrigger, EvidenceQuality, GoalEvaluateReply, HookDispatcher, MessageUserBeforeInput,
     MessageUserBeforeOutcome, ModelFallbackInput, ModelFallbackOutcome, PermissionApproveInput,
-    SessionLifecycleInput, TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput,
-    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    PlannerOutput, SessionLifecycleInput, TextCompleteInput, TextCompleteOutcome,
+    ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
+    ToolExecuteBeforeOutcome, ToolOutcomeNative, VerifierVerdict,
 };
 use crate::error::CoreError;
-use crate::loop_mode::{EvidenceQuality, PlannerOutput, VerifierVerdict};
 
 /// [`HookDispatcher`] backed by one or more ABI v2 [`NativeHook`] registrations.
 pub struct NativeHookDispatcher {

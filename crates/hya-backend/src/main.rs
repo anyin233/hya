@@ -41,11 +41,12 @@ use std::io::{Read as _, Write as _};
 
 use anyhow::Context as _;
 use clap::Parser;
-use hya_app::{HeadlessEvaluatorRoute, prepare_goal_driver, prepare_loop, run_headless_lead};
-use hya_engine::RunOutcome;
+use hya_app::{
+    HeadlessEvaluatorRoute, LoopRunOptions, prepare_goal_driver, prepare_loop, run_headless_lead,
+};
 use hya_engine::completion::render_transcript;
-use hya_engine::loop_mode::LoopConfig;
 use hya_proto::{ProjectId, SessionId};
+use hya_runtime_abi::DriverRunOutcome;
 use hya_store::SessionStore;
 use tokio_util::sync::CancellationToken;
 
@@ -427,7 +428,7 @@ async fn cmd_loop(
         .run(async move |headless| {
             let cancel = CancellationToken::new();
             let work = prepare_loop(
-                headless.built.engine(),
+                headless.built.host_runtime(),
                 headless.session,
                 headless.agent.clone(),
                 HeadlessEvaluatorRoute {
@@ -441,10 +442,10 @@ async fn cmd_loop(
                         cli_args::build_loop_predicate(while_command, until_command, workdir)
                             .map_err(anyhow::Error::msg)
                             .context("resolve loop condition")?;
-                    Ok(LoopConfig {
+                    Ok(LoopRunOptions {
                         budget: cli_args::loop_budget(budget, max_iterations),
                         predicate,
-                        ..LoopConfig::default()
+                        ..LoopRunOptions::default()
                     })
                 },
                 cancel.clone(),
@@ -458,7 +459,7 @@ async fn cmd_loop(
     exit_if_stopped(stop);
     let outcome = outcome.context("run loop")?;
     println!("loop outcome: {outcome:?}");
-    if let RunOutcome::InvalidCondition { reason, .. } = &outcome {
+    if let DriverRunOutcome::InvalidCondition { reason, .. } = &outcome {
         eprintln!(
             "warning: the loop condition itself is broken, so this is NOT a success: {reason}"
         );

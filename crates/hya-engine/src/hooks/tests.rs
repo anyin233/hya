@@ -21,7 +21,7 @@ fn last_verdict() -> VerifierVerdict {
     VerifierVerdict {
         score: 50,
         satisfied: false,
-        evidence_quality: crate::loop_mode::EvidenceQuality::ClaimOnly,
+        evidence_quality: EvidenceQuality::ClaimOnly,
         critical_gaps: Vec::new(),
         iteration_summary: String::new(),
         reason: String::new(),

@@ -8,12 +8,12 @@ use hya_engine::CoreError;
 use hya_engine::hooks::{
     AgentSpawnInput, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
     CommandExecuteBeforeOutcome, CompactionAfterInput, CompactionBeforeInput, CompactionDecision,
-    CompactionTrigger, GoalEvaluateReply, HookDispatcher, MessageUserBeforeInput,
+    CompactionTrigger, EvidenceQuality, GoalEvaluateReply, HookDispatcher, MessageUserBeforeInput,
     MessageUserBeforeOutcome, ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome,
-    SessionLifecycleInput, TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput,
-    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    PlannerOutput, SessionLifecycleInput, TextCompleteInput, TextCompleteOutcome,
+    ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
+    ToolExecuteBeforeOutcome, ToolOutcomeNative, VerifierVerdict,
 };
-use hya_engine::loop_mode::{EvidenceQuality, PlannerOutput, VerifierVerdict};
 use hya_proto::Envelope;
 use hya_provider::{CompletionRequest, ReasoningEffort};
 use hya_tool::{Action, Decision, Resource};

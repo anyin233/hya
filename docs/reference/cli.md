@@ -91,10 +91,12 @@ Runs iterative turns in memory through the `hya/goal` native bundle's `GoalDrive
 ### `hya loop`
 
 ```sh
-hya loop --target "<OBJECTIVE>" [--until "<CMD>" | --while "<CMD>"] [--budget <N>]
+hya loop --target "<OBJECTIVE>" [--until "<CMD>" | --while "<CMD>"] [--budget <N>] [--evaluator-model <PROVIDER/MODEL>]
 ```
 
-Iterates toward `--target` up to `--budget` rounds (default `10`). With `--until`, stops when `<CMD>` exits `0` (continues on exit `1`); `--while` inverts that check. Any exit code other than `0` or `1` aborts the loop as a broken check.
+Iterates toward `--target` up to `--budget` rounds (default `10`, clamped to `1..=100`; `--max-iterations` is an alias). With `--until`, stops when `<CMD>` exits `0` (continues on exit `1`); `--while` inverts that check. Any exit code other than `0` or `1` (or timeout) aborts the loop with a non-zero exit status as a broken condition.
+
+`hya loop` is provided by the built-in native bundle `hya/loop` (`LoopDriver`, dispatched through `HostRuntime::loop_driver()`). Running with `--bare` or with `hya/loop` disabled in `config.yaml` (`bundles.builtin.disable: [hya/loop]`) exits with an actionable error instead of running silently without a driver.
 
 ---
 

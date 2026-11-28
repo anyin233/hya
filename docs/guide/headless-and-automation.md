@@ -121,6 +121,21 @@ hya loop \
 
 > **Safety guard:** In `--until` / `--while`, exit codes `0` and `1` mean "met" or "not met yet." Any other exit code (like `127` command not found or a syntax error in your check command) stops the loop immediately with an error instead of burning through your token budget on a broken check!
 
+### Modular `hya/loop` bundle (`LoopDriver`)
+
+Loop mode is supplied by the built-in native ABI v2 bundle **`hya/loop`** (`bundles/builtin/loop/`), which registers its `LoopDriver` (`id: "loop"`), lifecycle `LoopService`, and verifier/planner prompt skills (`loop-verifier-prompt`, `loop-planner-prompt`) through `HostRuntime`.
+
+- **Full mode (default):** `hya/loop` is enabled automatically and `hya loop` dispatches through `HostRuntime::loop_driver()`.
+- **`--bare` or disabled:** Running `hya loop --bare` or listing `hya/loop` in `bundles.builtin.disable` skips loading the bundle and returns an actionable error instructing you to remove `--bare` or enable `hya/loop` in `config.yaml`:
+
+```yaml
+schema_version: 2
+bundles:
+  builtin:
+    profile: bare
+    enable: [hya/loop]
+```
+
 ---
 
 ## Permissions in headless runs

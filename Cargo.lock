@@ -1310,6 +1310,7 @@ dependencies = [
  "hya-extended-tools",
  "hya-goal",
  "hya-hashline",
+ "hya-loop",
  "hya-mcp",
  "hya-network",
  "hya-plan",
@@ -1609,6 +1610,22 @@ dependencies = [
  "tokio",
  "tokio-util",
  "xxhash-rust",
+]
+
+[[package]]
+name = "hya-loop"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "hya-bundle",
+ "hya-proto",
+ "hya-runtime-abi",
+ "hya-tool",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -1912,6 +1929,7 @@ dependencies = [
  "hya-extended-tools",
  "hya-goal",
  "hya-hashline",
+ "hya-loop",
  "hya-network",
  "hya-plan",
  "hya-proto",

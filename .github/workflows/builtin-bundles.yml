@@ -81,8 +81,8 @@ jobs:
 
           data = json.loads(os.environ["DISCOVERED"])
           bundles = data["all"]
-          if len(bundles) != 14:
-              print(f"ERROR: expected 14 builtin bundles, found {len(bundles)}", file=sys.stderr)
+          if len(bundles) != 15:
+              print(f"ERROR: expected 15 builtin bundles, found {len(bundles)}", file=sys.stderr)
               sys.exit(1)
 
           seen_ids = set()
@@ -343,11 +343,11 @@ jobs:
             hya/compaction \
             hya/plan \
             hya/goal \
+            hya/loop \
             hya/core-agents \
             hya/core-skills \
             hya/core-commands \
             hya/agent-channels \
-            hya/goal-loop \
             hya/plan-impl-review \
             hya/basic-tui-components; do
             if ! grep -q "$expected" <<< "$list_out"; then

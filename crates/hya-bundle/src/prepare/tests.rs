@@ -245,6 +245,42 @@ resources:
     let bytes = write_public_package(&source)?;
     let inspected = inspect_public_package(&bytes)?;
     assert_eq!(inspected.digest(), prepared.digest());
+
+    // ABI v2 native bundles may also declare `services` and `drivers` capabilities.
+    let driver_source = BundleSource::new(
+        "native-driver",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Bundle
+schema_version: 2
+identity:
+  id: acme/native-driver
+  version: 1.0.0
+  publisher: acme
+runtime:
+  kind: native
+  abi_version: 2
+  crate_dir: native
+  capabilities: [drivers, services]
+"#
+                .as_slice(),
+            ),
+            SourceFile::new("native/Cargo.toml", b"[package]\nname = \"d\"\n".as_slice()),
+        ],
+    );
+    let prepared_driver = prepare_package(driver_source)?;
+    let driver_rt = prepared_driver.bundles()[0]
+        .runtime()
+        .expect("driver native runtime");
+    assert_eq!(driver_rt.abi_version, Some(2));
+    assert_eq!(
+        driver_rt.capabilities,
+        vec![
+            PreparedNativeCapability::Services,
+            PreparedNativeCapability::Drivers,
+        ]
+    );
     Ok(())
 }
 

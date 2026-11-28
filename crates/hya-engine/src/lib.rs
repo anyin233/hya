@@ -55,8 +55,6 @@ pub mod handle_naming;
 pub mod hooks;
 /// Team mailbox service loop (event-sourced mail/channels).
 pub mod lifecycle;
-/// Loop-mode verifier/planner traits and drive helpers.
-pub mod loop_mode;
 pub mod mailbox;
 mod member_wait;
 /// Subagent concurrency governor and team budgets.
@@ -123,18 +121,13 @@ pub use error::CoreError;
 pub use hooks::{
     AgentSpawnInput, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
     CommandExecuteBeforeOutcome, CompactionAfterInput, CompactionBeforeInput, CompactionDecision,
-    CompactionTrigger, HookChain, HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome,
-    ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome, NativeHookDispatcher,
-    NoopHookHost, SessionLifecycleInput, TextCompleteInput, TextCompleteOutcome,
-    ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    CompactionTrigger, EvidenceQuality, HookChain, HookDispatcher, MessageUserBeforeInput,
+    MessageUserBeforeOutcome, ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome,
+    NativeHookDispatcher, NoopHookHost, PlannerOutput, SessionLifecycleInput, TextCompleteInput,
+    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
+    ToolExecuteBeforeOutcome, ToolOutcomeNative, VerifierVerdict,
 };
 pub use lifecycle::run_lifecycle_service;
-pub use loop_mode::{
-    EvidenceQuality, HookLoopPlanner, HookLoopVerifier, LoopConfig, LoopGate, LoopPlanner,
-    LoopPredicate, LoopPredicateOutcome, LoopVerifier, PlannerOutput, PredicateMode,
-    VerifierVerdict, drive_loop, run_loop, validate_budget,
-};
 pub use mailbox::run_mailbox_service;
 pub use orchestrator::{SubagentGovernor, SubagentLimits};
 pub use permission_mode::{PublishedPermissionMode, RuntimePermissionMode, SessionPermissionMode};

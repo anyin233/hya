@@ -5,7 +5,6 @@ use hya_proto::{Envelope, SessionId};
 use hya_tool::{Action, Decision, Resource};
 
 use crate::error::CoreError;
-use crate::loop_mode::{PlannerOutput, VerifierVerdict};
 
 mod activation;
 mod chain;

@@ -344,9 +344,9 @@ fn bundle_first_party_collision_and_override_fallback() -> TestResult {
 
     let over = write_pkg(
         root,
-        "goal-loop-override",
+        "goal-override",
         vec![
-            ("bundle.yaml", b"schema_version: 2\nkind: Bundle\nidentity: { id: hya/goal-loop, version: 9.0.0, publisher: local }\nnamespace: goal-loop\nresources: { skills: [{ id: evaluator-prompt, path: evaluator.md }] }\n"),
+            ("bundle.yaml", b"schema_version: 2\nkind: Bundle\nidentity: { id: hya/goal, version: 9.0.0, publisher: local }\nnamespace: goal\nresources: { skills: [{ id: evaluator-prompt, path: evaluator.md }] }\n"),
             ("evaluator.md", b"---\nname: evaluator-prompt\ndescription: override\n---\nCLI_OVERRIDE\n"),
         ],
     )?;
@@ -355,19 +355,13 @@ fn bundle_first_party_collision_and_override_fallback() -> TestResult {
         root,
         &["install", "-y", over.to_str().ok_or("o")?],
     )?;
-    let info = ok("info override", root, &["info", "hya/goal-loop"])?;
+    let info = ok("info override", root, &["info", "hya/goal"])?;
     assert!(
         info.contains("version=9.0.0\n") && info.contains("origin=installed\n"),
         "{info}"
     );
-    ok(
-        "uninstall override",
-        root,
-        &["uninstall", "-y", "hya/goal-loop"],
-    )?;
-    assert!(
-        ok("info fallback", root, &["info", "hya/goal-loop"])?.contains("origin=first-party\n")
-    );
+    ok("uninstall override", root, &["uninstall", "-y", "hya/goal"])?;
+    assert!(ok("info fallback", root, &["info", "hya/goal"])?.contains("origin=first-party\n"));
     Ok(())
 }
 
