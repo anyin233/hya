@@ -125,9 +125,9 @@ pub enum ToolError {
     /// Transient capacity pressure (for example spawn admission overloaded).
     #[error("overloaded: {0}")]
     Overloaded(String),
-    /// App-owned Workflow control rejected a structured command.
+    /// A tool rejected the call with its own machine-stable error code.
     #[error("{code}: {message}")]
-    WorkflowControl {
+    Coded {
         /// Machine-stable control code.
         code: String,
         /// Bounded diagnostic.

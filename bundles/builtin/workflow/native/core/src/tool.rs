@@ -144,7 +144,7 @@ impl Tool for WorkflowTool {
                 "workflow tool requires a session".to_string(),
             ));
         }
-        let session = ctx.session.ok_or_else(|| ToolError::WorkflowControl {
+        let session = ctx.session.ok_or_else(|| ToolError::Coded {
             code: "SESSION_NOT_FOUND".to_string(),
             message: "workflow tool requires an active session".to_string(),
         })?;
@@ -157,7 +157,7 @@ impl Tool for WorkflowTool {
             .service
             .execute(session, invocation, command, ctx.cancel.clone())
             .await
-            .map_err(|error| ToolError::WorkflowControl {
+            .map_err(|error| ToolError::Coded {
                 code: error.code().to_string(),
                 message: error.to_string(),
             })?;

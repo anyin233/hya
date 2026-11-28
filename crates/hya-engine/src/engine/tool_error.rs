@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 pub(super) fn tool_error_value(error: &ToolError) -> Value {
     match error {
-        ToolError::WorkflowControl { code, message } => tool_error_message_value(code, message),
+        ToolError::Coded { code, message } => tool_error_message_value(code, message),
         _ => tool_error_message_value(tool_error_type(error), &error.to_string()),
     }
 }
@@ -25,7 +25,7 @@ fn tool_error_type(error: &ToolError) -> &str {
         ToolError::Json(_) => "json",
         ToolError::Cancelled => "cancelled",
         ToolError::Overloaded(_) => "overloaded",
-        ToolError::WorkflowControl { code, .. } => code,
+        ToolError::Coded { code, .. } => code,
         ToolError::UnknownAgentId { .. } => "unknown_agent_id",
         ToolError::AgentSpawnNotAllowed { .. } => "agent_spawn_not_allowed",
         ToolError::UnsupportedInlineAgentField { .. } => "unsupported_inline_agent_field",
@@ -39,8 +39,8 @@ mod tests {
     use hya_tool::{Action, PermissionError, Resource};
 
     #[test]
-    fn workflow_control_code_survives_tool_error_serialization() {
-        let value = tool_error_value(&ToolError::WorkflowControl {
+    fn coded_error_type_survives_tool_error_serialization() {
+        let value = tool_error_value(&ToolError::Coded {
             code: "WORKFLOW_BUSY".to_string(),
             message: "another run is active".to_string(),
         });
@@ -74,7 +74,7 @@ mod tests {
             ("overloaded", ToolError::Overloaded("capacity".to_string())),
             (
                 "WORKFLOW_BUSY",
-                ToolError::WorkflowControl {
+                ToolError::Coded {
                     code: "WORKFLOW_BUSY".to_string(),
                     message: "another run is active".to_string(),
                 },
