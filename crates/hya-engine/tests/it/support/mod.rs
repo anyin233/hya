@@ -249,8 +249,8 @@ pub async fn fixture_engine(
         Arc::new(hya_tool_loader::MinimalHostRuntime::empty()),
     )
     .expect("load native rewriters");
-    let engine = SessionEngine::new(store, router, runtime, permission, bus)
-        .with_rewriters(regs.rewriters);
+    let engine =
+        SessionEngine::new(store, router, runtime, permission, bus).with_rewriters(regs.rewriters);
     let host = engine.host_runtime();
     for service in &channels.services {
         service
