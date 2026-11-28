@@ -2,7 +2,9 @@
 //!
 //! A bundle declares commands with their arguments; the `hya` binary adds
 //! them to its command line when the bundle is enabled and routes each
-//! invocation to the bundle's driver or BundleApi endpoint.
+//! invocation to the bundle's driver or BundleApi endpoint. An api route with
+//! `database: true` runs against `--db`, through the server that owns it when
+//! one does.
 
 use std::collections::BTreeSet;
 
@@ -33,6 +35,14 @@ pub struct CliCommand {
     /// Arguments, in help order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<CliArg>,
+    /// Run the `api` route against `--db` (claiming the database, or through
+    /// the server that owns it) instead of an in-memory store.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub database: bool,
+    /// `database` routes only: refusals when the call would go through the
+    /// owning server, checked in order; the first set one exits 75.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routed_refuse: Vec<CliRoutedRefusal>,
     /// Nested subcommands; a command with subcommands has no route itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subcommands: Vec<CliCommand>,
@@ -103,12 +113,41 @@ pub enum CliValue {
     Flag,
     /// A repeatable string (`--x a --x b` → `["a", "b"]`).
     List,
+    /// An existing Session id (`database` routes only): a Session-scope
+    /// endpoint is called for it instead of a new Session.
+    Session,
 }
 
 impl CliValue {
     fn is_string(&self) -> bool {
         *self == Self::String
     }
+}
+
+/// One [`CliCommand::routed_refuse`] entry: exactly one of `arg` or `flag`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CliRoutedRefusal {
+    /// Refuse when this argument of the command is given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arg: Option<String>,
+    /// Refuse when this global flag is given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flag: Option<CliGlobalFlag>,
+    /// Why the server cannot take the call, completing "…, and <reason>".
+    pub reason: String,
+}
+
+/// A global `hya` flag a [`CliRoutedRefusal`] can name.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CliGlobalFlag {
+    /// `--bare`.
+    Bare,
+    /// `--pure`.
+    Pure,
+    /// `--yolo`.
+    Yolo,
 }
 
 fn valid_name(name: &str) -> bool {
@@ -204,6 +243,23 @@ fn validate_command(
             "cli command `{label}` routes to undeclared api `{api}`"
         )));
     }
+    let sessions = command
+        .args
+        .iter()
+        .filter(|arg| arg.value == CliValue::Session)
+        .count();
+    if !command.database && (sessions > 0 || !command.routed_refuse.is_empty()) {
+        return Err(invalid(format!(
+            "cli command `{label}`: `value: session` and `routed_refuse` need `database: true`"
+        )));
+    }
+    if command.database
+        && (command.api.is_none() || command.kind == CliCommandKind::Prompt || sessions > 1)
+    {
+        return Err(invalid(format!(
+            "cli command `{label}`: `database: true` needs an `api` route on `kind: command` and at most one `value: session` argument"
+        )));
+    }
     let mut ids = BTreeSet::new();
     let mut longs = BTreeSet::new();
     for arg in &command.args {
@@ -236,6 +292,18 @@ fn validate_command(
             return Err(invalid(format!(
                 "cli command `{label}`: `{}` conflicts with unknown argument `{other}`",
                 arg.id
+            )));
+        }
+    }
+    for refusal in &command.routed_refuse {
+        let known = match (&refusal.arg, refusal.flag) {
+            (Some(arg), None) => ids.contains(arg.as_str()),
+            (None, Some(_)) => true,
+            _ => false,
+        };
+        if !known || refusal.reason.is_empty() {
+            return Err(invalid(format!(
+                "cli command `{label}`: each `routed_refuse` entry names one known `arg` or one `flag`, with a `reason`"
             )));
         }
     }
@@ -280,6 +348,15 @@ mod tests {
 - name: workflow
   subcommands:
     - { name: list, api: list, args: [{ id: json, long: json, value: flag }] }
+    - name: run
+      api: run
+      database: true
+      args:
+        - { id: session, long: session, value: session }
+        - { id: revision, long: revision }
+      routed_refuse:
+        - { arg: revision, reason: "`--revision` cannot be sent to it" }
+        - { flag: yolo, reason: "--yolo cannot apply to it" }
 "#,
         );
         validate_cli("acme/demo", &commands, &BTreeSet::new(), true).unwrap();
@@ -301,6 +378,32 @@ mod tests {
             ),
             (
                 "- { name: a, driver: d, args: [{ id: f, long: f, value: flag, required: true }] }",
+                true,
+            ),
+            ("- { name: a, driver: d, database: true }", true),
+            ("- { kind: prompt, api: a, database: true }", true),
+            (
+                "- { name: a, api: a, args: [{ id: s, long: s, value: session }] }",
+                true,
+            ),
+            (
+                "- { name: a, api: a, database: true, args: [{ id: s, long: s, value: session }, { id: t, long: t, value: session }] }",
+                true,
+            ),
+            (
+                "- { name: a, api: a, routed_refuse: [{ flag: yolo, reason: r }] }",
+                true,
+            ),
+            (
+                "- { name: a, api: a, database: true, routed_refuse: [{ arg: missing, reason: r }] }",
+                true,
+            ),
+            (
+                "- { name: a, api: a, database: true, args: [{ id: x, long: x }], routed_refuse: [{ arg: x, flag: yolo, reason: r }] }",
+                true,
+            ),
+            (
+                "- { name: a, api: a, database: true, routed_refuse: [{ flag: yolo, reason: \"\" }] }",
                 true,
             ),
         ];

@@ -18,7 +18,7 @@ pub use api::{
     MAX_API_PATH_BYTES, MAX_API_PATH_SEGMENTS, MAX_API_REQUEST_PATH_BYTES, split_request_path,
 };
 pub use catalog::{BundleCatalog, ExportKind};
-pub use cli::{CliArg, CliCommand, CliCommandKind, CliValue};
+pub use cli::{CliArg, CliCommand, CliCommandKind, CliGlobalFlag, CliRoutedRefusal, CliValue};
 pub use error::BundleError;
 pub use first_party::{
     BuiltinBundleEntry, BuiltinBundleProfile, BuiltinBundleSelection, BuiltinBundleStatus,
