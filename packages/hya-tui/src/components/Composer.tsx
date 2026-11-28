@@ -413,7 +413,10 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
         else if (mcpOpen()) controller.mcpKey(key)
         else if (rulesOpen()) controller.rulesKey(key)
         else if (skillsOpen()) controller.skillsKey(key)
-        else if (overlay) void extensionManager.key(overlay, key)
+        else if (overlay) {
+          if (extensionManager.panes().some((pane) => pane.key === overlay)) void extensionManager.paneKey(overlay, key)
+          else void extensionManager.key(overlay, key)
+        }
         else controller.agentsKey(key)
         return
       }

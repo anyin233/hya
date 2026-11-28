@@ -555,6 +555,37 @@ export class FakeBackend {
       }
       if (tail === "summarize" && method === "POST") return jsonResponse({ summaryMessage: "msg_sum" })
       if (tail === "refresh-context" && method === "POST") return jsonResponse({ pending: true })
+      if (tail === "bundles/hya%2Fagent-channels/inbox" && method === "GET") {
+        const ext = session.extensions?.["hya/agent-channels"] as { inboxes?: Record<string, number[]>; cursors?: Record<string, number>; mail?: { from?: string; body?: string }[] } | undefined
+        const unread: { from: string; channel: string; body: string }[] = []
+        if (ext?.inboxes) {
+          for (const [handle, indices] of Object.entries(ext.inboxes)) {
+            const cursor = ext.cursors?.[handle] ?? 0
+            for (const idx of indices) {
+              if (idx >= cursor) {
+                const msg = ext.mail?.[idx]
+                unread.push({ from: msg?.from ?? "peer", channel: handle, body: msg?.body ?? "" })
+              }
+            }
+          }
+        }
+        return jsonResponse({ handle: "lead", cursor: 0, total: unread.length, unread })
+      }
+      if (tail === "bundles/hya%2Fmulti-agent/members" && method === "GET") {
+        const members = (session.members ?? []).map((m) => ({
+          member: m.member,
+          child: m.child ?? null,
+          subagent_type: m.agent ?? "hya-task",
+          description: m.description ?? "",
+          depth: m.depth ?? 0,
+          status: m.status ?? "MEMBER_STATUS_RUNNING",
+          summary: m.summary ?? "",
+          handle: m.handle,
+          archived: m.archived === true,
+          archive_reason: m.archiveReason,
+        }))
+        return jsonResponse({ session: id, root: id, members, roster: {}, archived: {} })
+      }
       if ((tail === "archive" || tail === "bundles/hya%2Fmulti-agent/archive") && method === "POST") {
         const parent = this.sessions.find((s) => s.members?.some((m) => m.child === id))
         const member = parent?.members?.find((m) => m.child === id)
@@ -908,6 +939,17 @@ export async function renderApp(options: RenderAppOptions = {}): Promise<Rendere
   const terminal = createFakeTerminal(options.copyAccepts ?? true)
   const quitCalls: Array<"archive" | "background"> = []
 
+  if (options.loadExtensions) {
+    extensionManager.configure({
+      cacheRoot: join(configDir, "ext-cache"),
+      sdk: locateSdk(),
+      sandbox: "disabled",
+      vmDeadlineMs: 1_500,
+      restartDelayMs: 25,
+      notice: (text) => store.setStatus(text),
+    })
+  }
+
   const refreshExtensions = options.loadExtensions
     ? async (): Promise<void> => {
       try {
@@ -1054,19 +1096,39 @@ export async function renderApp(options: RenderAppOptions = {}): Promise<Rendere
 
 let basicComponentsDir: string | undefined
 
-/** Load the real first-party `hya/basic-tui-components` extension once for suites testing Sessions/Projects/Todos/Context panes. */
-export async function loadBasicComponents(): Promise<void> {
-  if (extensionManager.list().some((e) => e.id === "hya/basic-tui-components" && e.state === "running")) return
-  const bundleDir = join(import.meta.dir, "../../../../bundles/builtin/basic-tui-components")
+/** Build a `ListTuiExtensions` catalog entry from any in-tree `bundles/builtin/<name>` directory. */
+export function builtinTuiCatalogEntry(name: string): Record<string, unknown> {
+  const bundleDir = join(import.meta.dir, "../../../../bundles/builtin", name)
   const yaml = readFileSync(join(bundleDir, "bundle.yaml"), "utf8")
-  const files = [...yaml.matchAll(/path: (tui\/[^ }]+)/g)].map((m) => m[1]!)
-  const permissions = [...yaml.slice(yaml.indexOf("\ntui:")).matchAll(/^    - (.+)$/gm)].map((m) => m[1]!)
+  const idMatch = /^  id:\s*(.+)$/m.exec(yaml)
+  const bundleId = idMatch?.[1]?.trim() ?? `hya/${name}`
+  const tuiBlock = yaml.slice(yaml.indexOf("\ntui:"))
+  const entryMatch = /^  entry:\s*(.+)$/m.exec(tuiBlock)
+  const entry = entryMatch?.[1]?.trim() ?? "tui/main.ts"
+  const files = [...yaml.matchAll(/path:\s*(tui\/[^ }\r\n]+)/g)].map((m) => m[1]!)
+  const permissions = [...tuiBlock.matchAll(/^    -\s*(.+)$/gm)].map((m) => m[1]!.trim())
   const sha = (text: string) => createHash("sha256").update(text).digest("hex")
   const fileEntries = files.map((path) => {
     const content = readFileSync(join(bundleDir, path), "utf8")
     return { path, sha256: sha(content), content }
   })
   const digest = sha(fileEntries.map((f) => `${f.path}:${f.sha256}`).join("\n"))
+  return {
+    bundleId,
+    bundleVersion: "1.0.0",
+    preparedDigest: digest,
+    apiVersion: 2,
+    entry,
+    sdk: "2.0.0",
+    permissions,
+    firstParty: true,
+    files: fileEntries,
+  }
+}
+
+/** Load the real first-party `hya/basic-tui-components` extension once for suites testing Sessions/Projects/Todos/Context panes. */
+export async function loadBasicComponents(): Promise<void> {
+  if (extensionManager.list().some((e) => e.id === "hya/basic-tui-components" && e.state === "running")) return
   basicComponentsDir ??= mkdtempSync(join(tmpdir(), "hya-tui-basic-ext-"))
   extensionManager.configure({
     cacheRoot: join(basicComponentsDir, "cache"),
@@ -1075,17 +1137,10 @@ export async function loadBasicComponents(): Promise<void> {
     vmDeadlineMs: 500,
     restartDelayMs: 25,
   })
-  await extensionManager.load([{
-    bundleId: "hya/basic-tui-components",
-    bundleVersion: "1.0.0",
-    preparedDigest: digest,
-    apiVersion: 2,
-    entry: "tui/main.ts",
-    sdk: "2.0.0",
-    permissions,
-    firstParty: true,
-    files: fileEntries,
-  }], { enabled: () => undefined, remote: false, trusted: () => true })
+  await extensionManager.load(
+    [builtinTuiCatalogEntry("basic-tui-components")],
+    { enabled: () => undefined, remote: false, trusted: () => true },
+  )
   await extensionManager.settled()
 }
 

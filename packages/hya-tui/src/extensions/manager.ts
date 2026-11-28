@@ -251,10 +251,21 @@ export class ExtensionManager {
   /** Visibility filter for `visiblePaneRoot` / `visiblePaneLayout`: hides bundled panes unavailable in the loaded catalog. */
   visiblePaneOptions(): { hasSurface: (kind: "projects" | "sessions" | "todos" | "context") => boolean; hasExtensionPanel: (panel: string) => boolean } {
     this.listVersion()
-    const bare = this.loaded && this.running.size === 0
     return {
       hasSurface: (kind) => this.hasSurface(kind),
-      hasExtensionPanel: () => !bare,
+      hasExtensionPanel: (panelKey) => {
+        if (!this.loaded) return true
+        if (this.running.size === 0) return false
+        const [extension, id] = splitKey(panelKey)
+        const entry = this.running.get(extension)
+        if (!entry) return false
+        if (entry.state === "starting") return true
+        if (entry.state !== "running") return false
+        return Boolean(
+          entry.contributions?.panels.some((panel) => panel.id === id)
+          || entry.contributions?.panes.some((pane) => pane.id === id),
+        )
+      },
     }
   }
 
@@ -778,11 +789,9 @@ export class ExtensionManager {
   private hookTrees(target: RendererContribution["target"], inputKey: string, width: number, input: ToolCallInput | undefined): HookTrees {
     const renderers = this.ordered((contributions) => contributions.renderers.filter((renderer) => renderer.target === target))
     if (renderers.length === 0) return { decorators: [] }
-    const replacer = renderers.filter(({ item }) => item.mode === "replace").at(-1)
     const decorators: HookTree[] = []
     let replace: HookTree | undefined
     for (const { entry, item } of renderers) {
-      if (item.mode === "replace" && item !== replacer?.item) continue
       const slot = `renderer:${item.id}:${inputKey}`
       const cacheKey = String(entry.generation)
       const cached = entry.surfaces.get(slot)

@@ -258,6 +258,20 @@ export type HostCommand =
 
 Commands carrying a `token` deliver their outcome back to the originating surface or slash command via `tui/command_result` (`{ token, ok, value?, error? }`).
 
+## 4. First-Party Built-in TUI Extensions (`bundles/builtin/`)
+
+Under the v2 modular architecture ([ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)), five first-party bundles ship `@hya/tui-sdk` v2 extensions (`api_version: 2`, `sdk: "2.0.0"`). Hybrid `native` + `tui` bundles package both their compiled ABI v2 dynamic library and their `tui/*.ts` assets inside one `.hyabundle` archive; `GET /v2/tui-extensions` serves only the non-binary TUI assets.
+
+| Bundle | Runtime | Contributed Surfaces & Commands | Required Permissions |
+| --- | --- | --- | --- |
+| `hya/basic-tui-components` | `tui` | Panels replacing `projects`, `sessions`, `todos`, `context`, `context_line`, `project_view`, and `jobs` (`hya/basic-tui-components#jobs`) | `tui.panel`, `tui.action`, `tui.keys`, `tui.session.read`, `tui.sessions.read`, `tui.projects.read`, `tui.todos.read`, `tui.status.read`, `tui.session.control`, `tui.project.control` |
+| `hya/multi-agent` | `native` + `tui` | Dynamic panes `hya/multi-agent#subagents` (`SubagentsPane`) and `hya/multi-agent#subagent-viewer` (`SubagentViewer`, embedding `{ type: "transcript", sessionId }`), plus `/subagents` slash command calling `GET /members`, `POST /archive`, `POST /steer` | `tui.panel`, `tui.action`, `tui.keys`, `tui.session.read`, `tui.sessions.read`, `tui.bundle_api`, `tui.extension_state.read`, `tui.transcript.embed` |
+| `hya/workflow` | `native` + `tui` | Dynamic pane `hya/workflow#workflows` (`WorkflowsPane`) plus `/workflow` and `/workflows` slash commands calling `GET /workflows`, `GET /state`, `POST /command` | `tui.panel`, `tui.action`, `tui.keys`, `tui.session.read`, `tui.workspace.read`, `tui.bundle_api`, `tui.extension_state.read` |
+| `hya/plan` | `native` + `tui` | `plan_exit` tool-call card renderer (`plan-exit-card`) and `Plan` status badge (`PLAN (read-only)` while active session runs `hya-plan`) | `tui.render`, `tui.status_item`, `tui.session.read`, `tui.transcript.read` |
+| `hya/agent-channels` | `native` + `tui` | `send` / `list_channel` / `report` tool-call renderers (`channel-tools`) and `Mail` unread status item (`unread-mail`, reading `extension_state["hya/agent-channels"]` with `GET /inbox` fallback) | `tui.render`, `tui.status_item`, `tui.session.read`, `tui.transcript.read`, `tui.bundle_api`, `tui.extension_state.read` |
+
+When any bundle is disabled (via `/extensions disable <bundle-id>`, `bundles.builtin.disable`, or `--bare`), its dynamic panes, status badges, slash commands, and custom tool-call renderers disappear cleanly from the live TUI.
+
 ### JSON-RPC methods
 
 - **Host → Extension (`TuiMethodMap`):** `tui/initialize` (`{ api_version: 2, sdk_version, extension_id, permissions, authorized_bundles? }`), `tui/activate`, `tui/render` (`surface.kind: "panel" | "pane" | "status" | "renderer"`, optional `surface.instance`), `tui/command` (`{ name, args, raw }`), `tui/action`, `tui/key`, `tui/command_result`, `tui/context`, `tui/format`, `tui/intercept`, `tui/fs_event`, `tui/shutdown`.

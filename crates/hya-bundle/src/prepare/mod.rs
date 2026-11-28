@@ -374,19 +374,19 @@ fn prepare_tui(
 }
 
 fn validate_tui(tui: &PreparedTuiExtension, extensions: &[PreparedResource]) -> Result<(), String> {
-    if tui.api_version != 1 {
-        return Err("tui.api_version must be 1".to_string());
+    if tui.api_version != 2 {
+        return Err("tui.api_version must be 2".to_string());
     }
     let parts = tui.sdk.split('.').collect::<Vec<_>>();
     if !(2..=3).contains(&parts.len())
-        || parts[0] != "1"
+        || parts[0] != "2"
         || parts.iter().any(|part| {
             part.is_empty()
                 || !part.bytes().all(|byte| byte.is_ascii_digit())
                 || (part.len() > 1 && part.starts_with('0'))
         })
     {
-        return Err("tui.sdk must be major.minor[.patch] with major 1".to_string());
+        return Err("tui.sdk must be major.minor[.patch] with major 2".to_string());
     }
     if normalize_source_path("tui", &tui.entry).as_deref() != Ok(tui.entry.as_str())
         || tui.entry.contains(':')
@@ -406,6 +406,7 @@ fn validate_tui(tui: &PreparedTuiExtension, extensions: &[PreparedResource]) -> 
         "tui.status_item",
         "tui.session.read",
         "tui.transcript.read",
+        "tui.transcript.embed",
         "tui.workspace.read",
         "workspace.git.read",
         "tui.action",
@@ -416,6 +417,8 @@ fn validate_tui(tui: &PreparedTuiExtension, extensions: &[PreparedResource]) -> 
         "tui.keys",
         "tui.session.control",
         "tui.project.control",
+        "tui.bundle_api",
+        "tui.extension_state.read",
     ];
     let mut seen = BTreeSet::new();
     for permission in &tui.permissions {

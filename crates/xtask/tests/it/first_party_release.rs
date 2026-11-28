@@ -119,6 +119,36 @@ fn stages_installed_packages_and_versioned_release_assets() {
         .find(|asset| asset.local_id == "runtime")
         .expect("native library resource");
     assert_eq!(library.source_bytes().unwrap(), b"library:coding-extras");
+
+    // Hybrid native + TUI v2 bundles preserve both their native library and TUI assets.
+    for hybrid in ["multi-agent", "workflow", "plan", "agent-channels"] {
+        let pkg = hya_bundle::inspect_public_package(
+            &fs::read(
+                root.join("package/bundles")
+                    .join(format!("hya-{hybrid}.hyabundle")),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let bundle = &pkg.bundles()[0];
+        let tui = bundle.tui().expect("hybrid bundle carries tui descriptor");
+        assert_eq!(tui.api_version, 2, "{hybrid}");
+        assert_eq!(tui.entry, "tui/main.ts", "{hybrid}");
+        assert!(
+            bundle
+                .extensions()
+                .iter()
+                .any(|asset| asset.local_id == "runtime" && asset.binary_base64.is_some()),
+            "{hybrid} missing native runtime library"
+        );
+        assert!(
+            bundle
+                .extensions()
+                .iter()
+                .any(|asset| asset.source_path == "tui/main.ts" && asset.binary_base64.is_none()),
+            "{hybrid} missing tui/main.ts text asset"
+        );
+    }
     fs::remove_dir_all(root).unwrap();
 }
 

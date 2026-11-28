@@ -12,8 +12,9 @@ import { colors } from "../theme"
 import { ConversationPane } from "./ConversationPane"
 import { MessagePane } from "./MessagePane"
 import { WorkingIndicator } from "./WorkingIndicator"
-import { ExtensionPanel } from "../extensions/Host"
+import { ExtensionPane, ExtensionPanel } from "../extensions/Host"
 import { extensionManager } from "../extensions/manager"
+import type { JsonValue } from "../extensions/wire"
 import { LayoutPane } from "./LayoutPane"
 import { tuiVersion } from "../version"
 
@@ -91,22 +92,55 @@ function TextPane(props: PaneRenderProps) {
     </scrollbox>
   </PaneFrame>
 }
-/** Built-ins and custom panels share the layout's border and keyboard ownership. */
+/** Built-ins and custom panels/panes share the layout's border and keyboard ownership. */
 function BundledPane(props: PaneRenderProps) {
   const panel = () => props.node.kind === "extension" ? props.node.panel : extensionManager.replacement(props.node.kind as "projects" | "sessions" | "todos" | "context")?.key
-  const title = () => extensionManager.panels().find((item) => item.key === panel())?.title ?? paneDefinitions[props.node.kind].title
+  const dynamicPane = () => {
+    const key = panel()
+    return key ? extensionManager.panes().find((item) => item.key === key) : undefined
+  }
+  const title = () => {
+    const base = props.node.title
+      ?? dynamicPane()?.title
+      ?? extensionManager.panels().find((item) => item.key === panel())?.title
+      ?? paneDefinitions[props.node.kind].title
+    return props.node.pinned ? `${base} · pinned` : base
+  }
+  const contentWidth = () => props.width - (paneDefinitions[props.node.kind].selectable ? 4 : 2)
+  const contentHeight = () => props.height - (paneDefinitions[props.node.kind].selectable ? 2 : 1)
   return <PaneFrame kind={props.node.kind} focused={props.focused} title={title()}>
     <Show when={panel()} keyed fallback={<text wrapMode="word" fg={colors.muted}>{extensionManager.placeholder(props.node.kind as "projects" | "sessions" | "todos" | "context") ?? "Loading…"}</text>}>
-      {(key) => <ExtensionPanel panelKey={key} width={props.width - (paneDefinitions[props.node.kind].selectable ? 4 : 2)}
-        height={props.height - (paneDefinitions[props.node.kind].selectable ? 2 : 1)} paddingX={0} scrollRef={props.scrollRef} />}
+      {(key) => (
+        <Show
+          when={dynamicPane()}
+          fallback={<ExtensionPanel panelKey={key} width={contentWidth()} height={contentHeight()} paddingX={0} scrollRef={props.scrollRef} />}
+        >
+          <ExtensionPane
+            paneKey={key}
+            width={contentWidth()}
+            height={contentHeight()}
+            {...(props.node.instance ? { instance: props.node.instance } : {})}
+            {...(props.node.params !== undefined ? { params: props.node.params as JsonValue } : {})}
+            paddingX={0}
+            scrollRef={props.scrollRef}
+          />
+        </Show>
+      )}
     </Show>
   </PaneFrame>
 }
 function bundledInput(context: PaneInputContext): PaneInputHandle {
   const fallback = scrollInput(context)
   return { onKey: (key) => {
-    const panel = context.node.kind === "extension" ? extensionManager.panels().find((entry) => entry.key === context.node.panel)
-      : extensionManager.replacement(context.node.kind as "projects" | "sessions")
+    if (context.node.kind === "extension" && context.node.panel) {
+      const pane = extensionManager.panes().find((entry) => entry.key === context.node.panel)
+      if (pane?.keys) { void extensionManager.paneKey(pane.key, key, context.node.instance); return }
+      const panel = extensionManager.panels().find((entry) => entry.key === context.node.panel)
+      if (panel?.keys) { void extensionManager.key(panel.key, key); return }
+      fallback.onKey(key)
+      return
+    }
+    const panel = extensionManager.replacement(context.node.kind as "projects" | "sessions")
     if (panel?.keys) void extensionManager.key(panel.key, key)
     else if (context.node.kind !== "projects") fallback.onKey(key)
   } }

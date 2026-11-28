@@ -23,13 +23,15 @@ export interface CompletionContext {
   webTab?: boolean
   /** Preset names `/set preset` accepts (app/structure.ts). */
   presets?: string[]
+  /** Slash command names contributed by running TUI extensions (without leading `/`). */
+  extensionCommands?: string[]
 }
 
 const defaultRegistry = createCommandRegistry()
 
 /**
  * Return full replacement values for the current command line: command names
- * (native and backend) before the first space, else the command's own
+ * (native, extension, and backend) before the first space, else the command's own
  * argument completer from the registry.
  */
 export function completeCommand(input: string, context: CompletionContext, registry: CommandRegistry = defaultRegistry): Completion[] {
@@ -37,6 +39,7 @@ export function completeCommand(input: string, context: CompletionContext, regis
   if (input.indexOf(" ") < 0) {
     return matchValues("", input, [
       ...registry.list().filter((spec) => !(context.webTab && spec.terminalOnly)).map((spec) => spec.name),
+      ...(context.extensionCommands ?? []).map((name) => name.startsWith("/") ? name : `/${name}`),
       ...context.backendCommands.map((name) => `/${name}`),
     ])
   }

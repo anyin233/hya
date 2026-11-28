@@ -1256,7 +1256,7 @@ fn tui_manifest_validation_canonicalization_and_compatibility() {
         )
     };
     let block = |entry: &str, sdk: &str, perms: &str| {
-        format!("  api_version: 1\n  entry: {entry}\n  sdk: {sdk}\n  permissions: {perms}\n")
+        format!("  api_version: 2\n  entry: {entry}\n  sdk: {sdk}\n  permissions: {perms}\n")
     };
 
     // Absent tui section remains compatible.
@@ -1268,36 +1268,88 @@ fn tui_manifest_validation_canonicalization_and_compatibility() {
             .is_none()
     );
 
-    // Supported SDK versions + canonicalization of entry path & sorted permissions.
-    for sdk in ["1.0", "1.2.3"] {
+    // Supported SDK v2 versions + canonicalization of entry path & sorted v2 permissions.
+    for sdk in ["2.0", "2.0.0", "2.1.3"] {
         let prep = prepare_package(tui_src(
-            &block("./entry.ts", sdk, "[tui.render, tui.panel]"),
+            &block(
+                "./entry.ts",
+                sdk,
+                "[tui.transcript.embed, tui.render, tui.panel, tui.bundle_api, tui.extension_state.read]",
+            ),
             "entry.ts",
         ))
         .expect("valid tui");
         let tui = prep.bundles()[0].tui().expect("tui present");
+        assert_eq!(tui.api_version, 2);
         assert_eq!(tui.entry, "entry.ts");
-        assert_eq!(tui.permissions, ["tui.panel", "tui.render"]);
+        assert_eq!(
+            tui.permissions,
+            [
+                "tui.bundle_api",
+                "tui.extension_state.read",
+                "tui.panel",
+                "tui.render",
+                "tui.transcript.embed",
+            ]
+        );
     }
+
+    // Hybrid native + TUI v2 bundle prepares cleanly with both native runtime and TUI assets.
+    let hybrid = prepare_package(BundleSource::new(
+        "hybrid-native-tui",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                concat!(
+                    "kind: Bundle\n",
+                    "schema_version: 2\n",
+                    "identity: { id: hya/hybrid-tui, version: 1.0.0, publisher: hya }\n",
+                    "runtime:\n",
+                    "  kind: native\n",
+                    "  abi_version: 2\n",
+                    "  capabilities: [tools, apis]\n",
+                    "assets:\n",
+                    "  - { id: tui-main, path: tui/main.ts }\n",
+                    "tui:\n",
+                    "  api_version: 2\n",
+                    "  entry: tui/main.ts\n",
+                    "  sdk: \"2.0.0\"\n",
+                    "  permissions: [tui.panel, tui.bundle_api, tui.extension_state.read, tui.transcript.embed]\n",
+                )
+                .as_bytes(),
+            ),
+            SourceFile::new("tui/main.ts", b"export default {};".as_slice()),
+        ],
+    ))
+    .expect("hybrid native + tui bundle prepares");
+    let hybrid_bundle = &hybrid.bundles()[0];
+    assert!(hybrid_bundle.tui().is_some());
+    assert_eq!(hybrid_bundle.tui().unwrap().api_version, 2);
+    assert!(
+        hybrid_bundle
+            .extensions()
+            .iter()
+            .any(|res| res.source_path == "tui/main.ts" && res.binary_base64.is_none())
+    );
 
     // Invalid api_version, sdk, entry, and permissions.
     for (tui, file, needle) in [
         (
-            block("entry.ts", "1.2.3", "[]").replacen("api_version: 1", "api_version: 2", 1),
+            block("entry.ts", "2.0.0", "[]").replacen("api_version: 2", "api_version: 1", 1),
             "entry.ts",
             "tui.",
         ),
-        (block("entry.ts", "2.0", "[]"), "entry.ts", "tui."),
-        (block("missing.ts", "1.0", "[]"), "entry.ts", "tui.entry"),
-        (block("entry.txt", "1.0", "[]"), "entry.txt", "tui.entry"),
-        (block("entry.ts", "1.0", "[]"), "other.ts", "tui.entry"),
+        (block("entry.ts", "1.0", "[]"), "entry.ts", "tui."),
+        (block("missing.ts", "2.0", "[]"), "entry.ts", "tui.entry"),
+        (block("entry.txt", "2.0", "[]"), "entry.txt", "tui.entry"),
+        (block("entry.ts", "2.0", "[]"), "other.ts", "tui.entry"),
         (
-            block("entry.ts", "1.0", "[tui.unknown]"),
+            block("entry.ts", "2.0", "[tui.unknown]"),
             "entry.ts",
             "tui.permissions",
         ),
         (
-            block("entry.ts", "1.0", "[tui.panel, tui.panel]"),
+            block("entry.ts", "2.0", "[tui.panel, tui.panel]"),
             "entry.ts",
             "tui.permissions",
         ),

@@ -112,9 +112,9 @@ import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type Pi
 import { treeSessionIds, type PromptChoice } from "../state/prompts"
 import { activeProject, newestTopLevelSession, noProjectStatus, projectScope, sessionPlacement } from "../state/projects"
 import { extensionManager, type CommandOrigin } from "../extensions/manager"
-import type { HostCommand, JsonValue } from "../extensions/wire"
+import { isJson, resolveBundleApiRequest, type HostCommand, type JsonValue, type PaneHostCommand, type ResolvedBundleApiRequest } from "../extensions/wire"
 import { projectsSidebarVisible } from "../state/layout"
-import { paneLeaves } from "../state/panes"
+import { closeExtensionPane, focusExtensionPane, openExtensionPane, paneLeaves, pinExtensionPane } from "../state/panes"
 import { createAgentsViewController } from "./agentsView"
 import type { UiHandles } from "./context"
 import { createDiffController } from "./diff"
@@ -668,6 +668,91 @@ export function createController({ client, store, directory, remote: startedRemo
     void refreshProjects().catch(() => undefined)
   }
 
+  /** Invoke a bundle-confined v2 `BundleApi` endpoint via `client.request`. */
+  async function invokeBundleApi(request: ResolvedBundleApiRequest): Promise<JsonValue | undefined> {
+    const response = await client.request<unknown>(request.method, request.urlPath, request.body)
+    return isJson(response) ? response : undefined
+  }
+
+  /** Read folded `Projection::extensions[bundleId]` for the active or requested session. */
+  async function readExtensionState(bundleId: string, sessionId?: string): Promise<JsonValue | undefined> {
+    const active = store.state.selected
+    if (!sessionId || sessionId === active?.id) {
+      const value = active?.extensions?.[bundleId]
+      return isJson(value) ? value : undefined
+    }
+    const cached = store.state.sessions.find((row) => row.id === sessionId)?.extensions?.[bundleId]
+    if (isJson(cached)) return cached
+    const fetched = await client.request<SessionInfo>("GET", `/v2/sessions/${encodeURIComponent(sessionId)}`)
+    const value = fetched.extensions?.[bundleId]
+    return isJson(value) ? value : undefined
+  }
+
+  /** Execute a v2 dynamic pane lifecycle command (`pane.open`, `pane.pin`, `pane.close`, `pane.focus`). */
+  function paneCommand(command: PaneHostCommand, origin: CommandOrigin): JsonValue | undefined {
+    const paneKey = command.pane.includes("#") ? command.pane : `${origin.extension}#${command.pane}`
+    const descriptor = extensionManager.panes().find((pane) => pane.key === paneKey)
+    switch (command.command) {
+      case "pane.open": {
+        const slot = command.slot ?? descriptor?.defaultSlot ?? "right"
+        if (slot === "overlay") {
+          store.setExtensionOverlay(paneKey)
+          return { pane: paneKey, slot: "overlay" }
+        }
+        const sizeSpec = command.size ?? descriptor?.defaultSize
+        let weight: number | undefined
+        if (typeof sizeSpec?.width === "string" && sizeSpec.width.endsWith("%")) {
+          const pct = Number(sizeSpec.width.slice(0, -1))
+          if (Number.isFinite(pct) && pct > 0 && pct < 100) weight = pct / 100
+        }
+        const opened = openExtensionPane(store.state.paneLayout, {
+          panel: paneKey,
+          ...(command.instance !== undefined ? { instance: command.instance } : {}),
+          ...(command.title !== undefined ? { title: command.title } : {}),
+          slot,
+          ...(weight !== undefined ? { weight } : {}),
+          ...(command.params !== undefined ? { params: command.params } : {}),
+          ...(command.focus !== undefined ? { focus: command.focus } : {}),
+        })
+        store.setPaneLayout(opened.layout)
+        return {
+          id: opened.id,
+          pane: paneKey,
+          ...(command.instance !== undefined ? { instance: command.instance } : {}),
+        }
+      }
+      case "pane.pin": {
+        const next = pinExtensionPane(store.state.paneLayout, {
+          panel: paneKey,
+          ...(command.instance !== undefined ? { instance: command.instance } : {}),
+          ...(command.pinned !== undefined ? { pinned: command.pinned } : {}),
+        })
+        store.setPaneLayout(next)
+        return { pane: paneKey, pinned: command.pinned ?? true }
+      }
+      case "pane.close": {
+        if (store.state.extensionOverlay === paneKey) {
+          store.setExtensionOverlay(undefined)
+          return { pane: paneKey, closed: true }
+        }
+        const next = closeExtensionPane(store.state.paneLayout, {
+          panel: paneKey,
+          ...(command.instance !== undefined ? { instance: command.instance } : {}),
+        })
+        store.setPaneLayout(next)
+        return { pane: paneKey, closed: true }
+      }
+      case "pane.focus": {
+        const next = focusExtensionPane(store.state.paneLayout, {
+          panel: paneKey,
+          ...(command.instance !== undefined ? { instance: command.instance } : {}),
+        })
+        store.setPaneLayout(next)
+        return { pane: paneKey, active: next.active }
+      }
+    }
+  }
+
   /**
    * A host command an extension panel answered with (extensions/manager.ts;
    * docs/tui-extensions.md "Host commands"). What it returns is the token's
@@ -693,6 +778,16 @@ export function createController({ client, store, directory, remote: startedRemo
         const candidates = await client.findFiles(`${command.input.replace(/\/+$/, "")}*`, 1)
         return { candidates, ...(candidates[0] ? { completion: candidates[0] } : {}) }
       }
+      case "bundle.api": {
+        const resolved = resolveBundleApiRequest(origin.extension, command as unknown as Record<string, unknown>)
+        if (typeof resolved === "string") throw new Error(resolved)
+        return invokeBundleApi(resolved)
+      }
+      case "pane.open":
+      case "pane.pin":
+      case "pane.close":
+      case "pane.focus":
+        return paneCommand(command, origin)
       case "ui.release": case "ui.close": case "ui.open": return undefined
     }
   }
@@ -936,6 +1031,14 @@ export function createController({ client, store, directory, remote: startedRemo
       }
       if (source === "command" || (source === "auto" && text.startsWith("/"))) {
         if (!text.startsWith("/")) throw new Error("Command must start with /")
+        const [cmdToken = ""] = text.split(/\s+/)
+        const extName = cmdToken.slice(1)
+        const extCommand = extensionManager.commands().find((entry) => entry.name === extName)
+        if (extCommand) {
+          const extArgs = text.slice(cmdToken.length).trimStart()
+          await extensionManager.runSlashCommand(extCommand.extension, extCommand.name, extArgs, text)
+          return
+        }
         await registry.dispatch(text, { store, client, actions })
         return
       }
@@ -1162,7 +1265,10 @@ export function createController({ client, store, directory, remote: startedRemo
   function commandEntries(): CommandEntry[] {
     // A WebUI tab does not offer terminal-only commands (`/to-background`).
     const local = registry.list().filter((spec) => !(store.state.webTab && spec.terminalOnly))
-    return mergeCommandEntries(local, store.state.backendCommands, { skillCommands: store.state.structure.commands.skill_commands })
+    return mergeCommandEntries(local, store.state.backendCommands, {
+      skillCommands: store.state.structure.commands.skill_commands,
+      extensionCommands: extensionManager.commands(),
+    })
   }
 
   return {
@@ -1170,6 +1276,9 @@ export function createController({ client, store, directory, remote: startedRemo
     sessionViews,
     openRootSession,
     hostCommand,
+    invokeBundleApi,
+    readExtensionState,
+    paneCommand,
     focusProjects,
     openSessionContext,
     openProjectContext,
@@ -1195,7 +1304,15 @@ export function createController({ client, store, directory, remote: startedRemo
     clipboardImage,
     /** Pending `@path` image attachments of the composer's current text, for the pending-attachment row (components/Composer.tsx). */
     previewAttachments: (text: string) => loadAttachments(text, true),
-    complete: (input: string) => completeCommand(input, { ...store.completionContext(), ...(structure ? { presets: structure.presets() } : {}) }, registry),
+    complete: (input: string) => completeCommand(
+      input,
+      {
+        ...store.completionContext(),
+        ...(structure ? { presets: structure.presets() } : {}),
+        extensionCommands: extensionManager.commands().map((entry) => entry.name),
+      },
+      registry,
+    ),
     commandEntries,
     modes,
     pickerKey,

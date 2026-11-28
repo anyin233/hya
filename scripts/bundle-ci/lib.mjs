@@ -83,6 +83,27 @@ export const ALLOWED_PROCESS_KINDS = new Set(["rust", "bun", "claude"]);
 export const ALLOWED_RUNTIME_KINDS = new Set(["static", "js", "native"]);
 export const ALLOWED_JS_MODES = new Set(["managed", "process", "claude"]);
 export const ALLOWED_NATIVE_CAPABILITIES = new Set(["tools", "hooks", "rewriters", "services", "drivers", "schemas", "apis"]);
+export const ALLOWED_TUI_PERMISSIONS = new Set([
+  "fs.read",
+  "tui.panel",
+  "tui.render",
+  "tui.status_item",
+  "tui.session.read",
+  "tui.transcript.read",
+  "tui.transcript.embed",
+  "tui.workspace.read",
+  "workspace.git.read",
+  "tui.action",
+  "tui.sessions.read",
+  "tui.projects.read",
+  "tui.todos.read",
+  "tui.status.read",
+  "tui.keys",
+  "tui.session.control",
+  "tui.project.control",
+  "tui.bundle_api",
+  "tui.extension_state.read",
+]);
 
 const MAX_SKILL_BYTES = 256 * 1024;
 const MAX_PACKAGE_BYTES = 128 * 1024 * 1024;
@@ -314,6 +335,7 @@ export function discoverBundles(rootDirs, options = {}) {
       group: type === "native" ? "native" : "js_static",
       has_check: Boolean(Array.isArray(manifest?.check?.command) && manifest.check.command.length > 0),
       has_process: Boolean(processSpec),
+      has_tui: Boolean(isRecord(manifest?.tui)),
     };
     if (nativeMeta) {
       entry.crate_dir = nativeMeta.crate_dir;
@@ -950,20 +972,38 @@ export function validateBundleStatic(bundleDir) {
     if (!isRecord(manifest.tui)) {
       errors.push(`${manifestFile}: tui must be a mapping`);
     } else {
-      if (!Number.isInteger(manifest.tui.api_version) || manifest.tui.api_version < 1) {
-        errors.push(`${manifestFile}: tui.api_version must be a positive integer`);
+      if (manifest.tui.api_version !== 2) {
+        errors.push(`${manifestFile}: tui.api_version must be 2`);
       }
       const norm = normalizeSafeRelativePath(manifest.tui.entry);
       if (!norm.ok) errors.push(`${manifestFile}: tui.entry: ${norm.error}`);
       else if (!fileMap.has(norm.path)) errors.push(`${manifestFile}: tui.entry references missing file: ${norm.path}`);
-      if (typeof manifest.tui.sdk !== "string" || manifest.tui.sdk.trim() === "") {
-        errors.push(`${manifestFile}: tui.sdk must be a non-empty string`);
+      else {
+        const assetPaths = new Set(
+          (Array.isArray(manifest.assets) ? manifest.assets : [])
+            .map((a) => (isRecord(a) ? normalizeSafeRelativePath(a.path) : { ok: false }))
+            .filter((r) => r.ok)
+            .map((r) => r.path),
+        );
+        if (!assetPaths.has(norm.path)) {
+          errors.push(`${manifestFile}: tui.entry \`${norm.path}\` must be declared under \`assets\``);
+        }
       }
-      if (
-        manifest.tui.permissions !== undefined &&
-        (!Array.isArray(manifest.tui.permissions) || !manifest.tui.permissions.every((p) => typeof p === "string"))
-      ) {
-        errors.push(`${manifestFile}: tui.permissions must be a list of strings`);
+      if (typeof manifest.tui.sdk !== "string" || !/^2\.(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*))?$/.test(manifest.tui.sdk.trim())) {
+        errors.push(`${manifestFile}: tui.sdk must be major.minor[.patch] with major 2`);
+      }
+      if (manifest.tui.permissions !== undefined) {
+        if (!Array.isArray(manifest.tui.permissions) || !manifest.tui.permissions.every((p) => typeof p === "string")) {
+          errors.push(`${manifestFile}: tui.permissions must be a list of strings`);
+        } else {
+          const seenPerms = new Set();
+          for (const perm of manifest.tui.permissions) {
+            if (!ALLOWED_TUI_PERMISSIONS.has(perm) || seenPerms.has(perm)) {
+              errors.push(`${manifestFile}: tui.permissions contains unknown or duplicate permission \`${perm}\``);
+            }
+            seenPerms.add(perm);
+          }
+        }
       }
     }
   }

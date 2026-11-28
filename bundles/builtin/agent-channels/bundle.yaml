@@ -44,3 +44,18 @@ channels:
     capabilities: [send, report, steer, follow_up, resident_mail]
     scope: vertical
     retention: team_session
+assets:
+  - { id: tui-main, path: tui/main.ts }
+  - { id: tui-renderers, path: tui/renderers.ts }
+  - { id: tui-status, path: tui/status.ts }
+tui:
+  api_version: 2
+  entry: tui/main.ts
+  sdk: "2.0.0"
+  permissions:
+    - tui.render
+    - tui.status_item
+    - tui.session.read
+    - tui.transcript.read
+    - tui.bundle_api
+    - tui.extension_state.read

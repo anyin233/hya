@@ -169,7 +169,7 @@ const mouseRows: HelpRow[] = [
   { group: "Views", keys: "Drag a sidebar border", description: "Resize the pane beside it (the right sidebar stays at least 29 columns); the width is saved with the layout" },
 ]
 
-const sources: Record<CommandEntry["source"], NonNullable<HelpRow["source"]>> = { local: "local", command: "server", skill: "skill" }
+const sources: Record<CommandEntry["source"], NonNullable<HelpRow["source"]>> = { local: "local", extension: "local", command: "server", skill: "skill" }
 
 /** Every key (grouped, in `helpGroups` order) and every command of `commands` (the merged `/` menu list). */
 export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {

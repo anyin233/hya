@@ -194,3 +194,14 @@ test("Context line: segments by priority while they fit", async () => {
   expect(lines(await panel.render("context-line", 30, 1))).toEqual(["mode manual · Work · m1:high"]);
   panel.vm.dispose();
 });
+
+test("Jobs: active turn, busy/waiting sessions, and running subagents", async () => {
+  const panel = await open({ ...base, session: { id: "a", title: "A", agent: "build", busy: true } });
+  expect(lines(await panel.render("jobs", 60))).toEqual([
+    "● A · turn running",
+    "↳ hya-scout-skade · running",
+    "◌ C · waiting for input",
+  ]);
+  expect((await panel.action("jobs", { id: "c" })).commands).toEqual([{ command: "session.open", id: "c", token: "open" }]);
+  panel.vm.dispose();
+});

@@ -35,7 +35,21 @@ import { parseLegacyPaneLayout, type PaneNode as LegacyNode } from "./legacyPane
 export type PaneAxis = "horizontal" | "vertical"
 export type PaneDirection = "left" | "right" | "up" | "down"
 export type LayoutDirection = "row" | "column"
-export interface PaneLeaf { type: "pane"; id: string; kind: PaneKind; panel?: string; session?: string }
+export interface PaneLeaf {
+  type: "pane"
+  id: string
+  kind: PaneKind
+  panel?: string
+  session?: string
+  /** Optional instance id for multi-instance v2 extension panes (e.g. a subsession id). */
+  instance?: string
+  /** Optional title override supplied by `pane.open`. */
+  title?: string
+  /** Optional pin flag toggled by `pane.pin`. */
+  pinned?: boolean
+  /** Optional JSON params supplied by `pane.open`. */
+  params?: unknown
+}
 export type PaneSize = { mode: "weight"; value: number } | { mode: "content" }
 export interface PaneChild { node: PaneNode; size: PaneSize }
 export interface PaneSplit { type: "split"; id: string; direction: LayoutDirection; children: PaneChild[] }
@@ -384,6 +398,9 @@ export function parsePaneLayout(value: unknown): PaneLayout | undefined {
       if (!/^pane-[1-9]\d*$/.test(row.id) || !paneKinds.includes(row.kind as PaneKind) || ++leaves > maxPanes) return false
       if (row.kind === "extension" ? typeof row.panel !== "string" || !extensionPanelKey.test(row.panel) : row.panel !== undefined) return false
       if (row.session !== undefined && (row.kind !== "subagent-viewer" || typeof row.session !== "string" || !row.session.trim())) return false
+      if (row.instance !== undefined && (row.kind !== "extension" || typeof row.instance !== "string" || !row.instance.trim())) return false
+      if (row.title !== undefined && (row.kind !== "extension" || typeof row.title !== "string")) return false
+      if (row.pinned !== undefined && (row.kind !== "extension" || typeof row.pinned !== "boolean")) return false
       if (row.kind === "conversation") conversations++
       if (row.kind === "composer") composers++
       return true
@@ -414,4 +431,113 @@ export function pinSubagentViewer(layout: PaneLayout, id: string, session?: stri
     const { session: previous, ...leaf } = node as PaneLeaf
     return session ? { ...leaf, session } : leaf
   }) }
+}
+
+/** Match an open dynamic extension pane leaf by `<bundle>#<pane>` and optional `instance`. */
+function findExtensionPane(layout: PaneLayout, panel: string, instance?: string): PaneLeaf | undefined {
+  const candidates = paneLeaves(layout.root).filter((pane) => pane.kind === "extension" && pane.panel === panel)
+  if (!candidates.length) return undefined
+  if (instance !== undefined) {
+    return candidates.find((pane) => pane.instance === instance)
+  }
+  return candidates.find((pane) => pane.instance === undefined) ?? candidates[0]
+}
+
+export interface OpenExtensionPaneOptions {
+  readonly panel: string
+  readonly instance?: string
+  readonly title?: string
+  readonly slot?: "left" | "right" | "top" | "bottom" | "main"
+  readonly weight?: number
+  readonly params?: unknown
+  readonly focus?: boolean
+}
+
+/** Open or reuse a dynamic v2 extension pane leaf in `layout`. */
+export function openExtensionPane(layout: PaneLayout, options: OpenExtensionPaneOptions): { layout: PaneLayout; id: string } {
+  const existing = findExtensionPane(layout, options.panel, options.instance)
+  if (existing) {
+    const root = mapNode(layout.root, existing.id, (node) => {
+      if (node.type !== "pane") return node
+      return {
+        ...node,
+        ...(options.title !== undefined ? { title: options.title } : {}),
+        ...(options.params !== undefined ? { params: options.params } : {}),
+      }
+    })
+    return {
+      layout: finish(layout, root, options.focus === false ? layout.active : existing.id),
+      id: existing.id,
+    }
+  }
+  const slot = options.slot ?? "right"
+  const direction: LayoutDirection = slot === "top" || slot === "bottom" ? "column" : "row"
+  const before = slot === "left" || slot === "top"
+  const target = slot === "main"
+    ? (paneLeaves(layout.root).find((pane) => pane.kind === "conversation")?.id ?? "root")
+    : "root"
+  const beforeIds = new Set(paneLeaves(layout.root).map((pane) => pane.id))
+  let next = wrapPane(layout, target, direction, "extension", before, options.panel)
+  const added = paneLeaves(next.root).find((pane) => !beforeIds.has(pane.id))
+  if (!added) throw new Error("Cannot add pane: workspace pane limit reached")
+  if (options.weight !== undefined && Number.isFinite(options.weight) && options.weight > 0) {
+    next = setPaneSize(next, added.id, { mode: "weight", value: options.weight })
+  }
+  const root = mapNode(next.root, added.id, (node) => {
+    if (node.type !== "pane") return node
+    return {
+      ...node,
+      ...(options.instance !== undefined ? { instance: options.instance } : {}),
+      ...(options.title !== undefined ? { title: options.title } : {}),
+      ...(options.params !== undefined ? { params: options.params } : {}),
+    }
+  })
+  return {
+    layout: finish(next, root, options.focus === false ? layout.active : added.id),
+    id: added.id,
+  }
+}
+
+/** Pin or unpin an open dynamic v2 extension pane leaf. */
+export function pinExtensionPane(
+  layout: PaneLayout,
+  options: { readonly panel: string; readonly instance?: string; readonly pinned?: boolean },
+): PaneLayout {
+  const pinned = options.pinned ?? true
+  const exact = options.instance !== undefined ? findExtensionPane(layout, options.panel, options.instance) : undefined
+  const target = exact ?? paneLeaves(layout.root).find((pane) => pane.kind === "extension" && pane.panel === options.panel && !pane.pinned)
+    ?? paneLeaves(layout.root).find((pane) => pane.kind === "extension" && pane.panel === options.panel)
+  if (!target) return layout
+  const root = mapNode(layout.root, target.id, (node) => {
+    if (node.type !== "pane") return node
+    const { instance: _prevInstance, pinned: _prevPinned, ...rest } = node
+    if (!pinned) return { ...rest, pinned: false }
+    const nextInstance = options.instance ?? node.instance
+    return { ...rest, pinned: true, ...(nextInstance !== undefined ? { instance: nextInstance } : {}) }
+  })
+  return finish(layout, root)
+}
+
+/** Close a dynamic v2 extension pane leaf (or all matching instances if `instance` is omitted). */
+export function closeExtensionPane(
+  layout: PaneLayout,
+  options: { readonly panel: string; readonly instance?: string },
+): PaneLayout {
+  const matches = paneLeaves(layout.root).filter(
+    (pane) => pane.kind === "extension" && pane.panel === options.panel && (options.instance === undefined || pane.instance === options.instance),
+  )
+  let next = layout
+  for (const leaf of matches) {
+    next = closePane(next, leaf.id)
+  }
+  return next
+}
+
+/** Focus a dynamic v2 extension pane leaf if open. */
+export function focusExtensionPane(
+  layout: PaneLayout,
+  options: { readonly panel: string; readonly instance?: string },
+): PaneLayout {
+  const target = findExtensionPane(layout, options.panel, options.instance)
+  return target ? { ...layout, active: target.id } : layout
 }

@@ -12,6 +12,16 @@ export interface TreeHost {
   readonly transcript?: (node: TranscriptRenderNode) => JSX.Element
 }
 
+/** True when `node` or any descendant is a host-virtualized transcript node (which owns its own scrollbox). */
+export function containsTranscript(node: RenderNode | undefined): boolean {
+  if (!node) return false
+  if (isTranscriptNode(node)) return true
+  if ("children" in node && Array.isArray(node.children)) {
+    return node.children.some((child) => containsTranscript(child))
+  }
+  return false
+}
+
 const themed = (color: string | undefined): string | undefined => {
   if (color === undefined || color.startsWith("#")) return color
   if (color === "accent") return colors.focus // Legacy extension spelling.
@@ -55,8 +65,10 @@ export function RenderTree(props: { node: RenderNode; host?: TreeHost; inRow?: b
         >{node.text}</text>
       )
     }
-    case "row": case "column":
-      return <box flexDirection={node.kind} gap={node.gap ?? 0} width="100%"><For each={node.children}>{child}</For></box>
+    case "row":
+      return <box flexDirection="row" gap={node.gap ?? 0} width="100%" flexShrink={0}><For each={node.children}>{child}</For></box>
+    case "column":
+      return <box flexDirection="column" gap={node.gap ?? 0} width="100%" {...(containsTranscript(node) ? { flexGrow: 1, height: "100%" } : {})}><For each={node.children}>{child}</For></box>
     case "box":
       return (
         <box flexDirection="column" width="100%" padding={node.padding ?? 0}>

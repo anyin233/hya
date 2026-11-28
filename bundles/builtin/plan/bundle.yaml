@@ -24,3 +24,14 @@ resources:
       path: hooks/tool_visibility.json
 agents:
   - path: agents/hya-plan.md
+assets:
+  - { id: tui-main, path: tui/main.ts }
+tui:
+  api_version: 2
+  entry: tui/main.ts
+  sdk: "2.0.0"
+  permissions:
+    - tui.render
+    - tui.status_item
+    - tui.session.read
+    - tui.transcript.read
