@@ -41,6 +41,7 @@ where
 pub struct E2eEnvBuilder {
     scripts: Vec<ScriptStep>,
     routes: Vec<(String, Vec<ScriptStep>)>,
+    bare: bool,
     yolo: bool,
     agent: String,
     binary: Option<PathBuf>,
@@ -61,6 +62,7 @@ impl Default for E2eEnvBuilder {
         Self {
             scripts: Vec::new(),
             routes: Vec::new(),
+            bare: false,
             yolo: true,
             agent: "hya-main".into(),
             binary: None,
@@ -100,6 +102,13 @@ impl E2eEnvBuilder {
     #[must_use]
     pub fn route(mut self, marker: impl Into<String>, steps: Vec<ScriptStep>) -> Self {
         self.routes.push((marker.into(), steps));
+        self
+    }
+
+    /// Pass global `--bare` to `hya` (zero builtin bundles loaded).
+    #[must_use]
+    pub fn bare(mut self, bare: bool) -> Self {
+        self.bare = bare;
         self
     }
 
@@ -217,6 +226,7 @@ impl E2eEnvBuilder {
             self.binary.unwrap_or_else(default_backend_bin),
             fake.base_url(),
         );
+        spec.bare = self.bare;
         spec.yolo = self.yolo;
         spec.permission_model = self.permission_model;
         spec.code_mode = self.code_mode;
@@ -252,6 +262,7 @@ impl E2eEnvBuilder {
         }
         let binary = self.binary.unwrap_or_else(default_backend_bin);
         let mut spec = BackendSpec::new(binary.clone(), fake.base_url());
+        spec.bare = self.bare;
         spec.yolo = self.yolo;
         spec.permission_model = self.permission_model;
         spec.code_mode = self.code_mode;

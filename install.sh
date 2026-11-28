@@ -23,9 +23,12 @@ Options:
 
 Installs the release layout:
   bin/hya                   unified CLI: exec, serve, login, bundles, models, update, ...
-  bundles/hya-*.hyabundle   the thirteen trusted first-party bundles it loads at startup
+  bin/hya-migration         standalone v1-to-v2 migration and SHA-256 rollback CLI
+  bundles/hya-*.hyabundle   the fourteen trusted first-party bundles it loads at startup
   lib/hya/bun-adapter       Bun adapter for JavaScript bundle extensions
   lib/hya/claude-adapter    Claude Code plugin import and runtime adapter
+  lib/hya/code-mode         core Code Mode VM runtime
+  lib/hya/tui-sdk           TUI extension SDK and QuickJS VM host
   lib/hya/tui               terminal UI that bare `hya` starts
   lib/hya/tui-web           WebUI host that serves the TUI to the browser
 
@@ -123,21 +126,25 @@ lib_bak() {
 
 tmp_programs="$lib_dir/.hya-programs.tmp.$$"
 tmp_backend="$bin_dir/.hya.tmp.$$"
+tmp_migration="$bin_dir/.hya-migration.tmp.$$"
 tmp_bundles="$bundles_dir/.hya-bundles.tmp.$$"
 bak_backend="$bin_dir/.hya.bak.$$"
+bak_migration="$bin_dir/.hya-migration.bak.$$"
 bak_bundles="$bundles_dir/.hya-bundles.bak.$$"
 rollback_enabled=0
 install_complete=0
 had_backend=0
 placed_backend=0
+had_migration=0
+placed_migration=0
 placed_bundles=()
 
 cleanup_leftovers() {
   local name
-  rm -f "$tmp_backend"
+  rm -f "$tmp_backend" "$tmp_migration"
   rm -rf "${tmp_bundles:?}" "${tmp_programs:?}"
   if [[ "$install_complete" -eq 1 ]]; then
-    rm -f "$bak_backend"
+    rm -f "$bak_backend" "$bak_migration"
     rm -rf "$bak_bundles"
     for name in "${lib_names[@]}"; do
       rm -rf "$(lib_bak "$name")"
@@ -153,6 +160,9 @@ restore_install() {
   if [[ "$placed_backend" -eq 1 ]]; then
     rm -f "$bin_dir/hya"
   fi
+  if [[ "$placed_migration" -eq 1 ]]; then
+    rm -f "$bin_dir/hya-migration"
+  fi
   local index
   for index in "${!lib_names[@]}"; do
     if [[ "${placed_lib[$index]}" -eq 1 ]]; then
@@ -165,6 +175,9 @@ restore_install() {
   done
   if [[ "$had_backend" -eq 1 && -e "$bak_backend" ]]; then
     mv -f "$bak_backend" "$bin_dir/hya"
+  fi
+  if [[ "$had_migration" -eq 1 && -e "$bak_migration" ]]; then
+    mv -f "$bak_migration" "$bin_dir/hya-migration"
   fi
   for index in "${!lib_names[@]}"; do
     local bak
@@ -216,17 +229,18 @@ trap on_error ERR INT TERM
 say "Installing hya to $bin_dir"
 say "Installing first-party bundles to $bundles_dir"
 say "Installing Bun programs to $lib_dir"
-say "Rollback backup paths: $bak_backend $bak_bundles $(lib_bak '<program>')"
+say "Rollback backup paths: $bak_backend $bak_migration $bak_bundles $(lib_bak '<program>')"
 say "Permission preflight: $bin_dir $bundles_dir $lib_dir"
 preflight_path "$bin_dir"
 preflight_path "$bundles_dir"
 preflight_path "$lib_dir"
 say "Bun preflight: bun"
 run bun --version
-run cargo build --locked ${profile_args[@]+"${profile_args[@]}"} -p hya-backend --bins
+run cargo build --locked ${profile_args[@]+"${profile_args[@]}"} -p hya-backend -p hya-migration --bins
 run cargo build --locked ${profile_args[@]+"${profile_args[@]}"} "${tool_libraries[@]}" --lib
 run mkdir -p "$bin_dir" "$lib_dir" "$bundles_dir"
 run install -m 0755 "$target_dir/hya" "$tmp_backend"
+run install -m 0755 "$target_dir/hya-migration" "$tmp_migration"
 run cargo run --locked -p xtask -- stage-first-party-bundles --library-dir "$target_dir" --package-root "$tmp_bundles"
 run cargo run --locked -p xtask -- stage-bun-programs --package-root "$tmp_programs"
 if [[ "$dry_run" -eq 0 ]]; then
@@ -242,6 +256,10 @@ fi
 if [[ -e "$bin_dir/hya" ]]; then
   had_backend=1
   run mv -f "$bin_dir/hya" "$bak_backend"
+fi
+if [[ -e "$bin_dir/hya-migration" ]]; then
+  had_migration=1
+  run mv -f "$bin_dir/hya-migration" "$bak_migration"
 fi
 for index in "${!lib_names[@]}"; do
   name=${lib_names[$index]}
@@ -268,6 +286,8 @@ else
 fi
 placed_backend=1
 run mv -f "$tmp_backend" "$bin_dir/hya"
+placed_migration=1
+run mv -f "$tmp_migration" "$bin_dir/hya-migration"
 for index in "${!lib_names[@]}"; do
   name=${lib_names[$index]}
   placed_lib[index]=1
@@ -279,6 +299,7 @@ first_party=(hashline coding-extras multi-agent network compaction plan goal loo
 if [[ "$dry_run" -eq 0 ]]; then
   "$bin_dir/hya" --version >/dev/null
   "$bin_dir/hya" --help >/dev/null
+  "$bin_dir/hya-migration" --version >/dev/null
   mkdir -p "$verify_home"
   listing=$(HOME="$verify_home" XDG_CONFIG_HOME="$verify_home/config" XDG_DATA_HOME="$verify_home/data" \
     XDG_STATE_HOME="$verify_home/state" XDG_CACHE_HOME="$verify_home/cache" \
@@ -294,6 +315,8 @@ if [[ "$dry_run" -eq 0 ]]; then
   test -f "$lib_dir/claude-adapter/package.json"
   test -f "$lib_dir/claude-adapter/bun.lock"
   test -f "$lib_dir/claude-adapter/src/main.ts"
+  test -f "$lib_dir/code-mode/package.json"
+  test -f "$lib_dir/code-mode/runtime.ts"
   test -f "$lib_dir/tui/src/main.ts"
   test -d "$lib_dir/tui/node_modules/@opentui/core"
   test -f "$lib_dir/tui-web/src/main.ts"
@@ -321,12 +344,14 @@ if [[ "$dry_run" -eq 0 ]]; then
 else
   say "+ $bin_dir/hya --version"
   say "+ $bin_dir/hya --help"
+  say "+ $bin_dir/hya-migration --version"
   say "+ $bin_dir/hya bundle list (isolated HOME) must list: ${first_party[*]}"
   say "+ test -f $lib_dir/bun-adapter/package.json"
   say "+ test -f $lib_dir/bun-adapter/bun.lock"
   say "+ test -f $lib_dir/bun-adapter/src/main.ts"
   say "+ test -d $lib_dir/bun-adapter/node_modules"
   say "+ test -f $lib_dir/claude-adapter/package.json $lib_dir/claude-adapter/bun.lock $lib_dir/claude-adapter/src/main.ts"
+  say "+ test -f $lib_dir/code-mode/package.json $lib_dir/code-mode/runtime.ts"
   say "+ test -f $lib_dir/tui/src/main.ts; test -d $lib_dir/tui/node_modules/@opentui/core"
   say "+ test -f $lib_dir/tui-web/src/main.ts $lib_dir/tui-web/web/index.html; test -d $lib_dir/tui-web/node_modules/@xterm/xterm"
   say "+ bun $lib_dir/tui/src/main.ts --help; bun $lib_dir/tui-web/src/main.ts --help (outside the checkout)"
@@ -343,6 +368,7 @@ API setup:
     ~/.config/hya/config.yaml
 
   Minimal Anthropic config:
+    schema_version: 2
     default_model: claude-sonnet-4-6
     providers:
       anthropic:

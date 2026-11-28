@@ -104,7 +104,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release --locked -p hya-backend --bins --target "$TARGET"
+          cargo build --release --locked -p hya-backend -p hya-migration --bins --target "$TARGET"
           cargo build --release --locked -p hya-multi-agent --lib --target "$TARGET"
           cargo build --release --locked -p hya-hashline -p hya-coding-extras -p hya-network -p hya-agent-channels -p hya-compaction -p hya-plan -p hya-goal -p hya-loop -p hya-workflow-bundle --lib --target "$TARGET"
           cargo build --locked -p xtask
@@ -135,15 +135,19 @@ jobs:
           tar -xzf "dist/$archive" -C "$scratch"
           listing="$scratch/listing"; tar -tzf "dist/$archive" > "$listing"
           grep -Fx "$package_dir/bin/hya" "$listing"
+          grep -Fx "$package_dir/bin/hya-migration" "$listing"
           grep -Fx "$package_dir/lib/hya/bin/bun" "$listing"
           grep -Fx "$package_dir/lib/hya/bun-adapter/package.json" "$listing"
           grep -Fx "$package_dir/lib/hya/claude-adapter/src/main.ts" "$listing"
+          grep -Fx "$package_dir/lib/hya/code-mode/package.json" "$listing"
+          grep -Fx "$package_dir/lib/hya/code-mode/runtime.ts" "$listing"
           grep -Fx "$package_dir/lib/hya/tui/frontend-version.ts" "$listing"
           grep -Fx "$package_dir/lib/hya/tui/dist/app.js" "$listing"
           grep -Fx "$package_dir/lib/hya/tui-web/web/index.html" "$listing"
           grep -Fx "$package_dir/lib/hya/tui-sdk/src/main.ts" "$listing"
           grep -Fx "$package_dir/examples/hya-argus-example.hyabundle" "$listing"
           test "$("$scratch/$package_dir/bin/hya" --version)" = "hya $VERSION"
+          test "$("$scratch/$package_dir/bin/hya-migration" --version)" = "hya-migration $VERSION"
           test "$("$scratch/$package_dir/lib/hya/bin/bun" --version)" = "1.4.2"
           (cd dist && shasum -a 256 -c "SHA256SUMS-$TARGET")
           releases="$scratch/releases"
@@ -159,6 +163,7 @@ jobs:
             HYA_RELEASES_URL="file://$releases" \
             sh scripts/hya-install.sh --prefix "$installed"
           test "$("$installed/bin/hya" --version)" = "hya $VERSION"
+          test "$("$installed/bin/hya-migration" --version)" = "hya-migration $VERSION"
           HOME="$smoke_home" XDG_CONFIG_HOME="$smoke_home/config" XDG_DATA_HOME="$smoke_home/data" \
             XDG_STATE_HOME="$smoke_home/state" XDG_CACHE_HOME="$smoke_home/cache" \
             HYA_RELEASES_URL="file://$releases" \

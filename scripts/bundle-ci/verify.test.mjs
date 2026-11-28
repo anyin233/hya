@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseYaml, splitFrontmatter } from "./yaml.mjs";
 import {
   discoverBundles,
+  extractCargoDependencies,
   formatGithubOutputs,
   runPackDeterminismCheck,
   runProtocolSmoke,
@@ -209,6 +211,7 @@ workflow:
     withTempDir((dir) => {
       writeFiles(dir, {
         "bundle.yaml": `kind: Bundle
+schema_version: 2
 version_ref: hya
 identity:
   id: acme/bad
@@ -226,10 +229,94 @@ unknown_field: 123
     });
   });
 
+  test("rejects v1 schema_version, legacy extensions, exposure.yaml, and reserved kernel tools todo/rewrite", () => {
+    withTempDir((dir) => {
+      writeFiles(dir, {
+        "bundle.yaml": `kind: Bundle
+schema_version: 1
+identity:
+  id: acme/legacy
+  version: 1.0.0
+  publisher: acme
+extensions:
+  files:
+    - id: exposure
+      path: exposure.yaml
+resources:
+  tools:
+    - id: todo
+      path: tools/todo.json
+    - id: custom
+      aliases: [rewrite]
+      path: tools/custom.json
+`,
+        "exposure.yaml": "tools: []\n",
+        "tools/todo.json": JSON.stringify({ name: "todo", permission: "tool" }),
+        "tools/custom.json": JSON.stringify({ name: "custom", aliases: ["rewrite"], permission: "tool" }),
+      });
+      const res = validateBundleStatic(dir);
+      expect(res.ok).toBe(false);
+      expect(res.errors.some((e) => e.includes("schema_version must be 2"))).toBe(true);
+      expect(res.errors.some((e) => e.includes("legacy `extensions` was removed"))).toBe(true);
+      expect(res.errors.some((e) => e.includes("exposure.yaml"))).toBe(true);
+      expect(res.errors.some((e) => e.includes("`todo` is permanently reserved"))).toBe(true);
+      expect(res.errors.some((e) => e.includes("`rewrite` is permanently reserved"))).toBe(true);
+    });
+  });
+
+  test("enforces ABI v2 red-line crate dependencies and rejects ABI v1 symbols", () => {
+    expect(
+      extractCargoDependencies(`
+[package]
+name = "demo"
+[dependencies]
+hya-runtime-abi = { workspace = true }
+hya-store = { workspace = true }
+db = { package = "sqlx", version = "0.8" }
+[target.'cfg(unix)'.dependencies]
+axum = "0.7"
+[dev-dependencies]
+hya-engine = { workspace = true }
+`),
+    ).toEqual(["hya-runtime-abi", "hya-store", "sqlx", "axum"]);
+
+    withTempDir((dir) => {
+      writeFiles(dir, {
+        "bundle.yaml": `kind: Bundle
+schema_version: 2
+identity:
+  id: acme/bad-native
+  version: 1.0.0
+  publisher: acme
+runtime:
+  kind: native
+  abi_version: 2
+  crate_dir: native
+  capabilities: [tools]
+`,
+        "native/Cargo.toml": `[package]
+name = "acme-bad-native"
+version = "0.0.0"
+[dependencies]
+hya-runtime-abi = { workspace = true }
+hya-engine = { workspace = true }
+tonic = "0.13"
+`,
+        "native/src/lib.rs": `pub extern "C" fn hya_tool_bundle_abi_v1() -> u32 { 1 }\n`,
+      });
+      const res = validateBundleStatic(dir);
+      expect(res.ok).toBe(false);
+      expect(res.errors.some((e) => e.includes("forbidden native cdylib dependency `hya-engine`"))).toBe(true);
+      expect(res.errors.some((e) => e.includes("forbidden native cdylib dependency `tonic`"))).toBe(true);
+      expect(res.errors.some((e) => e.includes("removed ABI v1 symbol `hya_tool_bundle_abi_v1`"))).toBe(true);
+    });
+  });
+
   test("rejects MCP stdio+http conflict and hardcoded Authorization secret", () => {
     withTempDir((dir) => {
       writeFiles(dir, {
         "bundle.yaml": `kind: Bundle
+schema_version: 2
 identity:
   id: acme/mcp-bad
   version: 1.0.0
@@ -262,6 +349,7 @@ resources:
     withTempDir((dir) => {
       writeFiles(dir, {
         "bundle.yaml": `kind: Bundle
+schema_version: 2
 identity:
   id: acme/sym
   version: 1.0.0
@@ -287,6 +375,7 @@ describe("protocol smoke, check.command, and pack determinism", () => {
     await withTempDirAsync(async (dir) => {
       writeFiles(dir, {
         "bundle.yaml": `kind: Bundle
+schema_version: 2
 identity:
   id: acme/echo-plugin
   version: 1.0.0
@@ -294,13 +383,14 @@ identity:
 check:
   command: [bun, test]
   timeout_secs: 30
-extensions:
-  process:
-    kind: bun
-    command: [bun, run, '\${BUNDLE_ROOT}/plugin.ts']
-  files:
-    - id: plugin
-      path: plugin.ts
+runtime:
+  kind: js
+  mode: process
+  entry: plugin.ts
+  command: [bun, run, '\${BUNDLE_ROOT}/plugin.ts']
+assets:
+  - id: plugin
+    path: plugin.ts
 resources:
   tools:
     - id: ping
@@ -360,17 +450,19 @@ test("greet returns ok", () => expect(greet()).toBe("ok"));
     await withTempDirAsync(async (dir) => {
       writeFiles(dir, {
         "bundle.yaml": `kind: Bundle
+schema_version: 2
 identity:
   id: acme/mismatch
   version: 1.0.0
   publisher: acme
-extensions:
-  process:
-    kind: bun
-    command: [bun, run, '\${BUNDLE_ROOT}/plugin.ts']
-  files:
-    - id: plugin
-      path: plugin.ts
+runtime:
+  kind: js
+  mode: process
+  entry: plugin.ts
+  command: [bun, run, '\${BUNDLE_ROOT}/plugin.ts']
+assets:
+  - id: plugin
+    path: plugin.ts
 resources:
   tools:
     - id: expected_tool
@@ -432,6 +524,60 @@ writeFileSync(out, Buffer.concat([Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1
       });
       expect(badRes.ok).toBe(false);
       expect(badRes.error).toContain("non-deterministic pack output");
+    });
+  });
+
+  test("verify.mjs CLI supports --root <dir> --strict and positional bundle dirs", () => {
+    withTempDir((dir) => {
+      writeFiles(dir, {
+        "bundles/ok-static/bundle.yaml": `kind: Bundle
+schema_version: 2
+identity:
+  id: acme/ok-static
+  version: 1.0.0
+  publisher: acme
+runtime:
+  kind: static
+`,
+        "bundles/ok-native/bundle.yaml": `kind: Bundle
+schema_version: 2
+identity:
+  id: acme/ok-native
+  version: 1.0.0
+  publisher: acme
+runtime:
+  kind: native
+  abi_version: 2
+  crate_dir: native
+  capabilities: [tools]
+`,
+        "bundles/ok-native/native/Cargo.toml": `[package]
+name = "acme-ok-native"
+version = "0.0.0"
+[dependencies]
+hya-runtime-abi = { workspace = true }
+`,
+        "bundles/ok-native/native/src/lib.rs": `hya_runtime_abi::export_native_bundle_v2!(|_out| {});\n`,
+      });
+      const verifyScript = join(import.meta.dir, "verify.mjs");
+      const rootRun = spawnSync(
+        "node",
+        [verifyScript, "--root", join(dir, "bundles"), "--strict", "--json"],
+        { encoding: "utf8" },
+      );
+      expect(rootRun.status).toBe(0);
+      const parsed = JSON.parse(rootRun.stdout);
+      expect(parsed.ok).toBe(true);
+      expect(parsed.reports).toHaveLength(2);
+      expect(parsed.reports.find((r) => r.id === "acme/ok-native").native.ok).toBe(true);
+
+      const posRun = spawnSync(
+        "node",
+        [verifyScript, "--strict", join(dir, "bundles/ok-static")],
+        { encoding: "utf8" },
+      );
+      expect(posRun.status).toBe(0);
+      expect(posRun.stdout).toContain("[PASS]");
     });
   });
 });

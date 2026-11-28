@@ -1,21 +1,26 @@
 #!/usr/bin/env node
 // Verify one or more Hya bundle source directories:
-//   1. Static manifest, descriptor, path-safety, and secret-hygiene checks
-//   2. Declared `check.command` self-check execution
-//   3. Black-box JSON-RPC 2.0 protocol smoke test for JS process bundles
-//   4. Optional deterministic `.hyabundle` packaging & verification (`--pack-cmd`)
+//   1. Static v2-only manifest, descriptor, path-safety, secret-hygiene, and ABI v2 red-line checks
+//   2. Native ABI v2 exported symbol checks when compiled cdylibs exist or in `--strict` mode
+//   3. Declared `check.command` self-check execution
+//   4. Black-box JSON-RPC 2.0 protocol smoke test for JS process bundles
+//   5. Optional deterministic `.hyabundle` packaging & verification (`--pack-cmd`)
 
-import { verifyBundle } from "./lib.mjs";
+import { discoverBundles, verifyBundle } from "./lib.mjs";
 
 function usage() {
   console.error(
-    "Usage: verify.mjs [--skip-check] [--skip-protocol] [--pack-cmd <cmd>] [--verify-cmd <cmd>] [--json] <bundle-dir> [<bundle-dir>...]",
+    "Usage: verify.mjs [--root <dir>]... [--strict] [--require-cdylib] [--cdylib <path>] [--skip-check] [--skip-protocol] [--pack-cmd <cmd>] [--verify-cmd <cmd>] [--json] [<bundle-dir>...]",
   );
   process.exit(2);
 }
 
 function parseArgs(argv) {
+  const roots = [];
   const dirs = [];
+  let strict = false;
+  let requireCdylib = false;
+  let cdylib = null;
   let skipCheck = false;
   let skipProtocol = false;
   let packCmd = null;
@@ -26,6 +31,17 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === "--help" || arg === "-h") {
       usage();
+    } else if (arg === "--root") {
+      const value = argv[++i];
+      if (!value) usage();
+      roots.push(value);
+    } else if (arg === "--strict") {
+      strict = true;
+    } else if (arg === "--require-cdylib") {
+      requireCdylib = true;
+    } else if (arg === "--cdylib") {
+      cdylib = argv[++i];
+      if (!cdylib) usage();
     } else if (arg === "--skip-check") {
       skipCheck = true;
     } else if (arg === "--skip-protocol") {
@@ -46,17 +62,55 @@ function parseArgs(argv) {
     }
   }
 
-  if (dirs.length === 0) usage();
-  return { dirs, skipCheck, skipProtocol, packCmd, verifyCmd, jsonOutput };
+  if (roots.length === 0 && dirs.length === 0) usage();
+  return {
+    roots,
+    dirs,
+    strict,
+    requireCdylib,
+    cdylib,
+    skipCheck,
+    skipProtocol,
+    packCmd,
+    verifyCmd,
+    jsonOutput,
+  };
 }
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  const targetDirs = [];
+  const seen = new Set();
+
+  if (opts.roots.length > 0) {
+    const discovered = discoverBundles(opts.roots);
+    for (const entry of discovered.all) {
+      if (!seen.has(entry.path)) {
+        seen.add(entry.path);
+        targetDirs.push(entry.path);
+      }
+    }
+  }
+  for (const dir of opts.dirs) {
+    if (!seen.has(dir)) {
+      seen.add(dir);
+      targetDirs.push(dir);
+    }
+  }
+
+  if (targetDirs.length === 0) {
+    console.error("No bundles found to verify.");
+    process.exit(1);
+  }
+
   const reports = [];
   let allOk = true;
 
-  for (const dir of opts.dirs) {
+  for (const dir of targetDirs) {
     const report = await verifyBundle(dir, {
+      strict: opts.strict,
+      requireCdylib: opts.requireCdylib,
+      cdylib: opts.cdylib,
       skipCheck: opts.skipCheck,
       skipProtocol: opts.skipProtocol,
       packCmd: opts.packCmd,
@@ -72,6 +126,20 @@ async function main() {
       console.log(`[${status}] ${report.path} (${id}, type=${type})`);
       if (!report.static.ok) {
         for (const err of report.static.errors) console.error(`  static error: ${err}`);
+      }
+      if (report.native && !report.native.skipped) {
+        if (report.native.ok) {
+          const modeDetail = report.native.library
+            ? `cdylib=${report.native.library}`
+            : `mode=${report.native.mode}`;
+          console.log(
+            `  native ABI v2: passed (${modeDetail}, symbols=[${report.native.symbols.join(",")}])`,
+          );
+        } else {
+          for (const err of report.native.errors ?? [report.native.error].filter(Boolean)) {
+            console.error(`  native error: ${err}`);
+          }
+        }
       }
       if (!report.check.skipped) {
         if (report.check.ok) console.log(`  check: passed (${report.check.command})`);

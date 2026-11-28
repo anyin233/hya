@@ -8,7 +8,7 @@ Hya's test suite is fast when you run the right layer. **Locally, verify only th
 
 | Tier | Where it lives | What it tests |
 | --- | --- | --- |
-| **Track I (In-process Rust)** | Each crate's `src/` unit tests + single `tests/it/main.rs` integration binary | Deep engine logic, `Projection` replay, SQLite locks, provider decoders, permission math, and `/v1` HTTP ↔ gRPC parity (`hya-server`). |
+| **Track I (In-process Rust)** | Each crate's `src/` unit tests + single `tests/it/main.rs` integration binary | Deep engine logic, `Projection` replay, SQLite locks, provider decoders, permission math, and `/v2` HTTP ↔ gRPC parity (`hya-server`). |
 | **Track P (Process E2E)** | `crates/hya-e2e` (`tests/it/pNN_*.rs` + `matrix.toml`) | Real `hya` binary + scripted local `FakeLlm`: end-to-end tools, skills, MCP, subagents, `.hyabundle`, headless `exec`, and encrypted Relay tunnels. |
 | **TUI In-Memory UI** | `packages/hya-tui/test/` (`testRender` + `FakeBackend`) | Layout presets, keybindings, overlays, Vim/composer, streaming cards, subagent panes, and management views (`/key`, `/project`, `/diff`, etc.) in milliseconds. |
 | **TUI Real-PTY Seam (`tui-exp`)** | `packages/hya-tui-web/e2e/*.spec.ts` on Bun PTY + `@xterm/headless` | Real OS PTY, OSC 52/9/0 terminal sequences, bare `hya` launcher, daemon auto-start/restart, gRPC, Relay bridge, and confined Bun VM extensions. |
@@ -52,7 +52,7 @@ If you add or rename a scenario in `crates/hya-e2e` or `matrix.toml`, validate t
 cargo run -p xtask -- matrix-check
 ```
 
-**Honest oracle rule:** In Track P, never assert solely that `FakeLlm` received N requests or that tool-call *arguments* contained a string. Assert real outcomes: files written on disk, session tree depth (`GET /v1/sessions`), or tool **results** appearing in the follow-up `FakeLlm` request!
+**Honest oracle rule:** In Track P, never assert solely that `FakeLlm` received N requests or that tool-call *arguments* contained a string. Assert real outcomes: files written on disk, session tree depth (`GET /v2/sessions`), or tool **results** appearing in the follow-up `FakeLlm` request!
 
 ---
 
@@ -103,9 +103,9 @@ Bundle verification runs in two additional independent workflows (see **[`hyabun
 
 - **`.github/workflows/builtin-bundles.yml` (`builtin-bundles`):** Dedicated to `bundles/builtin/**` (static validation, per-crate native tests + `cdylib` ABI checks, JS/static matrix + JSON-RPC smoke, and bare-vs-full smoke).
 - **`.github/workflows/bundles.yml` (`bundles`):** Dedicated to `bundles/extra/**` and `bundles/examples/**` (backed by `scripts/bundle-ci/` with zero dependency on Hya's core Rust/E2E/TUI suites).
-| **Cross-boundary contracts & adapters** (`proto/hya/v1/**`, `hya-api`, `hya-proto`, `hya-server`, `hya-backend`, `hya-plugin*`, `versions.toml`, `packages/*/package.json`, `frontend-version.ts`, `operations.json`) | Full Rust + Frontend + `tui` (plus `docs` when `proto/hya/v1/**` or `docs/protocol/*` changes) |
+| **Cross-boundary contracts & adapters** (`proto/hya/v2/**`, `hya-api`, `hya-proto`, `hya-runtime-abi`, `hya-server`, `hya-backend`, `hya-plugin*`, `versions.toml`, `packages/*/package.json`, `frontend-version.ts`, `operations.json`) | Full Rust + Frontend + `tui` (plus `docs` when `proto/hya/v2/**` or `docs/protocol/*` changes) |
 | **Repo meta-docs** (`README.md`, `AGENTS.md`, `.agents/**`) | `changes` → `ci-gate` only |
 
 Manual runs via `workflow_dispatch` accept a `scope` input (`all`, `auto`, `rust`, `frontend`, `docs`, defaulting to `all`).
 
-When `rust=true`, `build-bin` compiles `hya`, `xtask`, the five lockstep native bundle `cdylib`s, and every workspace test binary in a single `cargo nextest archive --profile ci --workspace` invocation, uploading `ci-bins` and `ci-nextest-archive`. Downstream `test`, `e2e`, and `tui` jobs fan out in parallel from those artifacts without compiling Rust again. Pure frontend runs (`rust=false`, `build_bin=true`) only build `hya` and `xtask` for `tui`.
+When `rust=true`, `build-bin` compiles `hya`, `hya-migration`, `xtask`, the ten lockstep native ABI v2 bundle `cdylib`s, and every workspace test binary in a single `cargo nextest archive --profile ci --workspace` invocation, uploading `ci-bins` and `ci-nextest-archive`. Downstream `test`, `e2e`, and `tui` jobs fan out in parallel from those artifacts without compiling Rust again. Pure frontend runs (`rust=false`, `build_bin=true`) only build `hya` and `xtask` for `tui`.

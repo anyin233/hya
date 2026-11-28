@@ -78,9 +78,15 @@ class ClassifyPathsTests(unittest.TestCase):
                 self.assertTrue(res.build_bin)
                 self.assertTrue(res.tui)
 
-    def test_v1_proto_triggers_rust_frontend_and_docs(self) -> None:
-        res = classify_paths(["proto/hya/v1/session.proto"])
-        self.assertEqual(res, ScopeResult(rust=True, frontend=True, docs=True))
+    def test_v2_and_v1_proto_triggers_rust_frontend_and_docs(self) -> None:
+        for path in ["proto/hya/v2/session.proto", "proto/hya/v1/session.proto"]:
+            with self.subTest(path=path):
+                res = classify_paths([path])
+                self.assertEqual(res, ScopeResult(rust=True, frontend=True, docs=True))
+
+    def test_code_mode_package_triggers_both_rust_and_frontend(self) -> None:
+        res = classify_paths(["packages/hya-code-mode/runtime.ts"])
+        self.assertEqual(res, ScopeResult(rust=True, frontend=True))
 
     def test_generated_protocol_docs_trigger_rust_and_docs(self) -> None:
         res = classify_paths(["docs/protocol/openapi.json"])

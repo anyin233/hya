@@ -37,6 +37,8 @@ pub struct McpFixture {
 pub struct BackendSpec {
     /// Absolute path to `hya` binary.
     pub binary: PathBuf,
+    /// When true, pass global `--bare` to `hya` (zero builtin bundles loaded).
+    pub bare: bool,
     /// When true, pass `--yolo` (auto-approve tools).
     pub yolo: bool,
     /// OpenAI-compatible base URL including `/v1` suffix (FakeLlm base_url).
@@ -72,6 +74,7 @@ impl BackendSpec {
     pub fn new(binary: impl Into<PathBuf>, fake_base_url: impl Into<String>) -> Self {
         Self {
             binary: binary.into(),
+            bare: false,
             yolo: true,
             fake_base_url: fake_base_url.into(),
             model_id: "model".into(),
@@ -111,6 +114,7 @@ pub struct BackendProcess {
 
 struct ServeOptions {
     model_ref: String,
+    bare: bool,
     yolo: bool,
     has_mcp: bool,
     env: Vec<(String, String)>,
@@ -264,6 +268,7 @@ impl BackendProcess {
         let mat = materialize_root(spec)?;
         let serve = ServeOptions {
             model_ref: mat.model_ref,
+            bare: spec.bare,
             yolo: spec.yolo,
             has_mcp: mat.has_mcp,
             env: spec.env.clone(),
@@ -398,6 +403,9 @@ impl ServeOptions {
         xdg_data_home: &Path,
     ) -> Result<(String, BackendChild), E2eError> {
         let mut cmd = Command::new(binary);
+        if self.bare {
+            cmd.arg("--bare");
+        }
         if self.yolo {
             cmd.arg("--yolo");
         }
@@ -678,6 +686,39 @@ fn resolve_backend_bin(
         .join("../../target/debug/hya")
         .canonicalize()
         .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/hya"))
+}
+
+/// Resolve the standalone `hya-migration` binary: `HYA_E2E_MIGRATION_BIN`, then
+/// sibling of [`default_backend_bin`], then `CARGO_TARGET_DIR/debug/hya-migration`,
+/// else the workspace `target/debug/hya-migration`.
+pub fn default_migration_bin() -> PathBuf {
+    if let Some(override_bin) = std::env::var_os("HYA_E2E_MIGRATION_BIN")
+        && !override_bin.is_empty()
+    {
+        let bin = PathBuf::from(override_bin);
+        return bin.canonicalize().unwrap_or(bin);
+    }
+    let backend = default_backend_bin();
+    if let Some(parent) = backend.parent() {
+        let sibling = parent.join("hya-migration");
+        if sibling.is_file() {
+            return sibling.canonicalize().unwrap_or(sibling);
+        }
+    }
+    if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR")
+        && !target_dir.is_empty()
+    {
+        let bin = PathBuf::from(target_dir).join("debug/hya-migration");
+        if bin.is_file() {
+            return bin.canonicalize().unwrap_or(bin);
+        }
+    }
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/debug/hya-migration")
+        .canonicalize()
+        .unwrap_or_else(|_| {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/hya-migration")
+        })
 }
 
 /// Relative project path for the stdio MCP echo fixture written by the harness.

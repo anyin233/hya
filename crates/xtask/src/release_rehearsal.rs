@@ -15,8 +15,8 @@ use anyhow::{Context as _, Result, bail, ensure};
 use crate::first_party_release::StageOptions;
 use crate::release_staging::{
     self, ARGUS_PACKAGE, BUN_ADAPTER_RUNTIME, BUN_VERSION, BunRuntime, CLAUDE_ADAPTER_RUNTIME,
-    PACKAGED_BUN, PACKAGED_RUNTIMES, TUI_RUNTIME, TUI_SDK_RUNTIME, TUI_WEB_RUNTIME, copy_file,
-    repo_root,
+    CODE_MODE_RUNTIME, PACKAGED_BUN, PACKAGED_RUNTIMES, TUI_RUNTIME, TUI_SDK_RUNTIME,
+    TUI_WEB_RUNTIME, copy_file, repo_root,
 };
 
 /// Highest text-lockfile version [`BUN_VERSION`] can read.
@@ -156,8 +156,8 @@ fn opentui_native_package(target: &str) -> Result<&'static str> {
 /// Command-line options for one non-publishing rehearsal.
 #[derive(Debug)]
 struct Options {
-    version: String,
-    target: String,
+    version: Option<String>,
+    target: Option<String>,
 }
 
 /// Temporary workspace used for the archive and its extraction smoke tests.
@@ -226,16 +226,19 @@ pub fn run(args: Vec<String>) -> Result<()> {
     }
     let options = parse_args(&args)?;
     let root = repo_root()?;
-    validate_release_metadata(&root, &options.version, &options.target)?;
-    require_host_target(&options.target, &host_target(&root)?)?;
+    let version = options
+        .version
+        .unwrap_or_else(|| hya_version::VERSION.to_owned());
+    let host = host_target(&root)?;
+    let target = options.target.unwrap_or_else(|| host.clone());
+    ensure!(is_safe_target(&target), "invalid release target `{target}`");
+    validate_release_metadata(&root, &version, &target)?;
+    require_host_target(&target, &host)?;
     let bun = release_staging::release_bun()?;
-    prepare_and_build(&root, &options.target)?;
-    rehearse_package(&root, &options.version, &options.target, &bun)?;
+    prepare_and_build(&root, &target)?;
+    rehearse_package(&root, &version, &target, &bun)?;
 
-    println!(
-        "release-rehearsal: ok — version {}, target {}, no publish",
-        options.version, options.target
-    );
+    println!("release-rehearsal: ok — version {version}, target {target}, no publish");
     Ok(())
 }
 
@@ -243,7 +246,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
 fn print_usage() {
     println!(
         "usage: cargo run -p xtask -- release-rehearsal \
-         --version <semver> --target <target> --no-publish"
+         [--version <semver>] [--target <target>] --no-publish"
     );
 }
 
@@ -272,9 +275,9 @@ fn parse_args(args: &[String]) -> Result<Options> {
     }
 
     ensure!(no_publish, "release-rehearsal requires --no-publish");
-    let version = version.context("release-rehearsal requires --version <semver>")?;
-    let target = target.context("release-rehearsal requires --target <target>")?;
-    ensure!(is_safe_target(&target), "invalid release target `{target}`");
+    if let Some(target) = &target {
+        ensure!(is_safe_target(target), "invalid release target `{target}`");
+    }
 
     Ok(Options { version, target })
 }
@@ -485,12 +488,14 @@ fn prepare_and_build(root: &Path, target: &str) -> Result<()> {
         "--locked".to_owned(),
         "-p".to_owned(),
         "hya-backend".to_owned(),
+        "-p".to_owned(),
+        "hya-migration".to_owned(),
         "--bins".to_owned(),
         "--target".to_owned(),
         target.to_owned(),
     ];
     run_checked(OsStr::new("cargo"), &args, root, &[], &[])
-        .context("run locked release build for hya-backend")?;
+        .context("run locked release build for hya-backend and hya-migration")?;
     let mut libraries = arg_list(&["build", "--release", "--locked"]);
     for library in NATIVE_BUNDLE_CRATES {
         libraries.extend(["-p".to_owned(), library.to_owned()]);
@@ -681,6 +686,10 @@ fn verify_example_listing(listing: &str) -> Result<()> {
 /// Verify required runtime files before archiving.
 fn verify_package_layout(package_root: &Path, target: &str) -> Result<()> {
     require_file(&package_root.join("bin").join("hya"), "packaged binary")?;
+    require_file(
+        &package_root.join("bin").join("hya-migration"),
+        "packaged migration binary",
+    )?;
     require_file(&package_root.join(PACKAGED_BUN), "packaged Bun")?;
 
     verify_staged_program(
@@ -697,6 +706,7 @@ fn verify_package_layout(package_root: &Path, target: &str) -> Result<()> {
         &[],
         &["@types/bun", "typescript"],
     )?;
+    verify_staged_program(package_root, &CODE_MODE_RUNTIME, &[], &[], &[])?;
     require_file(
         &package_root.join(TUI_RUNTIME.destination).join("build.ts"),
         "packaged TUI build entry point",
@@ -797,6 +807,7 @@ fn verify_archive_listing(
         .with_context(|| format!("write archive listing {}", listing_path.display()))?;
     for path in [
         "bin/hya",
+        "bin/hya-migration",
         PACKAGED_BUN,
         "lib/hya/bun-adapter/package.json",
         "lib/hya/bun-adapter/bun.lock",
@@ -804,6 +815,8 @@ fn verify_archive_listing(
         "lib/hya/claude-adapter/package.json",
         "lib/hya/claude-adapter/bun.lock",
         "lib/hya/claude-adapter/src/main.ts",
+        "lib/hya/code-mode/package.json",
+        "lib/hya/code-mode/runtime.ts",
         "lib/hya/tui/frontend-version.ts",
         "lib/hya/tui/dist/app.js",
         "lib/hya/tui-web/web/index.html",
@@ -858,6 +871,27 @@ fn smoke_packaged_release(
         &[],
     )
     .context("smoke packaged hya --help")?;
+    let migration = package_root.join("bin/hya-migration");
+    let migration_version = run_checked(
+        migration.as_os_str(),
+        &arg_list(&["--version"]),
+        scratch.path(),
+        &[],
+        &[],
+    )
+    .context("smoke packaged hya-migration --version")?;
+    ensure!(
+        combined_output(&migration_version).contains(version),
+        "packaged hya-migration --version did not report {version}"
+    );
+    run_checked(
+        migration.as_os_str(),
+        &arg_list(&["--help"]),
+        scratch.path(),
+        &[],
+        &[],
+    )
+    .context("smoke packaged hya-migration --help")?;
     smoke_first_party_bundles(&backend, scratch, version)?;
     let bun = package_root.join(PACKAGED_BUN);
     let bun_version = run_checked(
@@ -966,6 +1000,18 @@ fn smoke_release_installer(
         combined_output(&version_output).trim() == format!("hya {version}"),
         "installed hya --version did not report {version}"
     );
+    let migration = installed.join("bin/hya-migration");
+    let migration_output = run_checked(
+        migration.as_os_str(),
+        &arg_list(&["--version"]),
+        scratch.path(),
+        &envs,
+        &[],
+    )?;
+    ensure!(
+        combined_output(&migration_output).trim() == format!("hya-migration {version}"),
+        "installed hya-migration --version did not report {version}"
+    );
     let update = run_checked(
         backend.as_os_str(),
         &arg_list(&["update"]),
@@ -1008,7 +1054,9 @@ fn smoke_claude_adapter(
     let plugin_dir = serde_json::to_string(&plugin)?;
     fs::write(
         config_dir.join("config.yaml"),
-        format!("plugins:\n  claude-smoke:\n    kind: claude\n    plugin_dir: {plugin_dir}\n"),
+        format!(
+            "schema_version: 2\nplugins:\n  claude-smoke:\n    kind: claude\n    plugin_dir: {plugin_dir}\n"
+        ),
     )?;
     let removed_env = ["HYA_CLAUDE_ADAPTER_DIR", "BUN"];
     run_checked(
@@ -1721,5 +1769,15 @@ mod tests {
         let error = require_host_target("x86_64-unknown-linux-gnu", "aarch64-apple-darwin")
             .expect_err("foreign target accepted");
         assert!(error.to_string().contains("host"), "{error:#}");
+    }
+
+    /// `--no-publish` alone succeeds and leaves version/target to default to workspace + host.
+    #[test]
+    fn rehearsal_args_allow_default_version_and_target_with_no_publish() -> Result<()> {
+        let parsed = parse_args(&["--no-publish".to_owned()])?;
+        assert!(parsed.version.is_none());
+        assert!(parsed.target.is_none());
+        assert!(parse_args(&[]).is_err());
+        Ok(())
     }
 }

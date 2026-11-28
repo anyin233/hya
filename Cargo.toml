@@ -120,7 +120,7 @@ clap = { version = "4", features = ["derive", "env"] }
 toml = "0.8"
 secrecy = "0.8"
 sevenz-rust2 = { path = "vendor/sevenz-rust2-0.20.2", version = "=0.20.2", default-features = false }
-# --- v1 dual-protocol contract (hya-api runtime + xtask codegen) ---
+# --- v2 dual-protocol contract (hya-api runtime + xtask codegen) ---
 prost = "0.13"
 prost-types = "0.13"
 pbjson = "0.7"

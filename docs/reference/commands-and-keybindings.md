@@ -97,7 +97,7 @@ Press **`?`** on an empty input box (or run **`/help`**) anytime inside Hya to o
 | `/refresh` | Re-fetch sessions, messages, models, skills, and commands from the server. |
 | `/reconnect` | Reconnect to (or restart) the local database daemon after `hya serve stop`. |
 | `/connect-remote [<link>]` / `/disconnect-remote` | Switch this TUI to a remote backend over a `hya://` relay link, or return to the local daemon. |
-| `/api [METHOD /v1/path [JSON]]` | Browse `/v1` endpoints or send a raw JSON API call directly against the connected server. |
+| `/api [METHOD /v2/path [JSON]]` | Browse `/v2` endpoints or send a raw JSON API call directly against the connected server. |
 
 ---
 

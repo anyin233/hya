@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, posix, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
 import { parseYaml, splitFrontmatter } from "./yaml.mjs";
 
 export const CANONICAL_HOOKS = new Set([
@@ -44,6 +44,32 @@ export const CANONICAL_HOOKS = new Set([
 
 export const RESERVED_NAMESPACES = new Set(["mcp", "harness", "builtin", "plugin"]);
 
+export const RESERVED_KERNEL_TOOLS = new Set(["todo", "rewrite"]);
+
+export const FORBIDDEN_NATIVE_DEPS = new Set([
+  "hya-store",
+  "sqlx",
+  "hya-engine",
+  "hya-server",
+  "axum",
+  "tonic",
+]);
+
+export const REQUIRED_ABI_V2_SYMBOLS = [
+  "hya_native_abi_v2",
+  "hya_native_register_v2",
+  "hya_native_with_runtime_v2",
+  "hya_native_share_deadline_v2",
+];
+
+export const REMOVED_ABI_V1_SYMBOLS = [
+  "hya_tool_bundle_abi_v1",
+  "hya_tool_bundle_register_v1",
+  "hya_tool_bundle_with_runtime_v1",
+  "hya_tool_bundle_share_deadline_v1",
+  "hya_tool_bundle_register_rewriters_v1",
+];
+
 export const ALLOWED_TOP_LEVEL_KEYS = new Set([
   "kind",
   "schema_version",
@@ -55,7 +81,6 @@ export const ALLOWED_TOP_LEVEL_KEYS = new Set([
   "check",
   "schemas",
   "resources",
-  "extensions",
   "assets",
   "apis",
   "permission_modes",
@@ -451,9 +476,97 @@ function validateResourceList(entries, kind, fileSet, errors) {
       errors.push(`${where}.path references missing file: ${norm.path}`);
       continue;
     }
-    validated.push({ id: item.id, path: norm.path });
+    validated.push({
+      id: item.id,
+      aliases: Array.isArray(item.aliases) ? item.aliases.filter((a) => typeof a === "string") : [],
+      path: norm.path,
+    });
   }
   return validated;
+}
+
+export function extractCargoDependencies(cargoTomlText) {
+  const deps = new Set();
+  let currentSection = "";
+  let inDepSection = false;
+  for (const rawLine of cargoTomlText.split(/\r?\n/)) {
+    const line = rawLine.replace(/#.*$/, "").trim();
+    if (!line) continue;
+    const sectionMatch = line.match(/^\[([^\]]+)\]$/);
+    if (sectionMatch) {
+      currentSection = sectionMatch[1].trim();
+      inDepSection =
+        currentSection === "dependencies" ||
+        currentSection === "build-dependencies" ||
+        /^target\.[^.]+\.(?:dependencies|build-dependencies)$/.test(currentSection) ||
+        /^target\.'[^']+'\.(?:dependencies|build-dependencies)$/.test(currentSection) ||
+        /^target\."[^"]+"\.(?:dependencies|build-dependencies)$/.test(currentSection);
+      const nestedDep = currentSection.match(
+        /^(?:dependencies|build-dependencies|target\.[^.]+\.(?:dependencies|build-dependencies))\.([A-Za-z0-9_-]+)$/,
+      );
+      if (nestedDep) {
+        deps.add(nestedDep[1]);
+        inDepSection = false;
+      }
+      continue;
+    }
+    if (!inDepSection) continue;
+    const kvMatch = line.match(/^["']?([A-Za-z0-9_-]+)["']?(?:\.[A-Za-z0-9_-]+)*\s*=\s*(.+)$/);
+    if (!kvMatch) continue;
+    const key = kvMatch[1];
+    const rhs = kvMatch[2];
+    const pkgMatch = rhs.match(/\bpackage\s*=\s*"([^"]+)"/);
+    deps.add(pkgMatch ? pkgMatch[1] : key);
+  }
+  return [...deps];
+}
+
+function validateNativeCrateSource(absDir, manifest, errors) {
+  const crateDir = manifest?.runtime?.crate_dir || "native";
+  const cargoFiles = [
+    join(absDir, crateDir, "Cargo.toml"),
+    join(absDir, crateDir, "core", "Cargo.toml"),
+  ];
+  for (const cargoPath of cargoFiles) {
+    if (!existsSync(cargoPath)) continue;
+    const rel = toPosix(relative(absDir, cargoPath));
+    const text = readFileSync(cargoPath, "utf8");
+    const deps = extractCargoDependencies(text);
+    for (const dep of deps) {
+      if (FORBIDDEN_NATIVE_DEPS.has(dep)) {
+        errors.push(
+          `${rel}: forbidden native cdylib dependency \`${dep}\` (ABI v2 red line forbids: ${[...FORBIDDEN_NATIVE_DEPS].join(", ")})`,
+        );
+      }
+    }
+  }
+  const libRsPath = join(absDir, crateDir, "src", "lib.rs");
+  if (existsSync(libRsPath)) {
+    const rel = toPosix(relative(absDir, libRsPath));
+    const libRs = readFileSync(libRsPath, "utf8");
+    for (const removed of REMOVED_ABI_V1_SYMBOLS) {
+      if (libRs.includes(removed)) {
+        errors.push(`${rel}: removed ABI v1 symbol \`${removed}\` is forbidden; migrate to ABI v2`);
+      }
+    }
+    const usesV2Macro = /\bexport_native_bundle_v2\s*!/.test(libRs);
+    const hasAllV2Syms = REQUIRED_ABI_V2_SYMBOLS.every((sym) => libRs.includes(sym));
+    if (!usesV2Macro && !hasAllV2Syms) {
+      errors.push(
+        `${rel}: native crate must export ABI v2 via \`export_native_bundle_v2!\` or define all required symbols (${REQUIRED_ABI_V2_SYMBOLS.join(", ")})`,
+      );
+    }
+  }
+}
+
+function checkReservedKernelToolName(name, location, errors) {
+  if (typeof name !== "string") return;
+  const normalized = name.trim().toLowerCase();
+  if (RESERVED_KERNEL_TOOLS.has(normalized)) {
+    errors.push(
+      `${location}: tool name \`${name}\` is permanently reserved for the hya-core kernel and cannot be declared, overridden, or aliased by a bundle`,
+    );
+  }
 }
 
 export function validateBundleStatic(bundleDir) {
@@ -490,7 +603,11 @@ export function validateBundleStatic(bundleDir) {
 
   // Unknown top-level keys (strict deny_unknown_fields parity).
   for (const key of Object.keys(manifest)) {
-    if (!ALLOWED_TOP_LEVEL_KEYS.has(key)) {
+    if (key === "extensions") {
+      errors.push(
+        `${manifestFile}: legacy \`extensions\` was removed in hyabundle schema_version 2; use \`runtime\` and \`assets\` instead`,
+      );
+    } else if (!ALLOWED_TOP_LEVEL_KEYS.has(key)) {
       errors.push(`${manifestFile}: unknown top-level key \`${key}\``);
     }
   }
@@ -499,8 +616,19 @@ export function validateBundleStatic(bundleDir) {
     errors.push(`${manifestFile}: kind must be \`Bundle\` (got ${JSON.stringify(manifest.kind)})`);
   }
 
-  if (manifest.schema_version !== undefined && manifest.schema_version !== 1 && manifest.schema_version !== 2) {
-    errors.push(`${manifestFile}: schema_version must be 1 or 2`);
+  if (manifest.schema_version !== 2) {
+    errors.push(
+      `${manifestFile}: schema_version must be 2 (v1 manifests are no longer supported; got ${JSON.stringify(manifest.schema_version)})`,
+    );
+  }
+
+  // Reject removed exposure.yaml anywhere in the bundle tree.
+  for (const entry of entries) {
+    if (entry.rel === "exposure.yaml" || entry.rel.endsWith("/exposure.yaml")) {
+      errors.push(
+        `${entry.rel}: \`exposure.yaml\` was removed in hyabundle schema_version 2; declare tools under \`resources.tools\` instead`,
+      );
+    }
   }
 
   // Identity & version_ref
@@ -583,8 +711,8 @@ export function validateBundleStatic(bundleDir) {
           }
         }
       } else if (rt.kind === "native") {
-        if (rt.abi_version !== undefined && rt.abi_version !== 1 && rt.abi_version !== 2) {
-          errors.push(`${manifestFile}: runtime.abi_version must be 1 or 2`);
+        if (rt.abi_version !== undefined && rt.abi_version !== 2) {
+          errors.push(`${manifestFile}: runtime.abi_version must be 2 (ABI v1 was removed)`);
         }
         if (rt.crate_dir !== undefined) {
           const norm = normalizeSafeRelativePath(rt.crate_dir);
@@ -607,30 +735,26 @@ export function validateBundleStatic(bundleDir) {
     }
   }
 
-  if (extensions.process !== undefined) {
-    const proc = extensions.process;
-    if (!isRecord(proc)) {
-      errors.push(`${manifestFile}: extensions.process must be a mapping`);
-    } else {
-      if (!ALLOWED_PROCESS_KINDS.has(proc.kind)) {
-        errors.push(`${manifestFile}: extensions.process.kind must be rust, bun, or claude`);
-      }
-      if (!Array.isArray(proc.command) || proc.command.length === 0 || proc.command.some((a) => typeof a !== "string" || a.trim() === "")) {
-        errors.push(`${manifestFile}: extensions.process.command must be a non-empty list of non-blank strings`);
-      }
-      if (proc.timeout_ms !== undefined && (!Number.isInteger(proc.timeout_ms) || proc.timeout_ms < 1000 || proc.timeout_ms > 3_600_000)) {
-        errors.push(`${manifestFile}: extensions.process.timeout_ms must be an integer in 1000..=3600000`);
-      }
-    }
+  // Enforce ABI v2 red-line crate dependencies & exports on any native bundle.
+  const nativeMeta = readNativeCrateMeta(absDir, manifest);
+  if (manifest.runtime?.kind === "native" || nativeMeta !== null) {
+    validateNativeCrateSource(absDir, manifest, errors);
   }
 
-  for (const extGroup of ["js", "rust", "libraries", "files"]) {
-    if (extensions[extGroup] !== undefined) {
-      validateResourceList(extensions[extGroup], `extensions.${extGroup}`, fileMap, errors);
-    }
-  }
   if (manifest.assets !== undefined) {
-    validateResourceList(manifest.assets, "assets", fileMap, errors);
+    const validatedAssets = validateResourceList(manifest.assets, "assets", fileMap, errors);
+    for (const asset of validatedAssets) {
+      if (
+        asset.id === "exposure" ||
+        asset.aliases.includes("exposure") ||
+        asset.path === "exposure.yaml" ||
+        asset.path.endsWith("/exposure.yaml")
+      ) {
+        errors.push(
+          `${manifestFile}: assets entry \`${asset.id}\` references removed \`exposure.yaml\`; declare tools under \`resources.tools\` instead`,
+        );
+      }
+    }
   }
 
   // Self-check validation
@@ -666,8 +790,12 @@ export function validateBundleStatic(bundleDir) {
   const skills = validateResourceList(resources.skills, "skills", fileMap, errors);
   const commands = validateResourceList(resources.commands, "commands", fileMap, errors);
 
-  // Validate tool descriptors (when JSON/YAML)
+  // Validate tool descriptors (when JSON/YAML) and enforce reserved kernel tools
   for (const tool of tools) {
+    checkReservedKernelToolName(tool.id, `${manifestFile}:resources.tools`, errors);
+    for (const alias of tool.aliases) {
+      checkReservedKernelToolName(alias, `${manifestFile}:resources.tools.${tool.id}.aliases`, errors);
+    }
     if (/\.(?:json|ya?ml)$/i.test(tool.path)) {
       const raw = readFileSync(fileMap.get(tool.path).full, "utf8");
       scanTextForSecrets(raw, tool.path, errors);
@@ -683,6 +811,27 @@ export function validateBundleStatic(bundleDir) {
         continue;
       }
       if (Object.keys(parsed).length > 0) {
+        if (typeof parsed.name === "string") {
+          checkReservedKernelToolName(parsed.name, `${tool.path}:name`, errors);
+        }
+        if (Array.isArray(parsed.aliases)) {
+          for (const alias of parsed.aliases) {
+            const aliasName = typeof alias === "string" ? alias : alias?.name;
+            checkReservedKernelToolName(aliasName, `${tool.path}:aliases`, errors);
+          }
+        }
+        if (Array.isArray(parsed.tools)) {
+          for (const entry of parsed.tools) {
+            if (!isRecord(entry)) continue;
+            checkReservedKernelToolName(entry.name, `${tool.path}:tools`, errors);
+            if (Array.isArray(entry.aliases)) {
+              for (const alias of entry.aliases) {
+                const aliasName = typeof alias === "string" ? alias : alias?.name;
+                checkReservedKernelToolName(aliasName, `${tool.path}:tools.aliases`, errors);
+              }
+            }
+          }
+        }
         if (parsed.permission !== undefined && !ALLOWED_TOOL_PERMISSIONS.has(parsed.permission)) {
           errors.push(`${tool.path}: invalid tool permission \`${parsed.permission}\``);
         }
@@ -1476,6 +1625,212 @@ export async function runPackDeterminismCheck(bundleDir, options = {}) {
   }
 }
 
+function findWorkspaceTargetDir(startDir) {
+  if (process.env.CARGO_TARGET_DIR) {
+    const envTarget = resolve(process.env.CARGO_TARGET_DIR);
+    if (existsSync(envTarget)) return envTarget;
+  }
+  let dir = resolve(startDir);
+  while (true) {
+    const candidate = join(dir, "target");
+    const cargoToml = join(dir, "Cargo.toml");
+    if (existsSync(cargoToml)) {
+      const text = readFileSync(cargoToml, "utf8");
+      if (/^\[workspace\]/m.test(text) && existsSync(candidate)) {
+        return candidate;
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+function findFileRecursive(dir, filename, maxDepth = 4) {
+  if (maxDepth < 0 || !existsSync(dir)) return null;
+  let newest = null;
+  let newestMtime = -1;
+  const walk = (cur, depth) => {
+    let items;
+    try {
+      items = readdirSync(cur, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const item of items) {
+      const full = join(cur, item.name);
+      if (item.isFile() && item.name === filename) {
+        const mtime = lstatSync(full).mtimeMs;
+        if (mtime > newestMtime) {
+          newestMtime = mtime;
+          newest = full;
+        }
+      } else if (item.isDirectory() && depth > 0) {
+        walk(full, depth - 1);
+      }
+    }
+  };
+  walk(dir, maxDepth);
+  return newest;
+}
+
+export function locateCompiledCdylib(bundleDir, manifest, options = {}) {
+  if (options.cdylib) {
+    const abs = resolve(options.cdylib);
+    return existsSync(abs) ? abs : null;
+  }
+  const absDir = resolve(bundleDir);
+  if (typeof manifest?.runtime?.library === "string") {
+    const norm = normalizeSafeRelativePath(manifest.runtime.library);
+    if (norm.ok) {
+      const candidate = join(absDir, norm.path);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  const nativeMeta = readNativeCrateMeta(absDir, manifest);
+  if (!nativeMeta?.lib_stem) return null;
+
+  const targetDir = findWorkspaceTargetDir(absDir);
+  if (!targetDir) return null;
+
+  const exts =
+    process.platform === "darwin"
+      ? [".dylib", ".so"]
+      : process.platform === "win32"
+        ? [".dll"]
+        : [".so", ".dylib"];
+
+  for (const profile of ["debug", "release"]) {
+    for (const ext of exts) {
+      const filename = process.platform === "win32" ? `${nativeMeta.lib_stem}${ext}` : `lib${nativeMeta.lib_stem}${ext}`;
+      for (const rel of [join(profile, filename), join(profile, "deps", filename)]) {
+        const candidate = join(targetDir, rel);
+        if (existsSync(candidate)) return candidate;
+      }
+      if (nativeMeta.crate_name) {
+        const buildCrateDir = join(targetDir, profile, "build", nativeMeta.crate_name);
+        const found = findFileRecursive(buildCrateDir, filename, 3);
+        if (found) return found;
+      }
+    }
+  }
+  return null;
+}
+
+export async function inspectCdylibSymbols(libraryPath) {
+  const args =
+    process.platform === "darwin"
+      ? ["-gU", libraryPath]
+      : ["-D", "--defined-only", libraryPath];
+  const res = await runCommand("nm", args, { timeoutMs: 15_000 });
+  if (!res.ok) {
+    return {
+      ok: false,
+      symbols: [],
+      error: `nm ${args.join(" ")} failed: ${tailLines(`${res.stdout}\n${res.stderr}` || res.error || "unknown error")}`,
+    };
+  }
+  const symbols = new Set();
+  for (const line of res.stdout.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split(/\s+/);
+    let sym = parts[parts.length - 1];
+    if (process.platform === "darwin" && sym.startsWith("_")) {
+      sym = sym.slice(1);
+    }
+    // Strip ELF version suffix like @@Base if present.
+    sym = sym.split("@")[0];
+    if (sym) symbols.add(sym);
+  }
+  return { ok: true, symbols: [...symbols], error: null };
+}
+
+export async function verifyNativeAbiV2(bundleDir, manifest, options = {}) {
+  const absDir = resolve(bundleDir);
+  const { type, nativeMeta } = classifyBundle(absDir, manifest);
+  if (type !== "native") {
+    return { skipped: true, ok: true, detail: "not a native bundle" };
+  }
+
+  const errors = [];
+  if (manifest?.runtime?.kind === "native" && manifest.runtime.abi_version !== 2) {
+    errors.push("native bundle must declare `runtime.abi_version: 2`");
+  }
+
+  const libraryPath = locateCompiledCdylib(absDir, manifest, options);
+  if (libraryPath) {
+    const inspected = await inspectCdylibSymbols(libraryPath);
+    if (!inspected.ok) {
+      errors.push(inspected.error);
+    } else {
+      const symSet = new Set(inspected.symbols);
+      for (const required of REQUIRED_ABI_V2_SYMBOLS) {
+        if (!symSet.has(required)) {
+          errors.push(`compiled cdylib ${libraryPath} missing required ABI v2 symbol \`${required}\``);
+        }
+      }
+      for (const removed of REMOVED_ABI_V1_SYMBOLS) {
+        if (symSet.has(removed)) {
+          errors.push(`compiled cdylib ${libraryPath} exports removed ABI v1 symbol \`${removed}\``);
+        }
+      }
+    }
+    return {
+      skipped: false,
+      ok: errors.length === 0,
+      mode: "cdylib",
+      library: toPosix(relative(process.cwd(), libraryPath)) || libraryPath,
+      symbols: REQUIRED_ABI_V2_SYMBOLS,
+      errors,
+    };
+  }
+
+  if (options.requireCdylib) {
+    errors.push(
+      `compiled cdylib not found for native crate \`${nativeMeta?.crate_name ?? "unknown"}\` (build the native crate first or omit --require-cdylib)`,
+    );
+    return {
+      skipped: false,
+      ok: false,
+      mode: "cdylib",
+      library: null,
+      symbols: [],
+      errors,
+    };
+  }
+
+  if (!options.strict) {
+    return { skipped: true, ok: true, detail: "no compiled cdylib found" };
+  }
+
+  // Strict source-level verification when cdylib has not yet been compiled.
+  const crateDir = manifest?.runtime?.crate_dir || "native";
+  const libRsPath = join(absDir, crateDir, "src", "lib.rs");
+  if (!existsSync(libRsPath)) {
+    errors.push(`strict ABI v2 check: missing ${crateDir}/src/lib.rs and no compiled cdylib found`);
+  } else {
+    const libRs = readFileSync(libRsPath, "utf8");
+    const usesV2Macro = /\bexport_native_bundle_v2\s*!/.test(libRs);
+    const hasAllV2Syms = REQUIRED_ABI_V2_SYMBOLS.every((sym) => libRs.includes(sym));
+    if (!usesV2Macro && !hasAllV2Syms) {
+      errors.push(
+        `strict ABI v2 check: ${crateDir}/src/lib.rs must invoke \`export_native_bundle_v2!\` or export all 4 symbols (${REQUIRED_ABI_V2_SYMBOLS.join(", ")})`,
+      );
+    }
+  }
+
+  return {
+    skipped: false,
+    ok: errors.length === 0,
+    mode: "source",
+    library: null,
+    symbols: REQUIRED_ABI_V2_SYMBOLS,
+    errors,
+  };
+}
+
 export async function verifyBundle(bundleDir, options = {}) {
   const staticResult = validateBundleStatic(bundleDir);
   const report = {
@@ -1483,6 +1838,7 @@ export async function verifyBundle(bundleDir, options = {}) {
     id: staticResult.manifest?.identity?.id ?? null,
     type: staticResult.classification?.type ?? null,
     static: { ok: staticResult.ok, errors: staticResult.errors, warnings: staticResult.warnings },
+    native: { skipped: true, ok: true },
     check: { skipped: true, ok: true },
     protocol: { skipped: true, ok: true },
     pack: { skipped: true, ok: true },
@@ -1492,6 +1848,13 @@ export async function verifyBundle(bundleDir, options = {}) {
   if (!staticResult.ok) {
     return report;
   }
+
+  report.native = await verifyNativeAbiV2(bundleDir, staticResult.manifest, {
+    strict: options.strict,
+    requireCdylib: options.requireCdylib,
+    cdylib: options.cdylib,
+  });
+  if (!report.native.ok) report.ok = false;
 
   if (!options.skipCheck) {
     report.check = await runBundleSelfCheck(bundleDir, staticResult.manifest);

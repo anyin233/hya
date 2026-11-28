@@ -21,25 +21,28 @@ pub struct Envelope {
 - **`seq = 0`:** Emitted on the in-memory `EventBus` for token-by-token `TextDelta` / `ReasoningDelta` streaming, `sessionUpdated { busy }`, `projectsUpdated`, `catalogUpdated`, and `serverStopping`. Never written to SQLite and never replayed.
 - **`seq > 0`:** Assigned strictly monotonically inside SQLite write transactions. Every `MessageStarted` for an assistant turn is guaranteed a matching terminal `MessageFinished` (even across `SIGINT`, daemon shutdown, or next-boot crash recovery).
 
-### Deterministic `Projection` Reducer
+### Deterministic `Projection` Reducer & `Event::Extension`
 
 `hya_proto::Projection` folds an ordered stream of durable `Envelope`s into read-ready session state:
-- Messages, parts (`Text`, `Reasoning`, `Tool` with status/output/eviction notice), per-round & total `TokenUsage`, active `todo` items, `revert` overlay state, Workflow state, and Team `Roster` + `Channel` cursors.
+- Core kernel events fold messages, parts (`Text`, `Reasoning`, `Tool` with status/output/eviction notice), per-round & total `TokenUsage`, active `todo` items ($g$), and `revert` overlay state.
+- Bundle-owned domain events arrive as `Event::Extension { session, bundle, kind, payload }` and are folded deterministically by each bundle's registered ABI v2 `ProjectionReducer` into `Projection::extensions: BTreeMap<String, Value>` (keyed by bundle ID, such as `"hya/multi-agent"`, `"hya/agent-channels"`, `"hya/workflow"`, `"hya/compaction"`).
 - `Projection::apply` is idempotent on `seq <= last_seq`, allowing `hya-store` to cache serialized `projection_snapshot` checkpoints in SQLite and replay only the tail of new events on read.
 
 ---
 
-## 2. SQLite Schema Overview (`hya-store`)
+## 2. SQLite v2 Schema Overview (`hya-store`, `format_version = 2`)
 
-`hya-store` runs SQLite in `WAL` journal mode with foreign keys enabled:
+`hya-store` runs SQLite in `WAL` journal mode with foreign keys enabled and enforces `schema_meta.format_version = 2` ([ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)). Opening an unmigrated v1 database fails fast and directs you to run `hya-migration run` (see **[Migrating from Hya v1 to v2](../guide/migration-v1-to-v2.md)**).
 
 | Table | What it stores |
 | --- | --- |
+| `schema_meta` | Schema metadata including `format_version = '2'`. |
 | `session` | Root and child session metadata (`id`, `parent_id`, `project_id`, `kind`, `created_at`, `archived_at`, `ephemeral`). |
-| `event_log` | Append-only `(seq INTEGER PRIMARY KEY, session_id, ts_millis, payload JSON)` truth. |
+| `event_log` | Append-only `(seq INTEGER PRIMARY KEY, session_id, ts_millis, payload JSON)` truth (kernel events + `Event::Extension`). |
 | `projection_snapshot` | Versioned cached `Projection` blobs + `last_seq` for fast cold reads on long sessions. |
 | `project` / `project_root` | Client-managed Projects (`prj_...`) and their ordered canonical root paths ([ADR-0024](../adr/0024-project-model-and-client-chosen-workspace.md)). |
-| `resident_actor_claim` | Active `(session_id, actor_epoch, owner_run_id)` leases fencing subagent episodes against zombie writes. |
+| `bundle_state` | Generic `(bundle, scope, key)` JSON key-value store with optimistic-concurrency `version` CAS, exposed to native bundles via `HostBundleStorage`. |
+| `bundle_claim` | Generic `(bundle, resource_key)` fenced leases (`owner_id`, monotonic `epoch`, `expires_at_millis`, `metadata`) replacing v1's domain-specific `resident_actor_claim` table. |
 | `pending_resume` | Root sessions interrupted by a graceful daemon `stop`/`restart` awaiting a restore prompt on next start. |
 | `saved_permission` | User *"Always allow"* grants (global for tools/commands, Project-scoped for `ExternalDirectory`). |
 | `file_blob` | Content-addressed file snapshots captured before `write`/`edit`/`apply_patch`/`bash` to power `/undo` & `/redo`. |
@@ -54,7 +57,7 @@ pub struct Envelope {
 
 Before opening SQLite in read-write mode, a server or headless writer acquires an exclusive advisory kernel lock on `<resolved-db>.runtime-owner.lock` ([ADR-0022](../adr/0022-one-writer-per-database.md)):
 - Plain paths are canonicalized (resolving symlinks); `sqlite:` and `file:` URI spellings are rejected up front.
-- If a daemon already holds the lock and published `<db>.server.json`, CLI writers (`exec`, `workflow`, `sessions archive`) route over `/v1` to that daemon; unroutable flags exit **`75`**.
+- If a daemon already holds the lock and published `<db>.server.json`, CLI writers (`exec`, `workflow`, `sessions archive`) route over `/v2` to that daemon; unroutable flags (`--bare`, `--pure`) exit **`75`**.
 - Read-only commands (`hya sessions`, `hya tail-session`) open SQLite read-only without touching the owner lock.
 
 ### Bounded append queue & graceful exit drain ([ADR-0036](../adr/0036-bounded-append-queue-and-degraded-store.md))

@@ -33,7 +33,7 @@ Passing the global `--bare` flag (`hya --bare`, `hya serve --bare`, or `hya exec
 | Engine & Kernel loop | `SessionEngine` on `hya-core::kernel` | `SessionEngine::new_bare` on `hya-core::kernel` | `SessionEngine::new_bare` on `hya-core::kernel` |
 | Built-in bundles (`bundles/builtin/`) | Loaded per `bundles.builtin` selection | **None loaded** (zero disk dependency on `bundles/builtin/`) | **None loaded** |
 | Default agent | `hya-main` (from `hya/core-agents`) | `hya-bare` (`hya_engine::BARE_AGENT_ID`) | `hya-bare` |
-| Core tools | Built-in tool-family bundles + kernel `todo`/`rewrite` + `skill` | 8 standard bare tools: `read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill` | 8 standard bare tools (`skill` catalog empty) |
+| Core tools | Built-in native ABI v2 bundles (`hya/hashline`, `hya/coding-extras`, `hya/multi-agent`, `hya/network`, `hya/agent-channels`, `hya/plan`, `hya/workflow`) + core `bash`, `skill`, and kernel `todo`/`rewrite` | 8 standard bare tools: `read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill` | 8 standard bare tools (`skill` catalog empty) |
 | Built-in `code-mode` | Enabled when configured (`agent()` gated on `hya/multi-agent`) | Enabled when configured (no `agent()`) | Disabled |
 | Context & external extensions | `AGENTS.md`, disk skills, MCP, user/project bundles & plugins | `AGENTS.md`, disk skills, MCP, user/project bundles & plugins | **Skipped** |
 | Compaction | `shake` + `remote` (`hya/compaction`) → Kernel `Rewrite` | Kernel `Rewrite` only | Kernel `Rewrite` only |

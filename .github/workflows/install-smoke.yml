@@ -49,8 +49,9 @@ jobs:
           curl -fsSL "$INSTALL_URL" | sh -s -- --version "$version" --prefix "$prefix"
 
           test "$("$prefix/bin/hya" --version)" = "hya $version"
+          test "$("$prefix/bin/hya-migration" --version)" = "hya-migration $version"
           test "$("$prefix/lib/hya/bin/bun" --version)" = "1.4.2"
-          for name in bun-adapter claude-adapter tui tui-sdk tui-web; do
+          for name in bun-adapter claude-adapter code-mode tui tui-sdk tui-web; do
             test -e "$prefix/lib/hya/$name"
           done
           grep -F "\"$version\"" "$prefix/lib/hya/tui/frontend-version.ts"

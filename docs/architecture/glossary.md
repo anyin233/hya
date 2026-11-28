@@ -19,18 +19,19 @@ Shared terms used across Hya's codebase, APIs, and documentation (aligned with r
 
 - **Session (`hysec_...`):** One persisted, event-sourced conversation in `event_log`. Both main chats and spawned subagents are full Sessions.
 - **Turn:** One cycle from prompt/command/shell admission through 0+ provider/tool rounds to `MessageFinished`.
-- **Agent:** A role definition (ID, prompt, model policy, `resource_view`, `can_spawn`, `hook_refs`). Its **Origin** is either **built-in** (`hya/core-agents`, full Harness tool plane) or **bundle** (clamped `InternalPublic` plane + its own bundle's resources).
-- **Bundle (`.hyabundle`, format v4):** Hya's deterministic package unit (`kind: Bundle`), carrying any mix of agents, a compiled Workflow, skills, tools, MCP servers, hooks, sidecar processes, custom HTTP APIs, permission modes, and TUI extensions.
+- **Agent:** A role definition (ID, prompt, model policy, `resource_view`, `can_spawn`, `hook_refs`). Its **Origin** is either **built-in** (`hya/core-agents`, `hya/multi-agent`, `hya/plan`, or `hya-bare` in bare mode) or **bundle** (clamped `InternalPublic` plane + its own bundle's resources).
+- **Bundle (`.hyabundle`, `schema_version: 2`):** Hya's deterministic package unit (`kind: Bundle`), carrying any mix of agents, a compiled Workflow, skills, tools, MCP servers, hooks, native ABI v2 `cdylib`s or JS sidecar processes, custom HTTP/gRPC `BundleApi` routes, permission modes, and `@hya/tui-sdk` v2 TUI extensions.
+- **Event::Extension & `Projection::extensions`:** The single generic event-log variant (`{ session, bundle, kind, payload }`) and folded map populated by native ABI v2 `ProjectionReducer`s so domain state stays single-source event-sourced without polluting `hya-proto` or `hya-store`.
 
 ---
 
 ## Subagents, Teams & Workflows
 
 - **Team:** The tree of Sessions rooted at one **Main agent** (`handle = "main"`, max depth `2`).
-- **Subagent (Member):** A child Session spawned via `task` (or a Workflow Stage), named deterministically as `main/<type>-<operator>`. Every subagent is an **episodic resident actor**.
+- **Subagent (Member):** A child Session spawned via `task` (or a Workflow Stage), named deterministically as `main/<type>-<operator>`. Every subagent is an **episodic resident actor** supervised by `hya/multi-agent`.
 - **Episode & Handoff:** One bounded activation of a subagent from spawn/revival until `report` (or `archive`). Ending an episode writes a state **Handoff** summary, releases its concurrency budget, and archives the subagent; a downward `#DM` from its parent revives it into episode `n + 1` with that Handoff.
-- **Channel (`#DM-{8}` & `#announce-{8}`):** Strictly vertical parent ⇄ direct-child mail pipes recorded on the team-root `event_log`. Siblings never see or message each other.
-- **Workflow (`*.hya.md`):** A compiled, acyclic graph of **Stages** (`hya-workflow`) executed durably by `hya-engine` on resident subagent sessions. *(Distinct from a dynamic JS **Workflow program** in `hya-extra/orchestrator`.)*
+- **Channel (`#DM-{8}` & `#announce-{8}`):** Strictly vertical parent ⇄ direct-child mail pipes recorded as `Event::Extension` on the team-root `event_log` by `hya/agent-channels`. Siblings never see or message each other.
+- **Workflow (`*.hya.md`):** A compiled, acyclic graph of **Stages** (`hya-workflow`) executed durably by the `hya/workflow` native ABI v2 bundle on resident subagent sessions. *(Distinct from a dynamic JS **Workflow program** in `hya-extra/orchestrator`.)*
 
 ---
 
@@ -40,4 +41,4 @@ Shared terms used across Hya's codebase, APIs, and documentation (aligned with r
 - **Project (`prj_...`) & Project roots:** A client-chosen workspace consisting of one or more ordered absolute folders on the backend host. File tools access paths inside any root freely and prompt `ExternalDirectory` outside (`ProjectScope`).
 - **Catalog scope:** The `Global`, `Directory(path)`, or `Project { id, roots }` key used to lazily compose and cache active bundles, plugins, skills, commands, and `AGENTS.md`.
 - **Temporary vs. Ephemeral session:** A **Temporary session** (`--temp`) works in `~/.cache/hya/scratch/<id>` outside any Project (never auto-deleted). An **Ephemeral session** (`ephemeral: true`) is an unused pre-opened root session that the daemon reaps ~5s after the last client disconnects.
-- **Relay, Room, Relay link & Bridge:** Remote access pieces (`hya-relay`): `hya proxy` hosts blind **Rooms**; `hya serve --relay` registers the Room and prints the secret **`hya://` link**; `hya bridge` / `hya --connect` opens a local loopback listener tunneling `hya.v1` inside end-to-end **`Noise_NKpsk0`** encryption.
+- **Relay, Room, Relay link & Bridge:** Remote access pieces (`hya-relay`): `hya proxy` hosts blind **Rooms**; `hya serve --relay` registers the Room and prints the secret **`hya://` link**; `hya bridge` / `hya --connect` opens a local loopback listener tunneling `hya.v2` inside end-to-end **`Noise_NKpsk0`** encryption.

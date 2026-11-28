@@ -11,8 +11,8 @@ Backend, first-party bundles, TUI, and WebUI share **one unified release version
   - `packages/hya-tui/frontend-version.ts` (`frontendVersion`),
   - `README.md`, and
   - `# <version>` (exact first line of `CHANGELOG.md`, **no** leading `v`).
-- **`versions.toml` (`minimum_backend_version`):** Mirrored as `minimumBackendVersion` in `packages/hya-tui/frontend-version.ts`. Declares the oldest backend daemon or remote server this TUI accepts. Bump it **only** when a frontend change requires a newer `/v1` backend contract.
-- **Placeholder `0.0.0` everywhere else:** All other Rust crates, frontend/adapter `package.json` files (`@hya/tui-sdk` keeps its own independent `1.0.0` SDK version), and bundle source manifests use `0.0.0` with `version-reference = "hya"` / `version_ref: hya` (resolved automatically at package time).
+- **`versions.toml` (`minimum_backend_version`):** Mirrored as `minimumBackendVersion` in `packages/hya-tui/frontend-version.ts`. Declares the oldest backend daemon or remote server this TUI accepts. Bump it **only** when a frontend change requires a newer `/v2` backend contract.
+- **Placeholder `0.0.0` everywhere else:** All other Rust crates, frontend/adapter `package.json` files (`@hya/tui-sdk` keeps its own independent `2.0.0` SDK version), and bundle source manifests use `0.0.0` with `version-reference = "hya"` / `version_ref: hya` (resolved automatically at package time).
 
 ### When to bump the version
 
@@ -50,7 +50,7 @@ Releases are published exclusively by `.github/workflows/release.yml` when a can
    git tag -a v0.48.0 -m "release v0.48.0"
    git push origin v0.48.0
    ```
-3. **What CI publishes:** Target archives `hya-<version>-<target>.tar.gz` (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`) containing `bin/hya`, the 13 first-party bundles, the Argus example bundle, pinned Bun, Bun & Claude adapters, TUI, WebUI, and TUI SDK—plus standalone `.hyabundle` assets, `SHA256SUMS`, and provenance attestations. *(The installer script itself is never attached to releases; `https://hya.ed-aisys.com/install.sh` serves `scripts/hya-install.sh` from `main`.)*
+3. **What CI publishes:** Target archives `hya-<version>-<target>.tar.gz` (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`) containing `bin/hya`, `bin/hya-migration`, the 14 first-party bundles, the Argus example bundle, pinned Bun, Bun & Claude adapters, `lib/hya/code-mode`, TUI, WebUI, and TUI SDK—plus standalone `.hyabundle` assets, `SHA256SUMS`, and provenance attestations. *(The installer script itself is never attached to releases; `https://hya.ed-aisys.com/install.sh` serves `scripts/hya-install.sh` from `main`.)*
 
 ### Retracting a bad release tag cleanly
 

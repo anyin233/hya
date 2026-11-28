@@ -216,7 +216,7 @@ Set `formatter: false` or `lsp: false` to disable either subsystem, or disable t
   - **URI schema (`UriSchemaHandler`):** `channel://<id>[?last=N]` (read-only; clamps `last` to `1..=50`, default `1`; returns `text/plain` messages plus structured metadata `{ type: "channel", channel, count, unreadRemaining, warning }` and commits `mail_consumed`).
   - **Native hook (`NativeHook`):** `unread-mail-steer` on `HookPoint::ToolExecuteAfter` splices `[NEW MAIL · answer or acknowledge via dm]` notices into successful non-`wait`/`report` tool results and stages `mail_consumed` for atomic commit with `ToolResult`.
   - **Projection reducer (`ProjectionReducer`):** Folds `hya/agent-channels` `Event::Extension` records (`channel_created`, `channel_joined`, `mail_sent`, `mail_consumed`) into `projection.extensions["hya/agent-channels"]` (`{ mail, inboxes, channels, cursors }`).
-  - **Session `BundleApi` endpoints** (`/v2/sessions/{session}/bundles/hya/agent-channels/...`):
+  - **Session `BundleApi` endpoints** (`/v2/sessions/{session}/bundles/hya%2Fagent-channels/...`):
     - `GET /channels` (`channels.list`) → `{ "channels": [{ "id", "kind", "can_speak", "peer", "unread" }], "team": [{ "handle", "status", "last_active_seconds" }] }`
     - `GET /channels/{channel}/messages?last=N` (`channels.messages`, read-only peek without advancing cursor, `last` default `20`, max `100`) → `{ "channel", "count", "unread_remaining", "warning", "messages": [{ "from", "body" }] }`
     - `GET /inbox` (`channels.inbox`, read-only) → `{ "handle", "cursor", "total", "unread": [{ "from", "channel", "body" }] }`
@@ -247,18 +247,18 @@ Every Hya installation ships with 14 trusted first-party bundles sourced from `b
 | --- | --- | --- | --- |
 | `hya/hashline` | `bundles/builtin/hashline` | Native ABI v2 (`cdylib`) | Hashline-addressed `read`, `write`, `edit`, and `grep` + `HashlineRuntime` (`overrides: hya/bare`, 4 tools). |
 | `hya/coding-extras` | `bundles/builtin/coding-extras` | Native ABI v2 (`cdylib`) | Workspace search (`ls`, `glob`, `find`), `apply_patch`, `ask_user`, `lsp`, `project_activity`, `lsp-formatter` `NativeService`, and post-edit + visibility `NativeHook`s (7 tools). |
-| `hya/multi-agent` | `bundles/builtin/multi-agent` | Native ABI v2 (`cdylib`) | Subagent orchestration: 5 tools (`list_agents`, `search_agent`, `task`, `archive`, `wait`), 3 subagents (`hya-task`, `hya-scout`, `hya-reviewer`), fenced actor claims (`bundle_claim`), `ProjectionReducer`, `SessionEnd` hook, and `BundleApi` (`/members`, `/archive`, `/steer`). |
+| `hya/multi-agent` | `bundles/builtin/multi-agent` | Native ABI v2 (`cdylib`) + TUI v2 | Subagent orchestration: 5 tools (`list_agents`, `search_agent`, `task`, `archive`, `wait`), 3 subagents (`hya-task`, `hya-scout`, `hya-reviewer`), fenced actor claims (`bundle_claim`), `ProjectionReducer`, `SessionEnd` hook, `BundleApi` (`/members`, `/archive`, `/steer`), and `@hya/tui-sdk` v2 `subagents` / `subagent-viewer` panes + `/subagents` command. |
 | `hya/network` | `bundles/builtin/network` | Native ABI v2 (`cdylib`) | Web fetch and web search (`webfetch`, `websearch`) + per-bundle `config.yml` and air-gapped disable. |
-| `hya/agent-channels` | `bundles/builtin/agent-channels` | Native ABI v2 (`cdylib`) + static | Unified team mailbox & channels (`send`, `list_channel`, `report`, mail-aware `wait` overriding `hya/multi-agent`), `channel://` `UriSchemaHandler`, `unread-mail-steer` `NativeHook`, read-only `BundleApi`, `ProjectionReducer`, and default vertical channel policies (`unit-default`, `parent-dm-default`). |
+| `hya/agent-channels` | `bundles/builtin/agent-channels` | Native ABI v2 (`cdylib`) + static + TUI v2 | Unified team mailbox & channels (`send`, `list_channel`, `report`, mail-aware `wait` overriding `hya/multi-agent`), `channel://` `UriSchemaHandler`, `unread-mail-steer` `NativeHook`, read-only `BundleApi`, `ProjectionReducer`, default vertical channel policies (`unit-default`, `parent-dm-default`), and `@hya/tui-sdk` v2 renderers + unread mail status badge. |
 | `hya/compaction` | `bundles/builtin/compaction` | Native ABI v2 (`cdylib`) | Context `Rewriter` (`shake` + `remote`) and `ProjectionReducer` (`Event::Extension`) before Kernel `Rewrite`. |
-| `hya/plan` | `bundles/builtin/plan` | Native ABI v2 (`cdylib`) | Read-only `hya-plan` agent, `plan_exit` tool (alias `plan`), and `tool.visibility` native hook. |
+| `hya/plan` | `bundles/builtin/plan` | Native ABI v2 (`cdylib`) + TUI v2 | Read-only `hya-plan` agent, `plan_exit` tool (alias `plan`), `tool.visibility` native hook, and `@hya/tui-sdk` v2 `plan_exit` card renderer + `Plan` status badge. |
 | `hya/goal` | `bundles/builtin/goal` | Native ABI v2 (`cdylib`) | Autonomous goal-mode `GoalDriver` (`hya -p`), `GoalDriverService`, 3 goal skills (`goal-contract`, `guided-goal`, `evaluator-prompt`), and 2 private helper agents (`hya-goal-guide`, `hya-goal-verifier`). |
 | `hya/loop` | `bundles/builtin/loop` | Native ABI v2 (`cdylib`) | Verifier/planner `LoopDriver` (`hya loop`), `LoopService`, and `loop-verifier-prompt` / `loop-planner-prompt` skills (`capabilities: [services, drivers]`). |
 | `hya/core-agents` | `bundles/builtin/core-agents` | Static | Core built-in agent definitions (`hya-main`, `hya-title`). |
 | `hya/core-skills` | `bundles/builtin/core-skills` | Static | Built-in fallback skills (`agent-bundle-authoring`, `secure-self-update`). |
 | `hya/core-commands` | `bundles/builtin/core-commands` | Static | Built-in slash command templates (`/init`, `/review`). |
-| `hya/workflow` | `bundles/builtin/workflow` | Native ABI v2 (`cdylib`) | Workflow DAG execution, durable replay, `workflow` tool, `ProjectionReducer` (`extensions["hya/workflow"]`), `BundleApi` (`/workflows`, `/state`, `/command`), and the built-in `plan-impl-review` Workflow + stage agents (`capabilities: [tools, services, apis]`). |
-| `hya/basic-tui-components` | `bundles/builtin/basic-tui-components` | JS / TUI | Standard TUI panels (Projects view/sidebar, Sessions, Todos, Context). |
+| `hya/workflow` | `bundles/builtin/workflow` | Native ABI v2 (`cdylib`) + TUI v2 | Workflow DAG execution, durable replay, `workflow` tool, `ProjectionReducer` (`extensions["hya/workflow"]`), `BundleApi` (`/workflows`, `/state`, `/command`), built-in `plan-impl-review` workflow + stage agents (`capabilities: [tools, services, apis]`), and `@hya/tui-sdk` v2 `workflows` pane + `/workflow` slash commands. |
+| `hya/basic-tui-components` | `bundles/builtin/basic-tui-components` | Static + TUI v2 | Standard `@hya/tui-sdk` v2 panels (Projects sidebar/view, Sessions, Todos, Context, Jobs). |
 
 ---
 
@@ -272,5 +272,5 @@ Source checkouts also include six optional official bundles under `bundles/extra
 | `hya-extra/scout` | Read-only `scout` subagent powered by semantic `zvec-grep` + `read`/`grep`/`glob`. |
 | `hya-extra/jev-model-router` | `chat.params` hook that classifies task difficulty (easy/medium/hard) via TypeSafe Jev and routes models per session chain. |
 | `hya-extra/model-fallback` | `model.fallback` hook providing per-model custom fallback chains when a provider fails before streaming. |
-| `hya-extra/token-summary` | Adds a `token-summary__token_summary` tool and `GET /v1/sessions/{id}/bundles/hya-extra%2Ftoken-summary/usage` API reporting token spend across a whole team tree. |
+| `hya-extra/token-summary` | Adds a `token-summary__token_summary` tool and `GET /v2/sessions/{id}/bundles/hya-extra%2Ftoken-summary/usage` API reporting token spend across a whole team tree. |
 | `hya-extra/orchestrator` | Main `orchestrator` agent that coordinates dedicated `orchestrator-scout`, `orchestrator-editor`, and `orchestrator-runner` workers via traced JavaScript workflow programs. |
