@@ -189,10 +189,6 @@ impl Provider for ScriptedProvider {
         })
     }
 
-    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
-        Some(b"m4-lifecycle-script-v1".to_vec())
-    }
-
     async fn stream(
         &self,
         request: CompletionRequest,

@@ -103,16 +103,12 @@ fn anthropic_prompt_cache_marks_only_system_last_tool_and_final_message_block() 
 }
 
 #[test]
-fn prompt_cache_changes_anthropic_route_identity_and_capabilities() {
+fn prompt_cache_changes_anthropic_route_capabilities() {
     let enabled = route(ProviderKind::Anthropic, 0);
     let disabled = route(ProviderKind::Anthropic, 0).with_prompt_cache(false);
     let model = ModelRef::new(LIMITED);
     assert!(enabled.capabilities(&model).unwrap().prompt_caching);
     assert!(!disabled.capabilities(&model).unwrap().prompt_caching);
-    assert_ne!(
-        enabled.configured_identity_v1(),
-        disabled.configured_identity_v1()
-    );
     assert!(
         !route(ProviderKind::Google, 0)
             .capabilities(&model)
@@ -237,18 +233,6 @@ fn catalog_rows_advertise_the_known_output_limit() {
         .find(|row| row.model_id == LIMITED)
         .unwrap();
     assert_eq!(row.capabilities.max_output, 131_072);
-}
-
-#[test]
-fn configured_identity_covers_model_limits() {
-    let identity = |output: u32| route(ProviderKind::Anthropic, output).configured_identity_v1();
-    assert!(identity(131_072).is_some());
-    assert_eq!(identity(131_072), identity(131_072));
-    assert_ne!(
-        identity(131_072),
-        identity(8_192),
-        "changing only an output limit changes the request shape"
-    );
 }
 
 #[test]

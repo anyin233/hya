@@ -45,9 +45,6 @@ impl Provider for Script {
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         FakeProvider::scripted(vec![]).capabilities(model)
     }
-    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
-        Some(b"lifecycle-bench-v1".to_vec())
-    }
     async fn stream(
         &self,
         _: CompletionRequest,

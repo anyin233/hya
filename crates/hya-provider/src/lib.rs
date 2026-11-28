@@ -224,48 +224,6 @@ pub struct Capabilities {
     pub prompt_caching: bool,
 }
 
-pub(crate) fn append_identity_bytes(output: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
-    let length = u64::try_from(bytes.len()).ok()?;
-    output.extend_from_slice(&length.to_be_bytes());
-    output.extend_from_slice(bytes);
-    Some(())
-}
-
-pub(crate) fn append_identity_count(output: &mut Vec<u8>, count: usize) -> Option<()> {
-    let count = u64::try_from(count).ok()?;
-    output.extend_from_slice(&count.to_be_bytes());
-    Some(())
-}
-
-pub(crate) fn append_identity_optional_bytes(
-    output: &mut Vec<u8>,
-    value: Option<&str>,
-) -> Option<()> {
-    match value {
-        Some(value) => {
-            output.push(1);
-            append_identity_bytes(output, value.as_bytes())?;
-        }
-        None => output.push(0),
-    }
-    Some(())
-}
-
-pub(crate) fn append_capabilities_identity(
-    output: &mut Vec<u8>,
-    caps: &Capabilities,
-) -> Option<()> {
-    output.extend_from_slice(&[
-        u8::from(caps.streaming_tool_calls),
-        u8::from(caps.usage_reporting),
-        u8::from(caps.prompt_caching),
-        u8::from(caps.reasoning_request),
-    ]);
-    output.extend_from_slice(&caps.max_context.to_be_bytes());
-    output.extend_from_slice(&caps.max_output.to_be_bytes());
-    Some(())
-}
-
 /// One model entry published into the aggregated catalog for UI / API listing.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderModel {
@@ -613,12 +571,6 @@ pub trait Provider: Send + Sync {
     fn supports_reasoning_effort(&self, model: &ModelRef, effort: ReasoningEffort) -> Option<bool> {
         self.capabilities(model)
             .map(|caps| effort == ReasoningEffort::Off || caps.reasoning_request)
-    }
-
-    /// Return deterministic configured routing identity, excluding secrets and
-    /// transient live state. Providers without a complete identity fail closed.
-    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
-        None
     }
 
     /// Models this route publishes into the aggregated catalog (default empty).

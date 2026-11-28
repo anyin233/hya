@@ -129,9 +129,6 @@ impl Provider for CountingProvider {
         }
         self.inner.capabilities(model)
     }
-    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
-        Some(b"hya-test-counting-provider-identity-v1".to_vec())
-    }
     async fn stream(
         &self,
         request: CompletionRequest,
@@ -162,9 +159,6 @@ impl<P: Provider> Provider for CaptureSystemsProvider<P> {
     }
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         self.inner.capabilities(model)
-    }
-    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
-        Some(b"hya-test-capture-systems-provider-identity-v1".to_vec())
     }
     async fn stream(
         &self,

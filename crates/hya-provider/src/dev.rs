@@ -6,10 +6,7 @@ use async_trait::async_trait;
 use futures::stream;
 use hya_proto::{Event, FinishReason, Message, MessageId, ModelRef, Part, PartId, Role, SessionId};
 
-use crate::{
-    Capabilities, CompletionRequest, EventStream, Provider, ProviderError,
-    append_capabilities_identity, append_identity_bytes,
-};
+use crate::{Capabilities, CompletionRequest, EventStream, Provider, ProviderError};
 
 /// Offline provider: echoes the latest user text on every turn (never exhausts).
 #[derive(Default)]
@@ -61,15 +58,6 @@ impl Provider for DevProvider {
 
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         (model.as_str() == "hya/offline").then(dev_capabilities)
-    }
-
-    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
-        let mut identity = Vec::new();
-        append_identity_bytes(&mut identity, b"hya.provider.offline.configured.v1")?;
-        append_identity_bytes(&mut identity, hya_version::BACKEND_VERSION.as_bytes())?;
-        append_identity_bytes(&mut identity, b"hya/offline")?;
-        append_capabilities_identity(&mut identity, &dev_capabilities())?;
-        Some(identity)
     }
 
     fn catalog(&self) -> Vec<crate::ProviderModel> {

@@ -81,10 +81,6 @@ impl Provider for CountingDevProvider {
         self.inner.capabilities(model)
     }
 
-    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
-        self.inner.configured_identity_v1()
-    }
-
     async fn stream(
         &self,
         request: CompletionRequest,
@@ -111,9 +107,6 @@ impl Provider for SessionRecordingProvider {
     }
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         DevProvider::new().capabilities(model)
-    }
-    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
-        DevProvider::new().configured_identity_v1()
     }
     async fn stream(
         &self,

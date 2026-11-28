@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use hya_proto::{Event, Message, MessageId, ModelRef, SessionId};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, RETRY_AFTER};
-use secrecy::{ExposeSecret as _, SecretString};
+use secrecy::SecretString;
 use serde_json::{Value, json};
 use tokio::{
     sync::mpsc,
@@ -22,15 +22,14 @@ mod output_limit_tests;
 mod stream;
 
 use crate::anthropic::AnthropicMessagesProtocol;
-use crate::auth::{ANTHROPIC_VERSION, AuthStyle, request_header_value};
+use crate::auth::{AuthStyle, request_header_value};
 use crate::google::GoogleProtocol;
 use crate::openai::{
     GrokBuildProtocol, OpenAiChatProtocol, OpenAiResponsesProtocol, encode_input_items_for_model,
 };
 use crate::{
     Capabilities, CompactedWindow, CompletionRequest, EventStream, ModelCatalogSource, Protocol,
-    Provider, ProviderError, ProviderModel, ReasoningEffort, append_capabilities_identity,
-    append_identity_bytes, append_identity_count, append_identity_optional_bytes,
+    Provider, ProviderError, ProviderModel, ReasoningEffort,
 };
 
 const MAX_REQUEST_ATTEMPTS: usize = 3;
@@ -41,9 +40,6 @@ const ERROR_BODY_TIMEOUT: Duration = Duration::from_secs(2);
 /// Bounded request budget before successful response headers establish a stream.
 /// Transport, HTTP 429/5xx and one forced auth refresh share this budget.
 /// Established streams are never replayed here.
-///
-/// Retry tuning is deliberately excluded from `configured_identity_v1`: like
-/// the timeout overrides it tunes liveness, not what the route serves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RetryConfig {
     /// Total request attempts per streamed completion, including the first.
@@ -217,9 +213,6 @@ impl HttpProvider {
         // would abort long streaming completions. Liveness comes from the much
         // narrower RESPONSE_HEADER_TIMEOUT (per attempt) and STREAM_IDLE_TIMEOUT
         // (between SSE frames) instead.
-        // Timeout and retry overrides are not part of `configured_identity_v1`:
-        // they tune liveness, not what the route serves, like the fixed connect
-        // timeout.
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
@@ -429,8 +422,7 @@ impl HttpProvider {
         self
     }
 
-    /// Attach per-model display names (presentation only; not part of the
-    /// configured routing identity).
+    /// Attach per-model display names (presentation only).
     #[must_use]
     pub fn with_model_display_names(
         mut self,
@@ -741,139 +733,6 @@ impl HttpProvider {
     fn served_model_id(&self, model: &ModelRef) -> Option<String> {
         self.served_model_name(model).map(str::to_owned)
     }
-
-    fn configured_identity_bytes_v1(&self) -> Option<Vec<u8>> {
-        let mut identity = Vec::new();
-        append_identity_bytes(&mut identity, b"hya.provider.http.configured.v1")?;
-        append_identity_bytes(&mut identity, hya_version::BACKEND_VERSION.as_bytes())?;
-        append_identity_bytes(&mut identity, self.id.as_bytes())?;
-        append_identity_bytes(&mut identity, provider_kind_identity(self.kind))?;
-        // Preserve the v1 representation for model-specific Gemini URLs.
-        if self.kind == ProviderKind::Google {
-            append_identity_bytes(&mut identity, b"")?;
-            append_identity_optional_bytes(&mut identity, Some(&self.base_url))?;
-        } else {
-            let endpoint = self.protocol.endpoint_url(&self.base_url, "");
-            append_identity_bytes(&mut identity, endpoint.as_bytes())?;
-            append_identity_optional_bytes(&mut identity, None)?;
-        }
-
-        append_identity_count(&mut identity, self.models.len())?;
-        for (model, row) in &self.models {
-            append_identity_bytes(&mut identity, model.as_bytes())?;
-            identity.push(u8::from(row.served));
-            if let Some(variants) = &row.reasoning_variants {
-                identity.push(1);
-                append_identity_count(&mut identity, variants.len())?;
-                for variant in variants {
-                    append_identity_bytes(&mut identity, variant.as_bytes())?;
-                }
-            } else {
-                identity.push(0);
-            }
-            append_identity_bytes(
-                &mut identity,
-                row.reasoning_default
-                    .unwrap_or(ReasoningEffort::Off)
-                    .as_str()
-                    .as_bytes(),
-            )?;
-            if let Some(limit) = &row.limit {
-                identity.push(1);
-                identity.extend_from_slice(&limit.context.to_be_bytes());
-                identity.extend_from_slice(&limit.output.to_be_bytes());
-            } else {
-                identity.push(0);
-            }
-            identity.push(match row.image_input {
-                None => 0,
-                Some(false) => 1,
-                Some(true) => 2,
-            });
-        }
-
-        append_capabilities_identity(&mut identity, &self.caps)?;
-        append_auth_identity(&mut identity, &self.core.auth)?;
-        append_identity_bytes(&mut identity, b"bearer-resolver-slot")?;
-        match &self.core.bearer_resolver {
-            Some(_) => {
-                identity.push(1);
-                append_identity_bytes(&mut identity, self.id.as_bytes())?;
-            }
-            None => identity.push(0),
-        }
-        append_identity_bytes(&mut identity, b"auth-refresher-slot")?;
-        match &self.core.auth_refresher {
-            Some(_) => {
-                identity.push(1);
-                append_identity_bytes(&mut identity, self.id.as_bytes())?;
-            }
-            None => identity.push(0),
-        }
-        Some(identity)
-    }
-}
-
-fn provider_kind_identity(kind: ProviderKind) -> &'static [u8] {
-    match kind {
-        ProviderKind::OpenAiCompatible => b"openai-compatible",
-        ProviderKind::OpenAiResponse => b"openai-response",
-        ProviderKind::OpenAiCodex => b"openai-codex",
-        ProviderKind::GrokBuild => b"grok-build",
-        ProviderKind::Anthropic => b"anthropic",
-        ProviderKind::Google => b"google",
-    }
-}
-
-fn append_auth_identity(output: &mut Vec<u8>, auth: &AuthStyle) -> Option<()> {
-    match auth {
-        AuthStyle::Bearer(key) => {
-            append_identity_bytes(output, b"bearer")?;
-            output.push(u8::from(
-                key.as_ref()
-                    .is_some_and(|value| !value.expose_secret().is_empty()),
-            ));
-        }
-        AuthStyle::CodexSession { token, account_id } => {
-            append_identity_bytes(output, b"codex-session")?;
-            output.push(u8::from(
-                token
-                    .as_ref()
-                    .is_some_and(|value| !value.expose_secret().is_empty()),
-            ));
-            append_identity_optional_bytes(output, account_id.as_deref())?;
-        }
-        AuthStyle::GrokSession {
-            token,
-            client_version,
-            client_identifier,
-        } => {
-            append_identity_bytes(output, b"grok-session")?;
-            output.push(u8::from(
-                token
-                    .as_ref()
-                    .is_some_and(|value| !value.expose_secret().is_empty()),
-            ));
-            append_identity_bytes(output, client_version.as_bytes())?;
-            append_identity_bytes(output, client_identifier.as_bytes())?;
-        }
-        AuthStyle::Anthropic(key) => {
-            append_identity_bytes(output, b"anthropic")?;
-            output.push(u8::from(
-                key.as_ref()
-                    .is_some_and(|value| !value.expose_secret().is_empty()),
-            ));
-            append_identity_bytes(output, ANTHROPIC_VERSION.as_bytes())?;
-        }
-        AuthStyle::Google(key) => {
-            append_identity_bytes(output, b"google")?;
-            output.push(u8::from(
-                key.as_ref()
-                    .is_some_and(|value| !value.expose_secret().is_empty()),
-            ));
-        }
-    }
-    Some(())
 }
 
 async fn response_error(response: reqwest::Response) -> ProviderError {
@@ -976,10 +835,6 @@ impl Provider for HttpProvider {
                 .iter()
                 .any(|variant| ReasoningEffort::parse(variant) == Some(effort)),
         )
-    }
-
-    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
-        self.configured_identity_bytes_v1()
     }
 
     fn catalog(&self) -> Vec<ProviderModel> {
@@ -1161,8 +1016,7 @@ mod tests {
             Some("client-v1")
         );
     }
-    use crate::{DevProvider, FakeProvider, ProviderRouter};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use crate::{DevProvider, ProviderRouter};
 
     #[test]
     fn retry_after_seconds_are_parsed_and_bounded() {
@@ -1282,320 +1136,6 @@ mod tests {
     }
 
     #[test]
-    fn configured_provider_identity_covers_routes_without_secrets_or_live_state() {
-        fn configured_identities(router: &ProviderRouter) -> Option<Vec<Vec<u8>>> {
-            router
-                .providers()
-                .iter()
-                .map(|provider| {
-                    provider
-                        .configured_identity_v1()
-                        .filter(|identity| !identity.is_empty())
-                })
-                .collect()
-        }
-
-        let route = |id: &str, kind: ProviderKind, base: &str, key: &str, models: &[&str]| {
-            match HttpProvider::new(
-                id,
-                kind,
-                base,
-                Some(key.to_string()),
-                models.iter().map(|model| (*model).to_string()),
-            ) {
-                Ok(provider) => provider,
-                Err(error) => panic!("test HTTP provider route: {error}"),
-            }
-        };
-        let router = |provider: HttpProvider| ProviderRouter::new().with(Arc::new(provider));
-
-        let empty = ProviderRouter::new();
-        assert_eq!(configured_identities(&empty), Some(Vec::new()));
-
-        let equivalent_a = router(route(
-            "gateway",
-            ProviderKind::OpenAiCompatible,
-            "https://example.test/v1/",
-            "secret-a",
-            &["model-b", "model-a"],
-        ));
-        let equivalent_b = router(route(
-            "gateway",
-            ProviderKind::OpenAiCompatible,
-            "https://example.test/v1",
-            "secret-b",
-            &["model-a", "model-b"],
-        ));
-        assert!(
-            configured_identities(&equivalent_a)
-                .as_ref()
-                .is_some_and(|identities| !identities.is_empty())
-        );
-        assert_eq!(
-            configured_identities(&equivalent_a),
-            configured_identities(&equivalent_b)
-        );
-
-        let empty_key = router(route(
-            "gateway",
-            ProviderKind::OpenAiCompatible,
-            "https://example.test/v1",
-            "",
-            &["model-a", "model-b"],
-        ));
-        assert_ne!(
-            configured_identities(&equivalent_a),
-            configured_identities(&empty_key)
-        );
-
-        let insertion_a = route(
-            "first",
-            ProviderKind::OpenAiCompatible,
-            "https://first.test/v1",
-            "key",
-            &["model"],
-        );
-        let insertion_b = route(
-            "second",
-            ProviderKind::OpenAiCompatible,
-            "https://second.test/v1",
-            "key",
-            &["model"],
-        );
-        let insertion_ab = ProviderRouter::new()
-            .with(Arc::new(insertion_a))
-            .with(Arc::new(insertion_b));
-        let insertion_ba = ProviderRouter::new()
-            .with(Arc::new(route(
-                "second",
-                ProviderKind::OpenAiCompatible,
-                "https://second.test/v1",
-                "key",
-                &["model"],
-            )))
-            .with(Arc::new(route(
-                "first",
-                ProviderKind::OpenAiCompatible,
-                "https://first.test/v1",
-                "key",
-                &["model"],
-            )));
-        assert_ne!(
-            configured_identities(&insertion_ab),
-            configured_identities(&insertion_ba)
-        );
-
-        let id_changed = router(route(
-            "gateway-renamed",
-            ProviderKind::OpenAiCompatible,
-            "https://example.test/v1",
-            "secret-a",
-            &["model-a", "model-b"],
-        ));
-        assert_ne!(
-            configured_identities(&equivalent_a),
-            configured_identities(&id_changed)
-        );
-
-        let kind_changed = router(route(
-            "gateway",
-            ProviderKind::OpenAiResponse,
-            "https://example.test/v1",
-            "secret-a",
-            &["model-a", "model-b"],
-        ));
-        assert_ne!(
-            configured_identities(&equivalent_a),
-            configured_identities(&kind_changed)
-        );
-
-        let endpoint_changed = router(route(
-            "gateway",
-            ProviderKind::OpenAiCompatible,
-            "https://other.test/v1",
-            "secret-a",
-            &["model-a", "model-b"],
-        ));
-        assert_ne!(
-            configured_identities(&equivalent_a),
-            configured_identities(&endpoint_changed)
-        );
-
-        let models_changed = router(route(
-            "gateway",
-            ProviderKind::OpenAiCompatible,
-            "https://example.test/v1",
-            "secret-a",
-            &["model-a", "model-c"],
-        ));
-        assert_ne!(
-            configured_identities(&equivalent_a),
-            configured_identities(&models_changed)
-        );
-
-        let mut caps_changed_route = route(
-            "gateway",
-            ProviderKind::OpenAiCompatible,
-            "https://example.test/v1",
-            "secret-a",
-            &["model-a", "model-b"],
-        );
-        caps_changed_route.caps.usage_reporting = false;
-        let caps_changed = router(caps_changed_route);
-        assert_ne!(
-            configured_identities(&equivalent_a),
-            configured_identities(&caps_changed)
-        );
-
-        let codex_account_absent = router(
-            route(
-                "codex",
-                ProviderKind::OpenAiCodex,
-                "https://example.test/v1",
-                "secret",
-                &["model"],
-            )
-            .with_codex_session_auth(None),
-        );
-        let codex_account_present = router(
-            route(
-                "codex",
-                ProviderKind::OpenAiCodex,
-                "https://example.test/v1",
-                "secret",
-                &["model"],
-            )
-            .with_codex_session_auth(Some("account-a".to_string())),
-        );
-        let codex_account_changed = router(
-            route(
-                "codex",
-                ProviderKind::OpenAiCodex,
-                "https://example.test/v1",
-                "secret",
-                &["model"],
-            )
-            .with_codex_session_auth(Some("account-b".to_string())),
-        );
-        assert_ne!(
-            configured_identities(&codex_account_absent),
-            configured_identities(&codex_account_present)
-        );
-        assert_ne!(
-            configured_identities(&codex_account_present),
-            configured_identities(&codex_account_changed)
-        );
-
-        let grok_client_a = router(
-            route(
-                "grok",
-                ProviderKind::GrokBuild,
-                "https://example.test/v1",
-                "secret",
-                &["model"],
-            )
-            .with_grok_session_auth("client-v1", "client-a"),
-        );
-        let grok_client_b = router(
-            route(
-                "grok",
-                ProviderKind::GrokBuild,
-                "https://example.test/v1",
-                "secret",
-                &["model"],
-            )
-            .with_grok_session_auth("client-v1", "client-b"),
-        );
-        assert_ne!(
-            configured_identities(&grok_client_a),
-            configured_identities(&grok_client_b)
-        );
-
-        assert!(
-            configured_identities(&equivalent_a).is_some_and(|identities| {
-                identities.iter().any(|identity| {
-                    identity
-                        .windows("hya.provider.http.configured.v1".len())
-                        .any(|bytes| bytes == b"hya.provider.http.configured.v1")
-                        && identity
-                            .windows(hya_version::BACKEND_VERSION.len())
-                            .any(|bytes| bytes == hya_version::BACKEND_VERSION.as_bytes())
-                })
-            })
-        );
-
-        let resolver_count_a = Arc::new(AtomicUsize::new(0));
-        let resolver_count_b = Arc::new(AtomicUsize::new(0));
-        let resolver_route_a = {
-            let counter = Arc::clone(&resolver_count_a);
-            route(
-                "resolver",
-                ProviderKind::OpenAiCompatible,
-                "https://example.test/v1",
-                "secret",
-                &["model"],
-            )
-            .with_bearer_resolver(Arc::new(move || {
-                counter.fetch_add(1, Ordering::SeqCst);
-                Ok("live-token-a".to_string())
-            }))
-        };
-        let resolver_route_b = {
-            let counter = Arc::clone(&resolver_count_b);
-            route(
-                "resolver",
-                ProviderKind::OpenAiCompatible,
-                "https://example.test/v1",
-                "secret",
-                &["model"],
-            )
-            .with_bearer_resolver(Arc::new(move || {
-                counter.fetch_add(1, Ordering::SeqCst);
-                Ok("live-token-b".to_string())
-            }))
-        };
-        let resolver_router_a = router(resolver_route_a);
-        let resolver_router_b = router(resolver_route_b);
-        assert_eq!(
-            configured_identities(&resolver_router_a),
-            configured_identities(&resolver_router_b)
-        );
-        assert_eq!(resolver_count_a.load(Ordering::SeqCst), 0);
-        assert_eq!(resolver_count_b.load(Ordering::SeqCst), 0);
-        assert_ne!(
-            configured_identities(&resolver_router_a),
-            configured_identities(&router(route(
-                "resolver",
-                ProviderKind::OpenAiCompatible,
-                "https://example.test/v1",
-                "secret",
-                &["model"],
-            )))
-        );
-
-        let fake_router = ProviderRouter::new().with(Arc::new(FakeProvider::scripted(Vec::new())));
-        assert_eq!(configured_identities(&fake_router), None);
-
-        let dev_router = ProviderRouter::new().with(Arc::new(DevProvider::new()));
-        assert!(
-            configured_identities(&dev_router)
-                .as_ref()
-                .is_some_and(|identities| !identities.is_empty())
-        );
-
-        assert!(equivalent_a.resolve(&ModelRef::new("model-a")).is_some());
-        assert!(
-            equivalent_a
-                .resolve(&ModelRef::new("gateway/model-a"))
-                .is_some()
-        );
-        assert!(
-            equivalent_a
-                .resolve(&ModelRef::new("foreign/model-a"))
-                .is_none()
-        );
-    }
-    #[test]
     fn per_model_reasoning_defaults_resolve_bare_and_prefixed_refs() -> Result<(), ProviderError> {
         let provider = provider()?.with_model_reasoning_defaults([
             ("claude-opus-4-8".to_string(), Some(ReasoningEffort::High)),
@@ -1620,35 +1160,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn provider_identity_covers_defaults_stably_and_without_secrets() -> Result<(), ProviderError> {
-        let make = |defaults: Vec<(&str, Option<ReasoningEffort>)>| {
-            provider()?
-                .with_model_reasoning_defaults(
-                    defaults
-                        .into_iter()
-                        .map(|(id, effort)| (id.to_string(), effort)),
-                )
-                .configured_identity_v1()
-                .ok_or_else(|| ProviderError::Http("missing configured identity".to_string()))
-        };
-        let low = make(vec![("gpt-5.5", Some(ReasoningEffort::Low))])?;
-        let high = make(vec![("gpt-5.5", Some(ReasoningEffort::High))])?;
-        assert_ne!(low, high, "changing only a model default changes identity");
-        let ordered = make(vec![
-            ("gpt-5.5", Some(ReasoningEffort::Low)),
-            ("claude-opus-4-8", Some(ReasoningEffort::Off)),
-        ])?;
-        let reversed = make(vec![
-            ("claude-opus-4-8", Some(ReasoningEffort::Off)),
-            ("gpt-5.5", Some(ReasoningEffort::Low)),
-        ])?;
-        assert_eq!(
-            ordered, reversed,
-            "default row insertion order is not semantic"
-        );
-        Ok(())
-    }
     #[test]
     fn router_default_uses_first_claiming_provider() -> Result<(), ProviderError> {
         let first = provider()?;
