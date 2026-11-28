@@ -460,16 +460,12 @@ export type FinishReason = ("stop") |
 ("cancelled") |
 ("error")
 
-export type GoalId = string
-
 export type HookId = HookName | `${string}:${string}`
 
 
 export type HookRegistration = {
   readonly name: HookId
 }
-
-export type LoopRunId = string
 
 export type MemberId = string
 
@@ -928,8 +924,6 @@ export function isFinishReason(value: unknown): value is FinishReason {
     (value === "error")
 }
 
-export function isGoalId(value: unknown): value is GoalId { return typeof value === "string" }
-
 export function isHookId(value: unknown): value is HookId { return typeof value === "string" && (isHookName(value) || /^[^:]+:[^:]+$/.test(value)) }
 
 export function isHookName(value: unknown): value is HookName { return typeof value === "string" && HOOK_NAMES.includes(value as HookName) }
@@ -937,8 +931,6 @@ export function isHookName(value: unknown): value is HookName { return typeof va
 export function isHookRegistration(value: unknown): value is HookRegistration {
   return isRecord(value) && ("name" in value && isHookId(value["name"]))
 }
-
-export function isLoopRunId(value: unknown): value is LoopRunId { return typeof value === "string" }
 
 export function isMemberId(value: unknown): value is MemberId { return typeof value === "string" }
 

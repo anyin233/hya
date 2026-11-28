@@ -172,6 +172,7 @@ In Hya v2, every built-in and installed bundle reads its own domain configuratio
 | `hya/coding-extras` | `~/.config/hya/bundles/hya%2Fcoding-extras/config.yml` | `formatter: false \| true \| map<name, { command, extensions, environment?, disabled? }>`, `lsp: true \| false \| map<name, { command, extensions, disabled?, env?, initialization? }>` |
 | `hya/compaction` | `~/.config/hya/bundles/hya%2Fcompaction/config.yml` | `compaction: { keep_recent: 6, summary_max_tokens: 4096, token_accounting: auto \| provider \| estimate }` |
 | `hya/goal` | `~/.config/hya/bundles/hya%2Fgoal/config.yml` | `goal: { evaluator_model?: "provider/model" }` |
+| `hya/loop` | `~/.config/hya/bundles/hya%2Floop/config.yml` | `loop: { evaluator_model?: "provider/model" }` |
 | `hya/multi-agent` | `~/.config/hya/bundles/hya%2Fmulti-agent/config.yml` | `subagents: { max_concurrency: 100, per_run_budget: 1024, per_team_turn_budget: 1024, per_team_message_budget: 1024 }`, plus optional `agents:` pins |
 | `hya/workflow` | `~/.config/hya/bundles/hya%2Fworkflow/config.yml` | Optional `agents:` pins for workflow stage agents |
 

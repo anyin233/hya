@@ -152,7 +152,7 @@ jobs:
       - name: build hya and xtask binaries
         id: build-only
         if: ${{ needs.changes.outputs.rust != 'true' }}
-        run: cargo build --locked -p hya-backend --bin hya -p hya-migration --bin hya-migration -p xtask --bin xtask
+        run: cargo build-hya --locked -p hya-migration --bin hya-migration -p xtask --bin xtask
       - name: generated v2 API drift check
         if: ${{ !cancelled() && (steps.build-archive.outcome == 'success' || steps.build-only.outcome == 'success') }}
         run: |

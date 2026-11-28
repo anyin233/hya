@@ -19,18 +19,10 @@ use crate::relay_doctor::RelayCommand;
         control it. Needs Bun. Subcommands select headless, server, and admin areas."
 )]
 pub(crate) struct Cli {
-    /// Headless goal mode: iterate the agent until an independent evaluator
-    /// reports the goal met, or the iteration cap trips.
+    /// Headless prompt. An enabled bundle may claim `-p` with its own driver
+    /// and flags (`hya/goal`: goal mode); otherwise it runs one headless turn.
     #[arg(short = 'p', long = "prompt", value_name = "GOAL")]
     pub(crate) prompt: Option<String>,
-    /// Iteration cap for `-p` goal mode.
-    #[arg(long, default_value_t = 6)]
-    pub(crate) max_iterations: u32,
-    /// Evaluator model for `-p` goal mode as `provider/model`. Overrides the
-    /// config `goal.evaluator_model`; without either, the worker's current
-    /// model judges (unless a plugin registers `goal.evaluate`).
-    #[arg(long, value_name = "PROVIDER/MODEL")]
-    pub(crate) evaluator_model: Option<String>,
     /// Port of the WebUI that bare `hya` serves on 127.0.0.1 next to the
     /// terminal TUI (default 3250; 0 picks a free port). Only for bare `hya`.
     #[arg(long, value_name = "PORT")]
@@ -404,36 +396,6 @@ pub(crate) enum Command {
     Relay {
         #[command(subcommand)]
         command: RelayCommand,
-    },
-    /// Loop mode: iterate the agent toward `--target` until the deterministic
-    /// `--while`/`--until` condition, the `loop.should_stop` hook, or the
-    /// independent verifier stops the run.
-    Loop {
-        /// The loop target: what "done" means, judged independently.
-        #[arg(long)]
-        target: String,
-        /// Iteration budget (clamped to 1..=100 by the engine's hard ceiling).
-        #[arg(long)]
-        budget: Option<u32>,
-        /// Alias for `--budget` (mirrors `-p` goal mode's flag); `--budget`
-        /// wins when both are given.
-        #[arg(long)]
-        max_iterations: Option<u32>,
-        /// Keep looping while this shell command exits 0; exit 1 stops the
-        /// loop; any other exit code or a timeout is a broken condition
-        /// (a failure, never a success).
-        #[arg(long = "while", value_name = "CMD")]
-        while_command: Option<String>,
-        /// Stop when this shell command exits 0; exit 1 keeps looping; any
-        /// other exit code or a timeout is a broken condition. Mutually
-        /// exclusive with `--while`.
-        #[arg(long = "until", value_name = "CMD")]
-        until_command: Option<String>,
-        /// Verifier/planner model as `provider/model`. Overrides the config
-        /// `goal.evaluator_model`; without either, the worker's current model
-        /// judges.
-        #[arg(long, value_name = "PROVIDER/MODEL")]
-        evaluator_model: Option<String>,
     },
 }
 
@@ -845,31 +807,6 @@ mod tests {
         assert_eq!(hosts("MyBox:8080"), ["mybox"]);
         let policy = super::serve_host_policy("0.0.0.0:8080", &["hya.lan".into()]).unwrap();
         assert!(policy.allows("hya.lan:8080") && !policy.allows("192.168.1.5:8080"));
-    }
-
-    #[test]
-    fn parses_goal_and_loop_flags() {
-        assert_eq!(
-            p("hya -p ship --evaluator-model deep/o3-mini")
-                .evaluator_model
-                .as_deref(),
-            Some("deep/o3-mini")
-        );
-        assert!(p("hya -p ship").evaluator_model.is_none());
-        assert!(matches!(
-            p("hya loop --target green --budget 5 --while true --evaluator-model deep/o3-mini").command,
-            Some(Command::Loop { ref target, budget: Some(5), max_iterations: None, while_command: Some(ref w), until_command: None, evaluator_model: Some(ref e) })
-                if target == "green" && w == "true" && e == "deep/o3-mini"
-        ));
-        assert!(matches!(
-            p("hya loop --target docs --until false --max-iterations 3").command,
-            Some(Command::Loop {
-                budget: None,
-                max_iterations: Some(3),
-                until_command: Some(_),
-                ..
-            })
-        ));
     }
 
     #[test]

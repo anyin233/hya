@@ -335,8 +335,24 @@ struct LoopArgs {
     until_command: Option<String>,
     #[serde(default)]
     evaluator_model: Option<String>,
-    #[serde(default)]
-    default_model: Option<String>,
+}
+
+/// `loop.evaluator_model` (or a top-level `evaluator_model`) of the bundle's
+/// own `config.yml`.
+async fn configured_evaluator_model(runtime: &dyn HostRuntime) -> Option<String> {
+    let config = runtime
+        .catalog_reader()
+        .bundle_config(LOOP_BUNDLE_ID)
+        .await
+        .ok()?;
+    config
+        .get("loop")
+        .and_then(|section| section.get("evaluator_model"))
+        .or_else(|| config.get("evaluator_model"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string)
 }
 
 #[async_trait]
@@ -373,7 +389,10 @@ impl NativeDriver for NativeLoopDriver {
             .or(args.max_iterations)
             .unwrap_or(DEFAULT_LOOP_BUDGET)
             .clamp(1, HARD_MAX_ITERATIONS);
-        let evaluator_model = args.evaluator_model.or(args.default_model);
+        let evaluator_model = match args.evaluator_model {
+            Some(model) => Some(model),
+            None => configured_evaluator_model(runtime.as_ref()).await,
+        };
         let run = LoopRunRequest {
             session: request.session,
             target: args.target,

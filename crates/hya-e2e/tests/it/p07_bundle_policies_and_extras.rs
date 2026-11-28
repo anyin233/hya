@@ -217,7 +217,9 @@ for line in sys.stdin:
     );
     std::fs::remove_dir_all(&plugin_dir).unwrap();
 
-    // 2b. `hya -p` errors cleanly in `--bare` mode and when `hya/goal` is disabled.
+    // 2b. Without `hya/goal` (`--bare`, or disabled), `hya -p` runs one plain
+    // headless turn: no goal driver, no evaluator.
+    env.fake.push_scripts([text_step("bare turn done")]).unwrap();
     let bare_goal = Command::new(&env.backend.binary)
         .args(["--bare", "-p", "verify bare failure"])
         .env("XDG_CONFIG_HOME", &env.backend.xdg_config_home)
@@ -230,14 +232,13 @@ for line in sys.stdin:
         .output()
         .await
         .expect("spawn bare goal run");
+    let bare_stdout = String::from_utf8_lossy(&bare_goal.stdout);
     assert!(
-        !bare_goal.status.success(),
-        "hya --bare -p must fail when hya/goal is absent"
-    );
-    let bare_stderr = String::from_utf8_lossy(&bare_goal.stderr);
-    assert!(
-        bare_stderr.contains("hya/goal") && bare_stderr.contains("--bare"),
-        "expected actionable hya/goal error in --bare stderr, got: {bare_stderr}"
+        bare_goal.status.success()
+            && bare_stdout.contains("bare turn done")
+            && !bare_stdout.contains("goal outcome"),
+        "hya --bare -p must run one turn: {bare_stdout}\n{}",
+        String::from_utf8_lossy(&bare_goal.stderr)
     );
 
     let disabled_cfg_dir = tmp.path().join("disabled-goal-xdg");
@@ -259,14 +260,13 @@ for line in sys.stdin:
         .output()
         .await
         .expect("spawn disabled-goal run");
+    let disabled_stdout = String::from_utf8_lossy(&disabled_goal.stdout);
     assert!(
-        !disabled_goal.status.success(),
-        "hya -p must fail when hya/goal is disabled in config.yaml"
-    );
-    let disabled_stderr = String::from_utf8_lossy(&disabled_goal.stderr);
-    assert!(
-        disabled_stderr.contains("hya/goal") && disabled_stderr.contains("bundles.builtin"),
-        "expected actionable hya/goal disabled error in stderr, got: {disabled_stderr}"
+        disabled_goal.status.success()
+            && disabled_stdout.contains("[User] verify disabled hya/goal failure")
+            && !disabled_stdout.contains("goal outcome"),
+        "hya -p with hya/goal disabled must run one turn: {disabled_stdout}\n{}",
+        String::from_utf8_lossy(&disabled_goal.stderr)
     );
 
     // 3. T2.25: installed channel policy denies child sends; uninstall restores default delivery.

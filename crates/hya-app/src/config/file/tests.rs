@@ -74,17 +74,6 @@ fn permission_catalog_scopes_and_v1_rejection() {
             "missing hya-migration guidance in error for `{bad_cfg}`: {err}"
         );
     }
-
-    assert_eq!(GoalSettings::from_block(None), GoalSettings::default());
-    assert_eq!(
-        resolve_evaluator_model(Some("cli/m"), Some("cfg/m"), "w/m"),
-        "cli/m"
-    );
-    assert_eq!(
-        resolve_evaluator_model(Some("  "), Some("  cfg/m "), "w/m"),
-        "cfg/m"
-    );
-    assert_eq!(resolve_evaluator_model(None, Some(""), "w/m"), "w/m");
 }
 
 #[test]
@@ -110,7 +99,6 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
         std::fs::create_dir_all(loc.dir()).unwrap();
         std::fs::write(loc.file(), body).unwrap();
     };
-    write_bundle_cfg("hya/goal-loop", "goal:\n  evaluator_model: deep/o3-mini\n");
     write_bundle_cfg("hya/coding-extras", "lsp: false\n");
     write_bundle_cfg(
         "hya/multi-agent",
@@ -135,10 +123,6 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
         file,
         config_file: Some(cfg_path.clone()),
     };
-    assert_eq!(
-        settings.goal().evaluator_model.as_deref(),
-        Some("deep/o3-mini")
-    );
     let net_json = settings.bundle_config_json("hya/network");
     assert_eq!(net_json["webfetch"]["enabled"], false);
     assert_eq!(net_json["websearch"]["provider"], "parallel");

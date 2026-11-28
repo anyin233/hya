@@ -345,11 +345,9 @@ async fn cmd_exec(
 }
 
 /// Run a bundle driver headlessly in an in-memory store and print its report.
-/// `args` are the driver's arguments; `default_model` is added as the
-/// worker's judge-model fallback.
 async fn cmd_driver(
     driver: &str,
-    mut args: serde_json::Value,
+    args: serde_json::Value,
     model_override: Option<String>,
     yolo: bool,
     bare: bool,
@@ -369,12 +367,6 @@ async fn cmd_driver(
     let (report, stop) = headless
         .run(async move |headless| {
             let cancel = CancellationToken::new();
-            if let serde_json::Value::Object(map) = &mut args {
-                map.insert(
-                    "default_model".to_string(),
-                    serde_json::Value::String(headless.evaluator_model.clone()),
-                );
-            }
             let request = hya_runtime_abi::DriverRequest {
                 session: headless.session,
                 agent: Some(headless.agent.name.clone()),
@@ -504,7 +496,8 @@ fn main() -> anyhow::Result<()> {
         })
 }
 
-/// `hya -p <PROMPT>` through the prompt driver an enabled bundle declares.
+/// `hya -p <PROMPT>`: the prompt driver an enabled bundle declares, else one
+/// headless turn whose transcript is printed.
 async fn run_prompt(
     cli: Cli,
     route: Option<bundle_cli::Route>,
@@ -518,7 +511,19 @@ async fn run_prompt(
                 .await
                 .inspect_err(|error| eprintln!("{label} error: {error:#}"))
         }
-        None => run(cli).await,
+        None => {
+            exec_entry(
+                cli.prompt.clone().unwrap_or_default(),
+                model,
+                &cli.db,
+                cli.yolo,
+                ExecOutput::Transcript,
+                cli.bare,
+                cli.pure,
+                None,
+            )
+            .await
+        }
     }
 }
 
@@ -575,16 +580,6 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let bare = cli.bare;
     let pure = cli.pure;
     let db = cli.db.clone();
-    if let Some(goal) = cli.prompt {
-        let args = serde_json::json!({
-            "prompt": goal,
-            "max_iterations": cli.max_iterations,
-            "evaluator_model": cli.evaluator_model,
-        });
-        return cmd_driver("hya/goal:goal", args, model, yolo, bare, pure)
-            .await
-            .inspect_err(|error| eprintln!("goal error: {error:#}"));
-    }
     match cli.command {
         // Bare `hya` on a terminal starts the TUI and the WebUI against the
         // database's backend daemon (frontend.rs, daemon.rs); without a
@@ -817,24 +812,6 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Relay { command }) => {
             let code = relay_doctor::run(command).await?;
             std::process::exit(code);
-        }
-        Some(Command::Loop {
-            target,
-            budget,
-            max_iterations,
-            while_command,
-            until_command,
-            evaluator_model,
-        }) => {
-            let args = serde_json::json!({
-                "target": target,
-                "budget": budget,
-                "max_iterations": max_iterations,
-                "while": while_command,
-                "until": until_command,
-                "evaluator_model": evaluator_model,
-            });
-            cmd_driver("hya/loop:loop", args, model, yolo, bare, pure).await
         }
     }
 }

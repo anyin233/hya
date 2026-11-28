@@ -19,3 +19,47 @@ resources:
       path: skills/loop-verifier-prompt/SKILL.md
     - id: loop-planner-prompt
       path: skills/loop-planner-prompt/SKILL.md
+cli:
+  - name: loop
+    about: >-
+      Loop mode: iterate the agent toward `--target` until the deterministic
+      `--while`/`--until` condition, a `hya/loop:should_stop` hook, or the
+      independent verifier stops the run.
+    driver: loop
+    args:
+      - id: target
+        long: target
+        required: true
+        help: "The loop target: what \"done\" means, judged independently."
+      - id: budget
+        long: budget
+        value: integer
+        help: Iteration budget (clamped to 1..=100 by the loop's hard ceiling).
+      - id: max_iterations
+        long: max-iterations
+        value: integer
+        help: >-
+          Alias for `--budget` (mirrors `-p` goal mode's flag); `--budget` wins
+          when both are given.
+      - id: while
+        long: while
+        value_name: CMD
+        conflicts_with: [until]
+        help: >-
+          Keep looping while this shell command exits 0; exit 1 stops the loop;
+          any other exit code or a timeout is a broken condition (a failure,
+          never a success).
+      - id: until
+        long: until
+        value_name: CMD
+        help: >-
+          Stop when this shell command exits 0; exit 1 keeps looping; any other
+          exit code or a timeout is a broken condition. Mutually exclusive with
+          `--while`.
+      - id: evaluator_model
+        long: evaluator-model
+        value_name: PROVIDER/MODEL
+        help: >-
+          Verifier/planner model as `provider/model`. Overrides the bundle config
+          `loop.evaluator_model`; without either, the worker's current model
+          judges.

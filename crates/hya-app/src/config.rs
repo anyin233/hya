@@ -33,9 +33,9 @@ pub use edit::{
 };
 pub use file::{
     BundlesConfig, CONFIG_SCHEMA_VERSION, CodeMode, ContextSettings, CreatedConfig, EngineSettings,
-    GoalSettings, active_config_path, configured_builtin_bundles, configured_code_mode,
-    ensure_config_file, ensure_config_file_at, expected_config_path, first_run_config_bootstrap,
-    load_configured_plugin_ids, resolve_evaluator_model, resolve_event_bus_capacity,
+    active_config_path, configured_builtin_bundles, configured_code_mode, ensure_config_file,
+    ensure_config_file_at, expected_config_path, first_run_config_bootstrap,
+    load_configured_plugin_ids, resolve_event_bus_capacity,
 };
 pub(crate) use file::{parse_plugin_config, read_bundle_config_json};
 pub(crate) use provider::resolve_secret;

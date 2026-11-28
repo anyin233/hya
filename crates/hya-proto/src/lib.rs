@@ -43,9 +43,9 @@ pub mod workspace;
 
 pub use event::{CompactionStrategy, Envelope, Event, SessionKind, StepCut};
 pub use ids::{
-    ActorClaim, ActorEpoch, ConfigGeneration, EventSeq, GoalId, LoopRunId, MemberId, MessageId,
-    OperationId, OwnerRunId, PartId, PermissionRequestId, ProjectId, QuestionRequestId, SessionId,
-    TeamRunId, ToolCallId, WorkflowRunId,
+    ActorClaim, ActorEpoch, ConfigGeneration, EventSeq, MemberId, MessageId, OperationId,
+    OwnerRunId, PartId, PermissionRequestId, ProjectId, QuestionRequestId, SessionId, TeamRunId,
+    ToolCallId, WorkflowRunId,
 };
 pub use mail::{
     CHANNEL_RANDOM_LEN, ChannelKind, ChannelPolicySnapshot, MailEndpoint, MailKind,

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use hya_context::rewrite::{RewriteCtx, ToolError};
 use hya_context::tokens::{TokenAccounting, TokenSource};
-use hya_proto::context::{ReasoningReplayPolicy, marker_goal};
+use hya_proto::context::{ReasoningReplayPolicy, marker_criteria};
 use hya_proto::{
     CompactionStrategy, Event, FinishReason, Message, MessageId, PartId, Role, SessionId,
 };
@@ -202,7 +202,7 @@ async fn commit(
     let session = cx.session;
     let todos = cx.projection.session.todos.as_deref().unwrap_or_default();
     body.push_str("\n\n");
-    body.push_str(&marker_goal(todos));
+    body.push_str(&marker_criteria(todos));
     let message = MessageId::new();
     let mut events = marker_events(session, message, body);
     if let (Some(first), Some(last)) = (messages.first(), messages.last()) {

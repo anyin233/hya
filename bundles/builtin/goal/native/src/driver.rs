@@ -511,8 +511,6 @@ struct GoalArgs {
     max_iterations: Option<u32>,
     #[serde(default)]
     evaluator_model: Option<String>,
-    #[serde(default)]
-    default_model: Option<String>,
 }
 
 /// Bind goal evaluator resources through `runtime` and prepare the cancellable
@@ -604,10 +602,7 @@ impl NativeDriver for NativeGoalDriver {
             max_wall_clock_secs: 1800,
             agent: request.agent,
             model: request.model,
-            config: serde_json::json!({
-                "evaluator_model": args.evaluator_model,
-                "default_model": args.default_model,
-            }),
+            config: serde_json::json!({ "evaluator_model": args.evaluator_model }),
         };
         let outcome = prepare_goal(runtime, run, cancel).await?.await?;
         Ok(DriverReport {

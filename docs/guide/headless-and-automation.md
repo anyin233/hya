@@ -64,7 +64,7 @@ In regular chat tools, an AI sometimes stops early and says *"All done!"* when t
 
 **Goal mode (`hya -p`)** fixes that by separating the **worker** from the **judge**. Goal mode is provided by the built-in **`hya/goal`** native ABI v2 bundle (the `hya/goal:goal` driver + `goal-contract`, `guided-goal`, and `evaluator-prompt` skills + `hya-goal-guide` and `hya-goal-verifier` agents). After Hya finishes a round of work, an independent evaluator (a registered `hya/goal:evaluate` hook or the tool-free model verifier) checks the transcript before letting Hya stop. If anything is missing, Hya gets sent back to finish the job.
 
-> **Bundle availability:** Goal mode requires `hya/goal` to be enabled (default in `profile: full`). Running `hya --bare -p "..."` or disabling `hya/goal` in `config.yaml` (`bundles.builtin.disable: [hya/goal]`) fails fast with an actionable error instead of falling back to an unverified single turn. Configure the default judge model per bundle in `~/.config/hya/bundles/hya%2Fgoal/config.yml` (`goal.evaluator_model`), or override it per run with `--evaluator-model`.
+> **Bundle availability:** Goal mode requires `hya/goal` to be enabled (default in `profile: full`). Without `hya/goal` (`hya --bare -p "..."`, or `bundles.builtin.disable: [hya/goal]`), `-p` runs one unverified headless turn instead and the goal-mode flags are not available. Configure the default judge model per bundle in `~/.config/hya/bundles/hya%2Fgoal/config.yml` (`goal.evaluator_model`), or override it per run with `--evaluator-model`.
 
 ```sh
 hya -p "Add unit tests for src/billing.rs and make sure cargo test passes" \
@@ -126,7 +126,7 @@ hya loop \
 Loop mode is supplied by the built-in native ABI v2 bundle **`hya/loop`** (`bundles/builtin/loop/`), which registers its `hya/loop:loop` driver, lifecycle `LoopService`, and verifier/planner prompt skills (`loop-verifier-prompt`, `loop-planner-prompt`) through `HostRuntime`.
 
 - **Full mode (default):** `hya/loop` is enabled automatically and `hya loop` runs the `hya/loop:loop` driver.
-- **`--bare` or disabled:** Running `hya loop --bare` or listing `hya/loop` in `bundles.builtin.disable` skips loading the bundle and returns an actionable error instructing you to remove `--bare` or enable `hya/loop` in `config.yaml`:
+- **`--bare` or disabled:** with `--bare`, or with `hya/loop` in `bundles.builtin.disable`, the bundle is not loaded and `hya loop` is not a command; enable `hya/loop` in `config.yaml`:
 
 ```yaml
 schema_version: 2

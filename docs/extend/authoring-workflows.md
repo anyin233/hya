@@ -114,7 +114,7 @@ To distribute a Workflow and its custom Agents together as a `.hyabundle`, decla
 When running `hya -p "<goal>"` or `hya loop`, the engine—never the worker—owns stop decisions (including iteration ceilings, stall guards, and `--until`/`--while` shell predicates).
 
 You can customize the intelligence behind evaluations in two ways:
-1. **Configure a judge model:** Pass `--evaluator-model provider/model` on the CLI or set `goal.evaluator_model` in `~/.config/hya/config.yaml`.
+1. **Configure a judge model:** Pass `--evaluator-model provider/model` on the CLI, or set `goal.evaluator_model` in `~/.config/hya/bundles/hya%2Fgoal/config.yml` (goal mode) or `loop.evaluator_model` in `~/.config/hya/bundles/hya%2Floop/config.yml` (loop mode).
 2. **Write a hook:** Implement a declared hook point in a Bundle/Plugin process (see **[Plugins & Hooks](plugins-and-hooks.md)**):
 
    | Point | Input | Reply (`null` defers to the next provider) |

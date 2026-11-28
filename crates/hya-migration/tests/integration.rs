@@ -1267,8 +1267,8 @@ async fn full_v1_to_v2_migration_v2_runtime_verification_and_sha256_rollback() {
             .expect("v2 hya-app::config::load must accept migrated config.yaml")
             .expect("migrated config.yaml must be discovered under XDG_CONFIG_HOME");
         assert_eq!(
-            resolved.settings.goal().evaluator_model.as_deref(),
-            Some("openai/gpt-5")
+            resolved.settings.bundle_config_json("hya/goal")["goal"]["evaluator_model"],
+            "openai/gpt-5"
         );
     }
 

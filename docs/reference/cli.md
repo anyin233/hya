@@ -89,7 +89,9 @@ Global flags such as `--bare` and `--pure` can be placed either before or after 
 hya -p "<GOAL>" [--max-iterations <N>] [--evaluator-model <MODEL>]
 ```
 
-Runs iterative turns in memory through the `hya/goal` native bundle's `hya/goal:goal` driver until an independent evaluator (a `hya/goal:evaluate` hook or the tool-free verifier model) confirms `<GOAL>` is met or `--max-iterations` (default `6`) is reached. Requires `hya/goal` to be enabled; fails with an actionable error in `--bare` mode or when `hya/goal` is disabled in `config.yaml` (`bundles.builtin.disable: [hya/goal]`). Per-bundle evaluator model defaults can be configured in `~/.config/hya/bundles/hya%2Fgoal/config.yml` under `goal.evaluator_model`.
+`hya/goal` claims `-p` (a `kind: prompt` CLI contribution) and adds `--max-iterations` and `--evaluator-model`. It runs iterative turns in memory through its `hya/goal:goal` driver until an independent evaluator (a `hya/goal:evaluate` hook or the tool-free verifier model) confirms `<GOAL>` is met or `--max-iterations` (default `6`) is reached. The default judge model is `goal.evaluator_model` in `~/.config/hya/bundles/hya%2Fgoal/config.yml`, else the worker's model.
+
+When no enabled bundle claims `-p` (`hya --bare -p "…"`, or `hya/goal` disabled in `config.yaml`), `hya -p "<PROMPT>"` runs **one** headless turn, prints its transcript like `hya exec`, and exits: no iterations, no evaluator. The goal-mode flags do not exist then.
 
 ### `hya loop`
 
@@ -99,7 +101,7 @@ hya loop --target "<OBJECTIVE>" [--until "<CMD>" | --while "<CMD>"] [--budget <N
 
 Iterates toward `--target` up to `--budget` rounds (default `10`, clamped to `1..=100`; `--max-iterations` is an alias). With `--until`, stops when `<CMD>` exits `0` (continues on exit `1`); `--while` inverts that check. Any exit code other than `0` or `1` (or timeout) aborts the loop with a non-zero exit status as a broken condition.
 
-`hya loop` is provided by the built-in native bundle `hya/loop` (the `hya/loop:loop` driver). Running with `--bare` or with `hya/loop` disabled in `config.yaml` (`bundles.builtin.disable: [hya/loop]`) exits with an actionable error instead of running silently without a driver.
+`hya loop` is a CLI command the built-in native bundle `hya/loop` contributes (routed to its `hya/loop:loop` driver). With `--bare`, or with `hya/loop` disabled in `config.yaml` (`bundles.builtin.disable: [hya/loop]`), the command does not exist (`unrecognized subcommand 'loop'`). The default judge model is `loop.evaluator_model` in `~/.config/hya/bundles/hya%2Floop/config.yml`, else the worker's model.
 
 ---
 

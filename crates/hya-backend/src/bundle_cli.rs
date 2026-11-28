@@ -61,7 +61,12 @@ pub(crate) async fn parse(argv: Vec<OsString>) -> anyhow::Result<Parsed> {
             let contributions = hya_app::cli_contributions(bare)
                 .await
                 .context("load bundle CLI contributions")?;
-            parse_with(argv, &contributions)
+            parse_with(argv, &contributions).map_err(|error| {
+                match error.downcast::<clap::Error>() {
+                    Ok(clap) => clap.exit(),
+                    Err(error) => error,
+                }
+            })
         }
     }
 }
@@ -112,9 +117,7 @@ fn parse_with(argv: Vec<OsString>, contributions: &[CliContribution]) -> anyhow:
             }
         }
     }
-    let mut matches = command
-        .try_get_matches_from(argv)
-        .unwrap_or_else(|error| error.exit());
+    let mut matches = command.try_get_matches_from(argv)?;
     let bundle_command = matches.subcommand_name().and_then(|name| {
         commands
             .iter()
@@ -123,7 +126,7 @@ fn parse_with(argv: Vec<OsString>, contributions: &[CliContribution]) -> anyhow:
     if let Some(contribution) = bundle_command
         && let Some((_, sub)) = matches.remove_subcommand()
     {
-        let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+        let cli = Cli::from_arg_matches(&matches)?;
         let (route, args) = resolve(&contribution.bundle, &contribution.command, &sub)?;
         return Ok(Parsed::Bundle { cli, route, args });
     }
@@ -131,7 +134,7 @@ fn parse_with(argv: Vec<OsString>, contributions: &[CliContribution]) -> anyhow:
 }
 
 fn finish_core(matches: ArgMatches, prompt: Option<&CliContribution>) -> anyhow::Result<Parsed> {
-    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    let cli = Cli::from_arg_matches(&matches)?;
     if cli.prompt.is_none() {
         return Ok(Parsed::Core(cli));
     }
@@ -211,9 +214,11 @@ fn clap_arg(arg: &CliArg) -> Arg {
     if !arg.aliases.is_empty() {
         clap = clap.aliases(arg.aliases.clone());
     }
-    if let Some(value_name) = &arg.value_name {
-        clap = clap.value_name(value_name.clone());
-    }
+    clap = clap.value_name(
+        arg.value_name
+            .clone()
+            .unwrap_or_else(|| arg.id.to_uppercase()),
+    );
     if let Some(default) = &arg.default {
         clap = clap.default_value(default.clone());
     }
@@ -342,6 +347,82 @@ mod tests {
             parse_with(argv("hya models"), &contributions(DEMO)).unwrap(),
             Parsed::Core(_)
         ));
+    }
+
+    fn first_party(ids: &[&str]) -> Vec<CliContribution> {
+        ids.iter()
+            .flat_map(|id| {
+                let catalog = hya_bundle::first_party_bundle(id).unwrap();
+                catalog.bundles()[0]
+                    .cli()
+                    .iter()
+                    .map(|command| CliContribution {
+                        bundle: (*id).to_string(),
+                        command: command.clone(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// `hya -p` and `hya loop` keep their pre-bundle flag surface.
+    #[test]
+    fn goal_and_loop_flags_are_byte_compatible() {
+        let contributions = first_party(&["hya/goal", "hya/loop"]);
+        let Parsed::Prompt { route, args, .. } = parse_with(
+            argv("hya -p ship --max-iterations 3 --evaluator-model deep/o3-mini"),
+            &contributions,
+        )
+        .unwrap() else {
+            panic!("expected goal mode");
+        };
+        assert_eq!(route, Some(Route::Driver("hya/goal:goal".into())));
+        assert_eq!(
+            args,
+            serde_json::json!({ "prompt": "ship", "max_iterations": 3, "evaluator_model": "deep/o3-mini" })
+        );
+        let Parsed::Prompt { args, .. } = parse_with(argv("hya -p ship"), &contributions).unwrap()
+        else {
+            panic!("expected goal mode");
+        };
+        assert_eq!(args["max_iterations"], 6);
+
+        let Parsed::Bundle { route, args, .. } = parse_with(
+            argv("hya loop --target green --budget 5 --while true --evaluator-model deep/o3-mini"),
+            &contributions,
+        )
+        .unwrap() else {
+            panic!("expected loop mode");
+        };
+        assert_eq!(route, Route::Driver("hya/loop:loop".into()));
+        assert_eq!(
+            args,
+            serde_json::json!({
+                "target": "green", "budget": 5, "max_iterations": null, "while": "true",
+                "until": null, "evaluator_model": "deep/o3-mini",
+            })
+        );
+        let Parsed::Bundle { args, .. } = parse_with(
+            argv("hya loop --target docs --until false --max-iterations 3"),
+            &contributions,
+        )
+        .unwrap() else {
+            panic!("expected loop mode");
+        };
+        assert_eq!(
+            (&args["max_iterations"], &args["until"]),
+            (&serde_json::json!(3), &serde_json::json!("false"))
+        );
+
+        for rejected in [
+            "hya loop --target x --while a --until b",
+            "hya loop --budget 2",
+        ] {
+            assert!(
+                parse_with(argv(rejected), &contributions).is_err(),
+                "{rejected}"
+            );
+        }
     }
 
     #[test]

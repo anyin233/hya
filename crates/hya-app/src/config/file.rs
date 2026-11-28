@@ -115,20 +115,6 @@ impl EngineSettings {
             .load_with_builtin(&self.file.agents)
     }
 
-    /// Goal evaluator settings resolved from the `hya/goal` (or legacy
-    /// `hya/goal-loop`) bundle config.
-    pub fn goal(&self) -> GoalSettings {
-        if !self.file.bundles.builtin.is_enabled("hya/goal")
-            && !self.file.bundles.builtin.is_enabled("hya/goal-loop")
-        {
-            return GoalSettings::default();
-        }
-        let block = self
-            .read_bundle_config_value(&["hya/goal", "hya/goal-loop"])
-            .and_then(|val| decode_bundle_section::<GoalFile>(&val, Some("goal")));
-        GoalSettings::from_block(block)
-    }
-
     pub(crate) fn categories(&self) -> CategoryRegistry {
         resolve_categories(&self.file)
     }
@@ -722,51 +708,6 @@ fn resolve_context_settings(file: Option<&CompactionFile>) -> ContextSettings {
         settings.token_accounting = parsed;
     }
     settings
-}
-
-/// File shape of the `goal:` block of `~/.config/hya/config.yaml`.
-#[derive(Clone, Debug, Default, Deserialize)]
-struct GoalFile {
-    /// `provider/model` ref that judges goal mode when no `--evaluator-model`
-    /// flag is given. Absent/blank → the worker's current model.
-    #[serde(default)]
-    evaluator_model: Option<String>,
-}
-
-/// Goal-mode settings resolved from config. There are no env overrides for
-/// this block by design: the CLI flag is the only layer above it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct GoalSettings {
-    /// Evaluator model from `goal.evaluator_model` (trimmed); `None` → the
-    /// worker's current model judges.
-    pub evaluator_model: Option<String>,
-}
-
-impl GoalSettings {
-    fn from_block(block: Option<GoalFile>) -> Self {
-        Self {
-            evaluator_model: block
-                .and_then(|goal| goal.evaluator_model)
-                .map(|model| model.trim().to_string())
-                .filter(|model| !model.is_empty()),
-        }
-    }
-}
-
-/// Resolve the goal evaluator model: the CLI flag wins over the config
-/// `goal.evaluator_model`; without either, the worker's current model judges.
-/// Blank/whitespace values count as unset at every layer, so an accidentally
-/// empty setting can never shadow a lower layer or break resolution.
-#[must_use]
-pub fn resolve_evaluator_model<'a>(
-    cli_flag: Option<&'a str>,
-    config_value: Option<&'a str>,
-    worker_current: &'a str,
-) -> &'a str {
-    let non_empty = |value: Option<&'a str>| value.map(str::trim).filter(|model| !model.is_empty());
-    non_empty(cli_flag)
-        .or_else(|| non_empty(config_value))
-        .unwrap_or(worker_current)
 }
 
 #[cfg(test)]

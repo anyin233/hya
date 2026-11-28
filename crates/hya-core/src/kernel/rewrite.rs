@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use hya_context::rewrite::{Pressure, RewriteCtx, Rewriter, ToolError};
 use hya_context::tokens::TokenAccounting;
-use hya_proto::context::{COMPACT_CONTEXT_MARKER, marker_goal};
+use hya_proto::context::{COMPACT_CONTEXT_MARKER, marker_criteria};
 use hya_proto::{
     CompactionStrategy, Event, MessageId, Projection, Role, SessionId, StepCut, TodoItem,
 };
@@ -19,13 +19,13 @@ const TRIGGER_PERCENT: u64 = 80;
 
 /// Share of `max_context` (percent) at which the model is asked, once per
 /// turn, to bring its todo list up to date before a rewrite.
-const GOAL_CHECKPOINT_PERCENT: u64 = 60;
+const CRITERIA_CHECKPOINT_PERCENT: u64 = 60;
 
 /// Prefix of the goal-checkpoint notice; marks it in the transcript.
-pub(super) const GOAL_CHECKPOINT: &str = "[hya] Goal checkpoint:";
+pub(super) const CRITERIA_CHECKPOINT: &str = "[hya] Goal checkpoint:";
 
-pub(super) fn is_goal_checkpoint(message: &hya_proto::MessageProjection) -> bool {
-    message.role == Role::System && collect_text(&message.parts).starts_with(GOAL_CHECKPOINT)
+pub(super) fn is_criteria_checkpoint(message: &hya_proto::MessageProjection) -> bool {
+    message.role == Role::System && collect_text(&message.parts).starts_with(CRITERIA_CHECKPOINT)
 }
 
 /// Who started a rewrite.
@@ -88,7 +88,7 @@ pub async fn before_round(
     if reread.is_some() {
         return Ok(true);
     }
-    goal_checkpoint(&cx, pressure).await
+    criteria_checkpoint(&cx, pressure).await
 }
 
 /// Reduce the Context now (`/summarize`): the first extension whose
@@ -184,17 +184,17 @@ async fn commit(
 
 /// Ask the model, at most once per turn, to record the task's completion
 /// criteria and their status in its todo list, when the request would fill
-/// [`GOAL_CHECKPOINT_PERCENT`] of the window by `pressure`. The notice is a
+/// [`CRITERIA_CHECKPOINT_PERCENT`] of the window by `pressure`. The notice is a
 /// system message in the log, so the request stays a function of the View.
 /// Returns whether it was appended.
-async fn goal_checkpoint(
+async fn criteria_checkpoint(
     cx: &RewriteCtx<'_>,
     pressure: Option<Pressure>,
 ) -> Result<bool, ToolError> {
     let (Some(pressure), Some(window)) = (pressure, cx.window) else {
         return Ok(false);
     };
-    if pressure.used * 100 < u64::from(window.max_context) * GOAL_CHECKPOINT_PERCENT {
+    if pressure.used * 100 < u64::from(window.max_context) * CRITERIA_CHECKPOINT_PERCENT {
         return Ok(false);
     }
     let projection = cx.projection;
@@ -208,12 +208,12 @@ async fn goal_checkpoint(
             .iter()
             .rev()
             .take_while(|row| row.id != cx.message)
-            .any(is_goal_checkpoint)
+            .any(is_criteria_checkpoint)
     {
         return Ok(false);
     }
     let text = format!(
-        "{GOAL_CHECKPOINT} earlier context will soon be removed; only the user messages and your todo list are kept verbatim. Record in the todo list every result you have derived and still need (values, findings, decisions), then continue the task. Anything not in the list will have to be worked out again."
+        "{CRITERIA_CHECKPOINT} earlier context will soon be removed; only the user messages and your todo list are kept verbatim. Record in the todo list every result you have derived and still need (values, findings, decisions), then continue the task. Anything not in the list will have to be worked out again."
     );
     cx.log
         .append(
@@ -351,6 +351,6 @@ fn marker_text(initiator: Initiator, users: &[String], todos: &[TodoItem]) -> St
         users.join("\n\n")
     );
     marker.push_str("\n\n");
-    marker.push_str(&marker_goal(todos));
+    marker.push_str(&marker_criteria(todos));
     marker
 }
