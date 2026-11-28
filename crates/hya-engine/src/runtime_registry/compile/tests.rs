@@ -1492,7 +1492,8 @@ fn both_planes_keep_builtin_aliases_out_of_model_schemas() {
         .into_iter()
         .map(|s| s.name.as_str().into())
         .collect();
-    assert_eq!(expected.len(), 25);
+    assert_eq!(expected.len(), 24);
+    expected.insert(crate::kernel::tools::SKILL.to_string());
     for name in crate::coordination::SPAWN_TOOLS {
         expected.remove(name);
     }

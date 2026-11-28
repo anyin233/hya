@@ -10,14 +10,12 @@ mod lsp;
 mod plan;
 mod project_activity;
 mod search_agent;
-mod skill;
 mod task;
 mod workflow;
 
 hya_tool::export_native_tool_bundle!(|out| {
-    let tools: [Arc<dyn Tool>; 10] = [
+    let tools: [Arc<dyn Tool>; 9] = [
         Arc::new(lsp::LspTool),
-        Arc::new(skill::SkillTool),
         Arc::new(agents::ListAgentsTool),
         Arc::new(task::TaskTool),
         Arc::new(workflow::WorkflowTool),

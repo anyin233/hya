@@ -16,6 +16,7 @@ mod edit;
 mod grep;
 mod read;
 pub(super) mod rewrite;
+mod skill;
 pub(super) mod todo;
 mod write;
 
@@ -37,6 +38,12 @@ pub use hya_tool::{RESERVED_KERNEL_TOOLS as RESERVED, is_reserved_kernel_tool as
 /// Name of the tool whose calls the kernel loop handles itself.
 pub const REWRITE: &str = "rewrite";
 
+/// Name of the core `skill` tool promoted into `hya-bare` (ADR-0039).
+pub const SKILL: &str = "skill";
+
+/// System-prompt `<tools>` summary line for the core `skill` tool.
+pub const SKILL_PROMPT: &str = "load a skill's instructions";
+
 /// Maximum raw UTF-8 bytes retained in a standard coding tool's model-facing output.
 pub(super) const MAX_CODING_OUTPUT_BYTES: usize = 50 * 1024;
 
@@ -52,6 +59,20 @@ pub fn builtin() -> Vec<Arc<dyn Tool>> {
         Arc::new(todo::Todo),
         Arc::new(rewrite::Rewrite),
     ]
+}
+
+/// Core `skill` tool instance for `hya-bare` and full-mode registries.
+#[must_use]
+pub fn skill_tool() -> Arc<dyn Tool> {
+    Arc::new(skill::SkillTool)
+}
+
+/// All `hya-bare` core tools: the seven kernel primitives plus `skill`.
+#[must_use]
+pub fn bare_tools() -> Vec<Arc<dyn Tool>> {
+    let mut tools = builtin();
+    tools.push(skill_tool());
+    tools
 }
 
 /// Schema of the `rewrite` tool, for a tool set the kernel loop intercepts it in.

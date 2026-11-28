@@ -118,13 +118,20 @@ pub async fn run_bare(
     emit.emit(session, events)
         .await
         .context("create the session")?;
+    let bare_tools = kernel::tools::bare_tools();
+    let system = kernel::prompt::compose(
+        &workdir,
+        |_| true,
+        &[(kernel::tools::SKILL, kernel::tools::SKILL_PROMPT)],
+        None,
+    );
     let result = kernel::run(kernel::Run {
         store,
         emit,
         provider: &runtime.router,
         model: &model,
-        system: &kernel::prompt::system_prompt(&workdir),
-        tools: &kernel::tools::builtin(),
+        system: &system,
+        tools: &bare_tools,
         ctx: &tool_ctx(&workdir, cancel),
         session,
         message,
@@ -207,7 +214,9 @@ fn tool_ctx(workdir: &Path, cancel: &CancellationToken) -> ToolCtx {
         lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session: None,
         parent_session: None,
-        skills: hya_tool::SkillPlane::default(),
+        skills: hya_tool::SkillPlane::from_snapshot(Arc::new(
+            hya_engine::skill_catalog::discover_skills(workdir),
+        )),
         artifacts: hya_tool::handle::ArtifactPlane::default(),
         agents: Arc::default(),
         websearch: hya_tool::WebSearchPlane::default(),

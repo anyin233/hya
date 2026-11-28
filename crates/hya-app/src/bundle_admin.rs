@@ -620,7 +620,7 @@ pub async fn listings(
     project_dir: Option<&Path>,
 ) -> Result<Vec<BundleListing>, BundleControlError> {
     let registry = existing_registry().await?;
-    let (mut disabled, installed, unreadable) = match &registry {
+    let (disabled, installed, unreadable) = match &registry {
         Some(registry) => {
             let snapshot = registry
                 .snapshot_with_catalogs()
@@ -634,9 +634,6 @@ pub async fn listings(
         }
         None => (BTreeSet::new(), Vec::new(), Vec::new()),
     };
-    if crate::config::configured_code_mode() == crate::config::CodeMode::Normal {
-        disabled.insert(crate::config::CodeMode::BUNDLE.to_string());
-    }
     let project = project_dir.map(project_bundles).unwrap_or_default();
     let mut higher_ids = BTreeSet::new();
     let mut higher_namespaces = BTreeSet::new();

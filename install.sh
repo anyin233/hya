@@ -275,7 +275,7 @@ for index in "${!lib_names[@]}"; do
 done
 
 verify_home="${TMPDIR:-/tmp}/hya-install-verify.$$"
-first_party=(base-tools extended-tools network-tools channel-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review basic-tui-components code-mode)
+first_party=(base-tools extended-tools network-tools channel-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review basic-tui-components)
 if [[ "$dry_run" -eq 0 ]]; then
   "$bin_dir/hya" --version >/dev/null
   "$bin_dir/hya" --help >/dev/null

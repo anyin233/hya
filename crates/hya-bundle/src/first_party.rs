@@ -30,7 +30,6 @@ pub const FIRST_PARTY_BUNDLES: &[&str] = &[
     "hya/goal-loop",
     "hya/plan-impl-review",
     "hya/basic-tui-components",
-    "hya/code-mode",
     "hya/compaction",
 ];
 

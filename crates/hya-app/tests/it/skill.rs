@@ -82,7 +82,7 @@ async fn skill_tool_loads_content_checks_permission_and_reports_missing() {
         "Use short sentences.\n",
     );
     std::fs::write(dir.join("scripts/run.sh"), "#!/bin/sh\n").unwrap();
-    let tool = hya_tool_loader::builtins().get("skill").unwrap();
+    let tool = hya_core::kernel::tools::skill_tool();
     let snapshot = Arc::new(discover_skills_from_dirs(&[root]));
 
     let out = tool
@@ -142,7 +142,7 @@ async fn skill_tool_honors_root_fallback_precedence_and_workdir_discovery() {
         "Writes concise text",
         "Second root content.\n",
     );
-    let tool = hya_tool_loader::builtins().get("skill").unwrap();
+    let tool = hya_core::kernel::tools::skill_tool();
 
     // Falls back to second root when first root lacks the skill.
     let out = tool
@@ -295,4 +295,32 @@ async fn skill_catalog_dir_order_first_win_and_builtin_override_precedence() {
     assert!(merged.iter().any(|s| {
         s.name == "secure-self-update" && s.origin == hya_tool::SkillCatalogOrigin::Embedded
     }));
+}
+
+#[test]
+fn skill_tool_lives_in_core_not_extended_tools_and_registers_in_bare_runtime() {
+    assert!(
+        hya_tool_loader::builtins().get("skill").is_none(),
+        "skill must not remain in bundles/builtin/extended-tools"
+    );
+    assert!(
+        hya_core::kernel::tools::bare_tools()
+            .iter()
+            .any(|tool| tool.name() == hya_core::kernel::tools::SKILL),
+        "skill must be part of hya-bare core tools"
+    );
+
+    let bare_tools = hya_tool_loader::from_tool_families(&[]);
+    let catalog = Arc::new(
+        hya_engine::AgentCatalog::new(Arc::new(
+            hya_bundle::BundleCatalog::from_prepared(&[]).unwrap(),
+        ))
+        .unwrap(),
+    );
+    let runtime = hya_engine::RuntimeRegistry::new(bare_tools, catalog);
+    let binding = runtime.bind_turn(Path::new(".")).unwrap();
+    let resolved = binding
+        .resolve_tool("skill")
+        .expect("bare runtime must expose core skill tool");
+    assert_eq!(resolved.permission, hya_tool::ToolPermission::ReadOnly);
 }

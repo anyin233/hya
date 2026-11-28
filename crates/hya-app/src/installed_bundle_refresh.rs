@@ -19,11 +19,10 @@ use crate::bundle_runtime::source::{bundle_schema_claims, prepared_static_bundle
 
 /// First-party bundles published with the runtime catalog, including workflows
 /// and the TUI extension of the built-in panes.
-const FIRST_PARTY_CATALOG_BUNDLES: [&str; 4] = [
+const FIRST_PARTY_CATALOG_BUNDLES: [&str; 3] = [
     "hya/goal-loop",
     "hya/plan-impl-review",
     "hya/basic-tui-components",
-    crate::config::CodeMode::BUNDLE,
 ];
 
 /// Load every enabled, present first-party runtime bundle using the active
@@ -379,8 +378,6 @@ pub struct InstalledBundleRefresh {
     base: std::sync::Mutex<Arc<BaseCatalogs>>,
     /// Read-only host services behind bundle process capabilities.
     host_reads: Option<Arc<dyn hya_engine::HostSessionReads>>,
-    /// `tools.code.mode` is not `normal`: publish the code-mode bundle.
-    code_mode: bool,
     /// Active built-in bundle selection from `config.yaml`.
     builtin_selection: hya_bundle::BuiltinBundleSelection,
 }
@@ -398,7 +395,6 @@ impl InstalledBundleRefresh {
             watched_configs: Mutex::new(Vec::new()),
             initialized: AtomicBool::new(false),
             sources: Arc::new(SourceCache::default()),
-            code_mode: false,
             builtin_selection: hya_bundle::BuiltinBundleSelection::full(),
             base: std::sync::Mutex::new(Arc::new(BaseCatalogs {
                 revision: 0,
@@ -425,13 +421,6 @@ impl InstalledBundleRefresh {
     #[must_use]
     pub fn with_host_reads(mut self, reads: Arc<dyn hya_engine::HostSessionReads>) -> Self {
         self.host_reads = Some(reads);
-        self
-    }
-
-    /// Publish the code-mode bundle, which is otherwise shipped but disabled.
-    #[must_use]
-    pub fn with_code_mode(mut self, enabled: bool) -> Self {
-        self.code_mode = enabled;
         self
     }
 
@@ -542,16 +531,13 @@ impl InstalledBundleRefresh {
             ),
             None => None,
         };
-        let mut disabled = match &self.registry.get() {
+        let disabled = match &self.registry.get() {
             Some(registry) => registry
                 .disabled_bundle_ids()
                 .await
                 .map_err(CoreError::bundle)?,
             None => BTreeSet::new(),
         };
-        if !self.code_mode {
-            disabled.insert(crate::config::CodeMode::BUNDLE.to_string());
-        }
         let unreadable_errors = snapshot.as_ref().map_or_else(Vec::new, |snapshot| {
             snapshot
                 .unreadable

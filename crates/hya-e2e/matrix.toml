@@ -410,7 +410,7 @@ path = "crates/hya-e2e/tests/it/p07_bundle_policies_and_extras.rs"
 
 [[scenario]]
 id = "T2.52"
-title = "default tools.code.mode (normal) publishes no code-mode__run and lists hya/code-mode disabled"
+title = "default tools.code.mode (normal) publishes no code-mode__run and omits hya/code-mode from bundles"
 track = "P"
 path = "crates/hya-e2e/tests/it/p07_bundle_policies_and_extras.rs"
 

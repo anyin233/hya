@@ -20,6 +20,8 @@ mod bundle_install;
 /// SQLite registry and install types for user bundles.
 pub mod bundle_registry;
 mod bundle_runtime;
+/// Core Code Mode runtime promoted into `hya-bare` (ADR-0039).
+pub mod code_mode;
 /// `config.yaml` load, first-run bootstrap, and Compat import.
 pub mod config;
 mod config_edit;
