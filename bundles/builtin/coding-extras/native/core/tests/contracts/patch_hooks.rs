@@ -15,8 +15,8 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::common::{
-    RecordingLsp, RewritingFormatter, StaticBytesFormatter, TempDirGuard, allow, ctx_with,
-    ctx_with_planes, deny, error_diagnostics, tempdir,
+    RecordingLsp, RewritingFormatter, TempDirGuard, allow, ctx_with, ctx_with_planes, deny,
+    error_diagnostics, tempdir,
 };
 
 #[tokio::test]
@@ -31,7 +31,7 @@ async fn apply_patch_add_update_move_delete_permission_and_missing_context() {
         .await
         .unwrap();
 
-    let tool = hya_tool_loader::builtins().get("apply_patch").unwrap();
+    let tool = crate::coding_extras_registry().get("apply_patch").unwrap();
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], dir.clone());
     let patch = "*** Begin Patch\n\
 *** Add File: notes/todo.txt\n\
@@ -98,152 +98,46 @@ async fn apply_patch_add_update_move_delete_permission_and_missing_context() {
 }
 
 #[tokio::test]
-async fn post_edit_formatter_runs_before_lsp_across_write_edit_and_apply_patch() {
-    let reg = hya_tool_loader::builtins();
-    for (tool_name, setup, input, diag_msg) in [
-        (
-            "write",
-            None,
-            json!({ "path": "main.rs", "content": "raw\n" }),
-            "bad write",
-        ),
-        (
-            "edit",
-            Some("old\n"),
-            json!({ "path": "main.rs", "edits": [{ "op": "replace_text", "oldText": "old\n", "newText": "new\n" }] }),
-            "bad edit",
-        ),
-        (
-            "apply_patch",
-            None,
-            json!({ "patchText": "*** Begin Patch\n*** Add File: main.rs\n+raw\n*** End Patch\n" }),
-            "bad patch",
-        ),
-    ] {
-        let dir = tempdir("fmt-lsp");
-        let _guard = TempDirGuard::new(&dir);
-        let target = dir.join("main.rs");
-        if let Some(seed) = setup {
-            tokio::fs::write(&target, seed).await.unwrap();
-        }
-        let diagnostics = error_diagnostics(&target, diag_msg);
-        let touches = Arc::new(Mutex::new(Vec::new()));
-        let lsp = LspPlane::new(Arc::new(RecordingLsp {
-            touches: touches.clone(),
+async fn apply_patch_formats_before_lsp_and_preserves_bom() {
+    let dir = tempdir("patch-fmt-lsp");
+    let _guard = TempDirGuard::new(&dir);
+    let target = dir.join("bom.txt");
+    tokio::fs::write(&target, b"\xEF\xBB\xBFold\n")
+        .await
+        .unwrap();
+    let diagnostics = error_diagnostics(&target, "bad patch");
+    let touches = Arc::new(Mutex::new(Vec::new()));
+    let ctx = ctx_with_planes(
+        vec![allow(Action::Edit, "*")],
+        dir,
+        FormatterPlane::new(Arc::new(RewritingFormatter)),
+        LspPlane::new(Arc::new(RecordingLsp {
+            touches: Arc::clone(&touches),
             diagnostics: diagnostics.clone(),
-        }));
-        let ctx = ctx_with_planes(
-            vec![allow(Action::Edit, "*")],
-            dir.clone(),
-            FormatterPlane::new(Arc::new(RewritingFormatter)),
-            lsp,
-            CancellationToken::new(),
-            None,
-        );
-        let out = reg
-            .get(tool_name)
-            .unwrap()
-            .execute(&ctx, input)
-            .await
-            .unwrap();
-        if tool_name == "apply_patch" {
-            assert_eq!(
-                tokio::fs::read_to_string(&target).await.unwrap(),
-                "formatted\n",
-                "{tool_name}"
-            );
-            assert_eq!(out["metadata"]["diagnostics"], diagnostics, "{tool_name}");
-            assert!(
-                out["output"].as_str().unwrap().contains(diag_msg),
-                "{tool_name}"
-            );
-            let calls = touches.lock().await;
-            assert_eq!(calls.len(), 1, "{tool_name}");
-            assert_eq!(calls[0].file, target);
-            assert_eq!(calls[0].content, "formatted\n");
-        } else {
-            // `hya/hashline` delegates post-edit formatting/LSP to hooks rather
-            // than calling `ctx.formatter`/`ctx.lsp` directly inside `write`/`edit`.
-            let expected = if tool_name == "write" {
-                "raw\n"
-            } else {
-                "new\n"
-            };
-            assert_eq!(
-                tokio::fs::read_to_string(&target).await.unwrap(),
-                expected,
-                "{tool_name}"
-            );
-            assert_eq!(out["metadata"]["diagnostics"], json!({}), "{tool_name}");
-            assert!(touches.lock().await.is_empty(), "{tool_name}");
-        }
-    }
-}
+        })),
+        CancellationToken::new(),
+        None,
+    );
+    let output = crate::coding_extras_registry()
+        .get("apply_patch")
+        .unwrap()
+        .execute(
+            &ctx,
+            json!({ "patchText": "*** Begin Patch\n*** Update File: bom.txt\n@@\n-old\n+new\n*** End Patch\n" }),
+        )
+        .await
+        .unwrap();
 
-#[tokio::test]
-async fn formatter_bom_restoration_across_write_edit_and_apply_patch() {
-    let reg = hya_tool_loader::builtins();
-    let bom_dropper = || {
-        FormatterPlane::new(Arc::new(StaticBytesFormatter {
-            output: b"formatted\n",
-        }))
-    };
-
-    for tool_name in ["write", "edit", "apply_patch"] {
-        let dir = tempdir("fmt-bom");
-        let _guard = TempDirGuard::new(&dir);
-        let target = dir.join("bom.txt");
-        tokio::fs::write(&target, b"\xEF\xBB\xBFold\n")
-            .await
-            .unwrap();
-        let ctx = ctx_with_planes(
-            vec![allow(Action::Read, "*"), allow(Action::Edit, "*")],
-            dir.clone(),
-            bom_dropper(),
-            LspPlane::default(),
-            CancellationToken::new(),
-            None,
-        );
-        let input = match tool_name {
-            "write" => json!({ "path": "bom.txt", "content": "new\n" }),
-            "edit" => {
-                let read_out = reg
-                    .get("read")
-                    .unwrap()
-                    .execute(&ctx, json!({ "path": "bom.txt" }))
-                    .await
-                    .unwrap();
-                let anchor = read_out["output"]
-                    .as_str()
-                    .unwrap()
-                    .lines()
-                    .find(|l| l.starts_with("1#"))
-                    .unwrap()
-                    .split(':')
-                    .next()
-                    .unwrap();
-                json!({ "path": "bom.txt", "edits": [{"op": "replace", "pos": anchor, "lines": ["new"]}] })
-            }
-            _ => {
-                json!({ "patchText": "*** Begin Patch\n*** Update File: bom.txt\n@@\n-old\n+new\n*** End Patch\n" })
-            }
-        };
-        reg.get(tool_name)
-            .unwrap()
-            .execute(&ctx, input)
-            .await
-            .unwrap();
-        let expected: &[u8] = if tool_name == "apply_patch" {
-            b"\xEF\xBB\xBFformatted\n"
-        } else {
-            b"\xEF\xBB\xBFnew\n"
-        };
-        assert_eq!(
-            tokio::fs::read(&target).await.unwrap(),
-            expected,
-            "{tool_name}"
-        );
-    }
+    assert_eq!(
+        tokio::fs::read(&target).await.unwrap(),
+        b"\xEF\xBB\xBFformatted\n"
+    );
+    assert_eq!(output["metadata"]["diagnostics"], diagnostics);
+    assert!(output["output"].as_str().unwrap().contains("bad patch"));
+    let calls = touches.lock().await;
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].file, target);
+    assert_eq!(calls[0].content, "\u{feff}formatted\n");
 }
 
 #[derive(Clone)]
@@ -267,7 +161,7 @@ impl LspProvider for FakeLsp {
 
 #[tokio::test]
 async fn lsp_schema_execution_no_server_and_permission_gate() {
-    let tool = hya_tool_loader::builtins().get("lsp").unwrap();
+    let tool = crate::coding_extras_registry().get("lsp").unwrap();
     let schema = tool.schema();
     assert!(schema.description.contains("Supported operations"));
     assert_eq!(
@@ -369,9 +263,7 @@ async fn lsp_dot_workdir_and_dot_file_reach_provider_as_current_dir() {
         return;
     };
 
-    let tool = hya_tool_loader::from_tool_families(&["hya/coding-extras"])
-        .get("lsp")
-        .unwrap();
+    let tool = crate::coding_extras_registry().get("lsp").unwrap();
     std::fs::remove_dir(child_dir).unwrap();
     assert!(std::env::current_dir().is_err());
     let requests = Arc::new(Mutex::new(Vec::new()));

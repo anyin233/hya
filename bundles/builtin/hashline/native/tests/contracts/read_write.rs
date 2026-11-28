@@ -73,7 +73,7 @@ async fn hashline_temp_files(directory: &Path) -> Vec<PathBuf> {
 
 #[test]
 fn read_and_write_schemas_expose_canonical_closed_surfaces() {
-    let registry = hya_tool_loader::builtins();
+    let registry = crate::hashline_registry();
 
     let read = registry.get("read").unwrap().schema().input_schema;
     let rprops = read["properties"].as_object().unwrap();
@@ -103,7 +103,7 @@ async fn read_input_validation_path_aliases_and_bad_offset() {
     tokio::fs::write(dir.join("other.txt"), "other\n")
         .await
         .unwrap();
-    let tool = hya_tool_loader::builtins().get("read").unwrap();
+    let tool = crate::hashline_registry().get("read").unwrap();
     let ctx = ctx_with(vec![allow(Action::Read, "*")], dir);
 
     for valid in [
@@ -160,7 +160,7 @@ async fn read_paging_directory_listing_and_missing_suggestions() {
     tokio::fs::write(&config_toml, "ok = true\n").await.unwrap();
     let missing = dir.join("config");
 
-    let tool = hya_tool_loader::builtins().get("read").unwrap();
+    let tool = crate::hashline_registry().get("read").unwrap();
     let ctx = ctx_with(vec![allow(Action::Read, "*")], dir);
 
     let paged = tool
@@ -234,7 +234,7 @@ async fn read_raw_bom_invalid_utf8_empty_and_binary_files() {
     tokio::fs::write(&binary, "plain text but binary extension\n")
         .await
         .unwrap();
-    let tool = hya_tool_loader::builtins().get("read").unwrap();
+    let tool = crate::hashline_registry().get("read").unwrap();
     let ctx = ctx_with(vec![allow(Action::Read, "*")], dir);
 
     let raw = tool
@@ -297,7 +297,7 @@ async fn read_image_attachments_malformed_and_over_budget() {
         .await
         .unwrap();
 
-    let tool = hya_tool_loader::builtins().get("read").unwrap();
+    let tool = crate::hashline_registry().get("read").unwrap();
     let ctx = ctx_with(vec![allow(Action::Read, "*")], dir);
 
     let ok = tool
@@ -342,7 +342,7 @@ async fn read_caps_long_lines_fifty_kb_oversized_first_line_and_escape_heavy_row
     const CAP: usize = 50 * 1024;
     let dir = tempdir("read-caps");
     let _guard = TempDirGuard::new(&dir);
-    let tool = hya_tool_loader::builtins().get("read").unwrap();
+    let tool = crate::hashline_registry().get("read").unwrap();
     let ctx = ctx_with(vec![allow(Action::Read, "*")], dir.clone());
 
     // 1) Individual line > 2000 chars truncates in legacy filePath mode.
@@ -488,7 +488,7 @@ async fn read_authorizes_external_path_lexically_before_metadata_probe() {
         ],
         dir,
     );
-    let tool = hya_tool_loader::builtins().get("read").unwrap();
+    let tool = crate::hashline_registry().get("read").unwrap();
     let res = tool.execute(&ctx, json!({ "path": nested })).await;
     assert!(matches!(res, Err(ToolError::Permission(_))));
 }
@@ -499,7 +499,7 @@ async fn write_creates_overwrites_bounds_display_and_enforces_input_and_permissi
     let _guard = TempDirGuard::new(&dir);
     let outside = tempdir("write-outside");
     let _out_guard = TempDirGuard::new(&outside);
-    let tool = hya_tool_loader::builtins().get("write").unwrap();
+    let tool = crate::hashline_registry().get("write").unwrap();
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], dir.clone());
 
     // Rejects removed `filePath` without mutating.
@@ -583,7 +583,7 @@ async fn write_strips_unambiguous_hashline_block_and_preserves_encodings() {
     let dir = tempdir("write-enc");
     let _guard = TempDirGuard::new(&dir);
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], dir.clone());
-    let tool = hya_tool_loader::builtins().get("write").unwrap();
+    let tool = crate::hashline_registry().get("write").unwrap();
 
     // Unambiguous hashline block stripped; ambiguous preserved verbatim.
     let stripped = tool
@@ -682,7 +682,7 @@ async fn write_unix_modes_shebang_hard_link_and_symlink() {
     let dir = tempdir("write-unix");
     let _guard = TempDirGuard::new(&dir);
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], dir.clone());
-    let tool = hya_tool_loader::builtins().get("write").unwrap();
+    let tool = crate::hashline_registry().get("write").unwrap();
 
     // New file gets mode 0600; existing 0640 is preserved; shebang sets execute bits.
     let new_file = dir.join("new.txt");
@@ -759,7 +759,7 @@ async fn write_unix_modes_shebang_hard_link_and_symlink() {
 async fn write_formatter_lsp_ordering_and_post_commit_failures() {
     let dir = tempdir("write-hooks");
     let _guard = TempDirGuard::new(&dir);
-    let tool = hya_tool_loader::builtins().get("write").unwrap();
+    let tool = crate::hashline_registry().get("write").unwrap();
 
     // `hya/hashline` delegates post-edit formatting and LSP diagnostics to hooks
     // rather than invoking `ctx.formatter` or `ctx.lsp` directly inside `write`.
@@ -832,7 +832,7 @@ async fn write_formatter_lsp_ordering_and_post_commit_failures() {
 async fn write_cancellation_and_snapshot_recovery_lifecycle() {
     let dir = tempdir("write-snap");
     let _guard = TempDirGuard::new(&dir);
-    let registry = hya_tool_loader::builtins();
+    let registry = crate::hashline_registry();
     let write = registry.get("write").unwrap();
     let edit = registry.get("edit").unwrap();
 

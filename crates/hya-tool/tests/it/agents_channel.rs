@@ -1,5 +1,4 @@
-//! Agent, channel, interaction, plan, and workflow tool contracts:
-//! `ask_user`/`question`, `plan_exit`, `send`, `list_channel`, `workflow`, and `task`.
+//! Agent, channel, and workflow tool contracts.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -13,192 +12,15 @@ use hya_proto::{
 };
 use hya_tool::handle::{DynamicUriContent, DynamicUriCtx, DynamicUriHandler, HandleError};
 use hya_tool::{
-    Action, ChannelRow, InteractionPlane, MailReceipt, MailboxPlane, MailboxRequest, MemberOutcome,
-    MemberStatusRow, QuestionAnswer, QuestionKind, SpawnMember, SpawnerPlane, ToolError,
-    ToolOperation, WorkflowCommand, WorkflowCommandResult, WorkflowHostError, WorkflowPlane,
-    WorkflowProjection, WorkflowRequest, WorkflowRequestSink, WorkflowSendError,
+    Action, ChannelRow, MailReceipt, MailboxPlane, MailboxRequest, MemberOutcome, MemberStatusRow,
+    SpawnMember, SpawnerPlane, ToolError, ToolOperation, WorkflowCommand, WorkflowCommandResult,
+    WorkflowHostError, WorkflowPlane, WorkflowProjection, WorkflowRequest, WorkflowRequestSink,
+    WorkflowSendError,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 use crate::common::{allow, ctx_with};
-
-#[tokio::test]
-async fn ask_user_batch_multiselect_cancel_errors_and_question_alias() {
-    let reg = hya_tool_loader::builtins();
-    let ask = reg.get("ask_user").unwrap();
-    let alias = reg.get("question").unwrap();
-    assert_eq!(alias.name(), "ask_user");
-    let canonical: Vec<_> = reg
-        .snapshot()
-        .canonical_tools()
-        .into_iter()
-        .map(|(n, _)| n)
-        .collect();
-    assert!(
-        canonical.contains(&"ask_user".to_string()) && !canonical.contains(&"question".to_string())
-    );
-
-    // 1. Batch select + freetext.
-    let session = SessionId::new();
-    let (interaction, mut rx) = InteractionPlane::new();
-    let mut ctx = ctx_with(vec![], PathBuf::from("."));
-    ctx.session = Some(session);
-    ctx.interaction = interaction.for_session(session);
-    let ask1 = Arc::clone(&ask);
-    let h = tokio::spawn(async move {
-        ask1.execute(
-            &ctx,
-            json!({
-                "questions": [
-                    { "question": "Pick a color", "header": "Color", "options": [
-                        { "label": "red", "description": "Warm" },
-                        { "label": "green", "description": "Calm" }
-                    ]},
-                    { "question": "Branch name?", "header": "Branch", "options": [] }
-                ]
-            }),
-        )
-        .await
-    });
-    let req = rx.recv().await.unwrap();
-    assert_eq!(req.session, Some(session));
-    assert_eq!(req.questions.len(), 2);
-    assert_eq!(
-        req.kind,
-        QuestionKind::Select {
-            options: vec!["red".into(), "green".into()],
-            allow_custom: true
-        }
-    );
-    req.reply
-        .send_many(vec![
-            QuestionAnswer::Selected(1),
-            QuestionAnswer::FreeText("codex/todo".into()),
-        ])
-        .unwrap();
-    let out = h.await.unwrap().unwrap();
-    assert_eq!(out["title"], "Asked 2 questions");
-    assert_eq!(out["metadata"]["answers"][0]["answer"], json!(["green"]));
-    assert_eq!(
-        out["metadata"]["answers"][1]["answer"],
-        json!(["codex/todo"])
-    );
-
-    // 2. Multi-select + allow_custom=false, legacy `custom` alias, cancel, validation, unavailable plane.
-    let (interaction, mut rx) = InteractionPlane::new();
-    let mut ctx = ctx_with(vec![], PathBuf::from("."));
-    ctx.session = Some(session);
-    ctx.interaction = interaction.for_session(session);
-    let ask2 = Arc::clone(&ask);
-    let ctx2 = ctx.clone();
-    let h = tokio::spawn(async move {
-        ask2.execute(
-            &ctx2,
-            json!({
-                "questions": [{
-                    "question": "Pick colors", "header": "Color", "multiple": true, "allow_custom": false,
-                    "options": [
-                        { "label": "red", "description": "Warm" },
-                        { "label": "green", "description": "Calm" },
-                        { "label": "blue", "description": "Cool" }
-                    ]
-                }]
-            }),
-        )
-        .await
-    });
-    let req = rx.recv().await.unwrap();
-    assert!(req.info.multiple);
-    req.reply
-        .send(QuestionAnswer::SelectedMany(vec![0, 2]))
-        .unwrap();
-    assert_eq!(
-        h.await.unwrap().unwrap()["metadata"]["answers"][0]["answer"],
-        json!(["red", "blue"])
-    );
-
-    // Legacy `custom: false` through hidden `question` alias.
-    let ctx3 = ctx.clone();
-    let h = tokio::spawn(async move {
-        alias
-            .execute(
-                &ctx3,
-                json!({ "questions": [{ "question": "Pick", "header": "h", "custom": false, "options": [{ "label": "a", "description": "d" }] }] }),
-            )
-            .await
-    });
-    let req = rx.recv().await.unwrap();
-    assert_eq!(
-        req.kind,
-        QuestionKind::Select {
-            options: vec!["a".into()],
-            allow_custom: false
-        }
-    );
-    req.reply.send(QuestionAnswer::Selected(0)).unwrap();
-    assert_eq!(h.await.unwrap().unwrap()["title"], "Asked 1 question");
-
-    // Cancel returns ToolError::Cancelled.
-    let ask3 = Arc::clone(&ask);
-    let ctx4 = ctx.clone();
-    let h = tokio::spawn(async move {
-        ask3.execute(
-            &ctx4,
-            json!({ "questions": [{ "question": "Ship?", "header": "c", "options": [{ "label": "yes", "description": "go" }] }] }),
-        )
-        .await
-    });
-    rx.recv()
-        .await
-        .unwrap()
-        .reply
-        .send(QuestionAnswer::Cancelled)
-        .unwrap();
-    assert!(matches!(h.await.unwrap(), Err(ToolError::Cancelled)));
-
-    // Missing description rejected; dropped receiver surfaces unavailable.
-    assert!(matches!(
-        ask.execute(&ctx, json!({ "questions": [{ "question": "q", "header": "h", "options": [{ "label": "red" }] }] })).await,
-        Err(ToolError::Input(m)) if m.contains("description")
-    ));
-    drop(rx);
-    assert!(matches!(
-        ask.execute(&ctx, json!({ "questions": [{ "question": "q", "header": "h", "options": [{ "label": "y", "description": "d" }] }] })).await,
-        Err(ToolError::Other(m)) if m.contains("unavailable")
-    ));
-}
-
-#[tokio::test]
-async fn plan_exit_approval_and_decline() {
-    let tool = hya_tool_loader::builtins().get("plan_exit").unwrap();
-    for (choice, expect_ok) in [(0usize, true), (1usize, false)] {
-        let session = SessionId::new();
-        let (interaction, mut rx) = InteractionPlane::new();
-        let mut ctx = ctx_with(vec![], PathBuf::from("."));
-        ctx.session = Some(session);
-        ctx.interaction = interaction.for_session(session);
-        let t = Arc::clone(&tool);
-        let h = tokio::spawn(async move { t.execute(&ctx, json!({})).await });
-        let req = rx.recv().await.unwrap();
-        assert_eq!(req.session, Some(session));
-        assert_eq!(
-            req.kind,
-            QuestionKind::Select {
-                options: vec!["Yes".into(), "No".into()],
-                allow_custom: false
-            }
-        );
-        req.reply.send(QuestionAnswer::Selected(choice)).unwrap();
-        let res = h.await.unwrap();
-        if expect_ok {
-            let out = res.unwrap();
-            assert_eq!(out["title"], "Switching to build agent");
-        } else {
-            assert!(matches!(res, Err(ToolError::Other(_))));
-        }
-    }
-}
 
 #[tokio::test]
 async fn send_and_list_channel_routing_team_status_and_hash_read() {

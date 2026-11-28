@@ -93,7 +93,7 @@ async fn tmp_files(dir: &Path) -> Vec<PathBuf> {
 
 #[test]
 fn edit_schema_exposes_closed_hashline_ops_and_valid_example_anchors() {
-    let schema = hya_tool_loader::builtins().get("edit").unwrap().schema();
+    let schema = crate::hashline_registry().get("edit").unwrap().schema();
     let text = format!("{} {}", schema.description, schema.input_schema);
     let mut examples = 0;
     for (index, _) in text.match_indices('#') {
@@ -203,7 +203,7 @@ async fn edit_applies_table_driven_hashline_ops_and_replace_text_dialects() {
             "first",
         ),
     ];
-    let tool = hya_tool_loader::builtins().get("edit").unwrap();
+    let tool = crate::hashline_registry().get("edit").unwrap();
     for (name, initial, input, expected) in op_cases {
         let dir = tempdir("edit-ops");
         let _guard = TempDirGuard::new(&dir);
@@ -256,7 +256,7 @@ async fn edit_rejects_malformed_requests_copied_prefixes_and_invalid_operations(
         .await
         .unwrap();
     let ctx = ctx_with(vec![allow(Action::Edit, "*")], dir.clone());
-    let tool = hya_tool_loader::builtins().get("edit").unwrap();
+    let tool = crate::hashline_registry().get("edit").unwrap();
 
     let cases = [
         (
@@ -380,7 +380,7 @@ async fn edit_rejects_malformed_requests_copied_prefixes_and_invalid_operations(
 async fn edit_fuzzy_hint_suspicious_warnings_and_authorized_missing_hash_context() {
     let dir = tempdir("edit-warn");
     let _guard = TempDirGuard::new(&dir);
-    let registry = hya_tool_loader::builtins();
+    let registry = crate::hashline_registry();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(
@@ -493,7 +493,7 @@ async fn edit_diff_bom_crlf_large_preview_omission_permissions_and_cancel() {
     let _guard = TempDirGuard::new(&dir);
     let outside_dir = tempdir("edit-meta-out");
     let _out_guard = TempDirGuard::new(&outside_dir);
-    let registry = hya_tool_loader::builtins();
+    let registry = crate::hashline_registry();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(
@@ -615,7 +615,7 @@ async fn edit_diff_bom_crlf_large_preview_omission_permissions_and_cancel() {
 async fn edit_formatter_lsp_encoding_normalization_and_hard_link_metadata() {
     let dir = tempdir("edit-fmt");
     let _guard = TempDirGuard::new(&dir);
-    let registry = hya_tool_loader::builtins();
+    let registry = crate::hashline_registry();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
 
@@ -683,7 +683,7 @@ async fn edit_formatter_lsp_encoding_normalization_and_hard_link_metadata() {
 async fn edit_post_commit_formatter_and_lsp_failures_and_cancellation_reconcile() {
     let dir = tempdir("edit-post");
     let _guard = TempDirGuard::new(&dir);
-    let registry = hya_tool_loader::builtins();
+    let registry = crate::hashline_registry();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let base_ctx = ctx_with(
@@ -724,7 +724,7 @@ async fn read_emits_pinned_hashline_anchors_and_chains_to_edit() {
     tokio::fs::write(dir.join("notes.txt"), "alpha\nbeta\ngamma\ndelta\n")
         .await
         .unwrap();
-    let registry = hya_tool_loader::builtins();
+    let registry = crate::hashline_registry();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(
@@ -765,7 +765,7 @@ async fn read_emits_pinned_hashline_anchors_and_chains_to_edit() {
 async fn stale_recovery_raw_read_conflict_and_no_history_guidance() {
     let dir = tempdir("hl-recover");
     let _guard = TempDirGuard::new(&dir);
-    let registry = hya_tool_loader::builtins();
+    let registry = crate::hashline_registry();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(
@@ -905,7 +905,7 @@ async fn stale_recovery_raw_read_conflict_and_no_history_guidance() {
 async fn duplicate_and_noop_guards_reset_on_read_and_survive_failed_or_cancelled_read() {
     let dir = tempdir("hl-guards");
     let _guard = TempDirGuard::new(&dir);
-    let registry = hya_tool_loader::builtins();
+    let registry = crate::hashline_registry();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let ctx = ctx_with(
@@ -1041,7 +1041,7 @@ async fn snapshots_are_isolated_by_session_workdir_and_target() {
     .await
     .unwrap();
 
-    let registry = hya_tool_loader::builtins();
+    let registry = crate::hashline_registry();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
     let s_a = SessionId::new();
@@ -1121,7 +1121,7 @@ async fn edit_follows_relative_symlink_and_preserves_link_identity() {
     tokio::fs::write(&target, "before\n").await.unwrap();
     symlink("real.txt", &link).unwrap();
 
-    let registry = hya_tool_loader::builtins();
+    let registry = crate::hashline_registry();
     let ctx = ctx_with(
         vec![allow(Action::Read, "*"), allow(Action::Edit, "*")],
         dir,
@@ -1150,7 +1150,7 @@ async fn same_resolved_file_serializes_mutations_across_sessions() {
     let _guard = TempDirGuard::new(&dir);
     let target = dir.join("shared.txt");
     tokio::fs::write(&target, "root\n").await.unwrap();
-    let registry = Arc::new(hya_tool_loader::builtins());
+    let registry = Arc::new(crate::hashline_registry());
     let rules = vec![allow(Action::Read, "*"), allow(Action::Edit, "*")];
 
     let mut handles = Vec::new();
@@ -1195,7 +1195,7 @@ async fn hard_link_aliases_serialize_mutations_by_inode() {
     tokio::fs::write(&target, "root\n").await.unwrap();
     std::fs::hard_link(&target, &alias).unwrap();
     let inode = std::fs::metadata(&target).unwrap().ino();
-    let registry = Arc::new(hya_tool_loader::builtins());
+    let registry = Arc::new(crate::hashline_registry());
     let rules = vec![allow(Action::Read, "*"), allow(Action::Edit, "*")];
 
     let mut handles = Vec::new();
@@ -1239,7 +1239,7 @@ async fn read_observes_consistent_snapshots_alongside_edits() {
     let _guard = TempDirGuard::new(&dir);
     let target = dir.join("final.txt");
     tokio::fs::write(&target, "before\n").await.unwrap();
-    let registry = Arc::new(hya_tool_loader::builtins());
+    let registry = Arc::new(crate::hashline_registry());
     let rules = vec![allow(Action::Read, "*"), allow(Action::Edit, "*")];
     let edit_ctx = ctx_with_planes(
         rules.clone(),
@@ -1284,7 +1284,7 @@ async fn waiting_symlink_edit_reresolves_after_retarget() {
     tokio::fs::write(&new_target, "new\n").await.unwrap();
     symlink("old.txt", &link).unwrap();
 
-    let registry = Arc::new(hya_tool_loader::builtins());
+    let registry = Arc::new(crate::hashline_registry());
     let sid = Some(SessionId::new());
     let rules = vec![allow(Action::Read, "*"), allow(Action::Edit, "*")];
     let c1 = ctx_with_planes(
@@ -1326,7 +1326,7 @@ async fn cancelled_waiting_edit_returns_cancelled_without_commit() {
     let _guard = TempDirGuard::new(&dir);
     let target = dir.join("cancel.txt");
     tokio::fs::write(&target, "before\n").await.unwrap();
-    let registry = Arc::new(hya_tool_loader::builtins());
+    let registry = Arc::new(crate::hashline_registry());
     let session = SessionId::new();
     let rules = vec![allow(Action::Read, "*"), allow(Action::Edit, "*")];
     let c1 = ctx_with_planes(
