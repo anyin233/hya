@@ -98,6 +98,7 @@ mod tests_support {
             overrides: None,
         };
         extra.push(bundle);
+        extra.extend(crate::test_support::first_party(&["hya/core-agents"]));
         let catalog = hya_bundle::BundleCatalog::from_prepared(&extra).expect("catalog valid");
         let catalog = crate::AgentCatalog::new(Arc::new(catalog)).expect("agent catalog valid");
         Arc::new(crate::RuntimeRegistry::new(

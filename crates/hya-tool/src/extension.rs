@@ -1,6 +1,6 @@
 //! Domain extension events, payloads, and projection reducers (Phase 0 v2 bridge).
 //!
-//! In `hya` v2, domain-specific events (workflow, agent-channels, multi-agent)
+//! In `hya` v2, domain-specific events (agent-channels, multi-agent)
 //! are persisted as [`Event::Extension`] and folded via [`ProjectionReducer`]s
 //! into [`Projection::extensions`].
 
@@ -9,21 +9,14 @@ use std::sync::Arc;
 
 use hya_proto::{
     ActorEpoch, AgentName, ChannelKind, Event, MailEndpoint, MailKind, MemberId, MemberRunStatus,
-    ModelRef, OwnerRunId, Projection, ProjectionReducer, ProjectionReducerRegistry, RosterStatus,
-    SessionId, SubagentMode, ToolCallId, WorkflowIdentity, WorkflowRunId, scope,
+    Projection, ProjectionReducer, ProjectionReducerRegistry, RosterStatus, SessionId,
+    SubagentMode, ToolCallId, scope,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::lifecycle::{ArchiveReason, ReportOutcome};
-use crate::workflow_plane::{
-    WorkflowMemberProjection, WorkflowMemberRole, WorkflowProjection, WorkflowRouteFailureClass,
-    WorkflowRunProjection, WorkflowRunStatus, WorkflowStagePlan, WorkflowStageProjection,
-    WorkflowStageRouteOutcome, WorkflowStageStatus,
-};
 
-/// Bundle id owning workflow extension events and projection state.
-pub const BUNDLE_WORKFLOW: &str = "hya/workflow";
 /// Bundle id owning channel/mailbox extension events and projection state.
 pub const BUNDLE_CHANNELS: &str = "hya/agent-channels";
 /// Bundle id owning multi-agent roster/member/handoff extension events and state.
@@ -271,58 +264,6 @@ pub struct MultiAgentExtensionState {
 #[allow(missing_docs)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExtensionEvent {
-    // ---- hya/workflow ----
-    WorkflowSelected {
-        session: SessionId,
-        workflow: WorkflowIdentity,
-    },
-    WorkflowRunStarted {
-        session: SessionId,
-        run: WorkflowRunId,
-        workflow: WorkflowIdentity,
-        request_hash: String,
-        owner: OwnerRunId,
-        stages: Vec<WorkflowStagePlan>,
-    },
-    WorkflowStageStarted {
-        session: SessionId,
-        run: WorkflowRunId,
-        stage: String,
-    },
-    WorkflowStageMemberLinked {
-        session: SessionId,
-        run: WorkflowRunId,
-        stage: String,
-        member: MemberId,
-        role: WorkflowMemberRole,
-        iteration: u32,
-    },
-    WorkflowStageRouteOutcome {
-        session: SessionId,
-        run: WorkflowRunId,
-        stage: String,
-        member: MemberId,
-        role: WorkflowMemberRole,
-        iteration: u32,
-        step: u32,
-        candidate_index: u32,
-        model: ModelRef,
-        reasoning: String,
-        failure_class: WorkflowRouteFailureClass,
-    },
-    WorkflowStageFinished {
-        session: SessionId,
-        run: WorkflowRunId,
-        stage: String,
-        status: WorkflowStageStatus,
-    },
-    WorkflowRunFinished {
-        session: SessionId,
-        run: WorkflowRunId,
-        status: WorkflowRunStatus,
-        error: Option<String>,
-    },
-
     // ---- hya/agent-channels ----
     MailSent {
         session: SessionId,
@@ -435,64 +376,6 @@ pub enum ExtensionEvent {
         child: SessionId,
         epoch: ActorEpoch,
     },
-}
-
-#[derive(Serialize, Deserialize)]
-struct WorkflowSelectedWire {
-    workflow: WorkflowIdentity,
-}
-
-#[derive(Serialize, Deserialize)]
-struct WorkflowRunStartedWire {
-    run: WorkflowRunId,
-    workflow: WorkflowIdentity,
-    request_hash: String,
-    owner: OwnerRunId,
-    stages: Vec<WorkflowStagePlan>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct WorkflowStageStartedWire {
-    run: WorkflowRunId,
-    stage: String,
-}
-
-#[derive(Serialize, Deserialize)]
-struct WorkflowStageMemberLinkedWire {
-    run: WorkflowRunId,
-    stage: String,
-    member: MemberId,
-    role: WorkflowMemberRole,
-    iteration: u32,
-}
-
-#[derive(Serialize, Deserialize)]
-struct WorkflowStageRouteOutcomeWire {
-    run: WorkflowRunId,
-    stage: String,
-    member: MemberId,
-    role: WorkflowMemberRole,
-    iteration: u32,
-    step: u32,
-    candidate_index: u32,
-    model: ModelRef,
-    reasoning: String,
-    failure_class: WorkflowRouteFailureClass,
-}
-
-#[derive(Serialize, Deserialize)]
-struct WorkflowStageFinishedWire {
-    run: WorkflowRunId,
-    stage: String,
-    status: WorkflowStageStatus,
-}
-
-#[derive(Serialize, Deserialize)]
-struct WorkflowRunFinishedWire {
-    run: WorkflowRunId,
-    status: WorkflowRunStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -643,13 +526,6 @@ impl ExtensionEvent {
     #[must_use]
     pub const fn bundle_id(&self) -> &'static str {
         match self {
-            Self::WorkflowSelected { .. }
-            | Self::WorkflowRunStarted { .. }
-            | Self::WorkflowStageStarted { .. }
-            | Self::WorkflowStageMemberLinked { .. }
-            | Self::WorkflowStageRouteOutcome { .. }
-            | Self::WorkflowStageFinished { .. }
-            | Self::WorkflowRunFinished { .. } => BUNDLE_WORKFLOW,
             Self::MailSent { .. }
             | Self::ChannelJoined { .. }
             | Self::ChannelCreated { .. }
@@ -674,13 +550,6 @@ impl ExtensionEvent {
     #[must_use]
     pub const fn kind(&self) -> &'static str {
         match self {
-            Self::WorkflowSelected { .. } => "workflow_selected",
-            Self::WorkflowRunStarted { .. } => "workflow_run_started",
-            Self::WorkflowStageStarted { .. } => "workflow_stage_started",
-            Self::WorkflowStageMemberLinked { .. } => "workflow_stage_member_linked",
-            Self::WorkflowStageRouteOutcome { .. } => "workflow_stage_route_outcome",
-            Self::WorkflowStageFinished { .. } => "workflow_stage_finished",
-            Self::WorkflowRunFinished { .. } => "workflow_run_finished",
             Self::MailSent { .. } => "mail_sent",
             Self::ChannelJoined { .. } => "channel_joined",
             Self::ChannelCreated { .. } => "channel_created",
@@ -705,14 +574,7 @@ impl ExtensionEvent {
     #[must_use]
     pub const fn session(&self) -> SessionId {
         match self {
-            Self::WorkflowSelected { session, .. }
-            | Self::WorkflowRunStarted { session, .. }
-            | Self::WorkflowStageStarted { session, .. }
-            | Self::WorkflowStageMemberLinked { session, .. }
-            | Self::WorkflowStageRouteOutcome { session, .. }
-            | Self::WorkflowStageFinished { session, .. }
-            | Self::WorkflowRunFinished { session, .. }
-            | Self::MailSent { session, .. }
+            Self::MailSent { session, .. }
             | Self::ChannelJoined { session, .. }
             | Self::ChannelCreated { session, .. }
             | Self::MailConsumed { session, .. }
@@ -739,68 +601,6 @@ impl ExtensionEvent {
         let bundle = self.bundle_id().to_owned();
         let kind = self.kind().to_owned();
         let payload = match self {
-            Self::WorkflowSelected { workflow, .. } => to_value(WorkflowSelectedWire { workflow }),
-            Self::WorkflowRunStarted {
-                run,
-                workflow,
-                request_hash,
-                owner,
-                stages,
-                ..
-            } => to_value(WorkflowRunStartedWire {
-                run,
-                workflow,
-                request_hash,
-                owner,
-                stages,
-            }),
-            Self::WorkflowStageStarted { run, stage, .. } => {
-                to_value(WorkflowStageStartedWire { run, stage })
-            }
-            Self::WorkflowStageMemberLinked {
-                run,
-                stage,
-                member,
-                role,
-                iteration,
-                ..
-            } => to_value(WorkflowStageMemberLinkedWire {
-                run,
-                stage,
-                member,
-                role,
-                iteration,
-            }),
-            Self::WorkflowStageRouteOutcome {
-                run,
-                stage,
-                member,
-                role,
-                iteration,
-                step,
-                candidate_index,
-                model,
-                reasoning,
-                failure_class,
-                ..
-            } => to_value(WorkflowStageRouteOutcomeWire {
-                run,
-                stage,
-                member,
-                role,
-                iteration,
-                step,
-                candidate_index,
-                model,
-                reasoning,
-                failure_class,
-            }),
-            Self::WorkflowStageFinished {
-                run, stage, status, ..
-            } => to_value(WorkflowStageFinishedWire { run, stage, status }),
-            Self::WorkflowRunFinished {
-                run, status, error, ..
-            } => to_value(WorkflowRunFinishedWire { run, status, error }),
             Self::MailSent {
                 from,
                 to,
@@ -998,81 +798,6 @@ impl ExtensionEvent {
         payload: &Value,
     ) -> Option<Self> {
         match (bundle, kind) {
-            (BUNDLE_WORKFLOW, "workflow_selected") => {
-                let wire: WorkflowSelectedWire = serde_json::from_value(payload.clone()).ok()?;
-                Some(Self::WorkflowSelected {
-                    session,
-                    workflow: wire.workflow,
-                })
-            }
-            (BUNDLE_WORKFLOW, "workflow_run_started") => {
-                let wire: WorkflowRunStartedWire = serde_json::from_value(payload.clone()).ok()?;
-                Some(Self::WorkflowRunStarted {
-                    session,
-                    run: wire.run,
-                    workflow: wire.workflow,
-                    request_hash: wire.request_hash,
-                    owner: wire.owner,
-                    stages: wire.stages,
-                })
-            }
-            (BUNDLE_WORKFLOW, "workflow_stage_started") => {
-                let wire: WorkflowStageStartedWire =
-                    serde_json::from_value(payload.clone()).ok()?;
-                Some(Self::WorkflowStageStarted {
-                    session,
-                    run: wire.run,
-                    stage: wire.stage,
-                })
-            }
-            (BUNDLE_WORKFLOW, "workflow_stage_member_linked") => {
-                let wire: WorkflowStageMemberLinkedWire =
-                    serde_json::from_value(payload.clone()).ok()?;
-                Some(Self::WorkflowStageMemberLinked {
-                    session,
-                    run: wire.run,
-                    stage: wire.stage,
-                    member: wire.member,
-                    role: wire.role,
-                    iteration: wire.iteration,
-                })
-            }
-            (BUNDLE_WORKFLOW, "workflow_stage_route_outcome") => {
-                let wire: WorkflowStageRouteOutcomeWire =
-                    serde_json::from_value(payload.clone()).ok()?;
-                Some(Self::WorkflowStageRouteOutcome {
-                    session,
-                    run: wire.run,
-                    stage: wire.stage,
-                    member: wire.member,
-                    role: wire.role,
-                    iteration: wire.iteration,
-                    step: wire.step,
-                    candidate_index: wire.candidate_index,
-                    model: wire.model,
-                    reasoning: wire.reasoning,
-                    failure_class: wire.failure_class,
-                })
-            }
-            (BUNDLE_WORKFLOW, "workflow_stage_finished") => {
-                let wire: WorkflowStageFinishedWire =
-                    serde_json::from_value(payload.clone()).ok()?;
-                Some(Self::WorkflowStageFinished {
-                    session,
-                    run: wire.run,
-                    stage: wire.stage,
-                    status: wire.status,
-                })
-            }
-            (BUNDLE_WORKFLOW, "workflow_run_finished") => {
-                let wire: WorkflowRunFinishedWire = serde_json::from_value(payload.clone()).ok()?;
-                Some(Self::WorkflowRunFinished {
-                    session,
-                    run: wire.run,
-                    status: wire.status,
-                    error: wire.error,
-                })
-            }
             (BUNDLE_CHANNELS, "mail_sent") => {
                 let wire: MailSentWire = serde_json::from_value(payload.clone()).ok()?;
                 Some(Self::MailSent {
@@ -1286,185 +1011,6 @@ pub fn members_projection(projection: &Projection) -> Vec<MemberProjection> {
 #[must_use]
 pub fn handoff_projection(projection: &Projection) -> Option<HandoffProjection> {
     read_extension::<MultiAgentExtensionState>(projection, BUNDLE_MULTI_AGENT).handoff
-}
-
-/// Extract folded workflow projection (`hya/workflow`).
-#[must_use]
-pub fn workflow_projection(projection: &Projection) -> Option<WorkflowProjection> {
-    projection
-        .extensions
-        .get(BUNDLE_WORKFLOW)
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-}
-
-/// Projection reducer for `hya/workflow`.
-#[derive(Debug, Default)]
-pub struct WorkflowProjectionReducer;
-
-impl ProjectionReducer for WorkflowProjectionReducer {
-    fn bundle_id(&self) -> &str {
-        BUNDLE_WORKFLOW
-    }
-
-    fn fold_extension(
-        &self,
-        projection: &mut Projection,
-        session: SessionId,
-        kind: &str,
-        payload: &Value,
-    ) {
-        let Some(ext) = ExtensionEvent::from_parts(session, BUNDLE_WORKFLOW, kind, payload) else {
-            return;
-        };
-        let mut wf: WorkflowProjection = workflow_projection(projection).unwrap_or_default();
-        match ext {
-            ExtensionEvent::WorkflowSelected { workflow, .. } => {
-                wf.selection = Some(workflow);
-            }
-            ExtensionEvent::WorkflowRunStarted {
-                run,
-                workflow,
-                request_hash,
-                owner,
-                stages,
-                ..
-            } => {
-                if wf.seen_runs.insert(run) {
-                    wf.selection = Some(workflow.clone());
-                    wf.run = Some(WorkflowRunProjection {
-                        id: run,
-                        workflow,
-                        request_hash,
-                        owner,
-                        status: WorkflowRunStatus::Running,
-                        stages: stages
-                            .into_iter()
-                            .map(|plan| WorkflowStageProjection {
-                                plan,
-                                status: WorkflowStageStatus::Pending,
-                                members: Vec::new(),
-                                route_outcomes: Vec::new(),
-                            })
-                            .collect(),
-                        error: None,
-                    });
-                }
-            }
-            ExtensionEvent::WorkflowStageStarted { run, stage, .. } => {
-                if let Some(current) = wf.run.as_mut().filter(|r| r.id == run)
-                    && current.status == WorkflowRunStatus::Running
-                    && let Some(existing) =
-                        current.stages.iter_mut().find(|row| row.plan.id == stage)
-                    && !existing.status.is_terminal()
-                {
-                    existing.status = WorkflowStageStatus::Running;
-                }
-            }
-            ExtensionEvent::WorkflowStageMemberLinked {
-                run,
-                stage,
-                member,
-                role,
-                iteration,
-                ..
-            } => {
-                if let Some(current) = wf.run.as_mut().filter(|r| r.id == run)
-                    && current.status == WorkflowRunStatus::Running
-                    && let Some(stage_row) =
-                        current.stages.iter_mut().find(|row| row.plan.id == stage)
-                    && !stage_row.members.iter().any(|row| {
-                        row.member == member && row.role == role && row.iteration == iteration
-                    })
-                {
-                    stage_row.members.push(WorkflowMemberProjection {
-                        member,
-                        role,
-                        iteration,
-                    });
-                }
-            }
-            ExtensionEvent::WorkflowStageRouteOutcome {
-                session,
-                run,
-                stage,
-                member,
-                role,
-                iteration,
-                step,
-                candidate_index,
-                model,
-                reasoning,
-                failure_class,
-            } => {
-                if let Some(current) = wf.run.as_mut().filter(|r| r.id == run)
-                    && current.status == WorkflowRunStatus::Running
-                    && let Some(stage_row) =
-                        current.stages.iter_mut().find(|row| row.plan.id == stage)
-                    && stage_row.status == WorkflowStageStatus::Running
-                    && !stage_row.route_outcomes.iter().any(|outcome| {
-                        outcome.stage == stage
-                            && outcome.member == member
-                            && outcome.role == role
-                            && outcome.iteration == iteration
-                            && outcome.step == step
-                    })
-                {
-                    stage_row.route_outcomes.push(WorkflowStageRouteOutcome {
-                        session,
-                        run,
-                        stage,
-                        member,
-                        role,
-                        iteration,
-                        step,
-                        candidate_index,
-                        model,
-                        reasoning,
-                        failure_class,
-                    });
-                }
-            }
-            ExtensionEvent::WorkflowStageFinished {
-                run, stage, status, ..
-            } => {
-                if status.is_terminal()
-                    && let Some(current) = wf.run.as_mut().filter(|r| r.id == run)
-                    && current.status == WorkflowRunStatus::Running
-                    && let Some(stage_row) =
-                        current.stages.iter_mut().find(|row| row.plan.id == stage)
-                    && !stage_row.status.is_terminal()
-                {
-                    stage_row.status = status;
-                }
-            }
-            ExtensionEvent::WorkflowRunFinished {
-                run, status, error, ..
-            } => {
-                if status.is_terminal()
-                    && let Some(current) = wf.run.as_mut().filter(|r| r.id == run)
-                    && !current.status.is_terminal()
-                {
-                    current.status = status;
-                    current.error = error;
-                    if status != WorkflowRunStatus::Completed {
-                        for stage in &mut current.stages {
-                            if stage.status == WorkflowStageStatus::Pending {
-                                stage.status = WorkflowStageStatus::Skipped;
-                            } else if stage.status == WorkflowStageStatus::Running {
-                                stage.status = if status == WorkflowRunStatus::Cancelled {
-                                    WorkflowStageStatus::Cancelled
-                                } else {
-                                    WorkflowStageStatus::Failed
-                                };
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-        write_extension(projection, BUNDLE_WORKFLOW, &wf);
-    }
 }
 
 /// Projection reducer for `hya/agent-channels`.
@@ -1809,12 +1355,11 @@ impl ProjectionReducer for MultiAgentProjectionReducer {
     }
 }
 
-/// Build the Phase 0 [`ProjectionReducerRegistry`] for workflow, agent-channels,
-/// and multi-agent extension events.
+/// Build the Phase 0 [`ProjectionReducerRegistry`] for agent-channels and
+/// multi-agent extension events.
 #[must_use]
 pub fn projection_reducers() -> ProjectionReducerRegistry {
     ProjectionReducerRegistry::new()
-        .with_reducer(Arc::new(WorkflowProjectionReducer))
         .with_reducer(Arc::new(AgentChannelsProjectionReducer))
         .with_reducer(Arc::new(MultiAgentProjectionReducer))
 }

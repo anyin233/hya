@@ -155,7 +155,12 @@ async fn fixture(
     )).unwrap();
     let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").unwrap();
     let catalog = AgentCatalog::new(Arc::new(
-        hya_bundle::BundleCatalog::from_verified_catalogs(&[&plugin, multi_agent]).unwrap(),
+        hya_bundle::BundleCatalog::from_verified_catalogs(&[
+            &plugin,
+            multi_agent,
+            hya_bundle::first_party_bundle("hya/core-agents").unwrap(),
+        ])
+        .unwrap(),
     ))
     .unwrap();
     let runtime = Arc::new(RuntimeRegistry::new(

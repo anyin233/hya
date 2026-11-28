@@ -20,7 +20,6 @@ hya-engine = { workspace = true }
 hya-provider = { workspace = true }
 hya-tool = { workspace = true }
 hya-tool-loader = { workspace = true }
-hya-coding-extras-core = { workspace = true }
 hya-store = { workspace = true }
 hya-server = { workspace = true }
 hya-proto = { workspace = true }

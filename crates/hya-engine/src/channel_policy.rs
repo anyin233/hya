@@ -12,8 +12,5 @@ use crate::TurnBinding;
 /// Returns [`BundleError`] if the trusted `hya/agent-channels` defaults manifest
 /// cannot be decoded.
 pub fn from_binding(binding: &TurnBinding) -> Result<ChannelPolicy, BundleError> {
-    if binding.agent_catalog().is_bare() {
-        return Ok(ChannelPolicy::empty());
-    }
     ChannelPolicy::from_bundle_catalog(binding.bundle_catalog())
 }

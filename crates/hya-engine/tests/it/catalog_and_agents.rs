@@ -29,7 +29,6 @@ use hya_bundle::{
     HandoffPolicy, ModelPolicy, PreparedAgent, PreparedCatalog, PreparedResource, ResourceView,
     SourceFile, prepare_package,
 };
-use hya_engine::builtin_agents::{builtin_agent_ids, core_agents_preset, preset_agent};
 use hya_engine::hooks::{
     NativeChatParamsInput, NativeToolAfterInput, NativeToolAfterOutcome, NativeToolBeforeInput,
     NativeToolBeforeOutcome,
@@ -135,15 +134,24 @@ fn bundle_skill(bundle_id: &str, local_id: &str, desc: &str, body: &str) -> Prep
     }
 }
 
+/// The first-party `hya/core-agents` bundle (`hya-main`, `hya-title`).
+fn core_agents_bundle() -> Bundle {
+    support::core_agents().bundles()[0].clone()
+}
+
+/// `bundles` over the first-party `hya/core-agents`.
 fn catalog_from_bundles(bundles: &[Bundle]) -> Arc<AgentCatalog> {
-    let bc = BundleCatalog::from_prepared(bundles).expect("bundle catalog");
+    let mut all = bundles.to_vec();
+    all.push(core_agents_bundle());
+    let bc = BundleCatalog::from_prepared(&all).expect("bundle catalog");
     Arc::new(AgentCatalog::new(Arc::new(bc)).expect("agent catalog"))
 }
 
 fn catalog_from_agents(agents: Vec<PreparedAgent>) -> Arc<AgentCatalog> {
+    let core = core_agents_bundle();
     let bundles: Vec<Bundle> = agents
         .into_iter()
-        .filter(|a| preset_agent(a.id.as_str()).is_none())
+        .filter(|a| core.agents().iter().all(|core| core.id != a.id))
         .map(|a| {
             let id = format!("hya/test-fixture-{}", a.id.as_str());
             make_bundle(&id, a, Vec::new())
@@ -152,8 +160,11 @@ fn catalog_from_agents(agents: Vec<PreparedAgent>) -> Arc<AgentCatalog> {
     catalog_from_bundles(&bundles)
 }
 
+/// `catalogs` over the first-party `hya/core-agents`.
 fn catalog_from_verified(catalogs: &[&PreparedCatalog]) -> Arc<AgentCatalog> {
-    let bc = BundleCatalog::from_verified_catalogs(catalogs).expect("verified catalog");
+    let mut all = catalogs.to_vec();
+    all.push(support::core_agents());
+    let bc = BundleCatalog::from_verified_catalogs(&all).expect("verified catalog");
     Arc::new(AgentCatalog::new(Arc::new(bc)).expect("agent catalog"))
 }
 
@@ -485,15 +496,7 @@ impl RuntimeCatalogRefresh for FnRefresh {
 // ===========================================================================
 
 #[test]
-fn builtin_agents_preset_and_core_catalog_invariants() {
-    const EXPECTED: &[&str] = &["hya-main", "hya-title"];
-    assert_eq!(builtin_agent_ids(), EXPECTED);
-    assert!(builtin_agent_ids().windows(2).all(|p| p[0] < p[1]));
-    for id in EXPECTED {
-        assert!(preset_agent(id).is_some(), "missing builtin {id}");
-    }
-    assert!(preset_agent("no-such-agent").is_none());
-
+fn core_agents_bundle_and_roster_invariants() {
     let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").unwrap();
     let multi_agent_ids: Vec<_> = multi_agent.bundles()[0]
         .agents()
@@ -502,66 +505,105 @@ fn builtin_agents_preset_and_core_catalog_invariants() {
         .collect();
     assert_eq!(multi_agent_ids, ["hya-reviewer", "hya-scout", "hya-task"]);
 
-    let preset = core_agents_preset().unwrap();
-    let fp = hya_bundle::first_party_bundle("hya/core-agents").unwrap();
-    assert_eq!(preset.bundle_id(), "hya/core-agents");
-    assert!(!preset.prepared_bytes().is_empty() && preset.digest().len() == 64);
-    assert!(std::ptr::eq(preset.prepared_bytes(), fp.bytes()) && preset.digest() == fp.digest());
-
-    let mut ordinary = 0;
-    for a in preset.agents() {
-        let id = a.id.as_str();
-        assert!(id.starts_with("hya-"));
-        let reserved = id == "hya-title";
-        assert_eq!(preset.is_reserved(id), reserved);
+    // `hya/core-agents` is an ordinary bundle: `hya-main` is its default
+    // agent and spawns any non-private agent; `hya-title` is private.
+    let core = core_agents_bundle();
+    assert_eq!(
+        core.default_agent().map(AgentName::as_str),
+        Some("hya-main")
+    );
+    let ids: Vec<_> = core.agents().iter().map(|a| a.id.as_str()).collect();
+    assert_eq!(ids, ["hya-main", "hya-title"]);
+    for a in core.agents() {
+        let main = a.id.as_str() == "hya-main";
+        assert_eq!(a.private, !main);
         assert_eq!(
             a.role,
-            if id == "hya-main" {
+            if main {
                 AgentRole::Main
             } else {
                 AgentRole::Subagent
             }
         );
+        assert_eq!(
+            a.can_spawn
+                .iter()
+                .map(AgentName::as_str)
+                .collect::<Vec<_>>(),
+            if main { vec!["*"] } else { Vec::new() }
+        );
         assert!(a.prompt.as_deref().is_some_and(|p| !p.trim().is_empty()));
-        if !reserved {
-            ordinary += 1;
-            assert!(
-                a.description
-                    .as_deref()
-                    .is_some_and(|d| !d.trim().is_empty())
-            );
-        }
-    }
-    assert_eq!(ordinary, 1);
-
-    let empty = catalog_from_bundles(&[]);
-    let preset_ids: Vec<_> = preset.agents().iter().map(|a| a.id.as_str()).collect();
-    let cat_ids: Vec<_> = empty.all().iter().map(|a| a.stable_id).collect();
-    assert_eq!(cat_ids, preset_ids);
-    for d in empty.all() {
-        assert_eq!(d.origin, AgentOrigin::Builtin);
         assert!(
-            d.model_policy.model.is_none()
-                && d.model_policy.category.is_none()
-                && d.model_policy.reasoning.is_none()
+            a.model_policy.model.is_none()
+                && a.model_policy.category.is_none()
+                && a.model_policy.reasoning.is_none()
+        );
+    }
+
+    // No bundle declares a default agent: the roster is the compiled-in `hya-bare`.
+    let bare = AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(&[]).unwrap())).unwrap();
+    assert_eq!(bare.default_agent_id(), "hya-bare");
+    let bare_ids: Vec<_> = bare.all().iter().map(|a| a.stable_id).collect();
+    assert_eq!(bare_ids, ["hya-bare"]);
+    assert_eq!(
+        bare.resolve("hya-bare").unwrap().origin,
+        AgentOrigin::Builtin
+    );
+    assert!(bare.resolve("hya-main").is_none());
+
+    // With `hya/core-agents`, `hya-main` is the default and `hya-bare` is gone.
+    let full = catalog_from_bundles(&[]);
+    assert_eq!(full.default_agent_id(), "hya-main");
+    let full_ids: Vec<_> = full.all().iter().map(|a| a.stable_id).collect();
+    assert_eq!(full_ids, ["hya-main", "hya-title"]);
+    assert!(full.resolve("hya-bare").is_none());
+    for d in full.all() {
+        assert_eq!(
+            d.origin,
+            AgentOrigin::Bundle {
+                bundle_id: "hya/core-agents"
+            }
         );
     }
     assert_eq!(
-        empty.resolve("hya-main").unwrap(),
-        empty
-            .resolve("bundle:hya/core-agents/agent/hya-main")
+        full.resolve("hya-main").unwrap(),
+        full.resolve("bundle:hya/core-agents/agent/hya-main")
             .unwrap()
     );
+    let selectable: Vec<_> = full.selectable().iter().map(|a| a.stable_id).collect();
+    assert_eq!(selectable, ["hya-main"]);
 
-    let mut rev = prep_agent("acme-reviewer");
-    rev.role = AgentRole::Subagent;
-    let populated = catalog_from_bundles(&[make_bundle("acme/reviewer", rev, vec![])]);
-    assert_eq!(empty.builtin_digest(), populated.builtin_digest());
+    // The bare roster's identity keeps the `hya-bare` section; the full one
+    // carries the core-agents bundle in its bundle identity instead.
+    let verified_bare = AgentCatalog::new(Arc::new(
+        BundleCatalog::from_verified_catalogs(&[]).unwrap(),
+    ))
+    .unwrap();
+    let verified_full = catalog_from_verified(&[]);
+    assert_ne!(
+        verified_bare.semantic_identity_v1().unwrap(),
+        verified_full.semantic_identity_v1().unwrap()
+    );
+}
+
+#[test]
+fn two_default_agent_bundles_are_rejected() {
+    let mut other = core_agents_bundle();
+    other.identity.id = "acme/agents".into();
+    other.agents = vec![prep_agent("acme-main")];
+    other.default_agent = Some(AgentName::new("acme-main"));
+    assert_eq!(
+        BundleCatalog::from_prepared(&[core_agents_bundle(), other]).unwrap_err(),
+        BundleError::DuplicateDefaultAgent {
+            first: "hya/core-agents".into(),
+            second: "acme/agents".into(),
+        }
+    );
 }
 
 #[tokio::test]
 async fn agent_catalog_bundle_resolution_shadowing_and_spawn_authorization() {
-    let mut shadow = prep_agent("hya-main");
+    let mut shadow = prep_agent("hya-bare");
     shadow.role = AgentRole::Subagent;
     let shadow_bc =
         BundleCatalog::from_prepared(&[make_bundle("acme/impostor", shadow, vec![])]).unwrap();
@@ -569,7 +611,20 @@ async fn agent_catalog_bundle_resolution_shadowing_and_spawn_authorization() {
         AgentCatalog::new(Arc::new(shadow_bc)).unwrap_err(),
         BundleError::BuiltinAgentIdShadowed {
             bundle_id: "acme/impostor".into(),
-            agent_id: "hya-main".into(),
+            agent_id: "hya-bare".into(),
+        }
+    );
+    // `hya-main` is a bundle agent: a second claimer is a duplicate id.
+    let mut impostor = prep_agent("hya-main");
+    impostor.role = AgentRole::Subagent;
+    assert_eq!(
+        BundleCatalog::from_prepared(&[
+            core_agents_bundle(),
+            make_bundle("acme/impostor", impostor, vec![])
+        ])
+        .unwrap_err(),
+        BundleError::DuplicateStableAgentId {
+            stable_id: "hya-main".into(),
         }
     );
 
@@ -801,7 +856,6 @@ fn agent_catalog_private_and_first_party_agent_runs() {
     for (caller, target, unknown) in [
         ("acme-other", "acme-helper", false),
         ("hya-title", "acme-helper", false),
-        ("hya-main", "hya-title", false),
         ("hya-main", "missing", true),
         ("missing", "acme-helper", true),
     ] {
@@ -812,6 +866,13 @@ fn agent_catalog_private_and_first_party_agent_runs() {
             "{caller}->{target}: {err:?}"
         );
     }
+    // An all-agents caller may direct a private agent (as a workflow node),
+    // but never spawn it.
+    assert!(
+        cat.resolve_agent_run("hya-main", "hya-title")
+            .unwrap()
+            .private
+    );
 
     for bundle_id in ["hya/goal", "hya/workflow"] {
         let prepared = hya_bundle::first_party_bundle(bundle_id).unwrap();
@@ -838,7 +899,10 @@ fn agent_catalog_private_and_first_party_agent_runs() {
 
 #[tokio::test]
 async fn fixed_system_title_prompt_model_guidance_and_usage() {
-    let title_prompt = preset_agent("hya-title")
+    let title_prompt = support::core_agents().bundles()[0]
+        .agents()
+        .iter()
+        .find(|a| a.id.as_str() == "hya-title")
         .and_then(|a| a.prompt.as_deref())
         .unwrap();
     let dir = TestDir::new("fixed-title");
@@ -859,7 +923,12 @@ async fn fixed_system_title_prompt_model_guidance_and_usage() {
     let def = binding.resolve_agent("hya-title").unwrap();
     assert_eq!(
         (def.origin, def.prompt),
-        (AgentOrigin::Builtin, Some(title_prompt))
+        (
+            AgentOrigin::Bundle {
+                bundle_id: "hya/core-agents"
+            },
+            Some(title_prompt)
+        )
     );
     assert!(
         !engine
@@ -2407,6 +2476,28 @@ fn catalog_scope_failures_drop_hooks_and_model_shadowing() {
     assert_eq!(
         ScopeKey::Project(scope_a.project_id().unwrap()),
         scope_a.key()
+    );
+
+    // A `config.yaml` `agents.<id>.model` applies by Agent id whatever the
+    // Agent's origin, ahead of the owning bundle's file.
+    registry.publish_agent_model_configuration(AgentModelConfiguration {
+        builtin: BTreeMap::from([("alpha-agent".into(), ModelRef::new("global-alpha"))]),
+        bundles: BTreeMap::new(),
+    });
+    let bind = registry.bind_scoped(&scope_a, root_a.path()).unwrap();
+    assert_eq!(
+        bind.configured_agent_model("alpha-agent"),
+        Some(&ModelRef::new("global-alpha"))
+    );
+    assert_eq!(
+        bind.agent_model_file_origin("alpha-agent"),
+        Some(AgentOrigin::Builtin)
+    );
+    assert_eq!(
+        bind.agent_model_file_origin("hya-main"),
+        Some(AgentOrigin::Bundle {
+            bundle_id: "hya/core-agents"
+        })
     );
 }
 

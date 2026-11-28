@@ -9,7 +9,7 @@
 When a prompt, slash command, or shell turn enters `SessionEngine`:
 
 1. **Lease reservation:** Each session allows at most one active turn at a time (`TurnGate` / `TurnLease`). Concurrent requests receive `409 session_busy`.
-2. **Immutable `TurnBinding`:** At turn start, the engine resolves the session's `CatalogScope` (`Global`, `Directory`, or `Project`) into an immutable snapshot of tools, skills, hooks, agent definitions, and guidance. If a user installs a bundle or reloads skills mid-turn, the running turn finishes cleanly on its captured binding while the *next* turn picks up the new generation.
+2. **Immutable `TurnBinding`:** At turn start, the engine resolves the session's `CatalogScope` (`Global`, `Directory`, or `Project`) into an immutable snapshot of tools, skills, hooks, agent definitions, and guidance. Agent definitions form one roster (`AgentCatalog`) from the enabled bundles alone: `hya-main` comes from `hya/core-agents` like any bundle agent, and the core's compiled-in `hya-bare` joins the roster (as the default) only when no enabled bundle declares `default_agent`. If a user installs a bundle or reloads skills mid-turn, the running turn finishes cleanly on its captured binding while the *next* turn picks up the new generation.
 3. **File snapshots & `/undo`:** Before mutating tools run, workspace file hashes/blobs are recorded (`FilesChanged` + `file_blob`). Calling `RevertSession` (`/undo`) hides the reverted messages in the projection and restores prior bytes on disk until `/redo` or the next user message commits the cut.
 
 ---

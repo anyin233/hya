@@ -751,10 +751,6 @@ export type WireToolResult = ({ readonly status: "ok" } & {
   readonly message: string
 })
 
-export type WorkflowRevision = string
-
-export type WorkflowRunId = string
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
@@ -1116,10 +1112,6 @@ export function isWireToolResult(value: unknown): value is WireToolResult {
   return (isRecord(value) && value["status"] === "ok" && isRecord(value) && ("output" in value && true) && (value["time_ms"] === undefined || (typeof value["time_ms"] === "number" && Number.isInteger(value["time_ms"]) && value["time_ms"] >= 0))) ||
     (isRecord(value) && value["status"] === "err" && isRecord(value) && ("message" in value && typeof value["message"] === "string"))
 }
-
-export function isWorkflowRevision(value: unknown): value is WorkflowRevision { return typeof value === "string" }
-
-export function isWorkflowRunId(value: unknown): value is WorkflowRunId { return typeof value === "string" }
 
 export const HOOK_PARAM_GUARDS = {
   "event": isEventNotificationParams,

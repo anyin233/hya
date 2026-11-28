@@ -28,25 +28,25 @@ Each round updates Context through three primitives:
 | **2. Tool append** | Deterministic observations from outside the model: a tool result paired with a call, or a user prompt. Invalid JSON tool arguments, unknown tools, and cancellations become structured `ToolError`s—never synthesized fake outputs. | `ToolResult`, `ToolError`, `TodosUpdated`, `FilesChanged`, `FilesObserved`, user `Message*` |
 | **3. Rewrite** | Destructive context reset when the window fills up (or when the model calls `rewrite`): drops visible history before the current step and inserts a clean system marker repeating all prior user messages verbatim plus the current `todo` list ($g$). Dropped messages stay safely in SQLite for human replay. | System marker message + `ContextCompacted { strategy: rewrite }` |
 
-Passing the global `--bare` flag (`hya --bare`, `hya serve --bare`, or `hya exec --bare`) runs the unified `SessionEngine` with `BuiltinBundleProfile::Bare`—zero built-in bundles loaded (even when `bundles/builtin/` is completely absent), the 8 standard bare tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill`), built-in `code-mode` (without `agent()`), the minimal `hya-bare` default agent, and standard `AGENTS.md`/skills/MCP/user-bundle adapters. Combining `--bare` with `--pure` (`hya exec --bare --pure`) also skips external `AGENTS.md`, disk skills, MCP servers, user/project plugins, and the `code-mode` sidecar for pure kernel benchmarks (see [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)).
+The runtime's only input is the set of enabled built-in bundles (`bundles.builtin` in `config.yaml`). The default profile enables every built-in bundle; the global `--bare` flag (`hya --bare`, `hya serve --bare`, or `hya exec --bare`) is the empty set; any subset in between is a valid configuration ([ADR-0040](../adr/0040-context-kernel-is-the-only-core.md)). With the empty set, the unified `SessionEngine` runs with zero built-in bundles loaded (even when `bundles/builtin/` is completely absent), the 8 standard bare tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill`), built-in `code-mode` (without `agent()`), the compiled-in `hya-bare` agent, and standard `AGENTS.md`/skills/MCP/user-bundle adapters. Combining `--bare` with `--pure` (`hya exec --bare --pure`) also skips external `AGENTS.md`, disk skills, MCP servers, user/project plugins, and the `code-mode` sidecar for pure kernel benchmarks; `--pure` is a separate axis that never reads the bundle selection.
 
-### Global `--bare` Runtime Profile (`BuiltinBundleProfile::Bare`)
+### Composing the built-in bundle set
 
-| Surface / Capability | Full Mode (`profile: full`) | Global `--bare` (`BuiltinBundleProfile::Bare`) | `--bare --pure` |
+| Surface / Capability | Every built-in (`profile: full`) | Empty set (`--bare`, `profile: bare`) | `--bare --pure` |
 | --- | --- | --- | --- |
 | Engine & Kernel loop | `SessionEngine` on `hya-core::kernel` | `SessionEngine` on `hya-core::kernel` | `SessionEngine` on `hya-core::kernel` |
 | Built-in bundles (`bundles/builtin/`) | Loaded per `bundles.builtin` selection | **None loaded** (zero disk dependency on `bundles/builtin/`) | **None loaded** |
-| Default agent | `hya-main` (from `hya/core-agents`) | `hya-bare` (`hya_engine::BARE_AGENT_ID`) | `hya-bare` |
+| Default agent | `hya-main` (the `default_agent` of `hya/core-agents`) | `hya-bare` (`hya_engine::BARE_AGENT_ID`) | `hya-bare` |
 | Core tools | Built-in native ABI v2 bundles (`hya/hashline`, `hya/coding-extras`, `hya/multi-agent`, `hya/network`, `hya/agent-channels`, `hya/plan`, `hya/workflow`) + core `bash`, `skill`, and kernel `todo`/`rewrite` | 8 standard bare tools: `read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill` | 8 standard bare tools (`skill` catalog empty) |
 | Built-in `code-mode` | Enabled when configured (`agent()` gated on `hya/multi-agent`) | Enabled when configured (no `agent()`) | Disabled |
 | Context & external extensions | `AGENTS.md`, disk skills, MCP, user/project bundles & plugins | `AGENTS.md`, disk skills, MCP, user/project bundles & plugins | **Skipped** |
 | Compaction | `shake` + `remote` (`hya/compaction`) → Kernel `Rewrite` | Kernel `Rewrite` only | Kernel `Rewrite` only |
 
-- **CLI usage:** `hya --bare` (interactive TUI/WebUI + auto-started `--bare` daemon), `hya serve --bare` / `hya serve start --bare` (HTTP/gRPC server), `hya exec --bare "<prompt>"`, `hya exec --bare --pure "<prompt>"`, `hya --bare agent list`.
+- **CLI usage:** `hya --bare` (interactive TUI/WebUI + auto-started `--bare` daemon), `hya serve --bare` / `hya serve start --bare` (HTTP/gRPC server), `hya exec --bare "<prompt>"`, `hya exec --bare --pure "<prompt>"`, `hya --bare agent list`. "Bare plus A" is `profile: bare` with `enable: [A]` in `config.yaml`.
 - **Rust / config interfaces:**
-  - `hya_app::RuntimeConfig::with_bare(bool)` applies `BuiltinBundleProfile::Bare` (equivalent to `bundles.builtin.profile: bare` in `config.yaml`).
-  - `hya_engine::AgentCatalog::with_minimal_agent` selects `hya-bare`. All profiles construct the engine with `SessionEngine::new`. The application passes enabled native registrations through `with_rewriters` and the other extension builders.
-  - `hya_server::AppState::with_core_commands(bool)` disables `hya/core-commands` loading in bare servers (`GET /v2/commands` returns only workspace/skill/bundle commands; `GET /v2/agents` returns `hya-bare`; `GET /v2/bundles` reports zero built-in bundles).
+  - `hya_app::builtin_selection(bare: bool) -> BuiltinBundleSelection` is the one selection a CLI invocation resolves: `BuiltinBundleSelection::bare()` under `--bare`, else `config.yaml` `bundles.builtin`. `hya_app::RuntimeConfig::with_bare(bool)` applies it.
+  - **One roster.** `hya_engine::AgentCatalog::new(bundles)` builds the agent roster from the enabled bundles alone. The default agent is the `default_agent` an enabled bundle declares (at most one may); when none does, the compiled-in `hya-bare` is part of the roster and is the default. `hya/core-agents` is an ordinary catalog bundle that declares `default_agent: hya-main`, so with it enabled `hya-bare` is not listed. All profiles construct the engine with `SessionEngine::new`; the application passes enabled native registrations through `with_rewriters` and the other extension builders.
+  - `hya_server::AppState::with_core_commands(bool)` disables `hya/core-commands` loading in bare servers (`GET /v2/commands` returns only workspace/skill/bundle commands; `GET /v2/agents` returns `hya-bare`; `GET /v2/bundles` reports zero built-in bundles). `AppState::with_auto_title(bool)` is on when the startup roster has `hya-title`.
 
 ---
 

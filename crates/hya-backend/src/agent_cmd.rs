@@ -1,5 +1,5 @@
-//! `hya agent list`: the built-in agent catalog (the compiled-in first-party
-//! bundles plus installed bundles), without composing a runtime.
+//! `hya agent list`: the agent catalog of the enabled first-party bundles,
+//! without composing a runtime.
 
 use std::io::Write as _;
 
@@ -33,15 +33,10 @@ fn list(bare: bool) -> anyhow::Result<()> {
 }
 
 /// Render the catalog's selectable agents, one block each: `id (mode)` plus
-/// its origin, then the description when it has one. Reserved system agents
-/// (compaction/title/summary) are excluded because no ordinary agent reaches
-/// them; neither is anything from disk.
+/// its origin, then the description when it has one. Private agents (such as
+/// the `hya-title` system agent) are excluded; so is anything from disk.
 fn list_text(bare: bool) -> anyhow::Result<String> {
-    let catalog = if bare {
-        hya_app::builtin_agent_catalog_for(&hya_bundle::BuiltinBundleSelection::bare())?
-    } else {
-        hya_app::builtin_agent_catalog()?
-    };
+    let catalog = hya_app::builtin_agent_catalog_for(&hya_app::builtin_selection(bare))?;
     let mut ordinary = catalog.selectable();
     ordinary.sort_by(|left, right| left.stable_id.cmp(right.stable_id));
 

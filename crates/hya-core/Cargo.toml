@@ -31,11 +31,6 @@ libc = { workspace = true }
 
 [dev-dependencies]
 hya-runtime-abi = { workspace = true }
-hya-tool-loader = { workspace = true }
-# Build these libraries for the native bundle tests.
-hya-hashline = { workspace = true }
-hya-coding-extras = { workspace = true }
-hya-compaction = { workspace = true }
 hya-provider = { workspace = true, features = ["test-support"] }
 image = { workspace = true }
 

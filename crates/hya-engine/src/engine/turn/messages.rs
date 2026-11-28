@@ -285,7 +285,11 @@ mod tests {
         ))?;
         let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent")?;
         let catalog = AgentCatalog::new(std::sync::Arc::new(
-            BundleCatalog::from_verified_catalogs(&[&prepared, multi_agent])?,
+            BundleCatalog::from_verified_catalogs(&[
+                &prepared,
+                multi_agent,
+                hya_bundle::first_party_bundle("hya/core-agents")?,
+            ])?,
         ))?;
         let registry =
             RuntimeRegistry::new(hya_tool_loader::builtins(), std::sync::Arc::new(catalog));

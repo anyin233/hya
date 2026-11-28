@@ -1770,7 +1770,8 @@ async fn root_mail_and_synthesis_wakes_stopped_during_binding_own_prompt() {
         ))
         .unwrap();
         let catalog = hya_engine::AgentCatalog::new(Arc::new(
-            hya_bundle::BundleCatalog::from_verified_catalogs(&[&plugin]).unwrap(),
+            hya_bundle::BundleCatalog::from_verified_catalogs(&[&plugin, support::core_agents()])
+                .unwrap(),
         ))
         .unwrap();
         engine

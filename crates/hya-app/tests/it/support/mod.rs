@@ -118,13 +118,19 @@ pub fn test_runtime(
     tools: Arc<ToolRegistry>,
     agents: &[(&str, AgentRole, &[&str])],
 ) -> Arc<RuntimeRegistry> {
+    let core_agents =
+        hya_bundle::first_party_bundle("hya/core-agents").expect("first-party hya/core-agents");
     let mut prepared = Vec::new();
     for (stable_id, role, can_spawn) in agents {
         assert_yaml_safe_id(stable_id);
         for target in *can_spawn {
             assert_yaml_safe_id(target);
         }
-        if hya_engine::preset_agent(stable_id).is_some() {
+        if core_agents.bundles()[0]
+            .agents()
+            .iter()
+            .any(|agent| agent.id.as_str() == *stable_id)
+        {
             continue;
         }
         let role = match role {
@@ -167,6 +173,7 @@ pub fn test_runtime(
     {
         refs.push(multi_agent);
     }
+    refs.push(core_agents);
     let catalog = BundleCatalog::from_verified_catalogs(&refs)
         .expect("test bundles must retain verified identity");
     let catalog = hya_engine::AgentCatalog::new(Arc::new(catalog)).expect("test agent catalog");

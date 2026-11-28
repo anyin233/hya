@@ -50,7 +50,15 @@ async fn start_with(
 ) -> anyhow::Result<StartedEngine> {
     let exit_store = store.clone();
     let runtime = runtime.with_yolo(yolo);
-    let agent = hya_app::agent_for_runtime(&runtime, None);
+    let agent = match hya_app::agent_for_runtime(&runtime, None) {
+        Ok(agent) => agent,
+        Err(error) => {
+            exit_store
+                .drain_and_report_exit(hya_store::EXIT_DRAIN_TIMEOUT)
+                .await;
+            return Err(error);
+        }
+    };
     let tool_config = (runtime.permission, runtime.settings);
     let built_res = if runtime.pure {
         hya_app::build_session_engine_pure(

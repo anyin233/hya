@@ -47,7 +47,10 @@ async fn state() -> AppState {
 
 /// Minimal runtime for the in-process engine: the builtin agent catalog.
 fn test_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegistry> {
-    let catalog = BundleCatalog::from_prepared(&[]).expect("sdk test catalog");
+    // `hya/core-agents` provides the default `hya-main` agent.
+    let core_agents =
+        hya_bundle::first_party_bundle("hya/core-agents").expect("first-party hya/core-agents");
+    let catalog = BundleCatalog::from_prepared(core_agents.bundles()).expect("sdk test catalog");
     let catalog = hya_engine::AgentCatalog::new(Arc::new(catalog)).expect("sdk agent catalog");
     Arc::new(RuntimeRegistry::from_snapshot(
         tools.snapshot(),

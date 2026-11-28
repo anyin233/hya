@@ -47,7 +47,6 @@ tracing = { workspace = true }
 hya-provider = { workspace = true, features = ["test-support"] }
 hya-store = { workspace = true, features = ["lifecycle-bench"] }
 hya-hashline = { workspace = true }
-hya-coding-extras-core = { workspace = true }
 hya-coding-extras = { workspace = true }
 hya-network = { workspace = true }
 libc = { workspace = true }

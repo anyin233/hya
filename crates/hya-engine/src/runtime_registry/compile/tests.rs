@@ -28,14 +28,20 @@ const WITHOUT_CHANNEL_TOOLS: [&str; 4] = [
     "hya/network",
 ];
 
+/// `bundles` over the first-party `hya/core-agents` (the `hya-main` roster).
 fn catalog_from(bundles: &[Bundle]) -> Arc<AgentCatalog> {
-    Arc::new(AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(bundles).unwrap())).unwrap())
+    let mut all = bundles.to_vec();
+    all.extend(crate::test_support::first_party(&["hya/core-agents"]));
+    Arc::new(AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(&all).unwrap())).unwrap())
 }
 
+/// `catalogs` over the first-party `hya/core-agents` (the `hya-main` roster).
 fn verified_catalog(catalogs: &[&hya_bundle::PreparedCatalog]) -> Arc<AgentCatalog> {
+    let mut all = catalogs.to_vec();
+    all.push(hya_bundle::first_party_bundle("hya/core-agents").unwrap());
     Arc::new(
         AgentCatalog::new(Arc::new(
-            BundleCatalog::from_verified_catalogs(catalogs).unwrap(),
+            BundleCatalog::from_verified_catalogs(&all).unwrap(),
         ))
         .unwrap(),
     )

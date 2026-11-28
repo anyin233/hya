@@ -688,7 +688,7 @@ async fn removed_plugin_hooks_leave_fresh_bindings_but_remain_live_on_old_bindin
     .unwrap();
     let catalog = Arc::new(
         AgentCatalog::new(Arc::new(
-            BundleCatalog::from_verified_catalogs(&[&prepared]).unwrap(),
+            BundleCatalog::from_verified_catalogs(&[&prepared, support::core_agents()]).unwrap(),
         ))
         .unwrap(),
     );
