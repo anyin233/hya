@@ -26,6 +26,7 @@ make_release() {
     "$scratch/$package/bundles" \
     "$scratch/$package/lib/hya/bin" \
     "$scratch/$package/lib/hya/bun-adapter/src" \
+    "$scratch/$package/lib/hya/code-mode" \
     "$scratch/$package/lib/hya/tui/src" \
     "$scratch/$package/lib/hya/tui/node_modules" \
     "$scratch/$package/lib/hya/tui-web/src" \
@@ -41,12 +42,22 @@ case "\${1:-}" in
 esac
 EOF
   chmod 755 "$scratch/$package/bin/hya"
+  cat >"$scratch/$package/bin/hya-migration" <<EOF
+#!/bin/sh
+case "\${1:-}" in
+  --version) printf 'hya-migration %s\\n' '$reported' ;;
+  *) printf 'hya-migration\\n' ;;
+esac
+EOF
+  chmod 755 "$scratch/$package/bin/hya-migration"
   cat >"$scratch/$package/lib/hya/bin/bun" <<EOF
 #!/bin/sh
 if [ "\${1:-}" = --version ]; then printf '1.4.2\\n'; else printf 'bun\\n'; fi
 EOF
   chmod 755 "$scratch/$package/lib/hya/bin/bun"
   printf '%s\n' backend >"$scratch/$package/lib/hya/bun-adapter/src/main.ts"
+  printf '%s\n' '{"name":"@hya/code-mode"}' >"$scratch/$package/lib/hya/code-mode/package.json"
+  printf '%s\n' code-mode >"$scratch/$package/lib/hya/code-mode/runtime.ts"
   if [[ ${5:-0} == 1 ]]; then
     mkdir -p "$scratch/$package/lib/hya/claude-adapter/src"
     printf '%s\n' claude >"$scratch/$package/lib/hya/claude-adapter/src/main.ts"
@@ -87,9 +98,10 @@ printf keep >"$prefix/lib/hya/claude-adapter/marker"
 printf mine >"$prefix/bundles/my-own.hyabundle"
 out="$(install_into "$prefix" 2>&1)" || fail "unified install failed: $out"
 [[ "$("$prefix/bin/hya" --version)" == 'hya 9.9.1' ]] || fail 'version mismatch'
+[[ "$("$prefix/bin/hya-migration" --version)" == 'hya-migration 9.9.1' ]] || fail 'hya-migration version mismatch'
 [[ "$(frontend_version_of "$prefix")" == '9.9.1' ]] || fail 'frontend version mismatch'
 [[ -x "$prefix/lib/hya/bin/bun" ]] || fail 'missing packaged Bun'
-[[ -f "$prefix/lib/hya/bun-adapter/src/main.ts" && -f "$prefix/lib/hya/tui/src/main.ts" && -f "$prefix/lib/hya/tui-web/src/main.ts" && -f "$prefix/lib/hya/tui-sdk/src/main.ts" ]] || fail 'missing runtime payload'
+[[ -f "$prefix/lib/hya/bun-adapter/src/main.ts" && -f "$prefix/lib/hya/code-mode/runtime.ts" && -f "$prefix/lib/hya/tui/src/main.ts" && -f "$prefix/lib/hya/tui-web/src/main.ts" && -f "$prefix/lib/hya/tui-sdk/src/main.ts" ]] || fail 'missing runtime payload'
 [[ "$(cat "$prefix/lib/hya/claude-adapter/marker")" == keep ]] || fail 'foreign lib entry changed'
 [[ "$(cat "$prefix/bundles/my-own.hyabundle")" == mine ]] || fail 'foreign bundle changed'
 
@@ -118,6 +130,7 @@ make_release 9.9.3 0.0.1
 if out="$(install_into "$prefix" --version v9.9.3 2>&1)"; then fail 'misreporting binary installed'; fi
 grep -q 'restored the previous installation' <<<"$out" || fail "rollback was not reported: $out"
 [[ "$("$prefix/bin/hya" --version)" == 'hya 9.9.1' ]] || fail 'rollback did not restore hya'
+[[ "$("$prefix/bin/hya-migration" --version)" == 'hya-migration 9.9.1' ]] || fail 'rollback did not restore hya-migration'
 [[ "$(cat "$prefix/bundles/hya-coding-extras.hyabundle")" == 9.9.1 ]] || fail 'rollback did not restore bundles'
 
 make_release 9.9.4 9.9.4 0 0.0.2

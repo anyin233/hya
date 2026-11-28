@@ -105,6 +105,9 @@ pub(crate) fn stage(root: &Path, options: &StageOptions, bun: &Path) -> Result<V
     let backend = package.join("bin/hya");
     copy_file(&options.library_dir.join("hya"), &backend)?;
     set_executable(&backend)?;
+    let migration = package.join("bin/hya-migration");
+    copy_file(&options.library_dir.join("hya-migration"), &migration)?;
+    set_executable(&migration)?;
     for file in ["README.md", "THIRD_PARTY_NOTICES"] {
         copy_file(&root.join(file), &package.join(file))?;
     }

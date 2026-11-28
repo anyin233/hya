@@ -12,3 +12,4 @@ mod p09_exec_headless;
 mod p10_model_catalog_discovery;
 mod p38_relay;
 mod p43_store_robustness;
+mod p44_v2_bare_bundles_and_migration;

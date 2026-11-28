@@ -30,8 +30,8 @@ usage() {
   cat <<'USAGE'
 Usage: install.sh [--version VERSION] [--prefix DIR] [--force]
 
-Install or update hya (backend, bundles, Bun runtime, TUI, and WebUI) from its
-GitHub release.
+Install or update hya (backend, migration CLI, bundles, Bun runtime, code-mode,
+TUI, and WebUI) from its GitHub release.
 
   --version VERSION  install this release (`0.47.0`, `v0.47.0`, or `v0.47.0-dev.1`;
                      default: the latest stable release)
@@ -165,12 +165,14 @@ package_dir=""
 rollback() {
   pkg_dir=$1
   old=$stage/old
-  if [ ! -e "$pkg_dir/bin/hya" ]; then
-    rm -f "$prefix/bin/hya"
-  fi
-  if [ -e "$old/bin/hya" ]; then
-    mv -f "$old/bin/hya" "$prefix/bin/hya"
-  fi
+  while IFS= read -r name; do
+    if [ ! -e "$pkg_dir/bin/$name" ]; then
+      rm -f "$prefix/bin/$name"
+    fi
+    if [ -e "$old/bin/$name" ]; then
+      mv -f "$old/bin/$name" "$prefix/bin/$name"
+    fi
+  done <"$stage/bin.list"
   while IFS= read -r name; do
     if [ ! -e "$pkg_dir/lib/hya/$name" ]; then
       rm -rf "${prefix:?}/lib/hya/$name"
@@ -262,14 +264,17 @@ package_dir=$stage/new/hya-$release-$target
 for name in bun-adapter tui tui-web; do
   [ -e "$package_dir/lib/hya/$name" ] || die "$archive has no hya-$release-$target/lib/hya/$name"
 done
+(cd "$package_dir/bin" && for name in *; do if [ -e "$name" ]; then printf '%s\n' "$name"; fi; done) >"$stage/bin.list"
 (cd "$package_dir/lib/hya" && for name in *; do if [ -e "$name" ]; then printf '%s\n' "$name"; fi; done) >"$stage/lib.list"
 (cd "$package_dir/bundles" && for name in hya-*.hyabundle; do if [ -e "$name" ]; then printf '%s\n' "$name"; fi; done) >"$stage/bundles.list"
 
 swapping=1
-if [ -e "$prefix/bin/hya" ]; then
-  mv -f "$prefix/bin/hya" "$stage/old/bin/hya"
-fi
-mv -f "$package_dir/bin/hya" "$prefix/bin/hya"
+while IFS= read -r name; do
+  if [ -e "$prefix/bin/$name" ]; then
+    mv -f "$prefix/bin/$name" "$stage/old/bin/$name"
+  fi
+  mv -f "$package_dir/bin/$name" "$prefix/bin/$name"
+done <"$stage/bin.list"
 while IFS= read -r name; do
   if [ -e "$prefix/lib/hya/$name" ]; then
     mv "$prefix/lib/hya/$name" "$stage/old/lib/$name"
@@ -288,6 +293,11 @@ done <"$stage/bundles.list"
 placed=$(installed_version "$prefix/bin/hya" || true)
 [ "$placed" = "$release" ] ||
   die "the installed hya reports version '${placed:-none}', expected $release"
+if grep -Fx hya-migration "$stage/bin.list" >/dev/null 2>&1; then
+  placed_migration=$(installed_version "$prefix/bin/hya-migration" || true)
+  [ "$placed_migration" = "$release" ] ||
+    die "the installed hya-migration reports version '${placed_migration:-none}', expected $release"
+fi
 if [ -f "$version_file" ]; then
   placed_frontend=$(installed_frontend_version "$version_file" || true)
   [ "$placed_frontend" = "$release" ] ||

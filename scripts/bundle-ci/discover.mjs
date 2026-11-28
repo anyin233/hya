@@ -7,7 +7,7 @@ import { discoverBundles, formatGithubOutputs } from "./lib.mjs";
 
 function usage() {
   console.error(
-    "Usage: discover.mjs [--changed-files <path>] [--changed <file>] [--github-output <path>] [--allow-empty] <root-dir> [<root-dir>...]",
+    "Usage: discover.mjs [--changed-files <path>] [--changed <file>] [--github-output <path>] [--allow-empty] [--root <dir>]... [<root-dir>...]",
   );
   process.exit(2);
 }
@@ -25,6 +25,10 @@ function parseArgs(argv) {
       usage();
     } else if (arg === "--allow-empty") {
       allowEmpty = true;
+    } else if (arg === "--root") {
+      const value = argv[++i];
+      if (!value) usage();
+      roots.push(value);
     } else if (arg === "--changed-files") {
       changedFilesPath = argv[++i];
       if (!changedFilesPath) usage();

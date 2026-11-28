@@ -105,7 +105,11 @@ GENERATED_PROTOCOL_DOCS = {
 
 # Cross-boundary Rust crates / plugin adapters where backend & frontend meet.
 CONTRACT_PREFIXES = (
+    "bundles/builtin/agent-channels/tui/",
     "bundles/builtin/basic-tui-components/",
+    "bundles/builtin/multi-agent/tui/",
+    "bundles/builtin/plan/tui/",
+    "bundles/builtin/workflow/tui/",
     "crates/hya-api/",
     "crates/hya-backend/",
     "crates/hya-plugin/",
@@ -113,6 +117,7 @@ CONTRACT_PREFIXES = (
     "crates/hya-plugin-claude/",
     "crates/hya-proto/",
     "crates/hya-server/",
+    "packages/hya-code-mode/",
     "packages/hya-tui/src/proto/",
     ".github/actions/setup-bun/",
 )
@@ -199,9 +204,9 @@ def classify_paths(paths: list[str]) -> ScopeResult:
         if path in IGNORED_EXACT_FILES or path.startswith(IGNORED_PREFIXES):
             continue
 
-        # 7. v1 proto definitions generate Rust, TUI (`operations.json` + proto),
+        # 7. Proto definitions generate Rust, TUI (`operations.json` + proto),
         #    and `docs/protocol/*` -> trigger Rust, Frontend, and Docs.
-        if path.startswith("proto/hya/v1/"):
+        if path.startswith("proto/hya/v2/") or path.startswith("proto/hya/v1/"):
             rust = True
             frontend = True
             docs = True

@@ -62,29 +62,35 @@ contains "$help" "--bin-dir DIR"
 contains "$help" "--profile release|dev|debug"
 contains "$help" "--dry-run"
 contains "$help" "bin/hya "
+contains "$help" "bin/hya-migration"
 not_contains "$help" "hya-backend"
 contains "$help" "bundles/hya-*.hyabundle"
 contains "$help" "lib/hya/bun-adapter"
+contains "$help" "lib/hya/code-mode"
 contains "$help" "lib/hya/tui "
 contains "$help" "lib/hya/tui-web"
 not_contains "$help" "compat"
 
 dry_run=$(bash ./install.sh --dry-run --prefix /tmp/hya-install-test --profile debug)
 contains "$dry_run" "Permission preflight: /tmp/hya-install-test/bin /tmp/hya-install-test/bundles /tmp/hya-install-test/lib/hya"
-[[ "$dry_run" == *"Bun preflight: bun"*"cargo build --locked -p hya-backend --bins"* ]] || fail "Bun preflight must run before cargo build"
-contains "$dry_run" "cargo build --locked -p hya-backend --bins"
+[[ "$dry_run" == *"Bun preflight: bun"*"cargo build --locked -p hya-backend -p hya-migration --bins"* ]] || fail "Bun preflight must run before cargo build"
+contains "$dry_run" "cargo build --locked -p hya-backend -p hya-migration --bins"
 contains "$dry_run" "cargo build --locked -p hya-hashline -p hya-coding-extras -p hya-multi-agent -p hya-network -p hya-agent-channels -p hya-compaction -p hya-plan -p hya-goal -p hya-loop -p hya-workflow-bundle --lib"
 contains "$dry_run" "stage-first-party-bundles --library-dir"
 contains "$dry_run" "stage-bun-programs --package-root"
 not_contains "$dry_run" "--profile debug"
 contains "$dry_run" "/tmp/hya-install-test/bin/.hya.tmp"
 contains "$dry_run" "/tmp/hya-install-test/bin/.hya.bak"
+contains "$dry_run" "/tmp/hya-install-test/bin/.hya-migration.tmp"
+contains "$dry_run" "/tmp/hya-install-test/bin/.hya-migration.bak"
 contains "$dry_run" "/tmp/hya-install-test/lib/hya/.hya-programs.tmp"
 contains "$dry_run" 'lib/hya/.<program>.bak'
 contains "$dry_run" "/tmp/hya-install-test/bundles/.hya-bundles.tmp"
 contains "$dry_run" "/tmp/hya-install-test/bundles/.hya-bundles.bak"
 contains "$dry_run" "/tmp/hya-install-test/bin/hya"
+contains "$dry_run" "/tmp/hya-install-test/bin/hya-migration"
 contains "$dry_run" "/tmp/hya-install-test/lib/hya/bun-adapter"
+contains "$dry_run" "/tmp/hya-install-test/lib/hya/code-mode/runtime.ts"
 contains "$dry_run" "/tmp/hya-install-test/lib/hya/tui/src/main.ts"
 contains "$dry_run" "/tmp/hya-install-test/lib/hya/tui-web/src/main.ts"
 contains "$dry_run" "bundle list (isolated HOME) must list: ${first_party[*]}"
@@ -123,6 +129,8 @@ if [[ " $* " == *" stage-bun-programs "* ]]; then
     mkdir -p "$root/$name/src"
     touch "$root/$name/"{package.json,bun.lock,src/main.ts}
   done
+  mkdir -p "$root/code-mode"
+  touch "$root/code-mode/"{package.json,runtime.ts}
   [[ "${HYA_FAIL_ADAPTER_INSTALL:-0}" != 1 ]] || exit 1
   mkdir -p "$root/bun-adapter/node_modules" "$root/tui/node_modules/@opentui/core" \
     "$root/tui-web/web" "$root/tui-web/node_modules/@xterm/xterm"
@@ -164,6 +172,15 @@ esac
 exit 2
 FAKE_BACKEND
 chmod +x "$out/hya"
+cat >"$out/hya-migration" <<'FAKE_MIGRATION'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  --help|--version) exit 0 ;;
+esac
+exit 2
+FAKE_MIGRATION
+chmod +x "$out/hya-migration"
 FAKE_CARGO
 chmod +x "$fake_bin/cargo"
 
@@ -208,6 +225,7 @@ mkdir -p "$install_root/bin"
 printf 'legacy-binary\n' >"$install_root/bin/hya-backend"
 run_install "$install_root" env >/dev/null
 [[ -x "$install_root/bin/hya" ]] || fail "missing installed binary: hya"
+[[ -x "$install_root/bin/hya-migration" ]] || fail "missing installed binary: hya-migration"
 [[ ! -e "$install_root/bin/hya-backend" ]] || fail "installer kept the legacy hya-backend executable"
 for bundle in "${first_party[@]}"; do
   [[ $(<"$install_root/bundles/hya-$bundle.hyabundle") == "new-$bundle" ]] ||
@@ -221,6 +239,9 @@ done
 for path in package.json bun.lock src/main.ts; do
   [[ -f "$install_root/lib/hya/claude-adapter/$path" ]] || fail "missing installed Claude adapter path: $path"
 done
+for path in package.json runtime.ts; do
+  [[ -f "$install_root/lib/hya/code-mode/$path" ]] || fail "missing installed code-mode path: $path"
+done
 for path in package.json bun.lock bunfig.toml tsconfig.json frontend-version.ts src/main.ts node_modules/@opentui/core; do
   [[ -e "$install_root/lib/hya/tui/$path" ]] || fail "missing installed TUI path: $path"
 done
@@ -233,6 +254,7 @@ seed_previous_install() {
   local root=$1
   mkdir -p "$root/bin" "$root/lib/hya/bun-adapter" "$root/lib/hya/claude-adapter" "$root/bundles"
   printf 'old-binary\n' >"$root/bin/hya"
+  printf 'old-migration\n' >"$root/bin/hya-migration"
   printf 'old-adapter\n' >"$root/lib/hya/bun-adapter/marker"
   printf 'old-claude\n' >"$root/lib/hya/claude-adapter/marker"
   printf 'old-core-agents\n' >"$root/bundles/hya-core-agents.hyabundle"
@@ -242,6 +264,7 @@ assert_previous_install() {
   local root=$1
   local reason=$2
   [[ $(<"$root/bin/hya") == old-binary ]] || fail "$reason replaced the previous binary"
+  [[ $(<"$root/bin/hya-migration") == old-migration ]] || fail "$reason replaced the previous migration binary"
   [[ $(<"$root/lib/hya/bun-adapter/marker") == old-adapter ]] || fail "$reason replaced the previous Bun adapter"
   [[ $(<"$root/lib/hya/claude-adapter/marker") == old-claude ]] || fail "$reason replaced the previous Claude adapter"
   [[ $(<"$root/bundles/hya-core-agents.hyabundle") == old-core-agents ]] ||

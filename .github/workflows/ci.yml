@@ -119,11 +119,11 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
-      # When Rust tests are selected, build `hya`, `xtask`, all five lockstep
-      # native bundle cdylibs, and every workspace test binary in ONE Cargo
-      # invocation, stage the five `.so` files into the fixed build-unit layout
-      # expected by `hya-tool-loader` on Cargo >= 1.100, and archive them for
-      # zero-compile `test` and `e2e` jobs.
+      # When Rust tests are selected, build `hya`, `hya-migration`, `xtask`, all
+      # ten lockstep native bundle cdylibs, and every workspace test binary in
+      # ONE Cargo invocation, stage the ten `.so` files into the fixed
+      # build-unit layout expected by `hya-tool-loader` on Cargo >= 1.100, and
+      # archive them for zero-compile `test` and `e2e` jobs.
       - name: build workspace binaries and test archive
         id: build-archive
         if: ${{ needs.changes.outputs.rust == 'true' }}
@@ -146,13 +146,14 @@ jobs:
             --archive-file "${RUNNER_TEMP}/ci-nextest-archive.tar.zst"
           rm -rf target/debug/build/*/ci-archive
           test -x target/debug/hya
+          test -x target/debug/hya-migration
           test -x target/debug/xtask
       # Pure frontend PRs skip Rust tests and only need `hya` + `xtask` for `tui`.
       - name: build hya and xtask binaries
         id: build-only
         if: ${{ needs.changes.outputs.rust != 'true' }}
-        run: cargo build --locked -p hya-backend --bin hya -p xtask --bin xtask
-      - name: generated v1 API drift check
+        run: cargo build --locked -p hya-backend --bin hya -p hya-migration --bin hya-migration -p xtask --bin xtask
+      - name: generated v2 API drift check
         if: ${{ !cancelled() && (steps.build-archive.outcome == 'success' || steps.build-only.outcome == 'success') }}
         run: |
           target/debug/xtask gen-api
@@ -163,8 +164,8 @@ jobs:
       - name: matrix registry check
         if: ${{ !cancelled() && (steps.build-archive.outcome == 'success' || steps.build-only.outcome == 'success') }}
         run: target/debug/xtask matrix-check
-      # `hya` loads its five lockstep first-party native bundles from
-      # `<exe-dir>/deps/libhya_*.so`, so ship them alongside `hya` and `xtask`.
+      # `hya` loads its ten lockstep first-party native bundles from
+      # `<exe-dir>/deps/libhya_*.so`, so ship them alongside `hya`, `hya-migration`, and `xtask`.
       - name: stage prebuilt binaries
         shell: bash
         run: |
@@ -172,7 +173,7 @@ jobs:
           stage="${RUNNER_TEMP}/ci-bins"
           rm -rf "$stage"
           mkdir -p "$stage/deps"
-          cp target/debug/hya target/debug/xtask "$stage/"
+          cp target/debug/hya target/debug/hya-migration target/debug/xtask "$stage/"
           for stem in hya_hashline hya_coding_extras hya_multi_agent hya_agent_channels hya_network hya_compaction hya_plan hya_goal hya_loop hya_workflow_bundle; do
             pkg="${stem//_/-}"
             if [[ -f "target/debug/deps/lib${stem}.so" ]]; then
@@ -248,15 +249,16 @@ jobs:
           name: ci-bins
           path: ${{ runner.temp }}/ci-bins
       - name: make prebuilt binaries executable
-        run: chmod +x "${RUNNER_TEMP}/ci-bins/hya" "${RUNNER_TEMP}/ci-bins/xtask" "${RUNNER_TEMP}/ci-bins/deps/"libhya_*.so
+        run: chmod +x "${RUNNER_TEMP}/ci-bins/hya" "${RUNNER_TEMP}/ci-bins/hya-migration" "${RUNNER_TEMP}/ci-bins/xtask" "${RUNNER_TEMP}/ci-bins/deps/"libhya_*.so
       - name: download nextest archive
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ci-nextest-archive
           path: ${{ runner.temp }}
-      - name: agent process e2e (Track P)
+      - name: agent process e2e (Track P, including bare, selective disable, and hya-migration)
         env:
           HYA_E2E_BACKEND_BIN: ${{ runner.temp }}/ci-bins/hya
+          HYA_E2E_MIGRATION_BIN: ${{ runner.temp }}/ci-bins/hya-migration
         run: |
           cargo-nextest nextest run \
             --archive-file "${RUNNER_TEMP}/ci-nextest-archive.tar.zst" \
@@ -299,6 +301,10 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: packages/hya-tui-sdk
         run: bun run typecheck && bun test
+      - name: hya-code-mode unit tests
+        if: ${{ !cancelled() }}
+        working-directory: packages/hya-code-mode
+        run: bun test
 
   tui:
     needs: [changes, build-bin]

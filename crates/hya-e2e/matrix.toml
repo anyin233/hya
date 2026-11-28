@@ -530,3 +530,21 @@ id = "T2.55"
 title = "ACP editor stdio and session MCP lifetime"
 track = "P"
 path = "crates/hya-e2e/tests/it/p03_mcp_and_custom_resources.rs"
+
+[[scenario]]
+id = "T2.56"
+title = "pure hya --bare exec and serve with zero bundles/builtin present"
+track = "P"
+path = "crates/hya-e2e/tests/it/p44_v2_bare_bundles_and_migration.rs"
+
+[[scenario]]
+id = "T2.57"
+title = "selective builtin bundle disable (hya/hashline bare fallback, hya/network air-gap, hya/multi-agent code-mode gating)"
+track = "P"
+path = "crates/hya-e2e/tests/it/p44_v2_bare_bundles_and_migration.rs"
+
+[[scenario]]
+id = "T2.58"
+title = "hya-migration CLI E2E: check -> run -> v2 hya replay -> SHA-256 verified rollback"
+track = "P"
+path = "crates/hya-e2e/tests/it/p44_v2_bare_bundles_and_migration.rs"
