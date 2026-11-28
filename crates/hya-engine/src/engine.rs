@@ -771,7 +771,7 @@ impl SessionEngine {
     /// Build a lightweight [`hya_runtime_abi::HostRuntime`] backed by this
     /// engine's store, bus, turn gate, and reviver handles.
     #[must_use]
-    pub(crate) fn channel_host_runtime(&self) -> Arc<dyn hya_runtime_abi::HostRuntime> {
+    pub fn channel_host_runtime(&self) -> Arc<dyn hya_runtime_abi::HostRuntime> {
         Arc::new(channel_host::EngineChannelsHostRuntime {
             store: self.store.clone(),
             bus: self.bus.clone(),

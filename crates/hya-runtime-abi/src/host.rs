@@ -548,11 +548,33 @@ pub struct StagedMailAck {
     pub consumed_incoming: bool,
 }
 
+/// Result of archiving a session subtree.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionTreeArchive {
+    /// Whether an active turn of the requested session was cancelled.
+    pub cancelled_turn: bool,
+    /// Sessions newly archived below the requested session, descendants first.
+    pub descendants: Vec<SessionId>,
+}
+
 /// Session creation and turn-driving capability without linking `hya-engine`.
 #[async_trait]
 pub trait HostTurnRunner: Send + Sync {
     /// Create a session according to `request` without starting a turn.
     async fn spawn_session(&self, request: TurnSpawnRequest) -> Result<SessionId, HostError>;
+
+    /// Return direct child IDs in creation order, including archived children.
+    async fn list_child_sessions(&self, _parent: SessionId) -> Result<Vec<SessionId>, HostError> {
+        Err(HostError::Unavailable("session tree is unavailable".into()))
+    }
+
+    /// Archive this session and its descendants.
+    async fn archive_session_tree(
+        &self,
+        _root: SessionId,
+    ) -> Result<SessionTreeArchive, HostError> {
+        Err(HostError::Unavailable("session tree is unavailable".into()))
+    }
 
     /// Run a turn on an existing session and await its [`TurnOutcome`].
     async fn run_turn(
@@ -582,6 +604,7 @@ pub trait HostTurnRunner: Send + Sync {
     async fn turn_status(&self, session: SessionId) -> Result<TurnStatus, HostError>;
 
     /// Preflight team depth and capacity budget for `wanted` activations under `parent`.
+    // Adapter: removed in CHR-47.
     async fn preflight_member_capacity(
         &self,
         _parent: SessionId,
@@ -592,6 +615,7 @@ pub trait HostTurnRunner: Send + Sync {
 
     /// Acquire a root-session driver activity guard keeping the resident team active
     /// until the returned handle is dropped.
+    // Adapter: removed in CHR-47.
     async fn begin_root_activity(
         &self,
         _parent: SessionId,
@@ -600,6 +624,7 @@ pub trait HostTurnRunner: Send + Sync {
     }
 
     /// Spawn a parked managed resident child member under `request.parent`.
+    // Adapter: removed in CHR-47.
     async fn spawn_managed_member(
         &self,
         _request: ManagedMemberSpawnRequest,
@@ -610,6 +635,7 @@ pub trait HostTurnRunner: Send + Sync {
     }
 
     /// Activate a parked managed resident child member and await settlement.
+    // Adapter: removed in CHR-47.
     async fn activate_managed_member(
         &self,
         _request: ManagedMemberActivateRequest,
@@ -621,11 +647,13 @@ pub trait HostTurnRunner: Send + Sync {
     }
 
     /// End a managed resident child member and release its live capacity slot.
+    // Adapter: removed in CHR-47.
     async fn end_managed_member(&self, _parent: SessionId, _handle: &str) -> Result<(), HostError> {
         Ok(())
     }
 
     /// Resolve the effective channel policy snapshot for `session`, if any.
+    // Adapter: removed in CHR-47.
     async fn session_channel_policy(
         &self,
         _session: SessionId,
@@ -634,15 +662,18 @@ pub trait HostTurnRunner: Send + Sync {
     }
 
     /// Return the in-memory acknowledged inbox watermark for `session`, if tracked.
+    // Adapter: removed in CHR-47.
     fn mail_mark(&self, _session: SessionId) -> Option<u64> {
         None
     }
 
     /// Advance the in-memory mail watermark for `session` and notify listeners.
+    // Adapter: removed in CHR-47.
     fn notify_mail_consumed(&self, _session: SessionId, _mark: u64, _consumed_incoming: bool) {}
 
     /// Return `true` when `handle` under `root` is currently parked by an explicit
     /// user stop/cancellation and should not receive in-flight resident wakeups.
+    // Adapter: removed in CHR-47.
     fn is_member_stopped_by_user(&self, _root: SessionId, _handle: &str) -> bool {
         false
     }
@@ -655,17 +686,20 @@ pub trait HostTurnRunner: Send + Sync {
     }
 
     /// Return the active fenced actor claim for the running turn on `session`, if any.
+    // Adapter: removed in CHR-47.
     fn active_actor_claim(&self, _session: SessionId) -> Option<ActorClaim> {
         None
     }
 
     /// Stage a `mail_consumed` acknowledgment to be committed atomically with the
     /// current tool result on `session`.
+    // Adapter: removed in CHR-47.
     fn stage_mail_steer_ack(&self, _session: SessionId, _ack: StagedMailAck) {}
 
     /// Revive an archived direct child member and deliver its pending DM mail.
     ///
     /// Returns the delivered recipient count (`1`) on success.
+    // Adapter: removed in CHR-47.
     async fn revive_archived_member_with_mail(
         &self,
         _request: MemberMailRevivalRequest,
@@ -677,6 +711,7 @@ pub trait HostTurnRunner: Send + Sync {
 
     /// Archive a subagent session on the user's behalf, cancelling any active
     /// turn and archiving live descendants first.
+    // Adapter: removed in CHR-47.
     async fn archive_subagent(
         &self,
         _child: SessionId,
@@ -687,6 +722,7 @@ pub trait HostTurnRunner: Send + Sync {
     }
 
     /// Steer a subagent session with a user message delivered on its parent DM.
+    // Adapter: removed in CHR-47.
     async fn steer_subagent(
         &self,
         _child: SessionId,

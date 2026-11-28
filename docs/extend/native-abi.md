@@ -326,7 +326,7 @@ pub trait HostRuntime: Send + Sync {
 | --- | --- | --- |
 | **`HostSessionStore`** | `session_exists`, `read_events(session, after_seq, limit)`, `append_events(session, claim, events)`, `append_extension_event(session, bundle, kind, payload, claim)`, `read_projection(session)`, `read_extension_state(session, bundle)`, `session_metadata(session)`, `list_sessions(filter)`, `runtime_owner_id()`, `find_sessions_with_extension(bundle, kind)` | `SessionSummaryMeta`, `SessionListFilter`, `Envelope`, `Event`, `Projection` |
 | **`HostBundleStorage`** | Scoped KV (`bundle_state` table): `get_state`, `put_state(bundle, scope, key, value, expected_version)` (optimistic CAS), `delete_state`, `list_state(bundle, scope, prefix)`. Fenced leases (`bundle_claim` table): `acquire_claim`, `renew_claim`, `release_claim`, `read_claim`, `list_claims`. | `BundleStateEntry`, `BundleClaimRequest`, `BundleClaimLease` |
-| **`HostTurnRunner`** | Core turns: `spawn_session`, `run_turn(request, cancel)`, `spawn_session_and_run`, `steer_turn`, `cancel_turn`, `turn_status`. Managed resident members & channels: `preflight_member_capacity`, `begin_root_activity`, `spawn_managed_member`, `activate_managed_member`, `end_managed_member`, `session_channel_policy`, `mail_mark`, `notify_mail_consumed`, `is_member_stopped_by_user`, `is_mail_steer_suppressed`, `active_actor_claim`, `stage_mail_steer_ack`, `revive_archived_member_with_mail`, `archive_subagent`, `steer_subagent`. | `TurnStartRequest`, `TurnSpawnRequest`, `TurnOutcome`, `TurnStatus`, `ManagedMemberHandle`, `ManagedMemberSpawnRequest`, `ManagedMemberActivateRequest`, `ManagedMemberActivationOutcome`, `MemberMailRevivalRequest`, `StagedMailAck`, `TurnRouteOutcome`, `TurnRouteFailureClass` |
+| **`HostTurnRunner`** | Session trees: `spawn_session`, `list_child_sessions`, `archive_session_tree`. Core turns: `run_turn(request, cancel)`, `spawn_session_and_run`, `steer_turn`, `cancel_turn`, `turn_status`. Managed resident members & channels: `preflight_member_capacity`, `begin_root_activity`, `spawn_managed_member`, `activate_managed_member`, `end_managed_member`, `session_channel_policy`, `mail_mark`, `notify_mail_consumed`, `is_member_stopped_by_user`, `is_mail_steer_suppressed`, `active_actor_claim`, `stage_mail_steer_ack`, `revive_archived_member_with_mail`, `archive_subagent`, `steer_subagent`. | `TurnStartRequest`, `TurnSpawnRequest`, `TurnOutcome`, `TurnStatus`, `ManagedMemberHandle`, `ManagedMemberSpawnRequest`, `ManagedMemberActivateRequest`, `ManagedMemberActivationOutcome`, `MemberMailRevivalRequest`, `StagedMailAck`, `TurnRouteOutcome`, `TurnRouteFailureClass` |
 | **`HostModelCaller`** | `complete(request, cancel)`, `stream(request, cancel)`, `compact_window(model, messages)`, `model_window(model)`, `resolve_model_route(entries)` | `ModelCallRequest`, `ModelCallResponse`, `ModelToolCall`, `ModelStreamChunk`, `ModelWindowInfo`, `ModelRouteEntry`, `ResolvedModelRoute`, `ResolvedModelRouteCandidate` |
 | **`HostEventBus`** | `publish(envelope)`, `subscribe() -> broadcast::Receiver<Envelope>`, `publish_extension(session, bundle, kind, payload)` | `Envelope` |
 | **`HostCatalogReader`** | `list_agents(session)`, `get_agent(name, session)`, `list_skills(session)`, `list_bundles()`, `get_bundle(id)`, `bundle_config(bundle_id)`, `global_config()`, `resolve_scope_catalog(session, directory)`, `authorize_workflow_agent(session, caller, agent)` | `BundleCatalogSummary`, `ScopeCatalogSnapshot`, `AgentDef`, `PreparedAgent`, `SkillCatalogEntry`, `Bundle` |
@@ -348,6 +348,19 @@ For example, subscribe to a bundle's `"ready"` key, copy the value from
 `borrow_and_update()`, and await `changed()` for a later value. Release the
 borrow before waiting or writing to the key.
 
+### Session trees
+
+A bundle can bind an agent to a child session with
+`TurnSpawnRequest { parent: Some(lead), agent, .. }`. For example, the loop
+driver starts each worker iteration with `spawn_session_and_run` and passes
+the lead session as its parent.
+
+| Interface | Contract | Current consumer |
+| --- | --- | --- |
+| `turn_runner().spawn_session(request: TurnSpawnRequest)` and `spawn_session_and_run(request, cancel)` | The first returns `Result<SessionId, HostError>`. The second waits for a `Result<TurnOutcome, HostError>`. Both record the request's `parent: Option<SessionId>` and `agent: AgentName`. | `hya/loop` creates and runs an iteration worker under its lead. |
+| `turn_runner().list_child_sessions(parent: SessionId)` | Returns `Result<Vec<SessionId>, HostError>` with direct children in creation order, including archived children. A parent with no rows has an empty list. | Subtree archival uses the same parent-linked traversal as child listing. |
+| `turn_runner().archive_session_tree(root: SessionId)` | Returns `Result<SessionTreeArchive, HostError>` with `cancelled_turn: bool` for the requested session and `descendants: Vec<SessionId>` for sessions newly archived below it, descendants first. Ordinary sessions record `SessionArchived` and let active turns finish. Registered members use the supervisor's archival path, including cancellation and handoff, and retain the supervisor's repeated-archive errors. | The `hya/multi-agent` client archive action calls the old ABI adapter, which uses this operation and converts session IDs to handles. |
+
 ### Turn admission
 
 Register a native hook that lists `HookPoint::TurnAdmit` under the name
@@ -364,6 +377,18 @@ signal readiness without starting another turn on the current session.
 
 The hook is available to native bundles. The JSON-RPC plugin hook list remains
 defined by the plugin wire contract.
+
+### Legacy host methods
+
+The CHR-47 removals still expose resident capacity, root activity, managed
+spawn/activation/ending, and actor claims for older callers. Those
+operations carry supervisor scheduling or fencing rules beyond session
+creation and turn execution. Channel policies still come from the bound
+agent. Mail marks, consumption, and user-stop checks read or update the
+supervisor synchronously. Mail revival and steering still deliver through
+the parent DM. The unread-mail hook stages its compatibility acknowledgment
+at `tool.execute.after` for the tool-result transaction. Root deletion still
+waits for member teardown before deleting the session tree.
 
 ### 3.4 Native Extension Traits
 

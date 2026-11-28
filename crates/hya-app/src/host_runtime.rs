@@ -30,7 +30,8 @@ use hya_runtime_abi::{
     ManagedMemberSpawnRequest, MemberMailRevivalRequest, ModelCallRequest, ModelCallResponse,
     ModelRouteEntry, ModelStreamChunk, ModelToolCall, ModelWindowInfo, NativeDriver,
     ResolvedModelRoute, ResolvedModelRouteCandidate, ScopeCatalogSnapshot, SessionListFilter,
-    SessionSummaryMeta, StagedMailAck, TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus,
+    SessionSummaryMeta, SessionTreeArchive, StagedMailAck, TurnOutcome, TurnSpawnRequest,
+    TurnStartRequest, TurnStatus,
 };
 use hya_store::SessionStore;
 use hya_tool::{AgentDef, ReportOutcome, SkillCatalogEntry, SpawnMember};
@@ -982,6 +983,28 @@ impl HostTurnRunner for AppHostRuntime {
             .map_err(map_core_error)
     }
 
+    async fn list_child_sessions(&self, parent: SessionId) -> Result<Vec<SessionId>, HostError> {
+        self.on_host(async move {
+            self.engine()?
+                .channel_host_runtime()
+                .turn_runner()
+                .list_child_sessions(parent)
+                .await
+        })
+        .await
+    }
+
+    async fn archive_session_tree(&self, root: SessionId) -> Result<SessionTreeArchive, HostError> {
+        self.on_host(async move {
+            self.engine()?
+                .channel_host_runtime()
+                .turn_runner()
+                .archive_session_tree(root)
+                .await
+        })
+        .await
+    }
+
     async fn run_turn(
         &self,
         request: TurnStartRequest,
@@ -1123,6 +1146,7 @@ impl HostTurnRunner for AppHostRuntime {
         Ok(TurnStatus::Idle)
     }
 
+    // Adapter: removed in CHR-47.
     async fn preflight_member_capacity(
         &self,
         parent: SessionId,
@@ -1160,6 +1184,7 @@ impl HostTurnRunner for AppHostRuntime {
         .await
     }
 
+    // Adapter: removed in CHR-47.
     async fn begin_root_activity(
         &self,
         parent: SessionId,
@@ -1175,6 +1200,7 @@ impl HostTurnRunner for AppHostRuntime {
         .await
     }
 
+    // Adapter: removed in CHR-47.
     async fn spawn_managed_member(
         &self,
         request: ManagedMemberSpawnRequest,
@@ -1216,6 +1242,7 @@ impl HostTurnRunner for AppHostRuntime {
         .await
     }
 
+    // Adapter: removed in CHR-47.
     async fn activate_managed_member(
         &self,
         request: ManagedMemberActivateRequest,
@@ -1305,6 +1332,7 @@ impl HostTurnRunner for AppHostRuntime {
         .await
     }
 
+    // Adapter: removed in CHR-47.
     async fn end_managed_member(&self, parent: SessionId, handle: &str) -> Result<(), HostError> {
         let handle = handle.to_owned();
         self.on_host(async move {
@@ -1322,6 +1350,7 @@ impl HostTurnRunner for AppHostRuntime {
         .await
     }
 
+    // Adapter: removed in CHR-47.
     async fn session_channel_policy(
         &self,
         session: SessionId,
@@ -1332,18 +1361,21 @@ impl HostTurnRunner for AppHostRuntime {
             .and_then(|engine| engine.session_channel_policy(session)))
     }
 
+    // Adapter: removed in CHR-47.
     fn mail_mark(&self, session: SessionId) -> Option<u64> {
         self.engine()
             .ok()
             .and_then(|engine| engine.mail_mark(session))
     }
 
+    // Adapter: removed in CHR-47.
     fn notify_mail_consumed(&self, session: SessionId, mark: u64, consumed_incoming: bool) {
         if let Ok(engine) = self.engine() {
             engine.notify_mail_consumed(session, Some(mark), consumed_incoming);
         }
     }
 
+    // Adapter: removed in CHR-47.
     fn is_member_stopped_by_user(&self, root: SessionId, handle: &str) -> bool {
         self.engine()
             .ok()
@@ -1357,12 +1389,14 @@ impl HostTurnRunner for AppHostRuntime {
             .is_some_and(|engine| engine.is_mail_steer_suppressed(session))
     }
 
+    // Adapter: removed in CHR-47.
     fn stage_mail_steer_ack(&self, session: SessionId, ack: StagedMailAck) {
         if let Ok(engine) = self.engine() {
             engine.stage_mail_steer_ack(session, ack);
         }
     }
 
+    // Adapter: removed in CHR-47.
     async fn revive_archived_member_with_mail(
         &self,
         request: MemberMailRevivalRequest,
@@ -1377,17 +1411,23 @@ impl HostTurnRunner for AppHostRuntime {
         .await
     }
 
+    // Adapter: removed in CHR-47.
     async fn archive_subagent(
         &self,
         child: SessionId,
     ) -> Result<hya_tool::ArchiveReceipt, HostError> {
         self.on_host(async move {
             let engine = self.engine()?;
-            engine.archive_subagent(child).await.map_err(map_core_error)
+            engine
+                .channel_host_runtime()
+                .turn_runner()
+                .archive_subagent(child)
+                .await
         })
         .await
     }
 
+    // Adapter: removed in CHR-47.
     async fn steer_subagent(
         &self,
         child: SessionId,

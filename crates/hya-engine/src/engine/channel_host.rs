@@ -6,7 +6,7 @@
 //! standalone engine tests; full `hya-app` runtimes install the complete
 //! `AppHostRuntime` honoring `BuiltinBundleSelection`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock, Weak};
 
 use async_trait::async_trait;
@@ -21,7 +21,7 @@ use hya_runtime_abi::{
     HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry, HostModelCaller,
     HostRuntime, HostSessionStore, HostTurnRunner, MemberMailRevivalRequest, ModelCallRequest,
     ModelCallResponse, ModelStreamChunk, ModelWindowInfo, SessionListFilter, SessionSummaryMeta,
-    StagedMailAck, TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus,
+    SessionTreeArchive, StagedMailAck, TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus,
 };
 use hya_store::{BundleClaim, SessionStore};
 use hya_tool::{AgentDef, SkillCatalogEntry};
@@ -114,6 +114,18 @@ pub(crate) struct EngineChannelsHostRuntime {
     pub(crate) turn_gate: Arc<TurnGate>,
 }
 
+struct SessionTreeSnapshot {
+    root_exists: bool,
+    children: HashMap<SessionId, Vec<SessionId>>,
+    archived: HashSet<SessionId>,
+}
+
+impl SessionTreeSnapshot {
+    fn children(&self, parent: SessionId) -> &[SessionId] {
+        self.children.get(&parent).map_or(&[], Vec::as_slice)
+    }
+}
+
 impl EngineChannelsHostRuntime {
     fn supervisor(&self) -> Option<Arc<ResidentSupervisor>> {
         self.reviver
@@ -121,6 +133,52 @@ impl EngineChannelsHostRuntime {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .and_then(Weak::upgrade)
+    }
+
+    async fn read_tree(&self, root: SessionId) -> Result<SessionTreeSnapshot, HostError> {
+        let events = self
+            .store
+            .replay_tree(root)
+            .await
+            .map_err(|error| HostError::Storage(error.to_string()))?;
+        let mut tree = SessionTreeSnapshot {
+            root_exists: false,
+            children: HashMap::new(),
+            archived: HashSet::new(),
+        };
+        for envelope in events {
+            match envelope.event {
+                Event::SessionCreated {
+                    session, parent, ..
+                } => {
+                    tree.root_exists |= session == root;
+                    if let Some(parent) = parent {
+                        tree.children.entry(parent).or_default().push(session);
+                    }
+                }
+                Event::SessionArchived { session, .. } => {
+                    tree.archived.insert(session);
+                }
+                Event::SessionUnarchived { session } => {
+                    tree.archived.remove(&session);
+                }
+                _ => {}
+            }
+        }
+        Ok(tree)
+    }
+
+    async fn read_root_projection(&self, root: SessionId) -> Result<Arc<Projection>, HostError> {
+        self.store
+            .read_projection_shared(root)
+            .await
+            .map_err(|error| HostError::Storage(error.to_string()))
+    }
+
+    fn supervisor_for_archive(&self) -> Result<Arc<ResidentSupervisor>, HostError> {
+        self.supervisor().ok_or_else(|| {
+            HostError::InvalidInput("subagents are not supervised by this process".into())
+        })
     }
 
     async fn session_lineage(&self, session: SessionId) -> Result<(SessionId, u32), HostError> {
@@ -488,6 +546,112 @@ impl HostTurnRunner for EngineChannelsHostRuntime {
         ))
     }
 
+    async fn list_child_sessions(&self, parent: SessionId) -> Result<Vec<SessionId>, HostError> {
+        Ok(self.read_tree(parent).await?.children(parent).to_vec())
+    }
+
+    async fn archive_session_tree(
+        &self,
+        session: SessionId,
+    ) -> Result<SessionTreeArchive, HostError> {
+        let (root, depth) = self.session_lineage(session).await?;
+        let projection = self.read_root_projection(root).await?;
+        let projection = hya_tool::extension::team_projection(&projection);
+        let registered = projection
+            .roster
+            .values()
+            .map(|entry| entry.session)
+            .collect::<HashSet<_>>();
+        let closed = projection
+            .archived
+            .values()
+            .map(|entry| entry.session)
+            .collect::<HashSet<_>>();
+        if depth > 0 && (registered.contains(&session) || closed.contains(&session)) {
+            let receipt = self
+                .supervisor_for_archive()?
+                .archive_member_for_user(root, &session.to_string())
+                .await
+                .map_err(map_core_err)?;
+            let projection = self.read_root_projection(root).await?;
+            let projection = hya_tool::extension::team_projection(&projection);
+            let descendants = receipt
+                .descendants
+                .iter()
+                .map(|handle| {
+                    projection
+                        .archived
+                        .get(handle)
+                        .map(|entry| entry.session)
+                        .or_else(|| projection.roster.get(handle).map(|entry| entry.session))
+                        .ok_or_else(|| {
+                            HostError::Internal(format!(
+                                "archived session for `{handle}` is missing"
+                            ))
+                        })
+                })
+                .collect::<Result<_, _>>()?;
+            return Ok(SessionTreeArchive {
+                cancelled_turn: receipt.cancelled_turn,
+                descendants,
+            });
+        }
+
+        let tree = self.read_tree(session).await?;
+        if !tree.root_exists {
+            return Err(HostError::NotFound(format!(
+                "session `{session}` was not found"
+            )));
+        }
+        let mut sessions = vec![session];
+        let mut index = 0;
+        while index < sessions.len() {
+            sessions.extend_from_slice(tree.children(sessions[index]));
+            index += 1;
+        }
+
+        let mut descendants = Vec::new();
+        let mut events = Vec::new();
+        let stamp = serde_json::Number::from(now_millis().max(1));
+        // Walking in reverse visits descendants before their parent.
+        for current in sessions.into_iter().rev() {
+            if closed.contains(&current) || tree.archived.contains(&current) {
+                continue;
+            }
+            if current != root && registered.contains(&current) {
+                self.supervisor_for_archive()?
+                    .archive_member_for_user(root, &current.to_string())
+                    .await
+                    .map_err(map_core_err)?;
+            } else {
+                events.push((
+                    current,
+                    Event::SessionArchived {
+                        session: current,
+                        archived: stamp.clone(),
+                    },
+                ));
+            }
+            if current != session {
+                descendants.push(current);
+            }
+        }
+        if !events.is_empty() {
+            let envelopes = self
+                .store
+                .append_events_batch(events)
+                .await
+                .map_err(|error| HostError::Storage(error.to_string()))?;
+            for envelope in envelopes {
+                self.bus.publish(envelope);
+            }
+        }
+        Ok(SessionTreeArchive {
+            cancelled_turn: false,
+            descendants,
+        })
+    }
+
     async fn run_turn(
         &self,
         _request: TurnStartRequest,
@@ -530,6 +694,7 @@ impl HostTurnRunner for EngineChannelsHostRuntime {
         }
     }
 
+    // Adapter: removed in CHR-47.
     async fn session_channel_policy(
         &self,
         session: SessionId,
@@ -542,15 +707,18 @@ impl HostTurnRunner for EngineChannelsHostRuntime {
             .copied())
     }
 
+    // Adapter: removed in CHR-47.
     fn mail_mark(&self, session: SessionId) -> Option<u64> {
         self.turn_gate.mail_mark(session)
     }
 
+    // Adapter: removed in CHR-47.
     fn notify_mail_consumed(&self, session: SessionId, mark: u64, consumed_incoming: bool) {
         self.turn_gate
             .notify_mail_consumed(session, Some(mark), consumed_incoming);
     }
 
+    // Adapter: removed in CHR-47.
     fn is_member_stopped_by_user(&self, root: SessionId, handle: &str) -> bool {
         self.supervisor()
             .is_some_and(|sup| sup.stopped_by_user(root, handle))
@@ -566,6 +734,7 @@ impl HostTurnRunner for EngineChannelsHostRuntime {
         ) == Some(Value::Bool(true))
     }
 
+    // Adapter: removed in CHR-47.
     fn stage_mail_steer_ack(&self, session: SessionId, ack: StagedMailAck) {
         self.staged_mail_acks
             .write()
@@ -573,6 +742,7 @@ impl HostTurnRunner for EngineChannelsHostRuntime {
             .insert(session, ack);
     }
 
+    // Adapter: removed in CHR-47.
     async fn revive_archived_member_with_mail(
         &self,
         request: MemberMailRevivalRequest,
@@ -604,6 +774,7 @@ impl HostTurnRunner for EngineChannelsHostRuntime {
             .map_err(map_core_err)
     }
 
+    // Adapter: removed in CHR-47.
     async fn archive_subagent(
         &self,
         child: SessionId,
@@ -615,17 +786,50 @@ impl HostTurnRunner for EngineChannelsHostRuntime {
                     .to_string(),
             ));
         }
-        let Some(supervisor) = self.supervisor() else {
-            return Err(HostError::InvalidInput(
-                "subagents are not supervised by this process".to_string(),
-            ));
-        };
-        supervisor
-            .archive_member_for_user(root, &child.to_string())
-            .await
-            .map_err(map_core_err)
+        self.supervisor_for_archive()?;
+        let projection = self.read_root_projection(root).await?;
+        let target = crate::resident::resolve_member_target(
+            &projection,
+            root,
+            hya_proto::ROOT_HANDLE,
+            &child.to_string(),
+        )
+        .map_err(map_core_err)?;
+        let archived = self.archive_session_tree(child).await?;
+        let projection = self.read_root_projection(root).await?;
+        let projection = hya_tool::extension::team_projection(&projection);
+        let descendants = archived
+            .descendants
+            .into_iter()
+            .map(|id| {
+                projection
+                    .archived
+                    .values()
+                    .find(|entry| entry.session == id)
+                    .map(|entry| entry.handle.clone())
+                    .or_else(|| {
+                        projection
+                            .roster
+                            .values()
+                            .find(|entry| entry.session == id)
+                            .map(|entry| entry.handle.clone())
+                    })
+                    .ok_or_else(|| {
+                        HostError::Internal(format!(
+                            "archived session handle for `{id}` is missing"
+                        ))
+                    })
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(hya_tool::ArchiveReceipt {
+            handle: target.handle,
+            session: child,
+            cancelled_turn: archived.cancelled_turn,
+            descendants,
+        })
     }
 
+    // Adapter: removed in CHR-47.
     async fn steer_subagent(
         &self,
         child: SessionId,
@@ -949,6 +1153,135 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+
+    #[tokio::test]
+    async fn session_tree_lists_direct_children_and_archives_the_subtree() {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let (permission, _rx) =
+            hya_tool::PermissionPlane::new(hya_tool::PermissionRules::default());
+        let engine = crate::SessionEngine::new(
+            store,
+            Arc::new(hya_provider::ProviderRouter::new()),
+            crate::test_support::runtime(hya_tool_loader::builtins()),
+            permission,
+            EventBus::default(),
+        );
+        let create = |parent| {
+            engine.create(crate::CreateSession {
+                parent,
+                agent: AgentName::new("build"),
+                model: ModelRef::new("fake"),
+                project: None,
+                workdir: "/tmp".into(),
+                kind: hya_proto::SessionKind::Project,
+            })
+        };
+        let root = create(None).await.unwrap();
+        let child = create(Some(root)).await.unwrap();
+        let leaf = create(Some(child)).await.unwrap();
+        let sibling = create(Some(root)).await.unwrap();
+        let host = engine.channel_host_runtime();
+        let turns = host.turn_runner();
+
+        assert_eq!(
+            turns.list_child_sessions(root).await.unwrap(),
+            vec![child, sibling]
+        );
+        assert_eq!(turns.list_child_sessions(child).await.unwrap(), vec![leaf]);
+        assert_eq!(
+            turns.archive_session_tree(child).await.unwrap(),
+            SessionTreeArchive {
+                cancelled_turn: false,
+                descendants: vec![leaf]
+            },
+        );
+        for (session, archived) in [(root, false), (child, true), (leaf, true), (sibling, false)] {
+            assert_eq!(
+                engine
+                    .read_projection_shared(session)
+                    .await
+                    .unwrap()
+                    .session
+                    .is_archived(),
+                archived
+            );
+        }
+        assert_eq!(
+            turns.list_child_sessions(root).await.unwrap(),
+            vec![child, sibling]
+        );
+        assert_eq!(
+            turns.archive_session_tree(child).await.unwrap(),
+            SessionTreeArchive::default()
+        );
+    }
+
+    #[tokio::test]
+    async fn archive_adapter_keeps_registered_handles_for_the_subtree() {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let (permission, _rx) =
+            hya_tool::PermissionPlane::new(hya_tool::PermissionRules::default());
+        let engine = Arc::new(crate::SessionEngine::new(
+            store,
+            Arc::new(
+                hya_provider::ProviderRouter::new()
+                    .with(Arc::new(hya_provider::DevProvider::new())),
+            ),
+            crate::test_support::runtime(hya_tool_loader::builtins()),
+            permission,
+            EventBus::default(),
+        ));
+        let root = engine
+            .create(crate::CreateSession {
+                parent: None,
+                agent: AgentName::new("hya-main"),
+                model: ModelRef::new("hya/offline"),
+                project: None,
+                workdir: "/tmp".into(),
+                kind: hya_proto::SessionKind::Project,
+            })
+            .await
+            .unwrap();
+        let owner = ResidentSupervisor::start(Arc::clone(&engine));
+        let scout = crate::AgentSpec {
+            name: AgentName::new("hya-scout"),
+            model: ModelRef::new("hya/offline"),
+            workdir: "/tmp".into(),
+            system_prompt: String::new(),
+            reasoning: None,
+        };
+        let binding = engine.bind_runtime(&scout.workdir).unwrap();
+        let resources = binding.agent_resource_policy(scout.name.as_str()).unwrap();
+        let resolved = (binding, Arc::from([]), resources, None);
+        let (child, handle, _) = owner
+            .spawn_resident_parked(
+                root,
+                scout.clone(),
+                resolved.clone(),
+                "parent".into(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let (leaf, leaf_handle, _) = owner
+            .spawn_resident_parked(child, scout, resolved, "child".into(), None, None)
+            .await
+            .unwrap();
+
+        let host = engine.channel_host_runtime();
+        let turns = host.turn_runner();
+        assert_eq!(turns.list_child_sessions(child).await.unwrap(), vec![leaf]);
+        let receipt = turns.archive_subagent(child).await.unwrap();
+        assert_eq!(receipt.session, child);
+        assert_eq!(receipt.handle, handle);
+        assert_eq!(receipt.descendants, vec![leaf_handle]);
+        assert!(!receipt.cancelled_turn);
+        let error = turns.archive_subagent(child).await.unwrap_err();
+        assert!(
+            matches!(error, HostError::InvalidInput(reason) if reason.contains("already archived"))
+        );
+    }
 
     #[tokio::test]
     async fn transient_state_watches_only_its_bundle_session_and_key() {

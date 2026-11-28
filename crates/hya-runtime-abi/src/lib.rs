@@ -49,8 +49,8 @@ pub use host::{
     MemberMailRevivalRequest, ModelCallRequest, ModelCallResponse, ModelRouteEntry,
     ModelStreamChunk, ModelToolCall, ModelWindowInfo, ResolvedModelRoute,
     ResolvedModelRouteCandidate, ScopeCatalogSnapshot, SessionListFilter, SessionSummaryMeta,
-    StagedMailAck, TurnOutcome, TurnRouteFailureClass, TurnRouteOutcome, TurnSpawnRequest,
-    TurnStartRequest, TurnStatus,
+    SessionTreeArchive, StagedMailAck, TurnOutcome, TurnRouteFailureClass, TurnRouteOutcome,
+    TurnSpawnRequest, TurnStartRequest, TurnStatus,
 };
 /// HTTP method and mount scope of a [`NativeApiEndpoint`].
 pub use hya_bundle::{ApiMethod, ApiScope};
