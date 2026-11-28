@@ -61,7 +61,7 @@ All 14 bundles in `bundles/builtin/` (10 native ABI v2 bundles—4 of which are 
 | `bundles/builtin/goal` | `hya/goal` | **Native ABI v2** (`cdylib`) | the `goal` driver (`drivers`, `hya/goal:goal`) + `GoalDriverService` (`services`), 3 goal skills (`goal-contract`, `guided-goal`, `evaluator-prompt`), and 2 private agents (`hya-goal-guide`, `hya-goal-verifier`) | **Full catalog + native ABI v2** via `hya-tool-loader` & `HostRuntime::goal_driver()`; skipped in `--bare` (`hya -p` errors cleanly when disabled) |
 | `bundles/builtin/loop` | `hya/loop` | **Native ABI v2** (`cdylib`) | the `loop` driver (`hya/loop:loop`), `LoopService` (`capabilities: [services, drivers]`), and `loop-verifier-prompt` / `loop-planner-prompt` skills | **Full catalog + native ABI v2** via `hya-tool-loader` & `HostRuntime::loop_driver()`; skipped in `--bare` (`hya loop` errors cleanly when disabled) |
 | `bundles/builtin/workflow` | `hya/workflow` | **Native ABI v2** (`cdylib`) + **TUI v2** | `workflow` tool, `WorkflowService` (`services`) DAG execution & durable replay, `ProjectionReducer` (`extensions["hya/workflow"]`), `NativeBundleApiHandler` (`apis`: `GET /workflows`, `GET /state`, `POST /command`), built-in default workflow (`workflows/plan-impl-review.hya.md`) + 3 private stage agents (`hya-pir-{planner,implementer,reviewer}`), and `@hya/tui-sdk` v2 `workflows` pane + `/workflow` slash commands | **Full catalog + native ABI v2 + TUI v2** via `hya-tool-loader` & `hya-app`; skipped in `--bare` (`hya workflow` errors cleanly when disabled) |
-| `bundles/builtin/core-agents` | `hya/core-agents` | **Static** | 2 built-in agents (`hya-main`, `hya-title`) + `policy.yaml` | **Full required** via `hya-engine::builtin_agents` |
+| `bundles/builtin/core-agents` | `hya/core-agents` | **Static** | 2 agents: `hya-main` (`default_agent`, `can_spawn: ["*"]`) and the private `hya-title` | **Full default** through the bundle catalog like any agent bundle; without it the default agent is the core's `hya-bare` |
 | `bundles/builtin/core-skills` | `hya/core-skills` | **Static** | 2 built-in skills (`agent-bundle-authoring`, `secure-self-update`) | **Full required** via `hya-engine::skill_catalog` |
 | `bundles/builtin/core-commands` | `hya/core-commands` | **Static** | 2 built-in slash commands (`/init`, `/review`) | **Full required** via `hya-server::support::command_catalog` |
 | `bundles/builtin/basic-tui-components` | `hya/basic-tui-components` | **Static + TUI v2** (`@hya/tui-sdk`) | Standard TUI panels (Projects, Sessions, Todos, Context, Project View, Jobs) | **Full catalog** published by `hya-app::first_party_catalogs()`, loaded by `packages/hya-tui` |
@@ -580,7 +580,7 @@ flowchart TD
 ```
 
 - **Precedence (highest to lowest):** `Project Tier` (`<root>/.hya/bundles/`, ordered by registered Project roots, first root wins) → `Global Installed Registry` (`registry.sqlite3`) → `Built-in Catalog Tier`.
-- **Immutability guard:** Reserved built-in identities (`hya/*` presets and reserved core agent IDs such as `hya-title`) cannot be uninstalled or shadowed by external bundles.
+- **Immutability guard:** Built-in identities (`hya/*` presets) cannot be uninstalled or replaced in place, and no bundle may declare the core's `hya-bare` agent id; any other agent id clash (such as a second `hya-main`) fails catalog composition as a duplicate agent id.
 
 ### 7.2 Physical Load Sources for `bundles/builtin/`
 

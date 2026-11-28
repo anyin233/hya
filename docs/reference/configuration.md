@@ -36,11 +36,11 @@ permission:
 | --- | --- | --- | --- |
 | `schema_version` | `u32` | **Required (`2`)** | Must be `2`. Legacy v1 configs are rejected at startup until migrated with `hya-migration run`. |
 | `default_model` | `string` | First live model, else `hya/offline` | Default `provider/model` (optional `#effort` suffix) when no agent pin or `--model` flag applies. |
-| `default_agent` | `string` | `"hya-main"` *(or `"hya-bare"` under `--bare`)* | Default root Agent ID (`hya-main`, `hya-plan`, or an installed bundle agent). |
+| `default_agent` | `string` | The `default_agent` of the enabled bundle that declares one (`hya-main` from `hya/core-agents`), else `"hya-bare"` (for example under `--bare`) | Default root Agent ID (`hya-main`, `hya-plan`, or an installed bundle agent). |
 | `reasoning` | `string` | — | Global fallback thinking effort: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
 | `providers` | `map<id, Provider>` | `{}` | Model provider routes, base URLs, keys, retry budgets, and model definitions. |
 | `provider_retry` | `ProviderRetry` | Defaults | Default retry/replay budget for every provider route (overridden per provider or via `HYA_PROVIDER_RETRY_*`). |
-| `agents` | `map<id, AgentPref>` | `{}` | Per-agent pinned `model` and `reasoning` effort for built-in agents. |
+| `agents` | `map<id, AgentPref>` | `{}` | Per-agent pinned `model` and `reasoning` effort, by Agent id whatever bundle provides the Agent. |
 | `categories` | `map<name, string[]>` | `{}` | Named ordered failover lists of `provider/model` candidates. |
 | `bundles` | `BundlesConfig` | `{builtin: {profile: full, enable: [], disable: []}}` | Controls which of the 14 built-in bundles under `bundles/builtin/` load at startup. |
 | `permission` | `PermissionConfig` | `{model: default, rules: []}` | Default permission posture and ordered regex rules. |
@@ -104,7 +104,7 @@ providers:
 
 ### `agents.<id>`
 
-Pin a built-in agent's model and default reasoning effort in `config.yaml`:
+Pin an agent's model and default reasoning effort in `config.yaml`. An entry applies by Agent id whatever bundle provides the Agent (`hya-main` and `hya-title` come from `hya/core-agents`); without one, the `agents.<id>.model` of the owning bundle's `config.yml` applies. Setting a model from the TUI updates the file that already holds the Agent's entry, else the owning bundle's `config.yml`:
 
 ```yaml
 agents:

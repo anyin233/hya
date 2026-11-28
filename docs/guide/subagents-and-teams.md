@@ -18,7 +18,9 @@ Out of the box, Hya comes with five user-facing agent roles:
 | **`hya-scout`** | Helper | **Fast read-only researcher.** Searches and reads files quickly so your main chat doesn't fill up with raw search logs. |
 | **`hya-reviewer`** | Helper | **Code reviewer.** Reads diffs and runs check commands, but is blocked from editing files. |
 
-> **Tip:** Want `hya-scout` to run on a fast, cheap model while `hya-main` uses your strongest reasoning model? Open **`/agent`**, select `hya-scout`, and press **`m`** to give it its own model!
+> **Tip:** Want `hya-scout` to run on a fast, cheap model while `hya-main` uses your strongest reasoning model? Open **`/agent`**, select `hya-scout`, and press **`m`** to give it its own model! You can also pin it in `config.yaml` under `agents.<id>.model`, which applies by Agent id whatever bundle provides the agent.
+
+New sessions run the default agent: the `default_agent` of the enabled bundle that declares one (`hya-main`, from `hya/core-agents`), unless `default_agent` in `config.yaml` picks another. With no such bundle enabled (for example `hya --bare`), the default is the core's minimal `hya-bare` agent.
 
 ---
 

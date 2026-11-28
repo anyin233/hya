@@ -226,6 +226,8 @@ Set `formatter: false` or `lsp: false` to disable either subsystem, or disable t
 
 ## 3. Built-in Agents (`hya/core-agents`, `hya/multi-agent` & `hya/plan`)
 
+Every agent comes from an enabled bundle, through the same catalog as an installed one. `hya/core-agents` declares `default_agent: hya-main`; when no enabled bundle declares a default agent (for example under `--bare`), the core's compiled-in `hya-bare` is the only agent and the default. `hya-main` declares `can_spawn: ["*"]` (every non-private agent of the catalog); `hya-title` is `private: true`.
+
 | Agent ID | Bundle | Kind | Tool restrictions | When to use |
 | --- | --- | --- | --- | --- |
 | `hya-main` | `hya/core-agents` | Main *(default)* | Full toolset | Everyday coding, debugging, refactoring, and delegating subtasks. |
@@ -233,7 +235,7 @@ Set `formatter: false` or `lsp: false` to disable either subsystem, or disable t
 | `hya-task` | `hya/multi-agent` | Subagent *(default)* | Full toolset | Focused implementation or testing subtasks delegated via `task`. |
 | `hya-scout` | `hya/multi-agent` | Subagent | Read-only (blocks edits, `bash`, `task`, `archive`) | Fast codebase search and reading without cluttering the main chat. |
 | `hya-reviewer` | `hya/multi-agent` | Subagent | Blocks file edits (`write`, `edit`, `apply_patch`), allows `bash` | Reviewing patches and running check suites without modifying code. |
-| `hya-title` | `hya/core-agents` | System *(reserved)* | Internal only | Generates short session titles after your first prompt. |
+| `hya-title` | `hya/core-agents` | System *(private)* | Internal only | Generates short session titles after your first prompt. |
 
 *(Built-in workflow bundles also define private stage agents—`hya-goal-guide`, `hya-goal-verifier`, `hya-pir-planner`, `hya-pir-implementer`, and `hya-pir-reviewer`—used internally by Goal/Loop mode and the `plan-impl-review` Workflow.)*
 
@@ -254,7 +256,7 @@ Every Hya installation ships with 14 trusted first-party bundles sourced from `b
 | `hya/plan` | `bundles/builtin/plan` | Native ABI v2 (`cdylib`) + TUI v2 | Read-only `hya-plan` agent, `plan_exit` tool (alias `plan`), `tool.visibility` native hook, and `@hya/tui-sdk` v2 `plan_exit` card renderer + `Plan` status badge. |
 | `hya/goal` | `bundles/builtin/goal` | Native ABI v2 (`cdylib`) | Autonomous goal-mode driver `hya/goal:goal` (`hya -p`), `GoalDriverService`, 3 goal skills (`goal-contract`, `guided-goal`, `evaluator-prompt`), and 2 private helper agents (`hya-goal-guide`, `hya-goal-verifier`). |
 | `hya/loop` | `bundles/builtin/loop` | Native ABI v2 (`cdylib`) | Verifier/planner driver `hya/loop:loop` (`hya loop`), `LoopService`, and `loop-verifier-prompt` / `loop-planner-prompt` skills (`capabilities: [services, drivers]`). |
-| `hya/core-agents` | `bundles/builtin/core-agents` | Static | Core built-in agent definitions (`hya-main`, `hya-title`). |
+| `hya/core-agents` | `bundles/builtin/core-agents` | Static | Default agent `hya-main` and the private `hya-title`; an ordinary catalog bundle. |
 | `hya/core-skills` | `bundles/builtin/core-skills` | Static | Built-in fallback skills (`agent-bundle-authoring`, `secure-self-update`). |
 | `hya/core-commands` | `bundles/builtin/core-commands` | Static | Built-in slash command templates (`/init`, `/review`). |
 | `hya/workflow` | `bundles/builtin/workflow` | Native ABI v2 (`cdylib`) + TUI v2 | Workflow DAG execution, durable replay, `workflow` tool, `ProjectionReducer` (`extensions["hya/workflow"]`), `BundleApi` (`/workflows`, `/state`, `/command`), built-in `plan-impl-review` workflow + stage agents (`capabilities: [tools, services, apis]`), and `@hya/tui-sdk` v2 `workflows` pane + `/workflow` slash commands. |

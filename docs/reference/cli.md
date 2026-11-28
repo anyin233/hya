@@ -43,7 +43,7 @@ hya [OPTIONS] [COMMAND]
 | `--allow-host <HOST>` | Loopback only | Extra `Host` header name accepted by the server (repeatable, e.g. `--allow-host hya.lan`). |
 | `--resume [<ID>]` | — | Reopen a specific session ID in bare `hya`, or open the session picker when `<ID>` is omitted. |
 | `--yolo` | `false` | Auto-approve every tool and command without asking. |
-| `--bare` | `false` | Run with `BuiltinBundleProfile::Bare` across `hya`, `hya serve` (including `start`/`restart` and daemon auto-start), `hya exec`, `-p`, `hya loop`, `hya acp`, and `hya agent list`: loads zero built-in bundles (so their contributed commands, such as `hya workflow` and `hya loop`, do not exist) (`bundles/builtin/`), exposes the 8 standard bare tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill`) plus built-in `code-mode` (without `agent()`), uses the minimal `hya-bare` default agent, and retains `AGENTS.md`, disk skills, MCP, and user/project bundle/plugin adapters. Combine with `--pure` (`hya exec --bare --pure`) to also skip external `AGENTS.md`, disk skills, MCP, and user/project plugins. |
+| `--bare` | `false` | Run with the empty built-in bundle set (`bundles.builtin` is ignored; "bare plus some bundles" is `profile: bare` with an `enable:` list in `config.yaml`) across `hya`, `hya serve` (including `start`/`restart` and daemon auto-start), `hya exec`, `-p`, `hya loop`, `hya acp`, and `hya agent list`: loads zero built-in bundles (so their contributed commands, such as `hya workflow` and `hya loop`, do not exist) (`bundles/builtin/`), exposes the 8 standard bare tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill`) plus built-in `code-mode` (without `agent()`), uses the core's minimal `hya-bare` default agent (no enabled bundle declares `default_agent`), and retains `AGENTS.md`, disk skills, MCP, and user/project bundle/plugin adapters. Combine with `--pure` (`hya exec --bare --pure`) to also skip external `AGENTS.md`, disk skills, MCP, and user/project plugins. |
 | `--pure` | `false` | Ignore external context (`AGENTS.md`, MCP servers, user/project plugins, disk skills, and `code-mode` sidecar). Can be combined with `--bare`. |
 | `--db <PATH>` | Command-dependent | SQLite database file path (`""` or `":memory:"` for in-memory on `exec` and foreground `serve`). |
 
@@ -113,7 +113,7 @@ Iterates toward `--target` up to `--budget` rounds (default `10`, clamped to `1.
 hya serve [--bind 127.0.0.1:8080] [--db ./sessions.db] [--bare] [--allow-host <HOST>]... [--relay <URL>]
 ```
 
-Serves both `/v2` HTTP/JSON+SSE+WebSocket and `hya.v2` gRPC on `--bind` (default `127.0.0.1:8080`, in-memory DB unless `--db` is given). Prints `hya server listening on <url>` on `stdout` when ready. Adding `--bare` starts the server on `BuiltinBundleProfile::Bare` with zero `bundles/builtin/` loaded (`hya-bare` default agent, standard bare tools, and an empty built-in bundle catalog).
+Serves both `/v2` HTTP/JSON+SSE+WebSocket and `hya.v2` gRPC on `--bind` (default `127.0.0.1:8080`, in-memory DB unless `--db` is given). Prints `hya server listening on <url>` on `stdout` when ready. Adding `--bare` starts the server on the empty built-in bundle set with zero `bundles/builtin/` loaded (`hya-bare` default agent, standard bare tools, and an empty built-in bundle catalog).
 
 ### Background daemon lifecycle
 
