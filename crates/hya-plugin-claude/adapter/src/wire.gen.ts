@@ -103,23 +103,12 @@ export type Action = ("tool") |
 ("lsp") |
 ("externaldirectory")
 
-export type ActorEpoch = number
-
 export type AgentName = string
 
 export type AgentSpawnParams = {
   readonly parent: SessionId
   readonly child: SessionId
 }
-
-export type ArchiveReason = ("reported") |
-("killed") |
-("root_teardown") |
-("archived_by_parent") |
-("shutdown")
-
-export type ChannelKind = ("group") |
-("dm")
 
 export type ChatParamsOutcomeWire = ({ readonly outcome: "continue" } & {
   readonly request: WireCompletionRequest
@@ -232,65 +221,11 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly session: SessionId
   readonly model: ModelRef
 }) |
-({ readonly type: "session_status" } & {
-  readonly session: SessionId
-  readonly status: unknown
-}) |
 ({ readonly type: "command_executed" } & {
   readonly session: SessionId
   readonly command: string
   readonly arguments: string
   readonly message: MessageId
-}) |
-({ readonly type: "workflow_selected" } & {
-  readonly session: SessionId
-  readonly workflow: WorkflowIdentity
-}) |
-({ readonly type: "workflow_run_started" } & {
-  readonly session: SessionId
-  readonly run: WorkflowRunId
-  readonly workflow: WorkflowIdentity
-  readonly request_hash: string
-  readonly owner: OwnerRunId
-  readonly stages: ReadonlyArray<WorkflowStagePlan>
-}) |
-({ readonly type: "workflow_stage_started" } & {
-  readonly session: SessionId
-  readonly run: WorkflowRunId
-  readonly stage: string
-}) |
-({ readonly type: "workflow_stage_member_linked" } & {
-  readonly session: SessionId
-  readonly run: WorkflowRunId
-  readonly stage: string
-  readonly member: MemberId
-  readonly role: WorkflowMemberRole
-  readonly iteration: number
-}) |
-({ readonly type: "workflow_stage_route_outcome" } & {
-  readonly session: SessionId
-  readonly run: WorkflowRunId
-  readonly stage: string
-  readonly member: MemberId
-  readonly role: WorkflowMemberRole
-  readonly iteration: number
-  readonly step: number
-  readonly candidate_index: number
-  readonly model: ModelRef
-  readonly reasoning: string
-  readonly failure_class: WorkflowRouteFailureClass
-}) |
-({ readonly type: "workflow_stage_finished" } & {
-  readonly session: SessionId
-  readonly run: WorkflowRunId
-  readonly stage: string
-  readonly status: WorkflowStageStatus
-}) |
-({ readonly type: "workflow_run_finished" } & {
-  readonly session: SessionId
-  readonly run: WorkflowRunId
-  readonly status: WorkflowRunStatus
-  readonly error?: string | null
 }) |
 ({ readonly type: "message_started" } & {
   readonly session: SessionId
@@ -430,111 +365,6 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly part: PartId
   readonly state: ToolPartState
 }) |
-({ readonly type: "member_spawned" } & {
-  readonly session: SessionId
-  readonly member: MemberId
-  readonly child?: SessionId | null
-  readonly subagent_type: AgentName
-  readonly description: string
-  readonly depth: number
-  readonly directive?: string
-  readonly tool_call?: ToolCallId | null
-}) |
-({ readonly type: "member_status_changed" } & {
-  readonly session: SessionId
-  readonly member: MemberId
-  readonly status: MemberRunStatus
-}) |
-({ readonly type: "member_finished" } & {
-  readonly session: SessionId
-  readonly member: MemberId
-  readonly status: MemberRunStatus
-  readonly summary: string
-  readonly child?: SessionId | null
-}) |
-({ readonly type: "agent_registered" } & {
-  readonly session: SessionId
-  readonly agent_session: SessionId
-  readonly handle: string
-  readonly parent?: string | null
-  readonly agent_type?: AgentName
-  readonly mode?: SubagentMode
-}) |
-({ readonly type: "agent_activity_changed" } & {
-  readonly session: SessionId
-  readonly handle: string
-  readonly status: RosterStatus
-  readonly current_task?: string | null
-}) |
-({ readonly type: "resident_work_started" } & {
-  readonly session: SessionId
-  readonly actor_session: SessionId
-  readonly handle: string
-  readonly epoch: ActorEpoch
-  readonly inbox_through: number
-}) |
-({ readonly type: "resident_work_finished" } & {
-  readonly session: SessionId
-  readonly handle: string
-  readonly epoch: ActorEpoch
-  readonly inbox_through: number
-}) |
-({ readonly type: "agent_heartbeat" } & {
-  readonly session: SessionId
-  readonly handle: string
-  readonly heartbeat_ms: number
-}) |
-({ readonly type: "mail_sent" } & {
-  readonly session: SessionId
-  readonly from: string
-  readonly to: MailEndpoint
-  readonly kind?: MailKind
-  readonly body: string
-}) |
-({ readonly type: "channel_joined" } & {
-  readonly session: SessionId
-  readonly channel: string
-  readonly member: string
-}) |
-({ readonly type: "channel_created" } & {
-  readonly session: SessionId
-  readonly channel: string
-  readonly kind?: ChannelKind
-  readonly unit?: string | null
-  readonly members?: ReadonlyArray<string>
-}) |
-({ readonly type: "subagent_reported" } & {
-  readonly session: SessionId
-  readonly member: MemberId
-  readonly child: SessionId
-  readonly handle: string
-  readonly outcome: ReportOutcome
-  readonly report: string
-}) |
-({ readonly type: "handoff_committed" } & {
-  readonly session: SessionId
-  readonly handle: string
-  readonly generation: number
-  readonly doc: string
-  readonly degraded?: boolean
-}) |
-({ readonly type: "agent_archived" } & {
-  readonly session: SessionId
-  readonly handle: string
-  readonly child: SessionId
-  readonly reason: ArchiveReason
-}) |
-({ readonly type: "mail_consumed" } & {
-  readonly session: SessionId
-  readonly handle: string
-  readonly through: number
-}) |
-({ readonly type: "agent_restarted" } & {
-  readonly session: SessionId
-  readonly handle: string
-  readonly child: SessionId
-  readonly epoch: ActorEpoch
-}) |
 ({ readonly type: "context_compacted" } & {
   readonly session: SessionId
   readonly message: MessageId
@@ -550,21 +380,6 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly session: SessionId
   readonly source: SessionId
   readonly before_message?: MessageId | null
-}) |
-({ readonly type: "context_evicted" } & {
-  readonly session: SessionId
-  readonly evicted_parts: number
-  readonly parts?: ReadonlyArray<EvictedPart>
-  readonly tokens_before: number
-  readonly tokens_after: number
-  readonly threshold: number
-}) |
-({ readonly type: "context_status" } & {
-  readonly session: SessionId
-  readonly tokens: number
-  readonly source: TokenSource
-  readonly mode: TokenAccountingMode
-  readonly threshold: number
 }) |
 ({ readonly type: "usage_recorded" } & {
   readonly session: SessionId
@@ -603,6 +418,12 @@ export type Event = ({ readonly type: "session_created" } & {
   readonly code: string
   readonly message: string
   readonly failed_message?: MessageId | null
+}) |
+({ readonly type: "extension" } & {
+  readonly session: SessionId
+  readonly bundle: string
+  readonly kind: string
+  readonly payload: unknown
 })
 
 export type EventNotificationParams = {
@@ -610,11 +431,6 @@ export type EventNotificationParams = {
 }
 
 export type EventSeq = number
-
-export type EvictedPart = {
-  readonly part: PartId
-  readonly notice: string
-}
 
 export type EvidenceQualityWire = ("missing") |
 ("claim_only") |
@@ -706,19 +522,7 @@ export type LoopVerifyParams = {
   readonly transcript: string
 }
 
-export type MailEndpoint = ({ readonly kind: "handle"; readonly id: string }) |
-({ readonly kind: "channel"; readonly id: string })
-
-export type MailKind = ("message") |
-("announcement")
-
 export type MemberId = string
-
-export type MemberRunStatus = ("spawning") |
-("running") |
-("done") |
-("failed") |
-("cancelled")
 
 export type Message = ({ readonly role: "user" } & {
   readonly id: MessageId
@@ -778,8 +582,6 @@ export type ModelFallbackParams = {
 }
 
 export type ModelRef = string
-
-export type OwnerRunId = string
 
 export type Part = ({ readonly type: "text" } & {
   readonly id: PartId
@@ -842,17 +644,9 @@ export type ProjectId = string
 
 export type QuestionRequestId = string
 
-export type ReportOutcome = ("done") |
-("failed")
-
 export type Role = ("user") |
 ("assistant") |
 ("system")
-
-export type RosterStatus = ("idle") |
-("busy") |
-("done") |
-("failed")
 
 export type SessionId = string
 
@@ -867,9 +661,6 @@ export type StepCut = {
   readonly through_part: PartId
   readonly kept_head: MessageId
 }
-
-export type SubagentMode = ("transient") |
-("resident")
 
 export type TeamRunId = string
 
@@ -894,13 +685,6 @@ export type TodoStatus = ("pending") |
 ("in_progress") |
 ("blocked") |
 ("completed")
-
-export type TokenAccountingMode = ("auto") |
-("provider") |
-("estimate")
-
-export type TokenSource = ("provider") |
-("estimate")
 
 export type TokenUsage = {
   readonly input?: number
@@ -1039,75 +823,9 @@ export type WireToolResult = ({ readonly status: "ok" } & {
   readonly message: string
 })
 
-export type WorkflowIdentity = {
-  readonly source: WorkflowSourceId
-  readonly name: string
-  readonly revision: WorkflowRevision
-}
-
-export type WorkflowMemberRole = ("worker") |
-("verifier")
-
-export type WorkflowModelAssignment = {
-  readonly id: string
-  readonly reasoning?: string | null
-  readonly fallback?: ReadonlyArray<WorkflowModelCandidate>
-}
-
-export type WorkflowModelCandidate = {
-  readonly id: string
-  readonly reasoning?: string | null
-}
-
-export type WorkflowModelResolvedCandidate = {
-  readonly index: number
-  readonly id: string
-  readonly reasoning: string
-}
-
 export type WorkflowRevision = string
 
-export type WorkflowRouteFailureClass = ("none") |
-("transport") |
-("rate_limited") |
-("server") |
-("unknown_model") |
-("auth") |
-("incompatible") |
-("http") |
-("decode") |
-("internal") |
-("aborted") |
-("cancelled")
-
 export type WorkflowRunId = string
-
-export type WorkflowRunStatus = ("running") |
-("completed") |
-("failed") |
-("cancelled") |
-("interrupted")
-
-export type WorkflowSourceId = string
-
-export type WorkflowStagePlan = {
-  readonly id: string
-  readonly title?: string | null
-  readonly agent: AgentName
-  readonly mode: string
-  readonly level: number
-  readonly worker_model?: WorkflowModelAssignment | null
-  readonly selected_worker_model?: WorkflowModelResolvedCandidate | null
-  readonly verifier_model?: WorkflowModelAssignment | null
-  readonly selected_verifier_model?: WorkflowModelResolvedCandidate | null
-}
-
-export type WorkflowStageStatus = ("pending") |
-("running") |
-("completed") |
-("failed") |
-("cancelled") |
-("skipped")
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -1130,27 +848,10 @@ export function isAction(value: unknown): value is Action {
     (value === "externaldirectory")
 }
 
-export function isActorEpoch(value: unknown): value is ActorEpoch {
-  return (typeof value === "number" && Number.isInteger(value) && value >= 0)
-}
-
 export function isAgentName(value: unknown): value is AgentName { return typeof value === "string" }
 
 export function isAgentSpawnParams(value: unknown): value is AgentSpawnParams {
   return isRecord(value) && ("parent" in value && isSessionId(value["parent"])) && ("child" in value && isSessionId(value["child"]))
-}
-
-export function isArchiveReason(value: unknown): value is ArchiveReason {
-  return (value === "reported") ||
-    (value === "killed") ||
-    (value === "root_teardown") ||
-    (value === "archived_by_parent") ||
-    (value === "shutdown")
-}
-
-export function isChannelKind(value: unknown): value is ChannelKind {
-  return (value === "group") ||
-    (value === "dm")
 }
 
 export function isChatParamsOutcomeWire(value: unknown): value is ChatParamsOutcomeWire {
@@ -1217,15 +918,7 @@ export function isEvent(value: unknown): value is Event {
     (isRecord(value) && value["type"] === "session_ephemeral_set" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("ephemeral" in value && typeof value["ephemeral"] === "boolean")) ||
     (isRecord(value) && value["type"] === "agent_switched" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("agent" in value && isAgentName(value["agent"]))) ||
     (isRecord(value) && value["type"] === "model_switched" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("model" in value && isModelRef(value["model"]))) ||
-    (isRecord(value) && value["type"] === "session_status" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("status" in value && true)) ||
     (isRecord(value) && value["type"] === "command_executed" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("command" in value && typeof value["command"] === "string") && ("arguments" in value && typeof value["arguments"] === "string") && ("message" in value && isMessageId(value["message"]))) ||
-    (isRecord(value) && value["type"] === "workflow_selected" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("workflow" in value && isWorkflowIdentity(value["workflow"]))) ||
-    (isRecord(value) && value["type"] === "workflow_run_started" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("run" in value && isWorkflowRunId(value["run"])) && ("workflow" in value && isWorkflowIdentity(value["workflow"])) && ("request_hash" in value && typeof value["request_hash"] === "string") && ("owner" in value && isOwnerRunId(value["owner"])) && ("stages" in value && (Array.isArray(value["stages"]) && value["stages"].every((item: unknown) => isWorkflowStagePlan(item))))) ||
-    (isRecord(value) && value["type"] === "workflow_stage_started" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("run" in value && isWorkflowRunId(value["run"])) && ("stage" in value && typeof value["stage"] === "string")) ||
-    (isRecord(value) && value["type"] === "workflow_stage_member_linked" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("run" in value && isWorkflowRunId(value["run"])) && ("stage" in value && typeof value["stage"] === "string") && ("member" in value && isMemberId(value["member"])) && ("role" in value && isWorkflowMemberRole(value["role"])) && ("iteration" in value && (typeof value["iteration"] === "number" && Number.isInteger(value["iteration"]) && value["iteration"] >= 0))) ||
-    (isRecord(value) && value["type"] === "workflow_stage_route_outcome" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("run" in value && isWorkflowRunId(value["run"])) && ("stage" in value && typeof value["stage"] === "string") && ("member" in value && isMemberId(value["member"])) && ("role" in value && isWorkflowMemberRole(value["role"])) && ("iteration" in value && (typeof value["iteration"] === "number" && Number.isInteger(value["iteration"]) && value["iteration"] >= 0)) && ("step" in value && (typeof value["step"] === "number" && Number.isInteger(value["step"]) && value["step"] >= 0)) && ("candidate_index" in value && (typeof value["candidate_index"] === "number" && Number.isInteger(value["candidate_index"]) && value["candidate_index"] >= 0)) && ("model" in value && isModelRef(value["model"])) && ("reasoning" in value && typeof value["reasoning"] === "string") && ("failure_class" in value && isWorkflowRouteFailureClass(value["failure_class"]))) ||
-    (isRecord(value) && value["type"] === "workflow_stage_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("run" in value && isWorkflowRunId(value["run"])) && ("stage" in value && typeof value["stage"] === "string") && ("status" in value && isWorkflowStageStatus(value["status"]))) ||
-    (isRecord(value) && value["type"] === "workflow_run_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("run" in value && isWorkflowRunId(value["run"])) && ("status" in value && isWorkflowRunStatus(value["status"])) && (value["error"] === undefined || (value["error"] === null || typeof value["error"] === "string"))) ||
     (isRecord(value) && value["type"] === "message_started" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("role" in value && isRole(value["role"])) && (value["agent"] === undefined || (value["agent"] === null || isAgentName(value["agent"]))) && (value["model"] === undefined || (value["model"] === null || isModelRef(value["model"])))) ||
     (isRecord(value) && value["type"] === "turn_binding_recorded" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("generation" in value && isConfigGeneration(value["generation"])) && (value["system_sha256"] === undefined || typeof value["system_sha256"] === "string") && (value["tools_sha256"] === undefined || typeof value["tools_sha256"] === "string")) ||
     (isRecord(value) && value["type"] === "user_prompt_context_recorded" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("files" in value && (Array.isArray(value["files"]) && value["files"].every((item: unknown) => true))) && ("agents" in value && (Array.isArray(value["agents"]) && value["agents"].every((item: unknown) => true)))) ||
@@ -1247,33 +940,16 @@ export function isEvent(value: unknown): value is Event {
     (isRecord(value) && value["type"] === "tool_result" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"])) && ("call" in value && isToolCallId(value["call"])) && ("output" in value && true) && ("time_ms" in value && (typeof value["time_ms"] === "number" && Number.isInteger(value["time_ms"]) && value["time_ms"] >= 0))) ||
     (isRecord(value) && value["type"] === "tool_error" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"])) && ("call" in value && isToolCallId(value["call"])) && ("message_text" in value && typeof value["message_text"] === "string") && (value["value"] === undefined || (value["value"] === null || true))) ||
     (isRecord(value) && value["type"] === "tool_part_updated" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("part" in value && isPartId(value["part"])) && ("state" in value && isToolPartState(value["state"]))) ||
-    (isRecord(value) && value["type"] === "member_spawned" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("member" in value && isMemberId(value["member"])) && (value["child"] === undefined || (value["child"] === null || isSessionId(value["child"]))) && ("subagent_type" in value && isAgentName(value["subagent_type"])) && ("description" in value && typeof value["description"] === "string") && ("depth" in value && (typeof value["depth"] === "number" && Number.isInteger(value["depth"]) && value["depth"] >= 0)) && (value["directive"] === undefined || typeof value["directive"] === "string") && (value["tool_call"] === undefined || (value["tool_call"] === null || isToolCallId(value["tool_call"])))) ||
-    (isRecord(value) && value["type"] === "member_status_changed" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("member" in value && isMemberId(value["member"])) && ("status" in value && isMemberRunStatus(value["status"]))) ||
-    (isRecord(value) && value["type"] === "member_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("member" in value && isMemberId(value["member"])) && ("status" in value && isMemberRunStatus(value["status"])) && ("summary" in value && typeof value["summary"] === "string") && (value["child"] === undefined || (value["child"] === null || isSessionId(value["child"])))) ||
-    (isRecord(value) && value["type"] === "agent_registered" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("agent_session" in value && isSessionId(value["agent_session"])) && ("handle" in value && typeof value["handle"] === "string") && (value["parent"] === undefined || (value["parent"] === null || typeof value["parent"] === "string")) && (value["agent_type"] === undefined || isAgentName(value["agent_type"])) && (value["mode"] === undefined || isSubagentMode(value["mode"]))) ||
-    (isRecord(value) && value["type"] === "agent_activity_changed" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("handle" in value && typeof value["handle"] === "string") && ("status" in value && isRosterStatus(value["status"])) && (value["current_task"] === undefined || (value["current_task"] === null || typeof value["current_task"] === "string"))) ||
-    (isRecord(value) && value["type"] === "resident_work_started" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("actor_session" in value && isSessionId(value["actor_session"])) && ("handle" in value && typeof value["handle"] === "string") && ("epoch" in value && isActorEpoch(value["epoch"])) && ("inbox_through" in value && (typeof value["inbox_through"] === "number" && Number.isInteger(value["inbox_through"]) && value["inbox_through"] >= 0))) ||
-    (isRecord(value) && value["type"] === "resident_work_finished" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("handle" in value && typeof value["handle"] === "string") && ("epoch" in value && isActorEpoch(value["epoch"])) && ("inbox_through" in value && (typeof value["inbox_through"] === "number" && Number.isInteger(value["inbox_through"]) && value["inbox_through"] >= 0))) ||
-    (isRecord(value) && value["type"] === "agent_heartbeat" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("handle" in value && typeof value["handle"] === "string") && ("heartbeat_ms" in value && (typeof value["heartbeat_ms"] === "number" && Number.isInteger(value["heartbeat_ms"]) && value["heartbeat_ms"] >= 0))) ||
-    (isRecord(value) && value["type"] === "mail_sent" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("from" in value && typeof value["from"] === "string") && ("to" in value && isMailEndpoint(value["to"])) && (value["kind"] === undefined || isMailKind(value["kind"])) && ("body" in value && typeof value["body"] === "string")) ||
-    (isRecord(value) && value["type"] === "channel_joined" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("channel" in value && typeof value["channel"] === "string") && ("member" in value && typeof value["member"] === "string")) ||
-    (isRecord(value) && value["type"] === "channel_created" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("channel" in value && typeof value["channel"] === "string") && (value["kind"] === undefined || isChannelKind(value["kind"])) && (value["unit"] === undefined || (value["unit"] === null || typeof value["unit"] === "string")) && (value["members"] === undefined || (Array.isArray(value["members"]) && value["members"].every((item: unknown) => typeof item === "string")))) ||
-    (isRecord(value) && value["type"] === "subagent_reported" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("member" in value && isMemberId(value["member"])) && ("child" in value && isSessionId(value["child"])) && ("handle" in value && typeof value["handle"] === "string") && ("outcome" in value && isReportOutcome(value["outcome"])) && ("report" in value && typeof value["report"] === "string")) ||
-    (isRecord(value) && value["type"] === "handoff_committed" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("handle" in value && typeof value["handle"] === "string") && ("generation" in value && (typeof value["generation"] === "number" && Number.isInteger(value["generation"]) && value["generation"] >= 0)) && ("doc" in value && typeof value["doc"] === "string") && (value["degraded"] === undefined || typeof value["degraded"] === "boolean")) ||
-    (isRecord(value) && value["type"] === "agent_archived" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("handle" in value && typeof value["handle"] === "string") && ("child" in value && isSessionId(value["child"])) && ("reason" in value && isArchiveReason(value["reason"]))) ||
-    (isRecord(value) && value["type"] === "mail_consumed" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("handle" in value && typeof value["handle"] === "string") && ("through" in value && (typeof value["through"] === "number" && Number.isInteger(value["through"]) && value["through"] >= 0))) ||
-    (isRecord(value) && value["type"] === "agent_restarted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("handle" in value && typeof value["handle"] === "string") && ("child" in value && isSessionId(value["child"])) && ("epoch" in value && isActorEpoch(value["epoch"]))) ||
     (isRecord(value) && value["type"] === "context_compacted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && ("strategy" in value && isCompactionStrategy(value["strategy"])) && ("from_message" in value && isMessageId(value["from_message"])) && ("to_message" in value && isMessageId(value["to_message"])) && ("folded_count" in value && (typeof value["folded_count"] === "number" && Number.isInteger(value["folded_count"]) && value["folded_count"] >= 0)) && ("input_tokens_est" in value && (typeof value["input_tokens_est"] === "number" && Number.isInteger(value["input_tokens_est"]) && value["input_tokens_est"] >= 0)) && ("threshold" in value && (typeof value["threshold"] === "number" && Number.isInteger(value["threshold"]) && value["threshold"] >= 0)) && (value["step_cut"] === undefined || (value["step_cut"] === null || isStepCut(value["step_cut"])))) ||
     (isRecord(value) && value["type"] === "session_forked" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("source" in value && isSessionId(value["source"])) && (value["before_message"] === undefined || (value["before_message"] === null || isMessageId(value["before_message"])))) ||
-    (isRecord(value) && value["type"] === "context_evicted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("evicted_parts" in value && (typeof value["evicted_parts"] === "number" && Number.isInteger(value["evicted_parts"]) && value["evicted_parts"] >= 0)) && (value["parts"] === undefined || (Array.isArray(value["parts"]) && value["parts"].every((item: unknown) => isEvictedPart(item)))) && ("tokens_before" in value && (typeof value["tokens_before"] === "number" && Number.isInteger(value["tokens_before"]) && value["tokens_before"] >= 0)) && ("tokens_after" in value && (typeof value["tokens_after"] === "number" && Number.isInteger(value["tokens_after"]) && value["tokens_after"] >= 0)) && ("threshold" in value && (typeof value["threshold"] === "number" && Number.isInteger(value["threshold"]) && value["threshold"] >= 0))) ||
-    (isRecord(value) && value["type"] === "context_status" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("tokens" in value && (typeof value["tokens"] === "number" && Number.isInteger(value["tokens"]) && value["tokens"] >= 0)) && ("source" in value && isTokenSource(value["source"])) && ("mode" in value && isTokenAccountingMode(value["mode"])) && ("threshold" in value && (typeof value["threshold"] === "number" && Number.isInteger(value["threshold"]) && value["threshold"] >= 0))) ||
     (isRecord(value) && value["type"] === "usage_recorded" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && (value["message"] === undefined || (value["message"] === null || isMessageId(value["message"]))) && (value["step"] === undefined || (value["step"] === null || (typeof value["step"] === "number" && Number.isInteger(value["step"]) && value["step"] >= 0))) && ("model" in value && isModelRef(value["model"])) && ("purpose" in value && isUsagePurpose(value["purpose"])) && ("tokens" in value && isTokenUsage(value["tokens"]))) ||
     (isRecord(value) && value["type"] === "todos_updated" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("todos" in value && (Array.isArray(value["todos"]) && value["todos"].every((item: unknown) => isTodoItem(item))))) ||
     (isRecord(value) && value["type"] === "files_changed" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && (value["call"] === undefined || (value["call"] === null || isToolCallId(value["call"]))) && ("files" in value && (Array.isArray(value["files"]) && value["files"].every((item: unknown) => isFileChange(item))))) ||
     (isRecord(value) && value["type"] === "files_observed" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("external" in value && typeof value["external"] === "boolean") && ("files" in value && (Array.isArray(value["files"]) && value["files"].every((item: unknown) => isFileStamp(item))))) ||
     (isRecord(value) && value["type"] === "session_reverted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("message" in value && isMessageId(value["message"])) && (value["files"] === undefined || (Array.isArray(value["files"]) && value["files"].every((item: unknown) => isFileRestore(item))))) ||
     (isRecord(value) && value["type"] === "session_unreverted" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && (value["files"] === undefined || (Array.isArray(value["files"]) && value["files"].every((item: unknown) => isFileRestore(item))))) ||
-    (isRecord(value) && value["type"] === "error" && isRecord(value) && ("session" in value && (value["session"] === null || isSessionId(value["session"]))) && ("code" in value && typeof value["code"] === "string") && ("message" in value && typeof value["message"] === "string") && (value["failed_message"] === undefined || (value["failed_message"] === null || isMessageId(value["failed_message"]))))
+    (isRecord(value) && value["type"] === "error" && isRecord(value) && ("session" in value && (value["session"] === null || isSessionId(value["session"]))) && ("code" in value && typeof value["code"] === "string") && ("message" in value && typeof value["message"] === "string") && (value["failed_message"] === undefined || (value["failed_message"] === null || isMessageId(value["failed_message"])))) ||
+    (isRecord(value) && value["type"] === "extension" && isRecord(value) && ("session" in value && isSessionId(value["session"])) && ("bundle" in value && typeof value["bundle"] === "string") && ("kind" in value && typeof value["kind"] === "string") && ("payload" in value && true))
 }
 
 export function isEventNotificationParams(value: unknown): value is EventNotificationParams {
@@ -1282,10 +958,6 @@ export function isEventNotificationParams(value: unknown): value is EventNotific
 
 export function isEventSeq(value: unknown): value is EventSeq {
   return (typeof value === "number" && Number.isInteger(value) && value >= 0)
-}
-
-export function isEvictedPart(value: unknown): value is EvictedPart {
-  return isRecord(value) && ("part" in value && isPartId(value["part"])) && ("notice" in value && typeof value["notice"] === "string")
 }
 
 export function isEvidenceQualityWire(value: unknown): value is EvidenceQualityWire {
@@ -1365,25 +1037,7 @@ export function isLoopVerifyParams(value: unknown): value is LoopVerifyParams {
   return isRecord(value) && ("target" in value && typeof value["target"] === "string") && ("transcript" in value && typeof value["transcript"] === "string")
 }
 
-export function isMailEndpoint(value: unknown): value is MailEndpoint {
-  return (isRecord(value) && value["kind"] === "handle" && typeof value["id"] === "string") ||
-    (isRecord(value) && value["kind"] === "channel" && typeof value["id"] === "string")
-}
-
-export function isMailKind(value: unknown): value is MailKind {
-  return (value === "message") ||
-    (value === "announcement")
-}
-
 export function isMemberId(value: unknown): value is MemberId { return typeof value === "string" }
-
-export function isMemberRunStatus(value: unknown): value is MemberRunStatus {
-  return (value === "spawning") ||
-    (value === "running") ||
-    (value === "done") ||
-    (value === "failed") ||
-    (value === "cancelled")
-}
 
 export function isMessage(value: unknown): value is Message {
   return (isRecord(value) && value["role"] === "user" && isRecord(value) && ("id" in value && isMessageId(value["id"])) && ("parts" in value && (Array.isArray(value["parts"]) && value["parts"].every((item: unknown) => isPart(item))))) ||
@@ -1424,8 +1078,6 @@ export function isModelFallbackParams(value: unknown): value is ModelFallbackPar
 
 export function isModelRef(value: unknown): value is ModelRef { return typeof value === "string" }
 
-export function isOwnerRunId(value: unknown): value is OwnerRunId { return typeof value === "string" }
-
 export function isPart(value: unknown): value is Part {
   return (isRecord(value) && value["type"] === "text" && isRecord(value) && ("id" in value && isPartId(value["id"])) && ("text" in value && typeof value["text"] === "string")) ||
     (isRecord(value) && value["type"] === "reasoning" && isRecord(value) && ("id" in value && isPartId(value["id"])) && ("text" in value && typeof value["text"] === "string") && (value["provider_data"] === undefined || (value["provider_data"] === null || true))) ||
@@ -1460,22 +1112,10 @@ export function isProjectId(value: unknown): value is ProjectId { return typeof 
 
 export function isQuestionRequestId(value: unknown): value is QuestionRequestId { return typeof value === "string" }
 
-export function isReportOutcome(value: unknown): value is ReportOutcome {
-  return (value === "done") ||
-    (value === "failed")
-}
-
 export function isRole(value: unknown): value is Role {
   return (value === "user") ||
     (value === "assistant") ||
     (value === "system")
-}
-
-export function isRosterStatus(value: unknown): value is RosterStatus {
-  return (value === "idle") ||
-    (value === "busy") ||
-    (value === "done") ||
-    (value === "failed")
 }
 
 export function isSessionId(value: unknown): value is SessionId { return typeof value === "string" }
@@ -1491,11 +1131,6 @@ export function isSessionLifecycleParams(value: unknown): value is SessionLifecy
 
 export function isStepCut(value: unknown): value is StepCut {
   return isRecord(value) && ("through_part" in value && isPartId(value["through_part"])) && ("kept_head" in value && isMessageId(value["kept_head"]))
-}
-
-export function isSubagentMode(value: unknown): value is SubagentMode {
-  return (value === "transient") ||
-    (value === "resident")
 }
 
 export function isTeamRunId(value: unknown): value is TeamRunId { return typeof value === "string" }
@@ -1517,17 +1152,6 @@ export function isTodoStatus(value: unknown): value is TodoStatus {
     (value === "in_progress") ||
     (value === "blocked") ||
     (value === "completed")
-}
-
-export function isTokenAccountingMode(value: unknown): value is TokenAccountingMode {
-  return (value === "auto") ||
-    (value === "provider") ||
-    (value === "estimate")
-}
-
-export function isTokenSource(value: unknown): value is TokenSource {
-  return (value === "provider") ||
-    (value === "estimate")
 }
 
 export function isTokenUsage(value: unknown): value is TokenUsage {
@@ -1606,68 +1230,9 @@ export function isWireToolResult(value: unknown): value is WireToolResult {
     (isRecord(value) && value["status"] === "err" && isRecord(value) && ("message" in value && typeof value["message"] === "string"))
 }
 
-export function isWorkflowIdentity(value: unknown): value is WorkflowIdentity {
-  return isRecord(value) && ("source" in value && isWorkflowSourceId(value["source"])) && ("name" in value && typeof value["name"] === "string") && ("revision" in value && isWorkflowRevision(value["revision"]))
-}
-
-export function isWorkflowMemberRole(value: unknown): value is WorkflowMemberRole {
-  return (value === "worker") ||
-    (value === "verifier")
-}
-
-export function isWorkflowModelAssignment(value: unknown): value is WorkflowModelAssignment {
-  return isRecord(value) && ("id" in value && typeof value["id"] === "string") && (value["reasoning"] === undefined || (value["reasoning"] === null || typeof value["reasoning"] === "string")) && (value["fallback"] === undefined || (Array.isArray(value["fallback"]) && value["fallback"].every((item: unknown) => isWorkflowModelCandidate(item))))
-}
-
-export function isWorkflowModelCandidate(value: unknown): value is WorkflowModelCandidate {
-  return isRecord(value) && ("id" in value && typeof value["id"] === "string") && (value["reasoning"] === undefined || (value["reasoning"] === null || typeof value["reasoning"] === "string"))
-}
-
-export function isWorkflowModelResolvedCandidate(value: unknown): value is WorkflowModelResolvedCandidate {
-  return isRecord(value) && ("index" in value && (typeof value["index"] === "number" && Number.isInteger(value["index"]) && value["index"] >= 0)) && ("id" in value && typeof value["id"] === "string") && ("reasoning" in value && typeof value["reasoning"] === "string")
-}
-
 export function isWorkflowRevision(value: unknown): value is WorkflowRevision { return typeof value === "string" }
 
-export function isWorkflowRouteFailureClass(value: unknown): value is WorkflowRouteFailureClass {
-  return (value === "none") ||
-    (value === "transport") ||
-    (value === "rate_limited") ||
-    (value === "server") ||
-    (value === "unknown_model") ||
-    (value === "auth") ||
-    (value === "incompatible") ||
-    (value === "http") ||
-    (value === "decode") ||
-    (value === "internal") ||
-    (value === "aborted") ||
-    (value === "cancelled")
-}
-
 export function isWorkflowRunId(value: unknown): value is WorkflowRunId { return typeof value === "string" }
-
-export function isWorkflowRunStatus(value: unknown): value is WorkflowRunStatus {
-  return (value === "running") ||
-    (value === "completed") ||
-    (value === "failed") ||
-    (value === "cancelled") ||
-    (value === "interrupted")
-}
-
-export function isWorkflowSourceId(value: unknown): value is WorkflowSourceId { return typeof value === "string" }
-
-export function isWorkflowStagePlan(value: unknown): value is WorkflowStagePlan {
-  return isRecord(value) && ("id" in value && typeof value["id"] === "string") && (value["title"] === undefined || (value["title"] === null || typeof value["title"] === "string")) && ("agent" in value && isAgentName(value["agent"])) && ("mode" in value && typeof value["mode"] === "string") && ("level" in value && (typeof value["level"] === "number" && Number.isInteger(value["level"]) && value["level"] >= 0)) && (value["worker_model"] === undefined || (value["worker_model"] === null || isWorkflowModelAssignment(value["worker_model"]))) && (value["selected_worker_model"] === undefined || (value["selected_worker_model"] === null || isWorkflowModelResolvedCandidate(value["selected_worker_model"]))) && (value["verifier_model"] === undefined || (value["verifier_model"] === null || isWorkflowModelAssignment(value["verifier_model"]))) && (value["selected_verifier_model"] === undefined || (value["selected_verifier_model"] === null || isWorkflowModelResolvedCandidate(value["selected_verifier_model"])))
-}
-
-export function isWorkflowStageStatus(value: unknown): value is WorkflowStageStatus {
-  return (value === "pending") ||
-    (value === "running") ||
-    (value === "completed") ||
-    (value === "failed") ||
-    (value === "cancelled") ||
-    (value === "skipped")
-}
 
 export const HOOK_PARAM_GUARDS = {
   "event": isEventNotificationParams,

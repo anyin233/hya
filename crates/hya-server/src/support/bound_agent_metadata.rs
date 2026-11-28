@@ -17,7 +17,7 @@ use hya_proto::{AgentName, ModelRef};
 
 use crate::{ApiError, ServerState};
 
-/// Shared projection used by `/v1/agents`.
+/// Shared projection used by `/v2/agents`.
 pub(crate) struct BoundAgentRow {
     pub(crate) name: String,
     pub(crate) description: Option<String>,

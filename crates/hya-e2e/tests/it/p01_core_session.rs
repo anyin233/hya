@@ -1,7 +1,7 @@
 //! T0.1, T1.2–T1.5, T1.9, T1.11–T1.15, T1.24 — core session journey:
 //! - backend boot, AGENTS.md guidance, background session titling (once),
 //! - multi-round tool loop (`write`, `read`, `edit`, `bash`, `todo`, `webfetch`, `skill`),
-//! - multi-session listing/resume, `/v1/sessions/{id}/messages`, `/compact`, `/summarize`,
+//! - multi-session listing/resume, `/v2/sessions/{id}/messages`, `/compact`, `/summarize`,
 //! - daemon `serve stop`/`serve start` interrupted-turn & permission-cancel restore + DB URI rejection,
 //! - `hya exec --bare` todo, stdin `-`, `--json` JSONL stream, and `tail-session` parity.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -10,7 +10,7 @@ use std::path::Path;
 use std::process::Output;
 use std::time::Duration;
 
-use hya_api::v1 as pb;
+use hya_api::v2 as pb;
 use hya_e2e::{
     E2eEnvBuilder, HeadlessEnv, default_backend_bin, fake_requests_from, load_raw_events,
     text_step, tool_step, unique_temp_dir, wait_until,
@@ -62,7 +62,7 @@ async fn core_session_tools_skills_context_and_compact() {
         .expect("title reply");
 
     // T0.1: backend URL responds.
-    let health = reqwest::get(format!("{}/v1/health", env.backend.url))
+    let health = reqwest::get(format!("{}/v2/health", env.backend.url))
         .await
         .expect("health request");
     assert!(
@@ -100,7 +100,7 @@ async fn core_session_tools_skills_context_and_compact() {
     );
 
     // Poll until background hya-title agent titles session A.
-    let session_url = format!("{}/v1/sessions/{session_a}", env.backend.url);
+    let session_url = format!("{}/v2/sessions/{session_a}", env.backend.url);
     let mut title = Value::Null;
     for _ in 0..200 {
         let info: Value = reqwest::get(&session_url)
@@ -117,10 +117,10 @@ async fn core_session_tools_skills_context_and_compact() {
     }
     assert_eq!(title, json!("Widget audit"), "{}", env.diagnostics());
 
-    // T1.9: /v1/skills lists the project skill before the tool call.
+    // T1.9: /v2/skills lists the project skill before the tool call.
     let skills = env
         .get_json(&format!(
-            "/v1/skills?directory={}",
+            "/v2/skills?directory={}",
             env.backend.workdir_str()
         ))
         .await
@@ -129,7 +129,7 @@ async fn core_session_tools_skills_context_and_compact() {
         skills["skills"]
             .as_array()
             .is_some_and(|rows| rows.iter().any(|s| s["name"] == "e2e-skill")),
-        "project skill must appear in /v1/skills: {skills}"
+        "project skill must appear in /v2/skills: {skills}"
     );
 
     // T1.3–T1.5, T1.9, T1.15, T1.24: single multi-round tool loop on session A.
@@ -249,7 +249,7 @@ async fn core_session_tools_skills_context_and_compact() {
         .count();
     assert_eq!(titled_count, 1);
 
-    // T1.11 + T1.12: second session + list_sessions + /v1/sessions/{id}/messages projection.
+    // T1.11 + T1.12: second session + list_sessions + /v2/sessions/{id}/messages projection.
     let session_b = env.create_session().await.expect("session b");
     assert_ne!(session_a, session_b);
     env.fake
@@ -315,9 +315,9 @@ async fn core_session_tools_skills_context_and_compact() {
         "post-compact request must carry marker instead of turn 1: {last_req}"
     );
 
-    // T1.14: /v1/sessions/{id}/summarize path on session B.
+    // T1.14: /v2/sessions/{id}/summarize path on session B.
     let sum_result = env
-        .post_json(&format!("/v1/sessions/{session_b}/summarize"), &Value::Null)
+        .post_json(&format!("/v2/sessions/{session_b}/summarize"), &Value::Null)
         .await
         .expect("summarize");
     assert!(
@@ -364,7 +364,7 @@ async fn daemon_stop_start_restore_and_db_uri_rejection() {
     // Session A (yolo): starts an in-flight bash tool that creates restart-started.txt.
     let session_a = env.create_session().await.unwrap();
     env.patch_json(
-        &format!("/v1/sessions/{session_a}"),
+        &format!("/v2/sessions/{session_a}"),
         &json!({ "permissionMode": "yolo" }),
     )
     .await
@@ -448,7 +448,7 @@ async fn daemon_stop_start_restore_and_db_uri_rejection() {
     );
     let ready: Value = serde_json::from_slice(&started.stdout).unwrap();
     let url = ready["url"].as_str().unwrap();
-    let client = hya_sdk_v1::Client::new(url);
+    let client = hya_sdk::Client::new(url);
 
     for (label, session) in [
         ("in-flight tool", session_a),
@@ -523,7 +523,7 @@ async fn daemon_stop_start_restore_and_db_uri_rejection() {
     assert!(client.list_interactions(None).await.unwrap().is_empty());
     let late = env
         .http
-        .post(format!("{url}/v1/interactions/{permission}/respond"))
+        .post(format!("{url}/v2/interactions/{permission}/respond"))
         .json(&json!({"permission": {"allowed": true}}))
         .send()
         .await

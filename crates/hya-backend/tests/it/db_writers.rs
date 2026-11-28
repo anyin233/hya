@@ -56,7 +56,7 @@ impl WriterScratch {
 
 async fn server_sessions(url: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let body: Value = reqwest::Client::new()
-        .get(format!("{url}/v1/sessions?includeArchived=true"))
+        .get(format!("{url}/v2/sessions?includeArchived=true"))
         .send()
         .await?
         .json()
@@ -189,7 +189,7 @@ async fn workflow_use_run_state_and_sessions_archive_route_through_server() -> T
     for (action, archived) in [("archive", true), ("unarchive", false)] {
         assert!(s.run(&["sessions", action, session])?.status.success());
         assert_eq!(
-            hya_sdk_v1::V1Sdk::new(&server.url, "")
+            hya_sdk::Sdk::new(&server.url, "")
                 .get_session(session)
                 .await?
                 .archived,
@@ -276,7 +276,7 @@ fn direct_writers_clear_metadata_after_run_and_hold_lock_while_active() -> TestR
     std::fs::write(
         s.0.0.join("config/hya/config.yaml"),
         format!(
-            "default_model: stall/m\nproviders:\n  stall:\n    kind: openai-completion\n    base_url: {provider}\n    api_key: test\n    models: [m]\n"
+            "schema_version: 2\ndefault_model: stall/m\nproviders:\n  stall:\n    kind: openai-completion\n    base_url: {provider}\n    api_key: test\n    models: [m]\n"
         ),
     )?;
     let mut exec = s

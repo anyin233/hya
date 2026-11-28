@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use hya_proto::{ActorClaim, Event, SessionId, WorkflowMemberRole, WorkflowStageStatus};
+use hya_proto::{ActorClaim, SessionId};
+use hya_tool::extension::ExtensionEvent;
+use hya_tool::{WorkflowMemberRole, WorkflowStageStatus};
 use hya_workflow::{FailurePolicy, StageEvidence, WorkflowStage};
 use tokio_util::sync::CancellationToken;
 
@@ -206,12 +208,13 @@ impl PreparedWorkflowRun {
                                     .record_workflow_event_for_actor(
                                         actor_claim.as_ref(),
                                         lead,
-                                        Event::WorkflowStageFinished {
+                                        ExtensionEvent::WorkflowStageFinished {
                                             session: lead,
                                             run,
                                             stage: stage.id().to_string(),
                                             status: WorkflowStageStatus::Skipped,
-                                        },
+                                        }
+                                        .into_event(),
                                     )
                                     .await?;
                             }
@@ -232,11 +235,12 @@ impl PreparedWorkflowRun {
                                 .record_workflow_event_for_actor(
                                     actor_claim.as_ref(),
                                     lead,
-                                    Event::WorkflowStageStarted {
+                                    ExtensionEvent::WorkflowStageStarted {
                                         session: lead,
                                         run,
                                         stage: stage.id().to_string(),
-                                    },
+                                    }
+                                    .into_event(),
                                 )
                                 .await?;
                         }
@@ -287,14 +291,15 @@ impl PreparedWorkflowRun {
                                 .record_workflow_event_for_actor(
                                     actor_claim.as_ref(),
                                     lead,
-                                    Event::WorkflowStageMemberLinked {
+                                    ExtensionEvent::WorkflowStageMemberLinked {
                                         session: lead,
                                         run,
                                         stage: stage.id().to_string(),
                                         member: actor.member,
                                         role: WorkflowMemberRole::Worker,
                                         iteration: 0,
-                                    },
+                                    }
+                                    .into_event(),
                                 )
                                 .await?;
                         }
@@ -390,7 +395,10 @@ impl PreparedWorkflowRun {
                                     .await
                                     {
                                         Ok(completed) => report = completed,
-                                        Err(WorkflowError::Engine(error @ CoreError::Store(_))) => {
+                                        Err(WorkflowError::Engine(
+                                            error @ (CoreError::Store(_)
+                                            | CoreError::CapacityExceeded { .. }),
+                                        )) => {
                                             return Err(error.into());
                                         }
                                         Err(WorkflowError::Engine(
@@ -466,12 +474,13 @@ impl PreparedWorkflowRun {
                         .record_workflow_event_for_actor(
                             actor_claim.as_ref(),
                             lead,
-                            Event::WorkflowStageFinished {
+                            ExtensionEvent::WorkflowStageFinished {
                                 session: lead,
                                 run,
                                 stage: report.stage.clone(),
                                 status: protocol_stage_status(report.status),
-                            },
+                            }
+                            .into_event(),
                         )
                         .await?;
                 }
@@ -491,12 +500,13 @@ impl PreparedWorkflowRun {
                             .record_workflow_event_for_actor(
                                 actor_claim.as_ref(),
                                 lead,
-                                Event::WorkflowStageFinished {
+                                ExtensionEvent::WorkflowStageFinished {
                                     session: lead,
                                     run,
                                     stage: report.stage.clone(),
                                     status: WorkflowStageStatus::Skipped,
-                                },
+                                }
+                                .into_event(),
                             )
                             .await?;
                     }

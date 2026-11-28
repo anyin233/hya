@@ -297,6 +297,9 @@ impl SessionEngine {
         permission: PermissionPlane,
         bus: EventBus,
     ) -> Result<Self, CoreError> {
+        if store.projection_reducers().is_empty() {
+            store.set_projection_reducers(hya_tool::extension::projection_reducers());
+        }
         let rewriters = internal_rewriters()?;
         let (interaction, _rx) = InteractionPlane::new();
         let spawner = BoundSpawnSender::disconnected();

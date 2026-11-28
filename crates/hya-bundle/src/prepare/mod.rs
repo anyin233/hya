@@ -13,7 +13,7 @@ use hya_workflow::is_valid_identifier;
 use self::decode::{digest_bytes, is_strictly_sorted, set_bundle_digest};
 use self::extensions::{
     ResolvedRuntime, resolve_runtime, validate_declared_apis, validate_declared_permission_modes,
-    validate_declared_schemas, validate_unsupported,
+    validate_declared_schemas, validate_overrides,
 };
 use self::parse::{parse_source, resolve_namespace, split_markdown, validate_identity};
 use self::resources::{
@@ -32,6 +32,51 @@ pub(crate) use extensions::validate_hook_local_id;
 pub(crate) use parse::normalize_source_path;
 
 const PREPARED_FORMAT_VERSION: u32 = 4;
+
+/// Transitional Phase 0–4 legacy tool-family bundles that temporarily retain
+/// `exposure.yaml` until their tools migrate across Phases 2–4 (`CHR-22`–`CHR-31`).
+const TRANSITIONAL_EXPOSURE_BUNDLES: [&str; 4] = [
+    "hya/base-tools",
+    "hya/extended-tools",
+    "hya/network-tools",
+    "hya/channel-tools",
+];
+
+fn reject_removed_exposure(
+    bundle_id: &str,
+    files: &std::collections::BTreeMap<String, Vec<u8>>,
+    assets: &[crate::source::SourceResource],
+) -> Result<(), BundleError> {
+    if TRANSITIONAL_EXPOSURE_BUNDLES.contains(&bundle_id) {
+        return Ok(());
+    }
+    if let Some(path) = files
+        .keys()
+        .find(|path| *path == "exposure.yaml" || path.ends_with("/exposure.yaml"))
+    {
+        return Err(BundleError::InvalidManifest {
+            source_name: bundle_id.to_string(),
+            detail: format!(
+                "`{path}` is not allowed: `exposure.yaml` was removed in hyabundle schema_version 2; declare tools under `resources.tools` instead"
+            ),
+        });
+    }
+    for asset in assets {
+        let path_is_exposure = normalize_source_path(bundle_id, &asset.path)
+            .ok()
+            .is_some_and(|path| path == "exposure.yaml" || path.ends_with("/exposure.yaml"));
+        if asset.id == "exposure"
+            || asset.aliases.iter().any(|alias| alias == "exposure")
+            || path_is_exposure
+        {
+            return Err(BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: "`assets` entry `exposure` / `exposure.yaml` was removed in hyabundle schema_version 2; declare tools under `resources.tools` instead".to_string(),
+            });
+        }
+    }
+    Ok(())
+}
 
 /// Read manifest identity before preparing resources or starting providers.
 pub fn read_bundle_identity(root: &std::path::Path) -> Result<(String, String), BundleError> {
@@ -124,18 +169,18 @@ fn prepare_bundle(
     let check = manifest.check.as_ref().map(prepared_check);
     let bundle_id = manifest.identity.id.clone();
     validate_identity(&bundle_id, &manifest.identity.version)?;
+    reject_removed_exposure(&bundle_id, &files, &manifest.assets)?;
     let namespace = Some(resolve_namespace(
         &bundle_id,
         &manifest.identity.id,
         &manifest.namespace,
     )?);
-    validate_unsupported(&bundle_id, &manifest.extensions)?;
     let ResolvedRuntime {
         prepared: runtime,
         process,
         js_entry_resource,
         native_library_resource,
-    } = resolve_runtime(&bundle_id, manifest.runtime.as_ref(), &manifest.extensions)?;
+    } = resolve_runtime(&bundle_id, manifest.runtime.as_ref())?;
     let PreparedResourceSets {
         tools,
         skills,
@@ -147,13 +192,14 @@ fn prepare_bundle(
         &bundle_id,
         &files,
         manifest.resources,
-        manifest.extensions,
         manifest.assets,
+        manifest.overrides.as_deref(),
         runtime.as_ref(),
         process.as_ref(),
         js_entry_resource,
         native_library_resource,
     )?;
+    validate_overrides(&bundle_id, manifest.overrides.as_deref(), &tools)?;
     let tui = prepare_tui(&bundle_id, manifest.tui.as_ref(), &extensions)?;
     let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
     let apis = validate_declared_apis(&bundle_id, &manifest.apis, process.as_ref(), &extensions)?;
@@ -228,6 +274,7 @@ fn prepare_bundle(
         check,
         identity: manifest.identity,
         namespace,
+        overrides: manifest.overrides,
         digest: String::new(),
         tui,
         agents,

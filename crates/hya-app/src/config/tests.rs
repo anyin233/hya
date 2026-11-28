@@ -18,6 +18,7 @@ use super::*;
 use crate::test_env::{EnvGuard, StableEnvGuard};
 
 const FIXTURE: &str = "
+schema_version: 2
 default_model: gpt-5.5
 providers:
   gw-oai:
@@ -42,7 +43,14 @@ providers:
 ";
 
 fn parse_providers(yaml: &str) -> anyhow::Result<Vec<ParsedProvider>> {
-    resolve_providers(&parse_config(yaml)?)
+    let with_version = if yaml.contains("schema_version") {
+        std::borrow::Cow::Borrowed(yaml)
+    } else if yaml.trim() == "{}" {
+        std::borrow::Cow::Borrowed("schema_version: 2\n")
+    } else {
+        std::borrow::Cow::Owned(format!("schema_version: 2\n{yaml}"))
+    };
+    resolve_providers(&parse_config(&with_version)?)
 }
 
 fn cached(id: &str) -> crate::model_cache::CachedModel {
@@ -235,7 +243,7 @@ fn reasoning_variants_order_boolean_and_validation() {
         detailed.models[2].reasoning_variants.is_empty() && detailed.models[2].variants_configured
     );
 
-    assert!(format!("{:#}", parse_config("providers:\n  g:\n    kind: openai-responses\n    base_url: https://x\n    models: [m]\n").unwrap_err()).contains("unknown variant"));
+    assert!(format!("{:#}", parse_config("schema_version: 2\nproviders:\n  g:\n    kind: openai-responses\n    base_url: https://x\n    models: [m]\n").unwrap_err()).contains("unknown variant"));
     assert!(parse_providers("providers:\n  g:\n    kind: openai-response\n    base_url: https://x\n    models:\n      - id: m\n        reasoning:\n          variants: [medium, extreme]\n").unwrap_err().to_string().contains("unknown reasoning variant extreme"));
     assert!(parse_providers("providers:\n  g:\n    kind: openai-response\n    base_url: https://x\n    models:\n      - id: m\n        reasoning:\n          default: high\n          variants: [low, medium]\n").unwrap_err().to_string().contains("reasoning default high is not advertised"));
 }
@@ -423,7 +431,7 @@ fn upsert_provider_and_oauth_entries_preserve_other_keys_and_models() {
     let _env = StableEnvGuard::new();
     let path = temp_config(
         "upsert",
-        "default_model: gw/m\nprovider_retry:\n  max_attempts: 5\nproviders:\n  gw:\n    kind: openai\n    base_url: https://old.example/v1\n    api_key: \"{env:GW_KEY}\"\n    models: [m]\n    retry: { max_attempts: 2 }\n",
+        "schema_version: 2\ndefault_model: gw/m\nprovider_retry:\n  max_attempts: 5\nproviders:\n  gw:\n    kind: openai\n    base_url: https://old.example/v1\n    api_key: \"{env:GW_KEY}\"\n    models: [m]\n    retry: { max_attempts: 2 }\n",
     );
     assert!(!upsert_provider_entry(&path, "gw", "anthropic", "https://new.example/v1").unwrap());
     assert!(upsert_provider_entry(&path, "fresh", "google", "https://g.example").unwrap());
@@ -459,7 +467,7 @@ fn upsert_provider_and_oauth_entries_preserve_other_keys_and_models() {
     let parsed = parse_config(&std::fs::read_to_string(&oauth_path).unwrap()).unwrap();
     assert!(parsed.providers["codex"].models.is_empty());
     assert_eq!(parsed.default_model.as_deref(), Some("hya/offline"));
-    std::fs::write(&oauth_path, "default_model: codex/user-model\nproviders:\n  codex:\n    kind: openai-codex\n    base_url: https://old\n    models: [user-model]\n").unwrap();
+    std::fs::write(&oauth_path, "schema_version: 2\ndefault_model: codex/user-model\nproviders:\n  codex:\n    kind: openai-codex\n    base_url: https://old\n    models: [user-model]\n").unwrap();
     upsert_oauth_provider(
         &oauth_path,
         "codex",
@@ -478,7 +486,7 @@ fn set_and_remove_model_entries_patch_preserve_kind_and_validate() {
     let _env = StableEnvGuard::new();
     let path = temp_config(
         "model-edit",
-        "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      - plain\n      - id: typed\n        kind: anthropic\n        name: Mine\n        limit: { context: 1000, output: 100 }\n        reasoning: { variants: [low, high] }\n",
+        "schema_version: 2\nproviders:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      - plain\n      - id: typed\n        kind: anthropic\n        name: Mine\n        limit: { context: 1000, output: 100 }\n        reasoning: { variants: [low, high] }\n",
     );
     let entry = |id: &str| {
         parse_providers(&std::fs::read_to_string(&path).unwrap())

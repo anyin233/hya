@@ -151,22 +151,22 @@ async fn set_archived(db: &str, id: &str, archived: bool) -> anyhow::Result<()> 
     Ok(())
 }
 
-/// `PATCH <url>/v1/sessions/<id> {"archived": ...}` on the server that
+/// `PATCH <url>/v2/sessions/<id> {"archived": ...}` on the server that
 /// holds the database.
 async fn update_through_server(
     url: &str,
     session: SessionId,
     archived: bool,
 ) -> anyhow::Result<()> {
-    hya_sdk_v1::V1Sdk::for_local_daemon(url.trim_end_matches('/'), "")?
-        .update_session(hya_api::v1::UpdateSessionRequest {
+    hya_sdk::Sdk::for_local_daemon(url.trim_end_matches('/'), "")?
+        .update_session(hya_api::v2::UpdateSessionRequest {
             session: session.to_string(),
             archived: Some(archived),
             ..Default::default()
         })
         .await
         .map_err(|error| match error {
-            hya_sdk_v1::SdkError::Api { message, .. } => anyhow::anyhow!("{message}: {session}"),
+            hya_sdk::SdkError::Api { message, .. } => anyhow::anyhow!("{message}: {session}"),
             error => anyhow::Error::new(error).context(format!("reach the hya server at {url}")),
         })?;
     Ok(())

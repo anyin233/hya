@@ -6,8 +6,12 @@
 use crate::support;
 
 use async_trait::async_trait;
-use hya_engine::{BoundSidecarFactory, CoreError, SidecarHandle, SidecarStart};
-use hya_proto::{ArchiveReason, Event, FinishReason, ReportOutcome, Role, ToolPartState};
+use hya_engine::{
+    BoundSidecarFactory, CoreError, SessionStoreExt as _, SidecarHandle, SidecarStart,
+};
+use hya_proto::{Event, FinishReason, Role, ToolPartState};
+use hya_tool::extension::{ExtensionEvent, members_projection, team_projection};
+use hya_tool::{ArchiveReason, ReportOutcome};
 use serde_json::json;
 use std::sync::{
     Arc,
@@ -79,10 +83,11 @@ async fn sidecar_loss_flushes_stream_and_reports_failure_to_parent() {
             .collect::<String>(),
         streamed
     );
-    assert_eq!(root.team.archived.len(), 1, "{:?}", root.session.members);
+    let root_team = team_projection(&root);
+    let root_members = members_projection(&root);
+    assert_eq!(root_team.archived.len(), 1, "{root_members:?}");
     assert!(
-        root.session
-            .members
+        root_members
             .iter()
             .any(|m| m.status == hya_proto::MemberRunStatus::Failed)
     );
@@ -107,15 +112,18 @@ async fn sidecar_start_failure_reports_failure_to_parent() {
     let root = h.engine.read_projection(h.root).await.unwrap();
     let events = h.engine.replay(h.root).await.unwrap();
     h.shutdown().await;
-    assert_eq!(root.team.archived[&handle].reason, ArchiveReason::Reported);
+    assert_eq!(
+        team_projection(&root).archived[&handle].reason,
+        ArchiveReason::Reported
+    );
     assert!(
         events.iter().any(|e| matches!(
-            &e.event,
-            Event::SubagentReported {
+            ExtensionEvent::from_event(&e.event),
+            Some(ExtensionEvent::SubagentReported {
                 child: reported,
                 outcome: ReportOutcome::Failed,
                 ..
-            } if *reported == child
+            }) if reported == child
         )),
         "sidecar startup failed without a parent report"
     );
@@ -165,7 +173,8 @@ async fn sidecar_failed_episode_revives_with_new_mail_and_preserved_tools() {
     .await;
     h.idle(child, &handle).await;
     assert_eq!(
-        h.engine.read_projection(h.root).await.unwrap().team.roster[&handle].resident_cursor,
+        team_projection(&h.engine.read_projection(h.root).await.unwrap()).roster[&handle]
+            .resident_cursor,
         2
     );
 
@@ -181,15 +190,10 @@ async fn sidecar_failed_episode_revives_with_new_mail_and_preserved_tools() {
     control.die().await;
     h.archived(&handle).await;
 
-    let doc = h
-        .engine
-        .read_projection(child)
-        .await
-        .unwrap()
-        .session
-        .handoff
-        .unwrap()
-        .doc;
+    let doc =
+        hya_tool::extension::handoff_projection(&h.engine.read_projection(child).await.unwrap())
+            .unwrap()
+            .doc;
     assert!(doc.contains("UNREAD_BEFORE_LOSS"));
     assert!(doc.contains("INTERRUPTED_BEFORE_LOSS"));
     assert!(!doc.contains("COMPLETED_BEFORE_LOSS"));
@@ -248,7 +252,7 @@ async fn promptless_catalog_agent_keeps_host_base_after_revive() {
         "review-promptless",
         vec![hya_bundle::SourceFile::new(
             "bundle.yaml",
-            "kind: Bundle\nidentity: { id: test/review-promptless, version: 1.0.0, publisher: test }\nagents:\n  - id: review-worker\n    role: subagent\n",
+            "kind: Bundle\nschema_version: 2\nidentity: { id: test/review-promptless, version: 1.0.0, publisher: test }\nagents:\n  - id: review-worker\n    role: subagent\n",
         )],
     ))
     .unwrap();
@@ -331,8 +335,8 @@ async fn idle_sidecar_loss_drops_handle_and_next_wake_starts_fresh() {
     assert_eq!(probe.drops.load(Ordering::SeqCst), 1);
     let events = h.engine.replay(h.root).await.unwrap();
     assert!(!events.iter().any(|e| matches!(
-        &e.event,
-        Event::SubagentReported { child: reported, .. } if *reported == child
+        ExtensionEvent::from_event(&e.event),
+        Some(ExtensionEvent::SubagentReported { child: reported, .. }) if reported == child
     )));
     assert!(
         h.engine
@@ -385,8 +389,10 @@ async fn running_sidecar_loss_removes_episode_before_archive_publication() {
     tokio::time::timeout(support::lifecycle::BOUND, async {
         loop {
             let event = bus.recv().await.unwrap();
-            if matches!(event.event, Event::AgentArchived { child: archived, .. } if archived == child)
-            {
+            if matches!(
+                ExtensionEvent::from_event(&event.event),
+                Some(ExtensionEvent::AgentArchived { child: archived, .. }) if archived == child
+            ) {
                 assert_eq!(h.built.resident_supervisor().episode_count(), 0);
                 assert_eq!(probe.drops.load(Ordering::SeqCst), 1);
                 break;
@@ -408,13 +414,13 @@ async fn running_sidecar_loss_removes_episode_before_archive_publication() {
     assert_eq!(
         root.iter()
             .filter(|e| matches!(
-                &e.event,
-                Event::SubagentReported {
+                ExtensionEvent::from_event(&e.event),
+                Some(ExtensionEvent::SubagentReported {
                     child: reported,
                     outcome: ReportOutcome::Failed,
                     report,
                     ..
-                } if *reported == child && report == "activation sidecar lost"
+                }) if reported == child && report == "activation sidecar lost"
             ))
             .count(),
         1
@@ -482,8 +488,9 @@ async fn sidecar_death_after_user_cancel_keeps_episode_held_and_forced_end_keeps
         .await
         .unwrap();
     h.until(h.root, |p| {
-        p.team.archived.contains_key(&handle)
-            || p.team
+        let team = team_projection(p);
+        team.archived.contains_key(&handle)
+            || team
                 .roster
                 .get(&handle)
                 .is_some_and(|entry| entry.status == hya_proto::RosterStatus::Idle)
@@ -493,11 +500,11 @@ async fn sidecar_death_after_user_cancel_keeps_episode_held_and_forced_end_keeps
     let held = h.engine.stopped_by_user(child);
     let events = h.engine.replay(h.root).await.unwrap();
     h.shutdown().await;
-    assert!(!root.team.archived.contains_key(&handle));
+    assert!(!team_projection(&root).archived.contains_key(&handle));
     assert!(held);
     assert!(!events.iter().any(|e| matches!(
-        &e.event,
-        Event::SubagentReported { child: reported, .. } if *reported == child
+        ExtensionEvent::from_event(&e.event),
+        Some(ExtensionEvent::SubagentReported { child: reported, .. }) if reported == child
     )));
 
     // 2. Forced ending preserves a dead sidecar's shutdown diagnostic.
@@ -521,9 +528,9 @@ async fn sidecar_death_after_user_cancel_keeps_episode_held_and_forced_end_keeps
     let events = h.engine.replay(h.root).await.unwrap();
     h.shutdown().await;
     assert!(events.iter().any(|e| matches!(
-        &e.event,
-        Event::MemberFinished { child: Some(member), summary, .. }
-            if *member == child
+        ExtensionEvent::from_event(&e.event),
+        Some(ExtensionEvent::MemberFinished { child: Some(member), summary, .. })
+            if member == child
                 && summary.contains("sidecar did not stop")
                 && summary.contains("late loss stop failed")
     )));
@@ -597,8 +604,9 @@ async fn completed_turn_loss_preserves_done_report_and_live_episode() {
             h.archived(&handle).await;
         } else {
             h.until(h.root, |p| {
-                p.team.archived.contains_key(&handle)
-                    || p.team
+                let team = team_projection(p);
+                team.archived.contains_key(&handle)
+                    || team
                         .roster
                         .get(&handle)
                         .is_some_and(|e| e.status == hya_proto::RosterStatus::Idle)
@@ -618,14 +626,12 @@ async fn completed_turn_loss_preserves_done_report_and_live_episode() {
         )));
         if report {
             assert!(
-                projection
-                    .session
-                    .members
+                members_projection(&projection)
                     .iter()
                     .any(|m| m.child == Some(child) && m.status == hya_proto::MemberRunStatus::Done)
             );
         } else {
-            assert!(projection.team.roster.contains_key(&handle));
+            assert!(team_projection(&projection).roster.contains_key(&handle));
         }
     }
 }
@@ -707,18 +713,17 @@ async fn root_teardown_during_loss_sidecar_stop_wins_without_report_mail() {
     }
     h.shutdown().await;
     assert!(tail.iter().any(|e| matches!(
-        e,
-        Event::AgentArchived {
+        ExtensionEvent::from_event(e),
+        Some(ExtensionEvent::AgentArchived {
             child: actor,
             reason: ArchiveReason::RootTeardown,
             ..
-        } if *actor == child
+        }) if actor == child
     )));
-    assert!(
-        !tail
-            .iter()
-            .any(|e| matches!(e, Event::MailSent { .. } | Event::SubagentReported { .. }))
-    );
+    assert!(!tail.iter().any(|e| matches!(
+        ExtensionEvent::from_event(e),
+        Some(ExtensionEvent::MailSent { .. } | ExtensionEvent::SubagentReported { .. })
+    )));
 }
 
 #[derive(Clone)]
@@ -881,7 +886,10 @@ async fn shutdown_reconciles_orphan_and_drop_releases_engine_ownership() {
     h.heal().await;
     h.shutdown().await;
     let root = h.engine.read_projection(h.root).await.unwrap();
-    assert_eq!(root.team.archived[&handle].reason, ArchiveReason::Shutdown);
+    assert_eq!(
+        team_projection(&root).archived[&handle].reason,
+        ArchiveReason::Shutdown
+    );
     assert!(
         !h.engine
             .store()
@@ -924,12 +932,7 @@ async fn live_capacity_survives_process_crash_and_enforces_revive() {
     );
 
     // Archive one member, take its slot with a fresh spawn, then verify reviving it overloads.
-    let first = h
-        .engine
-        .read_projection(h.root)
-        .await
-        .unwrap()
-        .team
+    let first = team_projection(&h.engine.read_projection(h.root).await.unwrap())
         .roster
         .keys()
         .find(|k| k.as_str() != "main")
@@ -940,9 +943,7 @@ async fn live_capacity_survives_process_crash_and_enforces_revive() {
     h.idle(c, &third).await;
     assert!(matches!(
         h.mail(&first, "must consume capacity".into()).await,
-        Err(CoreError::Store(
-            hya_store::StoreError::CapacityExceeded { .. }
-        ))
+        Err(CoreError::CapacityExceeded { .. })
     ));
     let rejected_send = h
         .tool(
@@ -1096,8 +1097,7 @@ async fn start_recovered_preserves_actor_ended_during_restore() {
     let mut h = support::lifecycle::crashed_team(test).await;
     let supervisor = h.built.resident_supervisor();
     let root = h.engine.read_projection(h.root).await.unwrap();
-    let (handle, ended) = root
-        .team
+    let (handle, ended) = team_projection(&root)
         .roster
         .iter()
         .find(|(handle, _)| handle.as_str() != "main")
@@ -1111,7 +1111,7 @@ async fn start_recovered_preserves_actor_ended_during_restore() {
     h.shutdown().await;
     assert_eq!(started.unwrap(), 1);
     assert_eq!(episodes, 1);
-    assert!(projection.team.archived.contains_key(&handle));
+    assert!(team_projection(&projection).archived.contains_key(&handle));
     assert!(!active.contains(&ended));
 }
 
@@ -1162,12 +1162,12 @@ async fn workflow_stage_loop_worker_and_verifier_are_residents() {
     let events = h.engine.replay(h.root).await.unwrap();
     let registrations: Vec<_> = events
         .iter()
-        .filter_map(|e| match &e.event {
-            Event::AgentRegistered {
+        .filter_map(|e| match ExtensionEvent::from_event(&e.event) {
+            Some(ExtensionEvent::AgentRegistered {
                 agent_session,
                 mode,
                 ..
-            } if *agent_session != h.root => Some((*agent_session, *mode)),
+            }) if agent_session != h.root => Some((agent_session, mode)),
             _ => None,
         })
         .collect();

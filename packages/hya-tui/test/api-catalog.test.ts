@@ -21,8 +21,8 @@ test("the packaged operation catalog is the one in docs/protocol/openapi.json (r
 })
 
 test("/api lists every operation with its streaming marker and completes METHOD /path names", () => {
-  expect(apiOperationNames).toContain("GET /v1/sessions")
-  expect(operations()).toMatch(/^GET\s+\/v1\/sessions\s+Session\.ListSessions$/m)
+  expect(apiOperationNames).toContain("GET /v2/sessions")
+  expect(operations()).toMatch(/^GET\s+\/v2\/sessions\s+Session\.ListSessions$/m)
   expect(operations()).toContain(" [stream]")
   expect(apiOperationNames.length).toBe(operations().split("\n").length)
 })

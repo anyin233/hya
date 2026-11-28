@@ -8,7 +8,7 @@
  * - Discovery (ADR-0022, `findRunningServer`): a server holds an exclusive
  *   lock on `<db>.lock` and publishes `<db>.server.json`
  *   (`{url, pid, version, startedAt}`) once listening. The TUI attaches when
- *   that pid is alive and `GET /v1/health` answers `ok` (a server that is
+ *   that pid is alive and `GET /v2/health` answers `ok` (a server that is
  *   shutting down answers `unavailable`).
  * - Start (`startDaemon`): otherwise it runs `hya serve start --json --db
  *   <db>` in `--dir`, which starts `hya serve` detached (own session, output
@@ -175,12 +175,12 @@ export function parseDiscovery(text: string): DiscoveryInfo | undefined {
 }
 
 /**
- * Whether `GET <url>/v1/health` answers `{ ok: true }` within `timeoutMs`.
+ * Whether `GET <url>/v2/health` answers `{ ok: true }` within `timeoutMs`.
  * `token`: a relay bridge's token (`x-hya-bridge-token`), for a bridge URL.
  */
 export async function probeHealth(url: string, fetcher: typeof fetch = fetch, timeoutMs = 2_000, token?: string): Promise<boolean> {
   try {
-    const response = await fetcher(`${url.replace(/\/+$/, "")}/v1/health`, { headers: bridgeTokenHeaders(token), signal: AbortSignal.timeout(timeoutMs) })
+    const response = await fetcher(`${url.replace(/\/+$/, "")}/v2/health`, { headers: bridgeTokenHeaders(token), signal: AbortSignal.timeout(timeoutMs) })
     if (!response.ok) return false
     const body = (await response.json()) as { ok?: unknown }
     return body?.ok === true

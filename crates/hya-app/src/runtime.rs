@@ -19,9 +19,9 @@ use hya_engine::resident::{
 use hya_engine::{
     AgentSpec, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest, BoundWorkflowSender,
     CategoryRegistry, CoreError, DRAIN_DEADLINE, EventBus, ModelSummarizer, ResidentSupervisor,
-    RuntimeRegistry, RuntimeSourceKind, SessionEngine, SubagentGovernor, Summarizer,
-    TerminalHandoffOptions, TokenAccounting, TurnBinding, TurnDrainReport, run_lifecycle_service,
-    run_mailbox_service,
+    RuntimeRegistry, RuntimeSourceKind, SessionEngine, SessionStoreExt as _, SubagentGovernor,
+    Summarizer, TerminalHandoffOptions, TokenAccounting, TurnBinding, TurnDrainReport,
+    run_lifecycle_service, run_mailbox_service,
 };
 
 // Single discovery/date implementation lives in hya-engine; re-export for callers.
@@ -29,9 +29,10 @@ pub use hya_engine::{discover_context_files, today};
 use hya_mcp::McpServerConfig;
 use hya_plugin::HostInfo;
 use hya_plugin::config::PluginSpec;
-use hya_proto::{AgentName, FinishCause, ModelRef, OwnerRunId, SessionId, WorkflowDelivery};
+use hya_proto::{AgentName, FinishCause, ModelRef, OwnerRunId, SessionId};
 use hya_provider::{DevProvider, ProviderCatalogSnapshot, ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
+use hya_tool::WorkflowDelivery;
 use hya_tool::{
     Action, AskRequest, InteractionPlane, InvocationPolicy, LifecyclePlane, MailboxPlane, Mode,
     PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, Rule, SpawnError,
@@ -558,7 +559,7 @@ impl hya_server::WorkflowControl for crate::WorkflowControl {
     fn execute(
         &self,
         session: SessionId,
-        command: hya_proto::WorkflowCommand,
+        command: hya_tool::WorkflowCommand,
         delivery: WorkflowDelivery,
     ) -> hya_server::WorkflowControlFuture<'_> {
         Box::pin(async move {
@@ -580,7 +581,7 @@ impl hya_server::WorkflowControl for crate::WorkflowControl {
     fn decorate(
         &self,
         session: SessionId,
-        state: hya_proto::WorkflowProjection,
+        state: hya_tool::WorkflowProjection,
     ) -> hya_server::WorkflowDecorationFuture<'_> {
         Box::pin(async move {
             crate::WorkflowControl::decorate(self, session, state)
@@ -974,12 +975,28 @@ async fn build_session_engine_with_mcp_defer(
         hya_engine::resident::recover_resident_claims(&store, owner_run_id).await?;
     crate::startup_trace::mark("store_recovery", None);
     let (websearch, invocation_policy, settings) = tool_config;
+    let builtins = settings.builtin_bundles().clone();
     let router = Arc::new(router);
-    let registry = hya_tool_loader::builtins();
-    if !settings.webfetch_enabled() {
+    let enabled_families: Vec<&'static str> = [
+        "hya/base-tools",
+        "hya/extended-tools",
+        "hya/network-tools",
+        "hya/channel-tools",
+    ]
+    .into_iter()
+    .filter(|id| {
+        builtins.is_enabled(id)
+            && hya_bundle::first_party_bundle_optional(id)
+                .ok()
+                .flatten()
+                .is_some()
+    })
+    .collect();
+    let registry = hya_tool_loader::from_tool_families(&enabled_families);
+    if !builtins.is_enabled("hya/network-tools") || !settings.webfetch_enabled() {
         registry.remove("webfetch");
     }
-    if !websearch.enabled {
+    if !builtins.is_enabled("hya/network-tools") || !websearch.enabled {
         registry.remove("websearch");
     }
 
@@ -998,7 +1015,7 @@ async fn build_session_engine_with_mcp_defer(
     let catalog = builtin_agent_catalog()?;
     // The startup catalog holds only the first-party bundle, so its schema
     // rows come straight from the same prepared document.
-    let first_party = crate::installed_bundle_refresh::first_party_catalogs()?;
+    let first_party = crate::installed_bundle_refresh::first_party_catalogs_for(&builtins)?;
     let schema_rows = first_party
         .iter()
         .flat_map(|catalog| catalog.schemas().to_vec())
@@ -1028,6 +1045,7 @@ async fn build_session_engine_with_mcp_defer(
         crate::ProjectScopeRefresh::new(Arc::new(
             InstalledBundleRefresh::new(bundle_registry_path())
                 .with_code_mode(settings.code_mode() != config::CodeMode::Normal)
+                .with_builtin_selection(builtins)
                 .with_io_tasks(lifecycle.io_tasks.clone())
                 .with_host_reads(Arc::new(hya_engine::StoreSessionReads::new(store.clone()))),
         ))

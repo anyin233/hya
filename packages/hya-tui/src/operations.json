@@ -1,703 +1,673 @@
 [
   {
     "method": "PUT",
-    "path": "/v1/agent-efforts/{agent_id}",
+    "path": "/v2/agent-efforts/{agent_id}",
     "operationId": "AgentModels.SetAgentEffort",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/agent-models",
+    "path": "/v2/agent-models",
     "operationId": "AgentModels.ListAgentModels",
     "streaming": false
   },
   {
     "method": "PUT",
-    "path": "/v1/agent-models/{agent_id}",
+    "path": "/v2/agent-models/{agent_id}",
     "operationId": "AgentModels.SetAgentModel",
     "streaming": false
   },
   {
     "method": "PUT",
-    "path": "/v1/agent-models/{agent_id}/configuration",
+    "path": "/v2/agent-models/{agent_id}/configuration",
     "operationId": "AgentModels.SaveAgentModelConfiguration",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/agents",
+    "path": "/v2/agents",
     "operationId": "Catalog.ListAgents",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/auth",
+    "path": "/v2/auth",
     "operationId": "Auth.ListProviderAuth",
     "streaming": false
   },
   {
     "method": "DELETE",
-    "path": "/v1/auth/{provider_id}",
+    "path": "/v2/auth/{provider_id}",
     "operationId": "Auth.RemoveProviderAuth",
     "streaming": false
   },
   {
     "method": "PUT",
-    "path": "/v1/auth/{provider_id}",
+    "path": "/v2/auth/{provider_id}",
     "operationId": "Auth.SetProviderAuth",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/bootstrap",
+    "path": "/v2/bootstrap",
     "operationId": "Process.GetBootstrap",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/bundle-apis",
+    "path": "/v2/bundle-apis",
     "operationId": "BundleApi.ListBundleApis",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/bundles",
+    "path": "/v2/bundles",
     "operationId": "Catalog.ListBundles",
     "streaming": false
   },
   {
     "method": "DELETE",
-    "path": "/v1/bundles/{bundle}/api/{path}",
+    "path": "/v2/bundles/{bundle}/api/{path}",
     "operationId": "BundleApi.InvokeGlobalBundleApi.delete",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/bundles/{bundle}/api/{path}",
+    "path": "/v2/bundles/{bundle}/api/{path}",
     "operationId": "BundleApi.InvokeGlobalBundleApi.get",
     "streaming": false
   },
   {
     "method": "PATCH",
-    "path": "/v1/bundles/{bundle}/api/{path}",
+    "path": "/v2/bundles/{bundle}/api/{path}",
     "operationId": "BundleApi.InvokeGlobalBundleApi.patch",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/bundles/{bundle}/api/{path}",
+    "path": "/v2/bundles/{bundle}/api/{path}",
     "operationId": "BundleApi.InvokeGlobalBundleApi.post",
     "streaming": false
   },
   {
     "method": "PUT",
-    "path": "/v1/bundles/{bundle}/api/{path}",
+    "path": "/v2/bundles/{bundle}/api/{path}",
     "operationId": "BundleApi.InvokeGlobalBundleApi.put",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/bundles:install",
+    "path": "/v2/bundles:install",
     "operationId": "Catalog.InstallBundle",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/bundles:refresh",
+    "path": "/v2/bundles:refresh",
     "operationId": "Catalog.RefreshBundles",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/bundles:set-enabled",
+    "path": "/v2/bundles:set-enabled",
     "operationId": "Catalog.SetBundleEnabled",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/bundles:uninstall",
+    "path": "/v2/bundles:uninstall",
     "operationId": "Catalog.UninstallBundle",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/commands",
+    "path": "/v2/commands",
     "operationId": "Catalog.ListCommands",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/config",
+    "path": "/v2/config",
     "operationId": "Process.GetConfig",
     "streaming": false
   },
   {
     "method": "PATCH",
-    "path": "/v1/config",
+    "path": "/v2/config",
     "operationId": "Process.UpdateConfig",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/events/stream",
+    "path": "/v2/events/stream",
     "operationId": "Events.StreamGlobalEvents",
     "streaming": true
   },
   {
     "method": "GET",
-    "path": "/v1/fs/find",
+    "path": "/v2/fs/find",
     "operationId": "Files.FindFiles",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/fs/list",
+    "path": "/v2/fs/list",
     "operationId": "Files.ListDirectory",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/fs/read",
+    "path": "/v2/fs/read",
     "operationId": "Files.ReadFile",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/fs/search",
+    "path": "/v2/fs/search",
     "operationId": "Files.SearchText",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/fs/symbols",
+    "path": "/v2/fs/symbols",
     "operationId": "Files.SearchSymbols",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/health",
+    "path": "/v2/health",
     "operationId": "Process.GetHealth",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/interactions",
+    "path": "/v2/interactions",
     "operationId": "Interactions.ListInteractions",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/interactions/{request}/respond",
+    "path": "/v2/interactions/{request}/respond",
     "operationId": "Interactions.RespondInteraction",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/location",
+    "path": "/v2/location",
     "operationId": "Process.GetLocation",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/logs",
+    "path": "/v2/logs",
     "operationId": "Logs.IngestLog",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/mcp",
+    "path": "/v2/mcp",
     "operationId": "Mcp.GetMcpStatus",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/mcp",
+    "path": "/v2/mcp",
     "operationId": "Mcp.AddMcpServer",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/mcp/session",
+    "path": "/v2/mcp/session",
     "operationId": "Mcp.OpenMcpSession",
     "streaming": true
   },
   {
     "method": "DELETE",
-    "path": "/v1/mcp/{name}/auth",
+    "path": "/v2/mcp/{name}/auth",
     "operationId": "Mcp.RemoveMcpAuth",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/mcp/{name}/auth",
+    "path": "/v2/mcp/{name}/auth",
     "operationId": "Mcp.StartMcpAuth",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/mcp/{name}/auth/complete",
+    "path": "/v2/mcp/{name}/auth/complete",
     "operationId": "Mcp.CompleteMcpAuth",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/mcp/{name}/connect",
+    "path": "/v2/mcp/{name}/connect",
     "operationId": "Mcp.ConnectMcp",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/mcp/{name}/disconnect",
+    "path": "/v2/mcp/{name}/disconnect",
     "operationId": "Mcp.DisconnectMcp",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/model-effort-preferences",
+    "path": "/v2/model-effort-preferences",
     "operationId": "AgentModels.ListModelEffortPreferences",
     "streaming": false
   },
   {
     "method": "PUT",
-    "path": "/v1/model-effort-preferences/{provider_id}/{model_id}",
+    "path": "/v2/model-effort-preferences/{provider_id}/{model_id}",
     "operationId": "AgentModels.SetModelEffortPreference",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/models",
+    "path": "/v2/models",
     "operationId": "Catalog.ListModels",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/permission-modes",
+    "path": "/v2/permission-modes",
     "operationId": "Catalog.ListPermissionModes",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/permissions/rules",
+    "path": "/v2/permissions/rules",
     "operationId": "Interactions.ListSavedRules",
     "streaming": false
   },
   {
     "method": "DELETE",
-    "path": "/v1/permissions/rules/{rule}",
+    "path": "/v2/permissions/rules/{rule}",
     "operationId": "Interactions.DeleteSavedRule",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/projects",
+    "path": "/v2/projects",
     "operationId": "Project.ListProjects",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/projects",
+    "path": "/v2/projects",
     "operationId": "Project.CreateProject",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/projects/current",
+    "path": "/v2/projects/current",
     "operationId": "Project.GetCurrentProject",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/projects/ensure",
+    "path": "/v2/projects/ensure",
     "operationId": "Project.EnsureProjectForPath",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/projects/resolve",
+    "path": "/v2/projects/resolve",
     "operationId": "Project.ResolveProject",
     "streaming": false
   },
   {
     "method": "DELETE",
-    "path": "/v1/projects/{project}",
+    "path": "/v2/projects/{project}",
     "operationId": "Project.DeleteProject",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/projects/{project}",
+    "path": "/v2/projects/{project}",
     "operationId": "Project.GetProject",
     "streaming": false
   },
   {
     "method": "PATCH",
-    "path": "/v1/projects/{project}",
+    "path": "/v2/projects/{project}",
     "operationId": "Project.UpdateProject",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/projects/{project}/directories",
+    "path": "/v2/projects/{project}/directories",
     "operationId": "Project.ListProjectDirectories",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/projects/{project}/init-git",
+    "path": "/v2/projects/{project}/init-git",
     "operationId": "Project.InitProjectGit",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/providers",
+    "path": "/v2/providers",
     "operationId": "Catalog.ListProviders",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/providers/{provider_id}",
+    "path": "/v2/providers/{provider_id}",
     "operationId": "Catalog.GetProvider",
     "streaming": false
   },
   {
     "method": "PUT",
-    "path": "/v1/providers/{provider_id}",
+    "path": "/v2/providers/{provider_id}",
     "operationId": "Catalog.UpsertProvider",
     "streaming": false
   },
   {
     "method": "DELETE",
-    "path": "/v1/providers/{provider_id}/models",
+    "path": "/v2/providers/{provider_id}/models",
     "operationId": "Catalog.RemoveProviderModel",
     "streaming": false
   },
   {
     "method": "PUT",
-    "path": "/v1/providers/{provider_id}/models",
+    "path": "/v2/providers/{provider_id}/models",
     "operationId": "Catalog.SetProviderModel",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/providers/{provider_id}/refresh",
+    "path": "/v2/providers/{provider_id}/refresh",
     "operationId": "Catalog.RefreshProvider",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/providers/{provider_id}/test",
+    "path": "/v2/providers/{provider_id}/test",
     "operationId": "Catalog.TestProviderModel",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/pty",
+    "path": "/v2/pty",
     "operationId": "Pty.CreatePty",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/pty/shells",
+    "path": "/v2/pty/shells",
     "operationId": "Pty.ListShells",
     "streaming": false
   },
   {
     "method": "DELETE",
-    "path": "/v1/pty/{id}",
+    "path": "/v2/pty/{id}",
     "operationId": "Pty.DeletePty",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/pty/{id}",
+    "path": "/v2/pty/{id}",
     "operationId": "Pty.GetPty",
     "streaming": false
   },
   {
     "method": "PUT",
-    "path": "/v1/pty/{id}",
+    "path": "/v2/pty/{id}",
     "operationId": "Pty.UpdatePty",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/pty/{id}/connect",
+    "path": "/v2/pty/{id}/connect",
     "operationId": "Pty.StreamPty",
     "streaming": true
   },
   {
     "method": "POST",
-    "path": "/v1/pty/{id}/connect-token",
+    "path": "/v2/pty/{id}/connect-token",
     "operationId": "Pty.CreateConnectToken",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/relay/connect",
+    "path": "/v2/relay/connect",
     "operationId": "RelayControl.ConnectRelay",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/relay/disconnect",
+    "path": "/v2/relay/disconnect",
     "operationId": "RelayControl.DisconnectRelay",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/relay/link",
+    "path": "/v2/relay/link",
     "operationId": "RelayControl.GetRelayLink",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/relay/rotate",
+    "path": "/v2/relay/rotate",
     "operationId": "RelayControl.RotateRelayKey",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/relay/status",
+    "path": "/v2/relay/status",
     "operationId": "RelayControl.GetRelayStatus",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/sessions",
+    "path": "/v2/sessions",
     "operationId": "Session.ListSessions",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/sessions",
+    "path": "/v2/sessions",
     "operationId": "Session.CreateSession",
     "streaming": false
   },
   {
     "method": "DELETE",
-    "path": "/v1/sessions/{session}",
+    "path": "/v2/sessions/{session}",
     "operationId": "Session.DeleteSession",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/sessions/{session}",
+    "path": "/v2/sessions/{session}",
     "operationId": "Session.GetSession",
     "streaming": false
   },
   {
     "method": "PATCH",
-    "path": "/v1/sessions/{session}",
+    "path": "/v2/sessions/{session}",
     "operationId": "Session.UpdateSession",
     "streaming": false
   },
   {
-    "method": "POST",
-    "path": "/v1/sessions/{session}/archive",
-    "operationId": "Session.ArchiveSubagent",
-    "streaming": false
-  },
-  {
     "method": "DELETE",
-    "path": "/v1/sessions/{session}/bundles/{bundle}/{path}",
+    "path": "/v2/sessions/{session}/bundles/{bundle}/{path}",
     "operationId": "BundleApi.InvokeSessionBundleApi.delete",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/sessions/{session}/bundles/{bundle}/{path}",
+    "path": "/v2/sessions/{session}/bundles/{bundle}/{path}",
     "operationId": "BundleApi.InvokeSessionBundleApi.get",
     "streaming": false
   },
   {
     "method": "PATCH",
-    "path": "/v1/sessions/{session}/bundles/{bundle}/{path}",
+    "path": "/v2/sessions/{session}/bundles/{bundle}/{path}",
     "operationId": "BundleApi.InvokeSessionBundleApi.patch",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/sessions/{session}/bundles/{bundle}/{path}",
+    "path": "/v2/sessions/{session}/bundles/{bundle}/{path}",
     "operationId": "BundleApi.InvokeSessionBundleApi.post",
     "streaming": false
   },
   {
     "method": "PUT",
-    "path": "/v1/sessions/{session}/bundles/{bundle}/{path}",
+    "path": "/v2/sessions/{session}/bundles/{bundle}/{path}",
     "operationId": "BundleApi.InvokeSessionBundleApi.put",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/sessions/{session}/compact",
+    "path": "/v2/sessions/{session}/compact",
     "operationId": "Session.CompactSession",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/sessions/{session}/events",
+    "path": "/v2/sessions/{session}/events",
     "operationId": "Events.ListEvents",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/sessions/{session}/events/stream",
+    "path": "/v2/sessions/{session}/events/stream",
     "operationId": "Events.StreamSessionEvents",
     "streaming": true
   },
   {
     "method": "POST",
-    "path": "/v1/sessions/{session}/fork",
+    "path": "/v2/sessions/{session}/fork",
     "operationId": "Session.ForkSession",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/sessions/{session}/messages",
+    "path": "/v2/sessions/{session}/messages",
     "operationId": "Messages.ListMessages",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/sessions/{session}/messages/{message}",
+    "path": "/v2/sessions/{session}/messages/{message}",
     "operationId": "Messages.GetMessage",
     "streaming": false
   },
   {
     "method": "DELETE",
-    "path": "/v1/sessions/{session}/messages/{message}/parts/{part}",
+    "path": "/v2/sessions/{session}/messages/{message}/parts/{part}",
     "operationId": "Messages.DeleteMessagePart",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/sessions/{session}/refresh-context",
+    "path": "/v2/sessions/{session}/refresh-context",
     "operationId": "Session.RefreshSessionContext",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/sessions/{session}/revert",
+    "path": "/v2/sessions/{session}/revert",
     "operationId": "Session.RevertSession",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/sessions/{session}/steer",
-    "operationId": "Session.SteerSubagent",
-    "streaming": false
-  },
-  {
-    "method": "POST",
-    "path": "/v1/sessions/{session}/summarize",
+    "path": "/v2/sessions/{session}/summarize",
     "operationId": "Session.SummarizeSession",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/sessions/{session}/todo",
+    "path": "/v2/sessions/{session}/todo",
     "operationId": "Messages.GetSessionTodo",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/sessions/{session}/turns",
+    "path": "/v2/sessions/{session}/turns",
     "operationId": "Turn.CreateTurn",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/sessions/{session}/turns/{turn}",
+    "path": "/v2/sessions/{session}/turns/{turn}",
     "operationId": "Turn.GetTurn",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/sessions/{session}/turns/{turn}/cancel",
+    "path": "/v2/sessions/{session}/turns/{turn}/cancel",
     "operationId": "Turn.CancelTurn",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/sessions/{session}/turns/{turn}/wait",
+    "path": "/v2/sessions/{session}/turns/{turn}/wait",
     "operationId": "Turn.WaitTurn",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/sessions/{session}/workflow",
-    "operationId": "Workflow.GetWorkflowState",
-    "streaming": false
-  },
-  {
-    "method": "POST",
-    "path": "/v1/sessions/{session}/workflow",
-    "operationId": "Workflow.SubmitWorkflowCommand",
-    "streaming": false
-  },
-  {
-    "method": "GET",
-    "path": "/v1/skills",
+    "path": "/v2/skills",
     "operationId": "Catalog.ListSkills",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/tools",
+    "path": "/v2/tools",
     "operationId": "Catalog.ListTools",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/tui-extensions",
+    "path": "/v2/tui-extensions",
     "operationId": "Catalog.ListTuiExtensions",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/vcs",
+    "path": "/v2/vcs",
     "operationId": "Project.GetVcsStatus",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/vcs/apply",
+    "path": "/v2/vcs/apply",
     "operationId": "Project.ApplyPatch",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/vcs/diff",
+    "path": "/v2/vcs/diff",
     "operationId": "Project.GetVcsDiff",
     "streaming": false
   },
   {
     "method": "GET",
-    "path": "/v1/workflows",
-    "operationId": "Workflow.ListWorkflows",
-    "streaming": false
-  },
-  {
-    "method": "GET",
-    "path": "/v1/worktrees",
+    "path": "/v2/worktrees",
     "operationId": "Worktrees.ListWorktrees",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/worktrees",
+    "path": "/v2/worktrees",
     "operationId": "Worktrees.CreateWorktree",
     "streaming": false
   },
   {
     "method": "DELETE",
-    "path": "/v1/worktrees/{worktree}",
+    "path": "/v2/worktrees/{worktree}",
     "operationId": "Worktrees.DeleteWorktree",
     "streaming": false
   },
   {
     "method": "POST",
-    "path": "/v1/worktrees/{worktree}/reset",
+    "path": "/v2/worktrees/{worktree}/reset",
     "operationId": "Worktrees.ResetWorktree",
     "streaming": false
   }

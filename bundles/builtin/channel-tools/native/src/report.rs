@@ -1,7 +1,6 @@
 //! Terminal subagent report tool.
-use hya_proto::ReportOutcome;
 use hya_tool::tool::obj_schema;
-use hya_tool::{Tool, ToolCtx, ToolError};
+use hya_tool::{ReportOutcome, Tool, ToolCtx, ToolError};
 use serde_json::{Value, json};
 
 /// Terminal report tool (ADR-0015): ends the calling agent's episode.

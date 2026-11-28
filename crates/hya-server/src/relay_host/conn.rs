@@ -1,6 +1,6 @@
 //! Serving one relay stream: the decrypted tunnel is an ordinary byte
 //! stream, so `hyper` serves the same [`Server`] over it as over a TCP
-//! connection — the `/v1` router, and the gRPC services for
+//! connection — the `/v2` router, and the gRPC services for
 //! `application/grpc*` requests (HTTP/1.1 with upgrades for the PTY
 //! WebSocket, or HTTP/2) — with the [`Origin::Relay`] extension on every
 //! request, gRPC included.

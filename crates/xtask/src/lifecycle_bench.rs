@@ -6,7 +6,7 @@ use hya_engine::{
 };
 use hya_proto::{
     AgentName, Event, FinishCause, FinishReason, MailEndpoint, MailKind, MessageId, ModelRef,
-    ReportOutcome, SessionId,
+    SessionId,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
@@ -16,6 +16,8 @@ use hya_store::{
     SessionStore,
     bench::{Counts, snapshot},
 };
+use hya_tool::ReportOutcome;
+use hya_tool::extension::ExtensionEvent;
 use hya_tool::{Mode, PermissionPlane, PermissionRules};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -149,7 +151,7 @@ fn row(scenario: &str, n: usize, phase: &str, start: Instant, before: Counts) ->
 fn runtime() -> anyhow::Result<Arc<RuntimeRegistry>> {
     use hya_bundle::{BundleCatalog, BundleSource, SourceFile};
     let packages = [("bench-root", "main", "    can_spawn: [bench-worker]\n"), ("bench-worker", "subagent", "")].into_iter().map(|(id, role, extra)| {
-        hya_bundle::prepare_package(BundleSource::new(format!("hya/{id}"), vec![SourceFile::new("bundle.yaml", format!("kind: Bundle\nidentity:\n  id: hya/{id}\n  version: 0.0.0\n  publisher: hya\nagents:\n  - id: {id}\n    role: {role}\n    prompt: prompt.md\n{extra}").into_bytes()), SourceFile::new("prompt.md", b"Complete the task.".to_vec())]))
+        hya_bundle::prepare_package(BundleSource::new(format!("hya/{id}"), vec![SourceFile::new("bundle.yaml", format!("schema_version: 2\nkind: Bundle\nidentity:\n  id: hya/{id}\n  version: 0.0.0\n  publisher: hya\nagents:\n  - id: {id}\n    role: {role}\n    prompt: prompt.md\n{extra}").into_bytes()), SourceFile::new("prompt.md", b"Complete the task.".to_vec())]))
     }).collect::<Result<Vec<_>, _>>()?;
     let catalog = BundleCatalog::from_verified_catalogs(&packages.iter().collect::<Vec<_>>())?;
     Ok(Arc::new(RuntimeRegistry::from_snapshot(
@@ -294,11 +296,11 @@ async fn sample_in(n: usize, dir: &std::path::Path) -> anyhow::Result<Vec<Row>> 
                 {
                     bail!("tool failed: {message_text}");
                 }
-                if let Event::AgentActivityChanged {
+                if let Some(ExtensionEvent::AgentActivityChanged {
                     handle,
                     status: hya_proto::RosterStatus::Idle,
                     ..
-                } = envelope.event
+                }) = ExtensionEvent::from_event(&envelope.event)
                     && handle != "main"
                 {
                     idle.insert(handle.clone());
@@ -317,9 +319,10 @@ async fn sample_in(n: usize, dir: &std::path::Path) -> anyhow::Result<Vec<Row>> 
                     .submit_report(root, handle, ReportOutcome::Done, "Measured answer.".into())
                     .await?;
                 loop {
-                    if matches!(events.recv().await?.event,
-                        Event::AgentArchived { handle: archived, .. } if archived == *handle)
-                    {
+                    if matches!(
+                        ExtensionEvent::from_event(&events.recv().await?.event),
+                        Some(ExtensionEvent::AgentArchived { handle: archived, .. }) if archived == *handle
+                    ) {
                         break;
                     }
                 }

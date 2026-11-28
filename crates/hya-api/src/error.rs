@@ -1,4 +1,4 @@
-//! Stable error model shared by the HTTP and gRPC v1 bindings.
+//! Stable error model shared by the HTTP and gRPC v2 bindings.
 //!
 //! HTTP exposes the stable string in the JSON error envelope and uses
 //! [Code::http_status] for its status. gRPC uses [Code::grpc_code] and
@@ -8,7 +8,7 @@ use std::fmt;
 
 macro_rules! wire_codes {
     ($($(#[$attr:meta])* $variant:ident => $wire:literal),+ $(,)?) => {
-        /// Stable machine-readable error code for the v1 contract.
+        /// Stable machine-readable error code for the v2 contract.
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub enum Code {
             $($(#[$attr])* $variant),+
@@ -38,28 +38,6 @@ macro_rules! wire_codes {
 wire_codes! {
     /// Request body or parameters are invalid.
     InvalidArgument => "invalid_argument",
-    /// Workflow command syntax is invalid.
-    WorkflowSyntax => "WORKFLOW_SYNTAX",
-    /// Workflow inputs or source fail validation.
-    WorkflowInvalidInput => "WORKFLOW_INVALID_INPUT",
-    /// Workflow source fails validation.
-    WorkflowInvalidSource => "WORKFLOW_INVALID_SOURCE",
-    /// Requested Workflow is missing.
-    WorkflowNotFound => "WORKFLOW_NOT_FOUND",
-    /// No Workflow is selected.
-    WorkflowNotSelected => "WORKFLOW_NOT_SELECTED",
-    /// Workflow access is denied.
-    WorkflowUnauthorized => "WORKFLOW_UNAUTHORIZED",
-    /// Workflow admission is busy.
-    WorkflowBusy => "WORKFLOW_BUSY",
-    /// Workflow operation conflicts with a prior operation.
-    WorkflowOperationConflict => "WORKFLOW_OPERATION_CONFLICT",
-    /// Workflow revision is stale.
-    WorkflowStaleRevision => "WORKFLOW_STALE_REVISION",
-    /// Workflow runtime is unavailable.
-    WorkflowRuntimeUnavailable => "WORKFLOW_RUNTIME_UNAVAILABLE",
-    /// Workflow live capacity is currently exhausted.
-    WorkflowOverloaded => "WORKFLOW_OVERLOADED",
     /// Requested resource does not exist.
     NotFound => "not_found",
     /// Session id does not exist (or was deleted).
@@ -99,15 +77,6 @@ impl Code {
     #[must_use]
     pub fn http_status(&self) -> u16 {
         match self {
-            Self::WorkflowSyntax => 400,
-            Self::WorkflowInvalidInput | Self::WorkflowInvalidSource => 422,
-            Self::WorkflowNotFound | Self::WorkflowNotSelected => 404,
-            Self::WorkflowUnauthorized => 403,
-            Self::WorkflowBusy | Self::WorkflowOperationConflict | Self::WorkflowStaleRevision => {
-                409
-            }
-            Self::WorkflowRuntimeUnavailable | Self::WorkflowOverloaded => 503,
-
             Self::InvalidArgument | Self::BundleApiBadRequest => 400,
             Self::NotFound | Self::SessionNotFound | Self::BundleApiNotFound => 404,
             Self::BundleApiMethodNotAllowed => 405,
@@ -123,17 +92,6 @@ impl Code {
     #[must_use]
     pub fn grpc_code(&self) -> tonic::Code {
         match self {
-            Self::WorkflowSyntax | Self::WorkflowInvalidInput | Self::WorkflowInvalidSource => {
-                tonic::Code::InvalidArgument
-            }
-            Self::WorkflowNotFound | Self::WorkflowNotSelected => tonic::Code::NotFound,
-            Self::WorkflowUnauthorized => tonic::Code::PermissionDenied,
-            Self::WorkflowBusy | Self::WorkflowOperationConflict | Self::WorkflowStaleRevision => {
-                tonic::Code::FailedPrecondition
-            }
-            Self::WorkflowRuntimeUnavailable => tonic::Code::Unavailable,
-            Self::WorkflowOverloaded => tonic::Code::ResourceExhausted,
-
             Self::InvalidArgument | Self::BundleApiBadRequest => tonic::Code::InvalidArgument,
             Self::NotFound | Self::SessionNotFound | Self::BundleApiNotFound => {
                 tonic::Code::NotFound
@@ -163,23 +121,6 @@ mod tests {
     fn stable_wire_codes_round_trip() {
         for (code, name) in [
             (Code::InvalidArgument, "invalid_argument"),
-            (Code::WorkflowSyntax, "WORKFLOW_SYNTAX"),
-            (Code::WorkflowInvalidInput, "WORKFLOW_INVALID_INPUT"),
-            (Code::WorkflowInvalidSource, "WORKFLOW_INVALID_SOURCE"),
-            (Code::WorkflowNotFound, "WORKFLOW_NOT_FOUND"),
-            (Code::WorkflowNotSelected, "WORKFLOW_NOT_SELECTED"),
-            (Code::WorkflowUnauthorized, "WORKFLOW_UNAUTHORIZED"),
-            (Code::WorkflowBusy, "WORKFLOW_BUSY"),
-            (
-                Code::WorkflowOperationConflict,
-                "WORKFLOW_OPERATION_CONFLICT",
-            ),
-            (Code::WorkflowStaleRevision, "WORKFLOW_STALE_REVISION"),
-            (
-                Code::WorkflowRuntimeUnavailable,
-                "WORKFLOW_RUNTIME_UNAVAILABLE",
-            ),
-            (Code::WorkflowOverloaded, "WORKFLOW_OVERLOADED"),
             (Code::NotFound, "not_found"),
             (Code::SessionNotFound, "session_not_found"),
             (Code::PermissionDenied, "permission_denied"),
@@ -247,31 +188,6 @@ mod tests {
             assert_eq!(code.as_str(), name);
             assert_eq!(code.http_status(), http);
             assert_eq!(code.grpc_code(), grpc);
-        }
-    }
-}
-
-#[cfg(test)]
-mod workflow_codes {
-    use super::Code;
-
-    #[test]
-    fn workflow_errors_keep_their_intended_status() {
-        for (code, status) in [
-            (Code::WorkflowSyntax, 400),
-            (Code::WorkflowInvalidInput, 422),
-            (Code::WorkflowInvalidSource, 422),
-            (Code::WorkflowNotFound, 404),
-            (Code::WorkflowNotSelected, 404),
-            (Code::WorkflowUnauthorized, 403),
-            (Code::WorkflowBusy, 409),
-            (Code::WorkflowOperationConflict, 409),
-            (Code::WorkflowStaleRevision, 409),
-            (Code::WorkflowRuntimeUnavailable, 503),
-            (Code::WorkflowOverloaded, 503),
-        ] {
-            assert_eq!(code.http_status(), status);
-            assert_ne!(code.grpc_code(), tonic::Code::Internal);
         }
     }
 }

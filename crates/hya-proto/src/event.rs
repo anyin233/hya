@@ -10,20 +10,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{
-    ActorEpoch, ConfigGeneration, EventSeq, MemberId, MessageId, OwnerRunId, PartId, ProjectId,
-    SessionId, ToolCallId, WorkflowRunId,
-};
-use crate::mail::{ChannelKind, MailEndpoint, MailKind};
-use crate::message::{
-    FinishCause, FinishReason, MemberRunStatus, Role, RosterStatus, SubagentMode, TokenUsage,
-    ToolPartState, UsagePurpose,
-};
+use crate::ids::{ConfigGeneration, EventSeq, MessageId, PartId, ProjectId, SessionId, ToolCallId};
+use crate::message::{FinishCause, FinishReason, Role, TokenUsage, ToolPartState, UsagePurpose};
 use crate::model::{AgentName, ModelRef, ToolName};
-use crate::tokens::{TokenAccountingMode, TokenSource};
-use crate::workflow::{
-    WorkflowIdentity, WorkflowMemberRole, WorkflowRunStatus, WorkflowStagePlan, WorkflowStageStatus,
-};
 
 /// Kind of a session (ADR-0024): part of a Project, or a temporary session
 /// with its own scratch workdir that belongs to no Project.
@@ -187,13 +176,6 @@ pub enum Event {
         /// New model reference.
         model: ModelRef,
     },
-    /// Historical `session.status` ping. Decoded for replay and never emitted.
-    SessionStatus {
-        /// Session this event belongs to.
-        session: SessionId,
-        /// Opaque status payload for live UIs.
-        status: serde_json::Value,
-    },
     /// Slash command produced a user message; reducer no-op (compat `command.executed`).
     CommandExecuted {
         /// Session this event belongs to.
@@ -204,103 +186,6 @@ pub enum Event {
         arguments: String,
         /// User message id that was admitted.
         message: MessageId,
-    },
-    /// Select an exact compiled Workflow identity; the last event wins.
-    WorkflowSelected {
-        /// Session whose control state changes.
-        session: SessionId,
-        /// Stable source/name/revision identity.
-        workflow: WorkflowIdentity,
-    },
-    /// Begin one durable Workflow run and capture its declaration-ordered plan.
-    WorkflowRunStarted {
-        /// Session that owns the Workflow control state.
-        session: SessionId,
-        /// Stable run identity.
-        run: WorkflowRunId,
-        /// Exact compiled identity executed by this run.
-        workflow: WorkflowIdentity,
-        /// Canonical hash of source, caller, input pairs, and bound runtime.
-        request_hash: String,
-        /// Process owner that admitted this run.
-        owner: OwnerRunId,
-        /// Stable display/provenance plan; never directives, inputs, or outputs.
-        stages: Vec<WorkflowStagePlan>,
-    },
-    /// Mark one compiled Stage as active.
-    WorkflowStageStarted {
-        /// Session that owns the Workflow run.
-        session: SessionId,
-        /// Run that owns this Stage activation.
-        run: WorkflowRunId,
-        /// Compiled Stage id.
-        stage: String,
-    },
-    /// Link one canonical Member reference to a Workflow Stage.
-    WorkflowStageMemberLinked {
-        /// Session that owns the Workflow run.
-        session: SessionId,
-        /// Run that owns this member.
-        run: WorkflowRunId,
-        /// Compiled Stage id.
-        stage: String,
-        /// Member identity in the authoritative Session member projection.
-        member: MemberId,
-        /// Worker or independent verifier role.
-        role: WorkflowMemberRole,
-        /// Zero-based activation iteration.
-        iteration: u32,
-    },
-    /// Record one finalized candidate selection for an explicit Stage route.
-    ///
-    /// This is one bounded observation per provider stream group; it carries
-    /// no provider text, credentials, prompts, or response content.
-    WorkflowStageRouteOutcome {
-        /// Owning root Session log.
-        session: SessionId,
-        /// Workflow run containing the Stage.
-        run: WorkflowRunId,
-        /// Compiled Stage id.
-        stage: String,
-        /// Canonical Session member reference.
-        member: MemberId,
-        /// Worker or independent verifier route.
-        role: WorkflowMemberRole,
-        /// Zero-based loop activation iteration.
-        iteration: u32,
-        /// Assistant/provider stream-group index.
-        step: u32,
-        /// Declaration-order candidate index selected or finally attempted.
-        candidate_index: u32,
-        /// Base model identity without a Workflow variant suffix.
-        model: ModelRef,
-        /// Required canonical effort label (`none` means Off).
-        reasoning: String,
-        /// Stable provider/activation failure class.
-        failure_class: WorkflowRouteFailureClass,
-    },
-    /// Finish one Workflow Stage with a terminal status.
-    WorkflowStageFinished {
-        /// Session that owns the Workflow run.
-        session: SessionId,
-        /// Run that owns this Stage activation.
-        run: WorkflowRunId,
-        /// Compiled Stage id.
-        stage: String,
-        /// Terminal Stage status.
-        status: WorkflowStageStatus,
-    },
-    /// Finish one Workflow run with a terminal status.
-    WorkflowRunFinished {
-        /// Session that owns the Workflow run.
-        session: SessionId,
-        /// Run being terminalized.
-        run: WorkflowRunId,
-        /// Terminal run status.
-        status: WorkflowRunStatus,
-        /// Bounded terminal error detail, when present.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
     },
 
     // -------- message lifecycle --------
@@ -589,269 +474,8 @@ pub enum Event {
         state: ToolPartState,
     },
 
-    // -------- subagent (member) lifecycle --------
-    // These attach to the PARENT (`session`) so they live in the parent's log and
-    // stream with it. They carry only bounded metadata + a short summary — never a
-    // child transcript — so observers can render a live agent tree cheaply.
-    /// Member spawned on the **parent** log (status → Spawning); never carries child transcript.
-    MemberSpawned {
-        /// Parent session log this event is appended to.
-        session: SessionId,
-        /// Member id within the parent tree.
-        member: MemberId,
-        /// Child session when known.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        child: Option<SessionId>,
-        /// Subagent type / agent name for the spawn.
-        subagent_type: AgentName,
-        /// Short human description of the task.
-        description: String,
-        /// Depth in the subagent tree (root children are 1).
-        depth: u32,
-        /// Verbatim parent directive that defines this member's purpose.
-        ///
-        /// Recorded on the edge because the child's first user message is not a
-        /// reliable substitute: a resumed session receives the directive as a
-        /// later message, and a resident agent also receives mail as user
-        /// prompts. Offline viewers summarize this; the engine never does.
-        #[serde(default, skip_serializing_if = "String::is_empty")]
-        directive: String,
-        /// Tool call that caused this spawn, when it came from one.
-        ///
-        /// `None` for members the resident supervisor starts without a tool call.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tool_call: Option<ToolCallId>,
-    },
-    /// Member status update on the parent log.
-    MemberStatusChanged {
-        /// Parent session log.
-        session: SessionId,
-        /// Member being updated.
-        member: MemberId,
-        /// New run status.
-        status: MemberRunStatus,
-    },
-    /// Member finished with a **bounded** summary string (not the child transcript).
-    MemberFinished {
-        /// Parent session log.
-        session: SessionId,
-        /// Member being finished.
-        member: MemberId,
-        /// Terminal member status.
-        status: MemberRunStatus,
-        /// Bounded summary for the parent/TUI.
-        summary: String,
-        /// Optional child session id when known at finish.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        child: Option<SessionId>,
-    },
-
-    // -------- event-sourced mailbox & channels (ADR-0001) --------
-    // Team-scoped comms. Every variant is appended to the TEAM-ROOT session's log
-    // (`session` = the root of the team tree) so a single replay reconstructs the
-    // whole team's inboxes/channels/roster, and the live bus carries them to the
-    // TUI for free.
-    /// Bind a team member's session to its stable handle within its unit.
-    /// `agent_session` is the registered agent's own session; `session` is the
-    /// team-root log the binding is recorded in.
-    AgentRegistered {
-        /// Team-root log session.
-        session: SessionId,
-        /// Agent's own session id.
-        agent_session: SessionId,
-        /// The agent's **leaf** name — its short name inside its unit, not a
-        /// path. The reducer joins it to `parent` to form the canonical handle.
-        handle: String,
-        /// Canonical path of this agent's parent, e.g. `main/lead-1`.
-        ///
-        /// `None` for the team root; child registrations carry their parent path.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        parent: Option<String>,
-        /// Declared agent type for the roster.
-        #[serde(default)]
-        agent_type: AgentName,
-        /// Transient vs resident scheduling (ADR-0002). `#[serde(default)]` so logs
-        /// predating Phase 4 replay every member as transient.
-        #[serde(default)]
-        mode: SubagentMode,
-    },
-    /// A team member's live activity changed (idle ⇄ busy, or a terminal
-    /// done/failed), optionally updating its short current-task label. Appended to
-    /// the TEAM-ROOT log by the resident supervisor so the roster status column
-    /// and quiescence view replay for free.
-    AgentActivityChanged {
-        /// Team-root log session.
-        session: SessionId,
-        /// Roster handle being updated.
-        handle: String,
-        /// New live activity.
-        status: RosterStatus,
-        /// Optional short task label for display; it does not acknowledge work.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        current_task: Option<String>,
-    },
-    /// Durable boundary between queued resident work and a turn that may dispatch
-    /// tools, children, or provider requests. Appended before those effects.
-    ResidentWorkStarted {
-        /// Team-root log session.
-        session: SessionId,
-        /// Resident actor session whose work is starting.
-        actor_session: SessionId,
-        /// Roster handle of the actor.
-        handle: String,
-        /// Actor epoch for this incarnation.
-        epoch: ActorEpoch,
-        /// Inbox length covered by this coalesced resident turn.
-        inbox_through: u64,
-    },
-    /// The admitted resident wake settled. A user cancellation leaves its work
-    /// pending instead; in-turn MailConsumed acknowledgements do not settle it.
-    ResidentWorkFinished {
-        /// Team-root log session.
-        session: SessionId,
-        /// Roster handle whose work settled.
-        handle: String,
-        /// Epoch of the work being settled.
-        epoch: ActorEpoch,
-        /// Inbox boundary acknowledged by the completed wake.
-        inbox_through: u64,
-    },
-    /// Harness-observed liveness for one resident (ADR-0002). Emitted ONLY by
-    /// the resident supervisor — never by the agent (no tool surface can) —
-    /// derived from real engine events the harness observed on the bus (tool
-    /// results, text deltas, turn boundaries). Folds onto the roster row as a
-    /// max, so the parent can tell a busy child that is progressing from one
-    /// that has stalled.
-    AgentHeartbeat {
-        /// Team-root log session.
-        session: SessionId,
-        /// Roster handle whose actor showed harness-observed activity.
-        handle: String,
-        /// Unix-epoch milliseconds of the observed activity; the fold keeps
-        /// the max, so stale values never regress liveness.
-        heartbeat_ms: u64,
-    },
-    /// Agent mail to a channel, or a harness notice to a handle. Channel sends
-    /// fan out to eligible subscribers in the deterministic reducer.
-    MailSent {
-        /// Team-root log session.
-        session: SessionId,
-        /// Sender handle.
-        from: String,
-        /// Channel endpoint; only `from == "harness"` may persist a handle.
-        to: MailEndpoint,
-        /// Message intent (default chatter vs announcement).
-        #[serde(default)]
-        kind: MailKind,
-        /// Message body text.
-        body: String,
-    },
-    /// Historical channel join. Decoded for replay and never emitted.
-    /// Membership is folded from `ChannelCreated`.
-    ChannelJoined {
-        /// Team-root log session.
-        session: SessionId,
-        /// Channel name without leading `#`.
-        channel: String,
-        /// Member handle joining.
-        member: String,
-    },
-
-    // -------- unified orchestration lifecycle (ADR-0015/0016) --------
-    /// A channel was minted as an event fact: group channels carry the leader
-    /// plus its direct reports; DM channels carry the vertical pair. The id is
-    /// the canonical channel key (`announce-{8}` / `DM-{8}`).
-    ChannelCreated {
-        /// Team-root log session.
-        session: SessionId,
-        /// Channel key without the leading `#`.
-        channel: String,
-        /// Group broadcast vs DM pair.
-        #[serde(default)]
-        kind: ChannelKind,
-        /// Owning unit path for group channels (`main/lead-1`); `None` for DM
-        /// pairs. Durable unit→channel mapping so leader-only posting and
-        /// broadcast resolution replay without derivation.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        unit: Option<String>,
-        /// Canonical handles of the founding members.
-        #[serde(default)]
-        members: Vec<String>,
-    },
-    /// Terminal task report from a subagent to its parent. Appended to the
-    /// PARENT log; the engine also delivers the report as mail on the
-    /// parent-child DM channel.
-    SubagentReported {
-        /// Parent session log.
-        session: SessionId,
-        /// Member id within the parent tree.
-        member: MemberId,
-        /// Reporting child session.
-        child: SessionId,
-        /// Reporting agent's canonical handle (team-root key).
-        handle: String,
-        /// Terminal outcome.
-        outcome: ReportOutcome,
-        /// Bounded result text for the parent.
-        report: String,
-    },
-    /// The state-only handoff document that survives an archive. Appended to
-    /// the CHILD's own log; `generation` counts episodes and each document
-    /// anchors on its predecessor.
-    HandoffCommitted {
-        /// Child session log.
-        session: SessionId,
-        /// Handle within the team (cross-log discovery).
-        handle: String,
-        /// Episode generation of this document.
-        generation: u32,
-        /// Full handoff document (six state-only sections).
-        doc: String,
-        /// A deterministic projection-derived fallback produced this document.
-        #[serde(default)]
-        degraded: bool,
-    },
-    /// An agent left the live roster: the sole archive marker. Removes the
-    /// roster row and group-channel membership; the DM channel persists as the
-    /// revival address.
-    AgentArchived {
-        /// Team-root log session.
-        session: SessionId,
-        /// Archived agent's canonical handle.
-        handle: String,
-        /// Archived agent's session.
-        child: SessionId,
-        /// Why the agent archived.
-        reason: ArchiveReason,
-    },
-    /// In-turn mail consumption (steer): unread mail surfaced to the agent
-    /// inside a tool result advances the durable inbox cursor, so the report
-    /// gate and later turns never re-inject or re-block on mail the agent has
-    /// already seen mid-turn.
-    MailConsumed {
-        /// Team-root log session.
-        session: SessionId,
-        /// Consuming roster handle.
-        handle: String,
-        /// Inbox length covered by this consumption.
-        through: u64,
-    },
-
-    /// An archived agent was revived by a downward DM. Paired with an
-    /// `AgentRegistered` upsert in the same transaction.
-    AgentRestarted {
-        /// Team-root log session.
-        session: SessionId,
-        /// Revived agent's canonical handle.
-        handle: String,
-        /// Revived agent's session.
-        child: SessionId,
-        /// New actor epoch for this incarnation.
-        epoch: ActorEpoch,
-    },
-
-    // -------- context observability --------
-    /// A compaction folded part of this session's transcript.
+    // -------- context rewrite & fork --------
+    /// A compaction or kernel rewrite folded part of this session's transcript.
     ///
     /// Appended to the log of the session that compacted; there is no parent
     /// mirror, because `event_log.seq` already orders every agent's events on one
@@ -907,54 +531,6 @@ pub enum Event {
         /// copied every visible message.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         before_message: Option<MessageId>,
-    },
-
-    /// Stale tool outputs were replaced by notices in the requests from now on.
-    ///
-    /// Cheaper than summarizing: the model keeps every tool call and its input,
-    /// and loses only old outputs it can re-fetch. Recorded whenever eviction
-    /// saved tokens, whether or not that alone was enough.
-    ///
-    /// The tool parts keep their full outputs in the log and the projection;
-    /// the reducer records each notice beside its part
-    /// ([`crate::PartProjection::Tool`] `eviction_notice`), and requests send
-    /// the notice instead of the output.
-    ContextEvicted {
-        /// Session whose request was reduced.
-        session: SessionId,
-        /// Number of tool-output parts replaced with a notice.
-        evicted_parts: u32,
-        /// Each evicted part with the exact text requests send instead of its
-        /// output. Empty in logs written before this field.
-        #[serde(default)]
-        parts: Vec<EvictedPart>,
-        /// Token count before eviction.
-        tokens_before: u64,
-        /// Token count after eviction.
-        tokens_after: u64,
-        /// Threshold in force when it ran.
-        threshold: u64,
-    },
-
-    /// Window occupancy for one model request, with how the figure was derived.
-    ///
-    /// Emitted once per streaming round, after any compaction ladder walk, so
-    /// the recorded number is the occupancy actually sent. This is the wire
-    /// surface of token accounting: the count, whether it was provider-anchored
-    /// or locally estimated, the accounting mode in force, and the resolved
-    /// threshold it was judged against. The projection keeps the latest per
-    /// session.
-    ContextStatus {
-        /// Session whose request was measured.
-        session: SessionId,
-        /// Tokens the request is believed to occupy.
-        tokens: u64,
-        /// Whether the count was provider-anchored or locally estimated.
-        source: TokenSource,
-        /// Accounting mode in force for the round.
-        mode: TokenAccountingMode,
-        /// Resolved compaction threshold the count was judged against.
-        threshold: u64,
     },
 
     // -------- token accounting --------
@@ -1077,90 +653,21 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failed_message: Option<MessageId>,
     },
-}
-/// Terminal outcome of a subagent's task report (ADR-0015).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReportOutcome {
-    /// Task completed successfully.
-    Done,
-    /// Task failed; the report carries the blocker.
-    Failed,
-}
 
-/// Why an agent left the live roster (ADR-0015). Archive is the sole exit.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ArchiveReason {
-    /// Terminal report accepted (model-issued or engine-synthesized).
-    Reported,
-    /// Legacy (before 0.41.0): parent `kill` tool. Kept so old logs decode.
-    Killed,
-    /// Root-turn teardown force-archive.
-    RootTeardown,
-    /// The parent (or an ancestor) archived the member with the `archive`
-    /// tool; any in-flight turn was cancelled first.
-    ArchivedByParent,
-    /// A graceful stop (end of a one-shot run, SIGINT/SIGTERM, `serve`
-    /// shutdown) archived the member so a later run can wake it with mail.
-    Shutdown,
-}
-
-/// Stable, bounded classification for one Workflow route outcome.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkflowRouteFailureClass {
-    /// The selected candidate succeeded without a fallback advance.
-    None,
-    /// Retryable transport failure before a stream was established.
-    Transport,
-    /// Upstream rate limiting before a stream was established.
-    RateLimited,
-    /// Retryable upstream server failure before a stream was established.
-    Server,
-    /// No provider route claimed the candidate model.
-    UnknownModel,
-    /// Authentication or authorization failure.
-    Auth,
-    /// Provider capability or request incompatibility.
-    Incompatible,
-    /// Non-retryable HTTP/provider response failure.
-    Http,
-    /// Malformed or truncated provider stream.
-    Decode,
-    /// Internal invariant, store, or claim failure after an attempt started.
-    Internal,
-    /// Sidecar loss or task abort after an attempt started.
-    Aborted,
-    /// Explicit Workflow-owned activation cancellation.
-    Cancelled,
-}
-
-/// Durable fields for one finalized explicit Workflow route stream group.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct WorkflowStageRouteOutcome {
-    /// Owning root Session log.
-    pub session: SessionId,
-    /// Workflow run containing the Stage.
-    pub run: WorkflowRunId,
-    /// Compiled Stage id.
-    pub stage: String,
-    /// Canonical Session member reference.
-    pub member: MemberId,
-    /// Worker or independent verifier route.
-    pub role: WorkflowMemberRole,
-    /// Zero-based loop activation iteration.
-    pub iteration: u32,
-    /// Assistant/provider stream-group index.
-    pub step: u32,
-    /// Declaration-order candidate index selected or finally attempted.
-    pub candidate_index: u32,
-    /// Base model identity without a Workflow variant suffix.
-    pub model: ModelRef,
-    /// Required canonical effort label (`none` means Off).
-    pub reasoning: String,
-    /// Stable provider/activation failure class.
-    pub failure_class: WorkflowRouteFailureClass,
+    // -------- bundle extension events --------
+    /// Bundle-defined extension event folded by registered
+    /// [`crate::ProjectionReducer`]s and preserved verbatim in the log even
+    /// when the owning bundle is not loaded.
+    Extension {
+        /// Session this event belongs to.
+        session: SessionId,
+        /// Owning bundle id (for example `hya/workflow` or `hya/multi-agent`).
+        bundle: String,
+        /// Bundle-defined event kind discriminator.
+        kind: String,
+        /// Opaque JSON payload owned by the bundle.
+        payload: serde_json::Value,
+    },
 }
 fn default_step_finish_reason() -> FinishReason {
     FinishReason::Stop
@@ -1182,16 +689,6 @@ pub struct StepCut {
     pub through_part: PartId,
     /// First message kept after the marker.
     pub kept_head: MessageId,
-}
-
-/// One tool part a [`Event::ContextEvicted`] replaced in later requests.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EvictedPart {
-    /// The evicted tool part.
-    pub part: PartId,
-    /// Text requests send instead of the part's output, artifact handle
-    /// included when the body was spilled.
-    pub notice: String,
 }
 
 /// Which compaction path produced a [`Event::ContextCompacted`] record.
@@ -1244,15 +741,7 @@ impl Event {
             | Event::SessionEphemeralSet { session, .. }
             | Event::AgentSwitched { session, .. }
             | Event::ModelSwitched { session, .. }
-            | Event::SessionStatus { session, .. }
             | Event::CommandExecuted { session, .. }
-            | Event::WorkflowSelected { session, .. }
-            | Event::WorkflowRunStarted { session, .. }
-            | Event::WorkflowStageStarted { session, .. }
-            | Event::WorkflowStageMemberLinked { session, .. }
-            | Event::WorkflowStageRouteOutcome { session, .. }
-            | Event::WorkflowStageFinished { session, .. }
-            | Event::WorkflowRunFinished { session, .. }
             | Event::MessageStarted { session, .. }
             | Event::TurnBindingRecorded { session, .. }
             | Event::UserPromptContextRecorded { session, .. }
@@ -1272,34 +761,17 @@ impl Event {
             | Event::ToolInputDelta { session, .. }
             | Event::ToolCallRequested { session, .. }
             | Event::ToolResult { session, .. }
-            | Event::ToolError { session, .. } => Some(*session),
-            Event::ToolPartUpdated { session, .. } => Some(*session),
-            Event::MemberSpawned { session, .. }
-            | Event::MemberStatusChanged { session, .. }
-            | Event::MemberFinished { session, .. } => Some(*session),
-            Event::AgentRegistered { session, .. }
-            | Event::AgentActivityChanged { session, .. }
-            | Event::ResidentWorkStarted { session, .. }
-            | Event::ResidentWorkFinished { session, .. }
-            | Event::AgentHeartbeat { session, .. }
-            | Event::MailSent { session, .. }
-            | Event::ChannelJoined { session, .. }
-            | Event::ChannelCreated { session, .. }
-            | Event::SubagentReported { session, .. }
-            | Event::HandoffCommitted { session, .. }
-            | Event::AgentArchived { session, .. }
-            | Event::AgentRestarted { session, .. }
-            | Event::MailConsumed { session, .. } => Some(*session),
-            Event::ContextCompacted { session, .. }
+            | Event::ToolError { session, .. }
+            | Event::ToolPartUpdated { session, .. }
+            | Event::ContextCompacted { session, .. }
             | Event::SessionForked { session, .. }
-            | Event::ContextEvicted { session, .. }
-            | Event::ContextStatus { session, .. }
             | Event::UsageRecorded { session, .. }
             | Event::TodosUpdated { session, .. }
             | Event::FilesChanged { session, .. }
             | Event::FilesObserved { session, .. }
             | Event::SessionReverted { session, .. }
-            | Event::SessionUnreverted { session, .. } => Some(*session),
+            | Event::SessionUnreverted { session, .. }
+            | Event::Extension { session, .. } => Some(*session),
             Event::Error { session, .. } => *session,
         }
     }
@@ -1392,80 +864,30 @@ mod tests {
         }
     }
 
-    /// Wire round-trip and owning-session attribution across mailbox, fork,
-    /// compaction, and orchestration events (ADR-0015/0016).
+    /// Wire round-trip and owning-session attribution across extension, fork,
+    /// and rewrite events.
     #[test]
     fn events_round_trip_and_report_owning_session() {
         let root = SessionId::new();
         let parent = SessionId::new();
-        let child = SessionId::new();
         let cases: Vec<(Event, SessionId)> = vec![
             (
-                Event::AgentRegistered {
+                Event::Extension {
                     session: root,
-                    agent_session: child,
-                    handle: "reviewer-3".to_string(),
-                    parent: None,
-                    agent_type: AgentName::new("reviewer"),
-                    mode: SubagentMode::Resident,
+                    bundle: "hya/workflow".to_string(),
+                    kind: "run_started".to_string(),
+                    payload: serde_json::json!({"run": "wfrun_123", "stage": "plan"}),
                 },
                 root,
             ),
             (
-                Event::AgentActivityChanged {
-                    session: root,
-                    handle: "reviewer-3".to_string(),
-                    status: RosterStatus::Busy,
-                    current_task: Some("reviewing".to_string()),
+                Event::Extension {
+                    session: parent,
+                    bundle: "hya/multi-agent".to_string(),
+                    kind: "member_spawned".to_string(),
+                    payload: serde_json::json!({"handle": "main/worker-1"}),
                 },
-                root,
-            ),
-            (
-                Event::ResidentWorkStarted {
-                    session: root,
-                    actor_session: child,
-                    handle: "reviewer-3".to_string(),
-                    epoch: ActorEpoch::INITIAL,
-                    inbox_through: 2,
-                },
-                root,
-            ),
-            (
-                Event::ResidentWorkFinished {
-                    session: root,
-                    handle: "main/member".into(),
-                    epoch: ActorEpoch::INITIAL,
-                    inbox_through: 1,
-                },
-                root,
-            ),
-            (
-                Event::MailSent {
-                    session: root,
-                    from: "main".to_string(),
-                    to: MailEndpoint::Channel("build".to_string()),
-                    kind: MailKind::Announcement,
-                    body: "ship it".to_string(),
-                },
-                root,
-            ),
-            (
-                Event::MailSent {
-                    session: root,
-                    from: "harness".to_string(),
-                    to: MailEndpoint::Handle("reviewer-2".to_string()),
-                    kind: MailKind::Message,
-                    body: "hi".to_string(),
-                },
-                root,
-            ),
-            (
-                Event::ChannelJoined {
-                    session: root,
-                    channel: "build".to_string(),
-                    member: "reviewer-1".to_string(),
-                },
-                root,
+                parent,
             ),
             (context_compacted(root), root),
             (
@@ -1484,112 +906,6 @@ mod tests {
                 },
                 root,
             ),
-            (
-                Event::ChannelCreated {
-                    session: root,
-                    channel: "announce-aB12Cd34".to_string(),
-                    kind: ChannelKind::Group,
-                    unit: None,
-                    members: vec!["main".to_string()],
-                },
-                root,
-            ),
-            (
-                Event::ChannelCreated {
-                    session: root,
-                    channel: "DM-aB12Cd34".to_string(),
-                    kind: ChannelKind::Dm,
-                    unit: None,
-                    members: vec!["main".to_string(), "main/lead-1".to_string()],
-                },
-                root,
-            ),
-            (
-                Event::SubagentReported {
-                    session: parent,
-                    member: MemberId::new(),
-                    child,
-                    handle: "main/lead-1".to_string(),
-                    outcome: ReportOutcome::Done,
-                    report: "shipped".to_string(),
-                },
-                parent,
-            ),
-            (
-                Event::SubagentReported {
-                    session: parent,
-                    member: MemberId::new(),
-                    child,
-                    handle: "main/lead-1".to_string(),
-                    outcome: ReportOutcome::Failed,
-                    report: "blocked on tests".to_string(),
-                },
-                parent,
-            ),
-            (
-                Event::HandoffCommitted {
-                    session: child,
-                    handle: "main/lead-1".to_string(),
-                    generation: 1,
-                    doc: "1. Goal - ship".to_string(),
-                    degraded: false,
-                },
-                child,
-            ),
-            (
-                Event::AgentArchived {
-                    session: root,
-                    handle: "main/lead-1".to_string(),
-                    child,
-                    reason: ArchiveReason::Reported,
-                },
-                root,
-            ),
-            (
-                Event::AgentArchived {
-                    session: root,
-                    handle: "main/lead-1".to_string(),
-                    child,
-                    reason: ArchiveReason::Killed,
-                },
-                root,
-            ),
-            (
-                Event::AgentArchived {
-                    session: root,
-                    handle: "main/lead-1".to_string(),
-                    child,
-                    reason: ArchiveReason::RootTeardown,
-                },
-                root,
-            ),
-            (
-                Event::AgentArchived {
-                    session: root,
-                    handle: "main/lead-1".to_string(),
-                    child,
-                    reason: ArchiveReason::ArchivedByParent,
-                },
-                root,
-            ),
-            (
-                Event::AgentArchived {
-                    session: root,
-                    handle: "main/lead-1".to_string(),
-                    child,
-                    reason: ArchiveReason::Shutdown,
-                },
-                root,
-            ),
-            (
-                Event::AgentRestarted {
-                    session: root,
-                    handle: "main/lead-1".to_string(),
-                    child,
-                    epoch: ActorEpoch::INITIAL,
-                },
-                root,
-            ),
         ];
         for (event, owner) in cases {
             let json = serde_json::to_string(&event).expect("serialize");
@@ -1597,6 +913,25 @@ mod tests {
             assert_eq!(event, back, "event must round-trip: {json}");
             assert_eq!(back.session(), Some(owner), "owning session for {json}");
         }
+    }
+
+    #[test]
+    fn extension_event_uses_tagged_wire_format() {
+        let session = SessionId::new();
+        let event = Event::Extension {
+            session,
+            bundle: "hya/compaction".to_string(),
+            kind: "context_evicted".to_string(),
+            payload: serde_json::json!({"evicted_parts": 2}),
+        };
+        let value = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(value["type"], "extension");
+        assert_eq!(value["session"], session.to_string());
+        assert_eq!(value["bundle"], "hya/compaction");
+        assert_eq!(value["kind"], "context_evicted");
+        assert_eq!(value["payload"]["evicted_parts"], 2);
+        let back: Event = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(back, event);
     }
 
     #[test]
@@ -1666,152 +1001,11 @@ mod tests {
             before.session, after.session,
             "only the marker row moves; there is none here"
         );
-        assert_eq!(before.team, after.team, "no team state may change");
+        assert_eq!(
+            before.extensions, after.extensions,
+            "no extension state may change"
+        );
         assert_eq!(after.last_seq, 2, "the record still advances seq");
-    }
-
-    /// AC8: a log written before this task must still replay. `MemberSpawned`
-    /// predates `directive` / `tool_call`, so both must default rather than fail.
-    #[test]
-    fn pre_change_member_spawned_still_decodes_and_folds() {
-        let session = SessionId::new();
-        let child = SessionId::new();
-        // Both new fields are `skip_serializing_if`, so an event with empty
-        // values encodes byte-for-byte like a log written before this task.
-        let legacy = serde_json::to_string(&Event::MemberSpawned {
-            session,
-            member: MemberId::new(),
-            child: Some(child),
-            subagent_type: AgentName::new("explore"),
-            description: "scan".to_string(),
-            depth: 1,
-            directive: String::new(),
-            tool_call: None,
-        })
-        .expect("serialize");
-        assert!(
-            !legacy.contains("directive") && !legacy.contains("tool_call"),
-            "empty additions must not appear on the wire: {legacy}"
-        );
-        let decoded: Event =
-            serde_json::from_str(&legacy).expect("a pre-change log must still decode");
-        let Event::MemberSpawned {
-            directive,
-            tool_call,
-            ..
-        } = &decoded
-        else {
-            panic!("expected MemberSpawned, got {decoded:?}");
-        };
-        assert!(directive.is_empty(), "absent directive defaults to empty");
-        assert!(tool_call.is_none(), "absent tool call defaults to none");
-
-        // And it still folds into a member row exactly as before.
-        let projection = crate::Projection::from_events(&[Envelope {
-            seq: EventSeq(1),
-            ts_millis: 1,
-            event: decoded,
-        }]);
-        assert_eq!(projection.session.members.len(), 1);
-        assert_eq!(projection.session.members[0].child, Some(child));
-        assert!(projection.session.members[0].directive.is_empty());
-    }
-
-    #[test]
-    fn context_evicted_round_trips_and_records_the_notice_beside_the_output() {
-        let session = SessionId::new();
-        let message = MessageId::new();
-        let part = PartId::new();
-        let event = Event::ContextEvicted {
-            session,
-            evicted_parts: 1,
-            parts: vec![EvictedPart {
-                part,
-                notice: "[tool output moved to artifact://a]".to_string(),
-            }],
-            tokens_before: 5000,
-            tokens_after: 1200,
-            threshold: 4000,
-        };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let back: Event = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(event, back, "context_evicted must round-trip: {json}");
-        assert_eq!(back.session(), Some(session));
-        let old: Event = serde_json::from_str(&format!(
-            r#"{{"type":"context_evicted","session":"{session}","evicted_parts":1,"tokens_before":2,"tokens_after":1,"threshold":1}}"#
-        ))
-        .expect("logs before `parts` still decode");
-        assert!(matches!(old, Event::ContextEvicted { parts, .. } if parts.is_empty()));
-
-        let envelopes: Vec<_> = [
-            Event::MessageStarted {
-                session,
-                message,
-                role: Role::Assistant,
-                agent: None,
-                model: None,
-            },
-            Event::ToolInputStart {
-                session,
-                message,
-                part,
-                call: ToolCallId::new(),
-                name: ToolName::new("read"),
-            },
-            back,
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(seq, event)| Envelope {
-            seq: EventSeq(seq as u64 + 1),
-            ts_millis: 1,
-            event,
-        })
-        .collect();
-        let projection = crate::Projection::from_events(&envelopes);
-        assert!(matches!(
-            &projection.session.messages[0].parts[0],
-            crate::PartProjection::Tool { eviction_notice: Some(notice), .. }
-                if notice == "[tool output moved to artifact://a]"
-        ));
-    }
-
-    /// `parent: None` must not appear on the wire, so a root registration
-    /// serializes byte-identically to how it did before scoping. Without
-    /// `skip_serializing_if`, every existing log comparison and golden fixture
-    /// would shift by one key.
-    #[test]
-    fn absent_parent_is_omitted_from_the_wire() {
-        let session = SessionId::new();
-        let rooted = Event::AgentRegistered {
-            session,
-            agent_session: session,
-            handle: "main".to_string(),
-            parent: None,
-            agent_type: AgentName::new("build"),
-            mode: SubagentMode::Transient,
-        };
-        let json = serde_json::to_string(&rooted).expect("serialize");
-        assert!(
-            !json.contains("parent"),
-            "a None parent must be omitted, got {json}"
-        );
-
-        let nested = Event::AgentRegistered {
-            session,
-            agent_session: SessionId::new(),
-            handle: "worker-1".to_string(),
-            parent: Some("main/lead-1".to_string()),
-            agent_type: AgentName::new("worker"),
-            mode: SubagentMode::Resident,
-        };
-        let json = serde_json::to_string(&nested).expect("serialize");
-        assert!(
-            json.contains(r#""parent":"main/lead-1""#),
-            "a real parent must be carried, got {json}"
-        );
-        let back: Event = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(nested, back);
     }
 
     #[test]
@@ -2040,8 +1234,34 @@ mod decode_contract_tests {
             "session_permission_set",
             "session_share_set",
             "session_share_cleared",
+            "session_status",
             "message_deleted",
             "channel_left",
+            "workflow_selected",
+            "workflow_run_started",
+            "workflow_stage_started",
+            "workflow_stage_member_linked",
+            "workflow_stage_route_outcome",
+            "workflow_stage_finished",
+            "workflow_run_finished",
+            "member_spawned",
+            "member_status_changed",
+            "member_finished",
+            "agent_registered",
+            "agent_activity_changed",
+            "resident_work_started",
+            "resident_work_finished",
+            "agent_heartbeat",
+            "mail_sent",
+            "channel_joined",
+            "channel_created",
+            "subagent_reported",
+            "handoff_committed",
+            "agent_archived",
+            "mail_consumed",
+            "agent_restarted",
+            "context_evicted",
+            "context_status",
             "future_event",
         ] {
             let payload = format!(r#"{{"type":"{tag}"}}"#);

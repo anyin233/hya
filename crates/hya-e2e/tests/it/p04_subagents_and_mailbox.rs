@@ -67,12 +67,12 @@ async fn subagent_roster_spawn_batch_nested_and_model_routing() {
         .await
         .expect("e2e env");
 
-    // 1. T2.3: /v1/agents roster + list_agents hides workflow-private agents + spawn refusal.
+    // 1. T2.3: /v2/agents roster + list_agents hides workflow-private agents + spawn refusal.
     let agents = env.list_agents().await.expect("list agents").to_string();
     assert!(agents.contains("hya-main") && agents.contains("hya-task"));
     let scoped = env
         .get_json(&format!(
-            "/v1/agents?directory={}",
+            "/v2/agents?directory={}",
             env.backend.workdir_str()
         ))
         .await
@@ -170,19 +170,21 @@ async fn subagent_roster_spawn_batch_nested_and_model_routing() {
     let single_events = env.events(s_single, None).await.unwrap();
     let dm = single_events
         .iter()
-        .find_map(|e| match &e.event {
-            Event::MailSent {
-                from,
-                to: hya_proto::MailEndpoint::Channel(ch),
-                body,
-                ..
-            } if from == "main" && body == "do the child work" => Some(ch),
-            _ => None,
-        })
+        .find_map(
+            |e| match hya_tool::extension::ExtensionEvent::from_event(&e.event) {
+                Some(hya_tool::extension::ExtensionEvent::MailSent {
+                    from,
+                    to: hya_proto::MailEndpoint::Channel(ch),
+                    body,
+                    ..
+                }) if from == "main" && body == "do the child work" => Some(ch),
+                _ => None,
+            },
+        )
         .expect("DM MailSent event");
     assert!(single_events.iter().any(|e| matches!(
-        &e.event,
-        Event::ChannelCreated { channel, kind: hya_proto::ChannelKind::Dm, .. } if channel == dm
+        hya_tool::extension::ExtensionEvent::from_event(&e.event),
+        Some(hya_tool::extension::ExtensionEvent::ChannelCreated { ref channel, kind: hya_proto::ChannelKind::Dm, .. }) if channel == &dm
     )));
 
     // 3. T2.1 (batch spawn: two distinct children with independent outputs).
@@ -245,8 +247,8 @@ async fn subagent_roster_spawn_batch_nested_and_model_routing() {
                 .contains("Second work")
     );
 
-    // 4. T2.16 + T2.17: /v1/agent-models preference + all four dispatch resolution branches.
-    let listed = env.get_json("/v1/agent-models").await.unwrap();
+    // 4. T2.16 + T2.17: /v2/agent-models preference + all four dispatch resolution branches.
+    let listed = env.get_json("/v2/agent-models").await.unwrap();
     let task_row = listed["agents"]
         .as_array()
         .unwrap()
@@ -286,12 +288,12 @@ async fn subagent_roster_spawn_batch_nested_and_model_routing() {
 
     // Set durable preference: hya-task -> fake/pref-target.
     env.put_json(
-        "/v1/agent-models/hya-task",
+        "/v2/agent-models/hya-task",
         &json!({"preference": {"providerId": "fake", "modelId": "pref-target"}}),
     )
     .await
     .unwrap();
-    let listed = env.get_json("/v1/agent-models").await.unwrap();
+    let listed = env.get_json("/v2/agent-models").await.unwrap();
     let task_row = listed["agents"]
         .as_array()
         .unwrap()

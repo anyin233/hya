@@ -1,11 +1,11 @@
 kind: Bundle
+schema_version: 2
 version_ref: hya
 identity:
   id: hya/network-tools
   version: 0.0.0
   publisher: hya
 namespace: network-tools
-extensions:
-  files:
-    - id: exposure
-      path: exposure.yaml
+assets:
+  - id: exposure
+    path: exposure.yaml

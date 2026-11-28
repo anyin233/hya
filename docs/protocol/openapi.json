@@ -1,85 +1,85 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "hya API v1",
-    "summary": "Generated from proto/hya/v1 by cargo run -p xtask -- gen-api; do not edit by hand.",
-    "version": "1.0.0"
+    "title": "hya API v2",
+    "summary": "Generated from proto/hya/v2 by cargo run -p xtask -- gen-api; do not edit by hand.",
+    "version": "2.0.0"
   },
   "paths": {
-    "/v1/agent-efforts/{agent_id}": {
+    "/v2/agent-efforts/{agent_id}": {
       "put": {
         "operationId": "AgentModels.SetAgentEffort",
         "summary": "Set or clear (empty `effort`) one agent's default thinking effort,",
         "tags": [
           "AgentModels"
         ],
-        "x-grpc-method": "hya.v1.AgentModels.SetAgentEffort",
+        "x-grpc-method": "hya.v2.AgentModels.SetAgentEffort",
         "x-server-streaming": false
       }
     },
-    "/v1/agent-models": {
+    "/v2/agent-models": {
       "get": {
         "operationId": "AgentModels.ListAgentModels",
         "summary": "Effective model state for every catalog agent under one binding.",
         "tags": [
           "AgentModels"
         ],
-        "x-grpc-method": "hya.v1.AgentModels.ListAgentModels",
+        "x-grpc-method": "hya.v2.AgentModels.ListAgentModels",
         "x-server-streaming": false
       }
     },
-    "/v1/agent-models/{agent_id}": {
+    "/v2/agent-models/{agent_id}": {
       "put": {
         "operationId": "AgentModels.SetAgentModel",
         "summary": "Set or clear one agent's remembered preference; returns the",
         "tags": [
           "AgentModels"
         ],
-        "x-grpc-method": "hya.v1.AgentModels.SetAgentModel",
+        "x-grpc-method": "hya.v2.AgentModels.SetAgentModel",
         "x-server-streaming": false
       }
     },
-    "/v1/agent-models/{agent_id}/configuration": {
+    "/v2/agent-models/{agent_id}/configuration": {
       "put": {
         "operationId": "AgentModels.SaveAgentModelConfiguration",
         "summary": "Set or clear the model in the owning user configuration file. Keeps a",
         "tags": [
           "AgentModels"
         ],
-        "x-grpc-method": "hya.v1.AgentModels.SaveAgentModelConfiguration",
+        "x-grpc-method": "hya.v2.AgentModels.SaveAgentModelConfiguration",
         "x-server-streaming": false
       }
     },
-    "/v1/agents": {
+    "/v2/agents": {
       "get": {
         "operationId": "Catalog.ListAgents",
         "summary": "Agents that can be bound to a session.",
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.ListAgents",
+        "x-grpc-method": "hya.v2.Catalog.ListAgents",
         "x-server-streaming": false
       }
     },
-    "/v1/auth": {
+    "/v2/auth": {
       "get": {
         "operationId": "Auth.ListProviderAuth",
         "summary": "List provider ids with saved credentials. Never returns secret values.",
         "tags": [
           "Auth"
         ],
-        "x-grpc-method": "hya.v1.Auth.ListProviderAuth",
+        "x-grpc-method": "hya.v2.Auth.ListProviderAuth",
         "x-server-streaming": false
       }
     },
-    "/v1/auth/{provider_id}": {
+    "/v2/auth/{provider_id}": {
       "put": {
         "operationId": "Auth.SetProviderAuth",
         "summary": "Store an API key (written atomically with mode 0600 as `type: api`) and",
         "tags": [
           "Auth"
         ],
-        "x-grpc-method": "hya.v1.Auth.SetProviderAuth",
+        "x-grpc-method": "hya.v2.Auth.SetProviderAuth",
         "x-server-streaming": false
       },
       "delete": {
@@ -88,51 +88,51 @@
         "tags": [
           "Auth"
         ],
-        "x-grpc-method": "hya.v1.Auth.RemoveProviderAuth",
+        "x-grpc-method": "hya.v2.Auth.RemoveProviderAuth",
         "x-server-streaming": false
       }
     },
-    "/v1/bootstrap": {
+    "/v2/bootstrap": {
       "get": {
         "operationId": "Process.GetBootstrap",
         "summary": "Aggregated startup snapshot: config, catalogs, pending interactions,",
         "tags": [
           "Process"
         ],
-        "x-grpc-method": "hya.v1.Process.GetBootstrap",
+        "x-grpc-method": "hya.v2.Process.GetBootstrap",
         "x-server-streaming": false
       }
     },
-    "/v1/bundle-apis": {
+    "/v2/bundle-apis": {
       "get": {
         "operationId": "BundleApi.ListBundleApis",
         "summary": "List every endpoint the bundles of the request's catalog scope register",
         "tags": [
           "BundleApi"
         ],
-        "x-grpc-method": "hya.v1.BundleApi.ListBundleApis",
+        "x-grpc-method": "hya.v2.BundleApi.ListBundleApis",
         "x-server-streaming": false
       }
     },
-    "/v1/bundles": {
+    "/v2/bundles": {
       "get": {
         "operationId": "Catalog.ListBundles",
         "summary": "Bundle inventory, as `hya bundle list` shows it. Includes first-party,",
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.ListBundles",
+        "x-grpc-method": "hya.v2.Catalog.ListBundles",
         "x-server-streaming": false
       }
     },
-    "/v1/bundles/{bundle}/api/{path}": {
+    "/v2/bundles/{bundle}/api/{path}": {
       "get": {
         "operationId": "BundleApi.InvokeGlobalBundleApi.get",
         "summary": "Invoke one global bundle endpoint (not tied to a session); otherwise",
         "tags": [
           "BundleApi"
         ],
-        "x-grpc-method": "hya.v1.BundleApi.InvokeGlobalBundleApi",
+        "x-grpc-method": "hya.v2.BundleApi.InvokeGlobalBundleApi",
         "x-server-streaming": false,
         "x-hya-any-method": true
       },
@@ -142,7 +142,7 @@
         "tags": [
           "BundleApi"
         ],
-        "x-grpc-method": "hya.v1.BundleApi.InvokeGlobalBundleApi",
+        "x-grpc-method": "hya.v2.BundleApi.InvokeGlobalBundleApi",
         "x-server-streaming": false,
         "x-hya-any-method": true
       },
@@ -152,7 +152,7 @@
         "tags": [
           "BundleApi"
         ],
-        "x-grpc-method": "hya.v1.BundleApi.InvokeGlobalBundleApi",
+        "x-grpc-method": "hya.v2.BundleApi.InvokeGlobalBundleApi",
         "x-server-streaming": false,
         "x-hya-any-method": true
       },
@@ -162,7 +162,7 @@
         "tags": [
           "BundleApi"
         ],
-        "x-grpc-method": "hya.v1.BundleApi.InvokeGlobalBundleApi",
+        "x-grpc-method": "hya.v2.BundleApi.InvokeGlobalBundleApi",
         "x-server-streaming": false,
         "x-hya-any-method": true
       },
@@ -172,74 +172,74 @@
         "tags": [
           "BundleApi"
         ],
-        "x-grpc-method": "hya.v1.BundleApi.InvokeGlobalBundleApi",
+        "x-grpc-method": "hya.v2.BundleApi.InvokeGlobalBundleApi",
         "x-server-streaming": false,
         "x-hya-any-method": true
       }
     },
-    "/v1/bundles:install": {
+    "/v2/bundles:install": {
       "post": {
         "operationId": "Catalog.InstallBundle",
         "summary": "Install a `.hyabundle` package from a path on the backend's machine",
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.InstallBundle",
+        "x-grpc-method": "hya.v2.Catalog.InstallBundle",
         "x-server-streaming": false
       }
     },
-    "/v1/bundles:refresh": {
+    "/v2/bundles:refresh": {
       "post": {
         "operationId": "Catalog.RefreshBundles",
         "summary": "Refresh the installed-bundle catalog and the directory's Project",
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.RefreshBundles",
+        "x-grpc-method": "hya.v2.Catalog.RefreshBundles",
         "x-server-streaming": false
       }
     },
-    "/v1/bundles:set-enabled": {
+    "/v2/bundles:set-enabled": {
       "post": {
         "operationId": "Catalog.SetBundleEnabled",
         "summary": "Enable or disable a bundle by id in every scope (`hya bundle",
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.SetBundleEnabled",
+        "x-grpc-method": "hya.v2.Catalog.SetBundleEnabled",
         "x-server-streaming": false
       }
     },
-    "/v1/bundles:uninstall": {
+    "/v2/bundles:uninstall": {
       "post": {
         "operationId": "Catalog.UninstallBundle",
         "summary": "Remove an installed bundle (`hya bundle remove`), then refresh the",
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.UninstallBundle",
+        "x-grpc-method": "hya.v2.Catalog.UninstallBundle",
         "x-server-streaming": false
       }
     },
-    "/v1/commands": {
+    "/v2/commands": {
       "get": {
         "operationId": "Catalog.ListCommands",
         "summary": "Slash-command catalog entries.",
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.ListCommands",
+        "x-grpc-method": "hya.v2.Catalog.ListCommands",
         "x-server-streaming": false
       }
     },
-    "/v1/config": {
+    "/v2/config": {
       "get": {
         "operationId": "Process.GetConfig",
         "summary": "Read the effective runtime configuration bag for a directory.",
         "tags": [
           "Process"
         ],
-        "x-grpc-method": "hya.v1.Process.GetConfig",
+        "x-grpc-method": "hya.v2.Process.GetConfig",
         "x-server-streaming": false
       },
       "patch": {
@@ -248,139 +248,139 @@
         "tags": [
           "Process"
         ],
-        "x-grpc-method": "hya.v1.Process.UpdateConfig",
+        "x-grpc-method": "hya.v2.Process.UpdateConfig",
         "x-server-streaming": false
       }
     },
-    "/v1/events/stream": {
+    "/v2/events/stream": {
       "get": {
         "operationId": "Events.StreamGlobalEvents",
         "summary": "Live stream across all sessions of a directory scope.",
         "tags": [
           "Events"
         ],
-        "x-grpc-method": "hya.v1.Events.StreamGlobalEvents",
+        "x-grpc-method": "hya.v2.Events.StreamGlobalEvents",
         "x-server-streaming": true
       }
     },
-    "/v1/fs/find": {
+    "/v2/fs/find": {
       "get": {
         "operationId": "Files.FindFiles",
         "summary": "Find files by glob-ish name pattern.",
         "tags": [
           "Files"
         ],
-        "x-grpc-method": "hya.v1.Files.FindFiles",
+        "x-grpc-method": "hya.v2.Files.FindFiles",
         "x-server-streaming": false
       }
     },
-    "/v1/fs/list": {
+    "/v2/fs/list": {
       "get": {
         "operationId": "Files.ListDirectory",
         "summary": "List one directory's entries.",
         "tags": [
           "Files"
         ],
-        "x-grpc-method": "hya.v1.Files.ListDirectory",
+        "x-grpc-method": "hya.v2.Files.ListDirectory",
         "x-server-streaming": false
       }
     },
-    "/v1/fs/read": {
+    "/v2/fs/read": {
       "get": {
         "operationId": "Files.ReadFile",
         "summary": "Read one file's content.",
         "tags": [
           "Files"
         ],
-        "x-grpc-method": "hya.v1.Files.ReadFile",
+        "x-grpc-method": "hya.v2.Files.ReadFile",
         "x-server-streaming": false
       }
     },
-    "/v1/fs/search": {
+    "/v2/fs/search": {
       "get": {
         "operationId": "Files.SearchText",
         "summary": "Full-text search across files (ripgrep-backed).",
         "tags": [
           "Files"
         ],
-        "x-grpc-method": "hya.v1.Files.SearchText",
+        "x-grpc-method": "hya.v2.Files.SearchText",
         "x-server-streaming": false
       }
     },
-    "/v1/fs/symbols": {
+    "/v2/fs/symbols": {
       "get": {
         "operationId": "Files.SearchSymbols",
         "summary": "Symbol search (definitions) across the directory.",
         "tags": [
           "Files"
         ],
-        "x-grpc-method": "hya.v1.Files.SearchSymbols",
+        "x-grpc-method": "hya.v2.Files.SearchSymbols",
         "x-server-streaming": false
       }
     },
-    "/v1/health": {
+    "/v2/health": {
       "get": {
         "operationId": "Process.GetHealth",
         "summary": "Liveness and version probe.",
         "tags": [
           "Process"
         ],
-        "x-grpc-method": "hya.v1.Process.GetHealth",
+        "x-grpc-method": "hya.v2.Process.GetHealth",
         "x-server-streaming": false
       }
     },
-    "/v1/interactions": {
+    "/v2/interactions": {
       "get": {
         "operationId": "Interactions.ListInteractions",
         "summary": "List pending permission/question requests, optionally scoped to one",
         "tags": [
           "Interactions"
         ],
-        "x-grpc-method": "hya.v1.Interactions.ListInteractions",
+        "x-grpc-method": "hya.v2.Interactions.ListInteractions",
         "x-server-streaming": false
       }
     },
-    "/v1/interactions/{request}/respond": {
+    "/v2/interactions/{request}/respond": {
       "post": {
         "operationId": "Interactions.RespondInteraction",
         "summary": "Respond to one pending request. Exactly one response kind is set.",
         "tags": [
           "Interactions"
         ],
-        "x-grpc-method": "hya.v1.Interactions.RespondInteraction",
+        "x-grpc-method": "hya.v2.Interactions.RespondInteraction",
         "x-server-streaming": false
       }
     },
-    "/v1/location": {
+    "/v2/location": {
       "get": {
         "operationId": "Process.GetLocation",
         "summary": "Identity of this backend process and the directory it serves.",
         "tags": [
           "Process"
         ],
-        "x-grpc-method": "hya.v1.Process.GetLocation",
+        "x-grpc-method": "hya.v2.Process.GetLocation",
         "x-server-streaming": false
       }
     },
-    "/v1/logs": {
+    "/v2/logs": {
       "post": {
         "operationId": "Logs.IngestLog",
         "summary": "Ingest one frontend log entry.",
         "tags": [
           "Logs"
         ],
-        "x-grpc-method": "hya.v1.Logs.IngestLog",
+        "x-grpc-method": "hya.v2.Logs.IngestLog",
         "x-server-streaming": false
       }
     },
-    "/v1/mcp": {
+    "/v2/mcp": {
       "get": {
         "operationId": "Mcp.GetMcpStatus",
         "summary": "Status of every configured MCP server in a directory.",
         "tags": [
           "Mcp"
         ],
-        "x-grpc-method": "hya.v1.Mcp.GetMcpStatus",
+        "x-grpc-method": "hya.v2.Mcp.GetMcpStatus",
         "x-server-streaming": false
       },
       "post": {
@@ -389,29 +389,29 @@
         "tags": [
           "Mcp"
         ],
-        "x-grpc-method": "hya.v1.Mcp.AddMcpServer",
+        "x-grpc-method": "hya.v2.Mcp.AddMcpServer",
         "x-server-streaming": false
       }
     },
-    "/v1/mcp/session": {
+    "/v2/mcp/session": {
       "post": {
         "operationId": "Mcp.OpenMcpSession",
         "summary": "Create a root session with MCP peers supplied by a local client. The",
         "tags": [
           "Mcp"
         ],
-        "x-grpc-method": "hya.v1.Mcp.OpenMcpSession",
+        "x-grpc-method": "hya.v2.Mcp.OpenMcpSession",
         "x-server-streaming": true
       }
     },
-    "/v1/mcp/{name}/auth": {
+    "/v2/mcp/{name}/auth": {
       "post": {
         "operationId": "Mcp.StartMcpAuth",
         "summary": "Begin an MCP server OAuth flow.",
         "tags": [
           "Mcp"
         ],
-        "x-grpc-method": "hya.v1.Mcp.StartMcpAuth",
+        "x-grpc-method": "hya.v2.Mcp.StartMcpAuth",
         "x-server-streaming": false
       },
       "delete": {
@@ -420,117 +420,117 @@
         "tags": [
           "Mcp"
         ],
-        "x-grpc-method": "hya.v1.Mcp.RemoveMcpAuth",
+        "x-grpc-method": "hya.v2.Mcp.RemoveMcpAuth",
         "x-server-streaming": false
       }
     },
-    "/v1/mcp/{name}/auth/complete": {
+    "/v2/mcp/{name}/auth/complete": {
       "post": {
         "operationId": "Mcp.CompleteMcpAuth",
         "summary": "Complete an MCP server OAuth flow.",
         "tags": [
           "Mcp"
         ],
-        "x-grpc-method": "hya.v1.Mcp.CompleteMcpAuth",
+        "x-grpc-method": "hya.v2.Mcp.CompleteMcpAuth",
         "x-server-streaming": false
       }
     },
-    "/v1/mcp/{name}/connect": {
+    "/v2/mcp/{name}/connect": {
       "post": {
         "operationId": "Mcp.ConnectMcp",
         "summary": "Enable and connect one MCP server now. A connect failure is answered",
         "tags": [
           "Mcp"
         ],
-        "x-grpc-method": "hya.v1.Mcp.ConnectMcp",
+        "x-grpc-method": "hya.v2.Mcp.ConnectMcp",
         "x-server-streaming": false
       }
     },
-    "/v1/mcp/{name}/disconnect": {
+    "/v2/mcp/{name}/disconnect": {
       "post": {
         "operationId": "Mcp.DisconnectMcp",
         "summary": "Disconnect one MCP server.",
         "tags": [
           "Mcp"
         ],
-        "x-grpc-method": "hya.v1.Mcp.DisconnectMcp",
+        "x-grpc-method": "hya.v2.Mcp.DisconnectMcp",
         "x-server-streaming": false
       }
     },
-    "/v1/model-effort-preferences": {
+    "/v2/model-effort-preferences": {
       "get": {
         "operationId": "AgentModels.ListModelEffortPreferences",
         "summary": "",
         "tags": [
           "AgentModels"
         ],
-        "x-grpc-method": "hya.v1.AgentModels.ListModelEffortPreferences",
+        "x-grpc-method": "hya.v2.AgentModels.ListModelEffortPreferences",
         "x-server-streaming": false
       }
     },
-    "/v1/model-effort-preferences/{provider_id}/{model_id}": {
+    "/v2/model-effort-preferences/{provider_id}/{model_id}": {
       "put": {
         "operationId": "AgentModels.SetModelEffortPreference",
         "summary": "Empty effort clears the preference. Emits a live `catalogUpdated` frame",
         "tags": [
           "AgentModels"
         ],
-        "x-grpc-method": "hya.v1.AgentModels.SetModelEffortPreference",
+        "x-grpc-method": "hya.v2.AgentModels.SetModelEffortPreference",
         "x-server-streaming": false
       }
     },
-    "/v1/models": {
+    "/v2/models": {
       "get": {
         "operationId": "Catalog.ListModels",
         "summary": "Models across providers, optionally filtered to one provider.",
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.ListModels",
+        "x-grpc-method": "hya.v2.Catalog.ListModels",
         "x-server-streaming": false
       }
     },
-    "/v1/permission-modes": {
+    "/v2/permission-modes": {
       "get": {
         "operationId": "Catalog.ListPermissionModes",
         "summary": "Session permission modes accepted by `UpdateSession.permission_mode`:",
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.ListPermissionModes",
+        "x-grpc-method": "hya.v2.Catalog.ListPermissionModes",
         "x-server-streaming": false
       }
     },
-    "/v1/permissions/rules": {
+    "/v2/permissions/rules": {
       "get": {
         "operationId": "Interactions.ListSavedRules",
         "summary": "List saved permission rules (persisted allow/deny/ask decisions).",
         "tags": [
           "Interactions"
         ],
-        "x-grpc-method": "hya.v1.Interactions.ListSavedRules",
+        "x-grpc-method": "hya.v2.Interactions.ListSavedRules",
         "x-server-streaming": false
       }
     },
-    "/v1/permissions/rules/{rule}": {
+    "/v2/permissions/rules/{rule}": {
       "delete": {
         "operationId": "Interactions.DeleteSavedRule",
         "summary": "Delete one saved permission rule.",
         "tags": [
           "Interactions"
         ],
-        "x-grpc-method": "hya.v1.Interactions.DeleteSavedRule",
+        "x-grpc-method": "hya.v2.Interactions.DeleteSavedRule",
         "x-server-streaming": false
       }
     },
-    "/v1/projects": {
+    "/v2/projects": {
       "get": {
         "operationId": "Project.ListProjects",
         "summary": "List the Projects (archived ones are left out), most recently updated",
         "tags": [
           "Project"
         ],
-        "x-grpc-method": "hya.v1.Project.ListProjects",
+        "x-grpc-method": "hya.v2.Project.ListProjects",
         "x-server-streaming": false
       },
       "post": {
@@ -539,51 +539,51 @@
         "tags": [
           "Project"
         ],
-        "x-grpc-method": "hya.v1.Project.CreateProject",
+        "x-grpc-method": "hya.v2.Project.CreateProject",
         "x-server-streaming": false
       }
     },
-    "/v1/projects/current": {
+    "/v2/projects/current": {
       "get": {
         "operationId": "Project.GetCurrentProject",
         "summary": "The Project whose root contains the request's directory scope (its",
         "tags": [
           "Project"
         ],
-        "x-grpc-method": "hya.v1.Project.GetCurrentProject",
+        "x-grpc-method": "hya.v2.Project.GetCurrentProject",
         "x-server-streaming": false
       }
     },
-    "/v1/projects/ensure": {
+    "/v2/projects/ensure": {
       "post": {
         "operationId": "Project.EnsureProjectForPath",
         "summary": "The Project for a local working directory: the Project that contains",
         "tags": [
           "Project"
         ],
-        "x-grpc-method": "hya.v1.Project.EnsureProjectForPath",
+        "x-grpc-method": "hya.v2.Project.EnsureProjectForPath",
         "x-server-streaming": false
       }
     },
-    "/v1/projects/resolve": {
+    "/v2/projects/resolve": {
       "get": {
         "operationId": "Project.ResolveProject",
         "summary": "The Project that contains `path`, without creating one: `project` is",
         "tags": [
           "Project"
         ],
-        "x-grpc-method": "hya.v1.Project.ResolveProject",
+        "x-grpc-method": "hya.v2.Project.ResolveProject",
         "x-server-streaming": false
       }
     },
-    "/v1/projects/{project}": {
+    "/v2/projects/{project}": {
       "get": {
         "operationId": "Project.GetProject",
         "summary": "Read one Project. `not_found` when it does not exist.",
         "tags": [
           "Project"
         ],
-        "x-grpc-method": "hya.v1.Project.GetProject",
+        "x-grpc-method": "hya.v2.Project.GetProject",
         "x-server-streaming": false
       },
       "patch": {
@@ -592,7 +592,7 @@
         "tags": [
           "Project"
         ],
-        "x-grpc-method": "hya.v1.Project.UpdateProject",
+        "x-grpc-method": "hya.v2.Project.UpdateProject",
         "x-server-streaming": false
       },
       "delete": {
@@ -601,51 +601,51 @@
         "tags": [
           "Project"
         ],
-        "x-grpc-method": "hya.v1.Project.DeleteProject",
+        "x-grpc-method": "hya.v2.Project.DeleteProject",
         "x-server-streaming": false
       }
     },
-    "/v1/projects/{project}/directories": {
+    "/v2/projects/{project}/directories": {
       "get": {
         "operationId": "Project.ListProjectDirectories",
         "summary": "The roots of a Project, primary root first. `not_found` when it does",
         "tags": [
           "Project"
         ],
-        "x-grpc-method": "hya.v1.Project.ListProjectDirectories",
+        "x-grpc-method": "hya.v2.Project.ListProjectDirectories",
         "x-server-streaming": false
       }
     },
-    "/v1/projects/{project}/init-git": {
+    "/v2/projects/{project}/init-git": {
       "post": {
         "operationId": "Project.InitProjectGit",
         "summary": "Initialize git in the primary root of a Project that has no repository",
         "tags": [
           "Project"
         ],
-        "x-grpc-method": "hya.v1.Project.InitProjectGit",
+        "x-grpc-method": "hya.v2.Project.InitProjectGit",
         "x-server-streaming": false
       }
     },
-    "/v1/providers": {
+    "/v2/providers": {
       "get": {
         "operationId": "Catalog.ListProviders",
         "summary": "Providers with their aggregate auth status.",
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.ListProviders",
+        "x-grpc-method": "hya.v2.Catalog.ListProviders",
         "x-server-streaming": false
       }
     },
-    "/v1/providers/{provider_id}": {
+    "/v2/providers/{provider_id}": {
       "get": {
         "operationId": "Catalog.GetProvider",
         "summary": "One provider's detail including its models.",
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.GetProvider",
+        "x-grpc-method": "hya.v2.Catalog.GetProvider",
         "x-server-streaming": false
       },
       "put": {
@@ -654,18 +654,18 @@
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.UpsertProvider",
+        "x-grpc-method": "hya.v2.Catalog.UpsertProvider",
         "x-server-streaming": false
       }
     },
-    "/v1/providers/{provider_id}/models": {
+    "/v2/providers/{provider_id}/models": {
       "put": {
         "operationId": "Catalog.SetProviderModel",
         "summary": "Write one model's entry (with its metadata overrides) into the",
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.SetProviderModel",
+        "x-grpc-method": "hya.v2.Catalog.SetProviderModel",
         "x-server-streaming": false
       },
       "delete": {
@@ -674,62 +674,62 @@
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.RemoveProviderModel",
+        "x-grpc-method": "hya.v2.Catalog.RemoveProviderModel",
         "x-server-streaming": false
       }
     },
-    "/v1/providers/{provider_id}/refresh": {
+    "/v2/providers/{provider_id}/refresh": {
       "post": {
         "operationId": "Catalog.RefreshProvider",
         "summary": "Re-read the provider's config entry and key, fetch its remote model",
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.RefreshProvider",
+        "x-grpc-method": "hya.v2.Catalog.RefreshProvider",
         "x-server-streaming": false
       }
     },
-    "/v1/providers/{provider_id}/test": {
+    "/v2/providers/{provider_id}/test": {
       "post": {
         "operationId": "Catalog.TestProviderModel",
         "summary": "Send one `hi` user message to a provider's model with max output tokens",
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.TestProviderModel",
+        "x-grpc-method": "hya.v2.Catalog.TestProviderModel",
         "x-server-streaming": false
       }
     },
-    "/v1/pty": {
+    "/v2/pty": {
       "post": {
         "operationId": "Pty.CreatePty",
         "summary": "Create a PTY session.",
         "tags": [
           "Pty"
         ],
-        "x-grpc-method": "hya.v1.Pty.CreatePty",
+        "x-grpc-method": "hya.v2.Pty.CreatePty",
         "x-server-streaming": false
       }
     },
-    "/v1/pty/shells": {
+    "/v2/pty/shells": {
       "get": {
         "operationId": "Pty.ListShells",
         "summary": "List available shell binaries on the host.",
         "tags": [
           "Pty"
         ],
-        "x-grpc-method": "hya.v1.Pty.ListShells",
+        "x-grpc-method": "hya.v2.Pty.ListShells",
         "x-server-streaming": false
       }
     },
-    "/v1/pty/{id}": {
+    "/v2/pty/{id}": {
       "get": {
         "operationId": "Pty.GetPty",
         "summary": "Read one PTY session's state.",
         "tags": [
           "Pty"
         ],
-        "x-grpc-method": "hya.v1.Pty.GetPty",
+        "x-grpc-method": "hya.v2.Pty.GetPty",
         "x-server-streaming": false
       },
       "put": {
@@ -738,7 +738,7 @@
         "tags": [
           "Pty"
         ],
-        "x-grpc-method": "hya.v1.Pty.UpdatePty",
+        "x-grpc-method": "hya.v2.Pty.UpdatePty",
         "x-server-streaming": false
       },
       "delete": {
@@ -747,95 +747,95 @@
         "tags": [
           "Pty"
         ],
-        "x-grpc-method": "hya.v1.Pty.DeletePty",
+        "x-grpc-method": "hya.v2.Pty.DeletePty",
         "x-server-streaming": false
       }
     },
-    "/v1/pty/{id}/connect": {
+    "/v2/pty/{id}/connect": {
       "get": {
         "operationId": "Pty.StreamPty",
         "summary": "Bidirectional terminal stream: client sends input/resize/ping,",
         "tags": [
           "Pty"
         ],
-        "x-grpc-method": "hya.v1.Pty.StreamPty",
+        "x-grpc-method": "hya.v2.Pty.StreamPty",
         "x-server-streaming": true
       }
     },
-    "/v1/pty/{id}/connect-token": {
+    "/v2/pty/{id}/connect-token": {
       "post": {
         "operationId": "Pty.CreateConnectToken",
         "summary": "Mint a one-time token authorizing a terminal connection.",
         "tags": [
           "Pty"
         ],
-        "x-grpc-method": "hya.v1.Pty.CreateConnectToken",
+        "x-grpc-method": "hya.v2.Pty.CreateConnectToken",
         "x-server-streaming": false
       }
     },
-    "/v1/relay/connect": {
+    "/v2/relay/connect": {
       "post": {
         "operationId": "RelayControl.ConnectRelay",
         "summary": "Join a relay: load (or create) the relay identity and keep a host",
         "tags": [
           "RelayControl"
         ],
-        "x-grpc-method": "hya.v1.RelayControl.ConnectRelay",
+        "x-grpc-method": "hya.v2.RelayControl.ConnectRelay",
         "x-server-streaming": false
       }
     },
-    "/v1/relay/disconnect": {
+    "/v2/relay/disconnect": {
       "post": {
         "operationId": "RelayControl.DisconnectRelay",
         "summary": "Leave the relay: close the control stream (the proxy releases the room)",
         "tags": [
           "RelayControl"
         ],
-        "x-grpc-method": "hya.v1.RelayControl.DisconnectRelay",
+        "x-grpc-method": "hya.v2.RelayControl.DisconnectRelay",
         "x-server-streaming": false
       }
     },
-    "/v1/relay/link": {
+    "/v2/relay/link": {
       "get": {
         "operationId": "RelayControl.GetRelayLink",
         "summary": "The full relay link — a secret: whoever holds it controls this backend.",
         "tags": [
           "RelayControl"
         ],
-        "x-grpc-method": "hya.v1.RelayControl.GetRelayLink",
+        "x-grpc-method": "hya.v2.RelayControl.GetRelayLink",
         "x-server-streaming": false
       }
     },
-    "/v1/relay/rotate": {
+    "/v2/relay/rotate": {
       "post": {
         "operationId": "RelayControl.RotateRelayKey",
         "summary": "Issue a new pre-shared key: every earlier link fails its next",
         "tags": [
           "RelayControl"
         ],
-        "x-grpc-method": "hya.v1.RelayControl.RotateRelayKey",
+        "x-grpc-method": "hya.v2.RelayControl.RotateRelayKey",
         "x-server-streaming": false
       }
     },
-    "/v1/relay/status": {
+    "/v2/relay/status": {
       "get": {
         "operationId": "RelayControl.GetRelayStatus",
         "summary": "The connector's state. Never contains key material.",
         "tags": [
           "RelayControl"
         ],
-        "x-grpc-method": "hya.v1.RelayControl.GetRelayStatus",
+        "x-grpc-method": "hya.v2.RelayControl.GetRelayStatus",
         "x-server-streaming": false
       }
     },
-    "/v1/sessions": {
+    "/v2/sessions": {
       "post": {
         "operationId": "Session.CreateSession",
         "summary": "Create a session, optionally as a child of an existing session and",
         "tags": [
           "Session"
         ],
-        "x-grpc-method": "hya.v1.Session.CreateSession",
+        "x-grpc-method": "hya.v2.Session.CreateSession",
         "x-server-streaming": false
       },
       "get": {
@@ -844,18 +844,18 @@
         "tags": [
           "Session"
         ],
-        "x-grpc-method": "hya.v1.Session.ListSessions",
+        "x-grpc-method": "hya.v2.Session.ListSessions",
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}": {
+    "/v2/sessions/{session}": {
       "get": {
         "operationId": "Session.GetSession",
         "summary": "Fetch one session's projection summary.",
         "tags": [
           "Session"
         ],
-        "x-grpc-method": "hya.v1.Session.GetSession",
+        "x-grpc-method": "hya.v2.Session.GetSession",
         "x-server-streaming": false
       },
       "patch": {
@@ -864,7 +864,7 @@
         "tags": [
           "Session"
         ],
-        "x-grpc-method": "hya.v1.Session.UpdateSession",
+        "x-grpc-method": "hya.v2.Session.UpdateSession",
         "x-server-streaming": false
       },
       "delete": {
@@ -873,29 +873,18 @@
         "tags": [
           "Session"
         ],
-        "x-grpc-method": "hya.v1.Session.DeleteSession",
+        "x-grpc-method": "hya.v2.Session.DeleteSession",
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}/archive": {
-      "post": {
-        "operationId": "Session.ArchiveSubagent",
-        "summary": "Archive a subagent session on the user's behalf, as its team lead's",
-        "tags": [
-          "Session"
-        ],
-        "x-grpc-method": "hya.v1.Session.ArchiveSubagent",
-        "x-server-streaming": false
-      }
-    },
-    "/v1/sessions/{session}/bundles/{bundle}/{path}": {
+    "/v2/sessions/{session}/bundles/{bundle}/{path}": {
       "get": {
         "operationId": "BundleApi.InvokeSessionBundleApi.get",
         "summary": "Invoke one session-scoped bundle endpoint. Over HTTP `bundle` is one",
         "tags": [
           "BundleApi"
         ],
-        "x-grpc-method": "hya.v1.BundleApi.InvokeSessionBundleApi",
+        "x-grpc-method": "hya.v2.BundleApi.InvokeSessionBundleApi",
         "x-server-streaming": false,
         "x-hya-any-method": true
       },
@@ -905,7 +894,7 @@
         "tags": [
           "BundleApi"
         ],
-        "x-grpc-method": "hya.v1.BundleApi.InvokeSessionBundleApi",
+        "x-grpc-method": "hya.v2.BundleApi.InvokeSessionBundleApi",
         "x-server-streaming": false,
         "x-hya-any-method": true
       },
@@ -915,7 +904,7 @@
         "tags": [
           "BundleApi"
         ],
-        "x-grpc-method": "hya.v1.BundleApi.InvokeSessionBundleApi",
+        "x-grpc-method": "hya.v2.BundleApi.InvokeSessionBundleApi",
         "x-server-streaming": false,
         "x-hya-any-method": true
       },
@@ -925,7 +914,7 @@
         "tags": [
           "BundleApi"
         ],
-        "x-grpc-method": "hya.v1.BundleApi.InvokeSessionBundleApi",
+        "x-grpc-method": "hya.v2.BundleApi.InvokeSessionBundleApi",
         "x-server-streaming": false,
         "x-hya-any-method": true
       },
@@ -935,292 +924,250 @@
         "tags": [
           "BundleApi"
         ],
-        "x-grpc-method": "hya.v1.BundleApi.InvokeSessionBundleApi",
+        "x-grpc-method": "hya.v2.BundleApi.InvokeSessionBundleApi",
         "x-server-streaming": false,
         "x-hya-any-method": true
       }
     },
-    "/v1/sessions/{session}/compact": {
+    "/v2/sessions/{session}/compact": {
       "post": {
         "operationId": "Session.CompactSession",
         "summary": "Compact a session's context using the configured method ladder.",
         "tags": [
           "Session"
         ],
-        "x-grpc-method": "hya.v1.Session.CompactSession",
+        "x-grpc-method": "hya.v2.Session.CompactSession",
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}/events": {
+    "/v2/sessions/{session}/events": {
       "get": {
         "operationId": "Events.ListEvents",
         "summary": "Replay events of one session after a sequence watermark.",
         "tags": [
           "Events"
         ],
-        "x-grpc-method": "hya.v1.Events.ListEvents",
+        "x-grpc-method": "hya.v2.Events.ListEvents",
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}/events/stream": {
+    "/v2/sessions/{session}/events/stream": {
       "get": {
         "operationId": "Events.StreamSessionEvents",
         "summary": "Live stream for one session; server-streaming over gRPC and SSE over",
         "tags": [
           "Events"
         ],
-        "x-grpc-method": "hya.v1.Events.StreamSessionEvents",
+        "x-grpc-method": "hya.v2.Events.StreamSessionEvents",
         "x-server-streaming": true
       }
     },
-    "/v1/sessions/{session}/fork": {
+    "/v2/sessions/{session}/fork": {
       "post": {
         "operationId": "Session.ForkSession",
         "summary": "Fork a session into a new session id. The fork copies the source's",
         "tags": [
           "Session"
         ],
-        "x-grpc-method": "hya.v1.Session.ForkSession",
+        "x-grpc-method": "hya.v2.Session.ForkSession",
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}/messages": {
+    "/v2/sessions/{session}/messages": {
       "get": {
         "operationId": "Messages.ListMessages",
         "summary": "List the transcript messages of a session.",
         "tags": [
           "Messages"
         ],
-        "x-grpc-method": "hya.v1.Messages.ListMessages",
+        "x-grpc-method": "hya.v2.Messages.ListMessages",
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}/messages/{message}": {
+    "/v2/sessions/{session}/messages/{message}": {
       "get": {
         "operationId": "Messages.GetMessage",
         "summary": "Fetch one message with its parts.",
         "tags": [
           "Messages"
         ],
-        "x-grpc-method": "hya.v1.Messages.GetMessage",
+        "x-grpc-method": "hya.v2.Messages.GetMessage",
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}/messages/{message}/parts/{part}": {
+    "/v2/sessions/{session}/messages/{message}/parts/{part}": {
       "delete": {
         "operationId": "Messages.DeleteMessagePart",
         "summary": "Delete one part of a message (message editing / redaction).",
         "tags": [
           "Messages"
         ],
-        "x-grpc-method": "hya.v1.Messages.DeleteMessagePart",
+        "x-grpc-method": "hya.v2.Messages.DeleteMessagePart",
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}/refresh-context": {
+    "/v2/sessions/{session}/refresh-context": {
       "post": {
         "operationId": "Session.RefreshSessionContext",
         "summary": "Re-record a session's initial context at its next turn: the",
         "tags": [
           "Session"
         ],
-        "x-grpc-method": "hya.v1.Session.RefreshSessionContext",
+        "x-grpc-method": "hya.v2.Session.RefreshSessionContext",
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}/revert": {
+    "/v2/sessions/{session}/revert": {
       "post": {
         "operationId": "Session.RevertSession",
         "summary": "Revert a session to just before a user message (default: the last",
         "tags": [
           "Session"
         ],
-        "x-grpc-method": "hya.v1.Session.RevertSession",
+        "x-grpc-method": "hya.v2.Session.RevertSession",
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}/steer": {
-      "post": {
-        "operationId": "Session.SteerSubagent",
-        "summary": "Steer a subagent session with a message from the user. It is delivered",
-        "tags": [
-          "Session"
-        ],
-        "x-grpc-method": "hya.v1.Session.SteerSubagent",
-        "x-server-streaming": false
-      }
-    },
-    "/v1/sessions/{session}/summarize": {
+    "/v2/sessions/{session}/summarize": {
       "post": {
         "operationId": "Session.SummarizeSession",
         "summary": "Produce a summary message for a session (titles, handoffs).",
         "tags": [
           "Session"
         ],
-        "x-grpc-method": "hya.v1.Session.SummarizeSession",
+        "x-grpc-method": "hya.v2.Session.SummarizeSession",
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}/todo": {
+    "/v2/sessions/{session}/todo": {
       "get": {
         "operationId": "Messages.GetSessionTodo",
         "summary": "Read the session's todo list projection.",
         "tags": [
           "Messages"
         ],
-        "x-grpc-method": "hya.v1.Messages.GetSessionTodo",
+        "x-grpc-method": "hya.v2.Messages.GetSessionTodo",
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}/turns": {
+    "/v2/sessions/{session}/turns": {
       "post": {
         "operationId": "Turn.CreateTurn",
         "summary": "Admit one turn into a session: a user prompt, a slash command, or a",
         "tags": [
           "Turn"
         ],
-        "x-grpc-method": "hya.v1.Turn.CreateTurn",
+        "x-grpc-method": "hya.v2.Turn.CreateTurn",
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}/turns/{turn}": {
+    "/v2/sessions/{session}/turns/{turn}": {
       "get": {
         "operationId": "Turn.GetTurn",
         "summary": "Read the current state of one turn.",
         "tags": [
           "Turn"
         ],
-        "x-grpc-method": "hya.v1.Turn.GetTurn",
+        "x-grpc-method": "hya.v2.Turn.GetTurn",
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}/turns/{turn}/cancel": {
+    "/v2/sessions/{session}/turns/{turn}/cancel": {
       "post": {
         "operationId": "Turn.CancelTurn",
         "summary": "Request cancellation of a running turn (cooperative abort).",
         "tags": [
           "Turn"
         ],
-        "x-grpc-method": "hya.v1.Turn.CancelTurn",
+        "x-grpc-method": "hya.v2.Turn.CancelTurn",
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}/turns/{turn}/wait": {
+    "/v2/sessions/{session}/turns/{turn}/wait": {
       "post": {
         "operationId": "Turn.WaitTurn",
         "summary": "Block until the turn reaches a terminal state or the timeout elapses.",
         "tags": [
           "Turn"
         ],
-        "x-grpc-method": "hya.v1.Turn.WaitTurn",
+        "x-grpc-method": "hya.v2.Turn.WaitTurn",
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}/workflow": {
-      "get": {
-        "operationId": "Workflow.GetWorkflowState",
-        "summary": "Read the projected workflow state of one session.",
-        "tags": [
-          "Workflow"
-        ],
-        "x-grpc-method": "hya.v1.Workflow.GetWorkflowState",
-        "x-server-streaming": false
-      },
-      "post": {
-        "operationId": "Workflow.SubmitWorkflowCommand",
-        "summary": "Submit one typed workflow command against a session (select source,",
-        "tags": [
-          "Workflow"
-        ],
-        "x-grpc-method": "hya.v1.Workflow.SubmitWorkflowCommand",
-        "x-server-streaming": false
-      }
-    },
-    "/v1/skills": {
+    "/v2/skills": {
       "get": {
         "operationId": "Catalog.ListSkills",
         "summary": "Skill catalog entries.",
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.ListSkills",
+        "x-grpc-method": "hya.v2.Catalog.ListSkills",
         "x-server-streaming": false
       }
     },
-    "/v1/tools": {
+    "/v2/tools": {
       "get": {
         "operationId": "Catalog.ListTools",
         "summary": "Tool registry entries including hidden aliases.",
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.ListTools",
+        "x-grpc-method": "hya.v2.Catalog.ListTools",
         "x-server-streaming": false
       }
     },
-    "/v1/tui-extensions": {
+    "/v2/tui-extensions": {
       "get": {
         "operationId": "Catalog.ListTuiExtensions",
         "summary": "Verified frontend extension declarations from prepared bundles. Metadata only.",
         "tags": [
           "Catalog"
         ],
-        "x-grpc-method": "hya.v1.Catalog.ListTuiExtensions",
+        "x-grpc-method": "hya.v2.Catalog.ListTuiExtensions",
         "x-server-streaming": false
       }
     },
-    "/v1/vcs": {
+    "/v2/vcs": {
       "get": {
         "operationId": "Project.GetVcsStatus",
         "summary": "Repository status: branch, head, and changed files.",
         "tags": [
           "Project"
         ],
-        "x-grpc-method": "hya.v1.Project.GetVcsStatus",
+        "x-grpc-method": "hya.v2.Project.GetVcsStatus",
         "x-server-streaming": false
       }
     },
-    "/v1/vcs/apply": {
+    "/v2/vcs/apply": {
       "post": {
         "operationId": "Project.ApplyPatch",
         "summary": "Apply a unified diff patch to the working tree.",
         "tags": [
           "Project"
         ],
-        "x-grpc-method": "hya.v1.Project.ApplyPatch",
+        "x-grpc-method": "hya.v2.Project.ApplyPatch",
         "x-server-streaming": false
       }
     },
-    "/v1/vcs/diff": {
+    "/v2/vcs/diff": {
       "get": {
         "operationId": "Project.GetVcsDiff",
         "summary": "Unified diff of working-tree changes.",
         "tags": [
           "Project"
         ],
-        "x-grpc-method": "hya.v1.Project.GetVcsDiff",
+        "x-grpc-method": "hya.v2.Project.GetVcsDiff",
         "x-server-streaming": false
       }
     },
-    "/v1/workflows": {
-      "get": {
-        "operationId": "Workflow.ListWorkflows",
-        "summary": "List discovered workflow sources for a directory.",
-        "tags": [
-          "Workflow"
-        ],
-        "x-grpc-method": "hya.v1.Workflow.ListWorkflows",
-        "x-server-streaming": false
-      }
-    },
-    "/v1/worktrees": {
+    "/v2/worktrees": {
       "get": {
         "operationId": "Worktrees.ListWorktrees",
         "summary": "List worktrees of a repository.",
         "tags": [
           "Worktrees"
         ],
-        "x-grpc-method": "hya.v1.Worktrees.ListWorktrees",
+        "x-grpc-method": "hya.v2.Worktrees.ListWorktrees",
         "x-server-streaming": false
       },
       "post": {
@@ -1229,29 +1176,29 @@
         "tags": [
           "Worktrees"
         ],
-        "x-grpc-method": "hya.v1.Worktrees.CreateWorktree",
+        "x-grpc-method": "hya.v2.Worktrees.CreateWorktree",
         "x-server-streaming": false
       }
     },
-    "/v1/worktrees/{worktree}": {
+    "/v2/worktrees/{worktree}": {
       "delete": {
         "operationId": "Worktrees.DeleteWorktree",
         "summary": "Delete a worktree and optionally its branch.",
         "tags": [
           "Worktrees"
         ],
-        "x-grpc-method": "hya.v1.Worktrees.DeleteWorktree",
+        "x-grpc-method": "hya.v2.Worktrees.DeleteWorktree",
         "x-server-streaming": false
       }
     },
-    "/v1/worktrees/{worktree}/reset": {
+    "/v2/worktrees/{worktree}/reset": {
       "post": {
         "operationId": "Worktrees.ResetWorktree",
         "summary": "Reset a worktree to a clean state at its branch head.",
         "tags": [
           "Worktrees"
         ],
-        "x-grpc-method": "hya.v1.Worktrees.ResetWorktree",
+        "x-grpc-method": "hya.v2.Worktrees.ResetWorktree",
         "x-server-streaming": false
       }
     }
@@ -2790,8 +2737,8 @@
           "todo_updated": {
             "$ref": "#/components/schemas/TodoUpdated"
           },
-          "workflow_updated": {
-            "$ref": "#/components/schemas/WorkflowUpdated"
+          "extension_event": {
+            "$ref": "#/components/schemas/ExtensionEvent"
           },
           "tokens_recorded": {
             "$ref": "#/components/schemas/TokensRecorded"
@@ -2808,9 +2755,6 @@
           "error_reported": {
             "$ref": "#/components/schemas/ErrorReported"
           },
-          "member_updated": {
-            "$ref": "#/components/schemas/MemberInfo"
-          },
           "session_reverted": {
             "$ref": "#/components/schemas/SessionReverted"
           },
@@ -2826,29 +2770,26 @@
           "projects_updated": {
             "$ref": "#/components/schemas/ProjectsUpdated"
           },
-          "member_lifecycle_changed": {
-            "$ref": "#/components/schemas/MemberLifecycleChanged"
-          },
           "part_deleted": {
             "$ref": "#/components/schemas/PartDeleted"
           }
         }
       },
-      "MemberLifecycleChanged": {
+      "ExtensionEvent": {
         "type": "object",
-        "description": "Actor lifecycle, separate from parent-local member task updates.",
+        "description": "Bundle-owned extension event emitted on a session stream.",
         "properties": {
-          "child": {
+          "session_id": {
             "type": "string"
           },
-          "handle": {
+          "bundle": {
             "type": "string"
           },
-          "archived": {
-            "type": "boolean"
-          },
-          "archive_reason": {
+          "kind": {
             "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/google.protobuf.Value"
           }
         }
       },
@@ -3153,15 +3094,6 @@
             "items": {
               "$ref": "#/components/schemas/TodoItem"
             }
-          }
-        }
-      },
-      "WorkflowUpdated": {
-        "type": "object",
-        "description": "The workflow projection changed.",
-        "properties": {
-          "state": {
-            "$ref": "#/components/schemas/WorkflowState"
           }
         }
       },
@@ -4100,46 +4032,6 @@
           }
         }
       },
-      "MemberInfo": {
-        "type": "object",
-        "description": "A subagent (member) spawned by a session, as recorded on the parent's log.",
-        "properties": {
-          "member": {
-            "type": "string"
-          },
-          "child": {
-            "type": "string"
-          },
-          "agent": {
-            "type": "string"
-          },
-          "description": {
-            "type": "string"
-          },
-          "status": {
-            "$ref": "#/components/schemas/MemberStatus"
-          },
-          "summary": {
-            "type": "string"
-          },
-          "call_id": {
-            "type": "string"
-          },
-          "depth": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "handle": {
-            "type": "string"
-          },
-          "archived": {
-            "type": "boolean"
-          },
-          "archive_reason": {
-            "type": "string"
-          }
-        }
-      },
       "RevertedFile": {
         "type": "object",
         "description": "One file a session revert or unrevert wrote (or could not restore).",
@@ -4985,11 +4877,8 @@
           "permission_mode": {
             "type": "string"
           },
-          "members": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/MemberInfo"
-            }
+          "extensions": {
+            "type": "object"
           },
           "usage": {
             "$ref": "#/components/schemas/TokenUsage"
@@ -5305,54 +5194,6 @@
           }
         }
       },
-      "ArchiveSubagentRequest": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "session": {
-            "type": "string"
-          }
-        }
-      },
-      "ArchiveSubagentResponse": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "handle": {
-            "type": "string"
-          },
-          "cancelled_turn": {
-            "type": "boolean"
-          },
-          "descendants": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        }
-      },
-      "SteerSubagentRequest": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "session": {
-            "type": "string"
-          },
-          "text": {
-            "type": "string"
-          }
-        }
-      },
-      "SteerSubagentResponse": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "from": {
-            "type": "string"
-          }
-        }
-      },
       "PromptTurn": {
         "type": "object",
         "description": "A plain user prompt turn.",
@@ -5511,257 +5352,6 @@
           },
           "turn": {
             "type": "string"
-          }
-        }
-      },
-      "WorkflowSummary": {
-        "type": "object",
-        "description": "One discovered workflow source.",
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "string"
-          },
-          "description": {
-            "type": "string"
-          },
-          "stage_count": {
-            "type": "integer",
-            "format": "int64"
-          }
-        }
-      },
-      "ListWorkflowsRequest": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "directory": {
-            "type": "string"
-          },
-          "page": {
-            "$ref": "#/components/schemas/PageRequest"
-          }
-        }
-      },
-      "ListWorkflowsResponse": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "workflows": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/WorkflowSummary"
-            }
-          },
-          "page": {
-            "$ref": "#/components/schemas/PageInfo"
-          }
-        }
-      },
-      "GetWorkflowStateRequest": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "session": {
-            "type": "string"
-          }
-        }
-      },
-      "WorkflowStageRun": {
-        "type": "object",
-        "description": "Execution state of one stage member.",
-        "properties": {
-          "stage": {
-            "type": "string"
-          },
-          "member": {
-            "type": "string"
-          },
-          "agent": {
-            "type": "string"
-          },
-          "status": {
-            "$ref": "#/components/schemas/WorkflowRunStatus"
-          }
-        }
-      },
-      "WorkflowState": {
-        "type": "object",
-        "description": "Projected workflow state of a session.",
-        "properties": {
-          "session": {
-            "type": "string"
-          },
-          "workflow": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "string"
-          },
-          "status": {
-            "$ref": "#/components/schemas/WorkflowRunStatus"
-          },
-          "stages": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/WorkflowStageRun"
-            }
-          },
-          "error_code": {
-            "type": "string"
-          },
-          "raw_json": {
-            "type": "string"
-          }
-        }
-      },
-      "WorkflowInfoCommand": {
-        "type": "object",
-        "description": "`list` command: enumerate workflow sources. `info` command: inspect one compiled workflow.",
-        "properties": {
-          "name": {
-            "type": "string"
-          }
-        }
-      },
-      "WorkflowSelectCommand": {
-        "type": "object",
-        "description": "`select` command: persist one source/revision identity.",
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "expected_revision": {
-            "type": "string"
-          }
-        }
-      },
-      "WorkflowRunCommand": {
-        "type": "object",
-        "description": "`run` command: start the selected or named workflow.",
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "inputs": {
-            "type": "object"
-          }
-        }
-      },
-      "SubmitWorkflowCommandRequest": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "session": {
-            "type": "string"
-          },
-          "list": {
-            "$ref": "#/components/schemas/WorkflowListCommand"
-          },
-          "info": {
-            "$ref": "#/components/schemas/WorkflowInfoCommand"
-          },
-          "select": {
-            "$ref": "#/components/schemas/WorkflowSelectCommand"
-          },
-          "run": {
-            "$ref": "#/components/schemas/WorkflowRunCommand"
-          }
-        }
-      },
-      "WorkflowModelCandidate": {
-        "type": "object",
-        "description": "One authored fallback candidate.",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "reasoning": {
-            "type": "string"
-          }
-        }
-      },
-      "WorkflowModelAssignment": {
-        "type": "object",
-        "description": "Authored worker model assignment for a stage.",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "reasoning": {
-            "type": "string"
-          },
-          "fallback": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/WorkflowModelCandidate"
-            }
-          }
-        }
-      },
-      "WorkflowInfoResult": {
-        "type": "object",
-        "description": "Result payload of the `info` command.",
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "string"
-          },
-          "stage_names": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "stages": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/WorkflowStageInfo"
-            }
-          }
-        }
-      },
-      "WorkflowStageInfo": {
-        "type": "object",
-        "description": "Compiled stage metadata from the `info` result.",
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "agent": {
-            "type": "string"
-          },
-          "level": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "worker_model": {
-            "$ref": "#/components/schemas/WorkflowModelAssignment"
-          },
-          "verifier_model": {
-            "$ref": "#/components/schemas/WorkflowModelAssignment"
-          }
-        }
-      },
-      "SubmitWorkflowCommandResponse": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "list": {
-            "$ref": "#/components/schemas/ListWorkflowsResponse"
-          },
-          "info": {
-            "$ref": "#/components/schemas/WorkflowInfoResult"
-          },
-          "selected": {
-            "$ref": "#/components/schemas/WorkflowState"
-          },
-          "started": {
-            "$ref": "#/components/schemas/WorkflowState"
           }
         }
       },
@@ -6003,18 +5593,6 @@
           "TODO_STATUS_BLOCKED"
         ]
       },
-      "MemberStatus": {
-        "type": "string",
-        "description": "Lifecycle status of a spawned subagent (member).",
-        "enum": [
-          "MEMBER_STATUS_UNSPECIFIED",
-          "MEMBER_STATUS_SPAWNING",
-          "MEMBER_STATUS_RUNNING",
-          "MEMBER_STATUS_DONE",
-          "MEMBER_STATUS_FAILED",
-          "MEMBER_STATUS_CANCELLED"
-        ]
-      },
       "VcsFileStatus": {
         "type": "string",
         "description": "Change status of one file.",
@@ -6070,18 +5648,6 @@
           "TURN_STATE_FINISHED",
           "TURN_STATE_FAILED",
           "TURN_STATE_CANCELLED"
-        ]
-      },
-      "WorkflowRunStatus": {
-        "type": "string",
-        "description": "Lifecycle status of a workflow run.",
-        "enum": [
-          "WORKFLOW_RUN_STATUS_UNSPECIFIED",
-          "WORKFLOW_RUN_STATUS_SELECTED",
-          "WORKFLOW_RUN_STATUS_RUNNING",
-          "WORKFLOW_RUN_STATUS_FINISHED",
-          "WORKFLOW_RUN_STATUS_FAILED",
-          "WORKFLOW_RUN_STATUS_CANCELLED"
         ]
       }
     }

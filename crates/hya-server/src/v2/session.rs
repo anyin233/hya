@@ -1,0 +1,768 @@
+//! `/v2` session domain: lifecycle, fork, compact, summarize, context
+//! refresh, and revert.
+
+use std::collections::BTreeMap;
+
+use axum::Router;
+use axum::extract::{Path as AxumPath, Query, State};
+use axum::routing::{get, post};
+
+use super::Json;
+
+use crate::ServerState;
+use hya_api::v2 as pb;
+use hya_engine::CreateSession;
+use hya_proto::SessionId;
+
+use super::V2Error;
+use super::convert::session_info;
+
+pub(crate) fn router() -> Router<ServerState> {
+    Router::new()
+        .route("/v2/sessions", get(list_sessions).post(create_session))
+        .route(
+            "/v2/sessions/:id",
+            get(get_session)
+                .patch(axum::routing::patch(update_session))
+                .delete(delete_session),
+        )
+        .route("/v2/sessions/:id/fork", post(fork_session))
+        .route("/v2/sessions/:id/compact", post(compact_session))
+        .route("/v2/sessions/:id/summarize", post(summarize_session))
+        .route(
+            "/v2/sessions/:id/refresh-context",
+            post(refresh_session_context),
+        )
+        .route("/v2/sessions/:id/revert", post(revert_session))
+}
+
+pub(crate) fn parse_session(id: &str) -> Result<SessionId, V2Error> {
+    id.parse::<SessionId>()
+        .map_err(|_| V2Error::invalid_argument(format!("invalid session id: {id}")))
+}
+
+async fn session_exists(st: &ServerState, session: SessionId) -> Result<(), V2Error> {
+    if st.engine.session_exists(session).await? {
+        Ok(())
+    } else {
+        Err(V2Error::session_not_found(&session.to_string()))
+    }
+}
+
+pub(super) async fn create_session(
+    State(st): State<ServerState>,
+    Json(request): Json<pb::CreateSessionRequest>,
+) -> Result<Json<pb::CreateSessionResponse>, V2Error> {
+    let placement = session_placement(&st, &request).await?;
+    let workdir = std::path::Path::new(&placement.workdir);
+    let (agent, model) = if request.agent.trim().is_empty() || request.model.trim().is_empty() {
+        // An empty agent or model takes the server's default, resolved as
+        // for a headless root session (`hya exec`): config `default_agent`,
+        // else the built-in agent, on that agent's effective model.
+        let requested = Some(request.agent.trim()).filter(|agent| !agent.is_empty());
+        let explicit = Some(request.model.trim())
+            .filter(|model| !model.is_empty())
+            .map(hya_proto::ModelRef::new);
+        crate::support::bound_agent_metadata::resolve_new_session_agent_model(
+            &st, workdir, requested, explicit,
+        )
+        .await?
+    } else {
+        let agent = crate::support::bound_agent_metadata::resolve_session_agent(
+            &st,
+            workdir,
+            Some(request.agent.as_str()),
+        )
+        .await
+        .map_err(|error| V2Error::new(hya_api::error::Code::Internal, error.text().to_owned()))?;
+        (agent, hya_proto::ModelRef::new(request.model.clone()))
+    };
+    let session = st
+        .engine
+        .create_with_id(
+            Some(placement.session),
+            CreateSession {
+                parent: placement.parent,
+                agent,
+                model,
+                workdir: placement.workdir,
+                project: placement.project,
+                kind: placement.kind,
+            },
+        )
+        .await?;
+    if !request.title.is_empty() {
+        st.engine.set_title(session, request.title.clone()).await?;
+    } else if request.ephemeral && placement.parent.is_none() {
+        // Dropped while unused once nobody watches it; checked after the
+        // creation grace even if no client ever does (`crate::ephemeral`).
+        st.engine.set_session_ephemeral(session, true).await?;
+        st.watchers
+            .schedule(session, crate::ephemeral::Wait::Unclaimed);
+    }
+    if placement.parent.is_none() && placement.project.is_some() {
+        st.notify_projects_updated();
+    }
+    let info = projection_info(&st, session).await?;
+    Ok(Json(pb::CreateSessionResponse {
+        session: Some(info),
+    }))
+}
+
+/// Where a new session works: its id (chosen up front so a temporary
+/// session's scratch directory can be named after it), parent, workdir,
+/// Project, and kind.
+struct Placement {
+    session: SessionId,
+    parent: Option<SessionId>,
+    workdir: String,
+    project: Option<hya_proto::ProjectId>,
+    kind: hya_proto::SessionKind,
+}
+
+/// Apply the `CreateSessionRequest` placement rules (ADR-0024; see the
+/// message comment in `session.proto`).
+async fn session_placement(
+    st: &ServerState,
+    request: &pb::CreateSessionRequest,
+) -> Result<Placement, V2Error> {
+    let session = SessionId::new();
+    let kind = pb::SessionKind::try_from(request.kind).map_err(|_| {
+        V2Error::invalid_argument(format!("unknown session kind: {}", request.kind))
+    })?;
+    let workdir = request
+        .workdir
+        .as_deref()
+        .map(str::trim)
+        .filter(|workdir| !workdir.is_empty());
+    let project_id = request.project_id.trim();
+    if !request.parent.trim().is_empty() {
+        let parent = parse_session(request.parent.trim())?;
+        if !project_id.is_empty() || kind != pb::SessionKind::Unspecified {
+            return Err(V2Error::invalid_argument(
+                "a child session joins its parent's project: leave projectId and kind unset",
+            ));
+        }
+        let workdir = match workdir {
+            Some(workdir) => hya_store::normalize_project_path(workdir)?,
+            None => st
+                .engine
+                .read_projection_shared(parent)
+                .await?
+                .session
+                .workdir
+                .clone()
+                .ok_or_else(|| V2Error::session_not_found(&parent.to_string()))?,
+        };
+        // The engine records the parent's Project and kind on the child.
+        return Ok(Placement {
+            session,
+            parent: Some(parent),
+            workdir,
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        });
+    }
+    if kind == pb::SessionKind::Temporary {
+        if !project_id.is_empty() || workdir.is_some() {
+            return Err(V2Error::invalid_argument(
+                "a temporary session has no project and no workdir: the server creates its scratch directory",
+            ));
+        }
+        let workdir = create_scratch_dir(st, session)?;
+        return Ok(Placement {
+            session,
+            parent: None,
+            workdir,
+            project: None,
+            kind: hya_proto::SessionKind::Temporary,
+        });
+    }
+    if !project_id.is_empty() {
+        let project =
+            super::project::load_project(st, super::project::parse_project(project_id)?).await?;
+        let workdir = match workdir {
+            Some(workdir) => {
+                let workdir = hya_store::normalize_project_path(workdir)?;
+                let inside = project
+                    .roots
+                    .iter()
+                    .any(|root| std::path::Path::new(&workdir).starts_with(root));
+                if !inside {
+                    return Err(V2Error::invalid_argument(format!(
+                        "workdir {workdir} is outside the roots of project {}",
+                        project.id
+                    )));
+                }
+                workdir
+            }
+            None => project
+                .roots
+                .first()
+                .cloned()
+                .ok_or_else(|| V2Error::internal("project has no roots"))?,
+        };
+        return Ok(Placement {
+            session,
+            parent: None,
+            workdir,
+            project: Some(project.id),
+            kind: hya_proto::SessionKind::Project,
+        });
+    }
+    let Some(workdir) = workdir else {
+        return Err(V2Error::invalid_argument(
+            "a session needs a projectId, a workdir, or kind SESSION_KIND_TEMPORARY",
+        ));
+    };
+    let workdir = hya_store::normalize_project_path(workdir)?;
+    let (project, _created) = super::project::ensure_project_for_path(st, &workdir).await?;
+    Ok(Placement {
+        session,
+        parent: None,
+        workdir,
+        project: Some(project.id),
+        kind: hya_proto::SessionKind::Project,
+    })
+}
+
+/// Create a temporary session's scratch directory `<scratch root>/<id>`,
+/// private to the user (0700 on Unix). hya never deletes it (ADR-0024).
+fn create_scratch_dir(st: &ServerState, session: SessionId) -> Result<String, V2Error> {
+    let Some(root) = &st.scratch_root else {
+        return Err(V2Error::unavailable(
+            "temporary sessions need XDG_CACHE_HOME or HOME for their scratch directory",
+        ));
+    };
+    let dir = root.join(session.to_string());
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        builder.mode(0o700);
+    }
+    builder.create(&dir).map_err(|error| {
+        V2Error::internal(format!(
+            "create scratch directory {}: {error}",
+            dir.display()
+        ))
+    })?;
+    dir.to_str().map(str::to_owned).ok_or_else(|| {
+        V2Error::internal(format!(
+            "scratch directory {} is not valid UTF-8",
+            dir.display()
+        ))
+    })
+}
+
+/// Read one session's projection summary with store timestamps.
+async fn projection_info(st: &ServerState, session: SessionId) -> Result<pb::SessionInfo, V2Error> {
+    let (started, updated) = st
+        .engine
+        .store()
+        .session_info(session)
+        .await?
+        .map(|row| (row.started_millis, row.updated_millis))
+        .unwrap_or((0, 0));
+    projection_info_at(st, session, started, updated).await
+}
+
+/// `SessionInfo` from the cached projection and already-known log bounds.
+async fn projection_info_at(
+    st: &ServerState,
+    session: SessionId,
+    started: i64,
+    updated: i64,
+) -> Result<pb::SessionInfo, V2Error> {
+    let projection = st.engine.read_projection_shared(session).await?;
+    let mut info = session_info(&projection, started, updated);
+    if let Some(model) = projection.session.model.as_ref() {
+        // Same resolver as the turn loop, including the session Agent's
+        // runtime/configured effort. An authored bundle `model_policy`
+        // effort is applied per request but not reflected here.
+        let agent = projection
+            .session
+            .agent
+            .as_ref()
+            .map(|agent| agent.as_str());
+        let workdir = std::path::Path::new(projection.session.workdir.as_deref().unwrap_or("."));
+        let binding = st.engine.bind_session_runtime(session, workdir).await?;
+        let resolved = st
+            .engine
+            .effective_effort(model, agent, None, Some(&binding))
+            .await?;
+        let (effort, source) = (resolved.effort, resolved.source);
+        info.effective_effort = effort
+            .map(|value| value.as_str().to_string())
+            .unwrap_or_default();
+        info.effort_source = match source {
+            hya_engine::EffortSource::Suffix => pb::EffortSource::Suffix,
+            hya_engine::EffortSource::Agent => pb::EffortSource::Agent,
+            hya_engine::EffortSource::Preference => pb::EffortSource::Preference,
+            hya_engine::EffortSource::ModelDefault => pb::EffortSource::ModelDefault,
+            hya_engine::EffortSource::GlobalDefault => pb::EffortSource::GlobalDefault,
+            hya_engine::EffortSource::None => pb::EffortSource::None,
+        } as i32;
+    }
+    info.busy = st.is_busy(session);
+    info.permission_mode = st.engine.permission_mode(session).await?;
+    Ok(info)
+}
+
+async fn get_session(
+    State(st): State<ServerState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<pb::SessionInfo>, V2Error> {
+    let session = parse_session(&id)?;
+    session_exists(&st, session).await?;
+    Ok(Json(projection_info(&st, session).await?))
+}
+
+async fn list_sessions(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::ListSessionsResponse>, V2Error> {
+    let request: pb::ListSessionsRequest = super::query_request(&[], &query)?;
+    let project = match request.project_id.trim() {
+        "" => None,
+        id => Some(super::project::parse_project(id)?),
+    };
+    let rows = st.engine.store().list_sessions_in(project).await?;
+    let mut listed_rows = Vec::with_capacity(rows.len());
+    for row in rows {
+        let projection = st.engine.read_projection_shared(row.session).await?;
+        if !request.parent.is_empty()
+            && let Ok(parent) = parse_session(&request.parent)
+            && projection.session.parent != Some(parent)
+        {
+            continue;
+        }
+        let archived = projection.session.is_archived();
+        let listed = if request.archived_only {
+            archived
+        } else {
+            request.include_archived || !archived
+        };
+        if listed {
+            listed_rows.push(row);
+        }
+    }
+    listed_rows.reverse();
+    let (rows, page) = super::catalog::paginate(listed_rows, &request.page)?;
+    let mut sessions = Vec::with_capacity(rows.len());
+    for row in rows {
+        sessions.push(
+            projection_info_at(&st, row.session, row.started_millis, row.updated_millis).await?,
+        );
+    }
+    Ok(Json(pb::ListSessionsResponse {
+        sessions,
+        page: Some(page),
+    }))
+}
+
+async fn update_session(
+    State(st): State<ServerState>,
+    AxumPath(id): AxumPath<String>,
+    Json(request): Json<pb::UpdateSessionRequest>,
+) -> Result<Json<pb::SessionInfo>, V2Error> {
+    let session = parse_session(&id)?;
+    session_exists(&st, session).await?;
+    if request
+        .model
+        .as_ref()
+        .is_some_and(|model| !model.is_empty())
+        || request
+            .agent
+            .as_ref()
+            .is_some_and(|agent| !agent.is_empty())
+    {
+        st.engine.ensure_external_turn_allowed(session).await?;
+    }
+    // Validate the mode before applying any other field, so an unknown mode
+    // leaves the session unchanged.
+    if let Some(mode) = request.permission_mode.as_deref()
+        && hya_engine::SessionPermissionMode::parse(mode).is_none()
+    {
+        return Err(V2Error::invalid_argument(format!(
+            "unknown permission mode: {mode:?}"
+        )));
+    }
+    // Only root sessions are archived: reject a child before any write.
+    if request.archived == Some(true)
+        && st
+            .engine
+            .read_projection_shared(session)
+            .await?
+            .session
+            .parent
+            .is_some()
+    {
+        return Err(V2Error::invalid_argument(
+            hya_proto::SessionArchiveError::NotRoot.to_string(),
+        ));
+    }
+    if let Some(title) = request.title
+        && !title.is_empty()
+    {
+        st.engine.set_title(session, title).await?;
+    }
+    let model = request
+        .model
+        .filter(|model| !model.is_empty())
+        .map(hya_proto::ModelRef::new);
+    if let Some(model) = &model {
+        st.engine.switch_model(session, model.clone()).await?;
+    }
+    if let Some(agent) = request.agent
+        && !agent.is_empty()
+    {
+        st.engine
+            .switch_agent(session, hya_proto::AgentName::new(agent))
+            .await?;
+    }
+    // A pinned agent (`agents.<id>.model`, authored policy) outranks the
+    // persisted session model, so the switch is also recorded as the root
+    // tree's temporary choice for the session's agent, which outranks both.
+    if let Some(model) = model {
+        let agent = st
+            .engine
+            .read_projection_shared(session)
+            .await?
+            .session
+            .agent
+            .clone();
+        if let Some(agent) = agent {
+            st.engine
+                .set_agent_model_override(session, agent, Some(model))
+                .await?;
+        }
+    }
+    if let Some(mode) = request.permission_mode {
+        let root = st
+            .engine
+            .set_permission_mode(session, &mode)
+            .await
+            .map_err(|error| match error {
+                hya_engine::CoreError::Invalid(message) => V2Error::invalid_argument(message),
+                other => V2Error::from(other),
+            })?;
+        if mode == hya_engine::permission_mode::YOLO {
+            // The tree now bypasses every check: let the calls already
+            // waiting for an answer continue as if allowed once.
+            st.permission_requests.allow_tree_once(root).await;
+        }
+    }
+    match request.archived {
+        Some(true) => {
+            st.engine
+                .archive_session(session)
+                .await
+                .map_err(archive_error)?;
+        }
+        Some(false) => {
+            st.engine
+                .unarchive_session(session)
+                .await
+                .map_err(archive_error)?;
+        }
+        None => {}
+    }
+    if request.archived.is_some() {
+        // A Project's `busy` counts only non-archived sessions.
+        st.notify_projects_updated();
+    }
+    Ok(Json(projection_info(&st, session).await?))
+}
+
+fn archive_error(error: hya_engine::CoreError) -> V2Error {
+    match error {
+        hya_engine::CoreError::Invalid(message) => V2Error::invalid_argument(message),
+        other => V2Error::from(other),
+    }
+}
+
+/// Unarchive `session` because a new prompt, command, or shell turn was
+/// admitted on it (appends `SessionUnarchived` only when it was archived).
+pub(crate) async fn unarchive_for_turn(
+    st: &ServerState,
+    session: SessionId,
+) -> Result<(), V2Error> {
+    st.engine.unarchive_session(session).await?;
+    Ok(())
+}
+
+async fn delete_session(
+    State(st): State<ServerState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<pb::DeleteSessionResponse>, V2Error> {
+    let session = parse_session(&id)?;
+    // Root-ness and Project membership must be read before the log (and so
+    // the parent link) goes.
+    let root = crate::session_list::is_root(&st, session).await;
+    let in_project = st
+        .engine
+        .read_projection_shared(session)
+        .await?
+        .session
+        .project
+        .is_some();
+    let deleted = st.delete_session(session).await?;
+    if !deleted {
+        return Err(V2Error::session_not_found(&id));
+    }
+    if in_project {
+        st.notify_projects_updated();
+    }
+    if root {
+        st.session_list
+            .publish(crate::session_list::SessionListNotice::Deleted { session });
+    }
+    Ok(Json(pb::DeleteSessionResponse {}))
+}
+
+async fn fork_session(
+    State(st): State<ServerState>,
+    AxumPath(id): AxumPath<String>,
+    Json(request): Json<pb::ForkSessionRequest>,
+) -> Result<Json<pb::ForkSessionResponse>, V2Error> {
+    let source = parse_session(&id)?;
+    let envs = st.engine.replay(source).await?;
+    if envs.is_empty() {
+        return Err(V2Error::session_not_found(&id));
+    }
+    let projection =
+        hya_proto::Projection::from_events_with(&envs, &hya_tool::extension::projection_reducers());
+    // A fork taken from an unused ephemeral session keeps the source.
+    st.engine.set_session_ephemeral(source, false).await?;
+    let at = if !request.message_id.is_empty() {
+        hya_engine::ForkAt::Message(parse_message(&request.message_id)?)
+    } else if request.until_seq > 0 {
+        hya_engine::ForkAt::UntilSeq(request.until_seq)
+    } else {
+        hya_engine::ForkAt::Head
+    };
+    let before = hya_engine::fork_cut(&envs, &projection, at).map_err(|error| match error {
+        hya_engine::ForkError::MessageNotFound(_) => {
+            V2Error::new(hya_api::error::Code::NotFound, error.to_string())
+        }
+        hya_engine::ForkError::NotUserMessage(_) => V2Error::invalid_argument(error.to_string()),
+    })?;
+    let prompt_text = match at {
+        hya_engine::ForkAt::Message(cut) => projection
+            .session
+            .messages
+            .iter()
+            .find(|message| message.id == cut)
+            .map(|message| super::convert::message_text(&message.parts))
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+    let target = st
+        .engine
+        .create(CreateSession {
+            parent: None,
+            agent: projection
+                .session
+                .agent
+                .clone()
+                .unwrap_or_else(|| st.agent.name.clone()),
+            model: projection
+                .session
+                .model
+                .clone()
+                .unwrap_or_else(|| st.agent.model.clone()),
+            // Every session records its workdir; the fork works there too.
+            workdir: projection
+                .session
+                .workdir
+                .clone()
+                .ok_or_else(|| V2Error::session_not_found(&source.to_string()))?,
+            // A fork stays in its source's Project and keeps its kind.
+            project: projection.session.project,
+            kind: projection.session.kind,
+        })
+        .await?;
+    st.engine
+        .record_session_forked(target, source, before)
+        .await?;
+    st.engine
+        .set_title(target, fork_title(&projection, source))
+        .await?;
+    if let Some(metadata) = projection.session.metadata.clone() {
+        st.engine.set_metadata(target, metadata).await?;
+    }
+    st.engine
+        .copy_messages_to_session(target, &projection, before)
+        .await?;
+    Ok(Json(pb::ForkSessionResponse {
+        session: Some(projection_info(&st, target).await?),
+        prompt_text,
+    }))
+}
+
+/// Title of a fork: `<source title> (fork)`, the source id standing in for
+/// a missing or default title. The suffix is not stacked on a fork of a
+/// fork. Not a default title, so automatic titling never renames the fork.
+fn fork_title(source: &hya_proto::Projection, id: hya_proto::SessionId) -> String {
+    const SUFFIX: &str = " (fork)";
+    let title = source
+        .session
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| {
+            !title.is_empty() && !hya_engine::title::is_default_or_fallback_title(title)
+        });
+    match title {
+        Some(title) if title.ends_with(SUFFIX) => title.to_owned(),
+        Some(title) => format!("{title}{SUFFIX}"),
+        None => format!("{id}{SUFFIX}"),
+    }
+}
+
+fn parse_message(id: &str) -> Result<hya_proto::MessageId, V2Error> {
+    id.parse::<hya_proto::MessageId>()
+        .map_err(|_| V2Error::invalid_argument(format!("invalid message id: {id}")))
+}
+
+async fn compact_session(
+    State(st): State<ServerState>,
+    AxumPath(id): AxumPath<String>,
+    // `until_seq` is deprecated and ignored: a manual compaction always folds
+    // the whole transcript at the head (see `CompactSessionRequest`).
+    Json(_request): Json<pb::CompactSessionRequest>,
+) -> Result<Json<pb::CompactSessionResponse>, V2Error> {
+    let session = parse_session(&id)?;
+    match st.engine.summarize_session(session).await {
+        Ok(marker) => {
+            // The strategy the recorded `ContextCompacted` of the marker names.
+            let strategy = st
+                .engine
+                .replay(session)
+                .await?
+                .iter()
+                .rev()
+                .find_map(|envelope| match &envelope.event {
+                    hya_proto::Event::ContextCompacted {
+                        message, strategy, ..
+                    } if *message == marker => Some(*strategy),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    V2Error::from(hya_engine::CoreError::Invalid(
+                        "compaction record missing".to_string(),
+                    ))
+                })?;
+            let projection = st.engine.read_projection_shared(session).await?;
+            Ok(Json(pb::CompactSessionResponse {
+                compacted_until_seq: projection.last_seq,
+                strategy: strategy.as_str().to_owned(),
+            }))
+        }
+        Err(hya_engine::CoreError::Invalid(message)) if message == "session not found" => {
+            Err(V2Error::session_not_found(&id))
+        }
+        Err(other) => Err(V2Error::from(other)),
+    }
+}
+
+async fn summarize_session(
+    State(st): State<ServerState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<pb::SummarizeSessionResponse>, V2Error> {
+    let session = parse_session(&id)?;
+    match st.engine.summarize_session(session).await {
+        Ok(summary) => Ok(Json(pb::SummarizeSessionResponse {
+            summary_message: summary.to_string(),
+        })),
+        Err(hya_engine::CoreError::Invalid(message)) if message == "session not found" => {
+            Err(V2Error::session_not_found(&id))
+        }
+        Err(other) => Err(V2Error::from(other)),
+    }
+}
+
+/// `RefreshSessionContext` (`/reload-context`): discard the session's
+/// recorded initial context so its next turn records it from the files as
+/// they are then. Refused while a turn runs: every round reads the context.
+async fn refresh_session_context(
+    State(st): State<ServerState>,
+    AxumPath(id): AxumPath<String>,
+    Json(_request): Json<pb::RefreshSessionContextRequest>,
+) -> Result<Json<pb::RefreshSessionContextResponse>, V2Error> {
+    let session = parse_session(&id)?;
+    session_exists(&st, session).await?;
+    if st.is_busy(session) {
+        return Err(V2Error::session_busy());
+    }
+    // Hold the admission slot so no turn starts between the check and the
+    // append.
+    let _run = st.start_run(session).ok_or_else(V2Error::session_busy)?;
+    match st.engine.refresh_initial_context(session).await {
+        Ok(pending) => Ok(Json(pb::RefreshSessionContextResponse { pending })),
+        Err(hya_engine::CoreError::Invalid(message)) if message == "session busy" => {
+            Err(V2Error::session_busy())
+        }
+        Err(hya_engine::CoreError::Invalid(message)) if message == "session not found" => {
+            Err(V2Error::session_not_found(&id))
+        }
+        Err(other) => Err(V2Error::from(other)),
+    }
+}
+
+async fn revert_session(
+    State(st): State<ServerState>,
+    AxumPath(id): AxumPath<String>,
+    Json(request): Json<pb::RevertSessionRequest>,
+) -> Result<Json<pb::RevertSessionResponse>, V2Error> {
+    let session = parse_session(&id)?;
+    session_exists(&st, session).await?;
+    st.engine.ensure_external_turn_allowed(session).await?;
+    if !request.undo && request.until_seq != 0 {
+        return Err(V2Error::invalid_argument(
+            "untilSeq is not supported by RevertSession; pass messageId",
+        ));
+    }
+    let target = if request.message_id.is_empty() {
+        hya_engine::RevertTarget::LastUserMessage
+    } else {
+        hya_engine::RevertTarget::Message(parse_message(&request.message_id)?)
+    };
+    if st.is_busy(session) {
+        return Err(V2Error::session_busy());
+    }
+    // Hold the admission slot so no prompt is admitted while files and the
+    // transcript change; the engine also holds the turn lease.
+    let run = st.start_run(session).ok_or_else(V2Error::session_busy)?;
+    let files = if request.undo {
+        st.engine.unrevert_session(session).await
+    } else {
+        st.engine
+            .revert_session(session, target)
+            .await
+            .map(|outcome| outcome.files)
+    }
+    .map_err(revert_error)?;
+    drop(run);
+    Ok(Json(pb::RevertSessionResponse {
+        session: Some(projection_info(&st, session).await?),
+        files: files.iter().map(super::convert::reverted_file).collect(),
+    }))
+}
+
+fn revert_error(error: hya_engine::RevertError) -> V2Error {
+    use hya_engine::RevertError as E;
+    match error {
+        E::SessionNotFound => {
+            V2Error::new(hya_api::error::Code::SessionNotFound, error.to_string())
+        }
+        E::Busy => V2Error::session_busy(),
+        E::MessageNotFound(_) => V2Error::new(hya_api::error::Code::NotFound, error.to_string()),
+        E::NothingToRevert | E::NotUserMessage(_) | E::AlreadyReverted(_) | E::NoRevertPending => {
+            V2Error::invalid_argument(error.to_string())
+        }
+        E::Core(error) => V2Error::from(error),
+    }
+}

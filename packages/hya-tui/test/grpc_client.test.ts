@@ -10,13 +10,13 @@ import type { MessagePart } from "../src/client"
 import { TranscriptOverlay } from "../src/state/overlay"
 
 test("maps a frontend request to the v1 gRPC operation and protobuf fields", () => {
-  expect(resolveGrpcOperation("GET", "/v1/sessions/hysec_1/events?sinceSeq=12", undefined, "/work")).toEqual({
+  expect(resolveGrpcOperation("GET", "/v2/sessions/hysec_1/events?sinceSeq=12", undefined, "/work")).toEqual({
     service: "Events",
     method: "ListEvents",
     request: { directory: "/work", session: "hysec_1", sinceSeq: "12" },
     streaming: false,
   })
-  expect(resolveGrpcOperation("GET", "/v1/bundles/example/api/sub/route", undefined, "/work")).toMatchObject({
+  expect(resolveGrpcOperation("GET", "/v2/bundles/example/api/sub/route", undefined, "/work")).toMatchObject({
     service: "BundleApi", method: "InvokeGlobalBundleApi", request: { bundle: "example", path: "sub/route" },
   })
 })
@@ -29,8 +29,8 @@ test("selects the gRPC listener without treating it as an HTTP URL", () => {
 })
 
 test("packaged protobuf filenames and bytes match the server contract (run cargo run -p xtask -- gen-api)", () => {
-  const bundled = resolve(import.meta.dir, "../src/proto/hya/v1")
-  const contract = resolve(import.meta.dir, "../../../proto/hya/v1")
+  const bundled = resolve(import.meta.dir, "../src/proto/hya/v2")
+  const contract = resolve(import.meta.dir, "../../../proto/hya/v2")
   const protoFiles = (dir: string) => readdirSync(dir).filter(name => name.endsWith(".proto")).sort()
   const files = protoFiles(contract)
   expect(protoFiles(bundled)).toEqual(files)
@@ -40,7 +40,7 @@ test("packaged protobuf filenames and bytes match the server contract (run cargo
 
 test("every API command maps to a method in the packaged gRPC contract", () => {
   const protoRoot = resolve(import.meta.dir, "../src/proto")
-  const protoDir = resolve(protoRoot, "hya/v1")
+  const protoDir = resolve(protoRoot, "hya/v2")
   const definitions = protoLoader.loadSync(
     readdirSync(protoDir).filter((name) => name.endsWith(".proto")).map((name) => resolve(protoDir, name)),
     { includeDirs: [protoRoot], keepCase: false, longs: String, enums: String, defaults: false },
@@ -48,7 +48,7 @@ test("every API command maps to a method in the packaged gRPC contract", () => {
   for (const row of catalog) {
     const path = row.path.replace(/\{[^}]+\}/g, "example")
     const call = resolveGrpcOperation(row.method, path, undefined, "/work")
-    const service = definitions[`hya.v1.${call.service}`] as Record<string, unknown> | undefined
+    const service = definitions[`hya.v2.${call.service}`] as Record<string, unknown> | undefined
     expect(service?.[call.method], `${row.method} ${row.path} → ${call.service}.${call.method}`).toBeDefined()
     expect(call.streaming).toBe(row.streaming)
   }
@@ -56,7 +56,7 @@ test("every API command maps to a method in the packaged gRPC contract", () => {
 
 test("native gRPC bootstraps and applies a streamed part deletion before message finish", async () => {
   const protoRoot = resolve(import.meta.dir, "../../../proto")
-  const protoDir = resolve(protoRoot, "hya/v1")
+  const protoDir = resolve(protoRoot, "hya/v2")
   const definitions = protoLoader.loadSync(
     readdirSync(protoDir).filter((name) => name.endsWith(".proto")).map((name) => resolve(protoDir, name)),
     { includeDirs: [protoRoot], keepCase: false, longs: String, enums: String, defaults: false },
@@ -72,13 +72,13 @@ test("native gRPC bootstraps and applies a streamed part deletion before message
   ]
   const server = new grpc.Server()
   const requests: Record<string, unknown>[] = []
-  server.addService(definitions["hya.v1.Process"] as grpc.ServiceDefinition, {
+  server.addService(definitions["hya.v2.Process"] as grpc.ServiceDefinition, {
     GetBootstrap(call: grpc.ServerUnaryCall<Record<string, unknown>, unknown>, callback: grpc.sendUnaryData<unknown>) {
       requests.push(call.request)
       callback(null, { location: { version: "grpc-test" }, agents: [], models: [] })
     },
   })
-  server.addService(definitions["hya.v1.Events"] as grpc.ServiceDefinition, {
+  server.addService(definitions["hya.v2.Events"] as grpc.ServiceDefinition, {
     StreamSessionEvents(call: grpc.ServerWritableStream<Record<string, unknown>, unknown>) {
       requests.push(call.request)
       for (const frame of frames) call.write(frame)

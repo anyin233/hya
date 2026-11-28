@@ -167,11 +167,11 @@ async fn render_reference_guidance(st: &ServerState, workdir: &Path) -> Option<S
 /// client model override.
 ///
 /// Re-homed from the retired legacy command routes; drives shell message
-/// attribution for `/v1` shell turns.
+/// attribution for `/v2` shell turns.
 pub(crate) async fn shell_agent(
     st: &crate::ServerState,
     session: SessionId,
-    req: &hya_api::v1::ShellTurn,
+    req: &hya_api::v2::ShellTurn,
 ) -> Result<hya_engine::AgentSpec, crate::ApiError> {
     if let Some(model) = &req.model {
         let provider = model.provider_id.trim();

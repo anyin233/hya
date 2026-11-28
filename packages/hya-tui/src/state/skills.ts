@@ -1,6 +1,6 @@
 /**
  * The Skills view (`/skills`, docs/tui.md "Skills view"): pure state and keys
- * over `GET /v1/skills` (components/SkillsView.tsx renders it;
+ * over `GET /v2/skills` (components/SkillsView.tsx renders it;
  * app/skills.ts owns the calls).
  *
  * Screens: `list` (every skill of the scope under a divider rule per source

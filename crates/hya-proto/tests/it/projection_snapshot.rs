@@ -7,12 +7,12 @@
 #[path = "support/event_script.rs"]
 mod event_script;
 
+use std::sync::Arc;
+
 use hya_proto::{
-    AgentName, Envelope, Event, EventSeq, OwnerRunId, PROJECTION_REDUCER_VERSION, Projection,
-    SessionId, WorkflowIdentity, WorkflowRevision, WorkflowRunId, WorkflowRunStatus,
-    WorkflowSourceId, WorkflowStagePlan,
+    Envelope, Event, EventSeq, PROJECTION_REDUCER_VERSION, Projection, ProjectionReducer,
+    ProjectionReducerRegistry, SessionId,
 };
-use uuid::Uuid;
 
 fn envelopes(events: Vec<Event>) -> Vec<Envelope> {
     events
@@ -26,78 +26,66 @@ fn envelopes(events: Vec<Event>) -> Vec<Envelope> {
         .collect()
 }
 
-fn fold_from_snapshot(prefix: &[Envelope], tail: &[Envelope]) -> Projection {
-    let bytes = Projection::from_events(prefix)
-        .encode_snapshot()
+fn fold_from_snapshot(
+    prefix: &[Envelope],
+    tail: &[Envelope],
+    reducers: &ProjectionReducerRegistry,
+) -> Projection {
+    let bytes = Projection::from_events_with(prefix, reducers)
+        .encode_snapshot_with(&reducers.signature())
         .expect("encode snapshot");
-    let mut projection = Projection::decode_snapshot(&bytes).expect("decode snapshot");
+    let mut projection =
+        Projection::decode_snapshot_with(&bytes, &reducers.signature()).expect("decode snapshot");
     for envelope in tail {
-        projection.apply(envelope);
+        projection.apply_with(envelope, reducers);
     }
     projection
 }
 
-fn run_started(session: SessionId, run: WorkflowRunId, revision: u8) -> Event {
-    Event::WorkflowRunStarted {
-        session,
-        run,
-        workflow: WorkflowIdentity {
-            source: WorkflowSourceId::new("project:snapshot"),
-            name: "snapshot".to_string(),
-            revision: WorkflowRevision::from_bytes([revision; 32]),
-        },
-        request_hash: format!("hash-{revision}"),
-        owner: OwnerRunId::from_storage(Uuid::from_u128(9)),
-        stages: vec![WorkflowStagePlan {
-            id: "plan".to_string(),
-            title: None,
-            agent: AgentName::new("planner"),
-            mode: "once".to_string(),
-            level: 0,
-            worker_model: None,
-            selected_worker_model: None,
-            verifier_model: None,
-            selected_verifier_model: None,
-        }],
+struct ScriptExtensionReducer {
+    bundle: &'static str,
+    version: u32,
+}
+
+impl ProjectionReducer for ScriptExtensionReducer {
+    fn bundle_id(&self) -> &str {
+        self.bundle
+    }
+
+    fn version(&self) -> u32 {
+        self.version
+    }
+
+    fn fold_extension(
+        &self,
+        projection: &mut Projection,
+        _session: SessionId,
+        kind: &str,
+        payload: &serde_json::Value,
+    ) {
+        let entry = projection
+            .extensions
+            .entry(self.bundle.to_owned())
+            .or_insert_with(|| serde_json::json!({ "count": 0, "last_kind": null }));
+        if let Some(obj) = entry.as_object_mut() {
+            let count = obj.get("count").and_then(|v| v.as_u64()).unwrap_or(0) + 1;
+            obj.insert("count".to_owned(), serde_json::json!(count));
+            obj.insert("last_kind".to_owned(), serde_json::json!(kind));
+            obj.insert("last_payload".to_owned(), payload.clone());
+        }
     }
 }
 
-/// A re-emitted start for an already-seen run is ignored by replay; the
-/// snapshot must carry that replay-only dedupe state or the tail re-applies it.
-#[test]
-fn snapshot_keeps_replay_only_workflow_dedupe_state() {
-    let session = format!("hysec_{:020}", 1).parse::<SessionId>().unwrap();
-    let first = WorkflowRunId::from_uuid(Uuid::from_u128(2));
-    let second = WorkflowRunId::from_uuid(Uuid::from_u128(3));
-    let log = envelopes(vec![
-        run_started(session, first, 1),
-        Event::WorkflowRunFinished {
-            session,
-            run: first,
-            status: WorkflowRunStatus::Completed,
-            error: None,
-        },
-        run_started(session, second, 2),
-        run_started(session, first, 1),
-    ]);
-
-    let full = Projection::from_events(&log);
-    assert_eq!(
-        full.session
-            .workflow
-            .as_ref()
-            .and_then(|workflow| workflow.run.as_ref())
-            .map(|run| run.id),
-        Some(second)
-    );
-    assert_eq!(fold_from_snapshot(&log[..3], &log[3..]), full);
-}
-
 /// Property: for generated logs (streaming, usage, deletes, compaction, forks,
-/// Workflow runs, team traffic), snapshot(prefix) + tail == full replay at
-/// every split point.
+/// extension events), snapshot(prefix) + tail == full replay at every split point.
 #[test]
 fn snapshot_plus_tail_equals_full_replay_at_every_split() {
+    let empty = ProjectionReducerRegistry::new();
+    let with_reducers =
+        ProjectionReducerRegistry::new().with_reducer(Arc::new(ScriptExtensionReducer {
+            bundle: "hya/workflow",
+            version: 1,
+        }));
     for seed in 0..48_u64 {
         let session = format!("hysec_{:020}", u128::from(seed) + 100)
             .parse::<SessionId>()
@@ -105,10 +93,15 @@ fn snapshot_plus_tail_equals_full_replay_at_every_split() {
         let fork_of =
             (seed % 4 == 0).then(|| format!("hysec_{:020}", 99).parse::<SessionId>().unwrap());
         let log = envelopes(event_script::script(seed, session, fork_of, 90));
-        let full = Projection::from_events(&log);
+        let reducers = if seed % 2 == 0 {
+            &with_reducers
+        } else {
+            &empty
+        };
+        let full = Projection::from_events_with(&log, reducers);
         for split in 0..=log.len() {
             assert_eq!(
-                fold_from_snapshot(&log[..split], &log[split..]),
+                fold_from_snapshot(&log[..split], &log[split..], reducers),
                 full,
                 "seed {seed} split {split}"
             );
@@ -116,11 +109,31 @@ fn snapshot_plus_tail_equals_full_replay_at_every_split() {
     }
 }
 
-/// A snapshot is rejected rather than misread when it is not a snapshot.
+/// A snapshot is rejected rather than misread when it is not a snapshot or when
+/// the loaded reducer signature differs.
 #[test]
-fn decode_snapshot_rejects_garbage() {
+fn decode_snapshot_rejects_garbage_and_reducer_mismatch() {
     assert!(Projection::decode_snapshot(b"{\"not\":\"a snapshot\"}").is_err());
     assert!(Projection::decode_snapshot(b"\xff").is_err());
+
+    let reducers =
+        ProjectionReducerRegistry::new().with_reducer(Arc::new(ScriptExtensionReducer {
+            bundle: "hya/workflow",
+            version: 1,
+        }));
+    let session = format!("hysec_{:020}", 1).parse::<SessionId>().unwrap();
+    let log = envelopes(vec![Event::Extension {
+        session,
+        bundle: "hya/workflow".to_owned(),
+        kind: "tick".to_owned(),
+        payload: serde_json::json!({"n": 1}),
+    }]);
+    let bytes = Projection::from_events_with(&log, &reducers)
+        .encode_snapshot_with(&reducers.signature())
+        .unwrap();
+    assert!(Projection::decode_snapshot(&bytes).is_err());
+    assert!(Projection::decode_snapshot_with(&bytes, "hya/workflow@2").is_err());
+    assert!(Projection::decode_snapshot_with(&bytes, &reducers.signature()).is_ok());
 }
 
 /// FNV-1a 64: stable across platforms and Rust releases.
@@ -159,39 +172,10 @@ fn reducer_fingerprint_pins_the_version() {
     let fingerprint = fnv1a(&encoded);
     assert_eq!(
         (PROJECTION_REDUCER_VERSION, fingerprint),
-        (13, 0x5980_6827_8f23_856c),
+        (14, 0x096c_af03_cf9c_1253),
         "reducer output changed: bump PROJECTION_REDUCER_VERSION and record \
          the new fingerprint {fingerprint:#018x}"
     );
-}
-
-#[test]
-fn snapshot_rejects_out_of_range_inbox_mail_index() {
-    let mut projection = Projection::default();
-    projection.team.inboxes.insert("main".into(), vec![0]);
-    let bytes = projection.encode_snapshot().unwrap();
-    assert!(Projection::decode_snapshot(&bytes).is_err());
-}
-
-#[test]
-fn snapshot_rejects_out_of_range_channel_mail_index() {
-    let session = SessionId::new();
-    let mut projection = Projection::from_events(&envelopes(vec![Event::ChannelCreated {
-        session,
-        channel: "DM-corrupt".into(),
-        kind: hya_proto::ChannelKind::Dm,
-        unit: None,
-        members: vec!["main".into()],
-    }]));
-    projection
-        .team
-        .channels
-        .get_mut("DM-corrupt")
-        .unwrap()
-        .log
-        .push(0);
-    let bytes = projection.encode_snapshot().unwrap();
-    assert!(Projection::decode_snapshot(&bytes).is_err());
 }
 
 #[test]
@@ -244,7 +228,8 @@ fn historical_todo_results_keep_their_list_and_ids_through_snapshot_replay() {
     assert_eq!(older[0].id, "todo-0");
     assert_eq!(older[0].status, TodoStatus::Completed);
 
-    let p = fold_from_snapshot(&log, &[]);
+    let empty = ProjectionReducerRegistry::new();
+    let p = fold_from_snapshot(&log, &[], &empty);
     assert_eq!(p, Projection::from_events(&log));
     assert_eq!(p.session.todo_last_id, 3);
     let newer = p.session.todos.unwrap();

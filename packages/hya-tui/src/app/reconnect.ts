@@ -6,7 +6,7 @@
  *
  * `lost()` runs when a live stream fails or ends. A stream can drop for a
  * moment (a network blip, a busy server), so the server counts as gone only
- * when `GET /v1/health` fails `probes` times, `gapMs` apart (a server that is
+ * when `GET /v2/health` fails `probes` times, `gapMs` apart (a server that is
  * shutting down answers `unavailable`, which fails the probe at once). Then
  * `reconnect()` runs the launch's attach-or-start (src/launch.ts
  * `connectOrStart`: the discovery file, else `hya serve start`) and
@@ -54,7 +54,7 @@ export interface ReconnectorOptions {
   url(): string
   /** Current daemon generation, if known. */
   generation?: () => string | undefined
-  /** `GET <url>/v1/health` answers `ok: true` (src/launch.ts `probeHealth`). */
+  /** `GET <url>/v2/health` answers `ok: true` (src/launch.ts `probeHealth`). */
   probe(url: string): Promise<boolean>
   /** Find or start the database's server (src/launch.ts `connectOrStart`). */
   reconnect(): Promise<ServerSwitch>

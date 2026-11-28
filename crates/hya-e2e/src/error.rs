@@ -20,7 +20,7 @@ pub enum E2eError {
     /// JSON encode/decode failure.
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
-    /// Typed `hya-sdk-v1` failure.
+    /// Typed `hya-sdk` failure.
     #[error("client: {0}")]
     Client(String),
     /// Catch-all harness message.
@@ -28,8 +28,8 @@ pub enum E2eError {
     Other(String),
 }
 
-impl From<hya_sdk_v1::ClientError> for E2eError {
-    fn from(value: hya_sdk_v1::ClientError) -> Self {
+impl From<hya_sdk::ClientError> for E2eError {
+    fn from(value: hya_sdk::ClientError) -> Self {
         Self::Client(value.to_string())
     }
 }

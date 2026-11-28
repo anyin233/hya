@@ -13,9 +13,8 @@ use async_trait::async_trait;
 use hya_context::rewrite::{
     CompactionHooks, ModelHost, ModelWindow, SessionLog, ToolError, Transcript,
 };
-use hya_proto::{Event, Message, ModelRef, Projection, SessionId};
+use hya_proto::{ActorClaim, Event, Message, ModelRef, Projection, SessionId};
 use hya_provider::ProviderRouter;
-use hya_store::ActorClaim;
 
 use super::super::summary::summary_messages;
 use super::super::{AgentSpec, SessionEngine};

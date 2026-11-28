@@ -202,7 +202,10 @@ pub async fn session_usage_report(
         let projection = store.read_projection_shared(current).await?;
         let state = &projection.session;
         if scope != UsageScope::Session {
-            for child in state.members.iter().filter_map(|member| member.child) {
+            for child in hya_tool::extension::members_projection(&projection)
+                .iter()
+                .filter_map(|member| member.child)
+            {
                 if seen.insert(child) {
                     queue.push_back(child);
                 }
@@ -530,4 +533,117 @@ pub struct PublishedBundleApis {
     pub bundle: String,
     /// Declared endpoints, sorted by id.
     pub apis: Vec<SourceApi>,
+}
+
+/// [`BundleApiProvider`] forwarding routed requests to native ABI v2
+/// [`hya_runtime_abi::NativeBundleApiHandler`] instances.
+pub struct NativeBundleApiProvider {
+    handlers: Vec<Arc<dyn hya_runtime_abi::NativeBundleApiHandler>>,
+}
+
+impl NativeBundleApiProvider {
+    /// Wrap a set of native API handlers.
+    #[must_use]
+    pub fn new(handlers: Vec<Arc<dyn hya_runtime_abi::NativeBundleApiHandler>>) -> Self {
+        Self { handlers }
+    }
+}
+
+#[async_trait]
+impl BundleApiProvider for NativeBundleApiProvider {
+    async fn request(&self, request: BundleApiRequest) -> Result<BundleApiReply, String> {
+        let Some(handler) = self
+            .handlers
+            .iter()
+            .find(|handler| handler.endpoints().iter().any(|ep| ep.id == request.api))
+        else {
+            return Err(format!(
+                "no native handler registered for endpoint `{}`",
+                request.api
+            ));
+        };
+        let scope = if request.session.is_some() {
+            ApiScope::Session
+        } else {
+            ApiScope::Global
+        };
+        let reply = handler
+            .handle(hya_runtime_abi::NativeBundleApiRequest {
+                api: request.api,
+                method: request.method,
+                scope,
+                path: request.path,
+                path_params: request.path_params,
+                query: request.query,
+                body: request.body,
+                session: request.session,
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(BundleApiReply {
+            status: reply.status,
+            body: reply.body,
+        })
+    }
+}
+
+/// Convert native [`hya_runtime_abi::NativeBundleApiHandler`] declarations into
+/// publishable [`SourceApi`]s and a [`NativeBundleApiProvider`].
+///
+/// # Errors
+/// Returns [`CoreError::Invalid`] if any declared path template fails to parse
+/// or duplicate `(method, scope, path)` / endpoint ids are encountered.
+pub fn source_apis_from_native_handlers(
+    bundle_id: &str,
+    handlers: Vec<Arc<dyn hya_runtime_abi::NativeBundleApiHandler>>,
+) -> Result<(Vec<SourceApi>, Arc<dyn BundleApiProvider>), CoreError> {
+    let mut apis = Vec::new();
+    let mut seen_ids = BTreeSet::new();
+    for handler in &handlers {
+        for ep in handler.endpoints() {
+            if !seen_ids.insert(ep.id.clone()) {
+                return Err(CoreError::Invalid(format!(
+                    "bundle `{bundle_id}` native API declares duplicate endpoint `{}`",
+                    ep.id
+                )));
+            }
+            let path = ApiPathTemplate::parse(&ep.path).map_err(|reason| {
+                CoreError::Invalid(format!(
+                    "bundle `{bundle_id}` native API `{}` path `{}` {reason}",
+                    ep.id, ep.path
+                ))
+            })?;
+            apis.push(SourceApi {
+                id: ep.id.clone(),
+                method: ep.method,
+                scope: ep.scope,
+                path,
+                description: ep.description.clone(),
+                request_schema: None,
+                response_schema: None,
+            });
+        }
+    }
+    apis.sort_by(|left, right| left.id.cmp(&right.id));
+    let provider: Arc<dyn BundleApiProvider> = Arc::new(NativeBundleApiProvider::new(handlers));
+    Ok((apis, provider))
+}
+
+impl SourceApis {
+    /// Build a standalone [`SourceApis`] backed by native ABI v2 handlers.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Invalid`] if any native endpoint path template is
+    /// invalid or duplicated.
+    pub fn from_native_handlers(
+        bundle_id: &str,
+        handlers: Vec<Arc<dyn hya_runtime_abi::NativeBundleApiHandler>>,
+    ) -> Result<Self, CoreError> {
+        let (apis, provider) = source_apis_from_native_handlers(bundle_id, handlers)?;
+        Ok(Self {
+            apis,
+            provider,
+            _owner: None,
+        })
+    }
 }

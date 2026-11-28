@@ -10,10 +10,10 @@
 use anyhow::Context as _;
 use hya_engine::{AgentSpec, CoreError, ResidentSupervisor, SessionEngine};
 use hya_proto::{
-    FinishReason, MessageId, PartProjection, Projection, Role, RosterEntry, RosterStatus,
-    SessionId, scope,
+    FinishReason, MessageId, PartProjection, Projection, Role, RosterStatus, SessionId, scope,
 };
 use hya_tool::deadline::{RunDeadline, Stage};
+use hya_tool::extension::{RosterEntry, members_projection, team_projection, workflow_projection};
 use tokio_util::sync::CancellationToken;
 
 /// Notice turns in a row that may end with the same pending work and no tool
@@ -149,8 +149,8 @@ async fn run_lead(
 }
 
 /// Why a lead turn that ended on its own must not end the run yet.
-struct Pending<'a> {
-    subagents: Vec<&'a RosterEntry>,
+struct Pending {
+    subagents: Vec<RosterEntry>,
     unread_mail: u64,
     narration: Option<Narration>,
 }
@@ -170,8 +170,8 @@ enum Narration {
     Empty,
 }
 
-impl<'a> Pending<'a> {
-    fn of(projection: &'a Projection, finish: FinishReason) -> Self {
+impl Pending {
+    fn of(projection: &Projection, finish: FinishReason) -> Self {
         Self {
             subagents: live_subagents(projection),
             unread_mail: unread_root_mail(projection),
@@ -235,20 +235,19 @@ impl<'a> Pending<'a> {
 }
 
 /// The lead's direct subagents still on the team roster.
-fn live_subagents(projection: &Projection) -> Vec<&RosterEntry> {
-    projection
-        .team
-        .roster
-        .values()
+fn live_subagents(projection: &Projection) -> Vec<RosterEntry> {
+    let team = team_projection(projection);
+    let workflow = workflow_projection(projection);
+    let members = members_projection(projection);
+    team.roster
+        .into_values()
         .filter(|entry| scope::parent_path(&entry.handle) == Some(scope::ROOT_HANDLE))
         .filter(|entry| !matches!(entry.status, RosterStatus::Done | RosterStatus::Failed))
         .filter(|entry| {
             // Finished Workflow actors stay parked for reuse; only busy ones
             // represent work the lead still needs to collect.
             entry.status != RosterStatus::Idle
-                || !projection
-                    .session
-                    .workflow
+                || !workflow
                     .as_ref()
                     .and_then(|workflow| workflow.run.as_ref())
                     .filter(|run| run.status.is_terminal())
@@ -257,7 +256,7 @@ fn live_subagents(projection: &Projection) -> Vec<&RosterEntry> {
                             .iter()
                             .flat_map(|stage| &stage.members)
                             .any(|linked| {
-                                projection.session.members.iter().any(|member| {
+                                members.iter().any(|member| {
                                     member.member == linked.member
                                         && member.child == Some(entry.session)
                                 })
@@ -269,14 +268,12 @@ fn live_subagents(projection: &Projection) -> Vec<&RosterEntry> {
 
 /// Mail that the supervisor would otherwise deliver in its next root turn.
 fn unread_root_mail(projection: &Projection) -> u64 {
-    let cursor = projection
-        .team
+    let team = team_projection(projection);
+    let cursor = team
         .roster
         .get(scope::ROOT_HANDLE)
         .map_or(0, |entry| entry.resident_cursor);
-    projection
-        .team
-        .unread_incoming_mail(scope::ROOT_HANDLE, cursor)
+    team.unread_incoming_mail(scope::ROOT_HANDLE, cursor)
         .count() as u64
 }
 
@@ -867,52 +864,77 @@ mod tests {
     #[test]
     fn pending_holds_for_unread_mail_live_roster_and_active_workflow_only() {
         // 1. Unread root mail holds exec open until cursor advances.
-        let mut proj = Projection::default();
+        let mut ma = hya_tool::extension::MultiAgentExtensionState::default();
+        let mut ch = hya_tool::extension::ChannelsExtensionState::default();
         let root = roster(scope::ROOT_HANDLE, RosterStatus::Idle);
-        proj.team.roster.insert(root.handle.clone(), root);
-        proj.team.mail.push(hya_proto::MailMessage {
+        ma.roster.insert(root.handle.clone(), root);
+        ch.mail.push(hya_tool::extension::MailMessage {
             from: "main/worker".into(),
             to: hya_proto::MailEndpoint::Handle(scope::ROOT_HANDLE.into()),
             kind: hya_proto::MailKind::Message,
             body: "result".into(),
         });
-        proj.team.inboxes.insert(scope::ROOT_HANDLE.into(), vec![0]);
+        ch.inboxes.insert(scope::ROOT_HANDLE.into(), vec![0]);
+        let mut proj = Projection::default();
+        proj.extensions.insert(
+            hya_tool::extension::BUNDLE_MULTI_AGENT.into(),
+            serde_json::to_value(&ma).unwrap(),
+        );
+        proj.extensions.insert(
+            hya_tool::extension::BUNDLE_CHANNELS.into(),
+            serde_json::to_value(&ch).unwrap(),
+        );
         let pending = Pending::of(&proj, FinishReason::Stop);
         assert!(!pending.is_empty());
         assert!(pending.notice(None, false).contains("1 unread message"));
-        proj.team
-            .roster
+        ma.roster
             .get_mut(scope::ROOT_HANDLE)
             .unwrap()
             .resident_cursor = 1;
+        proj.extensions.insert(
+            hya_tool::extension::BUNDLE_MULTI_AGENT.into(),
+            serde_json::to_value(&ma).unwrap(),
+        );
         assert!(Pending::of(&proj, FinishReason::Stop).is_empty());
 
         // 2. Late-stage archive guidance & terminal roster entries & workflow actor parking.
         let mut p2 = Projection::default();
+        let mut ma2 = hya_tool::extension::MultiAgentExtensionState::default();
         let worker = roster("main/worker", RosterStatus::Idle);
-        p2.team.roster.insert(worker.handle.clone(), worker);
+        ma2.roster.insert(worker.handle.clone(), worker);
+        p2.extensions.insert(
+            hya_tool::extension::BUNDLE_MULTI_AGENT.into(),
+            serde_json::to_value(&ma2).unwrap(),
+        );
         let late = Pending::of(&p2, FinishReason::Stop).notice(None, true);
         assert!(late.contains("`archive` the subagents whose work you cannot integrate"));
         assert!(!late.contains("HEADLESS RUN — FINAL"));
         for status in [RosterStatus::Done, RosterStatus::Failed] {
             let entry = roster("main/worker", status);
-            p2.team.roster.insert(entry.handle.clone(), entry);
+            ma2.roster.insert(entry.handle.clone(), entry);
+            p2.extensions.insert(
+                hya_tool::extension::BUNDLE_MULTI_AGENT.into(),
+                serde_json::to_value(&ma2).unwrap(),
+            );
             assert!(live_subagents(&p2).is_empty(), "{status:?}");
         }
 
         let mut p3 = Projection::default();
+        let mut ma3 = hya_tool::extension::MultiAgentExtensionState::default();
         let stage_worker = roster("main/stage", RosterStatus::Idle);
         let member = hya_proto::MemberId::new();
-        p3.session.members.push(
+        ma3.members.push(
             serde_json::from_value(serde_json::json!({
                 "member": member, "child": stage_worker.session, "subagent_type": "worker",
                 "description": "stage", "depth": 1, "status": "done"
             }))
             .unwrap(),
         );
-        p3.team
-            .roster
-            .insert(stage_worker.handle.clone(), stage_worker);
+        ma3.roster.insert(stage_worker.handle.clone(), stage_worker);
+        p3.extensions.insert(
+            hya_tool::extension::BUNDLE_MULTI_AGENT.into(),
+            serde_json::to_value(&ma3).unwrap(),
+        );
         let run = serde_json::json!({
             "id": hya_proto::WorkflowRunId::new(),
             "workflow": {"source": "test", "name": "test", "revision": "00".repeat(32)},
@@ -922,17 +944,18 @@ mod tests {
                 "status": "completed", "members": [{"member": member, "role": "worker", "iteration": 0}]
             }]
         });
-        p3.session.workflow =
-            Some(serde_json::from_value(serde_json::json!({"run": run})).unwrap());
+        let mut wf3: hya_tool::WorkflowProjection =
+            serde_json::from_value(serde_json::json!({"run": run})).unwrap();
+        p3.extensions.insert(
+            hya_tool::extension::BUNDLE_WORKFLOW.into(),
+            serde_json::to_value(&wf3).unwrap(),
+        );
         assert!(live_subagents(&p3).is_empty());
-        p3.session
-            .workflow
-            .as_mut()
-            .unwrap()
-            .run
-            .as_mut()
-            .unwrap()
-            .status = hya_proto::WorkflowRunStatus::Running;
+        wf3.run.as_mut().unwrap().status = hya_tool::WorkflowRunStatus::Running;
+        p3.extensions.insert(
+            hya_tool::extension::BUNDLE_WORKFLOW.into(),
+            serde_json::to_value(&wf3).unwrap(),
+        );
         assert_eq!(live_subagents(&p3).len(), 1);
 
         // Open todos do not hold runs open.
@@ -1116,7 +1139,7 @@ mod tests {
         .await
         .unwrap();
         let projection = engine.read_projection(root).await.unwrap();
-        assert!(!projection.team.archived.is_empty());
+        assert!(!team_projection(&projection).archived.is_empty());
         assert_eq!(
             projection
                 .session

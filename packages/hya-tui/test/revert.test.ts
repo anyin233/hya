@@ -173,10 +173,10 @@ test("/undo keeps text the user typed; a second /undo replaces the untouched pre
 })
 
 test("/undo while a turn runs shows the server's refusal; nothing to undo says so", async () => {
-  const busy = harness({ revertSession: async () => { throw new HttpError(409, "POST", "/v1/x", "session_busy: a turn is running") } } as Partial<HyaClient>)
+  const busy = harness({ revertSession: async () => { throw new HttpError(409, "POST", "/v2/x", "session_busy: a turn is running") } } as Partial<HyaClient>)
   await busy.revert.undo()
   expect(busy.store.state.status).toBe("Undo refused: a turn is running · wait for it to finish or press Esc to cancel it")
-  const none = harness({ revertSession: async () => { throw new HttpError(400, "POST", "/v1/x", "invalid_argument: no user message to revert") } } as Partial<HyaClient>)
+  const none = harness({ revertSession: async () => { throw new HttpError(400, "POST", "/v2/x", "invalid_argument: no user message to revert") } } as Partial<HyaClient>)
   await none.revert.undo()
   expect(none.store.state.status).toBe("Nothing to undo: invalid_argument: no user message to revert")
 })
@@ -216,7 +216,7 @@ test("/redo only while a revert is pending; it restores and clears the untouched
 })
 
 test("/redo refused by the server (the revert was committed) drops the local revert", async () => {
-  const { store, revert } = harness({ revertSession: async () => { throw new HttpError(400, "POST", "/v1/x", "invalid_argument: nothing to undo") } } as Partial<HyaClient>)
+  const { store, revert } = harness({ revertSession: async () => { throw new HttpError(400, "POST", "/v2/x", "invalid_argument: nothing to undo") } } as Partial<HyaClient>)
   store.setSelected(session("s", { revert: { messageId: "u2" } }))
   await revert.redo()
   expect(store.state.selected?.revert).toBeUndefined()

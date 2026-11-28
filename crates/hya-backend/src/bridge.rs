@@ -1027,11 +1027,11 @@ mod tests {
 
         let token = "ab".repeat(32);
         let head = format!(
-            "GET /v1/health HTTP/1.1\r\nHost: 127.0.0.1:9\r\nX-Hya-Bridge-Token:  {token} \r\naccept: */*\r\n\r\n"
+            "GET /v2/health HTTP/1.1\r\nHost: 127.0.0.1:9\r\nX-Hya-Bridge-Token:  {token} \r\naccept: */*\r\n\r\n"
         );
         assert_eq!(
             String::from_utf8(authorize(head.as_bytes(), &token).unwrap()).unwrap(),
-            "GET /v1/health HTTP/1.1\r\nHost: 127.0.0.1:9\r\naccept: */*\r\n\r\n"
+            "GET /v2/health HTTP/1.1\r\nHost: 127.0.0.1:9\r\naccept: */*\r\n\r\n"
         );
         for bad in [
             "GET / HTTP/1.1\r\nHost: x\r\n\r\n".to_string(),
@@ -1049,8 +1049,8 @@ mod tests {
 
     #[test]
     fn http_detection_and_error_envelopes() {
-        assert!(looks_like_http(b"GET /v1/health HTTP/1.1\r\n"));
-        assert!(looks_like_http(b"POST /v1/sessions HTTP/1.1\r\n"));
+        assert!(looks_like_http(b"GET /v2/health HTTP/1.1\r\n"));
+        assert!(looks_like_http(b"POST /v2/sessions HTTP/1.1\r\n"));
         for non_http in [&b"\x16\x03\x01"[..], b"PRI * HTTP/2.0", b"", b"GET"] {
             assert!(!looks_like_http(non_http));
         }

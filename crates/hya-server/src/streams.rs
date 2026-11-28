@@ -5,7 +5,7 @@
 //! connected client to hang up. The backend is a daemon that outlives its
 //! clients (`hya serve stop` must work while TUIs are attached), so
 //! [`StreamShutdown::close`] ends every open stream, and every stream opened
-//! later, and makes `GET /v1/health` answer `unavailable`. The last frame of
+//! later, and makes `GET /v2/health` answer `unavailable`. The last frame of
 //! each stream is a live `serverStopping {reason}`: after `stop` (or a plain
 //! signal) clients stay disconnected, after `restart` they wait for the next
 //! server, and a stream that ends without it lost its server unexpectedly,
@@ -70,7 +70,7 @@ impl Default for StreamShutdown {
 
 impl StreamShutdown {
     /// End every open stream (and every stream opened from now on) with a
-    /// final `serverStopping {reason}` frame, and make `GET /v1/health`
+    /// final `serverStopping {reason}` frame, and make `GET /v2/health`
     /// answer `unavailable`. Idempotent: the first reason wins.
     pub fn close(&self, reason: ShutdownReason) {
         self.closing.send_if_modified(|closing| {

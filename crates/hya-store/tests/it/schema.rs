@@ -62,10 +62,15 @@ async fn old_schema_is_rejected_without_migrating() {
         .await
         .err()
         .expect("old database must fail at open");
-    assert!(matches!(error, StoreError::UnsupportedDatabase));
-    assert_eq!(
-        error.to_string(),
-        "this database was created by an older version and is no longer supported; move it away"
+    assert!(matches!(error, StoreError::UnsupportedDatabase { .. }));
+    let msg = error.to_string();
+    assert!(
+        msg.contains("hya-migration --db"),
+        "expected migration guidance in error message: {msg}"
+    );
+    assert!(
+        msg.contains(&db.0),
+        "expected database path in error message: {msg}"
     );
 
     let pool = db.pool().await;
@@ -102,7 +107,70 @@ async fn unversioned_schema_is_rejected() {
         .await
         .err()
         .expect("unversioned schema must fail at open");
-    assert!(matches!(error, StoreError::UnsupportedDatabase));
+    assert!(matches!(error, StoreError::UnsupportedDatabase { .. }));
+    assert!(error.to_string().contains("hya-migration --db"));
+}
+
+#[tokio::test]
+async fn v1_resident_actor_claim_schema_is_rejected_with_migration_hint() {
+    let db = TempDb::new();
+    let pool = db.pool().await;
+    sqlx::raw_sql(
+        "CREATE TABLE _sqlx_migrations (
+            version BIGINT PRIMARY KEY, description TEXT NOT NULL,
+            installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            success BOOLEAN NOT NULL, checksum BLOB NOT NULL, execution_time BIGINT NOT NULL
+        );
+        CREATE TABLE event_log (seq INTEGER PRIMARY KEY, session_id BLOB, payload TEXT, ts INTEGER);
+        CREATE TABLE resident_actor_claim (
+            actor_id TEXT PRIMARY KEY,
+            root_session_id BLOB NOT NULL,
+            epoch INTEGER NOT NULL,
+            owner_run_id TEXT NOT NULL,
+            state TEXT NOT NULL
+        );
+        INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
+        VALUES (1, 'init', 1, x'deadbeef', 0);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    let err = SessionStore::connect(&db.0)
+        .await
+        .err()
+        .expect("v1 resident_actor_claim database must be rejected");
+    assert!(matches!(err, StoreError::UnsupportedDatabase { .. }));
+    let msg = err.to_string();
+    assert!(msg.contains("hya-migration --db"), "msg: {msg}");
+    assert!(msg.contains(&db.0), "msg: {msg}");
+
+    let ro_err = SessionStore::connect_read_only(&db.0)
+        .await
+        .err()
+        .expect("read-only open must also reject v1 database");
+    assert!(matches!(ro_err, StoreError::UnsupportedDatabase { .. }));
+    assert!(ro_err.to_string().contains("hya-migration --db"));
+}
+
+#[tokio::test]
+async fn wrong_schema_meta_version_is_rejected_with_migration_hint() {
+    let db = TempDb::new();
+    drop(SessionStore::connect(&db.0).await.unwrap());
+    let pool = db.pool().await;
+    sqlx::query("UPDATE schema_meta SET value = '1' WHERE key = 'format_version'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    let err = SessionStore::connect(&db.0)
+        .await
+        .err()
+        .expect("format_version = 1 must be rejected");
+    assert!(matches!(err, StoreError::UnsupportedDatabase { .. }));
+    assert!(err.to_string().contains("hya-migration --db"));
 }
 
 #[tokio::test]
@@ -128,6 +196,8 @@ async fn fresh_schema_reopens_and_contains_only_current_tables() {
             "_sqlx_migrations",
             "agent_effort_preference",
             "agent_model_preference",
+            "bundle_claim",
+            "bundle_state",
             "event_log",
             "file_blob",
             "model_effort_preference",
@@ -136,31 +206,47 @@ async fn fresh_schema_reopens_and_contains_only_current_tables() {
             "project",
             "project_root",
             "projection_snapshot",
-            "resident_actor_claim",
             "saved_permission",
+            "schema_meta",
             "session"
         ]
     );
+    let format_version: String =
+        sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = 'format_version'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(format_version, "2");
     let versions: Vec<i64> = sqlx::query_scalar("SELECT version FROM _sqlx_migrations")
         .fetch_all(&pool)
         .await
         .unwrap();
     assert_eq!(versions, vec![1]);
-    let columns: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM pragma_table_info('resident_actor_claim')")
+    let claim_columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('bundle_claim')")
             .fetch_all(&pool)
             .await
             .unwrap();
     assert_eq!(
-        columns,
+        claim_columns,
         vec![
-            "actor_id",
-            "root_session_id",
+            "bundle",
+            "claim_key",
+            "owner",
             "epoch",
-            "owner_run_id",
+            "expires_at",
+            "metadata",
+            "acquired_at",
+            "updated_at",
             "state"
         ]
     );
+    let state_columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('bundle_state')")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(state_columns, vec!["bundle", "key", "value", "updated_at"]);
     pool.close().await;
 }
 

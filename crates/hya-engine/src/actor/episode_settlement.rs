@@ -23,24 +23,23 @@ impl TeamActor {
         }
         let final_text = last_assistant_text(&*self.engine.read_projection_shared(session).await?);
         let root = self.engine.read_projection_shared(self.root).await?;
+        let team = hya_tool::extension::team_projection(&root);
         let mut state = self.lock();
         if let Some(slot) = state
             .residents
             .get_mut(&session)
             .filter(|slot| eligible(slot))
             .filter(|slot| {
-                root.team.roster.get(&slot.handle).is_some_and(|entry| {
+                team.roster.get(&slot.handle).is_some_and(|entry| {
                     entry.resident_work.is_none()
                         && slot.activation.as_ref().is_some_and(|activation| {
                             entry.resident_cursor >= activation.boundary as u64
                         })
-                        && root
-                            .team
+                        && team
                             .unread_incoming_mail(&slot.handle, entry.resident_cursor)
                             .next()
                             .is_none()
-                        && !root
-                            .team
+                        && !team
                             .roster
                             .keys()
                             .any(|path| scope::parent_path(path) == Some(slot.handle.as_str()))

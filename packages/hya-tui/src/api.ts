@@ -24,7 +24,7 @@ export function operations(): string {
   ).sort().join("\n")
 }
 
-/** `METHOD /v1/path` names for completion. */
+/** `METHOD /v2/path` names for completion. */
 export const apiOperationNames = catalogOperations.map((op) => `${op.method} ${op.path}`)
 
 /** Pretty JSON, truncated for display. */

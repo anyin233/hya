@@ -12,13 +12,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
 use anyhow::Context as _;
-use hya_api::v1 as pb;
+use hya_api::v2 as pb;
 use hya_engine::completion::render_transcript;
-use hya_proto::{
-    Envelope, Projection, SessionId, WorkflowCommandResult, WorkflowProjection, WorkflowRunResult,
-    WorkflowRunStatus,
-};
-use hya_sdk_v1::{SdkError, V1Sdk};
+use hya_proto::{Envelope, Projection, SessionId};
+use hya_sdk::{Sdk, SdkError};
+use hya_tool::{WorkflowCommandResult, WorkflowProjection, WorkflowRunResult, WorkflowRunStatus};
 
 use crate::exec_stream::{JsonStreamPrinter, StreamScope};
 use crate::stop_signals::StopSignal;
@@ -44,22 +42,18 @@ fn api(error: SdkError) -> anyhow::Error {
     }
 }
 
-fn client(url: &str) -> anyhow::Result<(V1Sdk, String)> {
+fn client(url: &str) -> anyhow::Result<(Sdk, String)> {
     let workdir = std::env::current_dir()
         .context("resolve current directory")?
         .to_string_lossy()
         .into_owned();
     Ok((
-        V1Sdk::for_local_daemon(url.trim_end_matches('/'), workdir.clone())?,
+        Sdk::for_local_daemon(url.trim_end_matches('/'), workdir.clone())?,
         workdir,
     ))
 }
 
-async fn create_session(
-    sdk: &V1Sdk,
-    workdir: &str,
-    model: Option<String>,
-) -> anyhow::Result<String> {
+async fn create_session(sdk: &Sdk, workdir: &str, model: Option<String>) -> anyhow::Result<String> {
     let session = sdk
         .create_session(pb::CreateSessionRequest {
             model: model.unwrap_or_default(),
@@ -186,7 +180,7 @@ pub(crate) async fn exec(url: &str, request: ExecRequest) -> anyhow::Result<()> 
 }
 
 /// The session's durable envelopes after `since`, and the next watermark.
-async fn replay(sdk: &V1Sdk, id: &str, since: u64) -> anyhow::Result<(Vec<Envelope>, u64)> {
+async fn replay(sdk: &Sdk, id: &str, since: u64) -> anyhow::Result<(Vec<Envelope>, u64)> {
     let response = sdk
         .list_raw_events(id, since)
         .await
@@ -202,7 +196,7 @@ async fn replay(sdk: &V1Sdk, id: &str, since: u64) -> anyhow::Result<(Vec<Envelo
 
 /// Print the session's new durable envelopes; returns the next watermark.
 async fn pump<W: std::io::Write>(
-    sdk: &V1Sdk,
+    sdk: &Sdk,
     id: &str,
     since: u64,
     printer: &mut JsonStreamPrinter<W>,
@@ -235,7 +229,7 @@ impl Asks {
         }
     }
 
-    pub(crate) async fn belongs(&mut self, sdk: &V1Sdk, session: &str) -> bool {
+    pub(crate) async fn belongs(&mut self, sdk: &Sdk, session: &str) -> bool {
         let mut chain = Vec::new();
         let mut current = session.to_string();
         let verdict = loop {
@@ -257,7 +251,7 @@ impl Asks {
         verdict
     }
 
-    async fn reject_pending(&mut self, sdk: &V1Sdk) {
+    async fn reject_pending(&mut self, sdk: &Sdk) {
         let Ok(pending) = sdk.list_interactions().await else {
             return;
         };
@@ -316,56 +310,92 @@ pub(crate) async fn workflow(
     };
     match route {
         WorkflowRoute::State => {
-            let state = sdk.workflow_state(&id).await.map_err(api)?;
+            let state_json = sdk
+                .invoke_session_bundle_api(
+                    &id,
+                    "hya/workflow",
+                    reqwest::Method::GET,
+                    "/state",
+                    None,
+                    None,
+                )
+                .await
+                .map_err(api)?;
             Ok(WorkflowCommandResult::State {
-                state: projection(&state)?,
+                state: decode_projection(state_json)?,
             })
         }
         WorkflowRoute::Select {
             name,
             expected_revision,
         } => {
-            let response = submit(
-                &sdk,
-                pb::SubmitWorkflowCommandRequest {
-                    session: id,
-                    command: Some(pb::submit_workflow_command_request::Command::Select(
-                        pb::WorkflowSelectCommand {
-                            name,
-                            expected_revision: expected_revision.unwrap_or_default(),
-                        },
-                    )),
-                },
-            )
-            .await?;
+            let body = serde_json::json!({
+                "select": {
+                    "name": name,
+                    "expectedRevision": expected_revision.unwrap_or_default(),
+                }
+            });
+            let response = sdk
+                .invoke_session_bundle_api(
+                    &id,
+                    "hya/workflow",
+                    reqwest::Method::POST,
+                    "/command",
+                    None,
+                    Some(&body),
+                )
+                .await
+                .map_err(api)?;
+            let selected = response
+                .get("selected")
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("the server returned no Workflow state"))?;
             Ok(WorkflowCommandResult::Selected {
-                state: projection(&response)?,
+                state: decode_projection(selected)?,
             })
         }
         WorkflowRoute::Run { name, inputs } => {
-            let response = submit(
-                &sdk,
-                pb::SubmitWorkflowCommandRequest {
-                    session: id.clone(),
-                    command: Some(pb::submit_workflow_command_request::Command::Run(
-                        pb::WorkflowRunCommand {
-                            name: name.unwrap_or_default(),
-                            inputs: Some(serde_json::from_value(serde_json::to_value(inputs)?)?),
-                        },
-                    )),
-                },
-            )
-            .await?;
-            let started: WorkflowRunResult = serde_json::from_str(&response.raw_json)
-                .context("decode the server's Workflow run")?;
+            let body = serde_json::json!({
+                "run": {
+                    "name": name.unwrap_or_default(),
+                    "inputs": inputs,
+                }
+            });
+            let response = sdk
+                .invoke_session_bundle_api(
+                    &id,
+                    "hya/workflow",
+                    reqwest::Method::POST,
+                    "/command",
+                    None,
+                    Some(&body),
+                )
+                .await
+                .map_err(api)?;
+            let started_val = response
+                .get("started")
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("the server returned no Workflow run"))?;
+            let started: WorkflowRunResult =
+                serde_json::from_value(started_val).context("decode the server's Workflow run")?;
             let mut run = started.run;
             // Asks of the run's members are rejected, as in process.
             let mut asks = Asks::new(id.clone());
             while run.status == WorkflowRunStatus::Running {
                 asks.reject_pending(&sdk).await;
                 tokio::time::sleep(POLL).await;
-                let state = sdk.workflow_state(&id).await.map_err(api)?;
-                if let Some(latest) = projection(&state)?.run
+                let state_json = sdk
+                    .invoke_session_bundle_api(
+                        &id,
+                        "hya/workflow",
+                        reqwest::Method::GET,
+                        "/state",
+                        None,
+                        None,
+                    )
+                    .await
+                    .map_err(api)?;
+                if let Some(latest) = decode_projection(state_json)?.run
                     && latest.id == run.id
                 {
                     run = latest;
@@ -381,22 +411,8 @@ pub(crate) async fn workflow(
     }
 }
 
-async fn submit(
-    sdk: &V1Sdk,
-    request: pb::SubmitWorkflowCommandRequest,
-) -> anyhow::Result<pb::WorkflowState> {
-    let response = sdk.submit_workflow_command(request).await.map_err(api)?;
-    match response.result {
-        Some(
-            pb::submit_workflow_command_response::Result::Selected(state)
-            | pb::submit_workflow_command_response::Result::Started(state),
-        ) => Ok(state),
-        _ => anyhow::bail!("the server returned no Workflow state"),
-    }
-}
-
-fn projection(state: &pb::WorkflowState) -> anyhow::Result<WorkflowProjection> {
-    serde_json::from_str(&state.raw_json).context("decode the server's Workflow state")
+fn decode_projection(value: serde_json::Value) -> anyhow::Result<WorkflowProjection> {
+    serde_json::from_value(value).context("decode the server's Workflow state")
 }
 
 #[cfg(test)]

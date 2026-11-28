@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { extensionCacheRoot } from "./extensions/install"
 import type { PermissionModeInfo } from "./state/modes"
 import type { RespondBody } from "./state/prompts"
-/** Small HTTP/JSON client for the shared hya.v1 server contract. */
+/** Small HTTP/JSON client for the shared hya.v2 server contract. */
 export interface SessionInfo {
   id: string
   agent: string
@@ -16,8 +16,10 @@ export interface SessionInfo {
   permissionMode?: string
   /** Parent session id when this is a subagent's session. */
   parent?: string
-  /** Subagents this session spawned (folded rows; the live counterpart is `memberUpdated`). */
+  /** Subagents this session spawned (folded rows; populated directly or from `extensions["hya/multi-agent"]`). */
   members?: MemberInfo[]
+  /** Per-bundle extension state folded from `Event::Extension` events (`hya.v2`). */
+  extensions?: Record<string, unknown>
   /** When the session was created (RFC 3339); stable ordering for sidebar numbers. */
   timeCreated?: string
   /** When the session projection last changed (RFC 3339); the `/sessions` picker's relative time (state/catalog.ts). */
@@ -43,7 +45,7 @@ export interface SessionInfo {
   ephemeral?: boolean
 }
 
-/** `hya.v1.SessionKind`. */
+/** `hya.v2.SessionKind`. */
 export type SessionKind = "SESSION_KIND_PROJECT" | "SESSION_KIND_TEMPORARY"
 
 /**
@@ -362,7 +364,7 @@ export interface ProviderTestResponse {
   latencyMs?: number | string
 }
 
-/** `SavedRule` (`GET /v1/permissions/rules`): a persisted allow/deny/ask decision. */
+/** `SavedRule` (`GET /v2/permissions/rules`): a persisted allow/deny/ask decision. */
 export interface SavedRule {
   id: string
   /** `RULE_PERMISSION_ALLOW`, `_ASK`, `_DENY`. */
@@ -375,7 +377,7 @@ export interface SavedRule {
   projectId?: string
 }
 
-/** `McpServerStatus` (`GET /v1/mcp`): one configured MCP server. */
+/** `McpServerStatus` (`GET /v2/mcp`): one configured MCP server. */
 export interface McpServerStatus {
   name: string
   /** `MCP_SERVER_STATE_DESIRED`, `_CONNECTED`, `_DISCONNECTED`, `_FAILED`. */
@@ -401,7 +403,7 @@ export interface AgentModelSelection {
   modelId?: string
 }
 
-/** `AgentModelState` (`GET /v1/agent-models`): one agent's effective base model. */
+/** `AgentModelState` (`GET /v2/agent-models`): one agent's effective base model. */
 export interface AgentModelState {
   agentId: string
   description?: string
@@ -510,7 +512,7 @@ export interface WorkflowSummary {
   stageCount?: number
 }
 
-/** `VcsStatus` (`GET /v1/vcs`): the status bar reads only `branch`. */
+/** `VcsStatus` (`GET /v2/vcs`): the status bar reads only `branch`. */
 export interface VcsStatus {
   branch?: string
   head?: string
@@ -551,6 +553,8 @@ export interface StreamEvent {
   /** A member (subagent) spawn or status change on the parent session; partial frames fold by `member`. */
   memberUpdated?: MemberInfo
   memberLifecycleChanged?: MemberLifecycleChanged
+  /** Bundle-owned extension event emitted on a session stream (`hya.v2`). */
+  extensionEvent?: { sessionId?: string; bundle?: string; kind?: string; payload?: unknown }
   permissionRequested?: { interaction?: Interaction }
   questionRequested?: { interaction?: Interaction }
   interactionResolved?: { request?: string }
@@ -580,14 +584,14 @@ export interface StreamEvent {
    * startup discovery finished; `projectId` empty or absent), or one
    * Project's catalog tier (its roots changed or it was deleted; `projectId`
    * names it). Arrives on the global stream and every session stream;
-   * re-read `GET /v1/models` / `GET /v1/providers` and the affected scope's
+   * re-read `GET /v2/models` / `GET /v2/providers` and the affected scope's
    * catalogs (`docs/protocol/README.md` "Live and durable frames").
    */
   catalogUpdated?: { projectId?: string }
   /**
    * Live-only, empty `session`, global stream only: the Project list changed
    * (a Project created/updated/deleted, a session added or removed, or a
-   * Project's `busy` flag flipped). Re-read `GET /v1/projects`.
+   * Project's `busy` flag flipped). Re-read `GET /v2/projects`.
    */
   projectsUpdated?: Record<string, never>
   /**
@@ -603,6 +607,126 @@ export interface StreamEvent {
 export interface StreamFrame {
   event?: StreamEvent
   resync?: { lastSeq?: string }
+}
+
+function mapMemberRunStatus(status: unknown): string | undefined {
+  switch (status) {
+    case "spawning": return "MEMBER_STATUS_SPAWNING"
+    case "running": return "MEMBER_STATUS_RUNNING"
+    case "done": return "MEMBER_STATUS_DONE"
+    case "failed": return "MEMBER_STATUS_FAILED"
+    case "cancelled": return "MEMBER_STATUS_CANCELLED"
+    default: return typeof status === "string" ? status : undefined
+  }
+}
+
+/** Extract subagent member rows from `SessionInfo` (`members` or v2 `extensions["hya/multi-agent"]`). */
+export function sessionMembers(session: SessionInfo | undefined): MemberInfo[] {
+  if (!session) return []
+  if (session.members?.length) return session.members
+  const ext = session.extensions?.["hya/multi-agent"]
+  if (!ext || typeof ext !== "object") return []
+  const state = ext as {
+    members?: Array<Record<string, unknown>>
+    roster?: Record<string, { handle?: string; session?: string }>
+    archived?: Record<string, { handle?: string; session?: string; reason?: string }>
+  }
+  const bySession = new Map<string, { handle?: string; archived: boolean; archiveReason?: string }>()
+  for (const [handle, row] of Object.entries(state.roster ?? {})) {
+    if (row?.session) bySession.set(row.session, { handle: row.handle || handle, archived: false })
+  }
+  for (const [handle, row] of Object.entries(state.archived ?? {})) {
+    if (row?.session) bySession.set(row.session, { handle: row.handle || handle, archived: true, ...(row.reason ? { archiveReason: row.reason } : {}) })
+  }
+  return (state.members ?? []).flatMap((raw) => {
+    const member = typeof raw.member === "string" ? raw.member : ""
+    if (!member) return []
+    const child = typeof raw.child === "string" ? raw.child : undefined
+    const binding = child ? bySession.get(child) : undefined
+    const status = mapMemberRunStatus(raw.status)
+    return [{
+      member,
+      ...(binding?.handle ? { handle: binding.handle } : {}),
+      ...(child ? { child } : {}),
+      ...(typeof raw.subagent_type === "string" ? { agent: raw.subagent_type } : {}),
+      ...(typeof raw.description === "string" ? { description: raw.description } : {}),
+      ...(status ? { status } : {}),
+      ...(typeof raw.summary === "string" && raw.summary ? { summary: raw.summary } : {}),
+      ...(typeof raw.tool_call === "string" ? { callId: raw.tool_call } : {}),
+      ...(typeof raw.depth === "number" ? { depth: raw.depth } : {}),
+      ...(binding ? { archived: binding.archived, ...(binding.archiveReason ? { archiveReason: binding.archiveReason } : {}) } : {}),
+    }]
+  })
+}
+
+/** Normalize v2 `extensionEvent` payloads into TUI stream fields when present. */
+export function normalizeStreamEvent(event: StreamEvent): StreamEvent {
+  const ext = event.extensionEvent
+  if (!ext) return event
+  const payload = (ext.payload && typeof ext.payload === "object" ? ext.payload : {}) as Record<string, unknown>
+  if (ext.bundle === "hya/workflow") {
+    return { ...event, workflowUpdated: payload }
+  }
+  if (ext.bundle === "hya/multi-agent") {
+    if (ext.kind === "member_spawned" && typeof payload.member === "string") {
+      return {
+        ...event,
+        memberUpdated: {
+          member: payload.member,
+          ...(typeof payload.child === "string" ? { child: payload.child } : {}),
+          ...(typeof payload.subagent_type === "string" ? { agent: payload.subagent_type } : {}),
+          ...(typeof payload.description === "string" ? { description: payload.description } : {}),
+          ...(typeof payload.depth === "number" ? { depth: payload.depth } : {}),
+          ...(typeof payload.tool_call === "string" ? { callId: payload.tool_call } : {}),
+          status: "MEMBER_STATUS_SPAWNING",
+        },
+      }
+    }
+    if (ext.kind === "member_status_changed" && typeof payload.member === "string") {
+      const status = mapMemberRunStatus(payload.status)
+      return {
+        ...event,
+        memberUpdated: {
+          member: payload.member,
+          ...(status ? { status } : {}),
+        },
+      }
+    }
+    if (ext.kind === "member_finished" && typeof payload.member === "string") {
+      const status = mapMemberRunStatus(payload.status)
+      return {
+        ...event,
+        memberUpdated: {
+          member: payload.member,
+          ...(typeof payload.child === "string" ? { child: payload.child } : {}),
+          ...(status ? { status } : {}),
+          ...(typeof payload.summary === "string" ? { summary: payload.summary } : {}),
+        },
+      }
+    }
+    if (ext.kind === "agent_archived" && typeof payload.child === "string") {
+      return {
+        ...event,
+        memberLifecycleChanged: {
+          child: payload.child,
+          ...(typeof payload.handle === "string" ? { handle: payload.handle } : {}),
+          archived: true,
+          ...(typeof payload.reason === "string" ? { archiveReason: payload.reason } : {}),
+        },
+      }
+    }
+    if (ext.kind === "agent_restarted" && typeof payload.child === "string") {
+      return {
+        ...event,
+        memberLifecycleChanged: {
+          child: payload.child,
+          ...(typeof payload.handle === "string" ? { handle: payload.handle } : {}),
+          archived: false,
+        },
+      }
+    }
+  }
+  return event
 }
 
 /** Decode SSE data blocks without assuming network chunks end on line boundaries. */
@@ -668,8 +792,8 @@ export class HttpError extends Error {
 
 /** Parse one command-view request; never allow a remote URL or non-v1 path. */
 export function parseApiCommand(input: string): ApiCommand {
-  const match = /^\/api\s+(GET|POST|PUT|PATCH|DELETE)\s+(\/v1\/\S+)(?:\s+([\s\S]+))?$/i.exec(input.trim())
-  if (!match) throw new Error("Usage: /api METHOD /v1/path [JSON object]")
+  const match = /^\/api\s+(GET|POST|PUT|PATCH|DELETE)\s+(\/v2\/\S+)(?:\s+([\s\S]+))?$/i.exec(input.trim())
+  if (!match) throw new Error("Usage: /api METHOD /v2/path [JSON object]")
   const method = match[1]?.toUpperCase() ?? ""
   const path = match[2] ?? ""
   if (method === "GET" && match[3]) throw new Error("GET requests cannot have a JSON body")
@@ -750,8 +874,8 @@ export class HyaClient {
    * call). A scoped rpc names its scope in `path` or `body` (`directory`).
    */
   async request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-    if (!path.startsWith("/v1/") || path.startsWith("//")) {
-      throw new Error("API path must start with /v1/")
+    if (!path.startsWith("/v2/") || path.startsWith("//")) {
+      throw new Error("API path must start with /v2/")
     }
     const response = await this.fetcher(`${this.base}${path}`, {
       method,
@@ -802,7 +926,7 @@ export class HyaClient {
           ...(placement.projectId ? { projectId: placement.projectId } : {}),
           ...(placement.workdir ? { workdir: placement.workdir } : {}),
         }
-    const result = await this.request<{ session: SessionInfo }>("POST", "/v1/sessions", {
+    const result = await this.request<{ session: SessionInfo }>("POST", "/v2/sessions", {
       agent,
       model,
       ...where,
@@ -814,7 +938,7 @@ export class HyaClient {
   async createTurn(session: string, text: string, attachments?: PromptAttachment[]): Promise<TurnInfo> {
     const result = await this.request<{ turn: TurnInfo }>(
       "POST",
-      `/v1/sessions/${encodeURIComponent(session)}/turns`,
+      `/v2/sessions/${encodeURIComponent(session)}/turns`,
       { prompt: { text, ...(attachments?.length ? { attachments } : {}) } },
     )
     return result.turn
@@ -828,7 +952,7 @@ export class HyaClient {
   async createShellTurn(session: string, command: string, agent: string, model?: { providerId?: string; modelId?: string }): Promise<TurnInfo> {
     const result = await this.request<{ turn: TurnInfo }>(
       "POST",
-      `/v1/sessions/${encodeURIComponent(session)}/turns`,
+      `/v2/sessions/${encodeURIComponent(session)}/turns`,
       { shell: { command, agent, ...(model?.providerId && model.modelId ? { model: { providerId: model.providerId, modelId: model.modelId } } : {}) } },
     )
     return result.turn
@@ -838,13 +962,13 @@ export class HyaClient {
   async findFiles(pattern: string, limit: number): Promise<string[]> {
     const result = await this.request<{ paths?: string[] }>(
       "GET",
-      this.scoped(`/v1/fs/find?pattern=${encodeURIComponent(pattern)}&limit=${limit}`),
+      this.scoped(`/v2/fs/find?pattern=${encodeURIComponent(pattern)}&limit=${limit}`),
     )
     return result.paths ?? []
   }
 
   /**
-   * `ReadFile` (`GET /v1/fs/read`): one file on the backend, `path` relative
+   * `ReadFile` (`GET /v2/fs/read`): one file on the backend, `path` relative
    * to `directory` (default: the client's scope) or absolute inside it; the
    * server refuses a path that escapes the scope. `maxBytes` caps what is
    * read. `data` is the content as standard base64 (protojson `bytes`).
@@ -852,7 +976,7 @@ export class HyaClient {
   async readFile(path: string, options: { directory?: string; maxBytes?: number; signal?: AbortSignal } = {}): Promise<ReadFileResult> {
     const scope = options.directory ?? this.directory
     const query = `path=${encodeURIComponent(path)}${options.maxBytes ? `&maxBytes=${options.maxBytes}` : ""}`
-    const result = await this.request<{ content?: string; text?: boolean; mime?: string }>("GET", this.scoped(`/v1/fs/read?${query}`, scope), undefined, options.signal)
+    const result = await this.request<{ content?: string; text?: boolean; mime?: string }>("GET", this.scoped(`/v2/fs/read?${query}`, scope), undefined, options.signal)
     const data = result.content ?? ""
     return { data, size: Buffer.from(data, "base64").byteLength, text: result.text === true, ...(result.mime ? { mime: result.mime } : {}) }
   }
@@ -860,14 +984,14 @@ export class HyaClient {
   async createCommandTurn(session: string, command: string, argumentsText: string): Promise<TurnInfo> {
     const result = await this.request<{ turn: TurnInfo }>(
       "POST",
-      `/v1/sessions/${encodeURIComponent(session)}/turns`,
+      `/v2/sessions/${encodeURIComponent(session)}/turns`,
       { command: { command, arguments: argumentsText } },
     )
     return result.turn
   }
 
   bootstrap(): Promise<Bootstrap> {
-    return this.request("GET", this.scoped("/v1/bootstrap"))
+    return this.request("GET", this.scoped("/v2/bootstrap"))
   }
 
   /** Every page of a list rpc; `scoped`: name the client's scope (`directory`). */
@@ -893,91 +1017,91 @@ export class HyaClient {
    */
   async listSessions(filter: { projectId?: string; includeArchived?: boolean } = {}): Promise<SessionInfo[]> {
     const query = (filter.projectId ? `&projectId=${encodeURIComponent(filter.projectId)}` : "") + (filter.includeArchived ? "&includeArchived=true" : "")
-    return this.listAll("/v1/sessions", "sessions", query)
+    return this.listAll("/v2/sessions", "sessions", query)
   }
 
-  /** `ListProjects` (`GET /v1/projects`): every non-archived Project, most recently updated first. */
+  /** `ListProjects` (`GET /v2/projects`): every non-archived Project, most recently updated first. */
   async listProjects(): Promise<ProjectInfo[]> {
-    return this.listAll("/v1/projects", "projects")
+    return this.listAll("/v2/projects", "projects")
   }
 
-  /** `GetProject` (`GET /v1/projects/{id}`). */
+  /** `GetProject` (`GET /v2/projects/{id}`). */
   async getProject(id: string): Promise<ProjectInfo> {
-    return this.request("GET", `/v1/projects/${encodeURIComponent(id)}`)
+    return this.request("GET", `/v2/projects/${encodeURIComponent(id)}`)
   }
 
-  /** `CreateProject` (`POST /v1/projects`): absolute roots, primary first. */
+  /** `CreateProject` (`POST /v2/projects`): absolute roots, primary first. */
   async createProject(body: { name: string; roots: string[] }): Promise<ProjectInfo> {
-    return this.request("POST", "/v1/projects", body)
+    return this.request("POST", "/v2/projects", body)
   }
 
-  /** `UpdateProject` (`PATCH /v1/projects/{id}`): rename and/or replace the whole root list. */
+  /** `UpdateProject` (`PATCH /v2/projects/{id}`): rename and/or replace the whole root list. */
   async updateProject(id: string, patch: { name?: string; roots?: string[] }): Promise<ProjectInfo> {
-    return this.request("PATCH", `/v1/projects/${encodeURIComponent(id)}`, patch)
+    return this.request("PATCH", `/v2/projects/${encodeURIComponent(id)}`, patch)
   }
 
-  /** `DeleteProject` (`DELETE /v1/projects/{id}`); `failed_precondition` while a live root session belongs to it. */
+  /** `DeleteProject` (`DELETE /v2/projects/{id}`); `failed_precondition` while a live root session belongs to it. */
   async deleteProject(id: string): Promise<void> {
-    await this.request("DELETE", `/v1/projects/${encodeURIComponent(id)}`)
+    await this.request("DELETE", `/v2/projects/${encodeURIComponent(id)}`)
   }
 
-  /** `ResolveProject` (`GET /v1/projects/resolve?path=`): the Project containing `path` (longest root wins), else `undefined`. */
+  /** `ResolveProject` (`GET /v2/projects/resolve?path=`): the Project containing `path` (longest root wins), else `undefined`. */
   async resolveProject(path: string): Promise<ProjectInfo | undefined> {
-    const result = await this.request<{ project?: ProjectInfo }>("GET", `/v1/projects/resolve?path=${encodeURIComponent(path)}`)
+    const result = await this.request<{ project?: ProjectInfo }>("GET", `/v2/projects/resolve?path=${encodeURIComponent(path)}`)
     return result?.project ?? undefined
   }
 
-  /** `EnsureProjectForPath` (`POST /v1/projects/ensure`): the Project containing `path`, else a new one rooted at it. */
+  /** `EnsureProjectForPath` (`POST /v2/projects/ensure`): the Project containing `path`, else a new one rooted at it. */
   async ensureProjectForPath(path: string): Promise<{ project: ProjectInfo; created: boolean }> {
-    const result = await this.request<{ project: ProjectInfo; created?: boolean }>("POST", "/v1/projects/ensure", { path })
+    const result = await this.request<{ project: ProjectInfo; created?: boolean }>("POST", "/v2/projects/ensure", { path })
     return { project: result.project, created: result.created === true }
   }
 
   async listMessages(session: string): Promise<MessageInfo[]> {
-    return this.listAll(`/v1/sessions/${encodeURIComponent(session)}/messages`, "messages")
+    return this.listAll(`/v2/sessions/${encodeURIComponent(session)}/messages`, "messages")
   }
 
   async listInteractions(): Promise<Interaction[]> {
-    return this.listAll("/v1/interactions", "interactions")
+    return this.listAll("/v2/interactions", "interactions")
   }
 
   async listModels(): Promise<ModelSummary[]> {
-    return this.listAll("/v1/models", "models")
+    return this.listAll("/v2/models", "models")
   }
 
-  /** `ListAgents` (`GET /v1/agents`): the `/agent` picker's rows (state/catalog.ts `agentRows`). */
+  /** `ListAgents` (`GET /v2/agents`): the `/agent` picker's rows (state/catalog.ts `agentRows`). */
   async listAgents(): Promise<AgentSummary[]> {
-    return this.listAll("/v1/agents", "agents", "", true)
+    return this.listAll("/v2/agents", "agents", "", true)
   }
 
   async listProviders(): Promise<ProviderSummary[]> {
-    return this.listAll("/v1/providers", "providers")
+    return this.listAll("/v2/providers", "providers")
   }
   /** `ListBundles`: the scope's bundles (user, the directory's project bundles, first-party). */
   async listBundles(): Promise<BundleSummary[]> {
-    const result = await this.request<{ bundles?: BundleSummary[] }>("GET", this.scoped("/v1/bundles"))
+    const result = await this.request<{ bundles?: BundleSummary[] }>("GET", this.scoped("/v2/bundles"))
     return result.bundles ?? []
   }
 
   /** `RefreshBundles`: publish disk edits before reloading catalogs. Shared by HTTP and gRPC. */
   async refreshBundles(signal?: AbortSignal): Promise<void> {
-    const result = await this.request<{ errors?: Array<{ bundleId: string; message: string }> }>("POST", "/v1/bundles:refresh", { directory: this.directory }, signal)
+    const result = await this.request<{ errors?: Array<{ bundleId: string; message: string }> }>("POST", "/v2/bundles:refresh", { directory: this.directory }, signal)
     if (result.errors?.length) throw new Error(result.errors.map((error) => `${error.bundleId}: ${error.message}`).join("; "))
   }
 
   /** `InstallBundle`: a `.hyabundle` at an absolute path on the backend's machine; `project` installs into the scope directory's `.hya/bundles`. */
   async installBundle(path: string, project: boolean, signal?: AbortSignal): Promise<void> {
-    await this.request("POST", "/v1/bundles:install", { directory: this.directory, path, project }, signal)
+    await this.request("POST", "/v2/bundles:install", { directory: this.directory, path, project }, signal)
   }
 
   /** `UninstallBundle`: from the user registry, or (`project`) the scope directory's `.hya/bundles`. */
   async uninstallBundle(bundleId: string, project: boolean, signal?: AbortSignal): Promise<void> {
-    await this.request("POST", "/v1/bundles:uninstall", { directory: this.directory, bundleId, project }, signal)
+    await this.request("POST", "/v2/bundles:uninstall", { directory: this.directory, bundleId, project }, signal)
   }
 
   /** `SetBundleEnabled`: enable or disable a bundle id in every scope. */
   async setBundleEnabled(bundleId: string, enabled: boolean, signal?: AbortSignal): Promise<void> {
-    await this.request("POST", "/v1/bundles:set-enabled", { directory: this.directory, bundleId, enabled }, signal)
+    await this.request("POST", "/v2/bundles:set-enabled", { directory: this.directory, bundleId, enabled }, signal)
   }
 
   async listCommands(session?: string): Promise<CommandSummary[]> {
@@ -993,11 +1117,11 @@ export class HyaClient {
    */
   async listCommandCatalog(session?: string): Promise<CommandListing> {
     try {
-      const { rows, diagnostics } = await this.catalogPages<CommandSummary>("/v1/commands", "commands", session)
+      const { rows, diagnostics } = await this.catalogPages<CommandSummary>("/v2/commands", "commands", session)
       return { commands: rows, diagnostics }
     } catch (error) {
       if (!session || !sessionScopeRefused(error)) throw error
-      const { rows, diagnostics } = await this.catalogPages<CommandSummary>("/v1/commands", "commands")
+      const { rows, diagnostics } = await this.catalogPages<CommandSummary>("/v2/commands", "commands")
       return { commands: rows, diagnostics }
     }
   }
@@ -1021,7 +1145,7 @@ export class HyaClient {
   }
 
   /**
-   * `ListSkills` (`GET /v1/skills`) of the client's scope: every page of
+   * `ListSkills` (`GET /v2/skills`) of the client's scope: every page of
    * skills and the diagnostics (repeated on each page; the first one is
    * kept). `session` lists what that session's agent can load instead
    * (bundle and plugin skills included); a backend that refuses the
@@ -1030,174 +1154,175 @@ export class HyaClient {
    */
   async listSkills(session?: string): Promise<SkillListing> {
     try {
-      const { rows, diagnostics } = await this.catalogPages<SkillSummary>("/v1/skills", "skills", session)
+      const { rows, diagnostics } = await this.catalogPages<SkillSummary>("/v2/skills", "skills", session)
       return { skills: rows, diagnostics }
     } catch (error) {
       if (!session || !sessionScopeRefused(error)) throw error
-      const { rows, diagnostics } = await this.catalogPages<SkillSummary>("/v1/skills", "skills")
+      const { rows, diagnostics } = await this.catalogPages<SkillSummary>("/v2/skills", "skills")
       return { skills: rows, diagnostics }
     }
   }
 
-  /** `SetProviderAuth` (`PUT /v1/auth/{id}`): save a key (applies live); `discovery` when the model list was fetched too. */
+  /** `SetProviderAuth` (`PUT /v2/auth/{id}`): save a key (applies live); `discovery` when the model list was fetched too. */
   async setProviderKey(provider: string, key: string, signal?: AbortSignal): Promise<{ status?: string; provider?: ProviderInfo; discovery?: DiscoveryOutcome }> {
-    return this.request("PUT", `/v1/auth/${encodeURIComponent(provider)}`, { apiKey: key }, signal)
+    return this.request("PUT", `/v2/auth/${encodeURIComponent(provider)}`, { apiKey: key }, signal)
   }
 
-  /** `RemoveProviderAuth` (`DELETE /v1/auth/{id}`): delete the saved key (applies live). */
+  /** `RemoveProviderAuth` (`DELETE /v2/auth/{id}`): delete the saved key (applies live). */
   async removeProviderKey(provider: string, signal?: AbortSignal): Promise<void> {
-    await this.request("DELETE", `/v1/auth/${encodeURIComponent(provider)}`, undefined, signal)
+    await this.request("DELETE", `/v2/auth/${encodeURIComponent(provider)}`, undefined, signal)
   }
 
-  /** `UpsertProvider` (`PUT /v1/providers/{id}`): write kind / base URL to config.yaml, save a non-empty key, fetch the models. */
+  /** `UpsertProvider` (`PUT /v2/providers/{id}`): write kind / base URL to config.yaml, save a non-empty key, fetch the models. */
   async upsertProvider(provider: string, body: { kind: string; baseUrl: string; apiKey?: string }, signal?: AbortSignal): Promise<ProviderUpdate> {
-    return this.request("PUT", `/v1/providers/${encodeURIComponent(provider)}`, body, signal)
+    return this.request("PUT", `/v2/providers/${encodeURIComponent(provider)}`, body, signal)
   }
 
-  /** `RefreshProvider` (`POST /v1/providers/{id}/refresh`): fetch the remote model list into the model cache. */
+  /** `RefreshProvider` (`POST /v2/providers/{id}/refresh`): fetch the remote model list into the model cache. */
   async refreshProvider(provider: string, signal?: AbortSignal): Promise<ProviderUpdate> {
-    return this.request("POST", `/v1/providers/${encodeURIComponent(provider)}/refresh`, {}, signal)
+    return this.request("POST", `/v2/providers/${encodeURIComponent(provider)}/refresh`, {}, signal)
   }
 
-  /** `SetProviderModel` (`PUT /v1/providers/{id}/models`): write one model entry into config.yaml. */
+  /** `SetProviderModel` (`PUT /v2/providers/{id}/models`): write one model entry into config.yaml. */
   async setProviderModel(provider: string, model: ProviderModelPatch, signal?: AbortSignal): Promise<ProviderUpdate> {
-    return this.request("PUT", `/v1/providers/${encodeURIComponent(provider)}/models`, model, signal)
+    return this.request("PUT", `/v2/providers/${encodeURIComponent(provider)}/models`, model, signal)
   }
 
-  /** `RemoveProviderModel` (`DELETE /v1/providers/{id}/models?modelId=`): delete a model's config.yaml entry. */
+  /** `RemoveProviderModel` (`DELETE /v2/providers/{id}/models?modelId=`): delete a model's config.yaml entry. */
   async removeProviderModel(provider: string, modelId: string, signal?: AbortSignal): Promise<ProviderUpdate> {
-    return this.request("DELETE", `/v1/providers/${encodeURIComponent(provider)}/models?modelId=${encodeURIComponent(modelId)}`, undefined, signal)
+    return this.request("DELETE", `/v2/providers/${encodeURIComponent(provider)}/models?modelId=${encodeURIComponent(modelId)}`, undefined, signal)
   }
 
-  /** `TestProviderModel` (`POST /v1/providers/{id}/test`): one `hi` with 1 output token (16 on Responses routes), up to 60 s. */
+  /** `TestProviderModel` (`POST /v2/providers/{id}/test`): one `hi` with 1 output token (16 on Responses routes), up to 60 s. */
   async testProviderModel(provider: string, modelId: string, signal?: AbortSignal): Promise<ProviderTestResponse> {
-    return this.request("POST", `/v1/providers/${encodeURIComponent(provider)}/test`, { modelId }, signal)
+    return this.request("POST", `/v2/providers/${encodeURIComponent(provider)}/test`, { modelId }, signal)
   }
 
-  /** `GetVcsDiff` (`GET /v1/vcs/diff`): `git diff HEAD` plus untracked files, as one unified-diff text; `""` outside a git repo. */
+  /** `GetVcsDiff` (`GET /v2/vcs/diff`): `git diff HEAD` plus untracked files, as one unified-diff text; `""` outside a git repo. */
   async getVcsDiff(): Promise<string> {
-    const result = await this.request<{ diff?: string }>("GET", this.scoped("/v1/vcs/diff"))
+    const result = await this.request<{ diff?: string }>("GET", this.scoped("/v2/vcs/diff"))
     return result.diff ?? ""
   }
 
-  /** `GetMcpStatus` (`GET /v1/mcp`): every configured MCP server's status. */
+  /** `GetMcpStatus` (`GET /v2/mcp`): every configured MCP server's status. */
   async getMcpStatus(): Promise<McpServerStatus[]> {
-    const result = await this.request<{ servers?: McpServerStatus[] }>("GET", `/v1/mcp?directory=${encodeURIComponent(this.directory)}`)
+    const result = await this.request<{ servers?: McpServerStatus[] }>("GET", `/v2/mcp?directory=${encodeURIComponent(this.directory)}`)
     return result.servers ?? []
   }
 
-  /** `ConnectMcp` (`POST /v1/mcp/{name}/connect`). */
+  /** `ConnectMcp` (`POST /v2/mcp/{name}/connect`). */
   async connectMcp(name: string, signal?: AbortSignal): Promise<McpServerStatus> {
-    return this.request("POST", `/v1/mcp/${encodeURIComponent(name)}/connect`, { directory: this.directory, name }, signal)
+    return this.request("POST", `/v2/mcp/${encodeURIComponent(name)}/connect`, { directory: this.directory, name }, signal)
   }
 
-  /** `DisconnectMcp` (`POST /v1/mcp/{name}/disconnect`). */
+  /** `DisconnectMcp` (`POST /v2/mcp/{name}/disconnect`). */
   async disconnectMcp(name: string, signal?: AbortSignal): Promise<McpServerStatus> {
-    return this.request("POST", `/v1/mcp/${encodeURIComponent(name)}/disconnect`, { directory: this.directory, name }, signal)
+    return this.request("POST", `/v2/mcp/${encodeURIComponent(name)}/disconnect`, { directory: this.directory, name }, signal)
   }
 
-  /** `StartMcpAuth` (`POST /v1/mcp/{name}/auth`): the URL to open in a browser. */
+  /** `StartMcpAuth` (`POST /v2/mcp/{name}/auth`): the URL to open in a browser. */
   async startMcpAuth(name: string, signal?: AbortSignal): Promise<{ authorizationUrl?: string }> {
-    return this.request("POST", `/v1/mcp/${encodeURIComponent(name)}/auth`, { directory: this.directory, name }, signal)
+    return this.request("POST", `/v2/mcp/${encodeURIComponent(name)}/auth`, { directory: this.directory, name }, signal)
   }
 
-  /** `CompleteMcpAuth` (`POST /v1/mcp/{name}/auth/complete`) with the callback code. */
+  /** `CompleteMcpAuth` (`POST /v2/mcp/{name}/auth/complete`) with the callback code. */
   async completeMcpAuth(name: string, code: string, signal?: AbortSignal): Promise<McpServerStatus> {
-    return this.request("POST", `/v1/mcp/${encodeURIComponent(name)}/auth/complete`, { directory: this.directory, name, code }, signal)
+    return this.request("POST", `/v2/mcp/${encodeURIComponent(name)}/auth/complete`, { directory: this.directory, name, code }, signal)
   }
 
-  /** `RemoveMcpAuth` (`DELETE /v1/mcp/{name}/auth`): delete stored credentials. */
+  /** `RemoveMcpAuth` (`DELETE /v2/mcp/{name}/auth`): delete stored credentials. */
   async removeMcpAuth(name: string, signal?: AbortSignal): Promise<void> {
-    await this.request("DELETE", `/v1/mcp/${encodeURIComponent(name)}/auth?directory=${encodeURIComponent(this.directory)}`, undefined, signal)
+    await this.request("DELETE", `/v2/mcp/${encodeURIComponent(name)}/auth?directory=${encodeURIComponent(this.directory)}`, undefined, signal)
   }
 
-  /** `ListSavedRules` (`GET /v1/permissions/rules`): saved permission decisions, stable id order. */
+  /** `ListSavedRules` (`GET /v2/permissions/rules`): saved permission decisions, stable id order. */
   async listSavedRules(): Promise<SavedRule[]> {
-    return this.listAll("/v1/permissions/rules", "rules", `&directory=${encodeURIComponent(this.directory)}`)
+    return this.listAll("/v2/permissions/rules", "rules", `&directory=${encodeURIComponent(this.directory)}`)
   }
 
-  /** `DeleteSavedRule` (`DELETE /v1/permissions/rules/{rule}`). */
+  /** `DeleteSavedRule` (`DELETE /v2/permissions/rules/{rule}`). */
   async deleteSavedRule(id: string, signal?: AbortSignal): Promise<void> {
-    await this.request("DELETE", `/v1/permissions/rules/${encodeURIComponent(id)}?directory=${encodeURIComponent(this.directory)}`, undefined, signal)
+    await this.request("DELETE", `/v2/permissions/rules/${encodeURIComponent(id)}?directory=${encodeURIComponent(this.directory)}`, undefined, signal)
   }
 
-  /** `ListAgentModels` (`GET /v1/agent-models`): effective base model of every catalog agent. */
+  /** `ListAgentModels` (`GET /v2/agent-models`): effective base model of every catalog agent. */
   async listAgentModels(session?: string): Promise<AgentModelState[]> {
     const query = session ? `?session=${encodeURIComponent(session)}` : ""
-    const result = await this.request<{ agents?: AgentModelState[] }>("GET", this.scoped(`/v1/agent-models${query}`))
+    const result = await this.request<{ agents?: AgentModelState[] }>("GET", this.scoped(`/v2/agent-models${query}`))
     return result.agents ?? []
   }
 
-  /** `SetAgentModel` (`PUT /v1/agent-models/{agentId}`); an absent `preference` clears it. */
+  /** `SetAgentModel` (`PUT /v2/agent-models/{agentId}`); an absent `preference` clears it. */
   async setAgentModel(agentId: string, preference: AgentModelSelection | undefined, session?: string, signal?: AbortSignal): Promise<AgentModelState> {
-    return this.request("PUT", `/v1/agent-models/${encodeURIComponent(agentId)}`, {
+    return this.request("PUT", `/v2/agent-models/${encodeURIComponent(agentId)}`, {
       ...(this.directory ? { directory: this.directory } : {}),
       ...(session ? { session } : {}),
       ...(preference ? { preference } : {}),
     }, signal)
   }
 
-  /** `SaveAgentModelConfiguration` (`PUT /v1/agent-models/{agentId}/configuration`): write the agent's model into its owning config file; absent `model` clears it. */
+  /** `SaveAgentModelConfiguration` (`PUT /v2/agent-models/{agentId}/configuration`): write the agent's model into its owning config file; absent `model` clears it. */
   async saveAgentModelConfiguration(agentId: string, model: AgentModelSelection | undefined, signal?: AbortSignal): Promise<AgentModelState> {
-    return this.request("PUT", `/v1/agent-models/${encodeURIComponent(agentId)}/configuration`, {
+    return this.request("PUT", `/v2/agent-models/${encodeURIComponent(agentId)}/configuration`, {
       ...(this.directory ? { directory: this.directory } : {}),
       ...(model ? { model } : {}),
     }, signal)
   }
 
-  /** `ListModelEffortPreferences` (`GET /v1/model-effort-preferences`). */
+  /** `ListModelEffortPreferences` (`GET /v2/model-effort-preferences`). */
   async listModelEffortPreferences(): Promise<ModelEffortPreference[]> {
-    const result = await this.request<{ preferences?: ModelEffortPreference[] }>("GET", this.scoped("/v1/model-effort-preferences"))
+    const result = await this.request<{ preferences?: ModelEffortPreference[] }>("GET", this.scoped("/v2/model-effort-preferences"))
     return result.preferences ?? []
   }
 
   /** `SetModelEffortPreference`; an empty effort clears the durable preference. */
   async setModelEffortPreference(providerId: string, modelId: string, effort: string, signal?: AbortSignal): Promise<ModelEffortPreference> {
-    return this.request("PUT", `/v1/model-effort-preferences/${encodeURIComponent(providerId)}/${encodeURIComponent(modelId)}`, { effort }, signal)
+    return this.request("PUT", `/v2/model-effort-preferences/${encodeURIComponent(providerId)}/${encodeURIComponent(modelId)}`, { effort }, signal)
   }
 
-  /** `SetAgentEffort` (`PUT /v1/agent-efforts/{agentId}`); an empty effort clears the agent's runtime choice. */
+  /** `SetAgentEffort` (`PUT /v2/agent-efforts/{agentId}`); an empty effort clears the agent's runtime choice. */
   async setAgentEffort(agentId: string, effort: string, signal?: AbortSignal): Promise<{ agentId: string; effort?: string }> {
-    return this.request("PUT", `/v1/agent-efforts/${encodeURIComponent(agentId)}`, { effort, ...(this.directory ? { directory: this.directory } : {}) }, signal)
+    return this.request("PUT", `/v2/agent-efforts/${encodeURIComponent(agentId)}`, { effort, ...(this.directory ? { directory: this.directory } : {}) }, signal)
   }
 
   async listWorkflows(): Promise<WorkflowSummary[]> {
-    return this.listAll("/v1/workflows", "workflows", "", true)
+    const result = await this.request<{ workflows?: WorkflowSummary[] }>("GET", this.scoped("/v2/bundles/hya%2Fworkflow/api/workflows"))
+    return result.workflows ?? []
   }
 
   async getWorkflowState(session: string): Promise<Record<string, unknown>> {
-    return this.request("GET", `/v1/sessions/${encodeURIComponent(session)}/workflow`)
+    return this.request("GET", `/v2/sessions/${encodeURIComponent(session)}/bundles/hya%2Fworkflow/state`)
   }
 
   async submitWorkflow(session: string, command: Record<string, unknown>): Promise<unknown> {
-    return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/workflow`, command)
+    return this.request("POST", `/v2/sessions/${encodeURIComponent(session)}/bundles/hya%2Fworkflow/command`, command)
   }
 
   async updateSessionModel(session: string, model: string): Promise<SessionInfo> {
-    return this.request("PATCH", `/v1/sessions/${encodeURIComponent(session)}`, { model })
+    return this.request("PATCH", `/v2/sessions/${encodeURIComponent(session)}`, { model })
   }
 
   /**
-   * `UpdateSession` (`PATCH /v1/sessions/:id`) for the fields `/rename`,
+   * `UpdateSession` (`PATCH /v2/sessions/:id`) for the fields `/rename`,
    * `/agent`, and the permission mode switch change (one field per call).
    * An unknown or unavailable `permissionMode` fails with `invalid_argument`.
    */
   async updateSession(session: string, patch: { title?: string; agent?: string; permissionMode?: string }): Promise<SessionInfo> {
-    return this.request("PATCH", `/v1/sessions/${encodeURIComponent(session)}`, patch)
+    return this.request("PATCH", `/v2/sessions/${encodeURIComponent(session)}`, patch)
   }
 
-  /** `DeleteSession` (`DELETE /v1/sessions/:id`): the `/sessions` picker's delete row action (Ctrl+D). */
+  /** `DeleteSession` (`DELETE /v2/sessions/:id`): the `/sessions` picker's delete row action (Ctrl+D). */
   /** Archive or unarchive a root session (`PATCH {archived}`; idempotent; a subagent session cannot be archived). */
   async setArchived(session: string, archived: boolean): Promise<SessionInfo> {
-    return this.request("PATCH", `/v1/sessions/${encodeURIComponent(session)}`, { archived })
+    return this.request("PATCH", `/v2/sessions/${encodeURIComponent(session)}`, { archived })
   }
 
   async deleteSession(session: string): Promise<void> {
-    await this.request("DELETE", `/v1/sessions/${encodeURIComponent(session)}`)
+    await this.request("DELETE", `/v2/sessions/${encodeURIComponent(session)}`)
   }
 
   /**
-   * `ListTuiExtensions` (`GET /v1/tui-extensions`): the scope's bundle TUI
+   * `ListTuiExtensions` (`GET /v2/tui-extensions`): the scope's bundle TUI
    * extensions with their files. Rows are untrusted until
    * extensions/install.ts `parseCatalogEntry` checks them; `[]` on a backend without the route.
    */
@@ -1217,7 +1342,7 @@ export class HyaClient {
         }))).filter((digest): digest is string => digest !== undefined).slice(0, 64)
       } catch { /* cache directory may not exist yet */ }
       const query = known.length ? `?known=${encodeURIComponent(known.join(","))}` : ""
-      const result = await this.request<{ extensions?: unknown }>("GET", this.scoped(`/v1/tui-extensions${query}`))
+      const result = await this.request<{ extensions?: unknown }>("GET", this.scoped(`/v2/tui-extensions${query}`))
       return Array.isArray(result.extensions) ? result.extensions : []
     } catch (error) {
       if (error instanceof HttpError && error.status === 404) return []
@@ -1225,10 +1350,10 @@ export class HyaClient {
     }
   }
 
-  /** `ListPermissionModes` (`GET /v1/permission-modes`): built-ins first, then bundle modes; `[]` on a backend without the route. */
+  /** `ListPermissionModes` (`GET /v2/permission-modes`): built-ins first, then bundle modes; `[]` on a backend without the route. */
   async listPermissionModes(): Promise<PermissionModeInfo[]> {
     try {
-      const result = await this.request<{ modes?: PermissionModeInfo[] }>("GET", this.scoped("/v1/permission-modes"))
+      const result = await this.request<{ modes?: PermissionModeInfo[] }>("GET", this.scoped("/v2/permission-modes"))
       return result.modes ?? []
     } catch (error) {
       if (error instanceof HttpError && error.status === 404) return []
@@ -1237,28 +1362,28 @@ export class HyaClient {
   }
 
   /**
-   * `RevertSession` (`POST /v1/sessions/{id}/revert`): `{}` reverts the last
+   * `RevertSession` (`POST /v2/sessions/{id}/revert`): `{}` reverts the last
    * visible user message (`/undo`; again = further back), `{messageId}`
    * reverts to that user message, `{undo: true}` undoes the pending revert
    * (`/redo`). `409 session_busy` while a turn runs; `400 invalid_argument`
    * when there is nothing to revert or undo.
    */
   async revertSession(session: string, body: { messageId?: string; undo?: boolean }): Promise<{ session: SessionInfo; files?: RevertedFile[] }> {
-    return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/revert`, body)
+    return this.request("POST", `/v2/sessions/${encodeURIComponent(session)}/revert`, body)
   }
 
   /**
-   * `ForkSession` (`POST /v1/sessions/{id}/fork`): a new root session with
+   * `ForkSession` (`POST /v2/sessions/{id}/fork`): a new root session with
    * the messages strictly before user message `messageId` (its text comes
    * back as `promptText`), or every message when `messageId` is unset.
    */
   async forkSession(session: string, messageId?: string): Promise<{ session: SessionInfo; promptText?: string }> {
-    return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/fork`, messageId ? { messageId } : {})
+    return this.request("POST", `/v2/sessions/${encodeURIComponent(session)}/fork`, messageId ? { messageId } : {})
   }
 
   /** `CompactSession`: compact the session's context now (`/compact`). */
   async compactSession(session: string): Promise<{ compactedUntilSeq?: string; strategy?: string }> {
-    return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/compact`, {})
+    return this.request("POST", `/v2/sessions/${encodeURIComponent(session)}/compact`, {})
   }
 
   /**
@@ -1268,61 +1393,59 @@ export class HyaClient {
    * while a turn runs.
    */
   async refreshSessionContext(session: string): Promise<{ pending: boolean }> {
-    const result = await this.request<{ pending?: boolean }>("POST", `/v1/sessions/${encodeURIComponent(session)}/refresh-context`, {})
+    const result = await this.request<{ pending?: boolean }>("POST", `/v2/sessions/${encodeURIComponent(session)}/refresh-context`, {})
     return { pending: result.pending === true }
   }
 
   /** `SummarizeSession`: generate a summary message for the session (`/summarize`). */
   async summarizeSession(session: string): Promise<{ summaryMessage?: string }> {
-    return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/summarize`, {})
+    return this.request("POST", `/v2/sessions/${encodeURIComponent(session)}/summarize`, {})
   }
 
   /** `GetSessionTodo` (`/todos`). */
   async getSessionTodo(session: string): Promise<TodoItem[]> {
-    const result = await this.request<{ items?: TodoItem[] }>("GET", `/v1/sessions/${encodeURIComponent(session)}/todo`)
+    const result = await this.request<{ items?: TodoItem[] }>("GET", `/v2/sessions/${encodeURIComponent(session)}/todo`)
     return result.items ?? []
   }
 
-  /** `GetVcsStatus` (`GET /v1/vcs`) scoped to the client's `--dir`; status bar git branch. */
+  /** `GetVcsStatus` (`GET /v2/vcs`) scoped to the client's `--dir`; status bar git branch. */
   async getVcsStatus(): Promise<VcsStatus> {
-    return this.request("GET", this.scoped("/v1/vcs"))
+    return this.request("GET", this.scoped("/v2/vcs"))
   }
 
   /**
-   * `ArchiveSubagent` (`POST /v1/sessions/{id}/archive`): archive a subagent
-   * as its parent's `archive` tool does (turn cancelled, descendants first).
-   * `400 invalid_argument` for a root session or an archived subagent.
+   * Archive a subagent via the `hya/multi-agent` bundle API
+   * (`POST /v2/sessions/{id}/bundles/hya%2Fmulti-agent/archive`).
    */
   async archiveSubagent(session: string): Promise<{ handle?: string; cancelledTurn?: boolean; descendants?: string[] }> {
-    return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/archive`, { session })
+    return this.request("POST", `/v2/sessions/${encodeURIComponent(session)}/bundles/hya%2Fmulti-agent/archive`, {})
   }
 
   /**
-   * `SteerSubagent` (`POST /v1/sessions/{id}/steer`): the user's message to a
-   * subagent, delivered on its parent's DM as `[user] <text>`; it wakes an
-   * idle subagent and revives an archived one.
+   * Steer a subagent via the `hya/multi-agent` bundle API
+   * (`POST /v2/sessions/{id}/bundles/hya%2Fmulti-agent/steer`).
    */
   async steerSubagent(session: string, text: string): Promise<{ from?: string }> {
-    return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/steer`, { session, text })
+    return this.request("POST", `/v2/sessions/${encodeURIComponent(session)}/bundles/hya%2Fmulti-agent/steer`, { text })
   }
 
   async cancelTurn(session: string, turn: string): Promise<unknown> {
-    return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/turns/${encodeURIComponent(turn)}/cancel`, {})
+    return this.request("POST", `/v2/sessions/${encodeURIComponent(session)}/turns/${encodeURIComponent(turn)}/cancel`, {})
   }
 
   /** `RespondInteraction` with one response kind (state/prompts.ts `respondBody`). */
   async respondInteraction(id: string, body: RespondBody): Promise<{ applied?: boolean }> {
-    return this.request("POST", `/v1/interactions/${encodeURIComponent(id)}/respond`, body)
+    return this.request("POST", `/v2/interactions/${encodeURIComponent(id)}/respond`, body)
   }
 
   async respondPermission(id: string, allowed: boolean): Promise<unknown> {
-    return this.request("POST", `/v1/interactions/${encodeURIComponent(id)}/respond`, {
+    return this.request("POST", `/v2/interactions/${encodeURIComponent(id)}/respond`, {
       permission: { allowed, persist: false },
     })
   }
 
   async respondQuestion(id: string, answer: string): Promise<unknown> {
-    return this.request("POST", `/v1/interactions/${encodeURIComponent(id)}/respond`, {
+    return this.request("POST", `/v2/interactions/${encodeURIComponent(id)}/respond`, {
       question: { answer },
     })
   }
@@ -1330,7 +1453,7 @@ export class HyaClient {
   async listEvents(session: string, sinceSeq: string, limit?: number): Promise<{ events?: StreamEvent[]; nextSeq?: string }> {
     return this.request(
       "GET",
-      `/v1/sessions/${encodeURIComponent(session)}/events?sinceSeq=${encodeURIComponent(sinceSeq)}${limit ? `&limit=${limit}` : ""}`,
+      `/v2/sessions/${encodeURIComponent(session)}/events?sinceSeq=${encodeURIComponent(sinceSeq)}${limit ? `&limit=${limit}` : ""}`,
     )
   }
 
@@ -1367,12 +1490,12 @@ export class HyaClient {
      */
     includeDescendants = false,
   ): Promise<void> {
-    const path = `/v1/sessions/${encodeURIComponent(session)}/events/stream?sinceSeq=${encodeURIComponent(sinceSeq)}${includeDescendants ? "&includeDescendants=true" : ""}`
+    const path = `/v2/sessions/${encodeURIComponent(session)}/events/stream?sinceSeq=${encodeURIComponent(sinceSeq)}${includeDescendants ? "&includeDescendants=true" : ""}`
     await this.readStream(path, onFrame, signal, onOpen)
   }
 
   /**
-   * `StreamGlobalEvents` (`GET /v1/events/stream?interactionsOnly=true`):
+   * `StreamGlobalEvents` (`GET /v2/events/stream?interactionsOnly=true`):
    * every session's live interaction frames (the permission/question asks
    * and their resolves) of sessions this TUI does not have open, plus
    * `catalogUpdated`. The server leaves out every session's engine events
@@ -1386,7 +1509,7 @@ export class HyaClient {
     /** Runs once the stream is subscribed, before any frame is read. */
     onOpen?: () => void | Promise<void>,
   ): Promise<void> {
-    await this.readStream("/v1/events/stream?interactionsOnly=true", onFrame, signal, onOpen)
+    await this.readStream("/v2/events/stream?interactionsOnly=true", onFrame, signal, onOpen)
   }
 
   /** Open one SSE stream and hand every frame to `onFrame` until it ends or `signal` aborts. */

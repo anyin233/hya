@@ -1,25 +1,9 @@
-use serde::{Deserialize, Serialize};
-
-use super::{PartProjection, Projection};
-use crate::event::{EvictedPart, StepCut};
+use super::Projection;
+use crate::event::StepCut;
 use crate::ids::MessageId;
 use crate::message::{TokenUsage, UsagePurpose};
 use crate::model::ModelRef;
-use crate::tokens::{TokenAccountingMode, TokenSource};
 use crate::usage::MessageUsage;
-
-/// Latest window-occupancy report, mirroring the newest `ContextStatus` event.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ContextStatusProjection {
-    /// Tokens the last measured request is believed to occupy.
-    pub tokens: u64,
-    /// Whether the count was provider-anchored or locally estimated.
-    pub source: TokenSource,
-    /// Accounting mode in force for that round.
-    pub mode: TokenAccountingMode,
-    /// Resolved compaction threshold the count was judged against.
-    pub threshold: u64,
-}
 
 impl Projection {
     pub(super) fn apply_context_compacted(
@@ -73,23 +57,6 @@ impl Projection {
         }
     }
 
-    pub(super) fn apply_context_evicted(&mut self, parts: &[EvictedPart]) {
-        for evicted in parts {
-            if let Some(PartProjection::Tool {
-                eviction_notice, ..
-            }) = self
-                .session
-                .messages
-                .iter_mut()
-                .rev()
-                .flat_map(|row| row.parts.iter_mut())
-                .find(|part| part.id() == evicted.part)
-            {
-                *eviction_notice = Some(evicted.notice.clone());
-            }
-        }
-    }
-
     pub(super) fn apply_usage_recorded(
         &mut self,
         message: &Option<MessageId>,
@@ -104,20 +71,5 @@ impl Projection {
                 None => m.usage = Some(MessageUsage::first(model, tokens)),
             }
         }
-    }
-
-    pub(super) fn apply_context_status(
-        &mut self,
-        tokens: &u64,
-        source: &TokenSource,
-        mode: &TokenAccountingMode,
-        threshold: &u64,
-    ) {
-        self.session.context_status = Some(ContextStatusProjection {
-            tokens: *tokens,
-            source: *source,
-            mode: *mode,
-            threshold: *threshold,
-        });
     }
 }

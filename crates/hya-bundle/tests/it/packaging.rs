@@ -52,10 +52,15 @@ const PUBLIC_RATIO_PREFLIGHT_LZMA2: [u8; 409] = [
 
 const PUBLIC_ARCHIVE_MANIFEST: &[u8] = br#"---
 kind: Bundle
+schema_version: 2
 identity:
   id: hya/archive-js
   version: 1.0.0
   publisher: hya
+runtime:
+  kind: js
+  mode: managed
+  entry: extensions/runtime.js
 resources:
   tools:
     - id: echo
@@ -64,10 +69,6 @@ resources:
         - say
   hooks:
     - id: event
-      path: extensions/runtime.js
-extensions:
-  js:
-    - id: runtime
       path: extensions/runtime.js
 agents:
   - id: lead
@@ -84,6 +85,7 @@ Archive JS lead.
 
 const FIXTURE_MANIFEST: &[u8] = br#"---
 kind: Bundle
+schema_version: 2
 identity:
   id: hya/valid-public
   version: 1.0.0
@@ -98,10 +100,15 @@ You are the valid public bundle lead.
 
 const FIXTURE_JS_MANIFEST: &[u8] = br#"---
 kind: Bundle
+schema_version: 2
 identity:
   id: hya/archive-js
   version: 1.0.0
   publisher: hya
+runtime:
+  kind: js
+  mode: managed
+  entry: extensions/runtime.js
 resources:
   tools:
     - id: echo
@@ -110,10 +117,6 @@ resources:
         - say
   hooks:
     - id: event
-      path: extensions/runtime.js
-extensions:
-  js:
-    - id: runtime
       path: extensions/runtime.js
 agents:
   - id: archive-js-lead
@@ -544,7 +547,7 @@ fn public_writer_round_trips_agent_and_workflow_packages_deterministically() {
         "public-package",
         vec![SourceFile::new(
             "bundle.hya.md",
-            b"---\nkind: Bundle\nidentity: { id: hya/public-package, version: 1.0.0, publisher: hya }\nagents: [{ id: public-package-lead, role: main }]\n---\nYou are the public package lead.\n".as_slice(),
+            b"---\nkind: Bundle\nschema_version: 2\nidentity: { id: hya/public-package, version: 1.0.0, publisher: hya }\nagents: [{ id: public-package-lead, role: main }]\n---\nYou are the public package lead.\n".as_slice(),
         )],
     );
     let first = write_public_package(&agent_src).expect("write 1");
@@ -566,7 +569,7 @@ fn public_writer_round_trips_agent_and_workflow_packages_deterministically() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                b"kind: Bundle\nidentity: { id: hya/workflow-public, version: 1.0.0, publisher: hya }\nworkflow: { id: demo, path: workflows/demo.hya.md }\nagents: [{ id: worker, role: subagent, prompt: prompts/worker.md }]\n".as_slice(),
+                b"kind: Bundle\nschema_version: 2\nidentity: { id: hya/workflow-public, version: 1.0.0, publisher: hya }\nworkflow: { id: demo, path: workflows/demo.hya.md }\nagents: [{ id: worker, role: subagent, prompt: prompts/worker.md }]\n".as_slice(),
             ),
             SourceFile::new(
                 "workflows/demo.hya.md",
@@ -592,7 +595,7 @@ fn e2e_schema_demo_fixture_matches_the_production_package_bytes() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                b"kind: Bundle\nidentity:\n  id: hya/schema-demo\n  version: 1.0.0\n  publisher: hya\nschemas:\n  - scheme: db\n    tool: query\n    writable: false\nresources:\n  tools:\n    - id: query\n      path: extensions/runtime.js\n  mcp:\n    - id: vecdb\n      path: mcp/vecdb.json\nextensions:\n  js:\n    - id: runtime\n      path: extensions/runtime.js\n  process:\n    kind: bun\n    command: [bun, schema-demo-worker]\nagents:\n  - id: schema-lead\n    role: main\n    resource_view:\n      allow:\n        - query\n        - runtime\n".as_slice(),
+                b"schema_version: 2\nkind: Bundle\nidentity:\n  id: hya/schema-demo\n  version: 1.0.0\n  publisher: hya\nschemas:\n  - scheme: db\n    tool: query\n    writable: false\nresources:\n  tools:\n    - id: query\n      path: extensions/runtime.js\n  mcp:\n    - id: vecdb\n      path: mcp/vecdb.json\nruntime:\n  kind: js\n  mode: process\n  entry: extensions/runtime.js\n  command: [bun, schema-demo-worker]\nagents:\n  - id: schema-lead\n    role: main\n    resource_view:\n      allow:\n        - query\n        - runtime\n".as_slice(),
             ),
             SourceFile::new("extensions/runtime.js", b"export default {}".as_slice()),
             SourceFile::new("mcp/vecdb.json", b"{\"command\": [\"python3\", \"vecdb.py\"]}".as_slice()),
@@ -691,7 +694,7 @@ fn staged_public_package_permissions_declared_files_and_conservative_cleanup() {
     drop(active);
 
     // 3. Public inspection returns exactly the declared closure sorted by path.
-    let manifest = b"kind: Bundle\nidentity: { id: hya/files, version: 1.0.0, publisher: hya }\nagents: [{ id: files-lead, role: main, prompt: prompts/lead.md }]\n";
+    let manifest = b"kind: Bundle\nschema_version: 2\nidentity: { id: hya/files, version: 1.0.0, publisher: hya }\nagents: [{ id: files-lead, role: main, prompt: prompts/lead.md }]\n";
     let pkg_src = BundleSource::new(
         "files",
         vec![

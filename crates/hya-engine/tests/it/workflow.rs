@@ -23,21 +23,23 @@ use hya_engine::hooks::{
 };
 use hya_engine::{
     AgentCatalog, AgentSpec, CompiledWorkflow, CoreError, CreateSession, EventBus, FailurePolicy,
-    PreparedWorkflowRun, ResidentSupervisor, SessionEngine, StageStatus, SubagentGovernor,
-    SubagentLimits, TurnBinding, WorkflowError, WorkflowRunContext, WorkflowRunReport,
-    WorkflowStatus, load_workflow_file, prepare_workflow_run, run_workflow,
+    PreparedWorkflowRun, ResidentSupervisor, SessionEngine, SessionStoreExt as _, StageStatus,
+    SubagentGovernor, SubagentLimits, TurnBinding, WorkflowError, WorkflowRunContext,
+    WorkflowRunReport, WorkflowStatus, load_workflow_file, prepare_workflow_run, run_workflow,
 };
 use hya_proto::context::REASONING_DEADLINE_NOTICE_PREFIX;
 use hya_proto::{
     AgentName, Envelope, Event, FinishCause, FinishReason, Message, MessageId, ModelRef, Part,
-    PartId, SessionId, SessionKind, WorkflowMemberRole, WorkflowRunId, WorkflowStageStatus,
+    PartId, SessionId, SessionKind, WorkflowRunId,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
     ProviderRouter,
 };
-use hya_store::{SessionStore, StoreError};
+use hya_store::SessionStore;
+use hya_tool::extension::{ExtensionEvent, members_projection, team_projection};
 use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, Tool};
+use hya_tool::{WorkflowMemberRole, WorkflowStageStatus};
 use hya_workflow::{WorkflowSource, compile};
 use serde_json::json;
 use tokio::sync::{Notify, broadcast};
@@ -244,24 +246,24 @@ impl WfEnv {
     async fn has_completed_stage_event(&self) -> bool {
         self.eng.replay(self.lead).await.unwrap().iter().any(|e| {
             matches!(
-                e.event,
-                Event::WorkflowStageFinished {
+                ExtensionEvent::from_event(&e.event),
+                Some(ExtensionEvent::WorkflowStageFinished {
                     status: WorkflowStageStatus::Completed,
                     ..
-                }
+                })
             )
         })
     }
 
     async fn assert_archived_resident(&self, agent_type: &str) {
         let proj = self.eng.read_projection(self.lead).await.unwrap();
-        let archived = proj
-            .team
+        let team = team_projection(&proj);
+        let archived = team
             .archived
             .values()
             .find(|e| e.agent_type.as_str() == agent_type)
             .expect("resident remains in archive");
-        assert!(!proj.team.roster.contains_key(&archived.handle));
+        assert!(!team.roster.contains_key(&archived.handle));
         assert!(
             !self
                 .eng
@@ -578,6 +580,7 @@ fn sidecar_probe_catalog() -> Arc<AgentCatalog> {
                     content: "// bound sidecar".into(),
                     binary_base64: None,
                     aliases: vec![],
+                    overrides: None,
                 }]
             } else {
                 vec![]
@@ -595,6 +598,7 @@ fn sidecar_probe_catalog() -> Arc<AgentCatalog> {
             commands: Vec::new(),
             runtime: None,
             permission_modes: vec![],
+            overrides: None,
         })
         .collect();
     let bc = hya_bundle::BundleCatalog::from_prepared(&bundles).unwrap();
@@ -676,12 +680,12 @@ struct RegistrationGate(Vec<Arc<StageLinkGate>>);
 #[async_trait]
 impl HookDispatcher for RegistrationGate {
     fn dispatch_event(&self, envelope: &Envelope) {
-        if let Event::WorkflowStageMemberLinked {
+        if let Some(ExtensionEvent::WorkflowStageMemberLinked {
             role, iteration, ..
-        } = &envelope.event
+        }) = ExtensionEvent::from_event(&envelope.event)
         {
             for gate in &self.0 {
-                if *role == gate.role && *iteration == gate.iteration {
+                if role == gate.role && iteration == gate.iteration {
                     gate.entered.notify_one();
                     tokio::task::block_in_place(|| {
                         let g = gate.released.lock().unwrap();
@@ -1103,9 +1107,7 @@ async fn preflight_capacity_counts_parked_members_and_returns_typed_occupancy_re
     let res = env2.prepare(&two, None).await;
     assert!(matches!(
         res,
-        Err(WorkflowError::Engine(CoreError::Store(
-            StoreError::CapacityExceeded { .. }
-        )))
+        Err(WorkflowError::Engine(CoreError::CapacityExceeded { .. }))
     ));
     env2.sup.end_member(env2.lead, &handle).await.unwrap();
     drop(rt2);
@@ -1169,7 +1171,7 @@ async fn loop_stage_verifier_owns_the_stop_decision() {
     assert_eq!(env.live_count().await, 0);
     assert_eq!(
         env.eng.replay(env.lead).await.unwrap().iter()
-            .filter(|e| matches!(e.event, Event::AgentRegistered { agent_session, .. } if agent_session == worker_rounds[0].0))
+            .filter(|e| matches!(ExtensionEvent::from_event(&e.event), Some(ExtensionEvent::AgentRegistered { agent_session, .. }) if agent_session == worker_rounds[0].0))
             .count(),
         1
     );
@@ -1311,9 +1313,9 @@ async fn resident_actor_identity_session_reuse_and_route_matching() {
             .is_some_and(|s| s.contains("resident-planner prompt") && s.contains("stage: refine"))
     );
     let root = env.eng.read_projection(env.lead).await.unwrap();
-    assert_eq!(root.team.inboxes.values().map(Vec::len).sum::<usize>(), 4);
-    let res = root
-        .team
+    let team = team_projection(&root);
+    assert_eq!(team.inboxes.values().map(Vec::len).sum::<usize>(), 4);
+    let res = team
         .roster
         .values()
         .find(|e| e.session.to_string() == sid)
@@ -1325,7 +1327,10 @@ async fn resident_actor_identity_session_reuse_and_route_matching() {
             .await
             .unwrap()
             .iter()
-            .filter(|e| matches!(e.event, Event::MailSent { .. }))
+            .filter(|e| matches!(
+                ExtensionEvent::from_event(&e.event),
+                Some(ExtensionEvent::MailSent { .. })
+            ))
             .count(),
         2
     );
@@ -1353,12 +1358,7 @@ async fn resident_actor_identity_session_reuse_and_route_matching() {
     assert_ne!(id_r.stages[0].session, id_r.stages[1].session);
     assert_ne!(id_r.stages[2].session, id_r.stages[3].session);
     assert_eq!(
-        id_env
-            .eng
-            .read_projection(id_env.lead)
-            .await
-            .unwrap()
-            .team
+        team_projection(&id_env.eng.read_projection(id_env.lead).await.unwrap())
             .roster
             .values()
             .filter(|e| e.agent_type.as_str() == "resident-planner")
@@ -1578,15 +1578,16 @@ async fn registration_overload_and_store_link_failure_release_all_claims() {
             .unwrap_err();
         assert!(matches!(
             err,
-            WorkflowError::Engine(CoreError::Store(StoreError::CapacityExceeded { .. }))
+            WorkflowError::Engine(CoreError::CapacityExceeded { .. })
         ));
         assert_eq!(
             env.eng.store().active_actor_ids().await.unwrap(),
             vec![task]
         );
         let root = env.eng.read_projection(env.lead).await.unwrap();
-        assert_eq!(root.team.archived.len(), 1);
-        let parked = root.team.archived.values().next().unwrap().session;
+        let team = team_projection(&root);
+        assert_eq!(team.archived.len(), 1);
+        let parked = team.archived.values().next().unwrap().session;
         assert!(
             !env.eng
                 .replay(parked)
@@ -1609,7 +1610,7 @@ async fn registration_overload_and_store_link_failure_release_all_claims() {
         "---\nkind: Workflow\nname: store\ndescription: Typed link failure\nnodes:\n  work:\n    agent: builder\n    directive: Work.\n    mode: loop\n    verify:\n      agent: reviewer\n      until: More work.\n      max_iterations: 2\n---\nflowchart TD\n  work\n",
     );
     let mut tx = env.eng.store().begin_transaction().await.unwrap();
-    sqlx::query("CREATE TRIGGER reject_loop_link BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = 'workflow_stage_member_linked' AND json_extract(NEW.payload, '$.iteration') = 1 AND json_extract(NEW.payload, '$.role') = 'worker' BEGIN SELECT RAISE(ABORT, 'review W3 link failure'); END")
+    sqlx::query("CREATE TRIGGER reject_loop_link BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = 'extension' AND json_extract(NEW.payload, '$.kind') = 'workflow_stage_member_linked' AND json_extract(NEW.payload, '$.payload.iteration') = 1 AND json_extract(NEW.payload, '$.payload.role') = 'worker' BEGIN SELECT RAISE(ABORT, 'review W3 link failure'); END")
         .execute(&mut *tx)
         .await
         .unwrap();
@@ -1662,12 +1663,7 @@ async fn loop_wrap_up_capacity_refusal_and_cancellation_never_complete_stage() {
             .execute(CancellationToken::new()),
     );
     v_gate.wait_entered().await;
-    let worker_handle = env
-        .eng
-        .read_projection(env.lead)
-        .await
-        .unwrap()
-        .team
+    let worker_handle = team_projection(&env.eng.read_projection(env.lead).await.unwrap())
         .roster
         .values()
         .find(|e| e.agent_type.as_str() == "builder")
@@ -1694,9 +1690,7 @@ async fn loop_wrap_up_capacity_refusal_and_cancellation_never_complete_stage() {
     env.drain().await;
     assert!(matches!(
         res,
-        Err(WorkflowError::Engine(CoreError::Store(
-            StoreError::CapacityExceeded { .. }
-        )))
+        Err(WorkflowError::Engine(CoreError::CapacityExceeded { .. }))
     ));
     assert!(!completed);
 
@@ -1793,7 +1787,7 @@ async fn workflow_worker_and_verifier_deadline_notices_follow_offered_report_too
             hya_tool::deadline::install(Duration::from_secs(30));
             let workflow = compile_wf("deadline.hya.md", "---\nkind: Workflow\nname: deadline\ndescription: Offered report capability\nnodes:\n  loop:\n    agent: hya-task\n    directive: Work.\n    mode: loop\n    verify:\n      agent: hya-reviewer\n      until: Finished.\n      max_iterations: 2\n---\nflowchart TD\n  loop\n");
             let denied_catalog = {
-                let src = hya_bundle::BundleSource::new("denied-report", vec![hya_bundle::SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: acme/denied-report, version: 1.0.0, publisher: acme }\nchannels:\n  - { id: dm, kind: parent_dm, participants: [{kind: role, role: child}], capabilities: [send, steer, follow_up, resident_mail], scope: vertical, retention: team_session }\n")]);
+                let src = hya_bundle::BundleSource::new("denied-report", vec![hya_bundle::SourceFile::new("bundle.yaml", "schema_version: 2\nkind: Bundle\nidentity: { id: acme/denied-report, version: 1.0.0, publisher: acme }\nchannels:\n  - { id: dm, kind: parent_dm, participants: [{kind: role, role: child}], capabilities: [send, steer, follow_up, resident_mail], scope: vertical, retention: team_session }\n")]);
                 let bc = hya_bundle::BundleCatalog::from_prepared(hya_bundle::prepare_package(src).unwrap().bundles()).unwrap();
                 Arc::new(AgentCatalog::new(Arc::new(bc)).unwrap())
             };
@@ -1832,7 +1826,7 @@ async fn workflow_worker_and_verifier_deadline_notices_follow_offered_report_too
                     routing: None,
                 };
                 assert_eq!(run_workflow(eng.clone(), root, &workflow, ctx, CancellationToken::new()).await.unwrap().status, WorkflowStatus::Completed);
-                let members = eng.read_projection(root).await.unwrap().session.members;
+                let members = members_projection(&eng.read_projection(root).await.unwrap());
                 assert_eq!(members.len(), 2);
                 for member in members {
                     let child = member.child.unwrap();

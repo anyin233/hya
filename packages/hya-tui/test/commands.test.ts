@@ -106,7 +106,7 @@ test("/model on a config-pinned agent switches only the session", async () => {
       return { ...session, model: { providerId, modelId, ...(variant ? { variant } : {}) } }
     },
     setAgentModel: async () => {
-      throw new HttpError(409, "PUT", "/v1/agent-models/hya-main", "conflict: Agent `hya-main` has a configured model")
+      throw new HttpError(409, "PUT", "/v2/agent-models/hya-main", "conflict: Agent `hya-main` has a configured model")
     },
     setAgentEffort: async (agent, effort) => {
       writes.push(`agent-effort ${agent}=${effort}`)

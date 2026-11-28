@@ -126,7 +126,7 @@ export async function selectEffort(context: CommandContext, effort: string): Pro
   const agentDecides = session?.effortSource === "EFFORT_SOURCE_AGENT"
   if (session && agentDecides) await client.setAgentEffort(session.agent, value)
   if (!agentDecides || !value) await client.setModelEffortPreference(providerId, modelId, value)
-  if (session) store.setSelected(await client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(session.id)}`))
+  if (session) store.setSelected(await client.request<SessionInfo>("GET", `/v2/sessions/${encodeURIComponent(session.id)}`))
   store.setStatus(`Thinking effort → ${effort}`)
   await actions.refresh()
 }

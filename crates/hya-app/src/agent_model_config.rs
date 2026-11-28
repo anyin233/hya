@@ -828,7 +828,7 @@ mod tests {
         let (_dir, files) = files();
         let path = files.global_path().to_path_buf();
         ensure_parent(&path).unwrap();
-        fs::write(&path, "agents: {}\n").unwrap();
+        fs::write(&path, "schema_version: 2\nagents: {}\n").unwrap();
         let lock = lock_for(&path).unwrap();
         let (sent, received) = std::sync::mpsc::channel();
         let provider_path = path.clone();
@@ -845,7 +845,11 @@ mod tests {
         let premature = received
             .recv_timeout(std::time::Duration::from_millis(50))
             .is_ok();
-        fs::write(&path, "agents:\n  worker: { model: openai/model }\n").unwrap();
+        fs::write(
+            &path,
+            "schema_version: 2\nagents:\n  worker: { model: openai/model }\n",
+        )
+        .unwrap();
         drop(lock);
         writer.join().unwrap();
         assert!(!premature);

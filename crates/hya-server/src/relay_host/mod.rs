@@ -8,7 +8,7 @@
 //! replacing it on the same stream after a PSK rotation), and for every
 //! `incoming` stream it accepts the stream, answers the Noise `NKpsk0`
 //! handshake as the responder (bounded by a short timeout), and serves the
-//! same [`crate::Server`] as the TCP listener (the `/v1` router and the gRPC
+//! same [`crate::Server`] as the TCP listener (the `/v2` router and the gRPC
 //! services) over the decrypted bytes, with the [`crate::Origin::Relay`]
 //! extension on each request. Handshake failures are
 //! logged without key material. Streams still handshaking and streams being

@@ -5,10 +5,13 @@ use anyhow::Context as _;
 use clap::Subcommand;
 use hya_app::{WorkflowCommand as ControlCommand, WorkflowCommandResult, WorkflowInvocation};
 use hya_proto::{
-    WorkflowInfo, WorkflowMemberRole, WorkflowModelAssignment, WorkflowModelResolvedCandidate,
-    WorkflowProjection, WorkflowRevision, WorkflowRouteFailureClass, WorkflowRunProjection,
+    WorkflowInfo, WorkflowModelAssignment, WorkflowModelResolvedCandidate, WorkflowRevision,
+    WorkflowSummary,
+};
+use hya_tool::{
+    WorkflowMemberRole, WorkflowProjection, WorkflowRouteFailureClass, WorkflowRunProjection,
     WorkflowRunResult, WorkflowRunStatus, WorkflowStagePlan, WorkflowStageRouteOutcome,
-    WorkflowStageStatus, WorkflowSummary,
+    WorkflowStageStatus,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -549,8 +552,8 @@ mod tests {
     use hya_proto::{
         AgentName, MemberId, ModelRef, OwnerRunId, SessionId, WorkflowIdentity,
         WorkflowModelCandidate, WorkflowRunId, WorkflowSourceId, WorkflowStageInfo,
-        WorkflowStageProjection,
     };
+    use hya_tool::WorkflowStageProjection;
 
     use super::*;
 
@@ -755,7 +758,7 @@ mod tests {
         std::fs::create_dir_all(second.join(".hya/bundles/catalog/workflows")).unwrap();
         std::fs::write(
             second.join(".hya/bundles/catalog/bundle.yaml"),
-            "kind: Bundle\nidentity: {id: test/catalog, version: 1.0.0, publisher: test}\nagents: [{id: catalog-worker, role: subagent}]\nworkflow: {id: echo-input, path: workflows/echo-input.hya.md}\n",
+            "schema_version: 2\nkind: Bundle\nidentity: {id: test/catalog, version: 1.0.0, publisher: test}\nagents: [{id: catalog-worker, role: subagent}]\nworkflow: {id: echo-input, path: workflows/echo-input.hya.md}\n",
         )
         .unwrap();
         std::fs::write(

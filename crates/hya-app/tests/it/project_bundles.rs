@@ -52,7 +52,7 @@ fn write_project_bundle_in(
     std::fs::write(
         dir.join("bundle.hya.md"),
         format!(
-            "---\nkind: Bundle\nidentity: {{ id: {bundle_id}, version: 1.0.0, publisher: hya }}\n{ns}resources:\n  skills: [{{ id: {name}-skill, path: resources/skills/{name}-skill.md }}]\nagents: [{{ id: {name}-agent, role: main }}]\n---\n{prompt}\n"
+            "---\nkind: Bundle\nschema_version: 2\nidentity: {{ id: {bundle_id}, version: 1.0.0, publisher: hya }}\n{ns}resources:\n  skills: [{{ id: {name}-skill, path: resources/skills/{name}-skill.md }}]\nagents: [{{ id: {name}-agent, role: main }}]\n---\n{prompt}\n"
         ),
     )
     .unwrap();
@@ -85,7 +85,7 @@ for line in sys.stdin:
 
 fn process_manifest(bundle_id: &str) -> String {
     format!(
-        "kind: Bundle\nidentity: {{ id: {bundle_id}, version: 1.0.0, publisher: acme }}\nextensions:\n  process: {{ kind: rust, command: [python3, '${{BUNDLE_ROOT}}/runtime.py'] }}\n  files: [{{ id: runtime, path: runtime.py }}]\nresources:\n  tools: [{{ id: echo, path: tool.json }}]\n"
+        "kind: Bundle\nschema_version: 2\nidentity: {{ id: {bundle_id}, version: 1.0.0, publisher: acme }}\nruntime: {{ kind: js, mode: process, command: [python3, '${{BUNDLE_ROOT}}/runtime.py'] }}\nassets: [{{ id: runtime, path: runtime.py }}]\nresources:\n  tools: [{{ id: echo, path: tool.json }}]\n"
     )
 }
 
@@ -129,7 +129,7 @@ fn installed_agent_source(
         vec![hya_bundle::SourceFile::new(
             "bundle.hya.md",
             format!(
-                "---\nkind: Bundle\nidentity: {{ id: {bundle_id}, version: 1.0.0, publisher: hya }}\nnamespace: {namespace}\nagents: [{{ id: {agent}, role: main }}]\n---\n{prompt}\n"
+                "---\nkind: Bundle\nschema_version: 2\nidentity: {{ id: {bundle_id}, version: 1.0.0, publisher: hya }}\nnamespace: {namespace}\nagents: [{{ id: {agent}, role: main }}]\n---\n{prompt}\n"
             ),
         )],
     )
@@ -248,7 +248,7 @@ async fn project_scope_isolation_precedence_first_root_and_static_plugin() {
     std::fs::create_dir_all(plugin_dir.join("resources/skills")).unwrap();
     std::fs::write(
         plugin_dir.join("bundle.yaml"),
-        "kind: Bundle\nidentity: { id: hya/local-plugin, version: 1.0.0, publisher: hya }\nresources:\n  skills: [{ id: local-plugin-skill, path: resources/skills/local-plugin-skill.md }]\n",
+        "kind: Bundle\nschema_version: 2\nidentity: { id: hya/local-plugin, version: 1.0.0, publisher: hya }\nresources:\n  skills: [{ id: local-plugin-skill, path: resources/skills/local-plugin-skill.md }]\n",
     )
     .unwrap();
     std::fs::write(

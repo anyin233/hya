@@ -10,17 +10,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_app::{
     InvocationPolicy, WebSearchConfig, WorkflowCatalog, WorkflowCatalogOwner, WorkflowCatalogRoots,
-    WorkflowControlError, WorkflowInvocation, agent_with_model, build_session_engine,
-    offline_router,
+    WorkflowCommand, WorkflowCommandResult, WorkflowControlError, WorkflowInvocation,
+    agent_with_model, build_session_engine, offline_router,
 };
 use hya_bundle::{BundleCatalog, BundleSource, SourceFile, prepare_package};
 use hya_engine::{AgentCatalog, CreateSession, RuntimeRegistry};
-use hya_proto::{
-    ToolCallId, WorkflowAvailability, WorkflowCommand, WorkflowCommandResult, WorkflowRunId,
-    WorkflowRunStatus,
-};
+use hya_proto::{ToolCallId, WorkflowAvailability, WorkflowRunId};
 use hya_store::SessionStore;
-use hya_tool::ToolOperation;
+use hya_tool::extension::ExtensionEvent;
+use hya_tool::{ToolOperation, WorkflowRunStatus};
 use tokio_util::sync::CancellationToken;
 
 fn temp_dir(label: &str) -> PathBuf {
@@ -328,14 +326,14 @@ async fn run_is_idempotent_by_tool_operation_and_rejects_changed_inputs() {
     let events = engine.replay(session).await.unwrap();
     let link_idx = events
         .iter()
-        .position(|e| matches!(&e.event, hya_proto::Event::WorkflowStageMemberLinked { member, .. } if *member == linked))
+        .position(|e| matches!(ExtensionEvent::from_event(&e.event), Some(ExtensionEvent::WorkflowStageMemberLinked { member, .. }) if member == linked))
         .unwrap();
     let start_idx = events
         .iter()
         .position(|e| {
             matches!(
-                &e.event,
-                hya_proto::Event::ResidentWorkStarted { .. } | hya_proto::Event::MailSent { .. }
+                ExtensionEvent::from_event(&e.event),
+                Some(ExtensionEvent::ResidentWorkStarted { .. } | ExtensionEvent::MailSent { .. })
             )
         })
         .unwrap();
@@ -379,7 +377,7 @@ fn workflow_bundle(bundle_id: &str, workflow_id: &str, prompt: &str) -> BundleSo
             SourceFile::new(
                 "bundle.yaml",
                 format!(
-                    "kind: Bundle\nidentity: {{ id: {bundle_id}, version: 1.0.0, publisher: hya }}\nworkflow: {{ id: {workflow_id}, path: workflows/{workflow_id}.hya.md }}\nagents: [{{ id: catalog-worker, role: subagent, prompt: prompts/w.md }}]\n"
+                    "kind: Bundle\nschema_version: 2\nidentity: {{ id: {bundle_id}, version: 1.0.0, publisher: hya }}\nworkflow: {{ id: {workflow_id}, path: workflows/{workflow_id}.hya.md }}\nagents: [{{ id: catalog-worker, role: subagent, prompt: prompts/w.md }}]\n"
                 ),
             ),
             SourceFile::new(

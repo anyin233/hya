@@ -245,6 +245,7 @@ fn res(
         content,
         binary_base64: None,
         aliases: aliases.iter().map(|a| (*a).into()).collect(),
+        overrides: None,
     }
 }
 
@@ -305,6 +306,7 @@ fn bundle_with_agent(id: &str, ag: PreparedAgent, skills: Vec<PreparedResource>)
         commands: Vec::new(),
         runtime: None,
         permission_modes: Vec::new(),
+        overrides: None,
     }
 }
 
@@ -592,7 +594,7 @@ fn bundle_owner_scoping_for_plugin_skills_and_process_tools() {
                 SourceFile::new(
                     "bundle.yaml",
                     format!(
-                        "kind: Bundle\nidentity: {{ id: acme/{id}, version: 1.0.0, publisher: acme }}\nresources:\n  skills: [{{ id: {name}, path: skills/guide.md }}]\n{ag}"
+                        "schema_version: 2\nkind: Bundle\nidentity: {{ id: acme/{id}, version: 1.0.0, publisher: acme }}\nresources:\n  skills: [{{ id: {name}, path: skills/guide.md }}]\n{ag}"
                     ),
                 ),
                 SourceFile::new("skills/guide.md", skill_md(name, "SKILL_BODY")),
@@ -611,7 +613,7 @@ fn bundle_owner_scoping_for_plugin_skills_and_process_tools() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                "kind: Bundle\nidentity: { id: acme/private-process, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [fixture] }\nresources:\n  tools: [{ id: echo, path: echo.json }]\n  hooks: [{ id: tool.execute.before, path: echo.json }]\nagents:\n  - { id: private-process-agent, role: main, hook_refs: [tool.execute.before], resource_view: { allow: [echo] } }\n",
+                "schema_version: 2\nkind: Bundle\nidentity: { id: acme/private-process, version: 1.0.0, publisher: acme }\nruntime: { kind: js, mode: process, command: [fixture] }\nresources:\n  tools: [{ id: echo, path: echo.json }]\n  hooks: [{ id: tool.execute.before, path: echo.json }]\nagents:\n  - { id: private-process-agent, role: main, hook_refs: [tool.execute.before], resource_view: { allow: [echo] } }\n",
             ),
             SourceFile::new("echo.json", "{}"),
         ],
@@ -676,7 +678,7 @@ fn bundled_mcp_partitioning_and_owner_server_expansion() {
         "bundled-mcp",
         vec![SourceFile::new(
             "bundle.yaml",
-            "kind: Bundle\nidentity: { id: acme/bundled-mcp, version: 1.0.0, publisher: acme }\n",
+            "schema_version: 2\nkind: Bundle\nidentity: { id: acme/bundled-mcp, version: 1.0.0, publisher: acme }\n",
         )],
     ))
     .unwrap();
@@ -685,7 +687,7 @@ fn bundled_mcp_partitioning_and_owner_server_expansion() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                "kind: Bundle\nidentity: { id: acme/private-mcp, version: 1.0.0, publisher: acme }\nresources:\n  mcp: [{ id: echo, path: mcp.json }]\nagents:\n  - { id: private-mcp-agent, role: main, resource_view: { allow: [echo] } }\n",
+                "schema_version: 2\nkind: Bundle\nidentity: { id: acme/private-mcp, version: 1.0.0, publisher: acme }\nresources:\n  mcp: [{ id: echo, path: mcp.json }]\nagents:\n  - { id: private-mcp-agent, role: main, resource_view: { allow: [echo] } }\n",
             ),
             SourceFile::new("mcp.json", r#"{"command":["fixture"]}"#),
         ],
@@ -883,7 +885,7 @@ fn dispatch_identity_and_base_semantic_fingerprint_invariants() {
             "rf",
             vec![SourceFile::new(
                 "bundle.yaml",
-                format!("kind: Bundle\nidentity: {{ id: hya/rf, version: 1.0.0, publisher: hya-tests }}\nagents: [{{ id: fp, description: \"manifest {cat}\", role: main }}]\n"),
+                format!("schema_version: 2\nkind: Bundle\nidentity: {{ id: hya/rf, version: 1.0.0, publisher: hya-tests }}\nagents: [{{ id: fp, description: \"manifest {cat}\", role: main }}]\n"),
             )],
         ))
         .unwrap();
@@ -1000,7 +1002,7 @@ fn semantic_fingerprint_tracks_selected_workdir_skills() {
     };
     let pkg = prepare_package(BundleSource::new(
         "rf-sk",
-        vec![SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: hya/rf-sk, version: 1.0.0, publisher: hya-tests }\nagents: [{ id: fp-sk, role: main }]\n")],
+        vec![SourceFile::new("bundle.yaml", "schema_version: 2\nkind: Bundle\nidentity: { id: hya/rf-sk, version: 1.0.0, publisher: hya-tests }\nagents: [{ id: fp-sk, role: main }]\n")],
     ))
     .unwrap();
     let fp_for = |sel: Vec<SkillCatalogEntry>, unrelated: Vec<SkillCatalogEntry>| {
@@ -1087,7 +1089,7 @@ fn semantic_fingerprint_tracks_plugin_and_mcp_sources() {
     };
     let pkg = prepare_package(BundleSource::new(
         "rf-src",
-        vec![SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: hya/rf-src, version: 1.0.0, publisher: hya-tests }\nagents: [{ id: fp-src, role: main }]\n")],
+        vec![SourceFile::new("bundle.yaml", "schema_version: 2\nkind: Bundle\nidentity: { id: hya/rf-src, version: 1.0.0, publisher: hya-tests }\nagents: [{ id: fp-src, role: main }]\n")],
     ))
     .unwrap();
     #[derive(Clone, Copy)]

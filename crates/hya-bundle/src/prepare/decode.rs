@@ -4,9 +4,9 @@ use hya_workflow::is_valid_identifier;
 use sha2::{Digest, Sha256};
 
 use super::extensions::{
-    validate_hook_local_id, validate_native_binary_bindings, validate_prepared_api_rows,
-    validate_prepared_permission_mode_rows, validate_prepared_process_rows,
-    validate_prepared_runtime, validate_prepared_schema_rows,
+    validate_hook_local_id, validate_native_binary_bindings, validate_overrides,
+    validate_prepared_api_rows, validate_prepared_permission_mode_rows,
+    validate_prepared_process_rows, validate_prepared_runtime, validate_prepared_schema_rows,
 };
 use super::parse::{normalize_source_path, validate_identity};
 use super::resources::validate_resource_views;
@@ -185,6 +185,7 @@ fn validate_prepared_references(bundles: &[Bundle]) -> Result<(), BundleError> {
                 bundle_id: bundle.identity().id.clone(),
             });
         }
+        validate_overrides(&bundle.identity().id, bundle.overrides(), bundle.tools())?;
         for agent in bundle.agents() {
             if !stable_agents.insert(agent.id.as_str()) {
                 return Err(BundleError::DuplicateStableAgentId {
@@ -319,6 +320,7 @@ fn resources_are_canonical(bundle: &Bundle, kind: &str, resources: &[PreparedRes
                             bundle.identity().id,
                             resource.local_id
                         )))
+                && (kind == "tool" || resource.overrides.is_none())
                 && is_strictly_sorted(resource.aliases.iter().map(String::as_str))
                 && names.insert(resource.local_id.as_str())
                 && resource

@@ -93,7 +93,7 @@ test.describe("bare hya", () => {
     const backend = await backendUrl(term)
     let terminalSession = ""
     await expect.poll(async () => {
-      const body = await (await fetch(`${backend}/v1/sessions`)).json() as { sessions?: { id: string; title?: string }[] }
+      const body = await (await fetch(`${backend}/v2/sessions`)).json() as { sessions?: { id: string; title?: string }[] }
       terminalSession = body.sessions?.find((row) => row.title === "hello from the terminal")?.id ?? ""
       return terminalSession
     }, { timeout: 30_000 }).not.toBe("")

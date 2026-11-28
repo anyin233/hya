@@ -82,11 +82,7 @@ flowchart TD
 "#;
 
 fn raw_state(value: &Value) -> Value {
-    value
-        .get("rawJson")
-        .and_then(Value::as_str)
-        .and_then(|raw| serde_json::from_str(raw).ok())
-        .unwrap_or_else(|| panic!("workflow state missing rawJson: {value}"))
+    value.clone()
 }
 
 fn find_stage<'a>(raw: &'a Value, stage_id: &str) -> &'a Value {
@@ -196,32 +192,33 @@ async fn workflow_fan_out_fan_in_model_routing_and_replay() {
         .unwrap();
 
     let s_route = env.create_session().await.expect("routing session");
-    let workflow_path = format!("/v1/sessions/{s_route}/workflow");
+    let workflow_cmd = format!("/v2/sessions/{s_route}/bundles/hya%2Fworkflow/command");
+    let workflow_path = format!("/v2/sessions/{s_route}/bundles/hya%2Fworkflow/state");
 
     let info = env
-        .post_json(&workflow_path, &json!({"info": {"name": "model-routing"}}))
+        .post_json(&workflow_cmd, &json!({"info": {"name": "model-routing"}}))
         .await
         .expect("workflow info");
     let info_stages = info
         .pointer("/info/stages")
         .and_then(Value::as_array)
         .unwrap();
-    let info_prepare = info_stages.iter().find(|s| s["name"] == "prepare").unwrap();
-    assert_eq!(info_prepare["workerModel"]["id"], "fake/primary");
-    assert_eq!(info_prepare["workerModel"]["reasoning"], "high");
+    let info_prepare = info_stages.iter().find(|s| s["id"] == "prepare").unwrap();
+    assert_eq!(info_prepare["worker_model"]["id"], "fake/primary");
+    assert_eq!(info_prepare["worker_model"]["reasoning"], "high");
     assert_eq!(
-        info_prepare["workerModel"]["fallback"][0]["id"],
+        info_prepare["worker_model"]["fallback"][0]["id"],
         "fake/primary-fallback"
     );
     assert_eq!(
-        info_prepare["workerModel"]["fallback"][0]["reasoning"],
+        info_prepare["worker_model"]["fallback"][0]["reasoning"],
         "medium"
     );
-    let info_loop = info_stages.iter().find(|s| s["name"] == "loop").unwrap();
-    assert_eq!(info_loop["workerModel"]["id"], "fake/loop");
-    assert_eq!(info_loop["workerModel"]["reasoning"], "low");
-    assert_eq!(info_loop["verifierModel"]["id"], "fake/loop");
-    assert_eq!(info_loop["verifierModel"]["reasoning"], "high");
+    let info_loop = info_stages.iter().find(|s| s["id"] == "loop").unwrap();
+    assert_eq!(info_loop["worker_model"]["id"], "fake/loop");
+    assert_eq!(info_loop["worker_model"]["reasoning"], "low");
+    assert_eq!(info_loop["verifier_model"]["id"], "fake/loop");
+    assert_eq!(info_loop["verifier_model"]["reasoning"], "high");
     assert!(
         info_stages
             .iter()
@@ -230,7 +227,7 @@ async fn workflow_fan_out_fan_in_model_routing_and_replay() {
 
     let started = env
         .post_json(
-            &workflow_path,
+            &workflow_cmd,
             &json!({"run": {"name": "model-routing", "inputs": {"target": "the parser"}}}),
         )
         .await

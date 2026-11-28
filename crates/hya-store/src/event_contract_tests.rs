@@ -174,48 +174,6 @@ async fn replay_page_decodes_only_the_sql_interval() {
 }
 
 #[tokio::test]
-async fn deletion_removes_claims_owned_by_the_root_even_without_actor_sessions() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let root = SessionId::new();
-    let other = SessionId::new();
-    for session in [root, other] {
-        store
-            .append_event(
-                session,
-                &Event::SessionCreated {
-                    session,
-                    parent: None,
-                    agent: "build".into(),
-                    model: "fake".into(),
-                    workdir: "/tmp".into(),
-                    project: None,
-                    kind: hya_proto::SessionKind::Project,
-                },
-            )
-            .await
-            .unwrap();
-    }
-    let missing_actor = SessionId::new();
-    let unrelated_actor = SessionId::new();
-    for (actor, owner) in [(missing_actor, root), (unrelated_actor, other)] {
-        sqlx::query("INSERT INTO resident_actor_claim (actor_id, root_session_id, epoch, owner_run_id, state) VALUES (?, ?, 1, randomblob(16), 'active')")
-            .bind(actor.storage_key()).bind(owner.storage_key()).execute(&store.writer_pool).await.unwrap();
-    }
-    let seq = store.replay(root).await.unwrap().last().unwrap().seq;
-    assert!(
-        !store
-            .delete_session_at(root, EventSeq(seq.0 + 1))
-            .await
-            .unwrap()
-    );
-    assert_eq!(store.live_member_count(root).await.unwrap(), 1);
-    assert!(store.delete_session_at(root, seq).await.unwrap());
-    assert_eq!(store.live_member_count(root).await.unwrap(), 0);
-    assert_eq!(store.live_member_count(other).await.unwrap(), 1);
-    assert!(store.replay(other).await.is_ok());
-}
-
-#[tokio::test]
 async fn deletion_removes_every_session_owned_table() {
     let store = SessionStore::connect_memory().await.unwrap();
     let root = SessionId::new();
@@ -262,10 +220,6 @@ async fn deletion_removes_every_session_owned_table() {
                 .await
                 .unwrap();
         }
-        sqlx::query("INSERT INTO resident_actor_claim (actor_id, root_session_id, epoch, owner_run_id, state) VALUES (?, ?, 1, randomblob(16), 'active')")
-            .bind(session.storage_key())
-            .bind(parent.unwrap_or(session).storage_key())
-            .execute(&store.writer_pool).await.unwrap();
     }
     for sql in [
         "INSERT INTO project VALUES ('project', 'Project', 1, 1, 0)",
@@ -296,7 +250,6 @@ async fn deletion_removes_every_session_owned_table() {
         ("pending_resume", "session_id"),
         ("projection_snapshot", "session_id"),
         ("file_blob", "session_id"),
-        ("resident_actor_claim", "actor_id"),
     ] {
         for session in [root, child] {
             let count: i64 =

@@ -1,6 +1,6 @@
 /**
  * The Diff view (`/diff`, docs/tui.md "Diff view"): pure state and keys over
- * `GET /v1/vcs/diff` (components/DiffView.tsx renders it; app/diff.ts owns
+ * `GET /v2/vcs/diff` (components/DiffView.tsx renders it; app/diff.ts owns
  * the call). The server returns one unified-diff text: `git diff HEAD` plus
  * every untracked file, each as its own `diff --git` section; `parseDiff`
  * splits it back into per-file rows.

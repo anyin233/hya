@@ -8,10 +8,16 @@ mod run;
 mod source;
 use std::sync::{Arc, Mutex};
 
-use hya_proto::{Event, MemberId, SessionId, WorkflowMemberRole, WorkflowRunId};
+use hya_proto::{Event, MemberId, SessionId, WorkflowRunId};
 use hya_provider::ReasoningEffort;
+use hya_tool::extension::ExtensionEvent;
+use hya_tool::{WorkflowMemberRole, WorkflowRouteFailureClass};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
+
+use crate::store_bridge::{
+    SessionStoreExt as _, WorkflowAdmissionOutcome, WorkflowSelectionOutcome,
+};
 
 pub use hya_proto::{WorkflowModelAssignment, WorkflowModelCandidate, WorkflowRevision};
 pub use hya_workflow::{
@@ -126,7 +132,7 @@ impl WorkflowRouteRecorder {
 struct WorkflowRouteAttempt {
     step: u32,
     candidate_index: Option<usize>,
-    pending_failure: Option<hya_proto::WorkflowRouteFailureClass>,
+    pending_failure: Option<WorkflowRouteFailureClass>,
 }
 
 /// Request-local route metadata and exactly-once finalization guard.
@@ -195,7 +201,7 @@ impl WorkflowTurnRoute {
     pub(crate) fn record_failure(
         &self,
         candidate_index: usize,
-        failure: hya_proto::WorkflowRouteFailureClass,
+        failure: WorkflowRouteFailureClass,
     ) {
         let mut attempt = self
             .attempt
@@ -209,7 +215,7 @@ impl WorkflowTurnRoute {
     pub(crate) fn selected(
         &self,
         candidate_index: usize,
-        pending_failure: Option<hya_proto::WorkflowRouteFailureClass>,
+        pending_failure: Option<WorkflowRouteFailureClass>,
     ) {
         let mut attempt = self
             .attempt
@@ -222,7 +228,7 @@ impl WorkflowTurnRoute {
     /// Finalize at most one bounded outcome for the current stream group.
     pub(crate) async fn finalize(
         &self,
-        failure: Option<hya_proto::WorkflowRouteFailureClass>,
+        failure: Option<WorkflowRouteFailureClass>,
     ) -> Result<(), crate::error::CoreError> {
         let (step, candidate_index, pending_failure) = {
             let mut attempt = self
@@ -250,21 +256,24 @@ impl WorkflowTurnRoute {
         };
         let candidate_index = u32::try_from(candidate_index).unwrap_or(u32::MAX);
         recorder
-            .record(Event::WorkflowStageRouteOutcome {
-                session: self.session,
-                run,
-                stage: self.stage.clone(),
-                member: self.member,
-                role: self.role,
-                iteration: self.iteration,
-                step,
-                candidate_index,
-                model: candidate.model.clone(),
-                reasoning: candidate.reasoning.as_str().to_string(),
-                failure_class: failure
-                    .or(pending_failure)
-                    .unwrap_or(hya_proto::WorkflowRouteFailureClass::None),
-            })
+            .record(
+                ExtensionEvent::WorkflowStageRouteOutcome {
+                    session: self.session,
+                    run,
+                    stage: self.stage.clone(),
+                    member: self.member,
+                    role: self.role,
+                    iteration: self.iteration,
+                    step,
+                    candidate_index,
+                    model: candidate.model.clone(),
+                    reasoning: candidate.reasoning.as_str().to_string(),
+                    failure_class: failure
+                        .or(pending_failure)
+                        .unwrap_or(WorkflowRouteFailureClass::None),
+                }
+                .into_event(),
+            )
             .await
     }
 }
@@ -358,15 +367,13 @@ impl crate::engine::SessionEngine {
             .admit_workflow_run(actor_claim, session, event)
             .await?
         {
-            hya_store::WorkflowAdmissionOutcome::Admitted(envelope) => {
+            WorkflowAdmissionOutcome::Admitted(envelope) => {
                 self.publish_envelope(*envelope);
                 Ok(DurableWorkflowAdmission::Admitted)
             }
-            hya_store::WorkflowAdmissionOutcome::Existing => Ok(DurableWorkflowAdmission::Existing),
-            hya_store::WorkflowAdmissionOutcome::Conflict => Ok(DurableWorkflowAdmission::Conflict),
-            hya_store::WorkflowAdmissionOutcome::Busy { run } => {
-                Ok(DurableWorkflowAdmission::Busy { run })
-            }
+            WorkflowAdmissionOutcome::Existing => Ok(DurableWorkflowAdmission::Existing),
+            WorkflowAdmissionOutcome::Conflict => Ok(DurableWorkflowAdmission::Conflict),
+            WorkflowAdmissionOutcome::Busy { run } => Ok(DurableWorkflowAdmission::Busy { run }),
         }
     }
 
@@ -386,13 +393,11 @@ impl crate::engine::SessionEngine {
             .select_workflow(actor_claim, session, event)
             .await?
         {
-            hya_store::WorkflowSelectionOutcome::Selected(envelope) => {
+            WorkflowSelectionOutcome::Selected(envelope) => {
                 self.publish_envelope(*envelope);
                 Ok(DurableWorkflowSelection::Selected)
             }
-            hya_store::WorkflowSelectionOutcome::Busy { run } => {
-                Ok(DurableWorkflowSelection::Busy { run })
-            }
+            WorkflowSelectionOutcome::Busy { run } => Ok(DurableWorkflowSelection::Busy { run }),
         }
     }
 
@@ -408,14 +413,16 @@ impl crate::engine::SessionEngine {
         event: hya_proto::Event,
     ) -> Result<(), crate::error::CoreError> {
         if !matches!(
-            &event,
-            hya_proto::Event::WorkflowSelected { .. }
-                | hya_proto::Event::WorkflowRunStarted { .. }
-                | hya_proto::Event::WorkflowStageStarted { .. }
-                | hya_proto::Event::WorkflowStageMemberLinked { .. }
-                | hya_proto::Event::WorkflowStageRouteOutcome { .. }
-                | hya_proto::Event::WorkflowStageFinished { .. }
-                | hya_proto::Event::WorkflowRunFinished { .. }
+            ExtensionEvent::from_event(&event),
+            Some(
+                ExtensionEvent::WorkflowSelected { .. }
+                    | ExtensionEvent::WorkflowRunStarted { .. }
+                    | ExtensionEvent::WorkflowStageStarted { .. }
+                    | ExtensionEvent::WorkflowStageMemberLinked { .. }
+                    | ExtensionEvent::WorkflowStageRouteOutcome { .. }
+                    | ExtensionEvent::WorkflowStageFinished { .. }
+                    | ExtensionEvent::WorkflowRunFinished { .. }
+            )
         ) || event.session() != Some(session)
         {
             return Err(crate::error::CoreError::Invalid(

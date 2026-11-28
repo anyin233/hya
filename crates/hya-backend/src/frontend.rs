@@ -6,7 +6,7 @@
 //! outlives them (ADR-0023):
 //!
 //! 1. the backend: the running daemon of the database (`<db>.server.json`
-//!    whose `/v1/health` answers), else a newly started detached daemon
+//!    whose `/v2/health` answers), else a newly started detached daemon
 //!    (`daemon::start`); with `--backend <url>` that URL, which must answer;
 //!    with `--connect <link>` no daemon at all: an in-process relay bridge
 //!    (`bridge.rs`) whose loopback URL reaches the remote backend;
@@ -337,7 +337,7 @@ pub(crate) async fn connect(
     if let Some(url) = &request.backend {
         if !db_lock::probe(url, PROBE_TIMEOUT).await {
             anyhow::bail!(
-                "no hya server answers at --backend {url} (GET {url}/v1/health); start one (`hya serve start`) or drop --backend"
+                "no hya server answers at --backend {url} (GET {url}/v2/health); start one (`hya serve start`) or drop --backend"
             );
         }
         let link = BackendLink {

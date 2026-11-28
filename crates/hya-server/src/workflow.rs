@@ -1,6 +1,6 @@
 //! Shared Workflow HTTP adapters and slash-command decision logic.
 //!
-//! Every `/v1` Workflow command route calls the parser in this module before
+//! Every `/v2` Workflow command route calls the parser in this module before
 //! it reserves a parent-model run. Typed endpoints call
 //! the same server-owned control port and serialize the shared proto DTOs.
 
@@ -8,8 +8,9 @@ use std::collections::BTreeMap;
 
 use crate::{ApiError, ServerState};
 use hya_api::error::Code;
-use hya_api::v1::CommandTurn;
-use hya_proto::{SessionId, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery};
+use hya_api::v2::CommandTurn;
+use hya_proto::SessionId;
+use hya_tool::{WorkflowCommand, WorkflowCommandResult, WorkflowDelivery};
 
 /// Parse and, when applicable, execute one `/workflow` command.
 //
@@ -144,7 +145,7 @@ fn required_name(name: &str) -> Result<String, ApiError> {
 }
 
 fn syntax(message: impl Into<String>) -> ApiError {
-    ApiError::new(Code::WorkflowSyntax, message)
+    ApiError::new(Code::InvalidArgument, message)
 }
 
 /// Reserve a Session for commands that can change durable Workflow state.
@@ -164,7 +165,7 @@ fn reserve_workflow_command(
     }
     st.reserve_workflow_run(session)
         .map(Some)
-        .ok_or_else(|| ApiError::new(Code::WorkflowBusy, "another run is active"))
+        .ok_or_else(|| ApiError::new(Code::FailedPrecondition, "another run is active"))
 }
 
 pub(crate) async fn execute(

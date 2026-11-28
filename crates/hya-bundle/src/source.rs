@@ -178,12 +178,12 @@ impl SourceCheck {
     }
 }
 
-/// Strict source manifest shape for a closed Bundle.
+/// Strict source manifest shape for a closed Bundle (hyabundle v2).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourceManifest {
     pub kind: String,
-    /// Optional manifest schema version (`1` or `2`; defaults to `1`).
+    /// Required manifest schema version (`2` only).
     #[serde(default)]
     pub schema_version: Option<u32>,
     /// Aggregate release version to resolve for this source manifest.
@@ -199,14 +199,15 @@ pub(crate) struct SourceManifest {
     /// Provider-facing namespace for this bundle's tools and schemas.
     #[serde(default)]
     pub namespace: Option<String>,
+    /// Optional bundle identity overridden by this bundle (e.g. `hya/bare`).
+    #[serde(default)]
+    pub overrides: Option<String>,
     /// External URI-scheme extensions this bundle provides.
     #[serde(default)]
     pub schemas: Vec<SourceSchema>,
     #[serde(default)]
     pub resources: SourceResources,
-    #[serde(default)]
-    pub extensions: SourceExtensions,
-    /// Runtime data files materialized alongside the bundle (successor to `extensions.files`).
+    /// Runtime data files materialized alongside the bundle.
     #[serde(default)]
     pub assets: Vec<SourceResource>,
     /// HTTP endpoints served by the explicit process runtime.
@@ -472,39 +473,8 @@ pub(crate) struct SourceResource {
     pub path: String,
     #[serde(default)]
     pub aliases: Vec<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct SourceExtensions {
-    pub js: Vec<SourceResource>,
-    /// Raw native executables for a `kind: rust` process extension.
-    pub rust: Vec<SourceResource>,
-    /// Raw Rust dynamic libraries loaded in-process by the first-party tool loader.
-    pub libraries: Vec<SourceResource>,
-    /// Text assets materialized for process extensions or bundle MCP servers.
-    pub files: Vec<SourceResource>,
-    /// The one optional out-of-process extension (`rust` | `bun` | `claude`).
-    pub process: Option<SourceProcessExtension>,
-}
-
-/// The declared process extension: which runtime kind executes the bundle and
-/// with what argv. Declared this phase; the unified spawn path lands later.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SourceProcessExtension {
-    pub kind: SourceProcessKind,
-    pub command: Vec<String>,
-    pub timeout_ms: Option<u64>,
-}
-
-/// Supported process-extension runtime kinds.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum SourceProcessKind {
-    Rust,
-    Bun,
-    Claude,
+    #[serde(default)]
+    pub overrides: Option<String>,
 }
 
 /// Connection shape of one `resources.mcp` declaration file: the same fields
@@ -594,6 +564,8 @@ pub(crate) struct SourceToolDescriptor {
     pub parameters: Option<Value>,
     #[serde(default)]
     pub entrypoint: Option<SourceToolDescriptorEntrypoint>,
+    #[serde(default)]
+    pub overrides: Option<String>,
 }
 
 /// Multi-tool descriptor file (`tools/tools.yaml` or `tools/tools.json`).

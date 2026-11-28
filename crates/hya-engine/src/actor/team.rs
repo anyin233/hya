@@ -277,12 +277,15 @@ impl TeamActor {
                     .commit_resident_mutation(
                         claim,
                         self.root,
-                        vec![Event::AgentActivityChanged {
-                            session: self.root,
-                            handle,
-                            status,
-                            current_task,
-                        }],
+                        vec![
+                            ExtensionEvent::AgentActivityChanged {
+                                session: self.root,
+                                handle,
+                                status,
+                                current_task,
+                            }
+                            .into_event(),
+                        ],
                     )
                     .await
             }
@@ -298,11 +301,12 @@ impl TeamActor {
     /// dropped liveness hint, never an error path: a fenced claim racing a
     /// stop/kill simply loses that heartbeat.
     async fn record_heartbeat(&self, claim: Option<&ActorClaim>, handle: &str, heartbeat_ms: u64) {
-        let event = Event::AgentHeartbeat {
+        let event = ExtensionEvent::AgentHeartbeat {
             session: self.root,
             handle: handle.to_string(),
             heartbeat_ms,
-        };
+        }
+        .into_event();
         let _ = self.engine.emit_for_actor(claim, self.root, event).await;
     }
 

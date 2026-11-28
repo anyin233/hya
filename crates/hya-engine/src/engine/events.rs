@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use hya_proto::{Envelope, Event, EventSeq, Projection, SessionId, now_millis};
-use hya_store::ActorClaim;
+use hya_proto::{ActorClaim, Envelope, Event, EventSeq, Projection, SessionId, now_millis};
 
 use super::SessionEngine;
 use crate::error::CoreError;
 use crate::hooks::activation_hook_for;
+use crate::store_bridge::SessionStoreExt as _;
 
 impl SessionEngine {
     /// Replay the full ordered event log for `session`.

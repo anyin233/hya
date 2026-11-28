@@ -2,10 +2,12 @@
 
 use super::inbox::{recipient_channel_role, resident_delivery_allowed};
 use super::*;
+use crate::store_bridge::{RecoveredActorClaim, SessionStoreExt as _};
 use crate::{CreateSession, EventBus};
 use hya_proto::{AgentName, ChannelKind, MailKind, ModelRef, SessionKind, SubagentMode};
 use hya_provider::{DevProvider, ProviderRouter};
 use hya_store::SessionStore;
+use hya_tool::extension::{ChannelProjection, ExtensionEvent, TeamProjection, team_projection};
 use hya_tool::{PermissionPlane, PermissionRules};
 
 async fn engine() -> Arc<SessionEngine> {
@@ -104,8 +106,8 @@ async fn archived_handles(engine: &SessionEngine, root: SessionId) -> Vec<String
         .await
         .unwrap()
         .into_iter()
-        .filter_map(|e| match e.event {
-            Event::AgentArchived { handle, .. } => Some(handle),
+        .filter_map(|e| match ExtensionEvent::from_event(&e.event) {
+            Some(ExtensionEvent::AgentArchived { handle, .. }) => Some(handle),
             _ => None,
         })
         .collect()
@@ -292,12 +294,15 @@ async fn concurrent_mail_revives_deduplicate_and_preserve_fast_archive() {
             .await
             .unwrap()
             .iter()
-            .filter(|e| matches!(e.event, Event::AgentRestarted { .. }))
+            .filter(|e| matches!(
+                ExtensionEvent::from_event(&e.event),
+                Some(ExtensionEvent::AgentRestarted { .. })
+            ))
             .count(),
         1
     );
     assert_eq!(
-        eng.read_projection(r).await.unwrap().team.inboxes[&handle].len(),
+        team_projection(&eng.read_projection(r).await.unwrap()).inboxes[&handle].len(),
         2
     );
 
@@ -322,15 +327,26 @@ async fn concurrent_mail_revives_deduplicate_and_preserve_fast_archive() {
         .unwrap()
         .unwrap();
     let proj = eng.read_projection(r).await.unwrap();
-    assert!(proj.team.archived.contains_key(&handle) && !proj.team.roster.contains_key(&handle));
+    let team = team_projection(&proj);
+    assert!(team.archived.contains_key(&handle) && !team.roster.contains_key(&handle));
     let evs = eng.replay(r).await.unwrap();
     let restarted = evs
         .iter()
-        .rposition(|e| matches!(e.event, Event::AgentRestarted { .. }))
+        .rposition(|e| {
+            matches!(
+                ExtensionEvent::from_event(&e.event),
+                Some(ExtensionEvent::AgentRestarted { .. })
+            )
+        })
         .unwrap();
     let archived = evs
         .iter()
-        .rposition(|e| matches!(e.event, Event::AgentArchived { .. }))
+        .rposition(|e| {
+            matches!(
+                ExtensionEvent::from_event(&e.event),
+                Some(ExtensionEvent::AgentArchived { .. })
+            )
+        })
         .unwrap();
     assert!(restarted < archived && !active_ids(&eng).await.contains(&child));
     drop(lead);
@@ -345,9 +361,9 @@ async fn list_channels_and_steer_count_incoming_only_ignoring_outgoing_copy() {
     let lead = eng.try_begin_turn(r).unwrap();
     let (child, handle) = parked(&sup, r).await;
     let proj = eng.read_projection(r).await.unwrap();
-    let dm = proj.team.resolve_dm(&handle, "^parent").unwrap();
-    let announce = proj
-        .team
+    let team = team_projection(&proj);
+    let dm = team.resolve_dm(&handle, "^parent").unwrap();
+    let announce = team
         .channels
         .iter()
         .find(|(_, c)| c.kind == ChannelKind::Group && c.members.contains(&handle))
@@ -382,15 +398,17 @@ async fn list_channels_and_steer_count_incoming_only_ignoring_outgoing_copy() {
     let root_rows = mailbox.for_session(r).list_channels().await.unwrap();
     assert!(!root_rows.is_empty() && root_rows.iter().all(|row| row.unread == 0));
 
-    let through = eng.read_projection(r).await.unwrap().team.inboxes[&handle].len() as u64;
+    let through =
+        team_projection(&eng.read_projection(r).await.unwrap()).inboxes[&handle].len() as u64;
     eng.store()
         .append_event(
             r,
-            &Event::MailConsumed {
+            &ExtensionEvent::MailConsumed {
                 session: r,
                 handle: handle.clone(),
                 through,
-            },
+            }
+            .into_event(),
         )
         .await
         .unwrap();
@@ -398,13 +416,14 @@ async fn list_channels_and_steer_count_incoming_only_ignoring_outgoing_copy() {
         eng.store()
             .append_event(
                 r,
-                &Event::MailSent {
+                &ExtensionEvent::MailSent {
                     session: r,
                     from: "main".into(),
                     to: MailEndpoint::Channel(ch.clone()),
                     kind: MailKind::Message,
                     body: "update".into(),
-                },
+                }
+                .into_event(),
             )
             .await
             .unwrap();
@@ -427,7 +446,7 @@ async fn mandatory_parent_delivery_requires_actual_parent_and_own_dm() {
     let policy =
         ChannelPolicy::from_binding(&eng.bind_runtime(std::path::Path::new("/tmp")).unwrap())
             .unwrap();
-    let mut proj = hya_proto::Projection::default();
+    let mut team = TeamProjection::default();
     for (id, members) in [
         ("own", vec!["main/lead", "main/lead/child"]),
         ("other", vec!["main/lead", "main/lead/other"]),
@@ -436,9 +455,9 @@ async fn mandatory_parent_delivery_requires_actual_parent_and_own_dm() {
             vec!["main/lead", "main/lead/child", "main/lead/other"],
         ),
     ] {
-        proj.team.channels.insert(
+        team.channels.insert(
             id.into(),
-            hya_proto::ChannelProjection {
+            ChannelProjection {
                 kind: ChannelKind::Dm,
                 members: members.into_iter().map(str::to_string).collect(),
                 ..Default::default()
@@ -467,7 +486,7 @@ async fn mandatory_parent_delivery_requires_actual_parent_and_own_dm() {
             false,
         ),
     ] {
-        let (kind, role) = recipient_channel_role(&proj, &to, "main/lead/child", sender);
+        let (kind, role) = recipient_channel_role(&team, &to, "main/lead/child", sender);
         assert_eq!(
             resident_delivery_allowed(&policy, "hya-scout", kind, role),
             want,
@@ -550,10 +569,7 @@ async fn activation_waiter_parked_settles_reports_revives_ends_and_records_dm_hi
             .is_empty()
     );
     assert!(
-        !eng.read_projection(r)
-            .await
-            .unwrap()
-            .team
+        !team_projection(&eng.read_projection(r).await.unwrap())
             .inboxes
             .contains_key(&handle)
     );
@@ -571,7 +587,7 @@ async fn activation_waiter_parked_settles_reports_revives_ends_and_records_dm_hi
         Err(CoreError::TurnAlreadyActive { .. })
     ));
     assert_eq!(
-        eng.read_projection(r).await.unwrap().team.inboxes[&handle].len(),
+        team_projection(&eng.read_projection(r).await.unwrap()).inboxes[&handle].len(),
         1
     );
     release.notify_one();
@@ -579,7 +595,7 @@ async fn activation_waiter_parked_settles_reports_revives_ends_and_records_dm_hi
         matches!(first.wait().await.unwrap(), ActivationResult::Settled { final_text } if final_text.contains("ACT_0"))
     );
     assert_eq!(
-        eng.read_projection(r).await.unwrap().team.roster[&handle].resident_cursor,
+        team_projection(&eng.read_projection(r).await.unwrap()).roster[&handle].resident_cursor,
         1
     );
 
@@ -624,10 +640,11 @@ async fn activation_waiter_parked_settles_reports_revives_ends_and_records_dm_hi
     // All three directives were recorded in parent DM channel history.
     let proj = eng.read_projection(r).await.unwrap();
     let dm = crate::engine::dm_channel_between(&proj, "main", &handle).unwrap();
-    let bodies: Vec<_> = proj.team.channels[&dm]
+    let team = team_projection(&proj);
+    let bodies: Vec<_> = team.channels[&dm]
         .log
         .iter()
-        .map(|i| &proj.team.mail[*i].body)
+        .map(|i| &team.mail[*i].body)
         .filter(|b| b.starts_with("ACT_"))
         .cloned()
         .collect();
@@ -637,7 +654,10 @@ async fn activation_waiter_parked_settles_reports_revives_ends_and_records_dm_hi
             .await
             .unwrap()
             .iter()
-            .filter(|e| matches!(e.event, Event::AgentRestarted { .. }))
+            .filter(|e| matches!(
+                ExtensionEvent::from_event(&e.event),
+                Some(ExtensionEvent::AgentRestarted { .. })
+            ))
             .count(),
         1
     );
@@ -665,8 +685,13 @@ async fn activation_rest_waits_for_followup_mail_live_children_and_skips_consume
         release.notify_one();
         if with_child {
             tokio::time::timeout(Duration::from_secs(3), async {
-                while !matches!(events.recv().await.unwrap().event, Event::ResidentWorkFinished { handle: ref f, .. } if f == &handle) {}
-            }).await.unwrap();
+                while !matches!(
+                    ExtensionEvent::from_event(&events.recv().await.unwrap().event),
+                    Some(ExtensionEvent::ResidentWorkFinished { handle: ref f, .. }) if f == &handle
+                ) {}
+            })
+            .await
+            .unwrap();
             let team = sup.team_with_resident(child).unwrap();
             let claim = team.lock().residents[&child].claim;
             team.settle_activation(child, claim.as_ref()).await.unwrap();
@@ -980,11 +1005,13 @@ async fn registration_frames_precede_siblings_and_activation_mail() {
         .into_iter()
         .filter(|e| {
             matches!(
-                e.event,
-                Event::MemberSpawned { .. }
-                    | Event::AgentRegistered { .. }
-                    | Event::ChannelCreated { .. }
-                    | Event::MailSent { .. }
+                ExtensionEvent::from_event(&e.event),
+                Some(
+                    ExtensionEvent::MemberSpawned { .. }
+                        | ExtensionEvent::AgentRegistered { .. }
+                        | ExtensionEvent::ChannelCreated { .. }
+                        | ExtensionEvent::MailSent { .. }
+                )
             )
         })
         .map(|e| e.seq)
@@ -1182,13 +1209,16 @@ async fn resident_mail_live_and_catch_up_deliver_only_incoming_work() {
                 .store()
                 .append_events(
                     r,
-                    vec![Event::MailSent {
-                        session: r,
-                        from: from.into(),
-                        to: MailEndpoint::Channel(dm.clone()),
-                        kind: MailKind::Message,
-                        body: body.into(),
-                    }],
+                    vec![
+                        ExtensionEvent::MailSent {
+                            session: r,
+                            from: from.into(),
+                            to: MailEndpoint::Channel(dm.clone()),
+                            kind: MailKind::Message,
+                            body: body.into(),
+                        }
+                        .into_event(),
+                    ],
                 )
                 .await
                 .unwrap();
@@ -1204,13 +1234,17 @@ async fn resident_mail_live_and_catch_up_deliver_only_incoming_work() {
         }
         drop(lease);
         tokio::time::timeout(Duration::from_secs(5), async {
-            while !matches!(events.recv().await.unwrap().event, Event::ResidentWorkFinished { session, handle: ref f, inbox_through: 2, .. } if session == r && f == &handle) {}
+            while !matches!(
+                ExtensionEvent::from_event(&events.recv().await.unwrap().event),
+                Some(ExtensionEvent::ResidentWorkFinished { session, handle: ref f, inbox_through: 2, .. }) if session == r && f == &handle
+            ) {}
         }).await.unwrap();
         let proj = eng.read_projection_shared(r).await.unwrap();
+        let team = team_projection(&proj);
         assert_eq!(
             (
-                proj.team.inboxes[&handle].len(),
-                proj.team.roster[&handle].resident_cursor
+                team.inboxes[&handle].len(),
+                team.roster[&handle].resident_cursor
             ),
             (2, 2)
         );
@@ -1247,13 +1281,14 @@ async fn slow_team_mail_does_not_block_another_root_and_queue_drops_payloads() {
             eng.emit_for_actor(
                 None,
                 target,
-                Event::MailSent {
+                ExtensionEvent::MailSent {
                     session: target,
                     from: scope::HARNESS_HANDLE.into(),
                     to: MailEndpoint::Handle(scope::ROOT_HANDLE.into()),
                     kind: MailKind::Message,
                     body: "q".into(),
-                },
+                }
+                .into_event(),
             )
             .await
             .unwrap();
@@ -1301,13 +1336,14 @@ async fn slow_team_mail_does_not_block_another_root_and_queue_drops_payloads() {
             part: hya_proto::PartId::new(),
             delta: "LARGE_ACTIVITY_PAYLOAD".repeat(10_000),
         },
-        Event::MailSent {
+        ExtensionEvent::MailSent {
             session: third,
             from: "harness".into(),
             to: MailEndpoint::Handle("main".into()),
             kind: MailKind::Message,
             body: "LARGE_MAIL_PAYLOAD".repeat(10_000),
-        },
+        }
+        .into_event(),
     ]
     .into_iter()
     .enumerate()
@@ -1390,13 +1426,14 @@ async fn interactive_turn_release_retires_team_and_shutdown_does_not_retain_engi
     eng.emit_for_actor(
         None,
         r,
-        Event::MailSent {
+        ExtensionEvent::MailSent {
             session: r,
             from: scope::HARNESS_HANDLE.into(),
             to: MailEndpoint::Handle(scope::ROOT_HANDLE.into()),
             kind: MailKind::Message,
             body: "child ended".into(),
-        },
+        }
+        .into_event(),
     )
     .await
     .unwrap();
@@ -1516,28 +1553,31 @@ async fn recovered_episode_ignores_outgoing_dm_and_staged_claim_recovers_root_ma
         .append_events(
             r,
             vec![
-                Event::AgentRegistered {
+                ExtensionEvent::AgentRegistered {
                     session: r,
                     agent_session: child,
                     handle: "scout".into(),
                     parent: Some("main".into()),
                     agent_type: AgentName::new("hya-scout"),
                     mode: SubagentMode::Resident,
-                },
-                Event::ChannelCreated {
+                }
+                .into_event(),
+                ExtensionEvent::ChannelCreated {
                     session: r,
                     channel: "DM-12345678".into(),
                     kind: ChannelKind::Dm,
                     unit: None,
                     members: vec!["main".into(), "main/scout".into()],
-                },
-                Event::MailSent {
+                }
+                .into_event(),
+                ExtensionEvent::MailSent {
                     session: r,
                     from: "main/scout".into(),
                     to: MailEndpoint::Channel("DM-12345678".into()),
                     kind: MailKind::Message,
                     body: "outgoing status".into(),
-                },
+                }
+                .into_event(),
             ],
         )
         .await
@@ -1587,7 +1627,7 @@ async fn recovered_episode_ignores_outgoing_dm_and_staged_claim_recovers_root_ma
         h2,
         a2,
         rt2,
-        hya_store::RecoveredActorClaim {
+        RecoveredActorClaim {
             claim,
             previous_epoch: claim.epoch,
         },
@@ -1596,13 +1636,14 @@ async fn recovered_episode_ignores_outgoing_dm_and_staged_claim_recovers_root_ma
     eng2.store()
         .append_event(
             r2,
-            &Event::MailSent {
+            &ExtensionEvent::MailSent {
                 session: r2,
                 from: scope::HARNESS_HANDLE.into(),
                 to: MailEndpoint::Handle("main".into()),
                 kind: MailKind::Message,
                 body: "unread root mail".into(),
-            },
+            }
+            .into_event(),
         )
         .await
         .unwrap();

@@ -5,7 +5,8 @@
 use std::path::Path;
 
 use hya_proto::context::TODO_TOOL;
-use hya_proto::{EvictedPart, Message, Part, ToolPartState};
+use hya_proto::{Message, Part, ToolPartState};
+use hya_tool::extension::EvictedPart;
 use hya_tool::handle::{ArtifactPlane, ArtifactStore};
 
 /// Replaces a dropped tool output when no sink preserved the body.

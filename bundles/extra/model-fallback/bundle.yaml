@@ -1,4 +1,5 @@
 kind: Bundle
+schema_version: 2
 version_ref: hya
 identity:
   id: hya-extra/model-fallback
@@ -7,13 +8,11 @@ identity:
 check:
   command: [bun, test, --pass-with-no-tests]
   timeout_secs: 120
-extensions:
-  process:
-    kind: bun
-    command: [bun, run, '${BUNDLE_ROOT}/fallback.ts']
-  files:
-    - id: fallback
-      path: fallback.ts
+runtime:
+  kind: js
+  mode: process
+  entry: fallback.ts
+  command: [bun, run, '${BUNDLE_ROOT}/fallback.ts']
 resources:
   hooks:
     - id: model.fallback

@@ -76,6 +76,8 @@ pub mod runtime_registry;
 pub mod sidecar;
 /// Filesystem and trusted builtin skill discovery for full-mode hosts.
 pub mod skill_catalog;
+/// Domain store operations over `hya-store` v2 primitives.
+pub mod store_bridge;
 /// Session title generation helpers.
 pub mod title;
 /// Token accounting: local estimation and provider-usage reliability.
@@ -94,8 +96,8 @@ pub use builtin_agents::{
 pub use bundle_apis::{
     ApiMethod, ApiPathTemplate, ApiScope, BundleApiCall, BundleApiError, BundleApiOutcome,
     BundleApiProvider, BundleApiReply, BundleApiRequest, HostSessionReads,
-    MAX_BUNDLE_API_BODY_BYTES, PublishedBundleApis, SessionUsageReport, SourceApi, SourceApis,
-    StoreSessionReads, UsageScope,
+    MAX_BUNDLE_API_BODY_BYTES, NativeBundleApiProvider, PublishedBundleApis, SessionUsageReport,
+    SourceApi, SourceApis, StoreSessionReads, UsageScope, source_apis_from_native_handlers,
 };
 pub use bus::EventBus;
 pub use catalog_scope::{CatalogScope, ScopeKey, ScopeOverlay};
@@ -150,6 +152,11 @@ pub use runtime_registry::{
 };
 pub use sidecar::{
     BoundSidecarFactory, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,
+};
+pub use store_bridge::{
+    EpisodeRegistration, RecoveredActorClaim, RecoveredResidentOutcome, RecoveredResidentWork,
+    ResidentArchive, ResidentArchiveOutcome, ResidentArchiveOwner, ResidentWorkPrompt,
+    SessionStoreExt, WorkflowAdmissionOutcome, WorkflowSelectionOutcome,
 };
 pub use terminal_handoff::{
     ModelSummarizer, SummarizeOptions, Summarizer, TerminalHandoff, TerminalHandoffOptions,

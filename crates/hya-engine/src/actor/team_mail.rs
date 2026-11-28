@@ -12,11 +12,11 @@ impl TeamActor {
         let Ok(projection) = self.engine.read_projection_shared(self.root).await else {
             return Vec::new();
         };
+        let team = hya_tool::extension::team_projection(&projection);
         let handles: Vec<String> = match to {
             // Handle targets are harness notices, never agent-to-agent mail.
             MailEndpoint::Handle(handle) => vec![handle.clone()],
-            MailEndpoint::Channel(channel) => projection
-                .team
+            MailEndpoint::Channel(channel) => team
                 .channels
                 .get(channel)
                 .map(|ch| {
@@ -32,9 +32,7 @@ impl TeamActor {
         handles
             .into_iter()
             .filter_map(|handle| {
-                projection
-                    .team
-                    .roster
+                team.roster
                     .get(&handle)
                     .map(|entry| entry.session)
                     .and_then(|session| {
@@ -129,11 +127,12 @@ impl TeamActor {
                 .emit_for_actor(
                     claim.as_ref(),
                     self.root,
-                    Event::MailConsumed {
+                    ExtensionEvent::MailConsumed {
                         session: self.root,
                         handle: handle.clone(),
                         through: through as u64,
-                    },
+                    }
+                    .into_event(),
                 )
                 .await
                 .is_ok()
@@ -190,11 +189,12 @@ impl TeamActor {
                 .emit_for_actor(
                     claim.as_ref(),
                     self.root,
-                    Event::MailConsumed {
+                    ExtensionEvent::MailConsumed {
                         session: self.root,
                         handle: handle.clone(),
                         through: through as u64,
-                    },
+                    }
+                    .into_event(),
                 )
                 .await
                 .is_ok()

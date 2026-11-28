@@ -18,7 +18,7 @@ use hya_proto::{
     SubagentMode, scope,
 };
 use hya_provider::{ProviderCatalogSnapshot, ReasoningEffort};
-use hya_store::StoreError;
+use hya_tool::extension::ExtensionEvent;
 use hya_tool::{AgentDef, MemberOutcome, SpawnError, SpawnMember};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -430,9 +430,7 @@ impl super::ResidentSupervisor {
                             model: Some(model),
                         })
                         .collect()),
-                    Err(CoreError::Store(StoreError::CapacityExceeded { .. })) => {
-                        Err(SpawnError::Overloaded)
-                    }
+                    Err(CoreError::CapacityExceeded { .. }) => Err(SpawnError::Overloaded),
                     Err(CoreError::Cancelled) => Err(SpawnError::Cancelled),
                     Err(error) => {
                         eprintln!("hya: atomic spawn registration failed ({error})");
@@ -703,16 +701,19 @@ impl ResidentSupervisor {
             .filter(|description| !description.is_empty())
             .map_or_else(|| directive.chars().take(80).collect(), ToString::to_string);
         let tool_call = task.as_ref().and_then(|task| task.tool_call);
-        events.push(Event::MemberSpawned {
-            session: parent,
-            member,
-            child: Some(session),
-            subagent_type: agent.name.clone(),
-            description,
-            depth: parent_depth.saturating_add(1),
-            directive,
-            tool_call,
-        });
+        events.push(
+            ExtensionEvent::MemberSpawned {
+                session: parent,
+                member,
+                child: Some(session),
+                subagent_type: agent.name.clone(),
+                description,
+                depth: parent_depth.saturating_add(1),
+                directive,
+                tool_call,
+            }
+            .into_event(),
+        );
         Ok((
             root,
             PreparedResident {
@@ -857,55 +858,61 @@ impl ResidentSupervisor {
             let group_channel = hya_proto::mint_channel_id(ChannelKind::Group);
             let dm_channel = hya_proto::mint_channel_id(ChannelKind::Dm);
             events.extend([
-                Event::AgentRegistered {
+                ExtensionEvent::AgentRegistered {
                     session: root,
                     agent_session: session,
                     handle: leaf,
                     parent: Some(parent_path.clone()),
                     agent_type: agent.name.clone(),
                     mode: SubagentMode::Resident,
-                },
+                }
+                .into_event(),
                 // The unit's leader-only broadcast channel: minted with the
                 // leader as founding member on first registration, joined
                 // by every child thereafter.
-                Event::ChannelCreated {
+                ExtensionEvent::ChannelCreated {
                     session: root,
                     channel: group_channel,
                     kind: ChannelKind::Group,
                     unit: Some(parent_path.clone()),
                     members: vec![parent_path.clone(), handle.clone()],
-                },
+                }
+                .into_event(),
                 // The persistent parent-child DM pair: the revival address
                 // that outlives archive cycles.
-                Event::ChannelCreated {
+                ExtensionEvent::ChannelCreated {
                     session: root,
                     channel: dm_channel.clone(),
                     kind: ChannelKind::Dm,
                     unit: None,
                     members: vec![parent_path.clone(), handle.clone()],
-                },
+                }
+                .into_event(),
             ]);
             let initial = initial.filter(|text| !text.trim().is_empty());
             let pending = initial.is_some();
             if let Some(text) = initial {
-                events.push(Event::MailSent {
-                    session: root,
-                    from: parent_path.clone(),
-                    to: MailEndpoint::Channel(dm_channel),
-                    kind: hya_proto::MailKind::Message,
-                    body: text,
-                });
+                events.push(
+                    ExtensionEvent::MailSent {
+                        session: root,
+                        from: parent_path.clone(),
+                        to: MailEndpoint::Channel(dm_channel),
+                        kind: hya_proto::MailKind::Message,
+                        body: text,
+                    }
+                    .into_event(),
+                );
             }
             let channel_policy = ChannelPolicy::from_binding(&binding)
                 .map_err(CoreError::bundle)?
                 .snapshot_for(agent.name.as_str());
 
-            let parent_session = projection
-                .team
+            let team_proj = hya_tool::extension::team_projection(&projection);
+            let parent_session = team_proj
                 .roster
                 .get(&parent_path)
                 .map_or(root, |entry| entry.session);
-            registrations.push(hya_store::EpisodeRegistration {
+            registrations.push(crate::store_bridge::EpisodeRegistration {
                 actor: session,
                 events,
             });
@@ -936,12 +943,12 @@ impl ResidentSupervisor {
             };
             installs.push((session, parent_session, episode, channel_policy));
         }
-        let archived: std::collections::HashSet<_> = projection
-            .team
-            .archived
-            .values()
-            .map(|entry| entry.session)
-            .collect();
+        let archived: std::collections::HashSet<_> =
+            hya_tool::extension::team_projection(&projection)
+                .archived
+                .values()
+                .map(|entry| entry.session)
+                .collect();
         drop(projection);
         let mut team = if let Some(main) = main {
             let mut teams = self.teams();
@@ -992,6 +999,7 @@ impl ResidentSupervisor {
             team = self.team_for(root).await?;
             write = self.claim_writes.lock().await;
         }
+        use crate::store_bridge::SessionStoreExt as _;
         let registered = self
             .engine
             .store()

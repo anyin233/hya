@@ -11,7 +11,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::{BundleError, BundleSource, PreparedCatalog, inspect_public_package, prepare_package};
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    Bundle, BundleError, BundleSource, PreparedCatalog, inspect_public_package, prepare_package,
+};
 
 /// Identities of every trusted first-party bundle, in load order.
 pub const FIRST_PARTY_BUNDLES: &[&str] = &[
@@ -151,6 +155,275 @@ pub fn load_first_party(
                     .join(", ")
             ),
         }),
+    }
+}
+
+/// Built-in first-party bundle profile (`config.yaml` -> `bundles.builtin.profile`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuiltinBundleProfile {
+    /// Enable all built-in first-party bundles by default (subject to `disable`).
+    #[default]
+    Full,
+    /// Start with zero built-in bundles enabled (`enable` selectively adds built-ins).
+    Bare,
+}
+
+/// Selective enable/disable configuration for built-in first-party bundles.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BuiltinBundleSelection {
+    /// Base profile (`full` or `bare`).
+    pub profile: BuiltinBundleProfile,
+    /// Built-in identities explicitly enabled (additive on `bare`, or overriding absence on `full`).
+    pub enable: Vec<String>,
+    /// Built-in identities explicitly disabled (takes precedence over `profile` and `enable`).
+    pub disable: Vec<String>,
+}
+
+impl BuiltinBundleSelection {
+    /// Select all built-in bundles (`profile: full`).
+    #[must_use]
+    pub fn full() -> Self {
+        Self {
+            profile: BuiltinBundleProfile::Full,
+            enable: Vec::new(),
+            disable: Vec::new(),
+        }
+    }
+
+    /// Select no built-in bundles (`profile: bare`).
+    #[must_use]
+    pub fn bare() -> Self {
+        Self {
+            profile: BuiltinBundleProfile::Bare,
+            enable: Vec::new(),
+            disable: Vec::new(),
+        }
+    }
+
+    /// Whether built-in bundle `identity` is enabled under this selection.
+    ///
+    /// `disable` takes precedence over both `profile` and `enable`.
+    #[must_use]
+    pub fn is_enabled(&self, identity: &str) -> bool {
+        if self.disable.iter().any(|entry| entry == identity) {
+            return false;
+        }
+        match self.profile {
+            BuiltinBundleProfile::Full => true,
+            BuiltinBundleProfile::Bare => self.enable.iter().any(|entry| entry == identity),
+        }
+    }
+
+    /// All trusted first-party identities enabled by this selection, in load order.
+    #[must_use]
+    pub fn enabled_identities(&self) -> Vec<&'static str> {
+        FIRST_PARTY_BUNDLES
+            .iter()
+            .copied()
+            .filter(|identity| self.is_enabled(identity))
+            .collect()
+    }
+
+    /// Any configured `enable` or `disable` entries not present in [`FIRST_PARTY_BUNDLES`].
+    #[must_use]
+    pub fn unknown_identities(&self) -> Vec<String> {
+        let mut unknown = Vec::new();
+        for entry in self.enable.iter().chain(&self.disable) {
+            if !FIRST_PARTY_BUNDLES.contains(&entry.as_str()) && !unknown.contains(entry) {
+                unknown.push(entry.clone());
+            }
+        }
+        unknown
+    }
+}
+
+/// Resolution status for one built-in first-party bundle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BuiltinBundleStatus {
+    /// Built-in bundle was enabled and loaded cleanly.
+    Loaded,
+    /// Built-in bundle was disabled by profile or `disable` configuration.
+    Disabled,
+    /// Built-in bundle was superseded by a project or user-installed bundle.
+    Overridden {
+        /// Identity of the overriding bundle.
+        by: String,
+    },
+    /// Built-in bundle source or packaged `.hyabundle` was not found on disk.
+    Missing {
+        /// Diagnostic detail explaining why it was missing.
+        reason: String,
+    },
+    /// Built-in bundle source/package existed, but failed to prepare or validate.
+    Failed {
+        /// Diagnostic error detail.
+        reason: String,
+    },
+}
+
+/// Resolution entry for a single built-in bundle in [`BuiltinResolutionReport`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BuiltinBundleEntry {
+    /// Built-in bundle identity from [`FIRST_PARTY_BUNDLES`].
+    pub identity: &'static str,
+    /// Outcome of resolving this built-in bundle.
+    pub status: BuiltinBundleStatus,
+}
+
+/// Non-panicking resolution outcome across all trusted first-party bundles.
+#[derive(Clone, Debug)]
+pub struct BuiltinResolutionReport {
+    /// Active selection used to resolve built-ins.
+    pub selection: BuiltinBundleSelection,
+    /// Catalogs successfully loaded from enabled, non-overridden built-ins.
+    pub loaded: Vec<PreparedCatalog>,
+    /// Per-builtin status entries in [`FIRST_PARTY_BUNDLES`] order.
+    pub entries: Vec<BuiltinBundleEntry>,
+    /// Configured `enable`/`disable` identities not matching [`FIRST_PARTY_BUNDLES`].
+    pub unknown_configured: Vec<String>,
+}
+
+impl BuiltinResolutionReport {
+    /// Loaded [`Bundle`] payloads from enabled, non-overridden built-ins.
+    pub fn loaded_bundles(&self) -> impl Iterator<Item = &Bundle> {
+        self.loaded
+            .iter()
+            .flat_map(|catalog| catalog.bundles().iter())
+    }
+
+    /// Find a loaded built-in bundle by identity.
+    #[must_use]
+    pub fn bundle(&self, identity: &str) -> Option<&Bundle> {
+        self.loaded_bundles()
+            .find(|bundle| bundle.identity().id == identity)
+    }
+
+    /// Look up the resolution status for a built-in bundle identity.
+    #[must_use]
+    pub fn status(&self, identity: &str) -> Option<&BuiltinBundleStatus> {
+        self.entries
+            .iter()
+            .find(|entry| entry.identity == identity)
+            .map(|entry| &entry.status)
+    }
+}
+
+/// Load a first-party bundle if its trusted source or package exists, without
+/// treating missing bundles as a fatal error.
+///
+/// # Errors
+///
+/// Returns [`BundleError::FirstPartyBundle`] when the identity is unknown, or
+/// the preparation/package error if a present source/package is invalid.
+pub fn first_party_bundle_optional(
+    identity: &str,
+) -> Result<Option<&'static PreparedCatalog>, BundleError> {
+    if !FIRST_PARTY_BUNDLES.contains(&identity) {
+        return Err(BundleError::FirstPartyBundle {
+            identity: identity.to_owned(),
+            detail: "unknown first-party identity".into(),
+        });
+    }
+    let missing = |detail: String| BundleError::FirstPartyBundle {
+        identity: identity.to_string(),
+        detail,
+    };
+    let executable = std::env::current_exe().map_err(|error| missing(error.to_string()))?;
+    let directory = executable
+        .parent()
+        .ok_or_else(|| missing("executable has no parent directory".to_string()))?;
+    if first_party_source(directory, identity).is_none() {
+        return Ok(None);
+    }
+    first_party_bundle(identity).map(Some)
+}
+
+/// Resolve all [`FIRST_PARTY_BUNDLES`] according to `selection` and `external_bundles`
+/// (project `.hya/bundles/` and user-installed bundles), filtering and reporting
+/// disabled, overridden, missing, or invalid built-ins cleanly without panicking.
+#[must_use]
+pub fn resolve_first_party_bundles(
+    selection: &BuiltinBundleSelection,
+    external_bundles: &[&Bundle],
+) -> BuiltinResolutionReport {
+    resolve_first_party_bundles_with(selection, external_bundles, |identity| {
+        first_party_bundle_optional(identity).map(|opt| opt.cloned())
+    })
+}
+
+/// Resolve [`FIRST_PARTY_BUNDLES`] using a custom loader callback.
+///
+/// This enables deterministic handling and testing of missing or failing
+/// built-in bundles without touching process-global environment or caches.
+pub fn resolve_first_party_bundles_with<F>(
+    selection: &BuiltinBundleSelection,
+    external_bundles: &[&Bundle],
+    mut load: F,
+) -> BuiltinResolutionReport
+where
+    F: FnMut(&str) -> Result<Option<PreparedCatalog>, BundleError>,
+{
+    let mut loaded = Vec::new();
+    let mut entries = Vec::with_capacity(FIRST_PARTY_BUNDLES.len());
+    for &identity in FIRST_PARTY_BUNDLES {
+        if !selection.is_enabled(identity) {
+            entries.push(BuiltinBundleEntry {
+                identity,
+                status: BuiltinBundleStatus::Disabled,
+            });
+            continue;
+        }
+        if let Some(overrider) = external_bundles
+            .iter()
+            .find(|bundle| bundle.identity().id == identity || bundle.overrides() == Some(identity))
+        {
+            entries.push(BuiltinBundleEntry {
+                identity,
+                status: BuiltinBundleStatus::Overridden {
+                    by: overrider.identity().id.clone(),
+                },
+            });
+            continue;
+        }
+        match load(identity) {
+            Ok(Some(catalog)) => {
+                loaded.push(catalog);
+                entries.push(BuiltinBundleEntry {
+                    identity,
+                    status: BuiltinBundleStatus::Loaded,
+                });
+            }
+            Ok(None) => {
+                entries.push(BuiltinBundleEntry {
+                    identity,
+                    status: BuiltinBundleStatus::Missing {
+                        reason: format!("no trusted source or package found for `{identity}`"),
+                    },
+                });
+            }
+            Err(error) => {
+                let status = if matches!(error, BundleError::FirstPartyBundle { .. })
+                    && error.to_string().contains("no trusted source or package")
+                {
+                    BuiltinBundleStatus::Missing {
+                        reason: error.to_string(),
+                    }
+                } else {
+                    BuiltinBundleStatus::Failed {
+                        reason: error.to_string(),
+                    }
+                };
+                entries.push(BuiltinBundleEntry { identity, status });
+            }
+        }
+    }
+    BuiltinResolutionReport {
+        selection: selection.clone(),
+        loaded,
+        entries,
+        unknown_configured: selection.unknown_identities(),
     }
 }
 

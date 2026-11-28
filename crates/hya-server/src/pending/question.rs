@@ -85,7 +85,7 @@ impl QuestionRequests {
         requests
     }
 
-    /// Subscribe to live v1 interaction events.
+    /// Subscribe to live v2 interaction events.
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<PendingEvent> {
         self.events.subscribe()
     }

@@ -16,6 +16,7 @@ futures = { workspace = true }
 hya-bundle = { workspace = true }
 hya-context = { workspace = true }
 hya-proto = { workspace = true }
+hya-runtime-abi = { workspace = true }
 hya-tool = { workspace = true }
 libc = { workspace = true }
 serde = { workspace = true }
@@ -30,3 +31,14 @@ hya-base-tools = { workspace = true }
 hya-extended-tools = { workspace = true }
 hya-channel-tools = { workspace = true }
 hya-network-tools = { workspace = true }
+hya-tool-error = { workspace = true }
+
+[[example]]
+name = "test_v2_bundle"
+path = "tests/fixtures/test_v2_bundle.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "wrong_abi_v2_bundle"
+path = "tests/fixtures/wrong_abi_v2_bundle.rs"
+crate-type = ["cdylib"]

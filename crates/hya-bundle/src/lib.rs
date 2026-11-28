@@ -19,9 +19,11 @@ pub use api::{
 pub use catalog::{BundleCatalog, ExportKind};
 pub use error::BundleError;
 pub use first_party::{
-    FIRST_PARTY_BUNDLES, FIRST_PARTY_SOURCE_ROOT_ENV, FirstPartySource, INTERNAL_BUNDLES,
-    first_party_bundle, first_party_package_name, first_party_source, first_party_source_directory,
-    first_party_source_root, load_first_party,
+    BuiltinBundleEntry, BuiltinBundleProfile, BuiltinBundleSelection, BuiltinBundleStatus,
+    BuiltinResolutionReport, FIRST_PARTY_BUNDLES, FIRST_PARTY_SOURCE_ROOT_ENV, FirstPartySource,
+    INTERNAL_BUNDLES, first_party_bundle, first_party_bundle_optional, first_party_package_name,
+    first_party_source, first_party_source_directory, first_party_source_root, load_first_party,
+    resolve_first_party_bundles, resolve_first_party_bundles_with,
 };
 pub use model::{
     AgentRole, Bundle, BundleIdentity, ChannelCapability, ChannelParticipantRole, ChannelRetention,

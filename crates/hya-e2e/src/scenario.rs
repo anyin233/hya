@@ -1,11 +1,11 @@
-//! High-level E2E environment: FakeLlm + BackendProcess + hya-sdk-v1 + HTTP helpers.
+//! High-level E2E environment: FakeLlm + BackendProcess + hya-sdk + HTTP helpers.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use hya_api::v1 as pb;
+use hya_api::v2 as pb;
 use hya_proto::SessionId;
-use hya_sdk_v1::Client;
+use hya_sdk::Client;
 use serde_json::Value;
 
 use crate::backend::{
@@ -519,7 +519,7 @@ impl E2eEnv {
     /// List pending permission requests (v1 interaction plane), as an array.
     pub async fn list_permissions(&self) -> Result<Value, E2eError> {
         let body = self
-            .get_json("/v1/interactions?type=INTERACTION_TYPE_PERMISSION")
+            .get_json("/v2/interactions?type=INTERACTION_TYPE_PERMISSION")
             .await?;
         Ok(body
             .get("interactions")
@@ -536,7 +536,7 @@ impl E2eEnv {
         };
         let body = serde_json::json!({ "permission": { "allowed": allowed, "persist": persist } });
         let _ = self
-            .post_json(&format!("/v1/interactions/{request_id}/respond"), &body)
+            .post_json(&format!("/v2/interactions/{request_id}/respond"), &body)
             .await?;
         Ok(())
     }
@@ -548,13 +548,13 @@ impl E2eEnv {
 
     /// List configured agents via the v1 surface.
     pub async fn list_agents(&self) -> Result<Value, E2eError> {
-        self.get_json("/v1/agents").await
+        self.get_json("/v2/agents").await
     }
 
     /// Compat-shaped session context (projected messages for the session).
     pub async fn session_context(&self, session: &SessionId) -> Result<Value, E2eError> {
         let messages = self
-            .get_json(&format!("/v1/sessions/{session}/messages"))
+            .get_json(&format!("/v2/sessions/{session}/messages"))
             .await?;
         Ok(
             serde_json::json!({ "data": messages.get("messages").cloned().unwrap_or(Value::Array(Vec::new())) }),
@@ -563,7 +563,7 @@ impl E2eEnv {
 
     /// Session todo list (v1).
     pub async fn session_todos(&self, session: &SessionId) -> Result<Value, E2eError> {
-        self.get_json(&format!("/v1/sessions/{session}/todo")).await
+        self.get_json(&format!("/v2/sessions/{session}/todo")).await
     }
 
     /// Fetch the nested tree from spawning-session edges and roster rows in the event log.
@@ -572,23 +572,25 @@ impl E2eEnv {
         // session -> [(child, subagent_type)]
         let mut nodes: std::collections::BTreeMap<String, Vec<(String, String)>> =
             std::collections::BTreeMap::new();
-        let mut roster: std::collections::BTreeMap<String, hya_proto::projection::RosterEntry> =
+        let mut roster: std::collections::BTreeMap<String, hya_tool::extension::RosterEntry> =
             std::collections::BTreeMap::new();
         let mut queue: Vec<(hya_proto::SessionId, usize)> = vec![(*session, 0)];
         let mut seen: std::collections::BTreeSet<String> =
             std::collections::BTreeSet::from([session.to_string()]);
+        let reducers = hya_tool::extension::projection_reducers();
         while let Some((current, depth)) = queue.pop() {
             let envelopes = self.events(current, None).await?;
-            let projection = hya_proto::Projection::from_events(&envelopes);
+            let projection = hya_proto::Projection::from_events_with(&envelopes, &reducers);
             if depth == 0 {
-                for entry in projection.team.roster.into_values() {
+                let team = hya_tool::extension::team_projection(&projection);
+                for entry in team.roster.into_values() {
                     roster.insert(entry.session.to_string(), entry);
                 }
             }
             if depth >= DEPTH_LIMIT {
                 continue;
             }
-            for member in &projection.session.members {
+            for member in &hya_tool::extension::members_projection(&projection) {
                 let Some(child) = member.child else {
                     continue;
                 };
@@ -605,7 +607,7 @@ impl E2eEnv {
         fn assemble(
             key: &str,
             nodes: &std::collections::BTreeMap<String, Vec<(String, String)>>,
-            roster: &mut std::collections::BTreeMap<String, hya_proto::projection::RosterEntry>,
+            roster: &mut std::collections::BTreeMap<String, hya_tool::extension::RosterEntry>,
         ) -> Value {
             let mut children = Vec::new();
             if let Some(spawns) = nodes.get(key) {
@@ -678,9 +680,9 @@ impl E2eEnv {
         Ok(info)
     }
 
-    /// POST `/v1/sessions/{id}/compact` (sync summarize + inject system message).
+    /// POST `/v2/sessions/{id}/compact` (sync summarize + inject system message).
     pub async fn compact_session(&self, session: &SessionId) -> Result<(), E2eError> {
-        let url = format!("{}/v1/sessions/{session}/compact", self.backend.url);
+        let url = format!("{}/v2/sessions/{session}/compact", self.backend.url);
         let resp = self
             .http
             .post(url)
@@ -812,14 +814,14 @@ impl E2eEnv {
         .await
     }
 
-    /// Wait until `/v1/mcp` reports `name` with status `connected`.
+    /// Wait until `/v2/mcp` reports `name` with status `connected`.
     pub async fn wait_mcp_connected(
         &self,
         name: &str,
         timeout: Duration,
     ) -> Result<Value, E2eError> {
         wait_until(&format!("mcp {name} connected"), timeout, || async {
-            let status = self.get_json("/v1/mcp").await.unwrap_or(Value::Null);
+            let status = self.get_json("/v2/mcp").await.unwrap_or(Value::Null);
             Ok(status
                 .get("servers")
                 .and_then(Value::as_array)
@@ -832,7 +834,7 @@ impl E2eEnv {
                 }))
         })
         .await?;
-        self.get_json("/v1/mcp").await
+        self.get_json("/v2/mcp").await
     }
 }
 
@@ -849,7 +851,7 @@ async fn auto_reply_permission(
         }
         let resp = http
             .get(format!(
-                "{base}/v1/interactions?type=INTERACTION_TYPE_PERMISSION"
+                "{base}/v2/interactions?type=INTERACTION_TYPE_PERMISSION"
             ))
             .send()
             .await
@@ -874,7 +876,7 @@ async fn auto_reply_permission(
                 _ => (false, false),
             };
             let reply_resp = http
-                .post(format!("{base}/v1/interactions/{id}/respond"))
+                .post(format!("{base}/v2/interactions/{id}/respond"))
                 .json(&serde_json::json!({ "permission": { "allowed": allowed, "persist": persist } }))
                 .send()
                 .await
@@ -900,7 +902,7 @@ async fn auto_reply_question(
         }
         let resp = http
             .get(format!(
-                "{base}/v1/interactions?type=INTERACTION_TYPE_QUESTION"
+                "{base}/v2/interactions?type=INTERACTION_TYPE_QUESTION"
             ))
             .send()
             .await
@@ -921,7 +923,7 @@ async fn auto_reply_question(
         {
             let answer = first_answer(&answers);
             let reply_resp = http
-                .post(format!("{base}/v1/interactions/{id}/respond"))
+                .post(format!("{base}/v2/interactions/{id}/respond"))
                 .json(&serde_json::json!({ "question": { "answer": answer } }))
                 .send()
                 .await

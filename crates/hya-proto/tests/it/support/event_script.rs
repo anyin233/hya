@@ -16,10 +16,8 @@
 
 use hya_proto::{
     AgentName, CompactionStrategy, Event, FileChange, FileRestore, FileState, FinishReason,
-    MailEndpoint, MailKind, MemberId, MemberRunStatus, MessageId, ModelRef, OwnerRunId, PartId,
-    ProjectId, Role, RosterStatus, SessionId, SessionKind, StepCut, SubagentMode, TodoItem,
-    TodoStatus, TokenUsage, ToolCallId, UsagePurpose, WorkflowIdentity, WorkflowRevision,
-    WorkflowRunId, WorkflowRunStatus, WorkflowSourceId, WorkflowStagePlan,
+    MessageId, ModelRef, PartId, ProjectId, Role, SessionId, SessionKind, StepCut, TodoItem,
+    TodoStatus, TokenUsage, ToolCallId, UsagePurpose,
 };
 use uuid::Uuid;
 
@@ -60,9 +58,7 @@ struct Script {
     session: SessionId,
     ids: u128,
     messages: Vec<(MessageId, Vec<(PartId, PartKind)>)>,
-    runs: Vec<WorkflowRunId>,
     handles: Vec<String>,
-    members: Vec<MemberId>,
 }
 
 impl Script {
@@ -92,15 +88,6 @@ impl Script {
             cache_read: self.rng.next() % 2_000,
             cache_write: self.rng.next() % 100,
             reasoning_unknown: self.rng.chance(20),
-        }
-    }
-
-    fn identity(&mut self) -> WorkflowIdentity {
-        let revision = (self.rng.next() % 4) as u8;
-        WorkflowIdentity {
-            source: WorkflowSourceId::new("project:scripted"),
-            name: "scripted".to_string(),
-            revision: WorkflowRevision::from_bytes([revision; 32]),
         }
     }
 
@@ -232,7 +219,6 @@ impl Script {
                 let Some((message, _)) = self.message() else {
                     return self.title();
                 };
-                // Half the time a step cut inside another message's parts.
                 let (to_message, parts) = self.message().unwrap_or((message, Vec::new()));
                 let step_cut = match parts.last() {
                     Some((part, _)) if self.rng.chance(50) => Some(StepCut {
@@ -253,109 +239,21 @@ impl Script {
                     step_cut,
                 }
             }
-            15 => {
-                // New run, or a re-emitted start for an already-seen run id.
-                let run = if !self.runs.is_empty() && self.rng.chance(40) {
-                    self.runs[self.rng.below(self.runs.len())]
-                } else {
-                    let run = WorkflowRunId::from_uuid(self.uuid());
-                    self.runs.push(run);
-                    run
-                };
-                Event::WorkflowRunStarted {
-                    session,
-                    run,
-                    workflow: self.identity(),
-                    request_hash: format!("hash-{}", self.rng.below(3)),
-                    owner: OwnerRunId::from_storage(Uuid::from_u128(7)),
-                    stages: vec![WorkflowStagePlan {
-                        id: "plan".to_string(),
-                        title: None,
-                        agent: AgentName::new("planner"),
-                        mode: "once".to_string(),
-                        level: 0,
-                        worker_model: None,
-                        selected_worker_model: None,
-                        verifier_model: None,
-                        selected_verifier_model: None,
-                    }],
+            15..=20 => {
+                let bundle =
+                    ["hya/workflow", "hya/multi-agent", "hya/compaction"][self.rng.below(3)];
+                let kind = ["tick", "status", "checkpoint"][self.rng.below(3)];
+                let n = self.rng.next() % 1_000;
+                if self.handles.len() < 4 {
+                    self.handles
+                        .push(format!("main/worker-{}", self.handles.len() + 1));
                 }
-            }
-            16 => {
-                let Some(run) = self.runs.last().copied() else {
-                    return self.title();
-                };
-                Event::WorkflowRunFinished {
+                let handle = self.handles[self.rng.below(self.handles.len())].clone();
+                Event::Extension {
                     session,
-                    run,
-                    status: if self.rng.chance(50) {
-                        WorkflowRunStatus::Completed
-                    } else {
-                        WorkflowRunStatus::Failed
-                    },
-                    error: None,
-                }
-            }
-            17 => {
-                let handle = format!("worker-{}", self.handles.len() + 1);
-                self.handles.push(format!("main/{handle}"));
-                Event::AgentRegistered {
-                    session,
-                    agent_session: format!("hysec_{:020}", self.rng.next()).parse().unwrap(),
-                    handle,
-                    parent: Some("main".to_string()),
-                    agent_type: AgentName::new("hya-worker"),
-                    mode: SubagentMode::Resident,
-                }
-            }
-            18 => {
-                let to = if self.handles.is_empty() {
-                    "main".to_string()
-                } else {
-                    self.handles[self.rng.below(self.handles.len())].clone()
-                };
-                Event::MailSent {
-                    session,
-                    from: "harness".to_string(),
-                    to: MailEndpoint::Handle(to),
-                    kind: MailKind::Message,
-                    body: format!("mail {}", self.rng.below(100)),
-                }
-            }
-            19 => {
-                if self.handles.is_empty() || self.rng.chance(50) {
-                    let member = MemberId::from_uuid(self.uuid());
-                    self.members.push(member);
-                    Event::MemberSpawned {
-                        session,
-                        member,
-                        child: Some(format!("hysec_{:020}", self.rng.next()).parse().unwrap()),
-                        subagent_type: AgentName::new("hya-worker"),
-                        description: "scripted member".to_string(),
-                        depth: 1,
-                        directive: String::new(),
-                        tool_call: None,
-                    }
-                } else {
-                    let handle = self.handles[self.rng.below(self.handles.len())].clone();
-                    Event::AgentActivityChanged {
-                        session,
-                        handle,
-                        status: RosterStatus::Busy,
-                        current_task: Some("scripted".to_string()),
-                    }
-                }
-            }
-            20 => {
-                let Some(member) = self.members.last().copied() else {
-                    return self.title();
-                };
-                Event::MemberFinished {
-                    session,
-                    member,
-                    status: MemberRunStatus::Done,
-                    summary: "done".to_string(),
-                    child: None,
+                    bundle: bundle.to_string(),
+                    kind: kind.to_string(),
+                    payload: serde_json::json!({ "n": n, "handle": handle }),
                 }
             }
             22 => Event::Error {
@@ -553,9 +451,7 @@ pub fn script(seed: u64, session: SessionId, fork_of: Option<SessionId>, len: us
         session,
         ids: 0,
         messages: Vec::new(),
-        runs: Vec::new(),
         handles: Vec::new(),
-        members: Vec::new(),
     };
     // Picked from the seed without consuming the RNG, so the rest of the
     // script is unchanged: a Project session, a temporary session, or a

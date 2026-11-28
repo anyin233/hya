@@ -104,21 +104,14 @@ pub(crate) fn package_native_library(
             bail!("native bundle source already declares `runtime.library`");
         }
         runtime.insert("library".into(), json!(library_path));
+    } else if root.contains_key("extensions") {
+        bail!(
+            "tool-family source uses legacy `extensions`; migrate to `schema_version: 2` and `runtime`"
+        );
     } else {
-        let extensions = root
-            .entry("extensions")
-            .or_insert_with(|| json!({}))
-            .as_object_mut()
-            .context("bundle extensions must be a mapping")?;
-        if extensions.contains_key("rust")
-            || extensions.contains_key("process")
-            || extensions.contains_key("libraries")
-        {
-            bail!("tool-family source already declares a native runtime");
-        }
-        extensions.insert(
-            "libraries".into(),
-            json!([{"id": "runtime", "path": library_path}]),
+        root.insert(
+            "runtime".into(),
+            json!({"kind": "native", "library": library_path}),
         );
     }
 
@@ -319,7 +312,7 @@ mod native_tests {
         ));
         let source = root.join("source");
         std::fs::create_dir_all(&source).unwrap();
-        std::fs::write(source.join("bundle.yaml"), "kind: Bundle\nidentity: { id: hya/network-tools, version: 1.0.0, publisher: hya }\nnamespace: network-tools\nextensions:\n  files: [{ id: exposure, path: exposure.yaml }]\n").unwrap();
+        std::fs::write(source.join("bundle.yaml"), "schema_version: 2\nkind: Bundle\nidentity: { id: hya/network-tools, version: 1.0.0, publisher: hya }\nnamespace: network-tools\nruntime:\n  kind: native\nassets: [{ id: exposure, path: exposure.yaml }]\n").unwrap();
         std::fs::write(source.join("exposure.yaml"), "schema_version: 1\nidentity: hya/network-tools\nprotected_names: []\ntools:\n  - { name: webfetch, schema_version: 1, permission: read_only }\n").unwrap();
         let library = root.join(format!(
             "libhya_network_tools{}",
@@ -415,12 +408,12 @@ mod native_tests {
         std::fs::create_dir_all(source.join("tools")).unwrap();
         std::fs::write(
             source.join("bundle.yaml"),
-            "kind: Bundle\nidentity: { id: hya/hybrid, version: 1.0.0, publisher: hya }\nextensions:\n  files: [{ id: exposure, path: exposure.yaml }]\n",
+            "schema_version: 2\nkind: Bundle\nidentity: { id: hya/channel-tools, version: 1.0.0, publisher: hya }\nruntime:\n  kind: native\nassets: [{ id: exposure, path: exposure.yaml }]\n",
         )
         .unwrap();
         std::fs::write(
             source.join("exposure.yaml"),
-            "schema_version: 1\nidentity: hya/hybrid\nprotected_names: []\ntools:\n  - { name: fetch, schema_version: 1, permission: read_only }\n",
+            "schema_version: 1\nidentity: hya/channel-tools\nprotected_names: []\ntools:\n  - { name: fetch, schema_version: 1, permission: read_only }\n",
         )
         .unwrap();
         std::fs::write(

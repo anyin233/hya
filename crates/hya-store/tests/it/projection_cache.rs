@@ -342,8 +342,6 @@ async fn legacy_envelopes_decode_and_replay_from_sqlite() {
     let markers = [MessageId::new(), MessageId::new(), MessageId::new()];
     let mut payloads = vec![
         json!({"type": "session_titled", "session": session, "title": "legacy"}),
-        json!({"type": "session_status", "session": session, "status": {"type": "busy"}}),
-        json!({"type": "channel_joined", "session": session, "channel": "build", "member": "reviewer"}),
         json!({"type": "message_started", "session": session, "message": user, "role": "user"}),
         json!({"type": "message_started", "session": session, "message": assistant, "role": "assistant"}),
     ];
@@ -381,7 +379,7 @@ async fn legacy_envelopes_decode_and_replay_from_sqlite() {
     assert_eq!(store.replay(session).await.unwrap(), envelopes);
     let projection = store.read_projection(session).await.unwrap();
     assert_eq!(projection, Projection::from_events(&envelopes));
-    assert!(projection.team.channels.is_empty());
+    assert!(projection.extensions.is_empty());
     assert_eq!(
         projection
             .session
@@ -442,12 +440,53 @@ async fn shared_snapshots_are_isolated_while_unique_cache_advances_in_place() {
 }
 
 #[tokio::test]
-async fn corrupt_mail_index_snapshot_row_is_ignored() {
+async fn pluggable_projection_reducer_folds_known_bundles_and_invalidates_snapshot_on_registry_change()
+ {
+    use hya_proto::{ProjectionReducer, ProjectionReducerRegistry};
+    use std::sync::Arc;
+
+    struct CounterReducer;
+    impl ProjectionReducer for CounterReducer {
+        fn bundle_id(&self) -> &str {
+            "hya/counter"
+        }
+
+        fn version(&self) -> u32 {
+            1
+        }
+
+        fn fold_extension(
+            &self,
+            projection: &mut Projection,
+            _session: SessionId,
+            kind: &str,
+            payload: &serde_json::Value,
+        ) {
+            if kind == "add" {
+                let current = projection
+                    .extensions
+                    .get("hya/counter")
+                    .and_then(|v| v.get("total"))
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                let delta = payload.get("n").and_then(|v| v.as_i64()).unwrap_or(0);
+                projection.extensions.insert(
+                    "hya/counter".to_owned(),
+                    serde_json::json!({ "total": current + delta }),
+                );
+            }
+        }
+    }
+
+    let mut registry = ProjectionReducerRegistry::new();
+    registry.register(Arc::new(CounterReducer));
+
     let db = TempDb::new();
     let store = SessionStore::connect(&db.0)
         .await
         .unwrap()
-        .with_projection_snapshot_interval(1);
+        .with_projection_snapshot_interval(1)
+        .with_projection_reducers(registry.clone());
     let session = SessionId::new();
     store
         .append_event(
@@ -467,48 +506,73 @@ async fn corrupt_mail_index_snapshot_row_is_ignored() {
     store
         .append_event(
             session,
-            &Event::ChannelCreated {
+            &Event::Extension {
                 session,
-                channel: "DM-test".into(),
-                kind: hya_proto::ChannelKind::Dm,
-                unit: None,
-                members: vec!["main".into()],
+                bundle: "hya/counter".into(),
+                kind: "add".into(),
+                payload: serde_json::json!({ "n": 4 }),
             },
         )
         .await
         .unwrap();
-    let truth = store.read_projection(session).await.unwrap();
-    let pool = raw_pool(&db.0).await;
-    for corrupt_inbox in [true, false] {
-        let mut corrupt = truth.clone();
-        if corrupt_inbox {
-            corrupt
-                .team
-                .inboxes
-                .insert("main".into(), vec![corrupt.team.mail.len()]);
-        } else {
-            corrupt
-                .team
-                .channels
-                .get_mut("DM-test")
-                .unwrap()
-                .log
-                .push(corrupt.team.mail.len());
-        }
-        let updated =
-            sqlx::query("UPDATE projection_snapshot SET payload = ? WHERE session_id = ?")
-                .bind(corrupt.encode_snapshot().unwrap())
-                .bind(session.storage_key())
-                .execute(&pool)
-                .await
-                .unwrap();
-        assert_eq!(updated.rows_affected(), 1);
-        let restarted = SessionStore::connect(&db.0).await.unwrap();
-        assert_eq!(
-            restarted.read_projection(session).await.unwrap(),
-            truth,
-            "corrupt_inbox={corrupt_inbox}: reject the row and replay the event log"
-        );
-    }
-    pool.close().await;
+    store
+        .append_event(
+            session,
+            &Event::Extension {
+                session,
+                bundle: "hya/counter".into(),
+                kind: "add".into(),
+                payload: serde_json::json!({ "n": 6 }),
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .append_event(
+            session,
+            &Event::Extension {
+                session,
+                bundle: "custom/unknown".into(),
+                kind: "ping".into(),
+                payload: serde_json::json!({ "msg": "keep-me" }),
+            },
+        )
+        .await
+        .unwrap();
+
+    let folded = store.read_projection(session).await.unwrap();
+    assert_eq!(
+        folded.extensions["hya/counter"],
+        serde_json::json!({ "total": 10 })
+    );
+    assert_eq!(
+        folded.extensions["custom/unknown"],
+        serde_json::json!([{ "kind": "ping", "payload": { "msg": "keep-me" } }])
+    );
+
+    // Reopening WITHOUT the custom reducer ignores the snapshot built with CounterReducer
+    // and replays into raw extension form instead of trusting stale folded state.
+    drop(store);
+    let bare = SessionStore::connect(&db.0).await.unwrap();
+    let raw = bare.read_projection(session).await.unwrap();
+    assert_eq!(
+        raw.extensions["hya/counter"],
+        serde_json::json!([
+            { "kind": "add", "payload": { "n": 4 } },
+            { "kind": "add", "payload": { "n": 6 } }
+        ])
+    );
+    assert_eq!(
+        raw.extensions["custom/unknown"],
+        serde_json::json!([{ "kind": "ping", "payload": { "msg": "keep-me" } }])
+    );
+
+    // Reopening WITH CounterReducer folds both events cleanly from the log.
+    drop(bare);
+    let restored = SessionStore::connect(&db.0)
+        .await
+        .unwrap()
+        .with_projection_reducers(registry);
+    let restored_proj = restored.read_projection(session).await.unwrap();
+    assert_eq!(restored_proj, folded);
 }

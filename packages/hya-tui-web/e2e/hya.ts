@@ -25,7 +25,7 @@ export { api, hyaTui, fakeModelRef, hyaBin, mcpToolsServer, tuiMain, type Backen
  * loading `approver.ts` as a bundle extension). `approve` is the JS source
  * of the hook handler, called with `{ session, root_session, agent, mode,
  * action, resource }` and returning `allow_once | allow_always | reject |
- * defer`. Select a mode as `<id>/<mode id>`; `GET /v1/permission-modes`
+ * defer`. Select a mode as `<id>/<mode id>`; `GET /v2/permission-modes`
  * lists it with `source: <id>`.
  */
 export function approverBundle(options: { id: string; modes: { id: string; title: string; description?: string }[]; approve: string }): BundleFiles {
@@ -36,11 +36,15 @@ export function approverBundle(options: { id: string; modes: { id: string; title
   return {
     "bundle.yaml":
       "kind: Bundle\n" +
+      "schema_version: 2\n" +
       `identity: { id: ${options.id}, version: 1.0.0, publisher: e2e }\n` +
-      "extensions:\n" +
-      `  process: { kind: bun, command: [bun, run, ${JSON.stringify(bunAdapterMain)}, --plugin-id, ${namespace}, --bundle-extension, '\${BUNDLE_ROOT}/approver.ts'] }\n` +
-      "  files:\n" +
-      "    - { id: approver, path: approver.ts }\n" +
+      "runtime:\n" +
+      "  kind: js\n" +
+      "  mode: process\n" +
+      "  entry: approver.ts\n" +
+      `  command: [bun, run, ${JSON.stringify(bunAdapterMain)}, --plugin-id, ${namespace}, --bundle-extension, '\${BUNDLE_ROOT}/approver.ts']\n` +
+      "assets:\n" +
+      "  - { id: approver, path: approver.ts }\n" +
       "resources:\n" +
       "  hooks:\n" +
       "    - { id: permission.approve, path: hooks/permission-approve.json }\n" +
@@ -254,7 +258,7 @@ export function backendConfigDir(backend: Backend): string {
 /** Wait until a plain TUI start has created its initial session. */
 export async function waitForSession(backend: Backend, timeout = 15_000): Promise<void> {
   await expect.poll(async () => {
-    const result = await api<{ sessions?: unknown[] }>(backend, "GET", "/v1/sessions")
+    const result = await api<{ sessions?: unknown[] }>(backend, "GET", "/v2/sessions")
     return result.sessions?.length ?? 0
   }, { timeout }).toBeGreaterThan(0)
 }
@@ -265,8 +269,8 @@ export async function waitForSession(backend: Backend, timeout = 15_000): Promis
  * Returns the new session's id.
  */
 export async function headlessTurn(backend: Backend, text: string): Promise<string> {
-  const { session } = await api<{ session: { id: string } }>(backend, "POST", "/v1/sessions", { agent: "hya-main", model: fakeModelRef, workdir: backend.dir })
-  await api(backend, "POST", `/v1/sessions/${session.id}/turns`, { prompt: { text } })
+  const { session } = await api<{ session: { id: string } }>(backend, "POST", "/v2/sessions", { agent: "hya-main", model: fakeModelRef, workdir: backend.dir })
+  await api(backend, "POST", `/v2/sessions/${session.id}/turns`, { prompt: { text } })
   return session.id
 }
 

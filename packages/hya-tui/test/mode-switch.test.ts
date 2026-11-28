@@ -45,9 +45,9 @@ test("the client sends UpdateSession with permissionMode and lists the permissio
   expect((await client.updateSession("hysec_1", { permissionMode: "yolo" })).permissionMode).toBe("yolo")
   expect(await client.listPermissionModes()).toEqual([{ id: "manual", title: "Manual", description: "Ask", source: "builtin" }])
   expect(calls).toEqual([
-    { url: "http://127.0.0.1:8080/v1/sessions/hysec_1", method: "PATCH", body: { permissionMode: "yolo" } },
+    { url: "http://127.0.0.1:8080/v2/sessions/hysec_1", method: "PATCH", body: { permissionMode: "yolo" } },
     // The catalog is scoped by the `directory` field (never a header).
-    { url: "http://127.0.0.1:8080/v1/permission-modes?directory=%2Fw", method: "GET", body: undefined },
+    { url: "http://127.0.0.1:8080/v2/permission-modes?directory=%2Fw", method: "GET", body: undefined },
   ])
 })
 

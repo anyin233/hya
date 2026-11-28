@@ -1,4 +1,5 @@
 kind: Bundle
+schema_version: 2
 identity:
   id: hya/directory-fixture
   version: 1.0.0

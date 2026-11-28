@@ -4,7 +4,8 @@
 //! `emit`. They append member lifecycle events to the PARENT session's log, which
 //! is how a live agent tree becomes observable without leaking child transcripts.
 
-use hya_proto::{Event, MemberId, MemberRunStatus, SessionId};
+use hya_proto::{MemberId, MemberRunStatus, SessionId};
+use hya_tool::extension::ExtensionEvent;
 
 use crate::engine::SessionEngine;
 use crate::error::CoreError;
@@ -19,11 +20,12 @@ impl SessionEngine {
     ) -> Result<(), CoreError> {
         self.emit(
             parent,
-            Event::MemberStatusChanged {
+            ExtensionEvent::MemberStatusChanged {
                 session: parent,
                 member,
                 status,
-            },
+            }
+            .into_event(),
         )
         .await
     }

@@ -51,7 +51,7 @@ fn healthy(url: &str) -> bool {
     let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
     if write!(
         s,
-        "GET /v1/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+        "GET /v2/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
     )
     .is_err()
     {
@@ -66,7 +66,7 @@ fn open_events(url: &str) -> Result<TcpStream, Box<dyn std::error::Error>> {
     s.set_read_timeout(Some(Duration::from_secs(15)))?;
     write!(
         s,
-        "GET /v1/events/stream HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n"
+        "GET /v2/events/stream HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n"
     )?;
     let mut head = [0u8; 64];
     let n = s.read(&mut head)?;

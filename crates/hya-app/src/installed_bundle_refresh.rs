@@ -26,17 +26,34 @@ const FIRST_PARTY_CATALOG_BUNDLES: [&str; 4] = [
     crate::config::CodeMode::BUNDLE,
 ];
 
-/// Load every first-party runtime bundle, in deterministic order.
+/// Load every enabled, present first-party runtime bundle using the active
+/// `config.yaml` [`hya_bundle::BuiltinBundleSelection`].
 pub fn first_party_catalogs() -> Result<Vec<PreparedCatalog>, CoreError> {
-    FIRST_PARTY_CATALOG_BUNDLES
-        .iter()
-        .map(|identity| {
-            let loaded = hya_bundle::first_party_bundle(identity)
-                .map_err(|error| CoreError::Invalid(error.to_string()))?;
-            PreparedCatalog::decode(loaded.bytes(), loaded.digest())
-                .map_err(|error| CoreError::Invalid(format!("first-party `{identity}`: {error}")))
-        })
-        .collect()
+    first_party_catalogs_for(&crate::config::configured_builtin_bundles())
+}
+
+/// Load every enabled, present first-party runtime bundle for `selection` in
+/// deterministic order, skipping disabled or missing built-ins without panicking.
+pub fn first_party_catalogs_for(
+    selection: &hya_bundle::BuiltinBundleSelection,
+) -> Result<Vec<PreparedCatalog>, CoreError> {
+    let mut catalogs = Vec::new();
+    for identity in FIRST_PARTY_CATALOG_BUNDLES {
+        if !selection.is_enabled(identity) {
+            continue;
+        }
+        let Some(loaded) = hya_bundle::first_party_bundle_optional(identity)
+            .map_err(|error| CoreError::Invalid(error.to_string()))?
+        else {
+            continue;
+        };
+        catalogs.push(
+            PreparedCatalog::decode(loaded.bytes(), loaded.digest()).map_err(|error| {
+                CoreError::Invalid(format!("first-party `{identity}`: {error}"))
+            })?,
+        );
+    }
+    Ok(catalogs)
 }
 
 /// Default path of the installed Bundle registry SQLite file.
@@ -255,6 +272,11 @@ pub(crate) async fn compose(
         .filter_map(|catalog| catalog.bundles().first())
         .map(|bundle| bundle.namespace())
         .collect::<BTreeSet<_>>();
+    let higher_overrides = prepared_catalog_refs
+        .iter()
+        .filter_map(|catalog| catalog.bundles().first())
+        .filter_map(|bundle| bundle.overrides())
+        .collect::<BTreeSet<_>>();
     let first_party = first_party
         .iter()
         .copied()
@@ -263,6 +285,7 @@ pub(crate) async fn compose(
                 !disabled.contains(&bundle.identity().id)
                     && !higher_ids.contains(bundle.identity().id.as_str())
                     && !higher_namespaces.contains(bundle.namespace())
+                    && !higher_overrides.contains(bundle.identity().id.as_str())
             })
         })
         .collect::<Vec<_>>();
@@ -358,6 +381,8 @@ pub struct InstalledBundleRefresh {
     host_reads: Option<Arc<dyn hya_engine::HostSessionReads>>,
     /// `tools.code.mode` is not `normal`: publish the code-mode bundle.
     code_mode: bool,
+    /// Active built-in bundle selection from `config.yaml`.
+    builtin_selection: hya_bundle::BuiltinBundleSelection,
 }
 
 impl InstalledBundleRefresh {
@@ -374,6 +399,7 @@ impl InstalledBundleRefresh {
             initialized: AtomicBool::new(false),
             sources: Arc::new(SourceCache::default()),
             code_mode: false,
+            builtin_selection: hya_bundle::BuiltinBundleSelection::full(),
             base: std::sync::Mutex::new(Arc::new(BaseCatalogs {
                 revision: 0,
                 installed: Vec::new(),
@@ -406,6 +432,13 @@ impl InstalledBundleRefresh {
     #[must_use]
     pub fn with_code_mode(mut self, enabled: bool) -> Self {
         self.code_mode = enabled;
+        self
+    }
+
+    /// Filter first-party built-in bundles according to `config.yaml` `bundles.builtin`.
+    #[must_use]
+    pub fn with_builtin_selection(mut self, selection: hya_bundle::BuiltinBundleSelection) -> Self {
+        self.builtin_selection = selection;
         self
     }
 
@@ -531,7 +564,7 @@ impl InstalledBundleRefresh {
             .into_iter()
             .flat_map(|snapshot| snapshot.bundles)
             .map(|loaded| Arc::new(loaded.prepared));
-        let first_party = first_party_catalogs()?
+        let first_party = first_party_catalogs_for(&self.builtin_selection)?
             .into_iter()
             .map(Arc::new)
             .collect::<Vec<_>>();
@@ -605,6 +638,7 @@ impl InstalledBundleRefresh {
                     let installed = &installed.bundles()[0];
                     installed.identity().id == bundle.identity().id
                         || installed.namespace() == bundle.namespace()
+                        || installed.overrides() == Some(bundle.identity().id.as_str())
                 })
             })
             .map(Arc::as_ref)

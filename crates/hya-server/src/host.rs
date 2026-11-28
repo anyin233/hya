@@ -22,7 +22,7 @@
 //!
 //! [`GrpcHostGuard`] also refuses a gRPC call carrying the removed
 //! `x-hya-directory` metadata (`INVALID_ARGUMENT`), like the HTTP router's
-//! [`crate::v1::directory_header_guard`] answers `400 invalid_argument`.
+//! [`crate::v2::directory_header_guard`] answers `400 invalid_argument`.
 
 use std::collections::BTreeSet;
 use std::future::Future;
@@ -38,7 +38,7 @@ use axum::response::{IntoResponse as _, Response};
 use hya_api::error::Code;
 
 use crate::Origin;
-use crate::v1::V1Error;
+use crate::v2::V2Error;
 
 /// The loopback names every server accepts.
 pub const LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "[::1]"];
@@ -197,16 +197,16 @@ pub(crate) fn admit(
     headers: &HeaderMap,
     uri: &Uri,
     extensions: &axum::http::Extensions,
-) -> Result<(), V1Error> {
+) -> Result<(), V2Error> {
     let relay = Origin::of(extensions) == Origin::Relay;
     if relay && is_browser(headers) {
-        return Err(V1Error::new(
+        return Err(V2Error::new(
             Code::PermissionDenied,
             "browser requests are not accepted over the relay (a request with Origin or Sec-Fetch-* headers arrived through the relay)",
         ));
     }
     let Ok(names) = named_hosts(headers, uri) else {
-        return Err(V1Error::new(
+        return Err(V2Error::new(
             Code::PermissionDenied,
             "request refused: the Host header is not valid text",
         ));
@@ -214,7 +214,7 @@ pub(crate) fn admit(
     if names.is_empty() {
         let network = relay || extensions.get::<ConnectInfo<SocketAddr>>().is_some();
         if network {
-            return Err(V1Error::new(
+            return Err(V2Error::new(
                 Code::PermissionDenied,
                 "request refused: it names no Host (send a Host header such as 127.0.0.1:<port>)",
             ));
@@ -223,7 +223,7 @@ pub(crate) fn admit(
     }
     for name in names {
         if !policy.allows(name) {
-            return Err(V1Error::new(
+            return Err(V2Error::new(
                 Code::PermissionDenied,
                 format!(
                     "request refused: Host {} is not an allowed name for this server (allowed: {}); if you reach this server by that name on purpose, start it with --allow-host <name>",
@@ -332,9 +332,9 @@ where
         // Admitted, but still sending the removed scope header: refused as
         // `INVALID_ARGUMENT` (3), like the HTTP router answers 400.
         let refusal = refusal.map(|message| ("7", message)).or_else(|| {
-            crate::v1::removed_directory_header(request.headers())
+            crate::v2::removed_directory_header(request.headers())
                 .err()
-                .map(|_| ("3", crate::v1::REMOVED_DIRECTORY_HEADER_MESSAGE.to_owned()))
+                .map(|_| ("3", crate::v2::REMOVED_DIRECTORY_HEADER_MESSAGE.to_owned()))
         });
         if let Some((status, message)) = refusal {
             let mut response = axum::http::Response::new(RB::default());
@@ -454,7 +454,7 @@ mod tests {
         if let Some(host) = host {
             headers.insert("host", host.parse().unwrap());
         }
-        (headers, Uri::from_static("/v1/health"), extensions)
+        (headers, Uri::from_static("/v2/health"), extensions)
     }
 
     #[test]
@@ -474,9 +474,9 @@ mod tests {
         assert!(admit(&policy, &headers, &uri, &extensions).is_err());
 
         let empty = HeaderMap::new();
-        let bad_uri: Uri = "http://evil.example/v1/health".parse().unwrap();
+        let bad_uri: Uri = "http://evil.example/v2/health".parse().unwrap();
         assert!(admit(&policy, &empty, &bad_uri, &axum::http::Extensions::new()).is_err());
-        let ok_uri: Uri = "http://127.0.0.1:9/v1/health".parse().unwrap();
+        let ok_uri: Uri = "http://127.0.0.1:9/v2/health".parse().unwrap();
         assert!(admit(&policy, &empty, &ok_uri, &axum::http::Extensions::new()).is_ok());
 
         for header in [

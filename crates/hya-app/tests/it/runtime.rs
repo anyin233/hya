@@ -91,7 +91,7 @@ async fn hya_runtime_starts_and_shuts_down_an_offline_server() {
     let response = runtime
         .router()
         .clone()
-        .oneshot(Request::get("/v1/health").body(Body::empty()).unwrap())
+        .oneshot(Request::get("/v2/health").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(response.status(), axum::http::StatusCode::OK);

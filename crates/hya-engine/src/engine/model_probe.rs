@@ -1,5 +1,5 @@
 //! One-shot model probe: the "does this model answer?" check behind the
-//! provider view's test action (`POST /v1/providers/{provider_id}/test`).
+//! provider view's test action (`POST /v2/providers/{provider_id}/test`).
 
 use futures::StreamExt as _;
 use hya_proto::{Event, FinishReason, Message, MessageId, ModelRef, Part, PartId, SessionId};

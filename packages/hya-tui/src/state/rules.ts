@@ -1,6 +1,6 @@
 /**
  * The Saved Rules view (`/rules`, docs/tui.md "Saved Rules"): pure state and
- * keys over `GET /v1/permissions/rules` / `DELETE /v1/permissions/rules/{id}`
+ * keys over `GET /v2/permissions/rules` / `DELETE /v2/permissions/rules/{id}`
  * (components/RulesView.tsx renders it; app/rules.ts owns the calls).
  *
  * One screen: the saved rules, newest first as the server returns them.

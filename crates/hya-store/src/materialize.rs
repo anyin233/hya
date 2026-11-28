@@ -86,7 +86,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use crate::SessionStore;
-    use hya_proto::{AgentName, Event, ModelRef, SubagentMode};
+    use hya_proto::{AgentName, Event, ModelRef};
     use sqlx::Row;
 
     #[tokio::test]
@@ -142,13 +142,14 @@ mod tests {
         store
             .append_event(
                 root,
-                &Event::AgentRegistered {
+                &Event::Extension {
                     session: root,
-                    agent_session: child,
-                    handle: "general-1".into(),
-                    parent: Some("main".into()),
-                    agent_type: AgentName::new("general"),
-                    mode: SubagentMode::Resident,
+                    bundle: "hya/multi-agent".into(),
+                    kind: "agent_registered".into(),
+                    payload: serde_json::json!({
+                        "agent_session": child,
+                        "handle": "general-1",
+                    }),
                 },
             )
             .await
@@ -159,7 +160,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             sessions, 0,
-            "registration must not create placeholder sessions"
+            "extension events must not create placeholder sessions"
         );
         for (session, parent, kind) in [
             (root, None, hya_proto::SessionKind::Project),

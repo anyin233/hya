@@ -1,15 +1,15 @@
 kind: Bundle
+schema_version: 2
 version_ref: hya
 identity:
   id: hya/core-commands
   version: 0.0.0
   publisher: hya
 namespace: core-commands
-extensions:
-  files:
-    - id: commands
-      path: commands.yaml
-    - id: init
-      path: commands/initialize.txt
-    - id: review
-      path: commands/review.txt
+assets:
+  - id: commands
+    path: commands.yaml
+  - id: init
+    path: commands/initialize.txt
+  - id: review
+    path: commands/review.txt

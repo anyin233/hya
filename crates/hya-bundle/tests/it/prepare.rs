@@ -29,7 +29,7 @@ fn rehash_bundle(document: &mut serde_json::Value) -> Vec<u8> {
 
 fn agent_source(root: &str, bundle_id: &str, stable_id: &str, reverse_files: bool) -> BundleSource {
     let manifest = format!(
-        "kind: Bundle\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\nagents:\n  - id: {stable_id}\n    role: main\n    prompt: prompts/lead.md\n"
+        "kind: Bundle\nschema_version: 2\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\nagents:\n  - id: {stable_id}\n    role: main\n    prompt: prompts/lead.md\n"
     );
     let mut files = vec![
         SourceFile::new("bundle.yaml", manifest.into_bytes()),
@@ -46,7 +46,7 @@ fn agent_source(root: &str, bundle_id: &str, stable_id: &str, reverse_files: boo
 
 fn skill_source(resource_path: &str) -> BundleSource {
     let manifest = format!(
-        "kind: Bundle\nidentity:\n  id: hya/skills\n  version: 1.0.0\n  publisher: hya\nresources:\n  skills:\n    - id: docs\n      path: {resource_path}\nagents:\n  - id: lead\n    role: main\n"
+        "kind: Bundle\nschema_version: 2\nidentity:\n  id: hya/skills\n  version: 1.0.0\n  publisher: hya\nresources:\n  skills:\n    - id: docs\n      path: {resource_path}\nagents:\n  - id: lead\n    role: main\n"
     );
     BundleSource::new(
         "skill-source",
@@ -64,7 +64,7 @@ fn workflow_source(include_orphan: bool) -> BundleSource {
         ""
     };
     let manifest = format!(
-        "kind: Bundle\nidentity:\n  id: hya/workflow-demo\n  version: 1.0.0\n  publisher: hya\nworkflow:\n  id: demo\n  path: workflows/demo.hya.md\nagents:\n  - id: worker\n    role: subagent\n    prompt: prompts/worker.md\n{extra}"
+        "kind: Bundle\nschema_version: 2\nidentity:\n  id: hya/workflow-demo\n  version: 1.0.0\n  publisher: hya\nworkflow:\n  id: demo\n  path: workflows/demo.hya.md\nagents:\n  - id: worker\n    role: subagent\n    prompt: prompts/worker.md\n{extra}"
     );
     let workflow = b"---\nkind: Workflow\nname: demo\ndescription: One packaged Workflow.\nnodes:\n  execute:\n    agent: worker\n    directive: Execute the request.\n---\nflowchart TD\n  execute\n";
     let mut files = vec![
@@ -93,7 +93,7 @@ fn workflow_closure_source(include_verifier: bool, include_helper: bool) -> Bund
         ""
     };
     let manifest = format!(
-        "kind: Bundle\nidentity:\n  id: hya/workflow-closure\n  version: 1.0.0\n  publisher: hya\nworkflow:\n  id: closure\n  path: workflows/closure.hya.md\nagents:\n  - id: worker\n    role: subagent\n    prompt: prompts/worker.md\n    can_spawn:\n      - helper\n{verifier}{helper}"
+        "kind: Bundle\nschema_version: 2\nidentity:\n  id: hya/workflow-closure\n  version: 1.0.0\n  publisher: hya\nworkflow:\n  id: closure\n  path: workflows/closure.hya.md\nagents:\n  - id: worker\n    role: subagent\n    prompt: prompts/worker.md\n    can_spawn:\n      - helper\n{verifier}{helper}"
     );
     let workflow = b"---\nkind: Workflow\nname: closure\ndescription: Verifier and helper Workflow.\nnodes:\n  execute:\n    agent: worker\n    directive: Execute the request.\n    mode: loop\n    verify:\n      agent: verifier\n      until: the result is valid\n      max_iterations: 2\n---\nflowchart TD\n  execute\n";
     let mut files = vec![
@@ -115,7 +115,7 @@ fn workflow_closure_source(include_verifier: bool, include_helper: bool) -> Bund
 
 fn schema_bundle(schemas_block: Option<&str>) -> BundleSource {
     let manifest = format!(
-        "kind: Bundle\nidentity:\n  id: hya/schema-demo\n  version: 1.0.0\n  publisher: hya\n{}resources:\n  tools:\n    - id: query\n      path: extensions/runtime.js\nextensions:\n  js:\n    - id: runtime\n      path: extensions/runtime.js\nagents:\n  - id: lead\n    role: main\n    resource_view:\n      allow:\n        - query\n        - runtime\n",
+        "kind: Bundle\nschema_version: 2\nidentity:\n  id: hya/schema-demo\n  version: 1.0.0\n  publisher: hya\nruntime:\n  kind: js\n  mode: managed\n  entry: extensions/runtime.js\n{}resources:\n  tools:\n    - id: query\n      path: extensions/runtime.js\nagents:\n  - id: lead\n    role: main\n    resource_view:\n      allow:\n        - query\n        - runtime\n",
         schemas_block.unwrap_or_default()
     );
     BundleSource::new(
@@ -127,10 +127,10 @@ fn schema_bundle(schemas_block: Option<&str>) -> BundleSource {
     )
 }
 
-fn process_bundle(process_block: Option<&str>) -> BundleSource {
-    let process = process_block.map_or_else(String::new, |block| format!("  process:\n{block}"));
+fn process_bundle(runtime_block: Option<&str>) -> BundleSource {
+    let runtime = runtime_block.map_or_else(String::new, |block| format!("runtime:\n{block}"));
     let manifest = format!(
-        "kind: Bundle\nidentity:\n  id: hya/process-demo\n  version: 1.0.0\n  publisher: hya\nextensions:\n{process}\nagents:\n  - id: process-lead\n    role: main\n"
+        "kind: Bundle\nschema_version: 2\nidentity:\n  id: hya/process-demo\n  version: 1.0.0\n  publisher: hya\n{runtime}\nagents:\n  - id: process-lead\n    role: main\n"
     );
     BundleSource::new(
         "process-demo",
@@ -140,7 +140,7 @@ fn process_bundle(process_block: Option<&str>) -> BundleSource {
 
 fn mcp_bundle(mcp_list: &str, files: &[(&str, &str)]) -> BundleSource {
     let manifest = format!(
-        "kind: Bundle\nidentity:\n  id: hya/mcp-demo\n  version: 1.0.0\n  publisher: hya\nresources:\n  mcp:\n{mcp_list}\nagents:\n  - id: mcp-lead\n    role: main\n"
+        "kind: Bundle\nschema_version: 2\nidentity:\n  id: hya/mcp-demo\n  version: 1.0.0\n  publisher: hya\nresources:\n  mcp:\n{mcp_list}\nagents:\n  - id: mcp-lead\n    role: main\n"
     );
     let mut sources = vec![SourceFile::new("bundle.yaml", manifest.into_bytes())];
     for (path, content) in files {
@@ -155,7 +155,7 @@ fn legacy_fields_source(agent_fields: &str, process_fields: &str) -> BundleSourc
         vec![SourceFile::new(
             "bundle.yaml",
             format!(
-                "kind: Bundle\nidentity: {{ id: acme/legacy, version: 1.0.0, publisher: acme }}\nagents: [{{ id: legacy, role: main{agent_fields} }}]\nextensions:\n  process: {{ kind: bun, command: [bun, run, runtime.ts]{process_fields} }}\n"
+                "kind: Bundle\nschema_version: 2\nidentity: {{ id: acme/legacy, version: 1.0.0, publisher: acme }}\nagents: [{{ id: legacy, role: main{agent_fields} }}]\nruntime: {{ kind: js, mode: process, command: [bun, run, runtime.ts]{process_fields} }}\n"
             ),
         )],
     )
@@ -176,7 +176,7 @@ fn old_agent_bundle_kind_agentless_multi_agent_and_mixed_catalog() {
         "plugin",
         vec![SourceFile::new(
             "bundle.yaml",
-            b"kind: Bundle\nidentity: { id: hya/plugin-pack, version: 1.0.0, publisher: hya }\n"
+            b"kind: Bundle\nschema_version: 2\nidentity: { id: hya/plugin-pack, version: 1.0.0, publisher: hya }\n"
                 .as_slice(),
         )],
     ))
@@ -189,7 +189,7 @@ fn old_agent_bundle_kind_agentless_multi_agent_and_mixed_catalog() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                b"kind: Bundle\nidentity: { id: hya/agent-set, version: 1.0.0, publisher: hya }\nagents:\n  - { id: alpha, role: main, prompt: prompts/alpha.md }\n  - { id: beta, role: subagent, prompt: prompts/beta.md }\n".as_slice(),
+                b"kind: Bundle\nschema_version: 2\nidentity: { id: hya/agent-set, version: 1.0.0, publisher: hya }\nagents:\n  - { id: alpha, role: main, prompt: prompts/alpha.md }\n  - { id: beta, role: subagent, prompt: prompts/beta.md }\n".as_slice(),
             ),
             SourceFile::new("prompts/alpha.md", b"Alpha.\n".as_slice()),
             SourceFile::new("prompts/beta.md", b"Beta.\n".as_slice()),
@@ -215,17 +215,17 @@ fn old_agent_bundle_kind_agentless_multi_agent_and_mixed_catalog() {
         Some("beta")
     );
 
-    // Static rust extension without extensions.process is unsupported.
+    // Legacy `extensions:` block (including `extensions.rust`) rejected under schema_version 2.
     let rust_ext = prepare_package(BundleSource::new(
         "plugin-rust",
         vec![SourceFile::new(
             "bundle.yaml",
-            b"kind: Bundle\nidentity: { id: hya/plugins-rust, version: 1.0.0, publisher: hya }\nextensions:\n  rust: [{ id: runtime, path: runtime.rs }]\n".as_slice(),
+            b"kind: Bundle\nschema_version: 2\nidentity: { id: hya/plugins-rust, version: 1.0.0, publisher: hya }\nextensions:\n  rust: [{ id: runtime, path: runtime.rs }]\n".as_slice(),
         )],
     ));
     assert!(matches!(
         rust_ext,
-        Err(BundleError::UnsupportedBundleFeature { feature, .. }) if feature == "extensions.rust"
+        Err(BundleError::InvalidManifest { detail, .. }) if detail.contains("unknown field `extensions`")
     ));
 }
 
@@ -236,7 +236,7 @@ fn static_skill_round_trips_and_malformed_declarations_are_rejected() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                b"kind: Bundle\nidentity: { id: hya/plugins-demo, version: 1.0.0, publisher: hya }\nresources:\n  skills: [{ id: guide, path: skills/guide.md }]\n".as_slice(),
+                b"kind: Bundle\nschema_version: 2\nidentity: { id: hya/plugins-demo, version: 1.0.0, publisher: hya }\nresources:\n  skills: [{ id: guide, path: skills/guide.md }]\n".as_slice(),
             ),
             SourceFile::new("skills/guide.md", b"Use the guide.\n".as_slice()),
         ],
@@ -248,7 +248,7 @@ fn static_skill_round_trips_and_malformed_declarations_are_rejected() {
 
     for key in ["agent", "agents", "workflow", "channels"] {
         let text = format!(
-            "kind: Bundle\nidentity: {{ id: hya/plugins-demo, version: 1.0.0, publisher: hya }}\n{key}: {{}}\n"
+            "kind: Bundle\nschema_version: 2\nidentity: {{ id: hya/plugins-demo, version: 1.0.0, publisher: hya }}\n{key}: {{}}\n"
         );
         assert!(
             prepare_package(BundleSource::new(
@@ -289,7 +289,7 @@ fn deterministic_prepare_normalized_paths_directory_reader_and_process_digest() 
 
     let wf_cmd = |cmd: &str| {
         let manifest = format!(
-            "kind: Bundle\nidentity: {{ id: hya/workflow-demo, version: 1.0.0, publisher: hya }}\nworkflow: {{ id: demo, path: workflows/demo.hya.md }}\nagents: [{{ id: worker, role: subagent, prompt: prompts/worker.md }}]\nextensions:\n  process: {{ kind: rust, command: [{cmd}] }}\n"
+            "kind: Bundle\nschema_version: 2\nidentity: {{ id: hya/workflow-demo, version: 1.0.0, publisher: hya }}\nworkflow: {{ id: demo, path: workflows/demo.hya.md }}\nagents: [{{ id: worker, role: subagent, prompt: prompts/worker.md }}]\nruntime: {{ kind: js, mode: process, command: [{cmd}] }}\n"
         );
         prepare_package(workflow_source(false).with_file("bundle.yaml", manifest.into_bytes()))
             .expect("process workflow")
@@ -332,7 +332,7 @@ fn workflow_bundle_prepares_v4_closure_and_retains_model_routes() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                b"kind: Bundle\nidentity: { id: hya/workflow-model-routes, version: 1.0.0, publisher: hya }\nworkflow: { id: routed, path: workflows/routed.hya.md }\nagents:\n  - { id: worker, role: subagent, prompt: prompts/worker.md }\n  - { id: verifier, role: subagent, prompt: prompts/verifier.md }\n".as_slice(),
+                b"kind: Bundle\nschema_version: 2\nidentity: { id: hya/workflow-model-routes, version: 1.0.0, publisher: hya }\nworkflow: { id: routed, path: workflows/routed.hya.md }\nagents:\n  - { id: worker, role: subagent, prompt: prompts/worker.md }\n  - { id: verifier, role: subagent, prompt: prompts/verifier.md }\n".as_slice(),
             ),
             SourceFile::new(
                 "workflows/routed.hya.md",
@@ -362,7 +362,7 @@ fn workflow_bundle_rejects_unreachable_and_missing_closure_agents() {
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    b"kind: Bundle\nidentity: { id: hya/workflow-missing-agent, version: 1.0.0, publisher: hya }\nworkflow: { id: demo, path: workflows/demo.hya.md }\nagents: [{ id: worker, role: subagent, prompt: prompts/worker.md }]\n".as_slice(),
+                    b"kind: Bundle\nschema_version: 2\nidentity: { id: hya/workflow-missing-agent, version: 1.0.0, publisher: hya }\nworkflow: { id: demo, path: workflows/demo.hya.md }\nagents: [{ id: worker, role: subagent, prompt: prompts/worker.md }]\n".as_slice(),
                 ),
                 SourceFile::new(
                     "workflows/demo.hya.md",
@@ -493,7 +493,7 @@ fn prepared_decode_rejects_forged_singular_content_noncanonical_and_unknown_fiel
         "spawn-order",
         vec![SourceFile::new(
             "bundle.yaml",
-            b"kind: Bundle\nidentity: { id: hya/spawn-order, version: 1.0.0, publisher: hya }\nagents: [{ id: lead, role: main, can_spawn: [beta, alpha] }]\n".as_slice(),
+            b"kind: Bundle\nschema_version: 2\nidentity: { id: hya/spawn-order, version: 1.0.0, publisher: hya }\nagents: [{ id: lead, role: main, can_spawn: [beta, alpha] }]\n".as_slice(),
         )],
     ))
     .expect("spawn");
@@ -568,7 +568,7 @@ fn prepared_decode_revalidates_resource_and_hook_references() {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                b"kind: Bundle\nidentity: { id: hya/prepared-hook, version: 1.0.0, publisher: hya }\nresources:\n  hooks: [{ id: event, path: extensions/runtime.js }]\nextensions:\n  js: [{ id: runtime, path: extensions/runtime.js }]\nagents: [{ id: lead, role: main }]\n".as_slice(),
+                b"kind: Bundle\nschema_version: 2\nidentity: { id: hya/prepared-hook, version: 1.0.0, publisher: hya }\nruntime: { kind: js, mode: managed, entry: extensions/runtime.js }\nresources:\n  hooks: [{ id: event, path: extensions/runtime.js }]\nagents: [{ id: lead, role: main }]\n".as_slice(),
             ),
             SourceFile::new("extensions/runtime.js", b"export const runtime = true;\n".as_slice()),
         ],
@@ -643,7 +643,7 @@ fn manifest_schemas_prepare_round_trip_and_reject_invalid() {
 #[test]
 fn manifest_extensions_process_prepare_round_trip_and_reject_invalid() {
     let prepared = prepare_package(process_bundle(Some(
-        "    kind: bun\n    command: [bun, run, extensions/runtime.ts]\n",
+        "  kind: js\n  mode: process\n  command: [bun, run, extensions/runtime.ts]\n",
     )))
     .expect("valid process");
     let process = prepared
@@ -662,7 +662,7 @@ fn manifest_extensions_process_prepare_round_trip_and_reject_invalid() {
     PreparedCatalog::decode(plain.bytes(), plain.digest()).expect("plain decodes");
 
     for command in ["[]", "[\"\"]", "[\"bun\", \"\"]"] {
-        let block = format!("    kind: bun\n    command: {command}\n");
+        let block = format!("  kind: js\n  mode: process\n  command: {command}\n");
         assert!(matches!(
             prepare_package(process_bundle(Some(&block))),
             Err(BundleError::InvalidManifest { detail, .. }) if detail.contains("command")
@@ -670,7 +670,7 @@ fn manifest_extensions_process_prepare_round_trip_and_reject_invalid() {
     }
     assert!(matches!(
         prepare_package(process_bundle(Some(
-            "    kind: python\n    command: [python3, server.py]\n"
+            "  kind: python\n  command: [python3, server.py]\n"
         ))),
         Err(BundleError::InvalidManifest { .. })
     ));
@@ -756,7 +756,7 @@ fn manifest_self_check_prepares_with_default_timeout_and_rejects_invalid() {
         "self-check",
         vec![SourceFile::new(
             "bundle.yaml",
-            b"kind: Bundle\nidentity: { id: acme/check, version: 1.0.0, publisher: acme }\ncheck: { command: [echo, ok] }\n".as_slice(),
+            b"kind: Bundle\nschema_version: 2\nidentity: { id: acme/check, version: 1.0.0, publisher: acme }\ncheck: { command: [echo, ok] }\n".as_slice(),
         )],
     ))
     .expect("valid self-check");
@@ -770,7 +770,7 @@ fn manifest_self_check_prepares_with_default_timeout_and_rejects_invalid() {
             vec![SourceFile::new(
                 "bundle.yaml",
                 format!(
-                    "kind: Bundle\nidentity: {{ id: acme/check, version: 1.0.0, publisher: acme }}\ncheck: {check}\n"
+                    "kind: Bundle\nschema_version: 2\nidentity: {{ id: acme/check, version: 1.0.0, publisher: acme }}\ncheck: {check}\n"
                 ),
             )],
         );
@@ -783,7 +783,7 @@ fn manifest_self_check_prepares_with_default_timeout_and_rejects_invalid() {
 
 #[test]
 fn single_markdown_bundle_filename_markers_and_explicit_prompt() {
-    let markers = "kind: Bundle\nidentity:\n  id: hya/markdown\n  version: 1.0.0\n  publisher: hya\nagents:\n  - id: markdown-lead\n    role: main";
+    let markers = "kind: Bundle\nschema_version: 2\nidentity:\n  id: hya/markdown\n  version: 1.0.0\n  publisher: hya\nagents:\n  - id: markdown-lead\n    role: main";
     let md = |fm: &str, name: &str| {
         prepare_package(BundleSource::new(
             "markdown",
@@ -808,7 +808,10 @@ fn single_markdown_bundle_filename_markers_and_explicit_prompt() {
         Err(BundleError::InvalidManifest { detail, .. }) if detail.contains("api_version")
     ));
     assert!(matches!(
-        md(&markers.replace("kind: Bundle\n", ""), "bundle.hya.md"),
+        md(
+            &markers.replace("kind: Bundle\nschema_version: 2\n", ""),
+            "bundle.hya.md"
+        ),
         Err(BundleError::InvalidManifest { .. })
     ));
 
@@ -818,7 +821,7 @@ fn single_markdown_bundle_filename_markers_and_explicit_prompt() {
         vec![
             SourceFile::new(
                 "bundle.hya.md",
-                b"---\nkind: Bundle\nidentity: { id: hya/markdown-explicit-prompt, version: 1.0.0, publisher: hya }\nagents: [{ id: markdown-alpha, role: main, prompt: prompts/alpha.md }]\n---\n\n".as_slice(),
+                b"---\nkind: Bundle\nschema_version: 2\nidentity: { id: hya/markdown-explicit-prompt, version: 1.0.0, publisher: hya }\nagents: [{ id: markdown-alpha, role: main, prompt: prompts/alpha.md }]\n---\n\n".as_slice(),
             ),
             SourceFile::new("prompts/alpha.md", b"Alpha prompt.".as_slice()),
         ],
@@ -838,7 +841,7 @@ fn agent_set_determinism_private_flag_and_rejections() {
             vec![SourceFile::new(
                 "bundle.yaml",
                 format!(
-                    "kind: Bundle\nidentity: {{ id: acme/team, version: 1.0.0, publisher: acme }}\nagents: {agents}\n{extra}\n"
+                    "kind: Bundle\nschema_version: 2\nidentity: {{ id: acme/team, version: 1.0.0, publisher: acme }}\nagents: {agents}\n{extra}\n"
                 ),
             )],
         )
@@ -920,7 +923,7 @@ fn agent_channels_prepare_validate_reject_forged_and_first_party_preset() {
             vec![SourceFile::new(
                 "bundle.yaml",
                 format!(
-                    "kind: Bundle\nidentity: {{ id: hya/agent-channels, version: 1.0.0, publisher: hya }}\nagents: {agents}\nchannels:\n{channels}\n"
+                    "kind: Bundle\nschema_version: 2\nidentity: {{ id: hya/agent-channels, version: 1.0.0, publisher: hya }}\nagents: {agents}\nchannels:\n{channels}\n"
                 ),
             )],
         )
@@ -948,7 +951,7 @@ fn agent_channels_prepare_validate_reject_forged_and_first_party_preset() {
         "empty",
         vec![SourceFile::new(
             "bundle.yaml",
-            b"kind: Bundle\nidentity: { id: acme/empty, version: 1.0.0, publisher: acme }\nagents: []\n".as_slice(),
+            b"kind: Bundle\nschema_version: 2\nidentity: { id: acme/empty, version: 1.0.0, publisher: acme }\nagents: []\n".as_slice(),
         )],
     ))
     .is_ok());
@@ -1023,17 +1026,18 @@ fn agent_channels_prepare_validate_reject_forged_and_first_party_preset() {
 
 #[test]
 fn manifest_fields_advertise_timeout_handoff_and_legacy_bytes_parity() {
-    // Legacy bytes & digest regression guard.
-    let legacy = prepare_package(legacy_fields_source("", "")).expect("legacy");
-    assert_eq!(
-        legacy.bytes(),
-        include_bytes!("../fixtures/legacy_manifest.json")
-    );
-    assert_eq!(
-        legacy.digest(),
-        "c1d2fd35397977b19174e2360fd9895163a68919ed368964a7cd5c452b5e042d"
-    );
-    let dec = PreparedCatalog::decode(legacy.bytes(), legacy.digest()).expect("legacy dec");
+    // Existing prepared catalog bytes & digest decode compatibly.
+    let legacy_bytes = include_bytes!("../fixtures/legacy_manifest.json");
+    let legacy_dec = PreparedCatalog::decode(
+        legacy_bytes,
+        "c1d2fd35397977b19174e2360fd9895163a68919ed368964a7cd5c452b5e042d",
+    )
+    .expect("legacy prepared catalog decodes");
+    assert_eq!(legacy_dec.bundles()[0].identity().id, "acme/legacy");
+
+    // Default `advertise: []` and `handoff: model` normalize to identical prepared bytes.
+    let baseline = prepare_package(legacy_fields_source("", "")).expect("v2 process");
+    let dec = PreparedCatalog::decode(baseline.bytes(), baseline.digest()).expect("v2 dec");
     assert!(dec.bundles()[0].agents()[0].advertise.is_empty());
     assert_eq!(
         dec.bundle_process("acme/legacy").expect("proc").timeout_ms,
@@ -1041,13 +1045,13 @@ fn manifest_fields_advertise_timeout_handoff_and_legacy_bytes_parity() {
     );
     assert_eq!(dec.bundles()[0].agents()[0].handoff, HandoffPolicy::Model);
     assert_eq!(
-        legacy.bytes(),
+        baseline.bytes(),
         prepare_package(legacy_fields_source(", advertise: []", ""))
             .expect("empty adv")
             .bytes()
     );
     assert_eq!(
-        legacy.bytes(),
+        baseline.bytes(),
         prepare_package(legacy_fields_source(", handoff: model", ""))
             .expect("model handoff")
             .bytes()
@@ -1102,13 +1106,13 @@ fn manifest_fields_advertise_timeout_handoff_and_legacy_bytes_parity() {
 
 #[test]
 fn process_resources_executables_libraries_and_support_files_round_trip() {
-    // 1. Process hooks + declared support files.
+    // 1. Process hooks + declared support assets.
     let proc_src = BundleSource::new(
         "process",
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                b"kind: Bundle\nidentity: { id: acme/process, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\n  files: [{ id: runtime, path: runtime.py }]\nresources:\n  tools: [{ id: echo, path: declarations.json }]\n  hooks:\n    - { id: goal.evaluate, path: declarations.json }\n    - { id: message.user.before, path: declarations.json }\n".as_slice(),
+                b"kind: Bundle\nschema_version: 2\nidentity: { id: acme/process, version: 1.0.0, publisher: acme }\nruntime: { kind: js, mode: process, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\nassets: [{ id: runtime, path: runtime.py }]\nresources:\n  tools: [{ id: echo, path: declarations.json }]\n  hooks:\n    - { id: goal.evaluate, path: declarations.json }\n    - { id: message.user.before, path: declarations.json }\n".as_slice(),
             ),
             SourceFile::new("runtime.py", b"print('fixture')\n".as_slice()),
             SourceFile::new("declarations.json", b"{}".as_slice()),
@@ -1120,13 +1124,13 @@ fn process_resources_executables_libraries_and_support_files_round_trip() {
     PreparedCatalog::decode(prep.bytes(), prep.digest()).expect("decode");
     write_public_package(&proc_src).expect("package");
 
-    // 2. Inert static support files without process.
+    // 2. Inert static support assets without process.
     let orphan = prepare_package(BundleSource::new(
         "orphan",
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                b"kind: Bundle\nidentity: { id: acme/orphan, version: 1.0.0, publisher: acme }\nextensions:\n  files: [{ id: orphan, path: orphan.py }]\n".as_slice(),
+                b"kind: Bundle\nschema_version: 2\nidentity: { id: acme/orphan, version: 1.0.0, publisher: acme }\nassets: [{ id: orphan, path: orphan.py }]\n".as_slice(),
             ),
             SourceFile::new("orphan.py", b"print('unused')\n".as_slice()),
         ],
@@ -1135,40 +1139,14 @@ fn process_resources_executables_libraries_and_support_files_round_trip() {
     assert!(orphan.process_extensions().is_empty() && orphan.bundles()[0].tools().is_empty());
     assert_eq!(orphan.bundles()[0].extensions()[0].source_path, "orphan.py");
 
-    // 3. Non-UTF8 native executable & standalone native library round-trip.
-    let elf = vec![0x7f, b'E', b'L', b'F', 0, 0xff, 0x80];
-    let exec_src = BundleSource::new(
-        "native-exec",
-        vec![
-            SourceFile::new(
-                "bundle.yaml",
-                b"kind: Bundle\nidentity: { id: acme/native, version: 1.0.0, publisher: acme }\nextensions:\n  rust: [{ id: provider, path: bin/provider }]\n  process: { kind: rust, command: ['${BUNDLE_ROOT}/bin/provider'] }\nresources:\n  tools: [{ id: echo, path: declarations.json }]\n".as_slice(),
-            ),
-            SourceFile::new("bin/provider", elf.clone()),
-            SourceFile::new("declarations.json", b"{}".as_slice()),
-        ],
-    );
-    let exec_prep = prepare_package(exec_src.clone()).expect("native exec");
-    assert_eq!(
-        exec_prep.bundles()[0].extensions()[0]
-            .source_bytes()
-            .expect("bytes"),
-        elf
-    );
-    assert_eq!(
-        inspect_public_package(&write_public_package(&exec_src).expect("pkg"))
-            .expect("ins")
-            .bytes(),
-        exec_prep.bytes()
-    );
-
+    // 3. Standalone native library via `runtime: { kind: native, library: ... }` round-trip.
     let dylib = vec![0xcf, 0xfa, 0xed, 0xfe, 0, 0xff, 0x80];
     let lib_src = BundleSource::new(
         "native-lib",
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                b"kind: Bundle\nidentity: { id: hya/network-tools, version: 1.0.0, publisher: hya }\nextensions:\n  libraries: [{ id: runtime, path: native/libhya_network_tools.dylib }]\n".as_slice(),
+                b"kind: Bundle\nschema_version: 2\nidentity: { id: hya/network-tools, version: 1.0.0, publisher: hya }\nruntime: { kind: native, abi_version: 1, library: native/libhya_network_tools.dylib }\n".as_slice(),
             ),
             SourceFile::new("native/libhya_network_tools.dylib", dylib.clone()),
         ],
@@ -1196,57 +1174,42 @@ fn process_resources_executables_libraries_and_support_files_round_trip() {
 
 #[test]
 fn library_and_process_extensions_sort_by_local_id_and_admit_router_hooks() {
-    for (with_proc, kind) in [
-        (false, "files"),
-        (true, "files"),
-        (true, "js"),
-        (true, "rust"),
-    ] {
-        let proc_line = if with_proc {
-            "  process: { kind: rust, command: ['${BUNDLE_ROOT}/types.bin'] }\n"
-        } else {
-            ""
-        };
-        let src = BundleSource::new(
-            "lib-order",
-            vec![
-                SourceFile::new(
-                    "bundle.yaml",
-                    format!(
-                        "kind: Bundle\nidentity: {{ id: hya/network-tools, version: 1.0.0, publisher: hya }}\nextensions:\n{proc_line}  {kind}: [{{ id: types, path: types.bin }}]\n  libraries: [{{ id: runtime, path: native/libhya_network_tools.so }}]\n"
-                    ),
-                ),
-                SourceFile::new("types.bin", b"{}".as_slice()),
-                SourceFile::new("native/libhya_network_tools.so", vec![0, 0xff, 0x80]),
-            ],
-        );
-        let prep = prepare_package(src.clone()).expect("prep lib+ext");
-        assert_eq!(
-            prep.bundles()[0]
-                .extensions()
-                .iter()
-                .map(|r| r.local_id.as_str())
-                .collect::<Vec<_>>(),
-            ["runtime", "types"],
-            "{with_proc}/{kind}"
-        );
-        assert_eq!(
-            inspect_public_package(&write_public_package(&src).expect("pkg"))
-                .expect("ins")
-                .bytes(),
-            prep.bytes()
-        );
-    }
+    let src = BundleSource::new(
+        "lib-order",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                "kind: Bundle\nschema_version: 2\nidentity: { id: hya/network-tools, version: 1.0.0, publisher: hya }\nruntime: { kind: native, abi_version: 1, library: native/libhya_network_tools.so }\nassets: [{ id: types, path: types.bin }]\n",
+            ),
+            SourceFile::new("types.bin", b"{}".as_slice()),
+            SourceFile::new("native/libhya_network_tools.so", vec![0, 0xff, 0x80]),
+        ],
+    );
+    let prep = prepare_package(src.clone()).expect("prep lib+ext");
+    assert_eq!(
+        prep.bundles()[0]
+            .extensions()
+            .iter()
+            .map(|r| r.local_id.as_str())
+            .collect::<Vec<_>>(),
+        ["runtime", "types"],
+    );
+    assert_eq!(
+        inspect_public_package(&write_public_package(&src).expect("pkg"))
+            .expect("ins")
+            .bytes(),
+        prep.bytes()
+    );
 
-    // Process-backed plugins may declare chat.params and model.fallback; implicit JS rejects them.
-    let router_src = |process: &str| {
+    // Process-backed plugins may declare chat.params and model.fallback; bare static bundles reject them.
+    let router_src = |runtime: &str| {
         BundleSource::new(
             "router",
             vec![
                 SourceFile::new(
                     "bundle.yaml",
                     format!(
-                        "kind: Bundle\nidentity: {{ id: acme/router, version: 1.0.0, publisher: acme }}\nextensions:\n{process}  js: [{{ id: runtime, path: runtime.js }}]\nresources:\n  hooks:\n    - {{ id: chat.params, path: runtime.js }}\n    - {{ id: model.fallback, path: runtime.js }}\n"
+                        "kind: Bundle\nschema_version: 2\nidentity: {{ id: acme/router, version: 1.0.0, publisher: acme }}\n{runtime}resources:\n  hooks:\n    - {{ id: chat.params, path: runtime.js }}\n    - {{ id: model.fallback, path: runtime.js }}\n"
                     ),
                 ),
                 SourceFile::new("runtime.js", b"export default {}\n".as_slice()),
@@ -1254,7 +1217,7 @@ fn library_and_process_extensions_sort_by_local_id_and_admit_router_hooks() {
         )
     };
     let ok = prepare_package(router_src(
-        "  process: { kind: bun, command: [bun, '${BUNDLE_ROOT}/runtime.js'] }\n",
+        "runtime: { kind: js, mode: process, entry: runtime.js, command: [bun, '${BUNDLE_ROOT}/runtime.js'] }\n",
     ))
     .expect("process router");
     assert_eq!(
@@ -1271,8 +1234,17 @@ fn library_and_process_extensions_sort_by_local_id_and_admit_router_hooks() {
 #[test]
 fn tui_manifest_validation_canonicalization_and_compatibility() {
     let tui_src = |tui: &str, entry_path: &str| {
+        let runtime_line = if entry_path.ends_with(".ts") || entry_path.ends_with(".js") {
+            format!(
+                "runtime: {{ kind: js, mode: process, entry: {entry_path}, command: [bun, run, '{entry_path}'] }}\n"
+            )
+        } else {
+            format!(
+                "runtime: {{ kind: js, mode: process, command: [bun, run, '{entry_path}'] }}\nassets: [{{ id: entry, path: {entry_path} }}]\n"
+            )
+        };
         let manifest = format!(
-            "kind: Bundle\nidentity: {{ id: hya/tui-test, version: 1.0.0, publisher: hya }}\nagents: [{{ id: tui-test, role: main, prompt: prompts/lead.md }}]\nextensions:\n  js: [{{ id: entry, path: {entry_path} }}]\n  process: {{ kind: bun, command: [bun, run, '{entry_path}'] }}\ntui:\n{tui}"
+            "kind: Bundle\nschema_version: 2\nidentity: {{ id: hya/tui-test, version: 1.0.0, publisher: hya }}\nagents: [{{ id: tui-test, role: main, prompt: prompts/lead.md }}]\n{runtime_line}tui:\n{tui}"
         );
         BundleSource::new(
             "tui-test",
@@ -1345,7 +1317,7 @@ fn resolves_hya_and_legacy_backend_version_references_in_bundle_source() {
             vec![SourceFile::new(
                 "bundle.yaml",
                 format!(
-                    "kind: Bundle\nversion_ref: {reference}\nidentity:\n  id: hya/version-reference\n  version: 0.0.0\n  publisher: hya\n"
+                    "kind: Bundle\nschema_version: 2\nversion_ref: {reference}\nidentity:\n  id: hya/version-reference\n  version: 0.0.0\n  publisher: hya\n"
                 ),
             )],
         ))

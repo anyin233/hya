@@ -1,4 +1,4 @@
-//! Store-layer failures: SQLite, migrations, JSON, admission, and claims.
+//! Store-layer failures: SQLite, migrations, JSON, projects, and bundle storage/claims.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,12 +17,17 @@ pub enum StoreError {
     /// Migration runner failure while applying `migrations/`.
     #[error("migrate: {0}")]
     Migrate(#[source] Arc<sqlx::migrate::MigrateError>),
-    /// The session database predates the current schema baseline.
+    /// The session database predates the v2 schema baseline and must be migrated.
     #[error(
-        "this database was created by an older version and is no longer supported; move it away"
+        "database at `{path}` uses an unsupported or unmigrated v1 schema ({reason}); run `hya-migration --db {path}` to upgrade it to v2"
     )]
-    UnsupportedDatabase,
-    /// JSON (de)serialization of event payloads.
+    UnsupportedDatabase {
+        /// Path to the unmigrated database file (or `<memory>`).
+        path: String,
+        /// Reason the schema check failed.
+        reason: String,
+    },
+    /// JSON (de)serialization of event payloads or metadata.
     #[error("json: {0}")]
     Json(#[source] Arc<serde_json::Error>),
     /// An event-log row cannot be decoded under the current event contract.
@@ -39,41 +44,39 @@ pub enum StoreError {
     /// A stored session key is not a current `hysec_` text key.
     #[error("session key data: {0}")]
     SessionKeyData(String),
-    /// Registering or reviving members would exceed the root's live capacity.
-    #[error(
-        "spawn admission overloaded for root {root}: live {live} + requested {requested} exceeds {limit}"
-    )]
-    CapacityExceeded {
-        /// Team root whose capacity is exhausted.
-        root: SessionId,
-        /// Active claims before registration.
-        live: u64,
-        /// New claims requested by this transaction.
-        requested: u64,
-        /// Configured live-member limit.
-        limit: u64,
+    /// Corrupt or invalid `bundle_state` input or row data.
+    #[error("bundle state: {0}")]
+    BundleStateData(String),
+    /// Bundle claim could not be acquired because an active non-expired lease already exists.
+    #[error("bundle claim `{claim_key}` for bundle `{bundle}` is already held")]
+    BundleClaimConflict {
+        /// Owning bundle identifier.
+        bundle: String,
+        /// Claimed resource key.
+        claim_key: String,
     },
-    /// Ordinary claim lost because another process already holds the actor.
-    #[error("resident actor is already claimed: {actor_id}")]
-    ActorAlreadyClaimed {
-        /// Actor session id under contention.
-        actor_id: SessionId,
+    /// Claim fence, renewal, or release failed: owner, epoch, expiry, or state no longer matches.
+    #[error("bundle claim `{claim_key}` for bundle `{bundle}` is stale or expired")]
+    StaleBundleClaim {
+        /// Owning bundle identifier.
+        bundle: String,
+        /// Claimed resource key.
+        claim_key: String,
     },
-    /// Claim fence failed: epoch or owner no longer matches the active row.
-    #[error("resident actor claim is stale: {actor_id}")]
-    StaleActorClaim {
-        /// Actor whose claim was fenced out.
-        actor_id: SessionId,
+    /// Takeover / recover found no active claim for this bundle key.
+    #[error("bundle claim `{claim_key}` for bundle `{bundle}` has no active claim")]
+    BundleClaimUnavailable {
+        /// Owning bundle identifier.
+        bundle: String,
+        /// Claimed resource key.
+        claim_key: String,
     },
-    /// Takeover / recover found no active claim to recover for this actor.
-    #[error("resident actor has no recoverable active claim: {actor_id}")]
-    ActorClaimUnavailable {
-        /// Actor with no recoverable claim.
-        actor_id: SessionId,
-    },
-    /// Corrupt or unparseable resident claim row data.
-    #[error("resident actor claim: {0}")]
-    ActorClaimData(String),
+    /// Corrupt or invalid `bundle_claim` input or row data.
+    #[error("bundle claim data: {0}")]
+    BundleClaimData(String),
+    /// Event failed pre-append validation.
+    #[error("invalid event: {0}")]
+    InvalidEvent(String),
     /// Another runtime/store handle owns the exclusive runtime-owner lock.
     #[error("RUNTIME_OWNER_BUSY: runtime owner lock is already held")]
     RuntimeOwnerBusy,
@@ -89,9 +92,6 @@ pub enum StoreError {
         #[source]
         source: Arc<std::io::Error>,
     },
-    /// Malformed or inconsistent Workflow control mutation.
-    #[error("workflow control: {0}")]
-    WorkflowData(String),
     /// Corrupt or invalid persisted model effort preference data.
     #[error("model effort preference {field}: {detail}")]
     InvalidPreferenceData {
@@ -100,29 +100,6 @@ pub enum StoreError {
         /// Validation detail.
         detail: String,
     },
-    /// An authorized DM targets an archived direct child and needs engine revival.
-    #[error("sender `{sender}` to channel `{channel}` must revive `{target}`")]
-    MailRevivalRequired {
-        /// Acting handle.
-        sender: String,
-        /// Authorized channel.
-        channel: String,
-        /// Archived direct child.
-        target: String,
-    },
-    /// A mail write failed channel authorization inside its transaction.
-    #[error("mailbox rejected: sender `{sender}` to channel `{channel}`: {reason}")]
-    MailAuthorizationRejected {
-        /// Addressed channel.
-        channel: String,
-        /// Acting canonical handle.
-        sender: String,
-        /// Failed authorization condition.
-        reason: String,
-    },
-    /// Mail append rejected by roster / permission / validation rules.
-    #[error("mailbox rejected: {0}")]
-    MailboxRejected(String),
     /// A Project name is empty or only whitespace.
     #[error("PROJECT_NAME_EMPTY: a project needs a non-empty name")]
     ProjectNameEmpty,

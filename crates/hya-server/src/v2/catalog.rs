@@ -1,0 +1,995 @@
+//! `/v2` catalog domain: agents, models, providers, commands, skills,
+//! tools, permission modes, and saved permission rules.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+use axum::Router;
+use axum::extract::{Path as AxumPath, Query, State};
+use axum::routing::{delete, get, post, put};
+
+use super::Json;
+
+use crate::ServerState;
+use hya_api::v2 as pb;
+use hya_provider::ProviderCatalogSnapshot;
+use serde_json::{Value, json};
+
+use super::{V2Error, catalog_scope};
+use crate::support::catalog_place::CatalogPlace;
+
+pub(crate) fn router() -> Router<ServerState> {
+    Router::new()
+        .route("/v2/agents", get(list_agents))
+        .route("/v2/models", get(list_models))
+        .route("/v2/bundles", get(list_bundles))
+        .route("/v2/bundles:verb", post(bundle_verb))
+        .route("/v2/providers", get(list_providers))
+        .route(
+            "/v2/providers/:provider_id",
+            get(get_provider).put(super::providers::upsert_provider),
+        )
+        .route(
+            "/v2/providers/:provider_id/refresh",
+            post(super::providers::refresh_provider),
+        )
+        .route(
+            "/v2/providers/:provider_id/models",
+            put(super::providers::set_provider_model)
+                .delete(super::providers::remove_provider_model),
+        )
+        .route(
+            "/v2/providers/:provider_id/test",
+            post(super::providers::test_provider_model),
+        )
+        .route("/v2/commands", get(list_commands))
+        .route("/v2/skills", get(list_skills))
+        .route("/v2/tools", get(list_tools))
+        .route("/v2/permission-modes", get(list_permission_modes))
+        .route("/v2/tui-extensions", get(list_tui_extensions))
+        .route("/v2/runtime/schemas", get(list_runtime_schemas))
+        .route("/v2/permissions/rules", get(list_saved_rules))
+        .route("/v2/permissions/rules/:rule", delete(delete_saved_rule))
+}
+
+/// `POST /v2/bundles:<verb>`: the router reads `:refresh` in
+/// `/v2/bundles:refresh` as a path parameter, so every custom verb of
+/// `/v2/bundles` (`refresh`, `install`, `uninstall`, `set-enabled`) shares
+/// one route and is dispatched here.
+async fn bundle_verb(
+    State(st): State<ServerState>,
+    AxumPath(verb): AxumPath<String>,
+    Json(body): Json<Value>,
+) -> Result<axum::response::Response, V2Error> {
+    use axum::response::IntoResponse as _;
+    fn parse<T: serde::de::DeserializeOwned>(body: Value) -> Result<Json<T>, V2Error> {
+        serde_json::from_value(body)
+            .map(Json)
+            .map_err(|error| V2Error::invalid_argument(format!("invalid request body: {error}")))
+    }
+    let state = State(st);
+    Ok(match verb.trim_start_matches(':') {
+        "refresh" => refresh_bundles(state, parse(body)?).await?.into_response(),
+        "install" => install_bundle(state, parse(body)?).await?.into_response(),
+        "uninstall" => uninstall_bundle(state, parse(body)?).await?.into_response(),
+        "set-enabled" => set_bundle_enabled(state, parse(body)?)
+            .await?
+            .into_response(),
+        other => {
+            return Err(V2Error::new(
+                hya_api::error::Code::NotFound,
+                format!("no bundle method `{other}`"),
+            ));
+        }
+    })
+}
+
+/// `RefreshBundles`: refresh the installed-bundle base and the directory's
+/// scope overlay now (instead of at the next bind) and report what is
+/// published. A generation that failed to prepare keeps the previous one;
+/// its failure is an `errors` entry, not an rpc error.
+async fn refresh_bundles(
+    State(st): State<ServerState>,
+    Json(request): Json<pb::RefreshBundlesRequest>,
+) -> Result<Json<pb::RefreshBundlesResponse>, V2Error> {
+    Ok(Json(refresh_scope(&st, &request.directory).await?))
+}
+
+/// Refresh `directory`'s scope and describe what is published (`RefreshBundles`).
+async fn refresh_scope(
+    st: &ServerState,
+    directory: &str,
+) -> Result<pb::RefreshBundlesResponse, V2Error> {
+    let place = catalog_scope(st, directory).await?;
+    let refreshed = place.refresh_bundles(st).await?;
+    let binding = &refreshed.binding;
+    let project = binding.project_bundle_dirs();
+    let bundles = binding
+        .bundle_catalog()
+        .bundles()
+        .iter()
+        .map(|bundle| {
+            let identity = bundle.identity();
+            pb::RefreshedBundle {
+                id: identity.id.clone(),
+                version: identity.version.clone(),
+                prepared_digest: bundle.digest().to_string(),
+                scope: if project.contains_key(&identity.id) {
+                    "project"
+                } else {
+                    "user"
+                }
+                .to_string(),
+            }
+        })
+        .collect();
+    if refreshed.changed {
+        st.notify_catalog_updated();
+    }
+    Ok(pb::RefreshBundlesResponse {
+        scope: match place.scope() {
+            hya_engine::CatalogScope::Global => "global",
+            hya_engine::CatalogScope::Directory(_) => "directory",
+            hya_engine::CatalogScope::Project { .. } => "project",
+        }
+        .to_string(),
+        generation: binding.generation().get(),
+        bundles,
+        errors: refreshed
+            .errors
+            .iter()
+            .flat_map(|error| match error {
+                hya_engine::CoreError::BundleRefresh(errors) => errors
+                    .iter()
+                    .map(|(id, message)| pb::BundleRefreshError {
+                        bundle_id: id.clone(),
+                        message: message.clone(),
+                    })
+                    .collect(),
+                hya_engine::CoreError::BundleRuntime { bundle_id, source } => {
+                    vec![pb::BundleRefreshError {
+                        bundle_id: bundle_id.clone(),
+                        message: source.to_string(),
+                    }]
+                }
+                other => vec![pb::BundleRefreshError {
+                    bundle_id: if directory.is_empty() {
+                        "global"
+                    } else {
+                        directory
+                    }
+                    .to_string(),
+                    message: other.to_string(),
+                }],
+            })
+            .collect(),
+    })
+}
+
+/// Map a bundle control failure onto the stable v1 error model.
+fn bundle_error(error: crate::BundleControlError) -> V2Error {
+    match error.code.as_str() {
+        crate::BUNDLE_INVALID_REQUEST => V2Error::invalid_argument(error.message),
+        crate::BUNDLE_NOT_FOUND => V2Error::new(hya_api::error::Code::NotFound, error.message),
+        crate::BUNDLE_IMMUTABLE | crate::BUNDLE_CONFLICT => {
+            V2Error::new(hya_api::error::Code::FailedPrecondition, error.message)
+        }
+        crate::BUNDLE_CONTROL_UNAVAILABLE => V2Error::unavailable(error.message),
+        _ => V2Error::internal(error.message),
+    }
+}
+
+/// The directory that the bundle management API inventories or modifies.
+fn project_bundles_dir(directory: &Path) -> PathBuf {
+    directory.join(".hya/bundles")
+}
+
+/// The `.hya/bundles` directory a `project` change targets.
+fn change_target(directory: &str, project: bool) -> Result<Option<PathBuf>, V2Error> {
+    if !project {
+        return Ok(None);
+    }
+    if directory.is_empty() {
+        return Err(V2Error::invalid_argument(
+            "a project bundle change needs a directory",
+        ));
+    }
+    Ok(Some(project_bundles_dir(Path::new(directory))))
+}
+
+/// `ListBundles`: inventory first-party, installed, and one directory's bundles.
+async fn list_bundles(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::ListBundlesResponse>, V2Error> {
+    let request: pb::ListBundlesRequest = super::query_request(&[], &query)?;
+    let directory = super::request_scope(&request.directory)?;
+    let inventory_dir = directory.as_deref().map(project_bundles_dir);
+    let listings = st
+        .bundle_control
+        .list(inventory_dir)
+        .await
+        .map_err(bundle_error)?;
+    Ok(Json(pb::ListBundlesResponse {
+        bundles: listings
+            .into_iter()
+            .map(|listing| pb::BundleSummary {
+                id: listing.id,
+                version: listing.version,
+                publisher: listing.publisher,
+                scope: listing.scope,
+                kind: listing.kind,
+                state: listing.state,
+                enabled: listing.enabled,
+                removable: listing.removable,
+                description: listing.description,
+                prepared_digest: listing.prepared_digest,
+                error: listing.error,
+                components: Some(pb::BundleComponents {
+                    agents: listing.components.agents,
+                    skills: listing.components.skills,
+                    tools: listing.components.tools,
+                    mcp_servers: listing.components.mcp_servers,
+                    workflows: listing.components.workflows,
+                    permission_modes: listing.components.permission_modes,
+                    apis: listing.components.apis,
+                    hooks: listing.components.hooks,
+                    tui: listing.components.tui,
+                    tui_permissions: listing.components.tui_permissions,
+                }),
+            })
+            .collect(),
+    }))
+}
+
+/// `InstallBundle`: install a package from the backend's filesystem, then refresh.
+async fn install_bundle(
+    State(st): State<ServerState>,
+    Json(request): Json<pb::InstallBundleRequest>,
+) -> Result<Json<pb::BundleChange>, V2Error> {
+    catalog_scope(&st, &request.directory).await?;
+    let path = std::path::PathBuf::from(&request.path);
+    if !path.is_absolute() {
+        return Err(V2Error::invalid_argument(format!(
+            "path must be absolute: `{}`",
+            request.path
+        )));
+    }
+    let target = change_target(&request.directory, request.project)?;
+    let bundle_id = st
+        .bundle_control
+        .install(path, target, request.overwrite)
+        .await
+        .map_err(bundle_error)?;
+    let refresh = refresh_scope(&st, &request.directory).await?;
+    Ok(Json(pb::BundleChange {
+        bundle_id,
+        refresh: Some(refresh),
+    }))
+}
+
+/// `UninstallBundle`: remove an installed bundle, then refresh.
+async fn uninstall_bundle(
+    State(st): State<ServerState>,
+    Json(request): Json<pb::UninstallBundleRequest>,
+) -> Result<Json<pb::BundleChange>, V2Error> {
+    catalog_scope(&st, &request.directory).await?;
+    let target = change_target(&request.directory, request.project)?;
+    st.bundle_control
+        .uninstall(request.bundle_id.clone(), target)
+        .await
+        .map_err(bundle_error)?;
+    let refresh = refresh_scope(&st, &request.directory).await?;
+    Ok(Json(pb::BundleChange {
+        bundle_id: request.bundle_id,
+        refresh: Some(refresh),
+    }))
+}
+
+/// `SetBundleEnabled`: enable or disable a bundle id in every scope, then refresh.
+async fn set_bundle_enabled(
+    State(st): State<ServerState>,
+    Json(request): Json<pb::SetBundleEnabledRequest>,
+) -> Result<Json<pb::BundleChange>, V2Error> {
+    catalog_scope(&st, &request.directory).await?;
+    st.bundle_control
+        .set_enabled(request.bundle_id.clone(), request.enabled)
+        .await
+        .map_err(bundle_error)?;
+    let refresh = refresh_scope(&st, &request.directory).await?;
+    Ok(Json(pb::BundleChange {
+        bundle_id: request.bundle_id,
+        refresh: Some(refresh),
+    }))
+}
+
+async fn list_tui_extensions(
+    State(st): State<ServerState>,
+    Query(mut query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::ListTuiExtensionsResponse>, V2Error> {
+    let known = parse_known_digests(query.remove("known").as_ref())?;
+    let request: pb::ListTuiExtensionsRequest = super::query_request(&[], &query)?;
+    let place = catalog_scope(&st, &request.directory).await?;
+    let binding = place.bind(&st).await?;
+    let project = binding.project_bundle_dirs();
+    let extensions = binding
+        .bundle_catalog()
+        .bundles()
+        .iter()
+        .filter_map(|bundle| {
+            let tui = bundle.tui()?;
+            let identity = bundle.identity();
+            let prepared_digest = bundle.digest().to_string();
+            let cached = known.contains(&prepared_digest);
+            let mut files = if cached {
+                Vec::new()
+            } else {
+                bundle
+                    .extensions()
+                    .iter()
+                    .filter(|resource| resource.binary_base64.is_none())
+                    .map(|resource| pb::TuiExtensionFile {
+                        path: resource.source_path.clone(),
+                        sha256: resource.digest.clone(),
+                        content: resource.content.clone(),
+                    })
+                    .collect::<Vec<_>>()
+            };
+            files.sort_by(|left, right| left.path.cmp(&right.path));
+            Some(pb::TuiExtensionDescriptor {
+                bundle_id: identity.id.clone(),
+                bundle_version: identity.version.clone(),
+                prepared_digest,
+                api_version: tui.api_version,
+                entry: tui.entry.clone(),
+                sdk: tui.sdk.clone(),
+                permissions: tui.permissions.clone(),
+                files,
+                first_party: hya_bundle::FIRST_PARTY_BUNDLES.contains(&identity.id.as_str())
+                    && !project.contains_key(&identity.id),
+                cached,
+            })
+        })
+        .collect();
+    Ok(Json(pb::ListTuiExtensionsResponse { extensions }))
+}
+
+fn parse_known_digests(value: Option<&String>) -> Result<BTreeSet<String>, V2Error> {
+    let Some(value) = value else {
+        return Ok(BTreeSet::new());
+    };
+    let digests = value.split(',').collect::<Vec<_>>();
+    if digests.len() > 64
+        || digests.iter().any(|digest| {
+            digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+    {
+        return Err(V2Error::invalid_argument(
+            "known must contain at most 64 comma-separated 64-character hexadecimal digests",
+        ));
+    }
+    Ok(digests
+        .into_iter()
+        .map(|digest| digest.to_ascii_lowercase())
+        .collect())
+}
+
+async fn list_agents(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::ListAgentsResponse>, V2Error> {
+    let request: pb::ListAgentsRequest = super::query_request(&[], &query)?;
+    let place = catalog_scope(&st, &request.directory).await?;
+    let agents = agent_rows(&st, &place).await?;
+    Ok(Json(paginated_agents(agents, &request.page)?))
+}
+
+/// Agent rows shared with the bootstrap snapshot.
+pub(crate) async fn agent_rows(
+    st: &ServerState,
+    place: &CatalogPlace,
+) -> Result<Vec<pb::AgentSummary>, V2Error> {
+    let rows = crate::support::bound_agent_metadata::list(st, place)
+        .await
+        .map_err(|error| V2Error::new(hya_api::error::Code::Internal, error.text().to_owned()))?;
+    Ok(rows
+        .into_iter()
+        .map(|row| pb::AgentSummary {
+            name: row.name.clone(),
+            model: row.model.as_deref().and_then(model_ref),
+            description: row.description.clone().unwrap_or_default(),
+            hidden: row.hidden,
+        })
+        .collect())
+}
+
+/// Parse a `provider/model[#variant]` reference string.
+pub(crate) fn model_ref(reference: &str) -> Option<pb::ModelRef> {
+    let (provider, rest) = reference.split_once('/')?;
+    let (model, variant) = match rest.split_once('#') {
+        Some((model, variant)) => (model, Some(variant.to_owned())),
+        None => (rest, None),
+    };
+    Some(pb::ModelRef {
+        provider_id: provider.to_owned(),
+        model_id: model.to_owned(),
+        variant: variant.unwrap_or_default(),
+    })
+}
+
+fn paginated_agents(
+    agents: Vec<pb::AgentSummary>,
+    page: &Option<pb::PageRequest>,
+) -> Result<pb::ListAgentsResponse, V2Error> {
+    let (agents, info) = paginate(agents, page)?;
+    Ok(pb::ListAgentsResponse {
+        agents,
+        page: Some(info),
+    })
+}
+
+pub(crate) fn page_offset(page: Option<&pb::PageRequest>) -> Result<u64, V2Error> {
+    let cursor = page.map_or("", |page| page.cursor.as_str());
+    hya_api::cursor::decode_offset(cursor)
+        .map_err(|_| V2Error::invalid_argument("invalid pagination cursor"))
+}
+
+/// Apply cursor pagination over a fully materialized page.
+pub(crate) fn paginate<T>(
+    rows: Vec<T>,
+    page: &Option<pb::PageRequest>,
+) -> Result<(Vec<T>, pb::PageInfo), V2Error> {
+    let offset = page_offset(page.as_ref())?;
+    let limit = page.as_ref().map_or(50, |page| {
+        if page.limit == 0 {
+            50
+        } else {
+            page.limit.min(500) as usize
+        }
+    });
+    let total = rows.len();
+    let offset = usize::try_from(offset).unwrap_or(usize::MAX).min(total);
+    let rows = rows
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect::<Vec<_>>();
+    let next_offset = offset + rows.len();
+    let has_more = next_offset < total;
+    let info = pb::PageInfo {
+        next_cursor: if has_more {
+            hya_api::cursor::encode_offset(next_offset as u64)
+        } else {
+            String::new()
+        },
+        has_more,
+    };
+    Ok((rows, info))
+}
+
+async fn list_models(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::ListModelsResponse>, V2Error> {
+    let request: pb::ListModelsRequest = super::query_request(&[], &query)?;
+    let mut models = model_rows(&st.engine.provider_catalog_snapshot());
+    if !request.provider_id.is_empty() {
+        models.retain(|model| model.provider_id == request.provider_id);
+    }
+    let (models, page) = paginate(models, &request.page)?;
+    Ok(Json(pb::ListModelsResponse {
+        models,
+        page: Some(page),
+    }))
+}
+
+/// Model rows shared with the bootstrap snapshot.
+pub(crate) fn model_rows(snapshot: &ProviderCatalogSnapshot) -> Vec<pb::ModelSummary> {
+    let auth_by_provider: std::collections::BTreeMap<String, i32> = snapshot
+        .providers()
+        .iter()
+        .map(|state| (state.provider_id.clone(), auth_status(state.auth)))
+        .collect();
+    snapshot
+        .models()
+        .iter()
+        .map(|row| pb::ModelSummary {
+            id: format!("{}/{}", row.provider_id, row.model_id),
+            provider_id: row.provider_id.clone(),
+            model_id: row.model_id.clone(),
+            display_name: row.display_name.clone().unwrap_or_default(),
+            // Declared by the model's metadata; unset when unknown.
+            reasoning: row.reasoning,
+            auth: *auth_by_provider
+                .get(&row.provider_id)
+                .unwrap_or(&(pb::AuthStatus::NotApplicable as i32)),
+            context_limit: u64::from(row.capabilities.max_context),
+            output_limit: u64::from(row.capabilities.max_output),
+            source: row.source.as_str().to_owned(),
+            image_input: row.capabilities.image_input,
+            reasoning_variants: row.reasoning_variants.clone(),
+            reasoning_default: row
+                .reasoning_default
+                .map(|effort| effort.as_str().to_owned()),
+        })
+        .collect()
+}
+
+/// Map the provider auth state onto the wire enum.
+fn auth_status(auth: hya_provider::ProviderAuthState) -> i32 {
+    use hya_provider::ProviderAuthState as A;
+    match auth {
+        A::Credentialed => pb::AuthStatus::Credentialed as i32,
+        A::Unauthenticated => pb::AuthStatus::Unauthenticated as i32,
+        A::AuthRequired => pb::AuthStatus::AuthRequired as i32,
+        A::AuthRejected => pb::AuthStatus::AuthRejected as i32,
+        A::NotApplicable => pb::AuthStatus::NotApplicable as i32,
+    }
+}
+
+/// Map the provider discovery outcome onto its wire string.
+fn catalog_result(result: hya_provider::ProviderCatalogResult) -> String {
+    use hya_provider::ProviderCatalogResult as R;
+    match result {
+        R::Models => "models",
+        R::Empty => "empty",
+        R::Unavailable => "unavailable",
+        R::Invalid => "invalid",
+        R::Unsupported | R::Offline => "unavailable",
+    }
+    .to_owned()
+}
+
+/// Config `kind` label for a live route kind (used when the provider is not
+/// in the settings list, e.g. an embedder without a provider control).
+fn kind_label(kind: hya_provider::ProviderKind) -> &'static str {
+    use hya_provider::ProviderKind as K;
+    match kind {
+        K::OpenAiCompatible => "openai",
+        K::OpenAiResponse => "openai-response",
+        K::OpenAiCodex => "openai-codex",
+        K::GrokBuild => "grok-build",
+        K::Anthropic => "anthropic",
+        K::Google => "google",
+    }
+}
+
+async fn list_providers(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::ListProvidersResponse>, V2Error> {
+    let request: pb::ListProvidersRequest = super::query_request(&[], &query)?;
+    let snapshot = st.engine.provider_catalog_snapshot();
+    let providers = provider_rows(&st, &snapshot).await;
+    let (providers, page) = paginate(providers, &request.page)?;
+    Ok(Json(pb::ListProvidersResponse {
+        providers,
+        page: Some(page),
+    }))
+}
+
+/// Provider rows shared with the bootstrap snapshot: every provider in the
+/// live catalog plus any configured provider the catalog does not hold yet,
+/// sorted by id. `auth` reflects the current credential (saved key, config
+/// key, or none) unless the last model-list fetch was refused.
+pub(crate) async fn provider_rows(
+    st: &ServerState,
+    snapshot: &ProviderCatalogSnapshot,
+) -> Vec<pb::ProviderSummary> {
+    let settings = st
+        .provider_control
+        .list_settings()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|settings| (settings.id.clone(), settings))
+        .collect::<BTreeMap<_, _>>();
+    let mut rows = BTreeMap::new();
+    for state in snapshot.providers() {
+        let settings = settings.get(&state.provider_id);
+        let offline = state.source == hya_provider::ProviderCatalogSource::Offline;
+        let auth = match (state.auth, settings.map(|settings| settings.key_source)) {
+            (
+                hya_provider::ProviderAuthState::AuthRejected
+                | hya_provider::ProviderAuthState::AuthRequired
+                | hya_provider::ProviderAuthState::NotApplicable,
+                _,
+            )
+            | (_, None) => auth_status(state.auth),
+            (_, Some(crate::ProviderKeySource::None)) => pb::AuthStatus::Unauthenticated as i32,
+            (_, Some(_)) => pb::AuthStatus::Credentialed as i32,
+        };
+        rows.insert(
+            state.provider_id.clone(),
+            pb::ProviderSummary {
+                id: state.provider_id.clone(),
+                name: state.provider_id.clone(),
+                auth,
+                website: String::new(),
+                result: catalog_result(state.result),
+                kind: settings.map_or_else(
+                    || {
+                        if offline {
+                            String::new()
+                        } else {
+                            kind_label(state.kind).to_owned()
+                        }
+                    },
+                    |settings| settings.kind.clone(),
+                ),
+                base_url: settings
+                    .map(|settings| settings.base_url.clone())
+                    .unwrap_or_default(),
+                key_source: settings
+                    .map_or(crate::ProviderKeySource::None, |settings| {
+                        settings.key_source
+                    })
+                    .as_str()
+                    .to_owned(),
+                model_count: 0,
+            },
+        );
+    }
+    for (id, settings) in &settings {
+        rows.entry(id.clone())
+            .or_insert_with(|| pb::ProviderSummary {
+                id: id.clone(),
+                name: id.clone(),
+                auth: if settings.key_source == crate::ProviderKeySource::None {
+                    pb::AuthStatus::Unauthenticated as i32
+                } else {
+                    pb::AuthStatus::Credentialed as i32
+                },
+                website: String::new(),
+                result: "unavailable".to_owned(),
+                kind: settings.kind.clone(),
+                base_url: settings.base_url.clone(),
+                key_source: settings.key_source.as_str().to_owned(),
+                model_count: 0,
+            });
+    }
+    for model in snapshot.models() {
+        if let Some(row) = rows.get_mut(&model.provider_id) {
+            row.model_count = row.model_count.saturating_add(1);
+        }
+    }
+    rows.into_values().collect()
+}
+
+/// One provider's detail row with its model rows; `None` when the id is
+/// neither live nor configured.
+pub(crate) async fn provider_info(st: &ServerState, provider_id: &str) -> Option<pb::ProviderInfo> {
+    let snapshot = st.engine.provider_catalog_snapshot();
+    let summary = provider_rows(st, &snapshot)
+        .await
+        .into_iter()
+        .find(|row| row.id == provider_id)?;
+    let models = model_rows(&snapshot)
+        .into_iter()
+        .filter(|model| model.provider_id == provider_id)
+        .collect();
+    let supports_oauth = matches!(summary.kind.as_str(), "openai-codex" | "grok-build");
+    Some(pb::ProviderInfo {
+        summary: Some(summary),
+        models,
+        supports_api_key: true,
+        supports_oauth,
+    })
+}
+
+async fn get_provider(
+    State(st): State<ServerState>,
+    AxumPath(provider_id): AxumPath<String>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::ProviderInfo>, V2Error> {
+    let request: pb::GetProviderRequest =
+        super::query_request(&[("provider_id", provider_id.as_str())], &query)?;
+    provider_info(&st, &request.provider_id)
+        .await
+        .map(Json)
+        .ok_or_else(|| {
+            V2Error::new(
+                hya_api::error::Code::NotFound,
+                format!("provider not found: {}", request.provider_id),
+            )
+        })
+}
+
+async fn list_commands(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::ListCommandsResponse>, V2Error> {
+    let request: pb::ListCommandsRequest = super::query_request(&[], &query)?;
+    // A session's own catalog (its workdir, Project, and agent's bundle
+    // skills) wins over the request directory.
+    let listing = match super::scope_session(&st, &request.session).await? {
+        Some(session) => {
+            let place = CatalogPlace::for_session(&st, session).await?;
+            let skills = crate::support::skill_catalog::session_listing(&st, session, &place)
+                .await
+                .skills;
+            crate::support::command_catalog::listing_with_skills(&place, skills)
+        }
+        None => {
+            let place = catalog_scope(&st, &request.directory).await?;
+            crate::support::command_catalog::listing(&st, &place)
+        }
+    };
+    let diagnostics = listing
+        .diagnostics
+        .iter()
+        .map(|diagnostic| pb::CatalogDiagnostic {
+            path: diagnostic.path.to_string_lossy().into_owned(),
+            kind: diagnostic.kind.to_owned(),
+            message: diagnostic.message.clone(),
+        })
+        .collect();
+    let (commands, page) = paginate(command_summaries(listing.commands), &request.page)?;
+    Ok(Json(pb::ListCommandsResponse {
+        commands,
+        page: Some(page),
+        diagnostics,
+    }))
+}
+
+/// Command rows shared with the bootstrap snapshot.
+pub(crate) fn command_rows(st: &ServerState, place: &CatalogPlace) -> Vec<pb::CommandSummary> {
+    command_summaries(crate::support::command_catalog::list(st, place))
+}
+
+fn command_summaries(
+    rows: Vec<crate::support::command_catalog::CommandInfo>,
+) -> Vec<pb::CommandSummary> {
+    rows.into_iter()
+        .map(|row| pb::CommandSummary {
+            name: row.name.clone(),
+            description: row.description.clone().unwrap_or_default(),
+            argument_hint: row.argument_hint.clone().unwrap_or_default(),
+            hints: row.hints.clone(),
+            source: row.source.to_owned(),
+            template: row.template.clone(),
+            agent: row.agent.clone().unwrap_or_default(),
+            model: row.model.clone().unwrap_or_default(),
+            subtask: row.subtask,
+            scope: row.scope.to_owned(),
+        })
+        .collect()
+}
+
+async fn list_skills(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::ListSkillsResponse>, V2Error> {
+    let request: pb::ListSkillsRequest = super::query_request(&[], &query)?;
+    // What a session's agent can load (bundle and plugin skills included)
+    // wins over the request directory.
+    let listing = match super::scope_session(&st, &request.session).await? {
+        Some(session) => {
+            let place = CatalogPlace::for_session(&st, session).await?;
+            crate::support::skill_catalog::session_listing(&st, session, &place).await
+        }
+        None => {
+            let place = catalog_scope(&st, &request.directory).await?;
+            crate::support::skill_catalog::listing(&st, &place)
+        }
+    };
+    let diagnostics = listing
+        .diagnostics
+        .iter()
+        .map(|diagnostic| pb::CatalogDiagnostic {
+            path: diagnostic.path.to_string_lossy().into_owned(),
+            kind: diagnostic.kind.as_str().to_owned(),
+            message: diagnostic.message.clone(),
+        })
+        .collect();
+    let (skills, page) = paginate(skill_summaries(listing.skills), &request.page)?;
+    Ok(Json(pb::ListSkillsResponse {
+        skills,
+        page: Some(page),
+        diagnostics,
+    }))
+}
+
+/// Skill rows shared with the bootstrap snapshot; the global view lists
+/// user skills and builtins only.
+pub(crate) fn skill_rows(st: &ServerState, place: &CatalogPlace) -> Vec<pb::SkillSummary> {
+    skill_summaries(crate::support::skill_catalog::list(st, place))
+}
+
+fn skill_summaries(rows: Vec<crate::support::skill_catalog::SkillInfo>) -> Vec<pb::SkillSummary> {
+    rows.into_iter()
+        .map(|row| pb::SkillSummary {
+            name: row.name,
+            description: row.description,
+            source: row.source.to_owned(),
+            content: row.content,
+            location: row.location,
+            disable_model_invocation: row.disable_model_invocation,
+            bundle_id: row.bundle_id.unwrap_or_default(),
+        })
+        .collect()
+}
+
+async fn list_tools(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::ListToolsResponse>, V2Error> {
+    let request: pb::ListToolsRequest = super::query_request(&[], &query)?;
+    let tools = tool_rows(&st);
+    let (tools, page) = paginate(tools, &request.page)?;
+    Ok(Json(pb::ListToolsResponse {
+        tools,
+        page: Some(page),
+    }))
+}
+
+async fn list_permission_modes(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::ListPermissionModesResponse>, V2Error> {
+    let request: pb::ListPermissionModesRequest = super::query_request(&[], &query)?;
+    let modes = match super::scope_session(&st, &request.session).await? {
+        Some(session) => st.engine.session_permission_modes(session).await?,
+        None => {
+            let place = catalog_scope(&st, &request.directory).await?;
+            if matches!(place.scope(), hya_engine::CatalogScope::Global) {
+                // Q7: the global view is the base catalog only.
+                st.engine.permission_modes().await
+            } else {
+                let mut modes = hya_engine::permission_mode::builtin_permission_modes();
+                modes.extend(place.bind(&st).await?.published_permission_modes());
+                modes
+            }
+        }
+    };
+    let modes = modes
+        .into_iter()
+        .map(|mode| pb::PermissionModeSummary {
+            id: mode.id,
+            title: mode.title,
+            description: mode.description,
+            source: mode.source,
+        })
+        .collect();
+    Ok(Json(pb::ListPermissionModesResponse { modes }))
+}
+
+/// Tool rows shared with the bootstrap snapshot.
+pub(crate) fn tool_rows(st: &ServerState) -> Vec<pb::ToolSummary> {
+    st.engine
+        .tool_schemas()
+        .into_iter()
+        .map(|schema| pb::ToolSummary {
+            name: schema.name.to_string(),
+            description: schema.description.clone(),
+            kind: "builtin".to_owned(),
+            hidden: false,
+        })
+        .collect()
+}
+
+/// The runtime snapshot's published scheme table: registered external URI
+/// schemes with their winning source binding and masking chain.
+///
+/// Rendered as plain protojson-shaped data until the `hya.v2` IDL grows the
+/// matching message; the route exists so clients can already observe the table.
+async fn list_runtime_schemas(State(st): State<ServerState>) -> Json<Value> {
+    let registry = st.engine.runtime_registry();
+    let effective = registry.effective_schemes();
+    let schemas = effective
+        .schemes
+        .keys()
+        .map(|scheme| {
+            let binding = &effective.schemes[scheme];
+            json!({
+                "scheme": scheme,
+                "owner": binding.owner(),
+                "canonicalTool": binding.canonical_tool(),
+                "writable": binding.writable(),
+                "chain": registry
+                    .scheme_chain(scheme)
+                    .into_iter()
+                    .map(|(owner, canonical_tool)| json!({
+                        "owner": owner,
+                        "canonicalTool": canonical_tool,
+                    }))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    Json(json!({
+        "generation": effective.generation.get(),
+        "schemas": schemas,
+    }))
+}
+
+async fn list_saved_rules(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::ListSavedRulesResponse>, V2Error> {
+    let request: pb::ListSavedRulesRequest = super::query_request(&[], &query)?;
+    let rules = saved_rule_rows(&st).await;
+    let (rules, page) = paginate(rules, &request.page)?;
+    Ok(Json(pb::ListSavedRulesResponse {
+        rules,
+        page: Some(page),
+    }))
+}
+
+/// Saved permission rules shared with the bootstrap snapshot.
+///
+/// Every row is an "allow always" grant, so the effect is always
+/// `RULE_PERMISSION_ALLOW`. Exact tool/MCP grants report the granted tool as
+/// `tool` with an empty `pattern`; exact command grants report `bash` plus the
+/// command; action-wide grants report the action name plus `*`. `project_id`
+/// is the store row's own scope: `"global"` for every rule except an
+/// `ExternalDirectory` grant (ADR-0026), which carries the Project it is
+/// scoped to.
+pub(crate) async fn saved_rule_rows(st: &ServerState) -> Vec<pb::SavedRule> {
+    let Ok(rows) = st.permission_requests.list_saved(None).await else {
+        return Vec::new();
+    };
+    rows.into_iter().map(saved_rule).collect()
+}
+
+fn saved_rule(row: hya_store::SavedPermission) -> pb::SavedRule {
+    let exact = row.resource != "*";
+    let project_id = row.project_id;
+    let (tool, pattern) = match row.action.as_str() {
+        "tool" | "mcp" if exact => (row.resource, String::new()),
+        _ => (row.action, row.resource),
+    };
+    pb::SavedRule {
+        id: row.id,
+        permission: pb::RulePermission::Allow as i32,
+        tool,
+        pattern,
+        time_created: row.time_created_ms.and_then(super::convert::timestamp),
+        project_id,
+    }
+}
+
+async fn delete_saved_rule(
+    State(st): State<ServerState>,
+    AxumPath(rule): AxumPath<String>,
+) -> Result<Json<pb::DeleteSavedRuleResponse>, V2Error> {
+    st.permission_requests
+        .remove_saved(&rule, st.engine.permission_plane())
+        .await
+        .map_err(V2Error::from)?;
+    Ok(Json(pb::DeleteSavedRuleResponse {}))
+}
+
+#[cfg(test)]
+mod pagination_regression {
+    use super::*;
+
+    #[test]
+    fn pins_page_contents_and_cursor() {
+        for (offset, expected, more) in [
+            (0, vec![0, 1], true),
+            (2, vec![2, 3], true),
+            (4, vec![4], false),
+            (5, vec![], false),
+            (u64::MAX, vec![], false),
+        ] {
+            let request = Some(pb::PageRequest {
+                cursor: hya_api::cursor::encode_offset(offset),
+                limit: 2,
+            });
+            let Ok((rows, page)) = paginate((0..5).collect(), &request) else {
+                panic!("server-generated cursor for offset {offset} rejected");
+            };
+            assert_eq!(rows, expected);
+            assert_eq!(page.has_more, more);
+            assert_eq!(
+                page.next_cursor,
+                if more {
+                    hya_api::cursor::encode_offset(offset + 2)
+                } else {
+                    String::new()
+                }
+            );
+        }
+    }
+}

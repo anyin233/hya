@@ -4,8 +4,7 @@
 
 use std::sync::Arc;
 
-use hya_proto::ReportOutcome;
-use hya_tool::LifecycleRequest;
+use hya_tool::{LifecycleRequest, ReportOutcome};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::engine::SessionEngine;

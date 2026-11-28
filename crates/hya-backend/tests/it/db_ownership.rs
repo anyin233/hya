@@ -252,7 +252,7 @@ async fn stop_notice_written_during_startup_keeps_its_reason() -> TestResult {
     ev.set_read_timeout(Some(T10))?;
     write!(
         ev,
-        "GET /v1/events/stream HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n"
+        "GET /v2/events/stream HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n"
     )?;
     let mut head = [0; 64];
     let n = ev.read(&mut head)?;

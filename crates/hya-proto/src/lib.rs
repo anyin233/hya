@@ -41,10 +41,7 @@ pub mod workflow;
 /// Compat workspace-adapter list entry.
 pub mod workspace;
 
-pub use event::{
-    ArchiveReason, CompactionStrategy, Envelope, Event, EvictedPart, ReportOutcome, SessionKind,
-    StepCut, WorkflowRouteFailureClass, WorkflowStageRouteOutcome,
-};
+pub use event::{CompactionStrategy, Envelope, Event, SessionKind, StepCut};
 pub use ids::{
     ActorClaim, ActorEpoch, ConfigGeneration, EventSeq, GoalId, LoopRunId, MemberId, MessageId,
     OperationId, OwnerRunId, PartId, PermissionRequestId, ProjectId, QuestionRequestId, SessionId,
@@ -59,22 +56,18 @@ pub use message::{
 };
 pub use model::{AgentName, ModelRef, ToolName, ToolSchema};
 pub use projection::{
-    ArchivedEntry, ChannelProjection, ContextStatusProjection, HandoffProjection, MailMessage,
-    MemberProjection, MessageError, MessageProjection, PROJECTION_REDUCER_VERSION, PartProjection,
-    Projection, ResidentWorkProjection, RosterEntry, SessionArchiveError, SessionProjection,
-    TeamProjection, session_archive_event,
+    MessageError, MessageProjection, PROJECTION_REDUCER_VERSION, PartProjection, Projection,
+    ProjectionReducer, ProjectionReducerRegistry, SessionArchiveError, SessionProjection,
+    session_archive_event,
 };
 pub use revert::{FileChange, FileChangeRecord, FileRestore, FileState, RevertProjection};
 pub use scope::{HARNESS_HANDLE, ROOT_HANDLE};
 pub use todo::{TodoItem, TodoStatus};
 pub use usage::{MessageUsage, OutputSplit, SessionUsage, UNATTRIBUTED_MODEL, UsageTotals};
 pub use workflow::{
-    WorkflowAvailability, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery,
-    WorkflowIdentity, WorkflowInfo, WorkflowMemberProjection, WorkflowMemberRole,
-    WorkflowModelAssignment, WorkflowModelCandidate, WorkflowModelResolvedCandidate,
-    WorkflowProjection, WorkflowRevision, WorkflowRevisionParseError, WorkflowRunProjection,
-    WorkflowRunResult, WorkflowRunStatus, WorkflowSourceId, WorkflowStageInfo, WorkflowStagePlan,
-    WorkflowStageProjection, WorkflowStageStatus, WorkflowSummary,
+    WorkflowAvailability, WorkflowIdentity, WorkflowInfo, WorkflowModelAssignment,
+    WorkflowModelCandidate, WorkflowModelResolvedCandidate, WorkflowRevision,
+    WorkflowRevisionParseError, WorkflowSourceId, WorkflowStageInfo, WorkflowSummary,
 };
 #[allow(deprecated, reason = "retain the public compatibility path")]
 pub use workspace::WorkspaceAdapterInfo;

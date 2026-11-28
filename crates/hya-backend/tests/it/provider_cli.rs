@@ -207,7 +207,7 @@ async fn refresh_updates_the_running_backend() -> TestResult {
         .ok_or("url")?
         .to_string();
     let http = reqwest::Client::new();
-    let fetch = || http.get(format!("{url}/v1/models?providerId=fake")).send();
+    let fetch = || http.get(format!("{url}/v2/models?providerId=fake")).send();
 
     let result = async {
         let before = fetch().await?.text().await?;

@@ -129,7 +129,7 @@ test("parses the discovery file and rejects anything malformed", () => {
   }
 })
 
-test("the health probe accepts only GET /v1/health answering ok: true", async () => {
+test("the health probe accepts only GET /v2/health answering ok: true", async () => {
   const seen: string[] = []
   const fetcher = (async (input: string | URL | Request) => {
     const url = String(input)
@@ -140,7 +140,7 @@ test("the health probe accepts only GET /v1/health answering ok: true", async ()
     throw new TypeError("connection refused")
   }) as typeof fetch
   expect(await probeHealth("http://good:1", fetcher)).toBe(true)
-  expect(seen).toEqual(["http://good:1/v1/health"])
+  expect(seen).toEqual(["http://good:1/v2/health"])
   expect(await probeHealth("http://good:1/", fetcher)).toBe(true)
   expect(await probeHealth("http://sick:1", fetcher)).toBe(false)
   expect(await probeHealth("http://err:1", fetcher)).toBe(false)

@@ -116,7 +116,7 @@ async fn installed_agent_workflow_and_schema_refresh_pins_old_bindings() {
             vec![
                 SourceFile::new(
                     "bundle.hya.md",
-                    "---\nkind: Bundle\nidentity: { id: hya/installed-test, version: 1.0.0, publisher: hya }\nresources:\n  skills: [{ id: installed-skill, path: resources/skills/installed-skill.md }]\nagents: [{ id: installed-agent, role: main }]\n---\nYou are the installed agent.\n",
+                    "---\nkind: Bundle\nschema_version: 2\nidentity: { id: hya/installed-test, version: 1.0.0, publisher: hya }\nresources:\n  skills: [{ id: installed-skill, path: resources/skills/installed-skill.md }]\nagents: [{ id: installed-agent, role: main }]\n---\nYou are the installed agent.\n",
                 ),
                 SourceFile::new(
                     "resources/skills/installed-skill.md",
@@ -134,7 +134,7 @@ async fn installed_agent_workflow_and_schema_refresh_pins_old_bindings() {
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    "kind: Bundle\nidentity: { id: hya/installed-workflow-test, version: 1.0.0, publisher: hya }\nworkflow: { id: refresh-flow, path: workflows/refresh-flow.hya.md }\nagents: [{ id: refresh-worker, role: subagent, prompt: prompts/w.md }]\n",
+                    "kind: Bundle\nschema_version: 2\nidentity: { id: hya/installed-workflow-test, version: 1.0.0, publisher: hya }\nworkflow: { id: refresh-flow, path: workflows/refresh-flow.hya.md }\nagents: [{ id: refresh-worker, role: subagent, prompt: prompts/w.md }]\n",
                 ),
                 SourceFile::new(
                     "workflows/refresh-flow.hya.md",
@@ -153,7 +153,7 @@ async fn installed_agent_workflow_and_schema_refresh_pins_old_bindings() {
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    "kind: Bundle\nidentity: { id: hya/schema-refresh, version: 1.0.0, publisher: hya }\nschemas: [{ scheme: db, tool: query, writable: true }]\nresources:\n  tools: [{ id: query, path: extensions/runtime.js }]\nextensions:\n  js: [{ id: runtime, path: extensions/runtime.js }]\nagents:\n  - id: schema-lead\n    role: main\n    resource_view: { allow: [query] }\n",
+                    "kind: Bundle\nschema_version: 2\nidentity: { id: hya/schema-refresh, version: 1.0.0, publisher: hya }\nruntime: { kind: js, mode: managed, entry: extensions/runtime.js }\nschemas: [{ scheme: db, tool: query, writable: true }]\nresources:\n  tools: [{ id: query, path: extensions/runtime.js }]\nagents:\n  - id: schema-lead\n    role: main\n    resource_view: { allow: [query] }\n",
                 ),
                 SourceFile::new("extensions/runtime.js", "export default {}"),
             ],
@@ -259,7 +259,7 @@ async fn installed_goal_loop_override_uninstall_restores_first_party_prompt() {
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    "kind: Bundle\nidentity: { id: hya/goal-loop, version: 9.0.0, publisher: test }\nnamespace: goal-loop\nresources:\n  skills: [{ id: evaluator-prompt, path: evaluator.md }]\n",
+                    "kind: Bundle\nschema_version: 2\nidentity: { id: hya/goal-loop, version: 9.0.0, publisher: test }\nnamespace: goal-loop\nresources:\n  skills: [{ id: evaluator-prompt, path: evaluator.md }]\n",
                 ),
                 SourceFile::new(
                     "evaluator.md",
@@ -324,7 +324,7 @@ for line in sys.stdin:
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    "kind: Bundle\nidentity: { id: acme/process-fixture, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\n  files:\n    - { id: runtime, path: runtime.py }\n    - { id: payload, path: payload.txt }\nresources:\n  tools: [{ id: echo, path: tool.json }]\n  hooks: [{ id: tool.execute.before, path: hook.json }]\n",
+                    "kind: Bundle\nschema_version: 2\nidentity: { id: acme/process-fixture, version: 1.0.0, publisher: acme }\nruntime: { kind: js, mode: process, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\nassets:\n  - { id: runtime, path: runtime.py }\n  - { id: payload, path: payload.txt }\nresources:\n  tools: [{ id: echo, path: tool.json }]\n  hooks: [{ id: tool.execute.before, path: hook.json }]\n",
                 ),
                 SourceFile::new("runtime.py", script),
                 SourceFile::new("tool.json", "{}"),
@@ -387,7 +387,7 @@ async fn failed_process_start_and_old_format_retain_healthy_sources() {
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    "kind: Bundle\nidentity: { id: acme/old-process, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\n  files: [{ id: runtime, path: runtime.py }]\nresources:\n  tools: [{ id: echo, path: tool.json }]\n",
+                    "kind: Bundle\nschema_version: 2\nidentity: { id: acme/old-process, version: 1.0.0, publisher: acme }\nruntime: { kind: js, mode: process, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\nassets: [{ id: runtime, path: runtime.py }]\nresources:\n  tools: [{ id: echo, path: tool.json }]\n",
                 ),
                 SourceFile::new("tool.json", "{}"),
                 SourceFile::new(
@@ -422,7 +422,7 @@ async fn failed_process_start_and_old_format_retain_healthy_sources() {
             "bad-process",
             vec![SourceFile::new(
                 "bundle.yaml",
-                "kind: Bundle\nidentity: { id: acme/old-process, version: 2.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [/nonexistent/hya-bundle-test-process] }\n",
+                "kind: Bundle\nschema_version: 2\nidentity: { id: acme/old-process, version: 2.0.0, publisher: acme }\nruntime: { kind: js, mode: process, command: [/nonexistent/hya-bundle-test-process] }\n",
             )],
         ),
         0x72,
@@ -434,7 +434,7 @@ async fn failed_process_start_and_old_format_retain_healthy_sources() {
             "healthy",
             vec![SourceFile::new(
                 "bundle.yaml",
-                "kind: Bundle\nidentity: { id: acme/healthy, version: 1.0.0, publisher: acme }\n",
+                "kind: Bundle\nschema_version: 2\nidentity: { id: acme/healthy, version: 1.0.0, publisher: acme }\n",
             )],
         ),
         0x75,
@@ -480,7 +480,7 @@ async fn failed_process_start_and_old_format_retain_healthy_sources() {
         "old-fmt",
         vec![SourceFile::new(
             "bundle.hya.md",
-            "---\nkind: Bundle\nidentity: { id: hya/old-fmt, version: 1.0.0, publisher: hya }\nagents: [{ id: old-fmt-agent, role: main }]\n---\nBody.\n",
+            "---\nkind: Bundle\nschema_version: 2\nidentity: { id: hya/old-fmt, version: 1.0.0, publisher: hya }\nagents: [{ id: old-fmt-agent, role: main }]\n---\nBody.\n",
         )],
     ))
     .unwrap();
@@ -565,7 +565,7 @@ for line in sys.stdin:
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    "kind: Bundle\nidentity: { id: acme/config-fixture, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\n  files: [{ id: runtime, path: runtime.py }]\nresources:\n  tools: [{ id: echo, path: tool.json }]\n",
+                    "kind: Bundle\nschema_version: 2\nidentity: { id: acme/config-fixture, version: 1.0.0, publisher: acme }\nruntime: { kind: js, mode: process, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\nassets: [{ id: runtime, path: runtime.py }]\nresources:\n  tools: [{ id: echo, path: tool.json }]\n",
                 ),
                 SourceFile::new("runtime.py", script),
                 SourceFile::new("tool.json", "{}"),

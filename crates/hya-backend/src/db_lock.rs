@@ -315,7 +315,7 @@ impl Drop for DbLock {
     }
 }
 
-/// Whether `GET <url>/v1/health` answers `200` with `"ok":true` within
+/// Whether `GET <url>/v2/health` answers `200` with `"ok":true` within
 /// `timeout` (a plain HTTP/1.1 request; `url` is `http://host:port`).
 pub(crate) async fn probe(url: &str, timeout: Duration) -> bool {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -329,7 +329,7 @@ pub(crate) async fn probe(url: &str, timeout: Duration) -> bool {
     let exchange = async {
         let mut stream = tokio::net::TcpStream::connect(authority).await.ok()?;
         let request = format!(
-            "GET /v1/health HTTP/1.1\r\nHost: {authority}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+            "GET /v2/health HTTP/1.1\r\nHost: {authority}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
         );
         stream.write_all(request.as_bytes()).await.ok()?;
         let mut response = Vec::new();

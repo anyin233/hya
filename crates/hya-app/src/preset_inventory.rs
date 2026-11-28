@@ -1,7 +1,28 @@
 //! Read-only inventory of the trusted first-party presets and internal bundles
 //! loaded at runtime.
 
-use hya_bundle::{Bundle, BundleError, first_party_bundle};
+use hya_bundle::{
+    BuiltinBundleSelection, Bundle, BundleError, PreparedCatalog, first_party_bundle_optional,
+};
+use serde::Deserialize;
+
+const TOOL_FAMILY_BUNDLES: [&str; 4] = [
+    "hya/base-tools",
+    "hya/extended-tools",
+    "hya/network-tools",
+    "hya/channel-tools",
+];
+
+#[derive(Debug, Default, Deserialize)]
+struct ExposureHeader {
+    #[serde(default)]
+    tools: Vec<ExposureToolName>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExposureToolName {
+    name: String,
+}
 
 /// Display metadata for one immutable trusted preset.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -24,107 +45,134 @@ pub struct TrustedPresetDescriptor {
     pub resource_ids: Vec<String>,
 }
 
-/// Return trusted presets and internal bundles in stable identity order.
+/// Return trusted presets and internal bundles in stable identity order using
+/// the active `config.yaml` [`BuiltinBundleSelection`].
 ///
-/// This is a parallel display inventory. It never inserts preset payloads into
-/// the public [`hya_bundle::BundleCatalog`], so listing cannot introduce
-/// self-shadowing or make presets installable.
+/// Disabled or missing built-in bundles are omitted cleanly without panicking.
 ///
 /// # Errors
-/// Returns a bundle integrity error if a trusted first-party bundle fails to load.
+/// Returns a bundle integrity error if an enabled, present first-party bundle
+/// fails to prepare or validate.
 pub fn trusted_preset_inventory() -> Result<Vec<TrustedPresetDescriptor>, BundleError> {
-    let core = hya_engine::core_agents_preset()?;
-    let core_skills = first_party_bundle("hya/core-skills")?;
-    let core_skills_bundle = single_bundle(core_skills.bundles(), "hya/core-skills")?;
-    let core_commands = first_party_bundle("hya/core-commands")?;
-    let core_commands_bundle = single_bundle(core_commands.bundles(), "hya/core-commands")?;
-    let channels = first_party_bundle(hya_engine::AGENT_CHANNELS_PRESET_ID)?;
-    let channel_bundle = single_bundle(channels.bundles(), hya_engine::AGENT_CHANNELS_PRESET_ID)?;
-    let mut presets = hya_tool_loader::tool_bundle_presets()
-        .iter()
-        .map(|policy| {
-            let catalog = first_party_bundle(policy.identity())?;
-            let bundle = single_bundle(catalog.bundles(), policy.identity())?;
-            Ok(TrustedPresetDescriptor {
-                id: bundle.identity().id.clone(),
-                kind: bundle.kind().as_str().to_string(),
-                version: bundle.identity().version.clone(),
-                digest: catalog.digest().to_string(),
-                immutable: true,
-                installable: false,
-                agent_ids: Vec::new(),
-                resource_ids: policy
-                    .tools()
-                    .iter()
-                    .map(|tool| tool.name().to_string())
-                    .collect(),
-            })
-        })
-        .collect::<Result<Vec<_>, BundleError>>()?;
-    presets.extend([
-        TrustedPresetDescriptor {
-            id: core_commands_bundle.identity().id.clone(),
-            kind: core_commands_bundle.kind().as_str().to_string(),
-            version: core_commands_bundle.identity().version.clone(),
+    trusted_preset_inventory_for(&crate::config::configured_builtin_bundles())
+}
+
+/// Return trusted presets and internal bundles enabled by `selection` in
+/// stable identity order.
+///
+/// Disabled or missing built-in bundles are omitted cleanly without panicking.
+///
+/// # Errors
+/// Returns a bundle integrity error if an enabled, present first-party bundle
+/// fails to prepare or validate.
+pub fn trusted_preset_inventory_for(
+    selection: &BuiltinBundleSelection,
+) -> Result<Vec<TrustedPresetDescriptor>, BundleError> {
+    let mut presets = Vec::new();
+    let load_enabled = |identity: &str| -> Result<Option<&'static PreparedCatalog>, BundleError> {
+        if !selection.is_enabled(identity) {
+            return Ok(None);
+        }
+        first_party_bundle_optional(identity)
+    };
+
+    for identity in TOOL_FAMILY_BUNDLES {
+        let Some(catalog) = load_enabled(identity)? else {
+            continue;
+        };
+        let bundle = single_bundle(catalog.bundles(), identity)?;
+        presets.push(TrustedPresetDescriptor {
+            id: bundle.identity().id.clone(),
+            kind: bundle.kind().as_str().to_string(),
+            version: bundle.identity().version.clone(),
+            digest: catalog.digest().to_string(),
+            immutable: true,
+            installable: false,
+            agent_ids: Vec::new(),
+            resource_ids: tool_resource_ids(bundle)?,
+        });
+    }
+
+    if let Some(core_commands) = load_enabled("hya/core-commands")? {
+        let bundle = single_bundle(core_commands.bundles(), "hya/core-commands")?;
+        presets.push(TrustedPresetDescriptor {
+            id: bundle.identity().id.clone(),
+            kind: bundle.kind().as_str().to_string(),
+            version: bundle.identity().version.clone(),
             digest: core_commands.digest().to_string(),
             immutable: true,
             installable: false,
             agent_ids: Vec::new(),
             // Template files; `commands` is the declaration manifest, not a command.
-            resource_ids: core_commands_bundle
+            resource_ids: bundle
                 .extensions()
                 .iter()
                 .filter(|asset| asset.local_id != "commands")
                 .map(|asset| asset.local_id.clone())
                 .collect(),
-        },
-        TrustedPresetDescriptor {
-            id: core_skills_bundle.identity().id.clone(),
-            kind: core_skills_bundle.kind().as_str().to_string(),
-            version: core_skills_bundle.identity().version.clone(),
+        });
+    }
+
+    if let Some(core_skills) = load_enabled("hya/core-skills")? {
+        let bundle = single_bundle(core_skills.bundles(), "hya/core-skills")?;
+        presets.push(TrustedPresetDescriptor {
+            id: bundle.identity().id.clone(),
+            kind: bundle.kind().as_str().to_string(),
+            version: bundle.identity().version.clone(),
             digest: core_skills.digest().to_string(),
             immutable: true,
             installable: false,
             agent_ids: Vec::new(),
-            resource_ids: core_skills_bundle
+            resource_ids: bundle
                 .skills()
                 .iter()
                 .map(|skill| skill.local_id.clone())
                 .collect(),
-        },
-        TrustedPresetDescriptor {
-            id: channel_bundle.identity().id.clone(),
-            kind: channel_bundle.kind().as_str().to_string(),
-            version: channel_bundle.identity().version.clone(),
-            digest: channel_bundle.digest().to_string(),
+        });
+    }
+
+    if let Some(channels) = load_enabled(hya_engine::AGENT_CHANNELS_PRESET_ID)? {
+        let bundle = single_bundle(channels.bundles(), hya_engine::AGENT_CHANNELS_PRESET_ID)?;
+        presets.push(TrustedPresetDescriptor {
+            id: bundle.identity().id.clone(),
+            kind: bundle.kind().as_str().to_string(),
+            version: bundle.identity().version.clone(),
+            digest: bundle.digest().to_string(),
             immutable: true,
             installable: false,
             agent_ids: Vec::new(),
-            resource_ids: channel_bundle
+            resource_ids: bundle
                 .channels()
                 .iter()
                 .map(|channel| channel.id.clone())
                 .collect(),
-        },
-        TrustedPresetDescriptor {
-            id: core.bundle_id().to_string(),
-            kind: "Bundle".to_string(),
-            version: core.version().to_string(),
-            digest: core.digest().to_string(),
+        });
+    }
+
+    if let Some(core_agents) = load_enabled("hya/core-agents")? {
+        let bundle = single_bundle(core_agents.bundles(), "hya/core-agents")?;
+        presets.push(TrustedPresetDescriptor {
+            id: bundle.identity().id.clone(),
+            kind: bundle.kind().as_str().to_string(),
+            version: bundle.identity().version.clone(),
+            digest: core_agents.digest().to_string(),
             immutable: true,
             installable: false,
-            agent_ids: core
+            agent_ids: bundle
                 .agents()
                 .iter()
                 .map(|agent| agent.id.as_str().to_string())
                 .collect(),
             resource_ids: Vec::new(),
-        },
-    ]);
+        });
+    }
+
     // Internal bundles load into the kernel, not the public catalog; listing them
     // here makes them visible and immutable like the presets.
     for identity in hya_bundle::INTERNAL_BUNDLES {
-        let catalog = first_party_bundle(identity)?;
+        let Some(catalog) = load_enabled(identity)? else {
+            continue;
+        };
         let bundle = single_bundle(catalog.bundles(), identity)?;
         presets.push(TrustedPresetDescriptor {
             id: bundle.identity().id.clone(),
@@ -139,6 +187,33 @@ pub fn trusted_preset_inventory() -> Result<Vec<TrustedPresetDescriptor>, Bundle
     }
     presets.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(presets)
+}
+
+fn tool_resource_ids(bundle: &Bundle) -> Result<Vec<String>, BundleError> {
+    if !bundle.tools().is_empty() {
+        return Ok(bundle
+            .tools()
+            .iter()
+            .map(|tool| tool.local_id.clone())
+            .collect());
+    }
+    let Some(exposure) = bundle
+        .extensions()
+        .iter()
+        .find(|asset| asset.local_id == "exposure")
+    else {
+        return Ok(Vec::new());
+    };
+    let parsed: ExposureHeader = serde_norway::from_str(&exposure.content).map_err(|error| {
+        BundleError::InvalidManifest {
+            source_name: bundle.identity().id.clone(),
+            detail: format!(
+                "invalid tool descriptor asset `{}`: {error}",
+                exposure.source_path
+            ),
+        }
+    })?;
+    Ok(parsed.tools.into_iter().map(|tool| tool.name).collect())
 }
 
 fn single_bundle<'a>(bundles: &'a [Bundle], identity: &str) -> Result<&'a Bundle, BundleError> {

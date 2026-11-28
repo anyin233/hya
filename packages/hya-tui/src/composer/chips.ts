@@ -11,7 +11,7 @@
  * Submitting expands the tokens still present, in order of appearance and
  * numbered 1..K per kind: a paste or file becomes an `<attachment>` block
  * (`wrap`) or its raw text, an image becomes `[image #N: name]` in the text and
- * a `PromptAttachment` in the same order. The `hya.v1` turn contract does not
+ * a `PromptAttachment` in the same order. The `hya.v2` turn contract does not
  * change.
  */
 

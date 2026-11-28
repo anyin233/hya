@@ -84,10 +84,10 @@ impl fmt::Display for ApiMethod {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiScope {
-    /// `/v1/sessions/{session}/bundles/{bundle}/…`: bound to one existing
+    /// `/v2/sessions/{session}/bundles/{bundle}/…`: bound to one existing
     /// session, whose data the process may read through its capability.
     Session,
-    /// `/v1/bundles/{bundle}/api/…`: not tied to any session.
+    /// `/v2/bundles/{bundle}/api/…`: not tied to any session.
     Global,
 }
 

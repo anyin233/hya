@@ -25,7 +25,7 @@ use hya_context::rewrite::{RewriteCtx, Rewriter};
 use hya_tool::native_bundle::{Registrations, abi_digest_v1, deadline_cell_v1};
 use hya_tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
 
-type RuntimeEntry = unsafe extern "C" fn(
+pub(crate) type RuntimeEntry = unsafe extern "C" fn(
     *const libc::c_void,
     unsafe extern "C" fn(*mut libc::c_void),
     *mut libc::c_void,
@@ -51,9 +51,9 @@ unsafe extern "C" fn poll_native_future<T>(state: *mut libc::c_void) {
     state.result = Some(future.as_mut().poll(context));
 }
 
-struct NativeTool {
-    inner: Arc<dyn Tool>,
-    with_runtime: RuntimeEntry,
+pub(crate) struct NativeTool {
+    pub(crate) inner: Arc<dyn Tool>,
+    pub(crate) with_runtime: RuntimeEntry,
 }
 
 struct NativeWorkerGuard {
@@ -180,9 +180,9 @@ async fn poll_with_runtime<T>(
 }
 
 /// A bundle's [`Rewriter`], polled inside the bundle's Tokio runtime.
-struct NativeRewriter {
-    inner: Arc<dyn Rewriter>,
-    with_runtime: RuntimeEntry,
+pub(crate) struct NativeRewriter {
+    pub(crate) inner: Arc<dyn Rewriter>,
+    pub(crate) with_runtime: RuntimeEntry,
 }
 
 #[async_trait]
@@ -207,6 +207,14 @@ fn host_handle() -> Result<tokio::runtime::Handle, ToolError> {
 
 static LIBRARIES: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
 static LIBRARY_SOURCES: OnceLock<Mutex<HashMap<String, std::path::PathBuf>>> = OnceLock::new();
+
+pub(crate) fn record_library_source(stem: &str, source: &std::path::Path) {
+    LIBRARY_SOURCES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(stem.to_string(), source.to_path_buf());
+}
 
 /// Return the source paths selected for native libraries loaded by this process.
 #[must_use]
@@ -308,7 +316,7 @@ fn native_package_directory(parent: &std::path::Path) -> std::path::PathBuf {
 
 #[cfg(unix)]
 #[derive(Debug, PartialEq, Eq)]
-enum LibrarySource {
+pub(crate) enum LibrarySource {
     /// Libraries left by a Cargo build, the most likely match first.
     Local(Vec<std::path::PathBuf>),
     Package(std::path::PathBuf),
@@ -356,7 +364,11 @@ fn build_unit_libraries(
 /// is costly to verify in unoptimized builds. Installed layouts carry no
 /// adjacent library, so they load the verified package beside `bin/`.
 #[cfg(unix)]
-fn library_source(parent: &std::path::Path, filename: &str, stem: &str) -> Option<LibrarySource> {
+pub(crate) fn library_source(
+    parent: &std::path::Path,
+    filename: &str,
+    stem: &str,
+) -> Option<LibrarySource> {
     let mut local = [parent.join("deps").join(filename), parent.join(filename)]
         .into_iter()
         .filter(|path| path.is_file())
@@ -599,7 +611,7 @@ fn extract_packaged_library(
 }
 
 #[cfg(unix)]
-fn native_cache_root() -> Option<std::path::PathBuf> {
+pub(crate) fn native_cache_root() -> Option<std::path::PathBuf> {
     std::env::var_os("XDG_CACHE_HOME")
         .filter(|path| !path.is_empty())
         .map(std::path::PathBuf::from)
@@ -614,7 +626,7 @@ fn native_cache_root() -> Option<std::path::PathBuf> {
 /// Cache only bytes already validated against the trusted package; a cache hit
 /// is compared in full before dlopen. Cache failures use private extraction.
 #[cfg(unix)]
-fn cache_library(
+pub(crate) fn cache_library(
     root: &std::path::Path,
     payload: &[u8],
     filename: &str,
@@ -678,7 +690,7 @@ fn open_library(stem: &str) -> Result<usize, String> {
 }
 
 #[cfg(unix)]
-fn symbol(handle: usize, name: &[u8]) -> Result<usize, String> {
+pub(crate) fn symbol(handle: usize, name: &[u8]) -> Result<usize, String> {
     // SAFETY: `handle` is retained in `LIBRARIES`, and `name` is a static,
     // NUL-terminated symbol name supplied by this module.
     let pointer = unsafe { libc::dlsym(handle as *mut libc::c_void, name.as_ptr().cast()) };

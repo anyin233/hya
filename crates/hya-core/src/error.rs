@@ -60,6 +60,37 @@ pub enum CoreError {
         /// The busy session.
         session: hya_proto::SessionId,
     },
+    /// Spawning or reviving a member would exceed the root session's live capacity.
+    #[error("CAPACITY_EXCEEDED: requested {requested}, limit {limit}")]
+    CapacityExceeded {
+        /// Requested member slots.
+        requested: u64,
+        /// Configured live member limit.
+        limit: u64,
+    },
+    /// Mail authorization rejected at durable commit time.
+    #[error("MAIL_AUTHORIZATION_REJECTED: {sender} -> {channel}: {reason}")]
+    MailAuthorizationRejected {
+        /// Sender handle.
+        sender: String,
+        /// Target channel or address.
+        channel: String,
+        /// Rejection detail.
+        reason: String,
+    },
+    /// Mail target is archived and requires revival before delivery.
+    #[error("MAIL_REVIVAL_REQUIRED: {sender} -> {channel} ({target})")]
+    MailRevivalRequired {
+        /// Sender handle.
+        sender: String,
+        /// Target channel id.
+        channel: String,
+        /// Archived recipient handle.
+        target: String,
+    },
+    /// Mailbox or report gate rejected the operation.
+    #[error("{0}")]
+    MailboxRejected(String),
 }
 
 impl CoreError {

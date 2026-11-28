@@ -172,7 +172,7 @@ describe("subagent panes", () => {
     await app.waitForText(/\/subagents steer \S+/)
     await app.type("steer-marker please")
     await app.press("RETURN")
-    await app.waitFor(() => app!.backend.calls.some((c) => c.method === "POST" && c.path === "/v1/sessions/hysec_child/steer"), "steer posted")
+    await app.waitFor(() => app!.backend.calls.some((c) => c.method === "POST" && c.path === "/v2/sessions/hysec_child/bundles/hya%2Fmulti-agent/steer"), "steer posted")
 
     // `d` asks confirmation; ArrowDown cancels; `d` + Enter archives child and hides selector row.
     await app.press("d")

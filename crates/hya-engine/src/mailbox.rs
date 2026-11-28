@@ -157,7 +157,7 @@ pub async fn run_mailbox_service(
 
 fn send_error(error: crate::CoreError) -> MailboxError {
     match error {
-        error @ crate::CoreError::Store(hya_store::StoreError::CapacityExceeded { .. }) => {
+        error @ crate::CoreError::CapacityExceeded { .. } => {
             MailboxError::Overloaded(error.to_string())
         }
         error => MailboxError::Rejected(error.to_string()),

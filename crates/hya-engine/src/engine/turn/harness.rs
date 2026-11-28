@@ -13,12 +13,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use hya_context::rewrite::RewriteCtx;
 use hya_proto::{
-    AgentName, Event, FinishReason, MessageId, ModelRef, PartProjection, Projection, SessionId,
-    TokenUsage, ToolSchema,
+    ActorClaim, AgentName, Event, FinishReason, MessageId, ModelRef, PartProjection, Projection,
+    SessionId, TokenUsage, ToolSchema,
 };
 use hya_provider::{CompletionRequest, EventStream, ProviderRetryClass, ProviderRouter};
-use hya_store::ActorClaim;
-use hya_tool::{AgentDef, ReportLatch};
+use hya_tool::{AgentDef, ReportLatch, WorkflowRouteFailureClass};
 use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::sync::CancellationToken;
 
@@ -306,7 +305,7 @@ impl TurnHarness<'_> {
         if self.cancel.is_cancelled() {
             if let Some(route) = self.workflow_route {
                 route
-                    .finalize(Some(hya_proto::WorkflowRouteFailureClass::Cancelled))
+                    .finalize(Some(WorkflowRouteFailureClass::Cancelled))
                     .await?;
             }
             return Err(CoreError::Cancelled);

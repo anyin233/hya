@@ -1,0 +1,559 @@
+//! `hya-server` v2 HTTP binding: the `/v2` routes generated from the
+//! `hya.v2` contract (`crates/hya-api`).
+//!
+//! Every handler speaks the generated protojson types directly, renders
+//! failures through the stable error model (`hya_api::error`), and shares
+//! the same engine/app state as the legacy surface. The gRPC binding
+//! (phase P3) wraps the same handler logic.
+
+mod agent_models;
+mod auth;
+mod builtin_bundle_apis;
+mod bundle_api;
+mod catalog;
+mod convert;
+pub(crate) mod events;
+mod fs;
+mod grpc;
+mod interaction;
+mod logs;
+mod mcp;
+mod mcp_session;
+mod message;
+mod process;
+mod project;
+mod providers;
+mod pty;
+mod relay;
+mod session;
+mod turn;
+mod worktree;
+
+use std::collections::BTreeMap;
+
+use axum::Router;
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{FromRequest, Request};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
+
+use crate::ServerState;
+use hya_api::error::Code;
+
+/// The removed directory scope header. The scope comes only from the
+/// request's `directory` field; a request (or gRPC call) that still sends
+/// this header is refused with [`removed_directory_header`] before any route
+/// runs, so an old client never silently loses its scope.
+pub(crate) const REMOVED_DIRECTORY_HEADER: &str = "x-hya-directory";
+
+/// The refusal of a request carrying [`REMOVED_DIRECTORY_HEADER`].
+pub(crate) const REMOVED_DIRECTORY_HEADER_MESSAGE: &str =
+    "the x-hya-directory header is no longer supported; set the request's directory field";
+
+/// Router middleware refusing the removed [`REMOVED_DIRECTORY_HEADER`] on
+/// every route — JSON, SSE, WebSocket, and the gRPC binding's in-process
+/// dispatch — before any handler runs. It sits inside the CORS layer, so a
+/// browser can read the `400 invalid_argument` answer.
+pub(crate) async fn directory_header_guard(
+    request: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if let Err(error) = removed_directory_header(request.headers()) {
+        return error.into_response();
+    }
+    next.run(request).await
+}
+
+/// `invalid_argument` when `headers` (HTTP headers or gRPC metadata) still
+/// carry the removed [`REMOVED_DIRECTORY_HEADER`], whatever its value.
+pub(crate) fn removed_directory_header(headers: &axum::http::HeaderMap) -> Result<(), V2Error> {
+    if headers.contains_key(REMOVED_DIRECTORY_HEADER) {
+        return Err(V2Error::invalid_argument(REMOVED_DIRECTORY_HEADER_MESSAGE));
+    }
+    Ok(())
+}
+
+pub(crate) fn router() -> Router<ServerState> {
+    Router::new()
+        .merge(process::router())
+        .merge(catalog::router())
+        .merge(agent_models::router())
+        .merge(auth::router())
+        .merge(logs::router())
+        .merge(session::router())
+        .merge(bundle_api::router())
+        .merge(turn::router())
+        .merge(message::router())
+        .merge(events::router())
+        .merge(interaction::router())
+        .merge(fs::router())
+        .merge(project::router())
+        .merge(worktree::router())
+        .merge(mcp::router())
+        .merge(mcp_session::router())
+        .merge(pty::router())
+        .merge(relay::router())
+}
+
+/// The v2 JSON body extractor and response: `axum::Json`, except that a body
+/// that fails to decode (malformed JSON, a wrong field type, an out-of-range
+/// number, a missing JSON content type) is a v2 `invalid_argument` error in
+/// the `{"error": {...}}` shape instead of axum's plain-text 400/415/422.
+/// An oversized body keeps the transport's 413.
+pub(crate) struct Json<T>(pub(crate) T);
+
+#[axum::async_trait]
+impl<T, S> FromRequest<S> for Json<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        match axum::Json::<T>::from_request(req, state).await {
+            Ok(axum::Json(value)) => Ok(Self(value)),
+            Err(rejection) => Err(json_rejection(rejection)),
+        }
+    }
+}
+
+fn json_rejection(rejection: JsonRejection) -> Response {
+    if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return rejection.into_response();
+    }
+    V2Error::invalid_argument(format!("invalid request body: {}", rejection.body_text()))
+        .into_response()
+}
+
+impl<T: Serialize> IntoResponse for Json<T> {
+    fn into_response(self) -> Response {
+        axum::Json(self.0).into_response()
+    }
+}
+
+/// One failed v2 call rendered as `{"error": {"code", "message"}}` with the
+/// canonical HTTP status from the stable error table.
+pub struct ApiError {
+    pub(crate) code: Code,
+    pub(crate) message: String,
+}
+
+pub(crate) type V2Error = ApiError;
+
+impl ApiError {
+    pub(crate) fn legacy_control(code: &str, fallback: Code, message: String) -> Self {
+        let code = match code {
+            "SESSION_NOT_FOUND" => Code::SessionNotFound,
+            "WORKFLOW_SYNTAX" | "WORKFLOW_INVALID_INPUT" | "WORKFLOW_INVALID_SOURCE" => {
+                Code::InvalidArgument
+            }
+            "WORKFLOW_NOT_FOUND" | "WORKFLOW_NOT_SELECTED" => Code::NotFound,
+            "WORKFLOW_UNAUTHORIZED" => Code::PermissionDenied,
+            "WORKFLOW_BUSY" | "WORKFLOW_OPERATION_CONFLICT" | "WORKFLOW_STALE_REVISION" => {
+                Code::FailedPrecondition
+            }
+            "WORKFLOW_RUNTIME_UNAVAILABLE" | "WORKFLOW_OVERLOADED" => Code::Unavailable,
+            _ => fallback,
+        };
+        Self::new(code, message)
+    }
+
+    pub(crate) fn workflow(error: crate::WorkflowControlError) -> Self {
+        Self::legacy_control(&error.code, Code::Internal, error.message)
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        &self.message
+    }
+
+    /// Build an error from a stable code and message.
+    pub(crate) fn new(code: Code, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// The request body or parameters are invalid.
+    pub(crate) fn invalid_argument(message: impl Into<String>) -> Self {
+        Self::new(Code::InvalidArgument, message)
+    }
+
+    /// The session id does not exist.
+    pub(crate) fn session_not_found(session: &str) -> Self {
+        Self::new(
+            Code::SessionNotFound,
+            format!("session not found: {session}"),
+        )
+    }
+
+    /// Another run owns the session's admission slot.
+    pub(crate) fn session_busy() -> Self {
+        Self::new(Code::SessionBusy, "session busy")
+    }
+
+    /// A required runtime capability is unavailable.
+    pub(crate) fn unavailable(message: impl Into<String>) -> Self {
+        Self::new(Code::Unavailable, message)
+    }
+
+    /// The requested resource does not exist.
+    pub(crate) fn not_found(message: impl Into<String>) -> Self {
+        Self::new(Code::NotFound, message)
+    }
+
+    /// Unhandled internal failure.
+    pub(crate) fn internal(message: impl Into<String>) -> Self {
+        Self::new(Code::Internal, message)
+    }
+
+    /// The same failure as a gRPC status (stable code table mapping).
+    pub(crate) fn grpc_status(&self) -> tonic::Status {
+        tonic::Status::new(self.code.grpc_code(), self.message.clone())
+    }
+}
+
+impl From<hya_engine::CoreError> for V2Error {
+    fn from(error: hya_engine::CoreError) -> Self {
+        if let hya_engine::CoreError::Store(error) = error {
+            return error.into();
+        }
+        let code = match &error {
+            hya_engine::CoreError::TurnAlreadyActive { .. } => Code::SessionBusy,
+            hya_engine::CoreError::Invalid(_) => Code::InvalidArgument,
+            hya_engine::CoreError::CapacityExceeded { .. }
+            | hya_engine::CoreError::MailboxRejected(_)
+            | hya_engine::CoreError::MailRevivalRequired { .. } => Code::FailedPrecondition,
+            hya_engine::CoreError::MailAuthorizationRejected { .. } => Code::PermissionDenied,
+            _ => Code::Internal,
+        };
+        Self::new(code, error.to_string())
+    }
+}
+
+impl From<hya_store::StoreError> for V2Error {
+    fn from(error: hya_store::StoreError) -> Self {
+        use hya_store::StoreError as E;
+        let code = match &error {
+            E::ProjectNameEmpty
+            | E::ProjectRootsEmpty
+            | E::ProjectRootNotAbsolute { .. }
+            | E::ProjectRootInvalid { .. } => Code::InvalidArgument,
+            E::ProjectNotFound { .. } => Code::NotFound,
+            E::ProjectInUse { .. } => Code::FailedPrecondition,
+            _ => Code::Internal,
+        };
+        Self::new(code, error.to_string())
+    }
+}
+
+impl IntoResponse for V2Error {
+    fn into_response(self) -> Response {
+        let status = StatusCode::from_u16(self.code.http_status())
+            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        (
+            status,
+            Json(json!({
+                "error": {
+                    "code": self.code.as_str(),
+                    "message": self.message,
+                }
+            })),
+        )
+            .into_response()
+    }
+}
+
+/// The directory scope a request names, if any: its `directory` field
+/// (a query parameter on GET/DELETE, a body field otherwise; gRPC sets the
+/// message field). Headers are never consulted — the removed
+/// `x-hya-directory` header is refused before any route runs.
+///
+/// `hya serve` has no working directory of its own (ADR-0024), so there is
+/// no fallback: `Ok(None)` means the request named no scope. A relative
+/// scope would resolve against the server process's cwd, so it is
+/// `invalid_argument`.
+pub(crate) fn request_scope(requested: &str) -> Result<Option<std::path::PathBuf>, V2Error> {
+    let named = requested.trim();
+    if named.is_empty() {
+        return Ok(None);
+    }
+    let path = std::path::PathBuf::from(named);
+    if !path.is_absolute() {
+        return Err(V2Error::invalid_argument(format!(
+            "the directory scope must be an absolute path, got `{named}`"
+        )));
+    }
+    Ok(Some(path))
+}
+
+/// The catalog place of a catalog read: the request's directory scope
+/// ([`request_scope`]) resolved through the Project that contains it.
+///
+/// Every catalog rpc (agents, commands, skills, bootstrap, agent models,
+/// permission modes, bundle APIs) answers from this one helper so they
+/// agree: a directory inside a registered Project lists that Project's
+/// catalog (every root, first root wins); a directory in no Project lists
+/// only its own inert tiers (no Project bundle); no directory is the
+/// global view.
+pub(crate) async fn catalog_scope(
+    st: &crate::ServerState,
+    requested: &str,
+) -> Result<crate::support::catalog_place::CatalogPlace, V2Error> {
+    let directory = request_scope(requested)?;
+    Ok(crate::support::catalog_place::CatalogPlace::for_directory(st, directory).await)
+}
+
+/// The session a catalog read is scoped to, if its `session` field names
+/// one: `invalid_argument` for a malformed id, `not_found` for an unknown
+/// session.
+pub(crate) async fn scope_session(
+    st: &crate::ServerState,
+    session: &str,
+) -> Result<Option<hya_proto::SessionId>, V2Error> {
+    let session = session.trim();
+    if session.is_empty() {
+        return Ok(None);
+    }
+    let id = session
+        .parse::<hya_proto::SessionId>()
+        .map_err(|_| V2Error::invalid_argument(format!("invalid session id: {session}")))?;
+    if !st.engine.session_exists(id).await? {
+        return Err(V2Error::session_not_found(session));
+    }
+    Ok(Some(id))
+}
+
+/// The directory scope of an rpc that cannot work without one.
+///
+/// Fails with `invalid_argument` when the request names none; the server
+/// never substitutes its own working directory.
+pub(crate) fn scope_directory(requested: &str) -> Result<std::path::PathBuf, V2Error> {
+    request_scope(requested)?.ok_or_else(|| {
+        V2Error::invalid_argument(
+            "this rpc needs a directory scope: set the request's `directory` field \
+             (hya serve has no working directory)",
+        )
+    })
+}
+
+/// Build a generated request message from path variables and query
+/// parameters.
+///
+/// GET/DELETE requests carry their fields as query parameters in protojson
+/// camelCase form; `page.cursor` and `page.limit` populate the nested page
+/// message. Path variables override query values. String-encoded numbers
+/// follow protojson rules.
+pub(crate) fn query_request<T: DeserializeOwned>(
+    path_vars: &[(&str, &str)],
+    query: &BTreeMap<String, String>,
+) -> Result<T, V2Error> {
+    query_request_pairs(path_vars, query.iter(), &[])
+}
+
+/// [`query_request`] over raw query pairs, where each key in `repeated`
+/// (a `repeated` proto field) collects every occurrence into a JSON array
+/// (`?paths=a&paths=b`). Other keys keep the last occurrence.
+pub(crate) fn query_request_pairs<'a, T: DeserializeOwned>(
+    path_vars: &[(&str, &str)],
+    query: impl IntoIterator<Item = (&'a String, &'a String)>,
+    repeated: &[&str],
+) -> Result<T, V2Error> {
+    let mut map = serde_json::Map::new();
+    let mut page = serde_json::Map::new();
+    for (key, value) in query {
+        if value.is_empty() {
+            continue;
+        }
+        if repeated.contains(&key.as_str()) {
+            let entry = map
+                .entry(key.clone())
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if let Value::Array(items) = entry {
+                items.push(Value::String(value.clone()));
+            }
+            continue;
+        }
+        // Query strings carry every value as text; protojson bools need
+        // real JSON booleans, so coerce the canonical literals.
+        let json = match value.as_str() {
+            "true" => Value::Bool(true),
+            "false" => Value::Bool(false),
+            _ => Value::String(value.clone()),
+        };
+        if let Some(field @ ("cursor" | "limit")) = key.strip_prefix("page.") {
+            page.insert(field.to_owned(), json);
+        } else {
+            map.insert(key.clone(), json);
+        }
+    }
+    if !page.is_empty() {
+        map.insert("page".to_owned(), Value::Object(page));
+    }
+    for (key, value) in path_vars {
+        map.insert((*key).to_owned(), Value::String((*value).to_owned()));
+    }
+    serde_json::from_value(Value::Object(map))
+        .map_err(|error| V2Error::invalid_argument(format!("invalid request fields: {error}")))
+}
+
+pub use grpc::V2Grpc;
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use hya_api::v2 as pb;
+
+    use super::query_request;
+
+    #[test]
+    fn query_request_decodes_page_fields_from_dotted_query_keys() {
+        let query = BTreeMap::from([
+            ("page.cursor".to_owned(), "next".to_owned()),
+            ("page.limit".to_owned(), "2".to_owned()),
+        ]);
+        let request: pb::ListSessionsRequest = query_request(&[], &query).unwrap_or_default();
+        let page = request.page;
+        assert_eq!(page.as_ref().map(|page| page.cursor.as_str()), Some("next"));
+        assert_eq!(page.as_ref().map(|page| page.limit), Some(2));
+    }
+}
+
+#[cfg(test)]
+mod workflow_error_regression {
+    use super::*;
+
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn workflow_failures_use_the_shared_transport_table() {
+        use tonic::Code as Grpc;
+
+        for (legacy_code, wire_code, status, grpc) in [
+            (
+                "WORKFLOW_SYNTAX",
+                "invalid_argument",
+                400,
+                Grpc::InvalidArgument,
+            ),
+            (
+                "WORKFLOW_INVALID_INPUT",
+                "invalid_argument",
+                400,
+                Grpc::InvalidArgument,
+            ),
+            (
+                "WORKFLOW_INVALID_SOURCE",
+                "invalid_argument",
+                400,
+                Grpc::InvalidArgument,
+            ),
+            ("WORKFLOW_NOT_FOUND", "not_found", 404, Grpc::NotFound),
+            ("WORKFLOW_NOT_SELECTED", "not_found", 404, Grpc::NotFound),
+            (
+                "SESSION_NOT_FOUND",
+                "session_not_found",
+                404,
+                Grpc::NotFound,
+            ),
+            (
+                "WORKFLOW_UNAUTHORIZED",
+                "permission_denied",
+                403,
+                Grpc::PermissionDenied,
+            ),
+            (
+                "WORKFLOW_BUSY",
+                "failed_precondition",
+                409,
+                Grpc::FailedPrecondition,
+            ),
+            (
+                "WORKFLOW_OPERATION_CONFLICT",
+                "failed_precondition",
+                409,
+                Grpc::FailedPrecondition,
+            ),
+            (
+                "WORKFLOW_STALE_REVISION",
+                "failed_precondition",
+                409,
+                Grpc::FailedPrecondition,
+            ),
+            (
+                "WORKFLOW_RUNTIME_UNAVAILABLE",
+                "unavailable",
+                503,
+                Grpc::Unavailable,
+            ),
+            ("WORKFLOW_OVERLOADED", "unavailable", 503, Grpc::Unavailable),
+            ("WORKFLOW_INTERNAL", "internal", 500, Grpc::Internal),
+            ("unknown", "internal", 500, Grpc::Internal),
+        ] {
+            let error =
+                ApiError::workflow(crate::WorkflowControlError::new(legacy_code, "failure"));
+            let grpc_status = error.grpc_status();
+            assert_eq!(grpc_status.code(), grpc, "{legacy_code}");
+            assert_eq!(grpc_status.message(), "failure");
+            assert!(grpc_status.details().is_empty());
+
+            let response = error.into_response();
+            assert_eq!(response.status().as_u16(), status, "{legacy_code}");
+            let body = axum::body::to_bytes(response.into_body(), 1_024)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                json!({"error": {"code": wire_code, "message": "failure"}}),
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod mail_error_tests {
+    use super::*;
+
+    #[test]
+    fn mail_errors_share_http_and_grpc_client_codes() {
+        for (error, expected, http, grpc) in [
+            (
+                hya_engine::CoreError::MailAuthorizationRejected {
+                    sender: "main/outsider".into(),
+                    channel: "DM-test1234".into(),
+                    reason: "sender is not a channel member".into(),
+                },
+                Code::PermissionDenied,
+                403,
+                tonic::Code::PermissionDenied,
+            ),
+            (
+                hya_engine::CoreError::MailboxRejected("report gate is closed".into()),
+                Code::FailedPrecondition,
+                409,
+                tonic::Code::FailedPrecondition,
+            ),
+            (
+                hya_engine::CoreError::MailRevivalRequired {
+                    sender: "main".into(),
+                    channel: "direct:main/worker".into(),
+                    target: "main/worker".into(),
+                },
+                Code::FailedPrecondition,
+                409,
+                tonic::Code::FailedPrecondition,
+            ),
+        ] {
+            let message = error.to_string();
+            let mapped = ApiError::from(error);
+            assert_eq!(mapped.code, expected);
+            assert_eq!(mapped.grpc_status().code(), grpc);
+            assert_eq!(mapped.grpc_status().message(), message);
+            assert_eq!(mapped.into_response().status().as_u16(), http);
+        }
+    }
+}

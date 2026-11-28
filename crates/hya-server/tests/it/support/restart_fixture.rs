@@ -100,7 +100,7 @@ pub(super) async fn fixture() -> (
 
 pub(super) async fn post_prompt(app: axum::Router, session: SessionId) -> StatusCode {
     app.oneshot(
-        Request::post(format!("/v1/sessions/{session}/turns"))
+        Request::post(format!("/v2/sessions/{session}/turns"))
             .header("content-type", "application/json")
             .body(Body::from(r#"{"prompt":{"text":"work"}}"#))
             .unwrap(),
@@ -116,7 +116,7 @@ pub(super) async fn wait_idle(app: axum::Router, session: SessionId) {
             let response = app
                 .clone()
                 .oneshot(
-                    Request::get(format!("/v1/sessions/{session}/turns/test"))
+                    Request::get(format!("/v2/sessions/{session}/turns/test"))
                         .body(Body::empty())
                         .unwrap(),
                 )

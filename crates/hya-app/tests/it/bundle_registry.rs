@@ -40,7 +40,7 @@ fn agent_candidate(
         .map(|value| format!("namespace: {value}\n"))
         .unwrap_or_default();
     let manifest = format!(
-        "kind: Bundle\nidentity:\n  id: {bundle_id}\n  version: {version}\n  publisher: hya\n{ns}agents:\n  - id: {agent_id}\n    role: main\n    prompt: prompts/lead.md\n"
+        "kind: Bundle\nschema_version: 2\nidentity:\n  id: {bundle_id}\n  version: {version}\n  publisher: hya\n{ns}agents:\n  - id: {agent_id}\n    role: main\n    prompt: prompts/lead.md\n"
     );
     let prepared = prepare_package(BundleSource::new(
         bundle_id,
@@ -65,6 +65,7 @@ fn workflow_candidate(source_digest: [u8; 32]) -> BundleInstallCandidate {
             SourceFile::new(
                 "bundle.yaml",
                 br#"kind: Bundle
+schema_version: 2
 identity: { id: hya/workflow-installed, version: 1.0.0, publisher: hya }
 workflow: { id: release, path: workflows/release.hya.md }
 agents:

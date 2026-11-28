@@ -17,12 +17,12 @@ impl SessionEngine {
         let projection = self.read_projection_shared(root).await?;
         let needle = query.trim().to_ascii_lowercase();
         let mut rows = Vec::new();
-        for (path, entry) in &projection.team.archived {
+        for (path, entry) in &hya_tool::extension::team_projection(&projection).archived {
             if hya_proto::scope::parent_path(path) != Some(handle.as_str()) {
                 continue;
             }
             let child_projection = self.read_projection_shared(entry.session).await?;
-            let handoff = child_projection.session.handoff.clone();
+            let handoff = hya_tool::extension::handoff_projection(&child_projection);
             let (goal, pending, degraded) = match &handoff {
                 Some(handoff) => (
                     handoff_section(&handoff.doc, "Goal"),

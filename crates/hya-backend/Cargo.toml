@@ -26,7 +26,7 @@ hya-tool = { workspace = true }
 hya-server = { workspace = true }
 hya-proto = { workspace = true }
 hya-app = { workspace = true }
-hya-sdk-v1 = { workspace = true }
+hya-sdk = { workspace = true }
 hya-plugin-claude = { workspace = true }
 hya-updater = { workspace = true }
 hya-relay = { workspace = true }

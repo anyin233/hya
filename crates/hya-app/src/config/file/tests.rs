@@ -3,13 +3,14 @@
 use super::*;
 use crate::config::load;
 use crate::test_env::{EnvGuard, StableEnvGuard};
+use hya_bundle::{BuiltinBundleProfile, BuiltinBundleSelection};
 use hya_tool::Invocation;
 
 #[test]
-fn permission_catalog_scopes_and_goal_precedence_parse_and_validate() {
+fn permission_catalog_scopes_and_v1_rejection() {
     let _env = StableEnvGuard::new();
     let file = parse_config(
-        "permission:\n  model: default\n  rules:\n    - { target: tool, selector: '^(read|grep)$', permission: allow }\n    - { target: mcp, selector: '^mcp__github__', permission: ask }\n    - { target: command, selector: '^git (status|diff)', permission: deny }\ncatalog_scopes:\n  max: 4\n  idle_ttl_secs: 90\ngoal:\n  evaluator_model: deep/o3-mini\n",
+        "schema_version: 2\npermission:\n  model: default\n  rules:\n    - { target: tool, selector: '^(read|grep)$', permission: allow }\n    - { target: mcp, selector: '^mcp__github__', permission: ask }\n    - { target: command, selector: '^git (status|diff)', permission: deny }\ncatalog_scopes:\n  max: 4\n  idle_ttl_secs: 90\n",
     )
     .unwrap();
     let policy = resolve_permission(&file).unwrap();
@@ -27,20 +28,20 @@ fn permission_catalog_scopes_and_goal_precedence_parse_and_validate() {
             .mode,
         Mode::Deny
     );
-    assert!(resolve_permission(&parse_config("{}").unwrap()).is_ok());
+    assert!(resolve_permission(&parse_config("schema_version: 2\n").unwrap()).is_ok());
     assert!(
         resolve_permission(
             &parse_config(
-                "permission:\n  rules: [{ target: tool, selector: '(', permission: allow }]\n"
+                "schema_version: 2\npermission:\n  rules: [{ target: tool, selector: '(', permission: allow }]\n"
             )
             .unwrap()
         )
         .is_err()
     );
-    assert!(parse_config("permission:\n  model: unknown\n").is_err());
+    assert!(parse_config("schema_version: 2\npermission:\n  model: unknown\n").is_err());
     assert!(
         parse_config(
-            "permission:\n  rules: [{ target: unknown, selector: x, permission: allow }]\n"
+            "schema_version: 2\npermission:\n  rules: [{ target: unknown, selector: x, permission: allow }]\n"
         )
         .is_err()
     );
@@ -55,10 +56,25 @@ fn permission_catalog_scopes_and_goal_precedence_parse_and_validate() {
         hya_engine::CatalogScopeCacheConfig::default()
     );
 
-    assert_eq!(
-        file.goal.as_ref().unwrap().evaluator_model.as_deref(),
-        Some("deep/o3-mini")
-    );
+    // Missing or v1 schema_version and removed v1 top-level keys reject with actionable hya-migration guidance.
+    for bad_cfg in [
+        "default_model: hya/offline\n",
+        "schema_version: 1\ndefault_model: hya/offline\n",
+        "schema_version: 2\ncompaction:\n  keep_recent: 12\n",
+        "schema_version: 2\ngoal:\n  evaluator_model: deep/o3-mini\n",
+        "schema_version: 2\nsubagents:\n  max_concurrency: 4\n",
+        "schema_version: 2\nlsp: false\n",
+        "schema_version: 2\nformatter: false\n",
+        "schema_version: 2\ntools:\n  websearch:\n    enabled: false\n",
+        "schema_version: 2\ntools:\n  webfetch:\n    enabled: false\n",
+    ] {
+        let err = parse_config(bad_cfg).expect_err("legacy v1 config must be rejected");
+        assert!(
+            err.to_string().contains("hya-migration"),
+            "missing hya-migration guidance in error for `{bad_cfg}`: {err}"
+        );
+    }
+
     assert_eq!(GoalSettings::from_block(None), GoalSettings::default());
     assert_eq!(
         resolve_evaluator_model(Some("cli/m"), Some("cfg/m"), "w/m"),
@@ -72,13 +88,67 @@ fn permission_catalog_scopes_and_goal_precedence_parse_and_validate() {
 }
 
 #[test]
-fn subagent_and_compaction_settings_parse_with_env_overrides() {
+fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
     let mut env = EnvGuard::new();
-    let file = parse_config(
-        "subagents:\n  max_depth: 9\n  max_concurrency: 200\n  per_run_budget: 1000\n  per_team_turn_budget: 700\n  per_team_message_budget: 800\ncompaction:\n  keep_recent: 12\n  summary_max_tokens: 8192\n  token_accounting: estimate\n",
+    let dir =
+        std::env::temp_dir().join(format!("hya-cfg-v2-bundle-{}", hya_proto::SessionId::new()));
+    let cfg_path = dir.join("hya/config.yaml");
+    std::fs::create_dir_all(dir.join("hya")).unwrap();
+    std::fs::write(
+        &cfg_path,
+        "schema_version: 2\nbundles:\n  builtin:\n    profile: bare\n    enable: [hya/base-tools, hya/network-tools, hya/compaction, hya/goal-loop, hya/extended-tools]\n    disable: [hya/channel-tools]\n",
     )
     .unwrap();
-    let sub = resolve_subagent_limits(file.subagents.as_ref());
+
+    let write_bundle_cfg = |id: &str, body: &str| {
+        let loc = crate::bundle_config::bundle_config_location(
+            &cfg_path,
+            id,
+            crate::bundle_config::BundleConfigScope::User,
+        )
+        .unwrap();
+        std::fs::create_dir_all(loc.dir()).unwrap();
+        std::fs::write(loc.file(), body).unwrap();
+    };
+    write_bundle_cfg("hya/goal-loop", "goal:\n  evaluator_model: deep/o3-mini\n");
+    write_bundle_cfg(
+        "hya/extended-tools",
+        "subagents:\n  max_concurrency: 200\n  per_run_budget: 1000\n  per_team_turn_budget: 700\n  per_team_message_budget: 800\nlsp: false\n",
+    );
+    write_bundle_cfg(
+        "hya/compaction",
+        "compaction:\n  keep_recent: 12\n  summary_max_tokens: 8192\n  token_accounting: estimate\n",
+    );
+    write_bundle_cfg(
+        "hya/network-tools",
+        "webfetch:\n  enabled: false\nwebsearch:\n  provider: parallel\n  endpoint: https://search.example/mcp\n  key: secret\n  enabled: false\n",
+    );
+
+    let file = parse_config(&std::fs::read_to_string(&cfg_path).unwrap()).unwrap();
+    assert_eq!(file.bundles.builtin.profile, BuiltinBundleProfile::Bare);
+    assert!(file.bundles.builtin.is_enabled("hya/base-tools"));
+    assert!(!file.bundles.builtin.is_enabled("hya/channel-tools"));
+
+    let settings = EngineSettings {
+        file,
+        config_file: Some(cfg_path.clone()),
+    };
+    assert_eq!(
+        settings.goal().evaluator_model.as_deref(),
+        Some("deep/o3-mini")
+    );
+    assert!(!settings.webfetch_enabled());
+    let ws = resolve_websearch(&settings.file, &cfg_path);
+    assert_eq!(
+        (ws.provider, ws.endpoint.as_deref(), ws.enabled),
+        (
+            hya_tool::WebSearchProvider::Parallel,
+            Some("https://search.example/mcp"),
+            false
+        )
+    );
+
+    let sub = settings.subagents();
     assert_eq!(
         (
             sub.max_concurrency,
@@ -92,7 +162,7 @@ fn subagent_and_compaction_settings_parse_with_env_overrides() {
 
     env.set("HYA_SUBAGENT_MESSAGE_BUDGET", "5");
     env.set("HYA_SUBAGENT_MAX_CONCURRENCY", "64");
-    let over = resolve_subagent_limits(file.subagents.as_ref());
+    let over = settings.subagents();
     assert_eq!(
         (
             over.max_concurrency,
@@ -102,7 +172,7 @@ fn subagent_and_compaction_settings_parse_with_env_overrides() {
         (64, 5, 700)
     );
 
-    let ctx = resolve_context_settings(file.compaction.as_ref());
+    let ctx = settings.context();
     assert_eq!(
         (
             ctx.compaction.keep_recent,
@@ -118,7 +188,7 @@ fn subagent_and_compaction_settings_parse_with_env_overrides() {
 
     env.set("HYA_COMPACTION_SUMMARY_MAX_TOKENS", "2048");
     env.set("HYA_TOKEN_ACCOUNTING", "provider");
-    let ctx_over = resolve_context_settings(file.compaction.as_ref());
+    let ctx_over = settings.context();
     assert_eq!(
         (
             ctx_over.compaction.summary_max_tokens,
@@ -129,9 +199,24 @@ fn subagent_and_compaction_settings_parse_with_env_overrides() {
     );
     env.set("HYA_TOKEN_ACCOUNTING", "banana");
     assert_eq!(
-        resolve_context_settings(file.compaction.as_ref()).token_accounting,
+        settings.context().token_accounting,
         TokenAccountingMode::Estimate
     );
+
+    // Bare without hya/network-tools forces webfetch & websearch off cleanly.
+    let bare_settings = EngineSettings {
+        file: FileConfig {
+            bundles: BundlesConfig {
+                builtin: BuiltinBundleSelection::bare(),
+            },
+            ..FileConfig::default()
+        },
+        config_file: Some(cfg_path.clone()),
+    };
+    assert!(!bare_settings.webfetch_enabled());
+    assert!(!resolve_websearch(&bare_settings.file, &cfg_path).enabled);
+
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -142,37 +227,25 @@ fn tools_categories_and_plugins_sections_parse_and_validate() {
         ("with_tools", CodeMode::WithTools),
         ("only", CodeMode::Only),
     ] {
-        let f = parse_config(&format!("tools: {{ code: {{ mode: {text} }} }}\n")).unwrap();
+        let f = parse_config(&format!(
+            "schema_version: 2\ntools: {{ code: {{ mode: {text} }} }}\n"
+        ))
+        .unwrap();
         assert_eq!(f.tools.unwrap().code.mode, expected);
     }
-    assert!(parse_config("tools: { code: { mode: always } }\n").is_err());
-    assert!(parse_config("tools: { webfetch: { enable: false } }\n").is_err());
-    assert!(
-        !EngineSettings {
-            file: parse_config("tools: { webfetch: { enabled: false } }\n").unwrap()
-        }
-        .webfetch_enabled()
-    );
+    assert!(parse_config("schema_version: 2\ntools: { code: { mode: always } }\n").is_err());
     assert!(
         EngineSettings {
-            file: parse_config("{}").unwrap()
+            file: parse_config("schema_version: 2\n").unwrap(),
+            config_file: None,
         }
         .webfetch_enabled()
     );
 
     let f = parse_config(
-        "tools:\n  websearch:\n    provider: parallel\n    endpoint: https://search.example/mcp\n    key: secret\n    enabled: false\ncategories:\n  deep: [primary/opus, backup/sonnet]\n  empty: []\nplugins:\n  memory: { command: [python3, memory.py], timeout_ms: 500, env: { TOKEN: literal } }\n  off: { enabled: false, command: [nope] }\n  ext: { kind: bun }\n  cc: { kind: claude, plugin_dir: /plugins/cc-demo }\n",
+        "schema_version: 2\ncategories:\n  deep: [primary/opus, backup/sonnet]\n  empty: []\nplugins:\n  memory: { command: [python3, memory.py], timeout_ms: 500, env: { TOKEN: literal } }\n  off: { enabled: false, command: [nope] }\n  ext: { kind: bun }\n  cc: { kind: claude, plugin_dir: /plugins/cc-demo }\n",
     )
     .unwrap();
-    let ws = f.tools.as_ref().unwrap().websearch.clone();
-    assert_eq!(
-        (ws.provider, ws.endpoint.as_deref(), ws.enabled),
-        (
-            hya_tool::WebSearchProvider::Parallel,
-            Some("https://search.example/mcp"),
-            false
-        )
-    );
 
     let cats = resolve_categories(&f);
     assert_eq!(cats.resolve("deep").unwrap().model.as_str(), "primary/opus");
@@ -194,18 +267,29 @@ fn tools_categories_and_plugins_sections_parse_and_validate() {
 async fn mcp_validation_disabled_secret_skip_and_remote_retention() {
     let mut env = EnvGuard::new();
     let file = parse_config(
-        "mcp:\n  echo: { command: [python3, echo.py], env: { TOKEN: literal }, timeout_ms: 250 }\n  remote: { url: https://example.com/mcp, transport: sse, enabled: false }\n",
+        "schema_version: 2\nmcp:\n  echo: { command: [python3, echo.py], env: { TOKEN: literal }, timeout_ms: 250 }\n  remote: { url: https://example.com/mcp, transport: sse, enabled: false }\n",
     )
     .unwrap();
     let mcp = resolve_mcp(&file).unwrap();
     assert_eq!(mcp.len(), 2);
     assert_eq!(mcp["remote"].enabled, Some(false));
     assert!(
-        resolve_mcp(&parse_config("mcp:\n  bad__key: { command: [echo] }\n").unwrap()).is_err()
+        resolve_mcp(
+            &parse_config("schema_version: 2\nmcp:\n  bad__key: { command: [echo] }\n").unwrap()
+        )
+        .is_err()
     );
-    assert!(resolve_mcp(&parse_config("mcp:\n  has.dot: { command: [echo] }\n").unwrap()).is_err());
     assert!(
-        resolve_mcp(&parse_config("mcp:\n  good-key_1: { command: [echo] }\n").unwrap()).is_ok()
+        resolve_mcp(
+            &parse_config("schema_version: 2\nmcp:\n  has.dot: { command: [echo] }\n").unwrap()
+        )
+        .is_err()
+    );
+    assert!(
+        resolve_mcp(
+            &parse_config("schema_version: 2\nmcp:\n  good-key_1: { command: [echo] }\n").unwrap()
+        )
+        .is_ok()
     );
 
     let root =
@@ -213,7 +297,7 @@ async fn mcp_validation_disabled_secret_skip_and_remote_retention() {
     std::fs::create_dir_all(root.join("hya")).unwrap();
     std::fs::write(
         root.join("hya/config.yaml"),
-        "mcp:\n  disabled:\n    command: [missing]\n    enabled: false\n    env:\n      TOKEN: '{env:HYA_DEFINITELY_UNSET_TEST}'\n",
+        "schema_version: 2\nmcp:\n  disabled:\n    command: [missing]\n    enabled: false\n    env:\n      TOKEN: '{env:HYA_DEFINITELY_UNSET_TEST}'\n",
     )
     .unwrap();
     env.set("XDG_CONFIG_HOME", root.to_str().unwrap());

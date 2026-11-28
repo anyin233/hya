@@ -13,7 +13,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
-use hya_api::v1 as pb;
+use hya_api::v2 as pb;
 use hya_bundle::{BundleSource, SourceFile, write_public_package};
 use hya_e2e::{E2eEnv, E2eEnvBuilder, fake_requests_from, text_step, tool_step, unique_temp_dir};
 use hya_proto::{Event, SessionId};
@@ -109,7 +109,7 @@ for line in sys.stdin:
     // 1. T2.20: workflow-private agents hidden in catalog + hya-goal-guide reads goal-contract.
     let agents = env
         .get_json(&format!(
-            "/v1/agents?directory={}",
+            "/v2/agents?directory={}",
             env.backend.workdir_str()
         ))
         .await
@@ -279,7 +279,7 @@ for line in sys.stdin:
         "channel-policy",
         vec![SourceFile::new(
             "bundle.yaml",
-            "kind: Bundle\nidentity: { id: acme/channel-policy, version: 1.0.0, publisher: acme }\nchannels:\n  - id: child-dm\n    kind: parent_dm\n    participants: [{ kind: role, role: child }]\n    capabilities: [report, steer, follow_up, resident_mail]\n    scope: vertical\n    retention: team_session\n",
+            "schema_version: 2\nkind: Bundle\nidentity: { id: acme/channel-policy, version: 1.0.0, publisher: acme }\nchannels:\n  - id: child-dm\n    kind: parent_dm\n    participants: [{ kind: role, role: child }]\n    capabilities: [report, steer, follow_up, resident_mail]\n    scope: vertical\n    retention: team_session\n",
         )],
     );
     install_source(&env, tmp.path(), "channel-policy.hyabundle", &chan_source);
@@ -671,7 +671,7 @@ async fn extra_jev_router_model_fallback_and_token_summary() {
         ts_turn.error_message
     );
 
-    let usage_path = format!("/v1/sessions/{s_ts}/bundles/hya-extra%2Ftoken-summary/usage");
+    let usage_path = format!("/v2/sessions/{s_ts}/bundles/hya-extra%2Ftoken-summary/usage");
     // The root never `wait`s, so a `TEAM QUIESCED` synthesis round may land
     // between two reads: settle on a tree read and a session read that agree.
     let mut tree_body = Value::Null;

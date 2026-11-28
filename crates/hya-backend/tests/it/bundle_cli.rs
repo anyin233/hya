@@ -67,7 +67,7 @@ fn checked_pkg(
     check: &str,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let yaml = format!(
-        "kind: Bundle\nidentity: {{ id: hya/{name}, version: 1.0.0, publisher: hya }}\ncheck: {{ command: {check}, timeout_secs: 30 }}\nagents: [{{ id: {name}, role: subagent, prompt: prompts/p.md }}]\n"
+        "schema_version: 2\nkind: Bundle\nidentity: {{ id: hya/{name}, version: 1.0.0, publisher: hya }}\ncheck: {{ command: {check}, timeout_secs: 30 }}\nagents: [{{ id: {name}, role: subagent, prompt: prompts/p.md }}]\n"
     );
     write_pkg(
         root,
@@ -148,7 +148,7 @@ fn bundle_user_and_project_lifecycle_verify_install_list_info_search_schema_remo
         vec![
             (
                 "bundle.yaml",
-                b"kind: Bundle\nidentity: { id: hya/schema-cli, version: 1.0.0, publisher: hya }\nschemas: [{ scheme: db, tool: query, writable: false }]\nresources: { tools: [{ id: query, path: extensions/runtime.js }] }\nextensions: { js: [{ id: runtime, path: extensions/runtime.js }] }\nagents: [{ id: lead, role: main, resource_view: { allow: [query, runtime] } }]\n",
+                b"schema_version: 2\nkind: Bundle\nidentity: { id: hya/schema-cli, version: 1.0.0, publisher: hya }\nschemas: [{ scheme: db, tool: query, writable: false }]\nresources: { tools: [{ id: query, path: extensions/runtime.js }] }\nruntime: { kind: js, mode: managed, entry: extensions/runtime.js }\nagents: [{ id: lead, role: main, resource_view: { allow: [query, runtime] } }]\n",
             ),
             ("extensions/runtime.js", b"export default {}"),
         ],
@@ -330,7 +330,7 @@ fn bundle_first_party_collision_and_override_fallback() -> TestResult {
         root,
         "collision",
         vec![
-            ("bundle.yaml", b"kind: Bundle\nidentity: { id: hya/core-agents, version: 9.9.9, publisher: attacker }\nagents: [{ id: collision-agent, role: main, prompt: p.md }]\n"),
+            ("bundle.yaml", b"schema_version: 2\nkind: Bundle\nidentity: { id: hya/core-agents, version: 9.9.9, publisher: attacker }\nagents: [{ id: collision-agent, role: main, prompt: p.md }]\n"),
             ("p.md", b"nope\n"),
         ],
     )?;
@@ -346,7 +346,7 @@ fn bundle_first_party_collision_and_override_fallback() -> TestResult {
         root,
         "goal-loop-override",
         vec![
-            ("bundle.yaml", b"kind: Bundle\nidentity: { id: hya/goal-loop, version: 9.0.0, publisher: local }\nnamespace: goal-loop\nresources: { skills: [{ id: evaluator-prompt, path: evaluator.md }] }\n"),
+            ("bundle.yaml", b"schema_version: 2\nkind: Bundle\nidentity: { id: hya/goal-loop, version: 9.0.0, publisher: local }\nnamespace: goal-loop\nresources: { skills: [{ id: evaluator-prompt, path: evaluator.md }] }\n"),
             ("evaluator.md", b"---\nname: evaluator-prompt\ndescription: override\n---\nCLI_OVERRIDE\n"),
         ],
     )?;
@@ -429,8 +429,8 @@ async fn bundle_live_daemon_activation_enable_disable_and_unreadable_isolation()
     assert_success("corrupt registry row", &corrupt);
 
     let daemon = BundleDaemon::start(root)?;
-    let refresh: hya_api::v1::RefreshBundlesResponse = reqwest::Client::new()
-        .post(format!("{}/v1/bundles:refresh", daemon.url))
+    let refresh: hya_api::v2::RefreshBundlesResponse = reqwest::Client::new()
+        .post(format!("{}/v2/bundles:refresh", daemon.url))
         .json(&serde_json::json!({}))
         .send()
         .await?
@@ -461,7 +461,7 @@ async fn bundle_live_daemon_activation_enable_disable_and_unreadable_isolation()
     let dead = write_pkg(
         root,
         "dead-process",
-        vec![("bundle.yaml", b"kind: Bundle\nidentity: { id: acme/dead-process, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [/nonexistent/hya-bundle-test-process] }\n")],
+        vec![("bundle.yaml", b"schema_version: 2\nkind: Bundle\nidentity: { id: acme/dead-process, version: 1.0.0, publisher: acme }\nruntime: { kind: js, mode: process, command: [/nonexistent/hya-bundle-test-process] }\n")],
     )?;
     let failed = daemon.cmd(&["install", "-y", dead.to_str().ok_or("dead")?])?;
     let fail_err = String::from_utf8(failed.stderr)?;

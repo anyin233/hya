@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use futures::{SinkExt as _, StreamExt as _};
 use hya_e2e::{E2eEnv, E2eEnvBuilder, fake_requests_from, text_step, tool_step};
-use hya_sdk_v1::Client;
+use hya_sdk::Client;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -544,13 +544,13 @@ async fn post(url: &str, body: Value) -> (u16, Value) {
 /// WebSocket upgrade); the marker comes back from the shell.
 async fn pty_echo(bridge: &str, cwd: &Path) {
     let (status, pty) = post(
-        &format!("{bridge}/v1/pty"),
+        &format!("{bridge}/v2/pty"),
         json!({"shell": "/bin/sh", "cwd": cwd.display().to_string()}),
     )
     .await;
     assert_eq!(status, 200, "{pty}");
     let id = pty["id"].as_str().expect("pty id");
-    let (status, token) = post(&format!("{bridge}/v1/pty/{id}/connect-token"), json!({})).await;
+    let (status, token) = post(&format!("{bridge}/v2/pty/{id}/connect-token"), json!({})).await;
     assert_eq!(status, 200, "{token}");
     let path = token["url"].as_str().expect("connect url");
     let ws = format!("{}{path}", bridge.replacen("http://", "ws://", 1));
@@ -647,7 +647,7 @@ async fn golden_path(binding: &str) {
 
     // Without the bridge token a connection is refused before any tunnel.
     let refused = reqwest::Client::new()
-        .get(format!("{api}/v1/health"))
+        .get(format!("{api}/v2/health"))
         .send()
         .await
         .expect("request without the token");
@@ -657,19 +657,19 @@ async fn golden_path(binding: &str) {
 
     // Bootstrap and health.
     let health = env
-        .get_json("/v1/health")
+        .get_json("/v2/health")
         .await
         .expect("health over the bridge");
     assert_eq!(health["ok"], json!(true), "{health}");
     let bootstrap = env
-        .get_json("/v1/bootstrap")
+        .get_json("/v2/bootstrap")
         .await
         .expect("bootstrap over the bridge");
     assert!(bootstrap.is_object(), "{bootstrap}");
 
     // A two-root Project created remotely; a session with no workdir lands in roots[0].
     let (status, project) = post(
-        &format!("{api}/v1/projects"),
+        &format!("{api}/v2/projects"),
         json!({
             "name": "relay-project",
             "roots": [root_a.display().to_string(), root_b.display().to_string()],
@@ -679,7 +679,7 @@ async fn golden_path(binding: &str) {
     assert_eq!(status, 200, "{project}");
     let project_id = project["id"].as_str().expect("project id").to_owned();
     let (status, created) = post(
-        &format!("{api}/v1/sessions"),
+        &format!("{api}/v2/sessions"),
         json!({"agent": env.agent, "model": env.model, "projectId": project_id}),
     )
     .await;
@@ -696,7 +696,7 @@ async fn golden_path(binding: &str) {
         .expect("session id parses");
 
     // The session SSE stream, through the bridge, before the prompt.
-    let sse = Sse::open(&format!("{api}/v1/sessions/{session}/events/stream")).await;
+    let sse = Sse::open(&format!("{api}/v2/sessions/{session}/events/stream")).await;
 
     // The prompt: a read in root #2 (no ask) and one outside every root (asks).
     let watcher = async {
@@ -740,7 +740,7 @@ async fn golden_path(binding: &str) {
     assert!(later.contains(OUTSIDE_MARKER), "outside read result");
     assert!(fake_requests_from(&requests, 0).contains(PROMPT_MARKER));
     let messages = env
-        .get_json(&format!("/v1/sessions/{session}/messages"))
+        .get_json(&format!("/v2/sessions/{session}/messages"))
         .await
         .expect("messages over the bridge")
         .to_string();
@@ -768,7 +768,7 @@ async fn golden_path(binding: &str) {
 
     // A temporary session over the bridge.
     let (status, temporary) = post(
-        &format!("{api}/v1/sessions"),
+        &format!("{api}/v2/sessions"),
         json!({"agent": env.agent, "model": env.model, "kind": "SESSION_KIND_TEMPORARY"}),
     )
     .await;
@@ -784,11 +784,11 @@ async fn golden_path(binding: &str) {
     );
 
     // RelayControl is refused from relay origin, allowed on loopback.
-    let (status, refused) = fresh_get(&format!("{api}/v1/relay/link")).await;
+    let (status, refused) = fresh_get(&format!("{api}/v2/relay/link")).await;
     assert_eq!(status, 403, "{refused}");
     assert_eq!(refused["error"]["code"], json!("permission_denied"));
     assert!(!refused.to_string().contains('#'));
-    let (status, own) = fresh_get(&format!("{local}/v1/relay/link")).await;
+    let (status, own) = fresh_get(&format!("{local}/v2/relay/link")).await;
     assert_eq!(status, 200, "{own}");
     assert_eq!(own["link"], json!(link));
 
@@ -799,7 +799,7 @@ async fn golden_path(binding: &str) {
     let new_link = rotated["link"].as_str().expect("rotated link").to_owned();
     assert_ne!(new_link, link);
     let (_, rejected) = wait_get(
-        &format!("{api}/v1/health"),
+        &format!("{api}/v2/health"),
         "the old bridge is rejected after rotate",
         |status, body| {
             status == 503
@@ -814,12 +814,12 @@ async fn golden_path(binding: &str) {
     let bridge = Bridge::start(&new_link, None).await;
     route_through(&mut env, &bridge);
     let api = bridge.url.clone();
-    let health = env.get_json("/v1/health").await.expect("health, new link");
+    let health = env.get_json("/v2/health").await.expect("health, new link");
     assert_eq!(health["ok"], json!(true));
 
     // Shutdown: a bridge-side SSE client gets serverStopping, then the bridge
     // answers 503 "remote backend is offline, or …".
-    let global = Sse::open(&format!("{api}/v1/events/stream")).await;
+    let global = Sse::open(&format!("{api}/v2/events/stream")).await;
     // SAFETY: `kill` has no memory-safety preconditions; the pid is our child.
     unsafe {
         libc::kill(env.backend.pid() as libc::pid_t, libc::SIGTERM);
@@ -841,7 +841,7 @@ async fn golden_path(binding: &str) {
         "SIGTERM"
     );
     wait_get(
-        &format!("{api}/v1/health"),
+        &format!("{api}/v2/health"),
         "the bridge reports the backend offline",
         |status, body| {
             status == 503
@@ -913,14 +913,14 @@ async fn t2_37_relay_over_tls_with_a_private_ca() {
     let bridge = Bridge::start(&link, Some(&tls.cert)).await;
     route_through(&mut env, &bridge);
 
-    let health = env.get_json("/v1/health").await.expect("health over TLS");
+    let health = env.get_json("/v2/health").await.expect("health over TLS");
     assert_eq!(health["ok"], json!(true));
     let session = env.create_session().await.expect("session over TLS");
     env.prompt(session, format!("hello over tls {PROMPT_MARKER}"))
         .await
         .expect("prompt over TLS");
     let messages = env
-        .get_json(&format!("/v1/sessions/{session}/messages"))
+        .get_json(&format!("/v2/sessions/{session}/messages"))
         .await
         .expect("messages over TLS")
         .to_string();

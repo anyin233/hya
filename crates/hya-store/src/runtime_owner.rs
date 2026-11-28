@@ -80,15 +80,6 @@ impl RuntimeOwnerState {
         Ok(())
     }
 
-    pub(super) fn current_owner(&self) -> Result<OwnerRunId, StoreError> {
-        self.claim
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .map(|claim| claim.owner)
-            .ok_or(StoreError::RuntimeOwnerClaimRequired)
-    }
-
     fn require(&self, owner: OwnerRunId) -> Result<(), StoreError> {
         let claim = self
             .claim
@@ -98,6 +89,17 @@ impl RuntimeOwnerState {
             Some(claim) if claim.owner == owner => Ok(()),
             _ => Err(StoreError::RuntimeOwnerClaimRequired),
         }
+    }
+
+    fn current(&self) -> Result<OwnerRunId, StoreError> {
+        let claim = self
+            .claim
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        claim
+            .as_ref()
+            .map(|c| c.owner)
+            .ok_or(StoreError::RuntimeOwnerClaimRequired)
     }
     fn release(&self, owner: OwnerRunId) -> Result<(), StoreError> {
         let mut claim = self
@@ -318,7 +320,12 @@ impl SessionStore {
     }
 
     /// Require a matching runtime-owner claim before a startup-only mutation.
-    pub(crate) fn require_runtime_owner(&self, owner: OwnerRunId) -> Result<(), StoreError> {
+    pub fn require_runtime_owner(&self, owner: OwnerRunId) -> Result<(), StoreError> {
         self.runtime_owner.require(owner)
+    }
+
+    /// Return the currently claimed runtime owner, or [`StoreError::RuntimeOwnerClaimRequired`].
+    pub fn current_runtime_owner(&self) -> Result<OwnerRunId, StoreError> {
+        self.runtime_owner.current()
     }
 }

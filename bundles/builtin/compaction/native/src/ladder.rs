@@ -11,6 +11,7 @@ use hya_proto::context::{ReasoningReplayPolicy, marker_goal};
 use hya_proto::{
     CompactionStrategy, Event, FinishReason, Message, MessageId, PartId, Role, SessionId,
 };
+use hya_tool::extension::ExtensionEvent;
 
 use crate::config::Config;
 use crate::evict::{ArtifactEvictionSink, evict_stale_tool_outputs, has_spillable_tool_output};
@@ -70,14 +71,17 @@ pub(crate) async fn walk(cx: &RewriteCtx<'_>) -> Result<bool, ToolError> {
             cx.log
                 .append(
                     session,
-                    vec![Event::ContextEvicted {
-                        session,
-                        evicted_parts: u32::try_from(evicted.len()).unwrap_or(u32::MAX),
-                        parts: evicted,
-                        tokens_before: used,
-                        tokens_after: after,
-                        threshold,
-                    }],
+                    vec![
+                        ExtensionEvent::ContextEvicted {
+                            session,
+                            evicted_parts: u32::try_from(evicted.len()).unwrap_or(u32::MAX),
+                            parts: evicted,
+                            tokens_before: used,
+                            tokens_after: after,
+                            threshold,
+                        }
+                        .into_event(),
+                    ],
                 )
                 .await?;
             changed = true;
@@ -105,13 +109,16 @@ pub(crate) async fn walk(cx: &RewriteCtx<'_>) -> Result<bool, ToolError> {
     cx.log
         .append(
             session,
-            vec![Event::ContextStatus {
-                session,
-                tokens: u64::try_from(tokens).unwrap_or(u64::MAX),
-                source,
-                mode: accounting.mode(),
-                threshold,
-            }],
+            vec![
+                ExtensionEvent::ContextStatus {
+                    session,
+                    tokens: u64::try_from(tokens).unwrap_or(u64::MAX),
+                    source,
+                    mode: accounting.mode(),
+                    threshold,
+                }
+                .into_event(),
+            ],
         )
         .await?;
     Ok(changed)

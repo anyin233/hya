@@ -440,16 +440,16 @@ track = "I"
 path = "crates/hya-engine/tests/it/subagent_lifecycle.rs"
 
 [[scenario]]
-id = "I.v1_api"
-title = "v1 HTTP contract integration"
+id = "I.v2_api"
+title = "v2 HTTP contract integration"
 track = "I"
-path = "crates/hya-server/tests/it/v1_api_core.rs"
+path = "crates/hya-server/tests/it/v2_api_core.rs"
 
 [[scenario]]
-id = "I.v1_grpc_parity"
-title = "v1 HTTP/gRPC dual-transport conformance"
+id = "I.v2_grpc_parity"
+title = "v2 HTTP/gRPC dual-transport conformance"
 track = "I"
-path = "crates/hya-server/tests/it/v1_grpc_parity.rs"
+path = "crates/hya-server/tests/it/v2_grpc_parity.rs"
 
 [[scenario]]
 id = "I.bundle_cli"

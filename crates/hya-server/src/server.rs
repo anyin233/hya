@@ -1,5 +1,5 @@
-//! One server, both protocols: [`Server`] serves the `/v1` HTTP router and
-//! the `hya.v1` gRPC binding on the same listener, from one server state.
+//! One server, both protocols: [`Server`] serves the `/v2` HTTP router and
+//! the `hya.v2` gRPC binding on the same listener, from one server state.
 //!
 //! Each connection is served by hyper's auto builder (HTTP/1.1 with
 //! upgrades for the PTY WebSocket, or HTTP/2 — `h2c` with prior knowledge
@@ -31,7 +31,7 @@ use tokio_util::task::TaskTracker;
 use tower::{Layer as _, ServiceExt as _};
 
 use crate::host::{GrpcHostGuard, GrpcHostLayer};
-use crate::{AppState, V1Grpc};
+use crate::{AppState, V2Grpc};
 
 /// Build the server for `app`: the HTTP router and the gRPC binding over
 /// the one shared server state of `app` (the background drivers start
@@ -39,7 +39,7 @@ use crate::{AppState, V1Grpc};
 #[must_use]
 pub fn build(app: AppState) -> Server {
     let hosts = app.allowed_hosts();
-    let grpc = V1Grpc::new(app.clone());
+    let grpc = V2Grpc::new(app.clone());
     Server {
         router: crate::router(app.clone()),
         grpc: Some(GrpcHostLayer::new(hosts).layer(grpc.routes())),

@@ -43,7 +43,7 @@ pub(super) static TEST_STALL_OPEN: std::sync::atomic::AtomicBool =
 
 pub(super) fn is_open_storage_fault(error: &StoreError) -> bool {
     match error {
-        StoreError::RuntimeOwnerBusy | StoreError::UnsupportedDatabase => false,
+        StoreError::RuntimeOwnerBusy | StoreError::UnsupportedDatabase { .. } => false,
         StoreError::RuntimeOwnerLock { source, .. } => {
             source.kind() != std::io::ErrorKind::InvalidInput
         }
@@ -180,7 +180,8 @@ impl SessionStore {
         let writer_pool_options =
             writer_pool_options.after_connect(|connection, _| Box::pin(bench::install(connection)));
         let writer_pool = writer_pool_options.connect_with(writer_opts).await?;
-        Self::migrate(&writer_pool).await?;
+        let db_display = paths.database.display().to_string();
+        Self::migrate(&writer_pool, &db_display).await?;
 
         let read_opts = SqliteConnectOptions::new()
             .filename(&paths.database)
@@ -444,6 +445,8 @@ impl SessionStore {
             .idle_timeout(None)
             .connect_with(opts)
             .await?;
+        let db_display = paths.database.display().to_string();
+        Self::verify_read_only_schema(&pool, &db_display).await?;
         Ok(Self {
             writer_pool: pool.clone(),
             read_pool: pool,
@@ -467,7 +470,7 @@ impl SessionStore {
             .busy_timeout(Duration::from_secs(5));
         let keeper = sqlx::ConnectOptions::connect(&opts).await?;
         let pool = Self::writer_pool_options().connect_with(opts).await?;
-        Self::migrate(&pool).await?;
+        Self::migrate(&pool, "<memory>").await?;
         Ok(Self {
             writer_pool: pool.clone(),
             read_pool: pool,
@@ -482,28 +485,69 @@ impl SessionStore {
         })
     }
 
-    async fn migrate(pool: &sqlx::SqlitePool) -> Result<(), StoreError> {
-        // Serialize baseline inspection with initialization; SQLite sqlx migration locks are a no-op.
-        let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+    async fn verify_read_only_schema(
+        pool: &sqlx::SqlitePool,
+        db_path: &str,
+    ) -> Result<(), StoreError> {
+        let mut conn = pool.acquire().await?;
         let migrator = sqlx::migrate!("./migrations");
+        Self::check_existing_schema(&mut conn, &migrator, db_path).await
+    }
+
+    async fn check_existing_schema(
+        conn: &mut sqlx::SqliteConnection,
+        migrator: &sqlx::migrate::Migrator,
+        db_path: &str,
+    ) -> Result<(), StoreError> {
         let tables: Vec<String> = sqlx::query_scalar(
             "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
         )
-        .fetch_all(&mut *transaction)
+        .fetch_all(&mut *conn)
         .await?;
-        if !tables.is_empty() {
-            if !tables.iter().any(|name| name == "_sqlx_migrations") {
-                return Err(StoreError::UnsupportedDatabase);
-            }
-            let checksum: Option<Vec<u8>> = sqlx::query_scalar(
-                "SELECT checksum FROM _sqlx_migrations WHERE version = 1 AND success = 1",
-            )
-            .fetch_optional(&mut *transaction)
-            .await?;
-            if checksum.as_deref() != Some(migrator.migrations[0].checksum.as_ref()) {
-                return Err(StoreError::UnsupportedDatabase);
-            }
+        if tables.is_empty() {
+            return Ok(());
         }
+        let unsupported = |reason: String| StoreError::UnsupportedDatabase {
+            path: db_path.to_owned(),
+            reason,
+        };
+        if tables.iter().any(|name| name == "resident_actor_claim") {
+            return Err(unsupported(
+                "legacy v1 table `resident_actor_claim` is present".to_owned(),
+            ));
+        }
+        if !tables.iter().any(|name| name == "_sqlx_migrations") {
+            return Err(unsupported("missing `_sqlx_migrations` table".to_owned()));
+        }
+        let checksum: Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT checksum FROM _sqlx_migrations WHERE version = 1 AND success = 1",
+        )
+        .fetch_optional(&mut *conn)
+        .await?;
+        if checksum.as_deref() != Some(migrator.migrations[0].checksum.as_ref()) {
+            return Err(unsupported("v1 baseline checksum mismatch".to_owned()));
+        }
+        if !tables.iter().any(|name| name == "schema_meta") {
+            return Err(unsupported("missing `schema_meta` table".to_owned()));
+        }
+        let format_version: Option<String> =
+            sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = 'format_version'")
+                .fetch_optional(&mut *conn)
+                .await?;
+        if format_version.as_deref() != Some("2") {
+            let found = format_version.unwrap_or_else(|| "missing".to_owned());
+            return Err(unsupported(format!(
+                "expected schema_meta.format_version = 2, found `{found}`"
+            )));
+        }
+        Ok(())
+    }
+
+    async fn migrate(pool: &sqlx::SqlitePool, db_path: &str) -> Result<(), StoreError> {
+        // Serialize baseline inspection with initialization; SQLite sqlx migration locks are a no-op.
+        let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+        let migrator = sqlx::migrate!("./migrations");
+        Self::check_existing_schema(&mut transaction, &migrator, db_path).await?;
         migrator.run_direct(&mut *transaction).await?;
         transaction.commit().await?;
         Ok(())

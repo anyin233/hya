@@ -1,3 +1,10 @@
+CREATE TABLE schema_meta (
+    key   TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL
+);
+
+INSERT INTO schema_meta (key, value) VALUES ('format_version', '2');
+
 CREATE TABLE session (
     id           BLOB PRIMARY KEY,
     parent_id    BLOB,
@@ -13,7 +20,6 @@ CREATE TABLE session (
     FOREIGN KEY (parent_id) REFERENCES session(id)
 );
 CREATE INDEX session_parent ON session(parent_id);
-
 CREATE INDEX session_project ON session(project_id);
 
 CREATE TABLE event_log (
@@ -25,29 +31,40 @@ CREATE TABLE event_log (
 CREATE INDEX event_log_session ON event_log(session_id);
 
 CREATE TABLE saved_permission (
-    id         TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
-    action     TEXT NOT NULL,
-    resource   TEXT NOT NULL,
+    id           TEXT PRIMARY KEY,
+    project_id   TEXT NOT NULL,
+    action       TEXT NOT NULL,
+    resource     TEXT NOT NULL,
     time_created INTEGER,
     UNIQUE(project_id, action, resource)
 );
-
 CREATE INDEX saved_permission_project ON saved_permission(project_id);
 
-CREATE TABLE resident_actor_claim (
-    actor_id     BLOB PRIMARY KEY,
-    root_session_id BLOB NOT NULL,
-    epoch        INTEGER NOT NULL CHECK (epoch > 0),
-    owner_run_id BLOB NOT NULL CHECK (length(owner_run_id) = 16),
-    state        TEXT NOT NULL CHECK (state IN ('active', 'released'))
-);
+-- Generic bundle-scoped key/value state (replaces domain-specific tables).
+CREATE TABLE bundle_state (
+    bundle     TEXT NOT NULL CHECK (length(bundle) > 0),
+    key        TEXT NOT NULL CHECK (length(key) > 0),
+    value      BLOB NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (bundle, key)
+) WITHOUT ROWID;
 
-CREATE INDEX resident_actor_claim_root_state
-    ON resident_actor_claim(root_session_id, state);
+-- Generic bundle-scoped lease/claim table (replaces resident_actor_claim).
+CREATE TABLE bundle_claim (
+    bundle      TEXT NOT NULL CHECK (length(bundle) > 0),
+    claim_key   TEXT NOT NULL CHECK (length(claim_key) > 0),
+    owner       TEXT NOT NULL CHECK (length(owner) > 0),
+    epoch       INTEGER NOT NULL CHECK (epoch > 0),
+    expires_at  INTEGER,
+    metadata    TEXT NOT NULL DEFAULT '{}',
+    acquired_at INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    state       TEXT NOT NULL CHECK (state IN ('active', 'released')),
+    PRIMARY KEY (bundle, claim_key)
+) WITHOUT ROWID;
 
-CREATE INDEX resident_actor_claim_state
-    ON resident_actor_claim(state, actor_id);
+CREATE INDEX bundle_claim_owner ON bundle_claim(bundle, owner);
+CREATE INDEX bundle_claim_expiry ON bundle_claim(expires_at) WHERE expires_at IS NOT NULL;
 
 CREATE TABLE agent_model_preference (
     agent_id    TEXT PRIMARY KEY NOT NULL,
@@ -71,10 +88,8 @@ CREATE TABLE open_assistant_message (
 -- Durable projection snapshots: a pure, replay-consistent cache of the shared
 -- reducer (`hya_proto::Projection`), keyed by session and the last folded
 -- event seq. Never a source of truth: a row is trusted only when its
--- `reducer_version` equals the running reducer's and its anchor event
--- (`event_log.seq = last_seq` for the same session) still exists; otherwise
--- the read folds the full log and overwrites the row. Starts empty — the
--- first read of an existing log without a snapshot folds it once.
+-- `reducer_version` and `reducer_signature` match the running reducer's and
+-- its anchor event (`event_log.seq = last_seq` for the same session) exists.
 CREATE TABLE projection_snapshot (
     session_id      BLOB PRIMARY KEY,
     reducer_version INTEGER NOT NULL,
@@ -127,10 +142,10 @@ CREATE TABLE model_effort_preference (
 
 -- Event-derived index of roots interrupted by shutdown, retained until assistant start.
 CREATE TABLE pending_resume (
-    session_id BLOB PRIMARY KEY,
-    message_id TEXT NOT NULL,
+    session_id        BLOB PRIMARY KEY,
+    message_id        TEXT NOT NULL,
     prompt_message_id BLOB,
-    created_at INTEGER NOT NULL
+    created_at        INTEGER NOT NULL
 );
 
 -- Durable per-Agent default thinking effort chosen by the user at runtime.

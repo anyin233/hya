@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use hya_bundle::BuiltinBundleSelection;
 use hya_engine::{
     CategoryEntry, CategoryRegistry, CompactionConfig, SubagentLimits, TokenAccountingMode,
 };
@@ -16,9 +17,24 @@ use serde::Deserialize;
 
 use super::provider::{ProviderConfig, ProviderRetryFile};
 
-/// Top-level shape of `~/.config/hya/config.yaml`.
+/// Supported `config.yaml` schema version.
+pub const CONFIG_SCHEMA_VERSION: u32 = 2;
+
+/// Bundle loading configuration (`bundles:` block in `config.yaml` v2).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct BundlesConfig {
+    /// Built-in first-party bundle profile and selective enable/disable lists.
+    pub builtin: BuiltinBundleSelection,
+}
+
+/// Top-level shape of `~/.config/hya/config.yaml` (v2).
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct FileConfig {
+    /// Required schema version (`2` only).
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub(super) schema_version: Option<u32>,
     /// Model used when neither `--model` nor `HYA_MODEL` is set.
     #[serde(default)]
     pub(super) default_model: Option<String>,
@@ -31,21 +47,15 @@ pub(super) struct FileConfig {
     #[serde(default)]
     pub(super) providers: BTreeMap<String, ProviderConfig>,
     #[serde(default)]
-    formatter: crate::formatter_config::RawFormatterConfig,
-    #[serde(default)]
     agents: BTreeMap<String, crate::agent_model_config::AgentFileSettings>,
-    #[serde(default)]
-    lsp: Option<crate::lsp::config::Selection>,
     #[serde(default)]
     pub(super) mcp: BTreeMap<String, McpServerConfig>,
     #[serde(default)]
     pub(super) plugins: BTreeMap<String, PluginEntry>,
     #[serde(default)]
-    pub(super) tools: Option<ToolsConfig>,
-    /// Bounded nested/parallel subagent caps. Absent → defaults; per-field env
-    /// overrides (`HYA_SUBAGENT_*`) win over file values.
+    pub(super) bundles: BundlesConfig,
     #[serde(default)]
-    subagents: Option<SubagentLimitsFile>,
+    pub(super) tools: Option<ToolsConfig>,
     /// Logical model categories: each maps a name (e.g. `deep`) to an ordered
     /// list of concrete `provider/model` refs (first = preferred, rest =
     /// failover). Absent → no categories (agents fall back to their own model).
@@ -53,15 +63,6 @@ pub(super) struct FileConfig {
     categories: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     permission: Option<PermissionConfig>,
-    /// Compaction settings and token-accounting mode. Absent → engine
-    /// defaults; per-field `HYA_COMPACTION_*` / `HYA_TOKEN_ACCOUNTING` env
-    /// overrides win over file values.
-    #[serde(default)]
-    pub(crate) compaction: Option<CompactionFile>,
-    /// Goal-mode settings (`goal:` block). Absent → the worker's current model
-    /// judges; the `--evaluator-model` CLI flag outranks this value.
-    #[serde(default)]
-    goal: Option<GoalFile>,
     /// Default replay budget for every provider route. Per-provider `retry:`
     /// blocks override individual fields; `HYA_PROVIDER_RETRY_*` env vars win
     /// over both. Absent → [`hya_provider::RetryConfig`] defaults.
@@ -77,62 +78,124 @@ pub(super) struct FileConfig {
 #[derive(Debug, Default)]
 pub struct EngineSettings {
     pub(super) file: FileConfig,
+    pub(super) config_file: Option<PathBuf>,
 }
 
 impl EngineSettings {
+    fn resolved_config_file(&self) -> PathBuf {
+        self.config_file.clone().unwrap_or_else(active_config_path)
+    }
+
+    fn read_bundle_config_value(&self, bundle_ids: &[&str]) -> Option<serde_norway::Value> {
+        read_bundle_config_for(&self.resolved_config_file(), bundle_ids)
+    }
+
+    /// Active built-in bundle selection from `bundles.builtin`.
+    #[must_use]
+    pub fn builtin_bundles(&self) -> &BuiltinBundleSelection {
+        &self.file.bundles.builtin
+    }
+
     pub(crate) fn agents(
         &self,
     ) -> anyhow::Result<(
         hya_engine::AgentModelConfiguration,
         BTreeMap<String, ReasoningEffort>,
     )> {
-        crate::agent_model_config::AgentModelConfigFiles::new(active_config_path())
+        crate::agent_model_config::AgentModelConfigFiles::new(self.resolved_config_file())
             .load_with_builtin(&self.file.agents)
     }
-    /// Goal evaluator settings from this startup snapshot.
+
+    /// Goal evaluator settings resolved from the `hya/goal-loop` bundle config.
     pub fn goal(&self) -> GoalSettings {
-        GoalSettings::from_block(self.file.goal.clone())
+        if !self.file.bundles.builtin.is_enabled("hya/goal-loop") {
+            return GoalSettings::default();
+        }
+        let block = self
+            .read_bundle_config_value(&["hya/goal-loop", "hya/goal"])
+            .and_then(|val| decode_bundle_section::<GoalFile>(&val, Some("goal")));
+        GoalSettings::from_block(block)
     }
+
     pub(crate) fn categories(&self) -> CategoryRegistry {
         resolve_categories(&self.file)
     }
+
     pub(crate) fn subagents(&self) -> SubagentLimits {
-        resolve_subagent_limits(self.file.subagents.as_ref())
+        let block = self
+            .read_bundle_config_value(&["hya/extended-tools", "hya/multi-agent"])
+            .and_then(|val| decode_bundle_section::<SubagentLimitsFile>(&val, Some("subagents")));
+        resolve_subagent_limits(block.as_ref())
     }
+
     pub(crate) fn context(&self) -> ContextSettings {
-        resolve_context_settings(self.file.compaction.as_ref())
+        let block = if self.file.bundles.builtin.is_enabled("hya/compaction") {
+            self.read_bundle_config_value(&["hya/compaction"])
+                .and_then(|val| decode_bundle_section::<CompactionFile>(&val, Some("compaction")))
+        } else {
+            None
+        };
+        resolve_context_settings(block.as_ref())
     }
+
     pub(crate) fn reasoning(&self) -> Option<ReasoningEffort> {
         self.file
             .reasoning
             .as_deref()
             .and_then(ReasoningEffort::parse)
     }
+
     pub(crate) fn scopes(&self) -> hya_engine::CatalogScopeCacheConfig {
         resolve_catalog_scope_cache(self.file.catalog_scopes.as_ref())
     }
+
     pub(crate) fn webfetch_enabled(&self) -> bool {
-        self.file
-            .tools
-            .as_ref()
-            .is_none_or(|tools| tools.webfetch.enabled)
+        if !self.file.bundles.builtin.is_enabled("hya/network-tools") {
+            return false;
+        }
+        self.read_bundle_config_value(&["hya/network-tools", "hya/network"])
+            .and_then(|val| decode_bundle_section::<WebFetchConfig>(&val, Some("webfetch")))
+            .is_none_or(|cfg| cfg.enabled)
     }
+
     pub(crate) fn code_mode(&self) -> CodeMode {
         self.file
             .tools
             .as_ref()
             .map_or_else(CodeMode::default, |tools| tools.code.mode)
     }
+
     pub(crate) fn plugin_ids(&self) -> Vec<String> {
         self.file.plugins.keys().cloned().collect()
     }
+
     pub(crate) fn formatter(&self) -> hya_tool::FormatterPlane {
-        hya_tool::FormatterPlane::new(Arc::new(crate::BuiltinFormatterProvider::new(
-            self.file.formatter.clone().into(),
-        )))
+        if !self.file.bundles.builtin.is_enabled("hya/base-tools") {
+            return hya_tool::FormatterPlane::default();
+        }
+        let raw: crate::formatter_config::RawFormatterConfig = self
+            .read_bundle_config_value(&["hya/base-tools", "hya/coding-extras"])
+            .and_then(|val| {
+                val.get("formatter")
+                    .cloned()
+                    .and_then(|sub| serde_norway::from_value(sub).ok())
+            })
+            .unwrap_or_default();
+        hya_tool::FormatterPlane::new(Arc::new(crate::BuiltinFormatterProvider::new(raw.into())))
     }
+
     pub(crate) fn lsp(&self) -> anyhow::Result<hya_tool::LspPlane> {
-        crate::lsp::from_selection(self.file.lsp.clone())
+        if !self.file.bundles.builtin.is_enabled("hya/extended-tools") {
+            return Ok(hya_tool::LspPlane::default());
+        }
+        let selection = self
+            .read_bundle_config_value(&["hya/extended-tools", "hya/coding-extras"])
+            .and_then(|val| {
+                val.get("lsp")
+                    .cloned()
+                    .and_then(|sub| serde_norway::from_value(sub).ok())
+            });
+        crate::lsp::from_selection(selection)
     }
 }
 
@@ -149,12 +212,9 @@ struct CatalogScopesFile {
     idle_ttl_secs: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ToolsConfig {
-    #[serde(default)]
-    webfetch: WebFetchConfig,
-    #[serde(default)]
-    pub(super) websearch: WebSearchConfig,
     #[serde(default)]
     code: CodeToolConfig,
 }
@@ -218,6 +278,64 @@ pub fn configured_code_mode() -> CodeMode {
         .and_then(|yaml| parse_config(&yaml).ok())
         .and_then(|file| file.tools)
         .map_or_else(CodeMode::default, |tools| tools.code.mode)
+}
+
+/// Built-in first-party bundle selection from the active `config.yaml`,
+/// defaulting to [`BuiltinBundleSelection::full`] when absent or unreadable.
+#[must_use]
+pub fn configured_builtin_bundles() -> BuiltinBundleSelection {
+    config_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .filter(|yaml| !yaml.trim().is_empty())
+        .and_then(|yaml| parse_config(&yaml).ok())
+        .map(|file| file.bundles.builtin)
+        .unwrap_or_default()
+}
+
+fn read_bundle_config_for(config_file: &Path, bundle_ids: &[&str]) -> Option<serde_norway::Value> {
+    for &id in bundle_ids {
+        let Ok(location) = crate::bundle_config::bundle_config_location(
+            config_file,
+            id,
+            crate::bundle_config::BundleConfigScope::User,
+        ) else {
+            continue;
+        };
+        let Ok(yaml) = std::fs::read_to_string(location.file()) else {
+            continue;
+        };
+        if yaml.trim().is_empty() {
+            continue;
+        }
+        if let Ok(value) = serde_norway::from_str::<serde_norway::Value>(&yaml) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn decode_bundle_section<T: for<'de> Deserialize<'de>>(
+    value: &serde_norway::Value,
+    nested_key: Option<&str>,
+) -> Option<T> {
+    if let Some(key) = nested_key
+        && let Some(nested) = value.get(key)
+    {
+        return serde_norway::from_value(nested.clone()).ok();
+    }
+    serde_norway::from_value(value.clone()).ok()
+}
+
+pub(super) fn resolve_websearch(file: &FileConfig, config_file: &Path) -> WebSearchConfig {
+    if !file.bundles.builtin.is_enabled("hya/network-tools") {
+        return WebSearchConfig {
+            enabled: false,
+            ..WebSearchConfig::default()
+        };
+    }
+    read_bundle_config_for(config_file, &["hya/network-tools", "hya/network"])
+        .and_then(|val| decode_bundle_section::<WebSearchConfig>(&val, Some("websearch")))
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -288,7 +406,7 @@ pub(crate) struct CompactionFile {
     token_accounting: Option<String>,
 }
 
-pub(super) const DEFAULT_CONFIG_YAML: &str = "default_model: hya/offline\nproviders: {}\nmcp: {}\nplugins: {}\npermission:\n  model: default\n  rules: []\n";
+pub(super) const DEFAULT_CONFIG_YAML: &str = "schema_version: 2\ndefault_model: hya/offline\nproviders: {}\nmcp: {}\nplugins: {}\nbundles:\n  builtin:\n    profile: full\n    enable: []\n    disable: []\npermission:\n  model: default\n  rules: []\n";
 
 /// Result of creating a brand-new default `config.yaml` on first run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -379,6 +497,52 @@ pub fn first_run_config_bootstrap(interactive: bool) -> anyhow::Result<()> {
 }
 
 pub(super) fn parse_config(yaml: &str) -> anyhow::Result<FileConfig> {
+    let value: serde_norway::Value =
+        serde_norway::from_str(yaml).context("parse hya config.yaml")?;
+    let Some(map) = value.as_mapping() else {
+        anyhow::bail!(
+            "config.yaml must be a YAML mapping with `schema_version: 2`; run `hya-migration run` to migrate legacy v1 configs"
+        );
+    };
+    match map.get("schema_version") {
+        Some(version) if version.as_u64() == Some(u64::from(CONFIG_SCHEMA_VERSION)) => {}
+        Some(version) => {
+            let found = version
+                .as_u64()
+                .map_or_else(|| format!("{version:?}"), |n| n.to_string());
+            anyhow::bail!(
+                "unsupported config.yaml `schema_version: {found}`; only `schema_version: 2` is supported — run `hya-migration run` to migrate v1 configuration"
+            );
+        }
+        None => {
+            anyhow::bail!(
+                "missing required `schema_version: 2` in config.yaml (v1 configs are no longer supported); run `hya-migration run` to migrate"
+            );
+        }
+    }
+    const REMOVED_V1_SECTIONS: [(&str, &str); 5] = [
+        ("compaction", "hya/compaction"),
+        ("formatter", "hya/base-tools"),
+        ("goal", "hya/goal-loop"),
+        ("lsp", "hya/extended-tools"),
+        ("subagents", "hya/extended-tools"),
+    ];
+    for (key, bundle_id) in REMOVED_V1_SECTIONS {
+        if map.contains_key(key) {
+            anyhow::bail!(
+                "config.yaml v1 top-level section `{key}` was moved to per-bundle config for `{bundle_id}`; run `hya-migration run` to migrate"
+            );
+        }
+    }
+    if let Some(tools) = map.get("tools").and_then(serde_norway::Value::as_mapping) {
+        for key in ["websearch", "webfetch"] {
+            if tools.contains_key(key) {
+                anyhow::bail!(
+                    "config.yaml v1 section `tools.{key}` was moved to per-bundle config for `hya/network-tools`; run `hya-migration run` to migrate"
+                );
+            }
+        }
+    }
     serde_norway::from_str(yaml).context("parse hya config.yaml")
 }
 

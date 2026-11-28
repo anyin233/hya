@@ -28,7 +28,7 @@ fn write_config_with_default_agent(scratch: &Scratch, agent_id: &str) -> TestRes
     std::fs::write(
         dir.join("config.yaml"),
         format!(
-            "default_model: hya/offline\nproviders: {{}}\nmcp: {{}}\nplugins: {{}}\npermission:\n  model: default\n  rules: []\ndefault_agent: {agent_id}\n"
+            "schema_version: 2\ndefault_model: hya/offline\nproviders: {{}}\nmcp: {{}}\nplugins: {{}}\npermission:\n  model: default\n  rules: []\ndefault_agent: {agent_id}\n"
         ),
     )?;
     Ok(())
@@ -161,7 +161,7 @@ fn exec_resolves_project_bundle_default_agent_and_rejects_unselectable_agent() -
     std::fs::create_dir_all(bundle_dir.join("prompts"))?;
     std::fs::write(
         bundle_dir.join("bundle.yaml"),
-        "kind: Bundle\nidentity:\n  id: hya/exec-project-demo\n  version: 1.0.0\n  publisher: hya\nagents:\n  - id: exec-project-lead\n    role: main\n    prompt: prompts/lead.md\n",
+        "schema_version: 2\nkind: Bundle\nidentity:\n  id: hya/exec-project-demo\n  version: 1.0.0\n  publisher: hya\nagents:\n  - id: exec-project-lead\n    role: main\n    prompt: prompts/lead.md\n",
     )?;
     std::fs::write(
         bundle_dir.join("prompts/lead.md"),

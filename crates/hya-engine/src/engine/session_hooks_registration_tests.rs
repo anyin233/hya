@@ -147,7 +147,7 @@ async fn fixture(
 ) {
     let plugin = hya_bundle::prepare_package(hya_bundle::BundleSource::new(
         "registration-hooks",
-        vec![hya_bundle::SourceFile::new("bundle.yaml", "kind: Bundle\nidentity: { id: test/registration-hooks, version: 1.0.0, publisher: test }\n")],
+        vec![hya_bundle::SourceFile::new("bundle.yaml", "schema_version: 2\nkind: Bundle\nidentity: { id: test/registration-hooks, version: 1.0.0, publisher: test }\n")],
     )).unwrap();
     let catalog = AgentCatalog::new(Arc::new(
         hya_bundle::BundleCatalog::from_verified_catalogs(&[&plugin]).unwrap(),
@@ -309,6 +309,7 @@ async fn wait_idle_stop(
 }
 
 async fn wait_inactive(eng: &SessionEngine, child: SessionId) {
+    use crate::store_bridge::SessionStoreExt as _;
     tokio::time::timeout(Duration::from_secs(5), async {
         while eng
             .store()
@@ -327,11 +328,7 @@ async fn wait_inactive(eng: &SessionEngine, child: SessionId) {
 async fn wait_archived(eng: &SessionEngine, root: SessionId, handle: &str) {
     let mut bus = eng.bus().subscribe();
     tokio::time::timeout(Duration::from_secs(5), async {
-        while !eng
-            .read_projection(root)
-            .await
-            .unwrap()
-            .team
+        while !hya_tool::extension::team_projection(&eng.read_projection(root).await.unwrap())
             .archived
             .contains_key(handle)
         {
@@ -345,7 +342,7 @@ async fn wait_archived(eng: &SessionEngine, root: SessionId, handle: &str) {
 async fn assert_pending_directive(eng: &SessionEngine, child: SessionId) {
     let p = eng.read_projection(child).await.unwrap();
     assert!(p.session.messages.is_empty());
-    let doc = &p.session.handoff.unwrap().doc;
+    let doc = &hya_tool::extension::handoff_projection(&p).unwrap().doc;
     assert!(
         doc.contains("1. Goal - [mail from main] do X")
             && doc.contains("5. Pending tasks - [mail from main] do X")
@@ -368,9 +365,7 @@ async fn failed_registrations_roll_back_main_claims_hooks_and_memory() {
     assert!(matches!(
         cs.register_existing_resident(cr, child, "worker".into(), agent, None)
             .await,
-        Err(crate::CoreError::Store(
-            hya_store::StoreError::CapacityExceeded { .. }
-        ))
+        Err(crate::CoreError::CapacityExceeded { .. })
     ));
     assert_eq!(ce.replay(cr).await.unwrap(), before);
     drop(rt);
@@ -386,6 +381,7 @@ async fn failed_registrations_roll_back_main_claims_hooks_and_memory() {
             tx.commit().await.unwrap();
             None
         } else {
+            use crate::store_bridge::SessionStoreExt as _;
             let c = eng
                 .store()
                 .try_claim_new(root, root, OwnerRunId::new())
@@ -404,6 +400,7 @@ async fn failed_registrations_roll_back_main_claims_hooks_and_memory() {
         let err = spawn(&sup, &eng, &agent, root, claim.as_ref())
             .await
             .unwrap_err();
+        use crate::store_bridge::SessionStoreExt as _;
         if trigger_abort {
             assert!(
                 err.to_string().contains("registration rejected")
@@ -412,7 +409,7 @@ async fn failed_registrations_roll_back_main_claims_hooks_and_memory() {
         } else {
             assert!(matches!(
                 err,
-                crate::CoreError::Store(hya_store::StoreError::StaleActorClaim { .. })
+                crate::CoreError::Store(hya_store::StoreError::StaleBundleClaim { .. })
             ));
             assert_eq!(eng.store().active_actor_ids().await.unwrap(), vec![root]);
         }
@@ -500,6 +497,7 @@ async fn dropping_spawn_during_init_hooks_keeps_resident_driver() {
             async move { spawn(&sup, &eng, &agent, root, None).await }
         });
         entered.notified().await;
+        use crate::store_bridge::SessionStoreExt as _;
         let child = eng.store().active_actor_ids().await.unwrap()[0];
         assert!(sup.team_cancel(root).is_some());
         task.abort();
@@ -545,21 +543,18 @@ async fn revived_resident_ignores_stale_init_hooks() {
         entered.notified().await;
         *pause.lock().unwrap() = None;
         let proj = eng.read_projection(root).await.unwrap();
-        let (handle, entry) = proj
-            .team
-            .roster
-            .iter()
-            .find(|(_, e)| e.session != root)
-            .unwrap();
+        let team = hya_tool::extension::team_projection(&proj);
+        let (handle, entry) = team.roster.iter().find(|(_, e)| e.session != root).unwrap();
+        let handle = handle.clone();
         let child = entry.session;
-        sup.archive_member(root, handle, "superseded")
+        sup.archive_member(root, &handle, "superseded")
             .await
             .unwrap();
 
         upsert_hooks(&eng.runtime, Arc::new(Hooks::default()), [3, 4]);
         let (running, finish) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
         *hooks.pause_request.lock().unwrap() = Some((running.clone(), finish.clone()));
-        mail(&eng, root, handle, "episode two").await;
+        mail(&eng, root, &handle, "episode two").await;
         running.notified().await;
         let captured = eng.captured_session_hooks(child).unwrap();
         assert_eq!(sup.member_busy(root, child), Some(true));
@@ -572,16 +567,21 @@ async fn revived_resident_ignores_stale_init_hooks() {
 
         let stale = tokio::time::timeout(Duration::from_millis(30), async {
             loop {
-                match events.recv().await.unwrap().event {
-                    hya_proto::Event::SessionCreated { session, .. } if session == child => {
-                        break "late pub";
-                    }
-                    hya_proto::Event::AgentActivityChanged {
-                        handle: ref a,
-                        status: hya_proto::RosterStatus::Idle,
-                        ..
-                    } if a == handle => break "premature idle",
-                    _ => {}
+                let event = events.recv().await.unwrap().event;
+                if matches!(
+                    event,
+                    hya_proto::Event::SessionCreated { session, .. } if session == child
+                ) {
+                    break "late pub";
+                }
+                if let Some(hya_tool::extension::ExtensionEvent::AgentActivityChanged {
+                    handle: ref a,
+                    status: hya_proto::RosterStatus::Idle,
+                    ..
+                }) = hya_tool::extension::ExtensionEvent::from_event(&event)
+                    && a == &handle
+                {
+                    break "premature idle";
                 }
             }
         })
@@ -600,18 +600,22 @@ async fn revived_resident_ignores_stale_init_hooks() {
             .await
             .unwrap()
             .into_iter()
-            .filter_map(|e| match e.event {
-                hya_proto::Event::AgentActivityChanged {
-                    handle: a, status, ..
-                } if a == *handle => Some(status),
-                _ => None,
-            })
+            .filter_map(
+                |e| match hya_tool::extension::ExtensionEvent::from_event(&e.event) {
+                    Some(hya_tool::extension::ExtensionEvent::AgentActivityChanged {
+                        handle: a,
+                        status,
+                        ..
+                    }) if a == handle => Some(status),
+                    _ => None,
+                },
+            )
             .collect();
         assert_eq!(
             &activity[activity.len() - 2..],
             &[hya_proto::RosterStatus::Busy, hya_proto::RosterStatus::Idle]
         );
-        sup.end_member(root, handle).await.unwrap();
+        sup.end_member(root, &handle).await.unwrap();
         assert_eq!(sup.member_busy(root, child), None);
     }
 }
@@ -625,16 +629,18 @@ async fn concurrent_siblings_share_one_group_and_all_receive_announce() {
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     let proj = eng.read_projection(root).await.unwrap();
-    assert_eq!(proj.team.channels.values().filter(|c| c.kind == hya_proto::ChannelKind::Group && c.unit.as_deref() == Some("main")).count(), 1);
+    let team = hya_tool::extension::team_projection(&proj);
+    assert_eq!(team.channels.values().filter(|c| c.kind == hya_proto::ChannelKind::Group && c.unit.as_deref() == Some("main")).count(), 1);
     eng.mail_announce(root, "one announcement".into())
         .await
         .unwrap();
     let proj = eng.read_projection(root).await.unwrap();
+    let team = hya_tool::extension::team_projection(&proj);
     for (_, h) in children {
         assert!(
-            proj.team.inboxes[&h]
+            team.inboxes[&h]
                 .iter()
-                .any(|i| proj.team.mail[*i].body == "one announcement")
+                .any(|i| team.mail[*i].body == "one announcement")
         );
     }
     sup.team_cancel(root).unwrap().cancel();
@@ -723,10 +729,7 @@ async fn team_turn_and_message_budget_kills_before_first_wake_preserve_directive
     assert_pending_directive(&eng, child).await;
     mail(&eng, root, &handle, "new task").await;
     assert!(
-        eng.read_projection(root)
-            .await
-            .unwrap()
-            .team
+        hya_tool::extension::team_projection(&eng.read_projection(root).await.unwrap())
             .roster
             .contains_key(&handle)
     );
@@ -770,8 +773,8 @@ async fn mail_to_killed_team_waits_for_cleanup_and_restores_main() {
     });
     entered.notified().await;
     let proj = eng.read_projection(root).await.unwrap();
-    let (handle, entry) = proj
-        .team
+    let team = hya_tool::extension::team_projection(&proj);
+    let (handle, entry) = team
         .roster
         .iter()
         .find(|(p, _)| p.as_str() != "main")
@@ -828,7 +831,7 @@ async fn wait_after_revived_kill_and_spawn_after_empty_team_kill_reset_state() {
     sup.submit_report(
         root,
         &handle,
-        hya_proto::ReportOutcome::Done,
+        hya_tool::ReportOutcome::Done,
         "OLD REPORT".into(),
     )
     .await
@@ -900,7 +903,8 @@ async fn wait_after_revived_kill_and_spawn_after_empty_team_kill_reset_state() {
         .unwrap();
     assert!(!s2.team_cancel(r2).unwrap().is_cancelled());
     assert_eq!(
-        e2.read_projection(r2).await.unwrap().team.roster[&h2].session,
+        hya_tool::extension::team_projection(&e2.read_projection(r2).await.unwrap()).roster[&h2]
+            .session,
         c2
     );
     s2.end_member(r2, &h2).await.unwrap();
@@ -988,11 +992,7 @@ async fn registered_directive_before_bus_delivery_waits_cancels_and_blocks_quies
             async move { spawn(&sup, &eng, &agent, root, None).await }
         });
         entered.notified().await;
-        let child = eng
-            .read_projection(root)
-            .await
-            .unwrap()
-            .team
+        let child = hya_tool::extension::team_projection(&eng.read_projection(root).await.unwrap())
             .roster
             .values()
             .find(|e| e.session != root)
@@ -1042,7 +1042,8 @@ async fn registered_directive_before_bus_delivery_waits_cancels_and_blocks_quies
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let p = eng.read_projection(root).await.unwrap();
-                let e = p.team.roster.values().find(|e| e.session == child).unwrap();
+                let team = hya_tool::extension::team_projection(&p);
+                let e = team.roster.values().find(|e| e.session == child).unwrap();
                 if e.resident_cursor == 1
                     && sup.member_busy(root, child) == Some(false)
                     && eng.mail_mark(root).is_some_and(|m| m >= 1)
@@ -1065,7 +1066,7 @@ async fn registered_directive_before_bus_delivery_waits_cancels_and_blocks_quies
                 .count(),
             1
         );
-        assert_eq!(eng.replay(root).await.unwrap().iter().filter(|e| matches!(e.event, hya_proto::Event::ResidentWorkStarted { actor_session, .. } if actor_session == child)).count(), 1);
+        assert_eq!(eng.replay(root).await.unwrap().iter().filter(|e| matches!(hya_tool::extension::ExtensionEvent::from_event(&e.event), Some(hya_tool::extension::ExtensionEvent::ResidentWorkStarted { actor_session, .. }) if actor_session == child)).count(), 1);
         drop(lead);
         sup.drain(FinishCause::Shutdown, Duration::from_secs(2))
             .await;

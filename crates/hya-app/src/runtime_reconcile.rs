@@ -1250,6 +1250,7 @@ mod tests {
             content: content.into(),
             binary_base64: None,
             aliases: Vec::new(),
+            overrides: None,
         };
         let valid = PluginContributionSet {
             skills: vec![SkillContribution {
@@ -1333,6 +1334,7 @@ mod tests {
                 publisher: "hya-tests".into(),
             },
             namespace: None,
+            overrides: None,
             digest: "test-only".into(),
             agents: vec![PreparedAgent {
                 private: false,
