@@ -21,6 +21,8 @@ pub const CONFIG: &str = "crates/xtask/boundary.toml";
 pub struct Config {
     scan: Scan,
     identifiers: Identifiers,
+    /// The ring map; absent in configs that only check the bundle boundary.
+    rings: Option<crate::rings::Rings>,
     #[serde(default)]
     allow: Allow,
 }
@@ -48,6 +50,8 @@ struct Allow {
     dependencies: BTreeMap<String, BTreeSet<String>>,
     #[serde(default)]
     identifiers: BTreeMap<String, BTreeSet<String>>,
+    #[serde(default)]
+    rings: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// Violations found in a tree, keyed like the allowlist.
@@ -57,6 +61,8 @@ pub struct Findings {
     pub dependencies: BTreeMap<String, BTreeSet<String>>,
     /// Source file → denied words it names.
     pub identifiers: BTreeMap<String, BTreeSet<String>>,
+    /// Crate directory → workspace crates of an outer ring it depends on.
+    pub rings: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl Config {
@@ -82,6 +88,19 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
     }
 }
 
+/// `cargo run -p xtask -- ring-report`: production lines per ring (ADR-0040).
+pub fn ring_report(args: Vec<String>) -> anyhow::Result<()> {
+    anyhow::ensure!(args.is_empty(), "usage: ring-report");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let config = Config::load(&root)?;
+    let rings = config
+        .rings
+        .as_ref()
+        .with_context(|| format!("{CONFIG} has no [rings] map"))?;
+    print!("{}", crate::rings::report(&root, rings)?);
+    Ok(())
+}
+
 impl Findings {
     /// The findings in allowlist form, for seeding `boundary.toml`.
     pub fn to_toml(&self) -> String {
@@ -89,6 +108,7 @@ impl Findings {
         for (table, entries) in [
             ("allow.dependencies", &self.dependencies),
             ("allow.identifiers", &self.identifiers),
+            ("allow.rings", &self.rings),
         ] {
             out.push_str(&format!("[{table}]\n"));
             for (path, names) in entries {
@@ -114,6 +134,12 @@ pub fn check(root: &Path, config: &Config) -> anyhow::Result<()> {
         "names bundle domain word",
         &found.identifiers,
         &config.allow.identifiers,
+        &mut problems,
+    );
+    diff(
+        "depends on an outer ring's crate",
+        &found.rings,
+        &config.allow.rings,
         &mut problems,
     );
     if problems.is_empty() {
@@ -183,6 +209,9 @@ pub fn scan(root: &Path, config: &Config) -> anyhow::Result<Findings> {
         if !hits.is_empty() {
             findings.identifiers.insert(path, hits);
         }
+    }
+    if let Some(rings) = &config.rings {
+        findings.rings = crate::rings::violations(root, rings)?;
     }
     Ok(findings)
 }
@@ -284,7 +313,7 @@ fn source_files(root: &Path, scan: &Scan) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 /// Tests, fixtures, and generated code are not core production source.
-fn is_test_or_generated(path: &Path) -> bool {
+pub(crate) fn is_test_or_generated(path: &Path) -> bool {
     let components: Vec<_> = path
         .components()
         .map(|c| c.as_os_str().to_string_lossy().into_owned())

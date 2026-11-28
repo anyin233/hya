@@ -39,6 +39,22 @@ exempt = [
     "FormatterContribution",
 ]
 
+# Rings (ADR-0040): each ring depends only on rings inside it; no ring depends
+# on a client or on tooling. Every directory under `crates/` and `packages/`
+# is in exactly one group. `cargo run -p xtask -- ring-report` sizes them.
+[rings]
+r0 = ["crates/hya-proto", "crates/hya-context", "crates/hya-tool-error", "crates/hya-version", "crates/hya-store", "crates/hya-provider", "crates/hya-tool", "crates/hya-core"]
+r1 = ["crates/hya-runtime-abi", "crates/hya-tool-loader", "crates/hya-bundle", "crates/hya-workflow", "crates/hya-engine", "crates/hya-mcp", "crates/hya-plugin", "crates/hya-plugin-bun", "crates/hya-plugin-claude", "crates/hya-child-io", "packages/hya-code-mode"]
+r2 = ["crates/hya-server", "crates/hya-api", "crates/hya-app", "crates/hya-relay", "crates/hya-updater", "proto"]
+entry = ["crates/hya-backend"]
+clients = ["crates/hya-sdk", "packages/hya-tui", "packages/hya-tui-web", "packages/hya-tui-sdk"]
+bundle_tooling = []
+repo_tooling = ["crates/xtask", "crates/hya-e2e", "crates/hya-migration"]
+# The five standard tools are counted on their own row.
+rows = { "standard tools" = ["crates/hya-core/src/kernel/tools/read.rs", "crates/hya-core/src/kernel/tools/write.rs", "crates/hya-core/src/kernel/tools/edit.rs", "crates/hya-core/src/kernel/tools/bash.rs", "crates/hya-core/src/kernel/tools/grep.rs"] }
+# The TUI's copy of `proto/`.
+exclude = ["packages/hya-tui/src/proto"]
+
 # Violations still being moved out (Phase 7); each issue removes its entries.
 [allow.dependencies]
 "crates/hya-app" = ["hya-coding-extras-core", "hya-multi-agent"]
