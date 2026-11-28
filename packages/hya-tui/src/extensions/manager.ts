@@ -191,15 +191,50 @@ export class ExtensionManager {
   }
 
   private isSettled(): boolean {
-    return this.loaded && this.running.get(basicComponentsBundle)?.state !== "starting"
+    if (!this.loaded) return false
+    const basic = this.running.get(basicComponentsBundle)
+    return !basic || basic.state !== "starting"
   }
 
-  /** Resolves once a catalog is loaded and hya/basic-tui-components has started (or could not). */
+  /**
+   * Resolves once a catalog is loaded and `hya/basic-tui-components` has
+   * finished starting (or is absent / disabled / failed). When the backend
+   * advertises zero TUI bundles (e.g. `hya --bare`), resolves immediately.
+   */
   settled(): Promise<void> {
     if (this.isSettled()) return Promise.resolve()
     const { promise, resolve } = Promise.withResolvers<void>()
     this.settledWaiters.push(resolve)
     return promise
+  }
+
+  /** True once a catalog loaded with zero TUI extensions advertised (e.g. `hya --bare`). */
+  bare(): boolean {
+    this.listVersion()
+    return this.loaded && this.running.size === 0
+  }
+
+  /**
+   * Whether a bundled sidebar surface has a backing extension (or the catalog
+   * is still loading / starting `hya/basic-tui-components`). Returns `false`
+   * once the catalog settled with no extension supplying `surface` (such as
+   * `hya --bare` with zero TUI bundles).
+   */
+  hasSurface(surface: ReplaceableSurface): boolean {
+    this.listVersion()
+    if (!this.loaded) return true
+    if (this.replacement(surface)) return true
+    return this.running.get(basicComponentsBundle)?.state === "starting"
+  }
+
+  /** Visibility filter for `visiblePaneRoot` / `visiblePaneLayout`: hides bundled panes unavailable in the loaded catalog. */
+  visiblePaneOptions(): { hasSurface: (kind: "projects" | "sessions" | "todos" | "context") => boolean; hasExtensionPanel: (panel: string) => boolean } {
+    this.listVersion()
+    const bare = this.loaded && this.running.size === 0
+    return {
+      hasSurface: (kind) => this.hasSurface(kind),
+      hasExtensionPanel: () => !bare,
+    }
   }
 
   configure(options: Partial<ManagerOptions>): void {

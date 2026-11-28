@@ -23,11 +23,25 @@ use crate::websearch::WebSearchPlane;
 use crate::workflow_plane::WorkflowPlane;
 
 pub use hya_tool_error::ToolError;
-/// Registry rejected a registration because the name (or alias) is already taken.
+
+/// Canonical tool names permanently reserved for the `hya-core` kernel loop.
+///
+/// No bundle, plugin, MCP server, or registry caller may register, override,
+/// shadow, or alias either name (ADR-0035, ADR-0039).
+pub const RESERVED_KERNEL_TOOLS: [&str; 2] = ["rewrite", hya_proto::context::TODO_TOOL];
+
+/// Whether `name` is permanently reserved for the kernel loop (`rewrite` or `todo`).
+#[must_use]
+pub fn is_reserved_kernel_tool(name: &str) -> bool {
+    RESERVED_KERNEL_TOOLS.contains(&name)
+}
+
+/// Registry rejected a registration because the name (or alias) is already taken
+/// or permanently reserved by the kernel.
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
-#[error("duplicate tool name: {name}")]
+#[error("duplicate or reserved tool name: {name}")]
 pub struct DuplicateName {
-    /// Conflicting tool or alias name.
+    /// Conflicting or reserved tool or alias name.
     pub name: String,
 }
 
@@ -100,6 +114,21 @@ impl ToolCtx {
         HandleRouter::new(&self.workdir)
             .with_skills(self.skills.clone())
             .with_artifacts(self.artifacts.store(&self.workdir))
+            .with_uri_handlers(Arc::clone(self.artifacts.uri_handlers()))
+    }
+
+    /// Register a dynamic URI scheme handler on this context's handle router.
+    ///
+    /// # Errors
+    /// Returns [`crate::handle::SchemeRegistryError`] if the handler attempts to
+    /// claim an internal scheme (`artifact`, `skill`, `local`) or collides with
+    /// an already registered dynamic scheme.
+    pub fn with_uri_handler(
+        mut self,
+        handler: Arc<dyn crate::handle::DynamicUriHandler>,
+    ) -> Result<Self, crate::handle::SchemeRegistryError> {
+        self.artifacts = self.artifacts.with_uri_handler(handler)?;
+        Ok(self)
     }
 }
 
@@ -478,13 +507,17 @@ impl ToolRegistry {
         identity: Option<[u8; 32]>,
     ) -> Result<(), DuplicateName> {
         let name = tool.name().to_string();
+        if is_reserved_kernel_tool(&name) {
+            return Err(DuplicateName { name });
+        }
         let mut inner = self.write();
         if inner.tools.contains_key(&name) || inner.aliases.contains_key(&name) {
             return Err(DuplicateName { name });
         }
         let mut pending = std::collections::BTreeSet::new();
         for alias in aliases {
-            if alias == &name
+            if is_reserved_kernel_tool(alias)
+                || alias == &name
                 || !pending.insert(alias.as_str())
                 || inner.tools.contains_key(alias)
                 || inner.aliases.contains_key(alias)
@@ -574,6 +607,10 @@ impl ToolRegistry {
         origin: &'static str,
     ) {
         let name = tool.name().to_string();
+        assert!(
+            !is_reserved_kernel_tool(&name),
+            "built-in tool `{name}` is reserved for the kernel and cannot be registered"
+        );
         let mut inner = self.write();
         let replaced = inner.tools.insert(
             name.clone(),
@@ -591,6 +628,10 @@ impl ToolRegistry {
         }
         inner.bundle_origins.insert(name, origin);
         for (alias, visibility) in aliases {
+            assert!(
+                !is_reserved_kernel_tool(alias),
+                "built-in alias `{alias}` is reserved for the kernel and cannot be registered"
+            );
             let replaced = inner.aliases.insert(
                 alias.to_string(),
                 ResolvedTool {

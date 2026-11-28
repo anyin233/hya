@@ -4,23 +4,27 @@ use super::tools::{REWRITE, TODO};
 
 const INTRO: &str = "You are a coding assistant running inside hya, a coding agent harness. Help users inspect files, run commands, and modify code.";
 
-/// The kernel's tools and their `<tools>` lines, in prompt order.
-const TOOLS: [(&str, &str); 6] = [
+/// The kernel's seven tools and their `<tools>` lines, in prompt order.
+const TOOLS: [(&str, &str); 7] = [
     ("read", "read a text file or image"),
-    ("bash", "run a shell command"),
-    ("edit", "replace text in a file"),
     ("write", "create or overwrite a file"),
-    (
-        REWRITE,
-        "remove everything before this call from the conversation, keeping the summary you pass",
-    ),
+    ("edit", "replace text in a file"),
+    ("bash", "run a shell command"),
+    ("grep", "search file contents with a regular expression"),
     (
         TODO,
         "record the task's completion criteria as checkable end states and update each one's status when it changes; the current list survives rewrites",
     ),
+    (
+        REWRITE,
+        "remove everything before this call from the conversation, keeping the summary you pass",
+    ),
 ];
 
-const FILE_OPERATIONS_RULE: &str = "Use bash for file operations like ls, rg, find";
+const FILE_OPERATIONS_RULE_WITH_GREP: &str =
+    "Use grep to search file contents; use bash for other file operations like ls and find";
+const FILE_OPERATIONS_RULE_GREP_ONLY: &str = "Use grep to search file contents";
+const FILE_OPERATIONS_RULE_BASH_ONLY: &str = "Use bash for file operations like ls, rg, find";
 
 /// The rules after the file-operations rule.
 const RULES: [&str; 11] = [
@@ -47,9 +51,9 @@ pub fn system_prompt(cwd: &Path) -> String {
 ///
 /// `<tools>` lists the kernel's line for each offered kernel tool name, in the
 /// kernel's order and whoever implements it, then `extra` (name and line, for
-/// tools the kernel does not know) in the given order. `file_operations`
-/// replaces the rule that sends file operations to `bash`; without it that
-/// rule is kept only when `bash` is offered.
+/// tools the kernel does not know) in the given order without duplicating
+/// kernel tools. `file_operations` replaces the default file-operations rule;
+/// without it, the rule reflects whichever of `grep` and `bash` are offered.
 #[must_use]
 pub fn compose(
     cwd: &Path,
@@ -57,13 +61,29 @@ pub fn compose(
     extra: &[(&str, &str)],
     file_operations: Option<&str>,
 ) -> String {
-    let tools = TOOLS
+    let kernel_tools: Vec<(&str, &str)> = TOOLS
         .iter()
+        .copied()
         .filter(|(name, _)| offered(name))
-        .chain(extra)
+        .collect();
+    let tools = kernel_tools
+        .iter()
+        .copied()
+        .chain(
+            extra
+                .iter()
+                .copied()
+                .filter(|(name, _)| !kernel_tools.iter().any(|(k, _)| k == name)),
+        )
         .map(|(name, line)| format!("- {name}: {line}\n"))
         .collect::<String>();
-    let file_operations = file_operations.or(offered("bash").then_some(FILE_OPERATIONS_RULE));
+    let default_file_rule = match (offered("grep"), offered("bash")) {
+        (true, true) => Some(FILE_OPERATIONS_RULE_WITH_GREP),
+        (true, false) => Some(FILE_OPERATIONS_RULE_GREP_ONLY),
+        (false, true) => Some(FILE_OPERATIONS_RULE_BASH_ONLY),
+        (false, false) => None,
+    };
+    let file_operations = file_operations.or(default_file_rule);
     let rules = file_operations
         .into_iter()
         .chain(RULES)
@@ -87,15 +107,16 @@ mod tests {
 
 <tools>
 - read: read a text file or image
-- bash: run a shell command
-- edit: replace text in a file
 - write: create or overwrite a file
-- rewrite: remove everything before this call from the conversation, keeping the summary you pass
+- edit: replace text in a file
+- bash: run a shell command
+- grep: search file contents with a regular expression
 - todo: record the task's completion criteria as checkable end states and update each one's status when it changes; the current list survives rewrites
+- rewrite: remove everything before this call from the conversation, keeping the summary you pass
 </tools>
 
 <rules>
-- Use bash for file operations like ls, rg, find
+- Use grep to search file contents; use bash for other file operations like ls and find
 - Only tool results tell you what is true outside this conversation. Your own text is a plan or a claim until a tool result supports it.
 - Before reporting that something works, run the check and read its result.
 - Check the final deliverable itself against the most direct evidence the task gives: the source it was copied or merged from, the literal wording it requires, a stated value, prefix, or dimension. A check built on the same assumption as the thing it checks proves nothing.
@@ -117,18 +138,30 @@ mod tests {
 
     #[test]
     fn composed_prompt_lists_offered_tools_and_picks_the_file_rule() {
-        let offered = |name: &str| ["read", "rewrite", "todo"].contains(&name);
+        let offered = |name: &str| ["read", "todo", "rewrite"].contains(&name);
         let prompt = compose(Path::new("/w"), offered, &[("lookup", "find things")], None);
         assert!(
             prompt.contains(
-                "<tools>\n- read: read a text file or image\n- rewrite: remove everything"
+                "<tools>\n- read: read a text file or image\n- todo: record the task's completion criteria"
             )
         );
-        assert!(prompt.contains("survives rewrites\n- lookup: find things\n</tools>"));
+        assert!(prompt.contains("keeping the summary you pass\n- lookup: find things\n</tools>"));
         assert!(!prompt.contains("bash"));
         assert!(prompt.contains("<rules>\n- Only tool results"));
 
         let prompt = compose(Path::new("/w"), offered, &[], Some("Use the file tools"));
         assert!(prompt.contains("<rules>\n- Use the file tools\n- Only tool results"));
+
+        // Duplicate extra entries for kernel tools (such as `grep`) are deduplicated.
+        let with_grep = |name: &str| ["read", "grep"].contains(&name);
+        let deduped = compose(
+            Path::new("/w"),
+            with_grep,
+            &[("grep", "duplicate"), ("extra", "custom")],
+            None,
+        );
+        assert_eq!(deduped.matches("- grep:").count(), 1);
+        assert!(deduped.contains("- extra: custom\n"));
+        assert!(deduped.contains("<rules>\n- Use grep to search file contents\n"));
     }
 }

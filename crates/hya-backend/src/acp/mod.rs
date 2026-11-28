@@ -195,10 +195,16 @@ fn prompt_text(blocks: Vec<acp::ContentBlock>) -> Result<String> {
     Ok(text)
 }
 
-pub(super) async fn run(db: String, model: Option<String>, pure: bool) -> anyhow::Result<()> {
+pub(super) async fn run(
+    db: String,
+    model: Option<String>,
+    bare: bool,
+    pure: bool,
+) -> anyhow::Result<()> {
     let spec = daemon::DaemonSpec {
         db,
         model: model.clone(),
+        bare,
         pure,
         yolo: false,
         allow_hosts: Vec::new(),

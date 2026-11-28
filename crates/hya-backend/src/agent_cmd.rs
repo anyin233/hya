@@ -14,14 +14,14 @@ pub(crate) enum AgentCommand {
     List,
 }
 
-pub(crate) fn run(command: AgentCommand) -> anyhow::Result<()> {
+pub(crate) fn run(command: AgentCommand, bare: bool) -> anyhow::Result<()> {
     match command {
-        AgentCommand::List => list(),
+        AgentCommand::List => list(bare),
     }
 }
 
-fn list() -> anyhow::Result<()> {
-    let text = list_text()?;
+fn list(bare: bool) -> anyhow::Result<()> {
+    let text = list_text(bare)?;
     let mut out = std::io::stdout().lock();
     if let Err(error) = out.write_all(text.as_bytes()) {
         if error.kind() == std::io::ErrorKind::BrokenPipe {
@@ -36,8 +36,12 @@ fn list() -> anyhow::Result<()> {
 /// its origin, then the description when it has one. Reserved system agents
 /// (compaction/title/summary) are excluded because no ordinary agent reaches
 /// them; neither is anything from disk.
-fn list_text() -> anyhow::Result<String> {
-    let catalog = hya_app::builtin_agent_catalog()?;
+fn list_text(bare: bool) -> anyhow::Result<String> {
+    let catalog = if bare {
+        hya_app::builtin_agent_catalog_for(&hya_bundle::BuiltinBundleSelection::bare())?
+    } else {
+        hya_app::builtin_agent_catalog()?
+    };
     let mut ordinary = catalog.selectable();
     ordinary.sort_by(|left, right| left.stable_id.cmp(right.stable_id));
 
@@ -88,7 +92,7 @@ mod tests {
         )
         .expect("write agent file");
 
-        let text = list_text().expect("render agent list");
+        let text = list_text(false).expect("render agent list");
         std::fs::remove_dir_all(&dir).ok();
         let names = listed_agent_names(&text);
 

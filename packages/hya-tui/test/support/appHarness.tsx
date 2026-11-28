@@ -89,6 +89,10 @@ export interface FakeBackendSeed {
   agentModels?: AgentModelState[]
   modelEffortPrefs?: ModelEffortPreference[]
   bundles?: BundleSummary[]
+  /** Raw rows served by `GET /v2/tui-extensions` (default `[]`). */
+  tuiExtensions?: unknown[]
+  /** Simulate `hya --bare` where `hya/workflow` is not loaded (workflow bundle routes return 404). */
+  workflowsUnavailable?: boolean
   vcs?: VcsStatus
   diff?: string
   files?: Record<string, string | Uint8Array>
@@ -182,6 +186,8 @@ export class FakeBackend {
   agentModels: AgentModelState[]
   modelEffortPrefs: ModelEffortPreference[]
   bundles: BundleSummary[]
+  tuiExtensions: unknown[]
+  workflowsUnavailable: boolean
   vcs: VcsStatus
   diff: string
   files = new Map<string, Uint8Array>()
@@ -244,6 +250,8 @@ export class FakeBackend {
     ]
     this.modelEffortPrefs = seed.modelEffortPrefs ? structuredClone(seed.modelEffortPrefs) : []
     this.bundles = seed.bundles ? structuredClone(seed.bundles) : []
+    this.tuiExtensions = seed.tuiExtensions ? structuredClone(seed.tuiExtensions) : []
+    this.workflowsUnavailable = seed.workflowsUnavailable === true
     this.vcs = seed.vcs ? structuredClone(seed.vcs) : { branch: "main" }
     this.diff = seed.diff ?? ""
     for (const [path, data] of Object.entries(seed.files ?? {})) {
@@ -581,12 +589,15 @@ export class FakeBackend {
     // Catalogs & views
     if (method === "GET" && pathname === "/v2/models") return jsonResponse({ models: this.models })
     if (method === "GET" && pathname === "/v2/agents") return jsonResponse({ agents: this.agents })
-    if (method === "GET" && (pathname === "/v2/workflows" || pathname === "/v2/bundles/hya%2Fworkflow/api/workflows")) return jsonResponse({ workflows: this.workflows })
+    if (method === "GET" && (pathname === "/v2/workflows" || pathname === "/v2/bundles/hya%2Fworkflow/api/workflows")) {
+      if (this.workflowsUnavailable) return errorResponse(404, "not_found", "bundle hya/workflow is not loaded")
+      return jsonResponse({ workflows: this.workflows })
+    }
     if (method === "GET" && pathname === "/v2/providers") return jsonResponse({ providers: this.providers })
     if (method === "GET" && pathname === "/v2/commands") return jsonResponse({ commands: this.commands, diagnostics: this.commandDiagnostics })
     if (method === "GET" && pathname === "/v2/skills") return jsonResponse({ skills: this.skills, diagnostics: this.skillDiagnostics })
     if (method === "GET" && pathname === "/v2/permission-modes") return jsonResponse({ modes: this.permissionModes })
-    if (method === "GET" && pathname === "/v2/tui-extensions") return jsonResponse({ extensions: [] })
+    if (method === "GET" && pathname === "/v2/tui-extensions") return jsonResponse({ extensions: this.tuiExtensions })
     if (method === "GET" && pathname === "/v2/vcs") return jsonResponse(this.vcs)
     if (method === "GET" && pathname === "/v2/vcs/diff") return jsonResponse({ diff: this.diff })
 
@@ -829,6 +840,8 @@ export interface RenderAppOptions {
   copyAccepts?: boolean
   /** Skip `controller.start()` when testing pre-connect states. */
   skipStart?: boolean
+  /** Wire `client.listTuiExtensions()` -> `extensionManager.load(...)` on startup and scope changes (like `app/run.tsx`), resetting `extensionManager` on `dispose()`. */
+  loadExtensions?: boolean
 }
 
 function rgbaHex(color: RGBA | undefined): string | undefined {
@@ -895,6 +908,25 @@ export async function renderApp(options: RenderAppOptions = {}): Promise<Rendere
   const terminal = createFakeTerminal(options.copyAccepts ?? true)
   const quitCalls: Array<"archive" | "background"> = []
 
+  const refreshExtensions = options.loadExtensions
+    ? async (): Promise<void> => {
+      try {
+        const catalog = await client.listTuiExtensions()
+        const { extensionEnabled = {}, extensionTrusted = {} } = loadPreferences(preferencesPath).preferences
+        const rejected = await extensionManager.load(catalog, {
+          enabled: (id) => extensionEnabled[id],
+          remote: options.remote === true,
+          trusted: (id) => extensionTrusted[id],
+        })
+        if (rejected.length) store.setStatus(`TUI extensions rejected: ${rejected.join(" · ")}`)
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        extensionManager.catalogFailed(reason)
+        store.setStatus(`TUI extensions unavailable: ${reason}`)
+      }
+    }
+    : undefined
+
   const controller = createController({
     client,
     store,
@@ -908,6 +940,7 @@ export async function renderApp(options: RenderAppOptions = {}): Promise<Rendere
     env: options.env ?? process.env,
     ...(options.bridge ? { bridge: options.bridge } : {}),
     ...(options.home ? { home: options.home } : {}),
+    ...(refreshExtensions ? { refreshExtensions, onScopeChanged: refreshExtensions } : {}),
     structure,
   })
 
@@ -920,6 +953,7 @@ export async function renderApp(options: RenderAppOptions = {}): Promise<Rendere
 
   if (!options.skipStart) {
     await controller.start()
+    if (refreshExtensions) await refreshExtensions()
   }
   await setup.renderOnce()
 
@@ -1009,6 +1043,7 @@ export async function renderApp(options: RenderAppOptions = {}): Promise<Rendere
       backend.closeAllStreams()
       controller.dispose()
       if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+      if (options.loadExtensions) await extensionManager.reset()
       setThemeSetting(autoThemeSetting)
       setTerminalThemeMode("dark")
       setCustomKeybindings({})

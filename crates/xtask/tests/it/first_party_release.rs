@@ -1,4 +1,4 @@
-//! Release staging of the thirteen trusted first-party bundle packages.
+//! Release staging of the twelve trusted first-party bundle packages.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -17,7 +17,7 @@ const NATIVE_FAMILIES: [&str; 5] = [
     "channel-tools",
     "compaction",
 ];
-const DATA_BUNDLES: [&str; 8] = [
+const DATA_BUNDLES: [&str; 7] = [
     "core-skills",
     "core-commands",
     "core-agents",
@@ -25,7 +25,6 @@ const DATA_BUNDLES: [&str; 8] = [
     "goal-loop",
     "plan-impl-review",
     "basic-tui-components",
-    "code-mode",
 ];
 
 /// Write placeholder libraries named like a Linux release build.

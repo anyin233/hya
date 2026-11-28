@@ -149,9 +149,7 @@ permission:
 
     fn exec_command(&self, db: &Path, bare: bool, json: bool, prompt: &str) -> Command {
         let mut cmd = self.command(db);
-        if !bare {
-            cmd.arg("--yolo");
-        }
+        cmd.arg("--yolo");
         cmd.args(["--model", "fake/model", "exec"]);
         if bare {
             cmd.arg("--bare");
@@ -1170,10 +1168,7 @@ async fn p43_first_signal_during_exit_drain_reports_and_exits_with_signal_code()
         let db = env.root.join("hya.db");
 
         let mut cmd = StdCommand::new(&env.binary);
-        cmd.arg("--db").arg(&db);
-        if !bare {
-            cmd.arg("--yolo");
-        }
+        cmd.arg("--db").arg(&db).arg("--yolo");
         cmd.args(["--model", "fake/model", "exec"]);
         if bare {
             cmd.arg("--bare");

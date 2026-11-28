@@ -7,8 +7,7 @@ use crate::bundle_registry::BundleRegistry;
 use async_trait::async_trait;
 use hya_bundle::{BundleCatalog, PreparedBundleSchemas, PreparedCatalog};
 use hya_engine::{
-    AgentCatalog, CoreError, RuntimeCatalogRefresh, RuntimeRegistry, RuntimeSource,
-    RuntimeSourceKind, ScopeKey,
+    CoreError, RuntimeCatalogRefresh, RuntimeRegistry, RuntimeSource, RuntimeSourceKind, ScopeKey,
 };
 use hya_plugin::{PluginContributionSet, SkillContribution};
 use sha2::Digest as _;
@@ -19,11 +18,10 @@ use crate::bundle_runtime::source::{bundle_schema_claims, prepared_static_bundle
 
 /// First-party bundles published with the runtime catalog, including workflows
 /// and the TUI extension of the built-in panes.
-const FIRST_PARTY_CATALOG_BUNDLES: [&str; 4] = [
+const FIRST_PARTY_CATALOG_BUNDLES: [&str; 3] = [
     "hya/goal-loop",
     "hya/plan-impl-review",
     "hya/basic-tui-components",
-    crate::config::CodeMode::BUNDLE,
 ];
 
 /// Load every enabled, present first-party runtime bundle using the active
@@ -379,8 +377,6 @@ pub struct InstalledBundleRefresh {
     base: std::sync::Mutex<Arc<BaseCatalogs>>,
     /// Read-only host services behind bundle process capabilities.
     host_reads: Option<Arc<dyn hya_engine::HostSessionReads>>,
-    /// `tools.code.mode` is not `normal`: publish the code-mode bundle.
-    code_mode: bool,
     /// Active built-in bundle selection from `config.yaml`.
     builtin_selection: hya_bundle::BuiltinBundleSelection,
 }
@@ -398,7 +394,6 @@ impl InstalledBundleRefresh {
             watched_configs: Mutex::new(Vec::new()),
             initialized: AtomicBool::new(false),
             sources: Arc::new(SourceCache::default()),
-            code_mode: false,
             builtin_selection: hya_bundle::BuiltinBundleSelection::full(),
             base: std::sync::Mutex::new(Arc::new(BaseCatalogs {
                 revision: 0,
@@ -428,18 +423,16 @@ impl InstalledBundleRefresh {
         self
     }
 
-    /// Publish the code-mode bundle, which is otherwise shipped but disabled.
-    #[must_use]
-    pub fn with_code_mode(mut self, enabled: bool) -> Self {
-        self.code_mode = enabled;
-        self
-    }
-
     /// Filter first-party built-in bundles according to `config.yaml` `bundles.builtin`.
     #[must_use]
     pub fn with_builtin_selection(mut self, selection: hya_bundle::BuiltinBundleSelection) -> Self {
         self.builtin_selection = selection;
         self
+    }
+
+    /// Active built-in bundle selection governing first-party bundle loading.
+    pub(crate) fn builtin_selection(&self) -> &hya_bundle::BuiltinBundleSelection {
+        &self.builtin_selection
     }
 
     /// Resolve user-scope bundle configuration beside `config_file` (the Hya
@@ -542,16 +535,13 @@ impl InstalledBundleRefresh {
             ),
             None => None,
         };
-        let mut disabled = match &self.registry.get() {
+        let disabled = match &self.registry.get() {
             Some(registry) => registry
                 .disabled_bundle_ids()
                 .await
                 .map_err(CoreError::bundle)?,
             None => BTreeSet::new(),
         };
-        if !self.code_mode {
-            disabled.insert(crate::config::CodeMode::BUNDLE.to_string());
-        }
         let unreadable_errors = snapshot.as_ref().map_or_else(Vec::new, |snapshot| {
             snapshot
                 .unreadable
@@ -673,7 +663,11 @@ impl InstalledBundleRefresh {
         };
         let static_sources = composition.runtime_sources();
         let agent_catalog = Arc::new(
-            AgentCatalog::new(Arc::clone(&composition.bundles)).map_err(CoreError::bundle)?,
+            crate::runtime::agent_catalog_for_selection(
+                Arc::clone(&composition.bundles),
+                &self.builtin_selection,
+            )
+            .map_err(CoreError::bundle)?,
         );
         runtime
             .refresh(|candidate| {

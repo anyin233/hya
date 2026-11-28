@@ -102,9 +102,10 @@ export const layoutCommand: CommandSpec = {
       case "focus": {
         const target = args[1]
         if (!target) throw new Error("Usage: /layout focus <left|right|up|down|next|previous|pane-id>")
-        if (["left", "right", "up", "down"].includes(target)) next = { ...current, active: movePaneFocus(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar), target as PaneDirection, actions.paneBounds?.()).active }
-        else if (target === "next" || target === "previous") next = { ...current, active: rotatePaneFocus(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar), target === "next" ? 1 : -1, actions.paneBounds?.()).active }
-        else if (paneLeaves(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar).root).some((pane) => pane.id === target && isSelectablePane(pane))) next = { ...current, active: target }
+        const paneOptions = extensionManager.visiblePaneOptions()
+        if (["left", "right", "up", "down"].includes(target)) next = { ...current, active: movePaneFocus(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar, paneOptions), target as PaneDirection, actions.paneBounds?.()).active }
+        else if (target === "next" || target === "previous") next = { ...current, active: rotatePaneFocus(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar, paneOptions), target === "next" ? 1 : -1, actions.paneBounds?.()).active }
+        else if (paneLeaves(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar, paneOptions).root).some((pane) => pane.id === target && isSelectablePane(pane))) next = { ...current, active: target }
         else throw new Error(`Pane ${target} is unselectable, hidden, or unknown`)
         break
       }
@@ -161,6 +162,10 @@ export const projectCommands: CommandSpec[] = [
     run: ({ store, actions }, { args }) => {
       const visible = store.state.structure.sidebar.enabled && projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)
       const shown = parseSwitch(args[0], visible, "Usage: /projects-sidebar [on|off]")
+      if (shown && !extensionManager.hasSurface("projects")) {
+        store.setStatus("Projects sidebar unavailable: no TUI bundles loaded")
+        return
+      }
       // A single-column preset has no sidebars: `on` turns the sidebar component on for this session (`/set sidebar on`).
       if (shown && !store.state.structure.sidebar.enabled) enableSidebar(actions)
       store.setProjectsSidebar(shown ? "open" : "closed")

@@ -42,21 +42,28 @@ pub(super) fn system_prompt(
     initial_context: Option<&str>,
     tools: &[hya_proto::ToolSchema],
     depth: u32,
+    use_tool_family_prompts: bool,
 ) -> String {
     let offered = |name: &str| tools.iter().any(|schema| schema.name.as_str() == name);
     let lines = tools
         .iter()
         .filter_map(|schema| {
             let name = schema.name.as_str();
-            hya_tool_loader::tool_prompt(name).map(|line| (name, line))
+            let family_line = use_tool_family_prompts
+                .then(|| hya_tool_loader::tool_prompt(name))
+                .flatten();
+            family_line
+                .or_else(|| {
+                    (name == crate::kernel::tools::SKILL)
+                        .then_some(crate::kernel::tools::SKILL_PROMPT)
+                })
+                .map(|line| (name, line))
         })
         .collect::<Vec<_>>();
-    let kernel = crate::kernel::prompt::compose(
-        workdir,
-        offered,
-        &lines,
-        hya_tool_loader::file_operations_rule(offered),
-    );
+    let file_ops_rule = use_tool_family_prompts
+        .then(|| hya_tool_loader::file_operations_rule(offered))
+        .flatten();
+    let kernel = crate::kernel::prompt::compose(workdir, offered, &lines, file_ops_rule);
     let reference = crate::prompt::team_quick_reference(offered, depth);
     [
         Some(kernel.as_str()),
@@ -286,6 +293,7 @@ mod tests {
             Some("INITIAL CONTEXT"),
             &tools,
             depth,
+            true,
         ))
     }
 
@@ -540,7 +548,7 @@ mod tests {
             .into_iter()
             .map(|s| s.name.to_string())
             .collect();
-        assert_eq!(builtins.len(), 25);
+        assert_eq!(builtins.len(), 24);
         for (model, gpt) in [
             ("openai/gpt-5.5", true),
             ("x/y/gpt-6.2-sol#high", true),

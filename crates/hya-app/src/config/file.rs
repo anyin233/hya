@@ -96,6 +96,11 @@ impl EngineSettings {
         &self.file.bundles.builtin
     }
 
+    /// Override the active built-in bundle selection (for example `--bare`).
+    pub fn set_builtin_bundles(&mut self, selection: BuiltinBundleSelection) {
+        self.file.bundles.builtin = selection;
+    }
+
     pub(crate) fn agents(
         &self,
     ) -> anyhow::Result<(
@@ -260,9 +265,6 @@ pub enum CodeMode {
 }
 
 impl CodeMode {
-    /// First-party bundle that supplies the tool; it publishes nothing in
-    /// [`CodeMode::Normal`].
-    pub const BUNDLE: &'static str = "hya/code-mode";
     /// The tool's name in a built-in agent's view.
     pub const TOOL: &'static str = "code-mode__run";
 }

@@ -96,7 +96,7 @@ fn dispatch_identity_and_permission_metadata_resolution() {
         .into_iter()
         .map(|(n, _)| n)
         .collect();
-    assert_eq!(canonical_names.len(), 25);
+    assert_eq!(canonical_names.len(), 24);
     for name in &canonical_names {
         let a = first.dispatch_identity_v1(name).expect("builtin identity");
         assert_eq!(Some(a), second.dispatch_identity_v1(name));
@@ -133,7 +133,6 @@ fn dispatch_identity_and_permission_metadata_resolution() {
         "find",
         "grep",
         "lsp",
-        "skill",
         "list_agents",
         "list_channel",
         "search_agent",
@@ -245,7 +244,6 @@ fn builtin_bundle_ownership_and_removed_kill_tool() {
             "hya/extended-tools",
             [
                 "lsp",
-                "skill",
                 "list_agents",
                 "task",
                 "workflow",

@@ -7,7 +7,7 @@ mod v2;
 
 pub use base_tools::{
     BaseToolAlias, BaseToolExposure, BaseToolsPreset, base_tools_preset, file_operations_rule,
-    tool_bundle_presets, tool_prompt,
+    is_protected_tool_name, tool_bundle_presets, tool_prompt,
 };
 pub use hya_runtime_abi::{
     AbiError, HostRuntime, NativeAbiV2, NativePluginContext, NativeRegistrations,
@@ -38,6 +38,9 @@ pub fn builtins() -> ToolRegistry {
 /// when a family's native library cannot be loaded, or when its exported tools
 /// disagree with its bundle policy.
 pub fn try_from_tool_families(identities: &[&str]) -> Result<ToolRegistry, String> {
+    if identities.is_empty() {
+        return Ok(ToolRegistry::default());
+    }
     for identity in identities {
         if !TOOL_FAMILIES.contains(identity) {
             return Err(format!("unknown tool family {identity}"));

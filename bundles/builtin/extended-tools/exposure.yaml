@@ -3,7 +3,6 @@ identity: hya/extended-tools
 protected_names: []
 tools:
   - { name: lsp, schema_version: 1, permission: read_only, prompt: query a language server about code }
-  - { name: skill, schema_version: 1, permission: read_only, prompt: load a skill's instructions }
   - { name: list_agents, schema_version: 1, permission: read_only, prompt: list the agents you can start with task }
   - { name: task, schema_version: 1, permission: task, prompt: start subagents on independent tasks }
   - { name: workflow, schema_version: 1, permission: tool, prompt: "list, inspect, and run workflows" }

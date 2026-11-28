@@ -18,12 +18,6 @@ impl SessionEngine {
         session: SessionId,
     ) -> Result<(TurnBinding, String), CoreError> {
         let projection = self.read_projection_shared(session).await?;
-        let stable_id = projection
-            .session
-            .agent
-            .as_ref()
-            .map_or(crate::MAIN_AGENT_ID, hya_proto::AgentName::as_str)
-            .to_string();
         // Every session records its workdir at creation; there is no
         // process-level fallback (ADR-0024).
         let workdir = projection
@@ -32,10 +26,17 @@ impl SessionEngine {
             .as_deref()
             .map(std::path::PathBuf::from)
             .ok_or_else(|| CoreError::Invalid(format!("session not found: {session}")))?;
-        Ok((
-            self.bind_session_runtime(session, &workdir).await?,
-            stable_id,
-        ))
+        let binding = self.bind_session_runtime(session, &workdir).await?;
+        let stable_id = projection
+            .session
+            .agent
+            .as_ref()
+            .map_or(
+                binding.agent_catalog().default_agent_id(),
+                hya_proto::AgentName::as_str,
+            )
+            .to_string();
+        Ok((binding, stable_id))
     }
 
     async fn apply_bundle_message_hook(

@@ -20,6 +20,17 @@ pub fn discover(workdir: Option<&Path>, roots: &[PathBuf]) -> SkillDiscovery {
     })
 }
 
+/// Discover filesystem skills and diagnostics for a workdir and its Project
+/// roots without merging the built-in `hya/core-skills` bundle (bare mode).
+#[must_use]
+pub fn discover_native(workdir: Option<&Path>, roots: &[PathBuf]) -> SkillDiscovery {
+    let dirs = match workdir {
+        Some(workdir) => skill_dirs_for(workdir, roots),
+        None => user_skill_dirs(),
+    };
+    discover_skills_from_dirs_with_diagnostics(&dirs)
+}
+
 /// YAML frontmatter shape for a `SKILL.md`. Every field beyond name/description is
 /// optional so existing minimal skills keep parsing.
 #[derive(Debug, Default, Deserialize)]

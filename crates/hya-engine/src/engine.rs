@@ -146,6 +146,10 @@ pub struct SessionEngine {
     store: SessionStore,
     base_system_prompt: String,
     pure_context: bool,
+    /// Whether system prompts may consult first-party tool-family exposure
+    /// policies (`hya_tool_loader`). Disabled in bare mode so zero builtin
+    /// bundles are read from disk.
+    use_tool_family_prompts: bool,
     providers: ProviderSnapshots,
     /// Cross-model failover plane: preferred [`ModelRef`] → its ordered
     /// candidate chain (the preferred model itself first). Empty by default,
@@ -214,6 +218,7 @@ impl Clone for SessionEngine {
             store: self.store.clone(),
             base_system_prompt: self.base_system_prompt.clone(),
             pure_context: self.pure_context,
+            use_tool_family_prompts: self.use_tool_family_prompts,
             providers: self.providers.clone(),
             global_reasoning: self.global_reasoning,
             exclusive_tool: self.exclusive_tool.clone(),
@@ -297,10 +302,55 @@ impl SessionEngine {
         permission: PermissionPlane,
         bus: EventBus,
     ) -> Result<Self, CoreError> {
+        let rewriters = internal_rewriters()?;
+        Ok(Self::build_with_rewriters(
+            store, providers, runtime, permission, bus, rewriters, true,
+        ))
+    }
+
+    /// Build the engine in bare mode without loading any internal native
+    /// bundles (such as `hya/compaction`) or tool-family prompt presets
+    /// (ADR-0039). Context compaction relies solely on the kernel's `rewrite`
+    /// primitive.
+    #[must_use]
+    pub fn new_bare(
+        store: SessionStore,
+        providers: Arc<ProviderRouter>,
+        runtime: Arc<RuntimeRegistry>,
+        permission: PermissionPlane,
+        bus: EventBus,
+    ) -> Self {
+        Self::build_with_rewriters(
+            store,
+            providers,
+            runtime,
+            permission,
+            bus,
+            Arc::from([]),
+            false,
+        )
+    }
+
+    /// Control whether system prompts consult first-party tool-family exposure
+    /// policies (`hya_tool_loader`).
+    #[must_use]
+    pub fn with_tool_family_prompts(mut self, enabled: bool) -> Self {
+        self.use_tool_family_prompts = enabled;
+        self
+    }
+
+    fn build_with_rewriters(
+        store: SessionStore,
+        providers: Arc<ProviderRouter>,
+        runtime: Arc<RuntimeRegistry>,
+        permission: PermissionPlane,
+        bus: EventBus,
+        rewriters: NativeRewriters,
+        use_tool_family_prompts: bool,
+    ) -> Self {
         if store.projection_reducers().is_empty() {
             store.set_projection_reducers(hya_tool::extension::projection_reducers());
         }
-        let rewriters = internal_rewriters()?;
         let (interaction, _rx) = InteractionPlane::new();
         let spawner = BoundSpawnSender::disconnected();
         let workflows = BoundWorkflowSender::disconnected();
@@ -317,6 +367,7 @@ impl SessionEngine {
             providers: ProviderSnapshots::new(providers),
             base_system_prompt: String::new(),
             pure_context: false,
+            use_tool_family_prompts,
 
             global_reasoning: None,
             exclusive_tool: None,
@@ -365,7 +416,7 @@ impl SessionEngine {
                 activity_rx,
             ));
         }
-        Ok(engine)
+        engine
     }
 
     /// Record the id claimed with `SessionStore::claim_runtime_owner`.

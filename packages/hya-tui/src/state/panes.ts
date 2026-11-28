@@ -99,10 +99,28 @@ export function chatPaneLayout(): PaneLayout {
   const leaf = (id: number, kind: PaneKind): PaneLeaf => ({ type: "pane", id: `pane-${id}`, kind })
   return { version: 4, active: "pane-1", root: { type: "split", id: "group-2", direction: "column", children: [weighted(leaf(6, "conversation")), content(leaf(7, "activity")), content(leaf(1, "composer"))] } }
 }
-export function visiblePaneRoot(root: PaneNode, columns: number, sidebar: SidebarMode, projectsSidebar: SidebarMode): PaneNode {
+export type BundledSidebarKind = "projects" | "sessions" | "todos" | "context"
+export interface VisiblePaneOptions {
+  /** Hide bundled sidebar panes whose extension surface is unavailable (e.g. `hya --bare` with zero TUI bundles). */
+  hasSurface?: (kind: BundledSidebarKind) => boolean
+  /** Hide `extension` panes when no TUI extensions are loaded (e.g. `hya --bare`). */
+  hasExtensionPanel?: (panel: string) => boolean
+}
+export function visiblePaneRoot(
+  root: PaneNode,
+  columns: number,
+  sidebar: SidebarMode,
+  projectsSidebar: SidebarMode,
+  options: VisiblePaneOptions = {},
+): PaneNode {
   const right = sidebarVisible(sidebar, columns), left = projectsSidebarVisible(projectsSidebar, columns)
   const keep = (node: PaneNode): PaneNode | undefined => {
-    if (node.type === "pane") return (node.kind === "projects" && !left) || (["sessions", "todos", "context"].includes(node.kind) && !right) ? undefined : node
+    if (node.type === "pane") {
+      if (node.kind === "projects" && (!left || options.hasSurface?.("projects") === false)) return undefined
+      if ((node.kind === "sessions" || node.kind === "todos" || node.kind === "context") && (!right || options.hasSurface?.(node.kind) === false)) return undefined
+      if (node.kind === "extension" && node.panel && options.hasExtensionPanel?.(node.panel) === false) return undefined
+      return node
+    }
     const children = node.children.flatMap((child) => { const kept = keep(child.node); return kept ? [kept === child.node ? child : { ...child, node: kept }] : [] })
     if (!children.length) return undefined
     if (children.length === 1) return children[0]!.node
@@ -110,7 +128,15 @@ export function visiblePaneRoot(root: PaneNode, columns: number, sidebar: Sideba
   }
   return keep(root) ?? { type: "pane", id: "pane-1", kind: "composer" }
 }
-export function visiblePaneLayout(layout: PaneLayout, columns: number, sidebar: SidebarMode, projectsSidebar: SidebarMode): PaneLayout { return normalizePaneFocus({ ...layout, root: visiblePaneRoot(layout.root, columns, sidebar, projectsSidebar) }) }
+export function visiblePaneLayout(
+  layout: PaneLayout,
+  columns: number,
+  sidebar: SidebarMode,
+  projectsSidebar: SidebarMode,
+  options: VisiblePaneOptions = {},
+): PaneLayout {
+  return normalizePaneFocus({ ...layout, root: visiblePaneRoot(layout.root, columns, sidebar, projectsSidebar, options) })
+}
 function mapNode(node: PaneNode, id: string, change: (node: PaneNode) => PaneNode): PaneNode {
   if (node.id === id) return change(node)
   if (node.type === "pane") return node

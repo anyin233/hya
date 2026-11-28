@@ -24,7 +24,66 @@ Every round in `hya-core` updates Context through strictly three primitives:
 | **2. Tool append** | Deterministic observations from outside the model: a tool result paired with a call, or a user prompt. Invalid JSON tool arguments, unknown tools, and cancellations become structured `ToolError`s—never synthesized fake outputs. | `ToolResult`, `ToolError`, `TodosUpdated`, `FilesChanged`, `FilesObserved`, user `Message*` |
 | **3. Rewrite** | Destructive context reset when the window fills up (or when the model calls `rewrite`): drops visible history before the current step and inserts a clean system marker repeating all prior user messages verbatim plus the current `todo` list ($g$). Dropped messages stay safely in SQLite for human replay. | System marker message + `ContextCompacted { strategy: rewrite }` |
 
-Running `hya exec --bare` runs this exact kernel loop alone—six tools (`bash`, `read`, `write`, `edit`, `todo`, `rewrite`), a minimal `<cwd>` system prompt, zero bundles, and zero sidecar processes.
+Passing the global `--bare` flag (`hya --bare`, `hya serve --bare`, or `hya exec --bare`) runs the unified `SessionEngine` with `BuiltinBundleProfile::Bare`—zero built-in bundles loaded (even when `bundles/builtin/` is completely absent), the 8 standard bare tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill`), built-in `code-mode` (without `agent()`), the minimal `hya-bare` default agent, and standard `AGENTS.md`/skills/MCP/user-bundle adapters. Combining `--bare` with `--pure` (`hya exec --bare --pure`) also skips external `AGENTS.md`, disk skills, MCP servers, user/project plugins, and the `code-mode` sidecar for pure kernel benchmarks (see [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)).
+
+### Global `--bare` Runtime Profile (`BuiltinBundleProfile::Bare`)
+
+| Surface / Capability | Full Mode (`profile: full`) | Global `--bare` (`BuiltinBundleProfile::Bare`) | `--bare --pure` |
+| --- | --- | --- | --- |
+| Engine & Kernel loop | `SessionEngine` on `hya-core::kernel` | `SessionEngine::new_bare` on `hya-core::kernel` | `SessionEngine::new_bare` on `hya-core::kernel` |
+| Built-in bundles (`bundles/builtin/`) | Loaded per `bundles.builtin` selection | **None loaded** (zero disk dependency on `bundles/builtin/`) | **None loaded** |
+| Default agent | `hya-main` (from `hya/core-agents`) | `hya-bare` (`hya_engine::BARE_AGENT_ID`) | `hya-bare` |
+| Core tools | Built-in tool-family bundles + kernel `todo`/`rewrite` + `skill` | 8 standard bare tools: `read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill` | 8 standard bare tools (`skill` catalog empty) |
+| Built-in `code-mode` | Enabled when configured (`agent()` gated on `hya/multi-agent`) | Enabled when configured (no `agent()`) | Disabled |
+| Context & external extensions | `AGENTS.md`, disk skills, MCP, user/project bundles & plugins | `AGENTS.md`, disk skills, MCP, user/project bundles & plugins | **Skipped** |
+| Compaction | `shake` + `remote` (`hya/compaction`) → Kernel `Rewrite` | Kernel `Rewrite` only | Kernel `Rewrite` only |
+
+- **CLI usage:** `hya --bare` (interactive TUI/WebUI + auto-started `--bare` daemon), `hya serve --bare` / `hya serve start --bare` (HTTP/gRPC server), `hya exec --bare "<prompt>"`, `hya exec --bare --pure "<prompt>"`, `hya --bare agent list`.
+- **Rust / config interfaces:**
+  - `hya_app::RuntimeConfig::with_bare(bool)` applies `BuiltinBundleProfile::Bare` (equivalent to `bundles.builtin.profile: bare` in `config.yaml`).
+  - `hya_engine::BARE_AGENT_ID` (`"hya-bare"`), `hya_engine::AgentCatalog::new_bare()`, and `hya_engine::SessionEngine::new_bare(...)` construct the bare engine without calling `hya_core::bundles::load_internal()` or reading `bundles/builtin/`.
+  - `hya_server::AppState::with_core_commands(bool)` disables `hya/core-commands` loading in bare servers (`GET /v2/commands` returns only workspace/skill/bundle commands; `GET /v2/agents` returns `hya-bare`; `GET /v2/bundles` reports zero built-in bundles).
+
+---
+
+## 2a. The Seven Standard Kernel Tools (`hya_core::kernel::tools`)
+
+`hya-core` ships seven self-contained standard primitives so bare mode (`hya --bare`) and trimmed bundle profiles operate cleanly without requiring `hya/hashline`, LSP, formatters, or channel bundles:
+
+| Tool | Purpose & Boundaries | Permission Action | Result Policy | Overridable? |
+| --- | --- | --- | --- | --- |
+| `read` | Read UTF-8 text files (with optional `offset`/`limit` paging), directories, images (`PNG`/`JPEG`/`GIF`/`WebP`), internal handles (`artifact://`, `skill://`, `local://`), and registered custom `UriSchemaHandler` URIs. Enforces `ProjectScope` on filesystem paths. | `Action::Read` (+ `Action::ExternalDirectory` outside `ProjectScope`) | `ToolResultPolicy::Coding` (50 KiB cap) | Yes (e.g. `hya/hashline`) |
+| `write` | Create or overwrite workspace files (creating parent directories), `local://` scratch handles, or writable custom `UriSchemaHandler` URIs. `artifact://` and `skill://` are read-only. Enforces `ProjectScope` on filesystem paths. | `Action::Edit` (+ `Action::ExternalDirectory` outside `ProjectScope`) | `ToolResultPolicy::Coding` | Yes |
+| `edit` | Replace one exact, unique literal occurrence of `old` with `new` in a workspace file or `local://` handle. Returns bounded diff metadata (`diff`, `filediff`). Contains zero hashline, LSP, or formatter logic. | `Action::Edit` (+ `Action::ExternalDirectory` outside `ProjectScope`) | `ToolResultPolicy::CodingWithDiff` | Yes |
+| `bash` | Run shell commands in isolated process groups with timeout/run-budget yielding (`still_running`) and 30 KiB head+tail output capping with spill file. Exempt from `ProjectScope` per ADR-0026. | `Action::Bash` | `ToolResultPolicy::Coding` | Yes |
+| `grep` | Pure-Rust regex or literal file search respecting `.gitignore` and `.ignore`, glob filters (`glob`, `!` exclusion), context lines (`0–5`), lexical match limits (`1–200`, default `50`), binary/dotfile/symlink skipping, and `grep_budget` display capping. Standard `{line}:{text}` / `{line}-{text}` output with zero hashline anchors. | `Action::Grep` (+ `Action::ExternalDirectory` outside `ProjectScope`) | `ToolResultPolicy::Coding` (`grep_budget`) | Yes |
+| `todo` | Atomic checklist operations (`add`, `edit`, `status`, `remove`) updating Context $g$ (`TodosUpdated`). Intercepted directly by the kernel loop. | Kernel-managed | Kernel-managed | **Never** (permanently reserved) |
+| `rewrite` | Destructive Context reset keeping prior user prompts, current `todo` list ($g$), and model summary. Intercepted directly by the kernel loop. | Kernel-managed | Kernel-managed | **Never** (permanently reserved) |
+
+### Usage & Interfaces
+
+- **Invocation:** Call `hya_core::kernel::tools::builtin()` to obtain all seven tools in prompt order, paired with `hya_core::kernel::prompt::system_prompt(&workdir)` (or `prompt::compose(...)`).
+- **Standard tool schemas:**
+  - `read`: `{ "path": string, "offset"?: integer (>=1), "limit"?: integer (>=1) }`
+  - `write`: `{ "path": string, "content": string }`
+  - `edit`: `{ "path": string, "old": string, "new": string }`
+  - `bash`: `{ "command": string, "timeout"?: integer (1..=86400), "cwd"?: string }`
+  - `grep`: `{ "pattern": string, "path"?: string, "glob"?: string, "ignoreCase"?: boolean, "literal"?: boolean, "context"?: integer (0..=5), "limit"?: integer (1..=200) }`
+  - `todo`: `{ "ops": Array<Add | Edit | Status | Remove> }`
+  - `rewrite`: `{ "summary": string }`
+- **Dynamic URI scheme dispatch (`HandleRouter` + `UriSchemaHandler`):**
+  - `ToolCtx::handles()` returns a `hya_tool::handle::HandleRouter` resolving internal `artifact://`, `skill://`, and `local://` handles (with projections `?lines=N[-M]`, `?head=N`, `?tail=N`, `?grep=<pattern>`, `?q=<.path>`).
+  - Bundles implementing ABI v2 `hya_runtime_abi::UriSchemaHandler` plug into `HandleRouter` via `hya_runtime_abi::adapt_uri_schema_handler(handler, runtime)` and `ToolCtx::with_uri_handler(...)` (or `HandleRouter::with_uri_handler(...)`). Internal schemes (`artifact`, `skill`, `local`) are protected (`SchemeRegistryError::ProtectedScheme`), and `hya-core` itself carries zero hardcoded domain schemes (such as `channel://`).
+  - Example:
+    ```rust
+    let ctx = ctx.with_uri_handler(
+        hya_core::kernel::tools::adapt_uri_schema_handler(custom_handler, None),
+    )?;
+    // `read` and `write` now delegate `custom://...` URIs through `HandleRouter`.
+    ```
+- **Permanent reservation of `todo` and `rewrite`:**
+  - `hya_tool::RESERVED_KERNEL_TOOLS` / `hya_core::kernel::tools::is_reserved(name)` mark `todo` and `rewrite` as permanently kernel-exclusive.
+  - `ToolRegistry` rejects registering or aliasing either name, ABI v2 bundle loading (`hya-tool-loader`) rejects bundles exporting either name, and `hya_core::kernel::run` always advertises the canonical kernel schemas and intercepts calls inside the kernel loop.
 
 ---
 

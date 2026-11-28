@@ -340,6 +340,15 @@ impl BaseToolAlias {
     }
 }
 
+static PRESETS: OnceLock<Result<Vec<BaseToolsPreset>, String>> = OnceLock::new();
+
+fn cached_presets() -> Result<&'static [BaseToolsPreset], &'static str> {
+    PRESETS
+        .get_or_init(load_presets)
+        .as_deref()
+        .map_err(String::as_str)
+}
+
 /// Return every tool-family policy in stable family order.
 ///
 /// # Panics
@@ -348,17 +357,31 @@ impl BaseToolAlias {
 /// invalid; the builtin registry cannot be built without it.
 #[must_use]
 pub fn tool_bundle_presets() -> &'static [BaseToolsPreset] {
-    static PRESETS: OnceLock<Vec<BaseToolsPreset>> = OnceLock::new();
-    PRESETS.get_or_init(|| {
-        load_presets().unwrap_or_else(|error| panic!("load tool-family policy {error}"))
-    })
+    cached_presets().unwrap_or_else(|error| panic!("load tool-family policy {error}"))
+}
+
+/// Whether `name` is a protected bare tool name that external aliases may not
+/// mask. Always protects reserved kernel tools (`todo`, `rewrite`) and `read`
+/// without touching `bundles/builtin/` on disk; also consults any already
+/// loaded tool-family policies.
+#[must_use]
+pub fn is_protected_tool_name(name: &str) -> bool {
+    if hya_tool::is_reserved_kernel_tool(name) || name == "read" {
+        return true;
+    }
+    PRESETS
+        .get()
+        .and_then(|res| res.as_ref().ok())
+        .is_some_and(|presets| presets.iter().any(|preset| preset.is_protected(name)))
 }
 
 /// The `<tools>` line the tool families declare for `name`; when two families
-/// export it, the line of the entry that overrides the other.
+/// export it, the line of the entry that overrides the other. Returns `None`
+/// cleanly when tool-family bundles are absent.
 #[must_use]
 pub fn tool_prompt(name: &str) -> Option<&'static str> {
-    tool_bundle_presets()
+    cached_presets()
+        .ok()?
         .iter()
         .filter_map(|preset| preset.tool(name))
         .max_by_key(|tool| tool.overrides.is_some())
@@ -367,9 +390,11 @@ pub fn tool_prompt(name: &str) -> Option<&'static str> {
 
 /// The rule a tool family declares in place of the kernel prompt's
 /// file-operations rule, when `offered` accepts one of the tools it names.
+/// Returns `None` cleanly when tool-family bundles are absent.
 #[must_use]
 pub fn file_operations_rule(offered: impl Fn(&str) -> bool) -> Option<&'static str> {
-    tool_bundle_presets()
+    cached_presets()
+        .ok()?
         .iter()
         .filter_map(|preset| preset.file_operations_rule.as_ref())
         .find(|rule| rule.tools.iter().any(|tool| offered(tool)))
@@ -512,7 +537,6 @@ tools:
                 "hya/extended-tools",
                 &[
                     "lsp",
-                    "skill",
                     "list_agents",
                     "task",
                     "workflow",
@@ -562,7 +586,6 @@ tools:
             ("find", ToolPermission::ReadOnly, &[]),
             ("grep", ToolPermission::ReadOnly, &[]),
             ("lsp", ToolPermission::ReadOnly, &[]),
-            ("skill", ToolPermission::ReadOnly, &[]),
             ("list_agents", ToolPermission::ReadOnly, &[]),
             ("task", ToolPermission::Task, &[]),
             ("workflow", ToolPermission::Tool, &[]),

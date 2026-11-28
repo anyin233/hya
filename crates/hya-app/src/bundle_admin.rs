@@ -619,8 +619,21 @@ fn listing(
 pub async fn listings(
     project_dir: Option<&Path>,
 ) -> Result<Vec<BundleListing>, BundleControlError> {
+    let selection = crate::config::configured_builtin_bundles();
+    listings_for(project_dir, &selection).await
+}
+
+/// [`listings`] evaluated against an explicit built-in bundle selection (for
+/// example `--bare`).
+///
+/// # Errors
+/// The registry or the selected shipped bundles cannot be read.
+pub async fn listings_for(
+    project_dir: Option<&Path>,
+    selection: &hya_bundle::BuiltinBundleSelection,
+) -> Result<Vec<BundleListing>, BundleControlError> {
     let registry = existing_registry().await?;
-    let (mut disabled, installed, unreadable) = match &registry {
+    let (disabled, installed, unreadable) = match &registry {
         Some(registry) => {
             let snapshot = registry
                 .snapshot_with_catalogs()
@@ -634,9 +647,6 @@ pub async fn listings(
         }
         None => (BTreeSet::new(), Vec::new(), Vec::new()),
     };
-    if crate::config::configured_code_mode() == crate::config::CodeMode::Normal {
-        disabled.insert(crate::config::CodeMode::BUNDLE.to_string());
-    }
     let project = project_dir.map(project_bundles).unwrap_or_default();
     let mut higher_ids = BTreeSet::new();
     let mut higher_namespaces = BTreeSet::new();
@@ -711,7 +721,7 @@ pub async fn listings(
             higher_namespaces.insert(loaded.prepared.bundles()[0].namespace().to_string());
         }
     }
-    for preset in crate::trusted_preset_inventory().map_err(failure)? {
+    for preset in crate::trusted_preset_inventory_for(selection).map_err(failure)? {
         rows.push(BundleListing {
             id: preset.id.clone(),
             version: preset.version.clone(),
@@ -729,7 +739,7 @@ pub async fn listings(
             ..BundleListing::default()
         });
     }
-    for catalog in crate::first_party_catalogs().map_err(failure)? {
+    for catalog in crate::first_party_catalogs_for(selection).map_err(failure)? {
         let [bundle] = catalog.bundles() else {
             continue;
         };
@@ -755,12 +765,31 @@ pub async fn listings(
 }
 
 /// The server's [`BundleControl`]: the same operations `hya bundle` runs.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct BundleManager;
+#[derive(Clone, Debug, Default)]
+pub struct BundleManager {
+    builtin_selection: Option<hya_bundle::BuiltinBundleSelection>,
+}
+
+impl BundleManager {
+    /// Construct a manager pinned to an explicit built-in bundle selection
+    /// (such as `--bare` on `hya serve --bare`).
+    #[must_use]
+    pub fn with_selection(selection: hya_bundle::BuiltinBundleSelection) -> Self {
+        Self {
+            builtin_selection: Some(selection),
+        }
+    }
+}
 
 impl BundleControl for BundleManager {
     fn list(&self, project_dir: Option<PathBuf>) -> BundleControlFuture<'_, Vec<BundleListing>> {
-        Box::pin(async move { listings(project_dir.as_deref()).await })
+        let selection = self.builtin_selection.clone();
+        Box::pin(async move {
+            match selection {
+                Some(selection) => listings_for(project_dir.as_deref(), &selection).await,
+                None => listings(project_dir.as_deref()).await,
+            }
+        })
     }
 
     fn install(

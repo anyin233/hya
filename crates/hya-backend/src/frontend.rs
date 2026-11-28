@@ -353,6 +353,7 @@ pub(crate) async fn connect(
         db: request.db.clone(),
         model: request.model.clone(),
         yolo: request.yolo,
+        bare: request.bare,
         pure: request.pure,
         allow_hosts: request.allow_hosts.clone(),
         exe: exe.to_path_buf(),
@@ -370,7 +371,7 @@ pub(crate) async fn connect(
         )
     } else {
         format!(
-            "hya: using the running backend daemon pid {} at {} (hya {}); --model/--yolo/--pure/--allow-host of this launch do not apply",
+            "hya: using the running backend daemon pid {} at {} (hya {}); --model/--yolo/--bare/--pure/--allow-host of this launch do not apply",
             found.pid, found.url, found.version
         )
     }];
@@ -446,6 +447,7 @@ pub(crate) struct LaunchRequest {
     pub(crate) resume: Option<Resume>,
     pub(crate) model: Option<String>,
     pub(crate) yolo: bool,
+    pub(crate) bare: bool,
     pub(crate) pure: bool,
     /// `$XDG_STATE_HOME/hya` (created), home of the log file.
     pub(crate) state_dir: PathBuf,
@@ -1118,6 +1120,7 @@ mod tests {
             resume: None,
             model: None,
             yolo: false,
+            bare: false,
             pure: false,
             state_dir: PathBuf::from("/nonexistent/hya"),
             connect: None,

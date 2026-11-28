@@ -88,7 +88,9 @@ Type **`/mcp`** in the TUI to see every configured server:
 
 ## 4. Optional: Code Mode (`tools.code.mode`)
 
-When Hya needs to inspect 20 files or run several tools back-to-back, calling one tool per round can feel slow. Turning on **Code Mode** gives built-in agents an extra `code-mode__run` tool that lets the model write a small JavaScript snippet to call multiple Hya tools in parallel, filter big outputs, and return just the summary in a single round!
+When Hya needs to inspect 20 files or run several tools back-to-back, calling one tool per round can feel slow. **Code Mode** is a core `hya-bare` runtime (`packages/hya-code-mode` + `crates/hya-app/src/code_mode.rs`) that exposes `code-mode__run` to built-in agents so the model can run a small JavaScript async program calling multiple Hya tools in parallel, filter big outputs, and return only the summary in a single round.
+
+### Usage & Configuration
 
 Enable it in `~/.config/hya/config.yaml` (then run `hya serve restart`):
 
@@ -98,6 +100,34 @@ tools:
     mode: with_tools   # normal (off) | with_tools | only
 ```
 
-Every tool call inside a Code Mode script still obeys your exact same Project boundaries and permission prompts.
+- `normal` *(default)*: `code-mode__run` is not loaded.
+- `with_tools`: offers `code-mode__run` alongside the agent's usual tools.
+- `only`: offers `code-mode__run` as the exclusive tool (with all other tools callable inside scripts via `tools.*`; direct model calls to hidden tools are refused).
+
+Optional judge configuration for `models.classify` lives in `~/.config/hya/code-mode/config.yml` (see `packages/hya-code-mode/config.example.yml`). Every tool call inside a Code Mode script still obeys your exact same Project boundaries and permission prompts.
+
+### VM Interface & Dynamic `hya/multi-agent` Gating
+
+Input to `code-mode__run` accepts one of four forms:
+- `{ script: string, args?: object, save_as?: string }`
+- `{ run: string, args?: object }`
+- `{ list: true }`
+- `{ show: string }`
+
+Globals exposed inside the sandbox:
+- `args`: call arguments object (or `{}`).
+- `await tools.<name>(input)`: invokes any tool in the caller's view (non-identifier characters become `_`).
+- `ALL_TOOLS` / `describeTool(name)`: lists and inspects callable tool schemas.
+- `await agent(input)` and `await agents.run(input)`: **dynamically gated on `hya/multi-agent`**. Exposed when `hya/multi-agent` is loaded (`HYA_CODE_MODE_MULTI_AGENT=1`), and omitted/rejected before running when `hya/multi-agent` is not loaded (for example under `--bare` or `bundles.builtin.disable: [hya/multi-agent]`, `HYA_CODE_MODE_MULTI_AGENT=0`).
+- `await models.classify({ state, questions })`: invokes a configured judge model.
+- `text(value)`, `return value`, `console.log(...)`: emit structured output and logs.
+
+Example (`code-mode__run` input):
+
+```json
+{
+  "script": "const [a, b] = await Promise.all([tools.read({ path: 'Cargo.toml' }), tools.grep({ pattern: 'hya-core' })]); return { hasCore: b.output.length > 0, bytes: a.output.length };"
+}
+```
 
 Want to write your own Skills, Commands, or full Bundles? See **[Extending Hya](../extend/overview.md)**.

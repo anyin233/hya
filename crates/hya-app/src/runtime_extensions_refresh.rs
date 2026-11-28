@@ -11,6 +11,7 @@ pub(crate) struct RuntimeExtensionsRefresh {
     reconciler: Arc<RuntimeReconciler>,
     config_file: PathBuf,
     applied: tokio::sync::Mutex<Option<String>>,
+    core_plugins: Vec<hya_plugin::config::PluginSpec>,
     pure: bool,
 }
 
@@ -27,8 +28,17 @@ impl RuntimeExtensionsRefresh {
             reconciler,
             config_file,
             applied: tokio::sync::Mutex::new(applied),
+            core_plugins: Vec::new(),
             pure,
         })
+    }
+
+    pub(crate) fn with_core_plugins(
+        mut self,
+        core_plugins: Vec<hya_plugin::config::PluginSpec>,
+    ) -> Self {
+        self.core_plugins = core_plugins;
+        self
     }
 }
 
@@ -63,7 +73,14 @@ impl RuntimeExtensionsRefresh {
             Err(error) => Err(error),
         };
         let (specs, config_error) = match loaded {
-            Ok(specs) => (Some(specs), None),
+            Ok(mut specs) => {
+                for core in &self.core_plugins {
+                    if !specs.iter().any(|existing| existing.id == core.id) {
+                        specs.push(core.clone());
+                    }
+                }
+                (Some(specs), None)
+            }
             Err(error) if explicit => (None, Some(error)),
             Err(error) => return Err(error),
         };

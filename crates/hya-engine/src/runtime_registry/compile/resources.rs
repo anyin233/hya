@@ -154,7 +154,10 @@ impl TurnBinding {
         // Built-ins own no bundle: their view comes from the core-agents
         // preset (read-only agents deny the write tools), and they carry no hooks.
         let (resource_view, hook_refs, advertise) = match bundle_id.as_deref() {
-            None => crate::builtin_agents::preset_agent(stable_id)
+            None => self
+                .snapshot
+                .catalog
+                .preset_agent(stable_id)
                 .map(|agent| {
                     (
                         agent.resource_view.clone(),
@@ -250,7 +253,10 @@ impl TurnBinding {
         let definition = self.snapshot.catalog.require(stable_id)?;
         let bundle_id = definition.origin.bundle_id().map(str::to_string);
         let (resource_view, hook_refs, advertise) = match bundle_id.as_deref() {
-            None => crate::builtin_agents::preset_agent(stable_id)
+            None => self
+                .snapshot
+                .catalog
+                .preset_agent(stable_id)
                 .map(|agent| {
                     (
                         agent.resource_view.clone(),

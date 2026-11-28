@@ -3,6 +3,7 @@
 mod kernel;
 mod reasoning_deadline_guard;
 mod replay_bare;
+mod standard_tools;
 
 #[test]
 fn internal_native_bundle_loads_its_rewriter() -> Result<(), hya_core::CoreError> {

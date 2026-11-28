@@ -6,6 +6,7 @@
  * already shows the same facts (deduplication). Pure: rows and their count
  * for the layout.
  */
+import { extensionManager } from "../extensions/manager"
 import { todoGlyphs, todoStatusText } from "./format"
 import { paneLeaves, visiblePaneRoot, type PaneKind } from "./panes"
 import type { AppState } from "./store"
@@ -23,7 +24,7 @@ export const maxSubagentRows = 3
 /** Whether a pane of `kind` is drawn right now (the workspace's sidebars). */
 function paneVisible(state: AppState, columns: number, kind: PaneKind): boolean {
   if (!state.structure.sidebar.enabled) return false
-  return paneLeaves(visiblePaneRoot(state.paneLayout.root, columns, state.sidebar, state.projectsSidebar)).some((pane) => pane.kind === kind)
+  return paneLeaves(visiblePaneRoot(state.paneLayout.root, columns, state.sidebar, state.projectsSidebar, extensionManager.visiblePaneOptions())).some((pane) => pane.kind === kind)
 }
 
 const toneOf = (status: string): DockRow["tone"] => status === "in_progress" ? "activity" : status === "blocked" ? "warning" : status === "completed" ? "success" : "muted"

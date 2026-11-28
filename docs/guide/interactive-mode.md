@@ -48,6 +48,10 @@ There are four built-in presets:
 
 To keep your favorite layout permanently, run `/config init` and set `preset = "workspace"` in `~/.config/hya/tui.toml` (or run `/config edit` to open it in your editor).
 
+### Bare mode (`hya --bare`, zero TUI bundles)
+
+When running against a backend with no TUI bundles loaded (for example `hya --bare` with zero built-in bundles), the TUI settles immediately without waiting for `hya/basic-tui-components` and renders the clean single-column chat layout (`conversation` + `activity` + `composer` + bottom status line). Even if `~/.config/hya/tui.toml` selects `preset = "workspace"`, unavailable bundled sidebar panes (`projects`, `sessions`, `todos`, `context`) are hidden cleanly with no `"Loading…"` or missing-pane placeholders while preserving your saved `tui.json` layout. All core management overlays (`/key`, `/mcp`, `/skills`, `/bundles`, `/rules`, `/diff`) remain fully operational.
+
 ---
 
 ## Writing messages, attaching files, and running commands

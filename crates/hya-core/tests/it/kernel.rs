@@ -214,11 +214,12 @@ impl Fixture {
 }
 
 fn tool_ctx(workdir: &Path, cancel: &CancellationToken) -> ToolCtx {
-    let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
-        Action::Read,
-        "*",
-        Mode::Allow,
-    )]));
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![
+        Rule::new(Action::Read, "*", Mode::Allow),
+        Rule::new(Action::Edit, "*", Mode::Allow),
+        Rule::new(Action::Bash, "*", Mode::Allow),
+        Rule::new(Action::Grep, "*", Mode::Allow),
+    ]));
     ToolCtx {
         nested: hya_tool::NestedToolPlane::disconnected(),
         workflows: hya_tool::WorkflowPlane::disconnected(),
@@ -651,13 +652,11 @@ async fn a1_tool_results_pair_with_calls_and_carry_reasoning_default() {
             _ => None,
         })
         .collect();
-    assert_eq!(
-        outputs,
-        vec![
-            json!({"bytes": 5}),
-            json!({"exit_code": 0, "output": "hello\n[exit code: 0]"})
-        ]
-    );
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(outputs[0]["bytes"], 5);
+    assert_eq!(outputs[0]["ok"], true);
+    assert_eq!(outputs[1]["exit_code"], 0);
+    assert_eq!(outputs[1]["output"], "hello\n[exit code: 0]");
 }
 
 #[tokio::test]
@@ -1861,7 +1860,9 @@ async fn read_verbatim_and_literal_edit_validation() {
         .await
         .unwrap();
     assert_eq!(tool_result_text(&result), sample);
-    assert_eq!(result, json!({"output": sample}));
+    assert_eq!(result["output"], sample);
+    assert_eq!(result["title"], "text.txt");
+    assert_eq!(result["metadata"]["truncated"], false);
 
     let edit = builtin_tool("edit");
     for (content, old, new, reason) in [
@@ -1922,15 +1923,16 @@ async fn read_image_validation_and_valid_formats() {
         let bytes = encoded_test_image(format);
         let result = run_read(&bytes).await.unwrap();
         assert_eq!(
-            result,
-            json!({
-                "output": format!("Image file ({mime}, {} bytes).", bytes.len()),
-                "attachments": [{
-                    "type": "file",
-                    "mime": mime,
-                    "url": format!("data:{mime};base64,{}", STANDARD.encode(&bytes)),
-                }],
-            })
+            result["output"],
+            format!("Image file ({mime}, {} bytes).", bytes.len())
+        );
+        assert_eq!(
+            result["attachments"],
+            json!([{
+                "type": "file",
+                "mime": mime,
+                "url": format!("data:{mime};base64,{}", STANDARD.encode(&bytes)),
+            }])
         );
     }
 

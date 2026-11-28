@@ -754,6 +754,96 @@ pub trait UriSchemaHandler: Send + Sync {
     }
 }
 
+/// Adapts an ABI v2 [`UriSchemaHandler`] into `hya_tool::handle::DynamicUriHandler`
+/// for registration on [`hya_tool::handle::HandleRouter`].
+pub struct UriSchemaHandleAdapter {
+    handler: Arc<dyn UriSchemaHandler>,
+    runtime: Option<Arc<dyn HostRuntime>>,
+}
+
+impl UriSchemaHandleAdapter {
+    /// Wrap `handler` with an optional [`HostRuntime`] injected on every call.
+    #[must_use]
+    pub fn new(handler: Arc<dyn UriSchemaHandler>, runtime: Option<Arc<dyn HostRuntime>>) -> Self {
+        Self { handler, runtime }
+    }
+}
+
+/// Adapt an ABI v2 [`UriSchemaHandler`] into a [`hya_tool::handle::DynamicUriHandler`]
+/// ready for [`hya_tool::handle::HandleRouter::with_uri_handler`] or
+/// [`hya_tool::ToolCtx::with_uri_handler`].
+#[must_use]
+pub fn adapt_uri_schema_handler(
+    handler: Arc<dyn UriSchemaHandler>,
+    runtime: Option<Arc<dyn HostRuntime>>,
+) -> Arc<dyn hya_tool::handle::DynamicUriHandler> {
+    Arc::new(UriSchemaHandleAdapter::new(handler, runtime))
+}
+
+fn map_host_error_to_handle_error(error: HostError) -> hya_tool::handle::HandleError {
+    match error {
+        HostError::NotFound(msg) => hya_tool::handle::HandleError::NotFound(msg),
+        HostError::InvalidInput(msg) => hya_tool::handle::HandleError::MalformedPath(msg),
+        HostError::PermissionDenied(msg) => hya_tool::handle::HandleError::PermissionDenied(msg),
+        other => hya_tool::handle::HandleError::Handler(other.to_string()),
+    }
+}
+
+#[async_trait]
+impl hya_tool::handle::DynamicUriHandler for UriSchemaHandleAdapter {
+    fn scheme(&self) -> &str {
+        self.handler.scheme()
+    }
+
+    fn writable(&self) -> bool {
+        self.handler.writable()
+    }
+
+    async fn read(
+        &self,
+        ctx: hya_tool::handle::DynamicUriCtx<'_>,
+        uri: &str,
+    ) -> Result<hya_tool::handle::DynamicUriContent, hya_tool::handle::HandleError> {
+        let content = self
+            .handler
+            .read(
+                UriResolveCtx {
+                    session: ctx.session,
+                    workdir: ctx.workdir,
+                    runtime: self.runtime.as_deref(),
+                },
+                uri,
+            )
+            .await
+            .map_err(map_host_error_to_handle_error)?;
+        Ok(hya_tool::handle::DynamicUriContent {
+            body: content.body,
+            media_type: content.media_type,
+            metadata: content.metadata,
+        })
+    }
+
+    async fn write(
+        &self,
+        ctx: hya_tool::handle::DynamicUriCtx<'_>,
+        uri: &str,
+        content: &str,
+    ) -> Result<Value, hya_tool::handle::HandleError> {
+        self.handler
+            .write(
+                UriResolveCtx {
+                    session: ctx.session,
+                    workdir: ctx.workdir,
+                    runtime: self.runtime.as_deref(),
+                },
+                uri,
+                content,
+            )
+            .await
+            .map_err(map_host_error_to_handle_error)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // GoalDriver & LoopDriver
 // ---------------------------------------------------------------------------

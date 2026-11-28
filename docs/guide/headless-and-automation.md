@@ -38,15 +38,23 @@ Pass `--json` to stream one JSON event per line (JSONL) instead of plain text—
 hya exec --json "List all public endpoints" | jq -r 'select(.event.type == "message_finished")'
 ```
 
-### Bare mode (`hya exec --bare`)
+### Bare mode (`hya --bare`)
 
-Want the fastest, simplest possible agent loop with **no** plugins, **no** MCP servers, **no** subagents, and **no** permission prompts? Add `--bare`:
+Want a lean runtime with **zero** built-in bundles (`bundles/builtin/`), the minimal `hya-bare` agent, and only the 8 standard bare tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill`) plus built-in `code-mode` (without `agent()`)? Pass the global `--bare` flag on `hya exec`, `hya serve`, or interactive `hya`:
 
 ```sh
+# Headless bare run (keeps AGENTS.md, disk skills, MCP, and user/project plugins)
 hya exec --bare "Fix the failing assertion in tests/math.test.ts"
+
+# Pure kernel benchmark (also skips AGENTS.md, disk skills, MCP, and user/project plugins)
+hya exec --bare --pure "Benchmark prompt"
+
+# Bare server or interactive TUI
+hya serve --bare --bind 127.0.0.1:8080
+hya --bare
 ```
 
-In `--bare` mode (great for isolated Docker containers or sandboxes), Hya runs its tiny core engine alone with just six tools: `bash`, `read`, `write`, `edit`, `todo`, and `rewrite`.
+Because `--bare` uses the unified `SessionEngine`, it still enforces your configured permission rules (pass `--yolo` in disposable containers/sandboxes when unattended execution is desired).
 
 ---
 
@@ -115,4 +123,4 @@ hya loop \
 
 ## Permissions in headless runs
 
-Remember that Hya still checks permissions in headless commands (except `--bare`). When running unattended inside a disposable CI container or VM where no human is sitting at the keyboard to press `1`, configure explicit `allow` rules in `~/.config/hya/config.yaml` (see **[Projects & Permissions](projects-and-permissions.md)**) so Hya can run your build and test commands without waiting.
+Remember that Hya checks permissions in headless commands (including `--bare` unless you pass `--yolo`). When running unattended inside a disposable CI container or VM where no human is sitting at the keyboard to press `1`, pass `--yolo` or configure explicit `allow` rules in `~/.config/hya/config.yaml` (see **[Projects & Permissions](projects-and-permissions.md)**) so Hya can run your build and test commands without waiting.

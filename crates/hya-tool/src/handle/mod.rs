@@ -25,7 +25,10 @@ pub use registry::{
     SchemeBinding, SchemeDispatch, SchemeHandler, SchemeReadTool, SchemeRegistry,
     SchemeRegistryError, SchemeWriteTool,
 };
-pub use router::{HandleContent, HandleRouter};
+pub use router::{
+    DynamicUriContent, DynamicUriCtx, DynamicUriHandler, HandleContent, HandleRouter,
+    ResolvedHandle, WriteHandleOutcome,
+};
 
 /// Why a handle could not be parsed or resolved.
 #[derive(Debug, thiserror::Error)]
@@ -72,4 +75,10 @@ pub enum HandleError {
     /// Storage or retrieval I/O failure.
     #[error("handle io: {0}")]
     Io(#[from] std::io::Error),
+    /// Dynamic scheme handler denied access to the requested handle.
+    #[error("handle permission denied: {0}")]
+    PermissionDenied(String),
+    /// Dynamic scheme handler returned an operational error.
+    #[error("handle error: {0}")]
+    Handler(String),
 }
