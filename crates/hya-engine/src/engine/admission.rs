@@ -352,15 +352,18 @@ impl SessionEngine {
             .await
     }
 
-    /// Admit a user prompt using a pre-captured runtime [`TurnBinding`].
+    /// Admit a user prompt using a pre-captured runtime [`TurnBinding`],
+    /// fenced by `actor_claim` when one is given.
     pub async fn admit_user_prompt_with_binding(
         &self,
+        actor_claim: Option<&ActorClaim>,
         session: SessionId,
         text: String,
         binding: &TurnBinding,
         stable_id: &str,
     ) -> Result<MessageId, CoreError> {
         self.admit_user_prompt_with_id_and_binding(
+            actor_claim,
             session,
             MessageId::new(),
             text,
@@ -379,8 +382,10 @@ impl SessionEngine {
     ) -> Result<MessageId, CoreError> {
         self.ensure_external_turn_allowed(session).await?;
         let (binding, stable_id) = self.admission_binding(session).await?;
-        self.admit_user_prompt_with_id_and_binding(session, message, text, &binding, &stable_id)
-            .await
+        self.admit_user_prompt_with_id_and_binding(
+            None, session, message, text, &binding, &stable_id,
+        )
+        .await
     }
 
     /// The user text after the `message.user.before` hooks (global, then
@@ -498,6 +503,7 @@ impl SessionEngine {
 
     pub(crate) async fn admit_user_prompt_with_id_and_binding(
         &self,
+        actor_claim: Option<&ActorClaim>,
         session: SessionId,
         message: MessageId,
         text: String,
@@ -512,7 +518,7 @@ impl SessionEngine {
             .await;
         let part = PartId::new();
         self.emit_batch_for_actor(
-            None,
+            actor_claim,
             session,
             vec![
                 Event::MessageStarted {
@@ -621,7 +627,9 @@ impl SessionEngine {
             )
             .await;
         let message = self
-            .admit_user_prompt_with_id_and_binding(session, message, text, &binding, &stable_id)
+            .admit_user_prompt_with_id_and_binding(
+                None, session, message, text, &binding, &stable_id,
+            )
             .await?;
         self.emit(
             session,

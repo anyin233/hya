@@ -163,7 +163,7 @@ async fn driven(fx: &Fixture, sidecars: &FencedSidecars) -> Result<DrivenTurnEnd
         .unwrap();
     let prompt = fx
         .engine
-        .admit_user_prompt_with_binding(fx.child, "go".into(), &binding, &id)
+        .admit_user_prompt_with_binding(None, fx.child, "go".into(), &binding, &id)
         .await
         .unwrap();
     let agent = AgentSpec {
@@ -206,6 +206,18 @@ async fn a_fenced_session_keeps_one_sidecar_until_its_fence_is_released() {
     assert_eq!(fx.counts.stopped.load(Ordering::SeqCst), 1);
     driven(&fx, &sidecars).await.unwrap();
     assert_eq!(fx.counts.started.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn concurrent_fenced_turns_on_a_session_start_one_sidecar() {
+    let fx = fixture(2, false).await;
+    let sidecars = FencedSidecars::default();
+    let (first, second) = tokio::join!(driven(&fx, &sidecars), driven(&fx, &sidecars));
+    for end in [first, second] {
+        assert_eq!(end.unwrap(), DrivenTurnEnd::Finished(FinishReason::Stop));
+    }
+    assert_eq!(fx.counts.started.load(Ordering::SeqCst), 1);
+    assert_eq!(fx.counts.stopped.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

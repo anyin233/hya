@@ -650,6 +650,37 @@ impl SessionEngine {
         .await
     }
 
+    /// End a turn whose queued lease claim was cancelled (or hit a drain)
+    /// before it started, answering its admitted prompt, if any.
+    pub(super) async fn end_queued_turn(
+        &self,
+        session: SessionId,
+        actor_claim: Option<&ActorClaim>,
+        answers_prompt: bool,
+        cancel: &CancellationToken,
+    ) -> Result<FinishReason, CoreError> {
+        if answers_prompt {
+            let cause = if cancel.is_cancelled() {
+                Some(hya_proto::FinishCause::UserCancel)
+            } else {
+                self.draining()
+            };
+            self.emit_batch_for_actor(
+                actor_claim,
+                session,
+                unstarted_answer(
+                    session,
+                    MessageId::new(),
+                    FinishReason::Cancelled,
+                    cause,
+                    None,
+                ),
+            )
+            .await?;
+        }
+        Ok(FinishReason::Cancelled)
+    }
+
     /// The single turn choke point: claim the session's one active turn
     /// (single-active-turn invariant), then run it. A caller-held lease is
     /// used as-is; otherwise the claim queues behind an active turn and a
@@ -673,26 +704,14 @@ impl SessionEngine {
             None => match self.begin_turn(session, &request.cancel).await? {
                 Some(lease) => lease,
                 None => {
-                    if request.admitted_prompt.is_some() {
-                        let cause = if request.cancel.is_cancelled() {
-                            Some(hya_proto::FinishCause::UserCancel)
-                        } else {
-                            self.draining()
-                        };
-                        self.emit_batch_for_actor(
-                            request.actor_claim,
+                    return self
+                        .end_queued_turn(
                             session,
-                            unstarted_answer(
-                                session,
-                                message,
-                                FinishReason::Cancelled,
-                                cause,
-                                None,
-                            ),
+                            request.actor_claim,
+                            request.admitted_prompt.is_some(),
+                            &request.cancel,
                         )
-                        .await?;
-                    }
-                    return Ok(FinishReason::Cancelled);
+                        .await;
                 }
             },
         };

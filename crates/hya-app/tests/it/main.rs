@@ -6,6 +6,7 @@ mod agent_model_control;
 mod bundle_registry;
 mod config_minimal_edit;
 mod hashline_fallback;
+mod host_turns;
 mod installed_bundle_refresh;
 mod loop_driver;
 mod nested_spawn_tree;

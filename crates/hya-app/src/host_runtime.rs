@@ -343,6 +343,17 @@ fn map_core_error(error: CoreError) -> HostError {
     }
 }
 
+/// [`map_core_error`] for `run_turn`, which reports a superseded fence as
+/// [`HostError::StaleClaim`].
+fn map_turn_error(error: CoreError) -> HostError {
+    match error {
+        CoreError::Store(hya_store::StoreError::StaleBundleClaim { .. }) => {
+            HostError::StaleClaim(error.to_string())
+        }
+        other => map_core_error(other),
+    }
+}
+
 fn explicit_route_from_resolved(route: &ResolvedModelRoute) -> ExplicitTurnRoute {
     let candidates = route
         .candidates
@@ -738,8 +749,13 @@ fn store_claim_to_lease(row: hya_store::BundleClaim) -> BundleClaimLease {
     }
 }
 
-/// The session fence `lease` holds, when its key is a session id.
+/// The session fence `lease` holds, when it is a claim on a session id in
+/// the namespace fenced turns validate against (`hya/multi-agent` until the
+/// session fence namespace lands).
 fn lease_fence(lease: &BundleClaimLease) -> Option<ActorClaim> {
+    if lease.bundle != hya_tool::extension::BUNDLE_MULTI_AGENT {
+        return None;
+    }
     Some(ActorClaim {
         actor_id: lease.resource_key.parse().ok()?,
         epoch: hya_proto::ActorEpoch::from_storage(lease.epoch),
@@ -1080,7 +1096,11 @@ impl HostTurnRunner for AppHostRuntime {
         let (binding, spec, resolved) = match request.actor_claim {
             // A fenced turn runs as a child of its parent's binding.
             Some(_) => {
-                let parent = meta.as_ref().and_then(|m| m.parent).unwrap_or(session);
+                let parent = meta.as_ref().and_then(|m| m.parent).ok_or_else(|| {
+                    HostError::InvalidInput(format!(
+                        "fenced turn on `{session}`, which has no parent session"
+                    ))
+                })?;
                 let parent_binding = engine
                     .bind_session_runtime(parent, &workdir)
                     .await
@@ -1132,9 +1152,15 @@ impl HostTurnRunner for AppHostRuntime {
         let admitted_prompt = match request.prompt {
             Some(prompt) => Some(
                 engine
-                    .admit_user_prompt_with_binding(session, prompt, &binding, agent_name.as_str())
+                    .admit_user_prompt_with_binding(
+                        request.actor_claim.as_ref(),
+                        session,
+                        prompt,
+                        &binding,
+                        agent_name.as_str(),
+                    )
                     .await
-                    .map_err(map_core_error)?,
+                    .map_err(map_turn_error)?,
             ),
             None => None,
         };
@@ -1157,7 +1183,7 @@ impl HostTurnRunner for AppHostRuntime {
                 cancel,
             )
             .await
-            .map_err(map_core_error)?;
+            .map_err(map_turn_error)?;
         if end == DrivenTurnEnd::SidecarLost {
             return Err(HostError::Unavailable("sidecar lost".into()));
         }
@@ -1214,7 +1240,13 @@ impl HostTurnRunner for AppHostRuntime {
             .capture_session_bundle_hooks(child, &binding, request.agent.as_str())
             .await;
         engine
-            .admit_user_prompt_with_binding(child, request.prompt, &binding, request.agent.as_str())
+            .admit_user_prompt_with_binding(
+                None,
+                child,
+                request.prompt,
+                &binding,
+                request.agent.as_str(),
+            )
             .await
             .map_err(map_core_error)?;
         let spec = AgentSpec {

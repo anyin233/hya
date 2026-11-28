@@ -58,6 +58,23 @@ struct FencedSidecar {
     hooks: Option<Arc<HookChain>>,
 }
 
+impl FencedSidecar {
+    /// What a turn uses: the sidecar's tools, hooks, and loss token.
+    fn share(&self) -> SharedSidecar {
+        (
+            Arc::clone(&self.tools),
+            self.hooks.clone(),
+            self.handle.loss_token(),
+        )
+    }
+}
+
+type SharedSidecar = (
+    Arc<[ResolvedTool]>,
+    Option<Arc<HookChain>>,
+    Option<CancellationToken>,
+);
+
 /// Sidecars of fenced sessions, kept across their driven turns.
 #[derive(Default)]
 pub struct FencedSidecars {
@@ -65,33 +82,36 @@ pub struct FencedSidecars {
 }
 
 impl FencedSidecars {
-    fn take(&self, session: SessionId) -> Option<FencedSidecar> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<SessionId, FencedSidecar>> {
         self.slots
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&session)
     }
 
-    fn put(&self, session: SessionId, sidecar: FencedSidecar) {
-        self.slots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(session, sidecar);
+    /// Remove `session`'s kept sidecar when another fence started it or it
+    /// is unhealthy.
+    fn take_stale(&self, session: SessionId, claim: &ActorClaim) -> Option<FencedSidecar> {
+        let mut slots = self.lock();
+        match slots.get(&session) {
+            Some(kept) if kept.claim != *claim || !kept.handle.is_healthy() => {
+                slots.remove(&session)
+            }
+            _ => None,
+        }
+    }
+
+    /// Remove the sidecar `claim` started, if it is still kept.
+    fn take(&self, claim: &ActorClaim) -> Option<FencedSidecar> {
+        let mut slots = self.lock();
+        match slots.get(&claim.actor_id) {
+            Some(kept) if kept.claim == *claim => slots.remove(&claim.actor_id),
+            _ => None,
+        }
     }
 
     /// Stop the sidecar `claim` started, if it is still kept.
     pub async fn release(&self, claim: &ActorClaim) {
-        let released = {
-            let mut slots = self
-                .slots
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            match slots.get(&claim.actor_id) {
-                Some(slot) if slot.claim == *claim => slots.remove(&claim.actor_id),
-                _ => None,
-            }
-        };
-        if let Some(mut sidecar) = released
+        if let Some(mut sidecar) = self.take(claim)
             && let Err(error) = sidecar.handle.shutdown().await
         {
             tracing::warn!(session = %claim.actor_id, %error, "fenced sidecar did not stop");
@@ -137,26 +157,39 @@ impl SessionEngine {
                 .map(DrivenTurnEnd::Finished);
         };
         let claim = &claim;
-        self.validate_actor_claim(Some(claim)).await?;
-        let sidecar = match sidecars.take(session) {
-            Some(mut kept) if kept.claim != *claim || !kept.handle.is_healthy() => {
-                let _ = kept.handle.terminate().await;
-                self.start_fenced_sidecar(&binding, &agent, *claim, &cancel)
-                    .await?
-            }
-            Some(kept) => Some(kept),
-            None => {
-                self.start_fenced_sidecar(&binding, &agent, *claim, &cancel)
-                    .await?
-            }
+        // The lease comes first so concurrent turns on the session take
+        // turns with its one kept sidecar.
+        let lease = match lease {
+            Some(lease) => lease,
+            None => match self.begin_turn(session, &cancel).await? {
+                Some(lease) => lease,
+                None => {
+                    return self
+                        .end_queued_turn(session, Some(claim), admitted_prompt.is_some(), &cancel)
+                        .await
+                        .map(DrivenTurnEnd::Finished);
+                }
+            },
         };
-        let tools = sidecar
-            .as_ref()
-            .map_or_else(|| Arc::from([]), |sidecar| Arc::clone(&sidecar.tools));
-        let hooks = sidecar.as_ref().and_then(|sidecar| sidecar.hooks.clone());
-        let loss = sidecar
-            .as_ref()
-            .and_then(|sidecar| sidecar.handle.loss_token());
+        self.validate_actor_claim(Some(claim)).await?;
+        if let Some(mut stale) = sidecars.take_stale(session, claim) {
+            let _ = stale.handle.terminate().await;
+        }
+        // The sidecar stays kept while turns use it, so `release` reaches it
+        // mid-turn; only the lease holder inserts it.
+        let kept = sidecars.lock().get(&session).map(FencedSidecar::share);
+        let kept = match kept {
+            Some(kept) => Some(kept),
+            None => self
+                .start_fenced_sidecar(&binding, &agent, *claim, &cancel)
+                .await?
+                .map(|sidecar| {
+                    let shared = sidecar.share();
+                    sidecars.lock().insert(session, sidecar);
+                    shared
+                }),
+        };
+        let (tools, hooks, loss) = kept.unwrap_or_else(|| (Arc::from([]), None, None));
         let turn_cancel = cancel.child_token();
         let run = self.run_turn_with_external_dirs_and_claim(
             session,
@@ -168,7 +201,7 @@ impl SessionEngine {
                 sidecar_tools: tools,
             },
             TurnRequestContext {
-                lease,
+                lease: Some(lease),
                 ..TurnRequestContext::new(turn_cancel.clone(), &[], guidance, Some(claim), route)
                     .with_admitted_prompt(admitted_prompt)
             },
@@ -194,12 +227,10 @@ impl SessionEngine {
             }
             outcome = &mut run => outcome.map(DrivenTurnEnd::Finished),
         };
-        match sidecar {
-            Some(mut sidecar) if matches!(end, Ok(DrivenTurnEnd::SidecarLost)) => {
-                let _ = sidecar.handle.terminate().await;
-            }
-            Some(sidecar) => sidecars.put(session, sidecar),
-            None => {}
+        if matches!(end, Ok(DrivenTurnEnd::SidecarLost))
+            && let Some(mut lost) = sidecars.take(claim)
+        {
+            let _ = lost.handle.terminate().await;
         }
         end
     }

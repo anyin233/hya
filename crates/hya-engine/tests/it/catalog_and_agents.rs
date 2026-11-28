@@ -3486,6 +3486,7 @@ async fn runtime_catalog_refresh_entry_points_and_loop_reuse() {
             .await;
         eng_l
             .admit_user_prompt_with_binding(
+                None,
                 child,
                 directive.to_string(),
                 &binding,
