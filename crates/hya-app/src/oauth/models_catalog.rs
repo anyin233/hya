@@ -1,39 +1,28 @@
 //! Fetch provider model catalogs after OAuth login.
 
-use crate::auth::OAuthType;
+use std::sync::Arc;
+
+use hya_provider::Protocol;
 
 use super::OAuthError;
 
-/// Fetch models for an OAuth provider using the just-obtained access token.
+/// Fetch the models of `protocol` at `base_url` with the just-obtained access
+/// token.
 ///
-/// The provider-owned adapter performs endpoint construction, authentication,
-/// bounded response/pagination handling, and normalization. Results are
-/// process-local preview data; callers must not persist fetched or guessed ids
-/// into empty provider lists.
+/// The protocol's catalog adapter performs endpoint construction,
+/// authentication headers, and normalization; the host bounds the response
+/// and pagination. Results are process-local preview data; callers must not
+/// persist fetched or guessed ids into empty provider lists.
 pub async fn fetch_oauth_models(
-    oauth_type: OAuthType,
+    protocol: Arc<dyn Protocol>,
     access_token: &str,
     account_id: Option<&str>,
     base_url: &str,
 ) -> Result<Vec<hya_provider::DiscoveredModel>, OAuthError> {
-    let endpoint = match oauth_type {
-        OAuthType::OpenaiCodex => OAuthType::OpenaiCodex.default_base_url(),
-        OAuthType::GrokBuild => base_url,
-    };
-    let kinds = crate::provider_kinds::builtin().map_err(|e| OAuthError::Config(e.to_string()))?;
-    let protocol = kinds
-        .protocol(oauth_type.provider_kind())
-        .cloned()
-        .ok_or_else(|| {
-            OAuthError::Config(format!(
-                "provider kind `{}` is not registered",
-                oauth_type.provider_kind()
-            ))
-        })?;
     let outcome = hya_provider::discover_models(hya_provider::CatalogDiscoveryRequest::new(
         "oauth-preview",
         protocol,
-        endpoint,
+        base_url,
         Some(hya_provider::RouteCredential {
             token: access_token.to_owned(),
             account_id: account_id.map(str::to_owned),

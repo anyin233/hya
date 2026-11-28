@@ -408,11 +408,9 @@ async fn prepare_server_with_store(
     let has_file_store = store.paths().is_some();
     emit_startup_mark("store_open", None);
     crate::first_run_config_bootstrap(false)?;
-    let config = hya_app::resolve_runtime(model_override)
-        .await
-        .with_yolo(yolo)
-        .with_pure(pure)
-        .with_bare(bare);
+    let config = hya_app::resolve_runtime(model_override, hya_app::RuntimeFlags { bare, pure })
+        .await?
+        .with_yolo(yolo);
     emit_startup_mark("runtime_resolved", None);
     let engine = hya_app::ServerEngine::build(store, config).await?;
     let mut lock = if has_file_store {

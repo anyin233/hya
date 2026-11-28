@@ -11,13 +11,57 @@
 
 use std::time::Duration;
 
-use crate::auth::{OAuthCredential, OAuthType};
+use async_trait::async_trait;
+use hya_provider::{OAuthLoginRequest, ProviderAuthFlow};
+
+use crate::auth::OAuthCredential;
 
 use super::callback::{bind_callback, wait_for_callback};
 use super::pkce::{generate_pkce_pair, generate_state};
 use super::{
     OAuthError, decode_jwt_claims, expires_at_from_secs, json_str, open_browser, post_form,
 };
+
+/// OAuth type id of the ChatGPT Codex subscription flow.
+const OAUTH_TYPE: &str = "openai-codex";
+
+/// ChatGPT Codex subscription login and refresh (`--type openai-codex`).
+pub(crate) struct CodexAuthFlow;
+
+#[async_trait]
+impl ProviderAuthFlow for CodexAuthFlow {
+    fn oauth_type(&self) -> &str {
+        OAUTH_TYPE
+    }
+
+    fn default_base_url(&self) -> &str {
+        "https://chatgpt.com/backend-api/codex"
+    }
+
+    fn default_model(&self) -> &str {
+        "gpt-5.3-codex"
+    }
+
+    fn supports_loopback(&self) -> bool {
+        true
+    }
+
+    /// Codex CLI default: device code, printing the URL and code without
+    /// opening a browser. `--loopback` runs the localhost PKCE callback and
+    /// opens the browser.
+    async fn login(&self, request: OAuthLoginRequest) -> Result<OAuthCredential, OAuthError> {
+        let open = request.browser.unwrap_or(request.loopback);
+        if request.loopback {
+            login_openai_codex(request.timeout, open).await
+        } else {
+            login_openai_codex_device(request.timeout, open).await
+        }
+    }
+
+    async fn refresh(&self, credential: &OAuthCredential) -> Result<OAuthCredential, OAuthError> {
+        refresh_openai_codex(&credential.refresh_token).await
+    }
+}
 
 pub(crate) const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 /// Codex OAuth issuer (`auth.openai.com`).
@@ -265,11 +309,9 @@ pub async fn refresh_openai_codex(refresh_token: &str) -> Result<OAuthCredential
     )
     .await
     .map_err(|e| match e {
-        OAuthError::Protocol(msg) if msg.contains("invalid_grant") => OAuthError::needs_login(
-            "?",
-            OAuthType::OpenaiCodex.as_str(),
-            "refresh token rejected (invalid_grant)",
-        ),
+        OAuthError::Protocol(msg) if msg.contains("invalid_grant") => {
+            OAuthError::needs_login("?", OAUTH_TYPE, "refresh token rejected (invalid_grant)")
+        }
         other => other,
     })?;
     credential_from_token_response(&token_json, Some(refresh_token))
@@ -353,7 +395,7 @@ fn credential_from_token_response(
         .and_then(extract_chatgpt_account_id)
         .or_else(|| extract_chatgpt_account_id(&access_token));
     Ok(OAuthCredential {
-        oauth_type: OAuthType::OpenaiCodex.as_str().to_string(),
+        oauth_type: OAUTH_TYPE.to_string(),
         access_token,
         refresh_token,
         expires_at,
@@ -462,7 +504,7 @@ mod tests {
         assert_eq!(cred.access_token, "access");
         assert_eq!(cred.refresh_token, "refresh");
         assert_eq!(cred.account_id.as_deref(), Some("acct-99"));
-        assert_eq!(cred.oauth_type, OAuthType::OpenaiCodex.as_str());
+        assert_eq!(cred.oauth_type, OAUTH_TYPE);
     }
 
     #[test]

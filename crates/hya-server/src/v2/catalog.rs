@@ -654,7 +654,10 @@ pub(crate) async fn provider_info(st: &ServerState, provider_id: &str) -> Option
         .into_iter()
         .filter(|model| model.provider_id == provider_id)
         .collect();
-    let supports_oauth = matches!(summary.kind.as_str(), "openai-codex" | "grok-build");
+    let supports_oauth = snapshot
+        .providers()
+        .iter()
+        .any(|state| state.provider_id == provider_id && state.supports_oauth);
     Some(pb::ProviderInfo {
         summary: Some(summary),
         models,

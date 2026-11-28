@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use hya_provider::{
     AuthPresence, AuthRefresher, BearerResolver, HttpProvider, ModelCatalogSource, Protocol,
-    ProviderAuthState, ProviderKinds, ReasoningEffort, RouteCredential,
+    ProviderAuthFlow, ProviderAuthState, ProviderKinds, ReasoningEffort, RouteCredential,
 };
 use serde::Deserialize;
 
@@ -280,8 +280,9 @@ pub(crate) struct ProviderCredential {
     pub(super) token: Option<String>,
     /// Account id stored with an OAuth credential (ChatGPT Codex), if known.
     pub(super) account_id: Option<String>,
-    /// When true, re-resolve the bearer via OAuth refresh on each stream.
-    pub(super) use_oauth_refresh: bool,
+    /// OAuth type of a saved OAuth credential with a token; its registered
+    /// flow re-resolves the bearer on each stream.
+    pub(super) oauth_type: Option<String>,
 }
 
 impl ProviderCredential {
@@ -315,7 +316,9 @@ pub(super) fn resolve_provider_credential(
         return Ok(ProviderCredential {
             token: (!token.is_empty()).then(|| token.to_string()),
             account_id: oauth.and_then(|o| o.account_id.clone()),
-            use_oauth_refresh: oauth.is_some() && !token.is_empty(),
+            oauth_type: oauth
+                .filter(|_| !token.is_empty())
+                .map(|oauth| oauth.oauth_type.clone()),
         });
     }
     let token = provider
@@ -327,7 +330,7 @@ pub(super) fn resolve_provider_credential(
     Ok(ProviderCredential {
         token,
         account_id: None,
-        use_oauth_refresh: false,
+        oauth_type: None,
     })
 }
 
@@ -343,7 +346,7 @@ pub(super) fn resolve_provider_credential_with(
     Some(ProviderCredential {
         token: Some(token.to_string()),
         account_id: None,
-        use_oauth_refresh: false,
+        oauth_type: None,
     })
 }
 
@@ -583,6 +586,56 @@ pub(super) fn kind_protocol(
     })
 }
 
+/// What a provider routes with once its kinds and OAuth type are registered.
+pub(super) struct ProviderSupport {
+    /// Protocol of the provider's own `kind`.
+    pub(super) protocol: Arc<dyn Protocol>,
+    /// Flow that refreshes the provider's saved OAuth credential.
+    pub(super) auth_flow: Option<Arc<dyn ProviderAuthFlow>>,
+}
+
+/// Look up `provider`'s kind, every model `kind:` override, and its saved
+/// OAuth type in `kinds`; the error says which one no enabled bundle provides.
+pub(super) fn provider_support(
+    provider: &ParsedProvider,
+    credential: &ProviderCredential,
+    kinds: &ProviderKinds,
+) -> Result<ProviderSupport, String> {
+    let missing_kind = |owner: String, label: &str| {
+        format!(
+            "{owner}: kind `{label}` is not provided by any enabled bundle (enabled kinds: {})",
+            kinds.labels().collect::<Vec<_>>().join(", ")
+        )
+    };
+    let protocol = kinds
+        .protocol(&provider.kind)
+        .cloned()
+        .ok_or_else(|| missing_kind(format!("provider {}", provider.id), &provider.kind))?;
+    if let Some(model) = provider
+        .models
+        .iter()
+        .find(|model| kinds.protocol(&model.kind).is_none())
+    {
+        return Err(missing_kind(
+            format!("provider {} model {}", provider.id, model.id),
+            &model.kind,
+        ));
+    }
+    let auth_flow = match &credential.oauth_type {
+        Some(oauth_type) => Some(kinds.auth_flow(oauth_type).cloned().ok_or_else(|| {
+            format!(
+                "provider {}: OAuth type `{oauth_type}` of its saved credential is not provided by any enabled bundle",
+                provider.id
+            )
+        })?),
+        None => None,
+    };
+    Ok(ProviderSupport {
+        protocol,
+        auth_flow,
+    })
+}
+
 fn variant_labels(protocol: &dyn Protocol) -> Vec<String> {
     protocol
         .reasoning_variant_labels()
@@ -758,6 +811,7 @@ pub(super) fn route_for_models(
     provider: &ParsedProvider,
     credential: &ProviderCredential,
     protocol: Arc<dyn Protocol>,
+    auth_flow: Option<&Arc<dyn ProviderAuthFlow>>,
     models: &[EffectiveModel],
 ) -> anyhow::Result<HttpProvider> {
     let prompt_cache = provider
@@ -806,17 +860,24 @@ pub(super) fn route_for_models(
             .reasoning_declared
             .map(|declared| (model.id.clone(), declared))
     }));
-    if credential.use_oauth_refresh && credential.token.is_some() {
+    if let Some(flow) = auth_flow {
         let resolver_id = provider.id.clone();
         let refresher_id = provider.id.clone();
+        let resolver_flow = Arc::clone(flow);
+        let refresher_flow = Arc::clone(flow);
         let resolver: BearerResolver = Arc::new(move || {
-            crate::oauth::ensure_access_token(&resolver_id).map_err(map_oauth_error)
+            crate::oauth::ensure_access_token(&resolver_id, resolver_flow.as_ref())
+                .map_err(map_oauth_error)
         });
         route = route.with_bearer_resolver(resolver);
         let refresher: AuthRefresher = Arc::new(move |stale_token: &str| {
-            crate::oauth::force_refresh_access_token(&refresher_id, stale_token)
-                .map(|_fresh| ())
-                .map_err(map_oauth_error)
+            crate::oauth::force_refresh_access_token(
+                &refresher_id,
+                stale_token,
+                refresher_flow.as_ref(),
+            )
+            .map(|_fresh| ())
+            .map_err(map_oauth_error)
         });
         route = route.with_auth_refresher(refresher);
     }

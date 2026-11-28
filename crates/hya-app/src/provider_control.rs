@@ -28,6 +28,7 @@ use crate::config::{self, ConfigEditError, DiscoverMode, PendingCatalogDiscovery
 #[derive(Clone)]
 pub struct ProviderManager {
     engine: Arc<SessionEngine>,
+    kinds: Arc<ProviderKinds>,
     lock: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -112,11 +113,12 @@ fn report(discovery: &config::DiscoveryResult) -> ProviderDiscoveryReport {
 }
 
 impl ProviderManager {
-    /// Manage providers on `engine`.
+    /// Manage providers on `engine`, resolving kinds against `kinds`.
     #[must_use]
-    pub fn new(engine: Arc<SessionEngine>) -> Self {
+    pub fn new(engine: Arc<SessionEngine>, kinds: Arc<ProviderKinds>) -> Self {
         Self {
             engine,
+            kinds,
             lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
@@ -152,13 +154,12 @@ impl ProviderManager {
     ) -> Result<ProviderChange, ProviderControlError> {
         let snapshot = self.engine.provider_snapshot();
         let ids = BTreeSet::from([provider_id.to_string()]);
-        let kinds = crate::provider_kinds::builtin().map_err(failure)?;
         let rebuilt = config::rebuild_providers(
             Some(&ids),
             mode,
             snapshot.catalog(),
             snapshot.router(),
-            &kinds,
+            &self.kinds,
         )
         .await
         .map_err(failure)?;
@@ -250,7 +251,6 @@ impl ProviderControl for ProviderManager {
     ) -> ProviderControlFuture<'_, ProviderChange> {
         Box::pin(async move {
             let _guard = self.lock.lock().await;
-            let kinds = crate::provider_kinds::builtin().map_err(failure)?;
             persist_provider_upsert(
                 &config::active_config_path(),
                 &request.id,
@@ -261,7 +261,7 @@ impl ProviderControl for ProviderManager {
                     .as_deref()
                     .map_or(SavedProviderKey::Keep, SavedProviderKey::Set),
                 None,
-                &kinds,
+                &self.kinds,
             )
             .await
             .map_err(edit_error)?;

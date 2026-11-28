@@ -2,7 +2,6 @@ use anyhow::Context as _;
 use clap::Subcommand;
 
 use crate::auth;
-use hya_app::auth::OAuthType;
 use hya_app::oauth::{self, OAuthLoginOptions};
 
 #[derive(Subcommand)]
@@ -15,7 +14,8 @@ pub(crate) enum OauthCommand {
         /// OAuth provider type: `openai-codex` or `grok-build`.
         #[arg(long = "type", value_name = "TYPE")]
         oauth_type: String,
-        /// openai-codex only: use localhost PKCE callback instead of Codex device-code.
+        /// Use a localhost callback instead of the type's default flow
+        /// (openai-codex: PKCE instead of device code).
         #[arg(long)]
         loopback: bool,
         /// Print the verification URL without opening a browser
@@ -56,40 +56,26 @@ pub(crate) async fn run_oauth(command: OauthCommand) -> anyhow::Result<()> {
             model,
             base_url,
         } => {
-            let oauth_type = OAuthType::parse(&oauth_type).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "unknown OAuth type '{oauth_type}'; supported: openai-codex, grok-build"
-                )
-            })?;
-            if loopback && !matches!(oauth_type, OAuthType::OpenaiCodex) {
-                anyhow::bail!("--loopback is only supported for --type openai-codex");
-            }
             if browser && no_browser {
                 anyhow::bail!("pass only one of --browser or --no-browser");
             }
-            // openai-codex defaults to Codex device-code (no local callback).
-            // grok-build is always device-code. --loopback opts into localhost PKCE for codex.
-            let use_loopback = loopback && matches!(oauth_type, OAuthType::OpenaiCodex);
-            // Codex default: print URL/code only (no auto-open). --browser enables open.
-            // Other types open unless --no-browser.
-            let no_browser = if browser {
-                false
-            } else if no_browser {
-                true
-            } else {
-                matches!(oauth_type, OAuthType::OpenaiCodex) && !use_loopback
-            };
-            let result = oauth::login(OAuthLoginOptions {
-                provider,
-                oauth_type,
-                loopback: use_loopback,
-                no_browser,
-                model,
-                base_url,
-                auth_dir: None,
-                config_path: None,
-                timeout: std::time::Duration::from_secs(600),
-            })
+            // The flow decides the browser default unless one flag is given.
+            let browser = (browser || no_browser).then_some(browser);
+            let kinds = hya_app::provider_kinds::configured()?;
+            let result = oauth::login(
+                OAuthLoginOptions {
+                    provider,
+                    oauth_type: oauth_type.trim().to_string(),
+                    loopback,
+                    browser,
+                    model,
+                    base_url,
+                    auth_dir: None,
+                    config_path: None,
+                    timeout: std::time::Duration::from_secs(600),
+                },
+                &kinds,
+            )
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
             println!(
@@ -100,7 +86,7 @@ pub(crate) async fn run_oauth(command: OauthCommand) -> anyhow::Result<()> {
             println!(
                 "  config: {} (kind: {}, base_url: {})",
                 result.config_path.display(),
-                result.oauth_type.provider_kind(),
+                result.kind,
                 result.base_url
             );
             if result.models_from_catalog {
@@ -129,7 +115,7 @@ pub(crate) async fn run_oauth(command: OauthCommand) -> anyhow::Result<()> {
                 return Ok(());
             }
             for status in statuses {
-                match status.oauth_type {
+                match status.oauth_type.as_deref() {
                     Some(oauth_type) => {
                         let state = if status.expired { "EXPIRED" } else { "ok" };
                         let exp = status.expires_at.as_deref().unwrap_or("?");

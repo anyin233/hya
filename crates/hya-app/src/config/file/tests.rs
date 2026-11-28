@@ -289,7 +289,7 @@ async fn mcp_validation_disabled_secret_skip_and_remote_retention() {
     )
     .unwrap();
     env.set("XDG_CONFIG_HOME", root.to_str().unwrap());
-    let kinds = crate::provider_kinds::builtin().unwrap();
+    let kinds = crate::provider_kinds::load(&hya_bundle::BuiltinBundleSelection::full()).unwrap();
     let loaded = resolve(parse().unwrap().unwrap(), &kinds).await.unwrap();
     assert_eq!(loaded.mcp["disabled"].enabled, Some(false));
     let _ = std::fs::remove_dir_all(root);

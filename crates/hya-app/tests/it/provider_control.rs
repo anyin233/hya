@@ -133,6 +133,10 @@ fn env(label: &str, config_yaml: Option<&str>) -> Env {
     }
 }
 
+fn full_kinds() -> Arc<hya_provider::ProviderKinds> {
+    hya_app::provider_kinds::load(&hya_bundle::BuiltinBundleSelection::full()).unwrap()
+}
+
 async fn app(engine_router: hya_provider::ProviderRouter) -> (axum::Router, hya_server::AppState) {
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
     let engine = Arc::new(SessionEngine::new(
@@ -152,7 +156,10 @@ async fn app(engine_router: hya_provider::ProviderRouter) -> (axum::Router, hya_
             reasoning: None,
         }),
     )
-    .with_provider_control(Arc::new(hya_app::ProviderManager::new(engine)));
+    .with_provider_control(Arc::new(hya_app::ProviderManager::new(
+        engine,
+        full_kinds(),
+    )));
     (hya_server::router(state.clone()), state)
 }
 
@@ -532,7 +539,9 @@ async fn deferred_discovery_publishes_one_global_catalog_notice() {
         )),
     );
     let store = SessionStore::connect_memory().await.unwrap();
-    let config = hya_app::resolve_runtime(None).await;
+    let config = hya_app::resolve_runtime(None, hya_app::RuntimeFlags::default())
+        .await
+        .unwrap();
     let mut runtime = hya_app::ServerEngine::build(store, config)
         .await
         .unwrap()
@@ -612,7 +621,7 @@ async fn model_cache_restores_metadata_merges_pinned_and_queues_miss() {
     )
     .await;
     let started = Instant::now();
-    let kinds = hya_app::provider_kinds::builtin().unwrap();
+    let kinds = full_kinds();
     let loaded = hya_app::config::resolve(hya_app::config::parse().unwrap().unwrap(), &kinds)
         .await
         .unwrap();
@@ -656,7 +665,7 @@ async fn model_cache_restores_metadata_merges_pinned_and_queues_miss() {
         ],
     )
     .await;
-    let kinds = hya_app::provider_kinds::builtin().unwrap();
+    let kinds = full_kinds();
     let loaded = hya_app::config::resolve(hya_app::config::parse().unwrap().unwrap(), &kinds)
         .await
         .unwrap();
@@ -687,7 +696,7 @@ async fn model_cache_restores_metadata_merges_pinned_and_queues_miss() {
         ),
     );
     let started = Instant::now();
-    let kinds = hya_app::provider_kinds::builtin().unwrap();
+    let kinds = full_kinds();
     let loaded = hya_app::config::resolve(hya_app::config::parse().unwrap().unwrap(), &kinds)
         .await
         .unwrap();

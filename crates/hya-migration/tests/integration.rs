@@ -1273,7 +1273,8 @@ async fn full_v1_to_v2_migration_v2_runtime_verification_and_sha256_rollback() {
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", &xdg_root);
         }
-        let kinds = hya_app::provider_kinds::builtin().expect("builtin provider kinds");
+        let kinds = hya_app::provider_kinds::load(&hya_bundle::BuiltinBundleSelection::full())
+            .expect("provider kinds");
         let loaded = match hya_app::config::parse() {
             Ok(Some(parsed)) => hya_app::config::resolve(parsed, &kinds).await.map(Some),
             other => other.map(|_| None),

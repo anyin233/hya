@@ -26,9 +26,18 @@ pub(crate) async fn start(
             .await;
         return Err(error);
     }
-    let runtime = hya_app::resolve_runtime(model).await;
+    let runtime = match hya_app::resolve_runtime(model, hya_app::RuntimeFlags { bare, pure }).await
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            exit_store
+                .drain_and_report_exit(hya_store::EXIT_DRAIN_TIMEOUT)
+                .await;
+            return Err(error);
+        }
+    };
     hya_app::startup_trace::mark("runtime_resolved", None);
-    start_with(store, runtime, yolo, bare, pure, true).await
+    start_with(store, runtime, yolo, true).await
 }
 
 /// [`start`] on an already resolved runtime configuration; `project_plugins`
@@ -37,15 +46,13 @@ async fn start_with(
     store: SessionStore,
     runtime: hya_app::RuntimeConfig,
     yolo: bool,
-    bare: bool,
-    pure: bool,
     project_plugins: bool,
 ) -> anyhow::Result<StartedEngine> {
     let exit_store = store.clone();
-    let runtime = runtime.with_yolo(yolo).with_pure(pure).with_bare(bare);
+    let runtime = runtime.with_yolo(yolo);
     let agent = hya_app::agent_for_runtime(&runtime, None);
     let tool_config = (runtime.permission, runtime.settings);
-    let built_res = if pure {
+    let built_res = if runtime.pure {
         hya_app::build_session_engine_pure(
             store,
             runtime.router,
@@ -125,9 +132,16 @@ impl HeadlessRuntime {
         pure: bool,
     ) -> anyhow::Result<Self> {
         let explicit_model = model.is_some();
-        let runtime = hya_app::offline_runtime(model, false);
+        let selection = if bare {
+            hya_bundle::BuiltinBundleSelection::bare()
+        } else {
+            hya_bundle::BuiltinBundleSelection::default()
+        };
+        let kinds = hya_app::provider_kinds::load(&selection)?;
+        let runtime = hya_app::offline_runtime(model, false, kinds)
+            .with_flags(hya_app::RuntimeFlags { bare, pure });
         Self::from_started(
-            start_with(store, runtime, false, bare, pure, false).await?,
+            start_with(store, runtime, false, false).await?,
             explicit_model,
         )
         .await

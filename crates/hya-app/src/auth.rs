@@ -7,69 +7,6 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// Supported OAuth provider implementations for interactive login.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum OAuthType {
-    /// ChatGPT Codex subscription OAuth (`openai-codex`).
-    OpenaiCodex,
-    /// Grok Build / xAI CLI OAuth (`grok-build`).
-    GrokBuild,
-}
-
-impl OAuthType {
-    /// Parse one canonical type id.
-    pub fn parse(raw: &str) -> Option<Self> {
-        match raw.trim() {
-            "openai-codex" => Some(Self::OpenaiCodex),
-            "grok-build" => Some(Self::GrokBuild),
-            _ => None,
-        }
-    }
-
-    /// Canonical type id used in CLI flags and stored auth files.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::OpenaiCodex => "openai-codex",
-            Self::GrokBuild => "grok-build",
-        }
-    }
-
-    /// Config `kind` written when upserting a provider after OAuth login.
-    #[must_use]
-    pub const fn provider_kind(self) -> &'static str {
-        match self {
-            Self::OpenaiCodex => "openai-codex",
-            Self::GrokBuild => "grok-build",
-        }
-    }
-
-    /// Default inference base URL for this OAuth type.
-    #[must_use]
-    pub const fn default_base_url(self) -> &'static str {
-        match self {
-            Self::OpenaiCodex => "https://chatgpt.com/backend-api/codex",
-            Self::GrokBuild => "https://cli-chat-proxy.grok.com/v1",
-        }
-    }
-
-    /// Default model id when none is supplied at login.
-    #[must_use]
-    pub const fn default_model(self) -> &'static str {
-        match self {
-            Self::OpenaiCodex => "gpt-5.3-codex",
-            Self::GrokBuild => "grok-4.5",
-        }
-    }
-}
-
-impl std::fmt::Display for OAuthType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 pub use hya_provider::OAuthCredential;
 
 /// On-disk auth document for one provider id.
@@ -137,13 +74,10 @@ impl AuthFile {
             .filter(|s| !s.is_empty())
             .unwrap_or("api");
         if kind.eq_ignore_ascii_case("oauth") {
-            let oauth_type = self
-                .oauth_type
-                .ok_or_else(|| invalid_credential("missing oauth_type"))?;
-            let oauth_type = OAuthType::parse(&oauth_type)
-                .ok_or_else(|| invalid_credential("unknown oauth_type"))?;
+            // Any OAuth type loads; a type no registered kind provides makes
+            // its provider unsupported when the config resolves.
             return Ok(AuthCredential::OAuth(OAuthCredential {
-                oauth_type: oauth_type.as_str().to_string(),
+                oauth_type: required_field(self.oauth_type, "oauth_type")?,
                 access_token: required_field(self.access_token, "access_token")?,
                 refresh_token: required_field(self.refresh_token, "refresh_token")?,
                 expires_at: required_field(self.expires_at, "expires_at")?,
@@ -396,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn hand_written_malformed_and_oauth_type_parsing() {
+    fn hand_written_malformed_and_unknown_oauth_type_documents() {
         let dir = tempdir();
         std::fs::write(dir.join("hand.yaml"), "token: \"sk-hand\"\n").unwrap();
         assert!(matches!(
@@ -415,21 +349,11 @@ mod tests {
             "type: oauth\noauth_type: other\naccess_token: a\nrefresh_token: r\nexpires_at: x\n",
         )
         .unwrap();
-        assert!(
-            load_credential_in(&dir, "unknown")
-                .unwrap_err()
-                .to_string()
-                .contains("unknown oauth_type")
-        );
+        assert!(matches!(
+            load_credential_in(&dir, "unknown").unwrap(),
+            Some(AuthCredential::OAuth(ref oauth)) if oauth.oauth_type == "other"
+        ));
         std::fs::write(dir.join("malformed.yaml"), "token: [\n").unwrap();
         assert!(load_credential_in(&dir, "malformed").is_err());
-
-        assert_eq!(
-            OAuthType::parse("openai-codex"),
-            Some(OAuthType::OpenaiCodex)
-        );
-        assert_eq!(OAuthType::parse("grok-build"), Some(OAuthType::GrokBuild));
-        assert_eq!(OAuthType::parse("codex"), None);
-        assert_eq!(OAuthType::parse("grok"), None);
     }
 }

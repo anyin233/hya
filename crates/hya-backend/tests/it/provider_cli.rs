@@ -109,7 +109,7 @@ async fn provider_add_reject_list_logout_and_remove_end_to_end() -> TestResult {
             "--base-url",
             &srv.base,
             "--protocol",
-            "openai-chat",
+            "openai",
             "--api-key",
             "sk-wrong",
         ],
@@ -118,7 +118,11 @@ async fn provider_add_reject_list_logout_and_remove_end_to_end() -> TestResult {
     assert!(!bad.status.success() && combined_text(&bad).contains("rejected"));
     assert!(!config(root).contains("bad:") && !root.join("config/hya/auth/bad.yaml").exists());
 
-    let add = provider(&s, &["add"], &format!("{}\n3\nsk-test\nfake\n", srv.base))?;
+    let add = provider(
+        &s,
+        &["add"],
+        &format!("{}\nopenai\nsk-test\nfake\n", srv.base),
+    )?;
     assert_success("provider add", &add);
     let out = combined_text(&add);
     assert!(out.contains("alpha") && out.contains("Saved provider `fake`"));
@@ -126,7 +130,7 @@ async fn provider_add_reject_list_logout_and_remove_end_to_end() -> TestResult {
     let key_file = root.join("config/hya/auth/fake.yaml");
     assert!(
         yaml.contains("fake:")
-            && yaml.contains("kind: anthropic")
+            && yaml.contains("kind: openai")
             && !yaml.contains("sk-test")
             && fs::read_to_string(&key_file)?.contains("sk-test")
     );
@@ -146,7 +150,7 @@ async fn provider_add_reject_list_logout_and_remove_end_to_end() -> TestResult {
     let listed = String::from_utf8(provider(&s, &["list"], "")?.stdout)?;
     for n in [
         "fake",
-        "anthropic-messages",
+        "  openai  ",
         "saved key",
         "config override",
         "config only",
@@ -188,7 +192,7 @@ async fn refresh_updates_the_running_backend() -> TestResult {
                 "--base-url",
                 &srv.base,
                 "--protocol",
-                "openai-chat",
+                "openai",
                 "--api-key",
                 "sk-test",
             ],

@@ -15,9 +15,9 @@ use super::file::{
     EngineSettings, FileConfig, config_path, parse_config, resolve_mcp, resolve_permission,
 };
 use super::provider::{
-    EffectiveModel, ParsedProvider, ProviderCredential, kind_protocol, merge_provider_models,
-    resolve_provider_credential, resolve_providers, resolve_providers_filtered, route_for_models,
-    status_auth, validate_base_url,
+    EffectiveModel, ParsedProvider, ProviderCredential, ProviderSupport, kind_protocol,
+    merge_provider_models, provider_support, resolve_provider_credential, resolve_providers,
+    resolve_providers_filtered, route_for_models, status_auth, validate_base_url,
 };
 
 /// One provider deferred to background discovery refresh (no cached rows,
@@ -37,6 +37,14 @@ pub struct PendingCatalogDiscovery {
 pub struct ParsedConfig {
     path: std::path::PathBuf,
     file: FileConfig,
+}
+
+impl ParsedConfig {
+    /// The file's built-in bundle selection (`bundles.builtin`).
+    #[must_use]
+    pub fn builtin_bundles(&self) -> &hya_bundle::BuiltinBundleSelection {
+        &self.file.bundles.builtin
+    }
 }
 
 fn failed_result(error: &CatalogFailure) -> ProviderCatalogResult {
@@ -265,7 +273,7 @@ pub async fn probe_provider(
             .filter(|key| !key.is_empty())
             .map(str::to_string),
         account_id: None,
-        use_oauth_refresh: false,
+        oauth_type: None,
     };
     Ok(discover_provider(&provider, &credential, protocol).await)
 }
@@ -285,7 +293,9 @@ pub async fn store_discovery(provider_id: &str, discovery: &DiscoveryResult) {
 }
 
 /// Build one provider's route, catalog rows, and status from its cached rows
-/// merged with its config entries.
+/// merged with its config entries. A provider `kinds` cannot route gets an
+/// `Unsupported` status and no route.
+#[cfg(test)]
 pub(super) fn plan_for_provider(
     provider: &ParsedProvider,
     credential: &ProviderCredential,
@@ -293,7 +303,44 @@ pub(super) fn plan_for_provider(
     discovery: Option<&DiscoveryResult>,
     kinds: &ProviderKinds,
 ) -> anyhow::Result<ProviderPlanResult> {
-    let protocol = kind_protocol(kinds, &provider.id, None, &provider.kind)?;
+    match provider_support(provider, credential, kinds) {
+        Ok(support) => plan_supported(provider, credential, &support, cached, discovery, kinds),
+        Err(reason) => Ok(unsupported_plan(provider, credential, &reason)),
+    }
+}
+
+/// The route-less plan of a provider whose kind or OAuth type no enabled
+/// bundle provides; `reason` goes to stderr.
+fn unsupported_plan(
+    provider: &ParsedProvider,
+    credential: &ProviderCredential,
+    reason: &str,
+) -> ProviderPlanResult {
+    eprintln!("hya: {reason}");
+    ProviderPlanResult {
+        routes: Vec::new(),
+        models: Vec::new(),
+        state: ProviderCatalogState {
+            provider_id: provider.id.clone(),
+            kind: provider.kind.clone(),
+            supports_oauth: false,
+            min_output_tokens: 1,
+            source: ProviderCatalogSource::None,
+            auth: status_auth(credential),
+            result: ProviderCatalogResult::Unsupported,
+        },
+    }
+}
+
+fn plan_supported(
+    provider: &ParsedProvider,
+    credential: &ProviderCredential,
+    support: &ProviderSupport,
+    cached: &[crate::model_cache::CachedModel],
+    discovery: Option<&DiscoveryResult>,
+    kinds: &ProviderKinds,
+) -> anyhow::Result<ProviderPlanResult> {
+    let protocol = &support.protocol;
     let merged = merge_provider_models(provider, cached, kinds)?;
     let auth = discovery.map_or_else(|| status_auth(credential), |discovery| discovery.auth);
     let source = if merged.is_empty() {
@@ -314,8 +361,7 @@ pub(super) fn plan_for_provider(
     let state = ProviderCatalogState {
         provider_id: provider.id.clone(),
         kind: protocol.kind().to_string(),
-        // Label-derived until the OAuth flows register with their kinds.
-        supports_oauth: matches!(protocol.kind(), "openai-codex" | "grok-build"),
+        supports_oauth: kinds.supports_oauth(protocol.kind()),
         min_output_tokens: protocol.min_output_tokens(),
         source,
         auth,
@@ -346,7 +392,13 @@ pub(super) fn plan_for_provider(
     let mut models = Vec::new();
     for (kind, partition) in partitions {
         let route_protocol = kind_protocol(kinds, &provider.id, None, kind)?;
-        let route = route_for_models(provider, credential, route_protocol, &partition)?;
+        let route = route_for_models(
+            provider,
+            credential,
+            route_protocol,
+            support.auth_flow.as_ref(),
+            &partition,
+        )?;
         models.extend(hya_provider::Provider::catalog(&route));
         routes.push(route);
     }
@@ -412,7 +464,13 @@ pub async fn resolve(
     let mut pending_discovery = Vec::new();
     for provider in parsed {
         let credential = resolve_provider_credential(&provider)?;
-        let protocol = kind_protocol(kinds, &provider.id, None, &provider.kind)?;
+        let support = match provider_support(&provider, &credential, kinds) {
+            Ok(support) => support,
+            Err(reason) => {
+                plans.push(unsupported_plan(&provider, &credential, &reason));
+                continue;
+            }
+        };
         let cached = cache.remove(&provider.id).unwrap_or_default();
         let pending = PendingCatalogDiscovery {
             provider_id: provider.id.clone(),
@@ -425,9 +483,10 @@ pub async fn resolve(
             if cached.is_empty() || provider.models.is_empty() {
                 pending_discovery.push(pending);
             }
-            plans.push(plan_for_provider(
+            plans.push(plan_supported(
                 &provider,
                 &credential,
+                &support,
                 &cached,
                 None,
                 kinds,
@@ -443,7 +502,7 @@ pub async fn resolve(
         tasks.spawn(async move {
             let discovery = match tokio::time::timeout_at(deadline, async {
                 let _permit = semaphore.acquire_owned().await.ok();
-                discover_provider(&provider, &credential, protocol).await
+                discover_provider(&provider, &credential, Arc::clone(&support.protocol)).await
             })
             .await
             {
@@ -451,7 +510,14 @@ pub async fn resolve(
                 Err(_) => DiscoveryResult::timed_out(status_auth(&credential)),
             };
             let rows = apply_discovery(&provider.id, Vec::new(), &discovery).await;
-            plan_for_provider(&provider, &credential, &rows, Some(&discovery), &kinds)
+            plan_supported(
+                &provider,
+                &credential,
+                &support,
+                &rows,
+                Some(&discovery),
+                &kinds,
+            )
         });
     }
     while let Some(result) = tasks.join_next().await {
@@ -588,13 +654,29 @@ pub async fn refresh_pending_catalogs(
     let mut cache = crate::model_cache::read_all_or_empty().await;
     let mut plans = Vec::with_capacity(pending.len());
     for entry in pending {
-        let protocol = kind_protocol(&entry.kinds, &entry.provider.id, None, &entry.provider.kind)?;
-        let discovery = discover_provider(&entry.provider, &entry.credential, protocol).await;
-        let cached = cache.remove(&entry.provider_id).unwrap_or_default();
-        let rows = apply_discovery(&entry.provider_id, cached, &discovery).await;
-        plans.push(plan_for_provider(
+        let support = match provider_support(&entry.provider, &entry.credential, &entry.kinds) {
+            Ok(support) => support,
+            Err(reason) => {
+                plans.push(unsupported_plan(
+                    &entry.provider,
+                    &entry.credential,
+                    &reason,
+                ));
+                continue;
+            }
+        };
+        let discovery = discover_provider(
             &entry.provider,
             &entry.credential,
+            Arc::clone(&support.protocol),
+        )
+        .await;
+        let cached = cache.remove(&entry.provider_id).unwrap_or_default();
+        let rows = apply_discovery(&entry.provider_id, cached, &discovery).await;
+        plans.push(plan_supported(
+            &entry.provider,
+            &entry.credential,
+            &support,
             &rows,
             Some(&discovery),
             &entry.kinds,
@@ -665,7 +747,13 @@ pub async fn rebuild_providers(
     let mut discovery = BTreeMap::new();
     for provider in selected {
         let credential = resolve_provider_credential(&provider)?;
-        let protocol = kind_protocol(kinds, &provider.id, None, &provider.kind)?;
+        let support = match provider_support(&provider, &credential, kinds) {
+            Ok(support) => support,
+            Err(reason) => {
+                plans.push(unsupported_plan(&provider, &credential, &reason));
+                continue;
+            }
+        };
         let mut cached = cache.remove(&provider.id).unwrap_or_default();
         let fetch = match mode {
             DiscoverMode::Always => true,
@@ -673,15 +761,17 @@ pub async fn rebuild_providers(
             DiscoverMode::Never => false,
         };
         let outcome = if fetch {
-            let outcome = discover_provider(&provider, &credential, protocol).await;
+            let outcome =
+                discover_provider(&provider, &credential, Arc::clone(&support.protocol)).await;
             cached = apply_discovery(&provider.id, cached, &outcome).await;
             Some(outcome)
         } else {
             None
         };
-        plans.push(plan_for_provider(
+        plans.push(plan_supported(
             &provider,
             &credential,
+            &support,
             &cached,
             outcome.as_ref(),
             kinds,

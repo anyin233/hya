@@ -67,12 +67,12 @@ fn no_key() -> ProviderCredential {
     ProviderCredential {
         token: None,
         account_id: None,
-        use_oauth_refresh: false,
+        oauth_type: None,
     }
 }
 
 fn kinds() -> std::sync::Arc<ProviderKinds> {
-    crate::provider_kinds::builtin().unwrap()
+    crate::provider_kinds::load(&hya_bundle::BuiltinBundleSelection::full()).unwrap()
 }
 
 fn plan(provider: &ParsedProvider) -> anyhow::Result<ProviderPlanResult> {
@@ -252,9 +252,12 @@ fn reasoning_variants_order_boolean_and_validation() {
     )
     .unwrap()
     .remove(0);
-    assert!(
-        format!("{:#}", plan(&unknown).err().unwrap())
-            .contains("provider g has unknown kind openai-responses")
+    let unsupported = plan(&unknown).unwrap();
+    assert!(unsupported.routes.is_empty());
+    assert_eq!(unsupported.state.kind, "openai-responses");
+    assert_eq!(
+        unsupported.state.result,
+        hya_provider::ProviderCatalogResult::Unsupported
     );
     assert!(parse_providers("providers:\n  g:\n    kind: openai-response\n    base_url: https://x\n    models:\n      - id: m\n        reasoning:\n          variants: [medium, extreme]\n").unwrap_err().to_string().contains("unknown reasoning variant extreme"));
     assert!(parse_providers("providers:\n  g:\n    kind: openai-response\n    base_url: https://x\n    models:\n      - id: m\n        reasoning:\n          default: high\n          variants: [low, medium]\n").unwrap_err().to_string().contains("reasoning default high is not advertised"));
@@ -384,16 +387,14 @@ fn model_kind_override_partitions_routes_and_applies_to_cached_rows() {
         labels(&OpenAiChatProtocol)
     );
 
-    // Unknown kind rejected when kinds resolve; every registered label accepted.
+    // An unregistered entry kind makes the whole provider unsupported;
+    // every registered label routes.
     let unknown = parse_providers("providers:\n  12th:\n    kind: openai\n    base_url: https://x\n    models:\n      - id: m\n        kind: anthropic-msgs\n").unwrap().remove(0);
-    assert!(
-        format!(
-            "{:#}",
-            plan_for_provider(&unknown, &no_key(), &[], None, &kinds())
-                .err()
-                .unwrap()
-        )
-        .contains("provider 12th model m has unknown kind anthropic-msgs")
+    let plan = plan_for_provider(&unknown, &no_key(), &[], None, &kinds()).unwrap();
+    assert!(plan.routes.is_empty() && plan.models.is_empty());
+    assert_eq!(
+        plan.state.result,
+        hya_provider::ProviderCatalogResult::Unsupported
     );
     for label in kinds().labels() {
         let provider = parse_providers(&format!("providers:\n  12th:\n    kind: openai\n    base_url: https://x\n    models:\n      - id: m\n        kind: {label}\n")).unwrap().remove(0);
@@ -625,4 +626,151 @@ fn set_and_remove_model_entries_patch_preserve_kind_and_validate() {
         set_model_entry(&path, "missing", "m", &Default::default()),
         Err(ConfigEditError::NotFound(_))
     ));
+}
+
+fn bare_kinds() -> std::sync::Arc<ProviderKinds> {
+    crate::provider_kinds::load(&hya_bundle::BuiltinBundleSelection::bare()).unwrap()
+}
+
+const MIXED_KINDS: &str = "schema_version: 2\ndefault_model: local/qwen\nproviders:\n  claude:\n    kind: anthropic\n    base_url: https://anthropic.example.test/v1\n    api_key: k\n    models: [sonnet]\n  codex:\n    kind: openai\n    base_url: https://codex.example.test/v1\n    models: [m]\n  local:\n    kind: openai\n    base_url: https://local.example.test/v1\n    api_key: k\n    models: [qwen]\n";
+
+#[tokio::test]
+async fn unregistered_kind_is_unsupported_and_other_providers_route() {
+    let home =
+        std::env::temp_dir().join(format!("hya-unsupported-{}", hya_proto::SessionId::new()));
+    let mut env = EnvGuard::with_home(&home, &home);
+    env.set("XDG_CACHE_HOME", home.join("cache"));
+    std::fs::create_dir_all(home.join("hya")).unwrap();
+    std::fs::write(home.join("hya/config.yaml"), MIXED_KINDS).unwrap();
+    // `codex` holds an OAuth credential whose type no registered kind provides.
+    crate::auth::save_credential_in(
+        &home.join("hya/auth"),
+        "codex",
+        &crate::auth::AuthCredential::OAuth(crate::auth::OAuthCredential {
+            oauth_type: "other-oauth".into(),
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            expires_at: "2099-01-01T00:00:00Z".into(),
+            account_id: None,
+            id_token: None,
+        }),
+    )
+    .unwrap();
+
+    let claude = parse_providers(MIXED_KINDS).unwrap().remove(0);
+    let reason = super::provider::provider_support(&claude, &no_key(), &bare_kinds())
+        .err()
+        .unwrap();
+    assert_eq!(
+        reason,
+        "provider claude: kind `anthropic` is not provided by any enabled bundle (enabled kinds: openai, openai-compatible, openai-completion)"
+    );
+
+    let resolved = resolve(parse().unwrap().unwrap(), &bare_kinds())
+        .await
+        .unwrap();
+    let state = |id: &str| {
+        resolved
+            .catalog
+            .providers()
+            .iter()
+            .find(|state| state.provider_id == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        (state("claude").result, state("claude").kind.as_str()),
+        (
+            hya_provider::ProviderCatalogResult::Unsupported,
+            "anthropic"
+        )
+    );
+    assert_eq!(
+        state("codex").result,
+        hya_provider::ProviderCatalogResult::Unsupported
+    );
+    assert_eq!(
+        state("local").result,
+        hya_provider::ProviderCatalogResult::Models
+    );
+    let routed = |model: &str| {
+        resolved
+            .router
+            .resolve(&hya_proto::ModelRef::new(model))
+            .is_some()
+    };
+    assert!(routed("local/qwen") && !routed("claude/sonnet") && !routed("codex/m"));
+    assert_eq!(resolved.default_model, "local/qwen");
+    assert!(
+        resolved
+            .pending_discovery
+            .iter()
+            .all(|entry| entry.provider_id == "local")
+    );
+
+    // With the kinds registered, the same file routes every provider except
+    // the one whose OAuth type is still unknown.
+    let full = resolve(parse().unwrap().unwrap(), &kinds()).await.unwrap();
+    assert!(
+        full.router
+            .resolve(&hya_proto::ModelRef::new("claude/sonnet"))
+            .is_some()
+    );
+    assert!(
+        full.router
+            .resolve(&hya_proto::ModelRef::new("codex/m"))
+            .is_none()
+    );
+    drop(env);
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[tokio::test]
+async fn edit_succeeds_while_another_providers_kind_is_unregistered() {
+    let _env = StableEnvGuard::new();
+    let path = temp_config("edit-unregistered", MIXED_KINDS);
+    let kinds = bare_kinds();
+    crate::provider_control::persist_provider_upsert(
+        &path,
+        "gw",
+        "openai",
+        "https://gw.example.test/v1",
+        crate::provider_control::SavedProviderKey::Keep,
+        None,
+        &kinds,
+    )
+    .await
+    .unwrap();
+    set_model_entry(
+        &path,
+        "claude",
+        "opus",
+        &ModelEntryOverride {
+            display_name: Some("Opus".into()),
+            context_limit: None,
+            output_limit: None,
+            reasoning: None,
+        },
+    )
+    .unwrap();
+    // Only the written kind is checked.
+    let refused = crate::provider_control::persist_provider_upsert(
+        &path,
+        "other",
+        "anthropic",
+        "https://other.example.test/v1",
+        crate::provider_control::SavedProviderKey::Keep,
+        None,
+        &kinds,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(refused, ConfigEditError::Invalid(ref message) if message.contains("unknown provider kind `anthropic`")),
+        "{refused:?}"
+    );
+    let file = parse_config(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(file.providers["gw"].kind, "openai");
+    assert_eq!(file.providers["claude"].kind, "anthropic");
+    assert!(!file.providers.contains_key("other"));
 }

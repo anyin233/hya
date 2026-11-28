@@ -2,11 +2,44 @@
 
 use std::time::Duration;
 
-use crate::auth::{OAuthCredential, OAuthType};
+use async_trait::async_trait;
+use hya_provider::{OAuthLoginRequest, ProviderAuthFlow};
+
+use crate::auth::OAuthCredential;
 
 use super::{
     OAuthError, expires_at_from_jwt, expires_at_from_secs, json_str, open_browser, post_form,
 };
+
+/// OAuth type id of the Grok Build CLI flow.
+const OAUTH_TYPE: &str = "grok-build";
+
+/// Grok Build / xAI CLI login and refresh (`--type grok-build`).
+pub(crate) struct GrokAuthFlow;
+
+#[async_trait]
+impl ProviderAuthFlow for GrokAuthFlow {
+    fn oauth_type(&self) -> &str {
+        OAUTH_TYPE
+    }
+
+    fn default_base_url(&self) -> &str {
+        "https://cli-chat-proxy.grok.com/v1"
+    }
+
+    fn default_model(&self) -> &str {
+        "grok-4.5"
+    }
+
+    /// Device code; opens the browser unless `--no-browser`.
+    async fn login(&self, request: OAuthLoginRequest) -> Result<OAuthCredential, OAuthError> {
+        login_grok_build(request.timeout, request.browser.unwrap_or(true)).await
+    }
+
+    async fn refresh(&self, credential: &OAuthCredential) -> Result<OAuthCredential, OAuthError> {
+        refresh_grok_build(&credential.refresh_token).await
+    }
+}
 
 pub(crate) const CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 pub(crate) const DEVICE_CODE_URL: &str = "https://auth.x.ai/oauth2/device/code";
@@ -155,7 +188,7 @@ pub async fn refresh_grok_build(refresh_token: &str) -> Result<OAuthCredential, 
         let err = json_str(&json, "error").unwrap_or("invalid_grant");
         return Err(OAuthError::needs_login(
             "?",
-            OAuthType::GrokBuild.as_str(),
+            OAUTH_TYPE,
             format!("refresh failed: {err}"),
         ));
     }
@@ -198,7 +231,7 @@ fn credential_from_token_response(
     };
     let id_token = json_str(payload, "id_token").map(str::to_string);
     Ok(OAuthCredential {
-        oauth_type: OAuthType::GrokBuild.as_str().to_string(),
+        oauth_type: OAUTH_TYPE.to_string(),
         access_token,
         refresh_token,
         expires_at,
@@ -233,7 +266,7 @@ mod tests {
         let cred = credential_from_token_response(&resp, None).unwrap();
         assert_eq!(cred.refresh_token, "rt-1");
         assert!(cred.expires_at.starts_with("2030-01-01"));
-        assert_eq!(cred.oauth_type, OAuthType::GrokBuild.as_str());
+        assert_eq!(cred.oauth_type, OAUTH_TYPE);
     }
 
     #[test]
