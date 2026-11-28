@@ -750,10 +750,10 @@ fn selective_loader_skips_disabled_and_errors_cleanly_on_missing()
         .ok_or("expected DisabledOrMissing error for absent bundle")?;
     assert!(matches!(missing_err, AbiError::DisabledOrMissing { .. }));
 
-    // Non-panicking v1 selective loader rejects unknown family cleanly.
+    // An id that is no first-party native bundle fails to load, cleanly.
     let v1_err = try_from_tool_families(&["hya/unknown-family"])
         .err()
-        .ok_or("expected error for unknown v1 tool family")?;
-    assert!(v1_err.contains("unknown tool family"));
+        .ok_or("expected a load error for an unknown bundle")?;
+    assert!(v1_err.contains("load hya/unknown-family"), "{v1_err}");
     Ok(())
 }
