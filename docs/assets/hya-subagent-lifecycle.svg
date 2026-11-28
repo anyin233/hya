@@ -85,7 +85,7 @@
   <rect x="976" y="126" width="138" height="92" rx="8" fill="#0f172a" stroke="#34d399" stroke-width="1.2"/>
   <text x="988" y="147" fill="#f1f5f9" font-size="12" font-weight="600">Backend Host</text>
   <text x="988" y="165" fill="#34d399" font-size="10.5">relay_host (Resp)</text>
-  <text x="988" y="182" fill="#94a3b8" font-size="10.5">↔ hyper hya.v1</text>
+  <text x="988" y="182" fill="#94a3b8" font-size="10.5">↔ hyper hya.v2</text>
   <text x="988" y="199" fill="#fbbf24" font-size="10.2">Origin::Relay guard</text>
 
   <rect x="626" y="232" width="488" height="76" rx="7" fill="#0f172a" stroke="#475569"/>

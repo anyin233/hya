@@ -31,7 +31,7 @@ cargo build -p hya-backend --bin hya
 1. **No panics in library crates (`unwrap_used` / `expect_used` denied):** Workspace Clippy lints forbid `.unwrap()` and `.expect()` in library code. Return typed errors (`StoreError`, `CoreError`, `ToolError`, `ProviderError`) instead of crashing the daemon. Binaries and tests may allow them locally where appropriate.
 2. **Preserve single-source event sourcing:** Never invent a second mutable read model in the server or TUI that can drift from `event_log`. Append durable events in `hya-store` and fold them through `hya_proto::Projection`.
 3. **Keep foundation crates lightweight:** `hya-proto` must stay free of async runtimes, SQLite, or HTTP libraries. `hya-updater` and `hya-relay` must not depend on runtime crates (`hya-engine`, `hya-app`, `hya-server`).
-4. **Reuse existing runtime planes:** Route permissions, user prompts, subagent spawning, skills, web search, and LSP calls through `hya-tool`'s existing planes (`PermissionPlane`, `InteractionPlane`, `SpawnerPlane`, `SkillPlane`, `WebSearchPlane`, `LspPlane`) rather than threading ad-hoc globals.
+4. **Reuse core planes & `HostRuntime`:** Route core permissions, user prompts, skills, and URI handles through `hya-tool`'s core planes (`PermissionPlane`, `InteractionPlane`, `SkillPlane`, `HandleRouter` / `UriSchemaPlane`, and `ExtensionPlanes`), and route all native bundle storage, session, turn, model, event, and API operations exclusively through `Arc<dyn HostRuntime>` (`crates/hya-runtime-abi`). Never link `hya-store`, `sqlx`, `hya-engine`, `hya-server`, `axum`, or `tonic` inside a native `cdylib` bundle.
 5. **One interactive frontend (`packages/hya-tui`):** Never add a second terminal UI or move UI rendering into `hya-server`. Both the terminal TUI and browser WebUI share `packages/hya-tui` ([ADR-0018](../adr/0018-browser-rendered-tui-test-environment.md)–[ADR-0020](../adr/0020-bundle-tui-and-webui-in-hya.md)), and core shortcuts must stay browser-safe (never bind an action *only* to `Ctrl/Cmd+W`, `T`, `N`, `L`, or `Ctrl+Tab`, which browsers intercept).
 
 ---
@@ -47,7 +47,7 @@ For multi-step work, run `python3 scripts/new-plan.py` from the repository root 
 Every new or changed user- or developer-facing feature ships with updated documentation in the same change:
 
 - **User-facing behavior & workflows:** Update the matching short guide under [`docs/guide/`](../guide/interactive-mode.md) and exact flags/fields/keys in [`docs/reference/`](../reference/cli.md).
-- **Bundle, Hook, TUI SDK, or `/v1` API changes:** Update [`docs/extend/`](../extend/overview.md) or [`docs/protocol/`](../protocol/README.md) (and run `cargo run -p xtask -- gen-api` if `proto/hya/v1/` changed).
+- **Bundle, Native ABI, Hook, TUI SDK, or `/v2` API changes:** Update [`docs/extend/`](../extend/overview.md) or [`docs/protocol/`](../protocol/README.md) (and run `cargo run -p xtask -- gen-api` if `proto/hya/v2/` changed).
 - **Internal engine, storage, or crate boundary changes:** Update [`docs/architecture/`](../architecture/overview.md) (and add an ADR under `docs/adr/` for major architectural decisions).
 
 Keep user guides short, plain-spoken, and focused on tasks; put exhaustive schemas and flag tables in `docs/reference/`, `docs/extend/`, or `docs/protocol/`.

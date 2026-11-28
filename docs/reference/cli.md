@@ -16,6 +16,7 @@
 | **Providers & auth** | `hya provider add\|list\|remove\|logout`, `hya login`, `hya oauth login\|status`, `hya models` |
 | **Sessions** | `hya sessions`, `hya sessions archive\|unarchive`, `hya tail-session` |
 | **Agents, Bundles & Workflows** | `hya agent list`, `hya bundle ...`, `hya workflow ...` |
+| **Offline v1 → v2 Migration** | `hya-migration check`, `hya-migration run [--dry-run] [--backup-dir <DIR>]`, `hya-migration rollback --backup <DIR>` |
 | **Self-update** | `hya update`, `hya update version` |
 
 ---
@@ -86,7 +87,7 @@ Global flags such as `--bare` and `--pure` can be placed either before or after 
 hya -p "<GOAL>" [--max-iterations <N>] [--evaluator-model <MODEL>]
 ```
 
-Runs iterative turns in memory through the `hya/goal` native bundle's `GoalDriver` until an independent evaluator (`goal.evaluate` hook or tool-free verifier model) confirms `<GOAL>` is met or `--max-iterations` (default `6`) is reached. Requires `hya/goal` to be enabled; fails with an actionable error in `--bare` mode or when `hya/goal` is disabled in `config.yaml` (`bundles.builtin.disable: [hya/goal]`). Per-bundle evaluator model defaults can be configured in `~/.config/hya/bundles/hya/goal/config.yml` under `goal.evaluator_model`.
+Runs iterative turns in memory through the `hya/goal` native bundle's `GoalDriver` until an independent evaluator (`goal.evaluate` hook or tool-free verifier model) confirms `<GOAL>` is met or `--max-iterations` (default `6`) is reached. Requires `hya/goal` to be enabled; fails with an actionable error in `--bare` mode or when `hya/goal` is disabled in `config.yaml` (`bundles.builtin.disable: [hya/goal]`). Per-bundle evaluator model defaults can be configured in `~/.config/hya/bundles/hya%2Fgoal/config.yml` under `goal.evaluator_model`.
 
 ### `hya loop`
 
@@ -108,7 +109,7 @@ Iterates toward `--target` up to `--budget` rounds (default `10`, clamped to `1.
 hya serve [--bind 127.0.0.1:8080] [--db ./sessions.db] [--bare] [--allow-host <HOST>]... [--relay <URL>]
 ```
 
-Serves both `/v1` HTTP/JSON+SSE+WebSocket and `hya.v1` gRPC on `--bind` (default `127.0.0.1:8080`, in-memory DB unless `--db` is given). Prints `hya server listening on <url>` on `stdout` when ready. Adding `--bare` starts the server on `BuiltinBundleProfile::Bare` with zero `bundles/builtin/` loaded (`hya-bare` default agent, standard bare tools, and an empty built-in bundle catalog).
+Serves both `/v2` HTTP/JSON+SSE+WebSocket and `hya.v2` gRPC on `--bind` (default `127.0.0.1:8080`, in-memory DB unless `--db` is given). Prints `hya server listening on <url>` on `stdout` when ready. Adding `--bare` starts the server on `BuiltinBundleProfile::Bare` with zero `bundles/builtin/` loaded (`hya-bare` default agent, standard bare tools, and an empty built-in bundle catalog).
 
 ### Background daemon lifecycle
 
@@ -209,10 +210,22 @@ Manage `.hyabundle` packages in `--user` scope (default, `~/.local/share/hya/bun
 
 ---
 
+## Offline Migration (`hya-migration`)
+
+The standalone `hya-migration` binary (shipped alongside `bin/hya`) upgrades v1 SQLite databases (`sessions.db`), `config.yaml`, `tui.toml`/`tui.json`, `.hya/bundles/`, and `registry.sqlite3` to Hya v2 with automatic SHA-256 backup snapshots and verified rollback. See **[Migrating from Hya v1 to v2](../guide/migration-v1-to-v2.md)** for full target flags, backup manifest format, and mapping tables.
+
+```sh
+hya-migration [--json] check [--db <PATH>] [--config <PATH>] [--tui-toml <PATH>] [--tui-json <PATH>] [--registry <PATH>] [--bundles-dir <DIR>]...
+hya-migration [--json] run [--dry-run] [--backup-dir <DIR>] [TARGET_FLAGS...]
+hya-migration [--json] rollback --backup <DIR>
+```
+
+---
+
 ## Database lock & exit codes
 
 Only **one writer** may hold a file-backed SQLite database (`<db>.runtime-owner.lock`) at a time:
-- When a daemon holds `<db>` (and published `<db>.server.json`), commands like `hya --db <db> exec`, `hya workflow run`, and `hya sessions archive` automatically route through that running server over `/v1`!
+- When a daemon holds `<db>` (and published `<db>.server.json`), commands like `hya --db <db> exec`, `hya workflow run`, and `hya sessions archive` automatically route through that running server over `/v2`!
 - Commands with flags a running server cannot honor per-call (such as `exec --bare`, `exec --pure`, or a second `hya serve` on the same DB) refuse cleanly with exit code **`75`**.
 - Read-only commands (`hya sessions`, `hya tail-session`, `hya workflow list|info`) never take the write lock and work anytime.
 

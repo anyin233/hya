@@ -61,7 +61,7 @@ In full mode, domain panes and slash commands are contributed dynamically by bui
 - **Workflows (`/workflow`, `/workflows`, `hya/workflow`):** Opens the dynamic Workflows pane (`hya/workflow#workflows`) and runs `/workflow select`, `/workflow run`, and `/workflow status`.
 - **Plan & Agent Channels (`hya/plan`, `hya/agent-channels`):** Add custom tool-call cards and live status badges (`PLAN (read-only)` and unread `Mail` counts).
 
-> **Upgrading from Hya v1:** Saved `tui.json` layouts use schema `version: 4` exclusively. Run `hya migrate` (powered by `crates/hya-migration`) to upgrade legacy v1 `tui.json` or `tui.toml` files; unmigrated legacy layouts are ignored and fall back to the default layout.
+> **Upgrading from Hya v1:** Saved `tui.json` layouts use schema `version: 4` exclusively and `tui.toml` uses `version = 2`. Run `hya-migration run` (see **[Migrating from Hya v1 to v2](migration-v1-to-v2.md)**) to upgrade legacy v1 `tui.json` or `tui.toml` files; unmigrated legacy layouts are ignored and fall back to the default layout.
 
 ---
 

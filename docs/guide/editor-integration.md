@@ -69,4 +69,4 @@ Example `session/prompt` request with a file link:
 
 ### Editor-supplied MCP servers (`OpenMcpSession`)
 
-When an editor passes stdio `mcpServers` (`{ name, command, args, env }`, where `name` uses ASCII letters, digits, `_`, or `-` without `__`), `hya acp` spawns them in the session's `cwd`—keeping editor command lines and secrets inside the local adapter process—and bridges their streams to the daemon over owner-only Unix sockets via `hya.v1.Mcp/OpenMcpSession` (`POST /v1/mcp/session` SSE). Two editor sessions can even bind the same MCP server name to different tool sets without colliding.
+When an editor passes stdio `mcpServers` (`{ name, command, args, env }`, where `name` uses ASCII letters, digits, `_`, or `-` without `__`), `hya acp` spawns them in the session's `cwd`—keeping editor command lines and secrets inside the local adapter process—and bridges their streams to the daemon over owner-only Unix sockets via `hya.v2.Mcp/OpenMcpSession` (`POST /v2/mcp/session` SSE). Two editor sessions can even bind the same MCP server name to different tool sets without colliding.

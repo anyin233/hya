@@ -17,7 +17,7 @@
 
   <!-- Header -->
   <text x="36" y="46" fill="#f8fafc" font-size="20" font-weight="700">hya  —  Event-Sourced Multi-Agent Coding Runtime Architecture</text>
-  <text x="36" y="68" fill="#94a3b8" font-size="12.5">Single canonical Event stream · Persistent backend daemon · Consolidated hya.v1 HTTP/SSE/WS &amp; gRPC · Episodic resident subagents</text>
+  <text x="36" y="68" fill="#94a3b8" font-size="12.5">Single canonical Event stream · Persistent backend daemon · Consolidated hya.v2 HTTP/SSE/WS &amp; gRPC · Modular ABI v2 bundles</text>
 
   <!-- LAYER 1: CLIENTS & FRONTENDS -->
   <rect x="28" y="88" width="1104" height="112" rx="10" fill="#1e293b" fill-opacity="0.55" stroke="#334155"/>
@@ -36,7 +36,7 @@
   <rect x="566" y="120" width="245" height="66" rx="8" fill="#0f172a" stroke="#475569" stroke-width="1.2"/>
   <text x="580" y="141" fill="#f1f5f9" font-size="13" font-weight="600">Headless CLI &amp; SDK Clients</text>
   <text x="580" y="159" fill="#94a3b8" font-size="11">hya exec · hya -p · hya loop · workflow</text>
-  <text x="580" y="174" fill="#64748b" font-size="10.5">hya-sdk-v1 (V1SessionMirror) · gRPC stubs</text>
+  <text x="580" y="174" fill="#64748b" font-size="10.5">hya-sdk (SessionMirror) · gRPC stubs</text>
 
   <rect x="827" y="120" width="289" height="66" rx="8" fill="#0f172a" stroke="#a78bfa" stroke-width="1.2"/>
   <text x="841" y="141" fill="#f1f5f9" font-size="13" font-weight="600">Remote Client Bridge &amp; Relay</text>
@@ -51,10 +51,10 @@
 
   <!-- LAYER 2: SERVER & PROTOCOL BOUNDARY -->
   <rect x="28" y="224" width="1104" height="96" rx="10" fill="#1e293b" fill-opacity="0.55" stroke="#334155"/>
-  <text x="44" y="244" fill="#34d399" font-size="11" font-weight="700" letter-spacing="0.08em">2. PERSISTENT BACKEND DAEMON &amp; CONSOLIDATED hya.v1 CONTRACT (hya-server · hya-api · hya-relay)</text>
+  <text x="44" y="244" fill="#34d399" font-size="11" font-weight="700" letter-spacing="0.08em">2. PERSISTENT BACKEND DAEMON &amp; CONSOLIDATED hya.v2 CONTRACT (hya-server · hya-api · hya-relay)</text>
 
   <rect x="44" y="254" width="750" height="52" rx="8" fill="#0f172a" stroke="#34d399" stroke-width="1.2"/>
-  <text x="60" y="275" fill="#f1f5f9" font-size="13" font-weight="600">Single-Port Dual Router: /v1 HTTP/JSON + SSE + WebSocket &amp; V1Grpc (18 Services · 109 RPCs)</text>
+  <text x="60" y="275" fill="#f1f5f9" font-size="13" font-weight="600">Single-Port Dual Router: /v2 HTTP/JSON + SSE + WebSocket &amp; V2Grpc (17 Services · 104 RPCs)</text>
   <text x="60" y="294" fill="#94a3b8" font-size="11">Detached daemon (&lt;db&gt;.runtime-owner.lock + .server.json) · Host allowlist guard · Ephemeral session reaper · No server cwd</text>
 
   <rect x="810" y="254" width="306" height="52" rx="8" fill="#0f172a" stroke="#a78bfa" stroke-width="1.2"/>
@@ -125,5 +125,5 @@
   <rect x="780" y="668" width="336" height="72" rx="8" fill="#0f172a" stroke="#34d399" stroke-width="1.2"/>
   <text x="794" y="689" fill="#f1f5f9" font-size="12.5" font-weight="600">SQLite WAL Store &amp; Projection (hya-store · proto)</text>
   <text x="794" y="707" fill="#94a3b8" font-size="10.8">event_log · Projection reducer · projection_snapshot</text>
-  <text x="794" y="723" fill="#64748b" font-size="10.5">project_root · resident_actor_claim · pending_resume</text>
+  <text x="794" y="723" fill="#64748b" font-size="10.5">project_root · bundle_state · bundle_claim · pending_resume</text>
 </svg>

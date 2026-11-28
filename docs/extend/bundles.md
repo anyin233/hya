@@ -7,9 +7,9 @@ A **Bundle** (`kind: Bundle`) is Hya's all-in-one package format. A single `.hya
 - **A compiled Workflow** with its stage agents,
 - **Custom HTTP endpoints** (`apis:`), **custom permission modes** (`permission_modes:`), **URI schemes** (`schemas:`), and **TUI panels** (`tui:`).
 
-Static bundles run zero extra processes. Executable bundles run either out-of-process **JS Bundles** (Bun / Claude sidecars over stdio NDJSON JSON-RPC 2.0) cleanly isolated from Hya's core engine, or **Native Bundles** (compiled Rust dynamic libraries verified against Hya's ABI).
+Static bundles run zero extra processes. Executable bundles run either out-of-process **JS Bundles** (Bun / Claude sidecars over stdio NDJSON JSON-RPC 2.0) cleanly isolated from Hya's core engine, or **Native Bundles** (compiled Rust `cdylib` libraries speaking Lockstep Native ABI v2 via `crates/hya-runtime-abi`, optionally paired with `@hya/tui-sdk` v2 TUI extensions in a hybrid `native` + `tui` bundle).
 
-For the complete normative format, all five descriptor file schemas, ABI contracts, loading precedence, and independent CI architecture, see the **[`hyabundle` Specification](hyabundle-spec.md)** and **[ADR-0038](../adr/0038-hyabundle-standard-and-independent-ci.md)**.
+For the complete normative format, all five descriptor file schemas, loading precedence, and independent CI architecture, see the **[`hyabundle` Specification](hyabundle-spec.md)**, **[Native Bundle Runtime ABI v2](native-abi.md)**, and **[ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)**.
 
 ---
 
@@ -22,6 +22,7 @@ For a simple custom agent that uses Hya's built-in tools, you only need **one fi
 ```markdown
 ---
 kind: Bundle
+schema_version: 2
 identity:
   id: acme/sql-helper
   version: 1.0.0
@@ -62,17 +63,18 @@ When packaging multiple agents, a Workflow, skills, or JS/TS extensions, use `bu
 
 ```yaml
 kind: Bundle
+schema_version: 2
 identity:
   id: acme/review-pack
   version: 1.0.0
   publisher: acme
 check:
-  command: ["bun", "test"]   # Optional self-test run automatically on verify/install!
+  command: ["bun", "test", "--pass-with-no-tests"]   # Optional self-test run automatically on verify/install!
   timeout_secs: 120
 resources:
   skills:
     - id: review-checklist
-      path: skills/review-checklist.md
+      path: skills/review-checklist/SKILL.md
 agents:
   - id: acme-reviewer
     description: Security & correctness code reviewer
@@ -91,59 +93,62 @@ agents:
 
 Check out runnable source examples in [`docs/examples/`](../examples/):
 - [`docs/examples/bundle.hya.md`](../examples/bundle.hya.md) — Single-file static agent
-- [`docs/examples/bun-transient/`](../examples/bun-transient/) & [`docs/examples/bun-resident/`](../examples/bun-resident/) — Agent + Bun JS tool (`bundle.hya.md` + `extensions/runtime.js`)
+- [`docs/examples/bun-transient/`](../examples/bun-transient/) & [`docs/examples/bun-resident/`](../examples/bun-resident/) — Agent + Bun JS tool
 - [`docs/examples/bun-disjoint/`](../examples/bun-disjoint/) — Multi-agent bundle selecting disjoint JS tools and hooks
 
 ---
 
 ## 2. Manifest Reference (`bundle.yaml`)
 
-Unknown YAML fields are rejected (`deny_unknown_fields`), so typos are caught at package time.
+Hya v2 accepts **`schema_version: 2` only** (upgrade v1 manifests with `hya-migration run`). Unknown YAML fields are rejected (`deny_unknown_fields`), so typos are caught at package time.
 
 | Top-level key | Purpose |
 | --- | --- |
 | `kind` | Required. Always `Bundle`. |
-| `schema_version` | Optional. `2` for the standardized schema (`1` remains supported for legacy `extensions:` manifests). |
+| `schema_version` | Required. Must be `2`. |
 | `identity` | Required `{ id: "<publisher>/<name>", version: "<semver>", publisher: "<name>" }`. |
 | `version_ref` | Optional (`hya`). Used by built-in bundles under `bundles/builtin/` to resolve `0.0.0` to `versions.toml`. |
 | `namespace` | Optional tool/schema prefix (defaults to `<name>`; cannot be `mcp`, `harness`, `builtin`, or `plugin`). |
-| `runtime` | Optional standardized runtime declaration `{ kind: static \| js \| native, mode?, entry?, command?, timeout_ms?, abi_version?, crate_dir?, library?, capabilities? }`. Mutually exclusive with legacy `extensions.{process,libraries}`. |
+| `overrides` | Optional bundle ID whose primitives this bundle overrides (e.g. `overrides: hya/bare` on `hya/hashline`, or per-tool `overrides: hya/multi-agent` on `hya/agent-channels`'s `wait`). Reserved kernel tools `todo` and `rewrite` can never be overridden. |
+| `runtime` | Optional runtime declaration `{ kind: static \| js \| native, mode?, entry?, command?, timeout_ms?, abi_version?, crate_dir?, library?, capabilities? }`. |
 | `check` | Optional `{ command: [...], timeout_secs?: 1..600 }` run in an isolated copy during `verify`, `install`, and Bundle CI. |
-| `resources` | Optional `{ tools: [...], skills: [...], commands: [...], mcp: [...], hooks: [...] }` (`{ id, path, aliases? }`). See the **[Descriptor Schemas](hyabundle-spec.md#4-standardized-descriptor-file-schemas)**. |
-| `assets` | Optional list of runtime data files (`[{ id, path }]`, such as JSON Schemas or templates), replacing `extensions.files`. |
-| `extensions` | Legacy v1 runtime block `{ js: [...], files: [...], rust: [...], libraries: [...], process?: { kind, command, timeout_ms? } }`. |
-| `agents` | Optional list of standalone Markdown agent references (`{ path: "agents/<id>.md" }`) or inline Agent definitions (`id`, `role: main \| subagent`, `description?`, `prompt?`, `model_policy?`, `resource_view?`, `advertise?`, `handoff?: model \| deterministic`, `private?`, `can_spawn?`, `hook_refs?`). *(Note: legacy `spawn_lifecycle` is removed—all subagents are episodic resident actors.)* |
+| `resources` | Optional `{ tools: [...], skills: [...], commands: [...], mcp: [...], hooks: [...] }` (`{ id, path, aliases?, overrides? }`). See the **[Descriptor Schemas](hyabundle-spec.md#4-standardized-descriptor-file-schemas)**. |
+| `assets` | Optional list of runtime data files (`[{ id, path }]`, such as JSON Schemas, TUI sources, or config templates). |
+| `agents` | Optional list of standalone Markdown agent references (`{ path: "agents/<id>.md" }`) or inline Agent definitions (`id`, `role: main \| subagent`, `description?`, `prompt?`, `model_policy?`, `resource_view?`, `advertise?`, `handoff?: model \| deterministic`, `private?`, `can_spawn?`, `hook_refs?`). |
 | `workflow` | Optional `{ id, path: "workflows/*.hya.md" }` (requires `agents` to match the exact reachable closure). |
 | `channels` | Optional vertical channel policy templates (`kind: unit \| parent_dm`, `participants`, `capabilities`, `scope`, `retention: team_session`). |
-| `schemas` | Optional custom URI schemes (`[{ scheme, tool, writable? }]`) routed through `read`/`write` (e.g. `db://...`). |
-| `apis` | Optional custom HTTP/gRPC endpoints served by a `js` `process` runtime (`runtime:` or `extensions.process`). |
+| `schemas` | Optional custom URI schemes (`[{ scheme, tool, writable? }]`) routed through `read`/`write` (e.g. `db://...`; native bundles may also register `UriSchemaHandler` via ABI v2). |
+| `apis` | Optional custom HTTP/gRPC endpoints mounted on `hya.v2.BundleApi` and served by a `js` `process` runtime or a native ABI v2 `NativeBundleApiHandler`. |
 | `permission_modes` | Optional custom session permission modes (`[{ id, title, description? }]`) backed by `permission.approve`. |
-| `tui` | Optional `{ api_version: 1, entry, sdk: "1.0.0", permissions: [...] }` (see **[TUI Extensions](tui-extensions.md)**). |
+| `tui` | Optional `{ api_version: 2, entry, sdk: "2.0.0", permissions: [...] }` (may be combined with `runtime.kind: native` in hybrid bundles; see **[TUI Extensions](tui-extensions.md)**). |
 
 ---
 
 ## 3. Advanced Bundle Capabilities
 
-### API endpoints (`apis:`)
+### API endpoints (`apis:` / `BundleApi`)
 
-A bundle with an explicit `extensions.process` can mount custom JSON endpoints on the Hya server (`/v1/sessions/{session}/bundles/{bundle}...` or `/v1/bundles/{bundle}/api...`):
+A bundle with `runtime: { kind: js, mode: process, ... }` (or a native ABI v2 bundle registering `NativeBundleApiHandler`) can mount custom JSON endpoints on the Hya v2 server (`/v2/sessions/{session}/bundles/{bundle}/{path}` or `/v2/bundles/{bundle}/api/{path}`):
 
 ```yaml
 kind: Bundle
+schema_version: 2
 identity: { id: acme/notes, version: 1.0.0, publisher: acme }
-extensions:
-  process: { kind: bun, command: [bun, run, '${BUNDLE_ROOT}/notes.ts'] }
-  files:
-    - { id: notes, path: notes.ts }
-    - { id: note-schema, path: schemas/note.json }   # packaged JSON Schema
+runtime:
+  kind: js
+  mode: process
+  command: [bun, run, '${BUNDLE_ROOT}/notes.ts']
+assets:
+  - { id: notes, path: notes.ts }
+  - { id: note-schema, path: schemas/note.json }   # packaged JSON Schema
 apis:
-  # GET /v1/sessions/{session}/bundles/acme%2Fnotes/usage
+  # GET /v2/sessions/{session}/bundles/acme%2Fnotes/usage
   - id: usage
     method: GET
     scope: session
     path: /usage
     description: Token usage of the session tree        # optional
-  # PUT /v1/bundles/acme%2Fnotes/api/notes/{key}
+  # PUT /v2/bundles/acme%2Fnotes/api/notes/{key}
   - id: put-note
     method: PUT
     scope: global
@@ -154,15 +159,18 @@ apis:
 
 ### Permission modes (`permission_modes:`)
 
-Add selectable modes to `/permissions` (for example `acme/approver/careful` to auto-allow read-only shell commands while deferring everything else to the user) by pairing `permission_modes:` with an `extensions.process` that handles `hook/permission.approve`:
+Add selectable modes to `/permissions` (for example `acme/approver/careful` to auto-allow read-only shell commands while deferring everything else to the user) by pairing `permission_modes:` with a `js` `process` runtime (or native hook) that handles `hook/permission.approve`:
 
 ```yaml
 kind: Bundle
+schema_version: 2
 identity: { id: acme/approver, version: 1.0.0, publisher: acme }
-extensions:
-  process: { kind: bun, command: [bun, run, '${BUNDLE_ROOT}/approver.ts'] }
-  files:
-    - { id: approver, path: approver.ts }
+runtime:
+  kind: js
+  mode: process
+  command: [bun, run, '${BUNDLE_ROOT}/approver.ts']
+assets:
+  - { id: approver, path: approver.ts }
 resources:
   hooks:
     - { id: permission.approve, path: hooks/permission-approve.json }

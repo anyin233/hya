@@ -1,6 +1,6 @@
 # Session Engine, Subagents & Channels
 
-`crates/hya-engine` builds full-mode interactive, headless, multi-agent, and Workflow execution on top of the `hya-core` kernel.
+`crates/hya-engine` provides the single-agent `SessionEngine` and extension host on top of the `hya-core` kernel, while modular native ABI v2 bundles (`hya/multi-agent`, `hya/agent-channels`, `hya/goal`, `hya/loop`, and `hya/workflow`) layer multi-agent supervision, vertical channels, governed loops, and Workflow DAG execution solely through `Arc<dyn HostRuntime>` ([ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)).
 
 ---
 
@@ -14,40 +14,40 @@ When a prompt, slash command, or shell turn enters `SessionEngine`:
 
 ---
 
-## 2. Episodic Resident Subagents (`ResidentSupervisor`)
+## 2. Episodic Resident Subagents (`hya/multi-agent`)
 
-Since `0.41.0` ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)), Hya has **one unified subagent model**: every child spawned via `task` (or a Workflow Stage) is an **episodic resident actor** (`MAX_SUBAGENT_DEPTH = 2`).
+Since `0.41.0` ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)), Hya has **one unified subagent model**: every child spawned via `task` (or a Workflow Stage) is an **episodic resident actor** (`MAX_SUBAGENT_DEPTH = 2`), packaged in `bundles/builtin/multi-agent` over Lockstep Native ABI v2.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> ActiveEpisode: task() spawns child<br/>Mints handle + #DM + ActorClaim(epoch=1)
+    [*] --> ActiveEpisode: task() spawns child<br/>Mints handle + #DM + bundle_claim(epoch=1)
     ActiveEpisode --> Archived: Calls report() (or parent archive())<br/>Commits state Handoff + releases claim & budget
-    Archived --> ActiveEpisode: Parent sends mail on #DM<br/>AgentRestarted(epoch+1) with system prompt + prior Handoff + DM
+    Archived --> ActiveEpisode: Parent sends mail on #DM<br/>agent_restarted(epoch+1) with system prompt + prior Handoff + DM
 ```
 
 ### Key invariants
 
 - **Deterministic handles:** Minted on the team-root log as `main/<type>-<operator>` (e.g. `main/hya-scout-suzuran`).
-- **Transactional epoch fencing (`ActorClaim`):** Every durable write by a subagent checks its `(SessionId, ActorEpoch, OwnerRunId)` claim inside SQLite. A stale or superseded worker can never commit late tool results or consume mail meant for its replacement.
+- **Transactional epoch fencing (`bundle_claim` / `ActorClaim`):** Every durable write by a subagent checks its fenced lease in SQLite's generic `bundle_claim` table (via `HostBundleStorage`). A stale or superseded worker can never commit late tool results or consume mail meant for its replacement.
 - **Zero-cost sleep & Handoff revival:** On `report`, Hya checks that the subagent has no unread mail and no still-running children, summarizes its episode into a state-only **Handoff** (`model` summarizer or `deterministic` projection summary), refunds its concurrency/capacity lease, and archives it. Later downward mail on its `#DM` revives the same handle and session with `system prompt + handoff(n) + new DM` instead of replaying a huge stale transcript.
-- **Concurrency & runaway budgets (`SubagentGovernor`):** Bounds concurrent streaming members (`max_concurrency`), live team members (`per_run_budget`), total team turns (`per_team_turn_budget`), and total mail events (`per_team_message_budget`).
+- **Concurrency & runaway budgets:** Bounds concurrent streaming members (`max_concurrency`), live team members (`per_run_budget`), total team turns (`per_team_turn_budget`), and total mail events (`per_team_message_budget`), configured in `~/.config/hya/bundles/hya%2Fmulti-agent/config.yml`.
 
 ---
 
-## 3. Strictly Vertical Channel Plane
+## 3. Strictly Vertical Channel Plane (`hya/agent-channels`)
 
-Inter-agent mail ([ADR-0016](../adr/0016-channel-communication-plane.md)) is event-sourced on the **team-root** session's `event_log` (`ChannelCreated`, `MailSent`, `MailConsumed`) with **strictly vertical addressing**:
+Inter-agent mail ([ADR-0016](../adr/0016-channel-communication-plane.md)) is event-sourced on the **team-root** session's `event_log` as `Event::Extension` (`bundle: "hya/agent-channels"`, kinds `channel_created`, `channel_joined`, `mail_sent`, `mail_consumed`) with **strictly vertical addressing**:
 
 - **`#DM-{8}`:** Private 1-on-1 pipe between a parent and one direct child, persisted across archive/revive episodes.
 - **`#announce-{8}`:** Broadcast pipe owned by a unit leader (`main` or a depth-1 parent) to all of its live direct children. Siblings cannot discover or message each other sideways.
-- **Exactly-once cursor (`MailConsumed`):** Shared across in-turn `[NEW MAIL]` steering notices, `wait` wakes, and `read channel://...` calls, preventing duplicate synthesis turns (`TEAM QUIESCED`) when a parent already read its children's reports during its turn.
+- **Exactly-once cursor (`mail_consumed`):** Shared across in-turn `[NEW MAIL]` steering notices (`unread-mail-steer` `NativeHook`), mail-aware `wait` wakes, and `read channel://...` calls (`UriSchemaHandler`), preventing duplicate synthesis turns (`TEAM QUIESCED`) when a parent already read its children's reports during its turn.
 
 ---
 
-## 4. Governed Execution (Goal, Loop & Workflows)
+## 4. Governed Execution (`hya/goal`, `hya/loop` & `hya/workflow`)
 
-- **Goal (`hya -p`) & Loop (`hya loop`) drivers:** Run iterative turns on `IterationDriver` where stop authority belongs strictly to the engine's budgets, stall fingerprint detector, `--until`/`--while` shell exit codes, and independent evaluator/verifier sessions or hooks.
-- **Durable Workflow executor:** Runs compiled `hya_workflow::CompiledWorkflow` Stage DAGs on the exact same resident subagent substrate—mapping anonymous Stages to one-shot episodes, `actor:` keys to persistent resident sessions woken by mail, and `mode: loop` Stages to fresh verifier sessions.
+- **Goal (`hya -p`, `hya/goal`) & Loop (`hya loop`, `hya/loop`) drivers:** Implemented as ABI v2 `GoalDriver` / `LoopDriver` native bundles running over `HostRuntime` where stop authority belongs strictly to budgets, stall detection, `--until`/`--while` shell exit codes, and independent evaluator/verifier sessions or hooks.
+- **Durable Workflow executor (`hya/workflow`):** Runs compiled `hya_workflow::CompiledWorkflow` Stage DAGs on top of `HostTurnRunner` and `Event::Extension` (`extensions["hya/workflow"]`)—mapping anonymous Stages to one-shot episodes, `actor:` keys to persistent resident sessions woken by mail, and `mode: loop` Stages to fresh verifier sessions, exposed via `BundleApi` (`/workflows`, `/state`, `/command`).
 - **Sidecar wire contract:** Per-activation JavaScript sidecars and bundle processes speak newline-delimited JSON-RPC 2.0 using plugin protocol version 1 (`initialize` retains existing `protocol_version` and `host` fields, and the only activation-specific metadata is `{ activation_id, lifecycle }`).
 
 ---

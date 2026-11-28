@@ -45,6 +45,7 @@ export default defineConfig({
           { label: 'Workflows', slug: 'guide/workflows' },
           { label: 'Skills, Commands & MCP', slug: 'guide/skills-commands-and-mcp' },
           { label: 'Background Server & Remote Relay', slug: 'guide/daemon-and-relay' },
+          { label: 'Migrating from v1 to v2', slug: 'guide/migration-v1-to-v2' },
         ],
       },
       {
@@ -67,15 +68,16 @@ export default defineConfig({
           { label: 'Authoring Workflows & Evaluators', slug: 'extend/authoring-workflows' },
           { label: 'Creating Bundles (.hyabundle)', slug: 'extend/bundles' },
           { label: 'hyabundle Specification', slug: 'extend/hyabundle-spec' },
+          { label: 'Native Runtime ABI v2', slug: 'extend/native-abi' },
           { label: 'Plugins, Tools & Hooks', slug: 'extend/plugins-and-hooks' },
-          { label: 'TUI Extensions (@hya/tui-sdk)', slug: 'extend/tui-extensions' },
+          { label: 'TUI Extensions (@hya/tui-sdk v2)', slug: 'extend/tui-extensions' },
         ],
       },
       {
         label: 'Protocol & SDK',
         collapsed: true,
         items: [
-          { label: 'hya.v1 Protocol Overview', slug: 'protocol/index' },
+          { label: 'hya.v2 Protocol Overview', slug: 'protocol/index' },
           { label: 'SDK & Client Integration', slug: 'protocol/sdk' },
           { label: 'Generated API Reference', slug: 'protocol/api-reference' },
         ],

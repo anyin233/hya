@@ -10,12 +10,12 @@ Run `cargo run -p xtask -- --help` to see all available tasks:
 
 | Command | When to run it & what it does |
 | --- | --- |
-| `cargo run -p xtask -- gen-api` | **After editing `proto/hya/v1/*.proto`.** Uses vendored `protoc` to regenerate Rust `hya-api` types, `hya-server` gRPC adapters, `docs/protocol/api-reference.md`, `docs/protocol/openapi.json`, and `packages/hya-tui`'s operation catalog + proto copies. Commit all generated files; CI checks for drift. |
+| `cargo run -p xtask -- gen-api` | **After editing `proto/hya/v2/*.proto`.** Uses vendored `protoc` to regenerate Rust `hya-api` types, `hya-server` gRPC adapters, `docs/protocol/api-reference.md`, `docs/protocol/openapi.json`, and `packages/hya-tui`'s operation catalog + proto copies. Commit all generated files; CI checks for drift. |
 | `cargo run -p xtask -- gen-relay` | **After editing `proto/hya/relay/v1/*.proto`.** Regenerates `crates/hya-relay` bindings. |
 | `cargo run -p xtask -- gen-plugin` | **After editing plugin hook types in `crates/hya-plugin/src/messages.rs`.** Regenerates TypeScript `wire.gen.ts` guards and syncs shared stdio runtime files across Bun and Claude adapters. |
 | `cargo run -p xtask -- matrix-check` | **After editing `crates/hya-e2e` tests or `matrix.toml`.** Verifies 1:1 Track P scenario registration with zero orphan files or numbering holes. |
-| `cargo run -p xtask -- package-bundle <src-dir> <out.hyabundle>` | Validates a bundle source directory and writes a deterministic format-v4 `.hyabundle` archive. |
-| `cargo run -p xtask -- package-native-tool-library <family-dir> <lib.so\|.dylib> <out.hyabundle>` | Packages a compiled first-party native tool-family dynamic library with its `exposure.yaml` declarations. |
+| `cargo run -p xtask -- package-bundle <src-dir> <out.hyabundle>` | Validates a `schema_version: 2` bundle source directory and writes a deterministic `.hyabundle` archive. |
+| `cargo run -p xtask -- package-native-tool-library <bundle-dir> <lib.so\|.dylib> <out.hyabundle>` | Packages a compiled first-party Native ABI v2 dynamic library (`bundles/builtin/*/native`) into its deterministic `.hyabundle` archive. |
 | `cargo run -p xtask -- startup-bench [--db <seed.db>]` | Measures cold `hya serve` startup latency and prints the `HYA_STARTUP_TRACE` phase waterfall. |
 | `cargo run -p xtask -- lifecycle-bench [--json] [--check crates/xtask/lifecycle-baseline.json]` | Benchmarks 1/16/64-subagent spawn, work, report/archive, and mail revival SQL/event counts offline. |
 | `cargo run -p xtask -- release-rehearsal --version <semver> --target <triple> --no-publish` | Full end-to-end local release staging, checksum, installer, and smoke verification for the host target. |
@@ -40,7 +40,7 @@ Open `http://localhost:4321`. Edits to `docs/**/*.md` hot-reload in the browser.
 
 ### Build & link verification gate
 
-`.github/workflows/ci.yml` (`docs` job, gated by `ci-gate`) runs these checks on every PR and `main` push touching `public/`, `docs/`, or `proto/hya/v1/` (checking `public/` static integrity first via `.github/scripts/check_web.py`, then assembling `public/` at `/` and Starlight under `/docs/` in `docs/site/dist-pages`), and `.github/workflows/docs.yml` builds and deploys `main` to GitHub Pages:
+`.github/workflows/ci.yml` (`docs` job, gated by `ci-gate`) runs these checks on every PR and `main` push touching `public/`, `docs/`, or `proto/hya/v2/` (checking `public/` static integrity first via `.github/scripts/check_web.py`, then assembling `public/` at `/` and Starlight under `/docs/` in `docs/site/dist-pages`), and `.github/workflows/docs.yml` builds and deploys `main` to GitHub Pages:
 
 ```sh
 python3 .github/scripts/check_web.py

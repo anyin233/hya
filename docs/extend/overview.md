@@ -16,9 +16,10 @@ Use this page to pick the lightest tool that solves your problem.
 | Connect existing external tools (GitHub, DBs, browsers) | **[MCP Servers](../guide/skills-commands-and-mcp.md#3-mcp-servers-model-context-protocol)** | None (`config.yaml`) | `~/.config/hya/config.yaml` `mcp:` |
 | Run a repeatable multi-agent pipeline (plan → code → review) | **[Workflows](authoring-workflows.md)** | None (`*.hya.md` + `flowchart TD`) | `.hya/workflows/*.hya.md` or inside a Bundle |
 | Ship custom Agents, Tools, Hooks, APIs, or Claude plugins as one package | **[Bundles (`.hyabundle`)](bundles.md)** | YAML + optional JS/TS or Rust | `~/.local/share/hya/bundles/` or `.hya/bundles/` |
+| Build compiled Rust native bundles with tools, services, hooks, reducers, or drivers | **[Native Bundle Runtime ABI v2](native-abi.md)** | Rust (`crates/hya-runtime-abi`) | `bundles/builtin/` or `.hyabundle` (`runtime.kind: native`) |
 | Intercept tool calls, rewrite model requests, or add custom approval modes | **[Plugins & Hooks](plugins-and-hooks.md)** | TypeScript (Bun) or any stdio JSON-RPC binary | Inside a Bundle or `config.yaml` `plugins:` |
-| Add custom UI panels, status items, or tool-card renderers to the TUI | **[TUI Extensions](tui-extensions.md)** | TypeScript (`@hya/tui-sdk`) | `tui:` section inside a Bundle |
-| Embed or drive Hya from your own web app, bot, or CLI | **[`hya.v1` API & SDK](../protocol/README.md)** | HTTP/JSON+SSE, gRPC, or Rust `hya-sdk-v1` | Your own client process |
+| Add custom UI panels, dynamic panes, status items, or tool-card renderers to the TUI | **[TUI Extensions](tui-extensions.md)** | TypeScript (`@hya/tui-sdk` v2) | `tui:` section inside a Bundle |
+| Embed or drive Hya from your own web app, bot, or CLI | **[`hya.v2` API & SDK](../protocol/README.md)** | HTTP/JSON+SSE, gRPC, or Rust `hya-sdk` | Your own client process |
 
 ---
 
