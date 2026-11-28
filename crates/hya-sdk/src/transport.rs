@@ -27,6 +27,11 @@ impl HttpTransport {
         }
     }
 
+    /// The same transport with no request timeout.
+    pub(crate) fn unbounded(&self) -> Self {
+        Self::new(self.base.clone(), self.http.clone(), None)
+    }
+
     pub(crate) fn request(
         &self,
         method: Method,
