@@ -158,7 +158,19 @@ pub fn test_runtime(
             .expect("test bundle must prepare"),
         );
     }
-    let refs = prepared.iter().collect::<Vec<_>>();
+    let mut refs = prepared.iter().collect::<Vec<_>>();
+    let fixture_ids: std::collections::BTreeSet<&str> =
+        agents.iter().map(|(id, _, _)| *id).collect();
+    if let Ok(multi_agent) = hya_bundle::first_party_bundle("hya/multi-agent")
+        && multi_agent.bundles().iter().all(|bundle| {
+            bundle
+                .agents()
+                .iter()
+                .all(|agent| !fixture_ids.contains(agent.id.as_str()))
+        })
+    {
+        refs.push(multi_agent);
+    }
     let catalog = BundleCatalog::from_verified_catalogs(&refs)
         .expect("test bundles must retain verified identity");
     let catalog = hya_engine::AgentCatalog::new(Arc::new(catalog)).expect("test agent catalog");

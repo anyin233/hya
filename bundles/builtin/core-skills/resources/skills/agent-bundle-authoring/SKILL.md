@@ -27,7 +27,7 @@ a second Agent runtime. Evaluator hooks receive their documented evaluation
 inputs while the engine retains iteration and budget caps.
 
 `hya/core-agents`, `hya/agent-channels`, and the native tool bundles
-(`hya/hashline`, `hya/coding-extras`, `hya/extended-tools`, `hya/network`)
+(`hya/hashline`, `hya/coding-extras`, `hya/multi-agent`, `hya/network`)
 are trusted built-in bundles. Trust comes
 from the embedded source, never from a manifest claiming
 their identity. Public bundle agents retain the internal-public Harness plane

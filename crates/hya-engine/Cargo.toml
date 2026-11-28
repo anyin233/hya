@@ -20,6 +20,8 @@ hya-plan = { workspace = true }
 hya-workflow-bundle = { workspace = true }
 # Built for its `cdylib`: the `hya/agent-channels` native ABI v2 bundle (mailbox, channel:// schema, steer hook, BundleApi).
 hya-agent-channels = { workspace = true }
+# Built for its `cdylib`: the `hya/multi-agent` native ABI v2 bundle (governor, handle naming, claims, tools, BundleApi).
+hya-multi-agent = { workspace = true }
 hya-core = { workspace = true }
 hya-proto = { workspace = true }
 hya-provider = { workspace = true }
@@ -47,6 +49,5 @@ hya-provider = { workspace = true, features = ["test-support"] }
 hya-store = { workspace = true, features = ["lifecycle-bench"] }
 hya-hashline = { workspace = true }
 hya-coding-extras = { workspace = true }
-hya-extended-tools = { workspace = true }
 hya-network = { workspace = true }
 sqlx = { workspace = true }

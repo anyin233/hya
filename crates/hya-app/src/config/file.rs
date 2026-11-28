@@ -135,7 +135,7 @@ impl EngineSettings {
 
     pub(crate) fn subagents(&self) -> SubagentLimits {
         let block = self
-            .read_bundle_config_value(&["hya/extended-tools", "hya/multi-agent"])
+            .read_bundle_config_value(&["hya/multi-agent", "hya/extended-tools"])
             .and_then(|val| decode_bundle_section::<SubagentLimitsFile>(&val, Some("subagents")));
         resolve_subagent_limits(block.as_ref())
     }
@@ -500,7 +500,7 @@ pub(super) fn parse_config(yaml: &str) -> anyhow::Result<FileConfig> {
         ("formatter", "hya/coding-extras"),
         ("goal", "hya/goal-loop"),
         ("lsp", "hya/coding-extras"),
-        ("subagents", "hya/extended-tools"),
+        ("subagents", "hya/multi-agent"),
     ];
     for (key, bundle_id) in REMOVED_V1_SECTIONS {
         if map.contains_key(key) {

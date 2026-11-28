@@ -443,7 +443,7 @@ impl SessionEngine {
                     .clone()
                     .with_uri_handler(hya_runtime_abi::adapt_uri_schema_handler(
                         channel_uri,
-                        Some(channels_runtime),
+                        Some(Arc::clone(&channels_runtime)),
                     ))
             {
                 artifacts = updated;
@@ -451,6 +451,22 @@ impl SessionEngine {
             store.register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
                 inner: Arc::new(hya_agent_channels::AgentChannelsProjectionReducer),
             }));
+
+            let multi_service = Arc::new(hya_multi_agent::MultiAgentService::with_runtime(
+                Arc::clone(&channels_runtime),
+            ));
+            native_hooks.push(Arc::new(hya_multi_agent::MultiAgentLifecycleHook::new(
+                Arc::clone(&multi_service),
+            )));
+            store.register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
+                inner: Arc::new(hya_multi_agent::MultiAgentProjectionReducer),
+            }));
+            let _ = runtime.register_native_bundle_apis(
+                hya_tool::extension::BUNDLE_MULTI_AGENT,
+                vec![Arc::new(hya_multi_agent::MultiAgentBundleApiHandler::new(
+                    multi_service,
+                ))],
+            );
         }
 
         let native_hooks = (!native_hooks.is_empty()).then(|| {
@@ -1086,6 +1102,33 @@ impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
         payload: &Value,
     ) {
         let bundle_id = self.inner.bundle_id();
+        let multi_reviving_path =
+            if bundle_id == hya_tool::extension::BUNDLE_MULTI_AGENT && kind == "agent_registered" {
+                let handle = payload.get("handle").and_then(Value::as_str);
+                let parent = payload.get("parent").and_then(Value::as_str);
+                handle.map(|handle| {
+                    let path = match parent {
+                        Some(parent) => hya_proto::scope::join_path(parent, handle),
+                        None => handle.to_string(),
+                    };
+                    let prev = projection
+                        .extensions
+                        .get(bundle_id)
+                        .and_then(|val| {
+                            serde_json::from_value::<hya_tool::extension::MultiAgentExtensionState>(
+                                val.clone(),
+                            )
+                            .ok()
+                        })
+                        .unwrap_or_default();
+                    let was_reviving =
+                        prev.archived.contains_key(&path) && !prev.roster.contains_key(&path);
+                    let is_new = !prev.roster.contains_key(&path);
+                    (path, parent.map(str::to_string), was_reviving, is_new)
+                })
+            } else {
+                None
+            };
         let state = projection
             .extensions
             .entry(bundle_id.to_string())
@@ -1100,6 +1143,78 @@ impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
         };
         if self.inner.apply(state, &ctx).is_err() {
             return;
+        }
+        // Mirror `hya/multi-agent` registration and archive events into
+        // `hya/agent-channels` group membership and initial inbox cursor.
+        if bundle_id == hya_tool::extension::BUNDLE_MULTI_AGENT {
+            if let Some((path, parent, was_reviving, is_new)) = multi_reviving_path
+                && let Some(channels_val) = projection
+                    .extensions
+                    .get(hya_tool::extension::BUNDLE_CHANNELS)
+                && let Ok(mut channels) = serde_json::from_value::<
+                    hya_tool::extension::ChannelsExtensionState,
+                >(channels_val.clone())
+            {
+                if was_reviving
+                    && let Some(parent) = parent
+                    && let Some(channel) = channels.channels.values_mut().find(|channel| {
+                        channel.kind == hya_proto::ChannelKind::Group
+                            && channel.unit.as_ref() == Some(&parent)
+                    })
+                {
+                    channel.members.insert(path.clone());
+                    if let Ok(serialized) = serde_json::to_value(&channels) {
+                        projection
+                            .extensions
+                            .insert(hya_tool::extension::BUNDLE_CHANNELS.to_string(), serialized);
+                    }
+                }
+                if is_new {
+                    let cursor = channels
+                        .inboxes
+                        .get(&path)
+                        .map_or(0, |inbox| inbox.len() as u64);
+                    if cursor > 0
+                        && let Some(multi_val) = projection
+                            .extensions
+                            .get(hya_tool::extension::BUNDLE_MULTI_AGENT)
+                        && let Ok(mut multi) = serde_json::from_value::<
+                            hya_tool::extension::MultiAgentExtensionState,
+                        >(multi_val.clone())
+                        && let Some(entry) = multi.roster.get_mut(&path)
+                    {
+                        entry.resident_cursor = entry.resident_cursor.max(cursor);
+                        if let Ok(serialized) = serde_json::to_value(&multi) {
+                            projection.extensions.insert(
+                                hya_tool::extension::BUNDLE_MULTI_AGENT.to_string(),
+                                serialized,
+                            );
+                        }
+                    }
+                }
+            } else if kind == "agent_archived"
+                && let Some(handle) = payload.get("handle").and_then(Value::as_str)
+                && let Some(channels_val) = projection
+                    .extensions
+                    .get(hya_tool::extension::BUNDLE_CHANNELS)
+                && let Ok(mut channels) = serde_json::from_value::<
+                    hya_tool::extension::ChannelsExtensionState,
+                >(channels_val.clone())
+            {
+                let mut changed = false;
+                for channel in channels.channels.values_mut() {
+                    if channel.kind == hya_proto::ChannelKind::Group
+                        && channel.members.remove(handle)
+                    {
+                        changed = true;
+                    }
+                }
+                if changed && let Ok(serialized) = serde_json::to_value(&channels) {
+                    projection
+                        .extensions
+                        .insert(hya_tool::extension::BUNDLE_CHANNELS.to_string(), serialized);
+                }
+            }
         }
         // Mirror compaction tool-output eviction notices onto PartProjection::Tool.
         if bundle_id == hya_tool::extension::BUNDLE_COMPACTION

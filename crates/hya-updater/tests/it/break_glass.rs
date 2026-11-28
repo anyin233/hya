@@ -50,7 +50,7 @@ fn install_sh_stages_every_first_party_bundle_beside_bin() {
     for family in [
         "hya-hashline",
         "hya-coding-extras",
-        "hya-extended-tools",
+        "hya-multi-agent",
         "hya-network",
         "hya-agent-channels",
         "hya-compaction",

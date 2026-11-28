@@ -13,31 +13,6 @@ agents:
     description: Default primary agent. Owns the request end to end and delegates focused work to hya-scout, hya-task, and hya-reviewer.
     role: main
     prompt: prompts/hya-main.md
-  - id: hya-task
-    description: General-purpose worker with the full tool set for one delegated multi-step task. The default `task` target.
-    role: subagent
-    prompt: prompts/hya-task.md
-  - id: hya-scout
-    description: Fast read-only scout for codebase research and broad pattern searches; returns compressed findings with path:line evidence.
-    role: subagent
-    prompt: prompts/hya-scout.md
-    resource_view:
-      deny:
-        - harness:tool/write
-        - harness:tool/edit
-        - harness:tool/apply_patch
-        - harness:tool/bash
-        - harness:tool/task
-        - harness:tool/archive
-  - id: hya-reviewer
-    description: Read-only code reviewer. Returns prioritized findings (P0-P3) on a patch and a correct/incorrect verdict.
-    role: subagent
-    prompt: prompts/hya-reviewer.md
-    resource_view:
-      deny:
-        - harness:tool/write
-        - harness:tool/edit
-        - harness:tool/apply_patch
   - id: hya-title
     role: subagent
     prompt: prompts/hya-title.md

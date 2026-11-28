@@ -941,7 +941,7 @@ fn enabled_native_tool_families(
         &[
             "hya/hashline",
             "hya/coding-extras",
-            "hya/extended-tools",
+            "hya/multi-agent",
             "hya/network",
             "hya/agent-channels",
         ]
@@ -949,7 +949,7 @@ fn enabled_native_tool_families(
         &[
             "hya/hashline",
             "hya/coding-extras",
-            "hya/extended-tools",
+            "hya/multi-agent",
             "hya/agent-channels",
         ]
     };

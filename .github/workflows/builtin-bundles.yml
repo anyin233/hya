@@ -337,7 +337,7 @@ jobs:
           for expected in \
             hya/hashline \
             hya/coding-extras \
-            hya/extended-tools \
+            hya/multi-agent \
             hya/network \
             hya/compaction \
             hya/plan \

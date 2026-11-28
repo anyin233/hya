@@ -1,9 +1,10 @@
 [package]
-name = "hya-extended-tools"
+name = "hya-multi-agent"
 version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+
 [package.metadata.hya]
 version-reference = "hya"
 
@@ -14,9 +15,12 @@ crate-type = ["rlib", "cdylib"]
 workspace = true
 
 [dependencies]
-hya-tool = { workspace = true }
-hya-proto = { workspace = true }
 async-trait = { workspace = true }
+hya-bundle = { workspace = true }
+hya-proto = { workspace = true }
+hya-runtime-abi = { workspace = true }
+hya-tool = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }

@@ -515,6 +515,7 @@ pub(crate) enum SourceToolPermission {
     ReadOnly,
     Tool,
     Command,
+    Task,
     Interactive,
 }
 

@@ -56,6 +56,26 @@ impl EngineChannelsHostRuntime {
             .as_ref()
             .and_then(Weak::upgrade)
     }
+
+    async fn session_lineage(&self, session: SessionId) -> Result<(SessionId, u32), HostError> {
+        let mut current = session;
+        let mut depth: u32 = 0;
+        for _ in 0..64 {
+            let projection = self
+                .store
+                .read_projection_shared(current)
+                .await
+                .map_err(|e| HostError::Storage(e.to_string()))?;
+            match projection.session.parent {
+                Some(parent) if parent != current => {
+                    current = parent;
+                    depth = depth.saturating_add(1);
+                }
+                _ => break,
+            }
+        }
+        Ok((current, depth))
+    }
 }
 
 fn scoped_state_key(scope: &str, key: &str) -> String {
@@ -344,6 +364,15 @@ impl HostBundleStorage for EngineChannelsHostRuntime {
             .map_err(|e| HostError::Storage(e.to_string()))?;
         Ok(row.map(claim_to_lease))
     }
+
+    async fn list_claims(&self, bundle: &str) -> Result<Vec<BundleClaimLease>, HostError> {
+        let rows = self
+            .store
+            .list_active_bundle_claims_at(bundle, now_millis())
+            .await
+            .map_err(|e| HostError::Storage(e.to_string()))?;
+        Ok(rows.into_iter().map(claim_to_lease).collect())
+    }
 }
 
 #[async_trait]
@@ -467,6 +496,141 @@ impl HostTurnRunner for EngineChannelsHostRuntime {
             )
             .await
             .map_err(map_core_err)
+    }
+
+    async fn archive_subagent(
+        &self,
+        child: SessionId,
+    ) -> Result<hya_tool::ArchiveReceipt, HostError> {
+        let (root, depth) = self.session_lineage(child).await?;
+        if depth == 0 {
+            return Err(HostError::InvalidInput(
+                "this session is not a subagent; use CancelTurn or CreateTurn on it directly"
+                    .to_string(),
+            ));
+        }
+        let Some(supervisor) = self.supervisor() else {
+            return Err(HostError::InvalidInput(
+                "subagents are not supervised by this process".to_string(),
+            ));
+        };
+        supervisor
+            .archive_member_for_user(root, &child.to_string())
+            .await
+            .map_err(map_core_err)
+    }
+
+    async fn steer_subagent(
+        &self,
+        child: SessionId,
+        text: &str,
+    ) -> Result<hya_tool::MailReceipt, HostError> {
+        let body = text.trim();
+        if body.is_empty() {
+            return Err(HostError::InvalidInput(
+                "a steer message needs text".to_string(),
+            ));
+        }
+        let (root, depth) = self.session_lineage(child).await?;
+        if depth == 0 {
+            return Err(HostError::InvalidInput(
+                "this session is not a subagent; use CancelTurn or CreateTurn on it directly"
+                    .to_string(),
+            ));
+        }
+        let projection = self
+            .store
+            .read_projection_shared(root)
+            .await
+            .map_err(|e| HostError::Storage(e.to_string()))?;
+        let target = crate::resident::resolve_member_target(
+            &projection,
+            root,
+            hya_proto::scope::ROOT_HANDLE,
+            &child.to_string(),
+        )
+        .map_err(map_core_err)?;
+        let parent =
+            hya_proto::scope::parent_path(&target.handle).unwrap_or(hya_proto::scope::ROOT_HANDLE);
+        let team = hya_tool::extension::team_projection(&projection);
+        let parent_session = if parent == hya_proto::scope::ROOT_HANDLE {
+            root
+        } else {
+            team.roster
+                .get(parent)
+                .map(|entry| entry.session)
+                .ok_or_else(|| {
+                    HostError::InvalidInput(format!(
+                        "`{}`'s parent `{parent}` is archived; steer `{parent}` first",
+                        target.handle
+                    ))
+                })?
+        };
+        let from = if parent_session == root {
+            team.roster
+                .values()
+                .find(|entry| entry.session == root)
+                .map_or_else(
+                    || hya_proto::scope::ROOT_HANDLE.to_string(),
+                    |entry| entry.handle.clone(),
+                )
+        } else {
+            parent.to_string()
+        };
+        let channel = team.resolve_dm(&from, &target.handle).ok_or_else(|| {
+            HostError::PermissionDenied(format!(
+                "mail authorization rejected ({from} -> direct:{}): no DM channel with that target; run `list_channel` to see your channels",
+                target.handle
+            ))
+        })?;
+        drop(projection);
+        let formatted = format!("{}{body}", super::member_control::USER_STEER_PREFIX);
+        let append = self
+            .store
+            .append_channel_mail(
+                root,
+                None,
+                from.clone(),
+                channel.clone(),
+                hya_proto::MailKind::Message,
+                formatted.clone(),
+                None,
+            )
+            .await;
+        let (envelope, recipients) = match append {
+            Ok((envelope, recipients)) => (Some(envelope), recipients),
+            Err(crate::CoreError::MailRevivalRequired {
+                target: target_handle,
+                channel: dm_channel,
+                ..
+            }) => {
+                let recipients = self
+                    .revive_archived_member_with_mail(MemberMailRevivalRequest {
+                        root,
+                        from_session: parent_session,
+                        from_handle: from.clone(),
+                        target_handle,
+                        channel: dm_channel,
+                        kind: hya_proto::MailKind::Message,
+                        body: formatted,
+                        actor_claim: None,
+                    })
+                    .await?;
+                (None, recipients)
+            }
+            Err(error) => return Err(map_core_err(error)),
+        };
+        if let Some(envelope) = envelope {
+            self.bus.publish(envelope);
+        }
+        if let Some(supervisor) = self.supervisor() {
+            supervisor.resume_for_user(child);
+        }
+        Ok(hya_tool::MailReceipt {
+            from,
+            to: hya_proto::MailEndpoint::Channel(channel),
+            recipients,
+        })
     }
 }
 
@@ -660,7 +824,12 @@ fn lease_to_claim(lease: &BundleClaimLease) -> BundleClaim {
 
 fn map_core_err(error: crate::CoreError) -> HostError {
     match error {
-        crate::CoreError::CapacityExceeded { .. } => HostError::Conflict(error.to_string()),
+        crate::CoreError::CapacityExceeded { .. }
+        | crate::CoreError::MailboxRejected(_)
+        | crate::CoreError::MailRevivalRequired { .. } => HostError::Conflict(error.to_string()),
+        crate::CoreError::MailAuthorizationRejected { .. } => {
+            HostError::PermissionDenied(error.to_string())
+        }
         crate::CoreError::Invalid(msg) => HostError::InvalidInput(msg),
         crate::CoreError::Store(hya_store::StoreError::StaleBundleClaim { .. }) => {
             HostError::StaleClaim(error.to_string())

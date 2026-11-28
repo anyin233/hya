@@ -94,7 +94,7 @@ const BINARY_NAME: &str = "hya";
 const NATIVE_BUNDLE_CRATES: [&str; 10] = [
     "hya-hashline",
     "hya-coding-extras",
-    "hya-extended-tools",
+    "hya-multi-agent",
     "hya-network",
     "hya-agent-channels",
     "hya-compaction",

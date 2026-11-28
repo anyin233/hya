@@ -149,8 +149,9 @@ async fn fixture(
         "registration-hooks",
         vec![hya_bundle::SourceFile::new("bundle.yaml", "schema_version: 2\nkind: Bundle\nidentity: { id: test/registration-hooks, version: 1.0.0, publisher: test }\n")],
     )).unwrap();
+    let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").unwrap();
     let catalog = AgentCatalog::new(Arc::new(
-        hya_bundle::BundleCatalog::from_verified_catalogs(&[&plugin]).unwrap(),
+        hya_bundle::BundleCatalog::from_verified_catalogs(&[&plugin, multi_agent]).unwrap(),
     ))
     .unwrap();
     let runtime = Arc::new(RuntimeRegistry::new(

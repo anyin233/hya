@@ -58,13 +58,22 @@ To prevent a noisy free-for-all where ten helpers talk over each other, Hya keep
 
 ---
 
-## Tuning subagent limits (`config.yaml`)
+## Tuning subagent limits (`bundles/hya%2Fmulti-agent/config.yml`)
 
-By default, Hya caps how many helpers can run at once so one prompt doesn't accidentally burn through your rate limits. You can adjust those limits in `~/.config/hya/config.yaml`:
+Multi-agent orchestration (`task`, `list_agents`, `search_agent`, `archive`, `wait`, the `hya-task`/`hya-scout`/`hya-reviewer` agents, and the `/members`, `/archive`, `/steer` Bundle APIs) is provided by the built-in `hya/multi-agent` native bundle. You can disable it in `~/.config/hya/config.yaml` with `bundles.builtin.disable: [hya/multi-agent]` (or `--bare`), or adjust its concurrency and budget caps in `~/.config/hya/bundles/hya%2Fmulti-agent/config.yml`:
 
 ```yaml
 subagents:
   max_concurrency: 100        # Max helpers streaming at the same time (1..=100)
   per_run_budget: 1024        # Max live helpers under one team root at once
   per_team_turn_budget: 1024  # Runaway safety cap on total helper turns
+  per_team_message_budget: 1024
 ```
+
+### Programmatic control (`BundleApi`)
+
+Clients (such as the TUI `/subagents` pane or `hya-sdk`) inspect and control subagents through `hya/multi-agent`'s native `BundleApi` routes:
+
+- `GET /v2/sessions/{id}/bundles/hya%2Fmulti-agent/members` (or `GET /v2/bundles/hya%2Fmulti-agent/api/members?session={id}`): returns `{ "root", "roster", "archived", "members" }`.
+- `POST /v2/sessions/{id}/bundles/hya%2Fmulti-agent/archive`: archives the subagent session and returns `{ "handle", "cancelledTurn", "descendants" }`.
+- `POST /v2/sessions/{id}/bundles/hya%2Fmulti-agent/steer` with `{ "text": "..." }`: delivers a `[user] `-prefixed steer message on the parent DM (reviving archived children) and returns `{ "from" }`.

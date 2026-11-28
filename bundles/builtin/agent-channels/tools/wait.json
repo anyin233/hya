@@ -3,7 +3,7 @@
   "name": "wait",
   "description": "Block until your subagents finish or new mail arrives for you.",
   "permission": "read_only",
-  "overrides": "hya/extended-tools",
+  "overrides": "hya/multi-agent",
   "prompt_hint": "block until your subagents finish or new mail arrives",
   "parameters": {
     "type": "object",

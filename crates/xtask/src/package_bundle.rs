@@ -310,17 +310,18 @@ mod native_tests {
             "hya-native-library-package-test-{}",
             std::process::id()
         ));
+        let _ = std::fs::remove_dir_all(&root);
         let source = root.join("source");
-        std::fs::create_dir_all(&source).unwrap();
-        std::fs::write(source.join("bundle.yaml"), "schema_version: 2\nkind: Bundle\nidentity: { id: hya/extended-tools, version: 1.0.0, publisher: hya }\nnamespace: extended-tools\nruntime:\n  kind: native\nassets: [{ id: exposure, path: exposure.yaml }]\n").unwrap();
-        std::fs::write(source.join("exposure.yaml"), "schema_version: 1\nidentity: hya/extended-tools\nprotected_names: []\ntools:\n  - { name: send, schema_version: 1, permission: tool }\n").unwrap();
+        std::fs::create_dir_all(source.join("tools")).unwrap();
+        std::fs::write(source.join("bundle.yaml"), "schema_version: 2\nkind: Bundle\nidentity: { id: hya/multi-agent, version: 1.0.0, publisher: hya }\nnamespace: multi-agent\nruntime:\n  kind: native\n  abi_version: 2\n  capabilities: [tools]\nresources:\n  tools:\n    - { id: task, path: tools/task.json }\n").unwrap();
+        std::fs::write(source.join("tools/task.json"), r#"{"schema_version":1,"name":"task","description":"Run a delegated task.","permission":"task"}"#).unwrap();
         let library = root.join(format!(
-            "libhya_extended_tools{}",
+            "libhya_multi_agent{}",
             std::env::consts::DLL_SUFFIX
         ));
         let bytes = [0xcf, 0xfa, 0xed, 0xfe, 0, 0xff];
         std::fs::write(&library, bytes).unwrap();
-        let package = root.join("channel.hyabundle");
+        let package = root.join("multi-agent.hyabundle");
         run_native_library(vec![
             source.to_string_lossy().into_owned(),
             library.to_string_lossy().into_owned(),
@@ -332,7 +333,7 @@ mod native_tests {
         let [bundle] = catalog.bundles() else {
             panic!("one bundle")
         };
-        assert_eq!(bundle.tools()[0].local_id, "send");
+        assert_eq!(bundle.tools()[0].local_id, "task");
         let resource = bundle
             .extensions()
             .iter()
@@ -398,7 +399,7 @@ mod native_tests {
     }
 
     #[test]
-    fn exposure_yaml_prefers_structured_tool_descriptors_when_present() {
+    fn exposure_yaml_is_rejected_by_package_native_library() {
         let root = std::env::temp_dir().join(format!(
             "hya-native-hybrid-package-test-{}",
             std::process::id()
@@ -408,12 +409,12 @@ mod native_tests {
         std::fs::create_dir_all(source.join("tools")).unwrap();
         std::fs::write(
             source.join("bundle.yaml"),
-            "schema_version: 2\nkind: Bundle\nidentity: { id: hya/extended-tools, version: 1.0.0, publisher: hya }\nruntime:\n  kind: native\nassets: [{ id: exposure, path: exposure.yaml }]\n",
+            "schema_version: 2\nkind: Bundle\nidentity: { id: hya/multi-agent, version: 1.0.0, publisher: hya }\nruntime:\n  kind: native\nassets: [{ id: exposure, path: exposure.yaml }]\n",
         )
         .unwrap();
         std::fs::write(
             source.join("exposure.yaml"),
-            "schema_version: 1\nidentity: hya/extended-tools\nprotected_names: []\ntools:\n  - { name: fetch, schema_version: 1, permission: read_only }\n",
+            "schema_version: 1\nidentity: hya/multi-agent\nprotected_names: []\ntools:\n  - { name: fetch, schema_version: 1, permission: read_only }\n",
         )
         .unwrap();
         std::fs::write(
@@ -425,13 +426,7 @@ mod native_tests {
         std::fs::write(&library, [1, 2, 3, 4]).unwrap();
         let package = root.join("hybrid.hyabundle");
 
-        package_native_library(&source, &library, &package).unwrap();
-        let catalog = inspect_public_package(&std::fs::read(&package).unwrap()).unwrap();
-        let [bundle] = catalog.bundles() else {
-            panic!("one bundle");
-        };
-        assert_eq!(bundle.tools()[0].local_id, "fetch");
-        assert_eq!(bundle.tools()[0].source_path, "tools/fetch.json");
+        assert!(package_native_library(&source, &library, &package).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -1,0 +1,33 @@
+kind: Bundle
+schema_version: 2
+version_ref: hya
+identity:
+  id: hya/multi-agent
+  version: 0.0.0
+  publisher: hya
+namespace: multi-agent
+runtime:
+  kind: native
+  abi_version: 2
+  crate_dir: native
+  capabilities:
+    - tools
+    - hooks
+    - services
+    - apis
+resources:
+  tools:
+    - id: list_agents
+      path: tools/list_agents.json
+    - id: task
+      path: tools/task.json
+    - id: search_agent
+      path: tools/search_agent.json
+    - id: archive
+      path: tools/archive.json
+    - id: wait
+      path: tools/wait.json
+agents:
+  - path: agents/hya-task.md
+  - path: agents/hya-scout.md
+  - path: agents/hya-reviewer.md

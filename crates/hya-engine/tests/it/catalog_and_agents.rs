@@ -483,19 +483,21 @@ impl RuntimeCatalogRefresh for FnRefresh {
 
 #[test]
 fn builtin_agents_preset_and_core_catalog_invariants() {
-    const EXPECTED: &[&str] = &[
-        "hya-main",
-        "hya-reviewer",
-        "hya-scout",
-        "hya-task",
-        "hya-title",
-    ];
+    const EXPECTED: &[&str] = &["hya-main", "hya-title"];
     assert_eq!(builtin_agent_ids(), EXPECTED);
     assert!(builtin_agent_ids().windows(2).all(|p| p[0] < p[1]));
     for id in EXPECTED {
         assert!(preset_agent(id).is_some(), "missing builtin {id}");
     }
     assert!(preset_agent("no-such-agent").is_none());
+
+    let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").unwrap();
+    let multi_agent_ids: Vec<_> = multi_agent.bundles()[0]
+        .agents()
+        .iter()
+        .map(|agent| agent.id.as_str())
+        .collect();
+    assert_eq!(multi_agent_ids, ["hya-reviewer", "hya-scout", "hya-task"]);
 
     let preset = core_agents_preset().unwrap();
     let fp = hya_bundle::first_party_bundle("hya/core-agents").unwrap();
@@ -527,7 +529,7 @@ fn builtin_agents_preset_and_core_catalog_invariants() {
             );
         }
     }
-    assert_eq!(ordinary, 4);
+    assert_eq!(ordinary, 1);
 
     let empty = catalog_from_bundles(&[]);
     let preset_ids: Vec<_> = preset.agents().iter().map(|a| a.id.as_str()).collect();
@@ -587,7 +589,12 @@ async fn agent_catalog_bundle_resolution_shadowing_and_spawn_authorization() {
         a.can_spawn = spawn.iter().map(|s| AgentName::new(*s)).collect();
         make_bundle(bid, a, vec![])
     };
+    let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent")
+        .unwrap()
+        .bundles()[0]
+        .clone();
     let cat = catalog_from_bundles(&[
+        multi_agent,
         sub("acme/zeta", "acme-zeta", &[]),
         sub("acme/alpha", "acme-alpha", &[]),
         sub(
@@ -743,16 +750,17 @@ fn agent_catalog_private_and_first_party_workflow_agents() {
         a.can_spawn = spawn.iter().map(|s| AgentName::new(*s)).collect();
         make_bundle(bid, a, vec![])
     };
+    let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent")
+        .unwrap()
+        .bundles()[0]
+        .clone();
     let cat = catalog_from_bundles(&[
+        multi_agent,
         mk("acme/helper", "acme-helper", true, &[]),
         mk("acme/lead", "acme-lead", false, &["acme-helper"]),
         mk("acme/other", "acme-other", false, &[]),
     ]);
-    for builtin in [
-        "hya-main",
-        "hya-task",
-        "bundle:hya/core-agents/agent/hya-main",
-    ] {
+    for builtin in ["hya-main", "bundle:hya/core-agents/agent/hya-main"] {
         assert!(
             !cat.spawnable(builtin)
                 .unwrap()
@@ -767,6 +775,10 @@ fn agent_catalog_private_and_first_party_workflow_agents() {
             assert!(cat.resolve_workflow_agent(builtin, r).unwrap().private);
         }
     }
+    assert!(matches!(
+        cat.resolve_spawn("hya-task", "acme-helper"),
+        Err(BundleError::AgentSpawnNotAllowed { .. })
+    ));
     assert!(
         !cat.selectable()
             .iter()
@@ -1053,7 +1065,15 @@ async fn historical_agent_identity_replay_fork_and_task_fallback() {
     let provider = RecordingProvider::new();
     let mut base_a = prep_agent("base");
     base_a.prompt = Some("base prompt".into());
-    let engine = eng_with(catalog_from_agents(vec![base_a]), provider.clone()).await;
+    let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent")
+        .unwrap()
+        .bundles()[0]
+        .clone();
+    let engine = eng_with(
+        catalog_from_bundles(&[multi_agent, make_bundle("hya/test-base", base_a, vec![])]),
+        provider.clone(),
+    )
+    .await;
 
     let src = create_root_session(&engine, HISTORICAL, "session-model", dir.path()).await;
     engine
@@ -1715,12 +1735,19 @@ async fn agent_model_configuration_session_override_and_model_selection() {
 
     // Pre-session configuration + root-scoped override replay/isolation/immutability/precedence.
     let provider = RecordingProvider::new();
-    let engine = eng_with(builtin_only_catalog(), provider.clone()).await;
+    let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent")
+        .unwrap()
+        .bundles()[0]
+        .clone();
+    let engine = eng_with(catalog_from_bundles(&[multi_agent]), provider.clone()).await;
     engine
         .runtime_registry()
         .publish_agent_model_configuration(AgentModelConfiguration {
-            builtin: BTreeMap::from([("hya-task".into(), m("configured"))]),
-            bundles: BTreeMap::new(),
+            builtin: BTreeMap::new(),
+            bundles: BTreeMap::from([(
+                "hya/multi-agent".into(),
+                BTreeMap::from([("hya-task".into(), m("configured"))]),
+            )]),
         });
     let root = create_root_session(&engine, "hya-task", "fake/base", dir.path()).await;
     let child = engine
@@ -2693,7 +2720,14 @@ async fn session_catalog_scope_apis_modes_invalidation_lru_and_ttl() {
         (out.status, out.body),
         (200, json!({ "session": sess.to_string() }))
     );
-    assert_eq!(engine.session_bundle_apis(sess).await.unwrap().len(), 1);
+    let scoped_apis = engine.session_bundle_apis(sess).await.unwrap();
+    assert_eq!(
+        scoped_apis
+            .iter()
+            .filter(|b| b.bundle == SCOPE_BUNDLE)
+            .count(),
+        1
+    );
     let mode_id = format!("{SCOPE_BUNDLE}/careful");
     assert!(
         engine
@@ -2710,7 +2744,13 @@ async fn session_catalog_scope_apis_modes_invalidation_lru_and_ttl() {
         engine.invoke_bundle_api(call(None)).await,
         Err(BundleApiError::NotFound { .. })
     ));
-    assert!(engine.bundle_apis().await.is_empty());
+    assert!(
+        engine
+            .bundle_apis()
+            .await
+            .iter()
+            .all(|b| b.bundle != SCOPE_BUNDLE)
+    );
     assert!(
         !engine
             .permission_modes()
@@ -3775,9 +3815,13 @@ async fn round_rebind_initial_context_member_isolation_and_hooks() {
         RecordingProvider::new().with_first_tools(false, &[("marker", json!({}))]),
         Arc::new(AtomicUsize::new(0)),
     );
+    let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent")
+        .unwrap()
+        .bundles()[0]
+        .clone();
     let em = engine_with_router_and_runtime(
         Arc::new(ProviderRouter::new().with(pm.clone())),
-        Arc::new(local_runtime(tools_m, builtin_only_catalog())),
+        Arc::new(local_runtime(tools_m, catalog_from_bundles(&[multi_agent]))),
         allow_all(),
     )
     .await;
@@ -4069,11 +4113,17 @@ async fn root_turn_bundle_prompt_missing_agent_and_workdir_precedence() {
 
     let mut exp = prep_agent("bundle-explorer");
     exp.prompt = Some(BUNDLE_PROMPT.into());
-    let mut hm = prep_agent("hya-main");
-    hm.workdir = Some(bdir.path().to_string_lossy().into_owned());
     let provider = RecordingProvider::new();
+    let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent")
+        .unwrap()
+        .bundles()[0]
+        .clone();
     let engine = eng_with(
-        catalog_from_agents(vec![prep_agent("plain-main"), exp, hm]),
+        catalog_from_bundles(&[
+            multi_agent,
+            make_bundle("hya/test-plain-main", prep_agent("plain-main"), vec![]),
+            make_bundle("hya/test-bundle-explorer", exp, vec![]),
+        ]),
         provider.clone(),
     )
     .await;

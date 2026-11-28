@@ -248,6 +248,11 @@ pub trait HostBundleStorage: Send + Sync {
         bundle: &str,
         resource_key: &str,
     ) -> Result<Option<BundleClaimLease>, HostError>;
+
+    /// List all active (non-expired) claims owned by `bundle`.
+    async fn list_claims(&self, _bundle: &str) -> Result<Vec<BundleClaimLease>, HostError> {
+        Ok(Vec::new())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -633,6 +638,28 @@ pub trait HostTurnRunner: Send + Sync {
     ) -> Result<usize, HostError> {
         Err(HostError::Unavailable(
             "archived member revival is unavailable in this runtime".into(),
+        ))
+    }
+
+    /// Archive a subagent session on the user's behalf, cancelling any active
+    /// turn and archiving live descendants first.
+    async fn archive_subagent(
+        &self,
+        _child: SessionId,
+    ) -> Result<hya_tool::ArchiveReceipt, HostError> {
+        Err(HostError::InvalidInput(
+            "subagents are not supervised by this process".into(),
+        ))
+    }
+
+    /// Steer a subagent session with a user message delivered on its parent DM.
+    async fn steer_subagent(
+        &self,
+        _child: SessionId,
+        _text: &str,
+    ) -> Result<hya_tool::MailReceipt, HostError> {
+        Err(HostError::Unavailable(
+            "subagent steering is unavailable in this runtime".into(),
         ))
     }
 }

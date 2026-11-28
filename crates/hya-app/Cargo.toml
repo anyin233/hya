@@ -11,7 +11,7 @@ version-reference = "hya"
 workspace = true
 
 [dependencies]
-hya-extended-tools = { workspace = true }
+hya-multi-agent = { workspace = true }
 hya-agent-channels = { workspace = true }
 hya-network = { workspace = true }
 hya-plan = { workspace = true }

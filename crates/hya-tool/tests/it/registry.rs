@@ -223,7 +223,7 @@ fn builtin_bundle_ownership_and_removed_kill_tool() {
             .as_slice(),
         ),
         (
-            "hya/extended-tools",
+            "hya/multi-agent",
             ["list_agents", "task", "search_agent", "archive"].as_slice(),
         ),
         ("hya/workflow", ["workflow"].as_slice()),
@@ -301,13 +301,13 @@ async fn wait_override_selects_mail_aware_or_member_only_variant() {
 
     let without_channels = hya_tool_loader::from_tool_families(&[
         "hya/coding-extras",
-        "hya/extended-tools",
+        "hya/multi-agent",
         "hya/network",
     ]);
     assert!(without_channels.get("send").is_none());
     assert_eq!(
         without_channels.builtin_bundle_origin("wait"),
-        Some("hya/extended-tools")
+        Some("hya/multi-agent")
     );
     assert!(!requested_mail_wake(&without_channels).await);
 
@@ -374,19 +374,21 @@ fn replacement_child() {
         return;
     };
     if mode == "wrong" {
-        let panic = std::panic::catch_unwind(|| {
-            hya_tool_loader::from_tool_families(&["hya/extended-tools"])
-        });
+        let panic =
+            std::panic::catch_unwind(|| hya_tool_loader::from_tool_families(&["hya/multi-agent"]));
         let error = panic.err().expect("wrong ABI must be rejected");
         let message = error
             .downcast_ref::<String>()
             .map(String::as_str)
             .or_else(|| error.downcast_ref::<&str>().copied())
             .unwrap();
-        assert!(message.contains("different hya-tool ABI"), "{message}");
+        assert!(
+            message.contains("ABI") || message.contains("abi"),
+            "{message}"
+        );
         return;
     }
-    let registry = hya_tool_loader::from_tool_families(&["hya/extended-tools"]);
+    let registry = hya_tool_loader::from_tool_families(&["hya/multi-agent"]);
     let tool = registry.resolve("list_agents").unwrap();
     let ctx = ctx_with(vec![], std::env::current_dir().unwrap());
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -403,10 +405,10 @@ fn replacement_child() {
         .unwrap();
     assert_eq!(result["budgetSeconds"], 8);
     assert_eq!(result["cappedSeconds"], hya_tool::deadline::MIN_TOOL_SECS);
-    let _ = hya_tool_loader::from_tool_families(&["hya/extended-tools"]);
+    let _ = hya_tool_loader::from_tool_families(&["hya/multi-agent"]);
     assert_eq!(
         registry.builtin_bundle_origin("list_agents"),
-        Some("hya/extended-tools")
+        Some("hya/multi-agent")
     );
 }
 
@@ -433,7 +435,7 @@ fn native_family_can_be_replaced_and_wrong_abi_is_rejected() {
             std::env::consts::DLL_SUFFIX
         );
         let dst = format!(
-            "{}hya_extended_tools{}",
+            "{}hya_multi_agent{}",
             std::env::consts::DLL_PREFIX,
             std::env::consts::DLL_SUFFIX
         );

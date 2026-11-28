@@ -302,6 +302,12 @@ fn map_core_error(error: CoreError) -> HostError {
         CoreError::Cancelled => HostError::Cancelled,
         CoreError::Invalid(msg) => HostError::InvalidInput(msg),
         CoreError::Store(err) => HostError::Storage(err.to_string()),
+        CoreError::MailAuthorizationRejected { .. } => {
+            HostError::PermissionDenied(error.to_string())
+        }
+        CoreError::MailboxRejected(_) | CoreError::MailRevivalRequired { .. } => {
+            HostError::Conflict(error.to_string())
+        }
         CoreError::CapacityExceeded { .. } | CoreError::TurnAlreadyActive { .. } => {
             HostError::Unavailable(error.to_string())
         }
@@ -905,6 +911,19 @@ impl HostBundleStorage for AppHostRuntime {
         })
         .await
     }
+
+    async fn list_claims(&self, bundle: &str) -> Result<Vec<BundleClaimLease>, HostError> {
+        let bundle = bundle.to_owned();
+        self.on_host(async move {
+            let rows = self
+                .store
+                .list_active_bundle_claims_at(&bundle, hya_proto::now_millis())
+                .await
+                .map_err(|error| HostError::Storage(error.to_string()))?;
+            Ok(rows.into_iter().map(store_claim_to_lease).collect())
+        })
+        .await
+    }
 }
 
 #[async_trait]
@@ -1329,6 +1348,33 @@ impl HostTurnRunner for AppHostRuntime {
             let engine = self.engine()?;
             engine
                 .revive_archived_member_with_mail(request)
+                .await
+                .map_err(map_core_error)
+        })
+        .await
+    }
+
+    async fn archive_subagent(
+        &self,
+        child: SessionId,
+    ) -> Result<hya_tool::ArchiveReceipt, HostError> {
+        self.on_host(async move {
+            let engine = self.engine()?;
+            engine.archive_subagent(child).await.map_err(map_core_error)
+        })
+        .await
+    }
+
+    async fn steer_subagent(
+        &self,
+        child: SessionId,
+        text: &str,
+    ) -> Result<hya_tool::MailReceipt, HostError> {
+        let text = text.to_owned();
+        self.on_host(async move {
+            let engine = self.engine()?;
+            engine
+                .steer_subagent(child, &text)
                 .await
                 .map_err(map_core_error)
         })

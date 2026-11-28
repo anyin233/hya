@@ -1322,11 +1322,11 @@ dependencies = [
  "hya-coding-extras",
  "hya-core",
  "hya-engine",
- "hya-extended-tools",
  "hya-goal",
  "hya-hashline",
  "hya-loop",
  "hya-mcp",
+ "hya-multi-agent",
  "hya-network",
  "hya-plan",
  "hya-plugin",
@@ -1543,8 +1543,8 @@ dependencies = [
  "hya-compaction",
  "hya-context",
  "hya-core",
- "hya-extended-tools",
  "hya-hashline",
+ "hya-multi-agent",
  "hya-network",
  "hya-plan",
  "hya-proto",
@@ -1565,18 +1565,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
-]
-
-[[package]]
-name = "hya-extended-tools"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "hya-proto",
- "hya-tool",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -1650,6 +1638,21 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "hya-multi-agent"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "hya-bundle",
+ "hya-proto",
+ "hya-runtime-abi",
+ "hya-tool",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1892,11 +1895,12 @@ dependencies = [
  "hya-agent-channels",
  "hya-coding-extras",
  "hya-context",
- "hya-extended-tools",
  "hya-hashline",
+ "hya-multi-agent",
  "hya-network",
  "hya-plan",
  "hya-proto",
+ "hya-runtime-abi",
  "hya-tool-error",
  "hya-tool-loader",
  "hya-version",
@@ -1931,10 +1935,10 @@ dependencies = [
  "hya-bundle",
  "hya-coding-extras",
  "hya-context",
- "hya-extended-tools",
  "hya-goal",
  "hya-hashline",
  "hya-loop",
+ "hya-multi-agent",
  "hya-network",
  "hya-plan",
  "hya-proto",

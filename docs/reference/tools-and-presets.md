@@ -24,7 +24,7 @@ These core tools live directly inside Hya's core kernel (`hya-core`), alongside 
 
 ## 2. Registry Tools (Full mode — 23 bundle tools + core `bash` & `skill`)
 
-In full mode, Hya loads its native tool bundles (`hya/hashline`, `hya/coding-extras`, `hya/network`, `hya/agent-channels`, `hya/plan`, and `hya/workflow` over Lockstep Native ABI v2, plus the remaining transitional tool family `hya/extended-tools`) alongside core `bash`, `skill`, and the kernel-exclusive `todo` and `rewrite`.
+In full mode, Hya loads all of its native tool bundles (`hya/hashline`, `hya/coding-extras`, `hya/multi-agent`, `hya/network`, `hya/agent-channels`, `hya/plan`, and `hya/workflow` — all over Lockstep Native ABI v2) alongside core `bash`, `skill`, and the kernel-exclusive `todo` and `rewrite`.
 
 ### `hya/hashline` (Content-Hashed File Tools — `overrides: hya/bare`)
 
@@ -91,15 +91,51 @@ Set `formatter: false` or `lsp: false` to disable either subsystem, or disable t
 - **Post-Edit Hook (`coding-extras.post-edit` on `HookPoint::ToolExecuteAfter`):** Intercepts successful non-noop `write` and `edit` results for both standard `hya-bare` file tools (`metadata.path`) and `hya/hashline` file tools (`metadata.path` / `metadata.filediff.file`), runs the configured formatter while preserving any UTF-8 BOM, notifies LSP (`touch_file`), and attaches LSP error diagnostics to `metadata.diagnostics` and the tool `output` text.
 - **Interactive Visibility Hook (`coding-extras.ask-user-visibility` on `HookPoint::ToolVisibility`):** Inspects `ToolVisibilityInput.interaction_available` and returns `ToolVisibilityOutcome::Hide { tools: ["ask_user"] }` whenever no interactive human receiver is connected.
 
-### `hya/extended-tools` (Subagents & Workflows)
+### `hya/multi-agent` (Subagents, Resident Supervision & Team Control — Native ABI v2)
 
-| Tool | Default permission | What it does |
-| --- | --- | --- |
-| `list_agents` | Allow | List spawnable agent definitions in the active catalog. |
-| `search_agent` | Allow | Search available agents by keyword. |
-| `task` | Allow | Spawn one or more episodic resident subagents in parallel (`tasks[]`). |
-| `archive` | Allow | Stop and archive a child subagent (can still be woken later via follow-up mail). |
-| `workflow` | Allow | List, inspect, select, run, or check state of compiled `*.hya.md` Workflows. |
+`hya/multi-agent` (`bundles/builtin/multi-agent/`, Lockstep Native ABI v2, `schema_version: 2`, `capabilities: [tools, hooks, services, apis]`) packages Hya's multi-agent orchestration subsystem—subagent tools, built-in worker agents (`hya-task`, `hya-scout`, `hya-reviewer`), fenced actor claim persistence, handle naming, subagent concurrency governor, terminal handoffs, projection folding, and user control APIs—running solely over `Arc<dyn HostRuntime>`.
+
+**Usage & Configuration:**
+- Enabled by default in `profile: full`; disable via `bundles.builtin.disable: [hya/multi-agent]` in `~/.config/hya/config.yaml` (or `--bare`) to remove subagent tools, worker agents, and Code Mode's `agent()` / `agents.run` bridge cleanly.
+- Configure subagent limits in `~/.config/hya/bundles/hya%2Fmulti-agent/config.yml`:
+  ```yaml
+  subagents:
+    max_concurrency: 100
+    per_run_budget: 1024
+    per_team_turn_budget: 1024
+    per_team_message_budget: 1024
+  ```
+- Example tool call:
+  ```json
+  {
+    "tool": "task",
+    "input": {
+      "tasks": [
+        { "agent": "hya-scout", "handle_prefix": "scout", "description": "Find auth routes", "prompt": "Locate all auth handlers and return path:line references." }
+      ]
+    }
+  }
+  ```
+
+**Tools (5):**
+
+| Tool | Default permission | Descriptor | What it does |
+| --- | --- | --- | --- |
+| `list_agents` | Allow (`read_only`) | `tools/list_agents.json` | List spawnable agent definitions in the active catalog (`{ "agents": [...] }`). |
+| `search_agent` | Allow (`read_only`) | `tools/search_agent.json` | Search available agents by keyword (`{ "query": string }`). |
+| `task` | Allow (`task`) | `tools/task.json` | Spawn one or more episodic resident subagents in parallel (`tasks[]`, `wait?: boolean`). |
+| `archive` | Allow (`task`) | `tools/archive.json` | Stop and archive a child subagent (`{ "target": string, "reason"?: string }`); wakes again on follow-up mail. |
+| `wait` | Allow (`read_only`) | `tools/wait.json` | Block until direct child subagents finish/report (`{ "targets"?: string[], "mode"?: "any" \| "all", "timeout_secs"?: integer }`; overridden by `hya/agent-channels`'s mail-aware `wait` when both bundles are enabled). |
+
+**Interfaces exposed by `hya/multi-agent`:**
+- **Built-in Subagents (3):** `hya-task` (full toolset, `can_spawn: [hya-task, hya-scout, hya-reviewer, hya-plan]`), `hya-scout` (read-only), and `hya-reviewer` (read-only + `bash`, `can_spawn: [hya-scout]`).
+- **Service (`hya/multi-agent:service`):** Implements `NativeService`; persists fenced actor lease claims (`bundle_claim`) and team checkpoints (`bundle_state`) under namespace `"hya/multi-agent"` via `HostRuntime::bundle_storage()`.
+- **Lifecycle Hook (`hya/multi-agent:lifecycle`):** Subscribes to `HookPoint::SessionEnd` to release session actor claim leases on teardown.
+- **Projection Reducer (`ProjectionReducer`):** Folds `hya/multi-agent` `Event::Extension` records (`member_spawned`, `member_status_changed`, `member_finished`, `agent_registered`, `agent_activity_changed`, `resident_work_started`, `resident_work_finished`, `agent_heartbeat`, `subagent_reported`, `handoff_committed`, `agent_archived`, `agent_restarted`) into `projection.extensions["hya/multi-agent"]`.
+- **`NativeBundleApiHandler` (`apis`):**
+  - `GET /v2/sessions/{id}/bundles/hya%2Fmulti-agent/members` & `GET /v2/bundles/hya%2Fmulti-agent/api/members?session=<id>` → `{ "root", "roster": [...], "archived": [...], "members": [...] }`
+  - `POST /v2/sessions/{id}/bundles/hya%2Fmulti-agent/archive` & `POST /v2/bundles/hya%2Fmulti-agent/api/archive` (`{ "session": "<id>" }`) → `{ "handle", "cancelledTurn", "descendants" }`
+  - `POST /v2/sessions/{id}/bundles/hya%2Fmulti-agent/steer` (`{ "text": string }`) & `POST /v2/bundles/hya%2Fmulti-agent/api/steer` (`{ "session": "<id>", "text": string }`) → `{ "from" }`
 
 ### `hya/plan` (Interactive Plan Mode — Native ABI v2)
 
@@ -164,7 +200,7 @@ Set `formatter: false` or `lsp: false` to disable either subsystem, or disable t
 | --- | --- | --- | --- |
 | `send` | Allow (`tool`) | `tools/send.json` | Send mail to a child's `#DM`, a parent (`^parent`), or a unit leader's `#announce` group channel (reviving archived direct children). |
 | `list_channel` | Allow (`read_only`) | `tools/list_channel.json` | List the caller's visible channels, unread message counts, and direct-child heartbeat status. |
-| `wait` | Allow (`read_only`) | `tools/wait.json` (`overrides: hya/extended-tools`) | Block until child subagents finish/report **or** new mail arrives in the caller's inbox. |
+| `wait` | Allow (`read_only`) | `tools/wait.json` (`overrides: hya/multi-agent`) | Block until child subagents finish/report **or** new mail arrives in the caller's inbox. |
 | `report` | Allow *(subagents only)* | `tools/report.json` | Deliver a subagent's final report to its parent, write a state handoff, and archive the episode. |
 
 - **Usage & configuration:**
@@ -188,15 +224,15 @@ Set `formatter: false` or `lsp: false` to disable either subsystem, or disable t
 
 ---
 
-## 3. Built-in Agents (`hya/core-agents` & `hya/plan`)
+## 3. Built-in Agents (`hya/core-agents`, `hya/multi-agent` & `hya/plan`)
 
 | Agent ID | Bundle | Kind | Tool restrictions | When to use |
 | --- | --- | --- | --- | --- |
 | `hya-main` | `hya/core-agents` | Main *(default)* | Full toolset | Everyday coding, debugging, refactoring, and delegating subtasks. |
 | `hya-plan` | `hya/plan` | Main | Read-only (blocks `write`, `edit`, `apply_patch`, `bash`) | Exploring code and designing a plan before changing any files. |
-| `hya-task` | `hya/core-agents` | Subagent *(default)* | Full toolset | Focused implementation or testing subtasks delegated via `task`. |
-| `hya-scout` | `hya/core-agents` | Subagent | Read-only (blocks edits, `bash`, `task`, `archive`) | Fast codebase search and reading without cluttering the main chat. |
-| `hya-reviewer` | `hya/core-agents` | Subagent | Blocks file edits (`write`, `edit`, `apply_patch`), allows `bash` | Reviewing patches and running check suites without modifying code. |
+| `hya-task` | `hya/multi-agent` | Subagent *(default)* | Full toolset | Focused implementation or testing subtasks delegated via `task`. |
+| `hya-scout` | `hya/multi-agent` | Subagent | Read-only (blocks edits, `bash`, `task`, `archive`) | Fast codebase search and reading without cluttering the main chat. |
+| `hya-reviewer` | `hya/multi-agent` | Subagent | Blocks file edits (`write`, `edit`, `apply_patch`), allows `bash` | Reviewing patches and running check suites without modifying code. |
 | `hya-title` | `hya/core-agents` | System *(reserved)* | Internal only | Generates short session titles after your first prompt. |
 
 *(Built-in workflow bundles also define private stage agents—`hya-goal-guide`, `hya-goal-verifier`, `hya-pir-planner`, `hya-pir-implementer`, and `hya-pir-reviewer`—used internally by Goal/Loop mode and the `plan-impl-review` Workflow.)*
@@ -211,14 +247,14 @@ Every Hya installation ships with 14 trusted first-party bundles sourced from `b
 | --- | --- | --- | --- |
 | `hya/hashline` | `bundles/builtin/hashline` | Native ABI v2 (`cdylib`) | Hashline-addressed `read`, `write`, `edit`, and `grep` + `HashlineRuntime` (`overrides: hya/bare`, 4 tools). |
 | `hya/coding-extras` | `bundles/builtin/coding-extras` | Native ABI v2 (`cdylib`) | Workspace search (`ls`, `glob`, `find`), `apply_patch`, `ask_user`, `lsp`, `project_activity`, `lsp-formatter` `NativeService`, and post-edit + visibility `NativeHook`s (7 tools). |
-| `hya/extended-tools` | `bundles/builtin/extended-tools` | Native (`cdylib`) | Subagents (5 tools; `skill` promoted to `hya-bare` core, `lsp`/`project_activity` moved to `hya/coding-extras`, `plan_exit` extracted to `hya/plan`, `workflow` extracted to `hya/workflow`). |
+| `hya/multi-agent` | `bundles/builtin/multi-agent` | Native ABI v2 (`cdylib`) | Subagent orchestration: 5 tools (`list_agents`, `search_agent`, `task`, `archive`, `wait`), 3 subagents (`hya-task`, `hya-scout`, `hya-reviewer`), fenced actor claims (`bundle_claim`), `ProjectionReducer`, `SessionEnd` hook, and `BundleApi` (`/members`, `/archive`, `/steer`). |
 | `hya/network` | `bundles/builtin/network` | Native ABI v2 (`cdylib`) | Web fetch and web search (`webfetch`, `websearch`) + per-bundle `config.yml` and air-gapped disable. |
-| `hya/agent-channels` | `bundles/builtin/agent-channels` | Native ABI v2 (`cdylib`) + static | Unified team mailbox & channels (`send`, `list_channel`, `report`, mail-aware `wait` overriding `hya/extended-tools`), `channel://` `UriSchemaHandler`, `unread-mail-steer` `NativeHook`, read-only `BundleApi`, `ProjectionReducer`, and default vertical channel policies (`unit-default`, `parent-dm-default`). |
+| `hya/agent-channels` | `bundles/builtin/agent-channels` | Native ABI v2 (`cdylib`) + static | Unified team mailbox & channels (`send`, `list_channel`, `report`, mail-aware `wait` overriding `hya/multi-agent`), `channel://` `UriSchemaHandler`, `unread-mail-steer` `NativeHook`, read-only `BundleApi`, `ProjectionReducer`, and default vertical channel policies (`unit-default`, `parent-dm-default`). |
 | `hya/compaction` | `bundles/builtin/compaction` | Native ABI v2 (`cdylib`) | Context `Rewriter` (`shake` + `remote`) and `ProjectionReducer` (`Event::Extension`) before Kernel `Rewrite`. |
 | `hya/plan` | `bundles/builtin/plan` | Native ABI v2 (`cdylib`) | Read-only `hya-plan` agent, `plan_exit` tool (alias `plan`), and `tool.visibility` native hook. |
 | `hya/goal` | `bundles/builtin/goal` | Native ABI v2 (`cdylib`) | Autonomous goal-mode `GoalDriver` (`hya -p`), `GoalDriverService`, 3 goal skills (`goal-contract`, `guided-goal`, `evaluator-prompt`), and 2 private helper agents (`hya-goal-guide`, `hya-goal-verifier`). |
 | `hya/loop` | `bundles/builtin/loop` | Native ABI v2 (`cdylib`) | Verifier/planner `LoopDriver` (`hya loop`), `LoopService`, and `loop-verifier-prompt` / `loop-planner-prompt` skills (`capabilities: [services, drivers]`). |
-| `hya/core-agents` | `bundles/builtin/core-agents` | Static | Built-in agent definitions (`hya-main`, `hya-task`, `hya-scout`, `hya-reviewer`, `hya-title`). |
+| `hya/core-agents` | `bundles/builtin/core-agents` | Static | Core built-in agent definitions (`hya-main`, `hya-title`). |
 | `hya/core-skills` | `bundles/builtin/core-skills` | Static | Built-in fallback skills (`agent-bundle-authoring`, `secure-self-update`). |
 | `hya/core-commands` | `bundles/builtin/core-commands` | Static | Built-in slash command templates (`/init`, `/review`). |
 | `hya/workflow` | `bundles/builtin/workflow` | Native ABI v2 (`cdylib`) | Workflow DAG execution, durable replay, `workflow` tool, `ProjectionReducer` (`extensions["hya/workflow"]`), `BundleApi` (`/workflows`, `/state`, `/command`), and the built-in `plan-impl-review` Workflow + stage agents (`capabilities: [tools, services, apis]`). |

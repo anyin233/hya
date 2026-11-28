@@ -20,7 +20,7 @@ pub(crate) const BARE_CORE_IDENTITY: &str = "hya/bare";
 pub(crate) const TOOL_FAMILIES: [&str; 5] = [
     "hya/hashline",
     "hya/coding-extras",
-    "hya/extended-tools",
+    "hya/multi-agent",
     "hya/network",
     "hya/agent-channels",
 ];
@@ -57,8 +57,8 @@ pub struct BaseToolExposure {
     #[serde(default)]
     aliases: Vec<BaseToolAlias>,
     /// Identity of another tool family whose same-named tool this entry
-    /// replaces whenever both families are loaded (for example channel-tools'
-    /// mail-aware `wait` over extended-tools' `wait`). The only way two
+    /// replaces whenever both families are loaded (for example `hya/agent-channels`'
+    /// mail-aware `wait` over `hya/multi-agent`'s `wait`). The only way two
     /// families may export one name: the winner is declared, never implied by
     /// load or lexicographic order.
     #[serde(default)]
@@ -256,9 +256,6 @@ fn load_preset(identity: &str) -> Result<BaseToolsPreset, String> {
     let [bundle] = catalog.bundles() else {
         return Err("tool family must prepare one bundle".to_string());
     };
-    if !bundle.agents().is_empty() || bundle.workflow().is_some() {
-        return Err("tool family must be an agentless Bundle".to_string());
-    }
     let policy = if let Some(asset) = bundle
         .extensions()
         .iter()
@@ -636,25 +633,23 @@ tools:
 
     #[test]
     fn a_shared_name_needs_exactly_one_declared_override() {
-        let extended = tools("- { name: wait, schema_version: 1, permission: read_only }");
+        let multi = tools("- { name: wait, schema_version: 1, permission: read_only }");
         let plain = tools("- { name: wait, schema_version: 1, permission: read_only }");
         let overriding = tools(
-            "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/extended-tools }",
+            "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/multi-agent }",
         );
         let wrong_target = tools(
             "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/network }",
         );
         let accepted = check_family_exports(&[
-            ("hya/extended-tools", &extended),
+            ("hya/multi-agent", &multi),
             ("hya/agent-channels", &overriding),
         ]);
         assert_eq!(accepted, Ok(()));
         for (label, other) in [("undeclared", &plain), ("wrong target", &wrong_target)] {
-            let error = check_family_exports(&[
-                ("hya/extended-tools", &extended),
-                ("hya/agent-channels", other),
-            ])
-            .unwrap_err();
+            let error =
+                check_family_exports(&[("hya/multi-agent", &multi), ("hya/agent-channels", other)])
+                    .unwrap_err();
             assert!(error.contains("`wait`"), "{label}: {error}");
         }
         // Both sides claiming the override is as ambiguous as neither.
@@ -663,7 +658,7 @@ tools:
         );
         assert!(
             check_family_exports(&[
-                ("hya/extended-tools", &back),
+                ("hya/multi-agent", &back),
                 ("hya/agent-channels", &overriding),
             ])
             .is_err()
@@ -673,7 +668,7 @@ tools:
             "- { name: waiting, schema_version: 1, permission: read_only, aliases: [{ name: wait, visibility: hidden }] }",
         );
         assert!(
-            check_family_exports(&[("hya/extended-tools", &extended), ("hya/network", &aliased),])
+            check_family_exports(&[("hya/multi-agent", &multi), ("hya/network", &aliased),])
                 .is_err()
         );
     }
@@ -709,8 +704,8 @@ tools:
                 ],
             ),
             (
-                "hya/extended-tools",
-                1,
+                "hya/multi-agent",
+                2,
                 &["list_agents", "task", "search_agent", "archive", "wait"],
             ),
             ("hya/network", 2, &["webfetch", "websearch"]),

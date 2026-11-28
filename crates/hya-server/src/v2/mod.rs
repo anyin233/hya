@@ -8,7 +8,6 @@
 
 mod agent_models;
 mod auth;
-mod builtin_bundle_apis;
 pub(crate) mod bundle_api;
 mod catalog;
 mod convert;

@@ -26,7 +26,7 @@ resources:
       path: tools/report.json
     - id: wait
       path: tools/wait.json
-      overrides: hya/extended-tools
+      overrides: hya/multi-agent
 channels:
   - id: unit-default
     kind: unit

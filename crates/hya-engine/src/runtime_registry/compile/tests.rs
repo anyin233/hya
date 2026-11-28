@@ -24,7 +24,7 @@ static NEXT_TEMP_SKILL_DIR: AtomicU64 = AtomicU64::new(0);
 const WITHOUT_CHANNEL_TOOLS: [&str; 4] = [
     "hya/hashline",
     "hya/coding-extras",
-    "hya/extended-tools",
+    "hya/multi-agent",
     "hya/network",
 ];
 
@@ -373,14 +373,15 @@ fn compile_bundle_agent(
     ag: PreparedAgent,
 ) -> Result<Arc<CompiledResourceView>, BundleError> {
     let id = ag.id.as_str().to_string();
-    let reg = reg_with(
-        tools,
-        catalog_from(&[bundle_with_agent(
-            &format!("hya/coord-{id}"),
-            ag,
-            Vec::new(),
-        )]),
-    );
+    let mut bundles = vec![bundle_with_agent(
+        &format!("hya/coord-{id}"),
+        ag,
+        Vec::new(),
+    )];
+    if let Ok(multi_agent) = hya_bundle::first_party_bundle("hya/multi-agent") {
+        bundles.extend(multi_agent.bundles().iter().cloned());
+    }
+    let reg = reg_with(tools, catalog_from(&bundles));
     compile_on(&bind(&reg), &id, None)
 }
 
@@ -2258,9 +2259,10 @@ fn coordination_read_injection_and_deny_rules() {
 #[test]
 fn builtin_agent_views_enforce_read_only_and_coordination_sets() {
     let plan_bundle = hya_bundle::first_party_bundle("hya/plan").unwrap();
+    let multi_agent_bundle = hya_bundle::first_party_bundle("hya/multi-agent").unwrap();
     let b = bind(&reg_with(
         hya_tool_loader::builtins(),
-        verified_catalog(&[plan_bundle]),
+        verified_catalog(&[plan_bundle, multi_agent_bundle]),
     ));
     let names = |id: &str| schema_names(&basic(&b, id));
     let writes = ["write", "edit", "apply_patch", "bash"];

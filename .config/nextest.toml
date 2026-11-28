@@ -13,7 +13,7 @@ final-status-level = "flaky"
 archive.include = [
   { path = "debug/build/hya-hashline/ci-archive/out/libhya_hashline.so", relative-to = "target", on-missing = "error" },
   { path = "debug/build/hya-coding-extras/ci-archive/out/libhya_coding_extras.so", relative-to = "target", on-missing = "error" },
-  { path = "debug/build/hya-extended-tools/ci-archive/out/libhya_extended_tools.so", relative-to = "target", on-missing = "error" },
+  { path = "debug/build/hya-multi-agent/ci-archive/out/libhya_multi_agent.so", relative-to = "target", on-missing = "error" },
   { path = "debug/build/hya-agent-channels/ci-archive/out/libhya_agent_channels.so", relative-to = "target", on-missing = "error" },
   { path = "debug/build/hya-network/ci-archive/out/libhya_network.so", relative-to = "target", on-missing = "error" },
   { path = "debug/build/hya-compaction/ci-archive/out/libhya_compaction.so", relative-to = "target", on-missing = "error" },

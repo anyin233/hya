@@ -297,10 +297,10 @@ async fn skill_catalog_dir_order_first_win_and_builtin_override_precedence() {
 }
 
 #[test]
-fn skill_tool_lives_in_core_not_extended_tools_and_registers_in_bare_runtime() {
+fn skill_tool_lives_in_core_not_multi_agent_and_registers_in_bare_runtime() {
     assert!(
         hya_tool_loader::builtins().get("skill").is_none(),
-        "skill must not remain in bundles/builtin/extended-tools"
+        "skill must not remain in bundles/builtin/multi-agent"
     );
     assert!(
         hya_core::kernel::tools::bare_tools()

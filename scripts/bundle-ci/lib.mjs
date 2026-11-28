@@ -77,7 +77,7 @@ export const ALLOWED_MCP_KEYS = new Set([
 
 export const ALLOWED_API_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 export const ALLOWED_API_SCOPES = new Set(["session", "global"]);
-export const ALLOWED_TOOL_PERMISSIONS = new Set(["read_only", "tool", "command", "interactive"]);
+export const ALLOWED_TOOL_PERMISSIONS = new Set(["read_only", "tool", "command", "task", "interactive"]);
 export const ALLOWED_HOOK_HANDLER_KINDS = new Set(["js", "rpc", "command", "native"]);
 export const ALLOWED_PROCESS_KINDS = new Set(["rust", "bun", "claude"]);
 export const ALLOWED_RUNTIME_KINDS = new Set(["static", "js", "native"]);

@@ -787,22 +787,29 @@ impl SessionEngine {
         let Some(recorded) = recorded else {
             return Ok(false);
         };
-        if binding.resolve_agent(recorded.as_str()).is_some()
-            || binding.resolve_agent(crate::TASK_AGENT_ID).is_none()
-        {
+        if binding.resolve_agent(recorded.as_str()).is_some() {
             return Ok(false);
         }
+        let fallback = if binding.resolve_agent(crate::TASK_AGENT_ID).is_some() {
+            crate::TASK_AGENT_ID
+        } else {
+            let default_id = binding.agent_catalog().default_agent_id();
+            if default_id == recorded.as_str() || binding.resolve_agent(default_id).is_none() {
+                return Ok(false);
+            }
+            default_id
+        };
         tracing::warn!(
             %session,
             recorded_agent = %recorded,
-            fallback = crate::TASK_AGENT_ID,
-            "stored session agent is not in the catalog; continuing as the task agent"
+            %fallback,
+            "stored session agent is not in the catalog; continuing as fallback agent"
         );
         self.emit(
             session,
             Event::AgentSwitched {
                 session,
-                agent: AgentName::new(crate::TASK_AGENT_ID),
+                agent: AgentName::new(fallback),
             },
         )
         .await?;

@@ -21,7 +21,7 @@ use crate::{
 pub const FIRST_PARTY_BUNDLES: &[&str] = &[
     "hya/hashline",
     "hya/coding-extras",
-    "hya/extended-tools",
+    "hya/multi-agent",
     "hya/network",
     "hya/core-skills",
     "hya/core-commands",

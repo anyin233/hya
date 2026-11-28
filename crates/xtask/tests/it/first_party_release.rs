@@ -13,7 +13,7 @@ const VERSION: &str = hya_version::BACKEND_VERSION;
 const NATIVE_FAMILIES: [&str; 10] = [
     "hashline",
     "coding-extras",
-    "extended-tools",
+    "multi-agent",
     "network",
     "agent-channels",
     "compaction",

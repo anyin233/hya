@@ -176,10 +176,13 @@ async fn bundle_apis_list_session_and_global_passthrough_all_methods() {
     let app = router(bundle_api_state().await);
     let listed = ok_get(&app, "/v2/bundle-apis").await;
     let apis = listed["apis"].as_array().unwrap();
+    let fixture_apis: Vec<&str> = apis
+        .iter()
+        .filter(|a| a["bundle"] == json!(BUNDLE))
+        .map(|a| a["api"].as_str().unwrap())
+        .collect();
     assert_eq!(
-        apis.iter()
-            .map(|a| a["api"].as_str().unwrap())
-            .collect::<Vec<_>>(),
+        fixture_apis,
         [
             "broken",
             "empty",
@@ -189,6 +192,22 @@ async fn bundle_apis_list_session_and_global_passthrough_all_methods() {
             "item-post",
             "item-put",
             "usage"
+        ]
+    );
+    let multi_agent_apis: Vec<&str> = apis
+        .iter()
+        .filter(|a| a["bundle"] == json!("hya/multi-agent"))
+        .map(|a| a["api"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        multi_agent_apis,
+        [
+            "archive_subagent",
+            "archive_subagent_global",
+            "list_members",
+            "list_members_global",
+            "steer_subagent",
+            "steer_subagent_global",
         ]
     );
     assert_eq!(
@@ -404,14 +423,19 @@ async fn bundle_api_host_errors_and_grpc_invocation() {
         ),
         (204, "", true)
     );
+    let grpc_apis = grpc
+        .list_bundle_apis(tonic::Request::new(pb::ListBundleApisRequest::default()))
+        .await
+        .unwrap()
+        .into_inner()
+        .apis;
+    assert_eq!(grpc_apis.iter().filter(|a| a.bundle == BUNDLE).count(), 8);
     assert_eq!(
-        grpc.list_bundle_apis(tonic::Request::new(pb::ListBundleApisRequest::default()))
-            .await
-            .unwrap()
-            .into_inner()
-            .apis
-            .len(),
-        8
+        grpc_apis
+            .iter()
+            .filter(|a| a.bundle == "hya/multi-agent")
+            .count(),
+        6
     );
 
     for (method, path, code) in [
@@ -535,8 +559,12 @@ async fn native_bundle_apis_dispatch_uniformly_over_http_and_grpc() {
 
     let listed = ok_get(&app, "/v2/bundle-apis").await;
     let apis = listed["apis"].as_array().unwrap();
-    assert_eq!(apis.len(), 2);
-    assert_eq!(apis[0]["bundle"], json!(NATIVE_BUNDLE));
+    let native_apis: Vec<&Value> = apis
+        .iter()
+        .filter(|a| a["bundle"] == json!(NATIVE_BUNDLE))
+        .collect();
+    assert_eq!(native_apis.len(), 2);
+    assert_eq!(native_apis[0]["bundle"], json!(NATIVE_BUNDLE));
 
     let global_http = ok_get(&app, &format!("/v2/bundles/{NATIVE_SEG}/api/status?k=v")).await;
     assert_eq!(global_http["api"], json!("status"));

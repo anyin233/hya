@@ -1,16 +1,19 @@
-//! Test-only replacement for the channel tool family, built as a real shared library.
+//! Test-only ABI v2 replacement for the `hya/multi-agent` bundle, built as a real shared library.
 use async_trait::async_trait;
 use hya_proto::{ToolName, ToolSchema};
+use hya_runtime_abi::HostError;
 use hya_tool::{Tool, ToolCtx, ToolError};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
 struct Replacement(&'static str);
+
 #[async_trait]
 impl Tool for Replacement {
     fn name(&self) -> &str {
         self.0
     }
+
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: ToolName::new(self.0),
@@ -19,6 +22,7 @@ impl Tool for Replacement {
             output_schema: None,
         }
     }
+
     async fn execute(&self, _: &ToolCtx, input: Value) -> Result<Value, ToolError> {
         let mut output = json!({"implementation":"replacement", "input":input});
         if let Some(deadline) = hya_tool::deadline::current() {
@@ -29,36 +33,9 @@ impl Tool for Replacement {
     }
 }
 
-/// # Safety
-/// `out` points to 32 writable bytes.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hya_tool_bundle_abi_v1(out: *mut u8) {
-    let digest = hya_tool::native_bundle::abi_digest_v1();
-    unsafe { std::ptr::copy_nonoverlapping(digest.as_ptr(), out, 32) };
-}
-/// # Safety
-/// `out` is a live vector from the matching host build.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hya_tool_bundle_register_v1(out: *mut Vec<Arc<dyn Tool>>) {
-    let out = unsafe { &mut *out };
+hya_runtime_abi::export_native_bundle_v2!(|_ctx, out| {
     for name in ["list_agents", "task", "search_agent", "archive", "wait"] {
-        out.push(Arc::new(Replacement(name)));
+        out.tools.push(Arc::new(Replacement(name)));
     }
-}
-/// # Safety
-/// The handle and callback state satisfy `with_runtime_v1`'s contract.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hya_tool_bundle_with_runtime_v1(
-    handle: *const std::ffi::c_void,
-    callback: unsafe extern "C" fn(*mut std::ffi::c_void),
-    state: *mut std::ffi::c_void,
-) {
-    unsafe { hya_tool::native_bundle::with_runtime_v1(handle, callback, state) };
-}
-
-/// # Safety
-/// `cell` is the matching host's process-lifetime deadline cell.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hya_tool_bundle_share_deadline_v1(cell: *const std::ffi::c_void) {
-    unsafe { hya_tool::native_bundle::share_deadline_v1(cell) };
-}
+    Ok::<(), HostError>(())
+});

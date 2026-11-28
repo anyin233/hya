@@ -1,17 +1,84 @@
+//! Model-facing multi-agent tools: `list_agents`, `task`, `search_agent`, and
+//! `archive` (plus `hya_tool::lifecycle::WaitTool::new(false)` for `wait`).
+
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
+use hya_tool::tool::obj_schema;
+use hya_tool::{Action, InlineAgent, Resource, SpawnError, SpawnMember, Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use hya_tool::tool::obj_schema;
-use hya_tool::{Action, Resource};
-use hya_tool::{InlineAgent, SpawnError, SpawnMember};
-use hya_tool::{Tool, ToolCtx, ToolError};
+/// List available agent definitions that the caller can spawn via `task`.
+pub struct ListAgentsTool;
 
+#[async_trait]
+impl Tool for ListAgentsTool {
+    fn name(&self) -> &str {
+        "list_agents"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        obj_schema(
+            "list_agents",
+            "List the agent definitions available to spawn via the `task` tool. Returns each agent's name (the `subagent_type` to pass to `task`), description, logical model category, mode, and default thinking effort (`effort`; none means the model's default). Pass `effort` to `task` to override it for one spawn. Use this when the available roster is unknown, then put independent assignments in one task tasks[] batch; set subagent_type and effort per item.",
+            json!({}),
+            &[],
+        )
+    }
+
+    async fn execute(&self, ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {
+        let mut agents = ctx.agents.to_vec();
+        agents.sort_by(|left, right| left.name.cmp(&right.name));
+        let rows: Vec<Value> = agents
+            .iter()
+            .map(|agent| {
+                json!({
+                    "name": agent.name,
+                    "description": agent.description,
+                    "category": agent.category,
+                    "mode": agent.mode,
+                    "effort": agent.effort,
+                    "effort_source": agent.effort_source,
+                })
+            })
+            .collect();
+        let output = if agents.is_empty() {
+            "No agents available.".to_string()
+        } else {
+            agents
+                .iter()
+                .map(|agent| {
+                    let description = agent.description.as_deref().unwrap_or("");
+                    let category = agent
+                        .category
+                        .as_deref()
+                        .map(|category| format!(" [category: {category}]"))
+                        .unwrap_or_default();
+                    let effort = agent
+                        .effort
+                        .as_deref()
+                        .map(|effort| format!(" [effort: {effort}]"))
+                        .unwrap_or_default();
+                    format!(
+                        "- {} ({}){}{}: {}",
+                        agent.name, agent.mode, category, effort, description
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        Ok(json!({
+            "title": format!("{} agents available", agents.len()),
+            "output": output,
+            "agents": rows,
+            "metadata": { "count": agents.len() },
+        }))
+    }
+}
+
+/// Launch one or more subagents concurrently on independent tasks.
 pub struct TaskTool;
 
-/// Request-scoped inline agent overlay for a `task` call. Applies only to this
-/// request/child spawn and is not retained as a reusable agent definition.
 #[derive(Deserialize)]
 struct InlineAgentInput {
     #[serde(default)]
@@ -27,8 +94,6 @@ struct InlineAgentInput {
 }
 
 impl InlineAgentInput {
-    /// Convert to the runtime [`InlineAgent`], defaulting the name to the caller's
-    /// `subagent_type` when the inline block omits one.
     fn into_inline(self, subagent_type: &str) -> InlineAgent {
         let name = if self.name.trim().is_empty() {
             subagent_type.to_string()
@@ -60,8 +125,6 @@ struct TaskMemberInput {
     effort: Option<String>,
     #[serde(default)]
     inline_agent: Option<InlineAgentInput>,
-    /// Removed in 0.41.0; present only so a call that still sends it fails
-    /// with [`REMOVED_NAME`] instead of being silently ignored.
     #[serde(default)]
     name: Option<Value>,
 }
@@ -89,12 +152,10 @@ struct TaskInput {
     tasks: Option<Vec<TaskMemberInput>>,
     #[serde(default)]
     context: String,
-    /// Removed in 0.41.0; see [`TaskMemberInput::name`].
     #[serde(default)]
     name: Option<Value>,
 }
 
-/// Input error for a call that still passes the removed `name` parameter.
 const REMOVED_NAME: &str = "`name` was removed; the handle is derived from `subagent_type`. Choose the agent with `subagent_type` (e.g. `\"subagent_type\": \"scout\"`) and drop `name`: the harness names the member `<subagent_type>-<operator>` (`main/scout-suzuran`).";
 
 fn reject_removed_name(name: Option<&Value>) -> Result<(), ToolError> {
@@ -202,10 +263,6 @@ impl Tool for TaskTool {
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        // Nested subagents are allowed: a subagent may call `task` to spawn its own
-        // subagents. Recursion depth and total fan-out are bounded by the engine's
-        // SubagentGovernor (max_depth + per-run budget), enforced in `run_team`, so
-        // there is no hard one-level cap here.
         for field in ["tasks", "members"] {
             if input.get(field).is_some_and(|value| !value.is_array()) {
                 return Err(ToolError::Input(format!(
@@ -295,8 +352,9 @@ impl Tool for TaskTool {
             .await
             .map_err(|error| match error {
                 SpawnError::Overloaded => ToolError::Overloaded(error.to_string()),
-                SpawnError::Unavailable => ToolError::Other(error.to_string()),
-                SpawnError::Cancelled => ToolError::Other(error.to_string()),
+                SpawnError::Unavailable | SpawnError::Cancelled => {
+                    ToolError::Other(error.to_string())
+                }
                 SpawnError::UnknownAgentId { agent_id } => ToolError::UnknownAgentId { agent_id },
                 SpawnError::AgentSpawnNotAllowed { caller, agent_id } => {
                     ToolError::AgentSpawnNotAllowed { caller, agent_id }
@@ -331,9 +389,6 @@ impl Tool for TaskTool {
             }));
         }
 
-        // Pair outcomes with the original member specs so the TUI can show every
-        // launched subagent (type + short description + session) in the main
-        // message, preserving the existing multi-task rows.
         let members_json: Vec<Value> = outcomes
             .into_iter()
             .enumerate()
@@ -442,4 +497,144 @@ fn render_single(result: TaskResult) -> Value {
             result.session, model_attr, state, tag, result.summary, tag
         ),
     })
+}
+
+/// Search archived direct subagents by their final state handoff.
+pub struct SearchAgentTool;
+
+#[derive(Deserialize)]
+struct SearchAgentInput {
+    #[serde(default)]
+    query: String,
+}
+
+#[async_trait]
+impl Tool for SearchAgentTool {
+    fn name(&self) -> &str {
+        "search_agent"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        obj_schema(
+            "search_agent",
+            "Search YOUR OWN archived direct subagents by their final state \
+             handoff (goal / current state / pending). Returns each agent's \
+             handle and digest. Use `send` with the handle as `channel` to revive \
+             the agent with its saved state.",
+            json!({
+                "query": {"type": "string", "description": "Free-text query over goal/state/pending digests; empty lists all"}
+            }),
+            &[],
+        )
+    }
+
+    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+        let input: SearchAgentInput =
+            serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
+        let rows = ctx.mailbox.search_agents(input.query).await?;
+        let rendered: Vec<String> = rows
+            .iter()
+            .map(|row| {
+                format!(
+                    "  {} ({}) · goal: {} · pending: {}{}",
+                    row.handle,
+                    row.agent_type,
+                    row.goal,
+                    row.pending,
+                    if row.degraded {
+                        " · degraded handoff"
+                    } else {
+                        ""
+                    }
+                )
+            })
+            .collect();
+        let output = if rendered.is_empty() {
+            "No archived agents match.".to_string()
+        } else {
+            rendered.join("\n")
+        };
+        Ok(json!({
+            "title": format!("{} archived agent(s)", rows.len()),
+            "output": output,
+            "agents": rows.iter().map(|row| json!({
+                "handle": row.handle,
+                "agent_type": row.agent_type,
+                "session": row.session,
+                "goal": row.goal,
+                "pending": row.pending,
+                "degraded": row.degraded,
+            })).collect::<Vec<_>>(),
+        }))
+    }
+}
+
+/// Stop one of the caller's subagents and archive it.
+pub struct ArchiveTool;
+
+#[async_trait]
+impl Tool for ArchiveTool {
+    fn name(&self) -> &str {
+        "archive"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        obj_schema(
+            "archive",
+            "Stop one of your subagents and archive it: its in-flight turn is cancelled, a state handoff is written, and it leaves your live roster (its own subagents are archived first). Use it for a subagent that is stuck, no longer needed, or blocking your own report. An archived subagent stays readable (session log, channel history) and is NOT gone: sending mail to its handle wakes it again with the same handle and session. The team lead (`main`) can never be archived.",
+            json!({
+                "target": {
+                    "type": "string",
+                    "description": "The subagent to archive: its handle as returned by `task` (e.g. `main/hya-task-exusiai`, or just the leaf `hya-task-exusiai` for your own subagent) or its session id (`hysec_...`)."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Short reason, recorded on its member row (optional)."
+                }
+            }),
+            &["target"],
+        )
+    }
+
+    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+        let target = input
+            .get("target")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| {
+                ToolError::Input(
+                    "archive requires `target`: the subagent's handle (e.g. `main/hya-task-exusiai`) or session id from the `task` result".to_string(),
+                )
+            })?
+            .to_string();
+        let reason = input
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_default();
+        let receipt = ctx.lifecycle.archive(target, reason).await?;
+        let mut output = format!(
+            "Archived `{}` (session {}).",
+            receipt.handle, receipt.session
+        );
+        if receipt.cancelled_turn {
+            output.push_str(" Its in-flight turn was cancelled.");
+        }
+        if !receipt.descendants.is_empty() {
+            output.push_str(&format!(
+                " Its subagents were archived first: {}.",
+                receipt.descendants.join(", ")
+            ));
+        }
+        output.push_str(&format!(
+            " Send mail to `{}` to wake it again with its handoff.",
+            receipt.handle
+        ));
+        Ok(json!({
+            "title": format!("Archived {}", receipt.handle),
+            "output": output,
+            "metadata": receipt,
+        }))
+    }
 }

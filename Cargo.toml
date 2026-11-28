@@ -2,7 +2,7 @@
 # See CONTEXT.md for the full architecture and agent-spec contract.
 [workspace]
 resolver = "3"
-members = ["crates/*", "bundles/builtin/hashline/native", "bundles/builtin/coding-extras/native", "bundles/builtin/extended-tools/native", "bundles/builtin/agent-channels/native", "bundles/builtin/network/native", "bundles/builtin/compaction/native", "bundles/builtin/plan/native", "bundles/builtin/goal/native", "bundles/builtin/loop/native", "bundles/builtin/workflow/native"]
+members = ["crates/*", "bundles/builtin/hashline/native", "bundles/builtin/coding-extras/native", "bundles/builtin/multi-agent/native", "bundles/builtin/agent-channels/native", "bundles/builtin/network/native", "bundles/builtin/compaction/native", "bundles/builtin/plan/native", "bundles/builtin/goal/native", "bundles/builtin/loop/native", "bundles/builtin/workflow/native"]
 exclude = ["crates/hya-plugin-bun", "vendor/sevenz-rust2-0.20.2"]
 
 [workspace.package]
@@ -25,7 +25,7 @@ hya-context = { path = "crates/hya-context" }
 hya-tool-error = { path = "crates/hya-tool-error" }
 hya-hashline = { path = "bundles/builtin/hashline/native" }
 hya-coding-extras = { path = "bundles/builtin/coding-extras/native" }
-hya-extended-tools = { path = "bundles/builtin/extended-tools/native" }
+hya-multi-agent = { path = "bundles/builtin/multi-agent/native" }
 hya-agent-channels = { path = "bundles/builtin/agent-channels/native" }
 hya-network = { path = "bundles/builtin/network/native" }
 hya-compaction = { path = "bundles/builtin/compaction/native" }

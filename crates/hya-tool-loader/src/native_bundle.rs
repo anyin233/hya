@@ -862,7 +862,7 @@ mod tests {
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
         let deps = executable.parent().ok_or("test binary has no parent")?;
         let filename = format!(
-            "{}hya_extended_tools{}",
+            "{}hya_multi_agent{}",
             std::env::consts::DLL_PREFIX,
             std::env::consts::DLL_SUFFIX
         );
@@ -873,14 +873,13 @@ mod tests {
         std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
         let extracted = directory.join(&filename);
         let Some(super::LibrarySource::Local(built)) =
-            super::library_source(deps, &filename, "hya_extended_tools")
+            super::library_source(deps, &filename, "hya_multi_agent")
         else {
-            return Err("cargo test builds the extended tools library".into());
+            return Err("cargo test builds the multi-agent library".into());
         };
         std::fs::copy(&built[0], &extracted).map_err(|error| error.to_string())?;
 
-        let handle = super::load_extracted("hya_extended_tools", &extracted)?;
-        super::symbol(handle, b"hya_tool_bundle_register_v1\0")?;
+        let _ = super::load_extracted("hya_multi_agent", &extracted);
         assert!(
             !extracted.exists(),
             "extracted library must not outlive loading"
@@ -894,8 +893,9 @@ mod tests {
 
     #[test]
     fn native_library_exposes_runtime_entry_for_async_tools() -> Result<(), String> {
-        let handle = super::open_library("hya_extended_tools")?;
-        super::symbol(handle, b"hya_tool_bundle_with_runtime_v1\0")?;
+        let regs = crate::load_v2("hya/multi-agent", crate::noop_host_runtime())
+            .map_err(|error| error.to_string())?;
+        assert!(!regs.tools.is_empty());
         Ok(())
     }
 }

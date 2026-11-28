@@ -22,10 +22,19 @@ pub enum AgentToolPlane {
 
 impl AgentToolPlane {
     /// Plane for an agent of this origin.
+    ///
+    /// Built-in agents (`hya/core-agents`) and trusted first-party interactive
+    /// agent bundles (`hya/multi-agent`, `hya/plan`) run on the full Harness
+    /// plane so workers like `hya-task` and `hya-plan` see project skills,
+    /// Harness MCP, and plugin tools. All other bundle agents stay clamped to
+    /// [`Self::InternalPublic`].
     #[must_use]
-    pub const fn for_origin(origin: &AgentOrigin<'_>) -> Self {
+    pub fn for_origin(origin: &AgentOrigin<'_>) -> Self {
         match origin {
             AgentOrigin::Builtin => Self::Full,
+            AgentOrigin::Bundle {
+                bundle_id: "hya/multi-agent" | "hya/plan",
+            } => Self::Full,
             AgentOrigin::Bundle { .. } => Self::InternalPublic,
         }
     }

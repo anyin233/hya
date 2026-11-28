@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "name": "task",
+  "description": "Launch one or more subagents concurrently on independent tasks.",
+  "permission": "task",
+  "prompt_hint": "start subagents on independent tasks",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "context": {
+        "type": "string",
+        "description": "Shared goal, interfaces and constraints prepended to every task prompt"
+      },
+      "description": {
+        "type": "string",
+        "description": "Short 3-5 word description of the task"
+      },
+      "prompt": {
+        "type": "string",
+        "description": "Task instructions for the subagent"
+      },
+      "subagent_type": {
+        "type": "string",
+        "description": "Agent id to spawn (defaults to hya-task)"
+      },
+      "tasks": {
+        "type": "array",
+        "description": "Independent tasks to launch concurrently in one call"
+      }
+    },
+    "required": []
+  },
+  "entrypoint": {
+    "native": "task"
+  }
+}
