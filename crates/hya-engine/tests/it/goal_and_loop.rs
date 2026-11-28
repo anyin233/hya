@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream;
-use hya_engine::completion::{IterationDriver, IterationExecutor, PluginGoalEvaluator};
+use hya_engine::completion::{IterationDriver, IterationExecutor};
 use hya_engine::hooks::{
     ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome,
     GoalEvaluateReply, HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome,
@@ -25,11 +25,10 @@ use hya_engine::loop_mode::{
     VerifierVerdict, clamp_budget, validate_budget,
 };
 use hya_engine::{
-    AgentSpec, CoreError, GateOutcome, GoalEvaluator, IterationGate, LoopPlanner, LoopVerifier,
-    ModelGoalEvaluator, RunOutcome, SafetyCaps, SessionEngine, Verdict, drive_loop, run_goal,
-    run_loop, validate_goal_condition,
+    AgentSpec, CoreError, GateOutcome, IterationGate, LoopPlanner, LoopVerifier, RunOutcome,
+    SafetyCaps, SessionEngine, drive_loop, run_loop,
 };
-use hya_proto::{Envelope, FinishReason, ModelRef, PartProjection, Role, SessionId};
+use hya_proto::{Envelope, FinishReason, ModelRef, SessionId};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
     ProviderRouter,
@@ -90,68 +89,6 @@ async fn engine_and_session(
     agent.system_prompt = "x".into();
     let session = support::create_root_session(&eng, agent_name, "fake", Path::new("/tmp")).await;
     (eng, session, agent)
-}
-
-async fn run_goal_case(
-    provider: FakeProvider,
-    condition: &str,
-    eval: Arc<dyn GoalEvaluator>,
-    caps: SafetyCaps,
-    cancel: CancellationToken,
-) -> (Arc<SessionEngine>, SessionId, RunOutcome) {
-    let (eng, sid, agent) = engine_and_session(provider, "build").await;
-    let out = run_goal(
-        eng.clone(),
-        sid,
-        agent,
-        condition.into(),
-        eval,
-        caps,
-        cancel,
-    )
-    .await
-    .unwrap();
-    (eng, sid, out)
-}
-
-struct GoalEval {
-    mets: Vec<bool>,
-    fixed: Option<&'static str>,
-    idx: AtomicUsize,
-}
-
-impl GoalEval {
-    fn seq(mets: Vec<bool>) -> Arc<dyn GoalEvaluator> {
-        Arc::new(Self {
-            mets,
-            fixed: None,
-            idx: AtomicUsize::new(0),
-        })
-    }
-    fn constant(met: bool, reason: &'static str) -> Arc<dyn GoalEvaluator> {
-        Arc::new(Self {
-            mets: vec![met],
-            fixed: Some(reason),
-            idx: AtomicUsize::new(0),
-        })
-    }
-}
-
-#[async_trait]
-impl GoalEvaluator for GoalEval {
-    async fn evaluate(&self, _: &str, _: &str) -> Result<Verdict, CoreError> {
-        let i = self.idx.fetch_add(1, Ordering::Relaxed);
-        let met = if self.fixed.is_some() {
-            self.mets[0]
-        } else {
-            self.mets.get(i).copied().unwrap_or(true)
-        };
-        let reason = self
-            .fixed
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("scripted {i}"));
-        Ok(Verdict { met, reason })
-    }
 }
 
 #[derive(Default)]
@@ -417,169 +354,8 @@ fn gate_with_hook(
 }
 
 // ---------------------------------------------------------------------------
-// 1. Goal mode: lifecycle, plugin evaluator & fallback, wrap-up, stall, contract
+// 1. IterationDriver wrap-up failure & cancellation (goal tests live in hya/goal)
 // ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn goal_lifecycle_achieves_caps_malformed_and_honors_pre_cancel() {
-    let (_, _, achieved) = run_goal_case(
-        working_provider(),
-        "tests pass",
-        GoalEval::seq(vec![false, false, false, true]),
-        SafetyCaps::default(),
-        CancellationToken::new(),
-    )
-    .await;
-    assert_eq!(
-        achieved,
-        RunOutcome::Achieved {
-            iterations: 4,
-            reason: "scripted 3".into()
-        }
-    );
-
-    let not_json = || {
-        FakeProvider::scripted_turns(vec![vec![
-            FakeStep::Text("not json".into()),
-            FakeStep::Finish(FinishReason::Stop),
-        ]])
-    };
-    let eval: Arc<dyn GoalEvaluator> = Arc::new(ModelGoalEvaluator::new(
-        router_with(not_json()),
-        ModelRef::new("fake"),
-    ));
-    let (_, _, capped) = run_goal_case(
-        not_json(),
-        "do the thing",
-        eval,
-        caps_max(2),
-        CancellationToken::new(),
-    )
-    .await;
-    assert_eq!(
-        capped,
-        RunOutcome::BudgetLimited {
-            iterations: 2,
-            which: "max_iterations"
-        }
-    );
-
-    let cancel = CancellationToken::new();
-    cancel.cancel();
-    let (_, _, cancelled) = run_goal_case(
-        FakeProvider::scripted_turns(vec![vec![FakeStep::Finish(FinishReason::Stop)]]),
-        "x",
-        GoalEval::seq(vec![true]),
-        SafetyCaps::default(),
-        cancel,
-    )
-    .await;
-    assert_eq!(cancelled, RunOutcome::Cancelled);
-}
-
-#[tokio::test]
-async fn goal_plugin_dispatcher_verdicts_malformed_cap_and_fallback() {
-    let met_hooks = Arc::new(TestHooks {
-        goal_replies: vec![GoalEvaluateReply::Verdict {
-            met: true,
-            reason: "done by hook".into(),
-        }],
-        ..TestHooks::default()
-    });
-    let (_, _, met) = run_goal_case(
-        working_provider(),
-        "tests pass",
-        Arc::new(PluginGoalEvaluator::new(met_hooks)),
-        SafetyCaps::default(),
-        CancellationToken::new(),
-    )
-    .await;
-    assert_eq!(
-        met,
-        RunOutcome::Achieved {
-            iterations: 1,
-            reason: "done by hook".into()
-        }
-    );
-
-    let bad_hooks = Arc::new(TestHooks {
-        goal_replies: vec![GoalEvaluateReply::Malformed, GoalEvaluateReply::Malformed],
-        ..TestHooks::default()
-    });
-    let (_, _, capped) = run_goal_case(
-        working_provider(),
-        "do the thing",
-        Arc::new(PluginGoalEvaluator::new(bad_hooks)),
-        caps_max(2),
-        CancellationToken::new(),
-    )
-    .await;
-    assert_eq!(
-        capped,
-        RunOutcome::BudgetLimited {
-            iterations: 2,
-            which: "max_iterations"
-        }
-    );
-
-    let fb_hooks = Arc::new(TestHooks {
-        goal_replies: vec![GoalEvaluateReply::Malformed],
-        ..TestHooks::default()
-    });
-    let eval = PluginGoalEvaluator::new(fb_hooks)
-        .with_fallback(GoalEval::constant(true, "bundle prompt fallback"));
-    assert_eq!(
-        eval.evaluate("goal", "evidence").await.unwrap(),
-        Verdict {
-            met: true,
-            reason: "bundle prompt fallback".into()
-        }
-    );
-}
-
-#[tokio::test]
-async fn goal_budget_wrap_up_and_stall_guard() {
-    let (eng, sid, outcome) = run_goal_case(
-        working_provider(),
-        "do the thing",
-        GoalEval::seq(vec![false, false, false]),
-        caps_max(2),
-        CancellationToken::new(),
-    )
-    .await;
-    assert_eq!(
-        outcome,
-        RunOutcome::BudgetLimited {
-            iterations: 2,
-            which: "max_iterations"
-        }
-    );
-    let proj = eng.read_projection(sid).await.unwrap();
-    let last_user = proj
-        .session
-        .messages
-        .iter()
-        .rev()
-        .filter(|m| m.role == Role::User)
-        .find_map(|m| {
-            m.parts.iter().find_map(|p| match p {
-                PartProjection::Text { text, .. } => Some(text.as_str()),
-                _ => None,
-            })
-        })
-        .unwrap_or_default();
-    assert!(last_user.contains("BUDGET LIMIT REACHED"), "{last_user}");
-
-    let (_, _, stalled) = run_goal_case(
-        working_provider(),
-        "do the thing",
-        GoalEval::constant(false, "not yet"),
-        SafetyCaps::default(),
-        CancellationToken::new(),
-    )
-    .await;
-    assert_eq!(stalled, RunOutcome::Stalled { iterations: 3 });
-}
 
 #[tokio::test]
 async fn goal_wrap_up_failure_propagates_capacity_and_preserves_cancellation() {
@@ -614,16 +390,6 @@ async fn goal_wrap_up_failure_propagates_capacity_and_preserves_cancellation() {
         matches!(cancel_res, Ok(RunOutcome::Cancelled)),
         "{cancel_res:?}"
     );
-}
-
-#[test]
-fn goal_contract_validation_accepts_freeform_and_validates_structured_sections() {
-    assert!(validate_goal_condition("make the tests pass").is_ok());
-    assert!(
-        validate_goal_condition("## Objective\nShip it.\n## Boundaries\nrepo only.\n").is_err()
-    );
-    assert!(validate_goal_condition("## Objective\nShip it.\n## Success criteria\nall green.\n## Verification\nrun the suite somehow.\n## Boundaries\nrepo only.\n## Stop conditions\ntwo failures.\n").is_err());
-    assert!(validate_goal_condition("## Objective\nShip it.\n## Success criteria\nall green.\n## Verification\n`cargo test`\n## Boundaries\nrepo only.\n## Stop conditions\ntwo failures.\n").is_ok());
 }
 
 // ---------------------------------------------------------------------------

@@ -10,7 +10,7 @@ use std::process::{Command, Output};
 
 const TARGET: &str = "x86_64-unknown-linux-gnu";
 const VERSION: &str = hya_version::BACKEND_VERSION;
-const NATIVE_FAMILIES: [&str; 7] = [
+const NATIVE_FAMILIES: [&str; 8] = [
     "hashline",
     "coding-extras",
     "extended-tools",
@@ -18,6 +18,7 @@ const NATIVE_FAMILIES: [&str; 7] = [
     "channel-tools",
     "compaction",
     "plan",
+    "goal",
 ];
 const DATA_BUNDLES: [&str; 7] = [
     "core-skills",

@@ -351,6 +351,8 @@ pub enum PreparedNativeCapability {
     Rewriters,
     /// Registers long-lived native services via ABI v2 (`NativeService`).
     Services,
+    /// Registers iterative drivers via ABI v2 (`GoalDriver` or `LoopDriver`).
+    Drivers,
 }
 
 impl PreparedNativeCapability {
@@ -362,6 +364,7 @@ impl PreparedNativeCapability {
             Self::Hooks => "hooks",
             Self::Rewriters => "rewriters",
             Self::Services => "services",
+            Self::Drivers => "drivers",
         }
     }
 }

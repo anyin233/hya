@@ -128,9 +128,9 @@ pub trait HookDispatcher: Send + Sync {
     }
     /// Whether any hook provider is registered for `goal.evaluate`.
     ///
-    /// Capability probe for goal-mode evaluator selection: callers build a
-    /// plugin-backed [`crate::completion::PluginGoalEvaluator`] only when this
-    /// returns true, and otherwise fail open to the built-in model evaluator.
+    /// Capability probe for goal-mode evaluator selection: the `hya/goal`
+    /// native driver routes evaluation through `goal.evaluate` hooks only when
+    /// this returns true, and otherwise falls back to its model evaluator.
     /// Default false.
     fn has_goal_evaluate(&self) -> bool {
         false

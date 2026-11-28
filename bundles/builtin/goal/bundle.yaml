@@ -1,0 +1,26 @@
+kind: Bundle
+schema_version: 2
+version_ref: hya
+identity:
+  id: hya/goal
+  version: 0.0.0
+  publisher: hya
+namespace: goal
+runtime:
+  kind: native
+  abi_version: 2
+  crate_dir: native
+  capabilities:
+    - services
+    - drivers
+resources:
+  skills:
+    - id: goal-contract
+      path: skills/goal-contract/SKILL.md
+    - id: guided-goal
+      path: skills/guided-goal/SKILL.md
+    - id: evaluator-prompt
+      path: skills/evaluator-prompt/SKILL.md
+agents:
+  - path: agents/hya-goal-guide.md
+  - path: agents/hya-goal-verifier.md

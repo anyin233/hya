@@ -41,7 +41,7 @@ pub mod category;
 pub mod channel_policy;
 /// Combined compaction configuration and handoff types.
 pub mod compaction;
-/// Goal-mode iteration driver, safety caps, and independent evaluators.
+/// Transitional iteration primitives for loop mode and workflow loop stages.
 pub mod completion;
 /// Harness coordination tools injected into every agent view at startup.
 mod coordination;
@@ -108,10 +108,7 @@ pub use category::{
 };
 pub use channel_policy::{AGENT_CHANNELS_PRESET_ID, ChannelPolicy};
 pub use compaction::CompactionConfig;
-pub use completion::{GateOutcome, IterationGate, validate_goal_condition};
-pub use completion::{
-    GoalEvaluator, IterationDriver, ModelGoalEvaluator, RunOutcome, SafetyCaps, Verdict, run_goal,
-};
+pub use completion::{GateOutcome, IterationDriver, IterationGate, RunOutcome, SafetyCaps};
 pub use effort::{AgentEffortSource, EffectiveEffort, EffortSource, agent_effort, resolve_effort};
 pub use engine::terminal_handoff;
 pub use engine::{

@@ -86,7 +86,7 @@ Global flags such as `--bare` and `--pure` can be placed either before or after 
 hya -p "<GOAL>" [--max-iterations <N>] [--evaluator-model <MODEL>]
 ```
 
-Runs iterative turns in memory until an independent evaluator confirms `<GOAL>` is met or `--max-iterations` (default `6`) is reached.
+Runs iterative turns in memory through the `hya/goal` native bundle's `GoalDriver` until an independent evaluator (`goal.evaluate` hook or tool-free verifier model) confirms `<GOAL>` is met or `--max-iterations` (default `6`) is reached. Requires `hya/goal` to be enabled; fails with an actionable error in `--bare` mode or when `hya/goal` is disabled in `config.yaml` (`bundles.builtin.disable: [hya/goal]`). Per-bundle evaluator model defaults can be configured in `~/.config/hya/bundles/hya/goal/config.yml` under `goal.evaluator_model`.
 
 ### `hya loop`
 

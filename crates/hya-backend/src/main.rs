@@ -41,7 +41,7 @@ use std::io::{Read as _, Write as _};
 
 use anyhow::Context as _;
 use clap::Parser;
-use hya_app::{HeadlessEvaluatorRoute, prepare_goal, prepare_loop, run_headless_lead};
+use hya_app::{HeadlessEvaluatorRoute, prepare_goal_driver, prepare_loop, run_headless_lead};
 use hya_engine::RunOutcome;
 use hya_engine::completion::render_transcript;
 use hya_engine::loop_mode::LoopConfig;
@@ -370,20 +370,20 @@ async fn cmd_goal(
     let (outcome, stop) = headless
         .run(async move |headless| {
             let cancel = CancellationToken::new();
-            let work = prepare_goal(
-                headless.built.engine(),
-                headless.session,
-                headless.agent.clone(),
-                HeadlessEvaluatorRoute {
-                    router: &headless.evaluator_router,
-                    model_override: evaluator_model_flag.as_deref(),
-                    default_model: &headless.evaluator_model,
-                },
+            let host_runtime = headless.built.host_runtime();
+            let request = hya_runtime_abi::GoalRunRequest {
+                session: headless.session,
                 goal,
                 max_iterations,
-                cancel.clone(),
-            )
-            .await?;
+                max_wall_clock_secs: 1800,
+                agent: Some(headless.agent.name.clone()),
+                model: Some(headless.agent.model.clone()),
+                config: serde_json::json!({
+                    "evaluator_model": evaluator_model_flag,
+                    "default_model": headless.evaluator_model,
+                }),
+            };
+            let work = prepare_goal_driver(host_runtime, request, cancel.clone())?;
             let (outcome, stop) =
                 run_until_stopped(&headless.built, &mut signals, &cancel, work).await;
             Ok((outcome, stop))

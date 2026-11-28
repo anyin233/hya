@@ -23,6 +23,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::HostError;
+use crate::extensions::{GoalDriver, NativeGoalEvaluateVerdict};
 
 // ---------------------------------------------------------------------------
 // HostSessionStore
@@ -610,6 +611,23 @@ pub trait HostExtensionRegistry: Send + Sync {
         input: Value,
         cancel: CancellationToken,
     ) -> Result<Value, HostError>;
+
+    /// Return `true` when at least one `goal.evaluate` hook provider is
+    /// registered for `session` (or globally when `session` is `None`).
+    async fn has_goal_evaluate_hook(&self, _session: Option<SessionId>) -> Result<bool, HostError> {
+        Ok(false)
+    }
+
+    /// Dispatch the `goal.evaluate` hook chain for `session`, returning
+    /// `Ok(None)` when no `goal.evaluate` provider is registered.
+    async fn invoke_goal_evaluate_hook(
+        &self,
+        _session: Option<SessionId>,
+        _condition: &str,
+        _transcript: &str,
+    ) -> Result<Option<NativeGoalEvaluateVerdict>, HostError> {
+        Ok(None)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -643,4 +661,10 @@ pub trait HostRuntime: Send + Sync {
 
     /// Query and invoke registered extensions and bundle APIs.
     fn extension_registry(&self) -> &dyn HostExtensionRegistry;
+
+    /// Look up the active [`GoalDriver`] registered by a loaded native bundle
+    /// (such as `hya/goal`), returning `None` when disabled or in `--bare` mode.
+    fn goal_driver(&self) -> Option<Arc<dyn GoalDriver>> {
+        None
+    }
 }

@@ -6,12 +6,11 @@
 use std::sync::Arc;
 
 use hya_app::plugin_adapter::PluginHostAdapter;
-use hya_engine::completion::PluginGoalEvaluator;
+use hya_engine::CoreError;
 use hya_engine::hooks::{
     GoalEvaluateReply, HookDispatcher, ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome,
     PermissionApproveInput,
 };
-use hya_engine::{CoreError, GoalEvaluator, Verdict};
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
 use hya_proto::{AgentName, MessageId, ModelRef, SessionId};
@@ -149,16 +148,16 @@ for line in sys.stdin:
         None
     );
 
-    // Standalone poisoned PluginGoalEvaluator degrades to not-met instead of Err.
+    // Standalone poisoned goal.evaluate hook surfaces Err so hya/goal's
+    // PluginGoalEvaluator can degrade it to a cappable not-met verdict.
     let only_poison =
         Arc::new(PluginHost::connect_all(vec![py_spec("poison", poison)], host_info()).await);
-    let evaluator = PluginGoalEvaluator::new(Arc::new(PluginHostAdapter::new(only_poison)));
-    assert_eq!(
-        evaluator.evaluate("condition", "transcript").await.unwrap(),
-        Verdict {
-            met: false,
-            reason: "goal.evaluate hook error".into(),
-        }
+    let poison_adapter = PluginHostAdapter::new(only_poison);
+    assert!(
+        poison_adapter
+            .goal_evaluate("condition", "transcript")
+            .await
+            .is_err()
     );
 }
 

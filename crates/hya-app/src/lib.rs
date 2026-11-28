@@ -62,7 +62,10 @@ pub mod workflow_control;
 pub use agent_model_control::{
     AgentModelControlError, AgentModelIdentity, PersistentAgentModelControl,
 };
-pub use headless::{HeadlessEvaluatorRoute, prepare_goal, prepare_loop};
+pub use headless::{
+    GOAL_DRIVER_UNAVAILABLE_MSG, HeadlessEvaluatorRoute, prepare_goal_driver, prepare_loop,
+    resolve_goal_driver,
+};
 pub use hya_coding_extras::BuiltinFormatterProvider;
 /// Formatter plane construction from optional formatter config (owned by `hya/coding-extras`).
 pub use hya_coding_extras::formatter::config as formatter_config;

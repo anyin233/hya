@@ -7,25 +7,7 @@ identity:
   publisher: hya
 resources:
   skills:
-    - id: goal-contract
-      path: resources/skills/goal-contract/SKILL.md
-    - id: guided-goal
-      path: resources/skills/guided-goal/SKILL.md
-    - id: evaluator-prompt
-      path: resources/skills/evaluator-prompt/SKILL.md
     - id: loop-verifier-prompt
       path: resources/skills/loop-verifier-prompt/SKILL.md
     - id: loop-planner-prompt
       path: resources/skills/loop-planner-prompt/SKILL.md
-agents:
-  - id: hya-goal-guide
-    private: true
-    description: Guides authors through the goal-condition contract and the evaluator rubric.
-    role: subagent
-    prompt: prompts/hya-goal-guide.md
-    can_spawn: [hya-goal-verifier]
-  - id: hya-goal-verifier
-    private: true
-    description: Independently verifies workflow output against the complete goal contract.
-    role: subagent
-    prompt: prompts/hya-goal-verifier.md

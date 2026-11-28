@@ -5,18 +5,24 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use hya_engine::completion::PluginGoalEvaluator;
 use hya_engine::hooks::HookDispatcher;
 use hya_engine::loop_mode::{LoopConfig, ModelLoopPlanner, ModelLoopVerifier, run_loop};
 use hya_engine::{
-    AgentSpec, CoreError, GoalEvaluator, HookChain, HookLoopPlanner, HookLoopVerifier,
-    ModelGoalEvaluator, RunOutcome, SafetyCaps, SessionEngine, TurnBinding, run_goal,
+    AgentSpec, CoreError, HookChain, HookLoopPlanner, HookLoopVerifier, RunOutcome, SessionEngine,
+    TurnBinding,
 };
 use hya_proto::{ModelRef, SessionId};
 use hya_provider::ProviderRouter;
+use hya_runtime_abi::{DriverRunOutcome, GoalDriver, GoalRunRequest, HostError, HostRuntime};
 use tokio_util::sync::CancellationToken;
 
 use crate::config;
+
+/// Error returned when `hya -p` is invoked without the `hya/goal` native bundle loaded.
+pub const GOAL_DRIVER_UNAVAILABLE_MSG: &str = "goal mode (`hya -p`) requires the `hya/goal` \
+    native bundle, which is unavailable in `--bare` mode or when `hya/goal` is disabled in \
+    `config.yaml` (`bundles.builtin`); re-run without `--bare` or enable `hya/goal` to use \
+    goal mode";
 
 /// Route used by the model evaluator, verifier and planner for a headless run.
 pub struct HeadlessEvaluatorRoute<'a> {
@@ -28,56 +34,30 @@ pub struct HeadlessEvaluatorRoute<'a> {
     pub default_model: &'a str,
 }
 
-/// Bind the goal evaluator and prepare the cancellable goal driver.
-///
-/// Await setup first, then drive the returned future under the host's cancellation
-/// and shutdown policy.
+/// Resolve the registered native [`GoalDriver`] from `host_runtime`, failing
+/// with an actionable error when `hya/goal` is disabled or running in `--bare`.
 ///
 /// # Errors
-/// Returns an error if the evaluator resources cannot be bound.
-pub async fn prepare_goal(
-    engine: Arc<SessionEngine>,
-    session: SessionId,
-    agent: AgentSpec,
-    route: HeadlessEvaluatorRoute<'_>,
-    goal: String,
-    max_iterations: u32,
+/// Returns [`GOAL_DRIVER_UNAVAILABLE_MSG`] when no [`GoalDriver`] is registered.
+pub fn resolve_goal_driver(host_runtime: &dyn HostRuntime) -> anyhow::Result<Arc<dyn GoalDriver>> {
+    host_runtime
+        .goal_driver()
+        .ok_or_else(|| anyhow::anyhow!("{GOAL_DRIVER_UNAVAILABLE_MSG}"))
+}
+
+/// Prepare a cancellable goal-mode run backed by the registered native
+/// [`GoalDriver`] (`hya/goal`).
+///
+/// # Errors
+/// Returns an actionable error when `hya/goal` is disabled or unavailable
+/// (for example under `--bare`).
+pub fn prepare_goal_driver(
+    host_runtime: Arc<dyn HostRuntime>,
+    request: GoalRunRequest,
     cancel: CancellationToken,
-) -> anyhow::Result<impl Future<Output = Result<RunOutcome, CoreError>> + use<>> {
-    let evaluator_router = route.router.clone();
-    let evaluator_model =
-        config::resolve_evaluator_model(route.model_override, None, route.default_model);
-    let binding = engine
-        .bind_root_runtime(&agent.workdir)
-        .await
-        .context("bind goal evaluator resources")?;
-    // Selection point (design §4.5): a registered `goal.evaluate` hook
-    // provider outranks the built-in evaluator. The probe is the trait
-    // capability probe (default false), so any dispatcher without the hook —
-    // or a selection that cannot confirm registration — fails open to the D7
-    // model evaluator instead of erroring startup.
-    let fallback: Arc<dyn GoalEvaluator> = Arc::new(
-        ModelGoalEvaluator::new(Arc::new(evaluator_router), ModelRef::new(evaluator_model))
-            .with_system_prompt(
-                binding
-                    .bundle_skill_content("hya/goal-loop", "evaluator-prompt")
-                    .map(skill_prompt_body)
-                    .unwrap_or("You are an independent goal verifier. No tools."),
-            ),
-    );
-    let dispatcher = goal_loop_hook_chain(&binding, agent.name.as_str());
-    let evaluator: Arc<dyn GoalEvaluator> = if dispatcher.has_goal_evaluate() {
-        Arc::new(PluginGoalEvaluator::new(dispatcher).with_fallback(Arc::clone(&fallback)))
-    } else {
-        fallback
-    };
-    let caps = SafetyCaps {
-        max_iterations,
-        ..SafetyCaps::default()
-    };
-    Ok(run_goal(
-        engine, session, agent, goal, evaluator, caps, cancel,
-    ))
+) -> anyhow::Result<impl Future<Output = Result<DriverRunOutcome, HostError>> + use<>> {
+    let driver = resolve_goal_driver(host_runtime.as_ref())?;
+    Ok(async move { driver.run_goal(host_runtime, request, cancel).await })
 }
 
 /// Bind loop resources and prepare the cancellable verifier/planner driver.
@@ -227,5 +207,16 @@ mod tests {
         assert!(Arc::ptr_eq(&ordered[1], &agentless));
         assert!(Arc::ptr_eq(&ordered[2], &selected));
         assert!(Arc::ptr_eq(&ordered[3], &intelligent));
+    }
+
+    #[test]
+    fn resolve_goal_driver_reports_actionable_error_when_unavailable() {
+        let noop = hya_tool_loader::noop_host_runtime();
+        let Err(err) = resolve_goal_driver(noop.as_ref()) else {
+            panic!("missing goal driver must error");
+        };
+        let err = err.to_string();
+        assert!(err.contains("hya/goal"), "{err}");
+        assert!(err.contains("--bare"), "{err}");
     }
 }

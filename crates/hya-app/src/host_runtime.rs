@@ -1,21 +1,27 @@
 //! App-layer [`hya_runtime_abi::HostRuntime`] implementation injected into
-//! ABI v2 native bundles (`hya/coding-extras`, `hya/hashline`, etc.).
+//! ABI v2 native bundles (`hya/coding-extras`, `hya/hashline`, `hya/goal`, etc.).
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock, Weak};
 
 use async_trait::async_trait;
+use futures::StreamExt as _;
 use hya_bundle::{Bundle, PreparedAgent};
+use hya_engine::hooks::{GoalEvaluateReply, HookDispatcher};
+use hya_engine::{AgentSpec, CoreError, HookChain, SessionEngine, TurnBinding};
 use hya_proto::{
-    ActorClaim, AgentName, Envelope, Event, EventSeq, Message, ModelRef, Projection, SessionId,
+    ActorClaim, AgentName, Envelope, Event, EventSeq, FinishReason, Message, MessageId, ModelRef,
+    PartProjection, Projection, Role, SessionId, TokenUsage,
 };
+use hya_provider::{CompletionRequest, ProviderRouter, ReasoningEffort};
 use hya_runtime_abi::{
     BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,
-    BundleClaimRequest, BundleStateEntry, ExtensionEntry, ExtensionKind, HostBundleStorage,
-    HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry, HostModelCaller,
-    HostRuntime, HostSessionStore, HostTurnRunner, ModelCallRequest, ModelCallResponse,
-    ModelStreamChunk, ModelWindowInfo, SessionListFilter, SessionSummaryMeta, TurnOutcome,
-    TurnSpawnRequest, TurnStartRequest, TurnStatus,
+    BundleClaimRequest, BundleStateEntry, ExtensionEntry, ExtensionKind, GoalDriver,
+    HostBundleStorage, HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry,
+    HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner, ModelCallRequest,
+    ModelCallResponse, ModelStreamChunk, ModelToolCall, ModelWindowInfo, NativeGoalEvaluateVerdict,
+    SessionListFilter, SessionSummaryMeta, TurnOutcome, TurnSpawnRequest, TurnStartRequest,
+    TurnStatus,
 };
 use hya_store::SessionStore;
 use hya_tool::{AgentDef, SkillCatalogEntry};
@@ -23,17 +29,135 @@ use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
-/// [`HostRuntime`] backed by `hya-app`'s [`SessionStore`] and active `config.yaml` path.
+/// [`HostRuntime`] backed by `hya-app`'s [`SessionStore`], [`ProviderRouter`],
+/// active `config.yaml` path, and late-attached [`SessionEngine`] + native drivers.
 pub(crate) struct AppHostRuntime {
     store: SessionStore,
     config_file: PathBuf,
+    router: Arc<ProviderRouter>,
+    default_agent: AgentSpec,
+    engine: OnceLock<Weak<SessionEngine>>,
+    goal_driver: OnceLock<Arc<dyn GoalDriver>>,
 }
 
 impl AppHostRuntime {
     /// Construct a host runtime for native bundles.
-    pub(crate) fn new(store: SessionStore, config_file: PathBuf) -> Self {
-        Self { store, config_file }
+    pub(crate) fn new(
+        store: SessionStore,
+        config_file: PathBuf,
+        router: Arc<ProviderRouter>,
+        default_agent: AgentSpec,
+    ) -> Self {
+        Self {
+            store,
+            config_file,
+            router,
+            default_agent,
+            engine: OnceLock::new(),
+            goal_driver: OnceLock::new(),
+        }
     }
+
+    /// Attach the constructed [`SessionEngine`] via a weak reference (avoiding
+    /// an `Arc` cycle while enabling turn execution, hooks, catalog, and bus).
+    pub(crate) fn attach_engine(&self, engine: &Arc<SessionEngine>) {
+        let _ = self.engine.set(Arc::downgrade(engine));
+    }
+
+    /// Register the active native [`GoalDriver`] loaded from `hya/goal`.
+    pub(crate) fn attach_goal_driver(&self, driver: Arc<dyn GoalDriver>) {
+        let _ = self.goal_driver.set(driver);
+    }
+
+    fn engine(&self) -> Result<Arc<SessionEngine>, HostError> {
+        self.engine
+            .get()
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| HostError::Unavailable("session engine is not attached".into()))
+    }
+
+    async fn resolve_session_scope(
+        &self,
+        session: Option<SessionId>,
+    ) -> Result<(PathBuf, String), HostError> {
+        if let Some(session_id) = session {
+            let projection = self.read_projection(session_id).await?;
+            let workdir = projection
+                .session
+                .workdir
+                .as_deref()
+                .filter(|w| !w.is_empty())
+                .map_or_else(|| self.default_agent.workdir.clone(), PathBuf::from);
+            let agent = projection.session.agent.as_ref().map_or_else(
+                || self.default_agent.name.as_str().to_string(),
+                |a| a.as_str().to_string(),
+            );
+            return Ok((workdir, agent));
+        }
+        Ok((
+            self.default_agent.workdir.clone(),
+            self.default_agent.name.as_str().to_string(),
+        ))
+    }
+
+    async fn bind_for_workdir(&self, workdir: &Path) -> Result<TurnBinding, HostError> {
+        let engine = self.engine()?;
+        engine
+            .bind_root_runtime(workdir)
+            .await
+            .map_err(map_core_error)
+    }
+}
+
+fn map_core_error(error: CoreError) -> HostError {
+    match error {
+        CoreError::Cancelled => HostError::Cancelled,
+        CoreError::Invalid(msg) => HostError::InvalidInput(msg),
+        CoreError::Store(err) => HostError::Storage(err.to_string()),
+        CoreError::CapacityExceeded { .. } | CoreError::TurnAlreadyActive { .. } => {
+            HostError::Unavailable(error.to_string())
+        }
+        other => HostError::Internal(other.to_string()),
+    }
+}
+
+fn goal_evaluator_hook_chain(
+    binding: &TurnBinding,
+    stable_agent_id: &str,
+) -> Arc<dyn HookDispatcher> {
+    let is_goal_owner = |id: &str| id == "hya/goal" || id == "hya/goal-loop";
+    let active_is_goal_owner = binding
+        .resolve_agent(stable_agent_id)
+        .is_some_and(|agent| agent.origin.bundle_id().is_some_and(is_goal_owner));
+    let selected = binding.bundle_hooks_for_agent(if active_is_goal_owner {
+        hya_engine::MAIN_AGENT_ID
+    } else {
+        stable_agent_id
+    });
+    let agentless = binding
+        .bundle_catalog()
+        .bundles()
+        .iter()
+        .filter(|bundle| {
+            (bundle.agents().is_empty() && bundle.workflow().is_none())
+                && !is_goal_owner(&bundle.identity().id)
+        })
+        .filter_map(|bundle| binding.bundle_hooks(&bundle.identity().id))
+        .collect::<Vec<_>>();
+    let mut hooks = Vec::new();
+    for hook in binding
+        .global_plugin_hooks()
+        .into_iter()
+        .chain(agentless)
+        .chain(selected)
+        .chain(binding.bundle_hooks("hya/goal"))
+        .chain(binding.bundle_hooks("hya/goal-loop"))
+    {
+        if !hooks.iter().any(|existing| Arc::ptr_eq(existing, &hook)) {
+            hooks.push(hook);
+        }
+    }
+    Arc::new(HookChain::new(hooks))
 }
 
 #[async_trait]
@@ -48,37 +172,78 @@ impl HostSessionStore for AppHostRuntime {
 
     async fn read_events(
         &self,
-        _session: SessionId,
-        _after_seq: Option<EventSeq>,
-        _limit: Option<usize>,
+        session: SessionId,
+        after_seq: Option<EventSeq>,
+        limit: Option<usize>,
     ) -> Result<Vec<Envelope>, HostError> {
-        Err(HostError::Unavailable(
-            "read_events not implemented on AppHostRuntime".into(),
-        ))
+        let mut envelopes = self
+            .store
+            .replay(session)
+            .await
+            .map_err(|error| HostError::Storage(error.to_string()))?;
+        if let Some(seq) = after_seq {
+            envelopes.retain(|env| env.seq > seq);
+        }
+        if let Some(max) = limit {
+            envelopes.truncate(max);
+        }
+        Ok(envelopes)
     }
 
     async fn append_events(
         &self,
-        _session: SessionId,
+        session: SessionId,
         _claim: Option<ActorClaim>,
-        _events: Vec<Event>,
+        events: Vec<Event>,
     ) -> Result<Vec<Envelope>, HostError> {
-        Err(HostError::Unavailable(
-            "append_events not implemented on AppHostRuntime".into(),
-        ))
+        let mut appended = Vec::with_capacity(events.len());
+        for event in events {
+            let (seq, ts_millis) = self
+                .store
+                .append_event(session, &event)
+                .await
+                .map_err(|error| HostError::Storage(error.to_string()))?;
+            let env = Envelope {
+                seq,
+                ts_millis,
+                event,
+            };
+            if let Ok(engine) = self.engine() {
+                engine.bus().publish(env.clone());
+            }
+            appended.push(env);
+        }
+        Ok(appended)
     }
 
     async fn append_extension_event(
         &self,
-        _session: SessionId,
-        _bundle: &str,
-        _kind: &str,
-        _payload: Value,
+        session: SessionId,
+        bundle: &str,
+        kind: &str,
+        payload: Value,
         _claim: Option<ActorClaim>,
     ) -> Result<Envelope, HostError> {
-        Err(HostError::Unavailable(
-            "append_extension_event not implemented on AppHostRuntime".into(),
-        ))
+        let event = Event::Extension {
+            session,
+            bundle: bundle.to_string(),
+            kind: kind.to_string(),
+            payload,
+        };
+        let (seq, ts_millis) = self
+            .store
+            .append_event(session, &event)
+            .await
+            .map_err(|error| HostError::Storage(error.to_string()))?;
+        let env = Envelope {
+            seq,
+            ts_millis,
+            event,
+        };
+        if let Ok(engine) = self.engine() {
+            engine.bus().publish(env.clone());
+        }
+        Ok(env)
     }
 
     async fn read_projection(&self, session: SessionId) -> Result<Arc<Projection>, HostError> {
@@ -211,18 +376,87 @@ impl HostBundleStorage for AppHostRuntime {
 impl HostTurnRunner for AppHostRuntime {
     async fn spawn_session(&self, _request: TurnSpawnRequest) -> Result<SessionId, HostError> {
         Err(HostError::Unavailable(
-            "turn_runner not wired on AppHostRuntime".into(),
+            "spawn_session not wired on AppHostRuntime".into(),
         ))
     }
 
     async fn run_turn(
         &self,
-        _request: TurnStartRequest,
-        _cancel: CancellationToken,
+        request: TurnStartRequest,
+        cancel: CancellationToken,
     ) -> Result<TurnOutcome, HostError> {
-        Err(HostError::Unavailable(
-            "turn_runner not wired on AppHostRuntime".into(),
-        ))
+        if cancel.is_cancelled() {
+            return Err(HostError::Cancelled);
+        }
+        let engine = self.engine()?;
+        let projection = engine
+            .read_projection_shared(request.session)
+            .await
+            .map_err(map_core_error)?;
+        let spec = AgentSpec {
+            name: request
+                .agent
+                .or_else(|| projection.session.agent.clone())
+                .unwrap_or_else(|| self.default_agent.name.clone()),
+            model: request
+                .model
+                .or_else(|| projection.session.model.clone())
+                .unwrap_or_else(|| self.default_agent.model.clone()),
+            system_prompt: request
+                .system_override
+                .unwrap_or_else(|| self.default_agent.system_prompt.clone()),
+            workdir: projection
+                .session
+                .workdir
+                .as_deref()
+                .filter(|w| !w.is_empty())
+                .map_or_else(|| self.default_agent.workdir.clone(), PathBuf::from),
+            reasoning: self.default_agent.reasoning,
+        };
+        let prompt = engine
+            .admit_user_prompt(request.session, request.prompt)
+            .await
+            .map_err(map_core_error)?;
+        engine
+            .run_turn_with_external_dirs_and_guidance(
+                request.session,
+                &spec,
+                cancel,
+                &[],
+                None,
+                None,
+                Some(prompt),
+            )
+            .await
+            .map_err(map_core_error)?;
+        let updated = engine
+            .read_projection_shared(request.session)
+            .await
+            .map_err(map_core_error)?;
+        let last_assistant = updated
+            .session
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::Assistant);
+        let output_text = last_assistant
+            .map(|msg| {
+                msg.parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        PartProjection::Text { text, .. } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>()
+            })
+            .unwrap_or_default();
+        Ok(TurnOutcome {
+            session: request.session,
+            message_id: last_assistant.map(|msg| msg.id),
+            finish_reason: last_assistant.and_then(|msg| msg.finish),
+            output_text,
+            error: None,
+        })
     }
 
     async fn spawn_session_and_run(
@@ -231,13 +465,13 @@ impl HostTurnRunner for AppHostRuntime {
         _cancel: CancellationToken,
     ) -> Result<TurnOutcome, HostError> {
         Err(HostError::Unavailable(
-            "turn_runner not wired on AppHostRuntime".into(),
+            "spawn_session_and_run not wired on AppHostRuntime".into(),
         ))
     }
 
     async fn steer_turn(&self, _session: SessionId, _message: String) -> Result<(), HostError> {
         Err(HostError::Unavailable(
-            "turn_runner not wired on AppHostRuntime".into(),
+            "steer_turn not wired on AppHostRuntime".into(),
         ))
     }
 
@@ -258,12 +492,82 @@ impl HostTurnRunner for AppHostRuntime {
 impl HostModelCaller for AppHostRuntime {
     async fn complete(
         &self,
-        _request: ModelCallRequest,
-        _cancel: CancellationToken,
+        request: ModelCallRequest,
+        cancel: CancellationToken,
     ) -> Result<ModelCallResponse, HostError> {
-        Err(HostError::Unavailable(
-            "model_caller not wired on AppHostRuntime".into(),
-        ))
+        if cancel.is_cancelled() {
+            return Err(HostError::Cancelled);
+        }
+        let router = self
+            .engine()
+            .map(|engine| engine.provider_snapshot().router().clone())
+            .unwrap_or_else(|_| (*self.router).clone());
+        let model = request
+            .model
+            .unwrap_or_else(|| self.default_agent.model.clone());
+        let completion = CompletionRequest {
+            model: model.clone(),
+            system: request.system,
+            messages: request.messages,
+            tools: request.tools,
+            temperature: request.temperature,
+            max_output_tokens: request.max_tokens,
+            reasoning: request
+                .reasoning_effort
+                .as_deref()
+                .and_then(ReasoningEffort::parse),
+            headers: Default::default(),
+        };
+        let mut stream = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(HostError::Cancelled),
+            res = router.stream(completion, SessionId::new(), MessageId::new()) => {
+                res.map_err(|error| HostError::Unavailable(error.to_string()))?
+            }
+        };
+        let mut text = String::new();
+        let mut reasoning = String::new();
+        let mut tool_calls: Vec<ModelToolCall> = Vec::new();
+        let mut finish_reason = FinishReason::Stop;
+        let mut usage: Option<TokenUsage> = None;
+        loop {
+            let item = tokio::select! {
+                biased;
+                () = cancel.cancelled() => return Err(HostError::Cancelled),
+                next = stream.next() => next,
+            };
+            let Some(item) = item else {
+                break;
+            };
+            let event = item.map_err(|error| HostError::Unavailable(error.to_string()))?;
+            match event {
+                Event::TextDelta { delta, .. } => text.push_str(&delta),
+                Event::ReasoningDelta { delta, .. } => reasoning.push_str(&delta),
+                Event::ToolCallRequested {
+                    call, name, input, ..
+                } => tool_calls.push(ModelToolCall {
+                    id: call,
+                    name,
+                    arguments: input,
+                }),
+                Event::UsageRecorded { tokens, .. } => usage = Some(tokens),
+                Event::MessageFinished { finish, tokens, .. } => {
+                    finish_reason = finish;
+                    if let Some(t) = tokens {
+                        usage = Some(t);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(ModelCallResponse {
+            model,
+            text,
+            reasoning: (!reasoning.is_empty()).then_some(reasoning),
+            tool_calls,
+            finish_reason,
+            usage,
+        })
     }
 
     async fn stream(
@@ -272,7 +576,7 @@ impl HostModelCaller for AppHostRuntime {
         _cancel: CancellationToken,
     ) -> Result<mpsc::Receiver<Result<ModelStreamChunk, HostError>>, HostError> {
         Err(HostError::Unavailable(
-            "model_caller not wired on AppHostRuntime".into(),
+            "model_caller.stream not wired on AppHostRuntime".into(),
         ))
     }
 
@@ -291,28 +595,26 @@ impl HostModelCaller for AppHostRuntime {
 
 #[async_trait]
 impl HostEventBus for AppHostRuntime {
-    fn publish(&self, _envelope: Envelope) -> Result<(), HostError> {
-        Err(HostError::Unavailable(
-            "event_bus not wired on AppHostRuntime".into(),
-        ))
+    fn publish(&self, envelope: Envelope) -> Result<(), HostError> {
+        self.engine()?.bus().publish(envelope);
+        Ok(())
     }
 
     fn subscribe(&self) -> Result<broadcast::Receiver<Envelope>, HostError> {
-        Err(HostError::Unavailable(
-            "event_bus not wired on AppHostRuntime".into(),
-        ))
+        Ok(self.engine()?.bus().subscribe())
     }
 
     async fn publish_extension(
         &self,
-        _session: SessionId,
-        _bundle: &str,
-        _kind: &str,
-        _payload: Value,
+        session: SessionId,
+        bundle: &str,
+        kind: &str,
+        payload: Value,
     ) -> Result<(), HostError> {
-        Err(HostError::Unavailable(
-            "event_bus not wired on AppHostRuntime".into(),
-        ))
+        let _ = self
+            .append_extension_event(session, bundle, kind, payload, None)
+            .await?;
+        Ok(())
     }
 }
 
@@ -338,10 +640,33 @@ impl HostCatalogReader for AppHostRuntime {
     }
 
     async fn list_bundles(&self) -> Result<Vec<BundleCatalogSummary>, HostError> {
-        Ok(Vec::new())
+        let Ok(binding) = self.bind_for_workdir(&self.default_agent.workdir).await else {
+            return Ok(Vec::new());
+        };
+        Ok(binding
+            .bundle_catalog()
+            .bundles()
+            .iter()
+            .map(|bundle| BundleCatalogSummary {
+                identity: bundle.identity().clone(),
+                enabled: true,
+                description: None,
+            })
+            .collect())
     }
 
-    async fn get_bundle(&self, _id: &str) -> Result<Option<Bundle>, HostError> {
+    async fn get_bundle(&self, id: &str) -> Result<Option<Bundle>, HostError> {
+        if let Ok(binding) = self.bind_for_workdir(&self.default_agent.workdir).await {
+            if let Some(bundle) = binding
+                .bundle_catalog()
+                .bundles()
+                .iter()
+                .find(|bundle| bundle.identity().id == id)
+            {
+                return Ok(Some(bundle.as_ref().clone()));
+            }
+            return Ok(None);
+        }
         Ok(None)
     }
 
@@ -361,13 +686,24 @@ impl HostCatalogReader for AppHostRuntime {
 impl HostExtensionRegistry for AppHostRuntime {
     async fn list_extensions(
         &self,
-        _kind: Option<ExtensionKind>,
+        kind: Option<ExtensionKind>,
     ) -> Result<Vec<ExtensionEntry>, HostError> {
-        Ok(Vec::new())
+        let mut entries = Vec::new();
+        if (kind.is_none() || kind == Some(ExtensionKind::GoalDriver))
+            && let Some(driver) = self.goal_driver.get()
+        {
+            entries.push(ExtensionEntry {
+                bundle_id: "hya/goal".to_string(),
+                kind: ExtensionKind::GoalDriver,
+                name: driver.id().to_string(),
+                metadata: Value::Null,
+            });
+        }
+        Ok(entries)
     }
 
-    async fn has_bundle(&self, _bundle_id: &str) -> Result<bool, HostError> {
-        Ok(false)
+    async fn has_bundle(&self, bundle_id: &str) -> Result<bool, HostError> {
+        Ok(self.get_bundle(bundle_id).await?.is_some())
     }
 
     async fn invoke_bundle_api(
@@ -375,7 +711,7 @@ impl HostExtensionRegistry for AppHostRuntime {
         _call: BundleApiInvocation,
     ) -> Result<BundleApiResult, HostError> {
         Err(HostError::Unavailable(
-            "extension_registry not wired on AppHostRuntime".into(),
+            "extension_registry.invoke_bundle_api not wired on AppHostRuntime".into(),
         ))
     }
 
@@ -387,8 +723,36 @@ impl HostExtensionRegistry for AppHostRuntime {
         _cancel: CancellationToken,
     ) -> Result<Value, HostError> {
         Err(HostError::Unavailable(
-            "extension_registry not wired on AppHostRuntime".into(),
+            "extension_registry.invoke_tool not wired on AppHostRuntime".into(),
         ))
+    }
+
+    async fn has_goal_evaluate_hook(&self, session: Option<SessionId>) -> Result<bool, HostError> {
+        let (workdir, agent) = self.resolve_session_scope(session).await?;
+        let binding = self.bind_for_workdir(&workdir).await?;
+        let dispatcher = goal_evaluator_hook_chain(&binding, &agent);
+        Ok(dispatcher.has_goal_evaluate())
+    }
+
+    async fn invoke_goal_evaluate_hook(
+        &self,
+        session: Option<SessionId>,
+        condition: &str,
+        transcript: &str,
+    ) -> Result<Option<NativeGoalEvaluateVerdict>, HostError> {
+        let (workdir, agent) = self.resolve_session_scope(session).await?;
+        let binding = self.bind_for_workdir(&workdir).await?;
+        let dispatcher = goal_evaluator_hook_chain(&binding, &agent);
+        if !dispatcher.has_goal_evaluate() {
+            return Ok(None);
+        }
+        match dispatcher.goal_evaluate(condition, transcript).await {
+            Ok(GoalEvaluateReply::Verdict { met, reason }) => {
+                Ok(Some(NativeGoalEvaluateVerdict::Verdict { met, reason }))
+            }
+            Ok(GoalEvaluateReply::Malformed) => Ok(Some(NativeGoalEvaluateVerdict::Malformed)),
+            Err(error) => Err(map_core_error(error)),
+        }
     }
 }
 
@@ -419,5 +783,9 @@ impl HostRuntime for AppHostRuntime {
 
     fn extension_registry(&self) -> &dyn HostExtensionRegistry {
         self
+    }
+
+    fn goal_driver(&self) -> Option<Arc<dyn GoalDriver>> {
+        self.goal_driver.get().cloned()
     }
 }

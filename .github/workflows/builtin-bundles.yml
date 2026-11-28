@@ -310,7 +310,7 @@ jobs:
           echo "$bare_out"
           grep -q "bare-smoke-ok" <<< "$bare_out"
 
-          # 2. Full installed prefix: bin/hya + all 14 staged builtin .hyabundle archives.
+          # 2. Full installed prefix: bin/hya + all 15 staged builtin .hyabundle archives.
           full_prefix="${RUNNER_TEMP}/full-prefix"
           full_home="${RUNNER_TEMP}/full-home"
           rm -rf "$full_prefix" "$full_home"
@@ -320,7 +320,7 @@ jobs:
 
           pkg_count="$(find "$full_prefix/bundles" -maxdepth 1 -name 'hya-*.hyabundle' | wc -l)"
           echo "Staged builtin packages: ${pkg_count}"
-          test "$pkg_count" -eq 14
+          test "$pkg_count" -eq 15
 
           for pkg in "$full_prefix/bundles/"hya-*.hyabundle; do
             "$full_prefix/bin/hya" bundle info -f "$pkg" >/dev/null
@@ -342,6 +342,7 @@ jobs:
             hya/channel-tools \
             hya/compaction \
             hya/plan \
+            hya/goal \
             hya/core-agents \
             hya/core-skills \
             hya/core-commands \
@@ -354,7 +355,7 @@ jobs:
               exit 1
             fi
           done
-          echo "All 14 staged builtin bundles verified in bare-vs-full smoke."
+          echo "All 15 staged builtin bundles verified in bare-vs-full smoke."
 
   builtin-bundles-gate:
     name: builtin-bundles-gate

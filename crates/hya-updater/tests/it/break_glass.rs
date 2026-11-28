@@ -55,6 +55,7 @@ fn install_sh_stages_every_first_party_bundle_beside_bin() {
         "hya-channel-tools",
         "hya-compaction",
         "hya-plan",
+        "hya-goal",
     ] {
         assert!(stdout.contains(&format!("-p {family}")), "{stdout}");
     }

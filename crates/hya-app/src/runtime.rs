@@ -530,6 +530,7 @@ pub struct BuiltSessionEngine {
     asks: Option<tokio::sync::mpsc::UnboundedReceiver<AskRequest>>,
     questions: Option<tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>>,
     mcp_control: Arc<dyn hya_server::McpControl>,
+    host_runtime: Arc<dyn hya_runtime_abi::HostRuntime>,
     native_services: Arc<[Arc<dyn hya_runtime_abi::NativeService>]>,
     lifecycle: RuntimeTaskOwner,
     runtime_owner: Option<OwnerRunId>,
@@ -540,6 +541,19 @@ impl BuiltSessionEngine {
     #[must_use]
     pub fn engine(&self) -> Arc<SessionEngine> {
         Arc::clone(&self.engine)
+    }
+
+    /// Host runtime handle backing ABI v2 native bundles and drivers.
+    #[must_use]
+    pub fn host_runtime(&self) -> Arc<dyn hya_runtime_abi::HostRuntime> {
+        Arc::clone(&self.host_runtime)
+    }
+
+    /// Registered native [`hya_runtime_abi::GoalDriver`], or `None` when
+    /// `hya/goal` is disabled or running under `--bare`.
+    #[must_use]
+    pub fn goal_driver(&self) -> Option<Arc<dyn hya_runtime_abi::GoalDriver>> {
+        self.host_runtime.goal_driver()
     }
 
     /// Shared resident scheduling owner used by Workflow actor activations.
@@ -1161,9 +1175,13 @@ async fn build_session_engine_with_mcp_defer(
     let (invocation_policy, settings) = tool_config;
     let builtins = settings.builtin_bundles().clone();
     let router = Arc::new(router);
-    let host_runtime: Arc<dyn hya_runtime_abi::HostRuntime> = Arc::new(
-        crate::host_runtime::AppHostRuntime::new(store.clone(), settings.resolved_config_file()),
-    );
+    let app_host_runtime = Arc::new(crate::host_runtime::AppHostRuntime::new(
+        store.clone(),
+        settings.resolved_config_file(),
+        Arc::clone(&router),
+        agent.clone(),
+    ));
+    let host_runtime: Arc<dyn hya_runtime_abi::HostRuntime> = app_host_runtime.clone();
     let enabled_families = enabled_native_tool_families(&builtins, false);
     let (registry, native_registrations) = compose_builtin_tool_registry_with_runtime(
         &builtins,
@@ -1284,6 +1302,31 @@ async fn build_session_engine_with_mcp_defer(
             } else {
                 registry.register_builtin(tool, ToolPermission::Tool, [], "hya/network");
             }
+        }
+        started_services.extend(regs.services);
+    }
+    if builtins.is_enabled("hya/goal")
+        && hya_bundle::first_party_bundle_optional("hya/goal")
+            .ok()
+            .flatten()
+            .is_some()
+    {
+        let regs = hya_tool_loader::load_v2("hya/goal", Arc::clone(&host_runtime))
+            .map_err(|error| anyhow::anyhow!("load native bundle hya/goal: {error}"))?;
+        for service in &regs.services {
+            if let Err(error) = service.start(Arc::clone(&host_runtime)).await {
+                for started in started_services.into_iter().rev() {
+                    let _ = started.stop().await;
+                }
+                store.release_runtime_owner(owner_run_id)?;
+                return Err(anyhow::anyhow!(
+                    "start native service `{}`: {error}",
+                    service.id()
+                ));
+            }
+        }
+        if let Some(driver) = regs.goal_drivers.into_iter().next() {
+            app_host_runtime.attach_goal_driver(driver);
         }
         started_services.extend(regs.services);
     }
@@ -1452,6 +1495,7 @@ async fn build_session_engine_with_mcp_defer(
         .with_governor(governor);
 
     let engine = Arc::new(engine_builder);
+    app_host_runtime.attach_engine(&engine);
     let (agent_configuration, agent_efforts) = settings.agents()?;
     let agent_model_control = PersistentAgentModelControl::load(
         engine.store().clone(),
@@ -1582,6 +1626,7 @@ async fn build_session_engine_with_mcp_defer(
         asks: Some(asks),
         questions: Some(questions),
         mcp_control,
+        host_runtime,
         native_services,
         lifecycle,
         agent_model_control,

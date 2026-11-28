@@ -1308,6 +1308,7 @@ dependencies = [
  "hya-core",
  "hya-engine",
  "hya-extended-tools",
+ "hya-goal",
  "hya-hashline",
  "hya-mcp",
  "hya-network",
@@ -1361,6 +1362,7 @@ dependencies = [
  "hya-proto",
  "hya-provider",
  "hya-relay",
+ "hya-runtime-abi",
  "hya-sdk",
  "hya-server",
  "hya-store",
@@ -1570,6 +1572,22 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "hya-goal"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "hya-bundle",
+ "hya-proto",
+ "hya-runtime-abi",
+ "hya-tool",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -1892,6 +1910,7 @@ dependencies = [
  "hya-coding-extras",
  "hya-context",
  "hya-extended-tools",
+ "hya-goal",
  "hya-hashline",
  "hya-network",
  "hya-plan",

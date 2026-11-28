@@ -18,6 +18,7 @@ archive.include = [
   { path = "debug/build/hya-network/ci-archive/out/libhya_network.so", relative-to = "target", on-missing = "error" },
   { path = "debug/build/hya-compaction/ci-archive/out/libhya_compaction.so", relative-to = "target", on-missing = "error" },
   { path = "debug/build/hya-plan/ci-archive/out/libhya_plan.so", relative-to = "target", on-missing = "error" },
+  { path = "debug/build/hya-goal/ci-archive/out/libhya_goal.so", relative-to = "target", on-missing = "error" },
   { path = "debug/examples/libreplacement_tools.so", relative-to = "target", on-missing = "error" },
   { path = "debug/examples/libwrong_abi_tools.so", relative-to = "target", on-missing = "error" },
   { path = "debug/examples/libtest_v2_bundle.so", relative-to = "target", on-missing = "error" },
