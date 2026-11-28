@@ -41,7 +41,7 @@ exempt = [
 
 # Violations still being moved out (Phase 7); each issue removes its entries.
 [allow.dependencies]
-"crates/hya-app" = ["hya-agent-channels", "hya-coding-extras-core", "hya-multi-agent", "hya-workflow-bundle", "hya-workflow-bundle-core"]
+"crates/hya-app" = ["hya-coding-extras-core", "hya-multi-agent"]
 "crates/hya-core" = ["hya-coding-extras", "hya-compaction", "hya-hashline"]
 "crates/hya-engine" = ["hya-agent-channels-core", "hya-coding-extras", "hya-coding-extras-core", "hya-compaction", "hya-hashline", "hya-multi-agent", "hya-multi-agent-core", "hya-network", "hya-plan", "hya-workflow-bundle"]
 "crates/hya-tool" = ["hya-multi-agent", "hya-workflow-bundle"]
@@ -55,8 +55,7 @@ exempt = [
 "crates/hya-app/src/lead_wrapup.rs" = ["resident", "subagent", "team"]
 "crates/hya-app/src/lib.rs" = ["formatter", "team"]
 "crates/hya-app/src/preset_inventory.rs" = ["channel"]
-"crates/hya-app/src/runtime.rs" = ["formatter", "lsp", "mailbox", "resident", "subagent", "team"]
-"crates/hya-app/src/workflow_inspect.rs" = ["workflow"]
+"crates/hya-app/src/runtime.rs" = ["formatter", "lsp", "resident", "subagent", "team"]
 "crates/hya-backend/src/acp/mcp.rs" = ["channel"]
 "crates/hya-backend/src/bundle_cmd.rs" = ["workflow"]
 "crates/hya-backend/src/main.rs" = ["resident", "team"]
