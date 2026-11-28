@@ -1057,6 +1057,9 @@ async fn build_session_engine_with_mcp_defer(
                 return Err(anyhow::anyhow!("load native bundles: {error}"));
             }
         };
+    // Tool-family prompt sections apply once a native bundle registered tools;
+    // the registry holds only those until the bare tools fill the gaps.
+    let use_tool_family_prompts = !registry.schemas().is_empty();
     register_missing_bare_tools(&registry);
     let mut native = crate::native_bundles::NativeInstall::default();
     for (bundle_id, regs) in native_regs {

@@ -51,9 +51,6 @@ mod member_control;
 mod members;
 mod model_probe;
 mod models;
-#[cfg(unix)]
-#[cfg(test)]
-mod native_rewriters_test;
 mod nested_tools;
 mod permissions;
 mod restart;

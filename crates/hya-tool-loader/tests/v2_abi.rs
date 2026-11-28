@@ -757,3 +757,43 @@ fn selective_loader_skips_disabled_and_errors_cleanly_on_missing()
     assert!(v1_err.contains("load hya/unknown-family"), "{v1_err}");
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn missing_native_bundle_library_fails_startup_load() -> Result<(), Box<dyn std::error::Error>> {
+    const CHILD: &str = "HYA_TEST_MISSING_NATIVE_LIBRARY_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        // The host's startup load path (`hya-app` runtime) for an enabled bundle.
+        let Err(error) = hya_tool_loader::load_native_bundles(
+            &["hya/compaction"],
+            Arc::new(hya_tool_loader::MinimalHostRuntime::empty()),
+        ) else {
+            panic!("startup must return a bundle load error");
+        };
+        assert!(error.contains("hya/compaction"), "{error}");
+        return Ok(());
+    }
+
+    // A fresh process with no adjacent libraries cannot reuse the loader cache.
+    let exe = std::env::current_exe()?;
+    let dir = exe.with_file_name(format!("missing-native-library-{}", SessionId::new()));
+    std::fs::create_dir(&dir)?;
+    let child = dir.join("fixture");
+    let result = std::fs::hard_link(exe, &child).and_then(|()| {
+        std::process::Command::new(child)
+            .args([
+                "--exact",
+                "missing_native_bundle_library_fails_startup_load",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+    });
+    std::fs::remove_dir_all(dir)?;
+    let output = result?;
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "{output:?}"
+    );
+    Ok(())
+}
