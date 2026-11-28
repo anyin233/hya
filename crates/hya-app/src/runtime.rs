@@ -1626,11 +1626,15 @@ mod open_store_tests {
             std::process::id(),
             nanos
         ));
-        let blocker = dir.join("not-a-dir");
-        std::fs::create_dir_all(&blocker).unwrap();
-        let path = blocker.to_string_lossy().into_owned();
+        // One directory-db path per check: an open that outlives its timeout
+        // keeps that path's owner lock briefly, so the checks must not share it.
+        let blocker = |name: &str| {
+            let blocker = dir.join(name);
+            std::fs::create_dir_all(&blocker).unwrap();
+            blocker.to_string_lossy().into_owned()
+        };
 
-        let strict_err = match open_store(&path).await {
+        let strict_err = match open_store(&blocker("strict")).await {
             Ok(_) => panic!("strict open_store must fail on directory db"),
             Err(err) => err,
         };
@@ -1640,7 +1644,7 @@ mod open_store_tests {
         );
 
         let runtime_err = match HyaRuntime::start(RuntimeOptions {
-            db: path.clone(),
+            db: blocker("runtime"),
             model: None,
             default_agent: None,
             yolo: false,
@@ -1656,9 +1660,9 @@ mod open_store_tests {
             "{runtime_err}"
         );
 
-        let fallback = match open_store_or_memory(&path).await {
+        let fallback = match open_store_or_memory(&blocker("fallback")).await {
             Ok(store) => store,
-            Err(err) => panic!("open_store_or_memory must fall back on directory db: {err}"),
+            Err(err) => panic!("open_store_or_memory must fall back on directory db: {err:#}"),
         };
         assert!(fallback.memory_fallback().is_some());
 
