@@ -1455,7 +1455,9 @@ async fn cli_binary_check_dry_run_run_and_rollback() {
     let ws = TempWorkspace::new("cli");
     let seeded = seed_all_v1_fixtures(&ws.root).await;
     let backup_dir = ws.root.join("cli-backup");
-    let bin = env!("CARGO_BIN_EXE_hya-migration");
+    let bin = std::env::var("NEXTEST_BIN_EXE_hya-migration")
+        .or_else(|_| std::env::var("CARGO_BIN_EXE_hya-migration"))
+        .unwrap_or_else(|_| env!("CARGO_BIN_EXE_hya-migration").to_owned());
 
     let common_args = vec![
         "--db".to_owned(),
@@ -1478,7 +1480,7 @@ async fn cli_binary_check_dry_run_run_and_rollback() {
     let pre_cfg_sha = file_sha256(&seeded.targets.config).unwrap().0;
 
     // 1. check --json
-    let out = Command::new(bin)
+    let out = Command::new(&bin)
         .arg("--json")
         .arg("check")
         .args(&common_args)
@@ -1493,7 +1495,7 @@ async fn cli_binary_check_dry_run_run_and_rollback() {
     assert_eq!(check_json["needs_migration"], json!(true));
 
     // 2. run --dry-run --json
-    let out = Command::new(bin)
+    let out = Command::new(&bin)
         .arg("--json")
         .arg("run")
         .arg("--dry-run")
@@ -1509,7 +1511,7 @@ async fn cli_binary_check_dry_run_run_and_rollback() {
     assert_eq!(file_sha256(&seeded.targets.config).unwrap().0, pre_cfg_sha);
 
     // 3. run --backup-dir <dir> --json
-    let out = Command::new(bin)
+    let out = Command::new(&bin)
         .arg("--json")
         .arg("run")
         .arg("--backup-dir")
@@ -1527,7 +1529,7 @@ async fn cli_binary_check_dry_run_run_and_rollback() {
     assert_eq!(run_json["db"]["store_verified"], json!(true));
 
     // 4. rollback --backup <dir> --json
-    let out = Command::new(bin)
+    let out = Command::new(&bin)
         .arg("--json")
         .arg("rollback")
         .arg("--backup")
