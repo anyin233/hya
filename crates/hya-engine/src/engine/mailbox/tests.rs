@@ -93,6 +93,8 @@ mod tests_support {
             runtime: None,
             permission_modes: vec![],
             cli: Vec::new(),
+            requires: Vec::new(),
+            default_agent: None,
             overrides: None,
         };
         extra.push(bundle);

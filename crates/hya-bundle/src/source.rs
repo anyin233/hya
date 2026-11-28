@@ -202,6 +202,12 @@ pub(crate) struct SourceManifest {
     /// Optional bundle identity overridden by this bundle (e.g. `hya/bare`).
     #[serde(default)]
     pub overrides: Option<String>,
+    /// Bundles that must be enabled with this one (`<publisher>/<name>`).
+    #[serde(default)]
+    pub requires: Vec<String>,
+    /// This bundle's Agent that becomes the default primary agent.
+    #[serde(default)]
+    pub default_agent: Option<String>,
     /// External URI-scheme extensions this bundle provides.
     #[serde(default)]
     pub schemas: Vec<SourceSchema>,

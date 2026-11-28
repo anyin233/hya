@@ -1372,6 +1372,8 @@ mod tests {
             runtime: None,
             permission_modes: vec![],
             cli: Vec::new(),
+            requires: Vec::new(),
+            default_agent: None,
         };
         let registry = Arc::new(RuntimeRegistry::new(
             hya_tool_loader::builtins(),

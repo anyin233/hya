@@ -99,6 +99,8 @@ pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> 
             runtime: None,
             permission_modes: vec![],
             cli: Vec::new(),
+            requires: Vec::new(),
+            default_agent: None,
             overrides: None,
         })
         .collect::<Vec<_>>();

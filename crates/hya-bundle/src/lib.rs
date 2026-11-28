@@ -11,6 +11,7 @@ mod first_party;
 mod model;
 mod package;
 mod prepare;
+mod prerequisites;
 mod source;
 
 pub use api::{
@@ -35,11 +36,12 @@ pub use model::{
     PreparedChannelTemplate, PreparedCheck, PreparedJsRuntimeMode, PreparedNativeCapability,
     PreparedPermissionMode, PreparedProcessExtension, PreparedProcessKind, PreparedResource,
     PreparedRuntime, PreparedRuntimeKind, PreparedSchema, PreparedTuiExtension, PreparedWorkflow,
-    ResourceView,
+    ResourceView, SPAWN_ANY_AGENT,
 };
 pub use package::{
     PackageFormat, PublicPackageInspection, StagedPackage, cleanup_orphaned_staging,
     detect_package_format, inspect_public_package, stage_package, write_public_package,
 };
 pub use prepare::{prepare_package, read_bundle_identity};
+pub use prerequisites::missing_prerequisites;
 pub use source::{BundleSource, SourceFile, SourceTuiExtension};

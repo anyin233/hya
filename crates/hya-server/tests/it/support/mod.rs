@@ -249,6 +249,8 @@ fn prepared_bundles(agents: &[AgentFixture]) -> Vec<Bundle> {
             runtime: None,
             permission_modes: vec![],
             cli: Vec::new(),
+            requires: Vec::new(),
+            default_agent: None,
             overrides: None,
         })
         .collect();

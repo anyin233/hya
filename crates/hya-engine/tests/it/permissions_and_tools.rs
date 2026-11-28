@@ -743,6 +743,8 @@ fn nested_catalog() -> Arc<AgentCatalog> {
         runtime: None,
         permission_modes: vec![],
         cli: Vec::new(),
+        requires: Vec::new(),
+        default_agent: None,
         overrides: None,
     };
     let bundles = BundleCatalog::from_prepared(&[bundle]).unwrap();

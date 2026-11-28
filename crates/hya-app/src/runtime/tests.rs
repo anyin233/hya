@@ -340,6 +340,8 @@ fn catalog_with_agents(stable_ids: &[&str]) -> Arc<AgentCatalog> {
             runtime: None,
             permission_modes: vec![],
             cli: Vec::new(),
+            requires: Vec::new(),
+            default_agent: None,
         })
         .collect::<Vec<_>>();
     Arc::new(to_agent_catalog(
@@ -392,6 +394,8 @@ fn catalog_with_worker_policy(model_policy: ModelPolicy) -> Arc<AgentCatalog> {
         runtime: None,
         permission_modes: vec![],
         cli: Vec::new(),
+        requires: Vec::new(),
+        default_agent: None,
     };
     Arc::new(to_agent_catalog(
         BundleCatalog::from_prepared(&[bundle]).expect("valid precedence bundle catalog"),
@@ -534,6 +538,8 @@ fn materialized_bundle(marker: &str) -> Bundle {
         runtime: None,
         permission_modes: vec![],
         cli: Vec::new(),
+        requires: Vec::new(),
+        default_agent: None,
     }
 }
 
@@ -599,6 +605,8 @@ fn disjoint_materialized_bundle(marker: &str) -> Bundle {
         runtime: None,
         permission_modes: vec![],
         cli: Vec::new(),
+        requires: Vec::new(),
+        default_agent: None,
     }
 }
 
