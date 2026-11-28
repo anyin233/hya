@@ -1,14 +1,14 @@
 //! Compatibility steer snapshot facade delegating topology, policy, and notice
 //! formatting to `hya/agent-channels`.
 //!
-//! Live turn steering runs through [`hya_agent_channels::UnreadMailSteerHook`]
+//! Live turn steering runs through [`hya_agent_channels_core::UnreadMailSteerHook`]
 //! (`HookPoint::ToolExecuteAfter`). This wrapper preserves the
 //! [`SessionEngine::steer_mailbox_snapshot_with_policy`] API used by engine
 //! integration tests.
 
 use std::collections::HashMap;
 
-use hya_agent_channels::{
+use hya_agent_channels_core::{
     SteeredMail, allows_steer_message, channel_topology, format_steer_notice,
 };
 use hya_bundle::{ChannelParticipantRole, ChannelTemplateKind};

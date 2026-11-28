@@ -4,7 +4,7 @@
 //! live-member capacity with active claims; team activity counters belong to
 //! the resident team.
 
-pub use hya_multi_agent::governor::{SubagentGovernor, SubagentLimits};
+pub use hya_multi_agent_core::governor::{SubagentGovernor, SubagentLimits};
 
 #[cfg(test)]
 mod tests {

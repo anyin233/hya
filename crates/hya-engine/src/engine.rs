@@ -433,14 +433,14 @@ impl SessionEngine {
                     turn_gate: Arc::clone(&turn_gate),
                 });
             let channels_service =
-                Arc::new(hya_agent_channels::AgentChannelsService::with_runtime(
+                Arc::new(hya_agent_channels_core::AgentChannelsService::with_runtime(
                     Arc::clone(&channels_runtime),
                 ));
-            native_hooks.push(Arc::new(hya_agent_channels::UnreadMailSteerHook::new(
+            native_hooks.push(Arc::new(hya_agent_channels_core::UnreadMailSteerHook::new(
                 Arc::clone(&channels_service),
             )));
             let channel_uri: Arc<dyn hya_runtime_abi::UriSchemaHandler> = Arc::new(
-                hya_agent_channels::ChannelUriSchemaHandler::new(channels_service),
+                hya_agent_channels_core::ChannelUriSchemaHandler::new(channels_service),
             );
             if let Ok(updated) =
                 schemas
@@ -453,23 +453,23 @@ impl SessionEngine {
                 schemas = updated;
             }
             store.register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
-                inner: Arc::new(hya_agent_channels::AgentChannelsProjectionReducer),
+                inner: Arc::new(hya_agent_channels_core::AgentChannelsProjectionReducer),
             }));
 
-            let multi_service = Arc::new(hya_multi_agent::MultiAgentService::with_runtime(
+            let multi_service = Arc::new(hya_multi_agent_core::MultiAgentService::with_runtime(
                 Arc::clone(&channels_runtime),
             ));
-            native_hooks.push(Arc::new(hya_multi_agent::MultiAgentLifecycleHook::new(
-                Arc::clone(&multi_service),
-            )));
+            native_hooks.push(Arc::new(
+                hya_multi_agent_core::MultiAgentLifecycleHook::new(Arc::clone(&multi_service)),
+            ));
             store.register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
-                inner: Arc::new(hya_multi_agent::MultiAgentProjectionReducer),
+                inner: Arc::new(hya_multi_agent_core::MultiAgentProjectionReducer),
             }));
             let _ = runtime.register_native_bundle_apis(
                 hya_tool::extension::BUNDLE_MULTI_AGENT,
-                vec![Arc::new(hya_multi_agent::MultiAgentBundleApiHandler::new(
-                    multi_service,
-                ))],
+                vec![Arc::new(
+                    hya_multi_agent_core::MultiAgentBundleApiHandler::new(multi_service),
+                )],
             );
         }
 

@@ -1282,6 +1282,14 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 name = "hya-agent-channels"
 version = "0.0.0"
 dependencies = [
+ "hya-agent-channels-core",
+ "hya-runtime-abi",
+]
+
+[[package]]
+name = "hya-agent-channels-core"
+version = "0.0.0"
+dependencies = [
  "async-trait",
  "hya-bundle",
  "hya-proto",
@@ -1320,6 +1328,7 @@ dependencies = [
  "hya-bundle",
  "hya-child-io",
  "hya-coding-extras",
+ "hya-coding-extras-core",
  "hya-core",
  "hya-engine",
  "hya-goal",
@@ -1339,6 +1348,7 @@ dependencies = [
  "hya-tool-loader",
  "hya-version",
  "hya-workflow-bundle",
+ "hya-workflow-bundle-core",
  "libc",
  "libsqlite3-sys",
  "rand_core 0.9.5",
@@ -1429,6 +1439,14 @@ dependencies = [
 
 [[package]]
 name = "hya-coding-extras"
+version = "0.0.0"
+dependencies = [
+ "hya-coding-extras-core",
+ "hya-runtime-abi",
+]
+
+[[package]]
+name = "hya-coding-extras-core"
 version = "0.0.0"
 dependencies = [
  "async-trait",
@@ -1538,13 +1556,16 @@ dependencies = [
  "base64 0.22.1",
  "futures",
  "hya-agent-channels",
+ "hya-agent-channels-core",
  "hya-bundle",
  "hya-coding-extras",
+ "hya-coding-extras-core",
  "hya-compaction",
  "hya-context",
  "hya-core",
  "hya-hashline",
  "hya-multi-agent",
+ "hya-multi-agent-core",
  "hya-network",
  "hya-plan",
  "hya-proto",
@@ -1642,6 +1663,14 @@ dependencies = [
 
 [[package]]
 name = "hya-multi-agent"
+version = "0.0.0"
+dependencies = [
+ "hya-multi-agent-core",
+ "hya-runtime-abi",
+]
+
+[[package]]
+name = "hya-multi-agent-core"
 version = "0.0.0"
 dependencies = [
  "async-trait",
@@ -1982,6 +2011,14 @@ dependencies = [
 
 [[package]]
 name = "hya-workflow-bundle"
+version = "0.0.0"
+dependencies = [
+ "hya-runtime-abi",
+ "hya-workflow-bundle-core",
+]
+
+[[package]]
+name = "hya-workflow-bundle-core"
 version = "0.0.0"
 dependencies = [
  "async-trait",

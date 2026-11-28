@@ -19,8 +19,10 @@ hya-plan = { workspace = true }
 # Built for its `cdylib`: the `hya/workflow` native ABI v2 bundle (`workflow` tool, DAG service, BundleApi).
 hya-workflow-bundle = { workspace = true }
 # Built for its `cdylib`: the `hya/agent-channels` native ABI v2 bundle (mailbox, channel:// schema, steer hook, BundleApi).
+hya-agent-channels-core = { workspace = true }
 hya-agent-channels = { workspace = true }
 # Built for its `cdylib`: the `hya/multi-agent` native ABI v2 bundle (governor, handle naming, claims, tools, BundleApi).
+hya-multi-agent-core = { workspace = true }
 hya-multi-agent = { workspace = true }
 hya-core = { workspace = true }
 hya-proto = { workspace = true }
@@ -47,6 +49,7 @@ tracing = { workspace = true }
 hya-provider = { workspace = true, features = ["test-support"] }
 hya-store = { workspace = true, features = ["lifecycle-bench"] }
 hya-hashline = { workspace = true }
+hya-coding-extras-core = { workspace = true }
 hya-coding-extras = { workspace = true }
 hya-network = { workspace = true }
 libc = { workspace = true }

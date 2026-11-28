@@ -15,14 +15,5 @@ crate-type = ["rlib", "cdylib"]
 workspace = true
 
 [dependencies]
-async-trait = { workspace = true }
-hya-bundle = { workspace = true }
-hya-proto = { workspace = true }
+hya-agent-channels-core = { workspace = true }
 hya-runtime-abi = { workspace = true }
-hya-tool = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-
-[dev-dependencies]
-tokio = { workspace = true }
-tokio-util = { workspace = true }

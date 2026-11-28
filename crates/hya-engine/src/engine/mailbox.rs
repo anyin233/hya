@@ -16,7 +16,7 @@ mod request;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use hya_agent_channels::{MAIN_HANDLE, dm_channel_between};
+pub(crate) use hya_agent_channels_core::{MAIN_HANDLE, dm_channel_between};
 
 use hya_proto::{ActorClaim, AgentName, RosterStatus, SessionId, SubagentMode, scope};
 use hya_tool::extension::{ExtensionEvent, team_projection};
