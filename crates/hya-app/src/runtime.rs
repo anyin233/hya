@@ -342,8 +342,7 @@ impl RuntimeConfig {
     #[must_use]
     pub fn with_flags(mut self, flags: RuntimeFlags) -> Self {
         if flags.bare {
-            self.settings
-                .set_builtin_bundles(builtin_selection(true));
+            self.settings.set_builtin_bundles(builtin_selection(true));
             self.default_agent = None;
         }
         if flags.pure {
