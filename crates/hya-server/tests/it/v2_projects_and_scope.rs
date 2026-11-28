@@ -675,7 +675,6 @@ async fn scoped_rpcs_require_absolute_directory_field_and_honor_it() {
         (Method::GET, "/v2/fs/list", Value::Null),
         (Method::GET, "/v2/fs/find?pattern=*", Value::Null),
         (Method::GET, "/v2/fs/search?query=x", Value::Null),
-        (Method::GET, "/v2/fs/symbols?query=x", Value::Null),
         (Method::GET, "/v2/vcs", Value::Null),
         (Method::GET, "/v2/vcs/diff", Value::Null),
         (Method::POST, "/v2/vcs/apply", json!({"patch": ""})),

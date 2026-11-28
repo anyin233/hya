@@ -85,7 +85,7 @@ pub(super) fn file_uri(path: &Path) -> Result<String, LspError> {
     Ok(encoded)
 }
 
-fn uri_to_file_path(uri: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn uri_to_file_path(uri: &str) -> Option<std::path::PathBuf> {
     let rest = uri.strip_prefix("file://")?;
     let path_part = if let Some(after_local) = rest.strip_prefix("localhost/") {
         format!("/{after_local}")

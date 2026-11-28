@@ -412,17 +412,6 @@ impl pb::files_server::Files for V2Grpc {
                 .await?,
         )
     }
-    async fn search_symbols(
-        &self,
-        request: GrpcRequest<pb::SearchSymbolsRequest>,
-    ) -> Result<GrpcResponse<pb::SearchSymbolsResponse>, Status> {
-        let (ctx, inner) = split(request);
-        let path = "/v2/fs/symbols";
-        into_response(
-            self.dispatch(&ctx, "GET", path, query_of(&inner), &inner)
-                .await?,
-        )
-    }
 }
 #[tonic::async_trait]
 impl pb::interactions_server::Interactions for V2Grpc {

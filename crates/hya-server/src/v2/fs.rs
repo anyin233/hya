@@ -1,5 +1,5 @@
-//! `/v2` filesystem domain: read, list, find, text search, and symbol
-//! search under a directory scope.
+//! `/v2` filesystem domain: read, list, find, and text search under a
+//! directory scope.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -9,7 +9,6 @@ use axum::extract::{Query, State};
 use axum::routing::get;
 
 use super::Json;
-use serde_json::Value;
 
 use crate::ServerState;
 use hya_api::v2 as pb;
@@ -22,7 +21,6 @@ pub(crate) fn router() -> Router<ServerState> {
         .route("/v2/fs/list", get(list_directory))
         .route("/v2/fs/find", get(find_files))
         .route("/v2/fs/search", get(search_text))
-        .route("/v2/fs/symbols", get(search_symbols))
 }
 
 /// Resolve `path` under `root`, rejecting traversal outside it.
@@ -196,60 +194,6 @@ async fn search_text(
     });
     matches.sort_by(|a, b| a.path.cmp(&b.path).then(a.line_number.cmp(&b.line_number)));
     Ok(Json(pb::SearchTextResponse { matches }))
-}
-
-async fn search_symbols(
-    State(st): State<ServerState>,
-    Query(query): Query<BTreeMap<String, String>>,
-) -> Result<Json<pb::SearchSymbolsResponse>, V2Error> {
-    let request: pb::SearchSymbolsRequest = super::query_request(&[], &query)?;
-    let root = scope_directory(&request.directory)?;
-    let symbols = st
-        .engine
-        .lsp()
-        .workspace_symbols(&root, request.query.clone())
-        .await
-        .unwrap_or_default();
-    let limit = if request.limit == 0 {
-        10
-    } else {
-        request.limit.min(100)
-    } as usize;
-    let mut mapped: Vec<pb::Symbol> = symbols
-        .iter()
-        .take(limit)
-        .map(|symbol| pb::Symbol {
-            path: field(symbol, "path"),
-            name: field(symbol, "name"),
-            kind: symbol_kind(symbol),
-            line_number: symbol
-                .get("line")
-                .or_else(|| symbol.pointer("location").and_then(|l| l.get("line")))
-                .and_then(Value::as_u64)
-                .unwrap_or(0) as u32,
-        })
-        .collect();
-    mapped.truncate(limit);
-    Ok(Json(pb::SearchSymbolsResponse { symbols: mapped }))
-}
-
-fn symbol_kind(symbol: &Value) -> i32 {
-    match symbol.get("kind").and_then(Value::as_u64) {
-        Some(5) | Some(6) => pb::SymbolKind::Function as i32,
-        Some(10) | Some(11) | Some(12) | Some(13) | Some(14) | Some(23) => {
-            pb::SymbolKind::Type as i32
-        }
-        Some(2) | Some(3) => pb::SymbolKind::Module as i32,
-        _ => pb::SymbolKind::Other as i32,
-    }
-}
-
-fn field(value: &Value, name: &str) -> String {
-    value
-        .get(name)
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .unwrap_or_default()
 }
 
 enum WalkControl {

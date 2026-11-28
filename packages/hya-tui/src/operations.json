@@ -169,12 +169,6 @@
   },
   {
     "method": "GET",
-    "path": "/v2/fs/symbols",
-    "operationId": "Files.SearchSymbols",
-    "streaming": false
-  },
-  {
-    "method": "GET",
     "path": "/v2/health",
     "operationId": "Process.GetHealth",
     "streaming": false

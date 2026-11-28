@@ -330,7 +330,7 @@ Live stream across all sessions of a directory scope.
 
 ## Service `Files`
 
-Filesystem reads for frontends (tree views, editors, go-to-symbol).
+Filesystem reads for frontends (tree views, editors).
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
@@ -338,7 +338,6 @@ Filesystem reads for frontends (tree views, editors, go-to-symbol).
 | `ListDirectory` | `GET /v2/fs/list` | `hya.v2.Files.ListDirectory` | `ListDirectoryRequest` | `ListDirectoryResponse` |
 | `FindFiles` | `GET /v2/fs/find` | `hya.v2.Files.FindFiles` | `FindFilesRequest` | `FindFilesResponse` |
 | `SearchText` | `GET /v2/fs/search` | `hya.v2.Files.SearchText` | `SearchTextRequest` | `SearchTextResponse` |
-| `SearchSymbols` | `GET /v2/fs/symbols` | `hya.v2.Files.SearchSymbols` | `SearchSymbolsRequest` | `SearchSymbolsResponse` |
 
 ### `Files.ReadFile`
 
@@ -358,11 +357,6 @@ Find files by glob-ish name pattern.
 ### `Files.SearchText`
 
 Full-text search across files (ripgrep-backed).
-
-
-### `Files.SearchSymbols`
-
-Symbol search (definitions) across the directory.
 
 
 ## Service `Interactions`
@@ -2082,33 +2076,6 @@ One text search match.
 |---|---|---|
 | `matches` (1) | `repeated TextMatch` | Matches in path order. |
 
-### `SearchSymbolsRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
-| `query` (2) | `string` | Symbol name query. |
-| `limit` (3) | `uint32` | Maximum symbols to return; 0 uses the server default. |
-
-### `Symbol`
-
-One discovered symbol.
-
-| Field | Type | Description |
-|---|---|---|
-| `path` (1) | `string` | Relative file path. |
-| `name` (2) | `string` | Symbol name. |
-| `kind` (3) | `SymbolKind` | Symbol kind. |
-| `line_number` (4) | `uint32` | 1-based line number. |
-
-### `SearchSymbolsResponse`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `symbols` (1) | `repeated Symbol` | Symbols matching the query. |
-
 ### `Interaction`
 
 One pending interaction request.
@@ -3417,18 +3384,6 @@ Kind of a directory entry.
 | `DIR_ENTRY_KIND_FILE` | 1 | A regular file. |
 | `DIR_ENTRY_KIND_DIRECTORY` | 2 | A subdirectory. |
 | `DIR_ENTRY_KIND_SYMLINK` | 3 | A symbolic link. |
-
-### `SymbolKind`
-
-Kind of a discovered symbol.
-
-| Value | Number | Description |
-|---|---|---|
-| `SYMBOL_KIND_UNSPECIFIED` | 0 | Unset sentinel; never emitted by the server. |
-| `SYMBOL_KIND_FUNCTION` | 1 | A function definition. |
-| `SYMBOL_KIND_TYPE` | 2 | A type, struct, or class definition. |
-| `SYMBOL_KIND_MODULE` | 3 | A module or namespace. |
-| `SYMBOL_KIND_OTHER` | 4 | Anything else. |
 
 ### `InteractionType`
 

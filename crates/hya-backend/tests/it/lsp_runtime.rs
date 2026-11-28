@@ -1,4 +1,5 @@
-//! A configured stdio LSP server must be reachable through the shipped HTTP surface.
+//! A configured stdio LSP server must be reachable through coding-extras'
+//! shipped BundleApi.
 #![cfg(unix)]
 
 use std::path::PathBuf;
@@ -59,7 +60,9 @@ async fn configured_language_server_exposes_workspace_symbols() -> TestResult {
     let symbols: Value = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()?
-        .get(format!("{url}/v2/fs/symbols"))
+        .get(format!(
+            "{url}/v2/bundles/hya%2Fcoding-extras/api/lsp/symbols"
+        ))
         .query(&[
             ("query", "qaSymbol"),
             ("directory", project.to_string_lossy().as_ref()),
@@ -69,11 +72,15 @@ async fn configured_language_server_exposes_workspace_symbols() -> TestResult {
         .error_for_status()?
         .json()
         .await?;
-    assert!(
-        symbols["symbols"]
-            .as_array()
-            .is_some_and(|rows| rows.iter().any(|row| row["name"] == "qaSymbol")),
-        "configured LSP result missing: {symbols}"
+    assert_eq!(
+        symbols,
+        json!({ "symbols": [{
+            "path": "main.ts",
+            "name": "qaSymbol",
+            "kind": "SYMBOL_KIND_FUNCTION",
+            "lineNumber": 1
+        }]}),
+        "configured LSP result missing"
     );
     backend.kill().await?;
     backend.wait().await?;

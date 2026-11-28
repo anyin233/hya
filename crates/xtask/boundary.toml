@@ -136,7 +136,6 @@ exempt = [
 "crates/hya-server/src/state.rs" = ["formatter", "lsp"]
 "crates/hya-server/src/support/global_state.rs" = ["lsp"]
 "crates/hya-server/src/v2/events.rs" = ["channel"]
-"crates/hya-server/src/v2/fs.rs" = ["lsp"]
 "crates/hya-server/src/v2/mod.rs" = ["mailbox"]
 "crates/hya-server/src/v2/process.rs" = ["formatter"]
 "crates/hya-tool-error/src/lib.rs" = ["lsp", "subagent", "workflow"]

@@ -7826,42 +7826,6 @@ pub struct SearchTextResponse {
     #[prost(message, repeated, tag = "1")]
     pub matches: ::prost::alloc::vec::Vec<TextMatch>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SearchSymbolsRequest {
-    /// Directory scope (absolute). Required:
-    /// without one the rpc fails with invalid_argument (the backend has no
-    /// working directory of its own).
-    #[prost(string, tag = "1")]
-    pub directory: ::prost::alloc::string::String,
-    /// Symbol name query.
-    #[prost(string, tag = "2")]
-    pub query: ::prost::alloc::string::String,
-    /// Maximum symbols to return; 0 uses the server default.
-    #[prost(uint32, tag = "3")]
-    pub limit: u32,
-}
-/// One discovered symbol.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Symbol {
-    /// Relative file path.
-    #[prost(string, tag = "1")]
-    pub path: ::prost::alloc::string::String,
-    /// Symbol name.
-    #[prost(string, tag = "2")]
-    pub name: ::prost::alloc::string::String,
-    /// Symbol kind.
-    #[prost(enumeration = "SymbolKind", tag = "3")]
-    pub kind: i32,
-    /// 1-based line number.
-    #[prost(uint32, tag = "4")]
-    pub line_number: u32,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SearchSymbolsResponse {
-    /// Symbols matching the query.
-    #[prost(message, repeated, tag = "1")]
-    pub symbols: ::prost::alloc::vec::Vec<Symbol>,
-}
 /// Kind of a directory entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -7899,47 +7863,6 @@ impl DirEntryKind {
         }
     }
 }
-/// Kind of a discovered symbol.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum SymbolKind {
-    /// Unset sentinel; never emitted by the server.
-    Unspecified = 0,
-    /// A function definition.
-    Function = 1,
-    /// A type, struct, or class definition.
-    Type = 2,
-    /// A module or namespace.
-    Module = 3,
-    /// Anything else.
-    Other = 4,
-}
-impl SymbolKind {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "SYMBOL_KIND_UNSPECIFIED",
-            Self::Function => "SYMBOL_KIND_FUNCTION",
-            Self::Type => "SYMBOL_KIND_TYPE",
-            Self::Module => "SYMBOL_KIND_MODULE",
-            Self::Other => "SYMBOL_KIND_OTHER",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "SYMBOL_KIND_UNSPECIFIED" => Some(Self::Unspecified),
-            "SYMBOL_KIND_FUNCTION" => Some(Self::Function),
-            "SYMBOL_KIND_TYPE" => Some(Self::Type),
-            "SYMBOL_KIND_MODULE" => Some(Self::Module),
-            "SYMBOL_KIND_OTHER" => Some(Self::Other),
-            _ => None,
-        }
-    }
-}
 /// Generated client implementations.
 pub mod files_client {
     #![allow(
@@ -7951,7 +7874,7 @@ pub mod files_client {
     )]
     use tonic::codegen::*;
     use tonic::codegen::http::Uri;
-    /// Filesystem reads for frontends (tree views, editors, go-to-symbol).
+    /// Filesystem reads for frontends (tree views, editors).
     #[derive(Debug, Clone)]
     pub struct FilesClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -8131,33 +8054,6 @@ pub mod files_client {
             req.extensions_mut().insert(GrpcMethod::new("hya.v2.Files", "SearchText"));
             self.inner.unary(req, path, codec).await
         }
-        /// Symbol search (definitions) across the directory.
-        ///
-        /// hya.http: GET /v2/fs/symbols
-        pub async fn search_symbols(
-            &mut self,
-            request: impl tonic::IntoRequest<super::SearchSymbolsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::SearchSymbolsResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/hya.v2.Files/SearchSymbols",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("hya.v2.Files", "SearchSymbols"));
-            self.inner.unary(req, path, codec).await
-        }
     }
 }
 /// Generated server implementations.
@@ -8213,18 +8109,8 @@ pub mod files_server {
             tonic::Response<super::SearchTextResponse>,
             tonic::Status,
         >;
-        /// Symbol search (definitions) across the directory.
-        ///
-        /// hya.http: GET /v2/fs/symbols
-        async fn search_symbols(
-            &self,
-            request: tonic::Request<super::SearchSymbolsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::SearchSymbolsResponse>,
-            tonic::Status,
-        >;
     }
-    /// Filesystem reads for frontends (tree views, editors, go-to-symbol).
+    /// Filesystem reads for frontends (tree views, editors).
     #[derive(Debug)]
     pub struct FilesServer<T> {
         inner: Arc<T>,
@@ -8460,51 +8346,6 @@ pub mod files_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = SearchTextSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/hya.v2.Files/SearchSymbols" => {
-                    #[allow(non_camel_case_types)]
-                    struct SearchSymbolsSvc<T: Files>(pub Arc<T>);
-                    impl<
-                        T: Files,
-                    > tonic::server::UnaryService<super::SearchSymbolsRequest>
-                    for SearchSymbolsSvc<T> {
-                        type Response = super::SearchSymbolsResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::SearchSymbolsRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as Files>::search_symbols(&inner, request).await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = SearchSymbolsSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

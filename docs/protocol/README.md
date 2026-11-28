@@ -105,6 +105,7 @@ In `hya.v2` ([ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)), c
 - **`hya/multi-agent`:** `GET .../members`, `POST .../archive`, `POST .../steer`
 - **`hya/workflow`:** `GET /v2/bundles/hya%2Fworkflow/api/workflows?directory=<abs>`, `GET /v2/sessions/{id}/bundles/hya%2Fworkflow/state`, `POST /v2/sessions/{id}/bundles/hya%2Fworkflow/command`
 - **`hya/agent-channels`:** `GET /v2/sessions/{id}/bundles/hya%2Fagent-channels/{channels,channels/{channel}/messages,inbox,team-status}`
+- **`hya/coding-extras`:** `GET /v2/bundles/hya%2Fcoding-extras/api/lsp/symbols?directory=<abs>&query=<name>&limit=<n>` searches workspace symbols through the language servers configured in the bundle's `config.yml` (`lsp:`). `directory` is required and absolute; `limit` defaults to 10 and is capped at 100. The reply is `{"symbols": [{"path", "name", "kind", "lineNumber"}]}`: `path` relative to `directory`, `kind` one of `SYMBOL_KIND_FUNCTION`, `SYMBOL_KIND_TYPE`, `SYMBOL_KIND_MODULE`, `SYMBOL_KIND_OTHER`, `lineNumber` 1-based. No configured server answers an empty list; a server failure answers `502` with `error.code` `lsp_failed`; with the bundle disabled the route is `404` `bundle_api_not_found`. This replaces the removed `Files.SearchSymbols` (`GET /v2/fs/symbols`).
 
 ### `ExtensionEvent` wire shape (`proto/hya/v2/events.proto`)
 

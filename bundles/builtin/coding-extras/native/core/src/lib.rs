@@ -11,6 +11,11 @@
 //!     both standard `hya-bare` `write`/`edit` and `hya/hashline` `write`/`edit`.
 //!   - [`AskUserVisibilityHook`] (`tool.visibility`): hides `ask_user` when no
 //!     interactive human receiver is connected.
+//! - **BundleApi (`NativeBundleApiHandler`):** [`LspApi`] serving
+//!   `GET /lsp/symbols` (workspace symbol search).
+//!
+//! The tools, hooks, and API all read the formatter and LSP planes from one
+//! shared [`CodingExtrasState`]; nothing else configures them.
 
 use std::sync::Arc;
 
@@ -25,6 +30,7 @@ pub mod formatter;
 mod fs_tools;
 /// Native hooks (`PostEditHook`, `AskUserVisibilityHook`).
 pub mod hooks;
+mod lsp_api;
 mod lsp_post_edit;
 /// Language server lifecycle and configuration.
 pub mod lsp_service;
@@ -39,6 +45,7 @@ pub use formatter::config::{RawFormatterConfig, RawFormatterEntry};
 pub use hooks::{
     ASK_USER_VISIBILITY_HOOK_ID, AskUserVisibilityHook, POST_EDIT_HOOK_ID, PostEditHook,
 };
+pub use lsp_api::LspApi;
 pub use lsp_service::config::{Selection as LspSelection, ServerConfig as LspServerConfig};
 pub use service::{
     BUNDLE_ID, CodingExtrasConfig, CodingExtrasService, CodingExtrasState, SERVICE_ID,
@@ -90,7 +97,7 @@ pub fn coding_extras_service(state: Arc<CodingExtrasState>) -> Arc<dyn NativeSer
     Arc::new(CodingExtrasService::new(state))
 }
 
-/// Register all `hya/coding-extras` tools, services, and hooks into `out`.
+/// Register all `hya/coding-extras` tools, services, hooks, and API handlers into `out`.
 pub fn register_bundle(
     ctx: &hya_runtime_abi::NativePluginContext,
     out: &mut hya_runtime_abi::NativeRegistrations,
@@ -99,6 +106,8 @@ pub fn register_bundle(
     let runtime = Arc::clone(ctx.runtime());
     out.tools.extend(coding_extras_tools(Arc::clone(&state)));
     out.services.push(coding_extras_service(Arc::clone(&state)));
+    out.api_handlers
+        .push(Arc::new(LspApi::new(Arc::clone(&state))));
     out.hooks.extend(coding_extras_hooks(state, Some(runtime)));
 }
 

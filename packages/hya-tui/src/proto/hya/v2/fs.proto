@@ -1,12 +1,12 @@
 // hya API v2 — read-only filesystem surface: file content, directory
-// listing, file/text/symbol search.
+// listing, file and text search.
 syntax = "proto3";
 
 package hya.v2;
 
 import "google/protobuf/timestamp.proto";
 
-// Filesystem reads for frontends (tree views, editors, go-to-symbol).
+// Filesystem reads for frontends (tree views, editors).
 service Files {
   // Read one file's content.
   //
@@ -27,11 +27,6 @@ service Files {
   //
   // hya.http: GET /v2/fs/search
   rpc SearchText(SearchTextRequest) returns (SearchTextResponse);
-
-  // Symbol search (definitions) across the directory.
-  //
-  // hya.http: GET /v2/fs/symbols
-  rpc SearchSymbols(SearchSymbolsRequest) returns (SearchSymbolsResponse);
 }
 
 message ReadFileRequest {
@@ -134,46 +129,4 @@ message TextMatch {
 message SearchTextResponse {
   // Matches in path order.
   repeated TextMatch matches = 1;
-}
-
-message SearchSymbolsRequest {
-  // Directory scope (absolute). Required:
-  // without one the rpc fails with invalid_argument (the backend has no
-  // working directory of its own).
-  string directory = 1;
-  // Symbol name query.
-  string query = 2;
-  // Maximum symbols to return; 0 uses the server default.
-  uint32 limit = 3;
-}
-
-// Kind of a discovered symbol.
-enum SymbolKind {
-  // Unset sentinel; never emitted by the server.
-  SYMBOL_KIND_UNSPECIFIED = 0;
-  // A function definition.
-  SYMBOL_KIND_FUNCTION = 1;
-  // A type, struct, or class definition.
-  SYMBOL_KIND_TYPE = 2;
-  // A module or namespace.
-  SYMBOL_KIND_MODULE = 3;
-  // Anything else.
-  SYMBOL_KIND_OTHER = 4;
-}
-
-// One discovered symbol.
-message Symbol {
-  // Relative file path.
-  string path = 1;
-  // Symbol name.
-  string name = 2;
-  // Symbol kind.
-  SymbolKind kind = 3;
-  // 1-based line number.
-  uint32 line_number = 4;
-}
-
-message SearchSymbolsResponse {
-  // Symbols matching the query.
-  repeated Symbol symbols = 1;
 }

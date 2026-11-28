@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, OnceCell, watch};
 
 use config::ServerConfig;
+pub(crate) use transport::uri_to_file_path;
 use transport::{Client, file_uri};
 
 type ClientSlot = Arc<OnceCell<Result<Arc<Client>, String>>>;
