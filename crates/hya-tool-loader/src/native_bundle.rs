@@ -369,17 +369,27 @@ pub(crate) fn library_source(
     filename: &str,
     stem: &str,
 ) -> Option<LibrarySource> {
+    library_source_for_package(parent, filename, stem, stem)
+}
+
+#[cfg(unix)]
+pub(crate) fn library_source_for_package(
+    parent: &std::path::Path,
+    filename: &str,
+    lib_stem: &str,
+    package_stem: &str,
+) -> Option<LibrarySource> {
     let mut local = [parent.join("deps").join(filename), parent.join(filename)]
         .into_iter()
         .filter(|path| path.is_file())
         .take(1)
         .collect::<Vec<_>>();
-    local.extend(build_unit_libraries(parent, filename, stem));
+    local.extend(build_unit_libraries(parent, filename, lib_stem));
     if !local.is_empty() {
         return Some(LibrarySource::Local(local));
     }
-    let package =
-        native_package_directory(parent).join(format!("{}.hyabundle", stem.replace('_', "-")));
+    let package = native_package_directory(parent)
+        .join(format!("{}.hyabundle", package_stem.replace('_', "-")));
     package.is_file().then_some(LibrarySource::Package(package))
 }
 

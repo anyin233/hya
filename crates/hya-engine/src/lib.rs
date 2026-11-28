@@ -80,8 +80,6 @@ pub mod store_bridge;
 pub mod title;
 /// Token accounting: local estimation and provider-usage reliability.
 pub use hya_context::tokens;
-/// User-authored workflow DAGs over the governed team primitives.
-pub mod workflow;
 
 #[cfg(test)]
 mod test_support;
@@ -110,12 +108,12 @@ pub use completion::{GateOutcome, IterationDriver, IterationGate, RunOutcome, Sa
 pub use effort::{AgentEffortSource, EffectiveEffort, EffortSource, agent_effort, resolve_effort};
 pub use engine::terminal_handoff;
 pub use engine::{
-    AgentSpec, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest, BoundWorkflowSender,
-    BundleRefresh, CatalogScopeCacheConfig, CreateSession, DRAIN_DEADLINE, ForkAt, ForkError,
-    MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES, MAX_SESSION_BLOB_BYTES, MODEL_PROBE_PROMPT,
-    ModelProbeReply, ProviderSnapshot, RevertError, RevertOutcome, RevertTarget,
-    RuntimeCatalogRefresh, SessionEngine, TurnBoundaryObserver, TurnDrainReport, TurnLease,
-    advertise_tool, fork_cut,
+    AgentSpec, BoundSpawnRequest, BoundSpawnSender, BundleRefresh, CatalogScopeCacheConfig,
+    CreateSession, DRAIN_DEADLINE, ExplicitModelRoute, ExplicitModelRouteCandidate,
+    ExplicitTurnRoute, ForkAt, ForkError, MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES,
+    MAX_SESSION_BLOB_BYTES, MODEL_PROBE_PROMPT, ModelProbeReply, ProviderSnapshot, RevertError,
+    RevertOutcome, RevertTarget, RuntimeCatalogRefresh, SessionEngine, TurnBoundaryObserver,
+    TurnDrainReport, TurnLease, advertise_tool, fork_cut,
 };
 pub use error::CoreError;
 pub use hooks::{
@@ -147,7 +145,7 @@ pub use sidecar::{
 pub use store_bridge::{
     EpisodeRegistration, RecoveredActorClaim, RecoveredResidentOutcome, RecoveredResidentWork,
     ResidentArchive, ResidentArchiveOutcome, ResidentArchiveOwner, ResidentWorkPrompt,
-    SessionStoreExt, WorkflowAdmissionOutcome, WorkflowSelectionOutcome,
+    SessionStoreExt,
 };
 pub use terminal_handoff::{
     ModelSummarizer, SummarizeOptions, Summarizer, TerminalHandoff, TerminalHandoffOptions,
@@ -155,14 +153,4 @@ pub use terminal_handoff::{
 };
 pub use tokens::{
     CalibratedTokenizer, TokenAccounting, TokenAccountingMode, TokenCount, TokenSource, Tokenizer,
-};
-pub use workflow::{
-    CompiledWorkflow, DurableWorkflowAdmission, DurableWorkflowSelection, FailurePolicy,
-    PreparedWorkflowRun, StageMode, StageReport, StageStatus, VerifySpec, WorkflowDefinition,
-    WorkflowError, WorkflowModelAssignment, WorkflowModelCandidate, WorkflowModelRoute,
-    WorkflowModelRouteCandidate, WorkflowPlan, WorkflowRevision, WorkflowRoutingContext,
-    WorkflowRunContext, WorkflowRunReport, WorkflowStage, WorkflowStatus,
-    discover_workflow_files_in_root, load_workflow_file, prepare_workflow_run,
-    prepare_workflow_run_for_actor, run_workflow, workflow_dirs_for_workdir, workflow_project_dir,
-    workflow_user_dir,
 };

@@ -78,7 +78,7 @@ agents:
 ```
 
 For agents owned by a **Bundle**, place the same `agents:` block (plus any custom settings that bundle reads) inside the bundle's own `config.yml`:
-- **User/builtin bundle:** `~/.config/hya/bundles/<percent-encoded-bundle-id>/config.yml` (e.g. `hya%2Fplan-impl-review/config.yml`)
+- **User/builtin bundle:** `~/.config/hya/bundles/<percent-encoded-bundle-id>/config.yml` (e.g. `hya%2Fworkflow/config.yml`)
 - **Project bundle:** `<project>/.hya/bundles/<dir>/config.yml`
 
 ---

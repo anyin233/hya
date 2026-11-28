@@ -13,7 +13,7 @@ use crate::v2::load_v2;
 
 /// First-party native ABI v2 bundles that export canonical builtin tools via
 /// structured `resources.tools` descriptors.
-pub const NATIVE_V2_TOOL_BUNDLES: [&str; 1] = ["hya/plan"];
+pub const NATIVE_V2_TOOL_BUNDLES: [&str; 2] = ["hya/plan", "hya/workflow"];
 
 #[derive(Deserialize)]
 #[serde(untagged)]

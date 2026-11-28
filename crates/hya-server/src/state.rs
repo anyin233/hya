@@ -18,7 +18,6 @@ use crate::relay_host::RelayHost;
 use crate::session_list::SessionListHub;
 use crate::streams::StreamShutdown;
 use crate::support;
-use crate::workflow_control::{EmptyWorkflowControl, WorkflowControl};
 use crate::{pending, runs};
 
 #[cfg(test)]
@@ -42,7 +41,6 @@ pub struct AppState {
     agent_model_control: Arc<dyn AgentModelControl>,
     provider_control: Arc<dyn ProviderControl>,
     bundle_control: Arc<dyn BundleControl>,
-    workflow_control: Arc<dyn WorkflowControl>,
     formatter_status: Vec<FormatterStatus>,
     default_agent: Option<String>,
     catalog_updates: broadcast::Sender<Value>,
@@ -159,7 +157,6 @@ impl AppState {
             agent_model_control: Arc::new(EmptyAgentModelControl),
             provider_control: Arc::new(EmptyProviderControl),
             bundle_control: Arc::new(EmptyBundleControl),
-            workflow_control: Arc::new(EmptyWorkflowControl),
             formatter_status: Vec::new(),
             default_agent: None,
             catalog_updates,
@@ -375,13 +372,6 @@ impl AppState {
         self.reconfigured()
     }
 
-    /// Install the app-owned Workflow control handle for v1 Workflow routes.
-    #[must_use]
-    pub fn with_workflow_control(mut self, control: Arc<dyn WorkflowControl>) -> Self {
-        self.workflow_control = control;
-        self.reconfigured()
-    }
-
     /// Publish a provider-catalog change: every v2 event stream (global and
     /// session, SSE and gRPC) delivers it as a live `catalogUpdated` frame
     /// with an empty `projectId`.
@@ -432,7 +422,6 @@ pub(crate) struct ServerState {
     pub(crate) agent_model_control: Arc<dyn AgentModelControl>,
     pub(crate) provider_control: Arc<dyn ProviderControl>,
     pub(crate) bundle_control: Arc<dyn BundleControl>,
-    pub(crate) workflow_control: Arc<dyn WorkflowControl>,
     pub(crate) pty: support::pty_state::PtyState,
     pub(crate) formatter_status: Vec<FormatterStatus>,
     pub(crate) default_agent: Option<String>,
@@ -472,7 +461,6 @@ impl ServerState {
             agent_model_control: app.agent_model_control,
             provider_control: app.provider_control,
             bundle_control: app.bundle_control,
-            workflow_control: app.workflow_control,
             pty: support::pty_state::PtyState::new(),
             formatter_status: app.formatter_status,
             default_agent: app.default_agent,
@@ -527,25 +515,25 @@ impl ServerState {
     /// Reserve the Session's admission slot without a busy notice (the
     /// drop of an unused ephemeral session, `crate::ephemeral`).
     pub(crate) fn reserve_quiet(&self, session: hya_proto::SessionId) -> Option<runs::RunGuard> {
-        if self.workflow_control.active_run(session).is_some() {
+        if self.engine.has_active_service_work(session) {
             return None;
         }
         self.runs.start_quiet(session)
     }
 
     fn reserve_run(&self, session: hya_proto::SessionId) -> Option<runs::RunGuard> {
-        if self.workflow_control.active_run(session).is_some() {
+        if self.engine.has_active_service_work(session) {
             return None;
         }
         self.runs.start(session)
     }
 
-    /// Return whether the Session has any active turn: a server run, a
-    /// Workflow run, or an engine turn the server did not start (a resident
-    /// wake, a deferred quiescence-synthesis turn).
+    /// Return whether the Session has any active turn: a server run, an active
+    /// native service run (such as a Workflow), or an engine turn the server
+    /// did not start (a resident wake, a deferred quiescence-synthesis turn).
     pub(crate) fn is_busy(&self, session: hya_proto::SessionId) -> bool {
         self.runs.is_busy(session)
-            || self.workflow_control.active_run(session).is_some()
+            || self.engine.has_active_service_work(session)
             || self.engine.turn_active(session)
     }
 
@@ -584,16 +572,14 @@ impl ServerState {
                 self.cancel_run(*session);
             }
             self.runs.wait_sessions_idle(&sessions).await;
-            // A reserved Workflow request may have handed off its background
-            // run after the first cancellation, but before releasing its slot.
+            // A reserved native-service request (such as a Workflow) may have
+            // handed off its background run after the first cancellation, but
+            // before releasing its slot.
             for session in &sessions {
-                self.workflow_control.cancel(*session);
+                let _ = self.engine.cancel_service_work(*session);
             }
             for session in &sessions {
-                self.workflow_control
-                    .wait_idle(*session)
-                    .await
-                    .map_err(crate::ApiError::workflow)?;
+                self.engine.wait_service_work_idle(*session).await?;
             }
             for session in &sessions {
                 self.engine.cancel_user_turn(*session);
@@ -622,8 +608,8 @@ impl ServerState {
     pub(crate) fn cancel_run(&self, session: hya_proto::SessionId) -> bool {
         let turn = self.engine.cancel_user_turn(session);
         let model = self.runs.cancel(session);
-        let workflow = self.workflow_control.cancel(session);
-        turn || model || workflow
+        let service = self.engine.cancel_service_work(session);
+        turn || model || service
     }
 }
 

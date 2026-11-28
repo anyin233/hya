@@ -75,6 +75,7 @@ struct RuntimeSnapshot {
     sources: BTreeMap<RuntimeSourceId, RuntimeSource>,
     masks: SnapshotMasks,
     schemes: SnapshotSchemes,
+    native_bundle_apis: Arc<RwLock<BTreeMap<String, crate::bundle_apis::SourceApis>>>,
 }
 
 /// The sole owner and publisher of the effective tool/skill/MCP runtime view.
@@ -107,6 +108,7 @@ pub struct RuntimeRegistry {
     builtin_skills: fn() -> Vec<SkillCatalogEntry>,
     session_sources: Mutex<HashMap<hya_proto::SessionId, SessionSources>>,
     source_owners: Mutex<Vec<Weak<dyn RuntimeSourceOwner>>>,
+    native_bundle_apis: Arc<RwLock<BTreeMap<String, crate::bundle_apis::SourceApis>>>,
 }
 
 struct SessionSources {
@@ -230,8 +232,11 @@ impl RuntimeRegistry {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         )?;
-        binding.snapshot =
-            Arc::new(candidate.into_snapshot(generation, binding.snapshot.basic_tools.clone()));
+        binding.snapshot = Arc::new(candidate.into_snapshot(
+            generation,
+            binding.snapshot.basic_tools.clone(),
+            Arc::clone(&self.native_bundle_apis),
+        ));
         entry.composed = Some((base, Arc::clone(&binding.snapshot)));
         Ok(binding)
     }
@@ -298,6 +303,7 @@ impl RuntimeRegistry {
         } else {
             tools
         };
+        let native_bundle_apis = Arc::new(RwLock::new(BTreeMap::new()));
         Self {
             publication: Mutex::new(ConfigGeneration::INITIAL),
             scopes: Mutex::new(HashMap::new()),
@@ -310,6 +316,7 @@ impl RuntimeRegistry {
                 sources: BTreeMap::new(),
                 masks: Arc::new(BTreeMap::new()),
                 schemes: Arc::new(BTreeMap::new()),
+                native_bundle_apis: Arc::clone(&native_bundle_apis),
             })),
             agent_model_preferences: watch::Sender::new(Arc::new(BTreeMap::new())),
             agent_model_configuration: watch::Sender::new(Arc::new(
@@ -321,6 +328,7 @@ impl RuntimeRegistry {
             builtin_skills: Vec::new,
             session_sources: Default::default(),
             source_owners: Mutex::new(Vec::new()),
+            native_bundle_apis,
         }
     }
 
@@ -677,6 +685,7 @@ impl RuntimeRegistry {
             sources: current.sources.clone(),
             masks: Arc::clone(&current.masks),
             schemes: Arc::clone(&current.schemes),
+            native_bundle_apis: Arc::clone(&self.native_bundle_apis),
         });
         *self
             .active
@@ -689,6 +698,25 @@ impl RuntimeRegistry {
     /// Model-facing tool schemas from this snapshot or view.
     pub fn tool_schemas(&self) -> Vec<ToolSchema> {
         self.active().tools.schemas()
+    }
+
+    /// Register ABI v2 native [`NativeBundleApiHandler`](hya_runtime_abi::NativeBundleApiHandler)
+    /// implementations for `bundle_id`. They survive catalog refreshes and are
+    /// exposed whenever `bundle_id` is present in the active scope catalog.
+    ///
+    /// # Errors
+    /// Returns [`crate::BundleApiError`] if endpoint declarations are invalid or overlap.
+    pub fn register_native_bundle_apis(
+        &self,
+        bundle_id: &str,
+        handlers: Vec<Arc<dyn hya_runtime_abi::NativeBundleApiHandler>>,
+    ) -> Result<(), crate::BundleApiError> {
+        let apis = crate::bundle_apis::SourceApis::from_native_handlers(bundle_id, handlers)?;
+        self.native_bundle_apis
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(bundle_id.to_string(), apis);
+        Ok(())
     }
 
     /// The API endpoints `bundle_id` serves in the live generation.
@@ -830,6 +858,7 @@ impl RuntimeRegistry {
         let published = Arc::new(candidate.into_snapshot(
             allocate_generation(last_generation)?,
             current.basic_tools.clone(),
+            Arc::clone(&self.native_bundle_apis),
         ));
         self.remember_source_owners(published.sources.values());
         *self
@@ -904,9 +933,11 @@ fn compose_scope(
         candidate.upsert_sources(plugins).map_err(failed)?;
     }
     let generation = allocate_generation(last_generation).map_err(failed)?;
-    Ok(Arc::new(
-        candidate.into_snapshot(generation, base.basic_tools.clone()),
-    ))
+    Ok(Arc::new(candidate.into_snapshot(
+        generation,
+        base.basic_tools.clone(),
+        Arc::clone(&base.native_bundle_apis),
+    )))
 }
 
 /// The base model configuration as seen by one scope: scope bundle ids drop
@@ -953,37 +984,53 @@ fn snapshot_bundle_apis(
     {
         return None;
     }
-    snapshot
+    if let Some(apis) = snapshot
         .sources
-        .get(&RuntimeSourceId::bundle(bundle_id))?
-        .apis
-        .clone()
+        .get(&RuntimeSourceId::bundle(bundle_id))
+        .and_then(|source| source.apis.clone())
+    {
+        return Some(apis);
+    }
+    snapshot
+        .native_bundle_apis
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(bundle_id)
+        .cloned()
 }
 
 fn snapshot_published_bundle_apis(
     snapshot: &RuntimeSnapshot,
 ) -> Vec<crate::bundle_apis::PublishedBundleApis> {
-    snapshot
-        .sources
+    let mut by_bundle: BTreeMap<String, Vec<crate::bundle_apis::SourceApi>> = BTreeMap::new();
+    let active_ids: BTreeSet<&str> = snapshot
+        .catalog
+        .bundles()
+        .bundles()
         .iter()
-        .filter(|(id, _)| id.kind() == RuntimeSourceKind::Bundle)
-        .filter(|(id, _)| {
-            snapshot
-                .catalog
-                .bundles()
-                .bundles()
-                .iter()
-                .any(|bundle| bundle.identity().id == id.configured_id())
-        })
-        .filter_map(|(id, source)| {
-            source
-                .apis
-                .as_ref()
-                .map(|apis| crate::bundle_apis::PublishedBundleApis {
-                    bundle: id.configured_id().to_string(),
-                    apis: apis.apis.clone(),
-                })
-        })
+        .map(|bundle| bundle.identity().id.as_str())
+        .collect();
+    for (bundle_id, apis) in snapshot
+        .native_bundle_apis
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+    {
+        if active_ids.contains(bundle_id.as_str()) {
+            by_bundle.insert(bundle_id.clone(), apis.apis.clone());
+        }
+    }
+    for (id, source) in &snapshot.sources {
+        if id.kind() != RuntimeSourceKind::Bundle || !active_ids.contains(id.configured_id()) {
+            continue;
+        }
+        if let Some(apis) = source.apis.as_ref() {
+            by_bundle.insert(id.configured_id().to_string(), apis.apis.clone());
+        }
+    }
+    by_bundle
+        .into_iter()
+        .map(|(bundle, apis)| crate::bundle_apis::PublishedBundleApis { bundle, apis })
         .collect()
 }
 

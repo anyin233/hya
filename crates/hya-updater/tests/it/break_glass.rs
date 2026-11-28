@@ -57,6 +57,7 @@ fn install_sh_stages_every_first_party_bundle_beside_bin() {
         "hya-plan",
         "hya-goal",
         "hya-loop",
+        "hya-workflow-bundle",
     ] {
         assert!(stdout.contains(&format!("-p {family}")), "{stdout}");
     }

@@ -171,10 +171,7 @@ impl TurnToolGate<'_> {
                                 .snapshot_for(live_agent.name.as_str());
                             let mut ctx = ToolCtx {
                                 nested: hya_tool::NestedToolPlane::disconnected(),
-                                workflows: engine
-                                    .workflows
-                                    .for_binding(binding)
-                                    .for_session_with_agents(session, agents.clone()),
+                                workflows: hya_tool::WorkflowPlane::disconnected(),
                                 permission,
                                 interaction: engine.interaction.for_session(session),
                                 spawner: engine

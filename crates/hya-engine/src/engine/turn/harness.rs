@@ -17,7 +17,8 @@ use hya_proto::{
     SessionId, TokenUsage, ToolSchema,
 };
 use hya_provider::{CompletionRequest, EventStream, ProviderRetryClass, ProviderRouter};
-use hya_tool::{AgentDef, ReportLatch, WorkflowRouteFailureClass};
+use hya_runtime_abi::TurnRouteFailureClass;
+use hya_tool::{AgentDef, ReportLatch};
 use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::sync::CancellationToken;
 
@@ -30,11 +31,9 @@ use super::super::{
 };
 use super::messages::{AttachmentData, prompt_digests, system_prompt};
 use super::rewrite_host::{HostErrors, TurnLog, TurnModels, TurnTranscript, model_window};
+use super::route::{ExplicitTurnRoute, core_route_failure_class, provider_route_failure_class};
 use super::tool_gate::{TurnToolGate, can_report};
-use super::{
-    RequestLineage, TurnExecution, TurnRebindInputs, workflow_failure_class,
-    workflow_provider_failure_class,
-};
+use super::{RequestLineage, TurnExecution, TurnRebindInputs};
 use crate::TurnBinding;
 use crate::error::CoreError;
 use crate::hooks::{
@@ -44,7 +43,6 @@ use crate::hooks::{
 use crate::kernel::{self, Failure, Harness, Round, ToolCall, ToolGate, View};
 use crate::prompt::{PromptEnv, discover_context_files, render_environment_and_context, today};
 use crate::runtime_registry::CompiledResourceView;
-use crate::workflow::WorkflowTurnRoute;
 
 impl SessionEngine {
     /// Drive the streaming rounds of one turn activation on the kernel loop,
@@ -267,7 +265,7 @@ struct TurnHarness<'a> {
     rebind: Option<TurnRebindInputs<'a>>,
     apply_default_overlays: bool,
     explicit_model: Option<&'a ModelRef>,
-    workflow_route: Option<&'a WorkflowTurnRoute>,
+    workflow_route: Option<&'a ExplicitTurnRoute>,
     guidance: Option<Arc<str>>,
     external_dirs: &'a [PathBuf],
     workspace: Arc<SessionWorkspace>,
@@ -315,9 +313,7 @@ impl TurnHarness<'_> {
     async fn check_failure_cancelled(&self) -> Result<(), CoreError> {
         if self.cancel.is_cancelled() {
             if let Some(route) = self.workflow_route {
-                route
-                    .finalize(Some(WorkflowRouteFailureClass::Cancelled))
-                    .await?;
+                route.finalize(Some(TurnRouteFailureClass::Cancelled))?;
             }
             return Err(CoreError::Cancelled);
         }
@@ -704,9 +700,7 @@ impl Harness for TurnHarness<'_> {
             Err(_) if cancel.is_cancelled() => Ok(None),
             Err(error) => {
                 if let Some(route) = workflow_route {
-                    route
-                        .finalize(Some(workflow_provider_failure_class(&error)))
-                        .await?;
+                    route.finalize(Some(provider_route_failure_class(&error)))?;
                 }
                 Err(error.into())
             }
@@ -773,9 +767,7 @@ impl Harness for TurnHarness<'_> {
         }
         self.check_failure_cancelled().await?;
         if let Some(route) = self.workflow_route {
-            route
-                .finalize(Some(workflow_failure_class(&failure.error, self.cancel)))
-                .await?;
+            route.finalize(Some(core_route_failure_class(&failure.error, self.cancel)))?;
         }
         Ok(false)
     }
@@ -790,7 +782,7 @@ impl Harness for TurnHarness<'_> {
             });
         }
         if let Some(route) = self.workflow_route {
-            route.finalize(None).await?;
+            route.finalize(None)?;
         }
         self.serving_model = None;
         self.workflow_candidate = None;

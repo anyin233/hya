@@ -22,7 +22,7 @@ const FIRST_PARTY_CATALOG_BUNDLES: [&str; 5] = [
     "hya/plan",
     "hya/goal",
     "hya/loop",
-    "hya/plan-impl-review",
+    "hya/workflow",
     "hya/basic-tui-components",
 ];
 

@@ -503,34 +503,44 @@ async fn stage_activation_keeps_one_supervisor_subscription() {
     let subs = eng.bus().subscriber_count();
     let binding = eng.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = AgentSpec {
-        name: AgentName::new("hya-main"),
+        name: AgentName::new("hya-task"),
         model: ModelRef::new("hya/offline"),
         workdir: "/tmp".into(),
         system_prompt: String::new(),
         reasoning: None,
     };
-    let wf = hya_workflow::compile(hya_workflow::WorkflowSource::new(
-        "stage.hya.md",
-        "---\nkind: Workflow\nname: stage\ndescription: stage\nnodes:\n  run:\n    agent: hya-task\n    directive: Answer with hello.\n---\nflowchart TD\n  run\n",
-    )).unwrap();
+    let agents = eng.agent_roster_for_binding(&binding, "hya-task").unwrap();
+    let resources = eng
+        .agent_resource_policy_for_binding(&binding, "hya-task")
+        .unwrap();
+    let resolved = (base, (binding, agents, resources, None));
+    let (child, _handle, _member) = sup
+        .spawn_resident_parked(
+            r,
+            resolved.0.clone(),
+            resolved.1.clone(),
+            "stage".into(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
     let task = tokio::spawn({
-        let (eng, sup) = (eng.clone(), sup.clone());
+        let sup = sup.clone();
         async move {
-            crate::run_workflow(
-                eng,
-                r,
-                &wf,
-                crate::WorkflowRunContext {
-                    binding,
-                    caller: "hya-main".into(),
-                    base_agent: base,
-                    inputs: BTreeMap::new(),
-                    resident_supervisor: Some(sup),
-                    routing: None,
-                },
-                CancellationToken::new(),
-            )
-            .await
+            let mut waiter = sup
+                .activate(
+                    r,
+                    child,
+                    resolved,
+                    "Answer with hello.".into(),
+                    Arc::from(""),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            waiter.wait().await
         }
     });
     tokio::time::timeout(Duration::from_secs(3), entered.notified())
@@ -538,15 +548,14 @@ async fn stage_activation_keeps_one_supervisor_subscription() {
         .unwrap();
     let during = eng.bus().subscriber_count();
     release.notify_one();
-    assert_eq!(
+    assert!(matches!(
         tokio::time::timeout(Duration::from_secs(3), task)
             .await
             .unwrap()
             .unwrap()
-            .unwrap()
-            .status,
-        crate::WorkflowStatus::Completed
-    );
+            .unwrap(),
+        ActivationResult::Settled { .. }
+    ));
     drain_sup(&sup).await;
     assert_eq!(during, subs + 1);
 }

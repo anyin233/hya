@@ -10,7 +10,7 @@ use std::process::{Command, Output};
 
 const TARGET: &str = "x86_64-unknown-linux-gnu";
 const VERSION: &str = hya_version::BACKEND_VERSION;
-const NATIVE_FAMILIES: [&str; 9] = [
+const NATIVE_FAMILIES: [&str; 10] = [
     "hashline",
     "coding-extras",
     "extended-tools",
@@ -20,13 +20,13 @@ const NATIVE_FAMILIES: [&str; 9] = [
     "plan",
     "goal",
     "loop",
+    "workflow",
 ];
-const DATA_BUNDLES: [&str; 6] = [
+const DATA_BUNDLES: [&str; 5] = [
     "core-skills",
     "core-commands",
     "core-agents",
     "agent-channels",
-    "plan-impl-review",
     "basic-tui-components",
 ];
 
@@ -34,7 +34,12 @@ const DATA_BUNDLES: [&str; 6] = [
 fn fake_libraries(directory: &Path) {
     fs::create_dir_all(directory).unwrap();
     for family in NATIVE_FAMILIES {
-        let name = format!("libhya_{}.so", family.replace('-', "_"));
+        let stem = if family == "workflow" {
+            "hya_workflow_bundle".to_string()
+        } else {
+            format!("hya_{}", family.replace('-', "_"))
+        };
+        let name = format!("lib{stem}.so");
         fs::write(directory.join(name), format!("library:{family}")).unwrap();
     }
 }

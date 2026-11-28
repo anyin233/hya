@@ -1,13 +1,9 @@
 use super::*;
-use crate::workflow::{
-    WorkflowModelRoute, WorkflowModelRouteCandidate, WorkflowRouteRecorder, WorkflowTurnRouteSpec,
-};
 use crate::{CreateSession, EventBus};
-use hya_proto::{MemberId, WorkflowRunId};
 use hya_provider::{
     Capabilities, FakeProvider, FakeStep, Provider, ProviderRouter, ReasoningEffort,
 };
-use hya_tool::{WorkflowMemberRole, WorkflowRouteFailureClass};
+use hya_runtime_abi::{TurnRouteFailureClass, TurnRouteOutcome};
 use std::sync::Mutex;
 
 #[derive(Default)]
@@ -134,40 +130,24 @@ async fn check_interrupted_route(
         })
         .await?;
     engine.admit_user_prompt(session, "go".into()).await?;
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let route = WorkflowTurnRoute::new(WorkflowTurnRouteSpec {
-        route: WorkflowModelRoute {
-            candidates: ["a", "b"]
-                .map(|name| WorkflowModelRouteCandidate {
-                    model: name.into(),
-                    reasoning: ReasoningEffort::Medium,
-                })
-                .into(),
-            selected_index: 0,
-        },
-        session,
-        run: Some(WorkflowRunId::new()),
-        stage: "work".into(),
-        member: MemberId::new(),
-        role: WorkflowMemberRole::Worker,
-        iteration: 0,
-        recorder: Some(WorkflowRouteRecorder::new(tx)),
+    let route = ExplicitTurnRoute::new(ExplicitModelRoute {
+        candidates: ["a", "b"]
+            .map(|name| ExplicitModelRouteCandidate {
+                model: name.into(),
+                reasoning: ReasoningEffort::Medium,
+            })
+            .into(),
+        selected_index: 0,
     });
-    let turn = engine.run_turn_with_external_dirs_and_claim(
-        session,
-        &agent,
-        TurnActivation::Root,
-        TurnRequestContext::new(cancel, &[], None, None, Some(route)),
-    );
-    let record = async {
-        let mut outcomes = Vec::new();
-        while let Some(record) = rx.recv().await {
-            outcomes.push(record.event);
-            assert!(record.ack.send(Ok(())).is_ok());
-        }
-        outcomes
-    };
-    let (result, outcomes) = tokio::join!(turn, record);
+    let result = engine
+        .run_turn_with_external_dirs_and_claim(
+            session,
+            &agent,
+            TurnActivation::Root,
+            TurnRequestContext::new(cancel, &[], None, None, Some(route.clone())),
+        )
+        .await;
+    let outcomes = route.outcomes();
     if cancel_on_interruption || cancel_on_reopen {
         if cancel_on_reopen {
             assert!(matches!(result, Ok(FinishReason::Cancelled)), "{result:?}");
@@ -196,18 +176,12 @@ async fn check_interrupted_route(
                 .len(),
             if cancel_on_reopen { 3 } else { 2 }
         );
-        let mapped: Vec<_> = outcomes
-            .iter()
-            .filter_map(hya_tool::extension::ExtensionEvent::from_event)
-            .collect();
         assert!(matches!(
-            &mapped[..],
-            [
-                hya_tool::extension::ExtensionEvent::WorkflowStageRouteOutcome {
-                    failure_class: WorkflowRouteFailureClass::Cancelled,
-                    ..
-                }
-            ]
+            &outcomes[..],
+            [TurnRouteOutcome {
+                failure_class: TurnRouteFailureClass::Cancelled,
+                ..
+            }]
         ));
         return Ok(());
     }
@@ -218,12 +192,8 @@ async fn check_interrupted_route(
         &*provider.calls.lock().unwrap_or_else(|e| e.into_inner()),
         &[ModelRef::new("a"), ModelRef::new("b"), ModelRef::new("b")]
     );
-    let mapped: Vec<_> = outcomes
-        .iter()
-        .filter_map(hya_tool::extension::ExtensionEvent::from_event)
-        .collect();
     assert!(
-        matches!(&mapped[..], [hya_tool::extension::ExtensionEvent::WorkflowStageRouteOutcome { candidate_index: 1, step: 0, model, failure_class: WorkflowRouteFailureClass::Decode, .. }] if model.as_str() == "b")
+        matches!(&outcomes[..], [TurnRouteOutcome { candidate_index: 1, step: 0, model, failure_class: TurnRouteFailureClass::Decode, .. }] if model.as_str() == "b")
     );
     Ok(())
 }

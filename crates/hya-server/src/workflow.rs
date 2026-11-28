@@ -9,8 +9,12 @@ use std::collections::BTreeMap;
 use crate::{ApiError, ServerState};
 use hya_api::error::Code;
 use hya_api::v2::CommandTurn;
+use hya_engine::{ApiMethod, BundleApiCall, BundleApiError};
 use hya_proto::SessionId;
 use hya_tool::{WorkflowCommand, WorkflowCommandResult, WorkflowDelivery};
+use serde_json::{Value, json};
+
+const WORKFLOW_BUNDLE_ID: &str = "hya/workflow";
 
 /// Parse and, when applicable, execute one `/workflow` command.
 //
@@ -168,16 +172,6 @@ fn reserve_workflow_command(
         .ok_or_else(|| ApiError::new(Code::FailedPrecondition, "another run is active"))
 }
 
-pub(crate) async fn execute(
-    st: &ServerState,
-    session: SessionId,
-    command: WorkflowCommand,
-    delivery: WorkflowDelivery,
-) -> Result<WorkflowCommandResult, ApiError> {
-    let _reservation = reserve_workflow_command(st, session, &command)?;
-    execute_reserved(st, session, command, delivery).await
-}
-
 async fn execute_reserved(
     st: &ServerState,
     session: SessionId,
@@ -187,10 +181,122 @@ async fn execute_reserved(
     if !st.engine.session_exists(session).await? {
         return Err(ApiError::session_not_found(&session.to_string()));
     }
-    st.workflow_control
-        .execute(session, command, delivery)
-        .await
-        .map_err(ApiError::workflow)
+    let call = BundleApiCall {
+        bundle: WORKFLOW_BUNDLE_ID.to_owned(),
+        method: ApiMethod::Post,
+        session: Some(session),
+        path: "/command".to_owned(),
+        query: BTreeMap::new(),
+        body: encode_workflow_command(&command, delivery),
+    };
+    let outcome = match crate::v2::bundle_api::invoke(st, call).await {
+        Ok(outcome) => outcome,
+        Err(BundleApiError::NotFound { .. }) => {
+            return Err(ApiError::unavailable(
+                "workflow runtime is unavailable (bundle `hya/workflow` is not enabled)",
+            ));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if outcome.status >= 400 {
+        let code = outcome
+            .body
+            .get("error")
+            .and_then(|err| err.get("code"))
+            .and_then(Value::as_str)
+            .unwrap_or("internal");
+        let message = outcome
+            .body
+            .get("error")
+            .and_then(|err| err.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("workflow command failed")
+            .to_owned();
+        return Err(ApiError::legacy_control(code, Code::Internal, message));
+    }
+    decode_workflow_command_result(outcome.body)
+}
+
+fn encode_workflow_command(command: &WorkflowCommand, delivery: WorkflowDelivery) -> Value {
+    match command {
+        WorkflowCommand::List => json!({ "list": {} }),
+        WorkflowCommand::State => json!({ "state": {} }),
+        WorkflowCommand::Info { name } => json!({ "info": { "name": name } }),
+        WorkflowCommand::Select {
+            name,
+            expected_revision,
+        } => {
+            let mut select = serde_json::Map::new();
+            select.insert("name".to_owned(), json!(name));
+            if let Some(revision) = expected_revision {
+                select.insert("expectedRevision".to_owned(), json!(revision.to_string()));
+            }
+            json!({ "select": select })
+        }
+        WorkflowCommand::Run {
+            name,
+            expected_revision,
+            inputs,
+            run,
+        } => {
+            let mut body = serde_json::Map::new();
+            if let Some(name) = name {
+                body.insert("name".to_owned(), json!(name));
+            }
+            if let Some(revision) = expected_revision {
+                body.insert("expectedRevision".to_owned(), json!(revision.to_string()));
+            }
+            if !inputs.is_empty() {
+                body.insert("inputs".to_owned(), json!(inputs));
+            }
+            if let Some(run) = run {
+                body.insert("run".to_owned(), json!(run.to_string()));
+            }
+            body.insert(
+                "delivery".to_owned(),
+                json!(match delivery {
+                    WorkflowDelivery::Started => "started",
+                    WorkflowDelivery::Finished => "finished",
+                }),
+            );
+            json!({ "run": body })
+        }
+    }
+}
+
+fn decode_workflow_command_result(body: Value) -> Result<WorkflowCommandResult, ApiError> {
+    if let Some(list) = body.get("list") {
+        let workflows = serde_json::from_value(
+            list.get("workflows")
+                .cloned()
+                .unwrap_or_else(|| Value::Array(Vec::new())),
+        )
+        .map_err(|error| ApiError::internal(format!("decode workflow list: {error}")))?;
+        return Ok(WorkflowCommandResult::List { workflows });
+    }
+    if let Some(info) = body.get("info") {
+        let workflow = serde_json::from_value(info.clone())
+            .map_err(|error| ApiError::internal(format!("decode workflow info: {error}")))?;
+        return Ok(WorkflowCommandResult::Info { workflow });
+    }
+    if let Some(selected) = body.get("selected") {
+        let state = serde_json::from_value(selected.clone())
+            .map_err(|error| ApiError::internal(format!("decode workflow selection: {error}")))?;
+        return Ok(WorkflowCommandResult::Selected { state });
+    }
+    if let Some(state) = body.get("state") {
+        let state = serde_json::from_value(state.clone())
+            .map_err(|error| ApiError::internal(format!("decode workflow state: {error}")))?;
+        return Ok(WorkflowCommandResult::State { state });
+    }
+    if let Some(started) = body.get("started") {
+        let result = serde_json::from_value(started.clone())
+            .map_err(|error| ApiError::internal(format!("decode workflow run: {error}")))?;
+        return Ok(WorkflowCommandResult::Run { result });
+    }
+    Err(ApiError::internal(
+        "unexpected workflow command API response envelope",
+    ))
 }
 
 #[cfg(test)]

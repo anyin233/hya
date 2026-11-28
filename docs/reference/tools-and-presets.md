@@ -190,7 +190,7 @@ Every Hya installation ships with 15 trusted first-party bundles sourced from `b
 | --- | --- | --- | --- |
 | `hya/hashline` | `bundles/builtin/hashline` | Native ABI v2 (`cdylib`) | Hashline-addressed `read`, `write`, `edit`, and `grep` + `HashlineRuntime` (`overrides: hya/bare`, 4 tools). |
 | `hya/coding-extras` | `bundles/builtin/coding-extras` | Native ABI v2 (`cdylib`) | Workspace search (`ls`, `glob`, `find`), `apply_patch`, `ask_user`, `lsp`, `project_activity`, `lsp-formatter` `NativeService`, and post-edit + visibility `NativeHook`s (7 tools). |
-| `hya/extended-tools` | `bundles/builtin/extended-tools` | Native (`cdylib`) | Subagents and workflows (6 tools; `skill` promoted to `hya-bare` core, `lsp`/`project_activity` moved to `hya/coding-extras`, `plan_exit` extracted to `hya/plan`). |
+| `hya/extended-tools` | `bundles/builtin/extended-tools` | Native (`cdylib`) | Subagents (5 tools; `skill` promoted to `hya-bare` core, `lsp`/`project_activity` moved to `hya/coding-extras`, `plan_exit` extracted to `hya/plan`, `workflow` extracted to `hya/workflow`). |
 | `hya/network` | `bundles/builtin/network` | Native ABI v2 (`cdylib`) | Web fetch and web search (`webfetch`, `websearch`) + per-bundle `config.yml` and air-gapped disable. |
 | `hya/channel-tools` | `bundles/builtin/channel-tools` | Native (`cdylib`) | Team mailbox tools (`send`, `list_channel`, `wait`, `report`). |
 | `hya/compaction` | `bundles/builtin/compaction` | Native ABI v2 (`cdylib`) | Context `Rewriter` (`shake` + `remote`) and `ProjectionReducer` (`Event::Extension`) before Kernel `Rewrite`. |
@@ -201,7 +201,7 @@ Every Hya installation ships with 15 trusted first-party bundles sourced from `b
 | `hya/core-skills` | `bundles/builtin/core-skills` | Static | Built-in fallback skills (`agent-bundle-authoring`, `secure-self-update`). |
 | `hya/core-commands` | `bundles/builtin/core-commands` | Static | Built-in slash command templates (`/init`, `/review`). |
 | `hya/agent-channels` | `bundles/builtin/agent-channels` | Static | Default vertical parent/child and unit broadcast channel policy. |
-| `hya/plan-impl-review` | `bundles/builtin/plan-impl-review` | Static | Built-in `plan-impl-review` Workflow DAG and stage agents. |
+| `hya/workflow` | `bundles/builtin/workflow` | Native ABI v2 (`cdylib`) | Workflow DAG execution, durable replay, `workflow` tool, `ProjectionReducer` (`extensions["hya/workflow"]`), `BundleApi` (`/workflows`, `/state`, `/command`), and the built-in `plan-impl-review` Workflow + stage agents (`capabilities: [tools, services, apis]`). |
 | `hya/basic-tui-components` | `bundles/builtin/basic-tui-components` | JS / TUI | Standard TUI panels (Projects view/sidebar, Sessions, Todos, Context). |
 
 ---

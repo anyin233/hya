@@ -128,9 +128,7 @@ flowchart TD
         })
         .await
         .unwrap();
-    let control = Arc::new(built.workflow_control());
-    let state = hya_server::AppState::new(engine.clone(), Arc::new(agent))
-        .with_workflow_control(control.clone());
+    let state = hya_server::AppState::new(engine.clone(), Arc::new(agent));
     let app = hya_server::router(state.clone());
     let (status, response) = call(
         &app,
@@ -154,7 +152,7 @@ flowchart TD
         .map(|row| row.session)
         .collect();
     assert!(sessions.len() >= 2);
-    assert!(hya_server::WorkflowControl::active_run(control.as_ref(), root).is_some());
+    assert!(engine.has_active_service_work(root));
     if grpc {
         pb::session_server::Session::delete_session(
             &hya_server::V2Grpc::new(state),
@@ -175,7 +173,7 @@ flowchart TD
         assert_eq!(status, StatusCode::OK, "{response}");
     }
     assert!(
-        hya_server::WorkflowControl::active_run(control.as_ref(), root).is_none(),
+        !engine.has_active_service_work(root),
         "delete replied before Workflow writer settled"
     );
     // Runtime shutdown joins the entire composition subtree: all possible late

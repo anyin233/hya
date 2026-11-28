@@ -44,7 +44,10 @@ pub use host::{
     BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,
     BundleClaimRequest, BundleStateEntry, ExtensionEntry, ExtensionKind, HostBundleStorage,
     HostCatalogReader, HostEventBus, HostExtensionRegistry, HostModelCaller, HostRuntime,
-    HostSessionStore, HostTurnRunner, ModelCallRequest, ModelCallResponse, ModelStreamChunk,
-    ModelToolCall, ModelWindowInfo, SessionListFilter, SessionSummaryMeta, TurnOutcome,
+    HostSessionStore, HostTurnRunner, ManagedMemberActivateRequest, ManagedMemberActivationOutcome,
+    ManagedMemberActivationStatus, ManagedMemberHandle, ManagedMemberSpawnRequest,
+    ModelCallRequest, ModelCallResponse, ModelRouteEntry, ModelStreamChunk, ModelToolCall,
+    ModelWindowInfo, ResolvedModelRoute, ResolvedModelRouteCandidate, ScopeCatalogSnapshot,
+    SessionListFilter, SessionSummaryMeta, TurnOutcome, TurnRouteFailureClass, TurnRouteOutcome,
     TurnSpawnRequest, TurnStartRequest, TurnStatus,
 };

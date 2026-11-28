@@ -801,7 +801,7 @@ fn agent_catalog_private_and_first_party_workflow_agents() {
         );
     }
 
-    for bundle_id in ["hya/goal", "hya/plan-impl-review"] {
+    for bundle_id in ["hya/goal", "hya/workflow"] {
         let prepared = hya_bundle::first_party_bundle(bundle_id).unwrap();
         let fp_cat = catalog_from_verified(&[prepared]);
         let agents = prepared.bundles()[0].agents();

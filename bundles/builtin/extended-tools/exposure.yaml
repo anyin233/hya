@@ -4,7 +4,6 @@ protected_names: []
 tools:
   - { name: list_agents, schema_version: 1, permission: read_only, prompt: list the agents you can start with task }
   - { name: task, schema_version: 1, permission: task, prompt: start subagents on independent tasks }
-  - { name: workflow, schema_version: 1, permission: tool, prompt: "list, inspect, and run workflows" }
   - { name: search_agent, schema_version: 1, permission: read_only, prompt: search your archived subagents }
   - { name: archive, schema_version: 1, permission: task, prompt: stop a live subagent and archive it }
   - { name: wait, schema_version: 1, permission: read_only, prompt: block until your subagents finish }

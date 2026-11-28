@@ -76,7 +76,6 @@ mod tool_error;
 mod turn;
 mod turn_end;
 mod turn_gate;
-mod workflow_requests;
 
 pub use agent_binding::AgentSpec;
 use agent_binding::{agent_roster, agent_with_bound_skills};
@@ -96,7 +95,7 @@ use session_state::session_workdir;
 pub use spawn_requests::{BoundSpawnRequest, BoundSpawnSender};
 use terminal_handoff::{SummarizeOptions, Summarizer, TerminalHandoffOptions};
 pub(crate) use turn::TurnRequestContext;
-pub use workflow_requests::{BoundWorkflowRequest, BoundWorkflowSender};
+pub use turn::{ExplicitModelRoute, ExplicitModelRouteCandidate, ExplicitTurnRoute};
 
 async fn authorize_tool_call(
     resolved: &ResolvedTool,
@@ -170,7 +169,7 @@ pub struct SessionEngine {
     permission: PermissionPlane,
     interaction: InteractionPlane,
     spawner: BoundSpawnSender,
-    workflows: BoundWorkflowSender,
+    native_services: Arc<RwLock<Vec<Arc<dyn hya_runtime_abi::NativeService>>>>,
     mailbox: MailboxPlane,
     project_activity: hya_tool::ProjectActivityPlane,
     lifecycle: LifecyclePlane,
@@ -231,7 +230,7 @@ impl Clone for SessionEngine {
             permission: self.permission.clone(),
             interaction: self.interaction.clone(),
             spawner: self.spawner.clone(),
-            workflows: self.workflows.clone(),
+            native_services: Arc::clone(&self.native_services),
             mailbox: self.mailbox.clone(),
             project_activity: self.project_activity.clone(),
             lifecycle: self.lifecycle.clone(),
@@ -404,7 +403,6 @@ impl SessionEngine {
         }
         let (interaction, _rx) = InteractionPlane::new();
         let spawner = BoundSpawnSender::disconnected();
-        let workflows = BoundWorkflowSender::disconnected();
         let lifecycle = LifecyclePlane::disconnected();
         let mailbox = MailboxPlane::disconnected();
         let (project_activity, activity_rx) = hya_tool::ProjectActivityPlane::new();
@@ -429,7 +427,7 @@ impl SessionEngine {
             permission,
             interaction,
             spawner,
-            workflows,
+            native_services: Arc::new(RwLock::new(Vec::new())),
             mailbox,
             project_activity,
             lifecycle,
@@ -621,15 +619,71 @@ impl SessionEngine {
         self
     }
 
-    /// Install the host-side receiver pair that serves `workflow` tool runs.
-    ///
-    /// Mirrors [`Self::with_spawn_sender`]: the engine owns this sender for its
-    /// whole life, and the host worker owns an `Arc<SessionEngine>` while it
-    /// drains, so queued requests always find a live executor.
+    /// Register started ABI v2 [`NativeService`](hya_runtime_abi::NativeService) instances
+    /// so session busy, cancellation, and delete-idle coordination include them.
+    pub fn register_native_services(&self, services: Vec<Arc<dyn hya_runtime_abi::NativeService>>) {
+        self.native_services
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(services);
+    }
+
+    /// Register ABI v2 [`ProjectionReducer`](hya_runtime_abi::ProjectionReducer)
+    /// instances on the underlying event store.
+    pub fn register_native_projection_reducers(
+        &self,
+        reducers: Vec<Arc<dyn hya_runtime_abi::ProjectionReducer>>,
+    ) {
+        for reducer in reducers {
+            self.store
+                .register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
+                    inner: reducer,
+                }));
+        }
+    }
+
+    /// Return `true` if any registered native service owns active background work on `session`.
     #[must_use]
-    pub fn with_workflow_sender(mut self, workflows: BoundWorkflowSender) -> Self {
-        self.workflows = workflows;
-        self
+    pub fn has_active_service_work(&self, session: SessionId) -> bool {
+        self.native_services
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .any(|service| service.is_session_busy(session))
+    }
+
+    /// Cancel active background work on `session` across all registered native services.
+    #[must_use]
+    pub fn cancel_service_work(&self, session: SessionId) -> bool {
+        let services = self
+            .native_services
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let mut cancelled = false;
+        for service in services {
+            cancelled |= service.cancel_session(session);
+        }
+        cancelled
+    }
+
+    /// Wait until all registered native services finish any active work on `session`.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Invalid`] if a native service reports a wait error.
+    pub async fn wait_service_work_idle(&self, session: SessionId) -> Result<(), CoreError> {
+        let services = self
+            .native_services
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        for service in services {
+            service
+                .wait_session_idle(session)
+                .await
+                .map_err(|error| CoreError::Invalid(error.to_string()))?;
+        }
+        Ok(())
     }
 
     /// Inject the mailbox plane whose service loop this engine drives (see

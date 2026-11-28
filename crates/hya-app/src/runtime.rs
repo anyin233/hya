@@ -17,11 +17,10 @@ use hya_engine::resident::{
     ResolveSpawnMemberCtx, resolve_main_activation_context, resolve_spawn_member_with_catalog,
 };
 use hya_engine::{
-    AgentSpec, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest, BoundWorkflowSender,
-    CategoryRegistry, CoreError, DRAIN_DEADLINE, EventBus, ModelSummarizer, ResidentSupervisor,
-    RuntimeRegistry, RuntimeSourceKind, SessionEngine, SessionStoreExt as _, SubagentGovernor,
-    Summarizer, TerminalHandoffOptions, TokenAccounting, TurnBinding, TurnDrainReport,
-    run_lifecycle_service, run_mailbox_service,
+    AgentSpec, BoundSpawnRequest, BoundSpawnSender, CategoryRegistry, CoreError, DRAIN_DEADLINE,
+    EventBus, ModelSummarizer, ResidentSupervisor, RuntimeRegistry, RuntimeSourceKind,
+    SessionEngine, SubagentGovernor, Summarizer, TerminalHandoffOptions, TokenAccounting,
+    TurnDrainReport, run_lifecycle_service, run_mailbox_service,
 };
 
 // Single discovery/date implementation lives in hya-engine; re-export for callers.
@@ -32,7 +31,6 @@ use hya_plugin::config::PluginSpec;
 use hya_proto::{AgentName, FinishCause, ModelRef, OwnerRunId, SessionId};
 use hya_provider::{DevProvider, ProviderCatalogSnapshot, ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
-use hya_tool::WorkflowDelivery;
 use hya_tool::{
     Action, AliasVisibility, AskRequest, InteractionPlane, InvocationPolicy, LifecyclePlane,
     MailboxPlane, Mode, PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, Rule,
@@ -525,7 +523,6 @@ pub use hya_server::RuntimeTaskOwner;
 pub struct BuiltSessionEngine {
     engine: Arc<SessionEngine>,
     resident_supervisor: Arc<ResidentSupervisor>,
-    workflow_control: crate::WorkflowControl,
     agent_model_control: PersistentAgentModelControl,
     asks: Option<tokio::sync::mpsc::UnboundedReceiver<AskRequest>>,
     questions: Option<tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>>,
@@ -560,12 +557,6 @@ impl BuiltSessionEngine {
     #[must_use]
     pub fn resident_supervisor(&self) -> Arc<ResidentSupervisor> {
         Arc::clone(&self.resident_supervisor)
-    }
-
-    /// Shared durable Workflow control adapter for direct and server surfaces.
-    #[must_use]
-    pub fn workflow_control(&self) -> crate::WorkflowControl {
-        self.workflow_control.clone()
     }
 
     /// Shared durable Agent model preference control for backend and server surfaces.
@@ -653,12 +644,12 @@ impl BuiltSessionEngine {
         async move {
             engine.begin_drain(cause);
             shutdown.await;
-            let report = residents.drain(cause, DRAIN_DEADLINE).await;
             for service in native_services.iter() {
                 if let Err(error) = service.stop().await {
                     tracing::warn!(service = service.id(), %error, "native service stop failed");
                 }
             }
+            let report = residents.drain(cause, DRAIN_DEADLINE).await;
             engine.runtime_registry().shutdown_sources().await;
             io_tasks.close();
             io_tasks.wait().await;
@@ -683,74 +674,6 @@ impl BuiltSessionEngine {
             self.runtime_owner = None;
         }
         Ok(())
-    }
-}
-
-/// Adapt the app-owned Workflow control to the dependency-inverted server port.
-impl hya_server::WorkflowControl for crate::WorkflowControl {
-    fn execute(
-        &self,
-        session: SessionId,
-        command: hya_tool::WorkflowCommand,
-        delivery: WorkflowDelivery,
-    ) -> hya_server::WorkflowControlFuture<'_> {
-        Box::pin(async move {
-            crate::WorkflowControl::execute(
-                self,
-                session,
-                crate::WorkflowInvocation {
-                    delivery,
-                    ..crate::WorkflowInvocation::default()
-                },
-                command,
-                tokio_util::sync::CancellationToken::new(),
-            )
-            .await
-            .map_err(Into::into)
-        })
-    }
-
-    fn decorate(
-        &self,
-        session: SessionId,
-        state: hya_tool::WorkflowProjection,
-    ) -> hya_server::WorkflowDecorationFuture<'_> {
-        Box::pin(async move {
-            crate::WorkflowControl::decorate(self, session, state)
-                .await
-                .map_err(Into::into)
-        })
-    }
-
-    fn list(
-        &self,
-        scope: Option<std::path::PathBuf>,
-    ) -> futures::future::BoxFuture<
-        '_,
-        Result<Vec<hya_proto::WorkflowSummary>, hya_server::WorkflowControlError>,
-    > {
-        Box::pin(async move {
-            crate::WorkflowControl::list(self, scope.as_deref())
-                .await
-                .map_err(Into::into)
-        })
-    }
-
-    fn active_run(&self, session: SessionId) -> Option<hya_proto::WorkflowRunId> {
-        crate::WorkflowControl::active_run(self, session)
-            .ok()
-            .flatten()
-    }
-
-    fn wait_idle(
-        &self,
-        session: SessionId,
-    ) -> futures::future::BoxFuture<'_, Result<(), hya_server::WorkflowControlError>> {
-        Box::pin(async move { self.wait_run_idle(session).await.map_err(Into::into) })
-    }
-
-    fn cancel(&self, session: SessionId) -> bool {
-        self.cancel_run(session)
     }
 }
 
@@ -814,72 +737,6 @@ pub fn spawn_team_supervisor(
         io_tasks.wait().await;
     });
     owner
-}
-
-/// Receive Workflow requests without waiting for another Session's run.
-fn spawn_workflow_supervisor(
-    mut rx: tokio::sync::mpsc::Receiver<BoundWorkflowRequest>,
-    control: crate::WorkflowControl,
-    stop: tokio_util::sync::CancellationToken,
-) -> tokio::task::JoinHandle<()> {
-    let tasks = control.tasks.clone();
-    let slots = Arc::new(tokio::sync::Semaphore::new(rx.max_capacity()));
-    tasks.spawn(async move {
-        loop {
-            let bound_request = tokio::select! {
-                biased;
-                _ = stop.cancelled() => break,
-                request = rx.recv() => match request {
-                    Some(request) => request,
-                    None => break,
-                },
-            };
-            let (binding, request) = bound_request.into_parts();
-            let Ok(slot) = slots.clone().try_acquire_owned() else {
-                let _ = request.reply.send(Err(hya_tool::WorkflowHostError::new(
-                    "WORKFLOW_OVERLOADED",
-                    "workflow host queue is full; retry shortly",
-                )));
-                continue;
-            };
-            let control = control.clone();
-            control.tasks.clone().spawn(async move {
-                handle_workflow_request(&control, binding, request, slot).await;
-            });
-        }
-    })
-}
-
-/// Execute one framed workflow request through the app-owned control seam.
-async fn handle_workflow_request(
-    control: &crate::WorkflowControl,
-    binding: TurnBinding,
-    request: hya_tool::WorkflowRequest,
-    slot: tokio::sync::OwnedSemaphorePermit,
-) {
-    let hya_tool::WorkflowRequest {
-        parent,
-        operation,
-        command,
-        cancel,
-        reply,
-    } = request;
-    let result = control
-        .execute_with_admission(
-            parent,
-            crate::WorkflowInvocation {
-                caller: None,
-                operation: Some(operation),
-                binding: Some(binding),
-                delivery: WorkflowDelivery::Finished,
-            },
-            command,
-            cancel,
-            Some(slot),
-        )
-        .await
-        .map_err(|error| hya_tool::WorkflowHostError::new(error.code(), error.to_string()));
-    let _ = reply.send(result);
 }
 
 fn spawn_team_supervisor_with_environment(
@@ -1172,21 +1029,20 @@ async fn build_session_engine_with_mcp_defer(
         .await
         .context("close turns a stopped process left open")?;
     crate::startup_trace::mark("interrupted_turns_recovered", None);
-    store
-        .recover_nonterminal_workflows(owner_run_id, "backend startup recovery")
-        .await
-        .context("recover nonterminal Workflows before spawn readiness")?;
     let recovered_claims =
         hya_engine::resident::recover_resident_claims(&store, owner_run_id).await?;
     crate::startup_trace::mark("store_recovery", None);
     let (invocation_policy, settings) = tool_config;
     let builtins = settings.builtin_bundles().clone();
+    let categories = Arc::new(settings.categories());
     let router = Arc::new(router);
     let app_host_runtime = Arc::new(crate::host_runtime::AppHostRuntime::new(
         store.clone(),
+        owner_run_id,
         settings.resolved_config_file(),
         Arc::clone(&router),
         agent.clone(),
+        Arc::clone(&categories),
     ));
     let host_runtime: Arc<dyn hya_runtime_abi::HostRuntime> = app_host_runtime.clone();
     let enabled_families = enabled_native_tool_families(&builtins, false);
@@ -1226,8 +1082,26 @@ async fn build_session_engine_with_mcp_defer(
         )
         .map_err(anyhow::Error::msg)
         .context("load first-party native bundle hya/plan")?;
-        loaded_v2_tools = !regs.tools.is_empty();
+        loaded_v2_tools |= !regs.tools.is_empty();
         all_native_hooks.extend(regs.hooks);
+    }
+    let mut deferred_workflow_regs: Option<hya_tool_loader::NativeRegistrations> = None;
+    if builtins.is_enabled("hya/workflow")
+        && hya_bundle::first_party_bundle_optional("hya/workflow")
+            .ok()
+            .flatten()
+            .is_some()
+    {
+        let mut regs = hya_tool_loader::load_and_register_v2_bundle(
+            &registry,
+            "hya/workflow",
+            Arc::clone(&host_runtime),
+        )
+        .map_err(anyhow::Error::msg)
+        .context("load first-party native bundle hya/workflow")?;
+        loaded_v2_tools |= !regs.tools.is_empty();
+        all_native_hooks.extend(std::mem::take(&mut regs.hooks));
+        deferred_workflow_regs = Some(regs);
     }
     let network_enabled = builtins.is_enabled("hya/network")
         && hya_bundle::first_party_bundle_optional("hya/network")
@@ -1362,7 +1236,6 @@ async fn build_session_engine_with_mcp_defer(
         all_native_hooks.extend(regs.hooks);
         app_host_runtime.set_loop_drivers(regs.loop_drivers);
     }
-    let native_services: Arc<[Arc<dyn hya_runtime_abi::NativeService>]> = started_services.into();
     register_missing_bare_tools(&registry);
 
     let project_plugins = if options.pure {
@@ -1409,7 +1282,6 @@ async fn build_session_engine_with_mcp_defer(
             candidate.replace_sources_of_kind(RuntimeSourceKind::Bundle, static_sources)
         })?;
     }
-    let categories = Arc::new(settings.categories());
     let reconciler =
         Arc::new(RuntimeReconciler::new(runtime.clone()).with_io_tasks(lifecycle.io_tasks.clone()));
     let mcp_control = Arc::new(RuntimeMcpControl::new(reconciler.clone()));
@@ -1454,7 +1326,6 @@ async fn build_session_engine_with_mcp_defer(
         .unwrap_or(tokio::sync::Semaphore::MAX_PERMITS)
         .clamp(1, tokio::sync::Semaphore::MAX_PERMITS);
     let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(spawn_queue_capacity);
-    let (workflow_sender, workflow_rx) = BoundWorkflowSender::with_capacity(spawn_queue_capacity);
     let (mailbox, mailbox_rx) = MailboxPlane::new();
     let (lifecycle_plane, lifecycle_rx) = LifecyclePlane::new();
 
@@ -1518,10 +1389,6 @@ async fn build_session_engine_with_mcp_defer(
         // Explicit cancellation closes intake: the engine owns each sender while
         // its receiver service retains the engine.
         .with_spawn_sender(spawn_sender)
-        // INVARIANT (workflow-intake liveness): mirrors `with_spawn_sender` --
-        // the engine owns this sender and the workflow worker owns an
-        // `Arc<SessionEngine>`, so queued requests always find a live executor.
-        .with_workflow_sender(workflow_sender)
         .with_mailbox(mailbox)
         .with_lifecycle(lifecycle_plane)
         .with_governor(governor);
@@ -1607,14 +1474,30 @@ async fn build_session_engine_with_mcp_defer(
         recovered_claims,
     )
     .await?;
-    let workflow_control = crate::WorkflowControl::new_with_routing(
-        engine.clone(),
-        agent.clone(),
-        resident_supervisor.clone(),
-        owner_run_id,
-        categories.clone(),
-        &lifecycle,
-    );
+    app_host_runtime.attach_resident_supervisor(&resident_supervisor);
+    app_host_runtime.attach_sidecar_environment(Arc::clone(&sidecar_environment));
+    if let Some(regs) = deferred_workflow_regs {
+        engine.register_native_projection_reducers(regs.projection_reducers);
+        engine
+            .runtime_registry()
+            .register_native_bundle_apis("hya/workflow", regs.api_handlers)
+            .map_err(|error| anyhow::anyhow!("register hya/workflow native APIs: {error}"))?;
+        for service in &regs.services {
+            if let Err(error) = service.start(Arc::clone(&host_runtime)).await {
+                for started in started_services.into_iter().rev() {
+                    let _ = started.stop().await;
+                }
+                store.release_runtime_owner(owner_run_id)?;
+                return Err(anyhow::anyhow!(
+                    "start native service `{}`: {error}",
+                    service.id()
+                ));
+            }
+        }
+        started_services.extend(regs.services);
+    }
+    engine.register_native_services(started_services.clone());
+    let native_services: Arc<[Arc<dyn hya_runtime_abi::NativeService>]> = started_services.into();
     let lifecycle = spawn_team_supervisor_with_environment(
         spawn_rx,
         engine.clone(),
@@ -1623,13 +1506,6 @@ async fn build_session_engine_with_mcp_defer(
         resident_supervisor.clone(),
         sidecar_environment,
         lifecycle,
-    );
-    // Serve `workflow` tool requests from a dedicated worker loop sharing the
-    // team supervisor's stop token; runs go through the governed core executor.
-    spawn_workflow_supervisor(
-        workflow_rx,
-        workflow_control.clone(),
-        lifecycle.stop.clone(),
     );
     // Drive the event-sourced mailbox: append MailSent/Channel*/AgentRegistered to
     // the team-root log and serve roster/channel reads (ADR-0001).
@@ -1654,7 +1530,6 @@ async fn build_session_engine_with_mcp_defer(
     Ok(BuiltSessionEngine {
         engine,
         resident_supervisor,
-        workflow_control,
         asks: Some(asks),
         questions: Some(questions),
         mcp_control,
@@ -1761,7 +1636,6 @@ impl ServerEngine {
             ))
             .with_question_requests(questions)
             .with_mcp_control(self.built.mcp_control())
-            .with_workflow_control(Arc::new(self.built.workflow_control()))
             .with_agent_model_control(Arc::new(self.built.agent_model_control()))
             .with_default_agent(self.default_agent)
             .with_pure_guidance(self.pure)

@@ -15,28 +15,41 @@ pub(super) enum SlotStatus {
 
 /// Completion of one explicitly armed resident activation.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ActivationResult {
+pub enum ActivationResult {
+    /// Resident settled at rest with its final visible assistant text.
     Settled {
+        /// Final assistant text.
         final_text: String,
     },
+    /// Resident emitted a terminal report to its parent.
     Reported {
+        /// Reported outcome status.
         outcome: ReportOutcome,
+        /// Terminal report body.
         text: String,
     },
+    /// Resident ended before settling or reporting.
     Ended {
+        /// Archive reason.
         reason: ArchiveReason,
+        /// Terminal member status.
         status: MemberRunStatus,
+        /// Human-readable ending note.
         note: String,
     },
 }
 
 /// A single activation's completion; cancelling a wait leaves the episode owned.
-pub(crate) struct ActivationWaiter {
+pub struct ActivationWaiter {
     pub(super) done: oneshot::Receiver<Result<ActivationResult, CoreError>>,
 }
 
 impl ActivationWaiter {
-    pub(crate) async fn wait(&mut self) -> Result<ActivationResult, CoreError> {
+    /// Await completion of the armed resident activation.
+    ///
+    /// # Errors
+    /// Returns [`CoreError`] if the episode exited without delivering its result.
+    pub async fn wait(&mut self) -> Result<ActivationResult, CoreError> {
         (&mut self.done).await.map_err(|_| {
             CoreError::Invalid("episode exited without its activation result".into())
         })?
@@ -51,7 +64,7 @@ pub(super) struct ActivationCompletion {
 pub(super) struct WorkflowActivation {
     pub(super) resolved: (AgentSpec, ResolvedResidentRuntime),
     pub(super) guidance: Arc<str>,
-    pub(super) route: Option<WorkflowTurnRoute>,
+    pub(super) route: Option<ExplicitTurnRoute>,
     pub(super) done: oneshot::Sender<Result<ActivationResult, CoreError>>,
 }
 
@@ -66,8 +79,8 @@ pub(super) struct Episode {
     /// In-process activation guidance. Workflow actors replace this only while
     /// idle, before durable mail wakes the next Stage. Recovery invents none.
     pub(super) guidance: Option<Arc<str>>,
-    /// Fixed request-local route for Workflow resident activations.
-    pub(super) route: Option<WorkflowTurnRoute>,
+    /// Fixed request-local explicit model route for resident activations.
+    pub(super) route: Option<ExplicitTurnRoute>,
     pub(super) activation: Option<ActivationCompletion>,
     /// Opaque request-scoped sidecar factory, retained only in memory.
     pub(super) sidecar_factory: Option<Arc<dyn BoundSidecarFactory>>,
@@ -138,7 +151,7 @@ pub(super) struct RunPlan {
     pub(super) agents: Option<Arc<[AgentDef]>>,
     pub(super) resources: Option<AgentResourcePolicy>,
     pub(super) guidance: Option<Arc<str>>,
-    pub(super) route: Option<WorkflowTurnRoute>,
+    pub(super) route: Option<ExplicitTurnRoute>,
     pub(super) sidecar_factory: Option<Arc<dyn BoundSidecarFactory>>,
     pub(super) handle: String,
     pub(super) is_main: bool,

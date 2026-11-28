@@ -103,9 +103,8 @@ pub(crate) fn stage(options: &StageOptions) -> anyhow::Result<Vec<StagedBundle>>
         let installed = bundles.join(format!("hya-{name}.hyabundle"));
         let native = source.join("native").is_dir();
         if native {
-            let library = options
-                .library_dir
-                .join(format!("libhya_{}{suffix}", name.replace('-', "_")));
+            let stem = native_library_stem(name);
+            let library = options.library_dir.join(format!("lib{stem}{suffix}"));
             ensure!(
                 library.is_file(),
                 "{identity} needs its built library at {}",
@@ -156,6 +155,14 @@ fn verify_package(package: &Path, identity: &str, version: &str) -> anyhow::Resu
         bundle.identity().version
     );
     Ok(())
+}
+
+fn native_library_stem(name: &str) -> String {
+    if name == "workflow" {
+        "hya_workflow_bundle".to_string()
+    } else {
+        format!("hya_{}", name.replace('-', "_"))
+    }
 }
 
 /// Dynamic library suffix for `target`, or for the host when `None`.

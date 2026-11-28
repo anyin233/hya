@@ -297,39 +297,50 @@ async fn fs_read_max_bytes_binary_list_find_search_and_traversal_refusal() {
 }
 
 #[derive(Default)]
-struct RecordingWorkflowControl {
+struct RecordingWorkflowApiHandler {
     seen: Mutex<Vec<Option<std::path::PathBuf>>>,
 }
 
-impl hya_server::WorkflowControl for RecordingWorkflowControl {
-    fn execute(
-        &self,
-        _: hya_proto::SessionId,
-        _: hya_tool::WorkflowCommand,
-        _: hya_tool::WorkflowDelivery,
-    ) -> hya_server::WorkflowControlFuture<'_> {
-        Box::pin(async {
-            Err(hya_server::WorkflowControlError::new(
-                "UNIMPLEMENTED",
-                "unused",
-            ))
+#[async_trait::async_trait]
+impl hya_runtime_abi::NativeBundleApiHandler for RecordingWorkflowApiHandler {
+    fn id(&self) -> &str {
+        "hya/workflow"
+    }
+
+    fn endpoints(&self) -> &[hya_runtime_abi::NativeApiEndpoint] {
+        static ENDPOINTS: std::sync::OnceLock<Vec<hya_runtime_abi::NativeApiEndpoint>> =
+            std::sync::OnceLock::new();
+        ENDPOINTS.get_or_init(|| {
+            vec![hya_runtime_abi::NativeApiEndpoint {
+                id: "list_workflows".to_owned(),
+                method: hya_engine::ApiMethod::Get,
+                scope: hya_engine::ApiScope::Global,
+                path: "/workflows".to_owned(),
+                description: "List discovered workflow sources for a directory.".to_owned(),
+            }]
         })
     }
-    fn list(
+
+    async fn handle(
         &self,
-        scope: Option<std::path::PathBuf>,
-    ) -> futures::future::BoxFuture<
-        '_,
-        Result<Vec<hya_proto::WorkflowSummary>, hya_server::WorkflowControlError>,
-    > {
+        request: hya_runtime_abi::NativeBundleApiRequest,
+    ) -> Result<hya_runtime_abi::NativeBundleApiReply, hya_runtime_abi::HostError> {
+        let scope = request
+            .query
+            .get("directory")
+            .filter(|dir| !dir.is_empty())
+            .map(std::path::PathBuf::from);
         self.seen.lock().unwrap().push(scope);
-        Box::pin(async { Ok(Vec::new()) })
+        Ok(hya_runtime_abi::NativeBundleApiReply {
+            status: 200,
+            body: json!({ "workflows": [] }),
+        })
     }
 }
 
 #[tokio::test]
 async fn catalog_mcp_vcs_workflows_pty_and_runtime_schemas() {
-    let wf_control = Arc::new(RecordingWorkflowControl::default());
+    let wf_api = Arc::new(RecordingWorkflowApiHandler::default());
     let mcp_control = crate::mcp_fixture::TestMcpControl::new(std::collections::BTreeMap::from([
         (
             "disabled".into(),
@@ -341,12 +352,24 @@ async fn catalog_mcp_vcs_workflows_pty_and_runtime_schemas() {
         ("failed".into(), hya_mcp::McpServerConfig::default()),
     ]))
     .await;
-    let app = router(
-        hello_state()
-            .await
-            .with_mcp_control(mcp_control)
-            .with_workflow_control(wf_control.clone()),
-    );
+    let state = hello_state().await.with_mcp_control(mcp_control);
+    let wf_bundle = hya_bundle::first_party_bundle("hya/workflow").unwrap();
+    let wf_catalog = hya_bundle::BundleCatalog::from_verified_catalogs(&[wf_bundle]).unwrap();
+    let agent_catalog = Arc::new(hya_engine::AgentCatalog::new(Arc::new(wf_catalog)).unwrap());
+    state
+        .engine
+        .runtime_registry()
+        .refresh(|candidate| {
+            candidate.replace_catalog(agent_catalog);
+            Ok(())
+        })
+        .unwrap();
+    state
+        .engine
+        .runtime_registry()
+        .register_native_bundle_apis("hya/workflow", vec![wf_api.clone()])
+        .unwrap();
+    let app = router(state);
 
     // MCP reports disabled & failed preparations.
     let mcp = ok_get(&app, "/v2/mcp").await;
@@ -407,7 +430,7 @@ async fn catalog_mcp_vcs_workflows_pty_and_runtime_schemas() {
         StatusCode::BAD_REQUEST
     );
     assert_eq!(
-        wf_control.seen.lock().unwrap().as_slice(),
+        wf_api.seen.lock().unwrap().as_slice(),
         &[None, Some(field_dir)]
     );
 

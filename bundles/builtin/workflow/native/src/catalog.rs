@@ -4,26 +4,100 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::Context as _;
-use hya_bundle::BundleCatalog;
-use hya_engine::catalog_scope::inert_catalog_dirs;
-use hya_engine::{
-    AgentCatalog, CatalogScope, CompiledWorkflow, TurnBinding, discover_workflow_files_in_root,
-    load_workflow_file, workflow_project_dir, workflow_user_dir,
-};
+use hya_bundle::Bundle;
 use hya_proto::{
     WorkflowAvailability, WorkflowIdentity, WorkflowInfo, WorkflowRevision, WorkflowSourceId,
     WorkflowStageInfo, WorkflowSummary,
 };
+use hya_workflow::CompiledWorkflow;
 use sha2::{Digest, Sha256};
 
-use crate::workflow_control::{WorkflowControlError, bounded_error};
-use crate::{ProjectScopeRefresh, bundle_admin, first_party_catalogs};
+use crate::error::{WorkflowControlError, WorkflowError, bounded_error};
 
-/// Bundle identity reserved for the read-only first-party Workflow catalog.
-pub const FIRST_PARTY_BUNDLE_ID: &str = "hya/plan-impl-review";
+/// Bundle identity reserved for the read-only first-party Workflow bundle.
+pub const FIRST_PARTY_BUNDLE_ID: &str = "hya/workflow";
 
 const BUNDLE_WORKFLOW_REVISION_DOMAIN: &[u8] = b"hya.workflow.bundle-revision/v1\0";
+
+/// The project-tier Workflow directory under one root (a Project root, a
+/// plain directory, or a Session workdir).
+#[must_use]
+pub fn workflow_project_dir(root: &Path) -> PathBuf {
+    root.join(".hya/workflows")
+}
+
+/// The user-tier Workflow directory, when the process has a home directory.
+#[must_use]
+pub fn workflow_user_dir() -> Option<PathBuf> {
+    std::env::home_dir().map(|home| home.join(".config/hya/workflows"))
+}
+
+/// Return Workflow discovery roots in project-before-user precedence order.
+#[must_use]
+pub fn workflow_dirs_for_workdir(workdir: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![workflow_project_dir(workdir)];
+    dirs.extend(workflow_user_dir());
+    dirs
+}
+
+/// List candidate `*.hya.md` Workflow files in one explicit directory.
+#[must_use]
+pub fn discover_workflow_files_in_root(root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut files = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && is_workflow_source(path))
+        .collect::<Vec<_>>();
+    files.sort();
+    files
+}
+
+/// Compile one Workflow document from disk.
+///
+/// # Errors
+/// Returns [`WorkflowError::Source`] for an unreadable file and
+/// [`WorkflowError::Compile`] for an invalid document.
+pub fn load_workflow_file(path: &Path) -> Result<CompiledWorkflow, WorkflowError> {
+    let content = std::fs::read_to_string(path).map_err(|error| WorkflowError::Source {
+        source_name: path.display().to_string(),
+        detail: error.to_string(),
+    })?;
+    let source_name = path.display().to_string();
+    hya_workflow::compile(hya_workflow::WorkflowSource::new(&source_name, &content))
+        .map_err(WorkflowError::Compile)
+}
+
+fn is_workflow_source(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".hya.md"))
+}
+
+/// Deduplicated discovery directories: optional `workdir` first, then each
+/// registered Project root in declaration order.
+fn scope_discovery_dirs(directory: Option<&Path>, project_roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    if let Some(dir) = directory.filter(|d| !d.as_os_str().is_empty()) {
+        let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        if seen.insert(canonical) {
+            out.push(dir.to_path_buf());
+        }
+    }
+    for root in project_roots {
+        if root.as_os_str().is_empty() {
+            continue;
+        }
+        let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+        if seen.insert(canonical) {
+            out.push(root.clone());
+        }
+    }
+    out
+}
 
 /// Source tier owning one resolved Workflow.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -45,9 +119,6 @@ pub enum WorkflowCatalogOwner {
 }
 
 /// Explicit filesystem roots used by one immutable Workflow catalog build.
-///
-/// `project` lists every Project root's Workflow directory in precedence
-/// order (first root wins on a source id or name collision, F2 multi-root).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkflowCatalogRoots {
     project: Vec<PathBuf>,
@@ -61,24 +132,13 @@ impl WorkflowCatalogRoots {
         Self { project, user }
     }
 
-    /// Derive the production roots for a bound catalog scope and workdir.
-    ///
-    /// `Global` lists user and bundle rows only (no project root, `hya
-    /// serve` has no working directory of its own, ADR-0024).
-    /// `Directory(dir)` lists that one directory. `Project { roots, .. }`
-    /// lists `workdir` first (it may be the Project root itself, a
-    /// registered subdirectory, or the caller's Session workdir), then each
-    /// registered root in declaration order, deduped (first root wins).
+    /// Derive production roots from an optional effective workdir and registered
+    /// project roots.
     #[must_use]
-    pub fn for_scope(scope: &CatalogScope, workdir: &Path) -> Self {
-        let directory = match scope {
-            CatalogScope::Global => None,
-            CatalogScope::Directory(dir) => Some(dir.as_path()),
-            CatalogScope::Project { .. } => Some(workdir),
-        };
-        let project = inert_catalog_dirs(directory, scope.project_roots())
+    pub fn for_scope(directory: Option<&Path>, project_roots: &[PathBuf]) -> Self {
+        let project = scope_discovery_dirs(directory, project_roots)
             .into_iter()
-            .map(workflow_project_dir)
+            .map(|dir| workflow_project_dir(&dir))
             .collect();
         Self {
             project,
@@ -121,7 +181,6 @@ impl ResolvedWorkflow {
     }
 }
 
-/// One invalid filesystem source retained for list diagnostics and stale state.
 struct InvalidWorkflowSource {
     name: String,
     source: WorkflowSourceId,
@@ -129,24 +188,16 @@ struct InvalidWorkflowSource {
     error: String,
 }
 
-/// One immutable valid/invalid row in catalog precedence order.
 enum WorkflowCatalogRow {
     Valid(usize),
     Invalid(InvalidWorkflowSource),
 }
 
-/// One resolved filesystem Workflow row, not yet admitted to a catalog.
 enum FilesystemRow {
     Valid(ResolvedWorkflow),
     Invalid(InvalidWorkflowSource),
 }
 
-/// Resolve one filesystem path below `root` to its source id and row.
-///
-/// `tier` is `"project"` or `"user"`: a project source id is the path
-/// relative to its own root (so the same root produces the same id across
-/// process restarts); a user source id is the absolute path (there is only
-/// ever one user root).
 fn filesystem_row(path: PathBuf, root: &Path, tier: &str) -> (String, FilesystemRow) {
     let relative = path.strip_prefix(root).map_or_else(
         |_| path.display().to_string(),
@@ -191,92 +242,14 @@ pub struct WorkflowCatalog {
 }
 
 impl WorkflowCatalog {
-    /// Inspect prepared Workflow sources for a working directory without starting a runtime.
-    ///
-    /// An existing database is opened read-only to resolve Project roots. Bundle
-    /// diagnostics are delivered in discovery order through `warn`.
+    /// Build a catalog from explicit filesystem roots and prepared bundles.
     ///
     /// # Errors
-    /// Returns database, bundle discovery, or catalog construction errors.
-    pub async fn inspect_read_only(
-        db: &str,
-        workdir: &Path,
-        mut warn: impl FnMut(&str),
-    ) -> anyhow::Result<Self> {
-        let project = if !db.is_empty() && Path::new(db).try_exists()? {
-            hya_store::SessionStore::connect_read_only(db)
-                .await
-                .with_context(|| format!("open existing database read-only at {db}"))?
-                .resolve_project_by_path(&workdir.to_string_lossy())
-                .await?
-        } else {
-            None
-        };
-        let scope = project.map_or_else(
-            || CatalogScope::Directory(workdir.to_path_buf()),
-            |project| CatalogScope::Project {
-                id: project.id,
-                roots: project.roots.into_iter().map(PathBuf::from).collect(),
-            },
-        );
-        let registry = bundle_admin::existing_registry().await?;
-        let disabled = match &registry {
-            Some(registry) => registry.disabled_bundle_ids().await?,
-            None => BTreeSet::new(),
-        };
-        let mut installed = Vec::new();
-        if let Some(registry) = registry {
-            let snapshot = registry.snapshot_with_catalogs().await?;
-            for row in snapshot.unreadable {
-                warn(&format!(
-                    "installed bundle {}: {}",
-                    row.bundle_id, row.error
-                ));
-            }
-            installed.extend(snapshot.bundles.into_iter().map(|loaded| loaded.prepared));
-        }
-        // `use`/`run` register an unregistered directory as a one-root Project,
-        // so its own `.hya/bundles` belong to the catalog here too.
-        let roots = match &scope {
-            CatalogScope::Project { roots, .. } => roots.as_slice(),
-            CatalogScope::Directory(directory) => std::slice::from_ref(directory),
-            CatalogScope::Global => &[],
-        };
-        let (bundles, warnings) = ProjectScopeRefresh::catalog_for_roots(
-            roots,
-            &installed,
-            &first_party_catalogs()?,
-            &disabled,
-        )?;
-        for warning in warnings {
-            warn(&warning);
-        }
-        let bundles = AgentCatalog::new(Arc::new(bundles))?;
-        Self::from_bundles(
-            WorkflowCatalogRoots::for_scope(&scope, workdir),
-            bundles.bundles(),
-        )
-        .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))
-    }
-
-    /// Build one catalog from explicit filesystem roots and a pinned runtime.
-    ///
-    /// The binding supplies the exact installed/first-party bundle snapshot;
-    /// catalog construction never consults a newer runtime generation.
-    ///
-    /// # Errors
-    /// Returns a control error when a prepared bundle Workflow cannot compile or
-    /// disagrees with its prepared identity.
-    pub fn build(
+    /// Returns [`WorkflowControlError::InvalidSource`] when a prepared bundle
+    /// Workflow fails to compile or disagrees with its prepared identity.
+    pub fn from_bundles(
         roots: WorkflowCatalogRoots,
-        binding: &TurnBinding,
-    ) -> Result<Self, WorkflowControlError> {
-        Self::from_bundles(roots, binding.bundle_catalog())
-    }
-
-    fn from_bundles(
-        roots: WorkflowCatalogRoots,
-        bundles: &BundleCatalog,
+        bundles: &[Bundle],
     ) -> Result<Self, WorkflowControlError> {
         let mut catalog = Self {
             entries: Vec::new(),
@@ -286,7 +259,7 @@ impl WorkflowCatalog {
         if let Some(user) = roots.user.as_deref() {
             catalog.append_filesystem_root(user, "user");
         }
-        for bundle in bundles.bundles() {
+        for bundle in bundles {
             let Some(prepared) = bundle.workflow() else {
                 continue;
             };
@@ -382,12 +355,8 @@ impl WorkflowCatalog {
 
     /// Resolve a qualified source or an effective bare Workflow name.
     ///
-    /// Project/user names shadow bundles. A bare bundle name resolves only when
-    /// exactly one bundle owns that name; qualified bundle ids are exact.
-    ///
     /// # Errors
-    /// Returns [`WorkflowControlError::NotFound`] for an unavailable name and
-    /// [`WorkflowControlError::InvalidSource`] for a matching broken file.
+    /// Returns [`WorkflowControlError::NotFound`] or [`WorkflowControlError::InvalidSource`].
     pub fn resolve(&self, reference: &str) -> Result<&ResolvedWorkflow, WorkflowControlError> {
         if reference.starts_with("bundle:")
             || reference.starts_with("project:")
@@ -481,7 +450,6 @@ impl WorkflowCatalog {
         WorkflowAvailability::Unavailable
     }
 
-    /// Append valid and invalid filesystem rows below one explicit root.
     fn append_filesystem_root(&mut self, root: &Path, tier: &str) {
         for path in discover_workflow_files_in_root(root) {
             let (_, row) = filesystem_row(path, root, tier);
@@ -489,13 +457,6 @@ impl WorkflowCatalog {
         }
     }
 
-    /// Append filesystem rows below every Project root, in order.
-    ///
-    /// Every root's Workflow directory is discovered; a later root's file
-    /// whose `project:<path relative to its root>` source id or compiled
-    /// Workflow name collides with an earlier root's is skipped (first root
-    /// wins) with a warning. A later root's invalid source with a distinct
-    /// id is always kept: it is still worth surfacing as a diagnostic row.
     fn append_project_roots(&mut self, roots: &[PathBuf]) {
         let mut seen_source_ids = BTreeSet::new();
         let mut seen_names = BTreeSet::new();
@@ -526,7 +487,6 @@ impl WorkflowCatalog {
         }
     }
 
-    /// Push one already-resolved filesystem row into the catalog.
     fn push_filesystem_row(&mut self, row: FilesystemRow) {
         match row {
             FilesystemRow::Valid(entry) => {
@@ -540,7 +500,11 @@ impl WorkflowCatalog {
 }
 
 /// Fold one bundle digest into a compiled Workflow revision.
-fn bundle_workflow_revision(workflow: &CompiledWorkflow, bundle_digest: &str) -> WorkflowRevision {
+#[must_use]
+pub fn bundle_workflow_revision(
+    workflow: &CompiledWorkflow,
+    bundle_digest: &str,
+) -> WorkflowRevision {
     let mut hasher = Sha256::new();
     hasher.update(BUNDLE_WORKFLOW_REVISION_DOMAIN);
     hasher.update(workflow.revision().as_bytes());
@@ -548,7 +512,6 @@ fn bundle_workflow_revision(workflow: &CompiledWorkflow, bundle_digest: &str) ->
     WorkflowRevision::from_bytes(hasher.finalize().into())
 }
 
-/// Convert one immutable resolved Workflow to the shared info DTO.
 fn workflow_info(entry: &ResolvedWorkflow) -> WorkflowInfo {
     let plan = entry.workflow().plan();
     WorkflowInfo {
@@ -579,45 +542,10 @@ fn workflow_info(entry: &ResolvedWorkflow) -> WorkflowInfo {
     }
 }
 
-/// Strip the complete Workflow suffix for an invalid-source discovery row.
 fn source_stem(path: &Path) -> String {
     path.file_name()
         .and_then(|name| name.to_str())
         .and_then(|name| name.strip_suffix(".hya.md"))
         .unwrap_or_default()
         .to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn process_command_changes_packaged_workflow_revision() {
-        use hya_bundle::{BundleSource, SourceFile, prepare_package};
-        let workflow_source = "---\nkind: Workflow\nname: demo\ndescription: Digest revision regression.\nnodes:\n  execute:\n    agent: worker\n    directive: Execute.\n---\nflowchart TD\n  execute\n";
-        let prepare = |command: &str| {
-            let manifest = format!(
-                "kind: Bundle\nschema_version: 2\nidentity: {{id: hya/demo, version: 1.0.0, publisher: hya}}\nagents: [{{id: worker, role: subagent}}]\nworkflow: {{id: demo, path: workflows/demo.hya.md}}\nruntime: {{kind: js, mode: process, command: [{command}]}}\n"
-            );
-            prepare_package(BundleSource::new(
-                "revision",
-                vec![
-                    SourceFile::new("bundle.yaml", manifest.into_bytes()),
-                    SourceFile::new("workflows/demo.hya.md", workflow_source.as_bytes()),
-                ],
-            ))
-            .unwrap_or_else(|error| panic!("prepare process-backed Workflow: {error}"))
-        };
-        let before = prepare("provider-before");
-        let after = prepare("provider-after");
-        let compiled = hya_workflow::compile(hya_workflow::WorkflowSource::new(
-            "workflows/demo.hya.md",
-            workflow_source,
-        ))
-        .unwrap_or_else(|error| panic!("compile Workflow: {error}"));
-        assert_ne!(before.bundles()[0].digest(), after.bundles()[0].digest());
-        assert_ne!(
-            super::bundle_workflow_revision(&compiled, before.bundles()[0].digest()),
-            super::bundle_workflow_revision(&compiled, after.bundles()[0].digest()),
-        );
-    }
 }

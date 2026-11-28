@@ -693,14 +693,14 @@ impl ResidentSupervisor {
     /// Guidance, route and the post-mail inbox boundary are installed before
     /// the turn reservation is released. The episode alone resolves completion.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn activate(
+    pub async fn activate(
         &self,
         parent: SessionId,
         member: SessionId,
         resolved: (AgentSpec, ResolvedResidentRuntime),
         directive: String,
         guidance: Arc<str>,
-        route: Option<WorkflowTurnRoute>,
+        route: Option<ExplicitTurnRoute>,
         parent_claim: Option<&ActorClaim>,
     ) -> Result<ActivationWaiter, CoreError> {
         if directive.trim().is_empty() {

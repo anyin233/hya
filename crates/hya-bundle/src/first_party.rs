@@ -30,7 +30,7 @@ pub const FIRST_PARTY_BUNDLES: &[&str] = &[
     "hya/agent-channels",
     "hya/goal",
     "hya/loop",
-    "hya/plan-impl-review",
+    "hya/workflow",
     "hya/plan",
     "hya/basic-tui-components",
     "hya/compaction",

@@ -215,3 +215,28 @@ fn cli_installs_and_runs_shipped_argus_workflowbundle() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn cli_rejects_workflow_commands_in_bare_or_when_bundle_disabled() -> TestResult {
+    let s = Scratch::new("hya-wf-disabled")?;
+    let bare_out = s.hya().args(["--bare", "workflow", "list"]).output()?;
+    assert!(
+        !bare_out.status.success() && combined_text(&bare_out).contains("hya/workflow"),
+        "expected actionable --bare error, got:\n{}",
+        combined_text(&bare_out)
+    );
+
+    let cfg = s.0.join("config/hya");
+    fs::create_dir_all(&cfg)?;
+    fs::write(
+        cfg.join("config.yaml"),
+        "schema_version: 2\nbundles:\n  builtin:\n    profile: full\n    disable:\n      - hya/workflow\n",
+    )?;
+    let disabled_out = wf(&s, None, &["list"])?;
+    assert!(
+        !disabled_out.status.success() && combined_text(&disabled_out).contains("hya/workflow"),
+        "expected actionable disabled-bundle error, got:\n{}",
+        combined_text(&disabled_out)
+    );
+    Ok(())
+}

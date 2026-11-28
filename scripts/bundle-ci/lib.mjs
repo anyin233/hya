@@ -82,7 +82,7 @@ export const ALLOWED_HOOK_HANDLER_KINDS = new Set(["js", "rpc", "command", "nati
 export const ALLOWED_PROCESS_KINDS = new Set(["rust", "bun", "claude"]);
 export const ALLOWED_RUNTIME_KINDS = new Set(["static", "js", "native"]);
 export const ALLOWED_JS_MODES = new Set(["managed", "process", "claude"]);
-export const ALLOWED_NATIVE_CAPABILITIES = new Set(["tools", "hooks", "rewriters", "services", "drivers"]);
+export const ALLOWED_NATIVE_CAPABILITIES = new Set(["tools", "hooks", "rewriters", "services", "drivers", "apis"]);
 
 const MAX_SKILL_BYTES = 256 * 1024;
 const MAX_PACKAGE_BYTES = 128 * 1024 * 1024;
@@ -578,7 +578,7 @@ export function validateBundleStatic(bundleDir) {
         }
         if (rt.capabilities !== undefined) {
           if (!Array.isArray(rt.capabilities) || !rt.capabilities.every((c) => ALLOWED_NATIVE_CAPABILITIES.has(c))) {
-            errors.push(`${manifestFile}: runtime.capabilities entries must be tools, hooks, rewriters, services, or drivers`);
+            errors.push(`${manifestFile}: runtime.capabilities entries must be tools, hooks, rewriters, services, drivers, or apis`);
           }
         }
       }

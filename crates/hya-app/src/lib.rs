@@ -54,10 +54,7 @@ mod runtime_reconcile;
 pub mod startup_trace;
 #[cfg(test)]
 mod test_env;
-/// Immutable Workflow sources, discovery, and inspection.
-pub mod workflow_catalog;
-/// Durable Workflow selection, state, and execution control.
-pub mod workflow_control;
+mod workflow_inspect;
 
 pub use agent_model_control::{
     AgentModelControlError, AgentModelIdentity, PersistentAgentModelControl,
@@ -73,6 +70,10 @@ pub use hya_coding_extras::formatter::config as formatter_config;
 pub use hya_proto::{WorkflowInfo, WorkflowStageInfo, WorkflowSummary};
 pub use hya_tool::{
     InvocationPolicy, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowRunResult,
+};
+pub use hya_workflow_bundle::{
+    FIRST_PARTY_BUNDLE_ID, ResolvedWorkflow, WorkflowCatalog, WorkflowCatalogOwner,
+    WorkflowCatalogRoots, WorkflowControlError, WorkflowInvocation,
 };
 pub use installed_bundle_refresh::{
     InstalledBundleRefresh, bundle_registry_path, first_party_catalogs, first_party_catalogs_for,
@@ -94,11 +95,7 @@ pub use runtime::{
     resolve_headless_agent_name, resolve_runtime, spawn_team_supervisor, today,
     with_built_session_engine,
 };
-pub use workflow_catalog::{
-    FIRST_PARTY_BUNDLE_ID, ResolvedWorkflow, WorkflowCatalog, WorkflowCatalogOwner,
-    WorkflowCatalogRoots,
-};
-pub use workflow_control::{WorkflowControl, WorkflowControlError, WorkflowInvocation};
+pub use workflow_inspect::inspect_workflow_catalog_read_only;
 
 #[cfg(test)]
 #[path = "../../hya-engine/tests/it/support/resident.rs"]

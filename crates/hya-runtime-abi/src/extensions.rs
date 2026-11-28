@@ -73,6 +73,23 @@ pub trait NativeService: Send + Sync {
 
     /// Query current service health.
     async fn health(&self) -> ServiceHealth;
+
+    /// Return `true` if this service currently owns active background work on `session`.
+    fn is_session_busy(&self, _session: SessionId) -> bool {
+        false
+    }
+
+    /// Request cancellation of any active service work on `session`.
+    ///
+    /// Returns `true` if an active operation on `session` was signalled.
+    fn cancel_session(&self, _session: SessionId) -> bool {
+        false
+    }
+
+    /// Wait until any active service work on `session` has fully stopped.
+    async fn wait_session_idle(&self, _session: SessionId) -> Result<(), HostError> {
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

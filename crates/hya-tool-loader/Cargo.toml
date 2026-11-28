@@ -35,6 +35,7 @@ hya-network = { workspace = true }
 hya-plan = { workspace = true }
 hya-goal = { workspace = true }
 hya-loop = { workspace = true }
+hya-workflow-bundle = { workspace = true }
 hya-tool-error = { workspace = true }
 
 [[example]]

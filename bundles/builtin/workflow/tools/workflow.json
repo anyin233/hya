@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "name": "workflow",
+  "description": "List, inspect, select, run, or inspect the state of user-authored workflow DAGs. Workflow execution uses the same durable Session control path as the CLI and direct server requests.",
+  "permission": "tool",
+  "prompt_hint": "list, inspect, and run workflows",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["list", "info", "select", "run", "state"],
+        "description": "list: discover workflows (default); info: inspect one graph; select: persist one workflow selection; run: execute one workflow; state: read durable selection/run state"
+      },
+      "name": {
+        "type": "string",
+        "description": "Declared Workflow name (required for action=info|select|run)"
+      },
+      "expected_revision": {
+        "type": "string",
+        "description": "Optional 64-character compiler revision fence for select/run"
+      },
+      "inputs": {
+        "type": "object",
+        "description": "Values for the Workflow's declared input keys (action=run)",
+        "additionalProperties": { "type": ["string", "number", "boolean"] }
+      },
+      "run": {
+        "type": "string",
+        "description": "Optional stable Workflow run id for direct idempotent retries"
+      }
+    },
+    "required": []
+  },
+  "entrypoint": {
+    "native": "workflow"
+  }
+}

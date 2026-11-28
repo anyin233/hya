@@ -9,7 +9,7 @@
 mod agent_models;
 mod auth;
 mod builtin_bundle_apis;
-mod bundle_api;
+pub(crate) mod bundle_api;
 mod catalog;
 mod convert;
 pub(crate) mod events;
@@ -147,23 +147,24 @@ pub(crate) type V2Error = ApiError;
 impl ApiError {
     pub(crate) fn legacy_control(code: &str, fallback: Code, message: String) -> Self {
         let code = match code {
-            "SESSION_NOT_FOUND" => Code::SessionNotFound,
-            "WORKFLOW_SYNTAX" | "WORKFLOW_INVALID_INPUT" | "WORKFLOW_INVALID_SOURCE" => {
-                Code::InvalidArgument
+            "SESSION_NOT_FOUND" | "session_not_found" => Code::SessionNotFound,
+            "WORKFLOW_SYNTAX"
+            | "WORKFLOW_INVALID_INPUT"
+            | "WORKFLOW_INVALID_SOURCE"
+            | "invalid_argument" => Code::InvalidArgument,
+            "WORKFLOW_NOT_FOUND" | "WORKFLOW_NOT_SELECTED" | "not_found" => Code::NotFound,
+            "WORKFLOW_UNAUTHORIZED" | "permission_denied" => Code::PermissionDenied,
+            "WORKFLOW_BUSY"
+            | "WORKFLOW_OPERATION_CONFLICT"
+            | "WORKFLOW_STALE_REVISION"
+            | "failed_precondition" => Code::FailedPrecondition,
+            "session_busy" => Code::SessionBusy,
+            "WORKFLOW_RUNTIME_UNAVAILABLE" | "WORKFLOW_OVERLOADED" | "unavailable" => {
+                Code::Unavailable
             }
-            "WORKFLOW_NOT_FOUND" | "WORKFLOW_NOT_SELECTED" => Code::NotFound,
-            "WORKFLOW_UNAUTHORIZED" => Code::PermissionDenied,
-            "WORKFLOW_BUSY" | "WORKFLOW_OPERATION_CONFLICT" | "WORKFLOW_STALE_REVISION" => {
-                Code::FailedPrecondition
-            }
-            "WORKFLOW_RUNTIME_UNAVAILABLE" | "WORKFLOW_OVERLOADED" => Code::Unavailable,
             _ => fallback,
         };
         Self::new(code, message)
-    }
-
-    pub(crate) fn workflow(error: crate::WorkflowControlError) -> Self {
-        Self::legacy_control(&error.code, Code::Internal, error.message)
     }
 
     pub(crate) fn text(&self) -> &str {
@@ -494,8 +495,7 @@ mod workflow_error_regression {
             ("WORKFLOW_INTERNAL", "internal", 500, Grpc::Internal),
             ("unknown", "internal", 500, Grpc::Internal),
         ] {
-            let error =
-                ApiError::workflow(crate::WorkflowControlError::new(legacy_code, "failure"));
+            let error = ApiError::legacy_control(legacy_code, Code::Internal, "failure".into());
             let grpc_status = error.grpc_status();
             assert_eq!(grpc_status.code(), grpc, "{legacy_code}");
             assert_eq!(grpc_status.message(), "failure");

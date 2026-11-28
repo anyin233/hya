@@ -14,4 +14,3 @@ mod shell_and_attachments;
 mod subagent_lifecycle;
 mod turn_end_and_recovery;
 mod turn_loop;
-mod workflow;

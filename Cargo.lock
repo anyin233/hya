@@ -1323,7 +1323,7 @@ dependencies = [
  "hya-tool",
  "hya-tool-loader",
  "hya-version",
- "hya-workflow",
+ "hya-workflow-bundle",
  "libc",
  "libsqlite3-sys",
  "rand_core 0.9.5",
@@ -1549,7 +1549,7 @@ dependencies = [
  "hya-store",
  "hya-tool",
  "hya-tool-loader",
- "hya-workflow",
+ "hya-workflow-bundle",
  "libc",
  "serde",
  "serde_json",
@@ -1936,6 +1936,7 @@ dependencies = [
  "hya-runtime-abi",
  "hya-tool",
  "hya-tool-error",
+ "hya-workflow-bundle",
  "libc",
  "serde",
  "serde_json",
@@ -1968,6 +1969,26 @@ dependencies = [
  "serde_norway",
  "sha2",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "hya-workflow-bundle"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "hya-bundle",
+ "hya-proto",
+ "hya-runtime-abi",
+ "hya-tool",
+ "hya-workflow",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

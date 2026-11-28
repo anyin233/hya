@@ -882,6 +882,7 @@ pub(super) fn resolve_runtime(
                     SourceNativeCapability::Rewriters => PreparedNativeCapability::Rewriters,
                     SourceNativeCapability::Services => PreparedNativeCapability::Services,
                     SourceNativeCapability::Drivers => PreparedNativeCapability::Drivers,
+                    SourceNativeCapability::Apis => PreparedNativeCapability::Apis,
                 };
                 if !seen.insert(prepared) {
                     return Err(invalid(format!(

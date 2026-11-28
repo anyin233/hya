@@ -711,14 +711,7 @@ tools:
             (
                 "hya/extended-tools",
                 1,
-                &[
-                    "list_agents",
-                    "task",
-                    "workflow",
-                    "search_agent",
-                    "archive",
-                    "wait",
-                ],
+                &["list_agents", "task", "search_agent", "archive", "wait"],
             ),
             ("hya/network", 2, &["webfetch", "websearch"]),
             (
@@ -773,7 +766,6 @@ tools:
             ("lsp", ToolPermission::ReadOnly, &[]),
             ("list_agents", ToolPermission::ReadOnly, &[]),
             ("task", ToolPermission::Task, &[]),
-            ("workflow", ToolPermission::Tool, &[]),
             ("project_activity", ToolPermission::ReadOnly, &[]),
             ("send", ToolPermission::Tool, &[]),
             ("list_channel", ToolPermission::ReadOnly, &[]),
@@ -822,14 +814,20 @@ tools:
             .map(|t| t.name().to_string())
             .collect();
         expected_exposed.insert("plan_exit".to_string());
+        expected_exposed.insert("workflow".to_string());
         assert_eq!(advertised, expected_exposed);
         assert_eq!(
             registry.builtin_bundle_origin("plan_exit"),
             Some("hya/plan")
         );
+        assert_eq!(
+            registry.builtin_bundle_origin("workflow"),
+            Some("hya/workflow")
+        );
         assert_eq!(registry.resolve("plan").unwrap().tool.name(), "plan_exit");
         assert!(!advertised.contains("plan"));
         assert!(tool_prompt("plan_exit").is_some());
+        assert!(tool_prompt("workflow").is_some());
 
         for tool in presets.iter().flat_map(|p| p.tools()) {
             assert!(

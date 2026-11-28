@@ -274,24 +274,21 @@ mod tests {
     fn user_scope_uses_encoded_leaf_under_config_dir_bundles() {
         let location = bundle_config_location(
             Path::new("/cfg/hya/config.yaml"),
-            "hya/plan-impl-review",
+            "hya/workflow",
             BundleConfigScope::User,
         )
         .unwrap();
-        assert_eq!(
-            location.dir(),
-            Path::new("/cfg/hya/bundles/hya%2Fplan-impl-review")
-        );
+        assert_eq!(location.dir(), Path::new("/cfg/hya/bundles/hya%2Fworkflow"));
         assert_eq!(
             location.file(),
-            Path::new("/cfg/hya/bundles/hya%2Fplan-impl-review/config.yml")
+            Path::new("/cfg/hya/bundles/hya%2Fworkflow/config.yml")
         );
         assert_eq!(
             location
                 .env()
                 .get(HYA_BUNDLE_CONFIG_FILE)
                 .map(String::as_str),
-            Some("/cfg/hya/bundles/hya%2Fplan-impl-review/config.yml")
+            Some("/cfg/hya/bundles/hya%2Fworkflow/config.yml")
         );
     }
 

@@ -16,6 +16,8 @@ hya-bundle = { workspace = true }
 hya-compaction = { workspace = true }
 # Built for its `cdylib`: the `hya/plan` native ABI v2 bundle (`plan_exit` + visibility hook).
 hya-plan = { workspace = true }
+# Built for its `cdylib`: the `hya/workflow` native ABI v2 bundle (`workflow` tool, DAG service, BundleApi).
+hya-workflow-bundle = { workspace = true }
 hya-core = { workspace = true }
 hya-proto = { workspace = true }
 hya-provider = { workspace = true }
@@ -23,7 +25,6 @@ hya-tool = { workspace = true }
 hya-runtime-abi = { workspace = true }
 hya-tool-loader = { workspace = true }
 hya-context = { workspace = true }
-hya-workflow = { workspace = true }
 hya-store = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

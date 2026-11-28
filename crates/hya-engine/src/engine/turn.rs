@@ -1,8 +1,6 @@
 use hya_proto::{ActorClaim, AgentName, Event, FinishReason, MessageId, ModelRef, Role, SessionId};
 use hya_provider::{Capabilities, CompletionRequest, EventStream, ProviderError, ProviderRouter};
-use hya_tool::{
-    Action, AgentDef, Mode, PermissionPlane, ResolvedTool, Rule, WorkflowRouteFailureClass,
-};
+use hya_tool::{Action, AgentDef, Mode, PermissionPlane, ResolvedTool, Rule};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -20,7 +18,6 @@ use crate::hooks::{
 };
 use crate::runtime_registry::CompiledResourceView;
 use crate::sidecar::{SidecarEnvironment, SidecarHandle, SidecarStart};
-use crate::workflow::WorkflowTurnRoute;
 use crate::{AgentResourcePolicy, TurnBinding};
 
 mod harness;
@@ -28,12 +25,15 @@ pub(super) mod messages;
 #[cfg(test)]
 mod provider_snapshot_test;
 pub(super) mod rewrite_host;
+pub mod route;
 #[cfg(test)]
 mod route_retry_test;
 mod tool_gate;
 
 pub use messages::advertise_tool;
 use messages::{AttachmentData, attachment_blobs, filtered_tool_schemas};
+pub use route::{ExplicitModelRoute, ExplicitModelRouteCandidate, ExplicitTurnRoute};
+use route::{core_route_failure_class, provider_route_failure_class};
 
 /// Tool availability hook point: both `ask_user` (`hya/coding-extras`) and
 /// `plan_exit` (`hya/plan`) are now governed by `tool.visibility` native hooks.
@@ -63,8 +63,8 @@ struct TurnExecution<'a> {
     explicit_model: Option<&'a ModelRef>,
     /// Whether this activation resolves Session/file defaults freshly.
     apply_default_overlays: bool,
-    /// Request-local Workflow route, absent for ordinary Agent turns.
-    workflow_route: Option<&'a WorkflowTurnRoute>,
+    /// Request-local explicit model route, absent for ordinary Agent turns.
+    workflow_route: Option<&'a ExplicitTurnRoute>,
     /// Round-boundary rebind inputs, present for Root activations only.
     rebind: Option<TurnRebindInputs<'a>>,
     /// Per-turn fallback holding last successful SQL preference reads.
@@ -91,7 +91,7 @@ pub(crate) struct TurnRequestContext<'a> {
     guidance: Option<Arc<str>>,
     actor_claim: Option<&'a ActorClaim>,
     explicit_model: Option<ModelRef>,
-    workflow_route: Option<WorkflowTurnRoute>,
+    workflow_route: Option<ExplicitTurnRoute>,
     /// Turn claim already taken by the caller (resident wakes claim under the
     /// team lock). `None` claims — queueing behind an active turn — on entry.
     lease: Option<TurnLease>,
@@ -107,7 +107,7 @@ impl<'a> TurnRequestContext<'a> {
         external_dirs: &'a [PathBuf],
         guidance: Option<Arc<str>>,
         actor_claim: Option<&'a ActorClaim>,
-        workflow_route: Option<WorkflowTurnRoute>,
+        workflow_route: Option<ExplicitTurnRoute>,
     ) -> Self {
         Self {
             cancel,
@@ -192,40 +192,6 @@ async fn shutdown_sidecar(handle: &mut Option<Box<dyn SidecarHandle>>) -> Result
         handle.shutdown().await
     } else {
         Ok(())
-    }
-}
-fn workflow_provider_failure_class(error: &ProviderError) -> WorkflowRouteFailureClass {
-    use WorkflowRouteFailureClass as Class;
-    match error {
-        ProviderError::Transport(_) => Class::Transport,
-        ProviderError::HttpStatus { status, .. } => {
-            if *status == 429 {
-                Class::RateLimited
-            } else if (500..=599).contains(status) {
-                Class::Server
-            } else {
-                Class::Http
-            }
-        }
-        ProviderError::UnknownModel(_) => Class::UnknownModel,
-        ProviderError::AuthExpired { .. } => Class::Auth,
-        ProviderError::Incompatible(_) => Class::Incompatible,
-        ProviderError::Decode(_) => Class::Decode,
-        ProviderError::Json(_) | ProviderError::Http(_) | ProviderError::StreamInterrupted(_) => {
-            Class::Http
-        }
-    }
-}
-
-fn workflow_failure_class(
-    error: &CoreError,
-    cancel: &CancellationToken,
-) -> WorkflowRouteFailureClass {
-    match error {
-        CoreError::Provider(error) => workflow_provider_failure_class(error),
-        CoreError::Cancelled if cancel.is_cancelled() => WorkflowRouteFailureClass::Cancelled,
-        CoreError::Cancelled => WorkflowRouteFailureClass::Aborted,
-        _ => WorkflowRouteFailureClass::Internal,
     }
 }
 
@@ -433,7 +399,7 @@ impl SessionEngine {
         request: &CompletionRequest,
         session: SessionId,
         message: MessageId,
-        route: &WorkflowTurnRoute,
+        route: &ExplicitTurnRoute,
         pinned: Option<usize>,
     ) -> Result<(EventStream, usize), ProviderError> {
         let candidates = &route.route().candidates;
@@ -453,7 +419,7 @@ impl SessionEngine {
                     return Ok((stream, index));
                 }
                 Err(error) => {
-                    let failure = workflow_provider_failure_class(&error);
+                    let failure = provider_route_failure_class(&error);
                     pending_failure = Some(failure);
                     let advance = (error.is_retryable_before_stream()
                         || matches!(error, ProviderError::UnknownModel(_)))
@@ -467,13 +433,13 @@ impl SessionEngine {
                         from = %candidate.model,
                         to = %candidates[index + 1].model,
                         error = %error,
-                        "pre-stream Workflow route failure; advancing declared candidate"
+                        "pre-stream explicit route failure; advancing declared candidate"
                     );
                 }
             }
         }
         Err(ProviderError::UnknownModel(
-            "Workflow route has no candidate".to_string(),
+            "explicit route has no candidate".to_string(),
         ))
     }
 
@@ -778,15 +744,15 @@ impl SessionEngine {
         if let Some(route) = workflow_route.as_ref() {
             let failure = match &outcome {
                 Ok(FinishReason::Cancelled) => Some(if cancel.is_cancelled() {
-                    WorkflowRouteFailureClass::Cancelled
+                    hya_runtime_abi::TurnRouteFailureClass::Cancelled
                 } else {
-                    WorkflowRouteFailureClass::Aborted
+                    hya_runtime_abi::TurnRouteFailureClass::Aborted
                 }),
-                Err(error) => Some(workflow_failure_class(error, &cancel)),
+                Err(error) => Some(core_route_failure_class(error, &cancel)),
                 Ok(_) => None,
             };
             if let Some(failure) = failure {
-                route.finalize(Some(failure)).await?;
+                route.finalize(Some(failure))?;
             }
         }
         if let Err(error) = &outcome
