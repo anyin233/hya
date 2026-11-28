@@ -45,6 +45,7 @@ sequenceDiagram
 - **Server projection is authoritative:** The TUI never builds a competing state model from raw SSE tokens. Live `seq = 0` deltas animate the active streaming block in `src/state/store.ts`, while durable boundaries (`messageFinished`, `sessionReverted`, `catalogUpdated`, `resync`) reconcile directly against `/v1` server projections.
 - **Hot supervisor reload:** Bare `hya` launches `packages/hya-tui` under a tiny wrapper (`src/supervisor.ts`). After `hya serve restart` (or `/reload-tui`), the TUI restarts its own JS bundle in place while keeping your open session ID and unsent composer draft intact.
 - **Confined TUI extensions:** Bundle `tui:` extensions run in a separate child process (`packages/hya-tui-sdk`) inside QuickJS WebAssembly VMs (64 MiB cap, 2s call deadline) or trusted JSC realms, wrapped in Linux Landlock + seccomp or macOS `sandbox_init`.
+- **Zero-bundle bare startup (`hya --bare`):** When `GET /v2/tui-extensions` advertises an empty catalog (and optional bundle APIs such as `hya/workflow` return 404), `ExtensionManager.settled()` resolves immediately without waiting for `hya/basic-tui-components`. `visiblePaneRoot` and `statusLineShown` gracefully collapse unavailable bundled sidebar panes (`projects`, `sessions`, `todos`, `context`, and `extension` panes) back to `chatPaneLayout()` (`conversation` + `activity` + `composer` + status line) with zero `"Loading…"` or missing-pane placeholders, while core overlays (`ProviderView`, `McpView`, `SkillsView`, `BundlesView`, `RulesView`, `DiffView`) remain operational.
 
 ---
 

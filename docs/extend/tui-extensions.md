@@ -127,3 +127,4 @@ Inside Hya, run **`/extensions`** (or open **`/bundles`**):
   ```text
   /layout split left extension acme/git-status-ui#git-summary
   ```
+- **Running without TUI bundles (`hya --bare`):** When the backend advertises zero TUI extensions, `ExtensionManager.settled()` resolves immediately, no extension host process is kept running, and the TUI falls back to the single-column chat layout (`conversation` + `activity` + `composer` + status line) without `"Loading…"` or missing-pane placeholders. Core overlays (`/key`, `/mcp`, `/skills`, `/bundles`, `/rules`, `/diff`) remain available without any TUI bundle installed.

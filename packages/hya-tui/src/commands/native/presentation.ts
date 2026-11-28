@@ -1,4 +1,5 @@
 import { copyNotice } from "../../composer/clipboard"
+import { extensionManager } from "../../extensions/manager"
 import { layoutBreakpoints, parseSwitch, sidebarTooNarrowNotice, sidebarVisible } from "../../state/layout"
 import { lastReplyText, transcriptViews } from "../../state/messages"
 import { autoThemeFor, autoThemeSetting, resolveThemeSetting, setTheme, setThemeSetting, terminalThemeMode, themeSetting, themes, type ThemeDefinition } from "../../theme"
@@ -52,6 +53,10 @@ export const presentationCommands: CommandSpec[] = [
     run: ({ store, actions }, { args }) => {
       const component = store.state.structure.sidebar.enabled
       const shown = parseSwitch(args[0], component && sidebarVisible(store.state.sidebar, store.state.columns), "Usage: /sidebar [on|off]")
+      if (shown && extensionManager.bare()) {
+        store.setStatus("Sidebar unavailable: no TUI bundles loaded")
+        return
+      }
       // A single-column preset: `on` turns the sidebar component on for this session (`/set sidebar on`).
       if (shown && !component) enableSidebar(actions)
       if (shown && store.state.columns < layoutBreakpoints.sidebar) {

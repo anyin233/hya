@@ -9,7 +9,8 @@ import { contextUsage, formatTokens, sessionTokens, truncate, truncateStart } fr
 import { effectiveMode, modeDisplay } from "./modes"
 import type { AppState } from "./store"
 import type { StatusSegment } from "../config/presets"
-import { paneLeaves, visiblePaneRoot } from "./panes"
+import { extensionManager } from "../extensions/manager"
+import { paneLeaves, visiblePaneRoot, type VisiblePaneOptions } from "./panes"
 
 export type SegmentTone = "muted" | "fg" | "accent" | "warning" | "error"
 
@@ -144,14 +145,19 @@ export function borderInfoText(state: AppState, segments: readonly StatusSegment
  * Context pane already shows these facts (ADR-0036 "Deduplication"; the
  * workspace preset below 150 columns hides its sidebar, so the line returns).
  */
-export function statusLineShown(state: AppState, columns: number, placement: "below" | "band" = "below"): boolean {
+export function statusLineShown(
+  state: AppState,
+  columns: number,
+  placement: "below" | "band" = "below",
+  paneOptions: VisiblePaneOptions = extensionManager.visiblePaneOptions(),
+): boolean {
   const settings = state.structure.statusline
   if (!settings.enabled) return false
   // A band needs the band input (`composer.style = "band"`); with a boxed input it goes below.
   const effective = settings.placement === "band" && state.structure.composer.style === "band" ? "band" : "below"
   if (effective !== placement) return false
   if (!state.structure.sidebar.enabled) return true
-  return !paneLeaves(visiblePaneRoot(state.paneLayout.root, columns, state.sidebar, state.projectsSidebar)).some((pane) => pane.kind === "context")
+  return !paneLeaves(visiblePaneRoot(state.paneLayout.root, columns, state.sidebar, state.projectsSidebar, paneOptions)).some((pane) => pane.kind === "context")
 }
 
 /** The rule of a band input without a status band: `─` across, `composer.border_info` at the right end. */
