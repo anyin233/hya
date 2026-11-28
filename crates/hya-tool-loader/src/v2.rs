@@ -19,11 +19,11 @@ use hya_bundle::{FirstPartySource, first_party_bundle, first_party_source, load_
 use hya_context::rewrite::Rewriter;
 use hya_proto::{Envelope, ModelRef, SessionId};
 use hya_runtime_abi::{
-    AbiDigestFn, AbiError, DriverRunOutcome, GoalDriver, GoalRunRequest, HookPoint, HostError,
-    HostRuntime, LoopDriver, LoopRunRequest, NativeAgentSpawnInput, NativeApiEndpoint,
-    NativeBundleApiHandler, NativeBundleApiReply, NativeBundleApiRequest, NativeChatParamsInput,
-    NativeCommandBeforeInput, NativeCompactionAfterInput, NativeCompactionBeforeInput,
-    NativeCompactionDecision, NativeHook, NativeMessageUserBeforeInput, NativeModelFallbackInput,
+    AbiDigestFn, AbiError, DriverReport, DriverRequest, HookPoint, HostError, HostRuntime,
+    NativeAgentSpawnInput, NativeApiEndpoint, NativeBundleApiHandler, NativeBundleApiReply,
+    NativeBundleApiRequest, NativeChatParamsInput, NativeCommandBeforeInput,
+    NativeCompactionAfterInput, NativeCompactionBeforeInput, NativeCompactionDecision,
+    NativeDriver, NativeHook, NativeMessageUserBeforeInput, NativeModelFallbackInput,
     NativePermissionApproveInput, NativePluginContext, NativeRegistrations, NativeService,
     NativeSessionLifecycleInput, NativeTextCompleteInput, NativeToolAfterInput,
     NativeToolAfterOutcome, NativeToolBeforeInput, NativeToolBeforeOutcome, RegisterV2Fn,
@@ -329,53 +329,24 @@ impl UriSchemaHandler for UriSchemaHandlerAdapter {
     }
 }
 
-struct GoalDriverAdapter {
-    inner: Arc<dyn GoalDriver>,
+struct NativeDriverAdapter {
+    inner: Arc<dyn NativeDriver>,
     with_runtime: RuntimeEntry,
 }
 
 #[async_trait]
-impl GoalDriver for GoalDriverAdapter {
-    fn id(&self) -> &str {
-        self.inner.id()
+impl NativeDriver for NativeDriverAdapter {
+    fn name(&self) -> &str {
+        self.inner.name()
     }
 
-    async fn run_goal(
+    async fn run(
         &self,
         runtime: Arc<dyn HostRuntime>,
-        request: GoalRunRequest,
+        request: DriverRequest,
         cancel: CancellationToken,
-    ) -> Result<DriverRunOutcome, HostError> {
-        poll_host_result(
-            self.inner.run_goal(runtime, request, cancel),
-            self.with_runtime,
-        )
-        .await
-    }
-}
-
-struct LoopDriverAdapter {
-    inner: Arc<dyn LoopDriver>,
-    with_runtime: RuntimeEntry,
-}
-
-#[async_trait]
-impl LoopDriver for LoopDriverAdapter {
-    fn id(&self) -> &str {
-        self.inner.id()
-    }
-
-    async fn run_loop(
-        &self,
-        runtime: Arc<dyn HostRuntime>,
-        request: LoopRunRequest,
-        cancel: CancellationToken,
-    ) -> Result<DriverRunOutcome, HostError> {
-        poll_host_result(
-            self.inner.run_loop(runtime, request, cancel),
-            self.with_runtime,
-        )
-        .await
+    ) -> Result<DriverReport, HostError> {
+        poll_host_result(self.inner.run(runtime, request, cancel), self.with_runtime).await
     }
 }
 
@@ -446,24 +417,14 @@ fn wrap_registrations_with_runtime(
                 }) as Arc<dyn UriSchemaHandler>
             })
             .collect(),
-        goal_drivers: regs
-            .goal_drivers
+        drivers: regs
+            .drivers
             .into_iter()
             .map(|inner| {
-                Arc::new(GoalDriverAdapter {
+                Arc::new(NativeDriverAdapter {
                     inner,
                     with_runtime,
-                }) as Arc<dyn GoalDriver>
-            })
-            .collect(),
-        loop_drivers: regs
-            .loop_drivers
-            .into_iter()
-            .map(|inner| {
-                Arc::new(LoopDriverAdapter {
-                    inner,
-                    with_runtime,
-                }) as Arc<dyn LoopDriver>
+                }) as Arc<dyn NativeDriver>
             })
             .collect(),
     }

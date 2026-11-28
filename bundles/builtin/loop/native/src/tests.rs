@@ -15,10 +15,9 @@ use hya_runtime_abi::{
     BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,
     BundleClaimRequest, BundleStateEntry, DriverRunOutcome, ExtensionEntry, ExtensionKind,
     HostBundleStorage, HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry,
-    HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner, LoopDriver, LoopRunRequest,
-    ModelCallRequest, ModelCallResponse, ModelStreamChunk, ModelWindowInfo, NativeService,
-    SessionListFilter, SessionSummaryMeta, TurnOutcome, TurnSpawnRequest, TurnStartRequest,
-    TurnStatus, abi_digest_v2,
+    HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner, ModelCallRequest,
+    ModelCallResponse, ModelStreamChunk, ModelWindowInfo, NativeService, SessionListFilter,
+    SessionSummaryMeta, TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus, abi_digest_v2,
 };
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
@@ -1197,7 +1196,7 @@ async fn native_loop_driver_runs_with_host_runtime_skills_events_and_service_hea
     assert!(service.health().await.healthy);
 
     let driver = NativeLoopDriver::new(Arc::clone(&service));
-    assert_eq!(driver.id(), LOOP_DRIVER_ID);
+    assert_eq!(hya_runtime_abi::NativeDriver::name(&driver), LOOP_DRIVER_ID);
 
     let outcome = driver
         .run_loop(

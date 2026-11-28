@@ -14,14 +14,14 @@ use hya_proto::{
 };
 use hya_runtime_abi::{
     AbiError, BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,
-    BundleClaimRequest, BundleStateEntry, DriverRunOutcome, ExtensionEntry, ExtensionEventContext,
-    ExtensionKind, GoalRunRequest, HostBundleStorage, HostCatalogReader, HostError, HostEventBus,
+    BundleClaimRequest, BundleStateEntry, DriverRequest, ExtensionEntry, ExtensionEventContext,
+    ExtensionKind, HostBundleStorage, HostCatalogReader, HostError, HostEventBus,
     HostExtensionRegistry, HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner,
-    LoopRunRequest, ModelCallRequest, ModelCallResponse, ModelStreamChunk, ModelWindowInfo,
-    NativeBundleApiRequest, NativeCompactionBeforeInput, NativeCompactionDecision,
-    NativeCompactionTrigger, NativeToolBeforeInput, NativeToolBeforeOutcome, SessionListFilter,
-    SessionSummaryMeta, ToolVisibilityInput, ToolVisibilityOutcome, TurnOutcome, TurnSpawnRequest,
-    TurnStartRequest, TurnStatus, UriResolveCtx,
+    ModelCallRequest, ModelCallResponse, ModelStreamChunk, ModelWindowInfo, NativeBundleApiRequest,
+    NativeCompactionBeforeInput, NativeCompactionDecision, NativeCompactionTrigger,
+    NativeToolBeforeInput, NativeToolBeforeOutcome, SessionListFilter, SessionSummaryMeta,
+    ToolVisibilityInput, ToolVisibilityOutcome, TurnOutcome, TurnSpawnRequest, TurnStartRequest,
+    TurnStatus, UriResolveCtx,
 };
 use hya_tool::{AgentDef, PermissionPlane, PermissionRules, SkillCatalogEntry, ToolCtx};
 use hya_tool_loader::{NativeBundleLoader, load_v2_from_path, try_from_tool_families};
@@ -533,8 +533,7 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
     assert_eq!(regs.api_handlers.len(), 1);
     assert_eq!(regs.projection_reducers.len(), 1);
     assert_eq!(regs.uri_schema_handlers.len(), 1);
-    assert_eq!(regs.goal_drivers.len(), 1);
-    assert_eq!(regs.loop_drivers.len(), 1);
+    assert_eq!(regs.drivers.len(), 1);
 
     let session = SessionId::new();
     let parent = SessionId::new();
@@ -670,55 +669,22 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
         .await?;
     assert_eq!(write_res["bytes"], 5);
 
-    // GoalDriver & LoopDriver
-    let goal_outcome = regs.goal_drivers[0]
-        .run_goal(
+    // NativeDriver
+    let report = regs.drivers[0]
+        .run(
             Arc::clone(&runtime),
-            GoalRunRequest {
+            DriverRequest {
                 session,
-                goal: "ship v2".to_string(),
-                max_iterations: 3,
-                max_wall_clock_secs: 60,
                 agent: None,
                 model: None,
-                config: Value::Null,
+                workdir: std::env::temp_dir(),
+                args: serde_json::json!({ "prompt": "ship v2" }),
             },
             CancellationToken::new(),
         )
         .await?;
-    assert_eq!(
-        goal_outcome,
-        DriverRunOutcome::Achieved {
-            iterations: 1,
-            reason: "goal-turn: ship v2".to_string(),
-        }
-    );
-
-    let loop_outcome = regs.loop_drivers[0]
-        .run_loop(
-            Arc::clone(&runtime),
-            LoopRunRequest {
-                session,
-                target: "all tests green".to_string(),
-                budget: 5,
-                max_wall_clock_secs: 60,
-                satisfaction_threshold: 80,
-                max_no_progress: 2,
-                predicate: None,
-                agent: None,
-                model: None,
-                config: Value::Null,
-            },
-            CancellationToken::new(),
-        )
-        .await?;
-    assert_eq!(
-        loop_outcome,
-        DriverRunOutcome::Achieved {
-            iterations: 2,
-            reason: "verified: all tests green".to_string(),
-        }
-    );
+    assert_eq!(report.stdout, "goal-turn: ship v2");
+    assert_eq!(report.exit_code, 0);
 
     // Verify registration error propagation from cdylib without panicking.
     let err = load_v2_from_path("hya/fail-register", &lib_path, runtime)

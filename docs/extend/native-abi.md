@@ -8,7 +8,7 @@ Under Hya v2 ([ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)), 
 
 Native ABI v2 solves two problems that limited ABI v1:
 
-1. **Unified registration:** A single `cdylib` can register any combination of **tools**, **context rewriters**, **background services**, **lifecycle hooks**, **HTTP/gRPC `BundleApi` handlers**, **event-log `ProjectionReducer`s**, **custom URI `UriSchemaHandler`s**, **`GoalDriver`s**, and **`LoopDriver`s** through one entry symbol (`hya_native_register_v2`).
+1. **Unified registration:** A single `cdylib` can register any combination of **tools**, **context rewriters**, **background services**, **lifecycle hooks**, **HTTP/gRPC `BundleApi` handlers**, **event-log `ProjectionReducer`s**, **custom URI `UriSchemaHandler`s**, **`NativeDriver`s**, and **declared hook points** through one entry symbol (`hya_native_register_v2`).
 2. **Zero-linkage host mediation:** Native bundles never link `hya-store`, `sqlx`, `hya-engine`, `hya-server`, `axum`, or `tonic`. Instead, the host injects an `Arc<dyn HostRuntime>` giving typed, mediated access to session logs, generic KV/claim persistence, turn execution, model calls, the live event bus, catalogs, and sibling extensions—verified before registration by a 32-byte lockstep SHA-256 ABI digest.
 
 ---
@@ -278,7 +278,7 @@ The block may return `()` or `Result<(), E>` (where `E: Display`, via `IntoRegis
 | `SYMBOL_SHARE_DEADLINE_V2` (`hya_native_share_deadline_v2`) | `unsafe extern "C" fn(cell: *const c_void)` (`ShareDeadlineFn`) | Adopts the host's process-lifetime deadline cell (`deadline_cell_v2()`) inside the bundle's `hya-tool` copy. |
 | `SYMBOL_REGISTER_V2` (`hya_native_register_v2`) | `unsafe extern "C" fn(ctx: *const NativePluginContext, out: *mut NativeRegistrations, error_out: *mut Option<String>) -> i32` (`RegisterV2Fn`) | Populates `NativeRegistrations`. Returns `0` on success, `-1` on null pointer, or `1` with `error_out` populated on registration failure. |
 
-**Lockstep digest coverage (`abi_digest_v2()`):** Covers the domain separator (`"hya.runtime.native-bundle-abi/v2"`), `ABI_VERSION_V2`, `hya_version::VERSION`, `hya_version::BACKEND_VERSION`, `hya_version::RUSTC`, `std::env::consts::{OS, ARCH}`, `hya_tool::native_bundle::abi_digest_v1()`, `size_of`/`align_of` of every ABI-crossing struct and trait object (`NativePluginContext`, `NativeRegistrations`, `HostError`, `AbiError`, `Arc<dyn HostRuntime>`, `Arc<dyn Tool>`, `Arc<dyn Rewriter>`, `Arc<dyn NativeService>`, `Arc<dyn NativeHook>`, `Arc<dyn NativeBundleApiHandler>`, `Arc<dyn ProjectionReducer>`, `Arc<dyn UriSchemaHandler>`, `Arc<dyn GoalDriver>`, `Arc<dyn LoopDriver>`, `ToolCtx`, `ToolError`, `tokio::runtime::Handle`, `Option<String>`), plus raw source bytes of every `hya-runtime-abi`, `hya-tool-error`, and `hya-context` ABI file.
+**Lockstep digest coverage (`abi_digest_v2()`):** Covers the domain separator (`"hya.runtime.native-bundle-abi/v2"`), `ABI_VERSION_V2`, `hya_version::VERSION`, `hya_version::BACKEND_VERSION`, `hya_version::RUSTC`, `std::env::consts::{OS, ARCH}`, `hya_tool::native_bundle::abi_digest_v1()`, `size_of`/`align_of` of every ABI-crossing struct and trait object (`NativePluginContext`, `NativeRegistrations`, `HostError`, `AbiError`, `Arc<dyn HostRuntime>`, `Arc<dyn Tool>`, `Arc<dyn Rewriter>`, `Arc<dyn NativeService>`, `Arc<dyn NativeHook>`, `Arc<dyn NativeBundleApiHandler>`, `Arc<dyn ProjectionReducer>`, `Arc<dyn UriSchemaHandler>`, `Arc<dyn NativeDriver>`, `ToolCtx`, `ToolError`, `tokio::runtime::Handle`, `Option<String>`), plus raw source bytes of every `hya-runtime-abi`, `hya-tool-error`, and `hya-context` ABI file.
 
 ### 3.2 `NativePluginContext` & `NativeRegistrations`
 
@@ -301,8 +301,8 @@ pub struct NativeRegistrations {
     pub uri_schema_handlers: Vec<Arc<dyn UriSchemaHandler>>,
     /// Hook points this bundle declares (local names; namespaced `<bundle-id>:<name>`).
     pub hook_points: Vec<String>,
-    pub goal_drivers: Vec<Arc<dyn GoalDriver>>,
-    pub loop_drivers: Vec<Arc<dyn LoopDriver>>,
+    /// Drivers that own a session run (namespaced `<bundle-id>:<name>`).
+    pub drivers: Vec<Arc<dyn NativeDriver>>,
 }
 ```
 
@@ -319,8 +319,6 @@ pub trait HostRuntime: Send + Sync {
     fn event_bus(&self) -> &dyn HostEventBus;
     fn catalog_reader(&self) -> &dyn HostCatalogReader;
     fn extension_registry(&self) -> &dyn HostExtensionRegistry;
-    fn goal_driver(&self) -> Option<Arc<dyn GoalDriver>> { None }
-    fn loop_driver(&self) -> Option<Arc<dyn LoopDriver>> { None }
 }
 ```
 
@@ -345,8 +343,7 @@ pub trait HostRuntime: Send + Sync {
 | **`NativeBundleApiHandler`** | `id`, `endpoints() -> &[NativeApiEndpoint]`, `handle(NativeBundleApiRequest) -> Result<NativeBundleApiReply, HostError>` | Mounted uniformly on `hya.v2.BundleApi` (`/v2/bundles/{bundle}/api/{path}` and `/v2/sessions/{session}/bundles/{bundle}/{path}`). |
 | **`ProjectionReducer`** | `bundle_id`, `initial_state() -> Value`, `apply(&self, state: &mut Value, event: &ExtensionEventContext)` | Deterministically folds `Event::Extension` records into `Projection::extensions[bundle_id]`. |
 | **`UriSchemaHandler`** | `scheme`, `writable()`, `read(UriResolveCtx, uri) -> Result<UriContent, HostError>`, `write(UriResolveCtx, uri, content)` | Plugged into `HandleRouter` via `adapt_uri_schema_handler` (`UriSchemaHandleAdapter`). Internal schemes (`artifact`, `skill`, `local`) are protected. |
-| **`GoalDriver`** | `id`, `run_goal(runtime, GoalRunRequest, cancel) -> Result<DriverRunOutcome, HostError>` | Drives `hya -p` goal mode (`hya/goal`). |
-| **`LoopDriver`** | `id`, `run_loop(runtime, LoopRunRequest, cancel) -> Result<DriverRunOutcome, HostError>` | Drives `hya loop` verified loops (`hya/loop`). |
+| **`NativeDriver`** | `name`, `run(runtime, DriverRequest, cancel) -> Result<DriverReport, HostError>` | A run that owns a session until it returns. The host registers it as `<bundle-id>:<name>` and knows nothing else about it. `DriverRequest` carries `session`, `agent`, `model`, `workdir`, and JSON `args` (for a CLI command, its parsed arguments); `DriverReport` carries `stdout`, `stderr`, and `exit_code`, which the CLI prints and exits with. `DriverRunOutcome` is a shared terminal-outcome type for iterating drivers. Consumers: `hya/goal:goal` (`hya -p`) and `hya/loop:loop` (`hya loop`). |
 
 ### 3.5 `ErasedPlane` & `ExtensionPlanes` (`crates/hya-tool`)
 

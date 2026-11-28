@@ -23,12 +23,12 @@ use hya_proto::{
 use hya_provider::{CompletionRequest, ProviderRouter, ReasoningEffort};
 use hya_runtime_abi::{
     BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,
-    BundleClaimRequest, BundleStateEntry, ExtensionEntry, ExtensionKind, GoalDriver,
-    HostBundleStorage, HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry,
-    HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner, LoopDriver,
-    ManagedMemberActivateRequest, ManagedMemberActivationOutcome, ManagedMemberActivationStatus,
-    ManagedMemberHandle, ManagedMemberSpawnRequest, MemberMailRevivalRequest, ModelCallRequest,
-    ModelCallResponse, ModelRouteEntry, ModelStreamChunk, ModelToolCall, ModelWindowInfo,
+    BundleClaimRequest, BundleStateEntry, ExtensionEntry, ExtensionKind, HostBundleStorage,
+    HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry, HostModelCaller,
+    HostRuntime, HostSessionStore, HostTurnRunner, ManagedMemberActivateRequest,
+    ManagedMemberActivationOutcome, ManagedMemberActivationStatus, ManagedMemberHandle,
+    ManagedMemberSpawnRequest, MemberMailRevivalRequest, ModelCallRequest, ModelCallResponse,
+    ModelRouteEntry, ModelStreamChunk, ModelToolCall, ModelWindowInfo, NativeDriver,
     ResolvedModelRoute, ResolvedModelRouteCandidate, ScopeCatalogSnapshot, SessionListFilter,
     SessionSummaryMeta, StagedMailAck, TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus,
 };
@@ -54,8 +54,8 @@ pub(crate) struct AppHostRuntime {
     engine: OnceLock<Weak<SessionEngine>>,
     resident_supervisor: OnceLock<Weak<ResidentSupervisor>>,
     sidecar_environment: OnceLock<Arc<BundleSidecarEnvironment>>,
-    goal_driver: OnceLock<Arc<dyn GoalDriver>>,
-    loop_drivers: OnceLock<Vec<Arc<dyn LoopDriver>>>,
+    /// Drivers of the loaded bundles, by `<bundle-id>:<name>`.
+    drivers: std::sync::RwLock<std::collections::BTreeMap<String, Arc<dyn NativeDriver>>>,
     /// Bundle-declared hook points (`<bundle-id>:<point>`) of the loaded bundles.
     declared_hooks: std::sync::RwLock<BTreeSet<String>>,
 }
@@ -81,8 +81,7 @@ impl AppHostRuntime {
             engine: OnceLock::new(),
             resident_supervisor: OnceLock::new(),
             sidecar_environment: OnceLock::new(),
-            goal_driver: OnceLock::new(),
-            loop_drivers: OnceLock::new(),
+            drivers: std::sync::RwLock::new(std::collections::BTreeMap::new()),
             declared_hooks: std::sync::RwLock::new(BTreeSet::new()),
         }
     }
@@ -150,14 +149,24 @@ impl AppHostRuntime {
         let _ = self.sidecar_environment.set(sidecar);
     }
 
-    /// Register the active native [`GoalDriver`] loaded from `hya/goal`.
-    pub(crate) fn attach_goal_driver(&self, driver: Arc<dyn GoalDriver>) {
-        let _ = self.goal_driver.set(driver);
+    /// Register the drivers `bundle_id` exports as `<bundle-id>:<name>`.
+    pub(crate) fn register_drivers(&self, bundle_id: &str, drivers: Vec<Arc<dyn NativeDriver>>) {
+        let mut registered = self
+            .drivers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for driver in drivers {
+            registered.insert(format!("{bundle_id}:{}", driver.name()), driver);
+        }
     }
 
-    /// Register loaded native [`LoopDriver`] instances (e.g. from `hya/loop`).
-    pub(crate) fn set_loop_drivers(&self, drivers: Vec<Arc<dyn LoopDriver>>) {
-        let _ = self.loop_drivers.set(drivers);
+    /// The driver registered as `name` (`<bundle-id>:<name>`).
+    pub(crate) fn driver(&self, name: &str) -> Option<Arc<dyn NativeDriver>> {
+        self.drivers
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(name)
+            .cloned()
     }
 
     fn engine(&self) -> Result<Arc<SessionEngine>, HostError> {
@@ -1679,24 +1688,17 @@ impl HostExtensionRegistry for AppHostRuntime {
         kind: Option<ExtensionKind>,
     ) -> Result<Vec<ExtensionEntry>, HostError> {
         let mut entries = Vec::new();
-        if (kind.is_none() || kind == Some(ExtensionKind::GoalDriver))
-            && let Some(driver) = self.goal_driver.get()
-        {
-            entries.push(ExtensionEntry {
-                bundle_id: "hya/goal".to_string(),
-                kind: ExtensionKind::GoalDriver,
-                name: driver.id().to_string(),
-                metadata: Value::Null,
-            });
-        }
-        if (kind.is_none() || kind == Some(ExtensionKind::LoopDriver))
-            && let Some(drivers) = self.loop_drivers.get()
-        {
-            for driver in drivers {
+        if kind.is_none() || kind == Some(ExtensionKind::Driver) {
+            let drivers = self
+                .drivers
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for name in drivers.keys() {
+                let (bundle_id, local) = name.split_once(':').unwrap_or((name.as_str(), ""));
                 entries.push(ExtensionEntry {
-                    bundle_id: "hya/loop".to_string(),
-                    kind: ExtensionKind::LoopDriver,
-                    name: driver.id().to_string(),
+                    bundle_id: bundle_id.to_string(),
+                    kind: ExtensionKind::Driver,
+                    name: local.to_string(),
                     metadata: Value::Null,
                 });
             }
@@ -1705,17 +1707,6 @@ impl HostExtensionRegistry for AppHostRuntime {
     }
 
     async fn has_bundle(&self, bundle_id: &str) -> Result<bool, HostError> {
-        if bundle_id == "hya/goal" && self.goal_driver.get().is_some() {
-            return Ok(true);
-        }
-        if bundle_id == "hya/loop"
-            && self
-                .loop_drivers
-                .get()
-                .is_some_and(|drivers| !drivers.is_empty())
-        {
-            return Ok(true);
-        }
         Ok(self.get_bundle(bundle_id).await?.is_some())
     }
 
@@ -1815,15 +1806,5 @@ impl HostRuntime for AppHostRuntime {
 
     fn extension_registry(&self) -> &dyn HostExtensionRegistry {
         self
-    }
-
-    fn goal_driver(&self) -> Option<Arc<dyn GoalDriver>> {
-        self.goal_driver.get().cloned()
-    }
-
-    fn loop_driver(&self) -> Option<Arc<dyn LoopDriver>> {
-        self.loop_drivers
-            .get()
-            .and_then(|drivers| drivers.first().cloned())
     }
 }

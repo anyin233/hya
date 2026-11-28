@@ -10,12 +10,12 @@ use hya_bundle::{ApiMethod, ApiScope};
 use hya_context::rewrite::{RewriteCtx, Rewriter};
 use hya_proto::{ToolName, ToolSchema};
 use hya_runtime_abi::{
-    DriverRunOutcome, ExtensionEventContext, GoalDriver, GoalRunRequest, HookPoint, HostError,
-    HostRuntime, LoopDriver, LoopRunRequest, NativeApiEndpoint, NativeBundleApiHandler,
-    NativeBundleApiReply, NativeBundleApiRequest, NativeCompactionBeforeInput,
-    NativeCompactionDecision, NativeHook, NativeService, NativeToolBeforeInput,
-    NativeToolBeforeOutcome, ProjectionReducer, ServiceHealth, ToolVisibilityInput,
-    ToolVisibilityOutcome, TurnStartRequest, UriContent, UriResolveCtx, UriSchemaHandler,
+    DriverReport, DriverRequest, ExtensionEventContext, HookPoint, HostError, HostRuntime,
+    NativeApiEndpoint, NativeBundleApiHandler, NativeBundleApiReply, NativeBundleApiRequest,
+    NativeCompactionBeforeInput, NativeCompactionDecision, NativeDriver, NativeHook, NativeService,
+    NativeToolBeforeInput, NativeToolBeforeOutcome, ProjectionReducer, ServiceHealth,
+    ToolVisibilityInput, ToolVisibilityOutcome, TurnStartRequest, UriContent, UriResolveCtx,
+    UriSchemaHandler,
 };
 use hya_tool::{Tool, ToolCtx, ToolError};
 use serde_json::{Value, json};
@@ -262,27 +262,31 @@ impl UriSchemaHandler for TestV2UriHandler {
     }
 }
 
-struct TestV2GoalDriver;
+struct TestV2Driver;
 
 #[async_trait]
-impl GoalDriver for TestV2GoalDriver {
-    fn id(&self) -> &str {
-        "test-goal"
+impl NativeDriver for TestV2Driver {
+    fn name(&self) -> &str {
+        "test-driver"
     }
 
-    async fn run_goal(
+    async fn run(
         &self,
         runtime: Arc<dyn HostRuntime>,
-        request: GoalRunRequest,
+        request: DriverRequest,
         cancel: CancellationToken,
-    ) -> Result<DriverRunOutcome, HostError> {
+    ) -> Result<DriverReport, HostError> {
         tokio::time::sleep(Duration::from_millis(1)).await;
+        let prompt = request.args["prompt"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
         let turn = runtime
             .turn_runner()
             .run_turn(
                 TurnStartRequest {
                     session: request.session,
-                    prompt: request.goal,
+                    prompt,
                     agent: request.agent,
                     model: request.model,
                     system_override: None,
@@ -292,31 +296,9 @@ impl GoalDriver for TestV2GoalDriver {
                 cancel,
             )
             .await?;
-        Ok(DriverRunOutcome::Achieved {
-            iterations: 1,
-            reason: turn.output_text,
-        })
-    }
-}
-
-struct TestV2LoopDriver;
-
-#[async_trait]
-impl LoopDriver for TestV2LoopDriver {
-    fn id(&self) -> &str {
-        "test-loop"
-    }
-
-    async fn run_loop(
-        &self,
-        _runtime: Arc<dyn HostRuntime>,
-        request: LoopRunRequest,
-        _cancel: CancellationToken,
-    ) -> Result<DriverRunOutcome, HostError> {
-        tokio::task::yield_now().await;
-        Ok(DriverRunOutcome::Achieved {
-            iterations: 2,
-            reason: format!("verified: {}", request.target),
+        Ok(DriverReport {
+            stdout: turn.output_text,
+            ..DriverReport::default()
         })
     }
 }
@@ -350,8 +332,7 @@ hya_runtime_abi::export_native_bundle_v2!(|ctx, out| {
     out.projection_reducers
         .push(Arc::new(TestV2Reducer { bundle_id }));
     out.uri_schema_handlers.push(Arc::new(TestV2UriHandler));
-    out.goal_drivers.push(Arc::new(TestV2GoalDriver));
-    out.loop_drivers.push(Arc::new(TestV2LoopDriver));
+    out.drivers.push(Arc::new(TestV2Driver));
     let _unused: BTreeMap<String, String> = BTreeMap::new();
     Ok::<(), HostError>(())
 });

@@ -12,9 +12,9 @@ pub mod evaluator;
 pub mod service;
 
 pub use driver::{
-    GOAL_DRIVER_ID, GateOutcome, GoalGate, IterationDriver, IterationExecutor, IterationGate,
-    LeadTurnExecutor, NativeGoalDriver, SafetyCaps, prepare_goal, render_transcript, run_goal,
-    validate_goal_condition, wrap_up_directive,
+    DEFAULT_MAX_ITERATIONS, GOAL_DRIVER_ID, GateOutcome, GoalGate, GoalRunRequest, IterationDriver,
+    IterationExecutor, IterationGate, LeadTurnExecutor, NativeGoalDriver, SafetyCaps, prepare_goal,
+    render_transcript, run_goal, validate_goal_condition, wrap_up_directive,
 };
 pub use evaluator::{
     DEFAULT_EVALUATOR_SYSTEM_PROMPT, EVALUATE_HOOK, EVALUATE_HOOK_POINT, EvaluateHookInput,
@@ -27,7 +27,7 @@ pub use service::{BUNDLE_ID, GOAL_SERVICE_ID, GoalDriverService};
 hya_runtime_abi::export_native_bundle_v2!(|out| {
     out.services.push(Arc::new(GoalDriverService::new()));
     out.hook_points.push(EVALUATE_HOOK_POINT.to_string());
-    out.goal_drivers.push(Arc::new(NativeGoalDriver));
+    out.drivers.push(Arc::new(NativeGoalDriver));
 });
 
 #[cfg(test)]
@@ -38,6 +38,14 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use async_trait::async_trait;
+
+    async fn run_goal_request(
+        runtime: Arc<dyn HostRuntime>,
+        request: GoalRunRequest,
+        cancel: CancellationToken,
+    ) -> Result<DriverRunOutcome, HostError> {
+        prepare_goal(runtime, request, cancel).await?.await
+    }
     use hya_proto::{
         ActorClaim, AgentName, Envelope, Event, EventSeq, FinishReason, Message, MessageId,
         ModelRef, PartId, Projection, Role, SessionId,
@@ -45,11 +53,11 @@ mod tests {
     use hya_runtime_abi::{
         BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,
         BundleClaimRequest, BundleStateEntry, DriverRunOutcome, ExtensionEntry, ExtensionKind,
-        GoalDriver, GoalRunRequest, HostBundleStorage, HostCatalogReader, HostError, HostEventBus,
-        HostExtensionRegistry, HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner,
-        ModelCallRequest, ModelCallResponse, ModelStreamChunk, ModelWindowInfo, NativeService,
-        SessionListFilter, SessionSummaryMeta, TurnOutcome, TurnSpawnRequest, TurnStartRequest,
-        TurnStatus, abi_digest_v2,
+        HostBundleStorage, HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry,
+        HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner, ModelCallRequest,
+        ModelCallResponse, ModelStreamChunk, ModelWindowInfo, NativeService, SessionListFilter,
+        SessionSummaryMeta, TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus,
+        abi_digest_v2,
     };
     use serde_json::{Value, json};
     use tokio::sync::{broadcast, mpsc};
@@ -735,23 +743,22 @@ mod tests {
             .with_goal_bundle("CUSTOM_EVALUATOR_PROMPT_BODY");
 
         let driver = NativeGoalDriver;
-        assert_eq!(driver.id(), GOAL_DRIVER_ID);
-        let outcome = driver
-            .run_goal(
-                host.clone(),
-                GoalRunRequest {
-                    session: SessionId::new(),
-                    goal: "make tests pass".into(),
-                    max_iterations: 5,
-                    max_wall_clock_secs: 60,
-                    agent: Some(AgentName::new("hya-main")),
-                    model: Some(ModelRef::new("worker/model")),
-                    config: Value::Null,
-                },
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
+        assert_eq!(hya_runtime_abi::NativeDriver::name(&driver), GOAL_DRIVER_ID);
+        let outcome = run_goal_request(
+            host.clone(),
+            GoalRunRequest {
+                session: SessionId::new(),
+                goal: "make tests pass".into(),
+                max_iterations: 5,
+                max_wall_clock_secs: 60,
+                agent: Some(AgentName::new("hya-main")),
+                model: Some(ModelRef::new("worker/model")),
+                config: Value::Null,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             outcome,
             DriverRunOutcome::Achieved {
@@ -777,22 +784,21 @@ mod tests {
             .with_model_replies(vec![Ok(r#"{"met":true,"reason":"ok"}"#.into())])
             .with_bundle_config(json!({"goal": {"evaluator_model": "bundle/judge"}}));
 
-        let outcome = NativeGoalDriver
-            .run_goal(
-                host.clone(),
-                GoalRunRequest {
-                    session: SessionId::new(),
-                    goal: "ship it".into(),
-                    max_iterations: 3,
-                    max_wall_clock_secs: 60,
-                    agent: None,
-                    model: Some(ModelRef::new("worker/model")),
-                    config: json!({"evaluator_model": "cli/judge"}),
-                },
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
+        let outcome = run_goal_request(
+            host.clone(),
+            GoalRunRequest {
+                session: SessionId::new(),
+                goal: "ship it".into(),
+                max_iterations: 3,
+                max_wall_clock_secs: 60,
+                agent: None,
+                model: Some(ModelRef::new("worker/model")),
+                config: json!({"evaluator_model": "cli/judge"}),
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
         assert!(matches!(
             outcome,
             DriverRunOutcome::Achieved { iterations: 1, .. }
@@ -811,22 +817,21 @@ mod tests {
             ])
             .with_model_replies(vec![Ok("not json".into()), Ok("still not json".into())]);
 
-        let outcome = NativeGoalDriver
-            .run_goal(
-                host.clone(),
-                GoalRunRequest {
-                    session: SessionId::new(),
-                    goal: "do the thing".into(),
-                    max_iterations: 2,
-                    max_wall_clock_secs: 60,
-                    agent: None,
-                    model: Some(ModelRef::new("fake/model")),
-                    config: Value::Null,
-                },
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
+        let outcome = run_goal_request(
+            host.clone(),
+            GoalRunRequest {
+                session: SessionId::new(),
+                goal: "do the thing".into(),
+                max_iterations: 2,
+                max_wall_clock_secs: 60,
+                agent: None,
+                model: Some(ModelRef::new("fake/model")),
+                config: Value::Null,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             outcome,
             DriverRunOutcome::BudgetLimited {
@@ -856,22 +861,21 @@ mod tests {
                 )),
             ]);
 
-        let outcome = NativeGoalDriver
-            .run_goal(
-                host.clone(),
-                GoalRunRequest {
-                    session: SessionId::new(),
-                    goal: "write readme".into(),
-                    max_iterations: 4,
-                    max_wall_clock_secs: 60,
-                    agent: None,
-                    model: None,
-                    config: Value::Null,
-                },
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
+        let outcome = run_goal_request(
+            host.clone(),
+            GoalRunRequest {
+                session: SessionId::new(),
+                goal: "write readme".into(),
+                max_iterations: 4,
+                max_wall_clock_secs: 60,
+                agent: None,
+                model: None,
+                config: Value::Null,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             outcome,
             DriverRunOutcome::Achieved {

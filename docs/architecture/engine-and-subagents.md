@@ -46,7 +46,7 @@ Inter-agent mail ([ADR-0016](../adr/0016-channel-communication-plane.md)) is eve
 
 ## 4. Governed Execution (`hya/goal`, `hya/loop` & `hya/workflow`)
 
-- **Goal (`hya -p`, `hya/goal`) & Loop (`hya loop`, `hya/loop`) drivers:** Implemented as ABI v2 `GoalDriver` / `LoopDriver` native bundles running over `HostRuntime` where stop authority belongs strictly to budgets, stall detection, `--until`/`--while` shell exit codes, and independent evaluator/verifier sessions or hooks.
+- **Goal (`hya -p`, `hya/goal`) & Loop (`hya loop`, `hya/loop`) drivers:** Implemented as ABI v2 `NativeDriver`s (`hya/goal:goal`, `hya/loop:loop`) in native bundles running over `HostRuntime` where stop authority belongs strictly to budgets, stall detection, `--until`/`--while` shell exit codes, and independent evaluator/verifier sessions or hooks.
 - **Durable Workflow executor (`hya/workflow`):** Runs compiled `hya_workflow::CompiledWorkflow` Stage DAGs on top of `HostTurnRunner` and `Event::Extension` (`extensions["hya/workflow"]`)—mapping anonymous Stages to one-shot episodes, `actor:` keys to persistent resident sessions woken by mail, and `mode: loop` Stages to fresh verifier sessions, exposed via `BundleApi` (`/workflows`, `/state`, `/command`).
 - **Sidecar wire contract:** Per-activation JavaScript sidecars and bundle processes speak newline-delimited JSON-RPC 2.0 using plugin protocol version 1 (`initialize` retains existing `protocol_version` and `host` fields, and the only activation-specific metadata is `{ activation_id, lifecycle }`).
 

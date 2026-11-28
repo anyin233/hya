@@ -24,7 +24,6 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::HostError;
-use crate::extensions::{GoalDriver, LoopDriver};
 
 // ---------------------------------------------------------------------------
 // HostSessionStore
@@ -908,10 +907,8 @@ pub enum ExtensionKind {
     ProjectionReducer,
     /// Custom URI scheme handler (`scheme://`).
     UriScheme,
-    /// Goal iteration driver.
-    GoalDriver,
-    /// Loop iteration driver.
-    LoopDriver,
+    /// Run driver.
+    Driver,
 }
 
 /// Descriptor for one registered extension item.
@@ -1035,15 +1032,4 @@ pub trait HostRuntime: Send + Sync {
 
     /// Query and invoke registered extensions and bundle APIs.
     fn extension_registry(&self) -> &dyn HostExtensionRegistry;
-
-    /// Look up the active [`GoalDriver`] registered by a loaded native bundle
-    /// (such as `hya/goal`), returning `None` when disabled or in `--bare` mode.
-    fn goal_driver(&self) -> Option<Arc<dyn GoalDriver>> {
-        None
-    }
-
-    /// Return the active [`LoopDriver`] registered by `hya/loop`, if loaded.
-    fn loop_driver(&self) -> Option<Arc<dyn LoopDriver>> {
-        None
-    }
 }

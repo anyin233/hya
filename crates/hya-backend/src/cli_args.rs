@@ -437,45 +437,6 @@ pub(crate) enum Command {
     },
 }
 
-/// Resolve the effective loop budget from the parsed flags: `--budget`
-/// outranks the `--max-iterations` alias, the default mirrors
-/// [`hya_app::DEFAULT_LOOP_BUDGET`], and every request is clamped into the
-/// `1..=100` range enforced by `hya/loop`.
-#[must_use]
-pub(crate) fn loop_budget(budget: Option<u32>, max_iterations: Option<u32>) -> u32 {
-    hya_app::clamp_loop_budget(
-        budget
-            .or(max_iterations)
-            .unwrap_or(hya_app::DEFAULT_LOOP_BUDGET),
-    )
-}
-
-/// Build the deterministic loop predicate from `--while`/`--until`: exactly
-/// one may be set, evaluated in the session workdir.
-pub(crate) fn build_loop_predicate(
-    while_command: Option<String>,
-    until_command: Option<String>,
-    workdir: &std::path::Path,
-) -> Result<Option<hya_app::LoopPredicateSpec>, String> {
-    match (while_command, until_command) {
-        (Some(_), Some(_)) => Err(
-            "--while and --until are mutually exclusive; give exactly one loop condition"
-                .to_string(),
-        ),
-        (Some(command), None) => Ok(Some(hya_app::LoopPredicateSpec {
-            command,
-            mode: hya_app::LoopPredicateMode::While,
-            workdir: workdir.to_path_buf(),
-        })),
-        (None, Some(command)) => Ok(Some(hya_app::LoopPredicateSpec {
-            command,
-            mode: hya_app::LoopPredicateMode::Until,
-            workdir: workdir.to_path_buf(),
-        })),
-        (None, None) => Ok(None),
-    }
-}
-
 /// Default WebUI port of bare `hya` (`--port` overrides it).
 pub(crate) const DEFAULT_WEB_PORT: u16 = 3250;
 
@@ -887,9 +848,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_goal_loop_budget_and_predicate_flags() {
-        use hya_app::{DEFAULT_LOOP_BUDGET, HARD_MAX_LOOP_BUDGET, LoopPredicateMode};
-
+    fn parses_goal_and_loop_flags() {
         assert_eq!(
             p("hya -p ship --evaluator-model deep/o3-mini")
                 .evaluator_model
@@ -911,38 +870,6 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(super::loop_budget(None, None), DEFAULT_LOOP_BUDGET);
-        assert_eq!(
-            (
-                super::loop_budget(Some(5), Some(9)),
-                super::loop_budget(None, Some(9)),
-                super::loop_budget(Some(0), None)
-            ),
-            (5, 9, 1)
-        );
-        assert_eq!(super::loop_budget(None, Some(500)), HARD_MAX_LOOP_BUDGET);
-
-        let dir = std::env::temp_dir();
-        assert_eq!(
-            super::build_loop_predicate(Some("x".into()), None, &dir)
-                .unwrap()
-                .unwrap()
-                .mode,
-            LoopPredicateMode::While
-        );
-        assert_eq!(
-            super::build_loop_predicate(None, Some("y".into()), &dir)
-                .unwrap()
-                .unwrap()
-                .mode,
-            LoopPredicateMode::Until
-        );
-        assert!(
-            super::build_loop_predicate(None, None, &dir)
-                .unwrap()
-                .is_none()
-        );
-        assert!(super::build_loop_predicate(Some("a".into()), Some("b".into()), &dir).is_err());
     }
 
     #[test]

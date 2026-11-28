@@ -2,8 +2,8 @@
 //!
 //! Alongside [`hya_tool::Tool`] and [`hya_context::rewrite::Rewriter`], native
 //! bundles may register lifecycle services, runtime hooks, bundle HTTP/gRPC API
-//! handlers, event projection reducers, custom URI scheme handlers, and goal or
-//! loop drivers.
+//! handlers, event projection reducers, custom URI scheme handlers, and
+//! drivers.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -852,54 +852,36 @@ impl hya_tool::handle::DynamicUriHandler for UriSchemaHandleAdapter {
 }
 
 // ---------------------------------------------------------------------------
-// GoalDriver & LoopDriver
+// NativeDriver
 // ---------------------------------------------------------------------------
 
-/// Request parameters passed to a [`GoalDriver`].
+/// Input of one [`NativeDriver`] run.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct GoalRunRequest {
-    /// Target session executing the goal run.
+pub struct DriverRequest {
+    /// Session the run drives.
     pub session: SessionId,
-    /// Goal completion condition text.
-    pub goal: String,
-    /// Maximum iterations allowed before capping.
-    pub max_iterations: u32,
-    /// Maximum wall-clock duration in seconds.
-    pub max_wall_clock_secs: u64,
-    /// Optional agent id for worker turns.
+    /// Agent bound to the session.
     pub agent: Option<AgentName>,
-    /// Optional model override.
+    /// The session's worker model.
     pub model: Option<ModelRef>,
-    /// Bundle-specific driver configuration JSON.
-    pub config: Value,
+    /// Working directory of the run.
+    pub workdir: std::path::PathBuf,
+    /// Driver arguments; for a CLI command, its parsed arguments by id.
+    pub args: Value,
 }
 
-/// Request parameters passed to a [`LoopDriver`].
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct LoopRunRequest {
-    /// Target session executing the loop run.
-    pub session: SessionId,
-    /// Loop target objective.
-    pub target: String,
-    /// Maximum iteration budget.
-    pub budget: u32,
-    /// Maximum wall-clock duration in seconds.
-    pub max_wall_clock_secs: u64,
-    /// Minimum verifier score treated as satisfied (`0..=100`).
-    pub satisfaction_threshold: u8,
-    /// Consecutive no-progress iterations before stopping as stalled.
-    pub max_no_progress: u32,
-    /// Optional deterministic predicate configuration/command JSON.
-    pub predicate: Option<Value>,
-    /// Optional agent id for worker turns.
-    pub agent: Option<AgentName>,
-    /// Optional model override.
-    pub model: Option<ModelRef>,
-    /// Bundle-specific driver configuration JSON.
-    pub config: Value,
+/// What a driver run leaves for its caller to print, and its exit code.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriverReport {
+    /// Text for standard output.
+    pub stdout: String,
+    /// Text for standard error.
+    pub stderr: String,
+    /// Process exit code (`0` on success).
+    pub exit_code: i32,
 }
 
-/// Terminal outcome of a [`GoalDriver`] or [`LoopDriver`] execution.
+/// Terminal outcome of an iterating driver run (goal or loop mode).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum DriverRunOutcome {
@@ -940,32 +922,19 @@ pub enum DriverRunOutcome {
     Cancelled,
 }
 
-/// Native driver executing goal-mode iterative runs (`hya/goal`).
+/// A run that owns a session until it returns: an iteration strategy such as
+/// goal mode or loop mode. The host knows only that a driver of this name
+/// exists (`<bundle-id>:<name>`).
 #[async_trait]
-pub trait GoalDriver: Send + Sync {
-    /// Stable driver identifier (e.g. `"goal"`).
-    fn id(&self) -> &str;
+pub trait NativeDriver: Send + Sync {
+    /// Driver name, local to its bundle.
+    fn name(&self) -> &str;
 
-    /// Run a goal loop until achieved, capped, stalled, or cancelled.
-    async fn run_goal(
+    /// Run to completion.
+    async fn run(
         &self,
         runtime: Arc<dyn HostRuntime>,
-        request: GoalRunRequest,
+        request: DriverRequest,
         cancel: CancellationToken,
-    ) -> Result<DriverRunOutcome, HostError>;
-}
-
-/// Native driver executing verifier+planner loop runs (`hya/loop`).
-#[async_trait]
-pub trait LoopDriver: Send + Sync {
-    /// Stable driver identifier (e.g. `"loop"`).
-    fn id(&self) -> &str;
-
-    /// Run a verified loop until satisfied, capped, stalled, or cancelled.
-    async fn run_loop(
-        &self,
-        runtime: Arc<dyn HostRuntime>,
-        request: LoopRunRequest,
-        cancel: CancellationToken,
-    ) -> Result<DriverRunOutcome, HostError>;
+    ) -> Result<DriverReport, HostError>;
 }

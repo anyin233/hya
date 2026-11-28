@@ -8,7 +8,7 @@ use hya_tool::{Tool, ToolCtx, ToolError};
 use sha2::{Digest, Sha256};
 
 use crate::extensions::{
-    GoalDriver, LoopDriver, NativeBundleApiHandler, NativeHook, NativeService, ProjectionReducer,
+    NativeBundleApiHandler, NativeDriver, NativeHook, NativeService, ProjectionReducer,
     UriSchemaHandler,
 };
 use crate::host::HostRuntime;
@@ -119,10 +119,8 @@ pub struct NativeRegistrations {
     /// Hook points this bundle declares, as local names; the host namespaces
     /// them as `<bundle-id>:<name>` so other bundles can implement them.
     pub hook_points: Vec<String>,
-    /// Iterative goal-mode drivers.
-    pub goal_drivers: Vec<Arc<dyn GoalDriver>>,
-    /// Iterative verifier/planner loop drivers.
-    pub loop_drivers: Vec<Arc<dyn LoopDriver>>,
+    /// Drivers that own a session run (namespaced `<bundle-id>:<name>`).
+    pub drivers: Vec<Arc<dyn NativeDriver>>,
 }
 
 impl NativeRegistrations {
@@ -143,8 +141,7 @@ impl NativeRegistrations {
             && self.projection_reducers.is_empty()
             && self.uri_schema_handlers.is_empty()
             && self.hook_points.is_empty()
-            && self.goal_drivers.is_empty()
-            && self.loop_drivers.is_empty()
+            && self.drivers.is_empty()
     }
 
     /// Merge all registrations from `other` into `self`, preserving order.
@@ -157,8 +154,7 @@ impl NativeRegistrations {
         self.projection_reducers.extend(other.projection_reducers);
         self.uri_schema_handlers.extend(other.uri_schema_handlers);
         self.hook_points.extend(other.hook_points);
-        self.goal_drivers.extend(other.goal_drivers);
-        self.loop_drivers.extend(other.loop_drivers);
+        self.drivers.extend(other.drivers);
     }
 }
 
@@ -215,8 +211,7 @@ pub fn abi_digest_v2() -> [u8; 32] {
     record_layout::<Arc<dyn NativeBundleApiHandler>>(&mut hash);
     record_layout::<Arc<dyn ProjectionReducer>>(&mut hash);
     record_layout::<Arc<dyn UriSchemaHandler>>(&mut hash);
-    record_layout::<Arc<dyn GoalDriver>>(&mut hash);
-    record_layout::<Arc<dyn LoopDriver>>(&mut hash);
+    record_layout::<Arc<dyn NativeDriver>>(&mut hash);
     record_layout::<ToolCtx>(&mut hash);
     record_layout::<ToolError>(&mut hash);
     record_layout::<tokio::runtime::Handle>(&mut hash);

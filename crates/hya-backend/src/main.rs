@@ -41,12 +41,9 @@ use std::io::{Read as _, Write as _};
 
 use anyhow::Context as _;
 use clap::Parser;
-use hya_app::{
-    HeadlessEvaluatorRoute, LoopRunOptions, prepare_goal_driver, prepare_loop, run_headless_lead,
-};
+use hya_app::{prepare_driver, run_headless_lead};
 use hya_engine::render_transcript;
 use hya_proto::{ProjectId, SessionId};
-use hya_runtime_abi::DriverRunOutcome;
 use hya_store::SessionStore;
 use tokio_util::sync::CancellationToken;
 
@@ -347,11 +344,12 @@ async fn cmd_exec(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn cmd_goal(
-    goal: String,
-    max_iterations: u32,
-    evaluator_model_flag: Option<String>,
+/// Run a bundle driver headlessly in an in-memory store and print its report.
+/// `args` are the driver's arguments; `default_model` is added as the
+/// worker's judge-model fallback.
+async fn cmd_driver(
+    driver: &str,
+    mut args: serde_json::Value,
     model_override: Option<String>,
     yolo: bool,
     bare: bool,
@@ -368,102 +366,35 @@ async fn cmd_goal(
         None,
     )
     .await?;
-    let (outcome, stop) = headless
+    let (report, stop) = headless
         .run(async move |headless| {
             let cancel = CancellationToken::new();
-            let host_runtime = headless.built.host_runtime();
-            let request = hya_runtime_abi::GoalRunRequest {
+            if let serde_json::Value::Object(map) = &mut args {
+                map.insert(
+                    "default_model".to_string(),
+                    serde_json::Value::String(headless.evaluator_model.clone()),
+                );
+            }
+            let request = hya_runtime_abi::DriverRequest {
                 session: headless.session,
-                goal,
-                max_iterations,
-                max_wall_clock_secs: 1800,
                 agent: Some(headless.agent.name.clone()),
                 model: Some(headless.agent.model.clone()),
-                config: serde_json::json!({
-                    "evaluator_model": evaluator_model_flag,
-                    "default_model": headless.evaluator_model,
-                }),
+                workdir: headless.agent.workdir.clone(),
+                args,
             };
-            let work = prepare_goal_driver(host_runtime, request, cancel.clone())?;
-            let (outcome, stop) =
+            let work = prepare_driver(&headless.built, driver, request, cancel.clone())?;
+            let (report, stop) =
                 run_until_stopped(&headless.built, &mut signals, &cancel, work).await;
-            Ok((outcome, stop))
+            Ok((report, stop))
         })
         .await?;
     exit_if_stopped(stop);
-    let outcome = outcome.context("run goal")?;
-    println!("goal outcome: {outcome:?}");
-    Ok(())
-}
-
-/// Loop-mode CLI entry (dev_plan 6.11): drive the lead session with an
-/// independent model verifier/planner until the deterministic condition, the
-/// `loop.should_stop` hook, or the verifier stops the run. In-memory store,
-/// mirroring `cmd_goal`'s setup.
-#[allow(clippy::too_many_arguments)]
-async fn cmd_loop(
-    target: String,
-    budget: Option<u32>,
-    max_iterations: Option<u32>,
-    while_command: Option<String>,
-    until_command: Option<String>,
-    evaluator_model_flag: Option<String>,
-    model_override: Option<String>,
-    yolo: bool,
-    bare: bool,
-    pure: bool,
-) -> anyhow::Result<()> {
-    let mut signals = StopSignals::install()?;
-    let headless = start_headless_with_signals(
-        &mut signals,
-        open_store("").await?,
-        model_override,
-        yolo,
-        bare,
-        pure,
-        None,
-    )
-    .await?;
-    let (outcome, stop) = headless
-        .run(async move |headless| {
-            let cancel = CancellationToken::new();
-            let work = prepare_loop(
-                headless.built.host_runtime(),
-                headless.session,
-                headless.agent.clone(),
-                HeadlessEvaluatorRoute {
-                    router: &headless.evaluator_router,
-                    model_override: evaluator_model_flag.as_deref(),
-                    default_model: &headless.evaluator_model,
-                },
-                target,
-                |workdir| {
-                    let predicate =
-                        cli_args::build_loop_predicate(while_command, until_command, workdir)
-                            .map_err(anyhow::Error::msg)
-                            .context("resolve loop condition")?;
-                    Ok(LoopRunOptions {
-                        budget: cli_args::loop_budget(budget, max_iterations),
-                        predicate,
-                        ..LoopRunOptions::default()
-                    })
-                },
-                cancel.clone(),
-            )
-            .await?;
-            let (outcome, stop) =
-                run_until_stopped(&headless.built, &mut signals, &cancel, work).await;
-            Ok((outcome, stop))
-        })
-        .await?;
-    exit_if_stopped(stop);
-    let outcome = outcome.context("run loop")?;
-    println!("loop outcome: {outcome:?}");
-    if let DriverRunOutcome::InvalidCondition { reason, .. } = &outcome {
-        eprintln!(
-            "warning: the loop condition itself is broken, so this is NOT a success: {reason}"
-        );
-        anyhow::bail!("loop ended on a broken condition; not a success");
+    let report = report.with_context(|| format!("run driver {driver}"))?;
+    print!("{}", report.stdout);
+    eprint!("{}", report.stderr);
+    let _ = std::io::stdout().flush();
+    if report.exit_code != 0 {
+        std::process::exit(report.exit_code);
     }
     Ok(())
 }
@@ -524,17 +455,14 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let pure = cli.pure;
     let db = cli.db.clone();
     if let Some(goal) = cli.prompt {
-        return cmd_goal(
-            goal,
-            cli.max_iterations,
-            cli.evaluator_model.clone(),
-            model,
-            yolo,
-            bare,
-            pure,
-        )
-        .await
-        .inspect_err(|error| eprintln!("goal error: {error:#}"));
+        let args = serde_json::json!({
+            "prompt": goal,
+            "max_iterations": cli.max_iterations,
+            "evaluator_model": cli.evaluator_model,
+        });
+        return cmd_driver("hya/goal:goal", args, model, yolo, bare, pure)
+            .await
+            .inspect_err(|error| eprintln!("goal error: {error:#}"));
     }
     match cli.command {
         // Bare `hya` on a terminal starts the TUI and the WebUI against the
@@ -777,19 +705,15 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             until_command,
             evaluator_model,
         }) => {
-            cmd_loop(
-                target,
-                budget,
-                max_iterations,
-                while_command,
-                until_command,
-                evaluator_model,
-                model,
-                yolo,
-                bare,
-                pure,
-            )
-            .await
+            let args = serde_json::json!({
+                "target": target,
+                "budget": budget,
+                "max_iterations": max_iterations,
+                "while": while_command,
+                "until": until_command,
+                "evaluator_model": evaluator_model,
+            });
+            cmd_driver("hya/loop:loop", args, model, yolo, bare, pure).await
         }
     }
 }

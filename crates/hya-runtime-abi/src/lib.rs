@@ -6,7 +6,7 @@
 //!   `HostCatalogReader`, `HostExtensionRegistry`),
 //! - Native extension traits (`NativeService`, `NativeHook`,
 //!   `NativeBundleApiHandler`, `ProjectionReducer`, `UriSchemaHandler`,
-//!   `GoalDriver`, `LoopDriver`),
+//!   `NativeDriver`),
 //! - Lockstep ABI v2 digest verification, [`NativePluginContext`],
 //!   [`NativeRegistrations`], and [`export_native_bundle_v2!`].
 //!
@@ -28,16 +28,17 @@ pub use abi::{
 };
 pub use error::{AbiError, HostError};
 pub use extensions::{
-    DriverRunOutcome, ExtensionEventContext, GoalDriver, GoalRunRequest, HookPoint, LoopDriver,
-    LoopRunRequest, NativeAgentSpawnInput, NativeApiEndpoint, NativeBundleApiHandler,
-    NativeBundleApiReply, NativeBundleApiRequest, NativeChatParamsInput, NativeCommandBeforeInput,
+    DriverReport, DriverRequest, DriverRunOutcome, ExtensionEventContext, HookPoint,
+    NativeAgentSpawnInput, NativeApiEndpoint, NativeBundleApiHandler, NativeBundleApiReply,
+    NativeBundleApiRequest, NativeChatParamsInput, NativeCommandBeforeInput,
     NativeCompactionAfterInput, NativeCompactionBeforeInput, NativeCompactionDecision,
-    NativeCompactionTrigger, NativeHook, NativeMessageUserBeforeInput, NativeModelFallbackInput,
-    NativePermissionApproveInput, NativeService, NativeSessionLifecycleInput,
-    NativeTextCompleteInput, NativeToolAfterInput, NativeToolAfterOutcome, NativeToolBeforeInput,
-    NativeToolBeforeOutcome, NativeToolResult, ProjectionReducer, ServiceHealth,
-    ToolVisibilityInput, ToolVisibilityOutcome, UriContent, UriResolveCtx, UriSchemaHandleAdapter,
-    UriSchemaHandler, adapt_uri_schema_handler, is_declared_hook_point,
+    NativeCompactionTrigger, NativeDriver, NativeHook, NativeMessageUserBeforeInput,
+    NativeModelFallbackInput, NativePermissionApproveInput, NativeService,
+    NativeSessionLifecycleInput, NativeTextCompleteInput, NativeToolAfterInput,
+    NativeToolAfterOutcome, NativeToolBeforeInput, NativeToolBeforeOutcome, NativeToolResult,
+    ProjectionReducer, ServiceHealth, ToolVisibilityInput, ToolVisibilityOutcome, UriContent,
+    UriResolveCtx, UriSchemaHandleAdapter, UriSchemaHandler, adapt_uri_schema_handler,
+    is_declared_hook_point,
 };
 pub use host::{
     BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,

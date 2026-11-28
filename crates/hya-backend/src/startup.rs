@@ -4,14 +4,12 @@ use anyhow::Context as _;
 use hya_app::{BuiltSessionEngine, config};
 use hya_engine::{AgentSpec, CreateSession};
 use hya_proto::SessionId;
-use hya_provider::ProviderRouter;
 use hya_store::SessionStore;
 
 pub(crate) struct StartedEngine {
     pub(crate) built: BuiltSessionEngine,
     pub(crate) agent: AgentSpec,
     pub(crate) default_agent: Option<String>,
-    pub(crate) evaluator_router: ProviderRouter,
     pub(crate) evaluator_model: String,
 }
 
@@ -36,7 +34,6 @@ pub(crate) async fn start(
         .with_bare(bare);
     hya_app::startup_trace::mark("runtime_resolved", None);
     let agent = hya_app::agent_for_runtime(&runtime, None);
-    let evaluator_router = runtime.router.clone();
     let evaluator_model = config::resolve_evaluator_model(
         None,
         runtime.settings.goal().evaluator_model.as_deref(),
@@ -78,7 +75,6 @@ pub(crate) async fn start(
         built,
         agent,
         default_agent: runtime.default_agent,
-        evaluator_router,
         evaluator_model,
     })
 }
@@ -87,7 +83,6 @@ pub(crate) struct HeadlessSession {
     pub(crate) built: BuiltSessionEngine,
     pub(crate) agent: AgentSpec,
     pub(crate) session: SessionId,
-    pub(crate) evaluator_router: ProviderRouter,
     pub(crate) evaluator_model: String,
     responder: RejectResponder,
     _root_drivers: Vec<hya_engine::resident::RootDriverActivity>,
@@ -133,7 +128,6 @@ impl HeadlessSession {
             mut built,
             mut agent,
             default_agent,
-            evaluator_router,
             evaluator_model,
         } = start(store, model, yolo, bare, pure).await?;
         let prepared = async {
@@ -194,7 +188,6 @@ impl HeadlessSession {
             built,
             agent,
             session,
-            evaluator_router,
             evaluator_model,
             responder,
             _root_drivers: drivers,

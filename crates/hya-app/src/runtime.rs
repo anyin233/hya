@@ -528,6 +528,7 @@ pub struct BuiltSessionEngine {
     questions: Option<tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>>,
     mcp_control: Arc<dyn hya_server::McpControl>,
     host_runtime: Arc<dyn hya_runtime_abi::HostRuntime>,
+    app_host_runtime: Arc<crate::host_runtime::AppHostRuntime>,
     native_services: Arc<[Arc<dyn hya_runtime_abi::NativeService>]>,
     lifecycle: RuntimeTaskOwner,
     runtime_owner: Option<OwnerRunId>,
@@ -546,11 +547,11 @@ impl BuiltSessionEngine {
         Arc::clone(&self.host_runtime)
     }
 
-    /// Registered native [`hya_runtime_abi::GoalDriver`], or `None` when
-    /// `hya/goal` is disabled or running under `--bare`.
+    /// The driver registered as `name` (`<bundle-id>:<name>`), or `None`
+    /// when no enabled bundle exports it.
     #[must_use]
-    pub fn goal_driver(&self) -> Option<Arc<dyn hya_runtime_abi::GoalDriver>> {
-        self.host_runtime.goal_driver()
+    pub fn driver(&self, name: &str) -> Option<Arc<dyn hya_runtime_abi::NativeDriver>> {
+        self.app_host_runtime.driver(name)
     }
 
     /// Shared resident scheduling owner used by Workflow actor activations.
@@ -604,13 +605,6 @@ impl BuiltSessionEngine {
     #[must_use]
     pub fn mcp_control(&self) -> Arc<dyn hya_server::McpControl> {
         Arc::clone(&self.mcp_control)
-    }
-
-    /// Return the active [`hya_runtime_abi::LoopDriver`] registered by `hya/loop`,
-    /// or `None` when `hya/loop` is disabled or running in `--bare` mode.
-    #[must_use]
-    pub fn loop_driver(&self) -> Option<Arc<dyn hya_runtime_abi::LoopDriver>> {
-        self.host_runtime.loop_driver()
     }
 
     /// Admit every daemon restore before starting recovered resident episodes.
@@ -1210,9 +1204,7 @@ async fn build_session_engine_with_mcp_defer(
             }
         }
         app_host_runtime.declare_hook_points("hya/goal", &regs.hook_points);
-        if let Some(driver) = regs.goal_drivers.into_iter().next() {
-            app_host_runtime.attach_goal_driver(driver);
-        }
+        app_host_runtime.register_drivers("hya/goal", regs.drivers);
         all_native_hooks.extend(regs.hooks);
         started_services.extend(regs.services);
     }
@@ -1238,7 +1230,7 @@ async fn build_session_engine_with_mcp_defer(
         }
         started_services.extend(regs.services);
         all_native_hooks.extend(regs.hooks);
-        app_host_runtime.set_loop_drivers(regs.loop_drivers);
+        app_host_runtime.register_drivers("hya/loop", regs.drivers);
         app_host_runtime.declare_hook_points("hya/loop", &regs.hook_points);
     }
     register_missing_bare_tools(&registry);
@@ -1559,6 +1551,7 @@ async fn build_session_engine_with_mcp_defer(
         questions: Some(questions),
         mcp_control,
         host_runtime,
+        app_host_runtime,
         native_services,
         lifecycle,
         agent_model_control,
