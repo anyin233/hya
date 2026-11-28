@@ -85,7 +85,7 @@ test("/model persists an agent model and explicit effort", async () => {
       return { agentId: agent, effort }
     },
   })
-  h.store.applyCatalog({ sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt", reasoningVariants: ["high"] }], workflows: [], providers: [], commands: [] })
+  h.store.applyCatalog({ sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt", reasoningVariants: ["high"] }], providers: [], commands: [] })
   h.store.openSession(session)
   await h.run("/model openai/gpt#high")
   expect(writes).toEqual([
@@ -113,7 +113,7 @@ test("/model on a config-pinned agent switches only the session", async () => {
       return { agentId: agent, effort }
     },
   })
-  h.store.applyCatalog({ sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt", reasoningVariants: ["high"] }], workflows: [], providers: [], commands: [] })
+  h.store.applyCatalog({ sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt", reasoningVariants: ["high"] }], providers: [], commands: [] })
   h.store.openSession(session)
   await h.run("/model openai/gpt#high")
   // The configured default stays in config.yaml; the session keeps the `#high` suffix itself.
@@ -216,7 +216,7 @@ test("/effort saves the choice on the layer that decides the session's effort", 
     },
     request: (async () => ({ ...session, ...resolved })) as HyaClient["request"],
   })
-  h.store.applyCatalog({ sessions: [], interactions: [], models: [{ id: "openai/gpt-6-astra", providerId: "openai", modelId: "gpt-6-astra", reasoningVariants: ["low", "high"] }], workflows: [], providers: [], commands: [] })
+  h.store.applyCatalog({ sessions: [], interactions: [], models: [{ id: "openai/gpt-6-astra", providerId: "openai", modelId: "gpt-6-astra", reasoningVariants: ["low", "high"] }], providers: [], commands: [] })
   // A `#high` suffix outranks everything: it is dropped, then the Agent's effort (which decides next) takes the choice.
   h.store.openSession({ ...session, model: { ...session.model, variant: "high" }, effectiveEffort: "high", effortSource: "EFFORT_SOURCE_SUFFIX" })
   await h.run("/effort low")
@@ -251,7 +251,7 @@ test("view commands switch the main panel; /help opens the help overlay", async 
 
 test("/open resolves list numbers and /key opens the Provider View", async () => {
   const { store, calls, run } = harness()
-  store.applyCatalog({ sessions: [{ id: "hysec_a", agent: "hya-main", workdir: "/w" }, { id: "hysec_b", agent: "hya-main", workdir: "/w" }], interactions: [], models: [], workflows: [], providers: [], commands: [] })
+  store.applyCatalog({ sessions: [{ id: "hysec_a", agent: "hya-main", workdir: "/w" }, { id: "hysec_b", agent: "hya-main", workdir: "/w" }], interactions: [], models: [], providers: [], commands: [] })
   await run("/open 2")
   await run("/open hysec_x")
   await run("/key")
@@ -267,7 +267,7 @@ test("/open <number> counts the active Project's sessions, as the sidebar number
       { id: "hysec_w1_kid", agent: "hya-task", workdir: "/w", projectId: "prj_w", parent: "hysec_w1" },
       { id: "hysec_w2", agent: "hya-main", workdir: "/w", projectId: "prj_w" },
     ],
-    interactions: [], models: [], workflows: [], providers: [], commands: [],
+    interactions: [], models: [], providers: [], commands: [],
   })
   store.setActiveProject("prj_w")
   await run("/open 2")
@@ -279,7 +279,7 @@ test("/open <number> counts the active Project's sessions, as the sidebar number
 
 test("/open and /resume completions show a titled session as title (id) and insert its id", () => {
   const { registry, store } = harness()
-  store.applyCatalog({ sessions: [{ id: "hysec_a", agent: "hya-main", workdir: "/w", title: "Fix login" }, { id: "hysec_b", agent: "hya-main", workdir: "/w" }], interactions: [], models: [], workflows: [], providers: [], commands: [] })
+  store.applyCatalog({ sessions: [{ id: "hysec_a", agent: "hya-main", workdir: "/w", title: "Fix login" }, { id: "hysec_b", agent: "hya-main", workdir: "/w" }], interactions: [], models: [], providers: [], commands: [] })
   const complete = (input: string) => registry.complete(input, store.completionContext())
   expect(suggestCommandInput("/open ", () => [], complete)).toEqual([
     { label: "/open Fix login (hysec_a)", replacement: "/open hysec_a", kind: "argument", runOnEnter: false },
@@ -402,7 +402,7 @@ test("/model with no argument opens a picker of the catalog, the session's curre
   const { store, pickers, run } = harness()
   store.applyCatalog({
     sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt" }],
-    agents: [{ name: "hya-main", description: "Default agent" }], workflows: [], providers: [], commands: [],
+    agents: [{ name: "hya-main", description: "Default agent" }], providers: [], commands: [],
   })
   store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w", model: { providerId: "openai", modelId: "gpt" } })
   await run("/model")
@@ -414,7 +414,7 @@ test("/model and /agent <name> with no session remember the choice for the next 
   const { store, calls, pickers, run } = harness()
   store.applyCatalog({
     sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt" }],
-    agents: [{ name: "review" }], workflows: [], providers: [], commands: [],
+    agents: [{ name: "review" }], providers: [], commands: [],
   })
   await run("/model")
   await pickers.at(-1)?.onSelect({ id: "openai/gpt", label: "gpt" })
@@ -488,7 +488,7 @@ test("/rename updates the session title", async () => {
   const { store, run } = harness({
     updateSession: async (session, patch) => ({ id: session, agent: "hya-main", workdir: "/w", title: patch.title }),
   })
-  store.applyCatalog({ sessions: [{ id: "hysec_1", agent: "hya-main", workdir: "/w" }], interactions: [], models: [], workflows: [], providers: [], commands: [] })
+  store.applyCatalog({ sessions: [{ id: "hysec_1", agent: "hya-main", workdir: "/w" }], interactions: [], models: [], providers: [], commands: [] })
   store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   await run("/rename New title")
   expect(store.state.selected?.title).toBe("New title")
@@ -581,8 +581,8 @@ test("/status shows the backend daemon: pid, database, and when it started; an e
 
 test("argument completion comes from the command's own completer", () => {
   const { registry, store } = harness()
-  store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [{ name: "release" }], providers: [{ id: "openai" }], commands: [] })
-  expect(registry.complete("/workflow run r", store.completionContext())).toEqual(["/workflow run release"])
+  store.applyCatalog({ sessions: [], interactions: [], models: [{ id: "openai/gpt" }], providers: [{ id: "openai" }], commands: [] })
+  expect(registry.complete("/model o", store.completionContext())).toEqual(["/model openai/gpt"])
   expect(registry.complete("/key o", store.completionContext())).toEqual([])
   expect(registry.complete("/unknown x", store.completionContext())).toEqual([])
 })
@@ -651,7 +651,7 @@ test("/sessions opens a picker with a New session row first, then the tree, the 
       { id: "hysec_1", agent: "hya-main", workdir: "/w", title: "Top" },
       { id: "hysec_2", agent: "review", workdir: "/w", parent: "hysec_1" },
     ],
-    interactions: [], models: [], workflows: [], providers: [], commands: [],
+    interactions: [], models: [], providers: [], commands: [],
   })
   await run("/sessions")
   expect(calls).toContain("refresh")
@@ -677,7 +677,7 @@ test("/sessions row actions: F2 renames (UpdateSession title), Ctrl+D deletes (D
   store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w", title: "Top" })
   store.applyCatalog({
     sessions: [{ id: "hysec_1", agent: "hya-main", workdir: "/w", title: "Top" }],
-    interactions: [], models: [], workflows: [], providers: [], commands: [],
+    interactions: [], models: [], providers: [], commands: [],
   })
   await run("/sessions")
   const picker = pickers.at(-1)!
@@ -945,8 +945,8 @@ test("layout tree commands expose container ids and share insert/move/wrap/remov
   await h.run("/layout insert root 1 jobs")
   await h.run("/layout move pane-8 group-3 1")
   expect(h.store.completionContext().layoutContainers?.find((node) => node.id === "group-3")?.children[1]).toBe("pane-8")
-  await h.run("/layout wrap pane-8 row models after")
-  const auxiliary = paneNodes(h.store.state.paneLayout.root).find((node) => node.type === "split" && paneLeaves(node).every((pane) => ["jobs", "models"].includes(pane.kind)))!
+  await h.run("/layout wrap pane-8 row status after")
+  const auxiliary = paneNodes(h.store.state.paneLayout.root).find((node) => node.type === "split" && paneLeaves(node).every((pane) => ["jobs", "status"].includes(pane.kind)))!
   await h.run(`/layout remove ${auxiliary.id}`)
   expect(h.store.completionContext().panes?.some((pane) => pane.kind === "jobs")).toBe(false)
   await expect(h.run("/layout move root group-2 0")).rejects.toThrow("descendant")
@@ -986,31 +986,6 @@ test("focus commands consume native bounds and horizontal navigation forms one c
   expect(h.store.state.paneLayout.active).toBe("pane-3")
 })
 
-test("/subagents opens ordinary panes, previews without opening a session, and persists pins", async () => {
-  const h = harness()
-  h.store.openSession({ id: "parent", agent: "main", workdir: "/work" })
-  h.store.setSessions([{ id: "a", parent: "parent", agent: "task", workdir: "/work" }])
-  await h.run("/subagents")
-  const panes = paneLeaves(h.store.state.paneLayout.root)
-  const selector = panes.find((pane) => pane.kind === "subagents")!
-  const viewer = panes.find((pane) => pane.kind === "subagent-viewer")!
-  expect(h.store.state.paneLayout.active).toBe(selector.id)
-  await h.run("/subagents select a")
-  expect(h.store.state.subagentSelection).toBe("a")
-  expect(h.store.state.selected?.id).toBe("parent")
-  expect(h.calls.some((call) => call.startsWith("open "))).toBe(false)
-  await h.run(`/subagents pin ${viewer.id}`)
-  expect(paneLeaves(h.store.state.paneLayout.root).find((pane) => pane.id === viewer.id)?.session).toBe("a")
-  await h.run(`/subagents follow ${viewer.id}`)
-  expect(paneLeaves(h.store.state.paneLayout.root).find((pane) => pane.id === viewer.id)?.session).toBeUndefined()
-  await h.run("/subagents view a")
-  expect(paneLeaves(h.store.state.paneLayout.root).filter((pane) => pane.kind === "subagent-viewer")).toHaveLength(2)
-  expect(h.store.state.paneLayout.active).toBe(selector.id)
-  await expect(h.run("/subagents select unrelated")).rejects.toThrow("Choose a subagent")
-  expect(h.registry.complete("/subagents pin ", h.store.completionContext())).toContain(`/subagents pin ${viewer.id}`)
-})
-
-
 test("/layout bubble swaps siblings, persists them, completes arguments, and validates usage", async () => {
   const h = harness()
   await h.run("/layout bubble todos next")
@@ -1020,64 +995,6 @@ test("/layout bubble swaps siblings, persists them, completes arguments, and val
   expect(h.registry.complete("/layout bubble pane-4 ", h.store.completionContext())).toEqual(["/layout bubble pane-4 next", "/layout bubble pane-4 previous"])
   expect(h.registry.complete("/layout bubble ", h.store.completionContext())).toContain("/layout bubble group-3")
   for (const line of ["/layout bubble", "/layout bubble pane-4", "/layout bubble pane-4 up", "/layout bubble pane-4 next extra"]) await expect(h.run(line)).rejects.toThrow("Usage: /layout bubble")
-})
-
-
-test("/subagents interrupt, archive and steer act on one subagent through the API", async () => {
-  const calls: string[] = []
-  const h = harness({
-    cancelTurn: async (session, turn) => { calls.push(`cancel ${session} ${turn}`); return { state: "TURN_STATE_CANCELLED" } },
-    archiveSubagent: async (session) => { calls.push(`archive ${session}`); return { handle: "main/helper", cancelledTurn: true, descendants: ["main/helper/leaf"] } },
-    steerSubagent: async (session, text) => { calls.push(`steer ${session} ${text}`); return { from: "main" } },
-  })
-  h.store.openSession({ id: "parent", agent: "main", workdir: "/work" })
-  h.store.setSessions([{ id: "a", parent: "parent", agent: "task", workdir: "/work" }])
-
-  await h.run("/subagents interrupt a")
-  expect(h.store.state.status).toContain("Interrupted")
-  await h.run("/subagents steer a   look at  the parser first  ")
-  expect(h.store.state.status).toContain("Steered")
-  await h.run("/subagents archive a")
-  expect(h.store.state.status).toContain("Archived main/helper")
-  expect(h.store.state.status).toContain("1 nested")
-  expect(calls).toEqual(["cancel a current", "steer a look at  the parser first", "archive a"])
-
-  await expect(h.run("/subagents steer a")).rejects.toThrow("Usage:")
-  await expect(h.run("/subagents archive")).rejects.toThrow("Usage:")
-  await expect(h.run("/subagents interrupt unrelated")).rejects.toThrow("Choose a subagent")
-  expect(h.registry.complete("/subagents ", h.store.completionContext())).toEqual(expect.arrayContaining(["/subagents interrupt", "/subagents archive", "/subagents steer"]))
-  expect(h.registry.complete("/subagents steer ", h.store.completionContext())).toContain("/subagents steer a")
-})
-
-test("/subagents interrupt says when the subagent was not running", async () => {
-  const h = harness({ cancelTurn: async () => ({ state: "TURN_STATE_FINISHED" }) })
-  h.store.openSession({ id: "parent", agent: "main", workdir: "/work" })
-  h.store.setSessions([{ id: "a", parent: "parent", agent: "task", workdir: "/work" }])
-  await h.run("/subagents interrupt a")
-  expect(h.store.state.status).toContain("not running")
-})
-
-test("/subagents archived toggles or explicitly sets visibility and validates arguments", async () => {
-  const h = harness()
-  await expect(h.run("/subagents archived")).rejects.toThrow("Open a conversation")
-  h.store.openSession({ id: "parent", agent: "main", workdir: "/work" })
-  h.store.setMembers([{ member: "m", child: "a", archived: true }])
-  await h.run("/subagents archived")
-  expect(h.store.state.subagentsShowArchived).toBe(true)
-  await h.run("/subagents select a")
-  await h.run("/subagents archived hide")
-  expect(h.store.state.subagentSelection).toBeUndefined()
-  await expect(h.run("/subagents select a")).rejects.toThrow("Choose a subagent")
-  await h.run("/subagents archived show")
-  await h.run("/subagents archived show")
-  expect(h.store.state.subagentsShowArchived).toBe(true)
-  await h.run("/subagents archived toggle")
-  expect(h.store.state.subagentsShowArchived).toBe(false)
-  await expect(h.run("/subagents archived invalid")).rejects.toThrow("Usage:")
-  await expect(h.run("/subagents archived show extra")).rejects.toThrow("Usage:")
-  expect(h.registry.complete("/subagents archived ", h.store.completionContext())).toEqual([
-    "/subagents archived hide", "/subagents archived show", "/subagents archived toggle",
-  ])
 })
 
 for (const archived of [false, true]) {

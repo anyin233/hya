@@ -249,7 +249,7 @@ export class ExtensionManager {
   }
 
   /** Visibility filter for `visiblePaneRoot` / `visiblePaneLayout`: hides bundled panes unavailable in the loaded catalog. */
-  visiblePaneOptions(): { hasSurface: (kind: "projects" | "sessions" | "todos" | "context") => boolean; hasExtensionPanel: (panel: string) => boolean } {
+  visiblePaneOptions(): { hasSurface: (kind: "projects" | "sessions" | "todos" | "context" | "jobs") => boolean; hasExtensionPanel: (panel: string) => boolean } {
     this.listVersion()
     return {
       hasSurface: (kind) => this.hasSurface(kind),

@@ -19,10 +19,9 @@ import { createMemo, createSignal, For, Match, Show, Switch, type JSX } from "so
 import { useApp } from "../app/context"
 import { formatBytes } from "../composer/attachments"
 import { foldAttachments, foldedAttachments } from "../composer/chips"
-import { taskChildStatus, taskLinks, type TaskMemberLink, type ChildStatus } from "../state/members"
 import { waitingKind } from "../state/prompts"
 import { messageBlockGap, reasoningExpanded, reasoningLabel, toolExpanded, type Block, type MessageView } from "../state/messages"
-import type { TaskInfo, Tone, ToolStatus } from "../state/tools"
+import type { TaskInfo, TaskMemberInfo, Tone, ToolStatus } from "../state/tools"
 import { colors, diffColors, toolColors } from "../theme"
 import { parseSkillBlock, skillBlockLabel } from "../state/skillBlock"
 import { Markdown } from "./Markdown"
@@ -315,20 +314,36 @@ function CardHeader(props: { status: ToolStatus | "waiting"; summary: string; du
   )
 }
 
-const childLabels: Record<ChildStatus, string> = {
+type TaskRowStatus = "starting" | "running" | "idle" | "done" | "failed" | "cancelled"
+
+const taskRowLabels: Record<TaskRowStatus, string> = {
   starting: "starting", running: "running", idle: "idle", done: "done", failed: "failed", cancelled: "cancelled",
+}
+
+function taskRowStatus(entry: TaskMemberInfo, sessionBusy: boolean | undefined, cardStatus: ToolStatus): TaskRowStatus {
+  switch (entry.status) {
+    case "running": return "running"
+    case "done": case "completed": return "done"
+    case "error": case "failed": return "failed"
+    case "cancelled": return "cancelled"
+  }
+  if (sessionBusy === true) return "running"
+  if (sessionBusy === false) return cardStatus === "failed" ? "failed" : "idle"
+  if (cardStatus === "done") return "done"
+  if (cardStatus === "failed") return "failed"
+  return cardStatus === "running" ? "running" : "starting"
 }
 
 /** A task card keeps every launched member visible and individually navigable. */
 function TaskCard(props: { block: Extract<Block, { kind: "tool" }>; task: TaskInfo }) {
   const { store, controller } = useApp()
-  const links = createMemo(() => taskLinks(props.task, props.block.callId, store.state.members))
-  const rows = createMemo(() => links().map((link, index) => ({
-    id: link.child ? `child:${link.child}` : link.member ? `member:${link.member.member}` : `pending:${index}`,
-    link,
+  const entries = createMemo(() => props.task.members ?? [props.task])
+  const rows = createMemo(() => entries().map((entry, index) => ({
+    id: entry.child ? `child:${entry.child}` : `entry:${index}`,
+    entry,
   })))
   const openSingle = () => {
-    const id = links().length === 1 ? links()[0]?.child : undefined
+    const id = entries().length === 1 ? entries()[0]?.child : undefined
     if (id) void controller.openSession(id).catch((error: unknown) => store.setStatus(`Open failed: ${String(error)}`))
   }
   return (
@@ -341,28 +356,28 @@ function TaskCard(props: { block: Extract<Block, { kind: "tool" }>; task: TaskIn
         <text width="100%" wrapMode="word" fg={colors.error}>{props.block.card.error}</text>
       </Show>
       <Show when={props.block.card.status !== "failed"}>
-        <KeyedFor each={rows()}>{(row) => <TaskMemberRow link={row().link} />}</KeyedFor>
+        <KeyedFor each={rows()}>{(row) => <TaskMemberRow entry={row().entry} cardStatus={props.block.card.status} />}</KeyedFor>
       </Show>
     </box>
   )
 }
 
-function TaskMemberRow(props: { link: TaskMemberLink }) {
+function TaskMemberRow(props: { entry: TaskMemberInfo; cardStatus: ToolStatus }) {
   const { store, controller } = useApp()
-  const link = () => props.link
-  const child = () => {
-    const id = link().child
-    return id ? store.state.children.get(id) : undefined
+  const entry = () => props.entry
+  const session = () => {
+    const id = entry().child
+    return id ? store.state.sessions.find((row) => row.id === id) : undefined
   }
-  const status = () => taskChildStatus(link(), child())
+  const status = () => taskRowStatus(entry(), session()?.busy, props.cardStatus)
   /** The child waits for the user (a pending ask of its session): shown instead of `running`. */
   const waiting = () => {
-    const id = link().child
+    const id = entry().child
     return id ? waitingKind(store.state.interactions, id) : undefined
   }
-  const detail = () => link().member?.summary || child()?.activity || (status() === "failed" ? link().summary : undefined)
+  const detail = () => entry().summary
   const open = () => {
-    const id = link().child
+    const id = entry().child
     if (id) void controller.openSession(id).catch((error: unknown) => store.setStatus(`Open failed: ${String(error)}`))
   }
   const statusColor = () => {
@@ -377,17 +392,17 @@ function TaskMemberRow(props: { link: TaskMemberLink }) {
   }
   return (
     <box width="100%" flexDirection="column" border={["left"]} borderColor={colors.border} paddingLeft={1} onMouseDown={open}>
-      <text width="100%" wrapMode="word" fg={colors.fg}>{[link().name || link().agent, link().description].filter(Boolean).join(" · ")}</text>
+      <text width="100%" wrapMode="word" fg={colors.fg}>{[entry().name || entry().agent, entry().description].filter(Boolean).join(" · ")}</text>
       <text width="100%" height={1} wrapMode="none">
         <Show when={!waiting()} fallback={<span style={{ fg: colors.warning }}>◌</span>}>
           <Show when={status() === "running"} fallback={<span style={{ fg: statusColor() }}>{status() === "failed" ? "✗" : status() === "cancelled" ? "!" : status() === "starting" ? "○" : "✓"}</span>}>
             <RunningIcon />
           </Show>
         </Show>
-        <span style={{ fg: waiting() ? colors.warning : statusColor() }}>{waiting() ? ` waiting for ${waiting() === "approval" ? "approval" : "an answer"}` : ` ${childLabels[status()]}`}</span>
+        <span style={{ fg: waiting() ? colors.warning : statusColor() }}>{waiting() ? ` waiting for ${waiting() === "approval" ? "approval" : "an answer"}` : ` ${taskRowLabels[status()]}`}</span>
         <span style={{ fg: colors.muted }}>{detail() ? `  ↳ ${detail()}` : ""}</span>
       </text>
-      <Show when={link().child}>
+      <Show when={entry().child}>
         {(id) => <text width="100%" wrapMode="word" fg={colors.muted}>{`click to view · /open ${id()}`}</text>}
       </Show>
     </box>

@@ -24,7 +24,7 @@ import { layoutBreakpoints, projectsSidebarVisible, sidebarTooNarrowNotice } fro
 import { bandRule, borderInfoText, statusLineShown } from "../state/statusline"
 import { StatusLine } from "./StatusLine"
 import { paneLeaves } from "../state/panes"
-import { subagentsWorking } from "../state/subagents"
+import { hasBusyDescendant } from "../state/prompts"
 import { focusedPane, keyboardOwner } from "../state/focus"
 import { isShiftTab } from "../state/modes"
 import { currentPrompt, promptKey } from "../state/prompts"
@@ -589,7 +589,7 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
     switch (action) {
       case "interrupt": {
         consume()
-        const escape = escapeAction({ menuOpen: open !== undefined, running: store.state.running, subagentsWorking: subagentsWorking(store.state), inputEmpty: !value(), childView: readOnly(), prompt: shown !== undefined })
+        const escape = escapeAction({ menuOpen: open !== undefined, running: store.state.running, subagentsWorking: hasBusyDescendant(store.state), inputEmpty: !value(), childView: readOnly(), prompt: shown !== undefined })
         if (escape === "closeMenu") {
           dismissed = open ? `${open.token.start}:${open.token.query}` : undefined
           closeMenu()

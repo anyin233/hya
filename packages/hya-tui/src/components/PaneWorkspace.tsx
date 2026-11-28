@@ -14,7 +14,6 @@ import { currentPrompt } from "../state/prompts"
 import { pendingLines } from "../state/format"
 import { statusLineShown } from "../state/statusline"
 import { dockRowCount } from "../state/dock"
-export { jobsText } from "./paneRegistry"
 
 /** One stable mounted instance per id; tree edits change its bounds, never its parent. */
 function PaneLeafView(props: { node: PaneLeaf; rect?: Rect }) {

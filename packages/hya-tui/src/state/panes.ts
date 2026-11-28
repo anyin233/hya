@@ -1,7 +1,11 @@
 /** Local split tree for the whole workspace. Backend projections are shared by its panes. */
 import { projectsSidebarVisible, sidebarMinColumns, sidebarVisible, type SidebarMode } from "./layout"
 
-export const paneKinds = ["conversation", "composer", "activity", "projects", "jobs", "sessions", "todos", "context", "models", "workflows", "interactions", "status", "api", "layout", "extension", "subagents", "subagent-viewer"] as const
+export const corePaneKinds = ["conversation", "composer", "activity", "status", "layout"] as const
+export const bundledPaneKinds = ["projects", "sessions", "todos", "context", "jobs"] as const
+export const paneKinds = [...corePaneKinds, ...bundledPaneKinds, "extension"] as const
+export type CorePaneKind = typeof corePaneKinds[number]
+export type BundledPaneKind = typeof bundledPaneKinds[number]
 export type PaneKind = typeof paneKinds[number]
 export interface PaneDefinition {
   title: string
@@ -11,26 +15,18 @@ export interface PaneDefinition {
 }
 /** Layout and input eligibility share one definition for each pane kind. */
 export const paneDefinitions: Record<PaneKind, PaneDefinition> = {
-  subagents: { title: "Subagents", selectable: true, minColumns: 16, minRows: 5 },
-  "subagent-viewer": { title: "Subagent viewer", selectable: false, minColumns: 16, minRows: 5 },
   conversation: { title: "Conversation", selectable: false, minColumns: 12, minRows: 3 },
   composer: { title: "Message editor", selectable: true, minColumns: 12, minRows: 3 },
   activity: { title: "Agent activity", selectable: false, minColumns: 8, minRows: 1 },
+  status: { title: "Status", selectable: false, minColumns: 8, minRows: 2 },
+  layout: { title: "Layout tree", selectable: true, minColumns: 24, minRows: 10 },
   projects: { title: "Projects", selectable: true, minColumns: 8, minRows: 3 },
   sessions: { title: "Sessions", selectable: true, minColumns: 8, minRows: 3 },
-  jobs: { title: "Jobs", selectable: true, minColumns: 8, minRows: 5 },
   todos: { title: "Todos", selectable: false, minColumns: 8, minRows: 2 },
   context: { title: "Context", selectable: false, minColumns: 8, minRows: 2 },
-  status: { title: "Status", selectable: false, minColumns: 8, minRows: 2 },
-  models: { title: "Models", selectable: true, minColumns: 8, minRows: 5 },
-  workflows: { title: "Workflows", selectable: true, minColumns: 8, minRows: 5 },
-  interactions: { title: "Interactions", selectable: true, minColumns: 8, minRows: 3 },
-  api: { title: "API", selectable: true, minColumns: 8, minRows: 3 },
-  layout: { title: "Layout tree", selectable: true, minColumns: 24, minRows: 10 },
+  jobs: { title: "Jobs", selectable: true, minColumns: 8, minRows: 5 },
   extension: { title: "Extension", selectable: true, minColumns: 8, minRows: 3 },
 }
-
-import { parseLegacyPaneLayout, type PaneNode as LegacyNode } from "./legacyPaneLayout"
 
 export type PaneAxis = "horizontal" | "vertical"
 export type PaneDirection = "left" | "right" | "up" | "down"
@@ -40,7 +36,6 @@ export interface PaneLeaf {
   id: string
   kind: PaneKind
   panel?: string
-  session?: string
   /** Optional instance id for multi-instance v2 extension panes (e.g. a subsession id). */
   instance?: string
   /** Optional title override supplied by `pane.open`. */
@@ -113,10 +108,10 @@ export function chatPaneLayout(): PaneLayout {
   const leaf = (id: number, kind: PaneKind): PaneLeaf => ({ type: "pane", id: `pane-${id}`, kind })
   return { version: 4, active: "pane-1", root: { type: "split", id: "group-2", direction: "column", children: [weighted(leaf(6, "conversation")), content(leaf(7, "activity")), content(leaf(1, "composer"))] } }
 }
-export type BundledSidebarKind = "projects" | "sessions" | "todos" | "context"
+export type BundledSidebarKind = BundledPaneKind
 export interface VisiblePaneOptions {
-  /** Hide bundled sidebar panes whose extension surface is unavailable (e.g. `hya --bare` with zero TUI bundles). */
-  hasSurface?: (kind: BundledSidebarKind) => boolean
+  /** Hide bundled panes whose extension surface is unavailable (e.g. `hya --bare` with zero TUI bundles). */
+  hasSurface?: (kind: BundledPaneKind) => boolean
   /** Hide `extension` panes when no TUI extensions are loaded (e.g. `hya --bare`). */
   hasExtensionPanel?: (panel: string) => boolean
 }
@@ -132,6 +127,7 @@ export function visiblePaneRoot(
     if (node.type === "pane") {
       if (node.kind === "projects" && (!left || options.hasSurface?.("projects") === false)) return undefined
       if ((node.kind === "sessions" || node.kind === "todos" || node.kind === "context") && (!right || options.hasSurface?.(node.kind) === false)) return undefined
+      if (node.kind === "jobs" && options.hasSurface?.("jobs") === false) return undefined
       if (node.kind === "extension" && node.panel && options.hasExtensionPanel?.(node.panel) === false) return undefined
       return node
     }
@@ -197,7 +193,7 @@ export function wrapPane(layout: PaneLayout, target: string, direction: LayoutDi
   return finish(layout, root, isSelectablePane(added) ? added.id : layout.active)
 }
 /** Split inserts into a matching parent, otherwise wraps the selected leaf. */
-export function splitPane(layout: PaneLayout, axis: PaneAxis, kind: PaneKind = "jobs", before = false, panel?: string): PaneLayout {
+export function splitPane(layout: PaneLayout, axis: PaneAxis, kind: PaneKind = "status", before = false, panel?: string): PaneLayout {
   const direction = axis === "vertical" ? "row" : "column"
   const parent = paneNodes(layout.root).find((node): node is PaneSplit => node.type === "split" && node.children.some((child) => child.node.id === layout.active))
   if (parent?.direction === direction) {
@@ -370,23 +366,11 @@ export function movePaneFocus(layout: PaneLayout, direction: PaneDirection, meas
   return candidates[0] ? { ...layout, active: candidates[0].id } : layout
 }
 
-/** Migrate binary splits once; their editor/viewer ids and proportional weights survive. */
-function fromLegacy(root: LegacyNode): PaneNode {
-  let next = 0
-  const convert = (node: LegacyNode): PaneNode => {
-    if (node.type === "pane") return node
-    const first = convert(node.first), second = convert(node.second)
-    return { type: "split", id: `group-${++next}`, direction: node.axis === "vertical" ? "row" : "column", children: [
-      node.sizing === "content-first" ? content(first) : weighted(first, node.sizing === "content-second" ? 1 : node.weight),
-      node.sizing === "content-second" ? content(second) : weighted(second, node.sizing === "content-first" ? 1 : 1 - node.weight),
-    ] }
-  }
-  return normalizePaneNode(convert(root))
-}
+/** Validate a v2 (schema version 4) saved layout tree; legacy v1-v3 files are migrated exclusively by `hya-migration`. */
 export function parsePaneLayout(value: unknown): PaneLayout | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
-  if (record.version !== 4) { const legacy = parseLegacyPaneLayout(value); return legacy ? { version: 4, root: fromLegacy(legacy.root), active: legacy.active } : undefined }
+  if (record.version !== 4) return undefined
   if (typeof record.active !== "string") return undefined
   const ids = new Set<string>(); let leaves = 0, groups = 0, conversations = 0, composers = 0
   const valid = (node: unknown, depth: number): node is PaneNode => {
@@ -397,7 +381,6 @@ export function parsePaneLayout(value: unknown): PaneLayout | undefined {
     if (row.type === "pane") {
       if (!/^pane-[1-9]\d*$/.test(row.id) || !paneKinds.includes(row.kind as PaneKind) || ++leaves > maxPanes) return false
       if (row.kind === "extension" ? typeof row.panel !== "string" || !extensionPanelKey.test(row.panel) : row.panel !== undefined) return false
-      if (row.session !== undefined && (row.kind !== "subagent-viewer" || typeof row.session !== "string" || !row.session.trim())) return false
       if (row.instance !== undefined && (row.kind !== "extension" || typeof row.instance !== "string" || !row.instance.trim())) return false
       if (row.title !== undefined && (row.kind !== "extension" || typeof row.title !== "string")) return false
       if (row.pinned !== undefined && (row.kind !== "extension" || typeof row.pinned !== "boolean")) return false
@@ -420,17 +403,6 @@ export function parsePaneLayout(value: unknown): PaneLayout | undefined {
   }
   if (!valid(record.root, 0) || conversations !== 1 || composers !== 1 || !paneLeaves(record.root).some((pane) => pane.id === record.active)) return undefined
   return finish({ version: 4, root: record.root, active: record.active }, record.root)
-}
-
-/** A viewer without a session follows the selector; a session pins this instance. */
-export function pinSubagentViewer(layout: PaneLayout, id: string, session?: string): PaneLayout {
-  if (session !== undefined && !session.trim()) throw new Error("Subagent session must not be empty")
-  const target = paneLeaves(layout.root).find((pane) => pane.id === id)
-  if (target?.kind !== "subagent-viewer") throw new Error(`Not a subagent viewer: ${id}`)
-  return { ...layout, root: mapNode(layout.root, id, (node) => {
-    const { session: previous, ...leaf } = node as PaneLeaf
-    return session ? { ...leaf, session } : leaf
-  }) }
 }
 
 /** Match an open dynamic extension pane leaf by `<bundle>#<pane>` and optional `instance`. */

@@ -19,8 +19,8 @@ test("pane states distinguish missing integration, loading, errors, and backend 
 
 test("the real extension registers an opt-in pane with minimal permissions", async () => {
   const runner = new TuiExtensionRunner(extension);
-  const result = await runner.handle({ jsonrpc: "2.0", id: 1, method: "tui/initialize", params: { api_version: 1, sdk_version: "1.0.0", extension_id: "hya-extra/disk-inspector", permissions: ["tui.panel"] } });
-  expect(result).toMatchObject({ result: { api_version: 1 } });
+  const result = await runner.handle({ jsonrpc: "2.0", id: 1, method: "tui/initialize", params: { api_version: 2, sdk_version: "2.0.0", extension_id: "hya-extra/disk-inspector", permissions: ["tui.panel"] } });
+  expect(result).toMatchObject({ result: { api_version: 2 } });
   expect(await runner.handle({ jsonrpc: "2.0", id: 2, method: "tui/activate", params: { context: { terminal: { columns: 80, rows: 24 } } } })).toMatchObject({
     result: { contributions: { panels: [{ id: "disk", title: "Disk inspector", placement: "pane" }] } },
   });

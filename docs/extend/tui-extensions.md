@@ -104,7 +104,9 @@ Package and install the bundle (`hya bundle install ...`), or place the folder u
 - **`/extensions` / `/bundles`:** Inspect loaded extensions, warnings, permissions, and logs.
 - **Default VM tier:** Third-party extensions run in QuickJS WebAssembly (64 MiB memory cap). Extensions from a **remote** backend start `blocked` until explicitly enabled with `/extensions enable <bundle-id>`.
 - **Trusted JIT tier (`/extensions trust <bundle-id>`):** Runs trusted code on JavaScriptCore's JIT inside a null-prototype realm and OS sandbox (default for local first-party bundles).
-- **Manual panel placement:** In the `workspace` layout preset, place a panel with `/layout split left extension <bundle-id>#<panel-id>`.
+- **Manual panel placement:** In the `workspace` layout preset, place any registered panel or dynamic pane with `/layout split left extension <bundle-id>#<pane-or-panel-id>` (or assign/wrap it in `/layout tree`).
+- **Core vs. bundle panes (`packages/hya-tui`):** The TUI host owns only five core pane kinds (`conversation`, `composer`, `activity`, `status`, `layout`), five bundle-replaced workspace slots (`projects`, `sessions`, `todos`, `context`, `jobs` from `hya/basic-tui-components`), and the generic `extension` leaf (`<bundle-id>#<pane-id>`). Saved `tui.json` layouts strictly require `version: 4`; legacy layout upgrades are handled by `crates/hya-migration`.
+- **Live extension state updates:** Whenever a bundle emits an `extensionEvent` on the session or global `/v2` stream, the TUI host refreshes the open session's `SessionInfo.extensions` projection and pushes the updated `context.extension_state` slice to the owning bundle's surfaces.
 - **Bare mode (`hya --bare`):** When the backend advertises zero TUI extensions, `ExtensionManager.settled()` resolves immediately, no extension host process runs, and the TUI uses the minimal single-column chat layout while keeping core overlays (`/key`, `/mcp`, `/skills`, `/bundles`, `/rules`, `/diff`) available.
 - **Browser-safe keybindings:** Keep custom `onKey` bindings browser-safe—do not rely exclusively on shortcuts reserved by browsers (`Ctrl/Cmd+W`, `T`, `N`, `L`, `Tab`, `Ctrl+Tab`).
 

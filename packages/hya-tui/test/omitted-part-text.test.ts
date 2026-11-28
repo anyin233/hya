@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test"
 import type { MessageInfo } from "../src/client"
-import { childActivity } from "../src/state/members"
 import { messageView } from "../src/state/messages"
 
 // protojson omits empty strings: a thinking block whose text is empty (for
@@ -24,8 +23,4 @@ test("a reasoning part without text renders as an empty thinking block", () => {
     { kind: "reasoning", id: "r", text: "", words: 0, active: false },
     { kind: "text", id: "d", text: "Done." },
   ])
-})
-
-test("a child's activity skips text parts without text", () => {
-  expect(childActivity([{ ...assistant, parts: [{ id: "d", text: { text: "Done." } }, { id: "t", text: {} }] }])).toBe("Done.")
 })

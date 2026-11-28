@@ -421,7 +421,6 @@ test("every scoped call names the scope in its directory field and no request or
   await client.bootstrap()
   await client.listAgents()
   await client.listCommands()
-  await client.listWorkflows()
   await client.listPermissionModes()
   await client.findFiles("*", 1)
   await client.readFile("a.txt")
@@ -435,7 +434,6 @@ test("every scoped call names the scope in its directory field and no request or
     ["GET", "/v2/bootstrap?directory=%2Fwork%20dir", undefined],
     ["GET", "/v2/agents?page.limit=500&directory=%2Fwork%20dir", undefined],
     ["GET", "/v2/commands?page.limit=500&directory=%2Fwork%20dir", undefined],
-    ["GET", "/v2/bundles/hya%2Fworkflow/api/workflows?directory=%2Fwork%20dir", undefined],
     ["GET", "/v2/permission-modes?directory=%2Fwork%20dir", undefined],
     ["GET", "/v2/fs/find?pattern=*&limit=1&directory=%2Fwork%20dir", undefined],
     ["GET", "/v2/fs/read?path=a.txt&directory=%2Fwork%20dir", undefined],

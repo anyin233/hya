@@ -37,17 +37,6 @@ test("multi-agent bundle: /subagents opens dynamic panes, embeds child transcrip
           workdir: "/workspace",
           projectId: "prj_work",
           kind: "SESSION_KIND_PROJECT",
-          members: [
-            {
-              member: "mem_1",
-              child: "hysec_child_1",
-              handle: "hya-scout-1",
-              agent: "hya-scout",
-              description: "Explore codebase",
-              status: "MEMBER_STATUS_RUNNING",
-              summary: "Inspecting bundles/",
-            },
-          ],
           extensions: {
             "hya/multi-agent": {
               members: [

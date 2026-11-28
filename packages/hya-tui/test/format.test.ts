@@ -35,7 +35,7 @@ test("truncates from either end", () => {
 
 test("the chat view's text is only the empty-state hint; messages render per component", () => {
   const store = createAppStore()
-  store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [], providers: [], commands: [] })
+  store.applyCatalog({ sessions: [], interactions: [], models: [], providers: [], commands: [] })
   store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   expect(mainContent(store.state)).toBe("No messages yet. Type a prompt below.")
   store.enqueue("next question", "hysec_1")
@@ -73,7 +73,7 @@ test("pending asks of other sessions name the session they belong to (its /open 
       { id: "perm_x", session: "hysec_2", type: "INTERACTION_TYPE_PERMISSION", title: "bash echo x" },
       { id: "que_y", session: "hysec_9", type: "INTERACTION_TYPE_QUESTION", title: "Which one?" },
     ],
-    models: [], workflows: [], providers: [], commands: [],
+    models: [], providers: [], commands: [],
   })
   store.openSession(selected)
   expect(pendingLines(store.state)).toEqual(["! bash echo x · 2. Other work", "? Which one? · saved session"])

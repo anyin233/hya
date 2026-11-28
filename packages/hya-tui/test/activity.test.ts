@@ -64,7 +64,7 @@ test("a pending permission or question prompt outranks any streaming activity", 
   store.applyCatalog({
     sessions: [session("hysec_1")],
     interactions: [{ id: "perm_1", session: "hysec_1", type: "INTERACTION_TYPE_PERMISSION", title: "bash ls", payload: { action: "run", resource: "bash", tool: "bash" } }],
-    models: [], workflows: [], providers: [], commands: [],
+    models: [], providers: [], commands: [],
   })
   store.openSession(session("hysec_1"))
   store.beginTurn()
@@ -73,14 +73,14 @@ test("a pending permission or question prompt outranks any streaming activity", 
   store.applyCatalog({
     sessions: [session("hysec_1")],
     interactions: [{ id: "que_1", session: "hysec_1", type: "INTERACTION_TYPE_QUESTION", title: "Which one?" }],
-    models: [], workflows: [], providers: [], commands: [],
+    models: [], providers: [], commands: [],
   })
   expect(activityText(store.state)).toBe("Waiting for an answer")
 })
 
 test("a running task card whose child has not answered reads Waiting for subagent <agent>", () => {
   const store = createAppStore()
-  store.openSession(session("hysec_1", { members: [{ member: "mbr_1", child: "hysec_c", agent: "scout", status: "MEMBER_STATUS_RUNNING", callId: "call_1" }] }))
+  store.openSession(session("hysec_1"))
   store.beginTurn()
   store.applyEvent({ seq: "1", session: "hysec_1", messageStarted: { message: "m_a", role: "ROLE_ASSISTANT" } })
   store.applyEvent({ seq: "2", session: "hysec_1", partStarted: { message: "m_a", part: "p_c", kind: "tool_call", tool: "task", callId: "call_1" } })

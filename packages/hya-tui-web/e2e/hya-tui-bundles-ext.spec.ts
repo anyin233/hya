@@ -40,9 +40,9 @@ identity: { id: e2e/tui-panel, version: 1.0.0, publisher: e2e }
 assets:
   - { id: panel, path: tui/main.ts }
 tui:
-  api_version: 1
+  api_version: 2
   entry: tui/main.ts
-  sdk: 1.0.0
+  sdk: "2.0.0"
   permissions: [tui.action, tui.panel, tui.render, tui.session.read, tui.status_item, tui.keys]
 `
 

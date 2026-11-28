@@ -44,10 +44,10 @@ test("the todo rows yield to a visible Todos pane and are off outside dock and w
 
 test("running subagents: one row each, waiting ones in the warning tone, at most three", () => {
   const store = dockStore()
-  const member = (n: number, status = "MEMBER_STATUS_RUNNING") => ({ member: `mbr_${n}`, child: `hysec_c${n}`, agent: "scout", description: `scout ${n}`, handle: `hya-scout-${n}`, status })
-  store.setMembers([member(1), member(2, "MEMBER_STATUS_DONE")])
+  const child = (n: number, busy = true) => ({ id: `hysec_c${n}`, parent: "hysec_1", agent: "scout", title: `hya-scout-${n}`, workdir: "/w", busy })
+  store.setSessions([store.state.selected!, child(1, true), child(2, false)])
   expect(subagentDockRows(store.state, 120).map((row) => `${row.glyph} ${row.text}`)).toEqual(["↳ hya-scout-1"])
-  store.setMembers([member(1), member(3), member(4), member(5)])
+  store.setSessions([store.state.selected!, child(1), child(3), child(4), child(5)])
   expect(subagentDockRows(store.state, 120).map((row) => row.text)).toEqual(["hya-scout-1", "hya-scout-3", "+2 more · /subagents"])
   expect(dockRowCount(store.state, 120)).toBe(3)
   store.setStructure({ ...builtinPreset("dock"), subagents: { enabled: false } })

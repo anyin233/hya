@@ -44,8 +44,12 @@ import {
   type TodoItem,
   type TurnInfo,
   type VcsStatus,
-  type WorkflowSummary,
 } from "../../src/client"
+
+export interface WorkflowSummary {
+  name: string
+  description?: string
+}
 import type { WebInfo } from "../../src/cli"
 import { locateSdk } from "../../src/extensions/install"
 import { extensionManager } from "../../src/extensions/manager"
@@ -572,33 +576,57 @@ export class FakeBackend {
         return jsonResponse({ handle: "lead", cursor: 0, total: unread.length, unread })
       }
       if (tail === "bundles/hya%2Fmulti-agent/members" && method === "GET") {
-        const members = (session.members ?? []).map((m) => ({
-          member: m.member,
-          child: m.child ?? null,
-          subagent_type: m.agent ?? "hya-task",
-          description: m.description ?? "",
-          depth: m.depth ?? 0,
-          status: m.status ?? "MEMBER_STATUS_RUNNING",
-          summary: m.summary ?? "",
-          handle: m.handle,
-          archived: m.archived === true,
-          archive_reason: m.archiveReason,
-        }))
-        return jsonResponse({ session: id, root: id, members, roster: {}, archived: {} })
+        const ext = session.extensions?.["hya/multi-agent"] as {
+          members?: Array<Record<string, unknown>>
+          roster?: Record<string, Record<string, unknown>>
+          archived?: Record<string, unknown>
+        } | undefined
+        const roster = ext?.roster ?? {}
+        const archived = ext?.archived ?? {}
+        const handleByChild = new Map<string, string>()
+        for (const [handle, row] of Object.entries(roster)) {
+          if (typeof row?.session === "string") handleByChild.set(row.session, handle)
+        }
+        const members = (ext?.members ?? []).map((m) => {
+          const child = typeof m.child === "string" ? m.child : undefined
+          const handle = typeof m.handle === "string" ? m.handle : (child ? handleByChild.get(child) : undefined)
+          const archiveEntry = handle ? archived[handle] : undefined
+          return {
+            member: m.member,
+            child: child ?? null,
+            subagent_type: m.subagent_type ?? "hya-task",
+            description: m.description ?? "",
+            depth: m.depth ?? 0,
+            status: m.status ?? "running",
+            summary: m.summary ?? "",
+            ...(handle ? { handle } : {}),
+            archived: m.archived === true || archiveEntry !== undefined,
+            ...(typeof archiveEntry === "string" ? { archive_reason: archiveEntry } : {}),
+          }
+        })
+        return jsonResponse({ session: id, root: id, members, roster, archived })
       }
-      if ((tail === "archive" || tail === "bundles/hya%2Fmulti-agent/archive") && method === "POST") {
-        const parent = this.sessions.find((s) => s.members?.some((m) => m.child === id))
-        const member = parent?.members?.find((m) => m.child === id)
+      if (tail === "bundles/hya%2Fmulti-agent/archive" && method === "POST") {
+        const parent = this.sessions.find((s) => {
+          const ext = s.extensions?.["hya/multi-agent"] as { members?: Array<{ child?: string }> } | undefined
+          return ext?.members?.some((m) => m.child === id)
+        })
+        const ext = parent?.extensions?.["hya/multi-agent"] as { members?: Array<Record<string, unknown>>; archived?: Record<string, unknown> } | undefined
+        const member = ext?.members?.find((m) => m.child === id)
         if (member) member.archived = true
-        if (parent) this.emitSession(parent.id, { memberLifecycleChanged: { child: id, ...(member?.handle ? { handle: member.handle } : {}), archived: true, archiveReason: "user" } })
-        return jsonResponse({ handle: member?.handle ?? id, cancelledTurn: false, descendants: [] })
+        if (parent) this.emitSession(parent.id, { extensionEvent: { bundle: "hya/multi-agent", kind: "member_archived", payload: { child: id, reason: "user" } } })
+        return jsonResponse({ handle: typeof member?.handle === "string" ? member.handle : id, cancelledTurn: false, descendants: [] })
       }
-      if ((tail === "steer" || tail === "bundles/hya%2Fmulti-agent/steer") && method === "POST") {
-        const parent = this.sessions.find((s) => s.members?.some((m) => m.child === id))
-        const member = parent?.members?.find((m) => m.child === id)
+      if (tail === "bundles/hya%2Fmulti-agent/steer" && method === "POST") {
+        const parent = this.sessions.find((s) => {
+          const ext = s.extensions?.["hya/multi-agent"] as { members?: Array<{ child?: string }> } | undefined
+          return ext?.members?.some((m) => m.child === id)
+        })
+        const ext = parent?.extensions?.["hya/multi-agent"] as { members?: Array<Record<string, unknown>> } | undefined
+        const member = ext?.members?.find((m) => m.child === id)
         if (member && member.archived) {
           member.archived = false
-          if (parent) this.emitSession(parent.id, { memberLifecycleChanged: { child: id, ...(member.handle ? { handle: member.handle } : {}), archived: false } })
+          if (parent) this.emitSession(parent.id, { extensionEvent: { bundle: "hya/multi-agent", kind: "member_unarchived", payload: { child: id } } })
         }
         return jsonResponse({ from: "user" })
       }

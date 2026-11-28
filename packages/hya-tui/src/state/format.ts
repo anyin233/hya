@@ -165,7 +165,7 @@ export function webNotice(web: WebInfo | undefined): string | undefined {
 }
 
 const titles: Record<View, string> = {
-  chat: "Chat", models: "Models", workflows: "Workflows", interactions: "Interactions",
+  chat: "Chat", models: "Models", interactions: "Interactions",
   api: "API commands", todos: "Todos", status: "Status", config: "TUI config",
 }
 
@@ -295,10 +295,6 @@ export function mainContent(state: AppState, view: View = state.view): string {
       return state.messages.length || state.overlay.length || state.queued.length ? "" : "No messages yet. Type a prompt below."
     case "models":
       return state.models.length ? state.models.map((model) => `${model.id}  ${model.displayName ?? ""}  ${model.auth ?? ""}`).join("\n") : "No models returned by server."
-    case "workflows": {
-      const current = state.workflowState
-      return `${current ? `Current: ${String(current.workflow ?? "none")} · ${String(current.status ?? "") }\n\n` : ""}${state.workflows.length ? state.workflows.map((workflow) => `${workflow.name} · ${workflow.stageCount ?? 0} stages\n${workflow.description ?? ""}`).join("\n\n") : "No workflows discovered."}`
-    }
     case "interactions":
       return state.interactions.length ? state.interactions.map((item) => `${item.type} · ${item.id}\n${item.title}\n${item.detail ?? ""}\n${(item.options ?? []).join(" | ")}`).join("\n\n") : "No pending interactions."
     case "api": return state.apiOutput

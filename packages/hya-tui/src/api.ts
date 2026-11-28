@@ -1,5 +1,5 @@
 /**
- * The v1 HTTP operation catalog used by `/api` and its completion.
+ * The v2 HTTP operation catalog used by `/api` and its completion.
  *
  * `operations.json` is generated next to `docs/protocol/openapi.json` by
  * `cargo run -p xtask -- gen-api` (test/api-catalog.test.ts checks they

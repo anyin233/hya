@@ -9,7 +9,7 @@ const env = { HOME: "/home/u" }
 const open = (extra: Record<string, unknown> = {}) => {
   const store = createAppStore()
   store.applyCatalog({
-    sessions: [], interactions: [], workflows: [], providers: [], commands: [],
+    sessions: [], interactions: [], providers: [], commands: [],
     models: [{ id: "fake/model", contextLimit: "1000" }],
   })
   store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/home/u/src/work", model: { providerId: "fake", modelId: "model" }, ...extra })

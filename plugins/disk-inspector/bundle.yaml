@@ -18,9 +18,9 @@ assets:
   - { id: tui-panel, path: tui/panel.ts }
   - { id: info-schema, path: schemas/info.json }
 tui:
-  api_version: 1
+  api_version: 2
   entry: tui/main.ts
-  sdk: "1.0.0"
+  sdk: "2.0.0"
   permissions: [tui.panel]
 apis:
   - id: info

@@ -5,7 +5,6 @@ const context = {
   backendCommands: ["compact", "review"],
   models: ["anthropic/claude", "openai/gpt"],
   sessions: [{ id: "hysec_1" }],
-  workflows: ["release"],
   interactions: ["req_1"],
   agents: ["hya-main"],
   apiOperations: ["GET /v2/health", "GET /v2/models"],
@@ -18,7 +17,6 @@ test("completes native and backend slash commands with current catalog arguments
   expect(completeCommand("/key s", context)).toEqual([])
   expect(completeCommand("/ke", context)).toEqual(["/key", "/keybind"])
   expect(completeCommand("/model anth", context)).toEqual(["/model anthropic/claude"])
-  expect(completeCommand("/workflow run r", context)).toEqual(["/workflow run release"])
   expect(completeCommand("/api GET /v2/m", context)).toEqual(["/api GET /v2/models"])
   expect(completeCommand("ordinary prompt", context)).toEqual([])
 })

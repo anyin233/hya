@@ -217,7 +217,7 @@ test("move offers valid destinations and indexes after source removal", () => {
 
 test("wrap and assign retain ids; removal requires explicit choice and protects the editor", () => {
   const e = editor("pane-5")
-  e.key("return"); e.choose("row"); e.choose("models")
+  e.key("return"); e.choose("row"); e.choose("status")
   const context = layoutTreeRows(e.layout.root).find((row) => row.id === "pane-5")!
   expect(context.parent?.direction).toBe("row")
   e.key("return"); e.choose("assign"); e.choose("jobs")

@@ -1,7 +1,6 @@
 /** Registration order of the built-in slash commands. */
 import { revertReadOnlyStatus } from "../app/revert"
 import type { CommandSummary } from "../client"
-import { subagentsCommand } from "./subagents"
 import { CommandRegistry, type CommandContext, type CommandInvocation, type CommandSpec } from "./registry"
 import { keybindingsCommand } from "./keybindings"
 import { configCommand, pasteCommand, resourcesCommand, setCommand } from "./config"
@@ -16,7 +15,6 @@ import { permissionModeCommand, interactionCommands } from "./native/interaction
 import { modelCommands, keyCommand } from "./native/models"
 import { helpCommand, presentationCommands } from "./native/presentation"
 import { sessionNavigationCommands, sessionHistoryCommands } from "./native/sessions"
-import { workflowCommands } from "./native/workflows"
 import { layoutCommand, projectCommands } from "./native/workspace"
 
 export { backendText } from "./native/connection"
@@ -92,7 +90,6 @@ export async function backendCommand(context: CommandContext, invocation: Comman
 
 export const nativeCommandSpecs: CommandSpec[] = [
   keybindingsCommand,
-  subagentsCommand,
   configCommand,
   setCommand,
   pasteCommand,
@@ -110,7 +107,6 @@ export const nativeCommandSpecs: CommandSpec[] = [
   keyCommand,
   ...catalogCommands,
   ...projectCommands,
-  ...workflowCommands,
   ...interactionCommands,
   ...connectionCommands,
   ...presentationCommands,

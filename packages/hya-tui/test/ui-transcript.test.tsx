@@ -171,7 +171,6 @@ describe("tool cards, status, todos, context usage, and compaction history", () 
           {
             id: "hysec_tools", agent: "hya-main", workdir: "/workspace", projectId: "prj_work",
             model: { providerId: "fake", modelId: "model" },
-            members: [{ member: "m1", handle: "main/helper", child: "hysec_sub", agent: "hya-task", description: "survey repo", status: "MEMBER_STATUS_RUNNING" }],
           },
           { id: "hysec_sub", parent: "hysec_tools", agent: "hya-task", workdir: "/workspace", busy: true },
         ],

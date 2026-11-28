@@ -1,6 +1,6 @@
 /** Reference-counted child transcript watches. The server projection remains authoritative. */
 import { createRoot } from "solid-js"
-import { sessionMembers, type HyaClient, type SessionInfo } from "../client"
+import { type HyaClient, type SessionInfo } from "../client"
 import { createAppStore, type AppStore } from "../state/store"
 
 type ViewClient = Pick<HyaClient, "request" | "listMessages" | "listEventsSince" | "streamSession">
@@ -54,7 +54,7 @@ export class SessionViews {
             this.client.request<SessionInfo>("GET", `/v2/sessions/${encodeURIComponent(id)}`), this.client.listMessages(id),
           ])
           if (!alive()) return
-          store.setSelected(session); store.setMembers(sessionMembers(session)); store.setMessages(id, messages)
+          store.setSelected(session); store.setMessages(id, messages)
           store.setStatus("")
         } while (again && alive())
       } finally { reading = false }

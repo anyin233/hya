@@ -30,27 +30,15 @@ test("normalization keeps mixed sizing boundaries and flattens content-only dock
   expect(retained.children[1]?.node.id).toBe("group-3")
 })
 
-test("binary v3 migration preserves weighted geometry, focus and ids", () => {
-  const old = { version: 3, active: "pane-3", root: { type: "split", axis: "vertical", weight: .2,
+test("v2 layout parser rejects legacy v1-v3 formats (migrated by hya-migration instead)", () => {
+  const v3 = { version: 3, active: "pane-3", root: { type: "split", axis: "vertical", weight: .2,
     first: { type: "pane", id: "pane-1", kind: "conversation" }, second: { type: "split", axis: "vertical", weight: .25,
       first: { type: "pane", id: "pane-2", kind: "composer" }, second: { type: "pane", id: "pane-3", kind: "jobs" } } } }
-  const layout = parsePaneLayout(old)!
-  expect(layout.version).toBe(4)
-  expect(layout.active).toBe("pane-3")
-  const rects = layoutRects(layout.root, { left: 0, top: 0, right: 100, bottom: 40 })
-  expect(rects.get("pane-2")?.left).toBe(20)
-  expect(rects.get("pane-3")?.left).toBe(40)
-  expect(parsePaneLayout(layout)).toEqual(layout)
-})
-
-test("legacy default content dock becomes viewer plus two content leaves", () => {
-  const old = { version: 3, active: "pane-1", root: { type: "split", axis: "horizontal", weight: .8,
-    first: { type: "pane", id: "pane-2", kind: "conversation" }, second: { type: "split", axis: "horizontal", weight: .2,
-      first: { type: "pane", id: "pane-3", kind: "activity" }, second: { type: "pane", id: "pane-1", kind: "composer" } } } }
-  const migrated = parsePaneLayout(old)!
-  expect(migrated.root.type === "split" && migrated.root.children.map((child) => child.size.mode)).toEqual(["weight", "content", "content"])
-  const custom = { ...old, root: { ...old.root, weight: .7 } }
-  expect((parsePaneLayout(custom)!.root as PaneSplit).children.every((child) => child.size.mode === "weight")).toBe(true)
+  const v2 = { version: 2, active: "pane-1", root: { type: "pane", id: "pane-1", kind: "conversation" } }
+  const v1 = { version: 1, active: "pane-1", root: { type: "pane", id: "pane-1", kind: "conversation" } }
+  expect(parsePaneLayout(v3)).toBeUndefined()
+  expect(parsePaneLayout(v2)).toBeUndefined()
+  expect(parsePaneLayout(v1)).toBeUndefined()
 })
 
 test("solver honors minimum widths, content rows, zero idle activity and screen bounds", () => {
@@ -75,11 +63,11 @@ test("tree operations insert, move, wrap root and prune closed auxiliary branche
   const moved = movePane(inserted, "pane-8", "group-3", 1)
   expect((paneNodes(moved.root).find((node) => node.id === "group-3") as PaneSplit).children[1]?.node.id).toBe("pane-8")
   expect(moved.active).toBe("pane-8")
-  const wrapped = wrapPane(moved, "root", "column", "models", false)
+  const wrapped = wrapPane(moved, "root", "column", "status", false)
   expect(wrapped.root.type === "split" && wrapped.root.direction).toBe("column")
-  expect(paneLeaves(wrapped.root).at(-1)?.kind).toBe("models")
+  expect(paneLeaves(wrapped.root).at(-1)?.kind).toBe("status")
   expect(parsePaneLayout(wrapped)).toEqual(wrapped)
-  const closed = closePane(wrapped, "models")
+  const closed = closePane(wrapped, "status")
   expect(closed.root.id).toBe(moved.root.id)
   expect(() => movePane(start, "root", "group-2", 0)).toThrow("descendant")
   expect(() => insertPane(start, "root", 100, "jobs")).toThrow("index")
@@ -118,7 +106,7 @@ test("boundary dragging and selected resize affect sibling weights and persist",
 })
 
 test("rendered rectangle navigation reaches all eligible panes and uses vertical overlap", () => {
-  const layout = splitPane(splitPane(defaultPaneLayout(), "vertical", "jobs"), "horizontal", "models")
+  const layout = splitPane(splitPane(defaultPaneLayout(), "vertical", "jobs"), "horizontal", "layout")
   const rects = new Map<string, Rect>([
     ["pane-1", { left: 0, top: 20, right: 20, bottom: 25 }],
     ["pane-2", { left: 40, top: 0, right: 60, bottom: 10 }],

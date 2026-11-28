@@ -6,10 +6,10 @@ This page explains how `hya-server` serves HTTP and gRPC from one port, how `hya
 
 ## 1. Single-Port Dual-Protocol Server (`crates/hya-server`)
 
-`hya_server::build` constructs one Axum router backed by `AppState` that serves **both** HTTP (`/v1/*` JSON, SSE, WebSocket) and `tonic` gRPC (`V1Grpc`) on the same TCP listener:
+`hya_server::build` constructs one Axum router backed by `AppState` that serves **both** HTTP (`/v2/*` JSON, SSE, WebSocket) and `tonic` gRPC (`V2Grpc`) on the same TCP listener:
 
-- **Protocol dispatch:** Incoming requests with `content-type: application/grpc*` dispatch to `V1Grpc`; everything else routes to `/v1` HTTP handlers.
-- **Zero drift by construction:** `cargo run -p xtask -- gen-api` generates `grpc_generated.rs` from `proto/hya/v1/*.proto` (`// hya.http:` annotations) so almost every unary gRPC method encodes its path/query/body and calls the exact same Axum handler in-process. Only streaming and loopback-only RPCs (`StreamSessionEvents`, `StreamGlobalEvents`, `StreamPty`, `Invoke*BundleApi`, `WaitTurn`, and `RelayControl`) have explicit adapters in `grpc.rs`.
+- **Protocol dispatch:** Incoming requests with `content-type: application/grpc*` dispatch to `V2Grpc`; everything else routes to `/v2` HTTP handlers.
+- **Zero drift by construction:** `cargo run -p xtask -- gen-api` generates `grpc_generated.rs` from `proto/hya/v2/*.proto` (`// hya.http:` annotations) so almost every unary gRPC method encodes its path/query/body and calls the exact same Axum handler in-process. Only streaming and loopback-only RPCs (`StreamSessionEvents`, `StreamGlobalEvents`, `StreamPty`, `Invoke*BundleApi`, `WaitTurn`, and `RelayControl`) have explicit adapters in `grpc.rs`.
 - **Host allowlist guard (`host.rs`):** Rejects any HTTP `Host` or gRPC `:authority` outside `localhost`, `127.0.0.1`, `[::1]`, a specific `--bind` IP, or `--allow-host` names before CORS or route dispatch—blocking DNS-rebinding attacks from browsers.
 - **Ephemeral session reaper (`ephemeral.rs`):** Speculatively created unused sessions (`ephemeral: true`) are automatically reaped ~5 seconds after their last `StreamSessionEvents` watcher disconnects (or 30 seconds on startup recovery) if no message, title, archive, or fork ever touched them.
 
@@ -40,12 +40,15 @@ sequenceDiagram
 
 ## 3. OpenTUI Frontend (`packages/hya-tui`)
 
-`packages/hya-tui` (Solid + `@opentui/solid` on Bun) is Hya's sole interactive UI ([ADR-0019](../adr/0019-adopt-opentui-frontend.md)):
+`packages/hya-tui` (Solid + `@opentui/solid` on Bun) is Hya's sole interactive UI ([ADR-0019](../adr/0019-adopt-opentui-frontend.md), [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)):
 
-- **Server projection is authoritative:** The TUI never builds a competing state model from raw SSE tokens. Live `seq = 0` deltas animate the active streaming block in `src/state/store.ts`, while durable boundaries (`messageFinished`, `sessionReverted`, `catalogUpdated`, `resync`) reconcile directly against `/v1` server projections.
+- **Pure `hya.v2` transport:** Both `HyaClient` (HTTP/JSON+SSE under `/v2/*`) and `GrpcHyaClient` (`src/proto/hya/v2/*.proto`) speak exclusively `hya.v2`. Domain-specific endpoints (multi-agent roster/steer/archive, workflow listing/state/commands, channel inboxes) are never hardcoded in `packages/hya-tui`; bundles invoke their own endpoints through confined `BundleApi` calls.
+- **Server projection is authoritative:** The TUI never builds a competing state model from raw SSE tokens. Live `seq = 0` deltas animate the active streaming block in `src/state/store.ts`, while durable boundaries (`messageFinished`, `sessionReverted`, `catalogUpdated`, `extensionEvent`, `resync`) reconcile directly against `/v2` server projections (`SessionInfo`, `SessionInfo.extensions`, messages).
+- **Minimal core panes + dynamic bundle pane dispatch:** `src/state/panes.ts` and `src/components/paneRegistry.tsx` render only the five core panes (`conversation`, `composer`, `activity`, `status`, `layout`), delegate workspace slots (`projects`, `sessions`, `todos`, `context`, `jobs`) to `hya/basic-tui-components`, and dispatch all domain panes (`hya/multi-agent#subagents`, `hya/multi-agent#subagent-viewer`, `hya/workflow#workflows`, or third-party `<bundleId>#<paneId>`) generically via the `extension` pane kind.
+- **v2-only layout persistence:** Saved `tui.json` `paneLayout` trees strictly require schema `version: 4` (n-ary containers with core/bundled/extension leaf kinds). Legacy v1→v2 `tui.json`/`tui.toml` migration lives exclusively in `crates/hya-migration`, never in `packages/hya-tui`.
 - **Hot supervisor reload:** Bare `hya` launches `packages/hya-tui` under a tiny wrapper (`src/supervisor.ts`). After `hya serve restart` (or `/reload-tui`), the TUI restarts its own JS bundle in place while keeping your open session ID and unsent composer draft intact.
-- **Confined TUI extensions:** Bundle `tui:` extensions run in a separate child process (`packages/hya-tui-sdk`) inside QuickJS WebAssembly VMs (64 MiB cap, 2s call deadline) or trusted JSC realms, wrapped in Linux Landlock + seccomp or macOS `sandbox_init`.
-- **Zero-bundle bare startup (`hya --bare`):** When `GET /v2/tui-extensions` advertises an empty catalog (and optional bundle APIs such as `hya/workflow` return 404), `ExtensionManager.settled()` resolves immediately without waiting for `hya/basic-tui-components`. `visiblePaneRoot` and `statusLineShown` gracefully collapse unavailable bundled sidebar panes (`projects`, `sessions`, `todos`, `context`, and `extension` panes) back to `chatPaneLayout()` (`conversation` + `activity` + `composer` + status line) with zero `"Loading…"` or missing-pane placeholders, while core overlays (`ProviderView`, `McpView`, `SkillsView`, `BundlesView`, `RulesView`, `DiffView`) remain operational.
+- **Confined TUI extensions:** Bundle `tui:` extensions (`api_version: 2`, `sdk: "2.0.0"`) run in a separate child process (`packages/hya-tui-sdk`) inside QuickJS WebAssembly VMs (64 MiB cap, 2s call deadline) or trusted JSC realms, wrapped in Linux Landlock + seccomp or macOS `sandbox_init`.
+- **Zero-bundle bare startup (`hya --bare`):** When `GET /v2/tui-extensions` advertises an empty catalog, `ExtensionManager.settled()` resolves immediately without waiting for `hya/basic-tui-components`. `visiblePaneRoot` and `statusLineShown` gracefully collapse unavailable bundled sidebar panes (`projects`, `sessions`, `todos`, `context`, `jobs`, and `extension` panes) back to `chatPaneLayout()` (`conversation` + `activity` + `composer` + status line) with zero `"Loading…"` or missing-pane placeholders, while core overlays (`ProviderView`, `McpView`, `SkillsView`, `BundlesView`, `RulesView`, `DiffView`) remain operational.
 
 ---
 

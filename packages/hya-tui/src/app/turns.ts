@@ -26,7 +26,7 @@ import { batch } from "solid-js"
 import { HttpError, type HyaClient, type PromptAttachment } from "../client"
 import { assistantRole, toolCallsFinish, type FinishedInfo, type OverlayEffect } from "../state/overlay"
 import type { AppStore, QueuedPrompt } from "../state/store"
-import { subagentsWorking } from "../state/subagents"
+import { hasBusyDescendant } from "../state/prompts"
 
 export interface TurnRunnerOptions {
   store: AppStore
@@ -209,7 +209,7 @@ export function createTurnRunner({ store, client, sleep = (ms) => Bun.sleep(ms),
      */
     async cancel(): Promise<void> {
       const session = store.state.selected?.id
-      if (session && !store.state.running && subagentsWorking(store.state)) {
+      if (session && !store.state.running && hasBusyDescendant(store.state)) {
         status("Stopping subagents…")
         await client.cancelTurn(session, "current")
         status("Stopped subagents · Ready")

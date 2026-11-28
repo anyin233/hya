@@ -103,13 +103,12 @@ import type { KeyLike } from "../keys/bindings"
 import { helpPickerHint, helpPickerRows } from "../commands"
 import { createBackendLifecycle } from "./backendLifecycle"
 import { currentModel, modelReference } from "../state/format"
-import { childSessionIds } from "../state/members"
 import { editText } from "../composer/editor"
 import { loadPaneLayout, savePreferences, type TuiPreferences } from "../prefs"
 import type { StructureControl } from "./structure"
 import { notificationBody, notificationSequence, shouldNotify, type NotifyKind } from "../notify"
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
-import { treeSessionIds, type PromptChoice } from "../state/prompts"
+import { taskChildIds, treeSessionIds, type PromptChoice } from "../state/prompts"
 import { activeProject, newestTopLevelSession, noProjectStatus, projectScope, sessionPlacement } from "../state/projects"
 import { extensionManager, type CommandOrigin } from "../extensions/manager"
 import { isJson, resolveBundleApiRequest, type HostCommand, type JsonValue, type PaneHostCommand, type ResolvedBundleApiRequest } from "../extensions/wire"
@@ -329,10 +328,8 @@ export function createController({ client, store, directory, remote: startedRemo
   }
 
   async function refresh(): Promise<void> {
-    const [sessions, interactions, models, agents, workflows, providers, commands, permissionModes, projects, skills] = await Promise.all([
+    const [sessions, interactions, models, agents, providers, commands, permissionModes, projects, skills] = await Promise.all([
       client.listSessions(), client.listInteractions(), client.listModels(), client.listAgents(),
-      // Optional: absent when `hya/workflow` is not loaded (e.g. `hya --bare`).
-      client.listWorkflows().catch(() => [] as Awaited<ReturnType<typeof client.listWorkflows>>),
       client.listProviders(),
       // The open session's catalog (its agent's bundle skills too), with the command diagnostics.
       client.listCommandCatalog
@@ -345,7 +342,7 @@ export function createController({ client, store, directory, remote: startedRemo
       // Optional: the skills and their diagnostics (an older backend without them keeps the bootstrap's).
       (client.listSkills?.(store.state.selected?.id) ?? Promise.resolve(undefined)).catch(() => undefined),
     ])
-    store.applyCatalog({ sessions, interactions, models, agents, workflows, providers, commands, ...(permissionModes ? { permissionModes } : {}), ...(projects ? { projects } : {}) })
+    store.applyCatalog({ sessions, interactions, models, agents, providers, commands, ...(permissionModes ? { permissionModes } : {}), ...(projects ? { projects } : {}) })
     if (skills) store.setSkills(skills)
   }
 
@@ -379,7 +376,6 @@ export function createController({ client, store, directory, remote: startedRemo
         throw error
       })
     followSessionScope(session)
-    subscriptions.resetChildren()
     store.openSession(session)
     await refreshMessages()
     void refreshTodos()
@@ -814,7 +810,7 @@ export function createController({ client, store, directory, remote: startedRemo
 
   /** The oldest waiting request outside the open tree: /pending opens its root session so the normal prompt can answer it. */
   async function reviewPending(): Promise<void> {
-    const pending = store.state.interactions.find((item) => item.session && !treeSessionIds(store.state.selected?.id ?? "", store.state.sessions, childSessionIds(store.state.members, store.state.messages)).has(item.session))
+    const pending = store.state.interactions.find((item) => item.session && !treeSessionIds(store.state.selected?.id ?? "", store.state.sessions, taskChildIds(store.state.messages)).has(item.session))
     if (!pending?.session) { status("No pending request in another session"); return }
     const first = await client.request<SessionInfo>("GET", `/v2/sessions/${encodeURIComponent(pending.session)}`)
     const root = await keeper.rootOf(first)
@@ -1346,8 +1342,6 @@ export function createController({ client, store, directory, remote: startedRemo
     dispose,
   }
 }
-
-export { childPollMs } from "./subscriptions"
 
 export type Controller = ReturnType<typeof createController>
 

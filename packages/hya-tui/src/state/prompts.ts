@@ -21,9 +21,8 @@
  *
  * Pure TypeScript (no Solid).
  */
-import type { Interaction, MemberInfo, MessageInfo, SessionInfo, StreamEvent } from "../client"
+import type { Interaction, MessageInfo, SessionInfo, StreamEvent } from "../client"
 import type { KeyLike } from "../keys/bindings"
-import { childSessionIds } from "./members"
 import { toolCard, type ToolLine } from "./tools"
 
 export type PromptChoice =
@@ -72,8 +71,6 @@ export interface PromptView {
 export interface PromptContext {
   selected: SessionInfo | undefined
   sessions: readonly SessionInfo[]
-  /** Members of the open session. */
-  members: readonly MemberInfo[]
   /** Projection of the open session. */
   messages: readonly MessageInfo[]
 }
@@ -119,6 +116,28 @@ function clipBody(lines: ToolLine[], max = promptBodyLines): ToolLine[] {
   return [...lines.slice(0, head), { text: `… ${hidden} lines hidden`, tone: "muted" }, ...lines.slice(lines.length - tail)]
 }
 
+/** Child session ids referenced in `task` tool outputs of `messages` before the session list refreshes. */
+export function taskChildIds(messages: readonly MessageInfo[]): string[] {
+  const ids = new Set<string>()
+  for (const message of messages) {
+    for (const part of message.parts ?? []) {
+      if (part.toolCall?.tool !== "task") continue
+      const task = toolCard(part.toolCall).task
+      if (task?.child) ids.add(task.child)
+      for (const member of task?.members ?? []) if (member.child) ids.add(member.child)
+    }
+  }
+  return [...ids]
+}
+
+/** Whether any live descendant session of the open session is currently busy. */
+export function hasBusyDescendant(state: { selected: SessionInfo | undefined; sessions: readonly SessionInfo[] }): boolean {
+  const root = state.selected?.id
+  if (!root) return false
+  const tree = treeSessionIds(root, state.sessions)
+  return state.sessions.some((session) => session.id !== root && tree.has(session.id) && !session.archived && session.busy === true)
+}
+
 /** The open session and every session below it: `parent` links, plus `direct` children the list may not have yet. */
 export function treeSessionIds(root: string, sessions: readonly SessionInfo[], direct: readonly string[] = []): Set<string> {
   const tree = new Set([root, ...direct])
@@ -139,7 +158,7 @@ export function treeSessionIds(root: string, sessions: readonly SessionInfo[], d
 export function promptQueue(interactions: readonly Interaction[], context: PromptContext): Interaction[] {
   const selected = context.selected
   if (!selected) return []
-  const tree = treeSessionIds(selected.id, context.sessions, childSessionIds(context.members, context.messages))
+  const tree = treeSessionIds(selected.id, context.sessions, taskChildIds(context.messages))
   return interactions.filter((item) => item.session !== undefined && tree.has(item.session))
 }
 
@@ -169,15 +188,14 @@ export function mergeInteractions(listed: readonly Interaction[], known: Readonl
   })
 }
 
-/** Who asks: the agent of the open session, or the subagent (with its task description). */
+/** Who asks: the agent of the open session, or the child session. */
 function asker(session: string, context: PromptContext): { asker: string; subagent: boolean } {
   const selected = context.selected
   const listed = context.sessions.find((row) => row.id === session)
-  const member = context.members.find((row) => row.child === session)
   if (selected && session === selected.id && !selected.parent) return { asker: selected.agent || "agent", subagent: false }
-  const agent = member?.agent || listed?.agent || (session === selected?.id ? selected.agent : "")
+  const agent = listed?.agent || (session === selected?.id ? selected.agent : "")
   const label = ["subagent", agent].filter(Boolean).join(" ")
-  return { asker: member?.description ? `${label} · ${member.description}` : label, subagent: true }
+  return { asker: listed?.title ? `${label} · ${listed.title}` : label, subagent: true }
 }
 
 /** The first question of a waiting `ask_user` call whose text is `title`: header and option labels. */
@@ -349,5 +367,5 @@ export function globalAskRoute(event: StreamEvent, context: PromptContext): "tre
   const selected = context.selected
   const asking = event.session || event.permissionRequested?.interaction?.session || event.questionRequested?.interaction?.session
   if (!selected || !asking) return "other"
-  return treeSessionIds(selected.id, context.sessions, childSessionIds(context.members, context.messages)).has(asking) ? "tree" : "other"
+  return treeSessionIds(selected.id, context.sessions, taskChildIds(context.messages)).has(asking) ? "tree" : "other"
 }

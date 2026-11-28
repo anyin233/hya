@@ -19,7 +19,6 @@
  */
 import type { Block } from "./messages"
 import { transcriptViews } from "./messages"
-import { childStatus, taskLink } from "./members"
 import { currentPrompt } from "./prompts"
 import type { AppState } from "./store"
 
@@ -36,14 +35,18 @@ export function formatElapsed(ms: number): string {
   return hours > 0 ? `${hours}:${pad2(minutes)}:${pad2(seconds)}` : `${minutes}:${pad2(seconds)}`
 }
 
-/** The subagent wait text for a `task` block whose child is starting or running; `undefined` otherwise. */
+/** The subagent wait text for a running `task` block whose child is active; `undefined` otherwise. */
 function subagentActivity(block: Extract<Block, { kind: "tool" }>, state: AppState): string | undefined {
   const task = block.card.task
   if (!task) return undefined
-  const link = taskLink({ ...(block.callId ? { callId: block.callId } : {}), ...(task.child ? { child: task.child } : {}) }, state.members)
-  const child = link.child ? state.children.get(link.child) : undefined
-  const status = childStatus(link.member, child)
-  return status === "running" || status === "starting" ? `Waiting for subagent ${task.agent}` : undefined
+  if (block.card.status === "running" || block.card.status === "pending") {
+    return `Waiting for subagent ${task.agent}`
+  }
+  const childId = task.child ?? task.members?.find((member) => member.child)?.child
+  if (childId && state.sessions.some((session) => session.id === childId && session.busy === true)) {
+    return `Waiting for subagent ${task.agent}`
+  }
+  return undefined
 }
 
 /** What the model (or the user) is doing right now, or `undefined` when nothing is running. */
