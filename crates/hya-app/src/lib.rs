@@ -64,8 +64,6 @@ pub use agent_model_control::{
 pub use bundle_cli::{CliContribution, cli_contributions};
 pub use headless::prepare_driver;
 pub use hya_coding_extras_core::BuiltinFormatterProvider;
-/// Formatter plane construction from optional formatter config (owned by `hya/coding-extras`).
-pub use hya_coding_extras_core::formatter::config as formatter_config;
 pub use hya_proto::{WorkflowInfo, WorkflowStageInfo, WorkflowSummary};
 pub use hya_tool::{InvocationPolicy, WorkflowCommand, WorkflowCommandResult, WorkflowRunResult};
 pub use hya_workflow_bundle_core::{

@@ -36,7 +36,7 @@ mod stop_signals;
 mod update_cmd;
 mod workflow_cmd;
 
-pub use hya_app::{auth, config, formatter_config, permission, plugins};
+pub use hya_app::{auth, config, permission, plugins};
 
 use std::io::{Read as _, Write as _};
 

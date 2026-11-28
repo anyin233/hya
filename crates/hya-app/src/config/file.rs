@@ -162,7 +162,7 @@ impl EngineSettings {
         if !self.file.bundles.builtin.is_enabled("hya/coding-extras") {
             return hya_tool::FormatterPlane::default();
         }
-        let raw: crate::formatter_config::RawFormatterConfig = self
+        let raw: hya_coding_extras_core::RawFormatterConfig = self
             .read_bundle_config_value(&["hya/coding-extras"])
             .and_then(|val| {
                 val.get("formatter")
