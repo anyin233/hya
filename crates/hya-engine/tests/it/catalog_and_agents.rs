@@ -745,7 +745,7 @@ async fn agent_catalog_bundle_resolution_shadowing_and_spawn_authorization() {
 }
 
 #[test]
-fn agent_catalog_private_and_first_party_workflow_agents() {
+fn agent_catalog_private_and_first_party_agent_runs() {
     let mk = |bid, aid, priv_, spawn: &[&str]| {
         let mut a = prep_agent(aid);
         a.role = AgentRole::Subagent;
@@ -775,7 +775,7 @@ fn agent_catalog_private_and_first_party_workflow_agents() {
                 cat.resolve_spawn(builtin, r),
                 Err(BundleError::AgentSpawnNotAllowed { .. })
             ));
-            assert!(cat.resolve_workflow_agent(builtin, r).unwrap().private);
+            assert!(cat.resolve_agent_run(builtin, r).unwrap().private);
         }
     }
     assert!(matches!(
@@ -797,10 +797,7 @@ fn agent_catalog_private_and_first_party_workflow_agents() {
         "acme-helper"
     );
     assert!(cat.resolve_spawn("acme-lead", "acme-helper").is_ok());
-    assert!(
-        cat.resolve_workflow_agent("acme-lead", "acme-helper")
-            .is_ok()
-    );
+    assert!(cat.resolve_agent_run("acme-lead", "acme-helper").is_ok());
     for (caller, target, unknown) in [
         ("acme-other", "acme-helper", false),
         ("hya-title", "acme-helper", false),
@@ -808,7 +805,7 @@ fn agent_catalog_private_and_first_party_workflow_agents() {
         ("hya-main", "missing", true),
         ("missing", "acme-helper", true),
     ] {
-        let err = cat.resolve_workflow_agent(caller, target).unwrap_err();
+        let err = cat.resolve_agent_run(caller, target).unwrap_err();
         assert_eq!(
             matches!(err, BundleError::UnknownAgentId { .. }),
             unknown,
@@ -823,11 +820,7 @@ fn agent_catalog_private_and_first_party_workflow_agents() {
         assert!(!agents.is_empty());
         for a in agents {
             assert!(a.private && fp_cat.resolve_spawn("hya-main", a.id.as_str()).is_err());
-            assert!(
-                fp_cat
-                    .resolve_workflow_agent("hya-main", a.id.as_str())
-                    .is_ok()
-            );
+            assert!(fp_cat.resolve_agent_run("hya-main", a.id.as_str()).is_ok());
         }
         if bundle_id == "hya/goal" {
             assert!(

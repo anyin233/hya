@@ -61,7 +61,7 @@ pub(super) struct ActivationCompletion {
     pub(super) done: oneshot::Sender<Result<ActivationResult, CoreError>>,
 }
 
-pub(super) struct WorkflowActivation {
+pub(super) struct DirectedActivation {
     pub(super) resolved: (AgentSpec, ResolvedResidentRuntime),
     pub(super) guidance: Arc<str>,
     pub(super) route: Option<ExplicitTurnRoute>,
@@ -1068,7 +1068,7 @@ impl TeamActor {
         let finish = match (claim.as_ref(), agents, resources) {
             (Some(claim), Some(agents), Some(resources)) => {
                 self.engine
-                    .run_resolved_turn_with_sidecar_tools_for_actor_and_workflow_route(
+                    .run_resolved_turn_with_sidecar_tools_for_actor_and_route(
                         session,
                         &agent,
                         (binding, agents, resources, Arc::clone(&sidecar_tools)),
@@ -1080,7 +1080,7 @@ impl TeamActor {
             }
             (None, Some(agents), Some(resources)) => {
                 self.engine
-                    .run_resolved_turn_with_sidecar_tools_and_workflow_route(
+                    .run_resolved_turn_with_sidecar_tools_and_route(
                         session,
                         &agent,
                         (binding, agents, resources, Arc::clone(&sidecar_tools)),
@@ -1092,7 +1092,7 @@ impl TeamActor {
             }
             (Some(claim), _, _) => {
                 self.engine
-                    .run_bound_turn_for_actor_with_workflow_route(
+                    .run_bound_turn_for_actor_with_route(
                         session,
                         &agent,
                         binding,
@@ -1104,7 +1104,7 @@ impl TeamActor {
             }
             (None, _, _) => {
                 self.engine
-                    .run_bound_turn_with_workflow_route(
+                    .run_bound_turn_with_route(
                         session,
                         &agent,
                         binding,

@@ -558,7 +558,7 @@ async fn authorize_stage_agent(
 ) -> Result<(), WorkflowError> {
     runtime
         .catalog_reader()
-        .authorize_workflow_agent(lead, caller, &AgentName::new(agent_id))
+        .authorize_agent_run(lead, caller, &AgentName::new(agent_id))
         .await
         .map_err(|error| match error {
             HostError::PermissionDenied(detail) | HostError::NotFound(detail) => {

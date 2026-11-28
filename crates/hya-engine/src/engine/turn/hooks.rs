@@ -48,7 +48,9 @@ pub(super) trait TurnHook: Send {
     }
 }
 
-/// Temporary host adapter for the extensions still wired by the engine.
+/// The engine's own turn hook entries. `Route` (a request's explicit model
+/// route) is core provider routing; `StreamPermit` and `Claim` are temporary
+/// adapters for the actor extensions the engine still wires.
 pub(super) fn entries<'a>(
     engine: &'a SessionEngine,
     claim: Option<&'a ActorClaim>,

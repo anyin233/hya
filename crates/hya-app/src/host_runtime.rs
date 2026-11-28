@@ -205,7 +205,7 @@ impl AppHostRuntime {
     ) -> Result<(AgentSpec, hya_engine::resident::ResolvedResidentRuntime), HostError> {
         let definition = match caller {
             Some(caller) => binding
-                .resolve_workflow_agent(caller.as_str(), agent.as_str())
+                .resolve_agent_run(caller.as_str(), agent.as_str())
                 .map_err(|error| HostError::PermissionDenied(error.to_string()))?,
             None => binding.resolve_agent(agent.as_str()).ok_or_else(|| {
                 HostError::PermissionDenied(format!("unknown agent `{}`", agent.as_str()))
@@ -1726,7 +1726,7 @@ impl HostCatalogReader for AppHostRuntime {
         .await
     }
 
-    async fn authorize_workflow_agent(
+    async fn authorize_agent_run(
         &self,
         session: SessionId,
         caller: &AgentName,

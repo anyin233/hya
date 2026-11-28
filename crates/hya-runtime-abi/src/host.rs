@@ -947,7 +947,7 @@ pub trait HostCatalogReader: Send + Sync {
     }
 
     /// Authorize spawning `agent` from `caller` within `session`'s active scope.
-    async fn authorize_workflow_agent(
+    async fn authorize_agent_run(
         &self,
         _session: SessionId,
         _caller: &AgentName,

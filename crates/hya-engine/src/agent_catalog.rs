@@ -232,7 +232,7 @@ impl AgentCatalog {
         caller: &str,
         requested: &str,
     ) -> Result<AgentDefinition<'_>, BundleError> {
-        let target = self.resolve_workflow_agent(caller, requested)?;
+        let target = self.resolve_agent_run(caller, requested)?;
         if target.private && matches!(self.spawn_scope_of(caller)?, CallerScope::Builtin(_)) {
             return Err(BundleError::AgentSpawnNotAllowed {
                 caller: caller.to_string(),
@@ -242,10 +242,10 @@ impl AgentCatalog {
         Ok(target)
     }
 
-    /// Authorise a workflow node or verifier, including private bundle agents.
+    /// Authorise a directed agent run, including private bundle agents.
     /// Built-ins with ordinary scope may use any non-reserved target; bundle
     /// callers still need an explicit `can_spawn` grant. Reserved callers cannot run agents.
-    pub fn resolve_workflow_agent(
+    pub fn resolve_agent_run(
         &self,
         caller: &str,
         requested: &str,

@@ -805,7 +805,7 @@ impl ResidentSupervisor {
             directive,
             parent_claim,
             None,
-            Some(WorkflowActivation {
+            Some(DirectedActivation {
                 resolved,
                 guidance,
                 route,

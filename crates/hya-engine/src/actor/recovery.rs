@@ -1,9 +1,9 @@
 //! Startup fencing and staging of resident actors. Starting their work remains explicit.
 
 use super::{
-    ActivationCompletion, Episode, EpisodeInit, RecoveredResident, ResidentRecovery,
-    ResidentRecoveryReport, ResidentSupervisor, ResolvedResidentRuntime, RootDriverActivity,
-    SlotStatus, TeamEvent, WorkflowActivation, await_episode,
+    ActivationCompletion, DirectedActivation, Episode, EpisodeInit, RecoveredResident,
+    ResidentRecovery, ResidentRecoveryReport, ResidentSupervisor, ResolvedResidentRuntime,
+    RootDriverActivity, SlotStatus, TeamEvent, await_episode,
 };
 use crate::store_bridge::{RecoveredActorClaim, RecoveredResidentWork, SessionStoreExt as _};
 use crate::{AgentSpec, CoreError, SessionEngine};
@@ -215,7 +215,7 @@ impl ResidentSupervisor {
         body: String,
         parent_claim: Option<&ActorClaim>,
         policy: Option<hya_proto::mail::ChannelPolicySnapshot>,
-        activation: Option<WorkflowActivation>,
+        activation: Option<DirectedActivation>,
     ) -> Result<usize, CoreError> {
         let projection = self.engine.read_projection_shared(root).await?;
         let team_proj = hya_tool::extension::team_projection(&projection);

@@ -216,16 +216,13 @@ impl TurnBinding {
         Ok(self.overlay_agent_model(definition))
     }
 
-    /// Resolve a workflow node or verifier using workflow authorization.
-    pub fn resolve_workflow_agent(
+    /// Authorise a directed agent run (`AgentCatalog::resolve_agent_run`) with the model overlay.
+    pub fn resolve_agent_run(
         &self,
         caller: &str,
         requested: &str,
     ) -> Result<AgentDefinition<'_>, BundleError> {
-        let definition = self
-            .snapshot
-            .catalog
-            .resolve_workflow_agent(caller, requested)?;
+        let definition = self.snapshot.catalog.resolve_agent_run(caller, requested)?;
         Ok(self.overlay_agent_model(definition))
     }
 

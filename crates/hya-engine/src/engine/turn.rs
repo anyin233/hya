@@ -383,7 +383,7 @@ impl SessionEngine {
         self.check_request_context(router, &attempt)?;
         router.stream(attempt, session, message).await
     }
-    /// Open one Workflow-assigned stream, starting at admission's candidate.
+    /// Open one explicitly routed stream, starting at admission's candidate.
     ///
     /// The route remains request-local. Only pre-stream retryable failures can
     /// advance it, and a returned stream is never replayed on another model.
@@ -559,8 +559,8 @@ impl SessionEngine {
         .await
     }
 
-    /// Run a bound turn with one request-local Workflow route.
-    pub(crate) async fn run_bound_turn_with_workflow_route(
+    /// Run a bound turn with one request-local explicit model route.
+    pub(crate) async fn run_bound_turn_with_route(
         &self,
         session: SessionId,
         agent: &AgentSpec,
@@ -575,8 +575,8 @@ impl SessionEngine {
         )
         .await
     }
-    /// Run an actor-fenced bound turn with one request-local Workflow route.
-    pub(crate) async fn run_bound_turn_for_actor_with_workflow_route(
+    /// Run an actor-fenced bound turn with one request-local explicit model route.
+    pub(crate) async fn run_bound_turn_for_actor_with_route(
         &self,
         session: SessionId,
         agent: &AgentSpec,
@@ -591,8 +591,8 @@ impl SessionEngine {
         )
         .await
     }
-    /// Run a resolved turn with one request-local Workflow route.
-    pub(crate) async fn run_resolved_turn_with_sidecar_tools_and_workflow_route(
+    /// Run a resolved turn with one request-local explicit model route.
+    pub(crate) async fn run_resolved_turn_with_sidecar_tools_and_route(
         &self,
         session: SessionId,
         agent: &AgentSpec,
@@ -618,8 +618,8 @@ impl SessionEngine {
         )
         .await
     }
-    /// Run an actor-fenced resolved turn with one request-local Workflow route.
-    pub(crate) async fn run_resolved_turn_with_sidecar_tools_for_actor_and_workflow_route(
+    /// Run an actor-fenced resolved turn with one request-local explicit model route.
+    pub(crate) async fn run_resolved_turn_with_sidecar_tools_for_actor_and_route(
         &self,
         session: SessionId,
         agent: &AgentSpec,
@@ -1167,7 +1167,7 @@ impl SessionEngine {
     /// then use the captured Session override, user-file model, and authored
     /// direct/category policy before falling back to the persisted Session
     /// model. Bound/Resolved child work keeps its already-resolved AgentSpec
-    /// model and never reapplies root defaults over an inline or Workflow
+    /// model and never reapplies root defaults over an inline or routed
     /// choice. `MessageStarted` records the first round's answer so the
     /// transcript can attribute the message before any round is served.
     fn requested_turn_model(

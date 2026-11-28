@@ -788,7 +788,7 @@ async fn activation_is_armed_before_bus_delivery_for_live_and_revive() {
                 "PENDING".into(),
                 None,
                 None,
-                Some(WorkflowActivation {
+                Some(DirectedActivation {
                     resolved: runtime_for(&eng),
                     guidance: Arc::from("g"),
                     route: None,
