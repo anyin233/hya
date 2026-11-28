@@ -29,8 +29,8 @@ everyone else, and if the core has no second code path for them.
    tools.
 2. **Everything else is a bundle.** The core exposes generic injection
    points: tools, rewriters, hooks, services, BundleApi, projection reducers,
-   URI schemes, drivers, CLI commands, and TUI contributions. It never names a
-   bundle or a bundle concept.
+   URI schemes, drivers, provider kinds, CLI commands, and TUI contributions.
+   It never names a bundle or a bundle concept.
 3. **First-party bundles get no privileges.** They load through the public
    Native ABI v2 and `@hya/tui-sdk` v2 only, like a third-party bundle.
 4. **One turn path, one interface.** Every turn runs through
