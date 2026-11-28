@@ -20,7 +20,6 @@ pub(crate) struct NativeInstall {
 impl NativeInstall {
     /// Take one bundle's registrations. Drivers and declared hook points are
     /// registered with the host runtime now, namespaced by `bundle_id`.
-
     pub(crate) fn add(
         &mut self,
         host: &AppHostRuntime,
