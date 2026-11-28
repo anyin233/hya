@@ -146,10 +146,6 @@ pub struct SessionEngine {
     store: SessionStore,
     base_system_prompt: String,
     pure_context: bool,
-    /// Whether system prompts may consult first-party tool-family exposure
-    /// policies (`hya_tool_loader`). Disabled in bare mode so zero builtin
-    /// bundles are read from disk.
-    use_tool_family_prompts: bool,
     providers: ProviderSnapshots,
     /// Cross-model failover plane: preferred [`ModelRef`] → its ordered
     /// candidate chain (the preferred model itself first). Empty by default,
@@ -223,7 +219,6 @@ impl Clone for SessionEngine {
             store: self.store.clone(),
             base_system_prompt: self.base_system_prompt.clone(),
             pure_context: self.pure_context,
-            use_tool_family_prompts: self.use_tool_family_prompts,
             providers: self.providers.clone(),
             global_reasoning: self.global_reasoning,
             exclusive_tool: self.exclusive_tool.clone(),
@@ -304,7 +299,6 @@ impl SessionEngine {
             providers: ProviderSnapshots::new(providers),
             base_system_prompt: String::new(),
             pure_context: false,
-            use_tool_family_prompts: false,
 
             global_reasoning: None,
             exclusive_tool: None,
@@ -355,14 +349,6 @@ impl SessionEngine {
             ));
         }
         engine
-    }
-
-    /// Control whether system prompts consult first-party tool-family exposure
-    /// policies (`hya_tool_loader`).
-    #[must_use]
-    pub fn with_tool_family_prompts(mut self, enabled: bool) -> Self {
-        self.use_tool_family_prompts = enabled;
-        self
     }
 
     /// Install native context rewriters in registration order.

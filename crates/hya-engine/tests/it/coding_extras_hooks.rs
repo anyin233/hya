@@ -94,7 +94,7 @@ fn bare_file_tools_registry() -> ToolRegistry {
             "bash" => ToolPermission::Command,
             _ => ToolPermission::Tool,
         };
-        registry.register_builtin(tool, permission, [], "hya/bare");
+        registry.register_builtin(tool, permission, [], "hya/bare", None);
     }
     registry
 }

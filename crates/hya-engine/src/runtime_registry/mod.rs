@@ -289,6 +289,7 @@ impl RuntimeRegistry {
                     ToolPermission::ReadOnly,
                     [],
                     "hya/bare",
+                    None,
                 );
             }
             if needs_bash {
@@ -297,6 +298,7 @@ impl RuntimeRegistry {
                     ToolPermission::Command,
                     [("shell", hya_tool::AliasVisibility::Hidden)],
                     "hya/bare",
+                    None,
                 );
             }
             builder.snapshot()

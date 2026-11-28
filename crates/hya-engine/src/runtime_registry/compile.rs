@@ -289,6 +289,12 @@ impl TurnBinding {
         self.snapshot.tools.resolve(name)
     }
 
+    /// The tool registry this binding resolves tools from, with the prompt
+    /// lines recorded at each tool's registration.
+    pub(crate) fn tools(&self) -> &ToolRegistrySnapshot {
+        &self.snapshot.tools
+    }
+
     #[must_use]
     /// Skill entries visible to this resource view.
     pub fn skills(&self) -> &[SkillCatalogEntry] {

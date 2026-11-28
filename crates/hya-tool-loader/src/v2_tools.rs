@@ -1,9 +1,9 @@
 //! Registration and descriptor metadata helpers for ABI v2 native tool bundles.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::{Arc, OnceLock};
+use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 
-use hya_bundle::{Bundle, first_party_bundle, first_party_bundle_optional};
+use hya_bundle::{Bundle, first_party_bundle};
 use hya_runtime_abi::{HostRuntime, NativeRegistrations};
 use hya_tool::{AliasVisibility, Tool, ToolPermission, ToolRegistry};
 use serde::Deserialize;
@@ -208,6 +208,7 @@ pub fn register_bundle_tools(
                 .iter()
                 .map(|(alias, visibility)| (alias.as_str(), *visibility)),
             origin,
+            meta.prompt_hint.as_deref(),
         );
     }
     Ok(())
@@ -266,32 +267,4 @@ pub fn load_and_register_v2_bundle(
     let regs = load_v2(identity, runtime).map_err(|error| format!("load {identity}: {error}"))?;
     register_v2_bundle_tools(registry, identity, &regs)?;
     Ok(regs)
-}
-
-static V2_PROMPTS: OnceLock<BTreeMap<String, String>> = OnceLock::new();
-
-/// Look up a `<tools>` prompt hint declared in any ABI v2 native tool bundle
-/// (`tools/*.json` `prompt_hint`). Returns `None` cleanly when the bundle is absent.
-#[must_use]
-pub fn v2_tool_prompt(name: &str) -> Option<&'static str> {
-    let prompts = V2_PROMPTS.get_or_init(|| {
-        let mut map = BTreeMap::new();
-        for identity in NATIVE_V2_TOOL_BUNDLES {
-            let Ok(Some(catalog)) = first_party_bundle_optional(identity) else {
-                continue;
-            };
-            let Some(bundle) = catalog.bundles().first() else {
-                continue;
-            };
-            if let Ok(entries) = parse_bundle_tool_metadata(bundle) {
-                for entry in entries {
-                    if let Some(hint) = entry.prompt_hint {
-                        map.insert(entry.name, hint);
-                    }
-                }
-            }
-        }
-        map
-    });
-    prompts.get(name).map(String::as_str)
 }

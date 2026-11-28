@@ -117,7 +117,7 @@ fn register_missing_bare_tools(registry: &hya_tool::ToolRegistry) {
             ),
             _ => (ToolPermission::Tool, &[]),
         };
-        registry.register_builtin(tool, permission, aliases.iter().copied(), "hya/bare");
+        registry.register_builtin(tool, permission, aliases.iter().copied(), "hya/bare", None);
     }
 }
 
@@ -1149,7 +1149,6 @@ async fn build_session_engine_with_mcp_defer(
         )
         .context("prepare core code-mode runtime specification")?
     };
-    let use_tool_family_prompts = native_ids.iter().any(|id| *id != "hya/compaction");
     let catalog_refresh = Arc::new(
         RuntimeExtensionsRefresh::new(
             crate::ProjectScopeRefresh::new(Arc::new(
@@ -1191,7 +1190,6 @@ async fn build_session_engine_with_mcp_defer(
     let engine_builder = engine
         .with_base_system_prompt(agent.system_prompt.clone())
         .with_pure_context(options.pure)
-        .with_tool_family_prompts(use_tool_family_prompts)
         .with_hook_list(std::mem::take(&mut native.registrations.hooks))
         .with_uri_schema_handlers(
             std::mem::take(&mut native.registrations.uri_schema_handlers),

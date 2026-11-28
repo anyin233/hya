@@ -562,6 +562,11 @@ struct ToolRegistryInner {
     dispatch_identities: HashMap<String, [u8; 32]>,
     advertised_aliases: BTreeSet<String>,
     bundle_origins: HashMap<String, &'static str>,
+    /// Canonical builtin name → its line in the system prompt's `<tools>` list.
+    prompt_lines: HashMap<String, String>,
+    /// Replacements for the kernel prompt's file-operations rule, in
+    /// registration order: the canonical tools that enable one, and its text.
+    file_operations_rules: Vec<(Vec<String>, String)>,
 }
 
 /// Immutable, lock-free tool view retained by an admitted turn.
@@ -651,7 +656,7 @@ impl ToolRegistry {
     }
 
     /// Compare a candidate with a frozen view by names, permission classes,
-    /// aliases, and executor identity.
+    /// aliases, executor identity, and prompt text.
     #[must_use]
     pub fn logically_matches(&self, snapshot: &ToolRegistrySnapshot) -> bool {
         let candidate = self.read();
@@ -659,6 +664,8 @@ impl ToolRegistry {
             && maps_match(&candidate.aliases, &snapshot.inner.aliases)
             && candidate.dispatch_identities == snapshot.inner.dispatch_identities
             && candidate.bundle_origins == snapshot.inner.bundle_origins
+            && candidate.prompt_lines == snapshot.inner.prompt_lines
+            && candidate.file_operations_rules == snapshot.inner.file_operations_rules
     }
 
     /// Register a tool on this candidate builder through a shared reference.
@@ -773,6 +780,7 @@ impl ToolRegistry {
         if inner.tools.remove(name).is_some() {
             inner.dispatch_identities.remove(name);
             inner.bundle_origins.remove(name);
+            inner.prompt_lines.remove(name);
         }
         inner
             .aliases
@@ -798,7 +806,10 @@ impl ToolRegistry {
         schemas
     }
 
-    /// Register a native builtin with its dispatch identity, origin, and aliases.
+    /// Register a native builtin with its dispatch identity, origin, aliases,
+    /// and the line the system prompt's `<tools>` list shows for it (`prompt`,
+    /// the text after `- <name>: `; a tool without one is listed by its
+    /// schema only).
     ///
     /// # Panics
     ///
@@ -811,6 +822,7 @@ impl ToolRegistry {
         permission: ToolPermission,
         aliases: impl IntoIterator<Item = (&'a str, AliasVisibility)>,
         origin: &'static str,
+        prompt: Option<&str>,
     ) {
         let name = tool.name().to_string();
         assert!(
@@ -831,6 +843,9 @@ impl ToolRegistry {
         );
         if let Some(identity) = builtin_dispatch_identity(&name) {
             inner.dispatch_identities.insert(name.clone(), identity);
+        }
+        if let Some(prompt) = prompt {
+            inner.prompt_lines.insert(name.clone(), prompt.to_string());
         }
         inner.bundle_origins.insert(name, origin);
         for (alias, visibility) in aliases {
@@ -853,6 +868,16 @@ impl ToolRegistry {
                 inner.advertised_aliases.insert(alias.to_string());
             }
         }
+    }
+
+    /// Record a loaded tool family's replacement for the kernel prompt's
+    /// file-operations rule: `text` applies to a round that offers one of
+    /// `tools`. The first recorded rule that applies wins.
+    #[doc(hidden)]
+    pub fn add_file_operations_rule(&self, tools: Vec<String>, text: &str) {
+        self.write()
+            .file_operations_rules
+            .push((tools, text.to_string()));
     }
 }
 
@@ -915,6 +940,22 @@ impl ToolRegistrySnapshot {
             .iter()
             .map(|(name, resolved)| (name.clone(), resolved.clone()))
             .collect()
+    }
+
+    /// The `<tools>` line recorded with `canonical`'s registration.
+    #[must_use]
+    pub fn prompt_line(&self, canonical: &str) -> Option<&str> {
+        self.inner.prompt_lines.get(canonical).map(String::as_str)
+    }
+
+    /// The first recorded file-operations rule naming a tool `offered` accepts.
+    #[must_use]
+    pub fn file_operations_rule(&self, offered: impl Fn(&str) -> bool) -> Option<&str> {
+        self.inner
+            .file_operations_rules
+            .iter()
+            .find(|(tools, _)| tools.iter().any(|tool| offered(tool)))
+            .map(|(_, text)| text.as_str())
     }
 
     /// Alias spellings whose resolved tool name matches `canonical`.

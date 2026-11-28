@@ -7,8 +7,8 @@ mod v2;
 mod v2_tools;
 
 pub use base_tools::{
-    BaseToolAlias, BaseToolExposure, BaseToolsPreset, base_tools_preset, file_operations_rule,
-    is_protected_tool_name, tool_bundle_presets, tool_prompt,
+    BaseToolAlias, BaseToolExposure, BaseToolsPreset, base_tools_preset, is_protected_tool_name,
+    tool_bundle_presets,
 };
 pub use hya_runtime_abi::{
     AbiError, HostRuntime, NativeAbiV2, NativePluginContext, NativeRegistrations,
@@ -194,7 +194,11 @@ pub fn load_native_bundles(
                         .iter()
                         .map(|alias| (alias.name(), alias.visibility())),
                     identity,
+                    exposure.prompt(),
                 );
+            }
+            if let Some((tools, text)) = preset.file_operations_rule() {
+                registry.add_file_operations_rule(tools.to_vec(), text);
             }
         }
     }

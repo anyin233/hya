@@ -139,7 +139,7 @@ impl SessionEngine {
             Some(&initial_context),
             &tools,
             depth,
-            self.use_tool_family_prompts,
+            binding.tools(),
         );
         let recorded_digests = prompt_digests(&system, &tools)?;
         events.push(Event::TurnBindingRecorded {
@@ -466,7 +466,7 @@ impl Harness for EngineHarness<'_> {
                 projection.session.initial_context.as_deref(),
                 &tools,
                 self.depth,
-                engine.use_tool_family_prompts,
+                self.binding.tools(),
             )),
             &tools,
             self.router.reasoning_replay_policy(&self.model),
@@ -539,7 +539,7 @@ impl Harness for EngineHarness<'_> {
             view.projection.session.initial_context.as_deref(),
             &tools,
             self.depth,
-            engine.use_tool_family_prompts,
+            self.binding.tools(),
         );
         let digests = prompt_digests(&system, &tools)?;
         if digests != self.recorded_digests {

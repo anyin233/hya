@@ -217,7 +217,7 @@ pub fn kernel_engine(
             "bash" => hya_tool::ToolPermission::Command,
             _ => hya_tool::ToolPermission::Tool,
         };
-        registry.register_builtin(tool.clone(), permission, [], "hya/bare");
+        registry.register_builtin(tool.clone(), permission, [], "hya/bare", None);
     }
     kernel_engine_with_registry(store, router, permission, registry)
 }
@@ -250,8 +250,7 @@ pub async fn fixture_engine(
     )
     .expect("load native rewriters");
     let engine = SessionEngine::new(store, router, runtime, permission, bus)
-        .with_rewriters(regs.rewriters)
-        .with_tool_family_prompts(true);
+        .with_rewriters(regs.rewriters);
     let host = engine.host_runtime();
     for service in &channels.services {
         service

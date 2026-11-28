@@ -460,6 +460,13 @@ impl BaseToolsPreset {
             .iter()
             .any(|protected| protected == name)
     }
+    /// The family's replacement for the kernel prompt's file-operations rule:
+    /// the tools that enable it and its text.
+    pub(crate) fn file_operations_rule(&self) -> Option<(&[String], &str)> {
+        self.file_operations_rule
+            .as_ref()
+            .map(|rule| (rule.tools.as_slice(), rule.text.as_str()))
+    }
 }
 
 impl BaseToolExposure {
@@ -493,6 +500,11 @@ impl BaseToolExposure {
     #[must_use]
     pub fn overrides(&self) -> Option<&str> {
         self.overrides.as_deref()
+    }
+    /// The tool's line in the system prompt's `<tools>` list.
+    #[must_use]
+    pub fn prompt(&self) -> Option<&str> {
+        self.prompt.as_deref()
     }
 }
 
@@ -542,36 +554,6 @@ pub fn is_protected_tool_name(name: &str) -> bool {
         .get()
         .and_then(|res| res.as_ref().ok())
         .is_some_and(|presets| presets.iter().any(|preset| preset.is_protected(name)))
-}
-
-/// The `<tools>` line the tool families or ABI v2 native tool bundles declare
-/// for `name`; when two families export it, the line of the entry that
-/// overrides the other. Returns `None` cleanly when tool bundles are absent.
-#[must_use]
-pub fn tool_prompt(name: &str) -> Option<&'static str> {
-    cached_presets()
-        .ok()
-        .and_then(|presets| {
-            presets
-                .iter()
-                .filter_map(|preset| preset.tool(name))
-                .max_by_key(|tool| tool.overrides.is_some())
-                .and_then(|tool| tool.prompt.as_deref())
-        })
-        .or_else(|| crate::v2_tools::v2_tool_prompt(name))
-}
-
-/// The rule a tool family declares in place of the kernel prompt's
-/// file-operations rule, when `offered` accepts one of the tools it names.
-/// Returns `None` cleanly when tool-family bundles are absent.
-#[must_use]
-pub fn file_operations_rule(offered: impl Fn(&str) -> bool) -> Option<&'static str> {
-    cached_presets()
-        .ok()?
-        .iter()
-        .filter_map(|preset| preset.file_operations_rule.as_ref())
-        .find(|rule| rule.tools.iter().any(|tool| offered(tool)))
-        .map(|rule| rule.text.as_str())
 }
 
 /// Return the foundational `hya/coding-extras` policy for compatibility.
@@ -821,8 +803,9 @@ tools:
         );
         assert_eq!(registry.resolve("plan").unwrap().tool.name(), "plan_exit");
         assert!(!advertised.contains("plan"));
-        assert!(tool_prompt("plan_exit").is_some());
-        assert!(tool_prompt("workflow").is_some());
+        let snapshot = registry.snapshot();
+        assert!(snapshot.prompt_line("plan_exit").is_some());
+        assert!(snapshot.prompt_line("workflow").is_some());
 
         for tool in presets.iter().flat_map(|p| p.tools()) {
             assert!(
