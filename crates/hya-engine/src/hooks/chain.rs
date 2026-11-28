@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use hya_proto::{Envelope, ModelRef, SessionId};
-use hya_runtime_abi::HostError;
+use hya_runtime_abi::{HostError, NativeTurnAdmitInput, NativeTurnAdmitOutcome};
 use hya_tool::{Action, Decision, Resource};
 use serde_json::Value;
 
@@ -300,6 +300,29 @@ impl HookChain {
             }
         }
         input.text
+    }
+
+    /// `turn.admit`: wait for readiness in order, then admit with accumulated steering.
+    pub async fn turn_admit(&self, input: NativeTurnAdmitInput) -> Result<Vec<String>, HostError> {
+        let mut steering = Vec::new();
+        for hook in self.matching(HookPoint::TurnAdmit) {
+            match hook.turn_admit(input.clone()).await? {
+                NativeTurnAdmitOutcome::Admit => {}
+                NativeTurnAdmitOutcome::Defer { until } => {
+                    until.await.map_err(|_| {
+                        HostError::Unavailable(format!(
+                            "admission hook `{}` dropped readiness",
+                            hook.id()
+                        ))
+                    })?;
+                }
+                NativeTurnAdmitOutcome::Refuse { reason } => {
+                    return Err(HostError::InvalidInput(reason));
+                }
+                NativeTurnAdmitOutcome::Steer { message } => steering.push(message),
+            }
+        }
+        Ok(steering)
     }
 
     /// `chat.params`: rewrites the request payload ([`chat_params_value`]).

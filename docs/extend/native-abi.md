@@ -348,6 +348,23 @@ For example, subscribe to a bundle's `"ready"` key, copy the value from
 `borrow_and_update()`, and await `changed()` for a later value. Release the
 borrow before waiting or writing to the key.
 
+### Turn admission
+
+Register a native hook that lists `HookPoint::TurnAdmit` under the name
+`turn.admit`. Return `Steer { message: "Use the cached result".into() }` to
+append a system message before the first model request. The engine runs the
+process hooks followed by the selected agent's hooks while the turn holds
+its lease. A refusal discards all accumulated steer messages. The engine
+cancels a deferred wait when the turn is cancelled. An admission hook should
+signal readiness without starting another turn on the current session.
+
+| Interface | Contract | Current consumer |
+| --- | --- | --- |
+| `NativeHook::turn_admit(input: NativeTurnAdmitInput)` | Input fields are `session: SessionId`, `root: SessionId`, and `agent: Option<AgentName>`. Returns `Result<NativeTurnAdmitOutcome, HostError>`. Outcomes are `Admit`, `Defer { until: oneshot::Receiver<()> }`, `Refuse { reason: String }`, or `Steer { message: String }`. A dropped readiness sender or a hook error fails admission. | The engine's external-turn guard refuses direct turns on registered multi-agent members. Its existing error and mail guidance remain in effect. |
+
+The hook is available to native bundles. The JSON-RPC plugin hook list remains
+defined by the plugin wire contract.
+
 ### 3.4 Native Extension Traits
 
 | Trait | Required Methods | Notes & Contracts |
@@ -355,7 +372,7 @@ borrow before waiting or writing to the key.
 | **`Tool`** (`hya_tool::Tool`) | `name`, `schema`, `execute(&self, ctx: &ToolCtx, input: Value)` | Model-callable tool; uses slim v2 `ToolCtx` + `ExtensionPlanes`. |
 | **`Rewriter`** (`hya_context::rewrite::Rewriter`) | Context reduction pass invoked before Kernel `Rewrite` at 80% window occupancy | Used by `hya/compaction` (`shake` + `remote`). |
 | **`NativeService`** | `id`, `start(runtime)`, `stop()`, `health() -> ServiceHealth`; optional `is_session_busy`, `cancel_session`, `wait_session_idle` | Host starts/stops managed background services with the runtime lifecycle. |
-| **`NativeHook`** | `id`, `hook_points() -> &[HookPoint]` plus default no-op methods for all 16 `HookPoint` variants; `declared_points()` + `invoke_declared(point, input)` for bundle-declared points; `is_healthy()`, `permission_identity()`, and a synchronous `on_event(envelope)` | Covers `tool.execute.{before,after}`, `tool.visibility`, `compaction.{before,after}`, `session.{start,end}`, `agent.spawn`, `command.execute.before`, `message.user.before`, `text.complete`, `chat.params`, `model.fallback`, `permission.{ask,approve}`, `event`. This is the one hook shape: the engine's `HookChain` holds native bundle hooks, the JS plugin host, and core built-ins as `NativeHook` entries, and dispatches each point through one ordered chain. A hook is called only for the points it lists. |
+| **`NativeHook`** | `id`, `hook_points() -> &[HookPoint]` plus default no-op methods for all 17 `HookPoint` variants; `declared_points()` + `invoke_declared(point, input)` for bundle-declared points; `is_healthy()`, `permission_identity()`, and a synchronous `on_event(envelope)` | Covers `tool.execute.{before,after}`, `tool.visibility`, `compaction.{before,after}`, `session.{start,end}`, `agent.spawn`, `command.execute.before`, `message.user.before`, `turn.admit`, `text.complete`, `chat.params`, `model.fallback`, `permission.{ask,approve}`, `event`. This is the one hook shape: the engine's `HookChain` holds native bundle hooks, the JS plugin host, and core built-ins as `NativeHook` entries, and dispatches each point through one ordered chain. A hook is called only for the points it lists. |
 | **`NativeBundleApiHandler`** | `id`, `endpoints() -> &[NativeApiEndpoint]`, `handle(NativeBundleApiRequest) -> Result<NativeBundleApiReply, HostError>` | Mounted uniformly on `hya.v2.BundleApi` (`/v2/bundles/{bundle}/api/{path}` and `/v2/sessions/{session}/bundles/{bundle}/{path}`). |
 | **`ProjectionReducer`** | `bundle_id`, `initial_state() -> Value`, `apply(&self, state: &mut Value, event: &ExtensionEventContext)` | Deterministically folds `Event::Extension` records into `Projection::extensions[bundle_id]`. |
 | **`UriSchemaHandler`** | `scheme`, `writable()`, `read(UriResolveCtx, uri) -> Result<UriContent, HostError>`, `write(UriResolveCtx, uri, content)` | Plugged into `HandleRouter` via `adapt_uri_schema_handler` (`UriSchemaHandleAdapter`). Internal schemes (`artifact`, `skill`, `local`) are protected. |

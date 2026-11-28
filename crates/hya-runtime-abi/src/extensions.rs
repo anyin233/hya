@@ -120,6 +120,8 @@ pub enum HookPoint {
     CommandExecuteBefore,
     /// Rewrite user prompt text before admission (`message.user.before`).
     MessageUserBefore,
+    /// Consulted before running a turn (`turn.admit`).
+    TurnAdmit,
     /// Rewrite completed assistant text (`text.complete`).
     TextComplete,
     /// Adjust completion parameters before provider call (`chat.params`).
@@ -136,7 +138,7 @@ pub enum HookPoint {
 
 impl HookPoint {
     /// Every core hook point, in dispatch-table order.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::ToolExecuteBefore,
         Self::ToolExecuteAfter,
         Self::ToolVisibility,
@@ -147,6 +149,7 @@ impl HookPoint {
         Self::AgentSpawn,
         Self::CommandExecuteBefore,
         Self::MessageUserBefore,
+        Self::TurnAdmit,
         Self::TextComplete,
         Self::ChatParams,
         Self::ModelFallback,
@@ -155,7 +158,7 @@ impl HookPoint {
         Self::EventObserve,
     ];
 
-    /// Hook name used by bundle manifests (`hook_refs`) and the plugin wire.
+    /// Hook name used by bundle manifests and, where supported, the plugin wire.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
@@ -169,6 +172,7 @@ impl HookPoint {
             Self::AgentSpawn => "agent.spawn",
             Self::CommandExecuteBefore => "command.execute.before",
             Self::MessageUserBefore => "message.user.before",
+            Self::TurnAdmit => "turn.admit",
             Self::TextComplete => "experimental.text.complete",
             Self::ChatParams => "chat.params",
             Self::ModelFallback => "model.fallback",
@@ -455,6 +459,38 @@ pub struct NativePermissionApproveInput {
     pub resource: Resource,
 }
 
+/// The session, tree root, and agent binding of a turn being admitted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeTurnAdmitInput {
+    /// Session running the turn.
+    pub session: SessionId,
+    /// The top ancestor, or `session` for a root turn.
+    pub root: SessionId,
+    /// The session's bound agent, when it has a recorded binding.
+    pub agent: Option<AgentName>,
+}
+
+/// One hook's decision about a turn.
+pub enum NativeTurnAdmitOutcome {
+    /// Continue to the next admission hook.
+    Admit,
+    /// Wait for a readiness signal before continuing the chain.
+    Defer {
+        /// A closed sender refuses admission. Turn cancellation interrupts the wait.
+        until: tokio::sync::oneshot::Receiver<()>,
+    },
+    /// Refuse the turn and discard any accumulated steering.
+    Refuse {
+        /// Diagnostic presented to the caller.
+        reason: String,
+    },
+    /// Add a system message if the chain admits the turn.
+    Steer {
+        /// Text of the system message.
+        message: String,
+    },
+}
+
 /// Hook implementation registered by a native bundle.
 #[async_trait]
 pub trait NativeHook: Send + Sync {
@@ -532,6 +568,14 @@ pub trait NativeHook: Send + Sync {
         input: NativeMessageUserBeforeInput,
     ) -> Result<String, HostError> {
         Ok(input.text)
+    }
+
+    /// Inspect turn admission before the provider starts.
+    async fn turn_admit(
+        &self,
+        _input: NativeTurnAdmitInput,
+    ) -> Result<NativeTurnAdmitOutcome, HostError> {
+        Ok(NativeTurnAdmitOutcome::Admit)
     }
 
     /// Rewrite completed assistant text (`text.complete`).

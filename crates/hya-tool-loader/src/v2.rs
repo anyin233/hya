@@ -26,10 +26,11 @@ use hya_runtime_abi::{
     NativeDriver, NativeHook, NativeMessageUserBeforeInput, NativeModelFallbackInput,
     NativePermissionApproveInput, NativePluginContext, NativeRegistrations, NativeService,
     NativeSessionLifecycleInput, NativeTextCompleteInput, NativeToolAfterInput,
-    NativeToolAfterOutcome, NativeToolBeforeInput, NativeToolBeforeOutcome, RegisterV2Fn,
-    SYMBOL_ABI_V2, SYMBOL_REGISTER_V2, SYMBOL_SHARE_DEADLINE_V2, SYMBOL_WITH_RUNTIME_V2,
-    ServiceHealth, ShareDeadlineFn, ToolVisibilityInput, ToolVisibilityOutcome, UriContent,
-    UriResolveCtx, UriSchemaHandler, abi_digest_v2, deadline_cell_v2,
+    NativeToolAfterOutcome, NativeToolBeforeInput, NativeToolBeforeOutcome, NativeTurnAdmitInput,
+    NativeTurnAdmitOutcome, RegisterV2Fn, SYMBOL_ABI_V2, SYMBOL_REGISTER_V2,
+    SYMBOL_SHARE_DEADLINE_V2, SYMBOL_WITH_RUNTIME_V2, ServiceHealth, ShareDeadlineFn,
+    ToolVisibilityInput, ToolVisibilityOutcome, UriContent, UriResolveCtx, UriSchemaHandler,
+    abi_digest_v2, deadline_cell_v2,
 };
 use hya_tool::{Action, Decision, Resource, Tool};
 use serde_json::Value;
@@ -219,6 +220,13 @@ impl NativeHook for NativeHookAdapter {
         input: NativeMessageUserBeforeInput,
     ) -> Result<String, HostError> {
         poll_host_result(self.inner.message_user_before(input), self.with_runtime).await
+    }
+
+    async fn turn_admit(
+        &self,
+        input: NativeTurnAdmitInput,
+    ) -> Result<NativeTurnAdmitOutcome, HostError> {
+        poll_host_result(self.inner.turn_admit(input), self.with_runtime).await
     }
 
     async fn text_complete(&self, input: NativeTextCompleteInput) -> Result<String, HostError> {

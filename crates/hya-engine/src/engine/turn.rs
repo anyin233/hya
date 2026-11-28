@@ -921,6 +921,15 @@ impl SessionEngine {
             .as_ref()
             .and_then(|handle| handle.loss_token());
         let post_ack = async {
+            let bound_agent = projection
+                .session
+                .agent
+                .as_ref()
+                .unwrap_or(&agent.name)
+                .clone();
+            self.apply_turn_admission_hooks(session, bound_agent, actor_claim, &cancel)
+                .await?;
+            // The next model round projects any steering committed by the admission hooks.
             let guidance_text = guidance.as_deref();
             let prepared: Result<_, CoreError> = match resolved {
                 Some((agents, policy, sidecar_tools)) => {

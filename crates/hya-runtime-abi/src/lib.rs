@@ -36,9 +36,9 @@ pub use extensions::{
     NativeModelFallbackInput, NativePermissionApproveInput, NativeService,
     NativeSessionLifecycleInput, NativeTextCompleteInput, NativeToolAfterInput,
     NativeToolAfterOutcome, NativeToolBeforeInput, NativeToolBeforeOutcome, NativeToolResult,
-    ProjectionReducer, ServiceHealth, ToolVisibilityInput, ToolVisibilityOutcome, UriContent,
-    UriResolveCtx, UriSchemaHandleAdapter, UriSchemaHandler, adapt_uri_schema_handler,
-    is_declared_hook_point,
+    NativeTurnAdmitInput, NativeTurnAdmitOutcome, ProjectionReducer, ServiceHealth,
+    ToolVisibilityInput, ToolVisibilityOutcome, UriContent, UriResolveCtx, UriSchemaHandleAdapter,
+    UriSchemaHandler, adapt_uri_schema_handler, is_declared_hook_point,
 };
 pub use host::{
     BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,
