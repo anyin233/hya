@@ -5153,6 +5153,7 @@ dependencies = [
  "hya-tool-loader",
  "hya-version",
  "pbjson-build",
+ "proc-macro2",
  "prost",
  "prost-types",
  "protoc-bin-vendored",

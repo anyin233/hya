@@ -1,6 +1,7 @@
 //! Repository automation for a workspace checkout. Run
 //! `cargo run -p xtask -- --help` to list the available tasks.
 
+mod boundary;
 mod first_party_release;
 mod gen_api;
 mod gen_plugin;
@@ -15,6 +16,7 @@ mod startup_bench;
 type Task = fn(Vec<String>) -> anyhow::Result<()>;
 
 const TASKS: &[(&str, Task)] = &[
+    ("boundary-check", boundary::run),
     ("startup-bench", startup_bench::run),
     ("lifecycle-bench", lifecycle_bench::run),
     ("matrix-check", matrix_check::run),
