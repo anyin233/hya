@@ -1033,29 +1033,20 @@ impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
                 }
             }
         }
-        // Mirror compaction tool-output eviction notices onto PartProjection::Tool.
-        if bundle_id == hya_tool::extension::BUNDLE_COMPACTION
-            && kind == "context_evicted"
-            && let Some(parts) = payload.get("parts").and_then(Value::as_array)
-        {
-            for entry in parts {
-                if let (Some(part_id), Some(notice)) = (
-                    entry
-                        .get("part")
-                        .and_then(|v| serde_json::from_value::<hya_proto::PartId>(v.clone()).ok()),
-                    entry.get("notice").and_then(Value::as_str),
-                ) && let Some(hya_proto::PartProjection::Tool {
-                    eviction_notice, ..
-                }) = projection
-                    .session
-                    .messages
-                    .iter_mut()
-                    .rev()
-                    .flat_map(|row| row.parts.iter_mut())
-                    .find(|part| part.id() == part_id)
-                {
-                    *eviction_notice = Some(notice.to_string());
-                }
+        // A reducer's tool-output overrides become the parts' eviction notices,
+        // which the kernel sends in place of the outputs.
+        for replaced in self.inner.tool_output_overrides(&ctx) {
+            if let Some(hya_proto::PartProjection::Tool {
+                eviction_notice, ..
+            }) = projection
+                .session
+                .messages
+                .iter_mut()
+                .rev()
+                .flat_map(|row| row.parts.iter_mut())
+                .find(|part| part.id() == replaced.part)
+            {
+                *eviction_notice = Some(replaced.output);
             }
         }
         // Bridge `hya/agent-channels` mail events with `hya/multi-agent` roster state

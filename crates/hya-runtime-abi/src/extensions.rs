@@ -734,6 +734,16 @@ pub struct ExtensionEventContext {
     pub payload: Value,
 }
 
+/// A tool output an extension event replaces in later requests: the host
+/// records `output` as the tool part's `PartProjection::Tool::eviction_notice`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolOutputOverride {
+    /// Tool part whose output is replaced.
+    pub part: PartId,
+    /// Text sent in place of the output.
+    pub output: String,
+}
+
 /// Folds bundle-owned `Event::Extension` records into `Projection` extension JSON state.
 pub trait ProjectionReducer: Send + Sync {
     /// Owning bundle identity (key under `Projection::extensions`).
@@ -746,6 +756,13 @@ pub trait ProjectionReducer: Send + Sync {
 
     /// Fold one extension event into `state` deterministically and idempotently.
     fn apply(&self, state: &mut Value, event: &ExtensionEventContext) -> Result<(), HostError>;
+
+    /// Tool outputs `event` replaces in the transcript, applied by the host
+    /// after [`Self::apply`] succeeds. Deterministic, like `apply`.
+    fn tool_output_overrides(&self, event: &ExtensionEventContext) -> Vec<ToolOutputOverride> {
+        let _ = event;
+        Vec::new()
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -1,19 +1,16 @@
 //! Domain extension events, payloads, and projection reducers (Phase 0 v2 bridge).
 //!
-//! In `hya` v2, domain-specific events (compaction observability, workflow,
-//! agent-channels, multi-agent) are persisted as [`Event::Extension`] and folded
-//! via [`ProjectionReducer`]s into [`Projection::extensions`] (and
-//! [`PartProjection::Tool::eviction_notice`] for compaction eviction).
+//! In `hya` v2, domain-specific events (workflow, agent-channels, multi-agent)
+//! are persisted as [`Event::Extension`] and folded via [`ProjectionReducer`]s
+//! into [`Projection::extensions`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use hya_proto::tokens::{TokenAccountingMode, TokenSource};
 use hya_proto::{
     ActorEpoch, AgentName, ChannelKind, Event, MailEndpoint, MailKind, MemberId, MemberRunStatus,
-    ModelRef, OwnerRunId, PartId, PartProjection, Projection, ProjectionReducer,
-    ProjectionReducerRegistry, RosterStatus, SessionId, SubagentMode, ToolCallId, WorkflowIdentity,
-    WorkflowRunId, scope,
+    ModelRef, OwnerRunId, Projection, ProjectionReducer, ProjectionReducerRegistry, RosterStatus,
+    SessionId, SubagentMode, ToolCallId, WorkflowIdentity, WorkflowRunId, scope,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -25,36 +22,12 @@ use crate::workflow_plane::{
     WorkflowStageRouteOutcome, WorkflowStageStatus,
 };
 
-/// Bundle id owning compaction extension events and projection state.
-pub const BUNDLE_COMPACTION: &str = "hya/compaction";
 /// Bundle id owning workflow extension events and projection state.
 pub const BUNDLE_WORKFLOW: &str = "hya/workflow";
 /// Bundle id owning channel/mailbox extension events and projection state.
 pub const BUNDLE_CHANNELS: &str = "hya/agent-channels";
 /// Bundle id owning multi-agent roster/member/handoff extension events and state.
 pub const BUNDLE_MULTI_AGENT: &str = "hya/multi-agent";
-
-/// One tool output replaced during compaction eviction.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EvictedPart {
-    /// Evicted tool part id.
-    pub part: PartId,
-    /// Replacement notice text sent in place of the output.
-    pub notice: String,
-}
-
-/// Latest window-occupancy report, mirroring the newest `context_status` event.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ContextStatusProjection {
-    /// Tokens the last measured request is believed to occupy.
-    pub tokens: u64,
-    /// Whether the count was provider-anchored or locally estimated.
-    pub source: TokenSource,
-    /// Accounting mode in force for that round.
-    pub mode: TokenAccountingMode,
-    /// Resolved compaction threshold the count was judged against.
-    pub threshold: u64,
-}
 
 /// Latest terminal handoff folded onto a child session (ADR-0015).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -260,14 +233,6 @@ impl TeamProjection {
     }
 }
 
-/// Extension state folded under `projection.extensions["hya/compaction"]`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CompactionExtensionState {
-    /// Latest context status occupancy snapshot.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_status: Option<ContextStatusProjection>,
-}
-
 /// Extension state folded under `projection.extensions["hya/agent-channels"]`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChannelsExtensionState {
@@ -306,23 +271,6 @@ pub struct MultiAgentExtensionState {
 #[allow(missing_docs)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExtensionEvent {
-    // ---- hya/compaction ----
-    ContextEvicted {
-        session: SessionId,
-        evicted_parts: u32,
-        parts: Vec<EvictedPart>,
-        tokens_before: u64,
-        tokens_after: u64,
-        threshold: u64,
-    },
-    ContextStatus {
-        session: SessionId,
-        tokens: u64,
-        source: TokenSource,
-        mode: TokenAccountingMode,
-        threshold: u64,
-    },
-
     // ---- hya/workflow ----
     WorkflowSelected {
         session: SessionId,
@@ -487,20 +435,6 @@ pub enum ExtensionEvent {
         child: SessionId,
         epoch: ActorEpoch,
     },
-}
-
-#[derive(Serialize, Deserialize)]
-struct ContextEvictedWire {
-    #[serde(default)]
-    evicted_parts: u32,
-    #[serde(default)]
-    parts: Vec<EvictedPart>,
-    #[serde(default)]
-    tokens_before: u64,
-    #[serde(default)]
-    tokens_after: u64,
-    #[serde(default)]
-    threshold: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -709,7 +643,6 @@ impl ExtensionEvent {
     #[must_use]
     pub const fn bundle_id(&self) -> &'static str {
         match self {
-            Self::ContextEvicted { .. } | Self::ContextStatus { .. } => BUNDLE_COMPACTION,
             Self::WorkflowSelected { .. }
             | Self::WorkflowRunStarted { .. }
             | Self::WorkflowStageStarted { .. }
@@ -741,8 +674,6 @@ impl ExtensionEvent {
     #[must_use]
     pub const fn kind(&self) -> &'static str {
         match self {
-            Self::ContextEvicted { .. } => "context_evicted",
-            Self::ContextStatus { .. } => "context_status",
             Self::WorkflowSelected { .. } => "workflow_selected",
             Self::WorkflowRunStarted { .. } => "workflow_run_started",
             Self::WorkflowStageStarted { .. } => "workflow_stage_started",
@@ -774,9 +705,7 @@ impl ExtensionEvent {
     #[must_use]
     pub const fn session(&self) -> SessionId {
         match self {
-            Self::ContextEvicted { session, .. }
-            | Self::ContextStatus { session, .. }
-            | Self::WorkflowSelected { session, .. }
+            Self::WorkflowSelected { session, .. }
             | Self::WorkflowRunStarted { session, .. }
             | Self::WorkflowStageStarted { session, .. }
             | Self::WorkflowStageMemberLinked { session, .. }
@@ -810,32 +739,6 @@ impl ExtensionEvent {
         let bundle = self.bundle_id().to_owned();
         let kind = self.kind().to_owned();
         let payload = match self {
-            Self::ContextEvicted {
-                evicted_parts,
-                parts,
-                tokens_before,
-                tokens_after,
-                threshold,
-                ..
-            } => to_value(ContextEvictedWire {
-                evicted_parts,
-                parts,
-                tokens_before,
-                tokens_after,
-                threshold,
-            }),
-            Self::ContextStatus {
-                tokens,
-                source,
-                mode,
-                threshold,
-                ..
-            } => to_value(ContextStatusProjection {
-                tokens,
-                source,
-                mode,
-                threshold,
-            }),
             Self::WorkflowSelected { workflow, .. } => to_value(WorkflowSelectedWire { workflow }),
             Self::WorkflowRunStarted {
                 run,
@@ -1095,27 +998,6 @@ impl ExtensionEvent {
         payload: &Value,
     ) -> Option<Self> {
         match (bundle, kind) {
-            (BUNDLE_COMPACTION, "context_evicted") => {
-                let wire: ContextEvictedWire = serde_json::from_value(payload.clone()).ok()?;
-                Some(Self::ContextEvicted {
-                    session,
-                    evicted_parts: wire.evicted_parts,
-                    parts: wire.parts,
-                    tokens_before: wire.tokens_before,
-                    tokens_after: wire.tokens_after,
-                    threshold: wire.threshold,
-                })
-            }
-            (BUNDLE_COMPACTION, "context_status") => {
-                let wire: ContextStatusProjection = serde_json::from_value(payload.clone()).ok()?;
-                Some(Self::ContextStatus {
-                    session,
-                    tokens: wire.tokens,
-                    source: wire.source,
-                    mode: wire.mode,
-                    threshold: wire.threshold,
-                })
-            }
             (BUNDLE_WORKFLOW, "workflow_selected") => {
                 let wire: WorkflowSelectedWire = serde_json::from_value(payload.clone()).ok()?;
                 Some(Self::WorkflowSelected {
@@ -1413,71 +1295,6 @@ pub fn workflow_projection(projection: &Projection) -> Option<WorkflowProjection
         .extensions
         .get(BUNDLE_WORKFLOW)
         .and_then(|value| serde_json::from_value(value.clone()).ok())
-}
-
-/// Extract latest folded context status (`hya/compaction`).
-#[must_use]
-pub fn context_status_projection(projection: &Projection) -> Option<ContextStatusProjection> {
-    read_extension::<CompactionExtensionState>(projection, BUNDLE_COMPACTION).context_status
-}
-
-/// Projection reducer for `hya/compaction`.
-#[derive(Debug, Default)]
-pub struct CompactionProjectionReducer;
-
-impl ProjectionReducer for CompactionProjectionReducer {
-    fn bundle_id(&self) -> &str {
-        BUNDLE_COMPACTION
-    }
-
-    fn fold_extension(
-        &self,
-        projection: &mut Projection,
-        session: SessionId,
-        kind: &str,
-        payload: &Value,
-    ) {
-        let Some(ext) = ExtensionEvent::from_parts(session, BUNDLE_COMPACTION, kind, payload)
-        else {
-            return;
-        };
-        match ext {
-            ExtensionEvent::ContextEvicted { parts, .. } => {
-                for evicted in parts {
-                    if let Some(PartProjection::Tool {
-                        eviction_notice, ..
-                    }) = projection
-                        .session
-                        .messages
-                        .iter_mut()
-                        .rev()
-                        .flat_map(|row| row.parts.iter_mut())
-                        .find(|part| part.id() == evicted.part)
-                    {
-                        *eviction_notice = Some(evicted.notice);
-                    }
-                }
-            }
-            ExtensionEvent::ContextStatus {
-                tokens,
-                source,
-                mode,
-                threshold,
-                ..
-            } => {
-                let state = CompactionExtensionState {
-                    context_status: Some(ContextStatusProjection {
-                        tokens,
-                        source,
-                        mode,
-                        threshold,
-                    }),
-                };
-                write_extension(projection, BUNDLE_COMPACTION, &state);
-            }
-            _ => {}
-        }
-    }
 }
 
 /// Projection reducer for `hya/workflow`.
@@ -1992,12 +1809,11 @@ impl ProjectionReducer for MultiAgentProjectionReducer {
     }
 }
 
-/// Build the full Phase 0 [`ProjectionReducerRegistry`] for compaction, workflow,
-/// agent-channels, and multi-agent extension events.
+/// Build the Phase 0 [`ProjectionReducerRegistry`] for workflow, agent-channels,
+/// and multi-agent extension events.
 #[must_use]
 pub fn projection_reducers() -> ProjectionReducerRegistry {
     ProjectionReducerRegistry::new()
-        .with_reducer(Arc::new(CompactionProjectionReducer))
         .with_reducer(Arc::new(WorkflowProjectionReducer))
         .with_reducer(Arc::new(AgentChannelsProjectionReducer))
         .with_reducer(Arc::new(MultiAgentProjectionReducer))

@@ -21,13 +21,12 @@ use hya_migration::tui_v1_to_v2::{
 };
 use hya_migration::{MigrationTargets, RunOptions, check_all, rollback, run_migration};
 use hya_proto::{
-    AgentName, MemberId, MessageId, OwnerRunId, PartId, PartProjection, Role, SessionId,
-    ToolCallId, WorkflowRunId,
+    AgentName, MemberId, MessageId, OwnerRunId, PartId, Role, SessionId, ToolCallId, WorkflowRunId,
 };
 use hya_store::SessionStore;
 use hya_tool::extension::{
-    BUNDLE_MULTI_AGENT, context_status_projection, handoff_projection, members_projection,
-    projection_reducers, team_projection, workflow_projection,
+    BUNDLE_MULTI_AGENT, handoff_projection, members_projection, projection_reducers,
+    team_projection, workflow_projection,
 };
 use serde_json::{Value as JsonValue, json};
 use sqlx::Connection as _;
@@ -1066,18 +1065,29 @@ async fn full_v1_to_v2_migration_v2_runtime_verification_and_sha256_rollback() {
         assert_eq!(root_envelopes.len(), 28);
         let root_proj = hya_proto::Projection::from_events_with(&root_envelopes, &reducers);
 
-        // Compaction eviction + status
-        let ctx_status = context_status_projection(&root_proj).unwrap();
-        assert_eq!(ctx_status.tokens, 3000);
-        assert_eq!(ctx_status.threshold, 8000);
-        assert!(matches!(
-            &root_proj.session.messages[0].parts[0],
-            PartProjection::Tool {
-                id,
-                eviction_notice: Some(notice),
-                ..
-            } if *id == seeded.tool_part && notice == "[moved to artifact://abc]"
-        ));
+        // Compaction eviction + status replay as the bundle's raw records; the
+        // `hya/compaction` reducer folds them when that bundle is enabled.
+        let compaction = |kind: &str| {
+            root_envelopes
+                .iter()
+                .find_map(|envelope| match &envelope.event {
+                    hya_proto::Event::Extension {
+                        bundle,
+                        kind: k,
+                        payload,
+                        ..
+                    } if bundle == "hya/compaction" && k == kind => Some(payload.clone()),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let ctx_status = compaction("context_status");
+        assert_eq!(ctx_status["tokens"], 3000);
+        assert_eq!(ctx_status["threshold"], 8000);
+        assert_eq!(
+            compaction("context_evicted")["parts"],
+            json!([{"part": seeded.tool_part, "notice": "[moved to artifact://abc]"}])
+        );
 
         // Workflow projection
         let wf = workflow_projection(&root_proj).expect("workflow projection must be present");

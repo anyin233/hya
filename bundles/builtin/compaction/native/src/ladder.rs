@@ -14,9 +14,9 @@ use hya_proto::{
     CompactionStrategy, Event, FinishReason, Message, MessageId, PartId, Role, SessionId,
 };
 use hya_runtime_abi::HostRuntime;
-use hya_tool::extension::ExtensionEvent;
 
 use crate::config::Config;
+use crate::events::{CompactionEvent, ContextEvicted, ContextStatusProjection};
 use crate::evict::{ArtifactEvictionSink, evict_stale_tool_outputs, has_spillable_tool_output};
 
 async fn try_compact_window(
@@ -94,15 +94,14 @@ pub(crate) async fn walk(
                 .append(
                     session,
                     vec![
-                        ExtensionEvent::ContextEvicted {
-                            session,
+                        CompactionEvent::ContextEvicted(ContextEvicted {
                             evicted_parts: u32::try_from(evicted.len()).unwrap_or(u32::MAX),
                             parts: evicted,
                             tokens_before: used,
                             tokens_after: after,
                             threshold,
-                        }
-                        .into_event(),
+                        })
+                        .into_event(session),
                     ],
                 )
                 .await?;
@@ -132,14 +131,13 @@ pub(crate) async fn walk(
         .append(
             session,
             vec![
-                ExtensionEvent::ContextStatus {
-                    session,
+                CompactionEvent::ContextStatus(ContextStatusProjection {
                     tokens: u64::try_from(tokens).unwrap_or(u64::MAX),
                     source,
                     mode: accounting.mode(),
                     threshold,
-                }
-                .into_event(),
+                })
+                .into_event(session),
             ],
         )
         .await?;
