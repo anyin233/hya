@@ -341,7 +341,7 @@ Values live in the host process and disappear on restart.
 | Interface | Contract | Current consumer |
 | --- | --- | --- |
 | `bundle_storage().get_transient_state(bundle: &str, session: SessionId, key: &str)` | Returns `Result<Option<Value>, HostError>`. | The unread-mail steer hook in `hya/agent-channels` reads `steer_suppressed` and stays silent while it is `true`. |
-| `bundle_storage().set_transient_state(bundle: &str, session: SessionId, key: &str, value: Option<Value>)` | Returns `Result<(), HostError>`. Pass `None` to remove the key. | The tool-result path sets `steer_suppressed` for `hya/agent-channels` around after-hooks while the result shows no further notices (`report` latched, steer deferred, or a `wait` ran), then clears it. |
+| `bundle_storage().set_transient_state(bundle: &str, session: SessionId, key: &str, value: Option<Value>)` | Returns `Result<(), HostError>`. Pass `None` to remove the key. | The tool-result path sets `steer_suppressed` for `hya/agent-channels` around after-hooks while the result shows no further notices (`report` latched, steer deferred, or a `wait` ran), and the user-command shell path sets it around its after-hooks, then both clear it. |
 | `bundle_storage().subscribe_transient_state(bundle: &str, session: SessionId, key: &str)` | Returns `Result<watch::Receiver<Option<Value>>, HostError>`. The receiver exposes the current value and coalesces updates. Equal writes do not signal a change. | The state regression test observes the suppression key. The current unread-mail hook reads it synchronously. |
 
 For example, subscribe to a bundle's `"ready"` key, copy the value from

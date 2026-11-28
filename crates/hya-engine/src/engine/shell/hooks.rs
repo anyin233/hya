@@ -35,6 +35,9 @@ pub(super) async fn apply_tool_after_hooks(
             message: error.to_string(),
         },
     };
+    // The shell commits no staged events, so unread mail waits for the next
+    // model tool call instead of being shown here without an ack.
+    engine.set_mail_steer_suppressed(call.session, true);
     let rewritten = hooks
         .tool_execute_after(NativeToolAfterInput {
             session: call.session,
@@ -45,6 +48,7 @@ pub(super) async fn apply_tool_after_hooks(
             result: native,
         })
         .await;
+    engine.set_mail_steer_suppressed(call.session, false);
     if was_permission_err {
         result
     } else {

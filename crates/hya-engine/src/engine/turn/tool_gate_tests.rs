@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use super::append_steer_notice;
-use crate::engine::{AgentSpec, SessionEngine};
+use crate::engine::{AgentSpec, SessionEngine, channel_host};
 use crate::{CreateSession, EventBus};
 
 const BUNDLE: &str = "test/staged";
@@ -77,6 +77,36 @@ impl NativeHook for StagingHook {
                 callbacks.lock().unwrap().push(seen);
             })),
         )?;
+        Ok(NativeToolAfterOutcome::Continue {
+            result: input.result,
+        })
+    }
+}
+
+/// Records the `steer_suppressed` transient value its after-hook sees.
+struct SuppressionProbe {
+    host: Arc<dyn HostRuntime>,
+    seen: Arc<Mutex<Vec<Option<Value>>>>,
+}
+
+#[async_trait]
+impl NativeHook for SuppressionProbe {
+    fn id(&self) -> &str {
+        "suppression-probe"
+    }
+    fn hook_points(&self) -> &[HookPoint] {
+        &[HookPoint::ToolExecuteAfter]
+    }
+    async fn tool_execute_after(
+        &self,
+        input: NativeToolAfterInput,
+    ) -> Result<NativeToolAfterOutcome, HostError> {
+        let value = self.host.bundle_storage().get_transient_state(
+            channel_host::STEER_STATE_BUNDLE,
+            input.session,
+            channel_host::STEER_SUPPRESSION_KEY,
+        )?;
+        self.seen.lock().unwrap().push(value);
         Ok(NativeToolAfterOutcome::Continue {
             result: input.result,
         })
@@ -164,6 +194,36 @@ async fn staged_extension_events_commit_with_the_tool_result_and_run_callbacks_a
         "staged event must follow its tool result in the same batch: {log:#?}"
     );
     assert_eq!(*callbacks.lock().unwrap(), vec![true]);
+}
+
+#[tokio::test]
+async fn shell_tool_after_hooks_see_steer_suppressed() {
+    let rules = PermissionRules::new(vec![hya_tool::Rule::new(
+        hya_tool::Action::Bash,
+        "**",
+        hya_tool::Mode::Allow,
+    )]);
+    let engine = engine(FakeProvider::scripted(vec![]), rules).await;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let engine = engine.clone().with_hooks(Arc::new(SuppressionProbe {
+        host: engine.channel_host_runtime(),
+        seen: Arc::clone(&seen),
+    }));
+    let (session, agent) = root_session(&engine, "hya-main").await;
+    engine
+        .run_shell(session, &agent, "true".into(), CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert_eq!(*seen.lock().unwrap(), vec![Some(Value::Bool(true))]);
+    assert_eq!(
+        engine.get_transient_state(
+            channel_host::STEER_STATE_BUNDLE,
+            session,
+            channel_host::STEER_SUPPRESSION_KEY,
+        ),
+        None
+    );
 }
 
 #[test]
