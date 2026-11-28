@@ -2,13 +2,14 @@
 //! (docs/cli.md "Database lock and the backend daemon"; [`crate::db_writer`]).
 //!
 //! When a live server (the backend daemon, or a foreground `hya serve`)
-//! holds a file `--db`, `hya exec`/`run` and `hya workflow use|run|state`
-//! run over its `/v1` API instead of opening the database a second time. The
+//! holds a file `--db`, `hya exec`/`run` and the `database: true` bundle
+//! commands run over its `/v2` API instead of opening the database a second
+//! time. The
 //! session is the server's, so every client of that server sees it live.
 //! Output and exit statuses follow the direct commands; the differences are
 //! documented in docs/cli.md.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -16,7 +17,6 @@ use hya_api::v2 as pb;
 use hya_engine::render_transcript;
 use hya_proto::{Envelope, Projection, SessionId};
 use hya_sdk::{Sdk, SdkError};
-use hya_tool::{WorkflowCommandResult, WorkflowProjection, WorkflowRunResult, WorkflowRunStatus};
 
 use crate::exec_stream::{JsonStreamPrinter, StreamScope};
 use crate::stop_signals::StopSignal;
@@ -354,143 +354,6 @@ async fn reject_asks_until_cancelled(sdk: &Sdk, asks: &mut Asks) -> std::convert
         asks.reject_pending(sdk).await;
         tokio::time::sleep(POLL).await;
     }
-}
-
-/// A `hya workflow use|run|state` command to run on a server.
-pub(crate) enum WorkflowRoute {
-    Select {
-        name: String,
-        expected_revision: Option<String>,
-    },
-    Run {
-        name: Option<String>,
-        inputs: BTreeMap<String, String>,
-    },
-    State,
-}
-
-/// Run one workflow command on the server and return the same result the
-/// in-process control seam returns. A run without `session` creates a new
-/// root session in the current directory; a run is followed until it ends
-/// (permission asks and questions of its session tree are rejected).
-pub(crate) async fn workflow(
-    url: &str,
-    session: Option<SessionId>,
-    model: Option<String>,
-    route: WorkflowRoute,
-) -> anyhow::Result<WorkflowCommandResult> {
-    let (sdk, workdir) = client(url)?;
-    let id = match session {
-        Some(session) => session.to_string(),
-        None => create_session(&sdk, &workdir, model)
-            .await
-            .context("create workflow Session")?,
-    };
-    match route {
-        WorkflowRoute::State => {
-            let state_json = sdk
-                .invoke_session_bundle_api(
-                    &id,
-                    "hya/workflow",
-                    reqwest::Method::GET,
-                    "/state",
-                    None,
-                    None,
-                )
-                .await
-                .map_err(api)?;
-            Ok(WorkflowCommandResult::State {
-                state: decode_projection(state_json)?,
-            })
-        }
-        WorkflowRoute::Select {
-            name,
-            expected_revision,
-        } => {
-            let body = serde_json::json!({
-                "select": {
-                    "name": name,
-                    "expectedRevision": expected_revision.unwrap_or_default(),
-                }
-            });
-            let response = sdk
-                .invoke_session_bundle_api(
-                    &id,
-                    "hya/workflow",
-                    reqwest::Method::POST,
-                    "/command",
-                    None,
-                    Some(&body),
-                )
-                .await
-                .map_err(api)?;
-            let selected = response
-                .get("selected")
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("the server returned no Workflow state"))?;
-            Ok(WorkflowCommandResult::Selected {
-                state: decode_projection(selected)?,
-            })
-        }
-        WorkflowRoute::Run { name, inputs } => {
-            let body = serde_json::json!({
-                "run": {
-                    "name": name.unwrap_or_default(),
-                    "inputs": inputs,
-                }
-            });
-            let response = sdk
-                .invoke_session_bundle_api(
-                    &id,
-                    "hya/workflow",
-                    reqwest::Method::POST,
-                    "/command",
-                    None,
-                    Some(&body),
-                )
-                .await
-                .map_err(api)?;
-            let started_val = response
-                .get("started")
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("the server returned no Workflow run"))?;
-            let started: WorkflowRunResult =
-                serde_json::from_value(started_val).context("decode the server's Workflow run")?;
-            let mut run = started.run;
-            // Asks of the run's members are rejected, as in process.
-            let mut asks = Asks::new(id.clone());
-            while run.status == WorkflowRunStatus::Running {
-                asks.reject_pending(&sdk).await;
-                tokio::time::sleep(POLL).await;
-                let state_json = sdk
-                    .invoke_session_bundle_api(
-                        &id,
-                        "hya/workflow",
-                        reqwest::Method::GET,
-                        "/state",
-                        None,
-                        None,
-                    )
-                    .await
-                    .map_err(api)?;
-                if let Some(latest) = decode_projection(state_json)?.run
-                    && latest.id == run.id
-                {
-                    run = latest;
-                }
-            }
-            Ok(WorkflowCommandResult::Run {
-                result: WorkflowRunResult {
-                    run,
-                    replayed: started.replayed,
-                },
-            })
-        }
-    }
-}
-
-fn decode_projection(value: serde_json::Value) -> anyhow::Result<WorkflowProjection> {
-    serde_json::from_value(value).context("decode the server's Workflow state")
 }
 
 #[cfg(test)]

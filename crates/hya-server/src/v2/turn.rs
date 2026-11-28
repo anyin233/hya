@@ -417,23 +417,6 @@ async fn create_turn(
             Ok(Json(running_turn(session, &message.to_string())))
         }
         Some(Kind::Command(command)) => {
-            // Slash interception (workflow and other built-ins) runs
-            // synchronously like the native command route.
-            if crate::workflow::intercept_slash(&st, session, &command)
-                .await?
-                .is_some()
-            {
-                return Ok(Json(pb::CreateTurnResponse {
-                    turn: Some(pb::TurnInfo {
-                        id: String::new(),
-                        session: session.to_string(),
-                        state: pb::TurnState::Finished as i32,
-                        finish: pb::FinishReason::Stop as i32,
-                        error_code: String::new(),
-                        error_message: String::new(),
-                    }),
-                }));
-            }
             let explicit_model =
                 (!command.model.trim().is_empty()).then(|| ModelRef::new(command.model.trim()));
             // Custom slash commands from the session's catalog (its workdir,

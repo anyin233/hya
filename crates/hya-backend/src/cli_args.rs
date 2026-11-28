@@ -334,10 +334,6 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: BundleCommand,
     },
-    Workflow {
-        #[command(subcommand)]
-        command: crate::workflow_cmd::WorkflowCliCommand,
-    },
     /// List the effective model catalog (model cache ∪ config entries).
     Models {
         /// Provider id to filter models by.
@@ -809,7 +805,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_exec_workflow_sessions_models_provider_oauth_and_effort() {
+    fn parses_exec_sessions_models_provider_oauth_and_effort() {
         assert_eq!(
             super::merge_model_effort(Some("openai/gpt".into()), Some("high".into())).unwrap(),
             Some("openai/gpt#high".into())
@@ -824,7 +820,7 @@ mod tests {
             "hya exec --time-budget 0 hi",
             "hya exec --time-budget -1 hi",
             "hya exec --time-budget 1.5 hi",
-            "hya workflow use echo-input",
+            "hya workflow list",
         ]);
         assert!(matches!(
             p("hya exec --json --time-budget 30 go").command,

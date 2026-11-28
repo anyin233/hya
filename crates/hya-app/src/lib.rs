@@ -56,7 +56,6 @@ mod runtime_reconcile;
 pub mod startup_trace;
 #[cfg(test)]
 mod test_env;
-mod workflow_inspect;
 
 pub use agent_model_control::{
     AgentModelControlError, AgentModelIdentity, PersistentAgentModelControl,
@@ -64,11 +63,7 @@ pub use agent_model_control::{
 pub use bundle_cli::{CliContribution, cli_contributions};
 pub use headless::prepare_driver;
 pub use hya_coding_extras_core::BuiltinFormatterProvider;
-pub use hya_proto::{WorkflowInfo, WorkflowStageInfo, WorkflowSummary};
-pub use hya_tool::{InvocationPolicy, WorkflowCommand, WorkflowCommandResult, WorkflowRunResult};
-pub use hya_workflow_bundle_core::{
-    WorkflowCatalog, WorkflowCatalogOwner, WorkflowCatalogRoots, WorkflowControlError,
-};
+pub use hya_tool::InvocationPolicy;
 pub use installed_bundle_refresh::{
     InstalledBundleRefresh, bundle_registry_path, first_party_catalogs, first_party_catalogs_for,
 };
@@ -89,7 +84,6 @@ pub use runtime::{
     open_store_or_memory, resolve_headless_agent_name, resolve_runtime, spawn_team_supervisor,
     today, with_built_session_engine,
 };
-pub use workflow_inspect::inspect_workflow_catalog_read_only;
 
 #[cfg(test)]
 #[path = "../../hya-engine/tests/it/support/resident.rs"]

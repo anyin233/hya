@@ -1,7 +1,8 @@
-//! Real-binary integration tests for `hya workflow`: offline fan-in run,
-//! cross-process durable Session handoff, and the shipped Argus WorkflowBundle.
-//! Pure input/revision parsing, output formatting, and read-only catalog scope
-//! resolution live in `src/workflow_cmd.rs` unit tests.
+//! Real-binary integration tests for `hya workflow` (contributed by
+//! `hya/workflow`): offline fan-in run, cross-process durable Session handoff,
+//! and the shipped Argus WorkflowBundle. Input/revision parsing, output
+//! formatting, and catalog scope resolution are unit tests of the bundle's
+//! `cli.rs`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -216,15 +217,56 @@ fn cli_installs_and_runs_shipped_argus_workflowbundle() -> TestResult {
     Ok(())
 }
 
+/// `list` (`database: read`) resolves the database's Project from a
+/// subdirectory without claiming the database, and prints the scope's
+/// skipped bundles as `warning:` lines.
 #[test]
-fn cli_rejects_workflow_commands_in_bare_or_when_bundle_disabled() -> TestResult {
-    let s = Scratch::new("hya-wf-disabled")?;
-    let bare_out = s.hya().args(["--bare", "workflow", "list"]).output()?;
-    assert!(
-        !bare_out.status.success() && combined_text(&bare_out).contains("hya/workflow"),
-        "expected actionable --bare error, got:\n{}",
-        combined_text(&bare_out)
+fn list_reads_the_db_project_from_a_subdirectory_and_warns_about_broken_bundles() -> TestResult {
+    let s = Scratch::new("hya-wf-read")?;
+    write_wf(&s, "echo-input.hya.md", ECHO_WF)?;
+    let db = s.0.join("sessions.db");
+    // The in-process run registers a Project for the scratch directory.
+    assert_success(
+        "run",
+        &wf(&s, Some(&db), &["run", "echo-input", "--input", "v=1"])?,
     );
+    fs::create_dir_all(s.0.join(".hya/bundles/broken"))?;
+    fs::write(s.0.join(".hya/bundles/broken/bundle.yaml"), "kind: [\n")?;
+    let sub = s.0.join("sub/dir");
+    fs::create_dir_all(&sub)?;
+    let out = s
+        .hya()
+        .current_dir(&sub)
+        .arg("--db")
+        .arg(&db)
+        .args(["workflow", "list"])
+        .output()?;
+    assert_success("list", &out);
+    let (stdout, stderr) = (
+        String::from_utf8(out.stdout)?,
+        String::from_utf8(out.stderr)?,
+    );
+    assert!(stdout.starts_with("echo-input\n"), "{stdout}");
+    assert!(
+        stderr.starts_with("warning: project bundle ")
+            && stderr.contains(".hya/bundles/broken: ")
+            && stderr.lines().count() == 1,
+        "{stderr}"
+    );
+    Ok(())
+}
+
+/// `hya workflow` is `hya/workflow`'s contributed command: under `--bare` or
+/// with the bundle disabled it does not exist.
+#[test]
+fn workflow_is_an_unknown_command_in_bare_or_when_bundle_disabled() -> TestResult {
+    let s = Scratch::new("hya-wf-disabled")?;
+    let unknown = |out: &Output| {
+        out.status.code() == Some(2)
+            && String::from_utf8_lossy(&out.stderr).contains("unrecognized subcommand 'workflow'")
+    };
+    let bare_out = s.hya().args(["--bare", "workflow", "list"]).output()?;
+    assert!(unknown(&bare_out), "{}", combined_text(&bare_out));
 
     let cfg = s.0.join("config/hya");
     fs::create_dir_all(&cfg)?;
@@ -233,10 +275,6 @@ fn cli_rejects_workflow_commands_in_bare_or_when_bundle_disabled() -> TestResult
         "schema_version: 2\nbundles:\n  builtin:\n    profile: full\n    disable:\n      - hya/workflow\n",
     )?;
     let disabled_out = wf(&s, None, &["list"])?;
-    assert!(
-        !disabled_out.status.success() && combined_text(&disabled_out).contains("hya/workflow"),
-        "expected actionable disabled-bundle error, got:\n{}",
-        combined_text(&disabled_out)
-    );
+    assert!(unknown(&disabled_out), "{}", combined_text(&disabled_out));
     Ok(())
 }

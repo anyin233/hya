@@ -1340,8 +1340,6 @@ dependencies = [
  "hya-tool",
  "hya-tool-loader",
  "hya-version",
- "hya-workflow-bundle",
- "hya-workflow-bundle-core",
  "libc",
  "libsqlite3-sys",
  "rand_core 0.9.5",
@@ -1359,6 +1357,7 @@ dependencies = [
  "tonic",
  "tower",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

@@ -1,5 +1,6 @@
-//! App-level Workflow list, info, selection, idempotency, precedence, and scope contracts
-//! driven through `hya/workflow`'s native BundleApi and `workflow` tool surfaces.
+//! App-level Workflow list, info, selection, idempotency, and scope contracts
+//! driven through `hya/workflow`'s native BundleApi and `workflow` tool
+//! surfaces, read as raw JSON (core has no Workflow types).
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -9,21 +10,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hya_app::{
-    InvocationPolicy, WorkflowCatalog, WorkflowCatalogOwner, WorkflowCatalogRoots,
-    WorkflowControlError, WorkflowInfo, WorkflowSummary, agent_with_model, build_session_engine,
-    offline_router,
-};
-use hya_bundle::{BundleCatalog, BundleSource, SourceFile, prepare_package};
-use hya_engine::{
-    AgentCatalog, ApiMethod, BundleApiCall, CreateSession, RuntimeRegistry, SessionEngine,
-};
-use hya_proto::{SessionId, ToolCallId, WorkflowAvailability, WorkflowRunId};
+use hya_app::{InvocationPolicy, agent_with_model, build_session_engine, offline_router};
+use hya_engine::{ApiMethod, BundleApiCall, CreateSession, SessionEngine};
+use hya_proto::{SessionId, ToolCallId};
 use hya_store::SessionStore;
 use hya_tool::extension::ExtensionEvent;
 use hya_tool::{
     InteractionPlane, PermissionModel, PermissionPlane, PermissionRules, ToolCtx, ToolOperation,
-    WorkflowProjection, WorkflowRunStatus,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -38,6 +31,21 @@ fn temp_dir(label: &str) -> PathBuf {
         "hya-workflow-{label}-{}-{nonce}-{seq}",
         std::process::id()
     ))
+}
+
+/// A fresh run id in the bundle's wire form.
+fn run_id() -> String {
+    uuid::Uuid::now_v7().to_string()
+}
+
+/// The `name`s of a `workflows` list.
+fn names(workflows: &Value) -> Vec<&str> {
+    workflows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|workflow| workflow["name"].as_str().unwrap())
+        .collect()
 }
 
 fn write_workflow(dir: &Path, stem: &str, name: &str, directive: &str) {
@@ -89,7 +97,7 @@ async fn wf_command(engine: &SessionEngine, session: SessionId, body: Value) -> 
     (outcome.status, outcome.body)
 }
 
-async fn wf_list_global(engine: &SessionEngine, directory: Option<&Path>) -> Vec<WorkflowSummary> {
+async fn wf_list_global(engine: &SessionEngine, directory: Option<&Path>) -> Value {
     let mut query = BTreeMap::new();
     if let Some(dir) = directory {
         query.insert("directory".to_owned(), dir.display().to_string());
@@ -106,7 +114,7 @@ async fn wf_list_global(engine: &SessionEngine, directory: Option<&Path>) -> Vec
         .await
         .unwrap();
     assert_eq!(outcome.status, 200, "{}", outcome.body);
-    serde_json::from_value(outcome.body["workflows"].clone()).unwrap()
+    outcome.body["workflows"].clone()
 }
 
 #[tokio::test]
@@ -131,21 +139,21 @@ async fn list_info_select_state_stale_revision_and_source_substitution() {
 
     let (status, body) = wf_command(&engine, session, json!({ "list": {} })).await;
     assert_eq!(status, 200, "{body}");
-    let workflows: Vec<WorkflowSummary> =
-        serde_json::from_value(body["list"]["workflows"].clone()).unwrap();
-    assert_eq!(
+    let workflows = &body["list"]["workflows"];
+    assert_eq!(names(workflows), ["alpha", "beta", "plan-impl-review"]);
+    assert!(
         workflows
+            .as_array()
+            .unwrap()
             .iter()
-            .map(|w| w.name.as_str())
-            .collect::<Vec<_>>(),
-        ["alpha", "beta", "plan-impl-review"]
+            .all(|w| w["revision"].is_string())
     );
-    assert!(workflows.iter().all(|w| w.revision.is_some()));
 
     let (status, body) = wf_command(&engine, session, json!({ "info": { "name": "alpha" } })).await;
     assert_eq!(status, 200, "{body}");
-    let alpha: WorkflowInfo = serde_json::from_value(body["info"].clone()).unwrap();
-    assert_eq!(alpha.stages.len(), 1);
+    let alpha = body["info"].clone();
+    assert_eq!(alpha["stages"].as_array().unwrap().len(), 1);
+    let alpha_revision = alpha["identity"]["revision"].as_str().unwrap().to_owned();
 
     let (status, body) = wf_command(
         &engine,
@@ -153,14 +161,13 @@ async fn list_info_select_state_stale_revision_and_source_substitution() {
         json!({
             "select": {
                 "name": "alpha",
-                "expectedRevision": alpha.identity.revision.to_string(),
+                "expectedRevision": alpha_revision,
             }
         }),
     )
     .await;
     assert_eq!(status, 200, "{body}");
-    let selected: WorkflowProjection = serde_json::from_value(body["selected"].clone()).unwrap();
-    assert_eq!(selected.availability, Some(WorkflowAvailability::Available));
+    assert_eq!(body["selected"]["availability"], "available");
 
     // Editing alpha invalidates revision fence -> 409 failed_precondition.
     write_project_workflow(&root, "alpha", "CHANGED");
@@ -170,7 +177,7 @@ async fn list_info_select_state_stale_revision_and_source_substitution() {
         json!({
             "select": {
                 "name": "alpha",
-                "expectedRevision": alpha.identity.revision.to_string(),
+                "expectedRevision": alpha_revision,
             }
         }),
     )
@@ -185,7 +192,7 @@ async fn list_info_select_state_stale_revision_and_source_substitution() {
             "run": {
                 "name": "alpha",
                 "inputs": { "request": "v" },
-                "run": WorkflowRunId::new().to_string(),
+                "run": run_id(),
                 "delivery": "finished",
             }
         }),
@@ -202,18 +209,14 @@ async fn list_info_select_state_stale_revision_and_source_substitution() {
     .unwrap();
     let (status, body) = wf_command(&engine, session, json!({ "state": {} })).await;
     assert_eq!(status, 200, "{body}");
-    let missing: WorkflowProjection = serde_json::from_value(body["state"].clone()).unwrap();
-    assert_eq!(
-        missing.availability,
-        Some(WorkflowAvailability::Unavailable)
-    );
+    assert_eq!(body["state"]["availability"], "unavailable");
     for name in [Value::Null, json!("alpha")] {
         let mut run = serde_json::Map::new();
         if !name.is_null() {
             run.insert("name".to_owned(), name);
         }
         run.insert("inputs".to_owned(), json!({ "request": "v" }));
-        run.insert("run".to_owned(), json!(WorkflowRunId::new().to_string()));
+        run.insert("run".to_owned(), json!(run_id()));
         run.insert("delivery".to_owned(), json!("finished"));
         let (status, body) = wf_command(&engine, session, json!({ "run": run })).await;
         assert_eq!(status, 404, "{body}");
@@ -224,8 +227,7 @@ async fn list_info_select_state_stale_revision_and_source_substitution() {
     let (status, body) =
         wf_command(&engine, session, json!({ "select": { "name": "beta" } })).await;
     assert_eq!(status, 200, "{body}");
-    let switched: WorkflowProjection = serde_json::from_value(body["selected"].clone()).unwrap();
-    assert_eq!(switched.selection.unwrap().name, "beta");
+    assert_eq!(body["selected"]["selection"]["name"], "beta");
 
     built.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root);
@@ -317,24 +319,28 @@ async fn run_is_idempotent_by_tool_operation_and_rejects_changed_inputs() {
         .execute(&make_ctx(), input.clone())
         .await
         .unwrap();
-    let hya_app::WorkflowCommandResult::Run { result: first } =
-        serde_json::from_value(first_out).unwrap()
-    else {
-        panic!("expected Run");
-    };
-    assert!(!first.replayed);
-    assert_eq!(first.run.status, WorkflowRunStatus::Completed);
+    let first = &first_out["result"];
+    assert_eq!(first_out["kind"], "run", "{first_out}");
+    assert_eq!(first["replayed"], false);
+    assert_eq!(first["run"]["status"], "completed");
+    // The run id is the operation's UUIDv5 under the Workflow run namespace.
+    let namespace = uuid::Uuid::from_u128(0x19aa_6124_335d_54fb_b7e1_c271_82d6_6638);
     assert_eq!(
-        first.run.id,
-        WorkflowRunId::from_operation(op.operation_id())
+        first["run"]["id"],
+        uuid::Uuid::new_v5(&namespace, op.operation_id().as_uuid().as_bytes()).to_string()
     );
 
     // Member link precedes governed resident turn start.
-    let linked = first.run.stages[0].members[0].member;
+    let linked = &first["run"]["stages"][0]["members"][0]["member"];
     let events = engine.replay(session).await.unwrap();
     let link_idx = events
         .iter()
-        .position(|e| matches!(ExtensionEvent::from_event(&e.event), Some(ExtensionEvent::WorkflowStageMemberLinked { member, .. }) if member == linked))
+        .position(|e| {
+            matches!(&e.event, hya_proto::Event::Extension { bundle, kind, payload, .. }
+                if bundle == "hya/workflow"
+                    && kind == "workflow_stage_member_linked"
+                    && &payload["member"] == linked)
+        })
         .unwrap();
     let start_idx = events
         .iter()
@@ -353,13 +359,8 @@ async fn run_is_idempotent_by_tool_operation_and_rejects_changed_inputs() {
         .execute(&make_ctx(), input)
         .await
         .unwrap();
-    let hya_app::WorkflowCommandResult::Run { result: replay } =
-        serde_json::from_value(replay_out).unwrap()
-    else {
-        panic!("expected Run");
-    };
-    assert!(replay.replayed);
-    assert_eq!(replay.run.id, first.run.id);
+    assert_eq!(replay_out["result"]["replayed"], true);
+    assert_eq!(replay_out["result"]["run"]["id"], first["run"]["id"]);
 
     let conflict_err = workflow_tool
         .tool
@@ -384,124 +385,11 @@ async fn run_is_idempotent_by_tool_operation_and_rejects_changed_inputs() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-fn workflow_bundle(bundle_id: &str, workflow_id: &str, prompt: &str) -> BundleSource {
-    BundleSource::new(
-        bundle_id,
-        vec![
-            SourceFile::new(
-                "bundle.yaml",
-                format!(
-                    "kind: Bundle\nschema_version: 2\nidentity: {{ id: {bundle_id}, version: 1.0.0, publisher: hya }}\nworkflow: {{ id: {workflow_id}, path: workflows/{workflow_id}.hya.md }}\nagents: [{{ id: catalog-worker, role: subagent, prompt: prompts/w.md }}]\n"
-                ),
-            ),
-            SourceFile::new(
-                format!("workflows/{workflow_id}.hya.md"),
-                format!(
-                    "---\nkind: Workflow\nname: {workflow_id}\ndescription: Installed.\nnodes:\n  run: {{ agent: catalog-worker, directive: Run. }}\n---\nflowchart TD\n  run\n"
-                ),
-            ),
-            SourceFile::new("prompts/w.md", prompt),
-        ],
-    )
-}
-
 #[tokio::test]
-async fn catalog_precedence_folded_revisions_and_first_party_selection() {
+async fn listing_never_selects_a_first_party_workflow_and_select_persists_it() {
     let _env = crate::support::env_read_lock().await;
-    let project = temp_dir("prec-proj");
-    let proj_wf = project.join(".hya/workflows");
-    let user_wf = temp_dir("prec-user");
-    write_workflow(&proj_wf, "collision", "collision", "PROJECT");
-    write_workflow(&user_wf, "collision", "collision", "USER");
-
-    let installed_old =
-        prepare_package(workflow_bundle("hya/cat-inst", "collision", "OLD")).unwrap();
-    let first_party = hya_bundle::first_party_bundle("hya/workflow").unwrap();
-    let runtime = Arc::new(RuntimeRegistry::new(
-        hya_tool_loader::builtins(),
-        Arc::new(
-            AgentCatalog::new(Arc::new(
-                BundleCatalog::from_verified_catalogs(&[&installed_old, first_party]).unwrap(),
-            ))
-            .unwrap(),
-        ),
-    ));
-    let old_binding = runtime.bind_turn(&project).unwrap();
-    let old_bundles: Vec<_> = old_binding
-        .bundle_catalog()
-        .bundles()
-        .iter()
-        .map(|b| (**b).clone())
-        .collect();
-    let roots = || WorkflowCatalogRoots::new(vec![proj_wf.clone()], Some(user_wf.clone()));
-
-    // Precedence: Project > User > Installed, while qualified refs bypass bare shadowing.
-    let cat = WorkflowCatalog::from_bundles(roots(), &old_bundles).unwrap();
-    assert!(matches!(
-        cat.resolve("collision").unwrap().owner(),
-        WorkflowCatalogOwner::Project
-    ));
-    let inst_ref = "bundle:hya/cat-inst/workflow/collision";
-    assert!(matches!(
-        cat.resolve(inst_ref).unwrap().owner(),
-        WorkflowCatalogOwner::Installed { bundle_id } if bundle_id == "hya/cat-inst"
-    ));
-    assert!(matches!(
-        cat.resolve("plan-impl-review").unwrap().owner(),
-        WorkflowCatalogOwner::FirstParty { bundle_id } if bundle_id == "hya/workflow"
-    ));
-
-    std::fs::remove_file(proj_wf.join("collision.hya.md")).unwrap();
-    assert!(matches!(
-        WorkflowCatalog::from_bundles(roots(), &old_bundles)
-            .unwrap()
-            .resolve("collision")
-            .unwrap()
-            .owner(),
-        WorkflowCatalogOwner::User
-    ));
-    std::fs::remove_file(user_wf.join("collision.hya.md")).unwrap();
-    assert!(matches!(
-        WorkflowCatalog::from_bundles(roots(), &old_bundles)
-            .unwrap()
-            .resolve("collision")
-            .unwrap()
-            .owner(),
-        WorkflowCatalogOwner::Installed { .. }
-    ));
-
-    // Bundle agent prompt change folds into revision; old binding stays pinned.
-    let installed_new =
-        prepare_package(workflow_bundle("hya/cat-inst", "collision", "NEW")).unwrap();
-    runtime
-        .publish_catalog(Arc::new(
-            AgentCatalog::new(Arc::new(
-                BundleCatalog::from_verified_catalogs(&[&installed_new, first_party]).unwrap(),
-            ))
-            .unwrap(),
-        ))
-        .unwrap();
-    let fresh_binding = runtime.bind_turn(&project).unwrap();
-    let fresh_bundles: Vec<_> = fresh_binding
-        .bundle_catalog()
-        .bundles()
-        .iter()
-        .map(|b| (**b).clone())
-        .collect();
-    let old_rev = WorkflowCatalog::from_bundles(roots(), &old_bundles)
-        .unwrap()
-        .resolve(inst_ref)
-        .unwrap()
-        .identity()
-        .revision;
-    let new_rev = WorkflowCatalog::from_bundles(roots(), &fresh_bundles)
-        .unwrap()
-        .resolve(inst_ref)
-        .unwrap()
-        .identity()
-        .revision;
-    assert_ne!(old_rev, new_rev);
-
+    let project = temp_dir("first-party");
+    std::fs::create_dir_all(&project).unwrap();
     // Listing/info/state never auto-selects first-party workflows; explicit select persists once.
     let (mut built, agent) = offline_built().await;
     let engine = built.engine();
@@ -529,15 +417,13 @@ async fn catalog_precedence_folded_revisions_and_first_party_selection() {
     )
     .await;
     assert_eq!(status, 200, "{body}");
-    let state: WorkflowProjection = serde_json::from_value(body["selected"].clone()).unwrap();
     assert_eq!(
-        state.selection.unwrap().source.as_str(),
+        body["selected"]["selection"]["source"],
         "bundle:hya/workflow/workflow/plan-impl-review"
     );
 
     built.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(project);
-    let _ = std::fs::remove_dir_all(user_wf);
 }
 
 #[tokio::test]
@@ -555,50 +441,16 @@ async fn directory_global_and_multi_root_project_workflow_scopes() {
     let nested = root_a.join("nested");
     write_project_workflow(&nested, "local", "LOCAL");
 
-    // 1. Multi-root dedupe by both source ID and declared name (first root wins).
-    let cat = WorkflowCatalog::from_bundles(
-        WorkflowCatalogRoots::new(vec![wf_a.clone(), wf_b.clone()], None),
-        &[],
-    )
-    .unwrap();
-    assert_eq!(
-        cat.list().into_iter().map(|i| i.name).collect::<Vec<_>>(),
-        ["root-a-same", "shared-name", "gamma"]
-    );
-    assert!(
-        cat.resolve("root-a-same")
-            .unwrap()
-            .display_path()
-            .starts_with(&wf_a.display().to_string())
-    );
-    assert!(
-        cat.resolve("shared-name")
-            .unwrap()
-            .display_path()
-            .starts_with(&wf_a.display().to_string())
-    );
-    assert!(matches!(
-        cat.resolve("root-b-same"),
-        Err(WorkflowControlError::NotFound { .. })
-    ));
-
-    // 2. Standalone `list(Some(dir))` vs `list(None)` and multi-root Project session selection.
+    // Standalone `list(Some(dir))` vs `list(None)` and multi-root Project
+    // session selection (catalog dedupe rules: `native/core/tests/catalog.rs`).
     let (mut built, agent) = offline_built().await;
     let engine = built.engine();
     assert_eq!(
-        wf_list_global(&engine, Some(&root_a))
-            .await
-            .iter()
-            .map(|i| i.name.as_str())
-            .collect::<Vec<_>>(),
+        names(&wf_list_global(&engine, Some(&root_a)).await),
         ["root-a-same", "shared-name", "plan-impl-review"]
     );
     assert_eq!(
-        wf_list_global(&engine, None)
-            .await
-            .iter()
-            .map(|i| i.name.as_str())
-            .collect::<Vec<_>>(),
+        names(&wf_list_global(&engine, None).await),
         ["plan-impl-review"]
     );
 
@@ -623,13 +475,8 @@ async fn directory_global_and_multi_root_project_workflow_scopes() {
         .unwrap();
     let (status, body) = wf_command(&engine, session, json!({ "list": {} })).await;
     assert_eq!(status, 200, "{body}");
-    let workflows: Vec<WorkflowSummary> =
-        serde_json::from_value(body["list"]["workflows"].clone()).unwrap();
     assert_eq!(
-        workflows
-            .iter()
-            .map(|w| w.name.as_str())
-            .collect::<Vec<_>>(),
+        names(&body["list"]["workflows"]),
         [
             "local",
             "root-a-same",
@@ -645,12 +492,10 @@ async fn directory_global_and_multi_root_project_workflow_scopes() {
     )
     .await;
     assert_eq!(status, 200, "{body}");
-    let state: WorkflowProjection = serde_json::from_value(body["selected"].clone()).unwrap();
-    assert_eq!(state.availability, Some(WorkflowAvailability::Available));
+    assert_eq!(body["selected"]["availability"], "available");
     let (status, body) = wf_command(&engine, session, json!({ "state": {} })).await;
     assert_eq!(status, 200, "{body}");
-    let fresh: WorkflowProjection = serde_json::from_value(body["state"].clone()).unwrap();
-    assert_eq!(fresh.availability, Some(WorkflowAvailability::Available));
+    assert_eq!(body["state"]["availability"], "available");
 
     built.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root_a);

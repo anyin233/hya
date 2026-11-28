@@ -13,7 +13,7 @@ use hya_proto::{
     FinishReason, MessageId, PartProjection, Projection, Role, RosterStatus, SessionId, scope,
 };
 use hya_tool::deadline::{RunDeadline, Stage};
-use hya_tool::extension::{RosterEntry, members_projection, team_projection, workflow_projection};
+use hya_tool::extension::{RosterEntry, members_projection, team_projection};
 use tokio_util::sync::CancellationToken;
 
 /// Notice turns in a row that may end with the same pending work and no tool
@@ -237,8 +237,28 @@ impl Pending {
 /// The lead's direct subagents still on the team roster.
 fn live_subagents(projection: &Projection) -> Vec<RosterEntry> {
     let team = team_projection(projection);
-    let workflow = workflow_projection(projection);
     let members = members_projection(projection);
+    // Members linked to the `hya/workflow` projection's finished run (raw
+    // JSON: core has no Workflow types; CHR-43 replaces this read).
+    let run = &projection
+        .extensions
+        .get("hya/workflow")
+        .unwrap_or(&serde_json::Value::Null)["run"];
+    let parked: Vec<&serde_json::Value> = if run["status"]
+        .as_str()
+        .is_some_and(|status| status != "running")
+    {
+        run["stages"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|stage| stage["members"].as_array())
+            .flatten()
+            .map(|linked| &linked["member"])
+            .collect()
+    } else {
+        Vec::new()
+    };
     team.roster
         .into_values()
         .filter(|entry| scope::parent_path(&entry.handle) == Some(scope::ROOT_HANDLE))
@@ -247,21 +267,12 @@ fn live_subagents(projection: &Projection) -> Vec<RosterEntry> {
             // Finished Workflow actors stay parked for reuse; only busy ones
             // represent work the lead still needs to collect.
             entry.status != RosterStatus::Idle
-                || !workflow
-                    .as_ref()
-                    .and_then(|workflow| workflow.run.as_ref())
-                    .filter(|run| run.status.is_terminal())
-                    .is_some_and(|run| {
-                        run.stages
+                || !members.iter().any(|member| {
+                    member.child == Some(entry.session)
+                        && parked
                             .iter()
-                            .flat_map(|stage| &stage.members)
-                            .any(|linked| {
-                                members.iter().any(|member| {
-                                    member.member == linked.member
-                                        && member.child == Some(entry.session)
-                                })
-                            })
-                    })
+                            .any(|linked| **linked == serde_json::json!(member.member))
+                })
         })
         .collect()
 }
@@ -935,8 +946,8 @@ mod tests {
             hya_tool::extension::BUNDLE_MULTI_AGENT.into(),
             serde_json::to_value(&ma3).unwrap(),
         );
-        let run = serde_json::json!({
-            "id": hya_proto::WorkflowRunId::new(),
+        let mut run = serde_json::json!({
+            "id": "0190f5a0-0000-7000-8000-000000000001",
             "workflow": {"source": "test", "name": "test", "revision": "00".repeat(32)},
             "request_hash": "test", "owner": hya_proto::OwnerRunId::new(),
             "status": "completed", "stages": [{
@@ -944,18 +955,12 @@ mod tests {
                 "status": "completed", "members": [{"member": member, "role": "worker", "iteration": 0}]
             }]
         });
-        let mut wf3: hya_tool::WorkflowProjection =
-            serde_json::from_value(serde_json::json!({"run": run})).unwrap();
-        p3.extensions.insert(
-            hya_tool::extension::BUNDLE_WORKFLOW.into(),
-            serde_json::to_value(&wf3).unwrap(),
-        );
+        p3.extensions
+            .insert("hya/workflow".into(), serde_json::json!({ "run": run }));
         assert!(live_subagents(&p3).is_empty());
-        wf3.run.as_mut().unwrap().status = hya_tool::WorkflowRunStatus::Running;
-        p3.extensions.insert(
-            hya_tool::extension::BUNDLE_WORKFLOW.into(),
-            serde_json::to_value(&wf3).unwrap(),
-        );
+        run["status"] = "running".into();
+        p3.extensions
+            .insert("hya/workflow".into(), serde_json::json!({ "run": run }));
         assert_eq!(live_subagents(&p3).len(), 1);
 
         // Open todos do not hold runs open.

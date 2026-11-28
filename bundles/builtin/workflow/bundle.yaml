@@ -38,6 +38,79 @@ assets:
   - { id: tui-main, path: tui/main.ts }
   - { id: tui-workflows, path: tui/workflows.ts }
   - { id: tui-commands, path: tui/commands.ts }
+cli:
+  - name: workflow
+    about: Inspect, select, and run Workflows.
+    subcommands:
+      - name: list
+        about: List discovered workflows with their declared stages.
+        api: cli_list
+        database: read
+        args:
+          - { id: json, long: json, value: flag, help: Emit the shared Workflow command result as JSON. }
+      - name: info
+        about: Show one workflow's compiled graph and join contract.
+        api: cli_info
+        database: read
+        args:
+          - { id: name, required: true, help: Workflow `name` as declared in its definition file. }
+          - { id: json, long: json, value: flag, help: Emit the shared Workflow command result as JSON. }
+      - name: use
+        about: Persist one selected workflow identity for this Session.
+        api: cli_use
+        database: true
+        args:
+          - { id: name, required: true, help: Workflow `name` as declared in its definition file. }
+          - id: revision
+            long: revision
+            aliases: [expected-revision]
+            value_name: EXPECTED_REVISION
+            help: Optional compiler revision fence (`--expected-revision` is an alias).
+          - id: session
+            long: session
+            value: session
+            required: true
+            value_name: SESSION_ID
+            help: Existing Session that owns the durable selection.
+          - { id: json, long: json, value: flag, help: Emit the shared Workflow command result as JSON. }
+      - name: run
+        about: Execute one selected or explicitly named workflow.
+        api: cli_run
+        database: true
+        args:
+          - { id: name, help: "Workflow `name`, or omit it to use the owning Session's selection." }
+          - id: input
+            long: input
+            value: list
+            value_name: KEY=VALUE
+            help: Provide one declared input value (`--input key=value`, repeatable).
+          - id: revision
+            long: revision
+            aliases: [expected-revision]
+            value_name: EXPECTED_REVISION
+            help: Optional compiler revision fence (`--expected-revision` is an alias).
+          - id: session
+            long: session
+            value: session
+            value_name: SESSION_ID
+            help: Existing Session that owns the durable run; omitted creates a new Session.
+          - { id: json, long: json, value: flag, help: Emit the shared Workflow command result as JSON instead of text. }
+        routed_refuse:
+          - { arg: revision, reason: "`workflow run --revision` cannot be sent to it" }
+          - { flag: pure, reason: "--pure cannot apply to it (it loaded its own context)" }
+          - { flag: yolo, reason: "--yolo cannot apply to its Workflow runs" }
+      - name: state
+        about: Show the durable selected workflow and latest run state.
+        api: cli_state
+        database: true
+        args:
+          - id: session
+            long: session
+            value: session
+            required: true
+            value_name: SESSION_ID
+            help: Existing Session whose durable Workflow state is shown.
+          - { id: json, long: json, value: flag, help: Emit the shared Workflow command result as JSON. }
 tui:
   api_version: 2
   entry: tui/main.ts

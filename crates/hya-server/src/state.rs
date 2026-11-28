@@ -24,7 +24,7 @@ use crate::{pending, runs};
 mod restart_tests;
 
 /// Holds the session engine, process agent base, permission/question queues,
-/// MCP and Workflow control handles, workspace adapters, and formatter status.
+/// MCP control handles, workspace adapters, and formatter status.
 /// The router wraps this into internal `ServerState`. The run registry and the
 /// session-list hub live here, so each router and gRPC binding built from one
 /// `AppState` shares them.
@@ -140,7 +140,7 @@ impl AppState {
         self.reconfigured()
     }
 
-    /// Create state with empty pending queues and no-op MCP, Workflow, and Agent-model controls.
+    /// Create state with empty pending queues and no-op MCP and Agent-model controls.
     #[must_use]
     pub fn new(engine: Arc<SessionEngine>, agent: Arc<AgentSpec>) -> Self {
         let store = engine.store().clone();
@@ -494,21 +494,9 @@ impl ServerState {
         let _ = self.projects_updates.send(());
     }
 
-    /// Start a parent-model run only when no Workflow owns the Session.
+    /// Start a parent-model run only when no bundle service run owns the
+    /// Session.
     pub(crate) fn start_run(&self, session: hya_proto::SessionId) -> Option<runs::RunGuard> {
-        self.reserve_run(session)
-    }
-
-    /// Reserve the Session for a mutating Workflow command.
-    ///
-    /// Parent-model and Workflow admissions use the same process-local
-    /// registry. The reservation remains held by the caller while it crosses
-    /// the Workflow control port, so a parent turn cannot slip in before the
-    /// app-owned Workflow claim becomes visible.
-    pub(crate) fn reserve_workflow_run(
-        &self,
-        session: hya_proto::SessionId,
-    ) -> Option<runs::RunGuard> {
         self.reserve_run(session)
     }
 
@@ -604,7 +592,7 @@ impl ServerState {
     /// Cancel every execution surface for a Session: the engine turn first
     /// (recording `cause: user_cancel` on its closing `MessageFinished`) along
     /// with every subagent's below it, which stay stopped until the user acts
-    /// on them again, then the parent-model run and the Workflow run.
+    /// on them again, then the parent-model run and the bundle service run.
     pub(crate) fn cancel_run(&self, session: hya_proto::SessionId) -> bool {
         let turn = self.engine.cancel_user_turn(session);
         let model = self.runs.cancel(session);

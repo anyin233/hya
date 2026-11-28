@@ -157,6 +157,24 @@ async fn pure_hya_bare_exec_and_serve_without_builtin_bundles() {
         "expected bare grep and todo results in follow-up requests: {exec_dump}"
     );
 
+    // `hya workflow` is contributed by `hya/workflow`, so bare has no such command.
+    let mut workflow_cmd = headless.command();
+    workflow_cmd
+        .env("HYA_FIRST_PARTY_SOURCE_ROOT", &empty_bundles)
+        .args(["--bare", "workflow", "list"]);
+    let workflow_out = tokio::time::timeout(Duration::from_secs(30), workflow_cmd.output())
+        .await
+        .expect("bare workflow list timed out")
+        .expect("spawn bare workflow list");
+    assert!(
+        workflow_out.status.code() == Some(2)
+            && String::from_utf8_lossy(&workflow_out.stderr)
+                .contains("unrecognized subcommand 'workflow'"),
+        "bare workflow list must be an unknown command: status={:?} stderr={}",
+        workflow_out.status,
+        String::from_utf8_lossy(&workflow_out.stderr)
+    );
+
     // 2. Pure `hya --bare serve` with zero `bundles/builtin/` present.
     let serve_env = E2eEnvBuilder::new()
         .binary(isolated_hya)
