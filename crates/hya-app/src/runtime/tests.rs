@@ -4108,3 +4108,67 @@ async fn channels_enabled_registers_exactly_one_channels_service_hook_and_scheme
         surface.channel_read
     );
 }
+
+#[tokio::test]
+async fn installed_bundle_missing_a_prerequisite_is_left_out_of_the_catalog() {
+    let home = tempdir();
+    let workdir = tempdir();
+    let _env = EnvGuard::with_home(&home, &workdir);
+    let registry_path = home.join("hya/bundles/registry.sqlite3");
+    std::fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+    let registry = BundleRegistry::connect(registry_path.to_str().unwrap())
+        .await
+        .unwrap();
+    for (index, (id, body)) in [
+        ("acme/needs", "requires: [acme/absent]\n"),
+        ("acme/plain", ""),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let name = id.trim_start_matches("acme/");
+        let installed = prepare_package(BundleSource::new(
+            name,
+            vec![SourceFile::new(
+                "bundle.yaml",
+                format!(
+                    "kind: Bundle\nschema_version: 2\nidentity: {{ id: {id}, version: 1.0.0, publisher: acme }}\n{body}agents:\n  - {{ id: {name}-agent, role: main }}\n"
+                ),
+            )],
+        ))
+        .unwrap();
+        registry
+            .install(
+                &[],
+                NamespaceInstallPolicy::DenyConflicts,
+                BundleInstallCandidate {
+                    source_digest: [0x60 + index as u8; 32],
+                    prepared_digest: installed.digest().to_string(),
+                    prepared_bytes: installed.bytes().to_vec(),
+                    installed_at: 1_725_000_030 + index as i64,
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    let (router, model) = offline_router(None);
+    let agent = agent_with_model(&model, None);
+    let mut built = build_session_engine(
+        SessionStore::connect_memory().await.unwrap(),
+        router,
+        &agent,
+        BTreeMap::new(),
+        Vec::new(),
+        (
+            InvocationPolicy::default(),
+            config::EngineSettings::default(),
+        ),
+    )
+    .await
+    .unwrap();
+    let binding = built.engine().bind_root_runtime(&workdir).await.unwrap();
+    assert!(binding.resolve_agent("plain-agent").is_some());
+    assert!(binding.resolve_agent("needs-agent").is_none());
+    built.shutdown().await.unwrap();
+}

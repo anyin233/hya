@@ -1073,6 +1073,21 @@ async fn build_session_engine_with_mcp_defer(
         .await
         .context("read installed bundles")?
     };
+    let installed = match crate::installed_bundle_refresh::retain_satisfied(
+        &builtins,
+        installed.iter().collect(),
+    ) {
+        Ok((kept, unsatisfied)) => {
+            for (bundle_id, warning) in unsatisfied {
+                tracing::warn!(bundle_id = %bundle_id, "{warning}");
+            }
+            kept
+        }
+        Err(error) => {
+            store.release_runtime_owner(owner_run_id)?;
+            return Err(error.into());
+        }
+    };
     for catalog in installed {
         for bundle in catalog.bundles().iter().filter(|bundle| {
             bundle.runtime().is_some_and(|runtime| {

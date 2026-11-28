@@ -5,7 +5,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::bundle_registry::BundleRegistry;
 use async_trait::async_trait;
-use hya_bundle::{BundleCatalog, PreparedBundleSchemas, PreparedCatalog};
+use hya_bundle::{
+    Bundle, BundleCatalog, BundleError, PreparedBundleSchemas, PreparedCatalog,
+    missing_prerequisites,
+};
 use hya_engine::{
     CoreError, RuntimeCatalogRefresh, RuntimeRegistry, RuntimeSource, RuntimeSourceKind, ScopeKey,
 };
@@ -58,6 +61,83 @@ pub fn first_party_catalogs_for(
         );
     }
     Ok(catalogs)
+}
+
+/// One `(bundle_id, warning)` per bundle left out for a missing prerequisite.
+pub(crate) type Unsatisfied = Vec<(String, String)>;
+
+/// Check the `requires` of a composed bundle set: every first-party bundle
+/// `selection` enables (catalog or not) plus the `third_party` (installed or
+/// project) catalogs, before shadowing. Returns the third-party catalogs whose
+/// prerequisites are met, in input order, and one `(bundle_id, warning)` per
+/// catalog left out.
+///
+/// # Errors
+/// [`BundleError::MissingPrerequisite`] when an enabled first-party bundle
+/// misses one (a configuration error), or a first-party load failure.
+pub(crate) fn retain_satisfied<'a>(
+    selection: &hya_bundle::BuiltinBundleSelection,
+    third_party: Vec<&'a PreparedCatalog>,
+) -> Result<(Vec<&'a PreparedCatalog>, Unsatisfied), BundleError> {
+    let mut first_party = Vec::new();
+    for identity in selection.enabled_identities() {
+        if let Some(catalog) = hya_bundle::first_party_bundle_optional(identity)? {
+            first_party.push(&catalog.bundles()[0]);
+        }
+    }
+    retain_satisfied_with(&first_party, third_party)
+}
+
+fn retain_satisfied_with<'a>(
+    first_party: &[&Bundle],
+    mut third_party: Vec<&'a PreparedCatalog>,
+) -> Result<(Vec<&'a PreparedCatalog>, Unsatisfied), BundleError> {
+    let mut warnings = Vec::new();
+    // Dropping a bundle can unsatisfy another, so repeat until none is dropped.
+    loop {
+        let replaced = third_party
+            .iter()
+            .copied()
+            .flat_map(|catalog| {
+                let bundle = &catalog.bundles()[0];
+                [Some(bundle.identity().id.as_str()), bundle.overrides()]
+            })
+            .flatten()
+            .collect::<BTreeSet<_>>();
+        let first_party = first_party
+            .iter()
+            .copied()
+            .filter(|bundle| !replaced.contains(bundle.identity().id.as_str()))
+            .collect::<Vec<_>>();
+        let present = first_party
+            .iter()
+            .map(|bundle| bundle.identity().id.as_str())
+            .chain(replaced.iter().copied())
+            .collect::<BTreeSet<_>>();
+        if let Some((bundle_id, requires)) = missing_prerequisites(&first_party, &present).first() {
+            return Err(BundleError::MissingPrerequisite {
+                bundle_id: (*bundle_id).to_string(),
+                requires: (*requires).to_string(),
+            });
+        }
+        let before = third_party.len();
+        third_party.retain(|catalog| {
+            let missing = missing_prerequisites(&[&catalog.bundles()[0]], &present);
+            let Some((bundle_id, requires)) = missing.first() else {
+                return true;
+            };
+            warnings.push((
+                (*bundle_id).to_string(),
+                format!(
+                    "bundle `{bundle_id}` requires bundle `{requires}`, which is not enabled; `{bundle_id}` is not loaded"
+                ),
+            ));
+            false
+        });
+        if third_party.len() == before {
+            return Ok((third_party, warnings));
+        }
+    }
 }
 
 /// Default path of the installed Bundle registry SQLite file.
@@ -634,8 +714,17 @@ impl InstalledBundleRefresh {
         let installed = published;
         let enabled = installed
             .iter()
+            .map(Arc::as_ref)
             .filter(|catalog| !disabled.contains(&catalog.bundles()[0].identity().id))
             .collect::<Vec<_>>();
+        let (enabled, unsatisfied) =
+            retain_satisfied(&self.builtin_selection, enabled).map_err(CoreError::bundle)?;
+        sources.retain(|(id, _), _| {
+            enabled
+                .iter()
+                .any(|catalog| catalog.bundles()[0].identity().id == *id)
+        });
+        errors.extend(unsatisfied);
         let first_party_refs = first_party
             .iter()
             .filter(|catalog| {
@@ -661,10 +750,7 @@ impl InstalledBundleRefresh {
         .await?;
         sources.extend(first.sources);
         watched.extend(first.watched);
-        let mut catalogs = enabled
-            .into_iter()
-            .map(|catalog| catalog.as_ref())
-            .collect::<Vec<_>>();
+        let mut catalogs = enabled;
         catalogs.extend(
             first_party_refs
                 .into_iter()
@@ -790,5 +876,101 @@ impl RuntimeCatalogRefresh for InstalledBundleRefresh {
 
     async fn diagnostics(&self, _scope: &hya_engine::CatalogScope) -> Vec<String> {
         InstalledBundleRefresh::diagnostics(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    fn catalog(id: &str, body: &str) -> PreparedCatalog {
+        let manifest = format!(
+            "kind: Bundle\nschema_version: 2\nidentity: {{ id: {id}, version: 1.0.0, publisher: acme }}\n{body}"
+        );
+        hya_bundle::prepare_package(hya_bundle::BundleSource::new(
+            id,
+            vec![hya_bundle::SourceFile::new("bundle.yaml", manifest)],
+        ))
+        .unwrap_or_else(|error| panic!("prepare {id}: {error}"))
+    }
+
+    fn ids(kept: &[&PreparedCatalog]) -> Vec<String> {
+        kept.iter()
+            .map(|catalog| catalog.bundles()[0].identity().id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn a_first_party_bundle_missing_a_prerequisite_is_a_configuration_error() {
+        let channels = catalog("acme/channels", "");
+        let agents = catalog("acme/agents", "requires: [acme/channels]\n");
+        let first_party = [&agents.bundles()[0]];
+        assert_eq!(
+            retain_satisfied_with(&first_party, Vec::new()).unwrap_err(),
+            BundleError::MissingPrerequisite {
+                bundle_id: "acme/agents".into(),
+                requires: "acme/channels".into(),
+            }
+        );
+        let message = retain_satisfied_with(&first_party, Vec::new())
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("`acme/channels`"), "{message}");
+        // An installed or project bundle may supply it.
+        let (kept, warnings) = retain_satisfied_with(&first_party, vec![&channels]).unwrap();
+        assert_eq!(ids(&kept), ["acme/channels"]);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn third_party_bundles_missing_a_prerequisite_are_dropped_to_a_fixpoint() {
+        let base = catalog("acme/base", "");
+        let top = catalog("acme/top", "requires: [acme/middle]\n");
+        let middle = catalog("acme/middle", "requires: [acme/absent]\n");
+        let ok = catalog("acme/ok", "requires: [acme/base]\n");
+        let first_party = [&base.bundles()[0]];
+        let (kept, warnings) =
+            retain_satisfied_with(&first_party, vec![&top, &ok, &middle]).unwrap();
+        assert_eq!(ids(&kept), ["acme/ok"]);
+        assert_eq!(
+            warnings
+                .iter()
+                .map(|(id, _)| id.as_str())
+                .collect::<Vec<_>>(),
+            ["acme/middle", "acme/top"]
+        );
+        assert!(warnings[0].1.contains("`acme/absent`"), "{warnings:?}");
+    }
+
+    #[test]
+    fn overriders_satisfy_their_target_and_a_dropped_one_keeps_it() {
+        let target = catalog("acme/target", "");
+        let user = catalog("acme/user", "requires: [acme/target]\n");
+        let replacement = catalog("acme/replacement", "overrides: acme/target\n");
+        let broken = catalog(
+            "acme/broken",
+            "overrides: acme/target\nrequires: [acme/absent]\n",
+        );
+        // The target is not enabled; its overrider stands in for it.
+        let (kept, _) = retain_satisfied_with(&[&user.bundles()[0]], vec![&replacement]).unwrap();
+        assert_eq!(ids(&kept), ["acme/replacement"]);
+        // A dropped overrider leaves the first-party target in the set.
+        let first_party = [&target.bundles()[0], &user.bundles()[0]];
+        let (kept, warnings) = retain_satisfied_with(&first_party, vec![&broken]).unwrap();
+        assert!(kept.is_empty());
+        assert_eq!(warnings[0].0, "acme/broken");
+    }
+
+    #[test]
+    fn every_builtin_selection_endpoint_satisfies_its_own_prerequisites() {
+        for selection in [
+            hya_bundle::BuiltinBundleSelection::full(),
+            hya_bundle::BuiltinBundleSelection::bare(),
+        ] {
+            let (kept, warnings) = retain_satisfied(&selection, Vec::new()).unwrap();
+            assert!(kept.is_empty() && warnings.is_empty());
+        }
     }
 }
