@@ -2,36 +2,12 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::collections::BTreeSet;
-use std::sync::{Arc, Mutex};
-
-use hya_tool::{Action, Decision, PermissionInterceptor, Resource, ToolCtx, ToolError};
-use serde_json::{Value, json};
+use hya_tool::{Action, ToolCtx, ToolError};
+use serde_json::json;
 
 use crate::common::{TempDirGuard, allow, ctx_with, deny, tempdir};
 
 const MAX_GLOB_BYTES: usize = 4096;
-
-struct RecordingPermissionInterceptor {
-    requests: Arc<Mutex<Vec<(Action, String)>>>,
-}
-
-#[async_trait::async_trait]
-impl PermissionInterceptor for RecordingPermissionInterceptor {
-    async fn intercept(
-        &self,
-        _session: Option<hya_proto::SessionId>,
-        action: Action,
-        resource: &Resource,
-    ) -> Option<Decision> {
-        let req = (action, resource.pattern());
-        match self.requests.lock() {
-            Ok(mut v) => v.push(req),
-            Err(p) => p.into_inner().push(req),
-        }
-        Some(Decision::Reject { feedback: None })
-    }
-}
 
 fn search_ctx(workdir: std::path::PathBuf) -> ToolCtx {
     ctx_with(

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use hya_tool::{Action, Decision, PermissionInterceptor, Resource, ToolCtx, ToolError};
 use serde_json::{Value, json};
 
-use crate::common::{TempDirGuard, allow, ctx_with, deny, tempdir};
+use crate::common::{TempDirGuard, allow, ctx_with, tempdir};
 
 const MAX_GREP_LOGICAL_LINE_BYTES: usize = 1024 * 1024;
 const MAX_GLOB_BYTES: usize = 4096;
