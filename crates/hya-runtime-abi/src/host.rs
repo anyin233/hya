@@ -331,7 +331,9 @@ pub trait HostBundleStorage: Send + Sync {
 /// Request to execute a single turn on an existing session.
 ///
 /// A fenced turn (`actor_claim: Some`) runs as a child of its parent's
-/// binding: the host resolves the agent, its system prompt, roster, and
+/// binding (a session without a parent is [`HostError::InvalidInput`]): the
+/// fence is a `hya/multi-agent` claim keyed by the session id, and the host
+/// admits the prompt under it, resolves the agent, its system prompt, roster, and
 /// resource policy from the parent, re-validates the fence before each round
 /// and before opening each stream, fences every append, and keeps one
 /// sidecar for the session from its first fenced turn until the fence is
@@ -371,7 +373,8 @@ pub enum TurnStart {
     #[default]
     Always,
     /// Take the lease atomically, or return [`HostError::Conflict`] without
-    /// admitting the prompt when a turn is active.
+    /// admitting the prompt when a turn is active; `run_turn` returns
+    /// `Conflict` for no other reason.
     IfIdle,
 }
 
