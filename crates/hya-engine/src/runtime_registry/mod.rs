@@ -807,7 +807,7 @@ impl RuntimeRegistry {
     /// Current user-global config plugin hooks. Idle sessions never retain
     /// these dispatchers; a config removal releases them at publication.
     #[must_use]
-    pub fn global_plugin_hooks(&self) -> Vec<Arc<dyn crate::hooks::HookDispatcher>> {
+    pub fn global_plugin_hooks(&self) -> Vec<crate::hooks::HookEntry> {
         self.active()
             .sources
             .values()

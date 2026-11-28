@@ -1,5 +1,5 @@
 //! T2.20, T2.25–T2.28, T2.30, T2.50–T2.52 — bundle policies & first-party / extra
-//! bundles: `hya/goal-loop` + patched `goal.evaluate`, installed channel policy,
+//! bundles: `hya/goal-loop` + patched `hya/goal:evaluate`, installed channel policy,
 //! `hya-extra/zvec-grep` + `hya-extra/scout`, `hya-extra/jev-model-router`,
 //! `hya-extra/model-fallback`, `hya-extra/token-summary`, and `hya/code-mode` modes.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -77,7 +77,7 @@ fn uninstall_bundle(env: &E2eEnv, id: &str) {
     );
 }
 
-/// T2.20 (`hya/goal-loop` preset + patched `goal.evaluate` injection) and
+/// T2.20 (`hya/goal-loop` preset + patched `hya/goal:evaluate` injection) and
 /// T2.25 (installed channel policy denies child sends; uninstall restores default).
 #[tokio::test]
 async fn goal_loop_and_channel_policy_bundles() {
@@ -89,9 +89,9 @@ for line in sys.stdin:
     req = json.loads(line)
     method = req.get("method")
     if method == "initialize":
-        result = {"protocol_version": 1, "plugin": {"id": "miao", "version": "1.0.0", "kind": "rust"}, "hooks": [{"name": "goal.evaluate"}], "tools": [], "workspaceAdapters": []}
+        result = {"protocol_version": 1, "plugin": {"id": "miao", "version": "1.0.0", "kind": "rust"}, "hooks": [{"name": "hya/goal:evaluate"}], "tools": [], "workspaceAdapters": []}
         print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": result}), flush=True)
-    elif method == "hook/goal.evaluate":
+    elif method == "hook/hya/goal:evaluate":
         calls += 1
         with open(log_path, "a", encoding="utf-8") as log:
             log.write(json.dumps({"call": calls, "transcript": req["params"]["transcript"]}, ensure_ascii=False) + "\n")
@@ -154,7 +154,7 @@ for line in sys.stdin:
         .join("\n");
     assert!(skill_text.contains("Success criteria") && skill_text.contains("Re-ask rules"));
 
-    // 2. T2.20: patched `goal.evaluate` plugin pollutes goal session on second iteration.
+    // 2. T2.20: patched `hya/goal:evaluate` plugin pollutes goal session on second iteration.
     let plugin_dir = env.backend.project.join(".hya/plugins/miao");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::write(

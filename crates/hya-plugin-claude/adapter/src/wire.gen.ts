@@ -9,10 +9,6 @@ export const HOOK_NAMES = [
   "tool.execute.after",
   "permission.ask",
   "permission.approve",
-  "goal.evaluate",
-  "loop.verifier",
-  "loop.planner",
-  "loop.should_stop",
   "compaction.before",
   "compaction.after",
   "session.start",
@@ -32,10 +28,6 @@ export const HOOK_METHODS = {
   ToolExecuteAfter: "hook/tool.execute.after",
   PermissionAsk: "hook/permission.ask",
   PermissionApprove: "hook/permission.approve",
-  GoalEvaluate: "hook/goal.evaluate",
-  LoopVerifier: "hook/loop.verifier",
-  LoopPlanner: "hook/loop.planner",
-  LoopShouldStop: "hook/loop.should_stop",
   CompactionBefore: "hook/compaction.before",
   CompactionAfter: "hook/compaction.after",
   SessionStart: "hook/session.start",
@@ -54,10 +46,6 @@ export type HookParams = {
   readonly "tool.execute.after": ToolExecuteAfterParams
   readonly "permission.ask": PermissionAskParams
   readonly "permission.approve": PermissionApproveParams
-  readonly "goal.evaluate": GoalEvaluateParams
-  readonly "loop.verifier": LoopVerifyParams
-  readonly "loop.planner": LoopPlanParams
-  readonly "loop.should_stop": LoopShouldStopParams
   readonly "compaction.before": CompactionBeforeParams
   readonly "compaction.after": CompactionAfterParams
   readonly "session.start": SessionLifecycleParams
@@ -76,10 +64,6 @@ export type HookReplies = {
   readonly "tool.execute.after": ToolAfterOutcomeWire
   readonly "permission.ask": PermissionOutcomeWire
   readonly "permission.approve": PermissionOutcomeWire
-  readonly "goal.evaluate": GoalVerdictWire
-  readonly "loop.verifier": VerifierVerdictWire
-  readonly "loop.planner": PlannerOutputWire
-  readonly "loop.should_stop": LoopShouldStopWire
   readonly "compaction.before": CompactionBeforeOutcomeWire
   readonly "compaction.after": Readonly<Record<string, never>>
   readonly "session.start": Readonly<Record<string, never>>
@@ -432,11 +416,6 @@ export type EventNotificationParams = {
 
 export type EventSeq = number
 
-export type EvidenceQualityWire = ("missing") |
-("claim_only") |
-("supported") |
-("verified")
-
 export type FileChange = {
   readonly path: string
   readonly before: FileState
@@ -481,46 +460,16 @@ export type FinishReason = ("stop") |
 ("cancelled") |
 ("error")
 
-export type GoalEvaluateParams = {
-  readonly condition: string
-  readonly transcript: string
-}
-
 export type GoalId = string
 
-export type GoalVerdictWire = {
-  readonly met: boolean
-  readonly reason?: string
-}
+export type HookId = HookName | `${string}:${string}`
 
 
 export type HookRegistration = {
-  readonly name: HookName
-}
-
-export type LoopPlanParams = {
-  readonly target: string
-  readonly history: ReadonlyArray<string>
-  readonly last: VerifierVerdictWire
-  readonly planner_notes: string
+  readonly name: HookId
 }
 
 export type LoopRunId = string
-
-export type LoopShouldStopParams = {
-  readonly target: string
-  readonly transcript: string
-}
-
-export type LoopShouldStopWire = {
-  readonly stop: boolean
-  readonly reason?: string
-}
-
-export type LoopVerifyParams = {
-  readonly target: string
-  readonly transcript: string
-}
 
 export type MemberId = string
 
@@ -631,14 +580,6 @@ export type PermissionOutcomeWire = ({ readonly outcome: "allow_once" }) |
 ({ readonly outcome: "defer" })
 
 export type PermissionRequestId = string
-
-export type PlannerOutputWire = {
-  readonly directive: string
-  readonly continuity_brief?: string
-  readonly planner_notes?: string
-  readonly strategy_change?: boolean
-  readonly change_note?: string
-}
 
 export type ProjectId = string
 
@@ -763,15 +704,6 @@ export type UsagePurpose = ("turn") |
 ("title") |
 ("compaction") |
 ("other")
-
-export type VerifierVerdictWire = {
-  readonly score: number
-  readonly satisfied: boolean
-  readonly evidence_quality: EvidenceQualityWire
-  readonly critical_gaps?: ReadonlyArray<string>
-  readonly iteration_summary?: string
-  readonly reason?: string
-}
 
 export type ViewRef = {
   readonly cut: EventSeq
@@ -960,13 +892,6 @@ export function isEventSeq(value: unknown): value is EventSeq {
   return (typeof value === "number" && Number.isInteger(value) && value >= 0)
 }
 
-export function isEvidenceQualityWire(value: unknown): value is EvidenceQualityWire {
-  return (value === "missing") ||
-    (value === "claim_only") ||
-    (value === "supported") ||
-    (value === "verified")
-}
-
 export function isFileChange(value: unknown): value is FileChange {
   return isRecord(value) && ("path" in value && typeof value["path"] === "string") && ("before" in value && isFileState(value["before"])) && (value["observed"] === undefined || typeof value["observed"] === "boolean")
 }
@@ -1003,39 +928,17 @@ export function isFinishReason(value: unknown): value is FinishReason {
     (value === "error")
 }
 
-export function isGoalEvaluateParams(value: unknown): value is GoalEvaluateParams {
-  return isRecord(value) && ("condition" in value && typeof value["condition"] === "string") && ("transcript" in value && typeof value["transcript"] === "string")
-}
-
 export function isGoalId(value: unknown): value is GoalId { return typeof value === "string" }
 
-export function isGoalVerdictWire(value: unknown): value is GoalVerdictWire {
-  return isRecord(value) && ("met" in value && typeof value["met"] === "boolean") && (value["reason"] === undefined || typeof value["reason"] === "string")
-}
+export function isHookId(value: unknown): value is HookId { return typeof value === "string" && (isHookName(value) || /^[^:]+:[^:]+$/.test(value)) }
 
 export function isHookName(value: unknown): value is HookName { return typeof value === "string" && HOOK_NAMES.includes(value as HookName) }
 
 export function isHookRegistration(value: unknown): value is HookRegistration {
-  return isRecord(value) && ("name" in value && isHookName(value["name"]))
-}
-
-export function isLoopPlanParams(value: unknown): value is LoopPlanParams {
-  return isRecord(value) && ("target" in value && typeof value["target"] === "string") && ("history" in value && (Array.isArray(value["history"]) && value["history"].every((item: unknown) => typeof item === "string"))) && ("last" in value && isVerifierVerdictWire(value["last"])) && ("planner_notes" in value && typeof value["planner_notes"] === "string")
+  return isRecord(value) && ("name" in value && isHookId(value["name"]))
 }
 
 export function isLoopRunId(value: unknown): value is LoopRunId { return typeof value === "string" }
-
-export function isLoopShouldStopParams(value: unknown): value is LoopShouldStopParams {
-  return isRecord(value) && ("target" in value && typeof value["target"] === "string") && ("transcript" in value && typeof value["transcript"] === "string")
-}
-
-export function isLoopShouldStopWire(value: unknown): value is LoopShouldStopWire {
-  return isRecord(value) && ("stop" in value && typeof value["stop"] === "boolean") && (value["reason"] === undefined || typeof value["reason"] === "string")
-}
-
-export function isLoopVerifyParams(value: unknown): value is LoopVerifyParams {
-  return isRecord(value) && ("target" in value && typeof value["target"] === "string") && ("transcript" in value && typeof value["transcript"] === "string")
-}
 
 export function isMemberId(value: unknown): value is MemberId { return typeof value === "string" }
 
@@ -1103,10 +1006,6 @@ export function isPermissionOutcomeWire(value: unknown): value is PermissionOutc
 }
 
 export function isPermissionRequestId(value: unknown): value is PermissionRequestId { return typeof value === "string" }
-
-export function isPlannerOutputWire(value: unknown): value is PlannerOutputWire {
-  return isRecord(value) && ("directive" in value && typeof value["directive"] === "string") && (value["continuity_brief"] === undefined || typeof value["continuity_brief"] === "string") && (value["planner_notes"] === undefined || typeof value["planner_notes"] === "string") && (value["strategy_change"] === undefined || typeof value["strategy_change"] === "boolean") && (value["change_note"] === undefined || typeof value["change_note"] === "string")
-}
 
 export function isProjectId(value: unknown): value is ProjectId { return typeof value === "string" }
 
@@ -1201,10 +1100,6 @@ export function isUsagePurpose(value: unknown): value is UsagePurpose {
     (value === "other")
 }
 
-export function isVerifierVerdictWire(value: unknown): value is VerifierVerdictWire {
-  return isRecord(value) && ("score" in value && (typeof value["score"] === "number" && Number.isInteger(value["score"]) && value["score"] >= 0)) && ("satisfied" in value && typeof value["satisfied"] === "boolean") && ("evidence_quality" in value && isEvidenceQualityWire(value["evidence_quality"])) && (value["critical_gaps"] === undefined || (Array.isArray(value["critical_gaps"]) && value["critical_gaps"].every((item: unknown) => typeof item === "string"))) && (value["iteration_summary"] === undefined || typeof value["iteration_summary"] === "string") && (value["reason"] === undefined || typeof value["reason"] === "string")
-}
-
 export function isViewRef(value: unknown): value is ViewRef {
   return isRecord(value) && ("cut" in value && isEventSeq(value["cut"])) && ("request_sha256" in value && typeof value["request_sha256"] === "string")
 }
@@ -1244,10 +1139,6 @@ export const HOOK_PARAM_GUARDS = {
   "tool.execute.after": isToolExecuteAfterParams,
   "permission.ask": isPermissionAskParams,
   "permission.approve": isPermissionApproveParams,
-  "goal.evaluate": isGoalEvaluateParams,
-  "loop.verifier": isLoopVerifyParams,
-  "loop.planner": isLoopPlanParams,
-  "loop.should_stop": isLoopShouldStopParams,
   "compaction.before": isCompactionBeforeParams,
   "compaction.after": isCompactionAfterParams,
   "session.start": isSessionLifecycleParams,

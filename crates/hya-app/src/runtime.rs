@@ -1209,6 +1209,7 @@ async fn build_session_engine_with_mcp_defer(
                 ));
             }
         }
+        app_host_runtime.declare_hook_points("hya/goal", &regs.hook_points);
         if let Some(driver) = regs.goal_drivers.into_iter().next() {
             app_host_runtime.attach_goal_driver(driver);
         }
@@ -1238,6 +1239,7 @@ async fn build_session_engine_with_mcp_defer(
         started_services.extend(regs.services);
         all_native_hooks.extend(regs.hooks);
         app_host_runtime.set_loop_drivers(regs.loop_drivers);
+        app_host_runtime.declare_hook_points("hya/loop", &regs.hook_points);
     }
     register_missing_bare_tools(&registry);
 
@@ -1362,7 +1364,7 @@ async fn build_session_engine_with_mcp_defer(
         .with_base_system_prompt(agent.system_prompt.clone())
         .with_pure_context(options.pure)
         .with_tool_family_prompts(use_tool_family_prompts)
-        .with_native_hook_list(all_native_hooks)
+        .with_hook_list(all_native_hooks)
         .with_uri_schema_handlers(native_uri_handlers, Arc::clone(&host_runtime))
         // Stop/start records use this store's runtime-owner claim.
         .with_runtime_owner(owner_run_id)

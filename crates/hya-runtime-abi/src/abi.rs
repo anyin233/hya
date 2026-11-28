@@ -116,6 +116,9 @@ pub struct NativeRegistrations {
     pub projection_reducers: Vec<Arc<dyn ProjectionReducer>>,
     /// Custom URI scheme handlers for `HandleRouter`.
     pub uri_schema_handlers: Vec<Arc<dyn UriSchemaHandler>>,
+    /// Hook points this bundle declares, as local names; the host namespaces
+    /// them as `<bundle-id>:<name>` so other bundles can implement them.
+    pub hook_points: Vec<String>,
     /// Iterative goal-mode drivers.
     pub goal_drivers: Vec<Arc<dyn GoalDriver>>,
     /// Iterative verifier/planner loop drivers.
@@ -139,6 +142,7 @@ impl NativeRegistrations {
             && self.api_handlers.is_empty()
             && self.projection_reducers.is_empty()
             && self.uri_schema_handlers.is_empty()
+            && self.hook_points.is_empty()
             && self.goal_drivers.is_empty()
             && self.loop_drivers.is_empty()
     }
@@ -152,6 +156,7 @@ impl NativeRegistrations {
         self.api_handlers.extend(other.api_handlers);
         self.projection_reducers.extend(other.projection_reducers);
         self.uri_schema_handlers.extend(other.uri_schema_handlers);
+        self.hook_points.extend(other.hook_points);
         self.goal_drivers.extend(other.goal_drivers);
         self.loop_drivers.extend(other.loop_drivers);
     }

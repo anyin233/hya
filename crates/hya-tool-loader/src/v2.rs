@@ -23,15 +23,13 @@ use hya_runtime_abi::{
     HostRuntime, LoopDriver, LoopRunRequest, NativeAgentSpawnInput, NativeApiEndpoint,
     NativeBundleApiHandler, NativeBundleApiReply, NativeBundleApiRequest, NativeChatParamsInput,
     NativeCommandBeforeInput, NativeCompactionAfterInput, NativeCompactionBeforeInput,
-    NativeCompactionDecision, NativeGoalEvaluateVerdict, NativeHook, NativeLoopPlanInput,
-    NativeMessageUserBeforeInput, NativeModelFallbackInput, NativePermissionApproveInput,
-    NativePlannerOutput, NativePluginContext, NativeRegistrations, NativeService,
+    NativeCompactionDecision, NativeHook, NativeMessageUserBeforeInput, NativeModelFallbackInput,
+    NativePermissionApproveInput, NativePluginContext, NativeRegistrations, NativeService,
     NativeSessionLifecycleInput, NativeTextCompleteInput, NativeToolAfterInput,
-    NativeToolAfterOutcome, NativeToolBeforeInput, NativeToolBeforeOutcome, NativeVerifierVerdict,
-    RegisterV2Fn, SYMBOL_ABI_V2, SYMBOL_REGISTER_V2, SYMBOL_SHARE_DEADLINE_V2,
-    SYMBOL_WITH_RUNTIME_V2, ServiceHealth, ShareDeadlineFn, ToolVisibilityInput,
-    ToolVisibilityOutcome, UriContent, UriResolveCtx, UriSchemaHandler, abi_digest_v2,
-    deadline_cell_v2,
+    NativeToolAfterOutcome, NativeToolBeforeInput, NativeToolBeforeOutcome, RegisterV2Fn,
+    SYMBOL_ABI_V2, SYMBOL_REGISTER_V2, SYMBOL_SHARE_DEADLINE_V2, SYMBOL_WITH_RUNTIME_V2,
+    ServiceHealth, ShareDeadlineFn, ToolVisibilityInput, ToolVisibilityOutcome, UriContent,
+    UriResolveCtx, UriSchemaHandler, abi_digest_v2, deadline_cell_v2,
 };
 use hya_tool::{Action, Decision, Resource, Tool};
 use serde_json::Value;
@@ -258,51 +256,24 @@ impl NativeHook for NativeHookAdapter {
         poll_host_result(self.inner.permission_approve(input), self.with_runtime).await
     }
 
-    async fn goal_evaluate(
-        &self,
-        condition: &str,
-        transcript: &str,
-    ) -> Result<Option<NativeGoalEvaluateVerdict>, HostError> {
-        poll_host_result(
-            self.inner.goal_evaluate(condition, transcript),
-            self.with_runtime,
-        )
-        .await
+    fn declared_points(&self) -> &[String] {
+        self.inner.declared_points()
     }
 
-    async fn loop_verify(
-        &self,
-        target: &str,
-        transcript: &str,
-    ) -> Result<Option<NativeVerifierVerdict>, HostError> {
-        poll_host_result(
-            self.inner.loop_verify(target, transcript),
-            self.with_runtime,
-        )
-        .await
+    async fn invoke_declared(&self, point: &str, input: Value) -> Result<Option<Value>, HostError> {
+        poll_host_result(self.inner.invoke_declared(point, input), self.with_runtime).await
     }
 
-    async fn loop_plan(
-        &self,
-        input: NativeLoopPlanInput,
-    ) -> Result<Option<NativePlannerOutput>, HostError> {
-        poll_host_result(self.inner.loop_plan(input), self.with_runtime).await
+    fn is_healthy(&self) -> bool {
+        self.inner.is_healthy()
     }
 
-    async fn loop_should_stop(
-        &self,
-        target: &str,
-        transcript: &str,
-    ) -> Result<Option<String>, HostError> {
-        poll_host_result(
-            self.inner.loop_should_stop(target, transcript),
-            self.with_runtime,
-        )
-        .await
+    fn permission_identity(&self) -> Option<[u8; 32]> {
+        self.inner.permission_identity()
     }
 
-    async fn on_event(&self, envelope: &Envelope) -> Result<(), HostError> {
-        poll_host_result(self.inner.on_event(envelope), self.with_runtime).await
+    fn on_event(&self, envelope: &Envelope) {
+        self.inner.on_event(envelope);
     }
 }
 
@@ -413,6 +384,7 @@ fn wrap_registrations_with_runtime(
     with_runtime: RuntimeEntry,
 ) -> NativeRegistrations {
     NativeRegistrations {
+        hook_points: regs.hook_points,
         tools: regs
             .tools
             .into_iter()

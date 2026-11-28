@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use hya_engine::{CoreError, TurnBinding};
 use hya_plugin::PreparedPlugin;
-use hya_plugin::messages::{HookName, HookRegistration};
+use hya_plugin::messages::{HookId, HookName, HookRegistration};
 use hya_tool::{ResolvedTool, ToolPermission};
 
 mod activation;
@@ -319,16 +319,16 @@ fn declared_bundle_sidecar_hooks(
 ) -> Result<BTreeSet<HookName>, CoreError> {
     let mut seen = BTreeSet::new();
     for registration in registrations {
-        if !matches!(
-            registration.name,
-            HookName::ToolExecuteBefore | HookName::ToolExecuteAfter | HookName::Event
-        ) {
+        let HookId::Core(
+            name @ (HookName::ToolExecuteBefore | HookName::ToolExecuteAfter | HookName::Event),
+        ) = registration.name
+        else {
             return Err(CoreError::Invalid(format!(
                 "unsupported Bundle sidecar hook declaration `{}`",
                 registration.name.as_str()
             )));
-        }
-        if !seen.insert(registration.name) {
+        };
+        if !seen.insert(name) {
             return Err(CoreError::Invalid(format!(
                 "duplicate Bundle sidecar hook declaration `{}`",
                 registration.name.as_str()

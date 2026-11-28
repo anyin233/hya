@@ -293,15 +293,23 @@ Aligned with Claude Code's `hooks/hooks.json` semantics:
 }
 ```
 
-#### The 20 Standard Hook Events
+#### The 16 Core Hook Events
 
 | Category | Hook events |
 | --- | --- |
 | **Tools & Permissions (5)** | `tool.execute.before` *(always fail-closed)*, `tool.execute.after`, `tool.visibility`, `permission.ask`, `permission.approve` |
 | **Requests & Routing (4)** | `chat.params`, `model.fallback`, `message.user.before`, `command.execute.before` |
 | **Text & Context (3)** | `experimental.text.complete`, `compaction.before`, `compaction.after` |
-| **Goal & Loop Evaluators (4)** | `goal.evaluate`, `loop.verifier`, `loop.planner`, `loop.should_stop` |
 | **Lifecycle Observation (4)** | `session.start`, `session.end`, `agent.spawn`, `event` |
+
+A hook may also implement a **bundle-declared hook point**, named
+`<bundle-id>:<point>` (for example `hya/goal:evaluate` or `hya/loop:verifier`).
+The declaring bundle registers the local point name in
+`NativeRegistrations::hook_points`, owns the JSON payload shapes, and
+dispatches the point through `HostExtensionRegistry::invoke_hook`. The first
+implementer that answers wins (`null` defers), and a failing implementer is
+skipped. A JSON-RPC process registers the full name in `hooks:` and receives
+`hook/<bundle-id>:<point>`.
 
 #### `handler.kind` Targets
 

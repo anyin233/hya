@@ -41,7 +41,7 @@ use hya_proto::{ConfigGeneration, SessionId};
 
 use super::SessionEngine;
 use crate::catalog_scope::ScopeKey;
-use crate::hooks::{HookChain, HookDispatcher, SessionLifecycleInput, activation_hook_for};
+use crate::hooks::{HookChain, NativeHook, activation_hook_for};
 use crate::runtime_registry::{BoundAgentHook, TurnBinding};
 
 #[cfg(test)]
@@ -51,7 +51,7 @@ mod registration_tests;
 /// Identity of one captured chain entry. The `Weak` pins the allocation
 /// (never the process), so a later dispatcher cannot reuse its address.
 struct CapturedIdentity {
-    source: Weak<dyn HookDispatcher>,
+    source: Weak<dyn NativeHook>,
     hook_ids: Option<Arc<[String]>>,
 }
 
@@ -72,7 +72,7 @@ impl CapturedIdentity {
 /// One session's captured hooks and where they came from.
 pub(crate) struct CapturedSessionHooks {
     /// `None` when there are no entries or the chain was released.
-    chain: Option<Arc<dyn HookDispatcher>>,
+    chain: Option<Arc<HookChain>>,
     /// Identities of the entries last captured (kept after a release).
     members: Vec<CapturedIdentity>,
     /// Stable agent id the chain was resolved for.
@@ -99,10 +99,7 @@ impl SessionEngine {
     }
 
     /// The session's current captured chain, if any.
-    pub(crate) fn captured_session_hooks(
-        &self,
-        session: SessionId,
-    ) -> Option<Arc<dyn HookDispatcher>> {
+    pub(crate) fn captured_session_hooks(&self, session: SessionId) -> Option<Arc<HookChain>> {
         self.session_bundle_hooks
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -115,7 +112,7 @@ impl SessionEngine {
     pub(crate) fn remove_captured_session_hooks(
         &self,
         session: SessionId,
-    ) -> Option<Arc<dyn HookDispatcher>> {
+    ) -> Option<Arc<HookChain>> {
         self.session_hook_map()
             .remove(&session)
             .and_then(|captured| captured.chain)
@@ -130,12 +127,9 @@ impl SessionEngine {
         binding: &TurnBinding,
         stable_agent_id: &str,
     ) {
-        let fresh = self.replace_session_hooks(session, binding, stable_agent_id);
-        if !fresh.is_empty() {
-            HookChain::new(fresh)
-                .session_start(SessionLifecycleInput { session })
-                .await;
-        }
+        self.replace_session_hooks(session, binding, stable_agent_id)
+            .session_start(session)
+            .await;
     }
 
     /// Swap the maps synchronously so a resident can hold its slot's claim
@@ -146,7 +140,7 @@ impl SessionEngine {
         session: SessionId,
         binding: &TurnBinding,
         stable_agent_id: &str,
-    ) -> Vec<Arc<dyn HookDispatcher>> {
+    ) -> HookChain {
         let hooks = binding.scope_hooks_for_agent(stable_agent_id);
         let scope = binding.scope().key();
         let generation = binding.generation();
@@ -159,7 +153,7 @@ impl SessionEngine {
             {
                 previous.scope = scope;
                 previous.generation = generation;
-                return Vec::new();
+                return HookChain::default();
             }
             let previous = map.get(&session);
             let fresh = hooks
@@ -169,15 +163,12 @@ impl SessionEngine {
                         !previous.members.iter().any(|member| member.matches(hook))
                     })
                 })
-                .map(|hook| Arc::clone(&hook.dispatcher))
+                .map(|hook| hook.dispatcher.clone())
                 .collect::<Vec<_>>();
             let chain = (!hooks.is_empty()).then(|| {
                 Arc::new(HookChain::new(
-                    hooks
-                        .iter()
-                        .map(|hook| Arc::clone(&hook.dispatcher))
-                        .collect(),
-                )) as Arc<dyn HookDispatcher>
+                    hooks.iter().map(|hook| hook.dispatcher.clone()).collect(),
+                ))
             });
             let captured = CapturedSessionHooks {
                 chain,
@@ -192,7 +183,7 @@ impl SessionEngine {
         // Release the old chain (possibly the last handle on a process)
         // outside the lock.
         drop(retired);
-        fresh
+        HookChain::new(fresh)
     }
 
     /// After a bind of `binding`'s scope: swap `own`'s captured chain (when
@@ -246,34 +237,26 @@ impl SessionEngine {
 }
 
 impl SessionEngine {
+    /// The process-wide chain followed by the user-global config plugins.
+    pub(crate) fn global_hooks(&self) -> HookChain {
+        HookChain::concat([
+            self.hooks.as_ref(),
+            &HookChain::new(self.runtime.global_plugin_hooks()),
+        ])
+    }
+
     pub(crate) async fn notify_session_start(&self, session: SessionId) {
-        for hooks in self
-            .native_hooks
-            .iter()
-            .chain(self.hooks.iter())
-            .cloned()
-            .chain(self.runtime.global_plugin_hooks())
-        {
-            hooks.session_start(SessionLifecycleInput { session }).await;
-        }
+        self.global_hooks().session_start(session).await;
     }
 
     /// Notify session lifecycle hooks. Best-effort by contract: implementors
     /// log their own failures, and the engine never propagates them.
     pub(super) async fn notify_session_lifecycle(&self, session: SessionId, start: bool) {
-        for hooks in self
-            .native_hooks
-            .iter()
-            .chain(self.hooks.iter())
-            .cloned()
-            .chain(self.runtime.global_plugin_hooks())
-        {
-            let input = SessionLifecycleInput { session };
-            if start {
-                hooks.session_start(input).await;
-            } else {
-                hooks.session_end(input).await;
-            }
+        let global = self.global_hooks();
+        if start {
+            global.session_start(session).await;
+        } else {
+            global.session_end(session).await;
         }
         let bundle_hooks = if start {
             self.captured_session_hooks(session)
@@ -285,30 +268,21 @@ impl SessionEngine {
             self.remove_captured_session_hooks(session)
         };
         if let Some(hooks) = bundle_hooks {
-            let input = SessionLifecycleInput { session };
             if start {
-                hooks.session_start(input).await;
+                hooks.session_start(session).await;
             } else {
-                hooks.session_end(input).await;
+                hooks.session_end(session).await;
             }
         }
     }
 
     /// `session.end` for a session whose turn is still running (archived
-    /// mid-turn): fires the startup and captured bundle hooks but keeps the
+    /// mid-turn): fires the global and captured bundle hooks but keeps the
     /// captured hooks and channel policy the turn still reads.
     pub(super) async fn notify_session_end_keeping_state(&self, session: SessionId) {
-        for hooks in self
-            .native_hooks
-            .iter()
-            .chain(self.hooks.iter())
-            .cloned()
-            .chain(self.runtime.global_plugin_hooks())
-        {
-            hooks.session_end(SessionLifecycleInput { session }).await;
-        }
+        self.global_hooks().session_end(session).await;
         if let Some(hooks) = self.captured_session_hooks(session) {
-            hooks.session_end(SessionLifecycleInput { session }).await;
+            hooks.session_end(session).await;
         }
     }
 
@@ -356,48 +330,27 @@ impl SessionEngine {
             .insert(session, policy);
     }
 
-    pub(crate) fn session_hook_dispatcher(
-        &self,
-        session: SessionId,
-    ) -> Option<Arc<dyn HookDispatcher>> {
-        let mut dispatchers = Vec::new();
-        if let Some(hooks) = &self.native_hooks {
-            dispatchers.push(Arc::clone(hooks));
-        }
-        if let Some(hooks) = &self.hooks {
-            dispatchers.push(Arc::clone(hooks));
-        }
-        dispatchers.extend(self.runtime.global_plugin_hooks());
-        if let Some(hooks) = self.captured_session_hooks(session) {
-            dispatchers.push(hooks);
-        }
-        match dispatchers.len() {
-            0 => None,
-            1 => dispatchers.pop(),
-            _ => Some(Arc::new(HookChain::new(dispatchers))),
-        }
+    /// Hooks for out-of-turn dispatch on `session`: the global chain, then the
+    /// session's captured bundle chain.
+    pub(crate) fn session_hook_dispatcher(&self, session: SessionId) -> Option<Arc<HookChain>> {
+        let captured = self.captured_session_hooks(session);
+        let chain = HookChain::concat(
+            [Some(&self.global_hooks()), captured.as_deref()]
+                .into_iter()
+                .flatten(),
+        );
+        (!chain.is_empty()).then(|| Arc::new(chain))
     }
 
-    /// Startup hooks (native bundle hooks + host hooks) followed by the
-    /// immutable activation-bound hook chain.
-    pub(crate) fn active_hook_dispatcher(
-        &self,
-        session: SessionId,
-    ) -> Option<Arc<dyn HookDispatcher>> {
-        let mut dispatchers = Vec::new();
-        if let Some(hooks) = &self.native_hooks {
-            dispatchers.push(Arc::clone(hooks));
-        }
-        if let Some(hooks) = &self.hooks {
-            dispatchers.push(Arc::clone(hooks));
-        }
-        if let Some(hooks) = activation_hook_for(session) {
-            dispatchers.push(hooks);
-        }
-        match dispatchers.len() {
-            0 => None,
-            1 => dispatchers.pop(),
-            _ => Some(Arc::new(HookChain::new(dispatchers))),
-        }
+    /// Hooks for in-turn dispatch on `session`: the process chain, then the
+    /// turn's activation chain.
+    pub(crate) fn active_hook_dispatcher(&self, session: SessionId) -> Option<Arc<HookChain>> {
+        let activation = activation_hook_for(session);
+        let chain = HookChain::concat(
+            [Some(self.hooks.as_ref()), activation.as_deref()]
+                .into_iter()
+                .flatten(),
+        );
+        (!chain.is_empty()).then(|| Arc::new(chain))
     }
 }

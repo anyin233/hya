@@ -19,7 +19,6 @@ use crate::agent_catalog::AgentDefinition;
 use crate::bus::EventBus;
 use crate::compaction::CompactionConfig;
 use crate::error::CoreError;
-use crate::hooks::HookDispatcher;
 use crate::sidecar::SidecarEnvironment;
 use crate::tokens::TokenAccounting;
 use crate::{CategoryRegistry, RuntimeRegistry, TurnBinding};
@@ -190,9 +189,9 @@ pub struct SessionEngine {
     /// Context-reduction extensions the kernel runs before its own Rewrite,
     /// before each round and on `/summarize`.
     rewriters: Arc<[Arc<dyn hya_context::rewrite::Rewriter>]>,
-    /// Process-wide ABI v2 native bundle hooks (run before external plugin hooks).
-    native_hooks: Option<Arc<dyn HookDispatcher>>,
-    hooks: Option<Arc<dyn HookDispatcher>>,
+    /// Process-wide hook chain: entries from every enabled source, in
+    /// registration order. Per-binding bundle and plugin entries follow it.
+    hooks: Arc<crate::hooks::HookChain>,
     /// Captured per-session lifecycle/event hooks ([`session_hooks`]).
     session_bundle_hooks: Arc<RwLock<session_hooks::SessionHookMap>>,
     session_channel_policies: Arc<RwLock<HashMap<SessionId, hya_tool::ChannelPolicySnapshot>>>,
@@ -250,8 +249,7 @@ impl Clone for SessionEngine {
             rewriter_keep_recent: self.rewriter_keep_recent,
             token_accounting: self.token_accounting.clone(),
             rewriters: Arc::clone(&self.rewriters),
-            native_hooks: self.native_hooks.clone(),
-            hooks: self.hooks.clone(),
+            hooks: Arc::clone(&self.hooks),
             session_bundle_hooks: Arc::clone(&self.session_bundle_hooks),
             session_channel_policies: Arc::clone(&self.session_channel_policies),
             mail_steer_suppressed: Arc::clone(&self.mail_steer_suppressed),
@@ -473,11 +471,6 @@ impl SessionEngine {
             );
         }
 
-        let native_hooks = (!native_hooks.is_empty()).then(|| {
-            Arc::new(crate::hooks::NativeHookDispatcher::new(native_hooks))
-                as Arc<dyn HookDispatcher>
-        });
-
         let engine = Self {
             workspace_watches: Default::default(),
             store,
@@ -511,8 +504,7 @@ impl SessionEngine {
             rewriter_keep_recent: CompactionConfig::default().keep_recent,
             token_accounting: TokenAccounting::default(),
             rewriters,
-            native_hooks,
-            hooks: None,
+            hooks: Arc::new(crate::hooks::HookChain::of_hooks(native_hooks)),
             session_bundle_hooks: Arc::new(RwLock::new(HashMap::new())),
             session_channel_policies,
             mail_steer_suppressed,
@@ -619,33 +611,25 @@ impl SessionEngine {
         self
     }
 
-    /// Install ABI v2 native bundle hooks (preserved across [`Self::with_hooks`]).
+    /// Append a hook to the process-wide chain.
     #[must_use]
-    pub fn with_native_hooks(mut self, hooks: Arc<dyn HookDispatcher>) -> Self {
-        self.native_hooks = Some(hooks);
+    pub fn with_hooks(mut self, hook: Arc<dyn hya_runtime_abi::NativeHook>) -> Self {
+        Arc::make_mut(&mut self.hooks).push(crate::hooks::HookEntry::new(hook));
         self
     }
 
-    /// Install plugin/host hooks for command/tool/chat interception and events.
+    /// Replace the process-wide chain with the hooks of the enabled sources,
+    /// dropping the defaults loaded by [`Self::try_new`].
     #[must_use]
-    pub fn with_hooks(mut self, hooks: Arc<dyn HookDispatcher>) -> Self {
-        self.hooks = Some(hooks);
+    pub fn with_hook_list(mut self, hooks: Vec<Arc<dyn hya_runtime_abi::NativeHook>>) -> Self {
+        self.hooks = Arc::new(crate::hooks::HookChain::of_hooks(hooks));
         self
     }
 
-    /// Install ABI v2 native hooks registered by enabled native bundles.
-    ///
-    /// Replaces any default native hooks loaded by [`Self::try_new`] so
-    /// disabling a native bundle cleanly removes its hooks.
+    /// The process-wide hook chain.
     #[must_use]
-    pub fn with_native_hook_list(
-        mut self,
-        hooks: Vec<Arc<dyn hya_runtime_abi::NativeHook>>,
-    ) -> Self {
-        self.native_hooks = (!hooks.is_empty()).then(|| {
-            Arc::new(crate::hooks::NativeHookDispatcher::new(hooks)) as Arc<dyn HookDispatcher>
-        });
-        self
+    pub fn process_hooks(&self) -> &Arc<crate::hooks::HookChain> {
+        &self.hooks
     }
 
     /// Replace dynamic URI scheme handlers on this engine's [`UriSchemaPlane`]

@@ -15,7 +15,7 @@ pub struct ActivationBindings {
     /// Tools exposed to the activated agent.
     pub tools: Arc<[ResolvedTool]>,
     /// Hooks exposed to the activated agent.
-    pub hooks: Option<Arc<dyn hya_engine::hooks::HookDispatcher>>,
+    pub hooks: Option<hya_engine::HookEntry>,
 }
 
 /// Initialize one private activation, validate its selected exports, and retain its process owner.
@@ -107,7 +107,7 @@ struct BundleSidecarHandle {
     loss: tokio_util::sync::CancellationToken,
     activation_dir: Option<PathBuf>,
     tools: Arc<[ResolvedTool]>,
-    hooks: Option<Arc<dyn hya_engine::hooks::HookDispatcher>>,
+    hooks: Option<hya_engine::HookEntry>,
 }
 
 impl BundleSidecarHandle {
@@ -179,7 +179,7 @@ impl SidecarHandle for BundleSidecarHandle {
         Arc::clone(&self.tools)
     }
 
-    fn hook_dispatcher(&self) -> Option<Arc<dyn hya_engine::hooks::HookDispatcher>> {
+    fn hook_dispatcher(&self) -> Option<hya_engine::HookEntry> {
         self.hooks.clone()
     }
 }

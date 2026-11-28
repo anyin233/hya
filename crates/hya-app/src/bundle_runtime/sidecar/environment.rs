@@ -280,7 +280,7 @@ impl SidecarHandle for NotifySidecarHandle {
     fn tool_bindings(&self) -> Arc<[ResolvedTool]> {
         self.inner.tool_bindings()
     }
-    fn hook_dispatcher(&self) -> Option<Arc<dyn hya_engine::hooks::HookDispatcher>> {
+    fn hook_dispatcher(&self) -> Option<hya_engine::HookEntry> {
         self.inner.hook_dispatcher()
     }
 }

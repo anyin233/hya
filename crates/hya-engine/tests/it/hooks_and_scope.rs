@@ -14,13 +14,15 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use hya_bundle::{AgentRole, BundleCatalog, BundleSource, SourceFile, prepare_package};
+use hya_engine::hooks::{
+    NativeChatParamsInput, NativeCommandBeforeInput, NativeMessageUserBeforeInput,
+    NativeSessionLifecycleInput, NativeTextCompleteInput, NativeToolAfterInput,
+    NativeToolAfterOutcome, NativeToolBeforeInput, NativeToolBeforeOutcome,
+};
 use hya_engine::{
-    AgentCatalog, CatalogScope, CatalogScopeCacheConfig, ChatParamsInput, ChatParamsOutcome,
-    CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, CoreError, CreateSession, EventBus,
-    HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome, RuntimeCatalogRefresh,
-    RuntimeRegistry, RuntimeSource, RuntimeSourceId, ScopeKey, ScopeOverlay, SessionEngine,
-    SessionLifecycleInput, TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput,
-    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome,
+    AgentCatalog, CatalogScope, CatalogScopeCacheConfig, CoreError, CreateSession, EventBus,
+    NativeHook, RuntimeCatalogRefresh, RuntimeRegistry, RuntimeSource, RuntimeSourceId, ScopeKey,
+    ScopeOverlay, SessionEngine,
 };
 use hya_proto::{
     AgentName, Envelope, Event, FinishReason, ModelRef, PartProjection, ProjectId, Role, SessionId,
@@ -113,8 +115,25 @@ impl ScriptedHook {
 }
 
 #[async_trait]
-impl HookDispatcher for ScriptedHook {
-    fn dispatch_event(&self, envelope: &Envelope) {
+impl NativeHook for ScriptedHook {
+    fn id(&self) -> &str {
+        "ScriptedHook"
+    }
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[
+            hya_runtime_abi::HookPoint::EventObserve,
+            hya_runtime_abi::HookPoint::CommandExecuteBefore,
+            hya_runtime_abi::HookPoint::TextComplete,
+            hya_runtime_abi::HookPoint::MessageUserBefore,
+            hya_runtime_abi::HookPoint::ChatParams,
+            hya_runtime_abi::HookPoint::ToolExecuteBefore,
+            hya_runtime_abi::HookPoint::ToolExecuteAfter,
+            hya_runtime_abi::HookPoint::SessionStart,
+            hya_runtime_abi::HookPoint::SessionEnd,
+        ]
+    }
+
+    fn on_event(&self, envelope: &Envelope) {
         self.counts.event.fetch_add(1, Ordering::SeqCst);
         if let (Some(g), Some(session)) = (&self.scope_probe, envelope.event.session()) {
             ScopeProbe::bump(&g.0.events, session);
@@ -123,8 +142,8 @@ impl HookDispatcher for ScriptedHook {
 
     async fn command_execute_before(
         &self,
-        mut input: CommandExecuteBeforeInput,
-    ) -> CommandExecuteBeforeOutcome {
+        mut input: NativeCommandBeforeInput,
+    ) -> Result<String, hya_runtime_abi::HostError> {
         if let Some((cmd, args)) = self.command_expect {
             assert_eq!(input.command, cmd);
             assert_eq!(input.arguments, args);
@@ -132,40 +151,47 @@ impl HookDispatcher for ScriptedHook {
         if let Some(suffix) = self.command_suffix {
             input.text.push_str(suffix);
         }
-        CommandExecuteBeforeOutcome::Continue { text: input.text }
+        Ok(input.text)
     }
 
-    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
+    async fn text_complete(
+        &self,
+        input: NativeTextCompleteInput,
+    ) -> Result<String, hya_runtime_abi::HostError> {
         let text = match self.text_replace {
             Some((from, to)) if input.text == from => to.to_string(),
             _ => input.text,
         };
-        TextCompleteOutcome::Continue { text }
+        Ok(text)
     }
 
     async fn message_user_before(
         &self,
-        mut input: MessageUserBeforeInput,
-    ) -> MessageUserBeforeOutcome {
+        mut input: NativeMessageUserBeforeInput,
+    ) -> Result<String, hya_runtime_abi::HostError> {
         self.counts.user_before.fetch_add(1, Ordering::SeqCst);
         if let Some(suffix) = self.user_suffix {
             input.text.push_str(suffix);
         }
-        MessageUserBeforeOutcome::Continue { text: input.text }
+        Ok(input.text)
     }
 
-    async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
+    async fn chat_params(
+        &self,
+        input: NativeChatParamsInput,
+    ) -> Result<serde_json::Value, hya_runtime_abi::HostError> {
         self.counts.chat_params.fetch_add(1, Ordering::SeqCst);
         self.lineage
             .lock()
             .unwrap()
             .push((input.session, input.root_session, input.agent.clone()));
-        ChatParamsOutcome::Continue {
-            request: input.request,
-        }
+        Ok(input.params)
     }
 
-    async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
+    async fn tool_execute_before(
+        &self,
+        input: NativeToolBeforeInput,
+    ) -> Result<NativeToolBeforeOutcome, hya_runtime_abi::HostError> {
         self.counts.tool_before.fetch_add(1, Ordering::SeqCst);
         let mut value = input.input;
         if let Some(cmd) = self.rewrite_bash_to
@@ -173,28 +199,39 @@ impl HookDispatcher for ScriptedHook {
         {
             value["command"] = json!(cmd);
         }
-        ToolExecuteBeforeOutcome::Continue { input: value }
+        Ok(NativeToolBeforeOutcome::Continue { input: value })
     }
 
-    async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
+    async fn tool_execute_after(
+        &self,
+        input: NativeToolAfterInput,
+    ) -> Result<NativeToolAfterOutcome, hya_runtime_abi::HostError> {
         self.counts.tool_after.fetch_add(1, Ordering::SeqCst);
-        ToolExecuteAfterOutcome::Continue {
+        Ok(NativeToolAfterOutcome::Continue {
             result: input.result,
-        }
+        })
     }
 
-    async fn session_start(&self, input: SessionLifecycleInput) {
+    async fn session_start(
+        &self,
+        input: NativeSessionLifecycleInput,
+    ) -> Result<(), hya_runtime_abi::HostError> {
         self.counts.starts.fetch_add(1, Ordering::SeqCst);
         if let Some(g) = &self.scope_probe {
             ScopeProbe::bump(&g.0.starts, input.session);
         }
+        Ok(())
     }
 
-    async fn session_end(&self, input: SessionLifecycleInput) {
+    async fn session_end(
+        &self,
+        input: NativeSessionLifecycleInput,
+    ) -> Result<(), hya_runtime_abi::HostError> {
         self.counts.ends.fetch_add(1, Ordering::SeqCst);
         if let Some(g) = &self.scope_probe {
             ScopeProbe::bump(&g.0.ends, input.session);
         }
+        Ok(())
     }
 }
 
@@ -521,7 +558,7 @@ async fn tool_after_hook_cannot_mask_denial_and_cleans_rewritten_bash_artifact()
         PermissionRules::new(vec![Rule::new(Action::Bash, "*", Mode::Allow)]),
     )
     .await
-    .with_hooks(Arc::clone(&mask) as Arc<dyn HookDispatcher>);
+    .with_hooks(Arc::clone(&mask) as Arc<dyn NativeHook>);
     let bash_sess =
         support::create_root_session(&bash_engine, "hya-main", "fake", bash_dir.path()).await;
     assert_eq!(
@@ -736,8 +773,8 @@ async fn removed_plugin_hooks_leave_fresh_bindings_but_remain_live_on_old_bindin
         "fresh"
     );
 
-    let MessageUserBeforeOutcome::Continue { text } = old_hooks[0]
-        .message_user_before(MessageUserBeforeInput {
+    let text = hya_engine::HookChain::new(old_hooks)
+        .message_user_before(NativeMessageUserBeforeInput {
             session: SessionId::new(),
             text: "body".into(),
         })

@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use crate::client::{DEFAULT_CALL_TIMEOUT, PluginClient};
 use crate::config::{PluginSpec, ProcessLaunch};
 use crate::error::PluginError;
-use crate::messages::{HookName, HostInfo, InitializeResult};
+use crate::messages::{HookId, HookName, HostInfo, InitializeResult};
 use crate::native_capability::SessionUsageReader;
 
 use super::{EVENT_CHANNEL_CAP, LiveClient, PluginConn, canonical_initialize, validate_initialize};
@@ -28,9 +28,9 @@ pub(super) async fn connect_one(
     let hooks = contributions
         .hooks
         .iter()
-        .map(|hook| hook.name)
+        .map(|hook| hook.name.clone())
         .collect::<HashSet<_>>();
-    let has_event_hook = hooks.contains(&HookName::Event);
+    let has_event_hook = hooks.contains(&HookId::Core(HookName::Event));
     // Only bundle processes receive capabilities, so only they keep host reads.
     let host_reads = spec.has_capabilities().then_some(host_reads).flatten();
     let (event_tx, event_rx) = mpsc::channel(EVENT_CHANNEL_CAP);

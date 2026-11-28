@@ -13,8 +13,8 @@ use super::{
 };
 use crate::error::CoreError;
 use crate::hooks::{
-    HookChain, HookDispatcher, ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome,
-    activation_hook_for, scope_activation_hooks, scope_optional_activation_hooks,
+    HookChain, ModelFailureClass, NativeModelFallbackInput, activation_hook_for,
+    scope_activation_hooks, scope_optional_activation_hooks,
 };
 use crate::runtime_registry::CompiledResourceView;
 use crate::sidecar::{SidecarEnvironment, SidecarHandle, SidecarStart};
@@ -74,7 +74,7 @@ struct TurnRebindInputs<'a> {
     /// Sidecar tools captured at activation; recompiled into every fresh
     /// resource view so a rebind never drops them.
     sidecar_tools: Arc<[ResolvedTool]>,
-    sidecar_hooks: Option<Arc<dyn HookDispatcher>>,
+    sidecar_hooks: Option<Arc<HookChain>>,
 }
 
 /// Request-local context shared by one governed turn activation.
@@ -293,19 +293,19 @@ impl SessionEngine {
                 .request_root_session(session, lineage.root_session_cache)
                 .await;
             let outcome = hooks
-                .model_fallback(ModelFallbackInput {
+                .model_fallback(NativeModelFallbackInput {
                     session,
                     root_session,
                     agent: Some(AgentName::new(lineage.agent)),
                     message,
                     model: failed.clone(),
-                    error_class: ModelFailureClass::of(&error),
+                    error_class: ModelFailureClass::of(&error).as_str().to_string(),
                     error_message: error.to_string(),
                     attempt: u32::try_from(tried.len()).unwrap_or(u32::MAX),
                     tried: tried.clone(),
                 })
                 .await;
-            let ModelFallbackOutcome::Retry { model } = outcome else {
+            let Some(model) = outcome else {
                 break;
             };
             if tried.contains(&model) {
@@ -901,8 +901,8 @@ impl SessionEngine {
         self.capture_session_bundle_hooks(session, &binding, stable_id)
             .await;
         let mut bound_hooks = binding.bundle_hooks_for_agent(stable_id);
-        if let Some(sidecar_hooks) = sidecar_hooks.clone() {
-            bound_hooks.push(sidecar_hooks);
+        if let Some(sidecar_hooks) = &sidecar_hooks {
+            bound_hooks.extend(sidecar_hooks.entries().iter().cloned());
         }
         // Bound/Resolved activations (subagents, resident members) run inside
         // a scope their caller opened for this session with the member's
@@ -913,10 +913,10 @@ impl SessionEngine {
             && !bound_hooks.is_empty()
             && let Some(inherited) = activation_hook_for(session)
         {
-            bound_hooks.push(inherited);
+            bound_hooks.extend(inherited.entries().iter().cloned());
         }
-        let activation_hooks = (!bound_hooks.is_empty())
-            .then(|| Arc::new(HookChain::new(bound_hooks)) as Arc<dyn HookDispatcher>);
+        let activation_hooks =
+            (!bound_hooks.is_empty()).then(|| Arc::new(HookChain::new(bound_hooks)));
         let sidecar_loss = sidecar_handle
             .as_ref()
             .and_then(|handle| handle.loss_token());
@@ -1262,7 +1262,7 @@ impl SessionEngine {
         agent: &AgentName,
         external_dirs: &[PathBuf],
         grant_scope: &hya_tool::GrantScope,
-        activation_hooks: Option<&Arc<dyn HookDispatcher>>,
+        activation_hooks: Option<&Arc<HookChain>>,
     ) -> Result<PermissionPlane, CoreError> {
         let mode_plane = self
             .mode_permission_plane(binding, session, Some(agent))

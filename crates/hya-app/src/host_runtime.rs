@@ -8,7 +8,6 @@ use std::sync::{Arc, OnceLock, Weak};
 use async_trait::async_trait;
 use futures::StreamExt as _;
 use hya_bundle::{Bundle, PreparedAgent};
-use hya_engine::hooks::{EvidenceQuality, GoalEvaluateReply, HookDispatcher, VerifierVerdict};
 use hya_engine::resident::ActivationResult;
 use hya_engine::{
     AgentSpec, BundleApiCall, BundleApiError, CatalogScope, CategoryRegistry, CoreError,
@@ -30,7 +29,6 @@ use hya_runtime_abi::{
     ManagedMemberActivateRequest, ManagedMemberActivationOutcome, ManagedMemberActivationStatus,
     ManagedMemberHandle, ManagedMemberSpawnRequest, MemberMailRevivalRequest, ModelCallRequest,
     ModelCallResponse, ModelRouteEntry, ModelStreamChunk, ModelToolCall, ModelWindowInfo,
-    NativeGoalEvaluateVerdict, NativeLoopPlanInput, NativePlannerOutput, NativeVerifierVerdict,
     ResolvedModelRoute, ResolvedModelRouteCandidate, ScopeCatalogSnapshot, SessionListFilter,
     SessionSummaryMeta, StagedMailAck, TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus,
 };
@@ -58,6 +56,8 @@ pub(crate) struct AppHostRuntime {
     sidecar_environment: OnceLock<Arc<BundleSidecarEnvironment>>,
     goal_driver: OnceLock<Arc<dyn GoalDriver>>,
     loop_drivers: OnceLock<Vec<Arc<dyn LoopDriver>>>,
+    /// Bundle-declared hook points (`<bundle-id>:<point>`) of the loaded bundles.
+    declared_hooks: std::sync::RwLock<BTreeSet<String>>,
 }
 
 impl AppHostRuntime {
@@ -83,7 +83,45 @@ impl AppHostRuntime {
             sidecar_environment: OnceLock::new(),
             goal_driver: OnceLock::new(),
             loop_drivers: OnceLock::new(),
+            declared_hooks: std::sync::RwLock::new(BTreeSet::new()),
         }
+    }
+
+    /// Record the hook points `bundle_id` declares (local names).
+    pub(crate) fn declare_hook_points(&self, bundle_id: &str, points: &[String]) {
+        let mut declared = self
+            .declared_hooks
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        declared.extend(points.iter().map(|point| format!("{bundle_id}:{point}")));
+    }
+
+    fn is_declared_hook(&self, point: &str) -> bool {
+        self.declared_hooks
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(point)
+    }
+
+    /// The chain that answers the declared point `point` for `session`.
+    async fn declared_hook_chain(
+        &self,
+        session: Option<SessionId>,
+        point: &str,
+    ) -> Result<HookChain, HostError> {
+        if !self.is_declared_hook(point) {
+            return Err(HostError::InvalidInput(format!(
+                "no loaded bundle declares hook point `{point}`"
+            )));
+        }
+        let engine = self.engine()?;
+        let (workdir, agent) = self.resolve_session_scope(session).await?;
+        let binding = match session {
+            Some(session) => engine.bind_session_runtime(session, &workdir).await,
+            None => engine.bind_root_runtime(&workdir).await,
+        }
+        .map_err(map_core_error)?;
+        Ok(declared_hook_chain(&engine, &binding, &agent, point))
     }
 
     /// Poll `future` (and drop it on cancellation) with the host's Tokio runtime
@@ -242,30 +280,6 @@ impl AppHostRuntime {
             .await
             .map_err(map_core_error)
     }
-
-    async fn loop_hooks_for_session(
-        &self,
-        session: SessionId,
-    ) -> Result<Arc<dyn HookDispatcher>, HostError> {
-        let engine = self.engine()?;
-        let projection = self.read_projection(session).await?;
-        let workdir = projection
-            .session
-            .workdir
-            .as_deref()
-            .filter(|w| !w.is_empty())
-            .map_or_else(|| self.default_agent.workdir.clone(), PathBuf::from);
-        let agent_name = projection
-            .session
-            .agent
-            .as_ref()
-            .map_or(self.default_agent.name.as_str(), AgentName::as_str);
-        let binding = engine
-            .bind_session_runtime(session, &workdir)
-            .await
-            .map_err(map_core_error)?;
-        Ok(build_loop_hook_chain(&binding, agent_name))
-    }
 }
 
 struct HostContextFuture<F> {
@@ -339,15 +353,21 @@ fn hex_digest(bytes: &[u8]) -> String {
     out
 }
 
-fn goal_evaluator_hook_chain(
+/// The entries that may answer the declared point `point`: the process-wide
+/// chain, user-global plugins, agent-less bundles, the bound agent's hooks,
+/// then the declaring bundle's own hooks. When the bound agent belongs to the
+/// declaring bundle, the main agent's hooks stand in for its own.
+fn declared_hook_chain(
+    engine: &SessionEngine,
     binding: &TurnBinding,
     stable_agent_id: &str,
-) -> Arc<dyn HookDispatcher> {
-    let is_goal_owner = |id: &str| id == "hya/goal" || id == "hya/goal-loop";
-    let active_is_goal_owner = binding
+    point: &str,
+) -> HookChain {
+    let owner = point.split_once(':').map(|(bundle, _)| bundle);
+    let active_is_owner = binding
         .resolve_agent(stable_agent_id)
-        .is_some_and(|agent| agent.origin.bundle_id().is_some_and(is_goal_owner));
-    let selected = binding.bundle_hooks_for_agent(if active_is_goal_owner {
+        .is_some_and(|agent| agent.origin.bundle_id() == owner);
+    let selected = binding.bundle_hooks_for_agent(if active_is_owner {
         hya_engine::MAIN_AGENT_ID
     } else {
         stable_agent_id
@@ -356,64 +376,25 @@ fn goal_evaluator_hook_chain(
         .bundle_catalog()
         .bundles()
         .iter()
-        .filter(|bundle| {
-            (bundle.agents().is_empty() && bundle.workflow().is_none())
-                && !is_goal_owner(&bundle.identity().id)
-        })
+        .filter(|bundle| bundle.agents().is_empty() && Some(bundle.identity().id.as_str()) != owner)
         .filter_map(|bundle| binding.bundle_hooks(&bundle.identity().id))
         .collect::<Vec<_>>();
-    let mut hooks = Vec::new();
-    for hook in binding
+    let mut entries = engine.process_hooks().entries().to_vec();
+    for entry in binding
         .global_plugin_hooks()
         .into_iter()
         .chain(agentless)
         .chain(selected)
-        .chain(binding.bundle_hooks("hya/goal"))
-        .chain(binding.bundle_hooks("hya/goal-loop"))
+        .chain(owner.and_then(|owner| binding.bundle_hooks(owner)))
     {
-        if !hooks.iter().any(|existing| Arc::ptr_eq(existing, &hook)) {
-            hooks.push(hook);
+        if !entries
+            .iter()
+            .any(|existing| Arc::ptr_eq(existing.hook(), entry.hook()))
+        {
+            entries.push(entry);
         }
     }
-    Arc::new(HookChain::new(hooks))
-}
-
-pub(crate) fn build_loop_hook_chain(
-    binding: &TurnBinding,
-    stable_agent_id: &str,
-) -> Arc<dyn HookDispatcher> {
-    let active_is_loop_owner = binding.resolve_agent(stable_agent_id).is_some_and(|agent| {
-        matches!(agent.origin.bundle_id(), Some("hya/loop" | "hya/goal-loop"))
-    });
-    let selected = binding.bundle_hooks_for_agent(if active_is_loop_owner {
-        hya_engine::MAIN_AGENT_ID
-    } else {
-        stable_agent_id
-    });
-    let agentless = binding
-        .bundle_catalog()
-        .bundles()
-        .iter()
-        .filter(|bundle| {
-            (bundle.agents().is_empty() && bundle.workflow().is_none())
-                && !matches!(bundle.identity().id.as_str(), "hya/loop" | "hya/goal-loop")
-        })
-        .filter_map(|bundle| binding.bundle_hooks(&bundle.identity().id))
-        .collect::<Vec<_>>();
-    let mut hooks: Vec<Arc<dyn HookDispatcher>> = Vec::new();
-    for hook in binding
-        .global_plugin_hooks()
-        .into_iter()
-        .chain(agentless)
-        .chain(selected)
-        .chain(binding.bundle_hooks("hya/goal-loop"))
-        .chain(binding.bundle_hooks("hya/loop"))
-    {
-        if !hooks.iter().any(|existing| Arc::ptr_eq(existing, &hook)) {
-            hooks.push(hook);
-        }
-    }
-    Arc::new(HookChain::new(hooks))
+    HookChain::new(entries)
 }
 
 fn extract_turn_outcome(session: SessionId, projection: &Projection) -> TurnOutcome {
@@ -1786,112 +1767,24 @@ impl HostExtensionRegistry for AppHostRuntime {
         ))
     }
 
-    async fn has_goal_evaluate_hook(&self, session: Option<SessionId>) -> Result<bool, HostError> {
-        let (workdir, agent) = self.resolve_session_scope(session).await?;
-        let binding = self.bind_for_workdir(&workdir).await?;
-        let dispatcher = goal_evaluator_hook_chain(&binding, &agent);
-        Ok(dispatcher.has_goal_evaluate())
+    async fn has_hook(&self, session: Option<SessionId>, point: &str) -> Result<bool, HostError> {
+        Ok(self
+            .declared_hook_chain(session, point)
+            .await?
+            .declares(point))
     }
 
-    async fn invoke_goal_evaluate_hook(
+    async fn invoke_hook(
         &self,
         session: Option<SessionId>,
-        condition: &str,
-        transcript: &str,
-    ) -> Result<Option<NativeGoalEvaluateVerdict>, HostError> {
-        let (workdir, agent) = self.resolve_session_scope(session).await?;
-        let binding = self.bind_for_workdir(&workdir).await?;
-        let dispatcher = goal_evaluator_hook_chain(&binding, &agent);
-        if !dispatcher.has_goal_evaluate() {
-            return Ok(None);
-        }
-        match dispatcher.goal_evaluate(condition, transcript).await {
-            Ok(GoalEvaluateReply::Verdict { met, reason }) => {
-                Ok(Some(NativeGoalEvaluateVerdict::Verdict { met, reason }))
-            }
-            Ok(GoalEvaluateReply::Malformed) => Ok(Some(NativeGoalEvaluateVerdict::Malformed)),
-            Err(error) => Err(map_core_error(error)),
-        }
-    }
-
-    async fn invoke_loop_should_stop(
-        &self,
-        session: SessionId,
-        target: &str,
-        transcript: &str,
-    ) -> Result<Option<String>, HostError> {
-        let hooks = self.loop_hooks_for_session(session).await?;
-        Ok(hooks.loop_should_stop(target, transcript).await)
-    }
-
-    async fn invoke_loop_verify(
-        &self,
-        session: SessionId,
-        target: &str,
-        transcript: &str,
-    ) -> Result<Option<NativeVerifierVerdict>, HostError> {
-        let hooks = self.loop_hooks_for_session(session).await?;
-        match hooks.loop_verify(target, transcript).await {
-            Ok(verdict) => Ok(Some(NativeVerifierVerdict {
-                score: verdict.score,
-                satisfied: verdict.satisfied,
-                evidence_quality: match verdict.evidence_quality {
-                    EvidenceQuality::Missing => "missing",
-                    EvidenceQuality::ClaimOnly => "claim_only",
-                    EvidenceQuality::Supported => "supported",
-                    EvidenceQuality::Verified => "verified",
-                }
-                .to_string(),
-                critical_gaps: verdict.critical_gaps,
-                iteration_summary: verdict.iteration_summary,
-                reason: verdict.reason,
-            })),
-            Err(CoreError::Invalid(msg))
-                if msg.contains("not registered") || msg.contains("not selected") =>
-            {
-                Ok(None)
-            }
-            Err(error) => Err(HostError::Internal(error.to_string())),
-        }
-    }
-
-    async fn invoke_loop_plan(
-        &self,
-        session: SessionId,
-        input: NativeLoopPlanInput,
-    ) -> Result<Option<NativePlannerOutput>, HostError> {
-        let hooks = self.loop_hooks_for_session(session).await?;
-        let last = VerifierVerdict {
-            score: input.last.score,
-            satisfied: input.last.satisfied,
-            evidence_quality: match input.last.evidence_quality.as_str() {
-                "verified" => EvidenceQuality::Verified,
-                "supported" => EvidenceQuality::Supported,
-                "claim_only" => EvidenceQuality::ClaimOnly,
-                _ => EvidenceQuality::Missing,
-            },
-            critical_gaps: input.last.critical_gaps,
-            iteration_summary: input.last.iteration_summary,
-            reason: input.last.reason,
-        };
-        match hooks
-            .loop_plan(&input.target, &input.history, &last, &input.planner_notes)
-            .await
-        {
-            Ok(plan) => Ok(Some(NativePlannerOutput {
-                directive: plan.directive,
-                continuity_brief: plan.continuity_brief,
-                planner_notes: plan.planner_notes,
-                strategy_change: plan.strategy_change,
-                change_note: plan.change_note,
-            })),
-            Err(CoreError::Invalid(msg))
-                if msg.contains("not registered") || msg.contains("not selected") =>
-            {
-                Ok(None)
-            }
-            Err(error) => Err(HostError::Internal(error.to_string())),
-        }
+        point: &str,
+        input: Value,
+    ) -> Result<Option<Value>, HostError> {
+        Ok(self
+            .declared_hook_chain(session, point)
+            .await?
+            .invoke_declared(point, input)
+            .await)
     }
 }
 

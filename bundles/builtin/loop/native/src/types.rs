@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use hya_proto::{PartProjection, Projection};
-use hya_runtime_abi::{HostError, NativeVerifierVerdict};
+use hya_runtime_abi::HostError;
+use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::predicate::LoopPredicate;
@@ -17,6 +18,82 @@ pub const LOOP_DRIVER_ID: &str = "loop";
 
 /// Stable service identifier registered on [`hya_runtime_abi::NativeRegistrations::services`].
 pub const LOOP_SERVICE_ID: &str = "loop";
+
+/// Hook points `hya/loop` declares, as local names; other bundles implement
+/// them as `hya/loop:<name>`.
+pub const LOOP_HOOK_POINTS: [&str; 3] = ["verifier", "planner", "should_stop"];
+
+/// `hya/loop:verifier`: `{target, transcript}` → [`VerdictWire`].
+pub const VERIFIER_HOOK: &str = "hya/loop:verifier";
+
+/// `hya/loop:planner`: [`PlanHookInput`] → [`PlannerWire`].
+pub const PLANNER_HOOK: &str = "hya/loop:planner";
+
+/// `hya/loop:should_stop`: `{target, transcript}` → `{stop, reason}`; `null`
+/// or `stop: false` lets the loop continue.
+pub const SHOULD_STOP_HOOK: &str = "hya/loop:should_stop";
+
+/// JSON shape of a verifier verdict on the `hya/loop` hook points.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerdictWire {
+    /// Score 0–100.
+    pub score: u8,
+    /// Whether the target is satisfied.
+    pub satisfied: bool,
+    /// `missing`, `claim_only`, `supported`, or `verified`.
+    pub evidence_quality: String,
+    /// Gaps that block satisfaction.
+    #[serde(default)]
+    pub critical_gaps: Vec<String>,
+    /// One-line summary of the iteration.
+    #[serde(default)]
+    pub iteration_summary: String,
+    /// Reason for the verdict.
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// Input of `hya/loop:planner`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PlanHookInput {
+    /// Loop target.
+    pub target: String,
+    /// Directive history.
+    pub history: Vec<String>,
+    /// Last verifier verdict.
+    pub last: VerdictWire,
+    /// Planner notes carried across iterations.
+    pub planner_notes: String,
+}
+
+/// Reply of `hya/loop:planner`.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct PlannerWire {
+    /// Next directive for the worker.
+    pub directive: String,
+    /// Continuity brief.
+    #[serde(default)]
+    pub continuity_brief: String,
+    /// Updated planner notes.
+    #[serde(default)]
+    pub planner_notes: String,
+    /// Whether the planner changed strategy.
+    #[serde(default)]
+    pub strategy_change: bool,
+    /// Note describing the change.
+    #[serde(default)]
+    pub change_note: String,
+}
+
+/// Reply of `hya/loop:should_stop`.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct ShouldStopWire {
+    /// Whether to stop the loop now.
+    pub stop: bool,
+    /// Reason recorded with the stop.
+    #[serde(default)]
+    pub reason: String,
+}
 
 /// Hard upper bound on iterations enforced before any worker runs.
 pub const HARD_MAX_ITERATIONS: u32 = 100;
@@ -82,9 +159,9 @@ pub struct VerifierVerdict {
 }
 
 impl VerifierVerdict {
-    /// Convert from the ABI v2 [`NativeVerifierVerdict`] representation.
+    /// Convert from the hook-point JSON shape.
     #[must_use]
-    pub fn from_native(native: NativeVerifierVerdict) -> Self {
+    pub fn from_wire(native: VerdictWire) -> Self {
         Self {
             score: native.score,
             satisfied: native.satisfied,
@@ -95,10 +172,10 @@ impl VerifierVerdict {
         }
     }
 
-    /// Convert into the ABI v2 [`NativeVerifierVerdict`] representation.
+    /// Convert into the hook-point JSON shape.
     #[must_use]
-    pub fn to_native(&self) -> NativeVerifierVerdict {
-        NativeVerifierVerdict {
+    pub fn to_wire(&self) -> VerdictWire {
+        VerdictWire {
             score: self.score,
             satisfied: self.satisfied,
             evidence_quality: self.evidence_quality.as_str().to_string(),

@@ -19,8 +19,8 @@ use super::messages::hidden_behind;
 use crate::TurnBinding;
 use crate::error::CoreError;
 use crate::hooks::{
-    HookDispatcher, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, ToolOutcomeNative, activation_hook_for,
+    HookChain, NativeToolAfterInput, NativeToolBeforeInput, NativeToolBeforeOutcome,
+    NativeToolResult, activation_hook_for,
 };
 use crate::kernel::ToolCall;
 use crate::runtime_registry::CompiledResourceView;
@@ -97,13 +97,11 @@ impl TurnToolGate<'_> {
             call: tc.call,
             tool: &tc.name,
         };
-        let has_hooks =
-            engine.native_hooks.is_some() || engine.hooks.is_some() || activation_hooks.is_some();
-        if has_hooks {
+        let tool_hooks = engine.active_hook_dispatcher(session);
+        let has_hooks = tool_hooks.is_some();
+        if let Some(hooks) = &tool_hooks {
             let input = apply_tool_execute_before_hooks(
-                engine.native_hooks.as_ref(),
-                engine.hooks.as_ref(),
-                activation_hooks.as_ref(),
+                hooks,
                 &hook_context,
                 std::mem::take(&mut tc.input),
             )
@@ -294,11 +292,11 @@ impl TurnToolGate<'_> {
             {
                 let was_permission_err = matches!(&result, Err(ToolError::Permission(_)));
                 let mut native = match &result {
-                    Ok(output) => ToolOutcomeNative::Ok {
+                    Ok(output) => NativeToolResult::Ok {
                         output: output.clone(),
                         time_ms,
                     },
-                    Err(e) => ToolOutcomeNative::Err {
+                    Err(e) => NativeToolResult::Err {
                         message: e.to_string(),
                     },
                 };
@@ -309,9 +307,7 @@ impl TurnToolGate<'_> {
                     report_latch.is_set() || *defer_steer || wait_ack.saw_wait(),
                 );
                 native = apply_tool_execute_after_hooks(
-                    engine.native_hooks.as_ref(),
-                    engine.hooks.as_ref(),
-                    activation_hooks.as_ref(),
+                    tool_hooks.as_deref().unwrap_or(&HookChain::default()),
                     &hook_context,
                     input_for_after.unwrap_or_default(),
                     native,
@@ -329,8 +325,8 @@ impl TurnToolGate<'_> {
                 } else {
                     was_hook_replaced = true;
                     match native {
-                        ToolOutcomeNative::Ok { output, .. } => Ok(output),
-                        ToolOutcomeNative::Err { message } => Err(ToolError::Other(message)),
+                        NativeToolResult::Ok { output, .. } => Ok(output),
+                        NativeToolResult::Err { message } => Err(ToolError::Other(message)),
                     }
                 }
             } else {
@@ -428,52 +424,41 @@ struct ToolHookContext<'a> {
 }
 
 async fn apply_tool_execute_before_hooks(
-    native: Option<&Arc<dyn HookDispatcher>>,
-    global: Option<&Arc<dyn HookDispatcher>>,
-    activation: Option<&Arc<dyn HookDispatcher>>,
+    hooks: &HookChain,
     context: &ToolHookContext<'_>,
-    mut input: serde_json::Value,
+    input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    for hooks in [native, global, activation].into_iter().flatten() {
-        match hooks
-            .tool_execute_before(ToolExecuteBeforeInput {
-                session: context.session,
-                message: context.message,
-                call: context.call,
-                tool: context.tool.to_string(),
-                input,
-            })
-            .await
-        {
-            ToolExecuteBeforeOutcome::Continue { input: next } => input = next,
-            ToolExecuteBeforeOutcome::Veto { reason } => return Err(reason),
-        }
+    match hooks
+        .tool_execute_before(NativeToolBeforeInput {
+            session: context.session,
+            message: context.message,
+            call: context.call,
+            tool: context.tool.to_string(),
+            input,
+        })
+        .await
+    {
+        NativeToolBeforeOutcome::Continue { input } => Ok(input),
+        NativeToolBeforeOutcome::Veto { reason } => Err(reason),
     }
-    Ok(input)
 }
 
 async fn apply_tool_execute_after_hooks(
-    native: Option<&Arc<dyn HookDispatcher>>,
-    global: Option<&Arc<dyn HookDispatcher>>,
-    activation: Option<&Arc<dyn HookDispatcher>>,
+    hooks: &HookChain,
     context: &ToolHookContext<'_>,
     input: serde_json::Value,
-    mut result: ToolOutcomeNative,
-) -> ToolOutcomeNative {
-    for hooks in [native, global, activation].into_iter().flatten() {
-        let ToolExecuteAfterOutcome::Continue { result: next } = hooks
-            .tool_execute_after(ToolExecuteAfterInput {
-                session: context.session,
-                message: context.message,
-                call: context.call,
-                tool: context.tool.to_string(),
-                input: input.clone(),
-                result,
-            })
-            .await;
-        result = next;
-    }
-    result
+    result: NativeToolResult,
+) -> NativeToolResult {
+    hooks
+        .tool_execute_after(NativeToolAfterInput {
+            session: context.session,
+            message: context.message,
+            call: context.call,
+            tool: context.tool.to_string(),
+            input,
+            result,
+        })
+        .await
 }
 
 /// Splice a steer notice into a tool result's model-facing text.

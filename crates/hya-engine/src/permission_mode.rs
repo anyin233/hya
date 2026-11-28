@@ -18,7 +18,7 @@ use hya_tool::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::hooks::{HookDispatcher, PermissionApproveInput};
+use crate::hooks::{HookChain, NativePermissionApproveInput};
 
 /// Wire name of the built-in mode that sends asks to the user.
 pub const MANUAL: &str = "manual";
@@ -172,7 +172,7 @@ pub(crate) fn derive_plane(
 /// `permission.approve` hook; `None` (defer, failure) falls through to the
 /// user ask.
 pub(crate) struct ModeApprover {
-    hooks: Arc<dyn HookDispatcher>,
+    hooks: Arc<HookChain>,
     root_session: SessionId,
     agent: Option<AgentName>,
     bundle: String,
@@ -181,7 +181,7 @@ pub(crate) struct ModeApprover {
 
 impl ModeApprover {
     pub(crate) fn new(
-        hooks: Arc<dyn HookDispatcher>,
+        hooks: Arc<HookChain>,
         root_session: SessionId,
         agent: Option<AgentName>,
         bundle: String,
@@ -217,7 +217,7 @@ impl PermissionInterceptor for ModeApprover {
         resource: &Resource,
     ) -> Option<Decision> {
         self.hooks
-            .permission_approve(PermissionApproveInput {
+            .permission_approve(NativePermissionApproveInput {
                 session: session.unwrap_or(self.root_session),
                 root_session: self.root_session,
                 agent: self.agent.clone(),

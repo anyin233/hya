@@ -66,7 +66,7 @@ pub struct RuntimeSource {
     pub(super) skills: Vec<RuntimeSourceSkill>,
     pub(super) resources: Arc<BTreeMap<String, Value>>,
     pub(super) schemas: Vec<SourceSchema>,
-    pub(super) hooks: Option<Arc<dyn crate::hooks::HookDispatcher>>,
+    pub(super) hooks: Option<crate::hooks::HookEntry>,
     pub(super) apis: Option<crate::bundle_apis::SourceApis>,
     pub(super) permission_modes: Vec<crate::permission_mode::RuntimePermissionMode>,
 }
@@ -589,11 +589,11 @@ impl RuntimeSource {
 
     /// Attach process hooks retained by this immutable runtime generation.
     #[must_use]
-    pub fn with_hooks(mut self, hooks: Arc<dyn crate::hooks::HookDispatcher>) -> Self {
-        self.hooks = Some(Arc::new(crate::bundle_hooks::ScopedBundleHooks::retaining(
+    pub fn with_hooks(mut self, hooks: Arc<dyn crate::hooks::NativeHook>) -> Self {
+        self.hooks = Some(crate::hooks::HookEntry::retaining(
             hooks,
             Arc::clone(&self.owner),
-        )));
+        ));
         self
     }
 
@@ -641,7 +641,7 @@ fn sources_match(
                 left.declaration_digest == right.declaration_digest
                     && Arc::ptr_eq(&left.owner, &right.owner)
                     && match (&left.hooks, &right.hooks) {
-                        (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                        (Some(left), Some(right)) => Arc::ptr_eq(left.hook(), right.hook()),
                         (None, None) => true,
                         _ => false,
                     }

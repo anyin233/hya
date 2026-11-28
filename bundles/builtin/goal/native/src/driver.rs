@@ -510,7 +510,7 @@ pub async fn prepare_goal(
     );
     let has_hook = runtime
         .extension_registry()
-        .has_goal_evaluate_hook(Some(request.session))
+        .has_hook(Some(request.session), crate::evaluator::EVALUATE_HOOK)
         .await
         .unwrap_or(false);
     let evaluator: Arc<dyn GoalEvaluator> = if has_hook {

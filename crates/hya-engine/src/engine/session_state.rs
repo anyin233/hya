@@ -6,7 +6,6 @@ use hya_proto::{
 
 use super::{AgentSpec, DRAIN_DEADLINE, SessionEngine};
 use crate::error::CoreError;
-use crate::hooks::SessionLifecycleInput;
 
 impl SessionEngine {
     /// Record an agent switch event for the session.
@@ -308,17 +307,7 @@ impl SessionEngine {
                 }
             }
         }
-        for hooks in self
-            .native_hooks
-            .iter()
-            .chain(self.hooks.iter())
-            .cloned()
-            .chain(self.runtime.global_plugin_hooks())
-        {
-            hooks
-                .session_start(SessionLifecycleInput { session: id })
-                .await;
-        }
+        self.global_hooks().session_start(id).await;
         Ok(id)
     }
 

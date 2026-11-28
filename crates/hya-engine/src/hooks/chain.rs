@@ -1,353 +1,438 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
+
+use hya_proto::{Envelope, ModelRef, SessionId};
+use hya_runtime_abi::HostError;
+use hya_tool::{Action, Decision, Resource};
+use serde_json::Value;
 
 use super::*;
 
-/// Ordered composition of hook dispatchers captured for one runtime binding.
-///
-/// Rewrite hooks feed each output into the next dispatcher. Guard vetoes and
-/// compaction skips stop the chain immediately; observation hooks fan out to
-/// every dispatcher. Evaluator hooks try capable dispatchers in order and only
-/// fail after every provider failed.
-pub struct HookChain {
-    dispatchers: Vec<Arc<dyn HookDispatcher>>,
+/// One hook source in a [`HookChain`], with its scope.
+#[derive(Clone)]
+pub struct HookEntry {
+    hook: Arc<dyn NativeHook>,
+    /// Hook names (`tool.execute.before`, `hya/goal:evaluate`, …) this entry
+    /// admits; `None` admits every point the hook implements.
+    admits: Option<Arc<BTreeSet<String>>>,
+    events: bool,
+    _owner: Option<Arc<dyn crate::RuntimeSourceOwner>>,
 }
 
-impl HookChain {
-    /// Create a chain in deterministic dispatch order.
+impl HookEntry {
+    /// An entry admitting every point `hook` implements.
     #[must_use]
-    pub fn new(dispatchers: Vec<Arc<dyn HookDispatcher>>) -> Self {
-        Self { dispatchers }
-    }
-
-    /// Whether the chain contains no dispatchers.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.dispatchers.is_empty()
-    }
-}
-
-#[async_trait]
-impl HookDispatcher for HookChain {
-    fn dispatch_event(&self, envelope: &Envelope) {
-        for dispatcher in &self.dispatchers {
-            dispatcher.dispatch_event(envelope);
+    pub fn new(hook: Arc<dyn NativeHook>) -> Self {
+        Self {
+            hook,
+            admits: None,
+            events: true,
+            _owner: None,
         }
     }
 
-    fn is_healthy(&self) -> bool {
-        self.dispatchers
-            .iter()
-            .all(|dispatcher| dispatcher.is_healthy())
+    /// Restrict the entry to the hook references an agent declares
+    /// (`<bundle>/hook/<name>`).
+    #[must_use]
+    pub fn scoped(hook: Arc<dyn NativeHook>, references: &[String]) -> Self {
+        Self {
+            admits: Some(Arc::new(
+                references
+                    .iter()
+                    .filter_map(|name| {
+                        name.rsplit_once("/hook/")
+                            .map(|(_, local)| local.to_string())
+                    })
+                    .collect(),
+            )),
+            ..Self::new(hook)
+        }
     }
 
-    fn permission_semantic_identity_v1(&self) -> Option<[u8; 32]> {
+    /// Keep `owner` (the source process handle) alive with the entry.
+    #[must_use]
+    pub fn retaining(hook: Arc<dyn NativeHook>, owner: Arc<dyn crate::RuntimeSourceOwner>) -> Self {
+        Self {
+            _owner: Some(owner),
+            ..Self::new(hook)
+        }
+    }
+
+    /// Narrow the entry to the names it already admits that `references`
+    /// (`<bundle>/hook/<name>`) also admit.
+    #[must_use]
+    pub fn restrict(self, references: &[String]) -> Self {
+        let narrowed = Self::scoped(Arc::clone(&self.hook), references)
+            .admits
+            .map(|names| match &self.admits {
+                Some(current) => Arc::new(names.intersection(current).cloned().collect()),
+                None => names,
+            });
+        Self {
+            admits: narrowed,
+            ..self
+        }
+    }
+
+    /// The same entry without live events (they reach the source elsewhere).
+    #[must_use]
+    pub fn without_events(mut self) -> Self {
+        self.events = false;
+        self
+    }
+
+    /// The hook source.
+    #[must_use]
+    pub fn hook(&self) -> &Arc<dyn NativeHook> {
+        &self.hook
+    }
+
+    fn admits(&self, name: &str) -> bool {
+        self.admits
+            .as_ref()
+            .is_none_or(|names| names.contains(name))
+    }
+
+    fn handles(&self, point: HookPoint) -> bool {
+        self.admits(point.name()) && self.hook.hook_points().contains(&point)
+    }
+
+    fn declares(&self, point: &str) -> bool {
+        self.admits(point) && self.hook.declared_points().iter().any(|p| p == point)
+    }
+}
+
+/// Ordered hook entries dispatched for one binding.
+///
+/// Rewrite hooks feed each output into the next entry. A veto or a
+/// compaction skip stops the chain; observers fan out to every entry. A
+/// failing entry is logged and skipped. Bundle-declared points are answered by
+/// the latest entry that answers.
+#[derive(Clone, Default)]
+pub struct HookChain {
+    entries: Vec<HookEntry>,
+}
+
+fn warn(hook: &dyn NativeHook, point: &str, error: &HostError) {
+    tracing::warn!(hook_id = hook.id(), point, %error, "hook failed; skipping it");
+}
+
+impl HookChain {
+    /// A chain in dispatch order.
+    #[must_use]
+    pub fn new(entries: Vec<HookEntry>) -> Self {
+        Self { entries }
+    }
+
+    /// A chain of unscoped entries.
+    #[must_use]
+    pub fn of_hooks(hooks: impl IntoIterator<Item = Arc<dyn NativeHook>>) -> Self {
+        Self::new(hooks.into_iter().map(HookEntry::new).collect())
+    }
+
+    /// Concatenate chains in order.
+    #[must_use]
+    pub fn concat<'a>(chains: impl IntoIterator<Item = &'a HookChain>) -> Self {
+        Self::new(
+            chains
+                .into_iter()
+                .flat_map(|chain| chain.entries.iter().cloned())
+                .collect(),
+        )
+    }
+
+    /// Append an entry.
+    pub fn push(&mut self, entry: HookEntry) {
+        self.entries.push(entry);
+    }
+
+    /// The entries in dispatch order.
+    #[must_use]
+    pub fn entries(&self) -> &[HookEntry] {
+        &self.entries
+    }
+
+    /// Whether the chain has no entries.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    fn matching(&self, point: HookPoint) -> impl Iterator<Item = &Arc<dyn NativeHook>> {
+        self.entries
+            .iter()
+            .filter(move |entry| entry.handles(point))
+            .map(HookEntry::hook)
+    }
+
+    /// Whether any entry implements `point`.
+    #[must_use]
+    pub fn handles(&self, point: HookPoint) -> bool {
+        self.matching(point).next().is_some()
+    }
+
+    /// Deliver a live envelope to every `event` observer, in publish order.
+    pub fn dispatch_event(&self, envelope: &Envelope) {
+        for entry in &self.entries {
+            if entry.events && entry.handles(HookPoint::EventObserve) {
+                entry.hook.on_event(envelope);
+            }
+        }
+    }
+
+    /// Whether every entry's source can still serve calls.
+    #[must_use]
+    pub fn is_healthy(&self) -> bool {
+        self.entries.iter().all(|entry| entry.hook.is_healthy())
+    }
+
+    /// Identity of the chain's `permission.ask` decisions; `None` unless every
+    /// entry admits and pins `permission.ask`.
+    #[must_use]
+    pub fn permission_identity(&self) -> Option<[u8; 32]> {
         use sha2::{Digest, Sha256};
         let mut bytes = b"hya.hook.permission-chain/v1".to_vec();
-        for dispatcher in &self.dispatchers {
-            bytes.extend_from_slice(&dispatcher.permission_semantic_identity_v1()?);
+        for entry in &self.entries {
+            if !entry.admits(HookPoint::PermissionAsk.name()) {
+                return None;
+            }
+            bytes.extend_from_slice(&entry.hook.permission_identity()?);
         }
         Some(Sha256::digest(bytes).into())
     }
 
-    async fn permission_ask(
+    /// `permission.ask`: the first decision wins.
+    pub async fn permission_ask(
         &self,
         session: Option<SessionId>,
         action: Action,
         resource: &Resource,
     ) -> Option<Decision> {
-        for dispatcher in &self.dispatchers {
-            if let Some(decision) = dispatcher.permission_ask(session, action, resource).await {
-                return Some(decision);
+        for hook in self.matching(HookPoint::PermissionAsk) {
+            match hook.permission_ask(session, action, resource).await {
+                Ok(Some(decision)) => return Some(decision),
+                Ok(None) => {}
+                Err(error) => warn(hook.as_ref(), "permission.ask", &error),
             }
         }
         None
     }
 
-    async fn permission_approve(&self, input: PermissionApproveInput) -> Option<Decision> {
-        for dispatcher in &self.dispatchers {
-            if let Some(decision) = dispatcher.permission_approve(input.clone()).await {
-                return Some(decision);
+    /// `permission.approve`: the first decision wins.
+    pub async fn permission_approve(
+        &self,
+        input: NativePermissionApproveInput,
+    ) -> Option<Decision> {
+        for hook in self.matching(HookPoint::PermissionApprove) {
+            match hook.permission_approve(input.clone()).await {
+                Ok(Some(decision)) => return Some(decision),
+                Ok(None) => {}
+                Err(error) => warn(hook.as_ref(), "permission.approve", &error),
             }
         }
         None
     }
 
-    async fn tool_visibility(&self, input: ToolVisibilityInput) -> ToolVisibilityOutcome {
+    /// `tool.visibility`: hides accumulate, `allow_only` intersects.
+    pub async fn tool_visibility(&self, input: ToolVisibilityInput) -> ToolVisibilityOutcome {
         let mut remaining = input.candidate_tools.clone();
-        let mut hidden = Vec::new();
-        let mut had_allow_only = false;
-        for dispatcher in &self.dispatchers {
-            let outcome = dispatcher
-                .tool_visibility(ToolVisibilityInput {
-                    session: input.session,
-                    agent: input.agent.clone(),
-                    candidate_tools: remaining.clone(),
-                    interactive: input.interactive,
-                })
-                .await;
-            native::fold_visibility_outcome(
-                &mut remaining,
-                &mut hidden,
-                &mut had_allow_only,
-                outcome,
-            );
-        }
-        native::finalize_visibility_outcome(remaining, hidden, had_allow_only)
-    }
-
-    async fn command_execute_before(
-        &self,
-        mut input: CommandExecuteBeforeInput,
-    ) -> CommandExecuteBeforeOutcome {
-        for dispatcher in &self.dispatchers {
-            let CommandExecuteBeforeOutcome::Continue { text } = dispatcher
-                .command_execute_before(CommandExecuteBeforeInput {
-                    session: input.session,
-                    command: input.command.clone(),
-                    arguments: input.arguments.clone(),
-                    text: input.text,
-                })
-                .await;
-            input.text = text;
-        }
-        CommandExecuteBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn text_complete(&self, mut input: TextCompleteInput) -> TextCompleteOutcome {
-        for dispatcher in &self.dispatchers {
-            let TextCompleteOutcome::Continue { text } = dispatcher
-                .text_complete(TextCompleteInput {
-                    session: input.session,
-                    message: input.message,
-                    part: input.part,
-                    text: input.text,
-                })
-                .await;
-            input.text = text;
-        }
-        TextCompleteOutcome::Continue { text: input.text }
-    }
-
-    async fn message_user_before(
-        &self,
-        mut input: MessageUserBeforeInput,
-    ) -> MessageUserBeforeOutcome {
-        for dispatcher in &self.dispatchers {
-            let MessageUserBeforeOutcome::Continue { text } = dispatcher
-                .message_user_before(MessageUserBeforeInput {
-                    session: input.session,
-                    text: input.text,
-                })
-                .await;
-            input.text = text;
-        }
-        MessageUserBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn chat_params(&self, mut input: ChatParamsInput) -> ChatParamsOutcome {
-        for dispatcher in &self.dispatchers {
-            let ChatParamsOutcome::Continue { request } = dispatcher
-                .chat_params(ChatParamsInput {
-                    session: input.session,
-                    root_session: input.root_session,
-                    agent: input.agent.clone(),
-                    message: input.message,
-                    request: input.request,
-                })
-                .await;
-            input.request = request;
-        }
-        ChatParamsOutcome::Continue {
-            request: input.request,
-        }
-    }
-
-    async fn tool_execute_before(
-        &self,
-        mut input: ToolExecuteBeforeInput,
-    ) -> ToolExecuteBeforeOutcome {
-        for dispatcher in &self.dispatchers {
-            match dispatcher
-                .tool_execute_before(ToolExecuteBeforeInput {
-                    session: input.session,
-                    message: input.message,
-                    call: input.call,
-                    tool: input.tool.clone(),
-                    input: input.input,
-                })
-                .await
-            {
-                ToolExecuteBeforeOutcome::Continue { input: next } => input.input = next,
-                veto @ ToolExecuteBeforeOutcome::Veto { .. } => return veto,
+        let mut hidden: Vec<String> = Vec::new();
+        let mut allow_only = false;
+        for hook in self.matching(HookPoint::ToolVisibility) {
+            let step = ToolVisibilityInput {
+                candidate_tools: remaining.clone(),
+                ..input.clone()
+            };
+            match hook.tool_visibility(step).await {
+                Ok(ToolVisibilityOutcome::Preserve) => {}
+                Ok(ToolVisibilityOutcome::Hide { tools }) => {
+                    remaining.retain(|name| !tools.contains(name));
+                    for tool in tools {
+                        if !hidden.contains(&tool) {
+                            hidden.push(tool);
+                        }
+                    }
+                }
+                Ok(ToolVisibilityOutcome::AllowOnly { tools }) => {
+                    remaining.retain(|name| tools.contains(name));
+                    allow_only = true;
+                }
+                Err(error) => warn(hook.as_ref(), "tool.visibility", &error),
             }
         }
-        ToolExecuteBeforeOutcome::Continue { input: input.input }
-    }
-
-    async fn tool_execute_after(
-        &self,
-        mut input: ToolExecuteAfterInput,
-    ) -> ToolExecuteAfterOutcome {
-        for dispatcher in &self.dispatchers {
-            let ToolExecuteAfterOutcome::Continue { result } = dispatcher
-                .tool_execute_after(ToolExecuteAfterInput {
-                    session: input.session,
-                    message: input.message,
-                    call: input.call,
-                    tool: input.tool.clone(),
-                    input: input.input.clone(),
-                    result: input.result,
-                })
-                .await;
-            input.result = result;
-        }
-        ToolExecuteAfterOutcome::Continue {
-            result: input.result,
+        if allow_only {
+            ToolVisibilityOutcome::AllowOnly { tools: remaining }
+        } else if !hidden.is_empty() {
+            ToolVisibilityOutcome::Hide { tools: hidden }
+        } else {
+            ToolVisibilityOutcome::Preserve
         }
     }
 
-    async fn model_fallback(&self, input: ModelFallbackInput) -> ModelFallbackOutcome {
-        for dispatcher in &self.dispatchers {
-            if let retry @ ModelFallbackOutcome::Retry { .. } =
-                dispatcher.model_fallback(input.clone()).await
-            {
-                return retry;
+    /// `command.execute.before`: rewrites the command text.
+    pub async fn command_execute_before(&self, mut input: NativeCommandBeforeInput) -> String {
+        for hook in self.matching(HookPoint::CommandExecuteBefore) {
+            match hook.command_execute_before(input.clone()).await {
+                Ok(text) => input.text = text,
+                Err(error) => warn(hook.as_ref(), "command.execute.before", &error),
             }
         }
-        ModelFallbackOutcome::GiveUp
+        input.text
     }
 
-    async fn compaction_before(&self, input: CompactionBeforeInput) -> CompactionDecision {
+    /// `experimental.text.complete`: rewrites completed assistant text.
+    pub async fn text_complete(&self, mut input: NativeTextCompleteInput) -> String {
+        for hook in self.matching(HookPoint::TextComplete) {
+            match hook.text_complete(input.clone()).await {
+                Ok(text) => input.text = text,
+                Err(error) => warn(hook.as_ref(), "text.complete", &error),
+            }
+        }
+        input.text
+    }
+
+    /// `message.user.before`: rewrites user text before admission.
+    pub async fn message_user_before(&self, mut input: NativeMessageUserBeforeInput) -> String {
+        for hook in self.matching(HookPoint::MessageUserBefore) {
+            match hook.message_user_before(input.clone()).await {
+                Ok(text) => input.text = text,
+                Err(error) => warn(hook.as_ref(), "message.user.before", &error),
+            }
+        }
+        input.text
+    }
+
+    /// `chat.params`: rewrites the request payload ([`chat_params_value`]).
+    pub async fn chat_params(&self, mut input: NativeChatParamsInput) -> Value {
+        for hook in self.matching(HookPoint::ChatParams) {
+            match hook.chat_params(input.clone()).await {
+                Ok(params) => input.params = params,
+                Err(error) => warn(hook.as_ref(), "chat.params", &error),
+            }
+        }
+        input.params
+    }
+
+    /// `tool.execute.before`: rewrites arguments; the first veto wins.
+    pub async fn tool_execute_before(
+        &self,
+        mut input: NativeToolBeforeInput,
+    ) -> NativeToolBeforeOutcome {
+        for hook in self.matching(HookPoint::ToolExecuteBefore) {
+            match hook.tool_execute_before(input.clone()).await {
+                Ok(NativeToolBeforeOutcome::Continue { input: next }) => input.input = next,
+                Ok(veto @ NativeToolBeforeOutcome::Veto { .. }) => return veto,
+                Err(error) => warn(hook.as_ref(), "tool.execute.before", &error),
+            }
+        }
+        NativeToolBeforeOutcome::Continue { input: input.input }
+    }
+
+    /// `tool.execute.after`: rewrites the tool result.
+    pub async fn tool_execute_after(&self, mut input: NativeToolAfterInput) -> NativeToolResult {
+        for hook in self.matching(HookPoint::ToolExecuteAfter) {
+            match hook.tool_execute_after(input.clone()).await {
+                Ok(NativeToolAfterOutcome::Continue { result }) => input.result = result,
+                Err(error) => warn(hook.as_ref(), "tool.execute.after", &error),
+            }
+        }
+        input.result
+    }
+
+    /// `model.fallback`: the first named model wins.
+    pub async fn model_fallback(&self, input: NativeModelFallbackInput) -> Option<ModelRef> {
+        for hook in self.matching(HookPoint::ModelFallback) {
+            match hook.model_fallback(input.clone()).await {
+                Ok(Some(model)) => return Some(model),
+                Ok(None) => {}
+                Err(error) => warn(hook.as_ref(), "model.fallback", &error),
+            }
+        }
+        None
+    }
+
+    /// `compaction.before`: a skip stops the chain; the last replacement wins.
+    pub async fn compaction_before(
+        &self,
+        input: NativeCompactionBeforeInput,
+    ) -> NativeCompactionDecision {
         let mut replacement = None;
-        for dispatcher in &self.dispatchers {
-            match dispatcher
-                .compaction_before(CompactionBeforeInput {
-                    session: input.session,
-                    trigger: input.trigger,
-                    messages_token_estimate: input.messages_token_estimate,
-                })
-                .await
-            {
-                CompactionDecision::Proceed => {}
-                CompactionDecision::Replace { instructions } => replacement = Some(instructions),
-                skip @ CompactionDecision::Skip { .. } => return skip,
+        for hook in self.matching(HookPoint::CompactionBefore) {
+            match hook.compaction_before(input.clone()).await {
+                Ok(NativeCompactionDecision::Proceed) => {}
+                Ok(NativeCompactionDecision::Replace { instructions }) => {
+                    replacement = Some(instructions);
+                }
+                Ok(skip @ NativeCompactionDecision::Skip { .. }) => return skip,
+                Err(error) => warn(hook.as_ref(), "compaction.before", &error),
             }
         }
-        replacement.map_or(CompactionDecision::Proceed, |instructions| {
-            CompactionDecision::Replace { instructions }
+        replacement.map_or(NativeCompactionDecision::Proceed, |instructions| {
+            NativeCompactionDecision::Replace { instructions }
         })
     }
 
-    async fn compaction_after(&self, input: CompactionAfterInput) {
-        for dispatcher in &self.dispatchers {
-            dispatcher
-                .compaction_after(CompactionAfterInput {
-                    session: input.session,
-                    summary_tokens: input.summary_tokens,
-                })
-                .await;
-        }
-    }
-
-    async fn session_start(&self, input: SessionLifecycleInput) {
-        for dispatcher in &self.dispatchers {
-            dispatcher
-                .session_start(SessionLifecycleInput {
-                    session: input.session,
-                })
-                .await;
-        }
-    }
-
-    async fn session_end(&self, input: SessionLifecycleInput) {
-        for dispatcher in &self.dispatchers {
-            dispatcher
-                .session_end(SessionLifecycleInput {
-                    session: input.session,
-                })
-                .await;
-        }
-    }
-
-    async fn agent_spawn(&self, input: AgentSpawnInput) {
-        for dispatcher in &self.dispatchers {
-            dispatcher
-                .agent_spawn(AgentSpawnInput {
-                    parent: input.parent,
-                    child: input.child,
-                })
-                .await;
-        }
-    }
-
-    fn has_goal_evaluate(&self) -> bool {
-        self.dispatchers
-            .iter()
-            .any(|dispatcher| dispatcher.has_goal_evaluate())
-    }
-
-    async fn goal_evaluate(
-        &self,
-        condition: &str,
-        transcript: &str,
-    ) -> Result<GoalEvaluateReply, CoreError> {
-        let mut last_error = None;
-        for dispatcher in self
-            .dispatchers
-            .iter()
-            .rev()
-            .filter(|dispatcher| dispatcher.has_goal_evaluate())
-        {
-            match dispatcher.goal_evaluate(condition, transcript).await {
-                Ok(reply) => return Ok(reply),
-                Err(error) => last_error = Some(error),
+    /// `compaction.after` observers.
+    pub async fn compaction_after(&self, input: NativeCompactionAfterInput) {
+        for hook in self.matching(HookPoint::CompactionAfter) {
+            if let Err(error) = hook.compaction_after(input.clone()).await {
+                warn(hook.as_ref(), "compaction.after", &error);
             }
         }
-        Err(last_error
-            .unwrap_or_else(|| CoreError::Invalid("goal.evaluate hook not registered".to_string())))
     }
 
-    async fn loop_verify(
-        &self,
-        target: &str,
-        transcript: &str,
-    ) -> Result<VerifierVerdict, CoreError> {
-        let mut last_error = None;
-        for dispatcher in self.dispatchers.iter().rev() {
-            match dispatcher.loop_verify(target, transcript).await {
-                Ok(reply) => return Ok(reply),
-                Err(error) => last_error = Some(error),
-            }
-        }
-        Err(last_error
-            .unwrap_or_else(|| CoreError::Invalid("loop.verifier hook not registered".to_string())))
-    }
-
-    async fn loop_plan(
-        &self,
-        target: &str,
-        history: &[String],
-        last: &VerifierVerdict,
-        planner_notes: &str,
-    ) -> Result<PlannerOutput, CoreError> {
-        let mut last_error = None;
-        for dispatcher in self.dispatchers.iter().rev() {
-            match dispatcher
-                .loop_plan(target, history, last, planner_notes)
+    /// `session.start` observers.
+    pub async fn session_start(&self, session: SessionId) {
+        for hook in self.matching(HookPoint::SessionStart) {
+            if let Err(error) = hook
+                .session_start(NativeSessionLifecycleInput { session })
                 .await
             {
-                Ok(reply) => return Ok(reply),
-                Err(error) => last_error = Some(error),
+                warn(hook.as_ref(), "session.start", &error);
             }
         }
-        Err(last_error
-            .unwrap_or_else(|| CoreError::Invalid("loop.planner hook not registered".to_string())))
     }
 
-    async fn loop_should_stop(&self, target: &str, transcript: &str) -> Option<String> {
-        for dispatcher in self.dispatchers.iter().rev() {
-            if let Some(reason) = dispatcher.loop_should_stop(target, transcript).await {
-                return Some(reason);
+    /// `session.end` observers.
+    pub async fn session_end(&self, session: SessionId) {
+        for hook in self.matching(HookPoint::SessionEnd) {
+            if let Err(error) = hook
+                .session_end(NativeSessionLifecycleInput { session })
+                .await
+            {
+                warn(hook.as_ref(), "session.end", &error);
+            }
+        }
+    }
+
+    /// `agent.spawn` observers.
+    pub async fn agent_spawn(&self, input: NativeAgentSpawnInput) {
+        for hook in self.matching(HookPoint::AgentSpawn) {
+            if let Err(error) = hook.agent_spawn(input.clone()).await {
+                warn(hook.as_ref(), "agent.spawn", &error);
+            }
+        }
+    }
+
+    /// Whether any entry implements the bundle-declared point `point`.
+    #[must_use]
+    pub fn declares(&self, point: &str) -> bool {
+        self.entries.iter().any(|entry| entry.declares(point))
+    }
+
+    /// Dispatch the bundle-declared point `point`: the latest entry that
+    /// answers wins; `None` when no entry answered.
+    pub async fn invoke_declared(&self, point: &str, input: Value) -> Option<Value> {
+        for entry in self
+            .entries
+            .iter()
+            .rev()
+            .filter(|entry| entry.declares(point))
+        {
+            match entry.hook.invoke_declared(point, input.clone()).await {
+                Ok(Some(reply)) => return Some(reply),
+                Ok(None) => {}
+                Err(error) => warn(entry.hook.as_ref(), point, &error),
             }
         }
         None

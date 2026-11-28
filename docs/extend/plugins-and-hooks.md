@@ -120,5 +120,5 @@ Register only the hooks you use in `initialize` (`hooks: [{ name: "..." }]`):
 | `model.fallback` | Failover | Pick `{ outcome: "retry", model: "provider/model" }` or `{ outcome: "give_up" }` when a model fails before streaming. |
 | `message.user.before` / `command.execute.before` | Enrichment (fail-open) | Rewrite incoming user prompt or slash-command text before admission. |
 | `compaction.before` / `compaction.after` | Observation | Notified before/after automatic 80% context window reduction. |
-| `goal.evaluate`, `loop.verifier`, `loop.planner` | Autopilot judges | Custom verdict/planning providers for `hya -p` Goal mode and `hya loop`. |
+| `<bundle-id>:<point>` (for example `hya/goal:evaluate`, `hya/loop:verifier`, `hya/loop:planner`, `hya/loop:should_stop`) | Bundle-declared point | Answer a hook point another bundle declares; the declaring bundle defines the JSON payloads. The first plugin that returns a non-`null` reply wins; a failing plugin is skipped. |
 | `session.start`, `session.end`, `agent.spawn`, `event` | Observation | Observe session lifecycle and committed event envelopes. |

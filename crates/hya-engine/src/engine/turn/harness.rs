@@ -36,8 +36,8 @@ use super::{RequestLineage, TurnExecution, TurnRebindInputs};
 use crate::TurnBinding;
 use crate::error::CoreError;
 use crate::hooks::{
-    ChatParamsInput, ChatParamsOutcome, HookChain, HookDispatcher, activation_hook_for,
-    replace_activation_hooks,
+    HookChain, HookPoint, NativeChatParamsInput, activation_hook_for, apply_chat_params,
+    chat_params_value, replace_activation_hooks,
 };
 use crate::kernel::{self, Failure, Harness, Round, ToolCall, ToolGate, View};
 use crate::prompt::{PromptEnv, discover_context_files, render_environment_and_context, today};
@@ -392,7 +392,7 @@ impl TurnHarness<'_> {
         );
         let mut hooks = fresh.bundle_hooks_for_agent(stable_id);
         if let Some(sidecar_hooks) = &inputs.sidecar_hooks {
-            hooks.push(Arc::clone(sidecar_hooks));
+            hooks.extend(sidecar_hooks.entries().iter().cloned());
         }
         self.agents = engine
             .annotate_agent_efforts_with(
@@ -404,8 +404,7 @@ impl TurnHarness<'_> {
         self.binding = fresh;
         self.live_agent = materialized;
         self.resources = compiled;
-        let hooks =
-            (!hooks.is_empty()).then(|| Arc::new(HookChain::new(hooks)) as Arc<dyn HookDispatcher>);
+        let hooks = (!hooks.is_empty()).then(|| Arc::new(HookChain::new(hooks)));
         replace_activation_hooks(session, hooks);
         let channel_policy = crate::channel_policy::from_binding(&self.binding)
             .map_err(CoreError::bundle)?
@@ -599,22 +598,25 @@ impl Harness for TurnHarness<'_> {
             &self.attachments,
             effort,
         );
-        let request = if let Some(hooks) = engine.active_hook_dispatcher(session) {
+        let request = if let Some(hooks) = engine
+            .active_hook_dispatcher(session)
+            .filter(|hooks| hooks.handles(HookPoint::ChatParams))
+        {
             let root_session = engine
                 .request_root_session(session, &mut self.root_session_cache)
                 .await;
-            match hooks
-                .chat_params(ChatParamsInput {
+            let params = hooks
+                .chat_params(NativeChatParamsInput {
                     session,
                     root_session,
                     agent: Some(AgentName::new(self.stable_id.as_str())),
                     message: self.message,
-                    request,
+                    params: chat_params_value(&request),
                 })
-                .await
-            {
-                ChatParamsOutcome::Continue { request } => request,
-            }
+                .await;
+            let mut request = request;
+            apply_chat_params(&mut request, params);
+            request
         } else {
             request
         };

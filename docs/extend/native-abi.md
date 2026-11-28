@@ -299,6 +299,8 @@ pub struct NativeRegistrations {
     pub api_handlers: Vec<Arc<dyn NativeBundleApiHandler>>,
     pub projection_reducers: Vec<Arc<dyn ProjectionReducer>>,
     pub uri_schema_handlers: Vec<Arc<dyn UriSchemaHandler>>,
+    /// Hook points this bundle declares (local names; namespaced `<bundle-id>:<name>`).
+    pub hook_points: Vec<String>,
     pub goal_drivers: Vec<Arc<dyn GoalDriver>>,
     pub loop_drivers: Vec<Arc<dyn LoopDriver>>,
 }
@@ -330,7 +332,7 @@ pub trait HostRuntime: Send + Sync {
 | **`HostModelCaller`** | `complete(request, cancel)`, `stream(request, cancel)`, `compact_window(model, messages)`, `model_window(model)`, `resolve_model_route(entries)` | `ModelCallRequest`, `ModelCallResponse`, `ModelToolCall`, `ModelStreamChunk`, `ModelWindowInfo`, `ModelRouteEntry`, `ResolvedModelRoute`, `ResolvedModelRouteCandidate` |
 | **`HostEventBus`** | `publish(envelope)`, `subscribe() -> broadcast::Receiver<Envelope>`, `publish_extension(session, bundle, kind, payload)` | `Envelope` |
 | **`HostCatalogReader`** | `list_agents(session)`, `get_agent(name, session)`, `list_skills(session)`, `list_bundles()`, `get_bundle(id)`, `bundle_config(bundle_id)`, `global_config()`, `resolve_scope_catalog(session, directory)`, `authorize_workflow_agent(session, caller, agent)` | `BundleCatalogSummary`, `ScopeCatalogSnapshot`, `AgentDef`, `PreparedAgent`, `SkillCatalogEntry`, `Bundle` |
-| **`HostExtensionRegistry`** | `list_extensions(kind)`, `has_bundle(bundle_id)`, `invoke_bundle_api(call)`, `invoke_tool(session, tool_name, input, cancel)`, plus goal/loop hook dispatch helpers (`has_goal_evaluate_hook`, `invoke_goal_evaluate_hook`, `invoke_loop_should_stop`, `invoke_loop_verify`, `invoke_loop_plan`) | `ExtensionKind`, `ExtensionEntry`, `BundleApiInvocation`, `BundleApiResult` |
+| **`HostExtensionRegistry`** | `list_extensions(kind)`, `has_bundle(bundle_id)`, `invoke_bundle_api(call)`, `invoke_tool(session, tool_name, input, cancel)`, and bundle-declared hook dispatch: `has_hook(session, point)` and `invoke_hook(session, point, input) -> Option<Value>` (first answer wins; an undeclared point is `InvalidInput`) | `ExtensionKind`, `ExtensionEntry`, `BundleApiInvocation`, `BundleApiResult` |
 
 ### 3.4 Native Extension Traits
 
@@ -339,7 +341,7 @@ pub trait HostRuntime: Send + Sync {
 | **`Tool`** (`hya_tool::Tool`) | `name`, `schema`, `execute(&self, ctx: &ToolCtx, input: Value)` | Model-callable tool; uses slim v2 `ToolCtx` + `ExtensionPlanes`. |
 | **`Rewriter`** (`hya_context::rewrite::Rewriter`) | Context reduction pass invoked before Kernel `Rewrite` at 80% window occupancy | Used by `hya/compaction` (`shake` + `remote`). |
 | **`NativeService`** | `id`, `start(runtime)`, `stop()`, `health() -> ServiceHealth`; optional `is_session_busy`, `cancel_session`, `wait_session_idle` | Host starts/stops managed background services with the runtime lifecycle. |
-| **`NativeHook`** | `id`, `hook_points() -> &[HookPoint]` plus default no-op methods for all 20 `HookPoint` variants | Covers `tool.execute.{before,after}`, `tool.visibility`, `compaction.{before,after}`, `session.{start,end}`, `agent.spawn`, `command.execute.before`, `message.user.before`, `text.complete`, `chat.params`, `model.fallback`, `permission.{ask,approve}`, `goal.evaluate`, `loop.{verifier,planner,should_stop}`, `event`. |
+| **`NativeHook`** | `id`, `hook_points() -> &[HookPoint]` plus default no-op methods for all 16 `HookPoint` variants; `declared_points()` + `invoke_declared(point, input)` for bundle-declared points; `is_healthy()`, `permission_identity()`, and a synchronous `on_event(envelope)` | Covers `tool.execute.{before,after}`, `tool.visibility`, `compaction.{before,after}`, `session.{start,end}`, `agent.spawn`, `command.execute.before`, `message.user.before`, `text.complete`, `chat.params`, `model.fallback`, `permission.{ask,approve}`, `event`. This is the one hook shape: the engine's `HookChain` holds native bundle hooks, the JS plugin host, and core built-ins as `NativeHook` entries, and dispatches each point through one ordered chain. A hook is called only for the points it lists. |
 | **`NativeBundleApiHandler`** | `id`, `endpoints() -> &[NativeApiEndpoint]`, `handle(NativeBundleApiRequest) -> Result<NativeBundleApiReply, HostError>` | Mounted uniformly on `hya.v2.BundleApi` (`/v2/bundles/{bundle}/api/{path}` and `/v2/sessions/{session}/bundles/{bundle}/{path}`). |
 | **`ProjectionReducer`** | `bundle_id`, `initial_state() -> Value`, `apply(&self, state: &mut Value, event: &ExtensionEventContext)` | Deterministically folds `Event::Extension` records into `Projection::extensions[bundle_id]`. |
 | **`UriSchemaHandler`** | `scheme`, `writable()`, `read(UriResolveCtx, uri) -> Result<UriContent, HostError>`, `write(UriResolveCtx, uri, content)` | Plugged into `HandleRouter` via `adapt_uri_schema_handler` (`UriSchemaHandleAdapter`). Internal schemes (`artifact`, `skill`, `local`) are protected. |

@@ -333,8 +333,8 @@ for line in sys.stdin:
     assert!(new.resolve_tool("process-fixture__echo").is_none());
     assert!(old.resolve_tool("process-fixture__echo").is_some());
 
-    match retained_hooks[0]
-        .tool_execute_before(hya_engine::hooks::ToolExecuteBeforeInput {
+    match hya_engine::HookChain::new(retained_hooks)
+        .tool_execute_before(hya_engine::hooks::NativeToolBeforeInput {
             session: hya_proto::SessionId::new(),
             message: hya_proto::MessageId::new(),
             call: hya_proto::ToolCallId::new(),
@@ -343,10 +343,10 @@ for line in sys.stdin:
         })
         .await
     {
-        hya_engine::hooks::ToolExecuteBeforeOutcome::Continue { input } => {
+        hya_engine::hooks::NativeToolBeforeOutcome::Continue { input } => {
             assert_eq!(input["marker"], "RETAINED_HOOK_FILES");
         }
-        hya_engine::hooks::ToolExecuteBeforeOutcome::Veto { reason } => {
+        hya_engine::hooks::NativeToolBeforeOutcome::Veto { reason } => {
             panic!("retained hook lost packaged files: {reason}");
         }
     }

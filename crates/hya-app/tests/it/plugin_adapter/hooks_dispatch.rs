@@ -9,17 +9,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hya_app::plugin_adapter::PluginHostAdapter;
 use hya_engine::hooks::{
-    AgentSpawnInput, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
-    CommandExecuteBeforeOutcome, CompactionAfterInput, CompactionBeforeInput, CompactionDecision,
-    CompactionTrigger, HookDispatcher, SessionLifecycleInput, TextCompleteInput,
-    TextCompleteOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome,
+    NativeAgentSpawnInput, NativeChatParamsInput, NativeCommandBeforeInput,
+    NativeCompactionAfterInput, NativeCompactionBeforeInput, NativeCompactionDecision,
+    NativeCompactionTrigger, NativeHook, NativeSessionLifecycleInput, NativeTextCompleteInput,
+    NativeToolBeforeInput, NativeToolBeforeOutcome,
 };
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
 use hya_plugin::messages::PluginKindWire;
-use hya_proto::{
-    AgentName, Envelope, Event, EventSeq, MessageId, ModelRef, PartId, SessionId, ToolCallId,
-};
+use hya_proto::{AgentName, Envelope, Event, EventSeq, MessageId, PartId, SessionId, ToolCallId};
 use serde_json::json;
 
 use super::{host_info, py_spec, wire_request};
@@ -107,7 +105,7 @@ for line in sys.stdin:
     let session = SessionId::new();
     let root = SessionId::new();
     match adapter
-        .tool_execute_before(ToolExecuteBeforeInput {
+        .tool_execute_before(NativeToolBeforeInput {
             session,
             message: MessageId::new(),
             call: ToolCallId::new(),
@@ -115,99 +113,112 @@ for line in sys.stdin:
             input: json!({"command": "ls"}),
         })
         .await
+        .unwrap()
     {
-        ToolExecuteBeforeOutcome::Continue { input } => {
+        NativeToolBeforeOutcome::Continue { input } => {
             assert_eq!(input["mutated"], json!(true));
             assert_eq!(input["command"], json!("ls"));
         }
-        ToolExecuteBeforeOutcome::Veto { reason } => panic!("unexpected veto: {reason}"),
+        NativeToolBeforeOutcome::Veto { reason } => panic!("unexpected veto: {reason}"),
     }
 
-    let CommandExecuteBeforeOutcome::Continue { text } = adapter
-        .command_execute_before(CommandExecuteBeforeInput {
+    let text = adapter
+        .command_execute_before(NativeCommandBeforeInput {
             session,
             command: "review".into(),
             arguments: "commit".into(),
             text: "Review diff".into(),
         })
-        .await;
+        .await
+        .unwrap();
     assert_eq!(text, "Review diff [review:commit]");
 
-    let TextCompleteOutcome::Continue { text } = adapter
-        .text_complete(TextCompleteInput {
+    let text = adapter
+        .text_complete(NativeTextCompleteInput {
             session,
             message: MessageId::new(),
             part: PartId::new(),
             text: "draft".into(),
         })
-        .await;
+        .await
+        .unwrap();
     assert!(text.starts_with("draft ["));
 
     // chat.params lineage rewrite + JSON-RPC error fail-open.
-    let ChatParamsOutcome::Continue { request } = adapter
-        .chat_params(ChatParamsInput {
+    let params = adapter
+        .chat_params(NativeChatParamsInput {
             session,
             root_session: root,
             agent: Some(AgentName::new("explore")),
             message: MessageId::new(),
-            request: wire_request("fake/model"),
+            params: hya_engine::chat_params_value(&wire_request("fake/model")),
         })
-        .await;
-    assert_eq!(request.model.as_str(), format!("routed/explore/{root}"));
+        .await
+        .unwrap();
+    assert_eq!(params["model"], format!("routed/explore/{root}"));
 
-    let ChatParamsOutcome::Continue { request } = adapter
-        .chat_params(ChatParamsInput {
+    let params = adapter
+        .chat_params(NativeChatParamsInput {
             session,
             root_session: root,
             agent: None,
             message: MessageId::new(),
-            request: wire_request("fail/model"),
+            params: hya_engine::chat_params_value(&wire_request("fail/model")),
         })
-        .await;
-    assert_eq!(request.model.as_str(), "fail/model");
+        .await
+        .unwrap();
+    assert_eq!(params["model"], "fail/model");
 
     // compaction.before replace + JSON-RPC error fail-open to Proceed.
     assert_eq!(
         adapter
-            .compaction_before(CompactionBeforeInput {
+            .compaction_before(NativeCompactionBeforeInput {
                 session,
-                trigger: CompactionTrigger::Overflow,
+                trigger: NativeCompactionTrigger::Overflow,
                 messages_token_estimate: 4_200,
             })
-            .await,
-        CompactionDecision::Replace {
+            .await
+            .unwrap(),
+        NativeCompactionDecision::Replace {
             instructions: "SUMMARIZE AS LIMERICKS".into(),
         }
     );
     assert_eq!(
         adapter
-            .compaction_before(CompactionBeforeInput {
+            .compaction_before(NativeCompactionBeforeInput {
                 session,
-                trigger: CompactionTrigger::Overflow,
+                trigger: NativeCompactionTrigger::Overflow,
                 messages_token_estimate: 999,
             })
-            .await,
-        CompactionDecision::Proceed
+            .await
+            .unwrap(),
+        NativeCompactionDecision::Proceed
     );
 
     // Notification hooks + event fan-out.
     adapter
-        .session_start(SessionLifecycleInput { session })
-        .await;
-    adapter.session_end(SessionLifecycleInput { session }).await;
+        .session_start(NativeSessionLifecycleInput { session })
+        .await
+        .unwrap();
     adapter
-        .agent_spawn(AgentSpawnInput {
+        .session_end(NativeSessionLifecycleInput { session })
+        .await
+        .unwrap();
+    adapter
+        .agent_spawn(NativeAgentSpawnInput {
             parent: session,
             child: SessionId::new(),
         })
-        .await;
+        .await
+        .unwrap();
     adapter
-        .compaction_after(CompactionAfterInput {
+        .compaction_after(NativeCompactionAfterInput {
             session,
             summary_tokens: 128,
         })
-        .await;
-    adapter.dispatch_event(&Envelope {
+        .await
+        .unwrap();
+    adapter.on_event(&Envelope {
         seq: EventSeq(1),
         ts_millis: 0,
         event: Event::SessionTitled {
@@ -306,7 +317,7 @@ for line in sys.stdin:
     );
 
     match adapter
-        .tool_execute_before(ToolExecuteBeforeInput {
+        .tool_execute_before(NativeToolBeforeInput {
             session: SessionId::new(),
             message: MessageId::new(),
             call: ToolCallId::new(),
@@ -314,22 +325,24 @@ for line in sys.stdin:
             input: json!({}),
         })
         .await
+        .unwrap()
     {
-        ToolExecuteBeforeOutcome::Continue { input } => {
+        NativeToolBeforeOutcome::Continue { input } => {
             assert_eq!(input["tags"], json!(["first", "second"]));
         }
-        ToolExecuteBeforeOutcome::Veto { reason } => panic!("unexpected veto: {reason}"),
+        NativeToolBeforeOutcome::Veto { reason } => panic!("unexpected veto: {reason}"),
     }
 
     assert_eq!(
         adapter
-            .compaction_before(CompactionBeforeInput {
+            .compaction_before(NativeCompactionBeforeInput {
                 session: SessionId::new(),
-                trigger: CompactionTrigger::Proactive,
+                trigger: NativeCompactionTrigger::Proactive,
                 messages_token_estimate: 10,
             })
-            .await,
-        CompactionDecision::Skip {
+            .await
+            .unwrap(),
+        NativeCompactionDecision::Skip {
             reason: "not worth folding yet".into(),
         }
     );
@@ -385,34 +398,92 @@ for line in sys.stdin:
     let mut original = wire_request("test-model");
     original.temperature = Some(0.5);
     let (guard_out, enrich_out) = tokio::join!(
-        guard_adapter.tool_execute_before(ToolExecuteBeforeInput {
+        guard_adapter.tool_execute_before(NativeToolBeforeInput {
             session: SessionId::new(),
             message: MessageId::new(),
             call: ToolCallId::new(),
             tool: "shell".into(),
             input: json!({"command": "rm -rf /"}),
         }),
-        enrich_adapter.chat_params(ChatParamsInput {
+        enrich_adapter.chat_params(NativeChatParamsInput {
             session: SessionId::new(),
             root_session: SessionId::new(),
             agent: None,
             message: MessageId::new(),
-            request: original,
+            params: hya_engine::chat_params_value(&original),
         }),
     );
 
-    match guard_out {
-        ToolExecuteBeforeOutcome::Veto { reason } => {
+    match guard_out.unwrap() {
+        NativeToolBeforeOutcome::Veto { reason } => {
             assert!(
                 reason.contains("guard failed safe"),
                 "expected safe-guard veto reason, got: {reason}"
             );
         }
-        ToolExecuteBeforeOutcome::Continue { .. } => {
+        NativeToolBeforeOutcome::Continue { .. } => {
             panic!("safe guard timeout must veto, not continue");
         }
     }
-    let ChatParamsOutcome::Continue { request } = enrich_out;
-    assert_eq!(request.temperature, Some(0.5));
-    assert_eq!(request.model, ModelRef::new("test-model"));
+    let params = enrich_out.unwrap();
+    assert_eq!(params["temperature"], 0.5);
+    assert_eq!(params["model"], "test-model");
+}
+
+/// A native hook and a JS (plugin host) hook on the same point share one
+/// ordered chain: each sees the previous entry's output, in registration order.
+#[tokio::test]
+async fn native_and_plugin_hooks_dispatch_through_one_ordered_chain() {
+    use async_trait::async_trait;
+    use hya_engine::hooks::{HookChain, HookPoint, NativeMessageUserBeforeInput};
+    use hya_runtime_abi::HostError;
+
+    struct Suffix(&'static str);
+
+    #[async_trait]
+    impl NativeHook for Suffix {
+        fn id(&self) -> &str {
+            self.0
+        }
+        fn hook_points(&self) -> &[HookPoint] {
+            &[HookPoint::MessageUserBefore]
+        }
+        async fn message_user_before(
+            &self,
+            input: NativeMessageUserBeforeInput,
+        ) -> Result<String, HostError> {
+            Ok(format!("{} {}", input.text, self.0))
+        }
+    }
+
+    let script = r#"
+import json, sys
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method == "initialize":
+        result = {"protocol_version": 1, "plugin": {"id": "js", "version": "0.1.0", "kind": "rust"},
+                  "hooks": [{"name": "message.user.before"}], "tools": []}
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
+    elif method == "hook/message.user.before":
+        text = msg["params"]["text"] + " js"
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"outcome": "continue", "text": text}}), flush=True)
+    elif "id" in msg:
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
+"#;
+    let host = Arc::new(PluginHost::connect_all(vec![py_spec("js", script)], host_info()).await);
+    let plugin: Arc<dyn NativeHook> = Arc::new(PluginHostAdapter::new(host.clone()));
+    let chain = HookChain::of_hooks([
+        Arc::new(Suffix("native-1")) as Arc<dyn NativeHook>,
+        plugin,
+        Arc::new(Suffix("native-2")),
+    ]);
+    let text = chain
+        .message_user_before(NativeMessageUserBeforeInput {
+            session: SessionId::new(),
+            text: "prompt".into(),
+        })
+        .await;
+    assert_eq!(text, "prompt native-1 js native-2");
+    host.shutdown().await.unwrap();
 }

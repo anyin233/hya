@@ -17,16 +17,17 @@ use hya_bundle::{
     PreparedAgent, PreparedResource, ResourceView, SourceFile, prepare_package,
 };
 use hya_engine::handle_naming::{HandleRng, SplitMix64, operator_names};
+use hya_engine::hooks::{
+    NativeChatParamsInput, NativeCommandBeforeInput, NativeMessageUserBeforeInput,
+    NativeTextCompleteInput, NativeToolAfterInput, NativeToolAfterOutcome, NativeToolBeforeInput,
+    NativeToolBeforeOutcome,
+};
 use hya_engine::{
-    AgentCatalog, AgentSpec, BoundSidecarFactory, BoundSpawnSender, ChatParamsInput,
-    ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, CompactionConfig,
-    CoreError, CreateSession, EventBus, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, ResidentRecovery, ResidentSupervisor, RuntimeSource, RuntimeSourceId,
-    SessionEngine, SessionStoreExt as _, SidecarEnvironment, SidecarHandle, SidecarLifecycle,
-    SidecarStart, SubagentGovernor, SubagentLimits, SummarizeOptions, Summarizer, TaskSpawnOrigin,
-    TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
-    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, TurnBinding, run_lifecycle_service,
-    run_mailbox_service,
+    AgentCatalog, AgentSpec, BoundSidecarFactory, BoundSpawnSender, CompactionConfig, CoreError,
+    CreateSession, EventBus, NativeHook, ResidentRecovery, ResidentSupervisor, RuntimeSource,
+    RuntimeSourceId, SessionEngine, SessionStoreExt as _, SidecarEnvironment, SidecarHandle,
+    SidecarLifecycle, SidecarStart, SubagentGovernor, SubagentLimits, SummarizeOptions, Summarizer,
+    TaskSpawnOrigin, TurnBinding, run_lifecycle_service, run_mailbox_service,
 };
 use hya_proto::{
     ActorEpoch, AgentName, ChannelKind, Envelope, Event, FinishCause, FinishReason, MailEndpoint,
@@ -385,7 +386,7 @@ impl SidecarHandle for AckGateHandle {
 #[derive(Clone)]
 struct SidecarCfg {
     bindings: Arc<[ResolvedTool]>,
-    hooks: Option<Arc<dyn HookDispatcher>>,
+    hooks: Option<Arc<dyn NativeHook>>,
     starts: Arc<AtomicUsize>,
     ready_calls: Arc<AtomicUsize>,
     healthy: Arc<AtomicBool>,
@@ -486,8 +487,8 @@ impl SidecarHandle for CfgHandle {
     fn tool_bindings(&self) -> Arc<[ResolvedTool]> {
         self.cfg.bindings.clone()
     }
-    fn hook_dispatcher(&self) -> Option<Arc<dyn HookDispatcher>> {
-        self.cfg.hooks.clone()
+    fn hook_dispatcher(&self) -> Option<hya_engine::HookEntry> {
+        self.cfg.hooks.clone().map(hya_engine::HookEntry::new)
     }
 }
 
@@ -499,38 +500,68 @@ struct ActivationHookProbe {
     events: Arc<Mutex<Vec<Envelope>>>,
 }
 #[async_trait]
-impl HookDispatcher for ActivationHookProbe {
-    fn dispatch_event(&self, e: &Envelope) {
+impl NativeHook for ActivationHookProbe {
+    fn id(&self) -> &str {
+        "ActivationHookProbe"
+    }
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[
+            hya_runtime_abi::HookPoint::EventObserve,
+            hya_runtime_abi::HookPoint::CommandExecuteBefore,
+            hya_runtime_abi::HookPoint::TextComplete,
+            hya_runtime_abi::HookPoint::MessageUserBefore,
+            hya_runtime_abi::HookPoint::ChatParams,
+            hya_runtime_abi::HookPoint::ToolExecuteBefore,
+            hya_runtime_abi::HookPoint::ToolExecuteAfter,
+        ]
+    }
+
+    fn on_event(&self, e: &Envelope) {
         self.events.lock().unwrap().push(e.clone());
     }
     async fn command_execute_before(
         &self,
-        i: CommandExecuteBeforeInput,
-    ) -> CommandExecuteBeforeOutcome {
+        i: NativeCommandBeforeInput,
+    ) -> Result<String, hya_runtime_abi::HostError> {
         self.leak.fetch_add(1, Ordering::SeqCst);
-        CommandExecuteBeforeOutcome::Continue { text: i.text }
+        Ok(i.text)
     }
-    async fn text_complete(&self, i: TextCompleteInput) -> TextCompleteOutcome {
+    async fn text_complete(
+        &self,
+        i: NativeTextCompleteInput,
+    ) -> Result<String, hya_runtime_abi::HostError> {
         self.leak.fetch_add(1, Ordering::SeqCst);
-        TextCompleteOutcome::Continue { text: i.text }
+        Ok(i.text)
     }
-    async fn message_user_before(&self, i: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
+    async fn message_user_before(
+        &self,
+        i: NativeMessageUserBeforeInput,
+    ) -> Result<String, hya_runtime_abi::HostError> {
         self.leak.fetch_add(1, Ordering::SeqCst);
-        MessageUserBeforeOutcome::Continue { text: i.text }
+        Ok(i.text)
     }
-    async fn chat_params(&self, i: ChatParamsInput) -> ChatParamsOutcome {
+    async fn chat_params(
+        &self,
+        i: NativeChatParamsInput,
+    ) -> Result<serde_json::Value, hya_runtime_abi::HostError> {
         self.leak.fetch_add(1, Ordering::SeqCst);
-        ChatParamsOutcome::Continue { request: i.request }
+        Ok(i.params)
     }
-    async fn tool_execute_before(&self, i: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
+    async fn tool_execute_before(
+        &self,
+        i: NativeToolBeforeInput,
+    ) -> Result<NativeToolBeforeOutcome, hya_runtime_abi::HostError> {
         self.tool_before.fetch_add(1, Ordering::SeqCst);
         let mut input = i.input;
         input["hooked"] = json!(true);
-        ToolExecuteBeforeOutcome::Continue { input }
+        Ok(NativeToolBeforeOutcome::Continue { input })
     }
-    async fn tool_execute_after(&self, i: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
+    async fn tool_execute_after(
+        &self,
+        i: NativeToolAfterInput,
+    ) -> Result<NativeToolAfterOutcome, hya_runtime_abi::HostError> {
         self.tool_after.fetch_add(1, Ordering::SeqCst);
-        ToolExecuteAfterOutcome::Continue { result: i.result }
+        Ok(NativeToolAfterOutcome::Continue { result: i.result })
     }
 }
 
@@ -540,30 +571,30 @@ struct PluginHookProbe {
     tool_before: Arc<AtomicUsize>,
 }
 #[async_trait]
-impl HookDispatcher for PluginHookProbe {
-    fn dispatch_event(&self, _: &Envelope) {}
-    async fn command_execute_before(
+impl NativeHook for PluginHookProbe {
+    fn id(&self) -> &str {
+        "PluginHookProbe"
+    }
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[
+            hya_runtime_abi::HookPoint::ChatParams,
+            hya_runtime_abi::HookPoint::ToolExecuteBefore,
+        ]
+    }
+
+    async fn chat_params(
         &self,
-        i: CommandExecuteBeforeInput,
-    ) -> CommandExecuteBeforeOutcome {
-        CommandExecuteBeforeOutcome::Continue { text: i.text }
-    }
-    async fn text_complete(&self, i: TextCompleteInput) -> TextCompleteOutcome {
-        TextCompleteOutcome::Continue { text: i.text }
-    }
-    async fn message_user_before(&self, i: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
-        MessageUserBeforeOutcome::Continue { text: i.text }
-    }
-    async fn chat_params(&self, i: ChatParamsInput) -> ChatParamsOutcome {
+        i: NativeChatParamsInput,
+    ) -> Result<serde_json::Value, hya_runtime_abi::HostError> {
         self.chat_params.fetch_add(1, Ordering::SeqCst);
-        ChatParamsOutcome::Continue { request: i.request }
+        Ok(i.params)
     }
-    async fn tool_execute_before(&self, i: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
+    async fn tool_execute_before(
+        &self,
+        i: NativeToolBeforeInput,
+    ) -> Result<NativeToolBeforeOutcome, hya_runtime_abi::HostError> {
         self.tool_before.fetch_add(1, Ordering::SeqCst);
-        ToolExecuteBeforeOutcome::Continue { input: i.input }
-    }
-    async fn tool_execute_after(&self, i: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
-        ToolExecuteAfterOutcome::Continue { result: i.result }
+        Ok(NativeToolBeforeOutcome::Continue { input: i.input })
     }
 }
 
@@ -579,8 +610,19 @@ struct HookLossDispatcher {
     calls: Arc<AtomicUsize>,
 }
 #[async_trait]
-impl HookDispatcher for HookLossDispatcher {
-    fn dispatch_event(&self, _: &Envelope) {
+impl NativeHook for HookLossDispatcher {
+    fn id(&self) -> &str {
+        "HookLossDispatcher"
+    }
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[
+            hya_runtime_abi::HookPoint::EventObserve,
+            hya_runtime_abi::HookPoint::ToolExecuteBefore,
+            hya_runtime_abi::HookPoint::ToolExecuteAfter,
+        ]
+    }
+
+    fn on_event(&self, _: &Envelope) {
         if matches!(self.stage, HookLossStage::Event)
             && self
                 .healthy
@@ -593,42 +635,33 @@ impl HookDispatcher for HookLossDispatcher {
     fn is_healthy(&self) -> bool {
         self.healthy.load(Ordering::SeqCst)
     }
-    async fn command_execute_before(
+    async fn tool_execute_before(
         &self,
-        i: CommandExecuteBeforeInput,
-    ) -> CommandExecuteBeforeOutcome {
-        CommandExecuteBeforeOutcome::Continue { text: i.text }
-    }
-    async fn text_complete(&self, i: TextCompleteInput) -> TextCompleteOutcome {
-        TextCompleteOutcome::Continue { text: i.text }
-    }
-    async fn message_user_before(&self, i: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
-        MessageUserBeforeOutcome::Continue { text: i.text }
-    }
-    async fn chat_params(&self, i: ChatParamsInput) -> ChatParamsOutcome {
-        ChatParamsOutcome::Continue { request: i.request }
-    }
-    async fn tool_execute_before(&self, i: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
-        match self.stage {
+        i: NativeToolBeforeInput,
+    ) -> Result<NativeToolBeforeOutcome, hya_runtime_abi::HostError> {
+        Ok(match self.stage {
             HookLossStage::Before => {
                 self.calls.fetch_add(1, Ordering::SeqCst);
                 self.healthy.store(false, Ordering::SeqCst);
-                ToolExecuteBeforeOutcome::Veto {
+                NativeToolBeforeOutcome::Veto {
                     reason: "hook transport lost".into(),
                 }
             }
             HookLossStage::After => {
                 self.calls.fetch_add(1, Ordering::SeqCst);
-                ToolExecuteBeforeOutcome::Continue { input: i.input }
+                NativeToolBeforeOutcome::Continue { input: i.input }
             }
-            HookLossStage::Event => ToolExecuteBeforeOutcome::Continue { input: i.input },
-        }
+            HookLossStage::Event => NativeToolBeforeOutcome::Continue { input: i.input },
+        })
     }
-    async fn tool_execute_after(&self, i: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
+    async fn tool_execute_after(
+        &self,
+        i: NativeToolAfterInput,
+    ) -> Result<NativeToolAfterOutcome, hya_runtime_abi::HostError> {
         if matches!(self.stage, HookLossStage::After) {
             self.healthy.store(false, Ordering::SeqCst);
         }
-        ToolExecuteAfterOutcome::Continue { result: i.result }
+        Ok(NativeToolAfterOutcome::Continue { result: i.result })
     }
 }
 
@@ -936,7 +969,7 @@ async fn sidecar_bundle_engine(
     provider: Arc<dyn Provider>,
     mode: Mode,
     extra_bundles: Vec<Bundle>,
-    plugin_hooks: Option<Arc<dyn HookDispatcher>>,
+    plugin_hooks: Option<Arc<dyn NativeHook>>,
     sidecar: Option<Arc<dyn SidecarEnvironment>>,
 ) -> (Arc<SessionEngine>, AgentSpec) {
     let mut bundles = vec![sidecar_bundle()];

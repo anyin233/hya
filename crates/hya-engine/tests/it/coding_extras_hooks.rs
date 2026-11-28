@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_coding_extras_core::{CodingExtrasState, coding_extras_hooks};
-use hya_engine::{AgentCatalog, EventBus, NativeHookDispatcher, RuntimeRegistry, SessionEngine};
+use hya_engine::{AgentCatalog, EventBus, RuntimeRegistry, SessionEngine};
 use hya_proto::{
     Event, FinishReason, MessageId, ModelRef, PartProjection, SessionId, ToolPartState,
 };
@@ -150,7 +150,7 @@ async fn post_edit_hook_fires_on_both_bare_and_hashline_write_and_edit() {
                 diagnostics: diagnostics.clone(),
             })),
         ));
-        let native_hooks = Arc::new(NativeHookDispatcher::new(coding_extras_hooks(state, None)));
+        let native_hooks = coding_extras_hooks(state, None);
 
         let write_input = json!({
             "path": "demo.rs",
@@ -213,7 +213,7 @@ async fn post_edit_hook_fires_on_both_bare_and_hashline_write_and_edit() {
             Rule::new(Action::Read, "*", Mode::Allow),
         ]));
         let engine = SessionEngine::new_bare(store, router, runtime, permission, EventBus::new(64))
-            .with_native_hooks(native_hooks);
+            .with_hook_list(native_hooks);
 
         let session = support::create_root_session(&engine, "hya-bare", "fake", dir.path()).await;
         engine
@@ -297,7 +297,7 @@ impl Provider for RecordingToolsProvider {
 async fn ask_user_visibility_hook_filters_offered_tools_by_interaction_availability() {
     let dir = support::TestDir::new("ask-user-visibility");
     let state = Arc::new(CodingExtrasState::new());
-    let native_hooks = Arc::new(NativeHookDispatcher::new(coding_extras_hooks(state, None)));
+    let native_hooks = coding_extras_hooks(state, None);
 
     for interactive in [false, true] {
         let offered = Arc::new(Mutex::new(Vec::new()));
@@ -307,7 +307,7 @@ async fn ask_user_visibility_hook_filters_offered_tools_by_interaction_availabil
         let (interaction, _questions_rx) = InteractionPlane::new();
         let mut engine = support::engine_with_provider(provider, PermissionRules::default())
             .await
-            .with_native_hooks(Arc::clone(&native_hooks) as Arc<dyn hya_engine::HookDispatcher>);
+            .with_hook_list(native_hooks.clone());
         if interactive {
             engine = engine.with_interaction(interaction);
         }

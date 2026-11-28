@@ -3,7 +3,7 @@ use hya_tool::ToolError;
 use serde_json::Value;
 
 use crate::engine::SessionEngine;
-use crate::hooks::{ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolOutcomeNative};
+use crate::hooks::{NativeToolAfterInput, NativeToolResult};
 
 pub(super) struct AfterHookCall<'a> {
     pub(super) session: SessionId,
@@ -27,16 +27,16 @@ pub(super) async fn apply_tool_after_hooks(
     };
     let was_permission_err = matches!(&result, Err(ToolError::Permission(_)));
     let native = match &result {
-        Ok(output) => ToolOutcomeNative::Ok {
+        Ok(output) => NativeToolResult::Ok {
             output: output.clone(),
             time_ms: call.time_ms,
         },
-        Err(error) => ToolOutcomeNative::Err {
+        Err(error) => NativeToolResult::Err {
             message: error.to_string(),
         },
     };
-    let ToolExecuteAfterOutcome::Continue { result: rewritten } = hooks
-        .tool_execute_after(ToolExecuteAfterInput {
+    let rewritten = hooks
+        .tool_execute_after(NativeToolAfterInput {
             session: call.session,
             message: call.message,
             call: call.call,
@@ -49,8 +49,8 @@ pub(super) async fn apply_tool_after_hooks(
         result
     } else {
         match rewritten {
-            ToolOutcomeNative::Ok { output, .. } => Ok(output),
-            ToolOutcomeNative::Err { message } => Err(ToolError::Other(message)),
+            NativeToolResult::Ok { output, .. } => Ok(output),
+            NativeToolResult::Err { message } => Err(ToolError::Other(message)),
         }
     }
 }

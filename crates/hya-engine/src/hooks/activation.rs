@@ -3,12 +3,12 @@ use std::sync::{Arc, RwLock};
 
 use hya_proto::SessionId;
 
-use super::HookDispatcher;
+use super::HookChain;
 
 #[derive(Clone)]
 struct ActivationHookContext {
     session: SessionId,
-    hooks: Arc<RwLock<Option<Arc<dyn HookDispatcher>>>>,
+    hooks: Arc<RwLock<Option<Arc<HookChain>>>>,
 }
 
 tokio::task_local! {
@@ -17,7 +17,7 @@ tokio::task_local! {
 
 pub(crate) async fn scope_activation_hooks<F, T>(
     session: SessionId,
-    hooks: Arc<dyn HookDispatcher>,
+    hooks: Arc<HookChain>,
     future: F,
 ) -> T
 where
@@ -36,7 +36,7 @@ where
 
 pub(crate) async fn scope_optional_activation_hooks<F, T>(
     session: SessionId,
-    hooks: Option<Arc<dyn HookDispatcher>>,
+    hooks: Option<Arc<HookChain>>,
     future: F,
 ) -> T
 where
@@ -53,7 +53,7 @@ where
         .await
 }
 
-pub(crate) fn activation_hook_for(session: SessionId) -> Option<Arc<dyn HookDispatcher>> {
+pub(crate) fn activation_hook_for(session: SessionId) -> Option<Arc<HookChain>> {
     ACTIVATION_HOOK_CONTEXT
         .try_with(|context| {
             (context.session == session).then(|| {
@@ -69,7 +69,7 @@ pub(crate) fn activation_hook_for(session: SessionId) -> Option<Arc<dyn HookDisp
         .flatten()
 }
 
-pub(crate) fn replace_activation_hooks(session: SessionId, hooks: Option<Arc<dyn HookDispatcher>>) {
+pub(crate) fn replace_activation_hooks(session: SessionId, hooks: Option<Arc<HookChain>>) {
     let _ = ACTIVATION_HOOK_CONTEXT.try_with(|context| {
         if context.session == session {
             *context

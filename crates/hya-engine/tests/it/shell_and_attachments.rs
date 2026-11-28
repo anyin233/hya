@@ -10,16 +10,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use hya_engine::{
-    AgentSpec, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
-    CommandExecuteBeforeOutcome, EventBus, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, SessionEngine, TextCompleteInput, TextCompleteOutcome,
-    ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, ToolOutcomeNative,
-};
+use hya_engine::hooks::{NativeToolAfterInput, NativeToolAfterOutcome, NativeToolResult};
+use hya_engine::{AgentSpec, EventBus, NativeHook, SessionEngine};
 use hya_proto::{
-    Envelope, Event, FinishReason, Message, MessageId, ModelRef, Part, PartProjection, Role,
-    SessionId, ToolPartState,
+    Event, FinishReason, Message, MessageId, ModelRef, Part, PartProjection, Role, SessionId,
+    ToolPartState,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, HttpProvider, Provider,
@@ -79,42 +74,25 @@ struct OversizedDirectResultHook {
 }
 
 #[async_trait]
-impl HookDispatcher for OversizedDirectResultHook {
-    fn dispatch_event(&self, _envelope: &Envelope) {}
+impl NativeHook for OversizedDirectResultHook {
+    fn id(&self) -> &str {
+        "OversizedDirectResultHook"
+    }
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[hya_runtime_abi::HookPoint::ToolExecuteAfter]
+    }
 
-    async fn command_execute_before(
+    async fn tool_execute_after(
         &self,
-        input: CommandExecuteBeforeInput,
-    ) -> CommandExecuteBeforeOutcome {
-        CommandExecuteBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
-        TextCompleteOutcome::Continue { text: input.text }
-    }
-
-    async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
-        MessageUserBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
-        ChatParamsOutcome::Continue {
-            request: input.request,
-        }
-    }
-
-    async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
-        ToolExecuteBeforeOutcome::Continue { input: input.input }
-    }
-
-    async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
-        if let ToolOutcomeNative::Ok { output, .. } = &input.result
+        input: NativeToolAfterInput,
+    ) -> Result<NativeToolAfterOutcome, hya_runtime_abi::HostError> {
+        if let NativeToolResult::Ok { output, .. } = &input.result
             && let Some(path) = output["metadata"]["outputPath"].as_str()
         {
             *self.captured_output_path.lock().unwrap() = Some(path.to_string());
         }
-        ToolExecuteAfterOutcome::Continue {
-            result: ToolOutcomeNative::Ok {
+        Ok(NativeToolAfterOutcome::Continue {
+            result: NativeToolResult::Ok {
                 output: json!({
                     "title": "T".repeat(4096),
                     "output": "O".repeat(300 * 1024),
@@ -126,7 +104,7 @@ impl HookDispatcher for OversizedDirectResultHook {
                 }),
                 time_ms: 0,
             },
-        }
+        })
     }
 }
 
@@ -332,7 +310,7 @@ async fn direct_shell_caps_oversized_post_hook_coding_envelope() {
         PermissionRules::new(vec![Rule::new(Action::Bash, "**", Mode::Allow)]),
     )
     .await
-    .with_hooks(Arc::clone(&hook) as Arc<dyn HookDispatcher>);
+    .with_hooks(Arc::clone(&hook) as Arc<dyn NativeHook>);
     let session = support::create_root_session(&engine, "hya-main", "fake", dir.path()).await;
     let agent = support::agent_spec("hya-main", "fake", dir.path());
 

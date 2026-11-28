@@ -1,38 +1,51 @@
-//! Evaluator (`goal.evaluate`, `loop.verifier`, `loop.planner`,
-//! `loop.should_stop`), `model.fallback`, and `permission.approve` hooks.
+//! Evaluator (`hya/goal:evaluate`, `hya/loop:verifier`, `hya/loop:planner`,
+//! `hya/loop:should_stop`), `model.fallback`, and `permission.approve` hooks.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::Arc;
 
 use hya_app::plugin_adapter::PluginHostAdapter;
-use hya_engine::CoreError;
 use hya_engine::hooks::{
-    GoalEvaluateReply, HookDispatcher, ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome,
-    PermissionApproveInput,
+    ModelFailureClass, NativeHook, NativeModelFallbackInput, NativePermissionApproveInput,
 };
 use hya_plugin::PluginHost;
 use hya_plugin::config::PluginSpec;
 use hya_proto::{AgentName, MessageId, ModelRef, SessionId};
 use hya_tool::{Action, Decision, Resource};
+use serde_json::json;
 
 use super::{host_info, py_spec};
 
 #[tokio::test]
 async fn evaluator_hooks_dispatch_and_fail_open() {
-    // Empty host: unregistered probes and defaults.
     let empty = PluginHostAdapter::new(Arc::new(
         PluginHost::connect_all(Vec::new(), host_info()).await,
     ));
-    assert!(!HookDispatcher::has_goal_evaluate(&empty));
-    assert!(matches!(
-        empty.goal_evaluate("condition", "transcript").await,
-        Err(CoreError::Invalid(ref m)) if m.contains("not registered")
-    ));
-    assert_eq!(empty.loop_should_stop("target", "transcript").await, None);
+    let goal = |condition, transcript| json!({"condition": condition, "transcript": transcript});
+    let stop = |target, transcript| json!({"target": target, "transcript": transcript});
+    assert!(
+        !empty
+            .declared_points()
+            .iter()
+            .any(|p| p == "hya/goal:evaluate")
+    );
+    assert_eq!(
+        empty
+            .invoke_declared("hya/goal:evaluate", goal("condition", "transcript"))
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        empty
+            .invoke_declared("hya/loop:should_stop", stop("target", "transcript"))
+            .await
+            .unwrap(),
+        None
+    );
 
-    // Chain: poison plugin fails open to healthy plugin, plus malformed replies and
-    // PluginGoalEvaluator error degradation.
+    // A failed call falls through and a non-null reply is returned as raw JSON.
     let poison = r#"
 import json, sys
 for line in sys.stdin:
@@ -42,15 +55,16 @@ for line in sys.stdin:
     m = msg.get("method")
     if m == "initialize":
         res = {"protocol_version": 1, "plugin": {"id": "poison", "version": "0.1.0", "kind": "rust"},
-               "hooks": [{"name": "goal.evaluate"}, {"name": "loop.should_stop"}], "tools": []}
+               "hooks": [{"name": "hya/goal:evaluate"}, {"name": "hya/loop:should_stop"}], "tools": []}
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": res}), flush=True)
-    elif m == "hook/goal.evaluate":
+    elif m == "hook/hya/goal:evaluate":
         if msg["params"]["condition"] == "malformed":
             print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"met": "yes", "verdict": True}}), flush=True)
         else:
             print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32000, "message": "poisoned"}}), flush=True)
-    elif m == "hook/loop.should_stop":
-        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"stop": "yes", "verdict": True}}), flush=True)
+    elif m == "hook/hya/loop:should_stop":
+        result = {"stop": "yes", "verdict": True} if msg["params"]["target"] == "malformed" else None
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
     elif "id" in msg:
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
 "#;
@@ -63,29 +77,29 @@ for line in sys.stdin:
     m = msg.get("method")
     if m == "initialize":
         res = {"protocol_version": 1, "plugin": {"id": "healthy", "version": "0.1.0", "kind": "rust"},
-               "hooks": [{"name": "goal.evaluate"}, {"name": "loop.verifier"},
-                         {"name": "loop.planner"}, {"name": "loop.should_stop"}], "tools": []}
+               "hooks": [{"name": "hya/goal:evaluate"}, {"name": "hya/loop:verifier"},
+                         {"name": "hya/loop:planner"}, {"name": "hya/loop:should_stop"}], "tools": []}
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": res}), flush=True)
-    elif m == "hook/goal.evaluate":
+    elif m == "hook/hya/goal:evaluate":
         cond = msg["params"]["condition"]
         if cond == "tests pass":
             assert "worker output" in msg["params"]["transcript"]
             print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"met": True, "reason": "all green"}}), flush=True)
         else:
             print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"met": False, "reason": "not yet"}}), flush=True)
-    elif m == "hook/loop.verifier":
+    elif m == "hook/hya/loop:verifier":
         assert msg["params"]["target"] == "green build"
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {
             "score": 80, "satisfied": False, "evidence_quality": "supported",
             "critical_gaps": ["tests still red"], "iteration_summary": "edited main.rs",
             "reason": "close"}}), flush=True)
-    elif m == "hook/loop.planner":
+    elif m == "hook/hya/loop:planner":
         assert msg["params"]["last"]["score"] == 80
         assert msg["params"]["planner_notes"] == "focus on unit tests"
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {
             "directive": "fix the failing unit test", "continuity_brief": "main.rs was edited",
             "planner_notes": "focus on unit tests", "strategy_change": False, "change_note": ""}}), flush=True)
-    elif m == "hook/loop.should_stop":
+    elif m == "hook/hya/loop:should_stop":
         if msg["params"]["target"] == "green tests":
             print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"stop": True, "reason": "worker reports done"}}), flush=True)
         else:
@@ -102,62 +116,89 @@ for line in sys.stdin:
     );
     let adapter = PluginHostAdapter::new(host.clone());
     assert_eq!(host.len(), 2);
-    assert!(HookDispatcher::has_goal_evaluate(&adapter));
+    assert!(
+        adapter
+            .declared_points()
+            .iter()
+            .any(|p| p == "hya/goal:evaluate")
+    );
 
-    // Poison errors -> falls through to healthy's verdict.
-    assert!(matches!(
-        adapter.goal_evaluate("tests pass", "[User] worker output").await,
-        Ok(GoalEvaluateReply::Verdict { met: true, ref reason }) if reason == "all green"
-    ));
-    // Malformed verdict from first provider is decisive.
-    assert!(matches!(
-        adapter.goal_evaluate("malformed", "transcript").await,
-        Ok(GoalEvaluateReply::Malformed)
-    ));
-
-    // loop.verifier + loop.planner round-trip.
-    let verdict = adapter
-        .loop_verify("green build", "[User] work")
-        .await
-        .unwrap();
-    assert_eq!(verdict.score, 80);
-    assert!(!verdict.satisfied);
-    assert_eq!(verdict.critical_gaps, ["tests still red"]);
-    let plan = adapter
-        .loop_plan(
-            "green build",
-            &["first attempt".into()],
-            &verdict,
-            "focus on unit tests",
-        )
-        .await
-        .unwrap();
-    assert_eq!(plan.directive, "fix the failing unit test");
-    assert!(!plan.strategy_change);
-
-    // loop.should_stop: malformed first plugin fails open to second plugin (stop=true and stop=false).
     assert_eq!(
         adapter
-            .loop_should_stop("green tests", "[User] worker output")
+            .invoke_declared(
+                "hya/goal:evaluate",
+                goal("tests pass", "[User] worker output")
+            )
             .await
-            .as_deref(),
-        Some("worker reports done")
+            .unwrap(),
+        Some(json!({"met": true, "reason": "all green"}))
     );
     assert_eq!(
-        adapter.loop_should_stop("keep-going", "transcript").await,
-        None
+        adapter
+            .invoke_declared("hya/goal:evaluate", goal("malformed", "transcript"))
+            .await
+            .unwrap(),
+        Some(json!({"met": "yes", "verdict": true}))
     );
 
-    // Standalone poisoned goal.evaluate hook surfaces Err so hya/goal's
-    // PluginGoalEvaluator can degrade it to a cappable not-met verdict.
+    let verdict = adapter
+        .invoke_declared("hya/loop:verifier", stop("green build", "[User] work"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(verdict["score"], 80);
+    assert_eq!(verdict["satisfied"], false);
+    assert_eq!(verdict["critical_gaps"], json!(["tests still red"]));
+    let plan = adapter
+        .invoke_declared(
+            "hya/loop:planner",
+            json!({
+                "target": "green build",
+                "history": ["first attempt"],
+                "last": verdict,
+                "planner_notes": "focus on unit tests",
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(plan["directive"], "fix the failing unit test");
+    assert_eq!(plan["strategy_change"], false);
+
+    assert_eq!(
+        adapter
+            .invoke_declared("hya/loop:should_stop", stop("malformed", "transcript"))
+            .await
+            .unwrap(),
+        Some(json!({"stop": "yes", "verdict": true}))
+    );
+    assert_eq!(
+        adapter
+            .invoke_declared(
+                "hya/loop:should_stop",
+                stop("green tests", "[User] worker output")
+            )
+            .await
+            .unwrap(),
+        Some(json!({"stop": true, "reason": "worker reports done"}))
+    );
+    assert_eq!(
+        adapter
+            .invoke_declared("hya/loop:should_stop", stop("keep-going", "transcript"))
+            .await
+            .unwrap(),
+        Some(json!({"stop": false}))
+    );
+
     let only_poison =
         Arc::new(PluginHost::connect_all(vec![py_spec("poison", poison)], host_info()).await);
     let poison_adapter = PluginHostAdapter::new(only_poison);
-    assert!(
+    assert_eq!(
         poison_adapter
-            .goal_evaluate("condition", "transcript")
+            .invoke_declared("hya/goal:evaluate", goal("condition", "transcript"))
             .await
-            .is_err()
+            .unwrap(),
+        None
     );
 }
 
@@ -190,13 +231,13 @@ for line in sys.stdin:
         );
         py_spec(id, &script)
     };
-    let input = |attempt: u32| ModelFallbackInput {
+    let input = |attempt: u32| NativeModelFallbackInput {
         session: SessionId::new(),
         root_session: SessionId::new(),
         agent: Some(AgentName::new("explore")),
         message: MessageId::new(),
         model: ModelRef::new("anthropic/claude-opus-5-5"),
-        error_class: ModelFailureClass::Retryable,
+        error_class: ModelFailureClass::Retryable.as_str().into(),
         error_message: "http status 529: overloaded".into(),
         attempt,
         tried: vec![
@@ -229,15 +270,12 @@ for line in sys.stdin:
     assert_eq!(host.len(), 6);
 
     assert_eq!(
-        adapter.model_fallback(input(2)).await,
-        ModelFallbackOutcome::Retry {
-            model: ModelRef::new("next/explore/retryable/2/2/anthropic/claude-opus-5-5/True"),
-        }
+        adapter.model_fallback(input(2)).await.unwrap(),
+        Some(ModelRef::new(
+            "next/explore/retryable/2/2/anthropic/claude-opus-5-5/True"
+        ))
     );
-    assert_eq!(
-        adapter.model_fallback(input(9)).await,
-        ModelFallbackOutcome::GiveUp
-    );
+    assert_eq!(adapter.model_fallback(input(9)).await.unwrap(), None);
 }
 
 #[tokio::test]
@@ -272,7 +310,7 @@ for line in sys.stdin:
     let host =
         Arc::new(PluginHost::connect_all(vec![py_spec("approver", script)], host_info()).await);
     let adapter = PluginHostAdapter::new(host);
-    let req = |mode: &str, action: Action, resource: Resource| PermissionApproveInput {
+    let req = |mode: &str, action: Action, resource: Resource| NativePermissionApproveInput {
         session: SessionId::new(),
         root_session: SessionId::new(),
         agent: Some(AgentName::new("build")),
@@ -284,15 +322,17 @@ for line in sys.stdin:
     assert_eq!(
         adapter
             .permission_approve(req("careful", Action::Bash, Resource::Command("ls".into())))
-            .await,
+            .await
+            .unwrap(),
         Some(Decision::AllowOnce)
     );
     assert_eq!(
-        HookDispatcher::permission_approve(
+        NativeHook::permission_approve(
             &adapter,
             req("careful", Action::Edit, Resource::Path("x".into()))
         )
-        .await,
+        .await
+        .unwrap(),
         Some(Decision::Reject {
             feedback: Some("mode careful says no".into()),
         })
@@ -301,7 +341,8 @@ for line in sys.stdin:
         assert_eq!(
             adapter
                 .permission_approve(req(mode, Action::Bash, Resource::Command("ls".into())))
-                .await,
+                .await
+                .unwrap(),
             None,
             "{mode} must fall through to user prompt"
         );

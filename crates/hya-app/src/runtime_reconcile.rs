@@ -108,7 +108,7 @@ pub(crate) struct PreparedSource {
     skills: Vec<RuntimeSourceSkill>,
     resources: BTreeMap<String, Value>,
     schemas: Vec<SourceSchema>,
-    pub(crate) hooks: Option<Arc<dyn hya_engine::hooks::HookDispatcher>>,
+    pub(crate) hooks: Option<Arc<dyn hya_engine::NativeHook>>,
 }
 
 pub(crate) struct PreparedFailure {

@@ -12,16 +12,12 @@ use async_trait::async_trait;
 use hya_bundle::{
     AgentRole, Bundle, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, ResourceView,
 };
+use hya_engine::hooks::{NativeToolAfterInput, NativeToolAfterOutcome, NativeToolResult};
 use hya_engine::{
-    AgentCatalog, AgentSpec, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
-    CommandExecuteBeforeOutcome, CreateSession, EventBus, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, RuntimeRegistry, SessionEngine, TextCompleteInput,
-    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    AgentCatalog, AgentSpec, CreateSession, EventBus, NativeHook, RuntimeRegistry, SessionEngine,
 };
 use hya_proto::{
-    AgentName, Envelope, ModelRef, PartProjection, Role, SessionId, SessionKind, ToolName,
-    ToolSchema,
+    AgentName, ModelRef, PartProjection, Role, SessionId, SessionKind, ToolName, ToolSchema,
 };
 use hya_provider::{Provider, ProviderRouter};
 use hya_store::SessionStore;
@@ -380,50 +376,33 @@ impl MaskFirstResult {
 }
 
 #[async_trait]
-impl HookDispatcher for MaskFirstResult {
-    fn dispatch_event(&self, _envelope: &Envelope) {}
+impl NativeHook for MaskFirstResult {
+    fn id(&self) -> &str {
+        "MaskFirstResult"
+    }
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[hya_runtime_abi::HookPoint::ToolExecuteAfter]
+    }
 
-    async fn command_execute_before(
+    async fn tool_execute_after(
         &self,
-        input: CommandExecuteBeforeInput,
-    ) -> CommandExecuteBeforeOutcome {
-        CommandExecuteBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
-        TextCompleteOutcome::Continue { text: input.text }
-    }
-
-    async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
-        MessageUserBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
-        ChatParamsOutcome::Continue {
-            request: input.request,
-        }
-    }
-
-    async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
-        ToolExecuteBeforeOutcome::Continue { input: input.input }
-    }
-
-    async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
-        if let ToolOutcomeNative::Ok { output, .. } = &input.result
+        input: NativeToolAfterInput,
+    ) -> Result<NativeToolAfterOutcome, hya_runtime_abi::HostError> {
+        if let NativeToolResult::Ok { output, .. } = &input.result
             && let Some(path) = output["metadata"]["outputPath"].as_str()
         {
             *self.captured_output_path.lock().unwrap() = Some(path.to_string());
         }
-        ToolExecuteAfterOutcome::Continue {
+        Ok(NativeToolAfterOutcome::Continue {
             result: if self.masked.swap(true, Ordering::SeqCst) {
                 input.result
             } else {
-                ToolOutcomeNative::Ok {
+                NativeToolResult::Ok {
                     output: json!({ "masked": true }),
                     time_ms: 0,
                 }
             },
-        }
+        })
     }
 }
 

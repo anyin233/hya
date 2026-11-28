@@ -17,7 +17,8 @@ pub use driver::{
     validate_goal_condition, wrap_up_directive,
 };
 pub use evaluator::{
-    DEFAULT_EVALUATOR_SYSTEM_PROMPT, GoalEvaluator, MALFORMED_VERDICT_REASON, ModelGoalEvaluator,
+    DEFAULT_EVALUATOR_SYSTEM_PROMPT, EVALUATE_HOOK, EVALUATE_HOOK_POINT, EvaluateHookInput,
+    EvaluateHookReply, GoalEvaluator, MALFORMED_VERDICT_REASON, ModelGoalEvaluator,
     PLUGIN_HOOK_ERROR_REASON, PluginGoalEvaluator, Verdict, resolve_evaluator_model,
     skill_prompt_body,
 };
@@ -25,6 +26,7 @@ pub use service::{BUNDLE_ID, GOAL_SERVICE_ID, GoalDriverService};
 
 hya_runtime_abi::export_native_bundle_v2!(|out| {
     out.services.push(Arc::new(GoalDriverService::new()));
+    out.hook_points.push(EVALUATE_HOOK_POINT.to_string());
     out.goal_drivers.push(Arc::new(NativeGoalDriver));
 });
 
@@ -45,9 +47,9 @@ mod tests {
         BundleClaimRequest, BundleStateEntry, DriverRunOutcome, ExtensionEntry, ExtensionKind,
         GoalDriver, GoalRunRequest, HostBundleStorage, HostCatalogReader, HostError, HostEventBus,
         HostExtensionRegistry, HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner,
-        ModelCallRequest, ModelCallResponse, ModelStreamChunk, ModelWindowInfo,
-        NativeGoalEvaluateVerdict, NativeService, SessionListFilter, SessionSummaryMeta,
-        TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus, abi_digest_v2,
+        ModelCallRequest, ModelCallResponse, ModelStreamChunk, ModelWindowInfo, NativeService,
+        SessionListFilter, SessionSummaryMeta, TurnOutcome, TurnSpawnRequest, TurnStartRequest,
+        TurnStatus, abi_digest_v2,
     };
     use serde_json::{Value, json};
     use tokio::sync::{broadcast, mpsc};
@@ -62,7 +64,7 @@ mod tests {
         model_replies: Mutex<VecDeque<Result<String, HostError>>>,
         model_requests: Mutex<Vec<ModelCallRequest>>,
         has_hook: AtomicBool,
-        hook_replies: Mutex<VecDeque<Result<Option<NativeGoalEvaluateVerdict>, HostError>>>,
+        hook_replies: Mutex<VecDeque<Result<Option<Value>, HostError>>>,
         hook_transcripts: Mutex<Vec<String>>,
         bundle_config: Mutex<Value>,
         bundle: Mutex<Option<hya_bundle::Bundle>>,
@@ -99,7 +101,7 @@ mod tests {
 
         fn with_hook_replies(
             self: Arc<Self>,
-            replies: Vec<Result<Option<NativeGoalEvaluateVerdict>, HostError>>,
+            replies: Vec<Result<Option<Value>, HostError>>,
         ) -> Arc<Self> {
             self.has_hook.store(true, Ordering::Release);
             *self.hook_replies.lock().unwrap() = replies.into();
@@ -541,23 +543,26 @@ mod tests {
             Err(HostError::Unavailable("unused".into()))
         }
 
-        async fn has_goal_evaluate_hook(
+        async fn has_hook(
             &self,
             _session: Option<SessionId>,
+            point: &str,
         ) -> Result<bool, HostError> {
+            assert_eq!(point, EVALUATE_HOOK);
             Ok(self.has_hook.load(Ordering::Acquire))
         }
 
-        async fn invoke_goal_evaluate_hook(
+        async fn invoke_hook(
             &self,
             _session: Option<SessionId>,
-            _condition: &str,
-            transcript: &str,
-        ) -> Result<Option<NativeGoalEvaluateVerdict>, HostError> {
+            point: &str,
+            input: Value,
+        ) -> Result<Option<Value>, HostError> {
+            assert_eq!(point, EVALUATE_HOOK);
             self.hook_transcripts
                 .lock()
                 .unwrap()
-                .push(transcript.to_string());
+                .push(input["transcript"].as_str().unwrap().to_string());
             self.hook_replies
                 .lock()
                 .unwrap()
@@ -843,14 +848,12 @@ mod tests {
         let host = MockHost::new()
             .with_turns(vec![Ok("step 1".into()), Ok("step 2".into())])
             .with_hook_replies(vec![
-                Ok(Some(NativeGoalEvaluateVerdict::Verdict {
-                    met: false,
-                    reason: "add meow".into(),
-                })),
-                Ok(Some(NativeGoalEvaluateVerdict::Verdict {
-                    met: true,
-                    reason: "hook approved".into(),
-                })),
+                Ok(Some(
+                    serde_json::json!({"met": false, "reason": "add meow"}),
+                )),
+                Ok(Some(
+                    serde_json::json!({"met": true, "reason": "hook approved"}),
+                )),
             ]);
 
         let outcome = NativeGoalDriver
@@ -884,7 +887,7 @@ mod tests {
 
         // Malformed hook falls back to ModelGoalEvaluator.
         let fb_host = MockHost::new()
-            .with_hook_replies(vec![Ok(Some(NativeGoalEvaluateVerdict::Malformed))])
+            .with_hook_replies(vec![Ok(Some(serde_json::json!({"verdict": "garbled"})))])
             .with_model_replies(vec![Ok(r#"{"met":true,"reason":"fallback ok"}"#.into())]);
         let fallback = Arc::new(ModelGoalEvaluator::new(fb_host.clone(), None));
         let eval = PluginGoalEvaluator::new(fb_host.clone(), None).with_fallback(fallback);

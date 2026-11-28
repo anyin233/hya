@@ -383,13 +383,25 @@ impl SidecarHandle for LossSidecar {
     fn loss_token(&self) -> Option<CancellationToken> {
         Some(self.loss.clone())
     }
-    fn hook_dispatcher(&self) -> Option<Arc<dyn hya_engine::HookDispatcher>> {
+    fn hook_dispatcher(&self) -> Option<hya_engine::HookEntry> {
         self.hooks
-            .then(|| Arc::new(hya_engine::NoopHookHost) as Arc<dyn hya_engine::HookDispatcher>)
+            .then(|| hya_engine::HookEntry::new(Arc::new(LossSidecarHook)))
     }
     async fn terminate(&mut self) -> Result<(), CoreError> {
         self.terminated.notify_one();
         Ok(())
+    }
+}
+
+struct LossSidecarHook;
+
+impl hya_engine::NativeHook for LossSidecarHook {
+    fn id(&self) -> &str {
+        "loss-sidecar"
+    }
+
+    fn hook_points(&self) -> &[hya_engine::HookPoint] {
+        &[]
     }
 }
 
@@ -400,52 +412,38 @@ struct BoundaryHooks {
 }
 
 #[async_trait]
-impl hya_engine::HookDispatcher for BoundaryHooks {
-    fn dispatch_event(&self, _: &Envelope) {}
-    async fn session_start(&self, _: hya_engine::SessionLifecycleInput) {
+impl hya_engine::NativeHook for BoundaryHooks {
+    fn id(&self) -> &str {
+        "BoundaryHooks"
+    }
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[
+            hya_runtime_abi::HookPoint::SessionStart,
+            hya_runtime_abi::HookPoint::ToolExecuteAfter,
+        ]
+    }
+
+    async fn session_start(
+        &self,
+        _: hya_engine::hooks::NativeSessionLifecycleInput,
+    ) -> Result<(), hya_runtime_abi::HostError> {
         if let Some((entered, release)) = &self.bind_pause {
             entered.notify_one();
             release.notified().await;
         }
-    }
-    async fn command_execute_before(
-        &self,
-        i: hya_engine::CommandExecuteBeforeInput,
-    ) -> hya_engine::CommandExecuteBeforeOutcome {
-        hya_engine::CommandExecuteBeforeOutcome::Continue { text: i.text }
-    }
-    async fn text_complete(
-        &self,
-        i: hya_engine::TextCompleteInput,
-    ) -> hya_engine::TextCompleteOutcome {
-        hya_engine::TextCompleteOutcome::Continue { text: i.text }
-    }
-    async fn message_user_before(
-        &self,
-        i: hya_engine::MessageUserBeforeInput,
-    ) -> hya_engine::MessageUserBeforeOutcome {
-        hya_engine::MessageUserBeforeOutcome::Continue { text: i.text }
-    }
-    async fn chat_params(&self, i: hya_engine::ChatParamsInput) -> hya_engine::ChatParamsOutcome {
-        hya_engine::ChatParamsOutcome::Continue { request: i.request }
-    }
-    async fn tool_execute_before(
-        &self,
-        i: hya_engine::ToolExecuteBeforeInput,
-    ) -> hya_engine::ToolExecuteBeforeOutcome {
-        hya_engine::ToolExecuteBeforeOutcome::Continue { input: i.input }
+        Ok(())
     }
     async fn tool_execute_after(
         &self,
-        _: hya_engine::ToolExecuteAfterInput,
-    ) -> hya_engine::ToolExecuteAfterOutcome {
+        _: hya_engine::hooks::NativeToolAfterInput,
+    ) -> Result<hya_engine::hooks::NativeToolAfterOutcome, hya_runtime_abi::HostError> {
         self.after_calls.fetch_add(1, Ordering::SeqCst);
-        hya_engine::ToolExecuteAfterOutcome::Continue {
-            result: hya_engine::ToolOutcomeNative::Ok {
+        Ok(hya_engine::hooks::NativeToolAfterOutcome::Continue {
+            result: hya_engine::hooks::NativeToolResult::Ok {
                 output: json!({"rewritten": true}),
                 time_ms: 0,
             },
-        }
+        })
     }
 }
 

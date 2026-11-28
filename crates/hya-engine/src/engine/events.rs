@@ -167,15 +167,8 @@ impl SessionEngine {
     }
 
     pub(crate) fn publish_envelope(&self, envelope: Envelope) {
-        if let Some(hooks) = &self.native_hooks {
-            hooks.dispatch_event(&envelope);
-        }
-        if let Some(hooks) = &self.hooks {
-            hooks.dispatch_event(&envelope);
-        }
-        for hooks in self.runtime.global_plugin_hooks() {
-            hooks.dispatch_event(&envelope);
-        }
+        self.hooks.dispatch_event(&envelope);
+        crate::HookChain::new(self.runtime.global_plugin_hooks()).dispatch_event(&envelope);
         let session = envelope.event.session();
         let active = session.and_then(activation_hook_for);
         if let Some(hooks) = active {

@@ -130,16 +130,66 @@ pub enum HookPoint {
     PermissionAsk,
     /// Approve under a bundle-declared permission mode (`permission.approve`).
     PermissionApprove,
-    /// Evaluate a goal completion condition (`goal.evaluate`).
-    GoalEvaluate,
-    /// Verify loop target progress (`loop.verifier`).
-    LoopVerify,
-    /// Plan next loop directive (`loop.planner`).
-    LoopPlan,
-    /// Decide whether a loop should stop (`loop.should_stop`).
-    LoopShouldStop,
     /// Observe live envelopes published on the event bus (`event`).
     EventObserve,
+}
+
+impl HookPoint {
+    /// Every core hook point, in dispatch-table order.
+    pub const ALL: [Self; 16] = [
+        Self::ToolExecuteBefore,
+        Self::ToolExecuteAfter,
+        Self::ToolVisibility,
+        Self::CompactionBefore,
+        Self::CompactionAfter,
+        Self::SessionStart,
+        Self::SessionEnd,
+        Self::AgentSpawn,
+        Self::CommandExecuteBefore,
+        Self::MessageUserBefore,
+        Self::TextComplete,
+        Self::ChatParams,
+        Self::ModelFallback,
+        Self::PermissionAsk,
+        Self::PermissionApprove,
+        Self::EventObserve,
+    ];
+
+    /// Hook name used by bundle manifests (`hook_refs`) and the plugin wire.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::ToolExecuteBefore => "tool.execute.before",
+            Self::ToolExecuteAfter => "tool.execute.after",
+            Self::ToolVisibility => "tool.visibility",
+            Self::CompactionBefore => "compaction.before",
+            Self::CompactionAfter => "compaction.after",
+            Self::SessionStart => "session.start",
+            Self::SessionEnd => "session.end",
+            Self::AgentSpawn => "agent.spawn",
+            Self::CommandExecuteBefore => "command.execute.before",
+            Self::MessageUserBefore => "message.user.before",
+            Self::TextComplete => "experimental.text.complete",
+            Self::ChatParams => "chat.params",
+            Self::ModelFallback => "model.fallback",
+            Self::PermissionAsk => "permission.ask",
+            Self::PermissionApprove => "permission.approve",
+            Self::EventObserve => "event",
+        }
+    }
+
+    /// Parse a hook name produced by [`Self::name`].
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|point| point.name() == name)
+    }
+}
+
+/// Whether `name` is a bundle-declared hook point (`<bundle-id>:<point>`).
+#[must_use]
+pub fn is_declared_hook_point(name: &str) -> bool {
+    name.split_once(':')
+        .is_some_and(|(bundle, point)| !bundle.is_empty() && !point.is_empty())
 }
 
 /// Input passed to `tool.execute.before` native hooks.
@@ -405,66 +455,6 @@ pub struct NativePermissionApproveInput {
     pub resource: Resource,
 }
 
-/// Verdict returned by a `goal.evaluate` native hook.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum NativeGoalEvaluateVerdict {
-    /// Structured verdict.
-    Verdict {
-        /// Whether the goal condition is satisfied.
-        met: bool,
-        /// Explanation for logs and directives.
-        reason: String,
-    },
-    /// Reply was unparseable; driver counts it against iteration budget.
-    Malformed,
-}
-
-/// Structured verdict returned by a `loop.verifier` native hook.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeVerifierVerdict {
-    /// Score in `0..=100`.
-    pub score: u8,
-    /// Whether the verifier considers the target satisfied.
-    pub satisfied: bool,
-    /// Evidence quality band (`missing`, `claim_only`, `supported`, `verified`).
-    pub evidence_quality: String,
-    /// Remaining critical gaps.
-    pub critical_gaps: Vec<String>,
-    /// Summary of this iteration's progress.
-    pub iteration_summary: String,
-    /// Free-form reason string.
-    pub reason: String,
-}
-
-/// Input passed to a `loop.planner` native hook.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeLoopPlanInput {
-    /// Loop target description.
-    pub target: String,
-    /// Historical directive/summary strings.
-    pub history: Vec<String>,
-    /// Last verifier verdict.
-    pub last: NativeVerifierVerdict,
-    /// Persistent planner notes.
-    pub planner_notes: String,
-}
-
-/// Planned next directive returned by a `loop.planner` native hook.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativePlannerOutput {
-    /// Next directive for the worker turn.
-    pub directive: String,
-    /// Continuity brief for the worker.
-    pub continuity_brief: String,
-    /// Updated planner notes.
-    pub planner_notes: String,
-    /// Whether strategy changed.
-    pub strategy_change: bool,
-    /// Explanation of strategy change.
-    pub change_note: String,
-}
-
 /// Hook implementation registered by a native bundle.
 #[async_trait]
 pub trait NativeHook: Send + Sync {
@@ -580,44 +570,37 @@ pub trait NativeHook: Send + Sync {
         Ok(None)
     }
 
-    /// Evaluate a goal condition (`goal.evaluate`).
-    async fn goal_evaluate(
-        &self,
-        _condition: &str,
-        _transcript: &str,
-    ) -> Result<Option<NativeGoalEvaluateVerdict>, HostError> {
+    /// Bundle-declared hook points (`<bundle-id>:<point>`) this hook implements.
+    fn declared_points(&self) -> &[String] {
+        &[]
+    }
+
+    /// Answer a bundle-declared hook point listed in [`Self::declared_points`].
+    ///
+    /// `Ok(None)` defers to the next implementer. The declaring bundle owns
+    /// the payload shapes.
+    async fn invoke_declared(&self, point: &str, input: Value) -> Result<Option<Value>, HostError> {
+        let _ = (point, input);
         Ok(None)
     }
 
-    /// Grade a loop target (`loop.verifier`).
-    async fn loop_verify(
-        &self,
-        _target: &str,
-        _transcript: &str,
-    ) -> Result<Option<NativeVerifierVerdict>, HostError> {
-        Ok(None)
+    /// Whether the hook's process can still serve calls; an unhealthy hook
+    /// cancels the turn that checks it.
+    fn is_healthy(&self) -> bool {
+        true
     }
 
-    /// Plan the next loop directive (`loop.planner`).
-    async fn loop_plan(
-        &self,
-        _input: NativeLoopPlanInput,
-    ) -> Result<Option<NativePlannerOutput>, HostError> {
-        Ok(None)
+    /// Stable identity of this hook's `permission.ask` decisions, used to pin
+    /// saved permission grants. `None` means the hook does not pin.
+    fn permission_identity(&self) -> Option<[u8; 32]> {
+        None
     }
 
-    /// Decide whether a loop should stop (`loop.should_stop`).
-    async fn loop_should_stop(
-        &self,
-        _target: &str,
-        _transcript: &str,
-    ) -> Result<Option<String>, HostError> {
-        Ok(None)
-    }
-
-    /// Observe a live event envelope (`event`).
-    async fn on_event(&self, _envelope: &Envelope) -> Result<(), HostError> {
-        Ok(())
+    /// Observe a live envelope published on the event bus (`event`).
+    ///
+    /// Called synchronously in publish order; implementors must not block.
+    fn on_event(&self, envelope: &Envelope) {
+        let _ = envelope;
     }
 }
 

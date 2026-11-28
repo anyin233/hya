@@ -631,7 +631,7 @@ fn bundle_owner_scoping_for_plugin_skills_and_process_tools() {
                     ToolPermission::Tool,
                 )],
             )
-            .with_hooks(Arc::new(crate::hooks::HookChain::new(Vec::new()))),
+            .with_hooks(Arc::new(PrivateProcessHook)),
         ])
     })
     .unwrap();
@@ -2279,5 +2279,17 @@ fn builtin_agent_views_enforce_read_only_and_coordination_sets() {
         "read",
     ]) {
         assert!(main.contains(k), "hya-main lacks `{k}`");
+    }
+}
+
+struct PrivateProcessHook;
+
+impl crate::NativeHook for PrivateProcessHook {
+    fn id(&self) -> &str {
+        "private-process"
+    }
+
+    fn hook_points(&self) -> &[crate::HookPoint] {
+        &[crate::HookPoint::ChatParams]
     }
 }

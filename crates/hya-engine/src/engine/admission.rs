@@ -3,10 +3,7 @@ use hya_proto::{ActorClaim, Envelope, Event, FinishReason, MessageId, PartId, Ro
 use super::SessionEngine;
 use crate::TurnBinding;
 use crate::error::CoreError;
-use crate::hooks::{
-    CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome,
-};
+use crate::hooks::{NativeCommandBeforeInput, NativeMessageUserBeforeInput};
 use crate::store_bridge::{
     RecoveredActorClaim, RecoveredResidentWork, ResidentArchive, ResidentArchiveOwner,
     SessionStoreExt as _,
@@ -50,29 +47,24 @@ impl SessionEngine {
         if hooks.is_empty() {
             return text;
         }
-        let dispatcher = crate::HookChain::new(hooks);
-        match dispatcher
-            .message_user_before(MessageUserBeforeInput { session, text })
+        crate::HookChain::new(hooks)
+            .message_user_before(NativeMessageUserBeforeInput { session, text })
             .await
-        {
-            MessageUserBeforeOutcome::Continue { text } => text,
-        }
     }
 
     async fn apply_bundle_command_hook(
         &self,
         binding: &TurnBinding,
         stable_id: &str,
-        input: CommandExecuteBeforeInput,
+        input: NativeCommandBeforeInput,
     ) -> String {
         let hooks = binding.bundle_hooks_for_agent(stable_id);
         if hooks.is_empty() {
             return input.text;
         }
-        let dispatcher = crate::HookChain::new(hooks);
-        let CommandExecuteBeforeOutcome::Continue { text } =
-            dispatcher.command_execute_before(input).await;
-        text
+        crate::HookChain::new(hooks)
+            .command_execute_before(input)
+            .await
     }
     pub(crate) async fn recover_resident_actor_durable(
         &self,
@@ -322,13 +314,10 @@ impl SessionEngine {
         session: SessionId,
         text: String,
     ) -> String {
-        let mut text = text;
-        for hooks in self.native_hooks.iter().chain(self.hooks.iter()) {
-            let MessageUserBeforeOutcome::Continue { text: next } = hooks
-                .message_user_before(MessageUserBeforeInput { session, text })
-                .await;
-            text = next;
-        }
+        let text = self
+            .hooks
+            .message_user_before(NativeMessageUserBeforeInput { session, text })
+            .await;
         self.apply_bundle_message_hook(binding, stable_id, session, text)
             .await
     }
@@ -532,23 +521,20 @@ impl SessionEngine {
     ) -> Result<MessageId, CoreError> {
         self.ensure_external_turn_allowed(session).await?;
         let (binding, stable_id) = self.admission_binding(session).await?;
-        let mut text = text;
-        for hooks in self.native_hooks.iter().chain(self.hooks.iter()) {
-            let CommandExecuteBeforeOutcome::Continue { text: next } = hooks
-                .command_execute_before(CommandExecuteBeforeInput {
-                    session,
-                    command: command.clone(),
-                    arguments: arguments.clone(),
-                    text,
-                })
-                .await;
-            text = next;
-        }
+        let text = self
+            .hooks
+            .command_execute_before(NativeCommandBeforeInput {
+                session,
+                command: command.clone(),
+                arguments: arguments.clone(),
+                text,
+            })
+            .await;
         let text = self
             .apply_bundle_command_hook(
                 &binding,
                 &stable_id,
-                CommandExecuteBeforeInput {
+                NativeCommandBeforeInput {
                     session,
                     command: command.clone(),
                     arguments: arguments.clone(),

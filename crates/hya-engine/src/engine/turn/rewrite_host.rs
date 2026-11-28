@@ -20,7 +20,9 @@ use super::super::summary::summary_messages;
 use super::super::{AgentSpec, SessionEngine};
 use super::messages::{AttachmentData, projection_to_messages};
 use crate::error::CoreError;
-use crate::hooks::{CompactionAfterInput, CompactionBeforeInput, CompactionTrigger};
+use crate::hooks::{
+    NativeCompactionAfterInput, NativeCompactionBeforeInput, NativeCompactionTrigger,
+};
 
 impl SessionEngine {
     /// The settings `RewriteCtx::config` carries to the compaction bundle:
@@ -101,9 +103,9 @@ impl CompactionHooks for SessionEngine {
     async fn before(&self, session: SessionId, tokens: usize) {
         if let Some(hooks) = self.active_hook_dispatcher(session) {
             hooks
-                .compaction_before(CompactionBeforeInput {
+                .compaction_before(NativeCompactionBeforeInput {
                     session,
-                    trigger: CompactionTrigger::Overflow,
+                    trigger: NativeCompactionTrigger::Overflow,
                     messages_token_estimate: tokens,
                 })
                 .await;
@@ -113,7 +115,7 @@ impl CompactionHooks for SessionEngine {
     async fn after(&self, session: SessionId, summary_tokens: usize) {
         if let Some(hooks) = self.active_hook_dispatcher(session) {
             hooks
-                .compaction_after(CompactionAfterInput {
+                .compaction_after(NativeCompactionAfterInput {
                     session,
                     summary_tokens,
                 })

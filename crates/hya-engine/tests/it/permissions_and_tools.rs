@@ -17,19 +17,17 @@ use hya_bundle::{
     AgentRole, Bundle, BundleCatalog, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent,
     ResourceView, SourceFile, prepare_package,
 };
-use hya_engine::hooks::PermissionApproveInput;
+use hya_engine::hooks::NativePermissionApproveInput;
+use hya_engine::hooks::{
+    NativeCompactionAfterInput, NativeCompactionBeforeInput, NativeCompactionDecision,
+};
 use hya_engine::{
-    AgentCatalog, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
-    CommandExecuteBeforeOutcome, CompactionAfterInput, CompactionBeforeInput, CompactionConfig,
-    CompactionDecision, CreateSession, EventBus, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, RuntimePermissionMode, RuntimeRegistry, RuntimeSource,
-    RuntimeSourceId, SessionEngine, SummarizeOptions, Summarizer, TextCompleteInput,
-    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome,
+    AgentCatalog, CompactionConfig, CreateSession, EventBus, NativeHook, RuntimePermissionMode,
+    RuntimeRegistry, RuntimeSource, RuntimeSourceId, SessionEngine, SummarizeOptions, Summarizer,
 };
 use hya_proto::{
-    AgentName, Envelope, Event, FinishReason, MessageId, ModelRef, PartProjection, Role, SessionId,
-    ToolName, ToolPartState, ToolSchema,
+    AgentName, Event, FinishReason, MessageId, ModelRef, PartProjection, Role, SessionId, ToolName,
+    ToolPartState, ToolSchema,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
@@ -129,52 +127,29 @@ async fn join_turn(task: tokio::task::JoinHandle<FinishReason>) -> FinishReason 
 }
 
 struct Approver {
-    seen: Arc<Mutex<Vec<PermissionApproveInput>>>,
+    seen: Arc<Mutex<Vec<NativePermissionApproveInput>>>,
 }
 
 #[async_trait]
-impl HookDispatcher for Approver {
-    fn dispatch_event(&self, _envelope: &Envelope) {}
+impl NativeHook for Approver {
+    fn id(&self) -> &str {
+        "Approver"
+    }
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[hya_runtime_abi::HookPoint::PermissionApprove]
+    }
 
-    async fn permission_approve(&self, input: PermissionApproveInput) -> Option<Decision> {
+    async fn permission_approve(
+        &self,
+        input: NativePermissionApproveInput,
+    ) -> Result<Option<Decision>, hya_runtime_abi::HostError> {
         let allow = input.resource == hya_tool::Resource::Command("printf ok".into());
         self.seen.lock().unwrap().push(input);
-        allow.then_some(Decision::AllowOnce)
-    }
-
-    async fn command_execute_before(
-        &self,
-        input: CommandExecuteBeforeInput,
-    ) -> CommandExecuteBeforeOutcome {
-        CommandExecuteBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
-        TextCompleteOutcome::Continue { text: input.text }
-    }
-
-    async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
-        MessageUserBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
-        ChatParamsOutcome::Continue {
-            request: input.request,
-        }
-    }
-
-    async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
-        ToolExecuteBeforeOutcome::Continue { input: input.input }
-    }
-
-    async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
-        ToolExecuteAfterOutcome::Continue {
-            result: input.result,
-        }
+        Ok(allow.then_some(Decision::AllowOnce))
     }
 }
 
-fn approver_runtime(seen: Arc<Mutex<Vec<PermissionApproveInput>>>) -> Arc<RuntimeRegistry> {
+fn approver_runtime(seen: Arc<Mutex<Vec<NativePermissionApproveInput>>>) -> Arc<RuntimeRegistry> {
     let prepared = prepare_package(BundleSource::new(
         "approver",
         vec![SourceFile::new(
@@ -530,7 +505,6 @@ async fn capture_request(
             .unwrap()
             .hooks,
     );
-    let native_hooks = Arc::new(hya_engine::NativeHookDispatcher::new(hooks));
     let engine = support::engine_with_provider(
         Arc::new(RequestCaptureProvider {
             id: provider_id,
@@ -539,7 +513,7 @@ async fn capture_request(
         PermissionRules::default(),
     )
     .await
-    .with_native_hooks(native_hooks)
+    .with_hook_list(hooks)
     .with_interaction(interaction);
     let session = support::create_root_session(&engine, "build", model, dir.path()).await;
     engine
@@ -813,7 +787,7 @@ async fn nested_calls_run_in_callers_view_and_record_against_caller() {
         ]),
     )
     .await
-    .with_native_hooks(Arc::new(hya_engine::NativeHookDispatcher::new({
+    .with_hook_list({
         let mut hooks = hya_coding_extras_core::coding_extras_hooks(
             Arc::new(hya_coding_extras_core::CodingExtrasState::new()),
             None,
@@ -824,7 +798,7 @@ async fn nested_calls_run_in_callers_view_and_record_against_caller() {
                 .hooks,
         );
         hooks
-    })));
+    });
     let session =
         support::create_root_session(&engine, "nesting-agent", "fake", workdir.path()).await;
     engine
@@ -1031,12 +1005,12 @@ async fn tool_errors_record_structured_payload_for_provider_replay() {
 
 #[derive(Default)]
 struct CompactionTestHook {
-    decisions: Mutex<Vec<CompactionDecision>>,
+    decisions: Mutex<Vec<NativeCompactionDecision>>,
     calls: Mutex<Vec<String>>,
 }
 
 impl CompactionTestHook {
-    fn with_decisions(decisions: Vec<CompactionDecision>) -> Arc<Self> {
+    fn with_decisions(decisions: Vec<NativeCompactionDecision>) -> Arc<Self> {
         Arc::new(Self {
             decisions: Mutex::new(decisions),
             calls: Mutex::new(Vec::new()),
@@ -1049,78 +1023,78 @@ impl CompactionTestHook {
 }
 
 #[async_trait]
-impl HookDispatcher for CompactionTestHook {
-    fn dispatch_event(&self, _envelope: &Envelope) {}
+impl NativeHook for CompactionTestHook {
+    fn id(&self) -> &str {
+        "CompactionTestHook"
+    }
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[
+            hya_runtime_abi::HookPoint::CompactionBefore,
+            hya_runtime_abi::HookPoint::CompactionAfter,
+            hya_runtime_abi::HookPoint::SessionStart,
+            hya_runtime_abi::HookPoint::SessionEnd,
+            hya_runtime_abi::HookPoint::AgentSpawn,
+        ]
+    }
 
-    async fn command_execute_before(
+    async fn compaction_before(
         &self,
-        input: CommandExecuteBeforeInput,
-    ) -> CommandExecuteBeforeOutcome {
-        CommandExecuteBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
-        TextCompleteOutcome::Continue { text: input.text }
-    }
-
-    async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
-        MessageUserBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
-        ChatParamsOutcome::Continue {
-            request: input.request,
-        }
-    }
-
-    async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
-        ToolExecuteBeforeOutcome::Continue { input: input.input }
-    }
-
-    async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
-        ToolExecuteAfterOutcome::Continue {
-            result: input.result,
-        }
-    }
-
-    async fn compaction_before(&self, input: CompactionBeforeInput) -> CompactionDecision {
+        input: NativeCompactionBeforeInput,
+    ) -> Result<NativeCompactionDecision, hya_runtime_abi::HostError> {
         self.calls
             .lock()
             .unwrap()
             .push(format!("compaction.before:{:?}", input.trigger));
-        self.decisions
+        Ok(self
+            .decisions
             .lock()
             .unwrap()
             .pop()
-            .unwrap_or(CompactionDecision::Proceed)
+            .unwrap_or(NativeCompactionDecision::Proceed))
     }
 
-    async fn compaction_after(&self, input: CompactionAfterInput) {
+    async fn compaction_after(
+        &self,
+        input: NativeCompactionAfterInput,
+    ) -> Result<(), hya_runtime_abi::HostError> {
         self.calls
             .lock()
             .unwrap()
             .push(format!("compaction.after:{}", input.summary_tokens));
+        Ok(())
     }
 
-    async fn session_start(&self, input: hya_engine::SessionLifecycleInput) {
+    async fn session_start(
+        &self,
+        input: hya_engine::hooks::NativeSessionLifecycleInput,
+    ) -> Result<(), hya_runtime_abi::HostError> {
         self.calls
             .lock()
             .unwrap()
             .push(format!("session.start:{}", input.session));
+        Ok(())
     }
 
-    async fn session_end(&self, input: hya_engine::SessionLifecycleInput) {
+    async fn session_end(
+        &self,
+        input: hya_engine::hooks::NativeSessionLifecycleInput,
+    ) -> Result<(), hya_runtime_abi::HostError> {
         self.calls
             .lock()
             .unwrap()
             .push(format!("session.end:{}", input.session));
+        Ok(())
     }
 
-    async fn agent_spawn(&self, input: hya_engine::AgentSpawnInput) {
+    async fn agent_spawn(
+        &self,
+        input: hya_engine::hooks::NativeAgentSpawnInput,
+    ) -> Result<(), hya_runtime_abi::HostError> {
         self.calls
             .lock()
             .unwrap()
             .push(format!("agent.spawn:{}:{}", input.parent, input.child));
+        Ok(())
     }
 }
 
@@ -1137,7 +1111,7 @@ impl Summarizer for NoSummarizer {
     }
 }
 
-async fn compacting_engine(hooks: Arc<dyn HookDispatcher>) -> Arc<SessionEngine> {
+async fn compacting_engine(hooks: Arc<dyn NativeHook>) -> Arc<SessionEngine> {
     let provider = FakeProvider::scripted_turns(vec![
         vec![
             FakeStep::Text("detail across the earlier turn ".repeat(7_000)),
@@ -1178,13 +1152,13 @@ async fn setup_overflow_session(engine: &SessionEngine, dir: &Path) -> SessionId
 async fn compaction_hooks_surround_rewrite_and_ignore_overflow_skip() {
     for (decision, check_calls) in [
         (
-            CompactionDecision::Replace {
+            NativeCompactionDecision::Replace {
                 instructions: "SUMMARIZE".into(),
             },
             true,
         ),
         (
-            CompactionDecision::Skip {
+            NativeCompactionDecision::Skip {
                 reason: "skip overflow".into(),
             },
             false,

@@ -24,10 +24,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::HostError;
-use crate::extensions::{
-    GoalDriver, LoopDriver, NativeGoalEvaluateVerdict, NativeLoopPlanInput, NativePlannerOutput,
-    NativeVerifierVerdict,
-};
+use crate::extensions::{GoalDriver, LoopDriver};
 
 // ---------------------------------------------------------------------------
 // HostSessionStore
@@ -983,49 +980,26 @@ pub trait HostExtensionRegistry: Send + Sync {
         cancel: CancellationToken,
     ) -> Result<Value, HostError>;
 
-    /// Return `true` when at least one `goal.evaluate` hook provider is
-    /// registered for `session` (or globally when `session` is `None`).
-    async fn has_goal_evaluate_hook(&self, _session: Option<SessionId>) -> Result<bool, HostError> {
+    /// Whether any hook bound to `session` implements the bundle-declared
+    /// hook point `point` (`<bundle-id>:<name>`).
+    async fn has_hook(&self, session: Option<SessionId>, point: &str) -> Result<bool, HostError> {
+        let _ = (session, point);
         Ok(false)
     }
 
-    /// Dispatch the `goal.evaluate` hook chain for `session`, returning
-    /// `Ok(None)` when no `goal.evaluate` provider is registered.
-    async fn invoke_goal_evaluate_hook(
+    /// Dispatch the bundle-declared hook point `point` for `session`: the
+    /// first implementer that answers wins, a failing implementer is skipped
+    /// with a warning, and `Ok(None)` means no implementer answered.
+    ///
+    /// # Errors
+    /// [`HostError::InvalidInput`] when no loaded bundle declares `point`.
+    async fn invoke_hook(
         &self,
-        _session: Option<SessionId>,
-        _condition: &str,
-        _transcript: &str,
-    ) -> Result<Option<NativeGoalEvaluateVerdict>, HostError> {
-        Ok(None)
-    }
-
-    /// Consult registered `loop.should_stop` hooks for `session` (`Ok(None)` when none stop).
-    async fn invoke_loop_should_stop(
-        &self,
-        _session: SessionId,
-        _target: &str,
-        _transcript: &str,
-    ) -> Result<Option<String>, HostError> {
-        Ok(None)
-    }
-
-    /// Invoke registered `loop.verifier` hooks for `session` (`Ok(None)` when unregistered).
-    async fn invoke_loop_verify(
-        &self,
-        _session: SessionId,
-        _target: &str,
-        _transcript: &str,
-    ) -> Result<Option<NativeVerifierVerdict>, HostError> {
-        Ok(None)
-    }
-
-    /// Invoke registered `loop.planner` hooks for `session` (`Ok(None)` when unregistered).
-    async fn invoke_loop_plan(
-        &self,
-        _session: SessionId,
-        _input: NativeLoopPlanInput,
-    ) -> Result<Option<NativePlannerOutput>, HostError> {
+        session: Option<SessionId>,
+        point: &str,
+        input: Value,
+    ) -> Result<Option<Value>, HostError> {
+        let _ = (session, point, input);
         Ok(None)
     }
 }

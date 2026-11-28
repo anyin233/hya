@@ -154,53 +154,36 @@ impl PauseHook {
 }
 
 #[async_trait::async_trait]
-impl crate::hooks::HookDispatcher for PauseHook {
-    fn dispatch_event(&self, _: &hya_proto::Envelope) {}
-    async fn command_execute_before(
-        &self,
-        i: crate::hooks::CommandExecuteBeforeInput,
-    ) -> crate::hooks::CommandExecuteBeforeOutcome {
-        crate::hooks::NoopHookHost.command_execute_before(i).await
+impl crate::hooks::NativeHook for PauseHook {
+    fn id(&self) -> &str {
+        "PauseHook"
     }
-    async fn text_complete(
-        &self,
-        i: crate::hooks::TextCompleteInput,
-    ) -> crate::hooks::TextCompleteOutcome {
-        crate::hooks::NoopHookHost.text_complete(i).await
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[
+            hya_runtime_abi::HookPoint::ChatParams,
+            hya_runtime_abi::HookPoint::SessionStart,
+        ]
     }
-    async fn message_user_before(
-        &self,
-        i: crate::hooks::MessageUserBeforeInput,
-    ) -> crate::hooks::MessageUserBeforeOutcome {
-        crate::hooks::NoopHookHost.message_user_before(i).await
-    }
-    async fn tool_execute_before(
-        &self,
-        i: crate::hooks::ToolExecuteBeforeInput,
-    ) -> crate::hooks::ToolExecuteBeforeOutcome {
-        crate::hooks::NoopHookHost.tool_execute_before(i).await
-    }
-    async fn tool_execute_after(
-        &self,
-        i: crate::hooks::ToolExecuteAfterInput,
-    ) -> crate::hooks::ToolExecuteAfterOutcome {
-        crate::hooks::NoopHookHost.tool_execute_after(i).await
-    }
+
     async fn chat_params(
         &self,
-        i: crate::hooks::ChatParamsInput,
-    ) -> crate::hooks::ChatParamsOutcome {
+        i: crate::hooks::NativeChatParamsInput,
+    ) -> Result<serde_json::Value, hya_runtime_abi::HostError> {
         if !self.on_start {
             self.entered.notify_one();
             self.release.notified().await;
         }
-        crate::hooks::NoopHookHost.chat_params(i).await
+        Ok(i.params)
     }
-    async fn session_start(&self, i: SessionLifecycleInput) {
+    async fn session_start(
+        &self,
+        i: crate::hooks::NativeSessionLifecycleInput,
+    ) -> Result<(), hya_runtime_abi::HostError> {
         if self.on_start && *self.target.lock().unwrap() == Some(i.session) {
             self.entered.notify_one();
             self.release.notified().await;
         }
+        Ok(())
     }
 }
 

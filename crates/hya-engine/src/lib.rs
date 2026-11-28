@@ -114,13 +114,8 @@ pub use engine::{
 };
 pub use error::CoreError;
 pub use hooks::{
-    AgentSpawnInput, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
-    CommandExecuteBeforeOutcome, CompactionAfterInput, CompactionBeforeInput, CompactionDecision,
-    CompactionTrigger, EvidenceQuality, HookChain, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome,
-    NativeHookDispatcher, NoopHookHost, PlannerOutput, SessionLifecycleInput, TextCompleteInput,
-    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, ToolOutcomeNative, VerifierVerdict,
+    HookChain, HookEntry, HookPoint, ModelFailureClass, NativeHook, apply_chat_params,
+    chat_params_value,
 };
 pub use lifecycle::run_lifecycle_service;
 pub use mailbox::run_mailbox_service;

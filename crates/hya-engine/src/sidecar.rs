@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::CoreError;
-use crate::hooks::HookDispatcher;
+use crate::hooks::HookEntry;
 
 /// Scheduling lifecycle for a harness sidecar activation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,8 +71,8 @@ pub trait SidecarHandle: Send {
         Arc::from([])
     }
 
-    /// Optional hook dispatcher bound to this sidecar.
-    fn hook_dispatcher(&self) -> Option<Arc<dyn HookDispatcher>> {
+    /// Optional hook source bound to this sidecar.
+    fn hook_dispatcher(&self) -> Option<HookEntry> {
         None
     }
 }

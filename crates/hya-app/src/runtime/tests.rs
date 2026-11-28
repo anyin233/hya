@@ -2467,10 +2467,10 @@ fn sidecar_materialization_scoping_and_validation_invariants() {
         "build",
         &[
             HookRegistration {
-                name: HookName::Event,
+                name: HookName::Event.into(),
             },
             HookRegistration {
-                name: HookName::Event,
+                name: HookName::Event.into(),
             },
         ],
     );
@@ -2734,10 +2734,10 @@ async fn bundle_sidecar_declaration_validation_and_tool_binding() {
     let ord_binding = ord_rt.bind_turn(&turn_dir).unwrap();
     let regs = [
         HookRegistration {
-            name: HookName::ToolExecuteBefore,
+            name: HookName::ToolExecuteBefore.into(),
         },
         HookRegistration {
-            name: HookName::Event,
+            name: HookName::Event.into(),
         },
     ];
     assert!(validate_bundle_sidecar_hooks(&ord_binding, "alpha", &regs).is_ok());
@@ -2770,7 +2770,7 @@ async fn bundle_sidecar_declaration_validation_and_tool_binding() {
     let (h_ho, p_ho) = prepared_sidecar_plugin(
         &[],
         &[HookRegistration {
-            name: HookName::Event,
+            name: HookName::Event.into(),
         }],
     )
     .await;

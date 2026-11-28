@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_proto::{Message, MessageId, ModelRef, Part, PartId, SessionId};
-use hya_runtime_abi::{HostError, HostRuntime, ModelCallRequest, NativeLoopPlanInput};
+use hya_runtime_abi::{HostError, HostRuntime, ModelCallRequest};
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
@@ -288,7 +288,7 @@ impl LoopPlanner for ModelLoopPlanner {
     }
 }
 
-/// Host-hook loop verifier (`loop.verifier`) with fallback when unregistered or
+/// Host-hook loop verifier (`hya/loop:verifier`) with fallback when unregistered or
 /// failing.
 pub struct HookLoopVerifier {
     runtime: Arc<dyn HostRuntime>,
@@ -318,10 +318,15 @@ impl LoopVerifier for HookLoopVerifier {
         match self
             .runtime
             .extension_registry()
-            .invoke_loop_verify(self.session, target, transcript)
+            .invoke_hook(
+                Some(self.session),
+                crate::types::VERIFIER_HOOK,
+                serde_json::json!({ "target": target, "transcript": transcript }),
+            )
             .await
+            .map(|reply| reply.and_then(|value| serde_json::from_value(value).ok()))
         {
-            Ok(Some(native)) => Ok(VerifierVerdict::from_native(native)),
+            Ok(Some(wire)) => Ok(VerifierVerdict::from_wire(wire)),
             Ok(None) => self.fallback.grade(target, transcript).await,
             Err(error) => {
                 tracing::warn!(%error, "loop.verifier hook failed; using model fallback");
@@ -331,7 +336,7 @@ impl LoopVerifier for HookLoopVerifier {
     }
 }
 
-/// Host-hook loop planner (`loop.planner`) with fallback when unregistered or
+/// Host-hook loop planner (`hya/loop:planner`) with fallback when unregistered or
 /// failing.
 pub struct HookLoopPlanner {
     runtime: Arc<dyn HostRuntime>,
@@ -364,18 +369,26 @@ impl LoopPlanner for HookLoopPlanner {
         last: &VerifierVerdict,
         planner_notes: &str,
     ) -> Result<PlannerOutput, HostError> {
-        let input = NativeLoopPlanInput {
+        let input = crate::types::PlanHookInput {
             target: target.to_string(),
             history: history.to_vec(),
-            last: last.to_native(),
+            last: last.to_wire(),
             planner_notes: planner_notes.to_string(),
         };
         match self
             .runtime
             .extension_registry()
-            .invoke_loop_plan(self.session, input)
+            .invoke_hook(
+                Some(self.session),
+                crate::types::PLANNER_HOOK,
+                serde_json::json!(input),
+            )
             .await
-        {
+            .map(|reply| {
+                reply.and_then(|value| {
+                    serde_json::from_value::<crate::types::PlannerWire>(value).ok()
+                })
+            }) {
             Ok(Some(native)) => Ok(PlannerOutput {
                 directive: native.directive,
                 continuity_brief: native.continuity_brief,
@@ -405,7 +418,7 @@ pub struct RuntimeShouldStopHook {
 }
 
 impl RuntimeShouldStopHook {
-    /// Create a fail-open `loop.should_stop` consult bound to `session`.
+    /// Create a fail-open `hya/loop:should_stop` consult bound to `session`.
     #[must_use]
     pub fn new(runtime: Arc<dyn HostRuntime>, session: SessionId) -> Self {
         Self { runtime, session }
@@ -418,10 +431,25 @@ impl LoopShouldStopHook for RuntimeShouldStopHook {
         match self
             .runtime
             .extension_registry()
-            .invoke_loop_should_stop(self.session, target, transcript)
+            .invoke_hook(
+                Some(self.session),
+                crate::types::SHOULD_STOP_HOOK,
+                serde_json::json!({ "target": target, "transcript": transcript }),
+            )
             .await
         {
-            Ok(reason) => reason,
+            Ok(reply) => reply
+                .and_then(|value| {
+                    serde_json::from_value::<crate::types::ShouldStopWire>(value).ok()
+                })
+                .filter(|wire| wire.stop)
+                .map(|wire| {
+                    if wire.reason.is_empty() {
+                        "no reason given".to_string()
+                    } else {
+                        wire.reason
+                    }
+                }),
             Err(error) => {
                 tracing::warn!(%error, "loop.should_stop hook failed; continuing loop");
                 None

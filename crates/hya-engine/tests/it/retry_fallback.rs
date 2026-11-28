@@ -11,17 +11,12 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use futures::stream;
+use hya_engine::hooks::{NativeChatParamsInput, NativeModelFallbackInput};
 use hya_engine::kernel::{self, View, request::AttachmentData};
-use hya_engine::{
-    AgentSpec, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
-    CommandExecuteBeforeOutcome, CoreError, EventBus, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome,
-    SessionEngine, TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput,
-    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome,
-};
+use hya_engine::{AgentSpec, CoreError, EventBus, ModelFailureClass, NativeHook, SessionEngine};
 use hya_proto::{
-    AgentName, Envelope, Event, FinishReason, Message, MessageId, ModelRef, Part, PartId,
-    PartProjection, Projection, Role, SessionId, ToolCallId, ToolName,
+    AgentName, Event, FinishReason, Message, MessageId, ModelRef, Part, PartId, PartProjection,
+    Projection, Role, SessionId, ToolCallId, ToolName,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
@@ -605,16 +600,16 @@ impl Provider for ScriptedModelProvider {
 }
 
 struct FallbackHook {
-    answers: Mutex<VecDeque<ModelFallbackOutcome>>,
+    answers: Mutex<VecDeque<Option<ModelRef>>>,
     endless_prefix: Option<&'static str>,
     expand_request: bool,
-    consults: Arc<Mutex<Vec<ModelFallbackInput>>>,
+    consults: Arc<Mutex<Vec<NativeModelFallbackInput>>>,
 }
 
 impl FallbackHook {
     fn scripted(
-        answers: Vec<ModelFallbackOutcome>,
-    ) -> (Arc<Self>, Arc<Mutex<Vec<ModelFallbackInput>>>) {
+        answers: Vec<Option<ModelRef>>,
+    ) -> (Arc<Self>, Arc<Mutex<Vec<NativeModelFallbackInput>>>) {
         let consults = Arc::new(Mutex::new(Vec::new()));
         (
             Arc::new(Self {
@@ -629,54 +624,40 @@ impl FallbackHook {
 }
 
 #[async_trait]
-impl HookDispatcher for FallbackHook {
-    fn dispatch_event(&self, _envelope: &Envelope) {}
+impl NativeHook for FallbackHook {
+    fn id(&self) -> &str {
+        "FallbackHook"
+    }
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[
+            hya_runtime_abi::HookPoint::ChatParams,
+            hya_runtime_abi::HookPoint::ModelFallback,
+        ]
+    }
 
-    async fn command_execute_before(
+    async fn chat_params(
         &self,
-        input: CommandExecuteBeforeInput,
-    ) -> CommandExecuteBeforeOutcome {
-        CommandExecuteBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
-        TextCompleteOutcome::Continue { text: input.text }
-    }
-
-    async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
-        MessageUserBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
-        let mut request = input.request;
+        input: NativeChatParamsInput,
+    ) -> Result<serde_json::Value, hya_runtime_abi::HostError> {
+        let mut params = input.params;
         if self.expand_request {
-            request.system = Some("expanded instructions ".repeat(200_000));
+            params["system"] = json!("expanded instructions ".repeat(200_000));
         }
-        ChatParamsOutcome::Continue { request }
+        Ok(params)
     }
 
-    async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
-        ToolExecuteBeforeOutcome::Continue { input: input.input }
-    }
-
-    async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
-        ToolExecuteAfterOutcome::Continue {
-            result: input.result,
-        }
-    }
-
-    async fn model_fallback(&self, input: ModelFallbackInput) -> ModelFallbackOutcome {
+    async fn model_fallback(
+        &self,
+        input: NativeModelFallbackInput,
+    ) -> Result<Option<ModelRef>, hya_runtime_abi::HostError> {
         let attempt = input.attempt;
         self.consults.lock().unwrap().push(input);
         if let Some(answer) = self.answers.lock().unwrap().pop_front() {
-            return answer;
+            return Ok(answer);
         }
-        match self.endless_prefix {
-            Some(prefix) => ModelFallbackOutcome::Retry {
-                model: ModelRef::new(format!("{prefix}-{attempt}")),
-            },
-            None => ModelFallbackOutcome::GiveUp,
-        }
+        Ok(self
+            .endless_prefix
+            .map(|prefix| ModelRef::new(format!("{prefix}-{attempt}"))))
     }
 }
 
@@ -686,10 +667,8 @@ fn chain(preferred: &str, rest: &[&str]) -> HashMap<ModelRef, Vec<ModelRef>> {
     HashMap::from([(ModelRef::new(preferred), candidates)])
 }
 
-fn retry_model(model: &str) -> ModelFallbackOutcome {
-    ModelFallbackOutcome::Retry {
-        model: ModelRef::new(model),
-    }
+fn retry_model(model: &str) -> Option<ModelRef> {
+    Some(ModelRef::new(model))
 }
 
 fn provider_err(error: &CoreError) -> &ProviderError {
@@ -710,7 +689,7 @@ async fn fallback_fixture(
     providers: Vec<ScriptedModelProvider>,
     fallbacks: Option<HashMap<ModelRef, Vec<ModelRef>>>,
     session_model: &str,
-    hooks: Option<Arc<dyn HookDispatcher>>,
+    hooks: Option<Arc<dyn NativeHook>>,
 ) -> FallbackFixture {
     let dir = support::TestDir::new("fallback");
     let router = providers
@@ -1038,7 +1017,7 @@ async fn model_fallback_hook_runs_after_chain_and_enforces_guards() {
         assert_eq!(c[0].root_session, fx.session);
         assert_eq!(c[0].agent, Some(AgentName::new("hya-task")));
         assert_eq!(c[0].model, ModelRef::new("alpha"));
-        assert_eq!(c[0].error_class, ModelFailureClass::Auth);
+        assert_eq!(c[0].error_class, ModelFailureClass::Auth.as_str());
         assert_eq!(c[0].attempt, 1);
         assert_eq!(c[0].tried, vec![ModelRef::new("alpha")]);
     }
@@ -1090,8 +1069,7 @@ async fn model_fallback_hook_runs_after_chain_and_enforces_guards() {
 
     // 3. GiveUp surfaces latest failure; already-tried model is refused; post-stream never consults.
     let attempts = Arc::new(Mutex::new(Vec::new()));
-    let (hook, consults) =
-        FallbackHook::scripted(vec![retry_model("beta"), ModelFallbackOutcome::GiveUp]);
+    let (hook, consults) = FallbackHook::scripted(vec![retry_model("beta"), None]);
     let fx = fallback_fixture(
         vec![
             ScriptedModelProvider::new(

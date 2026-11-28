@@ -30,22 +30,22 @@ use hya_bundle::{
     SourceFile, prepare_package,
 };
 use hya_engine::builtin_agents::{builtin_agent_ids, core_agents_preset, preset_agent};
+use hya_engine::hooks::{
+    NativeChatParamsInput, NativeToolAfterInput, NativeToolAfterOutcome, NativeToolBeforeInput,
+    NativeToolBeforeOutcome,
+};
 use hya_engine::runtime_registry::RuntimeSourceSkill;
 use hya_engine::{
     AgentCatalog, AgentDefinition, AgentEffortSource, AgentModelConfiguration, AgentOrigin,
     AgentSpec, ApiMethod, ApiPathTemplate, ApiScope, BoundSidecarFactory, BundleApiCall,
     BundleApiError, BundleApiProvider, BundleApiReply, BundleApiRequest, CatalogScope,
-    CatalogScopeCacheConfig, CategoryEntry, CategoryRegistry, ChatParamsInput, ChatParamsOutcome,
-    CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, CompactionConfig, CoreError,
-    CreateSession, EventBus, HookChain, HookDispatcher, MAX_BUNDLE_API_BODY_BYTES,
-    MessageUserBeforeInput, MessageUserBeforeOutcome, ModelSummarizer, RuntimeCandidate,
-    RuntimeCatalogRefresh, RuntimePermissionMode, RuntimeRefreshError, RuntimeRegistry,
-    RuntimeSource, RuntimeSourceExport, RuntimeSourceId, RuntimeSourceKind, RuntimeSourceOwner,
-    ScopeKey, ScopeOverlay, SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle,
-    SidecarStart, SourceApi, SourceApis, SourceSchema, Summarizer, TextCompleteInput,
-    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, TurnBinding, apply_agent_model_preference,
-    resolve_configured_agent_model,
+    CatalogScopeCacheConfig, CategoryEntry, CategoryRegistry, CompactionConfig, CoreError,
+    CreateSession, EventBus, HookChain, MAX_BUNDLE_API_BODY_BYTES, ModelSummarizer, NativeHook,
+    RuntimeCandidate, RuntimeCatalogRefresh, RuntimePermissionMode, RuntimeRefreshError,
+    RuntimeRegistry, RuntimeSource, RuntimeSourceExport, RuntimeSourceId, RuntimeSourceKind,
+    RuntimeSourceOwner, ScopeKey, ScopeOverlay, SessionEngine, SidecarEnvironment, SidecarHandle,
+    SidecarLifecycle, SidecarStart, SourceApi, SourceApis, SourceSchema, Summarizer, TurnBinding,
+    apply_agent_model_preference, resolve_configured_agent_model,
 };
 use hya_proto::{
     AgentName, CompactionStrategy, ConfigGeneration, Envelope, Event, FinishReason, MessageId,
@@ -2169,8 +2169,8 @@ fn plugin_tool_source(id: &str, export: &str) -> RuntimeSource {
     )
 }
 
-fn empty_hooks() -> Arc<dyn HookDispatcher> {
-    Arc::new(HookChain::new(Vec::new()))
+fn probe_hooks() -> Arc<dyn NativeHook> {
+    Arc::new(HookProbe::healthy())
 }
 
 #[test]
@@ -2315,7 +2315,7 @@ fn catalog_scope_failures_drop_hooks_and_model_shadowing() {
     let mut ov_a = scope_overlay("alpha-agent");
     ov_a.plugin_sources = vec![
         RuntimeSource::new(RuntimeSourceId::plugin("proj-a"), [4; 32], owner, vec![])
-            .with_hooks(empty_hooks()),
+            .with_hooks(probe_hooks()),
     ];
     let mut ov_b = scope_overlay("beta-agent");
     ov_b.plugin_sources = vec![
@@ -2325,7 +2325,7 @@ fn catalog_scope_failures_drop_hooks_and_model_shadowing() {
             Arc::new(()),
             vec![],
         )
-        .with_hooks(empty_hooks()),
+        .with_hooks(probe_hooks()),
     ];
     registry.publish_scope(scope_a.key(), ov_a).unwrap();
     registry.publish_scope(scope_b.key(), ov_b).unwrap();
@@ -2334,26 +2334,27 @@ fn catalog_scope_failures_drop_hooks_and_model_shadowing() {
     let chain_a = bind_a.bundle_hooks_for_agent("hya-main");
     assert_eq!(chain_a.len(), 1);
     assert!(Arc::ptr_eq(
-        &registry
+        registry
             .bind_scoped(&scope_a, root_a.path())
             .unwrap()
-            .bundle_hooks_for_agent("hya-main")[0],
-        &chain_a[0]
+            .bundle_hooks_for_agent("hya-main")[0]
+            .hook(),
+        chain_a[0].hook()
     ));
     assert!(
         bind_a
             .bundle_hooks_for_agent("alpha-agent")
             .iter()
-            .any(|h| Arc::ptr_eq(h, &chain_a[0]))
+            .any(|h| Arc::ptr_eq(h.hook(), chain_a[0].hook()))
     );
     let bind_b = registry.bind_scoped(&scope_b, root_b.path()).unwrap();
     let chain_b = bind_b.bundle_hooks_for_agent("hya-main");
-    assert!(chain_b.len() == 1 && !Arc::ptr_eq(&chain_b[0], &chain_a[0]));
+    assert!(chain_b.len() == 1 && !Arc::ptr_eq(chain_b[0].hook(), chain_a[0].hook()));
     assert!(
         !bind_b
             .bundle_hooks_for_agent("beta-agent")
             .iter()
-            .any(|h| Arc::ptr_eq(h, &chain_a[0]))
+            .any(|h| Arc::ptr_eq(h.hook(), chain_a[0].hook()))
     );
     assert!(
         registry
@@ -3070,21 +3071,21 @@ fn runtime_registry_plugin_hook_order_and_schema_claims() {
                 Arc::new(()),
                 vec![],
             )
-            .with_hooks(empty_hooks()),
+            .with_hooks(probe_hooks()),
             RuntimeSource::new(
                 RuntimeSourceId::bundle("acme/owner"),
                 [5; 32],
                 Arc::new(()),
                 vec![],
             )
-            .with_hooks(empty_hooks()),
+            .with_hooks(probe_hooks()),
             RuntimeSource::new(
                 RuntimeSourceId::bundle("acme/plugin-a"),
                 [6; 32],
                 Arc::new(()),
                 vec![],
             )
-            .with_hooks(empty_hooks()),
+            .with_hooks(probe_hooks()),
         ])
     })
     .unwrap();
@@ -3095,16 +3096,27 @@ fn runtime_registry_plugin_hook_order_and_schema_claims() {
         hb.bundle_hooks("acme/owner").unwrap(),
     );
     let b_hooks = hb.bundle_hooks_for_agent("hya-main");
-    assert!(b_hooks.len() == 2 && Arc::ptr_eq(&b_hooks[0], &pa) && Arc::ptr_eq(&b_hooks[1], &pb));
+    assert!(
+        b_hooks.len() == 2
+            && Arc::ptr_eq(b_hooks[0].hook(), pa.hook())
+            && Arc::ptr_eq(b_hooks[1].hook(), pb.hook())
+    );
     let h_hooks = hb.bundle_hooks_for_agent("hooked-agent");
     assert!(
         h_hooks.len() == 3
-            && Arc::ptr_eq(&h_hooks[0], &pa)
-            && Arc::ptr_eq(&h_hooks[1], &pb)
-            && !Arc::ptr_eq(&h_hooks[2], &ow)
+            && Arc::ptr_eq(h_hooks[0].hook(), pa.hook())
+            && Arc::ptr_eq(h_hooks[1].hook(), pb.hook())
+            && Arc::ptr_eq(h_hooks[2].hook(), ow.hook())
     );
+    let owner_hooks = HookChain::new(vec![h_hooks[2].clone()]);
+    assert!(owner_hooks.handles(hya_engine::HookPoint::ChatParams));
+    assert!(!owner_hooks.handles(hya_engine::HookPoint::ToolExecuteBefore));
     let p_hooks = hb.bundle_hooks_for_agent("plain-agent");
-    assert!(p_hooks.len() == 2 && Arc::ptr_eq(&p_hooks[0], &pa) && Arc::ptr_eq(&p_hooks[1], &pb));
+    assert!(
+        p_hooks.len() == 2
+            && Arc::ptr_eq(p_hooks[0].hook(), pa.hook())
+            && Arc::ptr_eq(p_hooks[1].hook(), pb.hook())
+    );
     assert!(hb.bundle_hooks_for_agent("missing-agent").is_empty());
 
     // Part B & C: Scheme competition (greater source id wins) + grouped SchemaConflicts error.
@@ -3959,8 +3971,20 @@ impl HookProbe {
 }
 
 #[async_trait]
-impl HookDispatcher for HookProbe {
-    fn dispatch_event(&self, env: &Envelope) {
+impl NativeHook for HookProbe {
+    fn id(&self) -> &str {
+        "HookProbe"
+    }
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[
+            hya_runtime_abi::HookPoint::EventObserve,
+            hya_runtime_abi::HookPoint::ChatParams,
+            hya_runtime_abi::HookPoint::ToolExecuteBefore,
+            hya_runtime_abi::HookPoint::ToolExecuteAfter,
+        ]
+    }
+
+    fn on_event(&self, env: &Envelope) {
         self.events.lock().unwrap().push(env.clone());
         if let Some(c) = &self.fail_event {
             c.fetch_add(1, Ordering::SeqCst);
@@ -3970,37 +3994,34 @@ impl HookDispatcher for HookProbe {
     fn is_healthy(&self) -> bool {
         self.healthy.load(Ordering::SeqCst)
     }
-    async fn command_execute_before(
+    async fn chat_params(
         &self,
-        i: CommandExecuteBeforeInput,
-    ) -> CommandExecuteBeforeOutcome {
-        CommandExecuteBeforeOutcome::Continue { text: i.text }
-    }
-    async fn text_complete(&self, i: TextCompleteInput) -> TextCompleteOutcome {
-        TextCompleteOutcome::Continue { text: i.text }
-    }
-    async fn message_user_before(&self, i: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
-        MessageUserBeforeOutcome::Continue { text: i.text }
-    }
-    async fn chat_params(&self, mut i: ChatParamsInput) -> ChatParamsOutcome {
+        mut i: NativeChatParamsInput,
+    ) -> Result<serde_json::Value, hya_runtime_abi::HostError> {
         if let Some(t) = self.temperature {
-            i.request.temperature = Some(t);
+            i.params["temperature"] = json!(t);
         }
-        ChatParamsOutcome::Continue { request: i.request }
+        Ok(i.params)
     }
-    async fn tool_execute_before(&self, i: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
+    async fn tool_execute_before(
+        &self,
+        i: NativeToolBeforeInput,
+    ) -> Result<NativeToolBeforeOutcome, hya_runtime_abi::HostError> {
         if let Some(c) = &self.fail_before {
             c.fetch_add(1, Ordering::SeqCst);
             self.healthy.store(false, Ordering::SeqCst);
         }
-        ToolExecuteBeforeOutcome::Continue { input: i.input }
+        Ok(NativeToolBeforeOutcome::Continue { input: i.input })
     }
-    async fn tool_execute_after(&self, i: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
+    async fn tool_execute_after(
+        &self,
+        i: NativeToolAfterInput,
+    ) -> Result<NativeToolAfterOutcome, hya_runtime_abi::HostError> {
         if let Some(c) = &self.fail_after {
             c.fetch_add(1, Ordering::SeqCst);
             self.healthy.store(false, Ordering::SeqCst);
         }
-        ToolExecuteAfterOutcome::Continue { result: i.result }
+        Ok(NativeToolAfterOutcome::Continue { result: i.result })
     }
 }
 
@@ -4017,7 +4038,7 @@ struct SidecarSpy {
     ready_gate: Option<(Arc<Notify>, Arc<Notify>)>,
     loss_token: Option<CancellationToken>,
     cancel_loss_on_ready: bool,
-    hooks: Option<Arc<dyn HookDispatcher>>,
+    hooks: Option<Arc<dyn NativeHook>>,
     shutdown_failure: Option<String>,
 }
 
@@ -4083,10 +4104,10 @@ impl SidecarHandle for SpyHandle {
         self.0.tool_bindings.fetch_add(1, Ordering::SeqCst);
         Arc::from([])
     }
-    fn hook_dispatcher(&self) -> Option<Arc<dyn HookDispatcher>> {
+    fn hook_dispatcher(&self) -> Option<hya_engine::HookEntry> {
         self.0.hooks.as_ref().map(|h| {
             self.0.hook_accessors.fetch_add(1, Ordering::SeqCst);
-            h.clone()
+            hya_engine::HookEntry::new(h.clone())
         })
     }
     fn loss_token(&self) -> Option<CancellationToken> {

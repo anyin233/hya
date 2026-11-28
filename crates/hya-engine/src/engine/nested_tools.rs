@@ -18,7 +18,7 @@ use tokio::sync::Mutex;
 
 use super::{SessionEngine, authorize_tool_call, file_snapshot};
 use crate::TurnBinding;
-use crate::hooks::HookDispatcher;
+use crate::hooks::HookChain;
 use crate::runtime_registry::CompiledResourceView;
 
 /// What one model tool call needs to dispatch nested calls.
@@ -32,7 +32,7 @@ pub(super) struct TurnNestedTools {
     pub(super) actor_claim: Option<ActorClaim>,
     pub(super) external_dirs: Arc<[PathBuf]>,
     pub(super) grant_scope: GrantScope,
-    pub(super) activation_hooks: Option<Arc<dyn HookDispatcher>>,
+    pub(super) activation_hooks: Option<Arc<HookChain>>,
     /// Canonical name of the calling tool.
     pub(super) caller: String,
     /// Nested observations to commit with the calling tool's result.

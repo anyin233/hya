@@ -230,12 +230,10 @@ async fn initialize_episode(
         if created {
             team.engine.notify_session_start(session).await;
         }
-        for hooks in team
-            .engine
+        team.engine
             .replace_session_hooks(session, &binding, agent.as_str())
-        {
-            hooks.session_start(SessionLifecycleInput { session }).await;
-        }
+            .session_start(session)
+            .await;
     };
     tokio::select! {
         biased;
@@ -250,7 +248,7 @@ async fn initialize_episode(
     let initialize = async {
         if created && let Some(hooks) = team.engine.session_hook_dispatcher(parent) {
             hooks
-                .agent_spawn(AgentSpawnInput {
+                .agent_spawn(NativeAgentSpawnInput {
                     parent: team.root,
                     child: session,
                 })
@@ -282,7 +280,7 @@ pub(super) async fn episode_task(
 ) {
     let mut sidecar_handle: Option<Box<dyn SidecarHandle>> = None;
     let mut sidecar_tools: Arc<[ResolvedTool]> = Arc::from([]);
-    let mut sidecar_hooks: Option<Arc<dyn HookDispatcher>> = None;
+    let mut sidecar_hooks: Option<Arc<HookChain>> = None;
     if let Some(init) = init {
         let Some(claim) = task_claim.as_ref() else {
             return;

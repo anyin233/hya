@@ -43,6 +43,8 @@ hya_runtime_abi::export_native_bundle_v2!(|out| {
     let service = Arc::new(LoopService::new());
     out.services
         .push(Arc::clone(&service) as Arc<dyn hya_runtime_abi::NativeService>);
+    out.hook_points
+        .extend(types::LOOP_HOOK_POINTS.map(str::to_string));
     out.loop_drivers
         .push(Arc::new(NativeLoopDriver::new(service)) as Arc<dyn hya_runtime_abi::LoopDriver>);
 });

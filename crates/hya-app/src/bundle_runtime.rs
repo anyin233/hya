@@ -422,7 +422,7 @@ pub(crate) async fn prepare_source(
         _root: None,
     };
     let mut resources = BTreeMap::new();
-    let mut hooks: Option<Arc<dyn hya_engine::hooks::HookDispatcher>> = None;
+    let mut hooks: Option<Arc<dyn hya_engine::NativeHook>> = None;
     let mut api_provider: Option<Arc<dyn hya_engine::BundleApiProvider>> = None;
     let mut declaration = Sha256::new();
     declaration.update(fingerprint);

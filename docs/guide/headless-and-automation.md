@@ -62,7 +62,7 @@ Because `--bare` uses the unified `SessionEngine`, it still enforces your config
 
 In regular chat tools, an AI sometimes stops early and says *"All done!"* when two files are still broken.
 
-**Goal mode (`hya -p`)** fixes that by separating the **worker** from the **judge**. Goal mode is provided by the built-in **`hya/goal`** native ABI v2 bundle (`GoalDriver` + `goal-contract`, `guided-goal`, and `evaluator-prompt` skills + `hya-goal-guide` and `hya-goal-verifier` agents). After Hya finishes a round of work, an independent evaluator (a registered `goal.evaluate` hook or the tool-free model verifier) checks the transcript before letting Hya stop. If anything is missing, Hya gets sent back to finish the job.
+**Goal mode (`hya -p`)** fixes that by separating the **worker** from the **judge**. Goal mode is provided by the built-in **`hya/goal`** native ABI v2 bundle (`GoalDriver` + `goal-contract`, `guided-goal`, and `evaluator-prompt` skills + `hya-goal-guide` and `hya-goal-verifier` agents). After Hya finishes a round of work, an independent evaluator (a registered `hya/goal:evaluate` hook or the tool-free model verifier) checks the transcript before letting Hya stop. If anything is missing, Hya gets sent back to finish the job.
 
 > **Bundle availability:** Goal mode requires `hya/goal` to be enabled (default in `profile: full`). Running `hya --bare -p "..."` or disabling `hya/goal` in `config.yaml` (`bundles.builtin.disable: [hya/goal]`) fails fast with an actionable error instead of falling back to an unverified single turn. Configure the default judge model per bundle in `~/.config/hya/bundles/hya%2Fgoal/config.yml` (`goal.evaluator_model`), or override it per run with `--evaluator-model`.
 
