@@ -38,21 +38,14 @@ rewrite}`. The kernel starts one before a round when the request is still over
 starts one with the `rewrite` tool. A marker repeats the removed user messages
 and the current todo list. Removed text stays in the log and cannot be read
 back.
-_Avoid_: summarize, compaction (compaction is the full-mode extension's steps)
+_Avoid_: summarize, compaction (compaction is the `hya/compaction` bundle's
+rewriter steps, `shake` and `remote`, which run before the kernel's Rewrite)
 
 **Bare mode**:
 Running the kernel alone with `hya exec --bare`: no bundle, six tools (`bash`,
 `read`, `write`, `edit`, `rewrite`, `todo`), the minimal system prompt, and the event
 log. It has no permissions, hooks, or subagents.
 _Avoid_: minimal mode, safe mode
-
-**Internal bundle**:
-A first-party `.hyabundle` under `bundles/builtin/` (such as `bundles/builtin/compaction`) that carries a full-mode
-feature outside the kernel. It extends the kernel and never replaces its
-logic: `hya/compaction` registers context-reduction steps (`shake`, `remote`)
-that run before the kernel's own Rewrite. Full mode loads them; bare mode does
-not.
-_Avoid_: plugin, module
 
 **Injection point**:
 A generic place where a bundle adds behavior to the core: a tool, rewriter,
@@ -116,8 +109,7 @@ One of the thirteen trusted bundles shipped with the backend (`hya/base-tools`,
 `hya/extended-tools`, `hya/network-tools`, `hya/channel-tools`,
 `hya/core-agents`, `hya/core-skills`, `hya/core-commands`,
 `hya/agent-channels`, `hya/goal-loop`, `hya/plan-impl-review`,
-`hya/basic-tui-components`, `hya/code-mode`, and the internal bundle
-`hya/compaction`). Loaded from in-tree sources in Cargo builds or
+`hya/basic-tui-components`, `hya/code-mode`, and `hya/compaction`). Loaded from in-tree sources in Cargo builds or
 `<prefix>/bundles/hya-*.hyabundle` in installed layouts.
 
 **Agent catalog**:
