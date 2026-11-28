@@ -88,6 +88,7 @@ export const ALLOWED_TOP_LEVEL_KEYS = new Set([
   "agents",
   "channels",
   "workflow",
+  "cli",
 ]);
 
 export const ALLOWED_MCP_KEYS = new Set([
