@@ -1,28 +1,74 @@
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import { Show } from "solid-js"
+import { Show, type JSX } from "solid-js"
 import { useApp } from "../app/context"
 import { colors } from "../theme"
 import { extensionManager, type PanelEntry } from "./manager"
-import { RenderTree } from "./renderTree"
+import { RenderTree, type TreeHost } from "./renderTree"
+import type { JsonValue, TranscriptRenderNode } from "./wire"
 
 /**
  * One extension panel's content at `width`×`height` cells; the extension
  * renders asynchronously. `scrollRef` hands its scrollbox to the pane's
  * keyboard scrolling (components/PaneWorkspace.tsx).
  */
-export function ExtensionPanel(props: { panelKey: string; width: number; height: number; paddingX?: number; scrollRef?: (element: ScrollBoxRenderable) => void }) {
+export function ExtensionPanel(props: {
+  panelKey: string
+  width: number
+  height: number
+  paddingX?: number
+  scrollRef?: (element: ScrollBoxRenderable) => void
+  transcript?: (node: TranscriptRenderNode) => JSX.Element
+}) {
   const view = () => extensionManager.panelView(props.panelKey, Math.max(1, Math.floor(props.width)), Math.max(1, Math.floor(props.height)))
   const [extension, id] = [props.panelKey.slice(0, props.panelKey.lastIndexOf("#")), props.panelKey.slice(props.panelKey.lastIndexOf("#") + 1)]
+  const host: TreeHost = {
+    onAction: (action, point) => void extensionManager.action(extension, { kind: "panel", id }, action, point),
+    ...(props.transcript ? { transcript: props.transcript } : {}),
+  }
   return (
     <scrollbox {...(props.scrollRef ? { ref: props.scrollRef } : {})} width="100%" flexGrow={1} paddingX={props.paddingX ?? 1}>
       <Show when={view().node} keyed fallback={<text wrapMode="word" fg={view().error ? colors.error : colors.muted}>{view().error ?? "Loading…"}</text>}>
-        {(node) => <RenderTree node={node} host={{ onAction: (action, point) => void extensionManager.action(extension, { kind: "panel", id }, action, point) }} />}
+        {(node) => <RenderTree node={node} host={host} />}
       </Show>
     </scrollbox>
   )
 }
 
+/**
+ * One dynamic named extension pane's content at `width`×`height` cells
+ * (`api.registerPane`, v2). Supports multi-instance parameters and
+ * host-virtualized `{ type: "transcript", sessionId }` nodes.
+ */
+export function ExtensionPane(props: {
+  paneKey: string
+  width: number
+  height: number
+  instance?: string
+  params?: JsonValue
+  paddingX?: number
+  scrollRef?: (element: ScrollBoxRenderable) => void
+  transcript?: (node: TranscriptRenderNode) => JSX.Element
+}) {
+  const view = () => extensionManager.paneView(
+    props.paneKey,
+    Math.max(1, Math.floor(props.width)),
+    Math.max(1, Math.floor(props.height)),
+    { ...(props.instance ? { instance: props.instance } : {}), ...(props.params !== undefined ? { input: props.params } : {}) },
+  )
+  const [extension, id] = [props.paneKey.slice(0, props.paneKey.lastIndexOf("#")), props.paneKey.slice(props.paneKey.lastIndexOf("#") + 1)]
+  const host: TreeHost = {
+    onAction: (action, point) => void extensionManager.action(extension, { kind: "pane", id, ...(props.instance ? { instance: props.instance } : {}) }, action, point),
+    ...(props.transcript ? { transcript: props.transcript } : {}),
+  }
+  return (
+    <scrollbox {...(props.scrollRef ? { ref: props.scrollRef } : {})} width="100%" flexGrow={1} paddingX={props.paddingX ?? 1}>
+      <Show when={view().node} keyed fallback={<text wrapMode="word" fg={view().error ? colors.error : colors.muted}>{view().error ?? "Loading…"}</text>}>
+        {(node) => <RenderTree node={node} host={host} />}
+      </Show>
+    </scrollbox>
+  )
+}
 
 /**
  * The full-screen overlay an extension panel draws while it holds the

@@ -2,12 +2,14 @@ import { TextAttributes } from "@opentui/core"
 import { For, type JSX } from "solid-js"
 import { colors } from "../theme"
 import { extensionManager, type HookTree, type HookTrees } from "./manager"
-import type { ExtensionAction, RenderNode } from "./wire"
+import { isTranscriptNode, type ExtensionAction, type RenderNode, type TranscriptRenderNode } from "./wire"
 
-/** How a validated tree meets the host: what fills its slot, what a click does. */
+/** How a validated tree meets the host: what fills its slot, what a click does, and how host-virtualized transcripts render. */
 export interface TreeHost {
   readonly slot?: () => JSX.Element
   readonly onAction?: (action: ExtensionAction, point: { readonly x: number; readonly y: number }) => void
+  /** Host-virtualized streaming transcript renderer for `{ type: "transcript", sessionId }` nodes. */
+  readonly transcript?: (node: TranscriptRenderNode) => JSX.Element
 }
 
 const themed = (color: string | undefined): string | undefined => {
@@ -24,6 +26,17 @@ const themed = (color: string | undefined): string | undefined => {
  */
 export function RenderTree(props: { node: RenderNode; host?: TreeHost; inRow?: boolean }): JSX.Element {
   const node = props.node
+  if (isTranscriptNode(node)) {
+    if (props.host?.transcript) return props.host.transcript(node)
+    const mode = node.follow === false
+      ? `scroll:${node.scrollOffset ?? 0}`
+      : "follow"
+    return (
+      <box flexDirection="column" width="100%">
+        <text wrapMode="none" fg={colors.muted}>{`[transcript: ${node.sessionId} · ${mode}${node.compact ? " · compact" : ""}]`}</text>
+      </box>
+    )
+  }
   const child = (item: RenderNode) => <RenderTree node={item} {...(props.host ? { host: props.host } : {})} inRow={node.kind === "row"} />
   switch (node.kind) {
     case "slot": return props.host?.slot?.() ?? null

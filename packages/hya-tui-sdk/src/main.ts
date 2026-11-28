@@ -52,7 +52,8 @@ function log(ext: string, line: string): void {
 function askTui(ext: string, method: string, params: Record<string, unknown>, target: { call: number; jit?: JitThread }): void {
   const id = `h${nextId++}`
   asked.set(id, target)
-  send({ jsonrpc: JSONRPC_VERSION, id, method, params: { ext, ...params } as JsonValue })
+  // Authoritative `ext` comes last so VM-supplied params can never spoof another extension's identity.
+  send({ jsonrpc: JSONRPC_VERSION, id, method, params: { ...params, ext } as JsonValue })
 }
 
 worker.onmessage = (event: MessageEvent<FromWorker>) => {

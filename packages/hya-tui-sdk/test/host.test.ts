@@ -13,7 +13,7 @@ const render = (vm: ExtensionVm, id: string) => request(vm, "tui/render", { surf
 
 async function probeVm(hostCall?: HostCall): Promise<ExtensionVm> {
   const vm = await ExtensionVm.create(await bundleExtension(fixture("probe.ts")), { memoryBytes: 32 * 1024 * 1024, deadlineMs: 80, log: () => undefined, ...(hostCall ? { hostCall } : {}) });
-  expect((await request(vm, "tui/initialize", { api_version: 1, permissions: ["fs.read"] })).result).toEqual({ api_version: 1, sdk_version: "1.0.0" });
+  expect((await request(vm, "tui/initialize", { api_version: 2, permissions: ["fs.read"] })).result).toEqual({ api_version: 2, sdk_version: "2.0.0" });
   await request(vm, "tui/activate", { context: { terminal: { columns: 80, rows: 24 } } });
   return vm;
 }

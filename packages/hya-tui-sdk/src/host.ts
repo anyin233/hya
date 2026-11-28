@@ -222,7 +222,7 @@ export class ExtensionVm {
           state.value.dispose()
           return typeof response === "string" ? response : fault("handler returned no response")
         }
-        if (this.outstanding.size === 0) return fault("handler never settles (extensions have no timers; only api.fs is asynchronous)")
+        if (this.outstanding.size === 0) return fault("handler never settles (extensions have no timers; only host APIs are asynchronous)")
         await Promise.race(this.outstanding)
       }
     } finally {

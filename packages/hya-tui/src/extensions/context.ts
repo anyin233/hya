@@ -12,7 +12,7 @@ import { sessionsInScope } from "../state/projects"
 import { mergeTranscript } from "../state/overlay"
 import { forkSourceText } from "../state/revert"
 import type { AppState } from "../state/store"
-import type { ExtensionContext } from "./wire"
+import { isJson, type ExtensionContext, type JsonValue } from "./wire"
 import { tuiVersion } from "../version"
 
 /** What the context needs from outside the store: the shown server, and the status items extensions contribute. */
@@ -87,12 +87,26 @@ function statusSection(state: AppState, feed: ExtensionStatusFeed): NonNullable<
   }
 }
 
+function extensionStateSection(raw: Record<string, unknown> | undefined): Readonly<Record<string, JsonValue>> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined
+  const out: Record<string, JsonValue> = {}
+  let count = 0
+  for (const [bundleId, value] of Object.entries(raw)) {
+    if (isJson(value)) {
+      out[bundleId] = value
+      count += 1
+    }
+  }
+  return count > 0 ? out : undefined
+}
+
 /** The complete host context; `scopeContext` drops what an extension's permissions do not grant. */
 export function extensionContext(state: AppState, terminal: { width: number; height: number }, feed: ExtensionStatusFeed): ExtensionContext {
   const session = state.selected
   const project = state.projects.find((row) => row.id === state.activeProjectId)
   const directory = session?.workdir || project?.roots[0] || ""
   const model = session ? modelReference(session) : undefined
+  const extensionState = extensionStateSection(session?.extensions)
   return {
     terminal: { columns: terminal.width, rows: terminal.height },
     ...(session ? {
@@ -128,5 +142,6 @@ export function extensionContext(state: AppState, terminal: { width: number; hei
       return isTodoStatus(status) ? [{ status, content: todo.content }] : []
     }),
     status: statusSection(state, feed),
+    ...(extensionState ? { extension_state: extensionState } : {}),
   }
 }

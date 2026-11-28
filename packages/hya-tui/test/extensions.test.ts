@@ -19,7 +19,7 @@ let digestSeed = 0
 /** A catalog row as `GET /v2/tui-extensions` returns it. */
 function catalogRow(id: string, files: Record<string, string>, permissions: string[], entry = "tui/main.ts") {
   return {
-    bundleId: id, bundleVersion: "1.0.0", preparedDigest: sha(`${id}:${++digestSeed}`), apiVersion: 1, entry, sdk: "1.0.0", permissions,
+    bundleId: id, bundleVersion: "1.0.0", preparedDigest: sha(`${id}:${++digestSeed}`), apiVersion: 2, entry, sdk: "2.0.0", permissions,
     files: Object.entries(files).map(([path, content]) => ({ path, sha256: sha(content), content })),
   }
 }
@@ -112,7 +112,8 @@ describe("catalog files", () => {
     expect(parseCatalogEntry({ ...row, files: [{ path: "../x.ts", sha256: sha("x"), content: "x" }], entry: "../x.ts" })).toContain("invalid entry")
     expect(parseCatalogEntry({ ...row, entry: "tui/other.ts" })).toContain("is not among its files")
     expect(parseCatalogEntry({ ...row, permissions: ["fs.write"] })).toContain("unknown permission")
-    expect(parseCatalogEntry({ ...row, apiVersion: 2 })).toContain("api_version 2 is not supported")
+    expect(parseCatalogEntry({ ...row, apiVersion: 1 })).toContain("api_version 1 is not supported")
+    expect(typeof parseCatalogEntry({ ...row, permissions: ["tui.bundle_api", "tui.extension_state.read", "tui.transcript.embed"] })).toBe("object")
   })
 
   test("materializes read-only files under the digest, once", async () => {
@@ -124,11 +125,12 @@ describe("catalog files", () => {
     expect(await materialize(parsed, join(temp, "files"))).toBe(dir)
   })
 
-  test("SDK compatibility: same major, installed minor not older", () => {
-    expect(sdkCompatible("1.0.0", "1.0.0")).toBe(true)
-    expect(sdkCompatible("1.0", "1.2.0")).toBe(true)
-    expect(sdkCompatible("1.3.0", "1.2.0")).toBe(false)
-    expect(sdkCompatible("2.0.0", "2.0.0")).toBe(false)
+  test("SDK compatibility: same major (2), installed minor not older", () => {
+    expect(sdkCompatible("2.0.0", "2.0.0")).toBe(true)
+    expect(sdkCompatible("2.0", "2.2.0")).toBe(true)
+    expect(sdkCompatible("2.3.0", "2.2.0")).toBe(false)
+    expect(sdkCompatible("1.0.0", "1.0.0")).toBe(false)
+    expect(sdkCompatible("1.0.0", "2.0.0")).toBe(false)
   })
 
   test("the SDK is found next to the TUI in both the repository and the release layout", () => {
@@ -555,6 +557,231 @@ export default defineTuiExtension({ activate(api) {
     extensions.setRoots([other])
     // The 16 live watches lie outside the new root: each ends with a `closed` event.
     await until(async () => (await panelJson(extensions, "acme/watcher#p")).closed === 17 || undefined, "closed on Project change")
+    await extensions.stopAll()
+  }, 20_000)
+})
+
+describe("SDK v2 capabilities (bundle.api, extension_state, dynamic panes, slash commands, transcript node)", () => {
+  test("wire validation covers transcript nodes, dynamic panes, slash commands, and confined extension_state", () => {
+    expect(validateRenderNode({ type: "transcript", sessionId: "hysec_sub_1" }, { slot: "forbid", actions: false }))
+      .toContain("tui.transcript.embed")
+    expect(validateRenderNode({ type: "transcript", sessionId: "hysec_sub_1", follow: false, scrollOffset: 5, maxMessages: 80, compact: true }, { slot: "forbid", actions: false, transcriptEmbed: true }))
+      .toEqual({ type: "transcript", sessionId: "hysec_sub_1", follow: false, scrollOffset: 5, maxMessages: 80, compact: true })
+    expect(validateRenderNode({ type: "transcript", sessionId: "../escape" }, { slot: "forbid", actions: false, transcriptEmbed: true }))
+      .toContain("valid session id")
+
+    const checked = validateContributions({
+      panes: [{ id: "viewer", title: "Viewer", default_slot: "right", default_size: { width: "40%", min_width: 30 }, pinnable: true, closable: true, keys: true }],
+      commands: [{ name: "subagents", description: "Open subagents", argument_hint: "[filter]" }],
+    }, ["tui.panel", "tui.action", "tui.keys"])
+    if (typeof checked === "string") throw new Error(checked)
+    expect(checked.contributions.panes).toEqual([
+      { id: "viewer", title: "Viewer", defaultSlot: "right", defaultSize: { width: "40%", min_width: 30 }, pinnable: true, closable: true, keys: true },
+    ])
+    expect(checked.contributions.commands).toEqual([
+      { name: "subagents", description: "Open subagents", argumentHint: "[filter]" },
+    ])
+    expect(checked.warnings).toEqual([])
+
+    const gated = validateContributions({
+      panes: [{ id: "viewer", title: "Viewer" }],
+      commands: [{ name: "subagents", description: "Open subagents" }],
+    }, [])
+    if (typeof gated === "string") throw new Error(gated)
+    expect(gated.contributions.panes).toEqual([])
+    expect(gated.contributions.commands).toEqual([])
+    expect(gated.warnings).toContain("panes ignored: permission tui.panel not declared")
+    expect(gated.warnings).toContain("commands ignored: permission tui.action not declared")
+    expect(validateContributions({ commands: [{ name: "skill:bad", description: "nope" }] }, ["tui.action"])).toContain("skill: prefix is reserved")
+
+    // extension_state is strictly confined to caller bundleId (and fail-closed without bundleId).
+    const full = {
+      ...context,
+      extension_state: { "hya/workflow": { active: 1 }, "hya/multi-agent": { workers: 3 } },
+    }
+    expect(scopeContext(full, []).extension_state).toBeUndefined()
+    expect(scopeContext(full, ["tui.extension_state.read"]).extension_state).toEqual({})
+    expect(scopeContext(full, ["tui.extension_state.read"], { bundleId: "hya/workflow" }).extension_state).toEqual({
+      "hya/workflow": { active: 1 },
+    })
+    expect(scopeContext(full, ["tui.extension_state.read"], { bundleId: "hya/workflow", authorizedBundles: ["hya/multi-agent"] }).extension_state).toEqual({
+      "hya/workflow": { active: 1 },
+      "hya/multi-agent": { workers: 3 },
+    })
+  })
+
+  test("dynamic panes, slash commands, pane.* commands, and transcript nodes run end-to-end in the VM", async () => {
+    const paneOps: unknown[] = []
+    const notices: string[] = []
+    const source = `import { defineTuiExtension, transcriptNode } from "@hya/tui-sdk"
+export default defineTuiExtension({
+  activate(api) {
+    api.registerPane({
+      id: "viewer",
+      title: "Subagent Viewer",
+      defaultSlot: "right",
+      defaultSize: { width: 48, minWidth: 30 },
+      pinnable: true,
+      closable: true,
+      render: ({ instance, params }) => ({
+        kind: "column",
+        children: [
+          { kind: "text", text: "viewer:" + (instance ?? "none") + ":" + JSON.stringify(params ?? null), action: { name: "pin" } },
+          transcriptNode(instance ?? "hysec_1", { follow: true, compact: true }),
+        ],
+      }),
+      onAction: (_action, _ctx, meta) => ({ commands: [{ command: "pane.pin", pane: "viewer", instance: meta?.instance, pinned: true }] }),
+      onKey: (key, _ctx, meta) => key.name === "q" ? { commands: [{ command: "pane.close", pane: "viewer", instance: meta?.instance }] } : undefined,
+    })
+    api.registerCommand({
+      name: "inspect",
+      description: "Inspect a subagent",
+      argumentHint: "<session-id>",
+      execute: ({ args }) => ({
+        notice: "inspecting " + args,
+        commands: [{ command: "pane.open", pane: "viewer", instance: args, slot: "right", focus: true, params: { source: "cmd" } }],
+      }),
+    })
+  },
+})`
+    const extensions = manager({
+      notice: (text) => notices.push(text),
+      paneCommand: async (command) => { paneOps.push(command); return undefined },
+    })
+    await extensions.load([
+      catalogRow("hya/multi-agent", { "tui/main.ts": source }, ["tui.panel", "tui.action", "tui.keys", "tui.transcript.embed"]),
+    ], local)
+
+    expect(extensions.panes().map((p) => [p.key, p.defaultSlot, p.defaultSize])).toEqual([
+      ["hya/multi-agent#viewer", "right", { width: 48, min_width: 30 }],
+    ])
+    expect(extensions.commands()).toEqual([
+      { key: "hya/multi-agent#inspect", extension: "hya/multi-agent", name: "inspect", description: "Inspect a subagent", argumentHint: "<session-id>" },
+    ])
+
+    expect(await extensions.runSlashCommand("hya/multi-agent", "inspect", "hysec_child_9")).toBe(true)
+    expect(notices).toContain("inspecting hysec_child_9")
+    expect(paneOps).toEqual([
+      { command: "pane.open", pane: "viewer", instance: "hysec_child_9", slot: "right", focus: true, params: { source: "cmd" } },
+    ])
+
+    const tree = await until(() => extensions.paneView("hya/multi-agent#viewer", 48, 20, { instance: "hysec_child_9", input: { source: "cmd" } }).node, "pane tree")
+    expect(tree).toEqual({
+      kind: "column",
+      children: [
+        { kind: "text", text: 'viewer:hysec_child_9:{"source":"cmd"}', action: { name: "pin", data: null } },
+        { type: "transcript", sessionId: "hysec_child_9", follow: true, compact: true },
+      ],
+    })
+
+    await extensions.action("hya/multi-agent", { kind: "pane", id: "viewer", instance: "hysec_child_9" }, { name: "pin", data: null })
+    await extensions.paneKey("hya/multi-agent#viewer", { name: "q", sequence: "q", ctrl: false, shift: false, meta: false }, "hysec_child_9")
+    expect(paneOps.slice(1)).toEqual([
+      { command: "pane.pin", pane: "viewer", instance: "hysec_child_9", pinned: true },
+      { command: "pane.close", pane: "viewer", instance: "hysec_child_9" },
+    ])
+
+    // Without tui.transcript.embed, returning a transcript node fails surface validation cleanly.
+    await extensions.load([
+      catalogRow("hya/no-embed", { "tui/main.ts": source }, ["tui.panel", "tui.action"]),
+    ], local)
+    const err = await until(() => extensions.paneView("hya/no-embed#viewer", 48, 20, { instance: "hysec_child_9" }).error, "transcript permission error")
+    expect(err).toContain("tui.transcript.embed")
+    await extensions.stopAll()
+  }, 20_000)
+
+  test("bundle.api and extension_state enforce permissions and strict bundle-ID confinement across sibling extensions", async () => {
+    const apiCalls: { extension: string; bundleId: string; method: string; urlPath: string; body?: unknown }[] = []
+    const source = `import { defineTuiExtension } from "@hya/tui-sdk"
+export default defineTuiExtension({
+  activate(api) {
+    let lastResult = "none"
+    api.registerPanel({
+      id: "probe",
+      title: "Probe",
+      render: async ({ context }) => {
+        const own = api.extensionState.get()
+        const queried = await api.extensionState.read({ sessionId: "hysec_1" })
+        const reply = await api.bundleApi.get("/items", { query: { page: "1" } })
+        let crossApiErr = "ok"
+        try { await api.bundleApi.get("/secret", { bundleId: "acme/beta" }) } catch (e) { crossApiErr = e.message }
+        let crossStateErr = "ok"
+        try { await api.extensionState.read({ bundleId: "acme/beta" }) } catch (e) { crossStateErr = e.message }
+        return JSON.stringify({ keys: Object.keys(context.extension_state ?? {}), own, queried, reply, crossApiErr, crossStateErr, lastResult })
+      },
+      onAction: (action) => {
+        if (action.name === "own") return { commands: [{ command: "bundle.api", method: "POST", path: "/run", body: { x: 1 }, token: "t1" }] }
+        if (action.name === "cross") return { commands: [{ command: "bundle.api", method: "GET", path: "/secret", bundleId: "acme/beta", token: "t2" }] }
+        if (action.name === "traverse") return { commands: [{ command: "bundle.api", method: "GET", path: "/../beta/api/secret", token: "t3" }] }
+        return undefined
+      },
+      onResult: (res) => { lastResult = (res.ok ? "ok:" + JSON.stringify(res.value) : "err:" + res.error) },
+    })
+  },
+})`
+    const betaSource = `import { defineTuiExtension } from "@hya/tui-sdk"
+export default defineTuiExtension({
+  activate(api) {
+    api.registerPanel({
+      id: "state",
+      title: "State",
+      render: ({ context }) => JSON.stringify({ keys: Object.keys(context.extension_state ?? {}), own: api.extensionState.get() }),
+    })
+  },
+})`
+
+    const extensions = manager({
+      invokeBundleApi: async (req, origin) => {
+        apiCalls.push({ extension: origin.extension, bundleId: req.bundleId, method: req.method, urlPath: req.urlPath, ...(req.body !== undefined ? { body: req.body } : {}) })
+        return { ok: true, url: req.urlPath }
+      },
+      readExtensionState: async (bundleId, sessionId) => ({ fromHost: bundleId, sessionId: sessionId ?? null }),
+    })
+    extensions.setContext({
+      ...context,
+      extension_state: {
+        "acme/alpha": { alphaSecret: 42 },
+        "acme/beta": { betaSecret: 99 },
+      },
+    })
+    await extensions.load([
+      catalogRow("acme/alpha", { "tui/main.ts": source }, ["tui.panel", "tui.action", "tui.bundle_api", "tui.extension_state.read"]),
+      catalogRow("acme/beta", { "tui/main.ts": betaSource }, ["tui.panel", "tui.extension_state.read"]),
+    ], local)
+
+    const alphaJson = async () => JSON.parse(String(await until(() => {
+      const node = extensions.panelView("acme/alpha#probe", 200, 10).node
+      return node?.kind === "text" ? node.text : undefined
+    }, "alpha probe"))) as Record<string, unknown>
+
+    const betaJson = async () => JSON.parse(String(await until(() => {
+      const node = extensions.panelView("acme/beta#state", 200, 10).node
+      return node?.kind === "text" ? node.text : undefined
+    }, "beta state"))) as Record<string, unknown>
+
+    // Sibling extensions sharing identical `tui.extension_state.read` permission NEVER see each other's state.
+    const alpha = await alphaJson()
+    const beta = await betaJson()
+    expect(alpha.keys).toEqual(["acme/alpha"])
+    expect(alpha.own).toEqual({ alphaSecret: 42 })
+    expect(alpha.queried).toEqual({ fromHost: "acme/alpha", sessionId: "hysec_1" })
+    expect(alpha.reply).toEqual({ ok: true, url: "/v2/bundles/acme%2Falpha/api/items?page=1" })
+    expect(String(alpha.crossApiErr)).toContain("confined to bundle acme/alpha")
+    expect(String(alpha.crossStateErr)).toContain("confined to bundle acme/alpha")
+    expect(beta).toEqual({ keys: ["acme/beta"], own: { betaSecret: 99 } })
+
+    // HostCommand `bundle.api` executes confined self-calls, and blocks cross-bundle & traversal attempts.
+    await extensions.action("acme/alpha", { kind: "panel", id: "probe" }, { name: "own", data: null })
+    await until(async () => String((await alphaJson()).lastResult).includes("/v2/bundles/acme%2Falpha/api/run") || undefined, "own bundle.api result")
+
+    await extensions.action("acme/alpha", { kind: "panel", id: "probe" }, { name: "cross", data: null })
+    await until(async () => String((await alphaJson()).lastResult).includes("confined to bundle acme/alpha") || undefined, "cross bundle.api rejected")
+
+    await extensions.action("acme/alpha", { kind: "panel", id: "probe" }, { name: "traverse", data: null })
+    await until(async () => String((await alphaJson()).lastResult).includes("traversal") || undefined, "traversal bundle.api rejected")
+
+    expect(apiCalls.every((c) => c.extension === "acme/alpha" && c.bundleId === "acme/alpha")).toBe(true)
+    expect(apiCalls.map((c) => `${c.method} ${c.urlPath}`)).toContain("POST /v2/bundles/acme%2Falpha/api/run")
     await extensions.stopAll()
   }, 20_000)
 })

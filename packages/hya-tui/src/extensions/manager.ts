@@ -24,9 +24,13 @@ import { HostChannel, HostTimeoutError, type Spawn } from "./hostChannel"
 import { planSandbox, type SandboxPolicy } from "./sandbox"
 import { errorLine } from "../state/projectCommands"
 import {
-  extensionApiVersion, extensionStoppedCode, nodeText, safeText, scopeContext, validateContributions, validateDecision, validateRenderNode,
-  type CommandResult, type Contributions, type ExtensionAction, type ExtensionContext, type ExtensionPermission, type HostCommand, type JsonValue, type NodeAction, type PanelContribution,
-  type RenderNode, type RendererContribution, type ReplaceableSurface,
+  bundleApiMethods, checkBundleConfinement, extensionApiVersion, extensionStoppedCode, isJson, isValidSessionId,
+  nodeText, paneSlots, resolveBundleApiRequest, safeText, scopeContext, validateContributions, validateDecision,
+  validatePaneSize, validateRenderNode,
+  type BundleApiMethod, type BundleScopedCapability, type CommandResult, type Contributions, type ExtensionAction,
+  type ExtensionContext, type ExtensionPermission, type HostCommand, type JsonValue, type NodeAction,
+  type PaneContribution, type PaneHostCommand, type PaneSlot, type PanelContribution, type RenderNode,
+  type RendererContribution, type ReplaceableSurface, type ResolvedBundleApiRequest, type SlashCommandContribution,
 } from "./wire"
 
 import { JSONRPC_VERSION, type SurfaceRef, type ToolCallInput, type TuiMethod, type TuiMethodMap } from "./wire.generated"
@@ -51,10 +55,17 @@ export interface ExtensionInfo {
 /** A panel from any running extension; `key` is `<bundle id>#<panel id>`. */
 export interface PanelEntry extends PanelContribution { readonly key: string; readonly extension: string }
 
+/** A dynamic named pane from any running extension; `key` is `<bundle id>#<pane id>`. */
+export interface PaneEntry extends PaneContribution { readonly key: string; readonly extension: string }
+
+/** A slash command from any running extension; `key` is `<bundle id>#<name>`. */
+export interface CommandEntry extends SlashCommandContribution { readonly key: string; readonly extension: string }
+
 /** What a view shows for a surface: a validated tree, an error, or nothing yet. */
 export interface SurfaceView { readonly node?: RenderNode; readonly error?: string }
 
 export type { ToolCallInput } from "./wire.generated"
+export type { ResolvedBundleApiRequest } from "./wire"
 
 /** One renderer's tree and who answers its actions. */
 export interface HookTree { readonly node: RenderNode; readonly extension: string; readonly renderer: string }
@@ -83,11 +94,21 @@ export interface ManagerOptions {
   readonly open?: (panelKey: string) => void
   /** Run a host command an extension answered with (`ui.*` commands the manager runs itself); a token's result is the returned value or the thrown error. */
   readonly executeCommand?: (command: HostCommand, origin: CommandOrigin) => Promise<JsonValue | undefined> | JsonValue | undefined
+  /** Optional handler for validated, bundle-confined `bundle.api` commands and `api.bundleApi` host calls. */
+  readonly invokeBundleApi?: (request: ResolvedBundleApiRequest, origin: { readonly extension: string }) => Promise<JsonValue | undefined> | JsonValue | undefined
+  /** Optional handler for `api.extensionState.read` host queries (receives an already-confined `bundleId`). */
+  readonly readExtensionState?: (bundleId: string, sessionId?: string) => Promise<JsonValue | undefined> | JsonValue | undefined
+  /** Optional handler for `pane.open` / `pane.pin` / `pane.close` / `pane.focus` commands (falls back to `executeCommand`). */
+  readonly paneCommand?: (command: PaneHostCommand, origin: CommandOrigin) => Promise<JsonValue | undefined> | JsonValue | undefined
+  /** Explicit authorization hook for cross-bundle `bundle.api` or `extension_state` access (default: deny all cross-bundle access). */
+  readonly authorizeBundleAccess?: (caller: string, target: string, capability: BundleScopedCapability) => boolean
+  /** Optional explicit list of additional bundle IDs a caller is authorized to read/invoke (default: none). */
+  readonly authorizedBundles?: (caller: string) => readonly string[]
 }
 
 /** Where a host command came from: the surface whose handler answered with it, and the click that triggered it. */
 export interface CommandOrigin {
-  readonly surface: { readonly kind: "panel" | "renderer"; readonly id: string }
+  readonly surface: { readonly kind: "panel" | "pane" | "renderer" | "command"; readonly id: string; readonly instance?: string }
   readonly extension: string
   readonly point?: { readonly x: number; readonly y: number }
 }
@@ -418,6 +439,28 @@ export class ExtensionManager {
     return out
   }
 
+  /** Dynamic named panes of running extensions, sorted by key. */
+  panes(): PaneEntry[] {
+    this.listVersion()
+    const out: PaneEntry[] = []
+    for (const entry of this.running.values()) {
+      if (entry.state !== "running") continue
+      for (const pane of entry.contributions?.panes ?? []) out.push({ ...pane, key: `${entry.catalog.bundleId}#${pane.id}`, extension: entry.catalog.bundleId })
+    }
+    return out
+  }
+
+  /** Slash commands contributed by running extensions, sorted by name then extension id. */
+  commands(): CommandEntry[] {
+    this.listVersion()
+    const out: CommandEntry[] = []
+    for (const entry of this.running.values()) {
+      if (entry.state !== "running") continue
+      for (const command of entry.contributions?.commands ?? []) out.push({ ...command, key: `${entry.catalog.bundleId}#${command.name}`, extension: entry.catalog.bundleId })
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name) || a.extension.localeCompare(b.extension))
+  }
+
   /** The panel replacing a surface; non-first-party wins, then bundle id. */
   replacement(kind: ReplaceableSurface): PanelEntry | undefined {
     return this.panels().filter((panel) => panel.replaces === kind).sort((a, b) => {
@@ -470,6 +513,43 @@ export class ExtensionManager {
       })
     }
     return cached?.view ?? {}
+  }
+
+  /** A dynamic named pane's current tree at this size; asks the extension when stale. */
+  paneView(key: string, width: number, height: number, options?: { readonly instance?: string; readonly input?: JsonValue }): SurfaceView {
+    this.surfaceVersion()
+    const [extension, id] = splitKey(key)
+    const entry = this.running.get(extension)
+    if (!entry || entry.state !== "running" || !entry.contributions?.panes.some((pane) => pane.id === id)) {
+      return { error: `Extension pane ${key} is not available` }
+    }
+    const instance = options?.instance
+    const inputHash = options?.input === undefined ? "" : `:${Bun.hash(JSON.stringify(options.input))}`
+    const cacheKey = `${entry.generation}:${width}x${height}${inputHash}`
+    const slot = `pane:${id}${instance ? `@${instance}` : ""}`
+    const cached = entry.surfaces.get(slot)
+    if (cached?.key !== cacheKey && !entry.inflight.has(slot)) {
+      entry.inflight.add(slot)
+      const surface: SurfaceRef = { kind: "pane", id, ...(instance ? { instance } : {}) }
+      void this.renderSurface(entry, surface, width, height, options?.input, "forbid").then((view) => {
+        entry.inflight.delete(slot)
+        const previous = entry.surfaces.get(slot)?.view
+        const same = previous !== undefined && JSON.stringify(previous) === JSON.stringify(view)
+        entry.surfaces.set(slot, { key: cacheKey, view: same ? previous : view })
+        if (!same || cacheKey !== `${entry.generation}:${width}x${height}${inputHash}`) this.bumpSurfaces()
+      })
+    }
+    return cached?.view ?? {}
+  }
+
+  /** Invoke an extension-contributed slash command (`tui/command`), applying notices, invalidation, and host commands. */
+  async runSlashCommand(extension: string, name: string, args: string, raw = args ? `/${name} ${args}` : `/${name}`): Promise<boolean> {
+    const entry = this.running.get(extension)
+    if (!entry || entry.state !== "running" || !entry.catalog.permissions.includes("tui.action")) return false
+    if (!entry.contributions?.commands.some((cmd) => cmd.name === name)) return false
+    const result = await this.call(entry, "tui/command", { name, args, raw })
+    await this.handled(entry, "tui/command", result, { surface: { kind: "command", id: name }, extension })
+    return result !== undefined
   }
 
   /** Context fields contributed by running extensions, consumed as `context.status.items`. */
@@ -550,8 +630,8 @@ export class ExtensionManager {
     return { text: current }
   }
 
-  /** A click on a node action inside a panel or renderer tree. */
-  async action(extension: string, surface: { kind: "panel" | "renderer"; id: string }, action: NodeAction | ExtensionAction, point?: { x: number; y: number }): Promise<void> {
+  /** A click on a node action inside a panel, pane, or renderer tree. */
+  async action(extension: string, surface: { kind: "panel" | "pane" | "renderer"; id: string; instance?: string }, action: NodeAction | ExtensionAction, point?: { x: number; y: number }): Promise<void> {
     const entry = this.running.get(extension)
     if (!entry || entry.state !== "running" || !entry.catalog.permissions.includes("tui.action")) return
     const wireAction: ExtensionAction = { ...action, data: action.data ?? null, button: "button" in action ? action.button : "left" }
@@ -561,18 +641,28 @@ export class ExtensionManager {
 
   /** Send a captured key to a panel, serializing requests for each surface (a terminal key event carries more than the wire's five fields). */
   key(panelKey: string, pressed: { readonly name: string; readonly sequence: string; readonly ctrl: boolean; readonly shift: boolean; readonly meta: boolean }): Promise<void> {
-    const [extension, id] = splitKey(panelKey)
+    return this.surfaceKey("panel", panelKey, pressed)
+  }
+
+  /** Send a captured key to a dynamic named pane (`<bundle>#<pane>`), serializing requests per instance. */
+  paneKey(paneKey: string, pressed: { readonly name: string; readonly sequence: string; readonly ctrl: boolean; readonly shift: boolean; readonly meta: boolean }, instance?: string): Promise<void> {
+    return this.surfaceKey("pane", paneKey, pressed, instance)
+  }
+
+  private surfaceKey(kind: "panel" | "pane", keyId: string, pressed: { readonly name: string; readonly sequence: string; readonly ctrl: boolean; readonly shift: boolean; readonly meta: boolean }, instance?: string): Promise<void> {
+    const [extension, id] = splitKey(keyId)
     const key = { name: pressed.name, sequence: pressed.sequence, ctrl: pressed.ctrl, shift: pressed.shift, meta: pressed.meta }
-    const previous = this.keyQueues.get(panelKey) ?? Promise.resolve()
+    const queueKey = `${kind}:${keyId}${instance ? `@${instance}` : ""}`
+    const previous = this.keyQueues.get(queueKey) ?? Promise.resolve()
     const next = previous.then(async () => {
       const entry = this.running.get(extension)
       if (!entry || entry.state !== "running" || !entry.catalog.permissions.includes("tui.keys")) return
-      const surface = { kind: "panel" as const, id }
+      const surface = { kind, id, ...(instance ? { instance } : {}) }
       await this.handled(entry, "tui/key", await this.call(entry, "tui/key", { surface, key }), { surface, extension })
     }).finally(() => {
-      if (this.keyQueues.get(panelKey) === next) this.keyQueues.delete(panelKey)
+      if (this.keyQueues.get(queueKey) === next) this.keyQueues.delete(queueKey)
     })
-    this.keyQueues.set(panelKey, next)
+    this.keyQueues.set(queueKey, next)
     return next
   }
 
@@ -610,8 +700,30 @@ export class ExtensionManager {
     if (command.command === "ui.close") return this.options.close?.(panelKey)
     let result: CommandResult | undefined
     try {
-      const value = await this.options.executeCommand?.(command, origin)
-      if ("token" in command && command.token) result = { token: command.token, ok: true, ...(value === undefined ? {} : { value }) }
+      let value: JsonValue | undefined
+      if (command.command === "bundle.api") {
+        const resolved = resolveBundleApiRequest(
+          entry.catalog.bundleId,
+          command as unknown as Record<string, unknown>,
+          (target) => this.isBundleAuthorized(entry.catalog.bundleId, target, "bundle_api"),
+        )
+        if (typeof resolved === "string") {
+          this.warn(entry, `bundle.api: ${resolved}`)
+          if (command.token) result = { token: command.token, ok: false, error: resolved }
+          else return
+        } else if (this.options.invokeBundleApi) {
+          value = await this.options.invokeBundleApi(resolved, { extension: entry.catalog.bundleId })
+        } else {
+          value = await this.options.executeCommand?.({ ...command, bundleId: resolved.bundleId, path: resolved.path }, origin)
+        }
+      } else if (command.command === "pane.open" || command.command === "pane.pin" || command.command === "pane.close" || command.command === "pane.focus") {
+        value = this.options.paneCommand
+          ? await this.options.paneCommand(command, origin)
+          : await this.options.executeCommand?.(command, origin)
+      } else {
+        value = await this.options.executeCommand?.(command, origin)
+      }
+      if (!result && "token" in command && command.token) result = { token: command.token, ok: true, ...(value === undefined ? {} : { value }) }
     } catch (error) {
       const message = errorLine(error)
       if ("token" in command && command.token) result = { token: command.token, ok: false, error: message }
@@ -649,7 +761,7 @@ export class ExtensionManager {
   private invalidate(entry: Running): void {
     entry.generation += 1
     const contributions = entry.contributions
-    if (contributions?.panels.length || contributions?.statusItems.length) this.bumpSurfaces()
+    if (contributions?.panels.length || contributions?.panes.length || contributions?.statusItems.length) this.bumpSurfaces()
     if (contributions?.renderers.length) this.bumpHooks()
     if (contributions?.formatters.length) this.bumpFormat()
   }
@@ -700,7 +812,11 @@ export class ExtensionManager {
   private async renderSurface(entry: Running, surface: SurfaceRef, width: number, height: number, input: JsonValue | undefined, slot: "forbid" | "require"): Promise<SurfaceView> {
     const result = await this.call(entry, "tui/render", { surface, width, height, now: Date.now(), ...(input === undefined ? {} : { input }) })
     if (!result || result.root === null || result.root === undefined) return {}
-    const node = validateRenderNode(result.root, { slot, actions: entry.catalog.permissions.includes("tui.action") })
+    const node = validateRenderNode(result.root, {
+      slot,
+      actions: entry.catalog.permissions.includes("tui.action"),
+      transcriptEmbed: entry.catalog.permissions.includes("tui.transcript.embed"),
+    })
     return typeof node === "string" ? { error: `${entry.catalog.bundleId}: ${node}` } : { node }
   }
 
@@ -740,12 +856,27 @@ export class ExtensionManager {
     this.bumpList()
   }
 
+  private authorizedFor(callerBundleId: string): readonly string[] {
+    return this.options.authorizedBundles?.(callerBundleId) ?? []
+  }
+
+  private isBundleAuthorized(callerBundleId: string, targetBundleId: string, capability: BundleScopedCapability): boolean {
+    if (this.options.authorizeBundleAccess?.(callerBundleId, targetBundleId, capability) === true) return true
+    return this.authorizedFor(callerBundleId).includes(targetBundleId)
+  }
+
   private async pushContext(entry: Running, scoped: Map<string, { context: ExtensionContext; json: string }>): Promise<void> {
     if (entry.state !== "running") return
-    const key = [...entry.catalog.permissions].sort().join(" ")
+    const hasExtState = entry.catalog.permissions.includes("tui.extension_state.read")
+    // When `tui.extension_state.read` is present, each extension receives its own bundle-confined slice.
+    const key = `${[...entry.catalog.permissions].sort().join(" ")}${hasExtState ? `::${entry.catalog.bundleId}` : ""}`
     let view = scoped.get(key)
     if (!view) {
-      const context = scopeContext(this.context, entry.catalog.permissions)
+      const authorized = hasExtState ? this.authorizedFor(entry.catalog.bundleId) : []
+      const context = scopeContext(this.context, entry.catalog.permissions, {
+        bundleId: entry.catalog.bundleId,
+        ...(authorized.length ? { authorizedBundles: authorized } : {}),
+      })
       view = { context, json: JSON.stringify(context) }
       scoped.set(key, view)
     }
@@ -828,8 +959,18 @@ export class ExtensionManager {
         jit: entry.jit,
         ...(this.options.vmDeadlineMs !== undefined ? { deadlineMs: this.options.vmDeadlineMs } : {}),
       })
-      await this.extRequest(host, ext, "tui/initialize", { api_version: extensionApiVersion, sdk_version: sdk.version, extension_id: ext, permissions: catalog.permissions })
-      const context = scopeContext(this.context, catalog.permissions)
+      const authorized = this.authorizedFor(ext)
+      await this.extRequest(host, ext, "tui/initialize", {
+        api_version: extensionApiVersion,
+        sdk_version: sdk.version,
+        extension_id: ext,
+        permissions: catalog.permissions,
+        ...(authorized.length ? { authorized_bundles: authorized } : {}),
+      })
+      const context = scopeContext(this.context, catalog.permissions, {
+        bundleId: ext,
+        ...(authorized.length ? { authorizedBundles: authorized } : {}),
+      })
       entry.sentContext = JSON.stringify(context)
       const activated = await this.extRequest(host, ext, "tui/activate", { context })
       const checked = validateContributions(activated?.contributions, catalog.permissions)
@@ -841,6 +982,9 @@ export class ExtensionManager {
       entry.generation += 1
       for (const panel of checked.contributions.panels) {
         if (panel.refreshMs) entry.timers.push(setInterval(() => this.invalidate(entry), panel.refreshMs))
+      }
+      for (const pane of checked.contributions.panes) {
+        if (pane.refreshMs) entry.timers.push(setInterval(() => this.invalidate(entry), pane.refreshMs))
       }
       this.bumpAll()
     } catch (error) {
@@ -893,11 +1037,40 @@ export class ExtensionManager {
     this.bumpList()
   }
 
-  /** The host's requests: an extension's `api.fs`, checked against its permission here (the VM's own check is not trusted). */
+  /**
+   * The host's requests (`api.fs`, `api.bundleApi`, `api.extensionState.read`),
+   * checked authoritatively against permissions and bundle-ID confinement here
+   * (the VM's own check is never trusted).
+   */
   private async serveHost(method: string, params: Readonly<Record<string, unknown>>): Promise<unknown> {
     const ext = typeof params.ext === "string" ? params.ext : ""
     const entry = this.running.get(ext)
     if (!entry || (entry.state !== "running" && entry.state !== "starting")) throw new Error("extension not running")
+    if (method === "bundle/api") {
+      if (!entry.catalog.permissions.includes("tui.bundle_api")) throw new Error("missing permission tui.bundle_api")
+      const resolved = resolveBundleApiRequest(ext, params, (target) => this.isBundleAuthorized(ext, target, "bundle_api"))
+      if (typeof resolved === "string") throw new Error(resolved)
+      if (!this.options.invokeBundleApi) throw new Error("bundle API host unavailable")
+      return (await this.options.invokeBundleApi(resolved, { extension: ext })) ?? null
+    }
+    if (method === "extension_state/read") {
+      if (!entry.catalog.permissions.includes("tui.extension_state.read")) throw new Error("missing permission tui.extension_state.read")
+      const requestedBundle = params.bundleId === undefined ? undefined : typeof params.bundleId === "string" ? params.bundleId : null
+      if (requestedBundle === null) throw new Error("extension_state bundleId must be a string")
+      const confined = checkBundleConfinement(ext, requestedBundle, "extension_state", (target) => this.isBundleAuthorized(ext, target, "extension_state"))
+      if (!confined.ok) throw new Error(confined.error)
+      const sessionId = params.sessionId === undefined ? undefined : isValidSessionId(params.sessionId) ? params.sessionId : null
+      if (sessionId === null) throw new Error("extension_state sessionId is invalid")
+      if (this.options.readExtensionState) {
+        const state = await this.options.readExtensionState(confined.bundleId, sessionId)
+        return { state: state ?? null }
+      }
+      if (!sessionId || sessionId === this.context.session?.id) {
+        return { state: this.context.extension_state?.[confined.bundleId] ?? null }
+      }
+      return { state: null }
+    }
+    if (!method.startsWith("fs/")) throw new Error(`unknown host request ${method}`)
     if (!entry.catalog.permissions.includes("fs.read")) throw new Error("missing permission fs.read")
     const path = typeof params.path === "string" ? params.path : ""
     switch (method) {
@@ -946,22 +1119,62 @@ export class ExtensionManager {
   }
 }
 
+const paneIdPattern = /^(?:[A-Za-z0-9][A-Za-z0-9._/-]{0,127}#)?[a-z0-9][a-z0-9._-]{0,63}$/
+
 function validateHostCommand(value: unknown): HostCommand | string {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "malformed command"
   const row = value as Record<string, unknown>
   if (typeof row.command !== "string") return "malformed command"
   const command = row.command
-  if (!["session.open", "session.menu", "session.new_temporary", "project.switch", "project.menu", "project.create", "project.rename", "project.set_roots", "project.delete", "fs.complete", "ui.release", "ui.close", "ui.open"].includes(command)) return `unknown command ${command}`
+  const known = [
+    "session.open", "session.menu", "session.new_temporary",
+    "project.switch", "project.menu", "project.create", "project.rename", "project.set_roots", "project.delete",
+    "fs.complete",
+    "bundle.api",
+    "pane.open", "pane.pin", "pane.close", "pane.focus",
+    "ui.release", "ui.close", "ui.open",
+  ]
+  if (!known.includes(command)) return `unknown command ${command}`
   if (["session.open", "session.menu", "project.switch", "project.menu", "project.rename", "project.set_roots", "project.delete"].includes(command) && typeof row.id !== "string") return `${command} requires id`
   if (["project.create", "project.rename"].includes(command) && typeof row.name !== "string") return `${command} requires name`
   if (["project.create", "project.set_roots"].includes(command) && (!Array.isArray(row.roots) || row.roots.some((root) => typeof root !== "string"))) return `${command} requires roots`
   if (command === "fs.complete" && (typeof row.input !== "string" || typeof row.token !== "string")) return "fs.complete requires input and token"
+  if (command === "bundle.api") {
+    if (typeof row.method !== "string" || !bundleApiMethods.includes(row.method as BundleApiMethod)) return `bundle.api requires method (${bundleApiMethods.join("|")})`
+    if (typeof row.path !== "string" || !row.path) return "bundle.api requires path"
+    if (row.body !== undefined && !isJson(row.body)) return "bundle.api body must be JSON-safe"
+    if (row.query !== undefined && (!row.query || typeof row.query !== "object" || Array.isArray(row.query) || Object.values(row.query as Record<string, unknown>).some((v) => typeof v !== "string"))) return "bundle.api query must be a string record"
+    if (row.sessionId !== undefined && !isValidSessionId(row.sessionId)) return "bundle.api sessionId is invalid"
+    if (row.bundleId !== undefined && typeof row.bundleId !== "string") return "bundle.api bundleId must be a string"
+    if (row.token !== undefined && typeof row.token !== "string") return "bundle.api token must be a string"
+  }
+  if (command === "pane.open" || command === "pane.pin" || command === "pane.close" || command === "pane.focus") {
+    if (typeof row.pane !== "string" || !paneIdPattern.test(row.pane)) return `${command} requires a valid pane id`
+    if (row.instance !== undefined && !isValidSessionId(row.instance)) return `${command} instance is invalid`
+    if (row.token !== undefined && typeof row.token !== "string") return `${command} token must be a string`
+    if (command === "pane.open") {
+      if (row.title !== undefined) {
+        const title = safeText(row.title)
+        if (!title || title.length > 64) return "pane.open title must be 1-64 characters"
+      }
+      if (row.slot !== undefined && !paneSlots.includes(row.slot as PaneSlot)) return `pane.open invalid slot ${String(row.slot)}`
+      if (row.size !== undefined) {
+        const checkedSize = validatePaneSize(row.size)
+        if (typeof checkedSize === "string") return `pane.open ${checkedSize}`
+      }
+      if (row.params !== undefined && !isJson(row.params)) return "pane.open params must be JSON-safe"
+      if (row.focus !== undefined && typeof row.focus !== "boolean") return "pane.open focus must be boolean"
+    }
+    if (command === "pane.pin" && row.pinned !== undefined && typeof row.pinned !== "boolean") return "pane.pin pinned must be boolean"
+  }
   return value as HostCommand
 }
 
 function commandPermission(command: HostCommand): ExtensionPermission | undefined {
   if (command.command.startsWith("session.")) return "tui.session.control"
   if (command.command.startsWith("project.") || command.command === "fs.complete") return "tui.project.control"
+  if (command.command === "bundle.api") return "tui.bundle_api"
+  if (command.command.startsWith("pane.")) return "tui.panel"
   return undefined
 }
 
