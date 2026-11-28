@@ -1,4 +1,6 @@
 //! Track P v2 E2E matrix scenarios (ADR-0039):
+//! - `T1.26`: `hya/agent-channels` disabled: no `channel://` scheme, mail tools,
+//!   or BundleApi, while the rest of the full set stays active.
 //! - `T2.56`: Pure `hya --bare` (`exec` and `serve`) from an isolated prefix with
 //!   zero `bundles/builtin/` present on disk.
 //! - `T2.57`: Selective `bundles.builtin.disable` matrix (`hya/hashline` falling back
@@ -58,6 +60,9 @@ fn all_requests_json(reqs: &[Value], start: usize) -> String {
         .join("\n")
 }
 
+/// The tool error a `read channel://…` gets when no bundle registers the scheme.
+const UNKNOWN_CHANNEL_SCHEME: &str = "unknown handle scheme: channel://";
+
 /// T2.56 — Pure `hya --bare` (`exec` and `serve`) runs cleanly from an isolated
 /// `<prefix>/bin/hya` directory with zero `bundles/builtin/` present on disk.
 #[tokio::test]
@@ -95,6 +100,7 @@ async fn pure_hya_bare_exec_and_serve_without_builtin_bundles() {
                 "todo",
                 json!({"ops": [{"op": "add", "content": "Bare kernel task"}]}),
             ),
+            tool_step("read", json!({"path": "channel://main?last=5"})),
             text_step("PURE_BARE_EXEC_OK"),
         ])
         .build_headless()
@@ -155,6 +161,10 @@ async fn pure_hya_bare_exec_and_serve_without_builtin_bundles() {
     assert!(
         exec_dump.contains("BARE_EDITED") && exec_dump.contains("Bare kernel task"),
         "expected bare grep and todo results in follow-up requests: {exec_dump}"
+    );
+    assert!(
+        exec_dump.contains(UNKNOWN_CHANNEL_SCHEME),
+        "bare has no `channel://` scheme: {exec_dump}"
     );
 
     // `hya workflow` is contributed by `hya/workflow`, so bare has no such command.
@@ -418,6 +428,65 @@ async fn selective_builtin_bundle_disable_matrix() {
             "expected blocked agent() script to mention hya/multi-agent: {followups}"
         );
     }
+}
+
+/// T1.26 — With `hya/agent-channels` disabled there is no mail surface: no
+/// `channel://` scheme, no `send`/`list_channel` tools, and no BundleApi. The
+/// rest of the full set, multi-agent included, stays active.
+#[tokio::test]
+async fn agent_channels_disabled_has_no_mail_surface() {
+    let env = E2eEnvBuilder::new()
+        .disable_builtin_bundle("hya/agent-channels")
+        .scripts(vec![
+            tool_step("read", json!({"path": "channel://main?last=5"})),
+            text_step("CHANNELS_DISABLED_OK"),
+        ])
+        .build()
+        .await
+        .expect("disable agent-channels env");
+
+    let session = env.create_session().await.unwrap();
+    let turn = env
+        .prompt(session, "read a channel without hya/agent-channels")
+        .await
+        .unwrap();
+    assert!(
+        turn.error_message.is_empty(),
+        "channels-disabled turn error: {}",
+        turn.error_message
+    );
+    assert_eq!(turn.state, pb::TurnState::Finished as i32);
+
+    let reqs = env.fake.requests().unwrap();
+    let tools = offered_tool_names(&reqs[0]);
+    for removed in ["send", "list_channel"] {
+        assert!(
+            !tools.iter().any(|t| t == removed),
+            "channel tool `{removed}` must be absent when hya/agent-channels is disabled: {tools:?}"
+        );
+    }
+    for kept in ["read", "task", "list_agents"] {
+        assert!(
+            tools.iter().any(|t| t == kept),
+            "`{kept}` must remain offered with only hya/agent-channels disabled: {tools:?}"
+        );
+    }
+    let followups = all_requests_json(&reqs, 1);
+    assert!(
+        followups.contains(UNKNOWN_CHANNEL_SCHEME),
+        "`read channel://` must fail as an unknown scheme: {followups}"
+    );
+
+    let inbox = env
+        .get_json(&format!(
+            "/v2/sessions/{session}/bundles/hya%2Fagent-channels/inbox"
+        ))
+        .await
+        .expect_err("agent-channels BundleApi must not be served when the bundle is disabled");
+    assert!(
+        inbox.to_string().contains("404"),
+        "expected 404 from the disabled agent-channels BundleApi: {inbox}"
+    );
 }
 
 /// Seed a realistic pre-Phase-0 v1 SQLite database with a session, user+assistant
