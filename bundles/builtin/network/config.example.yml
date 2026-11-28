@@ -1,0 +1,12 @@
+# Per-bundle configuration for hya/network
+# Copy to ~/.config/hya/bundles/hya%2Fnetwork/config.yml
+webfetch:
+  enabled: true
+websearch:
+  # Supported search backends: exa | parallel
+  provider: exa
+  # Optional custom MCP endpoint override:
+  # endpoint: https://mcp.exa.ai/mcp
+  # Optional API key (prefer environment variable references; never commit secrets):
+  # key: ${env:EXA_API_KEY}
+  enabled: true

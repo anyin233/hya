@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "name": "webfetch",
+  "description": "Fetch content from an HTTP(S) URL as text, markdown, or raw HTML.",
+  "permission": "tool",
+  "aliases": [
+    { "name": "fetch", "visibility": "hidden" }
+  ],
+  "prompt_hint": "fetch a web page",
+  "protected": false,
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "The URL to fetch content from"
+      },
+      "format": {
+        "type": "string",
+        "enum": ["text", "markdown", "html"],
+        "description": "The output format. Defaults to markdown."
+      },
+      "timeout": {
+        "type": "number",
+        "description": "Optional timeout in seconds, capped at 120."
+      }
+    },
+    "required": ["url"]
+  },
+  "entrypoint": {
+    "native": "webfetch"
+  }
+}

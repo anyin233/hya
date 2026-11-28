@@ -48,10 +48,13 @@ fn install_sh_stages_every_first_party_bundle_beside_bin() {
         String::from_utf8_lossy(&output.stderr)
     );
     for family in [
-        "hya-base-tools",
+        "hya-hashline",
+        "hya-coding-extras",
         "hya-extended-tools",
-        "hya-network-tools",
+        "hya-network",
         "hya-channel-tools",
+        "hya-compaction",
+        "hya-plan",
     ] {
         assert!(stdout.contains(&format!("-p {family}")), "{stdout}");
     }

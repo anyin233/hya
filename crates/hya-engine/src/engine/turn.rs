@@ -35,9 +35,10 @@ mod tool_gate;
 pub use messages::advertise_tool;
 use messages::{AttachmentData, attachment_blobs, filtered_tool_schemas};
 
-/// Human-answer tools cannot be useful once their host receiver is gone.
-pub(super) fn tool_available(name: &str, interaction_available: bool) -> bool {
-    interaction_available || !["ask_user", "plan_exit"].contains(&name)
+/// Tool availability hook point: both `ask_user` (`hya/coding-extras`) and
+/// `plan_exit` (`hya/plan`) are now governed by `tool.visibility` native hooks.
+pub(super) fn tool_available(_name: &str, _interaction_available: bool) -> bool {
+    true
 }
 
 struct TurnExecution<'a> {
@@ -1223,17 +1224,55 @@ impl SessionEngine {
 }
 
 impl SessionEngine {
+    /// Evaluate active `tool.visibility` hooks (native bundles, host plugins,
+    /// and activation hooks) for the candidate tools in `resources`.
+    pub(super) async fn tool_visibility_outcome(
+        &self,
+        session: SessionId,
+        agent: Option<&AgentName>,
+        resources: &CompiledResourceView,
+    ) -> crate::hooks::ToolVisibilityOutcome {
+        let Some(hooks) = self.active_hook_dispatcher(session) else {
+            return crate::hooks::ToolVisibilityOutcome::Preserve;
+        };
+        let mut tools = Vec::new();
+        for schema in resources.tool_schemas() {
+            let name = schema.name.as_str();
+            let canonical = resources.resolve_tool(name).map_or_else(
+                || name.to_string(),
+                |resolved| resolved.tool.name().to_string(),
+            );
+            if !tools.contains(&canonical) {
+                tools.push(canonical);
+            }
+        }
+        hooks
+            .tool_visibility(crate::hooks::ToolVisibilityInput {
+                session,
+                agent: agent.cloned(),
+                candidate_tools: tools,
+                interactive: self.interaction.is_available(),
+            })
+            .await
+    }
+
     /// Tool schemas a full-mode request to `model` offers: the agent's
     /// filtered tools plus `rewrite` and `todo`, handled by the kernel loop.
-    fn offered_tools(
+    async fn offered_tools(
         &self,
+        session: SessionId,
+        agent: Option<&AgentName>,
         resources: &CompiledResourceView,
         depth: u32,
         model: &ModelRef,
     ) -> Vec<hya_proto::ToolSchema> {
+        let visibility = self
+            .tool_visibility_outcome(session, agent, resources)
+            .await;
         let mut tools = filtered_tool_schemas(
             resources,
             self.interaction.is_available(),
+            &visibility,
             depth,
             self.exclusive_tool.as_deref(),
             model,

@@ -19,10 +19,10 @@ Models vary wildly on the wire—OpenAI Chat Completions, OpenAI Responses (`/re
 
 ## 2. Native Tool Families & Lockstep ABI (`hya-tool`, `hya-tool-loader`)
 
-Hya's 25 full-mode built-in tools live outside the core crate in four native dynamic-library bundles under `bundles/builtin/{base,extended,network,channel}-tools/native`:
+Hya's full-mode built-in tools live outside the core crate in native dynamic-library bundles under `bundles/builtin/{base-tools,extended-tools,network,channel-tools}/native`:
 
-- **Why split them out?** Keeps `hya-core` tiny while letting each family (`hya-base-tools`, `hya-extended-tools`, `hya-network-tools`, `hya-channel-tools`) compile cleanly and declare its visibility, default permission posture (`read_only`, `task`, `tool`, `command`, `mcp`), aliases, and `overrides:` (such as `channel-tools`'s mail-aware `wait` overriding `extended-tools`'s `wait`) in `exposure.yaml`.
-- **Lockstep ABI guard:** `hya-tool-loader` verifies a 32-byte `abi_digest_v1` hash covering the Hya version, `rustc -V`, target OS/arch, struct layouts, and `tool.rs`/`deadline.rs` source bytes before calling `hya_tool_bundle_register_v1`, preventing mismatched `.so`/`.dylib` libraries from ever loading.
+- **Why split them out?** Keeps `hya-core` tiny while letting each family (`hya-base-tools`, `hya-extended-tools`, `hya-network`, `hya-channel-tools`) compile cleanly and declare its visibility, default permission posture (`read_only`, `task`, `tool`, `command`, `mcp`), aliases, and `overrides:` (such as `channel-tools`'s mail-aware `wait` overriding `extended-tools`'s `wait`) via `resources.tools` (`schema_version: 2`, e.g. `hya/network`) or transitional `exposure.yaml`.
+- **Lockstep ABI guard:** `hya-tool-loader` verifies a 32-byte ABI digest (`abi_digest_v2` for ABI v2 bundles such as `hya/network` and `hya/compaction`, `abi_digest_v1` for legacy v1 bundles) before calling registration, preventing mismatched `.so`/`.dylib` libraries from ever loading.
 - **Output caps:** Every tool output passes through host envelope bounds (50 KiB coding text caps, 5,000-char default plugin/bundle caps with automatic spill to `.hya/tool-output/` or `artifact://`) so one noisy command can never blow out a model's context window.
 
 ---

@@ -81,8 +81,8 @@ jobs:
 
           data = json.loads(os.environ["DISCOVERED"])
           bundles = data["all"]
-          if len(bundles) != 12:
-              print(f"ERROR: expected 12 builtin bundles, found {len(bundles)}", file=sys.stderr)
+          if len(bundles) != 14:
+              print(f"ERROR: expected 14 builtin bundles, found {len(bundles)}", file=sys.stderr)
               sys.exit(1)
 
           seen_ids = set()
@@ -166,6 +166,7 @@ jobs:
           LIB_STEM: ${{ matrix.lib_stem }}
           BUNDLE_NAME: ${{ matrix.name }}
           BUNDLE_PATH: ${{ matrix.path }}
+          ABI_VERSION: ${{ matrix.abi_version }}
           HAS_REWRITERS: ${{ matrix.has_rewriters }}
         run: |
           set -euo pipefail
@@ -178,16 +179,25 @@ jobs:
           test -n "$lib" && test -f "$lib"
           echo "Located cdylib: $lib"
 
-          # Verify required lockstep v1 exported C ABI symbols.
+          # Verify required lockstep exported C ABI symbols (v1 or v2).
           syms="$(nm -D --defined-only "$lib")"
-          required_syms=(
-            hya_tool_bundle_abi_v1
-            hya_tool_bundle_register_v1
-            hya_tool_bundle_with_runtime_v1
-            hya_tool_bundle_share_deadline_v1
-          )
-          if [[ "$HAS_REWRITERS" == "true" ]]; then
-            required_syms+=(hya_tool_bundle_register_rewriters_v1)
+          if [[ "${ABI_VERSION:-1}" == "2" ]]; then
+            required_syms=(
+              hya_native_abi_v2
+              hya_native_with_runtime_v2
+              hya_native_share_deadline_v2
+              hya_native_register_v2
+            )
+          else
+            required_syms=(
+              hya_tool_bundle_abi_v1
+              hya_tool_bundle_register_v1
+              hya_tool_bundle_with_runtime_v1
+              hya_tool_bundle_share_deadline_v1
+            )
+            if [[ "$HAS_REWRITERS" == "true" ]]; then
+              required_syms+=(hya_tool_bundle_register_rewriters_v1)
+            fi
           fi
           for sym in "${required_syms[@]}"; do
             if ! grep -Eq "[[:space:]]${sym}$" <<< "$syms"; then
@@ -300,7 +310,7 @@ jobs:
           echo "$bare_out"
           grep -q "bare-smoke-ok" <<< "$bare_out"
 
-          # 2. Full installed prefix: bin/hya + all 12 staged builtin .hyabundle archives.
+          # 2. Full installed prefix: bin/hya + all 14 staged builtin .hyabundle archives.
           full_prefix="${RUNNER_TEMP}/full-prefix"
           full_home="${RUNNER_TEMP}/full-home"
           rm -rf "$full_prefix" "$full_home"
@@ -310,7 +320,7 @@ jobs:
 
           pkg_count="$(find "$full_prefix/bundles" -maxdepth 1 -name 'hya-*.hyabundle' | wc -l)"
           echo "Staged builtin packages: ${pkg_count}"
-          test "$pkg_count" -eq 12
+          test "$pkg_count" -eq 14
 
           for pkg in "$full_prefix/bundles/"hya-*.hyabundle; do
             "$full_prefix/bin/hya" bundle info -f "$pkg" >/dev/null
@@ -325,11 +335,13 @@ jobs:
           )"
           echo "$list_out"
           for expected in \
-            hya/base-tools \
+            hya/hashline \
+            hya/coding-extras \
             hya/extended-tools \
-            hya/network-tools \
+            hya/network \
             hya/channel-tools \
             hya/compaction \
+            hya/plan \
             hya/core-agents \
             hya/core-skills \
             hya/core-commands \
@@ -342,7 +354,7 @@ jobs:
               exit 1
             fi
           done
-          echo "All 12 staged builtin bundles verified in bare-vs-full smoke."
+          echo "All 14 staged builtin bundles verified in bare-vs-full smoke."
 
   builtin-bundles-gate:
     name: builtin-bundles-gate

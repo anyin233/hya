@@ -1,0 +1,38 @@
+{
+  "schema_version": 2,
+  "name": "lsp",
+  "description": "Query a configured Language Server Protocol (LSP) server for definitions, references, hover, symbols, and call hierarchy.",
+  "permission": "read_only",
+  "prompt_hint": "query a language server about code",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "operation": {
+        "type": "string"
+      },
+      "filePath": {
+        "type": "string"
+      },
+      "line": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "character": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "query": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "operation",
+      "filePath",
+      "line",
+      "character"
+    ]
+  },
+  "entrypoint": {
+    "native": "lsp"
+  }
+}

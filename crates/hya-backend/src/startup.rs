@@ -43,7 +43,7 @@ pub(crate) async fn start(
         &runtime.model,
     )
     .to_string();
-    let tool_config = (runtime.websearch, runtime.permission, runtime.settings);
+    let tool_config = (runtime.permission, runtime.settings);
     let built_res = if pure {
         hya_app::build_session_engine_pure(
             store,

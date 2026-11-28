@@ -62,7 +62,6 @@ fn ctx_with(
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         agents: Arc::default(),
-        websearch: hya_tool::WebSearchPlane::default(),
         lsp: hya_tool::LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
         workdir: workdir.to_path_buf(),

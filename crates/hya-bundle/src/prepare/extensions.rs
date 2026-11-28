@@ -880,6 +880,7 @@ pub(super) fn resolve_runtime(
                     SourceNativeCapability::Tools => PreparedNativeCapability::Tools,
                     SourceNativeCapability::Hooks => PreparedNativeCapability::Hooks,
                     SourceNativeCapability::Rewriters => PreparedNativeCapability::Rewriters,
+                    SourceNativeCapability::Services => PreparedNativeCapability::Services,
                 };
                 if !seen.insert(prepared) {
                     return Err(invalid(format!(
@@ -1025,6 +1026,7 @@ pub(crate) fn validate_hook_local_id(bundle_id: &str, local_id: &str) -> Result<
         "event"
             | "tool.execute.before"
             | "tool.execute.after"
+            | "tool.visibility"
             | "command.execute.before"
             | "experimental.text.complete"
             | "message.user.before"

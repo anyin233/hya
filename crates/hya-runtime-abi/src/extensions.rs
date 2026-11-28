@@ -211,6 +211,9 @@ pub struct ToolVisibilityInput {
     pub agent: Option<AgentName>,
     /// Candidate tool names before visibility filtering.
     pub candidate_tools: Vec<String>,
+    /// Whether an interactive user-question channel is currently connected.
+    #[serde(default)]
+    pub interactive: bool,
 }
 
 /// Outcome returned by `tool.visibility` native hooks.

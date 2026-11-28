@@ -1039,3 +1039,389 @@ fn invoke_register_v2(
     }
     Ok(wrap_registrations_with_runtime(regs, checked.with_runtime))
 }
+
+// ---------------------------------------------------------------------------
+// MinimalHostRuntime — reusable lightweight HostRuntime implementation
+// ---------------------------------------------------------------------------
+
+type BundleConfigCallback = Arc<dyn Fn(&str) -> Value + Send + Sync>;
+
+/// Lightweight [`HostRuntime`] implementation for callers that only need
+/// per-bundle configuration lookup (or no-op defaults for standalone tool
+/// family / test loading).
+pub struct MinimalHostRuntime {
+    bundle_config: BundleConfigCallback,
+}
+
+impl MinimalHostRuntime {
+    /// Create a no-op runtime whose `bundle_config` always returns `Value::Null`.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            bundle_config: Arc::new(|_| Value::Null),
+        }
+    }
+
+    /// Create a runtime backed by a custom per-bundle config reader callback.
+    #[must_use]
+    pub fn with_bundle_config<F>(reader: F) -> Self
+    where
+        F: Fn(&str) -> Value + Send + Sync + 'static,
+    {
+        Self {
+            bundle_config: Arc::new(reader),
+        }
+    }
+}
+
+#[async_trait]
+impl hya_runtime_abi::HostSessionStore for MinimalHostRuntime {
+    async fn session_exists(&self, _session: SessionId) -> Result<bool, HostError> {
+        Ok(false)
+    }
+
+    async fn read_events(
+        &self,
+        _session: SessionId,
+        _after_seq: Option<hya_proto::EventSeq>,
+        _limit: Option<usize>,
+    ) -> Result<Vec<Envelope>, HostError> {
+        Ok(Vec::new())
+    }
+
+    async fn append_events(
+        &self,
+        _session: SessionId,
+        _claim: Option<hya_proto::ActorClaim>,
+        _events: Vec<hya_proto::Event>,
+    ) -> Result<Vec<Envelope>, HostError> {
+        Err(HostError::Unavailable("session store unavailable".into()))
+    }
+
+    async fn append_extension_event(
+        &self,
+        _session: SessionId,
+        _bundle: &str,
+        _kind: &str,
+        _payload: Value,
+        _claim: Option<hya_proto::ActorClaim>,
+    ) -> Result<Envelope, HostError> {
+        Err(HostError::Unavailable("session store unavailable".into()))
+    }
+
+    async fn read_projection(
+        &self,
+        _session: SessionId,
+    ) -> Result<Arc<hya_proto::Projection>, HostError> {
+        Err(HostError::Unavailable("session store unavailable".into()))
+    }
+
+    async fn read_extension_state(
+        &self,
+        _session: SessionId,
+        _bundle: &str,
+    ) -> Result<Option<Value>, HostError> {
+        Ok(None)
+    }
+
+    async fn session_metadata(
+        &self,
+        _session: SessionId,
+    ) -> Result<Option<hya_runtime_abi::SessionSummaryMeta>, HostError> {
+        Ok(None)
+    }
+
+    async fn list_sessions(
+        &self,
+        _filter: hya_runtime_abi::SessionListFilter,
+    ) -> Result<Vec<hya_runtime_abi::SessionSummaryMeta>, HostError> {
+        Ok(Vec::new())
+    }
+}
+
+#[async_trait]
+impl hya_runtime_abi::HostBundleStorage for MinimalHostRuntime {
+    async fn get_state(
+        &self,
+        _bundle: &str,
+        _scope: &str,
+        _key: &str,
+    ) -> Result<Option<hya_runtime_abi::BundleStateEntry>, HostError> {
+        Ok(None)
+    }
+
+    async fn put_state(
+        &self,
+        _bundle: &str,
+        _scope: &str,
+        _key: &str,
+        _value: Value,
+        _expected_version: Option<u64>,
+    ) -> Result<hya_runtime_abi::BundleStateEntry, HostError> {
+        Err(HostError::Unavailable("bundle storage unavailable".into()))
+    }
+
+    async fn delete_state(
+        &self,
+        _bundle: &str,
+        _scope: &str,
+        _key: &str,
+    ) -> Result<bool, HostError> {
+        Err(HostError::Unavailable("bundle storage unavailable".into()))
+    }
+
+    async fn list_state(
+        &self,
+        _bundle: &str,
+        _scope: &str,
+        _prefix: Option<&str>,
+    ) -> Result<Vec<hya_runtime_abi::BundleStateEntry>, HostError> {
+        Ok(Vec::new())
+    }
+
+    async fn acquire_claim(
+        &self,
+        _request: hya_runtime_abi::BundleClaimRequest,
+    ) -> Result<hya_runtime_abi::BundleClaimLease, HostError> {
+        Err(HostError::Unavailable("bundle storage unavailable".into()))
+    }
+
+    async fn renew_claim(
+        &self,
+        _lease: &hya_runtime_abi::BundleClaimLease,
+        _ttl_millis: u64,
+    ) -> Result<hya_runtime_abi::BundleClaimLease, HostError> {
+        Err(HostError::Unavailable("bundle storage unavailable".into()))
+    }
+
+    async fn release_claim(
+        &self,
+        _lease: &hya_runtime_abi::BundleClaimLease,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unavailable("bundle storage unavailable".into()))
+    }
+
+    async fn read_claim(
+        &self,
+        _bundle: &str,
+        _resource_key: &str,
+    ) -> Result<Option<hya_runtime_abi::BundleClaimLease>, HostError> {
+        Ok(None)
+    }
+}
+
+#[async_trait]
+impl hya_runtime_abi::HostTurnRunner for MinimalHostRuntime {
+    async fn spawn_session(
+        &self,
+        _request: hya_runtime_abi::TurnSpawnRequest,
+    ) -> Result<SessionId, HostError> {
+        Err(HostError::Unavailable("turn runner unavailable".into()))
+    }
+
+    async fn run_turn(
+        &self,
+        _request: hya_runtime_abi::TurnStartRequest,
+        _cancel: CancellationToken,
+    ) -> Result<hya_runtime_abi::TurnOutcome, HostError> {
+        Err(HostError::Unavailable("turn runner unavailable".into()))
+    }
+
+    async fn spawn_session_and_run(
+        &self,
+        _request: hya_runtime_abi::TurnSpawnRequest,
+        _cancel: CancellationToken,
+    ) -> Result<hya_runtime_abi::TurnOutcome, HostError> {
+        Err(HostError::Unavailable("turn runner unavailable".into()))
+    }
+
+    async fn steer_turn(&self, _session: SessionId, _message: String) -> Result<(), HostError> {
+        Err(HostError::Unavailable("turn runner unavailable".into()))
+    }
+
+    async fn cancel_turn(
+        &self,
+        _session: SessionId,
+        _reason: Option<String>,
+    ) -> Result<bool, HostError> {
+        Err(HostError::Unavailable("turn runner unavailable".into()))
+    }
+
+    async fn turn_status(
+        &self,
+        _session: SessionId,
+    ) -> Result<hya_runtime_abi::TurnStatus, HostError> {
+        Ok(hya_runtime_abi::TurnStatus::Idle)
+    }
+}
+
+#[async_trait]
+impl hya_runtime_abi::HostModelCaller for MinimalHostRuntime {
+    async fn complete(
+        &self,
+        _request: hya_runtime_abi::ModelCallRequest,
+        _cancel: CancellationToken,
+    ) -> Result<hya_runtime_abi::ModelCallResponse, HostError> {
+        Err(HostError::Unavailable("model caller unavailable".into()))
+    }
+
+    async fn stream(
+        &self,
+        _request: hya_runtime_abi::ModelCallRequest,
+        _cancel: CancellationToken,
+    ) -> Result<
+        tokio::sync::mpsc::Receiver<Result<hya_runtime_abi::ModelStreamChunk, HostError>>,
+        HostError,
+    > {
+        Err(HostError::Unavailable("model caller unavailable".into()))
+    }
+
+    async fn compact_window(
+        &self,
+        _model: &ModelRef,
+        _messages: &[hya_proto::Message],
+    ) -> Result<Option<String>, HostError> {
+        Ok(None)
+    }
+
+    async fn model_window(
+        &self,
+        _model: &ModelRef,
+    ) -> Result<Option<hya_runtime_abi::ModelWindowInfo>, HostError> {
+        Ok(None)
+    }
+}
+
+#[async_trait]
+impl hya_runtime_abi::HostEventBus for MinimalHostRuntime {
+    fn publish(&self, _envelope: Envelope) -> Result<(), HostError> {
+        Err(HostError::Unavailable("event bus unavailable".into()))
+    }
+
+    fn subscribe(&self) -> Result<tokio::sync::broadcast::Receiver<Envelope>, HostError> {
+        Err(HostError::Unavailable("event bus unavailable".into()))
+    }
+
+    async fn publish_extension(
+        &self,
+        _session: SessionId,
+        _bundle: &str,
+        _kind: &str,
+        _payload: Value,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unavailable("event bus unavailable".into()))
+    }
+}
+
+#[async_trait]
+impl hya_runtime_abi::HostCatalogReader for MinimalHostRuntime {
+    async fn list_agents(
+        &self,
+        _session: Option<SessionId>,
+    ) -> Result<Vec<hya_tool::AgentDef>, HostError> {
+        Ok(Vec::new())
+    }
+
+    async fn get_agent(
+        &self,
+        _name: &hya_proto::AgentName,
+        _session: Option<SessionId>,
+    ) -> Result<Option<hya_bundle::PreparedAgent>, HostError> {
+        Ok(None)
+    }
+
+    async fn list_skills(
+        &self,
+        _session: Option<SessionId>,
+    ) -> Result<Vec<hya_tool::SkillCatalogEntry>, HostError> {
+        Ok(Vec::new())
+    }
+
+    async fn list_bundles(&self) -> Result<Vec<hya_runtime_abi::BundleCatalogSummary>, HostError> {
+        Ok(Vec::new())
+    }
+
+    async fn get_bundle(&self, _id: &str) -> Result<Option<hya_bundle::Bundle>, HostError> {
+        Ok(None)
+    }
+
+    async fn bundle_config(&self, bundle_id: &str) -> Result<Value, HostError> {
+        Ok((self.bundle_config)(bundle_id))
+    }
+
+    async fn global_config(&self) -> Result<Value, HostError> {
+        Ok(Value::Null)
+    }
+}
+
+#[async_trait]
+impl hya_runtime_abi::HostExtensionRegistry for MinimalHostRuntime {
+    async fn list_extensions(
+        &self,
+        _kind: Option<hya_runtime_abi::ExtensionKind>,
+    ) -> Result<Vec<hya_runtime_abi::ExtensionEntry>, HostError> {
+        Ok(Vec::new())
+    }
+
+    async fn has_bundle(&self, _bundle_id: &str) -> Result<bool, HostError> {
+        Ok(false)
+    }
+
+    async fn invoke_bundle_api(
+        &self,
+        _call: hya_runtime_abi::BundleApiInvocation,
+    ) -> Result<hya_runtime_abi::BundleApiResult, HostError> {
+        Err(HostError::Unavailable(
+            "extension registry unavailable".into(),
+        ))
+    }
+
+    async fn invoke_tool(
+        &self,
+        _session: Option<SessionId>,
+        _tool_name: &str,
+        _input: Value,
+        _cancel: CancellationToken,
+    ) -> Result<Value, HostError> {
+        Err(HostError::Unavailable(
+            "extension registry unavailable".into(),
+        ))
+    }
+}
+
+impl HostRuntime for MinimalHostRuntime {
+    fn session_store(&self) -> &dyn hya_runtime_abi::HostSessionStore {
+        self
+    }
+
+    fn bundle_storage(&self) -> &dyn hya_runtime_abi::HostBundleStorage {
+        self
+    }
+
+    fn turn_runner(&self) -> &dyn hya_runtime_abi::HostTurnRunner {
+        self
+    }
+
+    fn model_caller(&self) -> &dyn hya_runtime_abi::HostModelCaller {
+        self
+    }
+
+    fn event_bus(&self) -> &dyn hya_runtime_abi::HostEventBus {
+        self
+    }
+
+    fn catalog_reader(&self) -> &dyn hya_runtime_abi::HostCatalogReader {
+        self
+    }
+
+    fn extension_registry(&self) -> &dyn hya_runtime_abi::HostExtensionRegistry {
+        self
+    }
+}
+
+/// Minimal [`HostRuntime`] whose capability planes return no-op / unavailable defaults.
+#[must_use]
+pub fn noop_host_runtime() -> Arc<dyn HostRuntime> {
+    static NOOP: std::sync::OnceLock<Arc<dyn HostRuntime>> = std::sync::OnceLock::new();
+    Arc::clone(NOOP.get_or_init(|| Arc::new(MinimalHostRuntime::empty())))
+}

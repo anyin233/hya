@@ -6,12 +6,16 @@
 //! Per ADR-0026, `bash` is exempt from `ProjectScope` path boundaries.
 
 use std::ffi::OsString;
+use std::fs::{File, OpenOptions};
 use std::io::{self, SeekFrom};
 use std::os::unix::ffi::OsStringExt as _;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::LazyLock;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
@@ -181,20 +185,29 @@ impl Tool for Bash {
             BudgetGroup::run(process, deadline, &cancel, timer, capped, exit.clone()).await?;
         let printed = std::fs::metadata(&path)?.len();
         let truncated = printed > MAX_OUTPUT_BYTES;
-        let output = read_output(&path, printed).await?;
-        if truncated {
-            job.dir = None;
-        }
         let pgid = match status {
             GroupOutcome::Finished(status) => {
+                let spilled = if truncated {
+                    match spill_output_to_workdir(&path, &workdir_normalized(&ctx.workdir)) {
+                        Ok(published) => Some(published),
+                        Err(_) => {
+                            job.dir = None;
+                            Some(path.clone())
+                        }
+                    }
+                } else {
+                    None
+                };
+                let display_source = spilled.as_deref().unwrap_or(&path);
+                let output = read_output(display_source, printed).await?;
                 let code = json!(exit_code(status));
                 let mut metadata = json!({
                     "exit": code,
                     "cwd": display_path(&cwd),
                     "truncated": truncated,
                 });
-                if truncated {
-                    metadata["outputPath"] = json!(display_path(&path));
+                if let Some(spilled_path) = spilled {
+                    metadata["outputPath"] = json!(display_path(&spilled_path));
                 }
                 return Ok(cap_tool_output_with_policy(
                     json!({
@@ -207,6 +220,19 @@ impl Tool for Bash {
                 ));
             }
             GroupOutcome::Stopped => {
+                let spilled = if truncated {
+                    match spill_output_to_workdir(&path, &workdir_normalized(&ctx.workdir)) {
+                        Ok(published) => Some(published),
+                        Err(_) => {
+                            job.dir = None;
+                            Some(path.clone())
+                        }
+                    }
+                } else {
+                    None
+                };
+                let display_source = spilled.as_deref().unwrap_or(&path);
+                let output = read_output(display_source, printed).await?;
                 let note = format!(
                     "The command was still running after {limit:?} (the run's time budget capped the timeout). Bash killed its process group."
                 );
@@ -215,8 +241,8 @@ impl Tool for Bash {
                     "cwd": display_path(&cwd),
                     "truncated": truncated,
                 });
-                if truncated {
-                    metadata["outputPath"] = json!(display_path(&path));
+                if let Some(spilled_path) = spilled {
+                    metadata["outputPath"] = json!(display_path(&spilled_path));
                 }
                 return Ok(cap_tool_output_with_policy(
                     json!({
@@ -231,6 +257,7 @@ impl Tool for Bash {
             }
             GroupOutcome::Yielded(pgid) => pgid,
         };
+        let output = read_output(&path, printed).await?;
         abandoned.disarm();
         job.dir = None;
         let reason = if limit < requested {
@@ -325,4 +352,50 @@ impl Drop for Job {
             let _ = std::fs::remove_dir_all(dir);
         }
     }
+}
+
+static NEXT_SPILL_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Atomically publish a finished/stopped truncated output file into
+/// `<workdir>/.hya/tool-output/tool_<millis>_<pid>_<id>.txt` with mode `0o600`.
+fn spill_output_to_workdir(source: &Path, workdir: &Path) -> io::Result<PathBuf> {
+    let artifact_root = workdir.join(".hya/tool-output");
+    std::fs::create_dir_all(&artifact_root)?;
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let id = NEXT_SPILL_ID.fetch_add(1, Ordering::Relaxed);
+    let name = format!("tool_{millis}_{}_{id}.txt", std::process::id());
+    let published = artifact_root.join(&name);
+    let staged_path = artifact_root.join(format!(".{name}.tmp"));
+
+    struct StagedGuard {
+        path: PathBuf,
+        armed: bool,
+    }
+    impl Drop for StagedGuard {
+        fn drop(&mut self) {
+            if self.armed {
+                let _ = std::fs::remove_file(&self.path);
+            }
+        }
+    }
+
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut dest = options.open(&staged_path)?;
+    let mut guard = StagedGuard {
+        path: staged_path,
+        armed: true,
+    };
+    let mut src = File::open(source)?;
+    io::copy(&mut src, &mut dest)?;
+    dest.sync_all()?;
+    drop(dest);
+    std::fs::rename(&guard.path, &published)?;
+    guard.armed = false;
+    Ok(published)
 }

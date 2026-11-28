@@ -27,10 +27,12 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 
 [dev-dependencies]
-hya-base-tools = { workspace = true }
+hya-hashline = { workspace = true }
+hya-coding-extras = { workspace = true }
 hya-extended-tools = { workspace = true }
 hya-channel-tools = { workspace = true }
-hya-network-tools = { workspace = true }
+hya-network = { workspace = true }
+hya-plan = { workspace = true }
 hya-tool-error = { workspace = true }
 
 [[example]]

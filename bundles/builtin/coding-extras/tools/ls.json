@@ -1,0 +1,18 @@
+{
+  "schema_version": 2,
+  "name": "ls",
+  "description": "List the immediate entries of a directory (name, type, size).",
+  "permission": "read_only",
+  "prompt_hint": "list a directory",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    }
+  },
+  "entrypoint": {
+    "native": "ls"
+  }
+}

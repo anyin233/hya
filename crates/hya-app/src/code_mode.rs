@@ -259,8 +259,7 @@ mod tests {
     use hya_tool::{
         InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, NestedToolPlane, NestedTools,
         PermissionModel, PermissionPlane, PermissionRules, ProjectActivityPlane, SkillPlane,
-        SpawnerPlane, ToolCtx, ToolError, ToolOperation, WebSearchPlane, WorkflowPlane,
-        handle::ArtifactPlane,
+        SpawnerPlane, ToolCtx, ToolError, ToolOperation, WorkflowPlane, handle::ArtifactPlane,
     };
     use serde_json::{Value, json};
     use std::sync::Mutex;
@@ -340,7 +339,6 @@ mod tests {
             skills: SkillPlane::default(),
             artifacts: ArtifactPlane::default(),
             agents: Arc::default(),
-            websearch: WebSearchPlane::default(),
             lsp: LspPlane::default(),
             formatter: hya_tool::FormatterPlane::default(),
             workdir: workdir.clone(),

@@ -10,52 +10,151 @@ These core tools live directly inside Hya's core kernel (`hya-core`), alongside 
 
 | Tool | Default permission | What it does |
 | --- | --- | --- |
-| `read` | Allow *(inside Project)* | Read text files (with `LINE#HASH` anchors when `hya/base-tools` / `hya/hashline` is loaded), images (`png`/`jpeg`/`gif`/`webp`), PDFs, directories, `artifact://` spilled outputs, and `channel://` mail logs. |
-| `write` | Ask | Create or overwrite a file on disk (runs post-edit formatter & LSP diagnostics in full mode). |
-| `edit` | Ask | Edit an existing file via exact text replacement or `LINE#HASH` line anchors. |
-| `bash` | Ask | Execute a shell command (supports `timeout`, `cwd`, `env`, and `pty: true`). |
-| `todo` | Allow | Replace/update the session's ordered checklist (`pending`, `in_progress`, `completed`, `blocked`). |
-| `rewrite` | Allow | Fold earlier steps in the current turn behind a clean marker while preserving user messages and todos. |
+| `read` | Allow *(inside Project)* | Read text files (with `LINE#HASH` anchors when `hya/hashline` is enabled; standard verbatim/offset text when disabled or under `--bare`), images (`png`/`jpeg`/`gif`/`webp`), directories, internal handles (`artifact://`, `skill://`, `local://`), and any registered custom URI scheme via `HandleRouter`. |
+| `write` | Ask | Create or overwrite a file on disk, `local://<name>`, or any registered writable custom URI scheme (post-edit formatting/LSP run via hooks rather than hardcoded calls). |
+| `edit` | Ask | Edit an existing file via standard exact text replacement (`hya-bare`) or content-hashed `LINE#HASH` anchors (`hya/hashline`). |
+| `bash` | Ask (`command`, alias `shell`) | Execute a shell command (`hya-core` kernel primitive; supports `timeout`, `cwd`, run-budget yielding, and coding output caps). |
+| `grep` | Allow | Search file contents with a regex or literal pattern (returns `path:line:text` in `hya-bare` or hashline-anchored matches when `hya/hashline` is enabled). |
+| `todo` | Allow | Replace/update the session's ordered checklist (`pending`, `in_progress`, `completed`, `blocked`). Permanently kernel-exclusive; cannot be overridden. |
+| `rewrite` | Allow | Fold earlier steps in the current turn behind a clean marker while preserving user messages and todos. Permanently kernel-exclusive; cannot be overridden. |
 | `skill` | Allow (`read_only`) | Load the full body of a discovered or bundled `SKILL.md` by name. |
 | `code-mode__run` | Ask *(opt-in via `tools.code.mode`)* | Run a traced JavaScript async program calling `tools.*` (`workspace.state` supported); dynamically exposes `agent()` / `agents.run` only when `hya/multi-agent` is loaded. |
 
 ---
 
-## 2. Registry Tools (Full mode — 24 bundle tools + core `skill`)
+## 2. Registry Tools (Full mode — 23 bundle tools + core `bash` & `skill`)
 
-In full mode, Hya loads four native tool-family bundles alongside the kernel's `todo` and `rewrite`. (`read`, `write`, `edit`, and `bash` gain full-mode permission checks, `ProjectScope` folder containment, and LSP/formatter hooks.)
+In full mode, Hya loads its native tool bundles (`hya/hashline`, `hya/coding-extras`, `hya/network`, and `hya/plan` over Lockstep Native ABI v2, plus the remaining transitional tool families `hya/extended-tools` and `hya/channel-tools`) alongside core `bash`, `skill`, and the kernel-exclusive `todo` and `rewrite`.
 
-### `hya/base-tools` (File, Search, Shell & User Questions)
+### `hya/hashline` (Content-Hashed File Tools — `overrides: hya/bare`)
+
+`hya/hashline` is a Lockstep Native ABI v2 bundle (`bundles/builtin/hashline/`, `schema_version: 2`, exported via `export_native_bundle_v2!` / `hya_native_register_v2`) that overrides `hya-bare`'s standard `read`, `write`, `edit`, and `grep` with `HashlineRuntime`-backed `LINE#HASH` line-addressed primitives. Custom URI schemes delegate generically through `HandleRouter` (`DynamicUriHandler` / `UriSchemaHandler`), and post-edit formatting/LSP run through host/bundle hooks rather than hardcoded library calls.
+
+**Opting out (falling back to standard `hya-bare` file tools):**
+
+```yaml
+# ~/.config/hya/config.yaml
+schema_version: 2
+bundles:
+  builtin:
+    profile: full
+    disable:
+      - hya/hashline
+```
+
+When `hya/hashline` is disabled (or under `--bare` / `profile: bare`), `hya/hashline` is not loaded and `hya-bare`'s standard `read`, `write`, `edit`, and `grep` take over cleanly.
+
+| Tool | Default permission | Descriptor / Overrides | What it does |
+| --- | --- | --- | --- |
+| `read` | Allow (`read_only`, `protected: true`) | `tools/read.json` (`overrides: hya/bare`) | Read UTF-8 files with `LINE#HASH` anchors (or `raw: true`), directories, images/PDFs, internal handles, and custom `HandleRouter` URIs. |
+| `write` | Ask (`tool`) | `tools/write.json` (`overrides: hya/bare`) | Atomic whole-file write with optional copied hashline prefix stripping, `local://` scratch handles, and writable custom `HandleRouter` URIs. |
+| `edit` | Ask (`tool`) | `tools/edit.json` (`overrides: hya/bare`) | Strict hashline edits (`replace`, `append`, `prepend` by `LINE#HASH` anchor, or `replace_text`) with stale-anchor recovery. |
+| `grep` | Allow (`read_only`) | `tools/grep.json` (`overrides: hya/bare`) | Regex or literal content search returning hashline-anchored matches and recording recovery snapshots. |
+
+### `hya/coding-extras` (Workspace Search, Patching, User Questions, LSP & Formatters)
+
+`hya/coding-extras` is a Lockstep Native ABI v2 bundle (`bundles/builtin/coding-extras/`, `schema_version: 2`, `capabilities: [tools, hooks, services]`, exported via `export_native_bundle_v2!` / `hya_native_register_v2`) that packages workspace ergonomics, code intelligence, and automatic post-edit formatting/diagnostics on top of `hya-bare`.
+
+**Configuration & Usage:**
+
+Configure formatters and LSP language servers in `~/.config/hya/bundles/hya%2Fcoding-extras/config.yml` (see `bundles/builtin/coding-extras/config.example.yml`):
+
+```yaml
+# ~/.config/hya/bundles/hya%2Fcoding-extras/config.yml
+formatter:
+  rustfmt:
+    command: ["rustfmt", "$FILE"]
+    extensions: [".rs"]
+lsp:
+  rust-analyzer:
+    command: ["rust-analyzer"]
+    extensions: [".rs"]
+```
+
+Set `formatter: false` or `lsp: false` to disable either subsystem, or disable the entire bundle in `~/.config/hya/config.yaml` with `bundles.builtin.disable: [hya/coding-extras]`.
+
+**Tools (7):**
+
+| Tool | Default permission | Descriptor / Aliases | What it does |
+| --- | --- | --- | --- |
+| `ls` | Allow (`read_only`) | `tools/ls.json` | List directory entries as a compact tree (skipping ignored directories). |
+| `glob` | Allow (`read_only`) | `tools/glob.json` | Fast breadth-first filename glob matching (up to 100 matches, 30s traversal cap). |
+| `find` | Allow (`read_only`) | `tools/find.json` | Structured directory/file search with 30s traversal cap. |
+| `apply_patch` | Ask (`tool`) | `tools/apply_patch.json` (hidden alias `patch`) | Multi-file unified patch tool (advertised automatically to `gpt*` / `*codex*` models; hidden alias `patch` works for all models). |
+| `ask_user` | Interactive (`interactive`) | `tools/ask_user.json` (hidden alias `question`) | Ask the user structured multiple-choice or free-text questions. |
+| `lsp` | Allow (`read_only`) | `tools/lsp.json` | Query language servers (`goToDefinition`, `findReferences`, `hover`, `documentSymbol`, `workspaceSymbol`, `goToImplementation`, `prepareCallHierarchy`, `incomingCalls`, `outgoingCalls`). |
+| `project_activity` | Allow (`read_only`) | `tools/project_activity.json` | Inspect recent activity across sessions in the current Project. |
+
+**Service & Native Hook Interfaces:**
+
+- **Service (`lsp-formatter`):** Implements `hya_runtime_abi::NativeService`. Reads `formatter` (`bool | map<name, { command, extensions, environment, disabled }>`) and `lsp` (`bool | map<name, { command, extensions, disabled, env, initialization }>`) from `hya/coding-extras` bundle config on `start()`, reports readiness via `health()`, and shuts down spawned LSP server subprocesses on `stop()`.
+- **Post-Edit Hook (`coding-extras.post-edit` on `HookPoint::ToolExecuteAfter`):** Intercepts successful non-noop `write` and `edit` results for both standard `hya-bare` file tools (`metadata.path`) and `hya/hashline` file tools (`metadata.path` / `metadata.filediff.file`), runs the configured formatter while preserving any UTF-8 BOM, notifies LSP (`touch_file`), and attaches LSP error diagnostics to `metadata.diagnostics` and the tool `output` text.
+- **Interactive Visibility Hook (`coding-extras.ask-user-visibility` on `HookPoint::ToolVisibility`):** Inspects `ToolVisibilityInput.interaction_available` and returns `ToolVisibilityOutcome::Hide { tools: ["ask_user"] }` whenever no interactive human receiver is connected.
+
+### `hya/extended-tools` (Subagents & Workflows)
 
 | Tool | Default permission | What it does |
 | --- | --- | --- |
-| `read`, `write`, `edit`, `bash` | See above | Full-mode file and shell tools with multi-root `ProjectScope` enforcement. |
-| `apply_patch` | Ask | Multi-file unified patch tool (advertised automatically to `gpt*` / `*codex*` models; hidden alias `patch` works for all models). |
-| `ls` | Allow | List entries in a directory. |
-| `glob` | Allow | Fast breadth-first filename glob matching (up to 100 matches, 30s traversal cap). |
-| `find` | Allow | Structured directory/file search with 30s traversal cap. |
-| `grep` | Allow | Fast regular-expression content search across files. |
-| `ask_user` | Interactive | Ask the user structured multiple-choice or free-text questions (omitted automatically in in-process headless runs). |
-
-### `hya/extended-tools` (Code Intelligence, Subagents & Workflows)
-
-| Tool | Default permission | What it does |
-| --- | --- | --- |
-| `lsp` | Allow | Query language servers (go-to-definition, references, hover, symbols, diagnostics). |
 | `list_agents` | Allow | List spawnable agent definitions in the active catalog. |
 | `search_agent` | Allow | Search available agents by keyword. |
 | `task` | Allow | Spawn one or more episodic resident subagents in parallel (`tasks[]`). |
 | `archive` | Allow | Stop and archive a child subagent (can still be woken later via follow-up mail). |
 | `workflow` | Allow | List, inspect, select, run, or check state of compiled `*.hya.md` Workflows. |
-| `plan_exit` | Interactive | Hand off a completed plan from `hya-plan` for user approval (omitted in headless runs). |
-| `project_activity` | Allow | Inspect recent activity across sessions in the current Project. |
 
-### `hya/network-tools` (Web Access)
+### `hya/plan` (Interactive Plan Mode — Native ABI v2)
+
+`hya/plan` packages Hya's read-only planning workflow as a self-contained native ABI v2 bundle (`bundles/builtin/plan`, `id: hya/plan`), combining the `hya-plan` agent, the `plan_exit` approval tool, and its `tool.visibility` native hook so plan mode can be enabled or disabled independently without hardcoding plan logic in `hya-engine`.
+
+**Usage:**
+- In interactive TUI/WebUI sessions, switch to the planner with `/agent hya-plan` (or configure `default_agent: hya-plan`). When planning finishes, `hya-plan` calls `plan_exit` to request user approval before implementation begins.
+- In headless runs (no interactive interaction receiver), the bundle's `tool.visibility` hook automatically hides `plan_exit` from advertised tool schemas and nested tool listings.
+- Disable the bundle in `config.yaml` via `bundles.builtin.disable: [hya/plan]` (or run `hya --bare`).
+
+**Interfaces exposed by `hya/plan`:**
+- **Tool `plan_exit`** (hidden alias `plan`, permission `Tool`):
+  - Input schema: `{ "plan": string (required), "title"?: string, "summary"?: string }`.
+  - Output: `{ "approved": boolean, "action": "approved" | "declined", "title": string, "plan": string, "summary"?: string, "feedback"?: string }`.
+- **Agent `hya-plan`** (`role: main`): read-only (`resource_view.deny: [write, edit, apply_patch, bash]`), may spawn `hya-scout`, `hya-task`, and `hya-reviewer`.
+- **Native Hook `tool.visibility`** (`plan_exit_visibility`): receives `ToolVisibilityInput { session, agent, candidate_tools, interactive }` and returns `ToolVisibilityOutcome::Hide { tools: ["plan_exit"] }` when `interactive == false`, or `ToolVisibilityOutcome::Preserve` otherwise.
 
 | Tool | Default permission | What it does |
 | --- | --- | --- |
-| `webfetch` | Ask | Fetch a URL and extract readable content (up to 5 MiB; disable via `tools.webfetch.enabled: false`). |
-| `websearch` | Ask | Search the web via Exa (default, no key required) or Parallel (`tools.websearch`). |
+| `plan_exit` | Interactive | Hand off a completed plan from `hya-plan` for user approval (hidden alias `plan`; hidden automatically in headless runs by `hya/plan`'s `tool.visibility` native hook). |
+
+### `hya/network` (Web Access & Air-Gapped Control)
+
+`hya/network` (`bundles/builtin/network`, native ABI v2) owns all internet-access tools (`webfetch`, `websearch`) and their search backend configuration outside `hya-tool` and `hya-app`.
+
+| Tool | Hidden Alias | Default permission | What it does |
+| --- | --- | --- | --- |
+| `webfetch` | `fetch` | Ask | Fetch an HTTP(S) URL as `markdown`, `text`, or `html` (up to 5 MiB, default 30s timeout capped at 120s). |
+| `websearch` | `search` | Ask | Search the web via Exa (default, no key required) or Parallel. |
+
+- **Per-bundle configuration (`~/.config/hya/bundles/hya%2Fnetwork/config.yml`, see `bundles/builtin/network/config.example.yml`):**
+  ```yaml
+  webfetch:
+    enabled: true
+    max_response_bytes: 5242880
+    default_timeout_secs: 30
+    max_timeout_secs: 120
+  websearch:
+    enabled: true
+    provider: exa          # exa | parallel
+    # endpoint: https://mcp.exa.ai/mcp
+    # key: ${env:PARALLEL_API_KEY}
+  ```
+- **Air-gapped mode:** Disable the bundle in `~/.config/hya/config.yaml` to remove `webfetch`, `websearch`, `fetch`, and `search` cleanly from the runtime without loading `libhya_network`:
+  ```yaml
+  schema_version: 2
+  bundles:
+    builtin:
+      profile: full
+      disable: [hya/network]
+  ```
+- **Interface definitions:**
+  - `webfetch` input schema: `{ "url": string, "format"?: "text" | "markdown" | "html", "timeout"?: number }`
+  - `websearch` input schema: `{ "query": string, "numResults"?: number, "livecrawl"?: "fallback" | "preferred", "type"?: "auto" | "fast" | "deep", "contextMaxCharacters"?: number }`
+  - Native ABI v2 exports (`hya_native_register_v2`): tools `webfetch` & `websearch`, service `hya/network:service` (`NativeService` reading `HostCatalogReader::bundle_config("hya/network")`), and visibility hook `hya/network:visibility` (`HookPoint::ToolVisibility`).
 
 ### `hya/channel-tools` (Parent ⇄ Child Team Messaging)
 
@@ -68,16 +167,16 @@ In full mode, Hya loads four native tool-family bundles alongside the kernel's `
 
 ---
 
-## 3. Built-in Agents (`hya/core-agents`)
+## 3. Built-in Agents (`hya/core-agents` & `hya/plan`)
 
-| Agent ID | Kind | Tool restrictions | When to use |
-| --- | --- | --- | --- |
-| `hya-main` | Main *(default)* | Full toolset | Everyday coding, debugging, refactoring, and delegating subtasks. |
-| `hya-plan` | Main | Read-only (blocks `write`, `edit`, `apply_patch`, `bash`) | Exploring code and designing a plan before changing any files. |
-| `hya-task` | Subagent *(default)* | Full toolset | Focused implementation or testing subtasks delegated via `task`. |
-| `hya-scout` | Subagent | Read-only (blocks edits, `bash`, `task`, `archive`) | Fast codebase search and reading without cluttering the main chat. |
-| `hya-reviewer` | Subagent | Blocks file edits (`write`, `edit`, `apply_patch`), allows `bash` | Reviewing patches and running check suites without modifying code. |
-| `hya-title` | System *(reserved)* | Internal only | Generates short session titles after your first prompt. |
+| Agent ID | Bundle | Kind | Tool restrictions | When to use |
+| --- | --- | --- | --- | --- |
+| `hya-main` | `hya/core-agents` | Main *(default)* | Full toolset | Everyday coding, debugging, refactoring, and delegating subtasks. |
+| `hya-plan` | `hya/plan` | Main | Read-only (blocks `write`, `edit`, `apply_patch`, `bash`) | Exploring code and designing a plan before changing any files. |
+| `hya-task` | `hya/core-agents` | Subagent *(default)* | Full toolset | Focused implementation or testing subtasks delegated via `task`. |
+| `hya-scout` | `hya/core-agents` | Subagent | Read-only (blocks edits, `bash`, `task`, `archive`) | Fast codebase search and reading without cluttering the main chat. |
+| `hya-reviewer` | `hya/core-agents` | Subagent | Blocks file edits (`write`, `edit`, `apply_patch`), allows `bash` | Reviewing patches and running check suites without modifying code. |
+| `hya-title` | `hya/core-agents` | System *(reserved)* | Internal only | Generates short session titles after your first prompt. |
 
 *(Built-in workflow bundles also define private stage agents—`hya-goal-guide`, `hya-goal-verifier`, `hya-pir-planner`, `hya-pir-implementer`, and `hya-pir-reviewer`—used internally by Goal/Loop mode and the `plan-impl-review` Workflow.)*
 
@@ -85,16 +184,18 @@ In full mode, Hya loads four native tool-family bundles alongside the kernel's `
 
 ## 4. Built-in Bundles (`bundles/builtin/`)
 
-Every Hya installation ships with 12 trusted first-party bundles sourced from `bundles/builtin/` and packaged under `<prefix>/bundles/hya-<name>.hyabundle` (skipped in `--bare`, which runs only `hya-bare` core tools including `skill` and optional `code-mode`). See the **[`hyabundle` Specification](../extend/hyabundle-spec.md)** and **[ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)** for full paths, runtimes, and loading precedence.
+Every Hya installation ships with 14 trusted first-party bundles sourced from `bundles/builtin/` and packaged under `<prefix>/bundles/hya-<name>.hyabundle` (skipped in `--bare`, which runs only `hya-bare` core tools including `skill` and optional `code-mode`). See the **[`hyabundle` Specification](../extend/hyabundle-spec.md)** and **[ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)** for full paths, runtimes, and loading precedence.
 
 | Bundle ID | Source path | Runtime | Role |
 | --- | --- | --- | --- |
-| `hya/base-tools` | `bundles/builtin/base-tools` | Native (`cdylib`) | Core file, search, shell, patch, and `ask_user` tools (10 tools). |
-| `hya/extended-tools` | `bundles/builtin/extended-tools` | Native (`cdylib`) | Code intelligence (`lsp`), subagents, workflows, and project activity (9 tools; `skill` promoted to `hya-bare` core). |
-| `hya/network-tools` | `bundles/builtin/network-tools` | Native (`cdylib`) | Web fetch and web search (`webfetch`, `websearch`). |
+| `hya/hashline` | `bundles/builtin/hashline` | Native ABI v2 (`cdylib`) | Hashline-addressed `read`, `write`, `edit`, and `grep` + `HashlineRuntime` (`overrides: hya/bare`, 4 tools). |
+| `hya/coding-extras` | `bundles/builtin/coding-extras` | Native ABI v2 (`cdylib`) | Workspace search (`ls`, `glob`, `find`), `apply_patch`, `ask_user`, `lsp`, `project_activity`, `lsp-formatter` `NativeService`, and post-edit + visibility `NativeHook`s (7 tools). |
+| `hya/extended-tools` | `bundles/builtin/extended-tools` | Native (`cdylib`) | Subagents and workflows (6 tools; `skill` promoted to `hya-bare` core, `lsp`/`project_activity` moved to `hya/coding-extras`, `plan_exit` extracted to `hya/plan`). |
+| `hya/network` | `bundles/builtin/network` | Native ABI v2 (`cdylib`) | Web fetch and web search (`webfetch`, `websearch`) + per-bundle `config.yml` and air-gapped disable. |
 | `hya/channel-tools` | `bundles/builtin/channel-tools` | Native (`cdylib`) | Team mailbox tools (`send`, `list_channel`, `wait`, `report`). |
-| `hya/compaction` | `bundles/builtin/compaction` | Native (`cdylib`) | Context `Rewriter` running `shake` and `remote` compaction before Kernel `Rewrite`. |
-| `hya/core-agents` | `bundles/builtin/core-agents` | Static | Built-in agent definitions (`hya-main`, `hya-plan`, `hya-task`, `hya-scout`, `hya-reviewer`, `hya-title`). |
+| `hya/compaction` | `bundles/builtin/compaction` | Native ABI v2 (`cdylib`) | Context `Rewriter` (`shake` + `remote`) and `ProjectionReducer` (`Event::Extension`) before Kernel `Rewrite`. |
+| `hya/plan` | `bundles/builtin/plan` | Native ABI v2 (`cdylib`) | Read-only `hya-plan` agent, `plan_exit` tool (alias `plan`), and `tool.visibility` native hook. |
+| `hya/core-agents` | `bundles/builtin/core-agents` | Static | Built-in agent definitions (`hya-main`, `hya-task`, `hya-scout`, `hya-reviewer`, `hya-title`). |
 | `hya/core-skills` | `bundles/builtin/core-skills` | Static | Built-in fallback skills (`agent-bundle-authoring`, `secure-self-update`). |
 | `hya/core-commands` | `bundles/builtin/core-commands` | Static | Built-in slash command templates (`/init`, `/review`). |
 | `hya/agent-channels` | `bundles/builtin/agent-channels` | Static | Default vertical parent/child and unit broadcast channel policy. |

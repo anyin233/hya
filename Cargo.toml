@@ -2,7 +2,7 @@
 # See CONTEXT.md for the full architecture and agent-spec contract.
 [workspace]
 resolver = "3"
-members = ["crates/*", "bundles/builtin/base-tools/native", "bundles/builtin/extended-tools/native", "bundles/builtin/channel-tools/native", "bundles/builtin/network-tools/native", "bundles/builtin/compaction/native"]
+members = ["crates/*", "bundles/builtin/hashline/native", "bundles/builtin/coding-extras/native", "bundles/builtin/extended-tools/native", "bundles/builtin/channel-tools/native", "bundles/builtin/network/native", "bundles/builtin/compaction/native", "bundles/builtin/plan/native"]
 exclude = ["crates/hya-plugin-bun", "vendor/sevenz-rust2-0.20.2"]
 
 [workspace.package]
@@ -23,11 +23,13 @@ hya-runtime-abi = { path = "crates/hya-runtime-abi" }
 hya-tool-loader = { path = "crates/hya-tool-loader" }
 hya-context = { path = "crates/hya-context" }
 hya-tool-error = { path = "crates/hya-tool-error" }
-hya-base-tools = { path = "bundles/builtin/base-tools/native" }
+hya-hashline = { path = "bundles/builtin/hashline/native" }
+hya-coding-extras = { path = "bundles/builtin/coding-extras/native" }
 hya-extended-tools = { path = "bundles/builtin/extended-tools/native" }
 hya-channel-tools = { path = "bundles/builtin/channel-tools/native" }
-hya-network-tools = { path = "bundles/builtin/network-tools/native" }
+hya-network = { path = "bundles/builtin/network/native" }
 hya-compaction = { path = "bundles/builtin/compaction/native" }
+hya-plan = { path = "bundles/builtin/plan/native" }
 hya-store = { path = "crates/hya-store" }
 hya-core = { path = "crates/hya-core" }
 hya-engine = { path = "crates/hya-engine" }
@@ -85,7 +87,6 @@ similar = "2"
 xxhash-rust = { version = "0.8", features = ["xxh32"] }
 mime_guess = "2.0.5"
 libc = "0.2"
-pty-process = "0.5.3"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "json", "uuid", "time", "macros", "migrate"] }
 thiserror = "1"
 anyhow = "1"

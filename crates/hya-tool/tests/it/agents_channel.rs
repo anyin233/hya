@@ -7,9 +7,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use hya_proto::{
     ChannelKind, MailEndpoint, MailKind, OperationId, SessionId, ToolCallId, WorkflowRevision,
 };
+use hya_tool::handle::{DynamicUriContent, DynamicUriCtx, DynamicUriHandler, HandleError};
 use hya_tool::{
     Action, ChannelRow, InteractionPlane, MailReceipt, MailboxPlane, MailboxRequest, MemberOutcome,
     MemberStatusRow, QuestionAnswer, QuestionKind, SpawnMember, SpawnerPlane, ToolError,
@@ -323,15 +325,57 @@ async fn send_and_list_channel_routing_team_status_and_hash_read() {
     assert!(txt.contains("worker-2 · idle · no heartbeat yet"));
     assert!(txt.contains("#DM-aB12Cd34 · dm · peer main/worker-1 · 2 unread"));
 
-    // `#...` path that names no file is read as a channel.
+    // Dynamic `channel://` URI handler on HandleRouter serves channel history via `read`.
+    struct TestChannelHandler(MailboxPlane);
+    #[async_trait]
+    impl DynamicUriHandler for TestChannelHandler {
+        fn scheme(&self) -> &'static str {
+            "channel"
+        }
+        async fn read(
+            &self,
+            _ctx: DynamicUriCtx<'_>,
+            uri: &str,
+        ) -> Result<DynamicUriContent, HandleError> {
+            let channel = uri
+                .strip_prefix("channel://")
+                .unwrap_or_default()
+                .to_string();
+            let (_ch, messages, _unread, warning) = self
+                .0
+                .read_channel(channel, None)
+                .await
+                .map_err(|e| HandleError::Handler(e.to_string()))?;
+            let rendered = messages
+                .into_iter()
+                .map(|(from, body)| format!("[{from}] {body}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let body = match warning {
+                Some(w) => format!("[warning] {w}\n{rendered}"),
+                None => rendered,
+            };
+            Ok(DynamicUriContent {
+                body,
+                media_type: "text/plain".to_string(),
+                metadata: None,
+            })
+        }
+    }
+    let mut read_ctx = ctx_with(vec![allow(Action::Read, "*")], PathBuf::from("."));
+    read_ctx.session = Some(session);
+    read_ctx.mailbox = ctx.mailbox.clone();
+    read_ctx = read_ctx
+        .with_uri_handler(Arc::new(TestChannelHandler(ctx.mailbox.clone())))
+        .unwrap();
     let read_out = reg
         .get("read")
         .unwrap()
-        .execute(&ctx, json!({"filePath": "#main/scout-a"}))
+        .execute(&read_ctx, json!({"path": "channel://main/scout-a"}))
         .await
         .unwrap();
     let rtxt = read_out["output"].as_str().unwrap();
-    assert!(rtxt.contains("served `#main/scout-a`") && rtxt.contains("[main/scout-a] HELLO"));
+    assert!(rtxt.contains("served `main/scout-a`") && rtxt.contains("[main/scout-a] HELLO"));
     service.abort();
 
     // Without children, list_channel omits the `team` key.

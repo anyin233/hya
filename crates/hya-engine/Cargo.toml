@@ -14,6 +14,8 @@ workspace = true
 hya-bundle = { workspace = true }
 # Built for its `cdylib`: the internal `hya/compaction` bundle loaded at runtime.
 hya-compaction = { workspace = true }
+# Built for its `cdylib`: the `hya/plan` native ABI v2 bundle (`plan_exit` + visibility hook).
+hya-plan = { workspace = true }
 hya-core = { workspace = true }
 hya-proto = { workspace = true }
 hya-provider = { workspace = true }
@@ -40,8 +42,9 @@ libc = { workspace = true }
 [dev-dependencies]
 hya-provider = { workspace = true, features = ["test-support"] }
 hya-store = { workspace = true, features = ["lifecycle-bench"] }
-hya-base-tools = { workspace = true }
+hya-hashline = { workspace = true }
+hya-coding-extras = { workspace = true }
 hya-extended-tools = { workspace = true }
 hya-channel-tools = { workspace = true }
-hya-network-tools = { workspace = true }
+hya-network = { workspace = true }
 sqlx = { workspace = true }

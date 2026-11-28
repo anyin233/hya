@@ -9,6 +9,7 @@ use crate::loop_mode::{PlannerOutput, VerifierVerdict};
 
 mod activation;
 mod chain;
+mod native;
 mod payloads;
 
 pub(crate) use activation::{
@@ -16,6 +17,8 @@ pub(crate) use activation::{
     scope_optional_activation_hooks,
 };
 pub use chain::HookChain;
+pub use hya_runtime_abi::{ToolVisibilityInput, ToolVisibilityOutcome};
+pub use native::NativeHookDispatcher;
 pub use payloads::*;
 
 /// Host-implemented hooks the turn loop awaits around chat and tools.
@@ -64,6 +67,13 @@ pub trait HookDispatcher: Send + Sync {
     async fn permission_approve(&self, input: PermissionApproveInput) -> Option<Decision> {
         let _ = input;
         None
+    }
+    /// Filter or restrict advertised tools for a turn (`tool.visibility`).
+    ///
+    /// Default leaves the candidate tool list unchanged.
+    async fn tool_visibility(&self, input: ToolVisibilityInput) -> ToolVisibilityOutcome {
+        let _ = input;
+        ToolVisibilityOutcome::Preserve
     }
     /// Rewrite shell/command text before execution.
     async fn command_execute_before(

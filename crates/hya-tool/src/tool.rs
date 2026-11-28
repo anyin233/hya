@@ -19,7 +19,6 @@ use crate::mailbox::MailboxPlane;
 use crate::permission::{Invocation, Mode, PermissionPlane};
 use crate::skill::SkillPlane;
 use crate::spawn::SpawnerPlane;
-use crate::websearch::WebSearchPlane;
 use crate::workflow_plane::WorkflowPlane;
 
 pub use hya_tool_error::ToolError;
@@ -78,8 +77,6 @@ pub struct ToolCtx {
     pub artifacts: ArtifactPlane,
     /// Immutable caller-reachable agent roster for spawn authorization and listing.
     pub agents: Arc<[AgentDef]>,
-    /// Configured web-search plane.
-    pub websearch: WebSearchPlane,
     /// Language-server plane for `lsp` and post-edit diagnostics.
     pub lsp: LspPlane,
     /// External formatter plane for write/edit/patch post-processing.

@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use anyhow::Context as _;
 use hya_bundle::BuiltinBundleSelection;
@@ -10,9 +9,7 @@ use hya_engine::{
 use hya_mcp::McpServerConfig;
 use hya_plugin::config::PluginEntry;
 use hya_provider::ReasoningEffort;
-use hya_tool::{
-    InvocationPolicy, InvocationRule, Mode, PermissionModel, PermissionTarget, WebSearchConfig,
-};
+use hya_tool::{InvocationPolicy, InvocationRule, Mode, PermissionModel, PermissionTarget};
 use serde::Deserialize;
 
 use super::provider::{ProviderConfig, ProviderRetryFile};
@@ -82,12 +79,19 @@ pub struct EngineSettings {
 }
 
 impl EngineSettings {
-    fn resolved_config_file(&self) -> PathBuf {
+    pub(crate) fn resolved_config_file(&self) -> PathBuf {
         self.config_file.clone().unwrap_or_else(active_config_path)
     }
 
     fn read_bundle_config_value(&self, bundle_ids: &[&str]) -> Option<serde_norway::Value> {
         read_bundle_config_for(&self.resolved_config_file(), bundle_ids)
+    }
+
+    /// Read a bundle's `config.yml` as a JSON value (`Value::Null` when absent
+    /// or unreadable).
+    #[must_use]
+    pub fn bundle_config_json(&self, bundle_id: &str) -> serde_json::Value {
+        read_bundle_config_json(&self.resolved_config_file(), bundle_id)
     }
 
     /// Active built-in bundle selection from `bundles.builtin`.
@@ -154,15 +158,6 @@ impl EngineSettings {
         resolve_catalog_scope_cache(self.file.catalog_scopes.as_ref())
     }
 
-    pub(crate) fn webfetch_enabled(&self) -> bool {
-        if !self.file.bundles.builtin.is_enabled("hya/network-tools") {
-            return false;
-        }
-        self.read_bundle_config_value(&["hya/network-tools", "hya/network"])
-            .and_then(|val| decode_bundle_section::<WebFetchConfig>(&val, Some("webfetch")))
-            .is_none_or(|cfg| cfg.enabled)
-    }
-
     pub(crate) fn code_mode(&self) -> CodeMode {
         self.file
             .tools
@@ -175,32 +170,32 @@ impl EngineSettings {
     }
 
     pub(crate) fn formatter(&self) -> hya_tool::FormatterPlane {
-        if !self.file.bundles.builtin.is_enabled("hya/base-tools") {
+        if !self.file.bundles.builtin.is_enabled("hya/coding-extras") {
             return hya_tool::FormatterPlane::default();
         }
         let raw: crate::formatter_config::RawFormatterConfig = self
-            .read_bundle_config_value(&["hya/base-tools", "hya/coding-extras"])
+            .read_bundle_config_value(&["hya/coding-extras"])
             .and_then(|val| {
                 val.get("formatter")
                     .cloned()
                     .and_then(|sub| serde_norway::from_value(sub).ok())
             })
             .unwrap_or_default();
-        hya_tool::FormatterPlane::new(Arc::new(crate::BuiltinFormatterProvider::new(raw.into())))
+        hya_coding_extras::build_formatter_plane(raw)
     }
 
     pub(crate) fn lsp(&self) -> anyhow::Result<hya_tool::LspPlane> {
-        if !self.file.bundles.builtin.is_enabled("hya/extended-tools") {
+        if !self.file.bundles.builtin.is_enabled("hya/coding-extras") {
             return Ok(hya_tool::LspPlane::default());
         }
         let selection = self
-            .read_bundle_config_value(&["hya/extended-tools", "hya/coding-extras"])
+            .read_bundle_config_value(&["hya/coding-extras"])
             .and_then(|val| {
                 val.get("lsp")
                     .cloned()
                     .and_then(|sub| serde_norway::from_value(sub).ok())
             });
-        crate::lsp::from_selection(selection)
+        hya_coding_extras::build_lsp_plane(selection).map_err(|error| anyhow::anyhow!("{error}"))
     }
 }
 
@@ -222,25 +217,6 @@ struct CatalogScopesFile {
 pub(super) struct ToolsConfig {
     #[serde(default)]
     code: CodeToolConfig,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WebFetchConfig {
-    #[serde(default = "default_true")]
-    enabled: bool,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-impl Default for WebFetchConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_true(),
-        }
-    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -316,6 +292,12 @@ fn read_bundle_config_for(config_file: &Path, bundle_ids: &[&str]) -> Option<ser
     None
 }
 
+pub(crate) fn read_bundle_config_json(config_file: &Path, bundle_id: &str) -> serde_json::Value {
+    read_bundle_config_for(config_file, &[bundle_id])
+        .and_then(|value| serde_json::to_value(value).ok())
+        .unwrap_or(serde_json::Value::Null)
+}
+
 fn decode_bundle_section<T: for<'de> Deserialize<'de>>(
     value: &serde_norway::Value,
     nested_key: Option<&str>,
@@ -326,18 +308,6 @@ fn decode_bundle_section<T: for<'de> Deserialize<'de>>(
         return serde_norway::from_value(nested.clone()).ok();
     }
     serde_norway::from_value(value.clone()).ok()
-}
-
-pub(super) fn resolve_websearch(file: &FileConfig, config_file: &Path) -> WebSearchConfig {
-    if !file.bundles.builtin.is_enabled("hya/network-tools") {
-        return WebSearchConfig {
-            enabled: false,
-            ..WebSearchConfig::default()
-        };
-    }
-    read_bundle_config_for(config_file, &["hya/network-tools", "hya/network"])
-        .and_then(|val| decode_bundle_section::<WebSearchConfig>(&val, Some("websearch")))
-        .unwrap_or_default()
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -524,9 +494,9 @@ pub(super) fn parse_config(yaml: &str) -> anyhow::Result<FileConfig> {
     }
     const REMOVED_V1_SECTIONS: [(&str, &str); 5] = [
         ("compaction", "hya/compaction"),
-        ("formatter", "hya/base-tools"),
+        ("formatter", "hya/coding-extras"),
         ("goal", "hya/goal-loop"),
-        ("lsp", "hya/extended-tools"),
+        ("lsp", "hya/coding-extras"),
         ("subagents", "hya/extended-tools"),
     ];
     for (key, bundle_id) in REMOVED_V1_SECTIONS {
@@ -540,7 +510,7 @@ pub(super) fn parse_config(yaml: &str) -> anyhow::Result<FileConfig> {
         for key in ["websearch", "webfetch"] {
             if tools.contains_key(key) {
                 anyhow::bail!(
-                    "config.yaml v1 section `tools.{key}` was moved to per-bundle config for `hya/network-tools`; run `hya-migration run` to migrate"
+                    "config.yaml v1 section `tools.{key}` was moved to per-bundle config for `hya/network`; run `hya-migration run` to migrate"
                 );
             }
         }

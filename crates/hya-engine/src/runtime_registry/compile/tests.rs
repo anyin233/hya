@@ -21,8 +21,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 // ---------------------------------------------------------------------------
 
 static NEXT_TEMP_SKILL_DIR: AtomicU64 = AtomicU64::new(0);
-const WITHOUT_CHANNEL_TOOLS: [&str; 3] =
-    ["hya/base-tools", "hya/extended-tools", "hya/network-tools"];
+const WITHOUT_CHANNEL_TOOLS: [&str; 4] = [
+    "hya/hashline",
+    "hya/coding-extras",
+    "hya/extended-tools",
+    "hya/network",
+];
 
 fn catalog_from(bundles: &[Bundle]) -> Arc<AgentCatalog> {
     Arc::new(AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(bundles).unwrap())).unwrap())
@@ -400,7 +404,6 @@ fn dispatch_ctx(workdir: &Path) -> ToolCtx {
         skills: SkillPlane::default(),
         artifacts: hya_tool::handle::ArtifactPlane::default(),
         agents: Default::default(),
-        websearch: hya_tool::WebSearchPlane::default(),
         lsp: hya_tool::LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
         workdir: workdir.to_path_buf(),
@@ -1492,8 +1495,9 @@ fn both_planes_keep_builtin_aliases_out_of_model_schemas() {
         .into_iter()
         .map(|s| s.name.as_str().into())
         .collect();
-    assert_eq!(expected.len(), 24);
+    assert_eq!(expected.len(), 23);
     expected.insert(crate::kernel::tools::SKILL.to_string());
+    expected.insert(crate::kernel::tools::BASH.to_string());
     for name in crate::coordination::SPAWN_TOOLS {
         expected.remove(name);
     }
@@ -2251,13 +2255,20 @@ fn coordination_read_injection_and_deny_rules() {
 
 #[test]
 fn builtin_agent_views_enforce_read_only_and_coordination_sets() {
-    let b = bind(&reg_for(&[]));
+    let plan_bundle = hya_bundle::first_party_bundle("hya/plan").unwrap();
+    let b = bind(&reg_with(
+        hya_tool_loader::builtins(),
+        verified_catalog(&[plan_bundle]),
+    ));
     let names = |id: &str| schema_names(&basic(&b, id));
     let writes = ["write", "edit", "apply_patch", "bash"];
 
     let plan = names("hya-plan");
     assert!(
-        writes.iter().all(|d| !plan.contains(*d)) && plan.contains("grep") && plan.contains("task")
+        writes.iter().all(|d| !plan.contains(*d))
+            && plan.contains("grep")
+            && plan.contains("task")
+            && plan.contains("plan_exit")
     );
 
     let scout = names("hya-scout");

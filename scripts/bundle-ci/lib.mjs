@@ -23,6 +23,7 @@ export const CANONICAL_HOOKS = new Set([
   "event",
   "tool.execute.before",
   "tool.execute.after",
+  "tool.visibility",
   "command.execute.before",
   "experimental.text.complete",
   "message.user.before",
@@ -49,6 +50,7 @@ export const ALLOWED_TOP_LEVEL_KEYS = new Set([
   "version_ref",
   "identity",
   "namespace",
+  "overrides",
   "runtime",
   "check",
   "schemas",
@@ -80,7 +82,7 @@ export const ALLOWED_HOOK_HANDLER_KINDS = new Set(["js", "rpc", "command", "nati
 export const ALLOWED_PROCESS_KINDS = new Set(["rust", "bun", "claude"]);
 export const ALLOWED_RUNTIME_KINDS = new Set(["static", "js", "native"]);
 export const ALLOWED_JS_MODES = new Set(["managed", "process", "claude"]);
-export const ALLOWED_NATIVE_CAPABILITIES = new Set(["tools", "hooks", "rewriters"]);
+export const ALLOWED_NATIVE_CAPABILITIES = new Set(["tools", "hooks", "rewriters", "services"]);
 
 const MAX_SKILL_BYTES = 256 * 1024;
 const MAX_PACKAGE_BYTES = 128 * 1024 * 1024;
@@ -194,10 +196,18 @@ function readNativeCrateMeta(bundleDir, manifest) {
     caps.includes("rewriters") ||
     libRsText.includes("hya_tool_bundle_register_rewriters_v1") ||
     libRsText.includes("export_native_rewriter_bundle");
+  const abiVersion =
+    typeof manifest?.runtime?.abi_version === "number"
+      ? manifest.runtime.abi_version
+      : libRsText.includes("export_native_bundle_v2") ||
+          libRsText.includes("hya_native_register_v2")
+        ? 2
+        : 1;
   return {
     crate_dir: crateDir,
     crate_name: crateName,
     lib_stem: libStem,
+    abi_version: abiVersion,
     has_exposure: existsSync(join(bundleDir, "exposure.yaml")),
     has_rewriters: hasRewriters,
   };
@@ -309,6 +319,7 @@ export function discoverBundles(rootDirs, options = {}) {
       entry.crate_dir = nativeMeta.crate_dir;
       entry.crate_name = nativeMeta.crate_name;
       entry.lib_stem = nativeMeta.lib_stem;
+      entry.abi_version = nativeMeta.abi_version;
       entry.has_exposure = nativeMeta.has_exposure;
       entry.has_rewriters = nativeMeta.has_rewriters;
     }

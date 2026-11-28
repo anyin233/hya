@@ -27,7 +27,7 @@ a second Agent runtime. Evaluator hooks receive their documented evaluation
 inputs while the engine retains iteration and budget caps.
 
 `hya/core-agents`, `hya/agent-channels`, and the four tool-family presets
-(`hya/base-tools`, `hya/extended-tools`, `hya/network-tools`,
+(`hya/base-tools`, `hya/extended-tools`, `hya/network`,
 `hya/channel-tools`) are trusted embedded presets. Trust comes
 from the embedded source, never from a manifest claiming
 their identity. Public bundle agents retain the internal-public Harness plane

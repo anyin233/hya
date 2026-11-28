@@ -1,4 +1,4 @@
-//! Test-only replacement for the network tool family, built as a real shared library.
+//! Test-only replacement for the channel tool family, built as a real shared library.
 use async_trait::async_trait;
 use hya_proto::{ToolName, ToolSchema};
 use hya_tool::{Tool, ToolCtx, ToolError};
@@ -41,7 +41,7 @@ pub unsafe extern "C" fn hya_tool_bundle_abi_v1(out: *mut u8) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hya_tool_bundle_register_v1(out: *mut Vec<Arc<dyn Tool>>) {
     let out = unsafe { &mut *out };
-    for name in ["webfetch", "websearch"] {
+    for name in ["send", "list_channel", "report", "wait"] {
         out.push(Arc::new(Replacement(name)));
     }
 }

@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "name": "glob",
+  "description": "List files under a directory matching a glob pattern.",
+  "permission": "read_only",
+  "prompt_hint": "list files matching a glob pattern",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "pattern": {
+        "type": "string"
+      },
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "pattern"
+    ]
+  },
+  "entrypoint": {
+    "native": "glob"
+  }
+}

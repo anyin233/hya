@@ -182,6 +182,16 @@ fn collect_bundle_tool_candidates(
     bundle_id: &str,
     out: &mut BTreeMap<String, ResourceCandidate>,
 ) -> Result<(), BundleError> {
+    // Native bundles register their tools into the harness ToolRegistry at
+    // startup rather than through a per-activation sidecar.
+    if catalog.bundles().iter().any(|bundle| {
+        bundle.identity().id == bundle_id
+            && bundle
+                .runtime()
+                .is_some_and(|runtime| runtime.kind == hya_bundle::PreparedRuntimeKind::Native)
+    }) {
+        return Ok(());
+    }
     let Some(resources) = catalog.bundle_resources(bundle_id, ExportKind::Tool) else {
         return Err(BundleError::UnknownResourceReference {
             bundle_id: bundle_id.to_string(),

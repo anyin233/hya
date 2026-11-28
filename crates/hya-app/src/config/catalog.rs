@@ -12,9 +12,7 @@ use serde_norway::Value;
 
 use super::ResolvedConfig;
 use super::edit::ConfigEditError;
-use super::file::{
-    EngineSettings, config_path, parse_config, resolve_mcp, resolve_permission, resolve_websearch,
-};
+use super::file::{EngineSettings, config_path, parse_config, resolve_mcp, resolve_permission};
 use super::provider::{
     EffectiveModel, PROVIDER_KIND_LABELS, ParsedProvider, ProviderCredential, ProviderKindConfig,
     discovery_auth, merge_provider_models, resolve_provider_credential, resolve_providers,
@@ -444,7 +442,6 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     {
         anyhow::bail!("invalid global reasoning effort `{value}`");
     }
-    let websearch = resolve_websearch(&file, &path);
     Ok(Some(ResolvedConfig {
         router,
         default_model: catalog.default_model().to_string(),
@@ -453,7 +450,6 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         default_agent: file.default_agent.clone(),
         plugins: file.plugins.clone(),
         permission,
-        websearch,
         pending_discovery,
         settings: EngineSettings {
             file,

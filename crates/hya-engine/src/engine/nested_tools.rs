@@ -39,6 +39,8 @@ pub(super) struct TurnNestedTools {
     pub(super) stamps: Arc<Mutex<BTreeMap<String, FileStamp>>>,
     /// The calling tool's context, with `nested` disconnected.
     pub(super) base: ToolCtx,
+    /// `tool.visibility` hook outcome captured when the calling tool started.
+    pub(super) visibility: crate::hooks::ToolVisibilityOutcome,
 }
 
 fn core_error(error: crate::error::CoreError) -> ToolError {
@@ -61,6 +63,11 @@ impl NestedTools for TurnNestedTools {
                             && super::turn::tool_available(
                                 resolved.tool.name(),
                                 self.engine.interaction.is_available(),
+                            )
+                            && super::turn::messages::tool_visible_by_outcome(
+                                schema.name.as_str(),
+                                resolved.tool.name(),
+                                &self.visibility,
                             )
                     })
             })

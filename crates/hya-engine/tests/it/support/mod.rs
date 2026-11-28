@@ -350,7 +350,16 @@ impl Tool for MarkerTool {
 
 /// Replaces the first tool result with `{"masked": true}` and passes subsequent results through.
 #[derive(Default)]
-pub struct MaskFirstResult(AtomicBool);
+pub struct MaskFirstResult {
+    masked: AtomicBool,
+    captured_output_path: std::sync::Mutex<Option<String>>,
+}
+
+impl MaskFirstResult {
+    pub fn captured_output_path(&self) -> Option<String> {
+        self.captured_output_path.lock().unwrap().clone()
+    }
+}
 
 #[async_trait]
 impl HookDispatcher for MaskFirstResult {
@@ -382,8 +391,13 @@ impl HookDispatcher for MaskFirstResult {
     }
 
     async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
+        if let ToolOutcomeNative::Ok { output, .. } = &input.result
+            && let Some(path) = output["metadata"]["outputPath"].as_str()
+        {
+            *self.captured_output_path.lock().unwrap() = Some(path.to_string());
+        }
         ToolExecuteAfterOutcome::Continue {
-            result: if self.0.swap(true, Ordering::SeqCst) {
+            result: if self.masked.swap(true, Ordering::SeqCst) {
                 input.result
             } else {
                 ToolOutcomeNative::Ok {

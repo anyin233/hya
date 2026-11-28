@@ -248,7 +248,7 @@ mod tests {
     use super::*;
     use hya_tool::{
         InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-        SpawnerPlane, WebSearchPlane, handle::ArtifactPlane,
+        SpawnerPlane, handle::ArtifactPlane,
     };
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex};
     use tokio_util::sync::CancellationToken;
@@ -271,7 +271,6 @@ mod tests {
             parent_session: None,
             skills: SkillPlane::default(),
             artifacts: ArtifactPlane::default(),
-            websearch: WebSearchPlane::default(),
             lsp: LspPlane::default(),
             formatter: hya_tool::FormatterPlane::default(),
             agents: Default::default(),

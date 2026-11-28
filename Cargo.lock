@@ -1301,18 +1301,21 @@ dependencies = [
  "futures",
  "http-body-util",
  "hya-api",
- "hya-base-tools",
  "hya-bundle",
  "hya-channel-tools",
  "hya-child-io",
+ "hya-coding-extras",
  "hya-core",
  "hya-engine",
  "hya-extended-tools",
+ "hya-hashline",
  "hya-mcp",
- "hya-network-tools",
+ "hya-network",
+ "hya-plan",
  "hya-plugin",
  "hya-proto",
  "hya-provider",
+ "hya-runtime-abi",
  "hya-server",
  "hya-store",
  "hya-tool",
@@ -1380,27 +1383,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hya-base-tools"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "hya-proto",
- "hya-tool",
- "image",
- "libc",
- "pty-process",
- "regex",
- "serde",
- "serde_json",
- "sha2",
- "similar",
- "tokio",
- "tokio-util",
- "xxhash-rust",
-]
-
-[[package]]
 name = "hya-bundle"
 version = "0.0.0"
 dependencies = [
@@ -1439,15 +1421,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "hya-coding-extras"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "hya-bundle",
+ "hya-proto",
+ "hya-runtime-abi",
+ "hya-tool",
+ "hya-version",
+ "libc",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "similar",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "hya-compaction"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "hya-bundle",
  "hya-context",
  "hya-proto",
+ "hya-runtime-abi",
  "hya-tool",
  "serde",
  "serde_json",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1467,10 +1473,11 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "futures",
- "hya-base-tools",
  "hya-bundle",
+ "hya-coding-extras",
  "hya-compaction",
  "hya-context",
+ "hya-hashline",
  "hya-proto",
  "hya-provider",
  "hya-runtime-abi",
@@ -1523,14 +1530,16 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "futures",
- "hya-base-tools",
  "hya-bundle",
  "hya-channel-tools",
+ "hya-coding-extras",
  "hya-compaction",
  "hya-context",
  "hya-core",
  "hya-extended-tools",
- "hya-network-tools",
+ "hya-hashline",
+ "hya-network",
+ "hya-plan",
  "hya-proto",
  "hya-provider",
  "hya-runtime-abi",
@@ -1564,6 +1573,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "hya-hashline"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "hya-proto",
+ "hya-runtime-abi",
+ "hya-tool",
+ "image",
+ "libc",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "similar",
+ "tokio",
+ "tokio-util",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "hya-mcp"
 version = "0.0.0"
 dependencies = [
@@ -1584,17 +1614,36 @@ dependencies = [
 ]
 
 [[package]]
-name = "hya-network-tools"
+name = "hya-network"
 version = "0.0.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "hya-bundle",
  "hya-proto",
+ "hya-runtime-abi",
  "hya-tool",
  "reqwest",
  "serde",
  "serde_json",
+ "serde_norway",
  "time",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "hya-plan"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "hya-proto",
+ "hya-runtime-abi",
+ "hya-tool",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1801,11 +1850,13 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "futures",
- "hya-base-tools",
  "hya-channel-tools",
+ "hya-coding-extras",
  "hya-context",
  "hya-extended-tools",
- "hya-network-tools",
+ "hya-hashline",
+ "hya-network",
+ "hya-plan",
  "hya-proto",
  "hya-tool-error",
  "hya-tool-loader",
@@ -1836,12 +1887,14 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "futures",
- "hya-base-tools",
  "hya-bundle",
  "hya-channel-tools",
+ "hya-coding-extras",
  "hya-context",
  "hya-extended-tools",
- "hya-network-tools",
+ "hya-hashline",
+ "hya-network",
+ "hya-plan",
  "hya-proto",
  "hya-runtime-abi",
  "hya-tool",
@@ -3021,15 +3074,6 @@ name = "protoc-bin-vendored-win32"
 version = "3.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95067976aca6421a523e491fce939a3e65249bac4b977adee0ee9771568e8aa3"
-
-[[package]]
-name = "pty-process"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71cec9e2670207c5ebb9e477763c74436af3b9091dd550b9fb3c1bec7f3ea266"
-dependencies = [
- "rustix",
-]
 
 [[package]]
 name = "pxfm"

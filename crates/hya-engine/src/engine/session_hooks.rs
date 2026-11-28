@@ -248,8 +248,9 @@ impl SessionEngine {
 impl SessionEngine {
     pub(crate) async fn notify_session_start(&self, session: SessionId) {
         for hooks in self
-            .hooks
+            .native_hooks
             .iter()
+            .chain(self.hooks.iter())
             .cloned()
             .chain(self.runtime.global_plugin_hooks())
         {
@@ -261,8 +262,9 @@ impl SessionEngine {
     /// log their own failures, and the engine never propagates them.
     pub(super) async fn notify_session_lifecycle(&self, session: SessionId, start: bool) {
         for hooks in self
-            .hooks
+            .native_hooks
             .iter()
+            .chain(self.hooks.iter())
             .cloned()
             .chain(self.runtime.global_plugin_hooks())
         {
@@ -297,8 +299,9 @@ impl SessionEngine {
     /// captured hooks and channel policy the turn still reads.
     pub(super) async fn notify_session_end_keeping_state(&self, session: SessionId) {
         for hooks in self
-            .hooks
+            .native_hooks
             .iter()
+            .chain(self.hooks.iter())
             .cloned()
             .chain(self.runtime.global_plugin_hooks())
         {
@@ -356,6 +359,9 @@ impl SessionEngine {
         session: SessionId,
     ) -> Option<Arc<dyn HookDispatcher>> {
         let mut dispatchers = Vec::new();
+        if let Some(hooks) = &self.native_hooks {
+            dispatchers.push(Arc::clone(hooks));
+        }
         if let Some(hooks) = &self.hooks {
             dispatchers.push(Arc::clone(hooks));
         }
@@ -370,12 +376,16 @@ impl SessionEngine {
         }
     }
 
-    /// Startup hooks followed by the immutable activation-bound hook chain.
+    /// Startup hooks (native bundle hooks + host hooks) followed by the
+    /// immutable activation-bound hook chain.
     pub(crate) fn active_hook_dispatcher(
         &self,
         session: SessionId,
     ) -> Option<Arc<dyn HookDispatcher>> {
         let mut dispatchers = Vec::new();
+        if let Some(hooks) = &self.native_hooks {
+            dispatchers.push(Arc::clone(hooks));
+        }
         if let Some(hooks) = &self.hooks {
             dispatchers.push(Arc::clone(hooks));
         }

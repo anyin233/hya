@@ -1,0 +1,26 @@
+{
+  "schema_version": 2,
+  "name": "edit",
+  "description": "Apply strict hashline edits to a file using LINE#HASH anchors or exact literal text replacement.",
+  "permission": "tool",
+  "overrides": "hya/bare",
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "path": {
+        "type": "string"
+      },
+      "edits": {
+        "type": "array"
+      }
+    },
+    "required": [
+      "path",
+      "edits"
+    ]
+  },
+  "entrypoint": {
+    "native": "edit"
+  }
+}

@@ -6,10 +6,11 @@ use hya_bundle::{
 };
 use serde::Deserialize;
 
-const TOOL_FAMILY_BUNDLES: [&str; 4] = [
-    "hya/base-tools",
+const TOOL_FAMILY_BUNDLES: [&str; 5] = [
+    "hya/hashline",
+    "hya/coding-extras",
     "hya/extended-tools",
-    "hya/network-tools",
+    "hya/network",
     "hya/channel-tools",
 ];
 

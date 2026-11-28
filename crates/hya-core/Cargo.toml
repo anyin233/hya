@@ -33,8 +33,9 @@ tracing = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
-# Build these libraries for the native bundle and full-mode shell tests.
-hya-base-tools = { workspace = true }
+# Build these libraries for the native bundle tests.
+hya-hashline = { workspace = true }
+hya-coding-extras = { workspace = true }
 hya-compaction = { workspace = true }
 hya-provider = { workspace = true, features = ["test-support"] }
 image = { workspace = true }

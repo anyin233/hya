@@ -84,6 +84,12 @@ impl FormatterPlane {
         }
     }
 
+    /// Whether a concrete formatter provider is attached.
+    #[must_use]
+    pub fn is_configured(&self) -> bool {
+        self.provider.is_some()
+    }
+
     /// Provider status rows, or empty when disconnected.
     ///
     /// # Errors

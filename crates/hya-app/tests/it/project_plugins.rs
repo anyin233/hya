@@ -9,9 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use hya_app::{
-    InvocationPolicy, WebSearchConfig, agent_with_model, build_session_engine, offline_router,
-};
+use hya_app::{InvocationPolicy, agent_with_model, build_session_engine, offline_router};
 use hya_engine::hooks::{HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome};
 use hya_engine::{
     CatalogScope, CatalogScopeCacheConfig, CreateSession, EventBus, HookChain, RuntimeRegistry,
@@ -271,7 +269,6 @@ async fn project_plugins_isolation_hooks_first_root_and_config_precedence() {
             launch: Default::default(),
         }],
         (
-            WebSearchConfig::default(),
             InvocationPolicy::default(),
             hya_app::config::EngineSettings::default(),
         ),

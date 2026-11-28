@@ -34,14 +34,15 @@ fn inventory_exposes_immutable_noninstallable_presets_and_internal_bundles() {
             .collect::<Vec<_>>(),
         [
             "hya/agent-channels",
-            "hya/base-tools",
             "hya/channel-tools",
+            "hya/coding-extras",
             "hya/compaction",
             "hya/core-agents",
             "hya/core-commands",
             "hya/core-skills",
             "hya/extended-tools",
-            "hya/network-tools",
+            "hya/hashline",
+            "hya/network",
         ]
     );
     assert_eq!(inventory[0].id, "hya/agent-channels");
@@ -50,8 +51,9 @@ fn inventory_exposes_immutable_noninstallable_presets_and_internal_bundles() {
         inventory[0].resource_ids,
         ["parent-dm-default", "unit-default"]
     );
-    assert_eq!(inventory[1].id, "hya/base-tools");
+    assert_eq!(inventory[1].id, "hya/channel-tools");
     assert_eq!(inventory[1].kind, "Bundle");
+    assert_eq!(inventory[2].id, "hya/coding-extras");
     assert_eq!(inventory[2].kind, "Bundle");
     assert_eq!(inventory[3].kind, "Bundle");
     assert_eq!(inventory[4].kind, "Bundle");
@@ -88,7 +90,7 @@ fn inventory_exposes_immutable_noninstallable_presets_and_internal_bundles() {
     let selective = hya_app::trusted_preset_inventory_for(&hya_bundle::BuiltinBundleSelection {
         profile: hya_bundle::BuiltinBundleProfile::Bare,
         enable: vec![
-            "hya/base-tools".to_string(),
+            "hya/coding-extras".to_string(),
             "hya/core-skills".to_string(),
             "hya/unknown-preset".to_string(),
         ],
@@ -100,6 +102,6 @@ fn inventory_exposes_immutable_noninstallable_presets_and_internal_bundles() {
             .iter()
             .map(|item| item.id.as_str())
             .collect::<Vec<_>>(),
-        ["hya/base-tools"]
+        ["hya/coding-extras"]
     );
 }

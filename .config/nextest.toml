@@ -11,11 +11,13 @@ final-status-level = "flaky"
 # archived test binaries can dlopen them on zero-compile runners without
 # packing intermediate rlib/rmeta files.
 archive.include = [
-  { path = "debug/build/hya-base-tools/ci-archive/out/libhya_base_tools.so", relative-to = "target", on-missing = "error" },
+  { path = "debug/build/hya-hashline/ci-archive/out/libhya_hashline.so", relative-to = "target", on-missing = "error" },
+  { path = "debug/build/hya-coding-extras/ci-archive/out/libhya_coding_extras.so", relative-to = "target", on-missing = "error" },
   { path = "debug/build/hya-extended-tools/ci-archive/out/libhya_extended_tools.so", relative-to = "target", on-missing = "error" },
   { path = "debug/build/hya-channel-tools/ci-archive/out/libhya_channel_tools.so", relative-to = "target", on-missing = "error" },
-  { path = "debug/build/hya-network-tools/ci-archive/out/libhya_network_tools.so", relative-to = "target", on-missing = "error" },
+  { path = "debug/build/hya-network/ci-archive/out/libhya_network.so", relative-to = "target", on-missing = "error" },
   { path = "debug/build/hya-compaction/ci-archive/out/libhya_compaction.so", relative-to = "target", on-missing = "error" },
+  { path = "debug/build/hya-plan/ci-archive/out/libhya_plan.so", relative-to = "target", on-missing = "error" },
   { path = "debug/examples/libreplacement_tools.so", relative-to = "target", on-missing = "error" },
   { path = "debug/examples/libwrong_abi_tools.so", relative-to = "target", on-missing = "error" },
   { path = "debug/examples/libtest_v2_bundle.so", relative-to = "target", on-missing = "error" },

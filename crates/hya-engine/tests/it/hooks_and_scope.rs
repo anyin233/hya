@@ -511,6 +511,7 @@ async fn tool_after_hook_cannot_mask_denial_and_cleans_rewritten_bash_artifact()
 
     // 2. Rewriting a completed Bash output drops outputPath and removes the pre-hook artifact.
     let bash_dir = TestDir::new("hooks-after-bash-artifact");
+    let mask = Arc::new(support::MaskFirstResult::default());
     let bash_engine = support::engine_with_provider(
         Arc::new(FakeProvider::scripted_turns(tool_then_stop(
             "bash",
@@ -520,7 +521,7 @@ async fn tool_after_hook_cannot_mask_denial_and_cleans_rewritten_bash_artifact()
         PermissionRules::new(vec![Rule::new(Action::Bash, "*", Mode::Allow)]),
     )
     .await
-    .with_hooks(Arc::new(support::MaskFirstResult::default()));
+    .with_hooks(Arc::clone(&mask) as Arc<dyn HookDispatcher>);
     let bash_sess =
         support::create_root_session(&bash_engine, "hya-main", "fake", bash_dir.path()).await;
     assert_eq!(
@@ -536,10 +537,13 @@ async fn tool_after_hook_cannot_mask_denial_and_cleans_rewritten_bash_artifact()
     );
     let bash_out = completed_tool_output(&bash_engine, bash_sess, "bash").await;
     assert!(bash_out["metadata"].get("outputPath").is_none());
-    let mut artifacts = tokio::fs::read_dir(bash_dir.path().join(".hya/tool-output"))
-        .await
-        .unwrap();
-    assert!(artifacts.next_entry().await.unwrap().is_none());
+    let spilled = mask
+        .captured_output_path()
+        .expect("bash must have spilled oversized output before masking");
+    assert!(
+        !Path::new(&spilled).exists(),
+        "unpublished bash spill artifact must be deleted: {spilled}"
+    );
 }
 
 #[tokio::test]

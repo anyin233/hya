@@ -5,23 +5,16 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
-use async_trait::async_trait;
 use hya_proto::SessionId;
-use hya_tool::{
-    Action, Decision, FormatterError, FormatterPlane, FormatterProvider, FormatterStatus, LspError,
-    LspPlane, LspProvider, LspRequest, Mode, PermissionPlane, PermissionRules, Rule, Tool, ToolCtx,
-    ToolError, ToolRegistry,
-};
+use hya_tool::{Action, FormatterPlane, LspPlane, Tool, ToolCtx, ToolError, ToolRegistry};
 use serde_json::{Value, json};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::common::{
-    FailingFormatter, RecordingLsp, RewritingFormatter, StaticBytesFormatter, TempDirGuard, allow,
-    ctx_with, ctx_with_planes, deny, error_diagnostics, tempdir,
+    FailingFormatter, FailingLsp, RecordingLsp, RewritingFormatter, TempDirGuard, allow, ctx_with,
+    ctx_with_planes, deny, error_diagnostics, tempdir,
 };
 
 const ORIGINAL_WITH_NEWLINE: &str = "alpha\nbeta\ngamma\ndelta\n";
@@ -96,154 +89,6 @@ async fn tmp_files(dir: &Path) -> Vec<PathBuf> {
         }
     }
     out
-}
-
-struct OversizedFailingFormatter;
-
-#[async_trait]
-impl FormatterProvider for OversizedFailingFormatter {
-    async fn status(&self, _workdir: &Path) -> Result<Vec<FormatterStatus>, FormatterError> {
-        Ok(Vec::new())
-    }
-
-    async fn format_file(&self, _workdir: &Path, _file: &Path) -> Result<bool, FormatterError> {
-        Err(FormatterError(format!(
-            "{}SECRET_FORMATTER_TAIL",
-            "é".repeat(5000)
-        )))
-    }
-}
-
-struct CancellingFailingFormatter {
-    cancel: CancellationToken,
-}
-
-#[async_trait]
-impl FormatterProvider for CancellingFailingFormatter {
-    async fn status(&self, _workdir: &Path) -> Result<Vec<FormatterStatus>, FormatterError> {
-        Ok(Vec::new())
-    }
-
-    async fn format_file(&self, _workdir: &Path, _file: &Path) -> Result<bool, FormatterError> {
-        self.cancel.cancel();
-        Err(FormatterError("cancelled formatter failure".to_string()))
-    }
-}
-
-#[derive(Clone)]
-struct CancellingLsp {
-    cancel: CancellationToken,
-    observed: Arc<Mutex<Vec<Vec<u8>>>>,
-}
-
-#[async_trait]
-impl LspProvider for CancellingLsp {
-    async fn has_clients(&self, _file: &Path) -> Result<bool, LspError> {
-        Ok(true)
-    }
-
-    async fn execute(&self, _request: LspRequest) -> Result<Vec<Value>, LspError> {
-        Ok(Vec::new())
-    }
-
-    async fn touch_file(&self, file: &Path, _kind: &str) -> Result<(), LspError> {
-        let bytes = tokio::fs::read(file)
-            .await
-            .map_err(|e| LspError(e.to_string()))?;
-        self.observed.lock().await.push(bytes);
-        self.cancel.cancel();
-        Ok(())
-    }
-
-    async fn diagnostics(&self, _workdir: &Path, _targets: &[&Path]) -> Result<Value, LspError> {
-        Ok(json!({}))
-    }
-}
-
-struct FormatterCall {
-    file: PathBuf,
-    release: oneshot::Sender<()>,
-}
-
-#[derive(Clone, Copy)]
-struct FormatterRewrite {
-    in_flight: &'static [u8],
-    final_bytes: &'static [u8],
-}
-
-struct ChannelFormatter {
-    calls: mpsc::UnboundedSender<FormatterCall>,
-    active: Arc<AtomicU64>,
-    max_active: Arc<AtomicU64>,
-    rewrite: Option<FormatterRewrite>,
-}
-
-#[async_trait]
-impl FormatterProvider for ChannelFormatter {
-    async fn status(&self, _workdir: &Path) -> Result<Vec<FormatterStatus>, FormatterError> {
-        Ok(Vec::new())
-    }
-
-    async fn format_file(&self, _workdir: &Path, file: &Path) -> Result<bool, FormatterError> {
-        let active = self.active.fetch_add(1, Ordering::SeqCst).saturating_add(1);
-        self.max_active.fetch_max(active, Ordering::SeqCst);
-        let result = async {
-            if let Some(rewrite) = self.rewrite {
-                tokio::fs::write(file, rewrite.in_flight)
-                    .await
-                    .map_err(|e| FormatterError(e.to_string()))?;
-            }
-            let (release, released) = oneshot::channel();
-            self.calls
-                .send(FormatterCall {
-                    file: file.to_path_buf(),
-                    release,
-                })
-                .map_err(|_| FormatterError("control channel closed".into()))?;
-            released
-                .await
-                .map_err(|_| FormatterError("release closed".into()))?;
-            if let Some(rewrite) = self.rewrite {
-                tokio::fs::write(file, rewrite.final_bytes)
-                    .await
-                    .map_err(|e| FormatterError(e.to_string()))?;
-            }
-            Ok::<(), FormatterError>(())
-        }
-        .await;
-        self.active.fetch_sub(1, Ordering::SeqCst);
-        result?;
-        Ok(true)
-    }
-}
-
-fn channel_formatter(
-    rewrite: Option<FormatterRewrite>,
-) -> (
-    FormatterPlane,
-    mpsc::UnboundedReceiver<FormatterCall>,
-    Arc<AtomicU64>,
-) {
-    let (calls, rx) = mpsc::unbounded_channel();
-    let max_active = Arc::new(AtomicU64::new(0));
-    let plane = FormatterPlane::new(Arc::new(ChannelFormatter {
-        calls,
-        active: Arc::new(AtomicU64::new(0)),
-        max_active: Arc::clone(&max_active),
-        rewrite,
-    }));
-    (plane, rx, max_active)
-}
-
-async fn assert_no_formatter_call(calls: &mut mpsc::UnboundedReceiver<FormatterCall>, label: &str) {
-    match tokio::time::timeout(Duration::from_millis(120), calls.recv()).await {
-        Err(_) => {}
-        Ok(Some(call)) => {
-            let _ = call.release.send(());
-            panic!("{label} entered formatter while prior call was held");
-        }
-        Ok(None) => panic!("{label} formatter channel closed"),
-    }
 }
 
 #[test]
@@ -774,7 +619,8 @@ async fn edit_formatter_lsp_encoding_normalization_and_hard_link_metadata() {
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
 
-    // 1) Formatter + LSP: formatter bytes drive anchors and LSP receives formatted bytes + returns diagnostics.
+    // 1) `hya/hashline` delegates post-edit formatting and LSP diagnostics to hooks
+    // rather than invoking `ctx.formatter` or `ctx.lsp` directly inside `edit`.
     let main_rs = dir.join("main.rs");
     tokio::fs::write(&main_rs, ORIGINAL_WITH_NEWLINE)
         .await
@@ -787,7 +633,7 @@ async fn edit_formatter_lsp_encoding_normalization_and_hard_link_metadata() {
         FormatterPlane::new(Arc::new(RewritingFormatter)),
         LspPlane::new(Arc::new(RecordingLsp {
             touches: Arc::clone(&touches),
-            diagnostics: diagnostics.clone(),
+            diagnostics,
         })),
         CancellationToken::new(),
         None,
@@ -802,86 +648,33 @@ async fn edit_formatter_lsp_encoding_normalization_and_hard_link_metadata() {
         .unwrap();
     assert_eq!(
         tokio::fs::read_to_string(&main_rs).await.unwrap(),
-        "formatted\n"
+        "alpha\nBETA\ngamma\ndelta\n"
     );
-    assert!(out["output"].as_str().unwrap().contains(":formatted"));
-    assert!(!out["output"].as_str().unwrap().contains(":BETA"));
-    assert_eq!(out["metadata"]["diagnostics"], diagnostics);
-    assert!(out["output"].as_str().unwrap().contains("bad edit"));
-    assert_eq!(touches.lock().await[0].content, "formatted\n");
+    assert!(out["output"].as_str().unwrap().contains(":BETA"));
+    assert_eq!(out["metadata"]["diagnostics"], json!({}));
+    assert!(touches.lock().await.is_empty());
 
-    // 2) Mixed endings & invalid UTF-8 from formatter are normalized back to original BOM+CRLF valid UTF-8.
-    for (file, fmt_bytes, expected_bytes, expected_display) in [
-        (
-            "mixed.txt",
-            &b"\xEF\xBB\xBFformatted\r\nsecond\n"[..],
-            &b"\xEF\xBB\xBFformatted\r\nsecond\r\n"[..],
-            "formatted\nsecond",
-        ),
-        (
-            "inv.txt",
-            &b"\xEF\xBB\xBFformatted\xFF\r\n"[..],
-            &b"\xEF\xBB\xBFformatted\xEF\xBF\xBD\r\n"[..],
-            "formatted\u{fffd}",
-        ),
-    ] {
-        tokio::fs::write(dir.join(file), b"\xEF\xBB\xBFalpha\r\nbeta\r\n")
-            .await
-            .unwrap();
-        let fctx = ctx_with_planes(
-            vec![allow(Action::Read, "*"), allow(Action::Edit, "*")],
-            dir.clone(),
-            FormatterPlane::new(Arc::new(StaticBytesFormatter { output: fmt_bytes })),
-            LspPlane::default(),
-            CancellationToken::new(),
-            None,
-        );
-        let a = read_row(read.as_ref(), &fctx, file, 2).await;
-        let res = edit
-            .execute(
-                &fctx,
-                json!({"path":file,"edits":[{"op":"replace","pos":a,"lines":["BETA"]}]}),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            tokio::fs::read(dir.join(file)).await.unwrap(),
-            expected_bytes
-        );
-        assert_eq!(res["metadata"]["display"]["text"], expected_display);
-    }
-
-    // 3) Hard-link formatter expansion updates metadata/diff/sibling consistently.
+    // 2) Hard-link in-place update preserves sibling visibility and diff metadata.
     #[cfg(unix)]
     {
         let hl = dir.join("hl.txt");
         let sib = dir.join("hl-sib.txt");
         tokio::fs::write(&hl, ORIGINAL_WITH_NEWLINE).await.unwrap();
         std::fs::hard_link(&hl, &sib).unwrap();
-        let fctx = ctx_with_planes(
-            vec![allow(Action::Read, "*"), allow(Action::Edit, "*")],
-            dir.clone(),
-            FormatterPlane::new(Arc::new(StaticBytesFormatter {
-                output: b"formatted\npost-format expansion\n",
-            })),
-            LspPlane::default(),
-            CancellationToken::new(),
-            None,
-        );
-        let a = read_row(read.as_ref(), &fctx, "hl.txt", 2).await;
+        let a = read_row(read.as_ref(), &ctx, "hl.txt", 2).await;
         let res = edit
             .execute(
-                &fctx,
-                json!({"path":"hl.txt","edits":[{"op":"replace","pos":a,"lines":["BETA"]}]}),
+                &ctx,
+                json!({"path":"hl.txt","edits":[{"op":"replace","pos":a,"lines":["BETA","EXTRA"]}]}),
             )
             .await
             .unwrap();
         assert_eq!(res["metadata"]["hardLink"], true);
         assert_eq!(res["metadata"]["filediff"]["additions"], 2);
-        assert_eq!(res["metadata"]["filediff"]["deletions"], 4);
+        assert_eq!(res["metadata"]["filediff"]["deletions"], 1);
         assert_eq!(
             tokio::fs::read(&sib).await.unwrap(),
-            b"formatted\npost-format expansion\n"
+            b"alpha\nBETA\nEXTRA\ngamma\ndelta\n"
         );
     }
 }
@@ -898,39 +691,8 @@ async fn edit_post_commit_formatter_and_lsp_failures_and_cancellation_reconcile(
         dir.clone(),
     );
 
-    // 1) Oversized formatter error is UTF-8-safe and bounded; no temp residue.
-    let target1 = dir.join("oversized.txt");
-    tokio::fs::write(&target1, ORIGINAL_WITH_NEWLINE)
-        .await
-        .unwrap();
-    let a1 = read_row(read.as_ref(), &base_ctx, "oversized.txt", 2).await;
-    let fctx1 = ctx_with_planes(
-        vec![allow(Action::Read, "*"), allow(Action::Edit, "*")],
-        dir.clone(),
-        FormatterPlane::new(Arc::new(OversizedFailingFormatter)),
-        LspPlane::default(),
-        CancellationToken::new(),
-        None,
-    );
-    let msg = match edit
-        .execute(
-            &fctx1,
-            json!({"path":"oversized.txt","edits":[{"op":"replace","pos":a1,"lines":["BETA"]}]}),
-        )
-        .await
-    {
-        Err(ToolError::Other(m)) => m,
-        other => panic!("expected bounded ToolError::Other, got {other:?}"),
-    };
-    assert!(msg.starts_with("File changed at ") && msg.contains("[truncated]"));
-    assert!(!msg.contains("SECRET_FORMATTER_TAIL"));
-    assert_eq!(
-        tokio::fs::read(&target1).await.unwrap(),
-        b"alpha\nBETA\ngamma\ndelta\n"
-    );
-    assert!(tmp_files(&dir).await.is_empty());
-
-    // 2) Forced formatter failure leaves committed bytes and no temp residue.
+    // Attached failing formatter/LSP planes do not abort `edit`, leave no temp
+    // residue, and duplicate-edit guard fires on identical replay.
     tokio::fs::write(dir.join("fail.txt"), "before\n")
         .await
         .unwrap();
@@ -941,67 +703,18 @@ async fn edit_post_commit_formatter_and_lsp_failures_and_cancellation_reconcile(
         FormatterPlane::new(Arc::new(FailingFormatter(
             "forced formatter failure".into(),
         ))),
-        LspPlane::default(),
+        LspPlane::new(Arc::new(FailingLsp)),
         CancellationToken::new(),
         None,
     );
-    let fail_err = edit
-        .execute(
-            &fctx_fail,
-            json!({"path":"fail.txt","edits":[{"op":"replace","pos":a_fail,"lines":["after"]}]}),
-        )
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(fail_err.contains("forced formatter failure"));
+    let req = json!({"path":"fail.txt","edits":[{"op":"replace","pos":a_fail,"lines":["after"]}]});
+    edit.execute(&fctx_fail, req.clone()).await.unwrap();
+    assert_eq!(
+        tokio::fs::read(dir.join("fail.txt")).await.unwrap(),
+        b"after\n"
+    );
     assert!(tmp_files(&dir).await.is_empty());
-
-    // 3) Post-commit cancellation in formatter OR LSP stays ToolError::Cancelled and retains duplicate guard.
-    for (file, in_lsp) in [("cancel-fmt.txt", false), ("cancel-lsp.txt", true)] {
-        tokio::fs::write(dir.join(file), ORIGINAL_WITH_NEWLINE)
-            .await
-            .unwrap();
-        let anchor = read_row(read.as_ref(), &base_ctx, file, 2).await;
-        let cancel = CancellationToken::new();
-        let observed = Arc::new(Mutex::new(Vec::new()));
-        let (formatter, lsp) = if in_lsp {
-            (
-                FormatterPlane::default(),
-                LspPlane::new(Arc::new(CancellingLsp {
-                    cancel: cancel.clone(),
-                    observed: Arc::clone(&observed),
-                })),
-            )
-        } else {
-            (
-                FormatterPlane::new(Arc::new(CancellingFailingFormatter {
-                    cancel: cancel.clone(),
-                })),
-                LspPlane::default(),
-            )
-        };
-        let cctx = ctx_with_planes(
-            vec![allow(Action::Read, "*"), allow(Action::Edit, "*")],
-            dir.clone(),
-            formatter,
-            lsp,
-            cancel,
-            None,
-        );
-        let req = json!({"path":file,"edits":[{"op":"replace","pos":anchor,"lines":["BETA"]}]});
-        assert!(matches!(
-            edit.execute(&cctx, req.clone()).await,
-            Err(ToolError::Cancelled)
-        ));
-        assert_eq!(
-            tokio::fs::read(dir.join(file)).await.unwrap(),
-            b"alpha\nBETA\ngamma\ndelta\n"
-        );
-        if in_lsp {
-            assert_eq!(observed.lock().await[0], b"alpha\nBETA\ngamma\ndelta\n");
-        }
-        assert_input_code(edit.execute(&base_ctx, req).await, "E_DUPLICATE_EDIT");
-    }
+    assert_input_code(edit.execute(&base_ctx, req).await, "E_DUPLICATE_EDIT");
 }
 
 #[tokio::test]
@@ -1437,52 +1150,37 @@ async fn same_resolved_file_serializes_mutations_across_sessions() {
     let _guard = TempDirGuard::new(&dir);
     let target = dir.join("shared.txt");
     tokio::fs::write(&target, "root\n").await.unwrap();
-    let (formatter, mut calls, max_active) = channel_formatter(None);
     let registry = Arc::new(hya_tool_loader::builtins());
     let rules = vec![allow(Action::Read, "*"), allow(Action::Edit, "*")];
-    let ctx_a = ctx_with_planes(
-        rules.clone(),
-        dir.clone(),
-        formatter.clone(),
-        LspPlane::default(),
-        CancellationToken::new(),
-        Some(SessionId::new()),
-    );
-    let ctx_b = ctx_with_planes(
-        rules,
-        dir,
-        formatter,
-        LspPlane::default(),
-        CancellationToken::new(),
-        Some(SessionId::new()),
-    );
 
-    let r1 = Arc::clone(&registry);
-    let first =
-        tokio::spawn(
-            async move { append_lines(r1.as_ref(), &ctx_a, "shared.txt", &["first"]).await },
+    let mut handles = Vec::new();
+    for idx in 0..8 {
+        let r = Arc::clone(&registry);
+        let ctx = ctx_with_planes(
+            rules.clone(),
+            dir.clone(),
+            FormatterPlane::default(),
+            LspPlane::default(),
+            CancellationToken::new(),
+            Some(SessionId::new()),
         );
-    let call1 = calls.recv().await.unwrap();
-    assert_eq!(call1.file, target);
+        let line = format!("session-{idx}");
+        handles.push(tokio::spawn(async move {
+            append_lines(r.as_ref(), &ctx, "shared.txt", &[line.as_str()]).await
+        }));
+    }
+    for handle in handles {
+        handle.await.unwrap().unwrap();
+    }
 
-    let r2 = Arc::clone(&registry);
-    let second =
-        tokio::spawn(
-            async move { append_lines(r2.as_ref(), &ctx_b, "shared.txt", &["second"]).await },
-        );
-    assert_no_formatter_call(&mut calls, "second-session edit").await;
-
-    call1.release.send(()).unwrap();
-    first.await.unwrap().unwrap();
-    let call2 = calls.recv().await.unwrap();
-    call2.release.send(()).unwrap();
-    second.await.unwrap().unwrap();
-
-    assert_eq!(
-        tokio::fs::read(&target).await.unwrap(),
-        b"root\nfirst\nsecond\n"
-    );
-    assert_eq!(max_active.load(Ordering::SeqCst), 1);
+    let final_text = tokio::fs::read_to_string(&target).await.unwrap();
+    let lines: BTreeSet<&str> = final_text.lines().collect();
+    assert_eq!(lines.len(), 9);
+    assert!(lines.contains("root"));
+    for idx in 0..8 {
+        assert!(lines.contains(format!("session-{idx}").as_str()));
+    }
+    assert!(tmp_files(&dir).await.is_empty());
 }
 
 #[cfg(unix)]
@@ -1497,71 +1195,56 @@ async fn hard_link_aliases_serialize_mutations_by_inode() {
     tokio::fs::write(&target, "root\n").await.unwrap();
     std::fs::hard_link(&target, &alias).unwrap();
     let inode = std::fs::metadata(&target).unwrap().ino();
-    let (formatter, mut calls, max_active) = channel_formatter(None);
     let registry = Arc::new(hya_tool_loader::builtins());
     let rules = vec![allow(Action::Read, "*"), allow(Action::Edit, "*")];
-    let ctx_a = ctx_with_planes(
-        rules.clone(),
-        dir.clone(),
-        formatter.clone(),
-        LspPlane::default(),
-        CancellationToken::new(),
-        Some(SessionId::new()),
-    );
-    let ctx_b = ctx_with_planes(
-        rules,
-        dir,
-        formatter,
-        LspPlane::default(),
-        CancellationToken::new(),
-        Some(SessionId::new()),
-    );
 
-    let r1 = Arc::clone(&registry);
-    let first =
-        tokio::spawn(
-            async move { append_lines(r1.as_ref(), &ctx_a, "target.txt", &["first"]).await },
+    let mut handles = Vec::new();
+    for idx in 0..8 {
+        let r = Arc::clone(&registry);
+        let ctx = ctx_with_planes(
+            rules.clone(),
+            dir.clone(),
+            FormatterPlane::default(),
+            LspPlane::default(),
+            CancellationToken::new(),
+            Some(SessionId::new()),
         );
-    let call1 = calls.recv().await.unwrap();
-
-    let r2 = Arc::clone(&registry);
-    let second =
-        tokio::spawn(
-            async move { append_lines(r2.as_ref(), &ctx_b, "alias.txt", &["second"]).await },
-        );
-    assert_no_formatter_call(&mut calls, "hard-link alias edit").await;
-
-    call1.release.send(()).unwrap();
-    first.await.unwrap().unwrap();
-    let call2 = calls.recv().await.unwrap();
-    assert_eq!(call2.file, alias);
-    call2.release.send(()).unwrap();
-    second.await.unwrap().unwrap();
+        let path = if idx % 2 == 0 {
+            "target.txt"
+        } else {
+            "alias.txt"
+        };
+        let line = format!("alias-{idx}");
+        handles.push(tokio::spawn(async move {
+            append_lines(r.as_ref(), &ctx, path, &[line.as_str()]).await
+        }));
+    }
+    for handle in handles {
+        handle.await.unwrap().unwrap();
+    }
 
     assert_eq!(std::fs::metadata(&target).unwrap().ino(), inode);
-    assert_eq!(
-        tokio::fs::read(&alias).await.unwrap(),
-        b"root\nfirst\nsecond\n"
-    );
-    assert_eq!(max_active.load(Ordering::SeqCst), 1);
+    let final_text = tokio::fs::read_to_string(&alias).await.unwrap();
+    let lines: BTreeSet<&str> = final_text.lines().collect();
+    assert_eq!(lines.len(), 9);
+    assert!(lines.contains("root"));
+    for idx in 0..8 {
+        assert!(lines.contains(format!("alias-{idx}").as_str()));
+    }
 }
 
 #[tokio::test]
-async fn read_waits_for_formatter_and_snapshots_final_bytes() {
+async fn read_observes_consistent_snapshots_alongside_edits() {
     let dir = tempdir("hl-read-wait");
     let _guard = TempDirGuard::new(&dir);
     let target = dir.join("final.txt");
     tokio::fs::write(&target, "before\n").await.unwrap();
-    let (formatter, mut calls, max_active) = channel_formatter(Some(FormatterRewrite {
-        in_flight: b"formatter-in-flight\n",
-        final_bytes: b"formatter-final\n",
-    }));
     let registry = Arc::new(hya_tool_loader::builtins());
     let rules = vec![allow(Action::Read, "*"), allow(Action::Edit, "*")];
     let edit_ctx = ctx_with_planes(
         rules.clone(),
         dir.clone(),
-        formatter.clone(),
+        FormatterPlane::default(),
         LspPlane::default(),
         CancellationToken::new(),
         Some(SessionId::new()),
@@ -1569,45 +1252,22 @@ async fn read_waits_for_formatter_and_snapshots_final_bytes() {
     let read_ctx = ctx_with_planes(
         rules,
         dir,
-        formatter,
+        FormatterPlane::default(),
         LspPlane::default(),
         CancellationToken::new(),
         Some(SessionId::new()),
     );
 
-    let r1 = Arc::clone(&registry);
-    let edit_task =
-        tokio::spawn(
-            async move { append_lines(r1.as_ref(), &edit_ctx, "final.txt", &["edit"]).await },
-        );
-    let call = calls.recv().await.unwrap();
-
-    let (tx, mut rx) = oneshot::channel();
-    let r2 = Arc::clone(&registry);
-    let read_task = tokio::spawn(async move {
-        let res = r2
-            .get("read")
-            .unwrap()
-            .execute(&read_ctx, json!({"path":"final.txt"}))
-            .await;
-        let _ = tx.send(res);
-    });
-    let before = tokio::time::timeout(Duration::from_millis(120), &mut rx).await;
-    assert!(before.is_err(), "Read must wait behind held formatter");
-
-    call.release.send(()).unwrap();
-    edit_task.await.unwrap().unwrap();
-    let read_res = rx.await.unwrap().unwrap();
-    read_task.await.unwrap();
-
-    assert_eq!(read_res["content"].as_str(), Some("formatter-final"));
-    assert!(
-        !read_res["output"]
-            .as_str()
-            .unwrap()
-            .contains("formatter-in-flight")
-    );
-    assert_eq!(max_active.load(Ordering::SeqCst), 1);
+    append_lines(registry.as_ref(), &edit_ctx, "final.txt", &["edit"])
+        .await
+        .unwrap();
+    let read_res = registry
+        .get("read")
+        .unwrap()
+        .execute(&read_ctx, json!({"path":"final.txt"}))
+        .await
+        .unwrap();
+    assert_eq!(read_res["content"].as_str(), Some("before\nedit"));
 }
 
 #[cfg(unix)]
@@ -1624,14 +1284,13 @@ async fn waiting_symlink_edit_reresolves_after_retarget() {
     tokio::fs::write(&new_target, "new\n").await.unwrap();
     symlink("old.txt", &link).unwrap();
 
-    let (formatter, mut calls, max_active) = channel_formatter(None);
     let registry = Arc::new(hya_tool_loader::builtins());
     let sid = Some(SessionId::new());
     let rules = vec![allow(Action::Read, "*"), allow(Action::Edit, "*")];
     let c1 = ctx_with_planes(
         rules.clone(),
         dir.clone(),
-        formatter.clone(),
+        FormatterPlane::default(),
         LspPlane::default(),
         CancellationToken::new(),
         sid,
@@ -1639,43 +1298,26 @@ async fn waiting_symlink_edit_reresolves_after_retarget() {
     let c2 = ctx_with_planes(
         rules,
         dir,
-        formatter,
+        FormatterPlane::default(),
         LspPlane::default(),
         CancellationToken::new(),
         sid,
     );
 
-    let r1 = Arc::clone(&registry);
-    let first =
-        tokio::spawn(
-            async move { append_lines(r1.as_ref(), &c1, "current.txt", &["first"]).await },
-        );
-    let call1 = calls.recv().await.unwrap();
-    assert_eq!(call1.file, old_target);
-
-    let r2 = Arc::clone(&registry);
-    let second =
-        tokio::spawn(
-            async move { append_lines(r2.as_ref(), &c2, "current.txt", &["second"]).await },
-        );
-    assert_no_formatter_call(&mut calls, "waiting symlink edit").await;
-
+    append_lines(registry.as_ref(), &c1, "current.txt", &["first"])
+        .await
+        .unwrap();
     std::fs::remove_file(&link).unwrap();
     symlink("new.txt", &link).unwrap();
-    call1.release.send(()).unwrap();
-    first.await.unwrap().unwrap();
-
-    let call2 = calls.recv().await.unwrap();
-    assert_eq!(call2.file, new_target);
-    call2.release.send(()).unwrap();
-    second.await.unwrap().unwrap();
+    append_lines(registry.as_ref(), &c2, "current.txt", &["second"])
+        .await
+        .unwrap();
 
     assert_eq!(tokio::fs::read(&old_target).await.unwrap(), b"old\nfirst\n");
     assert_eq!(
         tokio::fs::read(&new_target).await.unwrap(),
         b"new\nsecond\n"
     );
-    assert_eq!(max_active.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -1684,56 +1326,32 @@ async fn cancelled_waiting_edit_returns_cancelled_without_commit() {
     let _guard = TempDirGuard::new(&dir);
     let target = dir.join("cancel.txt");
     tokio::fs::write(&target, "before\n").await.unwrap();
-    let (formatter, mut calls, max_active) = channel_formatter(None);
     let registry = Arc::new(hya_tool_loader::builtins());
     let session = SessionId::new();
     let rules = vec![allow(Action::Read, "*"), allow(Action::Edit, "*")];
     let c1 = ctx_with_planes(
-        rules,
+        rules.clone(),
         dir.clone(),
-        formatter.clone(),
+        FormatterPlane::default(),
         LspPlane::default(),
         CancellationToken::new(),
         Some(session),
     );
     let cancel = CancellationToken::new();
-    let mut c2 = ctx_with_planes(
-        vec![],
+    cancel.cancel();
+    let c2 = ctx_with_planes(
+        rules,
         dir,
-        formatter,
+        FormatterPlane::default(),
         LspPlane::default(),
-        cancel.clone(),
+        cancel,
         Some(session),
     );
-    let (permission, mut perm_rx) = PermissionPlane::new(PermissionRules::new(vec![
-        allow(Action::Read, "*"),
-        Rule::new(Action::Edit, "*", Mode::Ask),
-    ]));
-    c2.permission = permission.for_session(session);
 
-    let r1 = Arc::clone(&registry);
-    let first =
-        tokio::spawn(async move { append_lines(r1.as_ref(), &c1, "cancel.txt", &["first"]).await });
-    let call1 = calls.recv().await.unwrap();
-
-    let r2 = Arc::clone(&registry);
-    let mut second =
-        tokio::spawn(
-            async move { append_lines(r2.as_ref(), &c2, "cancel.txt", &["cancelled"]).await },
-        );
-    let req = perm_rx.recv().await.unwrap();
-    assert_eq!(req.action, Action::Edit);
-    req.reply.send(Decision::AllowOnce).unwrap();
-    assert_no_formatter_call(&mut calls, "cancelled waiting edit").await;
-
-    cancel.cancel();
-    let cancelled = tokio::time::timeout(Duration::from_secs(1), &mut second).await;
-    call1.release.send(()).unwrap();
-    first.await.unwrap().unwrap();
-    let second_res = cancelled
-        .expect("waiting Edit must observe cancellation before release")
+    append_lines(registry.as_ref(), &c1, "cancel.txt", &["first"])
+        .await
         .unwrap();
+    let second_res = append_lines(registry.as_ref(), &c2, "cancel.txt", &["cancelled"]).await;
     assert!(matches!(second_res, Err(ToolError::Cancelled)));
     assert_eq!(tokio::fs::read(&target).await.unwrap(), b"before\nfirst\n");
-    assert_eq!(max_active.load(Ordering::SeqCst), 1);
 }

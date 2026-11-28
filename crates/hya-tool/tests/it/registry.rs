@@ -58,7 +58,6 @@ fn registry_rejects_duplicates_hides_aliases_and_freezes_snapshots() {
         .map(|s| s.name.as_str().to_string())
         .collect();
     for (canonical, alias) in [
-        ("bash", "shell"),
         ("webfetch", "fetch"),
         ("websearch", "search"),
         ("ask_user", "question"),
@@ -96,7 +95,7 @@ fn dispatch_identity_and_permission_metadata_resolution() {
         .into_iter()
         .map(|(n, _)| n)
         .collect();
-    assert_eq!(canonical_names.len(), 24);
+    assert_eq!(canonical_names.len(), 23);
     for name in &canonical_names {
         let a = first.dispatch_identity_v1(name).expect("builtin identity");
         assert_eq!(Some(a), second.dispatch_identity_v1(name));
@@ -149,21 +148,6 @@ fn dispatch_identity_and_permission_metadata_resolution() {
     assert_eq!(
         registry.resolve("write").unwrap().permission,
         ToolPermission::Tool
-    );
-    assert_eq!(
-        registry.resolve("bash").unwrap().permission,
-        ToolPermission::Command
-    );
-    assert_eq!(
-        registry.resolve("shell").unwrap().permission,
-        ToolPermission::Command
-    );
-    assert!(
-        registry
-            .resolve("shell")
-            .unwrap()
-            .invocation(&json!({ "command": 1 }))
-            .is_err()
     );
     let alias = registry.resolve("fetch").unwrap();
     assert_eq!(alias.tool.name(), "webfetch");
@@ -224,36 +208,26 @@ fn namespaced_names_compose_validate_and_register() {
 fn builtin_bundle_ownership_and_removed_kill_tool() {
     let registry = hya_tool_loader::builtins();
     for (bundle, names) in [
+        ("hya/hashline", ["read", "write", "edit", "grep"].as_slice()),
         (
-            "hya/base-tools",
+            "hya/coding-extras",
             [
-                "read",
-                "write",
-                "edit",
                 "ls",
                 "glob",
                 "find",
-                "grep",
-                "ask_user",
-                "bash",
                 "apply_patch",
+                "ask_user",
+                "lsp",
+                "project_activity",
             ]
             .as_slice(),
         ),
         (
             "hya/extended-tools",
-            [
-                "lsp",
-                "list_agents",
-                "task",
-                "workflow",
-                "search_agent",
-                "archive",
-                "plan_exit",
-            ]
-            .as_slice(),
+            ["list_agents", "task", "workflow", "search_agent", "archive"].as_slice(),
         ),
-        ("hya/network-tools", ["webfetch", "websearch"].as_slice()),
+        ("hya/plan", ["plan_exit"].as_slice()),
+        ("hya/network", ["webfetch", "websearch"].as_slice()),
         (
             "hya/channel-tools",
             ["send", "list_channel", "report", "wait"].as_slice(),
@@ -325,9 +299,9 @@ async fn wait_override_selects_mail_aware_or_member_only_variant() {
     assert!(requested_mail_wake(&full).await);
 
     let without_channels = hya_tool_loader::from_tool_families(&[
-        "hya/base-tools",
+        "hya/coding-extras",
         "hya/extended-tools",
-        "hya/network-tools",
+        "hya/network",
     ]);
     assert!(without_channels.get("send").is_none());
     assert_eq!(
@@ -400,7 +374,7 @@ fn replacement_child() {
     };
     if mode == "wrong" {
         let panic = std::panic::catch_unwind(|| {
-            hya_tool_loader::from_tool_families(&["hya/network-tools"])
+            hya_tool_loader::from_tool_families(&["hya/channel-tools"])
         });
         let error = panic.err().expect("wrong ABI must be rejected");
         let message = error
@@ -411,8 +385,8 @@ fn replacement_child() {
         assert!(message.contains("different hya-tool ABI"), "{message}");
         return;
     }
-    let registry = hya_tool_loader::from_tool_families(&["hya/network-tools"]);
-    let tool = registry.resolve("webfetch").unwrap();
+    let registry = hya_tool_loader::from_tool_families(&["hya/channel-tools"]);
+    let tool = registry.resolve("send").unwrap();
     let ctx = ctx_with(vec![], std::env::current_dir().unwrap());
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let result = runtime
@@ -428,10 +402,10 @@ fn replacement_child() {
         .unwrap();
     assert_eq!(result["budgetSeconds"], 8);
     assert_eq!(result["cappedSeconds"], hya_tool::deadline::MIN_TOOL_SECS);
-    let _ = hya_tool_loader::from_tool_families(&["hya/network-tools"]);
+    let _ = hya_tool_loader::from_tool_families(&["hya/channel-tools"]);
     assert_eq!(
-        registry.builtin_bundle_origin("webfetch"),
-        Some("hya/network-tools")
+        registry.builtin_bundle_origin("send"),
+        Some("hya/channel-tools")
     );
 }
 
@@ -458,7 +432,7 @@ fn native_family_can_be_replaced_and_wrong_abi_is_rejected() {
             std::env::consts::DLL_SUFFIX
         );
         let dst = format!(
-            "{}hya_network_tools{}",
+            "{}hya_channel_tools{}",
             std::env::consts::DLL_PREFIX,
             std::env::consts::DLL_SUFFIX
         );

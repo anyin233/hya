@@ -15,7 +15,7 @@ use std::sync::Arc;
 use hya_mcp::McpServerConfig;
 use hya_plugin::config::PluginEntry;
 use hya_provider::{ProviderCatalogSnapshot, ProviderRouter};
-use hya_tool::{InvocationPolicy, WebSearchConfig};
+use hya_tool::InvocationPolicy;
 
 mod catalog;
 mod edit;
@@ -31,13 +31,13 @@ pub use edit::{
     provider_model_references, remove_model_entry, remove_provider_entry, set_model_entry,
     upsert_oauth_provider, upsert_provider_entry,
 };
-pub(crate) use file::parse_plugin_config;
 pub use file::{
     BundlesConfig, CONFIG_SCHEMA_VERSION, CodeMode, ContextSettings, CreatedConfig, EngineSettings,
     GoalSettings, active_config_path, configured_builtin_bundles, configured_code_mode,
     ensure_config_file, ensure_config_file_at, expected_config_path, first_run_config_bootstrap,
     load_configured_plugin_ids, resolve_evaluator_model, resolve_event_bus_capacity,
 };
+pub(crate) use file::{parse_plugin_config, read_bundle_config_json};
 pub(crate) use provider::resolve_secret;
 pub use provider::{PROVIDER_KIND_LABELS, validate_base_url};
 
@@ -58,8 +58,6 @@ pub struct ResolvedConfig {
     pub default_agent: Option<String>,
     /// Compiled tool permission policy (`permission:` block).
     pub permission: InvocationPolicy,
-    /// Web-search plane configuration.
-    pub websearch: WebSearchConfig,
     /// Providers that still need background discovery refresh after startup.
     pub pending_discovery: Vec<PendingCatalogDiscovery>,
     /// Parsed startup settings passed unchanged to the engine builder.

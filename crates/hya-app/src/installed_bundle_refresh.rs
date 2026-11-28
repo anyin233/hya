@@ -16,9 +16,10 @@ use tokio::sync::{Mutex, OnceCell};
 use crate::bundle_config::BundleConfigResolver;
 use crate::bundle_runtime::source::{bundle_schema_claims, prepared_static_bundle_source};
 
-/// First-party bundles published with the runtime catalog, including workflows
-/// and the TUI extension of the built-in panes.
-const FIRST_PARTY_CATALOG_BUNDLES: [&str; 3] = [
+/// First-party bundles published with the runtime catalog, including workflows,
+/// `hya/plan`, and the TUI extension of the built-in panes.
+const FIRST_PARTY_CATALOG_BUNDLES: [&str; 4] = [
+    "hya/plan",
     "hya/goal-loop",
     "hya/plan-impl-review",
     "hya/basic-tui-components",

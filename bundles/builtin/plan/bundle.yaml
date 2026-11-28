@@ -1,0 +1,26 @@
+kind: Bundle
+schema_version: 2
+version_ref: hya
+identity:
+  id: hya/plan
+  version: 0.0.0
+  publisher: hya
+namespace: plan
+runtime:
+  kind: native
+  abi_version: 2
+  crate_dir: native
+  capabilities:
+    - tools
+    - hooks
+resources:
+  tools:
+    - id: plan_exit
+      path: tools/plan_exit.json
+      aliases:
+        - plan
+  hooks:
+    - id: tool.visibility
+      path: hooks/tool_visibility.json
+agents:
+  - path: agents/hya-plan.md

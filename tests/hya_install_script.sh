@@ -56,7 +56,7 @@ EOF
   printf '%s\n' web >"$scratch/$package/lib/hya/tui-web/src/main.ts"
   printf '%s\n' sdk >"$scratch/$package/lib/hya/tui-sdk/src/main.ts"
   printf '%s\n' '<html></html>' >"$scratch/$package/lib/hya/tui-web/web/index.html"
-  printf '%s\n' "$version" >"$scratch/$package/bundles/hya-base-tools.hyabundle"
+  printf '%s\n' "$version" >"$scratch/$package/bundles/hya-coding-extras.hyabundle"
   tar -czf "$archive" -C "$scratch" "$package"
   mkdir -p "$releases/download/v$version"
   cp "$archive" "$releases/download/v$version/"
@@ -118,7 +118,7 @@ make_release 9.9.3 0.0.1
 if out="$(install_into "$prefix" --version v9.9.3 2>&1)"; then fail 'misreporting binary installed'; fi
 grep -q 'restored the previous installation' <<<"$out" || fail "rollback was not reported: $out"
 [[ "$("$prefix/bin/hya" --version)" == 'hya 9.9.1' ]] || fail 'rollback did not restore hya'
-[[ "$(cat "$prefix/bundles/hya-base-tools.hyabundle")" == 9.9.1 ]] || fail 'rollback did not restore bundles'
+[[ "$(cat "$prefix/bundles/hya-coding-extras.hyabundle")" == 9.9.1 ]] || fail 'rollback did not restore bundles'
 
 make_release 9.9.4 9.9.4 0 0.0.2
 if out="$(install_into "$prefix" --version 9.9.4 2>&1)"; then fail 'misreporting frontend installed'; fi

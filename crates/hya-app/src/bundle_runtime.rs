@@ -74,10 +74,20 @@ impl BundleRuntimeConfig {
     }
 }
 
+/// Whether `bundle` uses an in-process native runtime (`runtime.kind: native`).
+fn is_native_runtime(bundle: &Bundle) -> bool {
+    bundle
+        .runtime()
+        .is_some_and(|rt| rt.kind == hya_bundle::PreparedRuntimeKind::Native)
+}
+
 /// Whether preparing `bundle` starts an out-of-process provider: an explicit
 /// `extensions.process`, a declared MCP server, or the implicit Bun process of
 /// a JavaScript Plugin with tool or hook entrypoints.
 fn spawns_runtime(bundle: &Bundle, process: Option<&PreparedProcessExtension>) -> bool {
+    if is_native_runtime(bundle) {
+        return false;
+    }
     process.is_some()
         || !bundle.mcp().is_empty()
         || ((bundle.agents().is_empty() && bundle.workflow().is_none())
@@ -355,36 +365,38 @@ pub(crate) async fn prepare_source(
     let fingerprint = fingerprint(bundle, config)?;
     // A shared JavaScript Plugin has no agent activation to own a Bun sidecar.
     // Promote its explicit executable entrypoints to a generation-owned process.
-    let implicit_process =
-        if process.is_none() && (bundle.agents().is_empty() && bundle.workflow().is_none()) {
-            let entrypoints = bundle
-                .tools()
-                .iter()
-                .chain(bundle.hooks())
-                .map(|resource| resource.source_path.as_str())
-                .collect::<BTreeSet<_>>();
-            if entrypoints.is_empty() {
-                None
-            } else {
-                let mut command = crate::plugins::bundle_sidecar_command().ok_or_else(|| {
-                    CoreError::Invalid("Bun is required for JavaScript Plugin resources".into())
-                })?;
-                command.extend(["--plugin-id".into(), bundle.namespace().into()]);
-                for path in entrypoints {
-                    command.extend([
-                        "--bundle-extension".into(),
-                        format!("${{BUNDLE_ROOT}}/{path}"),
-                    ]);
-                }
-                Some(PreparedProcessExtension {
-                    kind: PreparedProcessKind::Bun,
-                    command,
-                    timeout_ms: None,
-                })
-            }
-        } else {
+    let implicit_process = if !is_native_runtime(bundle)
+        && process.is_none()
+        && (bundle.agents().is_empty() && bundle.workflow().is_none())
+    {
+        let entrypoints = bundle
+            .tools()
+            .iter()
+            .chain(bundle.hooks())
+            .map(|resource| resource.source_path.as_str())
+            .collect::<BTreeSet<_>>();
+        if entrypoints.is_empty() {
             None
-        };
+        } else {
+            let mut command = crate::plugins::bundle_sidecar_command().ok_or_else(|| {
+                CoreError::Invalid("Bun is required for JavaScript Plugin resources".into())
+            })?;
+            command.extend(["--plugin-id".into(), bundle.namespace().into()]);
+            for path in entrypoints {
+                command.extend([
+                    "--bundle-extension".into(),
+                    format!("${{BUNDLE_ROOT}}/{path}"),
+                ]);
+            }
+            Some(PreparedProcessExtension {
+                kind: PreparedProcessKind::Bun,
+                command,
+                timeout_ms: None,
+            })
+        }
+    } else {
+        None
+    };
     let process = process.or(implicit_process.as_ref());
 
     let contributions = PluginContributionSet {

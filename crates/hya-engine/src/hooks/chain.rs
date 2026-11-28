@@ -72,6 +72,29 @@ impl HookDispatcher for HookChain {
         None
     }
 
+    async fn tool_visibility(&self, input: ToolVisibilityInput) -> ToolVisibilityOutcome {
+        let mut remaining = input.candidate_tools.clone();
+        let mut hidden = Vec::new();
+        let mut had_allow_only = false;
+        for dispatcher in &self.dispatchers {
+            let outcome = dispatcher
+                .tool_visibility(ToolVisibilityInput {
+                    session: input.session,
+                    agent: input.agent.clone(),
+                    candidate_tools: remaining.clone(),
+                    interactive: input.interactive,
+                })
+                .await;
+            native::fold_visibility_outcome(
+                &mut remaining,
+                &mut hidden,
+                &mut had_allow_only,
+                outcome,
+            );
+        }
+        native::finalize_visibility_outcome(remaining, hidden, had_allow_only)
+    }
+
     async fn command_execute_before(
         &self,
         mut input: CommandExecuteBeforeInput,

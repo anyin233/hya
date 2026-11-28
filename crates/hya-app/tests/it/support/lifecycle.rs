@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
-use hya_app::{BuiltSessionEngine, InvocationPolicy, WebSearchConfig, build_session_engine_pure};
+use hya_app::{BuiltSessionEngine, InvocationPolicy, build_session_engine_pure};
 use hya_engine::{AgentSpec, CreateSession, SessionEngine};
 use hya_proto::{
     AgentName, FinishReason, MailEndpoint, MailKind, MessageId, ModelRef, PartProjection,
@@ -326,7 +326,6 @@ impl Harness {
             BTreeMap::new(),
             plugins,
             (
-                WebSearchConfig::default(),
                 InvocationPolicy::default().with_model(PermissionModel::Danger),
                 hya_app::config::EngineSettings::default(),
             ),

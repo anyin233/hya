@@ -48,7 +48,6 @@ fn process_tool_ctx(workdir: &std::path::Path) -> ToolCtx {
         parent_session: None,
         skills: hya_tool::SkillPlane::default(),
         artifacts: hya_tool::handle::ArtifactPlane::default(),
-        websearch: hya_tool::WebSearchPlane::default(),
         lsp: hya_tool::LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
         agents: Default::default(),

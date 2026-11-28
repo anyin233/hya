@@ -1,4 +1,4 @@
-//! Release staging of the twelve trusted first-party bundle packages.
+//! Release staging of the fourteen trusted first-party bundle packages.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -10,12 +10,14 @@ use std::process::{Command, Output};
 
 const TARGET: &str = "x86_64-unknown-linux-gnu";
 const VERSION: &str = hya_version::BACKEND_VERSION;
-const NATIVE_FAMILIES: [&str; 5] = [
-    "base-tools",
+const NATIVE_FAMILIES: [&str; 7] = [
+    "hashline",
+    "coding-extras",
     "extended-tools",
-    "network-tools",
+    "network",
     "channel-tools",
     "compaction",
+    "plan",
 ];
 const DATA_BUNDLES: [&str; 7] = [
     "core-skills",
@@ -102,16 +104,16 @@ fn stages_installed_packages_and_versioned_release_assets() {
         assert_eq!(bundle.identity().id, format!("hya/{name}"));
         assert_eq!(bundle.identity().version, VERSION);
     }
-    let base = hya_bundle::inspect_public_package(
-        &fs::read(root.join("package/bundles/hya-base-tools.hyabundle")).unwrap(),
+    let coding_extras = hya_bundle::inspect_public_package(
+        &fs::read(root.join("package/bundles/hya-coding-extras.hyabundle")).unwrap(),
     )
     .unwrap();
-    let library = base.bundles()[0]
+    let library = coding_extras.bundles()[0]
         .extensions()
         .iter()
         .find(|asset| asset.local_id == "runtime")
         .expect("native library resource");
-    assert_eq!(library.source_bytes().unwrap(), b"library:base-tools");
+    assert_eq!(library.source_bytes().unwrap(), b"library:coding-extras");
     fs::remove_dir_all(root).unwrap();
 }
 

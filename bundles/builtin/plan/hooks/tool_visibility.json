@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "hooks": [
+    {
+      "event": "tool.visibility",
+      "handler": {
+        "kind": "native",
+        "target": "plan_exit_visibility"
+      }
+    }
+  ]
+}

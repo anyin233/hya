@@ -1,0 +1,192 @@
+//! Web search tool implementation backed by `hya/network`'s [`NetworkPlane`].
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use hya_proto::{SessionId, ToolSchema};
+use hya_runtime_abi::HostRuntime;
+use hya_tool::tool::obj_schema;
+use hya_tool::{Action, Resource, Tool, ToolCtx, ToolError};
+use reqwest::Url;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use time::OffsetDateTime;
+
+use crate::config::{NetworkPlane, WebSearchConfig, WebSearchProvider};
+
+mod response;
+
+const DEFAULT_TIMEOUT_SECS: u64 = 25;
+const EXA_URL: &str = "https://mcp.exa.ai/mcp";
+const PARALLEL_URL: &str = "https://search.parallel.ai/mcp";
+
+/// Built-in `websearch` tool owned by `hya/network`.
+pub struct WebSearchTool {
+    plane: Arc<NetworkPlane>,
+    runtime: Option<Arc<dyn HostRuntime>>,
+}
+
+impl WebSearchTool {
+    /// Construct a `websearch` tool backed by `plane` and optional `runtime`.
+    #[must_use]
+    pub fn new(plane: Arc<NetworkPlane>, runtime: Option<Arc<dyn HostRuntime>>) -> Self {
+        Self { plane, runtime }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebSearchInput {
+    query: String,
+    num_results: Option<u64>,
+    livecrawl: Option<LiveCrawlMode>,
+    #[serde(rename = "type")]
+    search_type: Option<SearchType>,
+    context_max_characters: Option<u64>,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum LiveCrawlMode {
+    Fallback,
+    Preferred,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum SearchType {
+    Auto,
+    Fast,
+    Deep,
+}
+
+#[async_trait]
+impl Tool for WebSearchTool {
+    fn name(&self) -> &str {
+        "websearch"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        obj_schema(
+            "websearch",
+            &include_str!("websearch.txt")
+                .replace("{{year}}", &OffsetDateTime::now_utc().year().to_string()),
+            json!({
+                "query": { "type": "string", "description": "Websearch query" },
+                "numResults": { "type": "number", "description": "Number of search results to return (default: 8)" },
+                "livecrawl": { "type": "string", "enum": ["fallback", "preferred"], "description": "Live crawl mode - 'fallback': use live crawling as backup if cached content unavailable, 'preferred': prioritize live crawling (default: 'fallback')" },
+                "type": { "type": "string", "enum": ["auto", "fast", "deep"], "description": "Search type - 'auto': balanced search (default), 'fast': quick results, 'deep': comprehensive search" },
+                "contextMaxCharacters": { "type": "number", "description": "Maximum characters for context string optimized for LLMs (default: 10000)" }
+            }),
+            &["query"],
+        )
+    }
+
+    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+        if ctx.cancel.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
+        let cfg = self.plane.effective_config(self.runtime.as_deref()).await;
+        if !cfg.websearch.enabled {
+            return Err(ToolError::Other(
+                "websearch is disabled by hya/network configuration".to_string(),
+            ));
+        }
+        let input: WebSearchInput =
+            serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
+        ctx.permission
+            .assert(Action::WebSearch, Resource::WebSearch(input.query.clone()))
+            .await?;
+        let provider = cfg.websearch.provider;
+        let result = call_provider(&cfg.websearch, provider, &input, ctx.session).await?;
+        Ok(json!({
+            "title": format!("{}: {}", provider.label(), input.query),
+            "output": result.unwrap_or_else(|| "No search results found. Please try a different query.".to_string()),
+            "metadata": { "provider": provider.id() },
+        }))
+    }
+}
+
+async fn call_provider(
+    config: &WebSearchConfig,
+    provider: WebSearchProvider,
+    input: &WebSearchInput,
+    session: Option<SessionId>,
+) -> Result<Option<String>, ToolError> {
+    let (default_url, tool, arguments) = match provider {
+        WebSearchProvider::Exa => (EXA_URL, "web_search_exa", exa_arguments(input)),
+        WebSearchProvider::Parallel => (
+            PARALLEL_URL,
+            "web_search",
+            parallel_arguments(input, session),
+        ),
+    };
+    let url = config.endpoint.as_deref().unwrap_or(default_url);
+    let mut url = Url::parse(url).map_err(|e| ToolError::Input(e.to_string()))?;
+    if provider == WebSearchProvider::Exa
+        && let Some(key) = config.key.as_deref().filter(|key| !key.is_empty())
+    {
+        url.query_pairs_mut().append_pair("exaApiKey", key);
+    }
+    let mut request = crate::http_client()?
+        .post(url)
+        .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+        .header(
+            reqwest::header::ACCEPT,
+            "application/json, text/event-stream",
+        )
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": tool,
+                "arguments": arguments,
+            },
+        }));
+    if provider == WebSearchProvider::Parallel
+        && let Some(key) = config.key.as_deref().filter(|key| !key.is_empty())
+    {
+        request = request.bearer_auth(key);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| ToolError::Other(e.to_string()))?;
+    if !response.status().is_success() {
+        return Err(ToolError::Other(format!(
+            "websearch request failed with HTTP {}",
+            response.status()
+        )));
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|e| ToolError::Other(e.to_string()))?;
+    response::parse_response(&body)
+}
+
+fn exa_arguments(input: &WebSearchInput) -> Value {
+    let mut value = json!({
+        "query": input.query,
+        "type": input.search_type.unwrap_or(SearchType::Auto),
+        "numResults": input.num_results.unwrap_or(8),
+        "livecrawl": input.livecrawl.unwrap_or(LiveCrawlMode::Fallback),
+    });
+    if let Some(limit) = input.context_max_characters {
+        value["contextMaxCharacters"] = json!(limit);
+    }
+    value
+}
+
+fn parallel_arguments(input: &WebSearchInput, session: Option<SessionId>) -> Value {
+    let mut value = json!({
+        "objective": input.query,
+        "search_queries": [input.query],
+    });
+    if let Some(session) = session {
+        value["session_id"] = json!(session.to_string());
+    }
+    value
+}

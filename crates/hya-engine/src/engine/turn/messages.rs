@@ -4,6 +4,7 @@ use hya_proto::{Message, ModelRef, Projection, Role};
 use hya_provider::ReasoningEffort;
 
 use crate::engine::AgentSpec;
+use crate::hooks::ToolVisibilityOutcome;
 use crate::runtime_registry::CompiledResourceView;
 
 pub(super) use crate::kernel::request::AttachmentData;
@@ -108,14 +109,33 @@ pub(super) fn reasoning_for_model(
     }
 }
 
+/// Whether a tool (by advertised schema name or canonical tool name) passes
+/// the active `tool.visibility` hook outcome.
+pub(in crate::engine) fn tool_visible_by_outcome(
+    schema_name: &str,
+    canonical_name: &str,
+    outcome: &ToolVisibilityOutcome,
+) -> bool {
+    match outcome {
+        ToolVisibilityOutcome::Preserve => true,
+        ToolVisibilityOutcome::Hide { tools } => !tools
+            .iter()
+            .any(|hidden| hidden == schema_name || hidden == canonical_name),
+        ToolVisibilityOutcome::AllowOnly { tools } => tools
+            .iter()
+            .any(|allowed| allowed == schema_name || allowed == canonical_name),
+    }
+}
+
 pub(super) fn filtered_tool_schemas(
     resources: &CompiledResourceView,
     interaction_available: bool,
+    visibility: &ToolVisibilityOutcome,
     depth: u32,
     exclusive: Option<&str>,
     model: &ModelRef,
 ) -> Vec<hya_proto::ToolSchema> {
-    let offered = offered_tool_schemas(resources, depth, interaction_available, model);
+    let offered = offered_tool_schemas(resources, depth, interaction_available, visibility, model);
     let Some(exclusive) = exclusive_in_effect(&offered, exclusive) else {
         return offered;
     };
@@ -131,10 +151,11 @@ pub(super) fn filtered_tool_schemas(
     shown
 }
 
-fn offered_tool_schemas(
+pub(super) fn offered_tool_schemas(
     resources: &CompiledResourceView,
     depth: u32,
     interaction_available: bool,
+    visibility: &ToolVisibilityOutcome,
     model: &ModelRef,
 ) -> Vec<hya_proto::ToolSchema> {
     resources
@@ -145,6 +166,7 @@ fn offered_tool_schemas(
             advertise_tool_at_depth(name, depth, model)
                 && resources.resolve_tool(name).is_some_and(|resolved| {
                     super::tool_available(resolved.tool.name(), interaction_available)
+                        && tool_visible_by_outcome(name, resolved.tool.name(), visibility)
                 })
                 && (resources.advertises(name) || (depth >= 1 && name == "report"))
         })
@@ -275,7 +297,14 @@ mod tests {
     ) -> Result<String, Box<dyn std::error::Error>> {
         let model = ModelRef::new(model);
         let resources = agent_view("", agent)?;
-        let mut tools = filtered_tool_schemas(&resources, true, depth, None, &model);
+        let mut tools = filtered_tool_schemas(
+            &resources,
+            true,
+            &ToolVisibilityOutcome::Preserve,
+            depth,
+            None,
+            &model,
+        );
         tools.extend([
             crate::kernel::tools::rewrite_schema(),
             crate::kernel::tools::todo_schema(),
@@ -342,10 +371,17 @@ mod tests {
             (1, vec!["bash", "report"]),
             (crate::MAX_SUBAGENT_DEPTH, vec!["bash", "report"]),
         ] {
-            let mut names: Vec<_> = filtered_tool_schemas(&resources, true, depth, None, &model())
-                .into_iter()
-                .map(|s| s.name.to_string())
-                .collect();
+            let mut names: Vec<_> = filtered_tool_schemas(
+                &resources,
+                true,
+                &ToolVisibilityOutcome::Preserve,
+                depth,
+                None,
+                &model(),
+            )
+            .into_iter()
+            .map(|s| s.name.to_string())
+            .collect();
             names.sort();
             assert_eq!(names, expected, "depth {depth}");
         }
@@ -357,10 +393,17 @@ mod tests {
         let aliased = bundle_advertise_view(
             "advertise: [run]\n    resource_view: { allow: ['harness:tool/bash'], aliases: { run: 'harness:tool/bash' } }",
         )?;
-        let names: Vec<_> = filtered_tool_schemas(&aliased, true, 0, None, &model())
-            .into_iter()
-            .map(|s| s.name.to_string())
-            .collect();
+        let names: Vec<_> = filtered_tool_schemas(
+            &aliased,
+            true,
+            &ToolVisibilityOutcome::Preserve,
+            0,
+            None,
+            &model(),
+        )
+        .into_iter()
+        .map(|s| s.name.to_string())
+        .collect();
         assert_eq!(names, ["run"]);
         for fields in ["", "advertise: []"] {
             let view = bundle_advertise_view(fields)?;
@@ -371,10 +414,17 @@ mod tests {
                     .filter(|s| advertise_tool_at_depth(s.name.as_str(), depth, &model()))
                     .map(|s| s.name.to_string())
                     .collect();
-                let actual: BTreeSet<_> = filtered_tool_schemas(&view, true, depth, None, &model())
-                    .into_iter()
-                    .map(|s| s.name.to_string())
-                    .collect();
+                let actual: BTreeSet<_> = filtered_tool_schemas(
+                    &view,
+                    true,
+                    &ToolVisibilityOutcome::Preserve,
+                    depth,
+                    None,
+                    &model(),
+                )
+                .into_iter()
+                .map(|s| s.name.to_string())
+                .collect();
                 assert_eq!(actual, expected);
             }
         }
@@ -409,11 +459,13 @@ mod tests {
     #[test]
     fn exclusive_tool_and_headless_human_tool_filtering() -> Result<(), Box<dyn std::error::Error>>
     {
+        let preserve = ToolVisibilityOutcome::Preserve;
         let resources = bundle_advertise_view(
             "resource_view: { allow: ['harness:tool/bash', 'harness:tool/read'] }",
         )?;
         for (depth, expected) in [(0, vec!["bash"]), (1, vec!["bash", "report"])] {
-            let offered = filtered_tool_schemas(&resources, true, depth, Some("bash"), &model());
+            let offered =
+                filtered_tool_schemas(&resources, true, &preserve, depth, Some("bash"), &model());
             let mut names: Vec<_> = offered.iter().map(|s| s.name.as_str()).collect();
             names.sort_unstable();
             assert_eq!(names, expected);
@@ -431,7 +483,7 @@ mod tests {
         }
         assert_eq!(
             hidden_behind(
-                &filtered_tool_schemas(&resources, true, 0, Some("bash"), &model()),
+                &filtered_tool_schemas(&resources, true, &preserve, 0, Some("bash"), &model()),
                 Some("bash"),
                 "read"
             ),
@@ -439,7 +491,7 @@ mod tests {
         );
         assert_eq!(
             hidden_behind(
-                &filtered_tool_schemas(&resources, true, 1, Some("bash"), &model()),
+                &filtered_tool_schemas(&resources, true, &preserve, 1, Some("bash"), &model()),
                 Some("bash"),
                 "report"
             ),
@@ -447,7 +499,7 @@ mod tests {
         );
         assert_eq!(
             hidden_behind(
-                &filtered_tool_schemas(&resources, true, 0, Some("absent"), &model()),
+                &filtered_tool_schemas(&resources, true, &preserve, 0, Some("absent"), &model()),
                 Some("absent"),
                 "read"
             ),
@@ -461,12 +513,14 @@ mod tests {
         ] {
             let view = bundle_advertise_view(fields)?;
             assert_eq!(
-                filtered_tool_schemas(&view, true, 0, Some("bash"), &model()),
-                filtered_tool_schemas(&view, true, 0, None, &model())
+                filtered_tool_schemas(&view, true, &preserve, 0, Some("bash"), &model()),
+                filtered_tool_schemas(&view, true, &preserve, 0, None, &model())
             );
         }
 
         // Headless surface omits human tools (canonical or aliased) from schemas and exclusive docs.
+        // Both `ask_user` (`hya/coding-extras`) and `plan_exit` (`hya/plan`) visibility are
+        // controlled by `tool.visibility` native hooks (never hardcoded in `hya-engine`).
         for aliases in [
             "",
             ", aliases: { ask: 'harness:tool/ask_user', approve: 'harness:tool/plan_exit' }",
@@ -479,10 +533,33 @@ mod tests {
             } else {
                 ["ask", "approve"]
             };
+            // Without visibility hooks hiding them, neither human tool is hardcoded out.
+            let without_hook = filtered_tool_schemas(&view, false, &preserve, 0, None, &model());
+            for name in human {
+                assert!(
+                    without_hook.iter().any(|t| t.name.as_str() == name),
+                    "{name} visibility is owned by the tool.visibility hook, not hardcoded"
+                );
+            }
+
             for interactive in [false, true] {
-                let offered = filtered_tool_schemas(&view, interactive, 0, None, &model());
-                let exclusive =
-                    filtered_tool_schemas(&view, interactive, 0, Some("bash"), &model());
+                let visibility = if interactive {
+                    ToolVisibilityOutcome::Preserve
+                } else {
+                    ToolVisibilityOutcome::Hide {
+                        tools: vec!["ask_user".to_string(), "plan_exit".to_string()],
+                    }
+                };
+                let offered =
+                    filtered_tool_schemas(&view, interactive, &visibility, 0, None, &model());
+                let exclusive = filtered_tool_schemas(
+                    &view,
+                    interactive,
+                    &visibility,
+                    0,
+                    Some("bash"),
+                    &model(),
+                );
                 let bash = exclusive
                     .iter()
                     .find(|t| t.name.as_str() == "bash")
@@ -548,7 +625,7 @@ mod tests {
             .into_iter()
             .map(|s| s.name.to_string())
             .collect();
-        assert_eq!(builtins.len(), 24);
+        assert_eq!(builtins.len(), 23);
         for (model, gpt) in [
             ("openai/gpt-5.5", true),
             ("x/y/gpt-6.2-sol#high", true),
