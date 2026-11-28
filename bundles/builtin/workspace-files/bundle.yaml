@@ -1,0 +1,12 @@
+kind: Bundle
+schema_version: 2
+version_ref: hya
+identity:
+  id: hya/workspace-files
+  version: 0.0.0
+  publisher: hya
+runtime:
+  kind: native
+  abi_version: 2
+  crate_dir: native
+  capabilities: [apis]

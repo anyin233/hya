@@ -751,6 +751,8 @@ pub async fn listings_for(
             continue;
         }
         let state = if enabled { "active" } else { "disabled" };
+        // The catalog row includes runtime components missing from the preset.
+        rows.retain(|row| row.scope != SCOPE_FIRST_PARTY || row.id != bundle.identity().id);
         rows.push(listing(&catalog, bundle, SCOPE_FIRST_PARTY, state, enabled));
     }
     let rank = |scope: &str| match scope {

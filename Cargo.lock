@@ -1905,7 +1905,6 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
- "mime_guess",
  "pbjson-types",
  "rand_core 0.9.5",
  "regex",
@@ -2057,6 +2056,22 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "hya-workspace-files"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "hya-runtime-abi",
+ "mime_guess",
+ "pbjson-types",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

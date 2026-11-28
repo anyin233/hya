@@ -367,53 +367,6 @@ impl pb::events_server::Events for V2Grpc {
     }
 }
 #[tonic::async_trait]
-impl pb::files_server::Files for V2Grpc {
-    async fn read_file(
-        &self,
-        request: GrpcRequest<pb::ReadFileRequest>,
-    ) -> Result<GrpcResponse<pb::ReadFileResponse>, Status> {
-        let (ctx, inner) = split(request);
-        let path = "/v2/fs/read";
-        into_response(
-            self.dispatch(&ctx, "GET", path, query_of(&inner), &inner)
-                .await?,
-        )
-    }
-    async fn list_directory(
-        &self,
-        request: GrpcRequest<pb::ListDirectoryRequest>,
-    ) -> Result<GrpcResponse<pb::ListDirectoryResponse>, Status> {
-        let (ctx, inner) = split(request);
-        let path = "/v2/fs/list";
-        into_response(
-            self.dispatch(&ctx, "GET", path, query_of(&inner), &inner)
-                .await?,
-        )
-    }
-    async fn find_files(
-        &self,
-        request: GrpcRequest<pb::FindFilesRequest>,
-    ) -> Result<GrpcResponse<pb::FindFilesResponse>, Status> {
-        let (ctx, inner) = split(request);
-        let path = "/v2/fs/find";
-        into_response(
-            self.dispatch(&ctx, "GET", path, query_of(&inner), &inner)
-                .await?,
-        )
-    }
-    async fn search_text(
-        &self,
-        request: GrpcRequest<pb::SearchTextRequest>,
-    ) -> Result<GrpcResponse<pb::SearchTextResponse>, Status> {
-        let (ctx, inner) = split(request);
-        let path = "/v2/fs/search";
-        into_response(
-            self.dispatch(&ctx, "GET", path, query_of(&inner), &inner)
-                .await?,
-        )
-    }
-}
-#[tonic::async_trait]
 impl pb::interactions_server::Interactions for V2Grpc {
     async fn list_interactions(
         &self,
@@ -1089,52 +1042,6 @@ impl pb::turn_server::Turn for V2Grpc {
             encode(&field(&inner, "session")),
             encode(&field(&inner, "turn"))
         );
-        into_response(
-            self.dispatch(&ctx, "POST", path, Vec::new(), &inner)
-                .await?,
-        )
-    }
-}
-#[tonic::async_trait]
-impl pb::worktrees_server::Worktrees for V2Grpc {
-    async fn list_worktrees(
-        &self,
-        request: GrpcRequest<pb::ListWorktreesRequest>,
-    ) -> Result<GrpcResponse<pb::ListWorktreesResponse>, Status> {
-        let (ctx, inner) = split(request);
-        let path = "/v2/worktrees";
-        into_response(
-            self.dispatch(&ctx, "GET", path, query_of(&inner), &inner)
-                .await?,
-        )
-    }
-    async fn create_worktree(
-        &self,
-        request: GrpcRequest<pb::CreateWorktreeRequest>,
-    ) -> Result<GrpcResponse<pb::Worktree>, Status> {
-        let (ctx, inner) = split(request);
-        let path = "/v2/worktrees";
-        into_response(
-            self.dispatch(&ctx, "POST", path, Vec::new(), &inner)
-                .await?,
-        )
-    }
-    async fn delete_worktree(
-        &self,
-        request: GrpcRequest<pb::DeleteWorktreeRequest>,
-    ) -> Result<GrpcResponse<pb::DeleteWorktreeResponse>, Status> {
-        let (ctx, inner) = split(request);
-        let path = &format!("/v2/worktrees/{}", encode(&field(&inner, "worktree")));
-        let mut query = query_of(&inner);
-        query.retain(|(key, _)| !matches!(key.as_str(), "worktree"));
-        into_response(self.dispatch(&ctx, "DELETE", path, query, &inner).await?)
-    }
-    async fn reset_worktree(
-        &self,
-        request: GrpcRequest<pb::ResetWorktreeRequest>,
-    ) -> Result<GrpcResponse<pb::Worktree>, Status> {
-        let (ctx, inner) = split(request);
-        let path = &format!("/v2/worktrees/{}/reset", encode(&field(&inner, "worktree")));
         into_response(
             self.dispatch(&ctx, "POST", path, Vec::new(), &inner)
                 .await?,

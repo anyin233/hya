@@ -1,4 +1,4 @@
 [alias]
 # `hya` plus every first-party native bundle library it loads at runtime
 # (bundles are not Cargo dependencies of the core, ADR-0040).
-build-hya = "build --lib -p hya-backend --bin hya -p hya-hashline -p hya-coding-extras -p hya-multi-agent -p hya-agent-channels -p hya-network -p hya-compaction -p hya-plan -p hya-goal -p hya-loop -p hya-workflow-bundle"
+build-hya = "build --lib -p hya-backend --bin hya -p hya-hashline -p hya-coding-extras -p hya-multi-agent -p hya-agent-channels -p hya-network -p hya-compaction -p hya-plan -p hya-goal -p hya-loop -p hya-workflow-bundle -p hya-workspace-files"

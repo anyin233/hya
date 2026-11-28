@@ -66,12 +66,11 @@ impl V2Grpc {
         use pb::{
             agent_models_server::AgentModelsServer, auth_server::AuthServer,
             bundle_api_server::BundleApiServer, catalog_server::CatalogServer,
-            events_server::EventsServer, files_server::FilesServer,
-            interactions_server::InteractionsServer, logs_server::LogsServer,
-            mcp_server::McpServer, messages_server::MessagesServer, process_server::ProcessServer,
-            project_server::ProjectServer, pty_server::PtyServer,
+            events_server::EventsServer, interactions_server::InteractionsServer,
+            logs_server::LogsServer, mcp_server::McpServer, messages_server::MessagesServer,
+            process_server::ProcessServer, project_server::ProjectServer, pty_server::PtyServer,
             relay_control_server::RelayControlServer, session_server::SessionServer,
-            turn_server::TurnServer, worktrees_server::WorktreesServer,
+            turn_server::TurnServer,
         };
         tonic::service::Routes::new(ProcessServer::new(self.clone()))
             .add_service(CatalogServer::new(self.clone()))
@@ -85,9 +84,7 @@ impl V2Grpc {
             .add_service(MessagesServer::new(self.clone()))
             .add_service(EventsServer::new(self.clone()))
             .add_service(InteractionsServer::new(self.clone()))
-            .add_service(FilesServer::new(self.clone()))
             .add_service(ProjectServer::new(self.clone()))
-            .add_service(WorktreesServer::new(self.clone()))
             .add_service(McpServer::new(self.clone()))
             .add_service(PtyServer::new(self.clone()))
             .add_service(LogsServer::new(self.clone()))

@@ -33,7 +33,7 @@ New to Hya, or looking up how to run a workflow, switch models, or connect from 
 - **[CLI Reference](reference/cli.md)** — Every `hya` and `hya-migration` command, global `--bare`/`--pure` flags, database lock rules, and exit codes.
 - **[Configuration Reference](reference/configuration.md)** — Complete field dictionary for `config.yaml` (`schema_version: 2`), per-bundle `config.yml`, and `tui.toml` (`version = 2`).
 - **[Slash Commands & Keybindings](reference/commands-and-keybindings.md)** — Every `/command`, keyboard shortcut, and `/keybind` customization.
-- **[Built-in Tools, Agents & Bundles](reference/tools-and-presets.md)** — All 8 Core `hya-bare` tools + Code Mode, built-in agents, 14 `bundles/builtin/` packages, and `hya-extra/*` bundles.
+- **[Built-in Tools, Agents & Bundles](reference/tools-and-presets.md)** — All 8 Core `hya-bare` tools + Code Mode, built-in agents, 15 `bundles/builtin/` packages, and `hya-extra/*` bundles.
 - **[Environment Variables & File Paths](reference/env-and-paths.md)** — Every `HYA_*` variable and XDG file location on disk.
 - **[Troubleshooting](reference/troubleshooting.md)** — Quick fixes for busy ports, daemon locks, `403` host errors, offline mode, and relay setup.
 
@@ -47,7 +47,7 @@ Customize Hya or build your own apps and scripts on top of it—without touching
 - **[Authoring Skills & Slash Commands](extend/skills-and-commands.md)** — `SKILL.md` frontmatter, discovery precedence, and `.hya/commands/*.md` argument templates.
 - **[Authoring Workflows & Evaluators](extend/authoring-workflows.md)** — Writing `*.hya.md` Stage DAGs, loop verifiers, per-stage model routing, and custom Goal/Loop judges.
 - **[Creating Bundles (`.hyabundle`)](extend/bundles.md)** — Packaging agents, skills, tools, custom HTTP/gRPC APIs (`BundleApi`), and permission modes—plus importing Claude Code plugins (`--claude`).
-- **[`hyabundle` Specification](extend/hyabundle-spec.md)** — Canonical `schema_version: 2` `bundle.yaml` & descriptor schemas, 14 `bundles/builtin/` packages, `overrides: hya/bare`, loading precedence, and independent Bundle CI.
+- **[`hyabundle` Specification](extend/hyabundle-spec.md)** — Canonical `schema_version: 2` `bundle.yaml` & descriptor schemas, 15 `bundles/builtin/` packages, `overrides: hya/bare`, loading precedence, and independent Bundle CI.
 - **[Native Bundle Runtime ABI v2](extend/native-abi.md)** — Writing compiled Rust `cdylib` bundles with `crates/hya-runtime-abi`, `Arc<dyn HostRuntime>`, `NativeRegistrations`, and `ExtensionPlanes`.
 - **[Sidecar Plugins, Custom Tools & Hooks](extend/plugins-and-hooks.md)** — Writing Bun JS modules or NDJSON JSON-RPC 2.0 plugins, `host/capability` calls, and all 20 hooks.
 - **[TUI Extensions (`@hya/tui-sdk` v2)](extend/tui-extensions.md)** — Building sandboxed custom UI panels, dynamic panes, slash commands, status items, renderers, and embedded transcripts.
@@ -59,7 +59,7 @@ Customize Hya or build your own apps and scripts on top of it—without touching
 
 Working inside the `hya` repository or exploring how the runtime is built?
 
-- **[Architecture Overview](architecture/overview.md)** — Event-sourced truth (`Event::Extension`), `hya-bare` 3-primitive Kernel + 14 modular built-in bundles, persistent daemon, single-port `hya.v2`, and system diagrams.
+- **[Architecture Overview](architecture/overview.md)** — Event-sourced truth (`Event::Extension`), `hya-bare` 3-primitive Kernel + 15 modular built-in bundles, persistent daemon, single-port `hya.v2`, and system diagrams.
 - **[Repository & Crate Map](architecture/codebase-map.md)** — Workspace crates, native tool bundles, frontend packages, and where to make a change.
 - **[Kernel & Context Engine](architecture/kernel-and-context.md)** · **[Event Model & Storage](architecture/events-and-storage.md)** · **[Session Engine, Subagents & Channels](architecture/engine-and-subagents.md)** · **[Providers, Tool Plane & Scoping](architecture/providers-and-tools.md)** · **[Server, Relay & Frontend Internals](architecture/server-relay-and-tui.md)** · **[Domain Glossary](architecture/glossary.md)**
 - **[Development & Coding Standards](contributing/development.md)** · **[Plan Template](templates/plan.md)** · **[Testing & Verification](contributing/testing.md)** · **[Dev Tooling (`xtask`) & Docs Site](contributing/tooling-and-docs-site.md)** · **[Versioning & Release Guide](contributing/release.md)**

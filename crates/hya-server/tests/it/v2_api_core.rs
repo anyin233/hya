@@ -216,12 +216,32 @@ async fn turn_lifecycle_busy_cancel_and_replay() {
 }
 
 #[tokio::test]
-async fn fs_read_max_bytes_binary_list_find_search_and_traversal_refusal() {
-    let app = router(hello_state().await);
-    let root = support::tempdir("v1-fs");
+async fn workspace_files_bundle_reads_scoped_bytes_over_http_and_grpc() {
+    use hya_api::v2::{InvokeGlobalBundleApiRequest, bundle_api_server::BundleApi as _};
+    const BUNDLE: &str = "hya/workspace-files";
+    const BASE: &str = "/v2/bundles/hya%2Fworkspace-files/api";
+    let state = hello_state().await;
+    let bundle = hya_bundle::first_party_bundle(BUNDLE).unwrap();
+    let catalog = hya_bundle::BundleCatalog::from_verified_catalogs(&[bundle]).unwrap();
+    let agents = Arc::new(hya_engine::AgentCatalog::new(Arc::new(catalog)).unwrap());
+    let registry = state.engine.runtime_registry();
+    registry
+        .refresh(|candidate| {
+            candidate.replace_catalog(agents);
+            Ok(())
+        })
+        .unwrap();
+    let runtime = Arc::new(hya_tool_loader::MinimalHostRuntime::empty());
+    let regs = hya_tool_loader::load_v2(BUNDLE, runtime).unwrap();
+    registry
+        .register_native_bundle_apis(BUNDLE, regs.api_handlers)
+        .unwrap();
+    let grpc = hya_server::V2Grpc::new(state.clone());
+    let app = router(state);
+    let root = support::tempdir("workspace-files");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("src/a.rs"), "fn alpha() {}\n").unwrap();
-    std::fs::write(root.join("notes.txt"), "hello v1 probe\n").unwrap();
+    std::fs::write(root.join("notes.txt"), "hello scope probe\n").unwrap();
     std::fs::write(
         root.join("shot.png"),
         [0x89, b'P', b'N', b'G', 0xff, 0xfe, 0, 1, 2, 3],
@@ -229,16 +249,20 @@ async fn fs_read_max_bytes_binary_list_find_search_and_traversal_refusal() {
     .unwrap();
     let q = enc(&root.to_string_lossy());
 
-    let text = ok_get(&app, &format!("/v2/fs/read?directory={q}&path=notes.txt")).await;
+    let text = ok_get(
+        &app,
+        &format!("{BASE}/fs/read?directory={q}&path=notes.txt"),
+    )
+    .await;
     assert_eq!(text["text"], json!(true));
     assert!(
         String::from_utf8_lossy(&b64_decode(text["content"].as_str().unwrap_or("")))
-            .contains("hello v1 probe")
+            .contains("hello scope probe")
     );
 
     let bin = ok_get(
         &app,
-        &format!("/v2/fs/read?directory={q}&path=shot.png&maxBytes=6"),
+        &format!("{BASE}/fs/read?directory={q}&path=shot.png&maxBytes=6"),
     )
     .await;
     assert_eq!(
@@ -251,7 +275,7 @@ async fn fs_read_max_bytes_binary_list_find_search_and_traversal_refusal() {
     let abs = enc(&root.join("shot.png").to_string_lossy());
     assert_eq!(
         b64_decode(
-            ok_get(&app, &format!("/v2/fs/read?directory={q}&path={abs}")).await["content"]
+            ok_get(&app, &format!("{BASE}/fs/read?directory={q}&path={abs}")).await["content"]
                 .as_str()
                 .unwrap_or("")
         )
@@ -260,14 +284,14 @@ async fn fs_read_max_bytes_binary_list_find_search_and_traversal_refusal() {
     );
 
     assert!(
-        ok_get(&app, &format!("/v2/fs/list?directory={q}")).await["entries"]
+        ok_get(&app, &format!("{BASE}/fs/list?directory={q}")).await["entries"]
             .as_array()
             .is_some_and(|r| r.iter().any(|e| e["name"] == "src"))
     );
     assert!(
         ok_get(
             &app,
-            &format!("/v2/fs/find?directory={q}&pattern={}", enc("**/*.rs"))
+            &format!("{BASE}/fs/find?directory={q}&pattern={}", enc("**/*.rs"))
         )
         .await["paths"]
             .as_array()
@@ -278,7 +302,10 @@ async fn fs_read_max_bytes_binary_list_find_search_and_traversal_refusal() {
     assert!(
         ok_get(
             &app,
-            &format!("/v2/fs/search?directory={q}&query={}", enc("v1 probe"))
+            &format!(
+                "{BASE}/fs/search?directory={q}&query={}",
+                enc("scope probe")
+            )
         )
         .await["matches"]
             .as_array()
@@ -287,12 +314,42 @@ async fn fs_read_max_bytes_binary_list_find_search_and_traversal_refusal() {
     assert_err(
         get_json(
             &app,
-            &format!("/v2/fs/read?directory={q}&path={}", enc("../../etc/passwd")),
+            &format!(
+                "{BASE}/fs/read?directory={q}&path={}",
+                enc("../../etc/passwd")
+            ),
         )
         .await,
         StatusCode::BAD_REQUEST,
         "invalid_argument",
     );
+    for removed in ["/v2/fs/read", "/v2/worktrees"] {
+        assert_eq!(get_json(&app, removed).await.0, StatusCode::NOT_FOUND);
+    }
+    for invalid in ["", "."] {
+        assert_err(
+            get_json(&app, &format!("{BASE}/fs/list?directory={invalid}")).await,
+            StatusCode::BAD_REQUEST,
+            "invalid_argument",
+        );
+    }
+    let reply = grpc
+        .invoke_global_bundle_api(tonic::Request::new(InvokeGlobalBundleApiRequest {
+            bundle: BUNDLE.into(),
+            method: "GET".into(),
+            path: "/fs/read".into(),
+            query: std::collections::HashMap::from([
+                ("directory".into(), root.to_string_lossy().into_owned()),
+                ("path".into(), "shot.png".into()),
+                ("maxBytes".into(), "6".into()),
+            ]),
+            body: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(reply.status, 200);
+    assert_eq!(serde_json::to_value(reply.body.unwrap()).unwrap(), bin);
     let _ = std::fs::remove_dir_all(&root);
 }
 

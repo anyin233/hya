@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { extensionCacheRoot } from "./extensions/install"
+import { buildBundleApiUrlPath } from "./extensions/wire"
 import type { PermissionModeInfo } from "./state/modes"
 import type { RespondBody } from "./state/prompts"
 /** Small HTTP/JSON client for the shared hya.v2 server contract. */
@@ -653,6 +654,7 @@ export class HyaClient {
   private base: string
   private scope: string
   private bridgeToken: string | undefined
+  private workspaceFilesMissing = false
 
   /** `token`: the relay bridge's token when `baseUrl` is a bridge (sent as `x-hya-bridge-token`). */
   constructor(
@@ -694,6 +696,7 @@ export class HyaClient {
   setBaseUrl(baseUrl: string, token?: string): void {
     this.base = baseUrl.replace(/\/+$/, "")
     this.bridgeToken = token || undefined
+    this.workspaceFilesMissing = false
   }
 
   /**
@@ -794,25 +797,44 @@ export class HyaClient {
     return result.turn
   }
 
-  /** Relative paths under the `--dir` scope matching a glob (`FindFiles`). */
+  private async workspaceFileRequest<T>(path: string, query: Record<string, string>, scope: string, signal?: AbortSignal): Promise<T | undefined> {
+    if (this.workspaceFilesMissing) return undefined
+    const target = buildBundleApiUrlPath("hya/workspace-files", path, {
+      query: { ...query, ...(scope ? { directory: scope } : {}) },
+    })
+    if (!target.ok) throw new Error(target.error)
+    const backend = this.base
+    try {
+      return await this.request<T>("GET", target.urlPath, undefined, signal)
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404 && error.detail.startsWith("bundle_api_not_found:")) {
+        if (backend === this.base) this.workspaceFilesMissing = true
+        return undefined
+      }
+      throw error
+    }
+  }
+
+  /** Relative paths under the `--dir` scope matching a glob. */
   async findFiles(pattern: string, limit: number): Promise<string[]> {
-    const result = await this.request<{ paths?: string[] }>(
-      "GET",
-      this.scoped(`/v2/fs/find?pattern=${encodeURIComponent(pattern)}&limit=${limit}`),
+    const result = await this.workspaceFileRequest<{ paths?: string[] }>(
+      "/fs/find", { pattern, limit: String(limit) }, this.directory,
     )
-    return result.paths ?? []
+    return result?.paths ?? []
   }
 
   /**
-   * `ReadFile` (`GET /v2/fs/read`): one file on the backend, `path` relative
+   * One file on the backend, `path` relative
    * to `directory` (default: the client's scope) or absolute inside it; the
    * server refuses a path that escapes the scope. `maxBytes` caps what is
-   * read. `data` is the content as standard base64 (protojson `bytes`).
+   * read. `data` is standard base64. An absent workspace-files bundle
+   * returns undefined.
    */
-  async readFile(path: string, options: { directory?: string; maxBytes?: number; signal?: AbortSignal } = {}): Promise<ReadFileResult> {
+  async readFile(path: string, options: { directory?: string; maxBytes?: number; signal?: AbortSignal } = {}): Promise<ReadFileResult | undefined> {
     const scope = options.directory ?? this.directory
-    const query = `path=${encodeURIComponent(path)}${options.maxBytes ? `&maxBytes=${options.maxBytes}` : ""}`
-    const result = await this.request<{ content?: string; text?: boolean; mime?: string }>("GET", this.scoped(`/v2/fs/read?${query}`, scope), undefined, options.signal)
+    const query = { path, ...(options.maxBytes ? { maxBytes: String(options.maxBytes) } : {}) }
+    const result = await this.workspaceFileRequest<{ content?: string; text?: boolean; mime?: string }>("/fs/read", query, scope, options.signal)
+    if (!result) return undefined
     const data = result.content ?? ""
     return { data, size: Buffer.from(data, "base64").byteLength, text: result.text === true, ...(result.mime ? { mime: result.mime } : {}) }
   }
@@ -916,6 +938,9 @@ export class HyaClient {
   /** `ListBundles`: the scope's bundles (user, the directory's project bundles, first-party). */
   async listBundles(): Promise<BundleSummary[]> {
     const result = await this.request<{ bundles?: BundleSummary[] }>("GET", this.scoped("/v2/bundles"))
+    if (result.bundles?.some((bundle) => bundle.id === "hya/workspace-files" && bundle.enabled)) {
+      this.workspaceFilesMissing = false
+    }
     return result.bundles ?? []
   }
 

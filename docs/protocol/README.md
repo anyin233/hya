@@ -1,6 +1,6 @@
 # `hya.v2` Protocol Overview
 
-Every client—Hya's own TUI (`packages/hya-tui`), the browser WebUI, code editors via [`hya acp`](../guide/editor-integration.md), headless CLI commands routed through the daemon, and your own custom scripts or apps—talks to the Hya server over one clean-sheet unified contract: **`hya.v2`** (17 services, 104 RPCs, defined in `proto/hya/v2/`).
+Every client—Hya's own TUI (`packages/hya-tui`), the browser WebUI, code editors via [`hya acp`](../guide/editor-integration.md), headless CLI commands routed through the daemon, and your own custom scripts or apps—talks to the Hya server over one clean-sheet unified contract: **`hya.v2`** (15 services, 95 RPCs, defined in `proto/hya/v2/`).
 
 Both protocols are served **on the exact same port** (`hya serve --bind 127.0.0.1:8080`):
 - **HTTP/JSON + Server-Sent Events (SSE) + WebSocket** under `/v2/*` (see **[OpenAPI Schema](openapi.json)** and **[Generated API Reference](api-reference.md)**).
@@ -106,6 +106,46 @@ In `hya.v2` ([ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)), c
 - **`hya/workflow`:** `GET /v2/bundles/hya%2Fworkflow/api/workflows?directory=<abs>`, `GET /v2/sessions/{id}/bundles/hya%2Fworkflow/state`, `POST /v2/sessions/{id}/bundles/hya%2Fworkflow/command`
 - **`hya/agent-channels`:** `GET /v2/sessions/{id}/bundles/hya%2Fagent-channels/{channels,channels/{channel}/messages,inbox,team-status}`
 - **`hya/coding-extras`:** `GET /v2/bundles/hya%2Fcoding-extras/api/lsp/symbols?directory=<abs>&query=<name>&limit=<n>` searches workspace symbols through the language servers configured in the bundle's `config.yml` (`lsp:`). `directory` is required and absolute; `limit` defaults to 10 and is capped at 100. The reply is `{"symbols": [{"path", "name", "kind", "lineNumber"}]}`: `path` relative to `directory`, `kind` one of `SYMBOL_KIND_FUNCTION`, `SYMBOL_KIND_TYPE`, `SYMBOL_KIND_MODULE`, `SYMBOL_KIND_OTHER`, `lineNumber` 1-based. No configured server answers an empty list; a server failure answers `502` with `error.code` `lsp_failed`; with the bundle disabled the route is `404` `bundle_api_not_found`. This replaces the removed `Files.SearchSymbols` (`GET /v2/fs/symbols`).
+
+#### Workspace files and worktrees
+
+The native `hya/workspace-files` bundle provides filesystem browsing for
+frontends and Git worktree management. The full profile enables it by default.
+`hya --bare` and a full profile with
+`bundles.builtin.disable: [hya/workspace-files]` omit its endpoints. The TUI
+uses these routes for `@file` suggestions, Project root completion, and
+remote image reads. These calls replace the former `Files` and `Worktrees`
+RPCs and their direct `/v2/fs/*` and `/v2/worktrees*` HTTP routes.
+
+For HTTP, prefix the paths below with
+`/v2/bundles/hya%2Fworkspace-files/api`. For gRPC, call
+`BundleApi.InvokeGlobalBundleApi` with `bundle: "hya/workspace-files"`,
+the indicated method and path, and the same query or body. Every call
+requires an absolute `directory` string on the backend. GET and DELETE
+take it in the query. POST takes it in the JSON body.
+
+```sh
+curl --get http://127.0.0.1:8080/v2/bundles/hya%2Fworkspace-files/api/fs/find \
+  --data-urlencode "directory=$PWD" --data-urlencode 'pattern=**/*.rs' \
+  --data-urlencode 'limit=20'
+```
+
+| Method and path | Additional input | JSON success body |
+| --- | --- | --- |
+| `GET /fs/read` | `path` string, `maxBytes` uint64 (0 reads the whole file) | `{content, text, mime}`. Standard base64, a UTF-8 boolean, and a MIME string. |
+| `GET /fs/list` | Optional `path` string (empty lists the root) | `{entries: [{name, kind, size, timeModified}]}`, sorted by name. `kind` is `DIR_ENTRY_KIND_FILE`, `DIR_ENTRY_KIND_DIRECTORY`, or `DIR_ENTRY_KIND_SYMLINK`. `size` is a decimal byte count string and `timeModified` is RFC 3339. |
+| `GET /fs/find` | `pattern` glob string, optional `limit` uint32 (500 default, 2,000 cap) | `{paths: string[]}`. Sorted relative paths. |
+| `GET /fs/search` | `query` literal string, optional `glob` string and `limit` uint32 (200 default, 1,000 cap) | `{matches: [{path, lineNumber, text}]}`. Relative path, 1-based line number, and up to 400 characters of the matching line. |
+| `GET /worktrees` | — | `{worktrees: Worktree[]}`. Lists linked worktrees other than the source directory. |
+| `POST /worktrees` | Optional `name` string | `Worktree`. Creates a worktree from the source HEAD with a `compat/<slug>` branch. |
+| `POST /worktrees/{worktree}/reset` | — | `Worktree` with `id` and `path`. Resets to the source HEAD and removes untracked and ignored files. |
+| `DELETE /worktrees/{worktree}` | — | `{}`. Removes a linked worktree and its branch. Deleting a missing worktree succeeds. |
+
+`Worktree` has string `id` and `path` fields with the absolute worktree
+path and an optional string `branch`. Percent-encode the whole absolute
+path as one `{worktree}` segment. Read and list accept relative paths
+and absolute paths within `directory`. The bundle reports argument
+errors with status 400 and an `{error: {code, message}}` body.
 
 ### `ExtensionEvent` wire shape (`proto/hya/v2/events.proto`)
 

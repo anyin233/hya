@@ -23,7 +23,7 @@ Nothing maintains a separate "shadow state" table that can drift out of sync. Wh
 
 At the bottom of the runtime sits `hya-core::kernel`—a minimal agent loop with just three context operations (**Model append**, **Tool append**, and **Rewrite**) and seven built-in kernel tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`). Passing the global `--bare` flag (`hya --bare`, `hya serve --bare`, `hya exec --bare`) runs the unified `SessionEngine` on top of that kernel with `BuiltinBundleProfile::Bare` (adding `skill`, built-in `code-mode` without `agent()`, `AGENTS.md`/MCP/plugin adapters, and the minimal `hya-bare` agent—while loading zero built-in bundles). Add `--pure` (`hya exec --bare --pure`) to also skip external `AGENTS.md`, disk skills, MCP, and plugins for pure kernel benchmarks.
 
-Full mode (`hya-engine` + 14 built-in bundles under `bundles/builtin/` over Lockstep Native ABI v2, [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)) does **not** fork or replace that loop. Instead, it composes modular bundles onto the kernel via `Arc<dyn HostRuntime>`—layering hashline editing (`hya/hashline`), LSP/formatters (`hya/coding-extras`), web tools (`hya/network`), plan mode (`hya/plan`), goal/loop drivers (`hya/goal`, `hya/loop`), episodic subagents (`hya/multi-agent`), vertical channels (`hya/agent-channels`), Workflows (`hya/workflow`), and gentler context-reduction steps (`hya/compaction`).
+Full mode (`hya-engine` + 15 built-in bundles under `bundles/builtin/` over Lockstep Native ABI v2, [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)) does **not** fork or replace that loop. Instead, it composes modular bundles onto the kernel via `Arc<dyn HostRuntime>`—layering hashline editing (`hya/hashline`), LSP/formatters (`hya/coding-extras`), web tools (`hya/network`), plan mode (`hya/plan`), goal/loop drivers (`hya/goal`, `hya/loop`), episodic subagents (`hya/multi-agent`), vertical channels (`hya/agent-channels`), Workflows (`hya/workflow`), and gentler context-reduction steps (`hya/compaction`).
 
 ### 3. One background daemon per database, zero server `cwd`
 
@@ -32,7 +32,7 @@ Full mode (`hya-engine` + 14 built-in bundles under `bundles/builtin/` over Lock
 
 ### 4. One contract (`hya.v2`) on one port, plus blind Relay encryption
 
-`hya-server` exposes one clean-sheet Protobuf contract (`proto/hya/v2`: 17 services, 104 RPCs) over **both** `/v2` HTTP/JSON+SSE+WebSocket and gRPC (`V2Grpc`) on the **same TCP port**. Unary gRPC methods dispatch straight through the same internal router as HTTP, so HTTP and gRPC can never drift apart. Domain endpoints for native and JS bundles mount uniformly under `BundleApi` (`/v2/bundles/{bundle}/api/{path}` and `/v2/sessions/{session}/bundles/{bundle}/{path}`), and domain events stream via generic `ExtensionEvent`.
+`hya-server` exposes one clean-sheet Protobuf contract (`proto/hya/v2`: 15 services, 95 RPCs) over **both** `/v2` HTTP/JSON+SSE+WebSocket and gRPC (`V2Grpc`) on the **same TCP port**. Unary gRPC methods dispatch straight through the same internal router as HTTP, so HTTP and gRPC can never drift apart. Domain endpoints for native and JS bundles mount uniformly under `BundleApi` (`/v2/bundles/{bundle}/api/{path}` and `/v2/sessions/{session}/bundles/{bundle}/{path}`), and domain events stream via generic `ExtensionEvent`.
 
 For remote access, `hya proxy` forwards encrypted byte streams between `hya serve --relay` and `hya bridge` / `hya --connect` using `Noise_NKpsk0`. The relay holds zero keys and sees only room IDs and ciphertext.
 
@@ -69,7 +69,7 @@ flowchart TB
         Server["hya-server<br/>Single-Port /v2 HTTP+SSE+WS & V2Grpc"]
         App["hya-app<br/>Config v2 · Auth · CatalogScope · HostRuntime"]
         Engine["hya-engine on hya-core::kernel<br/>Single-Agent Turns · Extension Host"]
-        Bundles["14 Built-in Bundles (bundles/builtin/)<br/>ABI v2 Native cdylibs · Static · TUI v2"]
+        Bundles["15 Built-in Bundles (bundles/builtin/)<br/>ABI v2 Native cdylibs · Static · TUI v2"]
         Planes["hya-provider · hya-tool · hya-mcp · hya-plugin"]
         Store[("hya-store (SQLite WAL v2)<br/>event_log · bundle_state · bundle_claim")]
 

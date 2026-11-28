@@ -42,7 +42,7 @@ permission:
 | `provider_retry` | `ProviderRetry` | Defaults | Default retry/replay budget for every provider route (overridden per provider or via `HYA_PROVIDER_RETRY_*`). |
 | `agents` | `map<id, AgentPref>` | `{}` | Per-agent pinned `model` and `reasoning` effort for built-in agents. |
 | `categories` | `map<name, string[]>` | `{}` | Named ordered failover lists of `provider/model` candidates. |
-| `bundles` | `BundlesConfig` | `{builtin: {profile: full, enable: [], disable: []}}` | Controls which of the 14 built-in bundles under `bundles/builtin/` load at startup. |
+| `bundles` | `BundlesConfig` | `{builtin: {profile: full, enable: [], disable: []}}` | Controls which of the 15 built-in bundles under `bundles/builtin/` load at startup. |
 | `permission` | `PermissionConfig` | `{model: default, rules: []}` | Default permission posture and ordered regex rules. |
 | `mcp` | `map<name, McpServer>` | `{}` | Local stdio and remote HTTP MCP tool servers. |
 | `plugins` | `map<id, PluginSpec>` | `{}` | Process-wide JSON-RPC stdio plugins. |

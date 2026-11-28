@@ -33,6 +33,7 @@ pub const FIRST_PARTY_BUNDLES: &[&str] = &[
     "hya/plan",
     "hya/basic-tui-components",
     "hya/compaction",
+    "hya/workspace-files",
 ];
 
 /// In-tree source groups searched for a first-party bundle directory.

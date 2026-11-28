@@ -671,17 +671,9 @@ async fn scoped_rpcs_require_absolute_directory_field_and_honor_it() {
     let scope = dir.to_string_lossy().into_owned();
 
     let calls = [
-        (Method::GET, "/v2/fs/read?path=notes.txt", Value::Null),
-        (Method::GET, "/v2/fs/list", Value::Null),
-        (Method::GET, "/v2/fs/find?pattern=*", Value::Null),
-        (Method::GET, "/v2/fs/search?query=x", Value::Null),
         (Method::GET, "/v2/vcs", Value::Null),
         (Method::GET, "/v2/vcs/diff", Value::Null),
         (Method::POST, "/v2/vcs/apply", json!({"patch": ""})),
-        (Method::GET, "/v2/worktrees", Value::Null),
-        (Method::POST, "/v2/worktrees", json!({})),
-        (Method::DELETE, "/v2/worktrees/some-id", Value::Null),
-        (Method::POST, "/v2/worktrees/some-id/reset", Value::Null),
         (Method::POST, "/v2/pty", json!({"shell": "/bin/sh"})),
         (Method::GET, "/v2/projects/current", Value::Null),
     ];
@@ -744,10 +736,7 @@ async fn scoped_rpcs_require_absolute_directory_field_and_honor_it() {
 
 #[tokio::test]
 async fn grpc_scope_field_and_removed_x_hya_directory_header_guard() {
-    use hya_api::v2::{
-        files_server::Files as _, process_server::Process as _, pty_server::Pty as _,
-        worktrees_server::Worktrees as _,
-    };
+    use hya_api::v2::{process_server::Process as _, pty_server::Pty as _};
 
     let state = nonexistent_cwd_state().await;
     let app = router(state.clone());
@@ -761,7 +750,10 @@ async fn grpc_scope_field_and_removed_x_hya_directory_header_guard() {
         (Method::GET, "/v2/agents".into(), Value::Null),
         (
             Method::GET,
-            format!("/v2/fs/list?directory={}", enc(&scope)),
+            format!(
+                "/v2/bundles/hya%2Fworkspace-files/api/fs/list?directory={}",
+                enc(&scope)
+            ),
             Value::Null,
         ),
         (
@@ -790,52 +782,18 @@ async fn grpc_scope_field_and_removed_x_hya_directory_header_guard() {
     assert_eq!(cors.status(), StatusCode::BAD_REQUEST);
     assert!(cors.headers().contains_key("access-control-allow-origin"));
 
-    // gRPC requires directory field and honors it across files/location/worktrees/pty.
+    // The transport honors the explicit location and PTY scopes.
     let grpc = V2Grpc::new(state.clone());
-    let err = grpc
-        .read_file(tonic::Request::new(pb::ReadFileRequest {
-            path: "notes.txt".into(),
-            ..Default::default()
-        }))
-        .await
-        .unwrap_err();
-    assert!(
-        err.code() == tonic::Code::InvalidArgument && err.message().contains("directory scope")
-    );
-    let read_req = || pb::ReadFileRequest {
+    let location_req = || pb::GetLocationRequest {
         directory: scope.clone(),
-        path: "notes.txt".into(),
-        ..Default::default()
     };
     assert_eq!(
-        grpc.read_file(tonic::Request::new(read_req()))
+        grpc.get_location(tonic::Request::new(location_req()))
             .await
             .unwrap()
             .into_inner()
-            .content,
-        b"hello".to_vec()
-    );
-    assert_eq!(
-        grpc.get_location(tonic::Request::new(pb::GetLocationRequest {
-            directory: scope.clone()
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .directory,
+            .directory,
         scope
-    );
-    assert!(
-        !grpc
-            .delete_worktree(tonic::Request::new(pb::DeleteWorktreeRequest {
-                worktree: "missing".into(),
-                directory: scope.clone(),
-                ..Default::default()
-            }))
-            .await
-            .unwrap_err()
-            .message()
-            .contains("directory scope")
     );
     let pty = grpc
         .create_pty(tonic::Request::new(pb::CreatePtyRequest {
@@ -864,7 +822,11 @@ async fn grpc_scope_field_and_removed_x_hya_directory_header_guard() {
             (tonic::Code::InvalidArgument, HEADER_REFUSAL)
         )
     };
-    check_refused(grpc.read_file(with_meta(read_req())).await.unwrap_err());
+    check_refused(
+        grpc.get_location(with_meta(location_req()))
+            .await
+            .unwrap_err(),
+    );
     let (addr, _task) = serve_server(&build(state), std::future::pending()).await;
     let ch = tonic::transport::Channel::from_shared(format!("http://{addr}"))
         .unwrap()
@@ -872,8 +834,8 @@ async fn grpc_scope_field_and_removed_x_hya_directory_header_guard() {
         .await
         .unwrap();
     check_refused(
-        pb::files_client::FilesClient::new(ch.clone())
-            .read_file(with_meta(read_req()))
+        pb::process_client::ProcessClient::new(ch.clone())
+            .get_location(with_meta(location_req()))
             .await
             .unwrap_err(),
     );

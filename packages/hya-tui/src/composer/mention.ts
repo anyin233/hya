@@ -1,7 +1,7 @@
 /**
  * `@file` references. An `@` at the start of the input or after white space,
  * followed by at least one character up to the cursor, is a mention: its text
- * is looked up with `FindFiles` and a chosen path replaces the token as
+ * is looked up through the workspace-files bundle and a chosen path replaces the token as
  * `@<relative path> ` (`@"<path>" ` when it has white space or quotes).
  * Nothing is attached; the prompt carries the text.
  */
@@ -41,7 +41,7 @@ export function insertMention(text: string, token: MentionToken, path: string): 
   return { text: text.slice(0, token.start) + inserted + rest, cursor: token.start + inserted.length }
 }
 
-/** The `FindFiles` glob for a query: any path containing it (`**` + `/*query*`). Matching is case-sensitive. */
+/** The workspace-files glob for a query: any path containing it (`**` + `/*query*`). Matching is case-sensitive. */
 export function findPattern(query: string): string {
   return `**/*${query}*`
 }

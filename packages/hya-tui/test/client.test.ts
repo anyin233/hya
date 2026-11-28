@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { HyaClient, SseDecoder, bridgeTokenHeader, parseApiCommand, serverTokenEnv, type FetchLike } from "../src/client"
 import { mergeTranscript, TranscriptOverlay } from "../src/state/overlay"
 
-test("creates a session and admits a prompt through scoped v1 requests", async () => {
+test("creates a session and admits a prompt through BundleApi", async () => {
   const calls: Array<{ url: string; method: string; header: string | null; body: unknown }> = []
   const fetcher: FetchLike = async (input, init) => {
     const url = String(input)
@@ -187,7 +187,7 @@ test("reports empty HTTP errors", async () => {
   await expect(invalid.bootstrap()).rejects.toThrow("GET /v2/bootstrap?directory=%2Fwork: HTTP 502 Bad Gateway")
 })
 
-test("admits a shell turn and finds files through scoped v1 requests", async () => {
+test("admits a shell turn and finds files through BundleApi", async () => {
   const calls: Array<{ url: string; method: string; header: string | null; body: unknown }> = []
   const fetcher: FetchLike = async (input, init) => {
     const url = String(input)
@@ -212,7 +212,7 @@ test("admits a shell turn and finds files through scoped v1 requests", async () 
       header: null,
       body: { shell: { command: "echo hi", agent: "hya-main", model: { providerId: "fake", modelId: "model" } } },
     },
-    { url: "http://h/v2/fs/find?pattern=**%2F*ma%20in*&limit=20&directory=%2Fwork", method: "GET", header: null, body: undefined },
+    { url: "http://h/v2/bundles/hya%2Fworkspace-files/api/fs/find?pattern=**%2F*ma%20in*&limit=20&directory=%2Fwork", method: "GET", header: null, body: undefined },
   ])
 })
 
@@ -353,7 +353,7 @@ test("readFile sends its own scope and cap and decodes the size; an empty scope 
   const fetcher: FetchLike = async (input, init) => {
     const url = String(input)
     calls.push({ url, header: new Headers(init?.headers).get("x-hya-directory") })
-    if (url.includes("/v2/fs/read")) return Response.json({ content: Buffer.from([1, 2, 3]).toString("base64"), mime: "image/png" })
+    if (url.includes("/v2/bundles/hya%2Fworkspace-files/api/fs/read")) return Response.json({ content: Buffer.from([1, 2, 3]).toString("base64"), mime: "image/png" })
     return Response.json({ paths: [] })
   }
   const client = new HyaClient("http://127.0.0.1:8080", "", fetcher)
@@ -361,8 +361,8 @@ test("readFile sends its own scope and cap and decodes the size; an empty scope 
   const read = await client.readFile("shots/a b.png", { directory: "/srv/app", maxBytes: 11 })
   expect(read).toEqual({ data: "AQID", size: 3, text: false, mime: "image/png" })
   expect(calls).toEqual([
-    { url: "http://127.0.0.1:8080/v2/fs/find?pattern=**%2F*a*&limit=5", header: null },
-    { url: "http://127.0.0.1:8080/v2/fs/read?path=shots%2Fa%20b.png&maxBytes=11&directory=%2Fsrv%2Fapp", header: null },
+    { url: "http://127.0.0.1:8080/v2/bundles/hya%2Fworkspace-files/api/fs/find?pattern=**%2F*a*&limit=5", header: null },
+    { url: "http://127.0.0.1:8080/v2/bundles/hya%2Fworkspace-files/api/fs/read?path=shots%2Fa%20b.png&maxBytes=11&directory=%2Fsrv%2Fapp", header: null },
   ])
 })
 
@@ -435,8 +435,8 @@ test("every scoped call names the scope in its directory field and no request or
     ["GET", "/v2/agents?page.limit=500&directory=%2Fwork%20dir", undefined],
     ["GET", "/v2/commands?page.limit=500&directory=%2Fwork%20dir", undefined],
     ["GET", "/v2/permission-modes?directory=%2Fwork%20dir", undefined],
-    ["GET", "/v2/fs/find?pattern=*&limit=1&directory=%2Fwork%20dir", undefined],
-    ["GET", "/v2/fs/read?path=a.txt&directory=%2Fwork%20dir", undefined],
+    ["GET", "/v2/bundles/hya%2Fworkspace-files/api/fs/find?pattern=*&limit=1&directory=%2Fwork%20dir", undefined],
+    ["GET", "/v2/bundles/hya%2Fworkspace-files/api/fs/read?path=a.txt&directory=%2Fwork%20dir", undefined],
     ["GET", "/v2/vcs?directory=%2Fwork%20dir", undefined],
     ["GET", "/v2/vcs/diff?directory=%2Fwork%20dir", undefined],
     ["GET", "/v2/agent-models?session=hysec_1&directory=%2Fwork%20dir", undefined],

@@ -145,30 +145,6 @@
   },
   {
     "method": "GET",
-    "path": "/v2/fs/find",
-    "operationId": "Files.FindFiles",
-    "streaming": false
-  },
-  {
-    "method": "GET",
-    "path": "/v2/fs/list",
-    "operationId": "Files.ListDirectory",
-    "streaming": false
-  },
-  {
-    "method": "GET",
-    "path": "/v2/fs/read",
-    "operationId": "Files.ReadFile",
-    "streaming": false
-  },
-  {
-    "method": "GET",
-    "path": "/v2/fs/search",
-    "operationId": "Files.SearchText",
-    "streaming": false
-  },
-  {
-    "method": "GET",
     "path": "/v2/health",
     "operationId": "Process.GetHealth",
     "streaming": false
@@ -639,30 +615,6 @@
     "method": "GET",
     "path": "/v2/vcs/diff",
     "operationId": "Project.GetVcsDiff",
-    "streaming": false
-  },
-  {
-    "method": "GET",
-    "path": "/v2/worktrees",
-    "operationId": "Worktrees.ListWorktrees",
-    "streaming": false
-  },
-  {
-    "method": "POST",
-    "path": "/v2/worktrees",
-    "operationId": "Worktrees.CreateWorktree",
-    "streaming": false
-  },
-  {
-    "method": "DELETE",
-    "path": "/v2/worktrees/{worktree}",
-    "operationId": "Worktrees.DeleteWorktree",
-    "streaming": false
-  },
-  {
-    "method": "POST",
-    "path": "/v2/worktrees/{worktree}/reset",
-    "operationId": "Worktrees.ResetWorktree",
     "streaming": false
   }
 ]
