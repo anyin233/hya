@@ -12,7 +12,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use hya_bundle::{ApiMethod, ApiScope};
 use hya_proto::{
-    ActorClaim, AgentName, Envelope, EventSeq, MessageId, ModelRef, PartId, SessionId, ToolCallId,
+    ActorClaim, AgentName, Envelope, EventSeq, FinishCause, FinishReason, MessageId, ModelRef,
+    PartId, SessionId, ToolCallId,
 };
 use hya_tool::{Action, Decision, Resource};
 use serde::{Deserialize, Serialize};
@@ -134,11 +135,23 @@ pub enum HookPoint {
     PermissionApprove,
     /// Observe live envelopes published on the event bus (`event`).
     EventObserve,
+    /// Hold a guard for each model stream a turn opens (`model.stream.permit`).
+    ModelStreamPermit,
+    /// Observe a user stop before the host cancels the turn (`turn.stop`).
+    TurnStop,
+    /// Approve or refuse archiving or deleting a session tree (`session.close.before`).
+    SessionClose,
+    /// Report pending work around a headless run (`run.headless`).
+    HeadlessRun,
+    /// Add text to a session's restore prompt (`session.restore`).
+    SessionRestore,
+    /// Observe that every restore prompt was admitted (`runtime.restored`).
+    RuntimeRestored,
 }
 
 impl HookPoint {
     /// Every core hook point, in dispatch-table order.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 23] = [
         Self::ToolExecuteBefore,
         Self::ToolExecuteAfter,
         Self::ToolVisibility,
@@ -156,6 +169,12 @@ impl HookPoint {
         Self::PermissionAsk,
         Self::PermissionApprove,
         Self::EventObserve,
+        Self::ModelStreamPermit,
+        Self::TurnStop,
+        Self::SessionClose,
+        Self::HeadlessRun,
+        Self::SessionRestore,
+        Self::RuntimeRestored,
     ];
 
     /// Hook name used by bundle manifests and, where supported, the plugin wire.
@@ -179,6 +198,12 @@ impl HookPoint {
             Self::PermissionAsk => "permission.ask",
             Self::PermissionApprove => "permission.approve",
             Self::EventObserve => "event",
+            Self::ModelStreamPermit => "model.stream.permit",
+            Self::TurnStop => "turn.stop",
+            Self::SessionClose => "session.close.before",
+            Self::HeadlessRun => "run.headless",
+            Self::SessionRestore => "session.restore",
+            Self::RuntimeRestored => "runtime.restored",
         }
     }
 
@@ -285,6 +310,9 @@ pub struct ToolVisibilityInput {
     /// Whether an interactive user-question channel is currently connected.
     #[serde(default)]
     pub interactive: bool,
+    /// Number of parent links between the session and its tree root.
+    #[serde(default)]
+    pub depth: u32,
 }
 
 /// Outcome returned by `tool.visibility` native hooks.
@@ -468,6 +496,82 @@ pub struct NativeTurnAdmitInput {
     pub root: SessionId,
     /// The session's bound agent, when it has a recorded binding.
     pub agent: Option<AgentName>,
+    /// The fence of a bundle-driven turn; `None` for a client turn.
+    pub actor_claim: Option<ActorClaim>,
+}
+
+/// Input passed to `model.stream.permit` native hooks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeStreamPermitInput {
+    /// Session opening the stream.
+    pub session: SessionId,
+    /// Root of the session's tree.
+    pub root: SessionId,
+    /// Number of parent links between `session` and `root`.
+    pub depth: u32,
+}
+
+/// Guard a `model.stream.permit` hook returns. The host drops it when the
+/// round's stream is collected or before it waits to retry the round.
+pub struct NativeStreamPermit(pub Box<dyn Send + Sync>);
+
+/// Input passed to `turn.stop` native hooks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeTurnStopInput {
+    /// Session the user stopped.
+    pub session: SessionId,
+    /// Cause the host records on the cancelled turns.
+    pub cause: FinishCause,
+}
+
+/// What `session.close.before` is about to do to a session tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionCloseKind {
+    /// Archive the session and its descendants.
+    Archive,
+    /// Delete the session log.
+    Delete,
+}
+
+/// Input passed to `session.close.before` native hooks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeSessionCloseInput {
+    /// Session being closed (the root of the closed tree).
+    pub session: SessionId,
+    /// Archive or delete.
+    pub kind: SessionCloseKind,
+}
+
+/// Where a headless run is when `run.headless` is dispatched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "phase", rename_all = "snake_case")]
+pub enum HeadlessRunPhase {
+    /// Before the first turn.
+    Start,
+    /// After a turn ended with `finish`.
+    TurnEnded {
+        /// The ended turn's finish reason.
+        finish: FinishReason,
+    },
+    /// Before the run exits.
+    End,
+}
+
+/// Input passed to `run.headless` native hooks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeHeadlessRunInput {
+    /// Session the headless run drives.
+    pub session: SessionId,
+    /// Point of the run.
+    pub phase: HeadlessRunPhase,
+}
+
+/// Input passed to `session.restore` native hooks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeSessionRestoreInput {
+    /// Session whose interrupted turn is being restored.
+    pub session: SessionId,
 }
 
 /// One hook's decision about a turn.
@@ -646,6 +750,47 @@ pub trait NativeHook: Send + Sync {
     fn on_event(&self, envelope: &Envelope) {
         let _ = envelope;
     }
+
+    /// Wait for capacity to open a model stream (`model.stream.permit`).
+    /// `Ok(None)` grants it without a guard.
+    async fn model_stream_permit(
+        &self,
+        _input: NativeStreamPermitInput,
+    ) -> Result<Option<NativeStreamPermit>, HostError> {
+        Ok(None)
+    }
+
+    /// Notified before the host cancels a user-stopped turn (`turn.stop`).
+    async fn turn_stop(&self, _input: NativeTurnStopInput) -> Result<(), HostError> {
+        Ok(())
+    }
+
+    /// Consulted before a session tree is archived or deleted
+    /// (`session.close.before`); an error refuses the close.
+    async fn session_close(&self, _input: NativeSessionCloseInput) -> Result<(), HostError> {
+        Ok(())
+    }
+
+    /// Report a line of pending work for a headless run (`run.headless`).
+    async fn headless_run(
+        &self,
+        _input: NativeHeadlessRunInput,
+    ) -> Result<Option<String>, HostError> {
+        Ok(None)
+    }
+
+    /// Text appended to a session's restore prompt (`session.restore`).
+    async fn session_restore(
+        &self,
+        _input: NativeSessionRestoreInput,
+    ) -> Result<Option<String>, HostError> {
+        Ok(None)
+    }
+
+    /// Notified once restore prompts have been admitted (`runtime.restored`).
+    async fn runtime_restored(&self) -> Result<(), HostError> {
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -762,6 +907,13 @@ pub trait ProjectionReducer: Send + Sync {
     fn tool_output_overrides(&self, event: &ExtensionEventContext) -> Vec<ToolOutputOverride> {
         let _ = event;
         Vec::new()
+    }
+
+    /// Other bundles whose events the host also passes to [`Self::apply`]
+    /// (with `event.bundle` naming the owner), folding into this reducer's
+    /// state only.
+    fn observed_bundles(&self) -> &[&str] {
+        &[]
     }
 }
 

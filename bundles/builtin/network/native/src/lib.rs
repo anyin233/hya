@@ -528,6 +528,7 @@ mod tests {
                 agent: None,
                 candidate_tools: vec!["webfetch".into(), "websearch".into()],
                 interactive: true,
+                depth: 0,
             })
             .await
             .unwrap();
@@ -558,6 +559,7 @@ mod tests {
                 agent: None,
                 candidate_tools: vec!["webfetch".into(), "websearch".into()],
                 interactive: true,
+                depth: 0,
             })
             .await
             .unwrap();

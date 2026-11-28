@@ -437,6 +437,81 @@ impl HookChain {
         }
     }
 
+    /// `model.stream.permit`: every entry's guard, held together.
+    pub async fn model_stream_permit(
+        &self,
+        input: NativeStreamPermitInput,
+    ) -> Vec<NativeStreamPermit> {
+        let mut permits = Vec::new();
+        for hook in self.matching(HookPoint::ModelStreamPermit) {
+            match hook.model_stream_permit(input.clone()).await {
+                Ok(Some(permit)) => permits.push(permit),
+                Ok(None) => {}
+                Err(error) => warn(hook.as_ref(), "model.stream.permit", &error),
+            }
+        }
+        permits
+    }
+
+    /// `turn.stop` observers, awaited in order.
+    pub async fn turn_stop(&self, input: NativeTurnStopInput) {
+        for hook in self.matching(HookPoint::TurnStop) {
+            if let Err(error) = hook.turn_stop(input.clone()).await {
+                warn(hook.as_ref(), "turn.stop", &error);
+            }
+        }
+    }
+
+    /// `session.close.before`: latest entry first; the first error refuses.
+    ///
+    /// # Errors
+    /// The refusing hook's error.
+    pub async fn session_close(&self, input: NativeSessionCloseInput) -> Result<(), HostError> {
+        let hooks: Vec<_> = self.matching(HookPoint::SessionClose).collect();
+        for hook in hooks.into_iter().rev() {
+            hook.session_close(input.clone()).await?;
+        }
+        Ok(())
+    }
+
+    /// `run.headless`: every entry's pending-work line, in order.
+    pub async fn headless_run(&self, input: NativeHeadlessRunInput) -> Vec<String> {
+        let mut lines = Vec::new();
+        for hook in self.matching(HookPoint::HeadlessRun) {
+            match hook.headless_run(input.clone()).await {
+                Ok(Some(line)) => lines.push(line),
+                Ok(None) => {}
+                Err(error) => warn(hook.as_ref(), "run.headless", &error),
+            }
+        }
+        lines
+    }
+
+    /// `session.restore`: every entry's restore text, in order.
+    pub async fn session_restore(&self, session: SessionId) -> Vec<String> {
+        let mut texts = Vec::new();
+        for hook in self.matching(HookPoint::SessionRestore) {
+            match hook
+                .session_restore(NativeSessionRestoreInput { session })
+                .await
+            {
+                Ok(Some(text)) => texts.push(text),
+                Ok(None) => {}
+                Err(error) => warn(hook.as_ref(), "session.restore", &error),
+            }
+        }
+        texts
+    }
+
+    /// `runtime.restored` observers.
+    pub async fn runtime_restored(&self) {
+        for hook in self.matching(HookPoint::RuntimeRestored) {
+            if let Err(error) = hook.runtime_restored().await {
+                warn(hook.as_ref(), "runtime.restored", &error);
+            }
+        }
+    }
+
     /// Whether any entry implements the bundle-declared point `point`.
     #[must_use]
     pub fn declares(&self, point: &str) -> bool {

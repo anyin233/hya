@@ -1133,6 +1133,33 @@ pub async fn append_event_in_transaction(
     Ok(envelope)
 }
 
+/// Check inside a writer transaction that each `(session, seq)` is still the
+/// last sequence of that session's log (`0` for an empty log).
+///
+/// # Errors
+/// [`StoreError::StaleSessionSeq`] for the first session whose log moved.
+pub async fn expect_last_seqs_in_transaction(
+    tx: &mut StoreTransaction<'_>,
+    expect: &[(SessionId, EventSeq)],
+) -> Result<(), StoreError> {
+    for (session, expected) in expect {
+        let actual: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM event_log WHERE session_id = ?")
+                .bind(session.storage_key())
+                .fetch_one(&mut **tx.inner_mut())
+                .await?;
+        let actual = u64::try_from(actual).unwrap_or_default();
+        if actual != expected.0 {
+            return Err(StoreError::StaleSessionSeq {
+                session: *session,
+                expected: expected.0,
+                actual,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Fold one Session log inside an existing writer transaction.
 ///
 /// Starts from the cached fold (anchor-checked through the transaction) and

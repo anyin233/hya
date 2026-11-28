@@ -423,7 +423,7 @@ pub(super) async fn episode_task(
                         let started = tokio::select! {
                             biased;
                             _ = cancel.cancelled() => Err(CoreError::Cancelled),
-                            result = factory.start(SidecarStart::resident()) => result,
+                            result = factory.start(SidecarStart::persistent()) => result,
                         };
                         let activation = match started {
                             Ok(mut handle) => {

@@ -1438,6 +1438,7 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
             agent: None,
             candidate_tools: vec!["webfetch".into(), "websearch".into(), "read".into()],
             interactive: true,
+            depth: 0,
         })
         .await;
     assert_eq!(

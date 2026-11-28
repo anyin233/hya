@@ -262,6 +262,7 @@ impl SessionEngine {
                     session,
                     root,
                     agent,
+                    actor_claim: None,
                 })
                 .await
                 .map_err(map_admission_error)?;
@@ -287,6 +288,7 @@ impl SessionEngine {
             session,
             root,
             agent: Some(agent),
+            actor_claim: claim.copied(),
         };
         let steering = tokio::select! {
             biased;

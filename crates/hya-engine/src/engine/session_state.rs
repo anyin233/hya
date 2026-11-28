@@ -336,11 +336,31 @@ impl SessionEngine {
         Ok(())
     }
 
+    /// Run the `session.close.before` hooks for closing `session`'s tree.
+    ///
+    /// # Errors
+    /// [`CoreError::Invalid`] with the refusing hook's reason.
+    pub async fn before_session_close(
+        &self,
+        session: SessionId,
+        kind: crate::hooks::SessionCloseKind,
+    ) -> Result<(), CoreError> {
+        let Some(hooks) = self.session_hook_dispatcher(session) else {
+            return Ok(());
+        };
+        hooks
+            .session_close(crate::hooks::NativeSessionCloseInput { session, kind })
+            .await
+            .map_err(|error| CoreError::Invalid(error.to_string()))
+    }
+
     /// Delete a session log from the store.
     ///
     /// # Errors
     /// Returns store failures.
     pub async fn delete_session(&self, session: SessionId) -> Result<bool, CoreError> {
+        self.before_session_close(session, crate::hooks::SessionCloseKind::Delete)
+            .await?;
         self.ensure_session_delete_allowed(session).await?;
         // Root-turn teardown (ADR-0015 §1): deleting a team root force-archives
         // every live descendant (claims release, roster exits) before the log

@@ -46,6 +46,8 @@ pub(super) struct TurnToolGate<'a> {
     pub(super) parent_session: Option<SessionId>,
     /// Tool schemas the round's request offered.
     pub(super) offered: &'a [ToolSchema],
+    /// Parent links between the session and its tree root.
+    pub(super) depth: u32,
 }
 
 #[derive(Default)]
@@ -75,6 +77,7 @@ impl TurnToolGate<'_> {
             ref mut defer_steer,
             parent_session,
             offered,
+            depth,
         } = self;
         engine.validate_actor_claim(actor_claim).await?;
         let activation_hooks = activation_hook_for(session);
@@ -122,6 +125,7 @@ impl TurnToolGate<'_> {
         let behind = hidden_behind(offered, engine.exclusive_tool.as_deref(), tc.name.as_str());
         let wait_ack = hya_tool::WaitAckSlot::default();
         let mut ends_turn = false;
+        let mut suppresses_notices = false;
         let collect_tool = async {
             Ok::<_, CoreError>(match (behind, resources.resolve_tool(&tc.name)) {
                 (Some(exclusive), Some(_)) => (
@@ -192,7 +196,12 @@ impl TurnToolGate<'_> {
                                 extensions,
                             };
                             let visibility = engine
-                                .tool_visibility_outcome(session, Some(&live_agent.name), resources)
+                                .tool_visibility_outcome(
+                                    session,
+                                    Some(&live_agent.name),
+                                    resources,
+                                    depth,
+                                )
                                 .await;
                             let nested = super::super::nested_tools::TurnNestedTools {
                                 engine: Arc::clone(
@@ -229,6 +238,7 @@ impl TurnToolGate<'_> {
                                 .execute(&ctx, std::mem::take(&mut tc.input))
                                 .await;
                             ends_turn = result.is_ok() && resolved.tool.ends_turn();
+                            suppresses_notices = resolved.tool.suppresses_notices();
                             result
                         }
                         Err(error) => Err(error),
@@ -269,7 +279,11 @@ impl TurnToolGate<'_> {
                 engine.open_staged_events(session);
                 engine.set_mail_steer_suppressed(
                     session,
-                    state.report_latch.is_set() || *defer_steer || wait_ack.saw_wait(),
+                    state.report_latch.is_set()
+                        || *defer_steer
+                        || wait_ack.saw_wait()
+                        || ends_turn
+                        || suppresses_notices,
                 );
                 native = apply_tool_execute_after_hooks(
                     tool_hooks.as_deref().unwrap_or(&HookChain::default()),

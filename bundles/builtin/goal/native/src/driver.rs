@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use hya_proto::{AgentName, ModelRef, PartProjection, Projection, SessionId};
 use hya_runtime_abi::{
-    DriverReport, DriverRequest, DriverRunOutcome, HostError, HostRuntime, NativeDriver,
+    DriverReport, DriverRequest, DriverRunOutcome, HostError, HostRuntime, NativeDriver, TurnStart,
     TurnStartRequest,
 };
 use serde_json::Value;
@@ -387,12 +387,15 @@ impl IterationExecutor for LeadTurnExecutor {
             .run_turn(
                 TurnStartRequest {
                     session: self.session,
-                    prompt: directive.to_string(),
+                    prompt: Some(directive.to_string()),
                     agent: self.agent.clone(),
                     model: self.model.clone(),
                     system_override: None,
                     metadata: None,
                     actor_claim: None,
+                    guidance: None,
+                    route: None,
+                    start: TurnStart::Always,
                 },
                 cancel.clone(),
             )

@@ -90,6 +90,7 @@ impl NativeInstall {
                 }
                 anyhow::bail!("start native bundle service `{}`: {error}", service.id());
             }
+            crate::startup_trace::mark("native_service", Some(service.id()));
             started.push(service);
         }
         Ok(started)

@@ -224,3 +224,176 @@ async fn declared_points_answer_from_the_latest_admitting_entry() {
         Some(json!("late"))
     );
 }
+
+/// Records lifecycle calls under its name; refuses `session.close.before`
+/// when `refuse` is set.
+struct LifecycleHook {
+    name: &'static str,
+    refuse: bool,
+    calls: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl LifecycleHook {
+    fn record(&self, point: &str) {
+        self.calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(format!("{}:{point}", self.name));
+    }
+}
+
+#[async_trait]
+impl NativeHook for LifecycleHook {
+    fn id(&self) -> &str {
+        self.name
+    }
+
+    fn hook_points(&self) -> &[HookPoint] {
+        &[
+            HookPoint::ModelStreamPermit,
+            HookPoint::TurnStop,
+            HookPoint::SessionClose,
+            HookPoint::HeadlessRun,
+            HookPoint::SessionRestore,
+            HookPoint::RuntimeRestored,
+        ]
+    }
+
+    async fn model_stream_permit(
+        &self,
+        input: NativeStreamPermitInput,
+    ) -> Result<Option<NativeStreamPermit>, HostError> {
+        self.record("permit");
+        let calls = Arc::clone(&self.calls);
+        let name = self.name;
+        Ok(Some(NativeStreamPermit(Box::new(DropRecorder {
+            calls,
+            line: format!("{name}:released:{}", input.depth),
+        }))))
+    }
+
+    async fn turn_stop(&self, _input: NativeTurnStopInput) -> Result<(), HostError> {
+        self.record("stop");
+        Ok(())
+    }
+
+    async fn session_close(&self, _input: NativeSessionCloseInput) -> Result<(), HostError> {
+        self.record("close");
+        if self.refuse {
+            return Err(HostError::InvalidInput(format!("{} refuses", self.name)));
+        }
+        Ok(())
+    }
+
+    async fn headless_run(
+        &self,
+        input: NativeHeadlessRunInput,
+    ) -> Result<Option<String>, HostError> {
+        Ok((input.phase == HeadlessRunPhase::End).then(|| format!("{} pending", self.name)))
+    }
+
+    async fn session_restore(
+        &self,
+        _input: NativeSessionRestoreInput,
+    ) -> Result<Option<String>, HostError> {
+        Ok(Some(format!("{} restored", self.name)))
+    }
+
+    async fn runtime_restored(&self) -> Result<(), HostError> {
+        self.record("restored");
+        Ok(())
+    }
+}
+
+struct DropRecorder {
+    calls: Arc<std::sync::Mutex<Vec<String>>>,
+    line: String,
+}
+
+impl Drop for DropRecorder {
+    fn drop(&mut self) {
+        self.calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(std::mem::take(&mut self.line));
+    }
+}
+
+#[tokio::test]
+async fn lifecycle_points_fan_out_and_close_refusals_run_latest_first() {
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let hook = |name, refuse| -> Arc<dyn NativeHook> {
+        Arc::new(LifecycleHook {
+            name,
+            refuse,
+            calls: Arc::clone(&calls),
+        })
+    };
+    let chain = HookChain::of_hooks([hook("first", true), hook("second", false)]);
+    let session = SessionId::new();
+    let taken = || std::mem::take(&mut *calls.lock().unwrap_or_else(|e| e.into_inner()));
+
+    let permits = chain
+        .model_stream_permit(NativeStreamPermitInput {
+            session,
+            root: session,
+            depth: 1,
+        })
+        .await;
+    assert_eq!(permits.len(), 2);
+    drop(permits);
+    assert_eq!(
+        taken(),
+        [
+            "first:permit",
+            "second:permit",
+            "first:released:1",
+            "second:released:1"
+        ]
+    );
+
+    let refused = chain
+        .session_close(NativeSessionCloseInput {
+            session,
+            kind: SessionCloseKind::Delete,
+        })
+        .await;
+    assert_eq!(
+        refused,
+        Err(HostError::InvalidInput("first refuses".into()))
+    );
+    assert_eq!(taken(), ["second:close", "first:close"]);
+
+    chain
+        .turn_stop(NativeTurnStopInput {
+            session,
+            cause: hya_proto::FinishCause::UserCancel,
+        })
+        .await;
+    chain.runtime_restored().await;
+    assert_eq!(
+        taken(),
+        [
+            "first:stop",
+            "second:stop",
+            "first:restored",
+            "second:restored"
+        ]
+    );
+
+    let input = |phase| NativeHeadlessRunInput { session, phase };
+    assert!(
+        chain
+            .headless_run(input(HeadlessRunPhase::Start))
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        chain.headless_run(input(HeadlessRunPhase::End)).await,
+        ["first pending", "second pending"]
+    );
+    assert_eq!(
+        chain.session_restore(session).await,
+        ["first restored", "second restored"]
+    );
+}

@@ -372,6 +372,37 @@ impl HostSessionStore for EngineHostRuntime {
         Ok(Vec::new())
     }
 
+    async fn append_batch(
+        &self,
+        fence: Option<ActorClaim>,
+        expect: Vec<(SessionId, EventSeq)>,
+        events: Vec<(SessionId, Event)>,
+    ) -> Result<Vec<Envelope>, HostError> {
+        let store_err = |error: hya_store::StoreError| map_core_err(error.into());
+        let mut tx = self.store.begin_transaction().await.map_err(store_err)?;
+        if let Some(claim) = &fence {
+            crate::store_bridge::fence_actor_claim(&mut tx, claim)
+                .await
+                .map_err(store_err)?;
+        }
+        hya_store::expect_last_seqs_in_transaction(&mut tx, &expect)
+            .await
+            .map_err(store_err)?;
+        let mut envelopes = Vec::with_capacity(events.len());
+        for (session, event) in events {
+            envelopes.push(
+                hya_store::append_event_in_transaction(&mut tx, session, event)
+                    .await
+                    .map_err(store_err)?,
+            );
+        }
+        tx.commit().await.map_err(store_err)?;
+        for envelope in &envelopes {
+            self.bus.publish(envelope.clone());
+        }
+        Ok(envelopes)
+    }
+
     fn runtime_owner_id(&self) -> Option<OwnerRunId> {
         Some(self.runtime_owner)
     }
@@ -733,10 +764,12 @@ impl HostTurnRunner for EngineHostRuntime {
 
     async fn cancel_turn(
         &self,
-        _session: SessionId,
-        _reason: Option<String>,
+        session: SessionId,
+        reason: Option<String>,
     ) -> Result<bool, HostError> {
-        Ok(false)
+        Ok(self
+            .turn_gate
+            .cancel(session, finish_cause(reason.as_deref())))
     }
 
     async fn turn_status(&self, session: SessionId) -> Result<TurnStatus, HostError> {
@@ -1167,8 +1200,21 @@ fn lease_to_claim(lease: &BundleClaimLease) -> BundleClaim {
     }
 }
 
+/// The [`FinishCause`](hya_proto::FinishCause) a `cancel_turn` reason names
+/// on the wire (`archived`, `leader_failed`, …); other text records `other`
+/// and no reason records `user_cancel`.
+pub(crate) fn finish_cause(reason: Option<&str>) -> hya_proto::FinishCause {
+    reason.map_or(hya_proto::FinishCause::UserCancel, |reason| {
+        serde_json::from_value(Value::String(reason.to_string()))
+            .unwrap_or(hya_proto::FinishCause::Other)
+    })
+}
+
 fn map_core_err(error: crate::CoreError) -> HostError {
     match error {
+        crate::CoreError::Store(hya_store::StoreError::StaleSessionSeq { .. }) => {
+            HostError::Conflict(error.to_string())
+        }
         crate::CoreError::CapacityExceeded { .. }
         | crate::CoreError::MailboxRejected(_)
         | crate::CoreError::MailRevivalRequired { .. } => HostError::Conflict(error.to_string()),
@@ -1357,5 +1403,194 @@ mod tests {
                 value,
             );
         }
+    }
+
+    fn test_engine(store: SessionStore) -> crate::SessionEngine {
+        let (permission, _rx) =
+            hya_tool::PermissionPlane::new(hya_tool::PermissionRules::default());
+        crate::SessionEngine::new(
+            store,
+            Arc::new(hya_provider::ProviderRouter::new()),
+            crate::test_support::runtime(hya_tool_loader::builtins()),
+            permission,
+            EventBus::default(),
+        )
+    }
+
+    fn ping(session: SessionId, bundle: &str) -> Event {
+        Event::Extension {
+            session,
+            bundle: bundle.into(),
+            kind: "ping".into(),
+            payload: Value::Null,
+        }
+    }
+
+    #[tokio::test]
+    async fn append_batch_is_atomic_across_sessions_and_checks_expect_and_fence() {
+        let engine = test_engine(SessionStore::connect_memory().await.unwrap());
+        let host = engine.host_runtime();
+        let store = host.session_store();
+        let (a, b) = (SessionId::new(), SessionId::new());
+        let first = store
+            .append_events(a, None, vec![ping(a, "t/x")])
+            .await
+            .unwrap();
+        let a_last = first[0].seq;
+
+        let stale = store
+            .append_batch(
+                None,
+                vec![(a, a_last), (b, EventSeq(7))],
+                vec![(a, ping(a, "t/x")), (b, ping(b, "t/x"))],
+            )
+            .await;
+        assert!(matches!(stale, Err(HostError::Conflict(_))), "{stale:?}");
+        assert_eq!(store.read_events(b, None, None).await.unwrap().len(), 0);
+
+        let owner = OwnerRunId::new();
+        let lease = host
+            .bundle_storage()
+            .acquire_claim(hya_runtime_abi::BundleClaimRequest {
+                bundle: hya_tool::extension::BUNDLE_MULTI_AGENT.into(),
+                resource_key: b.to_string(),
+                owner_id: owner.as_uuid().to_string(),
+                ttl_millis: 60_000,
+                metadata: Value::Null,
+            })
+            .await
+            .unwrap();
+        let fence = ActorClaim {
+            actor_id: b,
+            epoch: hya_proto::ActorEpoch::from_storage(lease.epoch),
+            owner_run_id: owner,
+        };
+        let superseded = ActorClaim {
+            epoch: hya_proto::ActorEpoch::from_storage(lease.epoch + 1),
+            ..fence
+        };
+        let refused = store
+            .append_batch(Some(superseded), Vec::new(), vec![(b, ping(b, "t/x"))])
+            .await;
+        assert!(
+            matches!(refused, Err(HostError::StaleClaim(_))),
+            "{refused:?}"
+        );
+
+        let mut live = engine.bus().subscribe();
+        let appended = store
+            .append_batch(
+                Some(fence),
+                vec![(a, a_last), (b, EventSeq(0))],
+                vec![(a, ping(a, "t/x")), (b, ping(b, "t/x"))],
+            )
+            .await
+            .unwrap();
+        assert_eq!(appended.len(), 2);
+        assert_eq!(store.read_events(a, None, None).await.unwrap().len(), 2);
+        assert_eq!(store.read_events(b, None, None).await.unwrap().len(), 1);
+        assert_eq!(live.recv().await.unwrap().seq, appended[0].seq);
+        assert_eq!(live.recv().await.unwrap().seq, appended[1].seq);
+    }
+
+    #[tokio::test]
+    async fn turn_control_reports_and_cancels_the_active_turn() {
+        let engine = test_engine(SessionStore::connect_memory().await.unwrap());
+        let host = engine.host_runtime();
+        let session = SessionId::new();
+        let runner = host.turn_runner();
+        assert_eq!(runner.turn_status(session).await.unwrap(), TurnStatus::Idle);
+        assert!(!runner.cancel_turn(session, None).await.unwrap());
+
+        let lease = engine.try_begin_turn(session).unwrap();
+        let cancel = lease.bind_cancel(&CancellationToken::new());
+        assert_eq!(
+            runner.turn_status(session).await.unwrap(),
+            TurnStatus::Running
+        );
+        assert!(
+            runner
+                .cancel_turn(session, Some("archived".into()))
+                .await
+                .unwrap()
+        );
+        assert!(cancel.is_cancelled());
+        assert_eq!(
+            engine.turn_cancel_cause(session),
+            Some(hya_proto::FinishCause::Archived)
+        );
+        assert_eq!(
+            finish_cause(Some("no such cause")),
+            hya_proto::FinishCause::Other
+        );
+    }
+
+    /// Counts the events it folds, by owning bundle.
+    struct CountingReducer {
+        bundle: &'static str,
+        observed: &'static [&'static str],
+    }
+
+    impl hya_runtime_abi::ProjectionReducer for CountingReducer {
+        fn bundle_id(&self) -> &str {
+            self.bundle
+        }
+
+        fn initial_state(&self) -> Value {
+            serde_json::json!({})
+        }
+
+        fn apply(
+            &self,
+            state: &mut Value,
+            event: &hya_runtime_abi::ExtensionEventContext,
+        ) -> Result<(), HostError> {
+            let count = state[&event.bundle].as_u64().unwrap_or(0);
+            state[&event.bundle] = (count + 1).into();
+            Ok(())
+        }
+
+        fn observed_bundles(&self) -> &[&str] {
+            self.observed
+        }
+    }
+
+    #[tokio::test]
+    async fn observed_reducers_fold_other_bundles_events_into_their_own_state() {
+        let engine = test_engine(SessionStore::connect_memory().await.unwrap());
+        engine.register_native_projection_reducers(vec![
+            Arc::new(CountingReducer {
+                bundle: "t/owner",
+                observed: &[],
+            }),
+            Arc::new(CountingReducer {
+                bundle: "t/observer",
+                observed: &["t/owner", "t/absent"],
+            }),
+        ]);
+        let session = SessionId::new();
+        let store = engine.host_runtime();
+        let store = store.session_store();
+        store
+            .append_events(
+                session,
+                None,
+                vec![
+                    ping(session, "t/owner"),
+                    ping(session, "t/absent"),
+                    ping(session, "t/observer"),
+                ],
+            )
+            .await
+            .unwrap();
+        let projection = store.read_projection(session).await.unwrap();
+        assert_eq!(
+            projection.extensions["t/owner"],
+            serde_json::json!({"t/owner": 1})
+        );
+        assert_eq!(
+            projection.extensions["t/observer"],
+            serde_json::json!({"t/owner": 1, "t/absent": 1, "t/observer": 1})
+        );
     }
 }

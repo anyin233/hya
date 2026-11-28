@@ -20,6 +20,9 @@ use crate::runtime_registry::CompiledResourceView;
 use crate::sidecar::{SidecarEnvironment, SidecarHandle, SidecarStart};
 use crate::{AgentResourcePolicy, TurnBinding};
 
+mod driven;
+#[cfg(test)]
+mod driven_tests;
 mod harness;
 mod hooks;
 pub(super) mod messages;
@@ -31,6 +34,7 @@ pub mod route;
 mod route_retry_test;
 mod tool_gate;
 
+pub use driven::{DrivenTurn, DrivenTurnEnd, FencedSidecars};
 pub use messages::advertise_tool;
 use messages::{AttachmentData, attachment_blobs, filtered_tool_schemas};
 pub use route::{ExplicitModelRoute, ExplicitModelRouteCandidate, ExplicitTurnRoute};
@@ -1209,6 +1213,7 @@ impl SessionEngine {
         session: SessionId,
         agent: Option<&AgentName>,
         resources: &CompiledResourceView,
+        depth: u32,
     ) -> crate::hooks::ToolVisibilityOutcome {
         let Some(hooks) = self.active_hook_dispatcher(session) else {
             return crate::hooks::ToolVisibilityOutcome::Preserve;
@@ -1230,6 +1235,7 @@ impl SessionEngine {
                 agent: agent.cloned(),
                 candidate_tools: tools,
                 interactive: self.interaction.is_available(),
+                depth,
             })
             .await
     }
@@ -1245,7 +1251,7 @@ impl SessionEngine {
         model: &ModelRef,
     ) -> Vec<hya_proto::ToolSchema> {
         let visibility = self
-            .tool_visibility_outcome(session, agent, resources)
+            .tool_visibility_outcome(session, agent, resources, depth)
             .await;
         let mut tools = filtered_tool_schemas(
             resources,

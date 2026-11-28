@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::SessionEngine;
 use super::route::{ExplicitTurnRoute, core_route_failure_class, provider_route_failure_class};
+use crate::hooks::{HookPoint, NativeStreamPermit, NativeStreamPermitInput};
 use crate::{CoreError, kernel::Failure};
 
 pub(super) struct OpenRequest<'a> {
@@ -53,6 +54,7 @@ pub(super) trait TurnHook: Send {
 /// adapters for the actor extensions the engine still wires.
 pub(super) fn entries<'a>(
     engine: &'a SessionEngine,
+    session: SessionId,
     claim: Option<&'a ActorClaim>,
     route: Option<&'a ExplicitTurnRoute>,
     cancel: &'a CancellationToken,
@@ -74,6 +76,12 @@ pub(super) fn entries<'a>(
             permit: None,
         }));
     }
+    entries.push(Box::new(HookPermit {
+        engine,
+        session,
+        depth,
+        permits: None,
+    }));
     if let Some(claim) = claim {
         entries.push(Box::new(Claim { engine, claim }));
     }
@@ -158,6 +166,58 @@ impl TurnHook for StreamPermit<'_> {
     fn collected(&mut self) -> Result<(), CoreError> {
         // Tool calls can wait for work that needs its own stream permit.
         self.permit = None;
+        Ok(())
+    }
+}
+
+/// The `model.stream.permit` guards of the hooks active for the turn, held
+/// from opening a stream until it is collected or the round waits to retry.
+struct HookPermit<'a> {
+    engine: &'a SessionEngine,
+    session: SessionId,
+    depth: u32,
+    permits: Option<Vec<NativeStreamPermit>>,
+}
+
+#[async_trait]
+impl TurnHook for HookPermit<'_> {
+    async fn before_open(&mut self) -> Result<(), CoreError> {
+        if self.permits.is_some() {
+            return Ok(());
+        }
+        let Some(hooks) = self
+            .engine
+            .active_hook_dispatcher(self.session)
+            .filter(|hooks| hooks.handles(HookPoint::ModelStreamPermit))
+        else {
+            return Ok(());
+        };
+        let (root, _) = self.engine.session_lineage(self.session).await?;
+        self.permits = Some(
+            hooks
+                .model_stream_permit(NativeStreamPermitInput {
+                    session: self.session,
+                    root,
+                    depth: self.depth,
+                })
+                .await,
+        );
+        Ok(())
+    }
+
+    fn failed(
+        &mut self,
+        _failure: &Failure,
+        retry: &mut Option<Duration>,
+    ) -> Result<(), CoreError> {
+        if retry.is_some() {
+            self.permits = None;
+        }
+        Ok(())
+    }
+
+    fn collected(&mut self) -> Result<(), CoreError> {
+        self.permits = None;
         Ok(())
     }
 }

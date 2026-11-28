@@ -366,6 +366,11 @@ pub trait Tool: Send + Sync {
     fn ends_turn(&self) -> bool {
         false
     }
+    /// Whether the call's result already shows everything pending, so
+    /// `tool.execute.after` hooks add no further notices to it.
+    fn suppresses_notices(&self) -> bool {
+        false
+    }
     /// Run the tool body with validated (or raw) `input` and the call context.
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError>;
 }
@@ -407,6 +412,10 @@ impl Tool for NamedTool {
 
     fn ends_turn(&self) -> bool {
         self.inner.ends_turn()
+    }
+
+    fn suppresses_notices(&self) -> bool {
+        self.inner.suppresses_notices()
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {

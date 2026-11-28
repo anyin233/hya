@@ -17,12 +17,14 @@ pub(crate) use activation::{
 };
 pub use chain::{HookChain, HookEntry};
 pub use hya_runtime_abi::{
-    HookPoint, NativeAgentSpawnInput, NativeChatParamsInput, NativeCommandBeforeInput,
-    NativeCompactionAfterInput, NativeCompactionBeforeInput, NativeCompactionDecision,
-    NativeCompactionTrigger, NativeHook, NativeMessageUserBeforeInput, NativeModelFallbackInput,
-    NativePermissionApproveInput, NativeSessionLifecycleInput, NativeTextCompleteInput,
-    NativeToolAfterInput, NativeToolAfterOutcome, NativeToolBeforeInput, NativeToolBeforeOutcome,
-    NativeToolResult, ToolVisibilityInput, ToolVisibilityOutcome,
+    HeadlessRunPhase, HookPoint, NativeAgentSpawnInput, NativeChatParamsInput,
+    NativeCommandBeforeInput, NativeCompactionAfterInput, NativeCompactionBeforeInput,
+    NativeCompactionDecision, NativeCompactionTrigger, NativeHeadlessRunInput, NativeHook,
+    NativeMessageUserBeforeInput, NativeModelFallbackInput, NativePermissionApproveInput,
+    NativeSessionCloseInput, NativeSessionLifecycleInput, NativeSessionRestoreInput,
+    NativeStreamPermit, NativeStreamPermitInput, NativeTextCompleteInput, NativeToolAfterInput,
+    NativeToolAfterOutcome, NativeToolBeforeInput, NativeToolBeforeOutcome, NativeToolResult,
+    NativeTurnStopInput, SessionCloseKind, ToolVisibilityInput, ToolVisibilityOutcome,
 };
 
 /// Classification of a pre-stream provider failure, carried to

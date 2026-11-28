@@ -207,6 +207,7 @@ impl HeadlessRuntime {
             .resident_supervisor()
             .start_recovered_headless(session)
             .await?;
+        engine.notify_runtime_restored().await;
         Ok(session)
     }
 

@@ -156,6 +156,21 @@ pub trait HostSessionStore: Send + Sync {
             "staged extension events are unavailable".into(),
         ))
     }
+
+    /// Append `events` (each to its own session log) in one transaction.
+    ///
+    /// The batch commits only when `fence` (if any) is the current holder of
+    /// its session fence and each `(session, seq)` in `expect` is still that
+    /// session's last sequence; otherwise nothing is written and the call
+    /// returns [`HostError::StaleClaim`] or [`HostError::Conflict`].
+    async fn append_batch(
+        &self,
+        _fence: Option<ActorClaim>,
+        _expect: Vec<(SessionId, EventSeq)>,
+        _events: Vec<(SessionId, Event)>,
+    ) -> Result<Vec<Envelope>, HostError> {
+        Err(HostError::Unavailable("batch append is unavailable".into()))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -314,12 +329,22 @@ pub trait HostBundleStorage: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Request to execute a single turn on an existing session.
+///
+/// A fenced turn (`actor_claim: Some`) runs as a child of its parent's
+/// binding: the host resolves the agent, its system prompt, roster, and
+/// resource policy from the parent, re-validates the fence before each round
+/// and before opening each stream, fences every append, and keeps one
+/// sidecar for the session from its first fenced turn until the fence is
+/// released or the process stops. A lost sidecar fails the running turn with
+/// [`HostError::Unavailable`]. An unfenced turn binds the session itself and
+/// starts a sidecar per turn.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TurnStartRequest {
     /// Target session id.
     pub session: SessionId,
-    /// User/directive prompt text for this turn.
-    pub prompt: String,
+    /// User/directive prompt admitted before the turn; `None` runs on the
+    /// log tail the caller appended.
+    pub prompt: Option<String>,
     /// Optional agent override for this turn.
     pub agent: Option<AgentName>,
     /// Optional model override for this turn.
@@ -330,6 +355,24 @@ pub struct TurnStartRequest {
     pub metadata: Option<Value>,
     /// Optional actor claim fencing this turn.
     pub actor_claim: Option<ActorClaim>,
+    /// Guidance layer composed into the system prompt for this turn.
+    pub guidance: Option<String>,
+    /// Explicit model route resolved with [`HostModelCaller::resolve_model_route`].
+    pub route: Option<ResolvedModelRoute>,
+    /// Whether the turn queues behind an active turn or starts only when idle.
+    pub start: TurnStart,
+}
+
+/// How [`HostTurnRunner::run_turn`] takes the session's single turn lease.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnStart {
+    /// Wait for an active turn to end, then run.
+    #[default]
+    Always,
+    /// Take the lease atomically, or return [`HostError::Conflict`] without
+    /// admitting the prompt when a turn is active.
+    IfIdle,
 }
 
 /// Request to spawn a new session (and optionally immediately run a turn).
@@ -904,6 +947,21 @@ pub struct ScopeCatalogSnapshot {
     pub diagnostics: Vec<String>,
 }
 
+/// Inputs of [`HostCatalogReader::resolve_agent_model`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentModelRequest {
+    /// Session whose binding (and agent model preferences) the child inherits.
+    pub parent: SessionId,
+    /// Agent the child session runs.
+    pub agent: AgentName,
+    /// Model the caller named, if any.
+    pub model: Option<ModelRef>,
+    /// Model category the caller named, if any.
+    pub category: Option<String>,
+    /// Reasoning effort the caller named, if any.
+    pub effort: Option<String>,
+}
+
 /// Read-only access to agents, skills, bundles, and effective configuration.
 #[async_trait]
 pub trait HostCatalogReader: Send + Sync {
@@ -943,6 +1001,21 @@ pub trait HostCatalogReader: Send + Sync {
     ) -> Result<ScopeCatalogSnapshot, HostError> {
         Err(HostError::Unavailable(
             "scope catalog resolution is unavailable in this runtime".into(),
+        ))
+    }
+
+    /// Resolve the model (with any `#effort` suffix) a child of
+    /// `request.parent` running `request.agent` uses, with the spawn
+    /// precedence of `task`: from lowest to highest, the base model, the
+    /// agent's remembered preference, its category, its model, the request's
+    /// category, and the request's model matched against the provider catalog.
+    /// The parent's agent must be allowed to spawn `request.agent`.
+    async fn resolve_agent_model(
+        &self,
+        _request: AgentModelRequest,
+    ) -> Result<ModelRef, HostError> {
+        Err(HostError::Unavailable(
+            "agent model resolution is unavailable in this runtime".into(),
         ))
     }
 

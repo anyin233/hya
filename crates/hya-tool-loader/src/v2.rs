@@ -23,14 +23,16 @@ use hya_runtime_abi::{
     NativeAgentSpawnInput, NativeApiEndpoint, NativeBundleApiHandler, NativeBundleApiReply,
     NativeBundleApiRequest, NativeChatParamsInput, NativeCommandBeforeInput,
     NativeCompactionAfterInput, NativeCompactionBeforeInput, NativeCompactionDecision,
-    NativeDriver, NativeHook, NativeMessageUserBeforeInput, NativeModelFallbackInput,
-    NativePermissionApproveInput, NativePluginContext, NativeRegistrations, NativeService,
-    NativeSessionLifecycleInput, NativeTextCompleteInput, NativeToolAfterInput,
-    NativeToolAfterOutcome, NativeToolBeforeInput, NativeToolBeforeOutcome, NativeTurnAdmitInput,
-    NativeTurnAdmitOutcome, RegisterV2Fn, SYMBOL_ABI_V2, SYMBOL_REGISTER_V2,
-    SYMBOL_SHARE_DEADLINE_V2, SYMBOL_WITH_RUNTIME_V2, ServiceHealth, ShareDeadlineFn,
-    ToolVisibilityInput, ToolVisibilityOutcome, UriContent, UriResolveCtx, UriSchemaHandler,
-    abi_digest_v2, deadline_cell_v2,
+    NativeDriver, NativeHeadlessRunInput, NativeHook, NativeMessageUserBeforeInput,
+    NativeModelFallbackInput, NativePermissionApproveInput, NativePluginContext,
+    NativeRegistrations, NativeService, NativeSessionCloseInput, NativeSessionLifecycleInput,
+    NativeSessionRestoreInput, NativeStreamPermit, NativeStreamPermitInput,
+    NativeTextCompleteInput, NativeToolAfterInput, NativeToolAfterOutcome, NativeToolBeforeInput,
+    NativeToolBeforeOutcome, NativeTurnAdmitInput, NativeTurnAdmitOutcome, NativeTurnStopInput,
+    RegisterV2Fn, SYMBOL_ABI_V2, SYMBOL_REGISTER_V2, SYMBOL_SHARE_DEADLINE_V2,
+    SYMBOL_WITH_RUNTIME_V2, ServiceHealth, ShareDeadlineFn, ToolVisibilityInput,
+    ToolVisibilityOutcome, UriContent, UriResolveCtx, UriSchemaHandler, abi_digest_v2,
+    deadline_cell_v2,
 };
 use hya_tool::{Action, Decision, Resource, Tool};
 use serde_json::Value;
@@ -282,6 +284,39 @@ impl NativeHook for NativeHookAdapter {
 
     fn on_event(&self, envelope: &Envelope) {
         self.inner.on_event(envelope);
+    }
+
+    async fn model_stream_permit(
+        &self,
+        input: NativeStreamPermitInput,
+    ) -> Result<Option<NativeStreamPermit>, HostError> {
+        poll_host_result(self.inner.model_stream_permit(input), self.with_runtime).await
+    }
+
+    async fn turn_stop(&self, input: NativeTurnStopInput) -> Result<(), HostError> {
+        poll_host_result(self.inner.turn_stop(input), self.with_runtime).await
+    }
+
+    async fn session_close(&self, input: NativeSessionCloseInput) -> Result<(), HostError> {
+        poll_host_result(self.inner.session_close(input), self.with_runtime).await
+    }
+
+    async fn headless_run(
+        &self,
+        input: NativeHeadlessRunInput,
+    ) -> Result<Option<String>, HostError> {
+        poll_host_result(self.inner.headless_run(input), self.with_runtime).await
+    }
+
+    async fn session_restore(
+        &self,
+        input: NativeSessionRestoreInput,
+    ) -> Result<Option<String>, HostError> {
+        poll_host_result(self.inner.session_restore(input), self.with_runtime).await
+    }
+
+    async fn runtime_restored(&self) -> Result<(), HostError> {
+        poll_host_result(self.inner.runtime_restored(), self.with_runtime).await
     }
 }
 

@@ -226,7 +226,7 @@ impl HostTurnRunner for MockHostRuntime {
             session: request.session,
             message_id: None,
             finish_reason: Some(FinishReason::Stop),
-            output_text: format!("goal-turn: {}", request.prompt),
+            output_text: format!("goal-turn: {}", request.prompt.unwrap_or_default()),
             error: None,
         })
     }
@@ -594,6 +594,7 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
             agent: None,
             candidate_tools: vec!["read".to_string(), "edit".to_string()],
             interactive: true,
+            depth: 0,
         })
         .await?;
     assert_eq!(
@@ -611,6 +612,68 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
         })
         .await?;
     assert!(matches!(comp, NativeCompactionDecision::Replace { .. }));
+
+    // Every CHR-43 lifecycle point crosses the cdylib boundary to the bundle's
+    // implementation, not the trait default.
+    let hook = &regs.hooks[0];
+    let permit = hook
+        .model_stream_permit(hya_runtime_abi::NativeStreamPermitInput {
+            session,
+            root: parent,
+            depth: 2,
+        })
+        .await?;
+    assert!(permit.is_some());
+    hook.turn_stop(hya_runtime_abi::NativeTurnStopInput {
+        session,
+        cause: hya_proto::FinishCause::UserCancel,
+    })
+    .await?;
+    assert!(
+        hook.turn_stop(hya_runtime_abi::NativeTurnStopInput {
+            session,
+            cause: hya_proto::FinishCause::Archived,
+        })
+        .await
+        .is_err()
+    );
+    assert!(matches!(
+        hook.session_close(hya_runtime_abi::NativeSessionCloseInput {
+            session,
+            kind: hya_runtime_abi::SessionCloseKind::Delete,
+        })
+        .await,
+        Err(HostError::PermissionDenied(_))
+    ));
+    hook.session_close(hya_runtime_abi::NativeSessionCloseInput {
+        session,
+        kind: hya_runtime_abi::SessionCloseKind::Archive,
+    })
+    .await?;
+    assert_eq!(
+        hook.headless_run(hya_runtime_abi::NativeHeadlessRunInput {
+            session,
+            phase: hya_runtime_abi::HeadlessRunPhase::Start,
+        })
+        .await?
+        .as_deref(),
+        Some("probe Start")
+    );
+    assert_eq!(
+        hook.session_restore(hya_runtime_abi::NativeSessionRestoreInput { session })
+            .await?,
+        Some(format!("restore {session}"))
+    );
+    assert_eq!(
+        hook.runtime_restored().await,
+        Err(HostError::Unavailable("probe restored".into()))
+    );
+    assert_eq!(
+        regs.projection_reducers[0].observed_bundles(),
+        ["hya/observed"]
+    );
+    assert!(regs.tools[0].ends_turn());
+    assert!(regs.tools[0].suppresses_notices());
 
     // NativeBundleApiHandler
     let api_reply = regs.api_handlers[0]

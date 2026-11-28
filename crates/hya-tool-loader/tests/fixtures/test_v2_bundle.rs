@@ -12,9 +12,11 @@ use hya_proto::{ToolName, ToolSchema};
 use hya_runtime_abi::{
     DriverReport, DriverRequest, ExtensionEventContext, HookPoint, HostError, HostRuntime,
     NativeApiEndpoint, NativeBundleApiHandler, NativeBundleApiReply, NativeBundleApiRequest,
-    NativeCompactionBeforeInput, NativeCompactionDecision, NativeDriver, NativeHook, NativeService,
-    NativeToolBeforeInput, NativeToolBeforeOutcome, ProjectionReducer, ServiceHealth,
-    ToolVisibilityInput, ToolVisibilityOutcome, TurnStartRequest, UriContent, UriResolveCtx,
+    NativeCompactionBeforeInput, NativeCompactionDecision, NativeDriver, NativeHeadlessRunInput,
+    NativeHook, NativeService, NativeSessionCloseInput, NativeSessionRestoreInput,
+    NativeStreamPermit, NativeStreamPermitInput, NativeToolBeforeInput, NativeToolBeforeOutcome,
+    NativeTurnStopInput, ProjectionReducer, ServiceHealth, SessionCloseKind, ToolVisibilityInput,
+    ToolVisibilityOutcome, TurnStart, TurnStartRequest, UriContent, UriResolveCtx,
     UriSchemaHandler,
 };
 use hya_tool::{Tool, ToolCtx, ToolError};
@@ -40,6 +42,14 @@ impl Tool for TestV2Tool {
             input_schema: json!({"type": "object"}),
             output_schema: None,
         }
+    }
+
+    fn ends_turn(&self) -> bool {
+        true
+    }
+
+    fn suppresses_notices(&self) -> bool {
+        true
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
@@ -131,7 +141,58 @@ impl NativeHook for TestV2Hook {
             HookPoint::ToolExecuteBefore,
             HookPoint::ToolVisibility,
             HookPoint::CompactionBefore,
+            HookPoint::ModelStreamPermit,
+            HookPoint::TurnStop,
+            HookPoint::SessionClose,
+            HookPoint::HeadlessRun,
+            HookPoint::SessionRestore,
+            HookPoint::RuntimeRestored,
         ]
+    }
+
+    async fn model_stream_permit(
+        &self,
+        input: NativeStreamPermitInput,
+    ) -> Result<Option<NativeStreamPermit>, HostError> {
+        tokio::task::yield_now().await;
+        Ok((input.depth > 0).then(|| NativeStreamPermit(Box::new(input.depth))))
+    }
+
+    async fn turn_stop(&self, input: NativeTurnStopInput) -> Result<(), HostError> {
+        tokio::task::yield_now().await;
+        match input.cause {
+            hya_proto::FinishCause::UserCancel => Ok(()),
+            other => Err(HostError::InvalidInput(format!("{other:?}"))),
+        }
+    }
+
+    async fn session_close(&self, input: NativeSessionCloseInput) -> Result<(), HostError> {
+        tokio::task::yield_now().await;
+        match input.kind {
+            SessionCloseKind::Delete => Err(HostError::PermissionDenied("probe refuses".into())),
+            SessionCloseKind::Archive => Ok(()),
+        }
+    }
+
+    async fn headless_run(
+        &self,
+        input: NativeHeadlessRunInput,
+    ) -> Result<Option<String>, HostError> {
+        tokio::task::yield_now().await;
+        Ok(Some(format!("probe {:?}", input.phase)))
+    }
+
+    async fn session_restore(
+        &self,
+        input: NativeSessionRestoreInput,
+    ) -> Result<Option<String>, HostError> {
+        tokio::task::yield_now().await;
+        Ok(Some(format!("restore {}", input.session)))
+    }
+
+    async fn runtime_restored(&self) -> Result<(), HostError> {
+        tokio::task::yield_now().await;
+        Err(HostError::Unavailable("probe restored".into()))
     }
 
     async fn tool_execute_before(
@@ -212,6 +273,10 @@ impl ProjectionReducer for TestV2Reducer {
         json!({ "count": 0, "kinds": [] })
     }
 
+    fn observed_bundles(&self) -> &[&str] {
+        &["hya/observed"]
+    }
+
     fn apply(&self, state: &mut Value, event: &ExtensionEventContext) -> Result<(), HostError> {
         let count = state
             .get("count")
@@ -286,12 +351,15 @@ impl NativeDriver for TestV2Driver {
             .run_turn(
                 TurnStartRequest {
                     session: request.session,
-                    prompt,
+                    prompt: Some(prompt),
                     agent: request.agent,
                     model: request.model,
                     system_override: None,
                     metadata: None,
                     actor_claim: None,
+                    guidance: None,
+                    route: None,
+                    start: TurnStart::Always,
                 },
                 cancel,
             )

@@ -20,8 +20,8 @@ use hya_runtime_abi::{
     NativeBundleApiReply, NativeBundleApiRequest, NativeDriver, NativeHook, NativePluginContext,
     NativeRegistrations, NativeService, NativeToolBeforeInput, NativeToolBeforeOutcome,
     ProjectionReducer, ServiceHealth, SessionListFilter, SessionSummaryMeta, TurnOutcome,
-    TurnSpawnRequest, TurnStartRequest, TurnStatus, UriContent, UriResolveCtx, UriSchemaHandler,
-    abi_digest_v2, export_native_bundle_v2,
+    TurnSpawnRequest, TurnStart, TurnStartRequest, TurnStatus, UriContent, UriResolveCtx,
+    UriSchemaHandler, abi_digest_v2, export_native_bundle_v2,
 };
 use hya_tool::{AgentDef, SkillCatalogEntry, Tool, ToolCtx, ToolError};
 use serde_json::{Value, json};
@@ -324,12 +324,12 @@ impl HostTurnRunner for InMemoryHostRuntime {
         self.turns_run
             .lock()
             .map_err(|e| HostError::Internal(e.to_string()))?
-            .push(request.prompt.clone());
+            .push(request.prompt.clone().unwrap_or_default());
         Ok(TurnOutcome {
             session: request.session,
             message_id: None,
             finish_reason: Some(FinishReason::Stop),
-            output_text: format!("ran: {}", request.prompt),
+            output_text: format!("ran: {}", request.prompt.unwrap_or_default()),
             error: None,
         })
     }
@@ -823,12 +823,15 @@ async fn host_runtime_subtraits_and_extension_traits_dispatch_cleanly()
         .run_turn(
             TurnStartRequest {
                 session,
-                prompt: "hello".to_string(),
+                prompt: Some("hello".to_string()),
                 agent: None,
                 model: None,
                 system_override: None,
                 metadata: None,
                 actor_claim: None,
+                guidance: None,
+                route: None,
+                start: TurnStart::Always,
             },
             CancellationToken::new(),
         )

@@ -33,7 +33,7 @@ impl SidecarStart {
         }
     }
 
-    pub(crate) fn resident() -> Self {
+    pub(crate) fn persistent() -> Self {
         Self {
             activation_id: format!("activation-{}", MemberId::new()),
             lifecycle: SidecarLifecycle::Resident,

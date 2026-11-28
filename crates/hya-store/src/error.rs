@@ -63,6 +63,16 @@ pub enum StoreError {
         /// Claimed resource key.
         claim_key: String,
     },
+    /// A batch expected a session's log to end at a sequence it has moved past.
+    #[error("session {session} log ends at {actual}, not the expected {expected}")]
+    StaleSessionSeq {
+        /// Session whose log moved.
+        session: SessionId,
+        /// Last sequence the caller expected.
+        expected: u64,
+        /// Last sequence in the log.
+        actual: u64,
+    },
     /// Takeover / recover found no active claim for this bundle key.
     #[error("bundle claim `{claim_key}` for bundle `{bundle}` has no active claim")]
     BundleClaimUnavailable {

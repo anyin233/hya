@@ -89,6 +89,14 @@ impl Tool for NativeTool {
         self.inner.result_policy()
     }
 
+    fn ends_turn(&self) -> bool {
+        self.inner.ends_turn()
+    }
+
+    fn suppresses_notices(&self) -> bool {
+        self.inner.suppresses_notices()
+    }
+
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {

@@ -102,11 +102,12 @@ pub use effort::{AgentEffortSource, EffectiveEffort, EffortSource, agent_effort,
 pub use engine::terminal_handoff;
 pub use engine::{
     AgentSpec, BoundSpawnRequest, BoundSpawnSender, BundleRefresh, CatalogScopeCacheConfig,
-    CreateSession, DRAIN_DEADLINE, ExplicitModelRoute, ExplicitModelRouteCandidate,
-    ExplicitTurnRoute, ForkAt, ForkError, MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES,
-    MAX_SESSION_BLOB_BYTES, MODEL_PROBE_PROMPT, ModelProbeReply, ProviderSnapshot, RevertError,
-    RevertOutcome, RevertTarget, RuntimeCatalogRefresh, SessionEngine, TurnBoundaryObserver,
-    TurnDrainReport, TurnLease, advertise_tool, fork_cut,
+    CreateSession, DRAIN_DEADLINE, DrivenTurn, DrivenTurnEnd, ExplicitModelRoute,
+    ExplicitModelRouteCandidate, ExplicitTurnRoute, FencedSidecars, ForkAt, ForkError,
+    MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES, MAX_SESSION_BLOB_BYTES, MODEL_PROBE_PROMPT,
+    ModelProbeReply, ProviderSnapshot, RevertError, RevertOutcome, RevertTarget,
+    RuntimeCatalogRefresh, SessionEngine, TurnBoundaryObserver, TurnDrainReport, TurnLease,
+    advertise_tool, fork_cut,
 };
 pub use error::CoreError;
 pub use hooks::{

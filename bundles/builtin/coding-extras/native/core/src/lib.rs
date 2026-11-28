@@ -739,6 +739,7 @@ mod tests {
                 agent: None,
                 candidate_tools: vec!["read".into(), "ask_user".into()],
                 interactive: false,
+                depth: 0,
             })
             .await
             .unwrap();
@@ -755,6 +756,7 @@ mod tests {
                 agent: None,
                 candidate_tools: vec!["read".into(), "ask_user".into()],
                 interactive: true,
+                depth: 0,
             })
             .await
             .unwrap();

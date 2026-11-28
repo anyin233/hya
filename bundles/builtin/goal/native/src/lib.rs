@@ -288,7 +288,7 @@ mod tests {
             self.turn_prompts
                 .lock()
                 .unwrap()
-                .push(request.prompt.clone());
+                .push(request.prompt.clone().unwrap_or_default());
             let reply = self
                 .turn_replies
                 .lock()
@@ -318,7 +318,7 @@ mod tests {
                     session: request.session,
                     message: user_msg,
                     part: user_part,
-                    delta: request.prompt,
+                    delta: request.prompt.unwrap_or_default(),
                 },
                 Event::MessageFinished {
                     session: request.session,

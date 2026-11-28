@@ -11,9 +11,10 @@ use hya_bundle::{Bundle, PreparedAgent};
 use hya_engine::resident::ActivationResult;
 use hya_engine::{
     AgentSpec, BundleApiCall, BundleApiError, CatalogScope, CategoryRegistry, CoreError,
-    CreateSession, ExplicitModelRoute, ExplicitModelRouteCandidate, ExplicitTurnRoute, HookChain,
-    ResidentSupervisor, SessionEngine, SessionStoreExt as _, SidecarEnvironment as _, TurnBinding,
-    apply_agent_model_preference, apply_spawn_model_policy,
+    CreateSession, DrivenTurn, DrivenTurnEnd, ExplicitModelRoute, ExplicitModelRouteCandidate,
+    ExplicitTurnRoute, FencedSidecars, HookChain, ResidentSupervisor, SessionEngine,
+    SessionStoreExt as _, SidecarEnvironment as _, TurnBinding, apply_agent_model_preference,
+    apply_spawn_model_policy,
 };
 use hya_proto::{
     ActorClaim, AgentName, ChannelPolicySnapshot, Envelope, Event, EventSeq, FinishReason, Message,
@@ -22,16 +23,16 @@ use hya_proto::{
 };
 use hya_provider::{CompletionRequest, ProviderRouter, ReasoningEffort};
 use hya_runtime_abi::{
-    BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,
-    BundleClaimRequest, BundleStateEntry, ExtensionEntry, ExtensionKind, HostBundleStorage,
-    HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry, HostModelCaller,
-    HostRuntime, HostSessionStore, HostTurnRunner, ManagedMemberActivateRequest,
+    AgentModelRequest, BundleApiInvocation, BundleApiResult, BundleCatalogSummary,
+    BundleClaimLease, BundleClaimRequest, BundleStateEntry, ExtensionEntry, ExtensionKind,
+    HostBundleStorage, HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry,
+    HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner, ManagedMemberActivateRequest,
     ManagedMemberActivationOutcome, ManagedMemberActivationStatus, ManagedMemberHandle,
     ManagedMemberSpawnRequest, MemberMailRevivalRequest, ModelCallRequest, ModelCallResponse,
     ModelRouteEntry, ModelStreamChunk, ModelToolCall, ModelWindowInfo, NativeDriver,
-    ResolvedModelRoute, ResolvedModelRouteCandidate, ScopeCatalogSnapshot, SessionListFilter,
-    SessionSummaryMeta, SessionTreeArchive, TurnOutcome, TurnSpawnRequest, TurnStartRequest,
-    TurnStatus,
+    ResolvedModelRoute, ResolvedModelRouteCandidate, ScopeCatalogSnapshot, SessionCloseKind,
+    SessionListFilter, SessionSummaryMeta, SessionTreeArchive, TurnOutcome, TurnSpawnRequest,
+    TurnStart, TurnStartRequest, TurnStatus,
 };
 use hya_store::SessionStore;
 use hya_tool::{AgentDef, ReportOutcome, SkillCatalogEntry, SpawnMember};
@@ -59,6 +60,8 @@ pub(crate) struct AppHostRuntime {
     drivers: std::sync::RwLock<std::collections::BTreeMap<String, Arc<dyn NativeDriver>>>,
     /// Bundle-declared hook points (`<bundle-id>:<point>`) of the loaded bundles.
     declared_hooks: std::sync::RwLock<BTreeSet<String>>,
+    /// Sidecars kept across the fenced turns of each session.
+    fenced_sidecars: FencedSidecars,
 }
 
 impl AppHostRuntime {
@@ -84,6 +87,7 @@ impl AppHostRuntime {
             sidecar_environment: OnceLock::new(),
             drivers: std::sync::RwLock::new(std::collections::BTreeMap::new()),
             declared_hooks: std::sync::RwLock::new(BTreeSet::new()),
+            fenced_sidecars: FencedSidecars::default(),
         }
     }
 
@@ -665,6 +669,22 @@ impl HostSessionStore for AppHostRuntime {
         Some(self.owner_run_id)
     }
 
+    async fn append_batch(
+        &self,
+        fence: Option<ActorClaim>,
+        expect: Vec<(SessionId, EventSeq)>,
+        events: Vec<(SessionId, Event)>,
+    ) -> Result<Vec<Envelope>, HostError> {
+        self.on_host(async move {
+            self.engine()?
+                .host_runtime()
+                .session_store()
+                .append_batch(fence, expect, events)
+                .await
+        })
+        .await
+    }
+
     async fn find_sessions_with_extension(
         &self,
         bundle: &str,
@@ -716,6 +736,15 @@ fn store_claim_to_lease(row: hya_store::BundleClaim) -> BundleClaimLease {
         expires_at_millis: row.expires_at.unwrap_or(i64::MAX),
         metadata: row.metadata,
     }
+}
+
+/// The session fence `lease` holds, when its key is a session id.
+fn lease_fence(lease: &BundleClaimLease) -> Option<ActorClaim> {
+    Some(ActorClaim {
+        actor_id: lease.resource_key.parse().ok()?,
+        epoch: hya_proto::ActorEpoch::from_storage(lease.epoch),
+        owner_run_id: serde_json::from_value(Value::String(lease.owner_id.clone())).ok()?,
+    })
 }
 
 fn lease_to_store_claim(lease: &BundleClaimLease) -> hya_store::BundleClaim {
@@ -927,7 +956,12 @@ impl HostBundleStorage for AppHostRuntime {
                 .await
                 .map_err(|error| HostError::Storage(error.to_string()))
         })
-        .await
+        .await?;
+        // A released session fence ends the sidecar its fenced turns kept.
+        if let Some(fence) = lease_fence(lease) {
+            self.fenced_sidecars.release(&fence).await;
+        }
+        Ok(())
     }
 
     async fn read_claim(
@@ -1009,7 +1043,12 @@ impl HostTurnRunner for AppHostRuntime {
 
     async fn archive_session_tree(&self, root: SessionId) -> Result<SessionTreeArchive, HostError> {
         self.on_host(async move {
-            self.engine()?
+            let engine = self.engine()?;
+            engine
+                .before_session_close(root, SessionCloseKind::Archive)
+                .await
+                .map_err(map_core_error)?;
+            engine
                 .host_runtime()
                 .turn_runner()
                 .archive_session_tree(root)
@@ -1027,7 +1066,8 @@ impl HostTurnRunner for AppHostRuntime {
             return Err(HostError::Cancelled);
         }
         let engine = self.engine()?;
-        let meta = self.session_metadata(request.session).await?;
+        let session = request.session;
+        let meta = self.session_metadata(session).await?;
         let workdir = meta
             .as_ref()
             .and_then(|m| m.workdir.as_deref())
@@ -1037,41 +1077,95 @@ impl HostTurnRunner for AppHostRuntime {
             .agent
             .or_else(|| meta.as_ref().and_then(|m| m.agent.clone()))
             .unwrap_or_else(|| self.default_agent.name.clone());
-        let model = request
-            .model
-            .or_else(|| meta.as_ref().and_then(|m| m.model.clone()))
-            .unwrap_or_else(|| self.default_agent.model.clone());
-        let binding = engine
-            .bind_session_runtime(request.session, &workdir)
-            .await
-            .map_err(map_core_error)?;
-        engine
-            .admit_user_prompt_with_binding(
-                request.session,
-                request.prompt,
-                &binding,
-                agent_name.as_str(),
+        let (binding, spec, resolved) = match request.actor_claim {
+            // A fenced turn runs as a child of its parent's binding.
+            Some(_) => {
+                let parent = meta.as_ref().and_then(|m| m.parent).unwrap_or(session);
+                let parent_binding = engine
+                    .bind_session_runtime(parent, &workdir)
+                    .await
+                    .map_err(map_core_error)?;
+                let (mut spec, (binding, roster, resources, _)) = self
+                    .resolve_managed_member_runtime(
+                        &engine,
+                        &parent_binding,
+                        &workdir,
+                        None,
+                        &agent_name,
+                        request.route.as_ref(),
+                    )?;
+                if let Some(system) = request.system_override {
+                    spec.system_prompt = system;
+                }
+                if let Some(model) = request.model {
+                    spec.model = model;
+                }
+                (binding, spec, Some((roster, resources)))
+            }
+            None => {
+                let binding = engine
+                    .bind_session_runtime(session, &workdir)
+                    .await
+                    .map_err(map_core_error)?;
+                let model = request
+                    .model
+                    .or_else(|| meta.as_ref().and_then(|m| m.model.clone()))
+                    .unwrap_or_else(|| self.default_agent.model.clone());
+                let spec = AgentSpec {
+                    name: agent_name.clone(),
+                    model,
+                    system_prompt: request
+                        .system_override
+                        .unwrap_or_else(|| self.default_agent.system_prompt.clone()),
+                    workdir,
+                    reasoning: self.default_agent.reasoning,
+                };
+                (binding, spec, None)
+            }
+        };
+        let lease = match request.start {
+            TurnStart::Always => None,
+            TurnStart::IfIdle => Some(engine.try_begin_turn(session).map_err(|_| {
+                HostError::Conflict(format!("session `{session}` has an active turn"))
+            })?),
+        };
+        let admitted_prompt = match request.prompt {
+            Some(prompt) => Some(
+                engine
+                    .admit_user_prompt_with_binding(session, prompt, &binding, agent_name.as_str())
+                    .await
+                    .map_err(map_core_error)?,
+            ),
+            None => None,
+        };
+        let fenced = request.actor_claim.is_some();
+        let end = engine
+            .run_driven_turn(
+                session,
+                DrivenTurn {
+                    agent: spec,
+                    binding,
+                    resolved,
+                    claim: request.actor_claim,
+                    guidance: request.guidance.map(Arc::from),
+                    route: request.route.as_ref().map(explicit_route_from_resolved),
+                    lease,
+                    // A fenced turn answers its prompt however it ends.
+                    admitted_prompt: admitted_prompt.filter(|_| fenced),
+                },
+                &self.fenced_sidecars,
+                cancel,
             )
             .await
             .map_err(map_core_error)?;
-        let spec = AgentSpec {
-            name: agent_name,
-            model,
-            system_prompt: request
-                .system_override
-                .unwrap_or_else(|| self.default_agent.system_prompt.clone()),
-            workdir,
-            reasoning: self.default_agent.reasoning,
-        };
-        engine
-            .run_bound_turn(request.session, &spec, binding, cancel, None)
-            .await
-            .map_err(map_core_error)?;
+        if end == DrivenTurnEnd::SidecarLost {
+            return Err(HostError::Unavailable("sidecar lost".into()));
+        }
         let projection = engine
-            .read_projection_shared(request.session)
+            .read_projection_shared(session)
             .await
             .map_err(map_core_error)?;
-        Ok(extract_turn_outcome(request.session, &projection))
+        Ok(extract_turn_outcome(session, &projection))
     }
 
     async fn spawn_session_and_run(
@@ -1149,14 +1243,22 @@ impl HostTurnRunner for AppHostRuntime {
 
     async fn cancel_turn(
         &self,
-        _session: SessionId,
-        _reason: Option<String>,
+        session: SessionId,
+        reason: Option<String>,
     ) -> Result<bool, HostError> {
-        Ok(false)
+        self.engine()?
+            .host_runtime()
+            .turn_runner()
+            .cancel_turn(session, reason)
+            .await
     }
 
-    async fn turn_status(&self, _session: SessionId) -> Result<TurnStatus, HostError> {
-        Ok(TurnStatus::Idle)
+    async fn turn_status(&self, session: SessionId) -> Result<TurnStatus, HostError> {
+        self.engine()?
+            .host_runtime()
+            .turn_runner()
+            .turn_status(session)
+            .await
     }
 
     // Adapter: removed in CHR-47.
@@ -1722,6 +1824,59 @@ impl HostCatalogReader for AppHostRuntime {
                 runtime_fingerprint,
                 diagnostics,
             })
+        })
+        .await
+    }
+
+    async fn resolve_agent_model(&self, request: AgentModelRequest) -> Result<ModelRef, HostError> {
+        self.on_host(async move {
+            let engine = self.engine()?;
+            let workdir = self.session_workdir_strict(request.parent).await?;
+            let binding = engine
+                .bind_session_runtime(request.parent, &workdir)
+                .await
+                .map_err(map_core_error)?;
+            let caller = self
+                .read_projection(request.parent)
+                .await?
+                .session
+                .agent
+                .clone()
+                .unwrap_or_else(|| self.default_agent.name.clone());
+            let allowed = engine
+                .agent_roster_for_binding(&binding, caller.as_str())
+                .map_err(map_core_error)?;
+            let environment = engine.sidecar_environment().ok_or_else(|| {
+                HostError::Unavailable("sidecar environment is not attached".into())
+            })?;
+            let mut base = self.default_agent.clone();
+            base.workdir = workdir;
+            let providers = engine.provider_snapshot();
+            let is_servable = |model: &ModelRef| providers.router().resolve(model).is_some();
+            let resolved = hya_engine::resident::resolve_spawn_member(
+                &hya_engine::resident::ResolveSpawnMemberCtx {
+                    engine: &engine,
+                    binding: &binding,
+                    base: &base,
+                    caller: caller.as_str(),
+                    allowed_agents: &allowed,
+                    categories: &self.categories,
+                    is_servable: &is_servable,
+                    guidance: None,
+                    sidecar_environment: environment.as_ref(),
+                },
+                SpawnMember {
+                    description: String::new(),
+                    prompt: String::new(),
+                    subagent_type: request.agent.as_str().to_string(),
+                    model: request.model.map(|model| model.to_string()),
+                    category: request.category,
+                    inline_agent: None,
+                    effort: request.effort,
+                },
+            )
+            .map_err(|error| HostError::InvalidInput(error.to_string()))?;
+            Ok(resolved.agent.model)
         })
         .await
     }

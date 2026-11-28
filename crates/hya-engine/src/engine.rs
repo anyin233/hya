@@ -87,7 +87,10 @@ use session_state::session_workdir;
 pub use spawn_requests::{BoundSpawnRequest, BoundSpawnSender};
 use terminal_handoff::{SummarizeOptions, Summarizer, TerminalHandoffOptions};
 pub(crate) use turn::TurnRequestContext;
-pub use turn::{ExplicitModelRoute, ExplicitModelRouteCandidate, ExplicitTurnRoute};
+pub use turn::{
+    DrivenTurn, DrivenTurnEnd, ExplicitModelRoute, ExplicitModelRouteCandidate, ExplicitTurnRoute,
+    FencedSidecars,
+};
 
 use crate::orchestrator::SubagentGovernor as StreamGovernor;
 
@@ -356,9 +359,9 @@ impl SessionEngine {
             hya_multi_agent_core::MultiAgentLifecycleHook::new(Arc::clone(&multi_service)),
         ));
         self.store
-            .register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
-                inner: Arc::new(hya_multi_agent_core::MultiAgentProjectionReducer),
-            }));
+            .register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter::owned(Arc::new(
+                hya_multi_agent_core::MultiAgentProjectionReducer,
+            ))));
         let _ = self.runtime.register_native_bundle_apis(
             hya_tool::extension::BUNDLE_MULTI_AGENT,
             vec![Arc::new(
@@ -684,15 +687,33 @@ impl SessionEngine {
 
     /// Register ABI v2 [`ProjectionReducer`](hya_runtime_abi::ProjectionReducer)
     /// instances on the underlying event store.
+    ///
+    /// A reducer's [`observed_bundles`](hya_runtime_abi::ProjectionReducer::observed_bundles)
+    /// also receive those bundles' events, after the owner folds them.
     pub fn register_native_projection_reducers(
         &self,
         reducers: Vec<Arc<dyn hya_runtime_abi::ProjectionReducer>>,
     ) {
-        for reducer in reducers {
-            self.store
-                .register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
-                    inner: reducer,
-                }));
+        let mut adapters: std::collections::BTreeMap<String, AbiV2ProjectionReducerAdapter> =
+            std::collections::BTreeMap::new();
+        for reducer in &reducers {
+            let bundle = reducer.bundle_id().to_string();
+            adapters
+                .entry(bundle.clone())
+                .or_insert_with(|| AbiV2ProjectionReducerAdapter::observing(bundle))
+                .inner = Some(Arc::clone(reducer));
+        }
+        for reducer in &reducers {
+            for observed in reducer.observed_bundles() {
+                adapters
+                    .entry((*observed).to_string())
+                    .or_insert_with(|| AbiV2ProjectionReducerAdapter::observing((*observed).into()))
+                    .observers
+                    .push(Arc::clone(reducer));
+            }
+        }
+        for adapter in adapters.into_values() {
+            self.store.register_projection_reducer(Arc::new(adapter));
         }
     }
 
@@ -864,24 +885,40 @@ fn fixed_system_agent(
 }
 
 /// Bridges an ABI v2 native bundle [`hya_runtime_abi::ProjectionReducer`] onto
-/// the host's [`hya_proto::ProjectionReducer`] pipeline.
+/// the host's [`hya_proto::ProjectionReducer`] pipeline for one bundle's
+/// events: its owner (when loaded) folds them, then each observer folds them
+/// into its own state.
 struct AbiV2ProjectionReducerAdapter {
-    inner: Arc<dyn hya_runtime_abi::ProjectionReducer>,
+    bundle: String,
+    inner: Option<Arc<dyn hya_runtime_abi::ProjectionReducer>>,
+    observers: Vec<Arc<dyn hya_runtime_abi::ProjectionReducer>>,
 }
 
-impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
-    fn bundle_id(&self) -> &str {
-        self.inner.bundle_id()
+impl AbiV2ProjectionReducerAdapter {
+    fn owned(inner: Arc<dyn hya_runtime_abi::ProjectionReducer>) -> Self {
+        Self {
+            bundle: inner.bundle_id().to_string(),
+            inner: Some(inner),
+            observers: Vec::new(),
+        }
     }
 
-    fn fold_extension(
-        &self,
+    fn observing(bundle: String) -> Self {
+        Self {
+            bundle,
+            inner: None,
+            observers: Vec::new(),
+        }
+    }
+
+    fn fold_owned(
+        inner: &dyn hya_runtime_abi::ProjectionReducer,
         projection: &mut hya_proto::Projection,
         session: SessionId,
         kind: &str,
         payload: &Value,
     ) {
-        let bundle_id = self.inner.bundle_id();
+        let bundle_id = inner.bundle_id();
         let multi_reviving_path =
             if bundle_id == hya_tool::extension::BUNDLE_MULTI_AGENT && kind == "agent_registered" {
                 let handle = payload.get("handle").and_then(Value::as_str);
@@ -912,7 +949,7 @@ impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
         let state = projection
             .extensions
             .entry(bundle_id.to_string())
-            .or_insert_with(|| self.inner.initial_state());
+            .or_insert_with(|| inner.initial_state());
         let ctx = hya_runtime_abi::ExtensionEventContext {
             session,
             seq: hya_proto::EventSeq(projection.last_seq),
@@ -921,7 +958,7 @@ impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
             kind: kind.to_string(),
             payload: payload.clone(),
         };
-        if self.inner.apply(state, &ctx).is_err() {
+        if inner.apply(state, &ctx).is_err() {
             return;
         }
         // Mirror `hya/multi-agent` registration and archive events into
@@ -998,7 +1035,7 @@ impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
         }
         // A reducer's tool-output overrides become the parts' eviction notices,
         // which the kernel sends in place of the outputs.
-        for replaced in self.inner.tool_output_overrides(&ctx) {
+        for replaced in inner.tool_output_overrides(&ctx) {
             if let Some(hya_proto::PartProjection::Tool {
                 eviction_notice, ..
             }) = projection
@@ -1070,6 +1107,50 @@ impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
                         .extensions
                         .insert(hya_tool::extension::BUNDLE_CHANNELS.to_string(), serialized);
                 }
+            }
+        }
+    }
+}
+
+impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
+    fn bundle_id(&self) -> &str {
+        &self.bundle
+    }
+
+    fn version(&self) -> u32 {
+        // Observers change the fold, so they are part of the snapshot signature.
+        self.observers.iter().fold(1u32, |hash, observer| {
+            observer.bundle_id().bytes().fold(hash, |hash, byte| {
+                hash.wrapping_mul(31).wrapping_add(u32::from(byte))
+            })
+        })
+    }
+
+    fn fold_extension(
+        &self,
+        projection: &mut hya_proto::Projection,
+        session: SessionId,
+        kind: &str,
+        payload: &Value,
+    ) {
+        if let Some(inner) = &self.inner {
+            Self::fold_owned(inner.as_ref(), projection, session, kind, payload);
+        }
+        let ctx = hya_runtime_abi::ExtensionEventContext {
+            session,
+            seq: hya_proto::EventSeq(projection.last_seq),
+            ts_millis: 0,
+            bundle: self.bundle.clone(),
+            kind: kind.to_string(),
+            payload: payload.clone(),
+        };
+        for observer in &self.observers {
+            let state = projection
+                .extensions
+                .entry(observer.bundle_id().to_string())
+                .or_insert_with(|| observer.initial_state());
+            if let Err(error) = observer.apply(state, &ctx) {
+                tracing::warn!(observer = observer.bundle_id(), %error, "observed event fold failed");
             }
         }
     }

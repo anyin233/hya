@@ -621,6 +621,7 @@ impl BuiltSessionEngine {
         let restored = state.resume_interrupted_turns().await;
         let residents = self.resident_supervisor.start_recovered().await?;
         crate::startup_trace::mark("residents_recovered", Some(&residents.to_string()));
+        self.engine.notify_runtime_restored().await;
         Ok(restored)
     }
 
@@ -688,7 +689,10 @@ where
     E: From<CoreError>,
 {
     let body_result = match built.resident_supervisor.start_recovered().await {
-        Ok(_) => body(&mut built).await,
+        Ok(_) => {
+            built.engine.notify_runtime_restored().await;
+            body(&mut built).await
+        }
         Err(error) => Err(E::from(error)),
     };
     let shutdown_result = built.shutdown().await.map_err(E::from);

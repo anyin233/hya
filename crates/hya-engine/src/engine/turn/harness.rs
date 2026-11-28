@@ -184,7 +184,7 @@ impl SessionEngine {
             rebind,
             apply_default_overlays,
             explicit_model,
-            entries: turn_hooks::entries(self, actor_claim, explicit_route, cancel, depth),
+            entries: turn_hooks::entries(self, session, actor_claim, explicit_route, cancel, depth),
             ran_known_tool,
             guidance,
             external_dirs,
@@ -405,6 +405,7 @@ impl ToolGate for EngineHarness<'_> {
             defer_steer: self.defer_steer,
             parent_session: self.parent_session,
             offered: &self.offered,
+            depth: self.depth,
         };
         gate.call(call).await?;
         self.defer_steer = gate.defer_steer;

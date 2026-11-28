@@ -191,6 +191,36 @@ impl SessionEngine {
         cancelled
     }
 
+    /// [`cancel_user_turn`](Self::cancel_user_turn) after the `turn.stop`
+    /// hooks for `session` have run, so a hook sees the turns still live.
+    pub async fn stop_user_turn(&self, session: SessionId) -> bool {
+        if let Some(hooks) = self.session_hook_dispatcher(session) {
+            hooks
+                .turn_stop(crate::hooks::NativeTurnStopInput {
+                    session,
+                    cause: FinishCause::UserCancel,
+                })
+                .await;
+        }
+        self.cancel_user_turn(session)
+    }
+
+    /// The `run.headless` pending-work lines for `session` at `phase`.
+    pub async fn headless_run_lines(
+        &self,
+        session: SessionId,
+        phase: crate::hooks::HeadlessRunPhase,
+    ) -> Vec<String> {
+        match self.session_hook_dispatcher(session) {
+            Some(hooks) => {
+                hooks
+                    .headless_run(crate::hooks::NativeHeadlessRunInput { session, phase })
+                    .await
+            }
+            None => Vec::new(),
+        }
+    }
+
     /// Distinguish an external cancellation from one about to be caused by loss.
     pub(crate) fn turn_cancel_cause(&self, session: SessionId) -> Option<FinishCause> {
         self.turn_gate.cancel_cause(session)

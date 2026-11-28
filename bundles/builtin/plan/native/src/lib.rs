@@ -118,6 +118,7 @@ mod tests {
                 agent: Some(AgentName::new("hya-plan")),
                 candidate_tools: vec!["read".into(), "plan_exit".into()],
                 interactive: false,
+                depth: 0,
             })
             .await
             .expect("non-interactive visibility outcome");
@@ -134,6 +135,7 @@ mod tests {
                 agent: Some(AgentName::new("hya-plan")),
                 candidate_tools: vec!["read".into(), "plan_exit".into()],
                 interactive: true,
+                depth: 0,
             })
             .await
             .expect("interactive visibility outcome");
