@@ -120,7 +120,6 @@ time = { version = "0.3", features = ["serde", "macros", "parsing", "formatting"
 tracing = "0.1"
 clap = { version = "4", features = ["derive", "env", "string"] }
 toml = "0.8"
-secrecy = "0.8"
 sevenz-rust2 = { path = "vendor/sevenz-rust2-0.20.2", version = "=0.20.2", default-features = false }
 # --- v2 dual-protocol contract (hya-api runtime + xtask codegen) ---
 prost = "0.13"
