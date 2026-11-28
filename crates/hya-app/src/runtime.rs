@@ -418,9 +418,10 @@ pub async fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
 ///
 /// The configuration could not be loaded.
 async fn resolve_runtime_strict(model_override: Option<String>) -> anyhow::Result<RuntimeConfig> {
-    let Some(cfg) = config::load().await? else {
+    let Some(parsed) = config::parse()? else {
         return Ok(offline_runtime(model_override, false));
     };
+    let cfg = config::resolve(parsed, &crate::provider_kinds::builtin()?).await?;
     let model = model_override
         .or_else(|| std::env::var("HYA_MODEL").ok())
         .unwrap_or_else(|| cfg.default_model.clone());

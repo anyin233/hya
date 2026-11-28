@@ -169,9 +169,13 @@ async fn refresh_credential(
     provider: &str,
     oauth: &OAuthCredential,
 ) -> Result<OAuthCredential, OAuthError> {
-    let result = match oauth.oauth_type {
-        OAuthType::OpenaiCodex => refresh_openai_codex(&oauth.refresh_token).await,
-        OAuthType::GrokBuild => refresh_grok_build(&oauth.refresh_token).await,
+    let result = match OAuthType::parse(&oauth.oauth_type) {
+        Some(OAuthType::OpenaiCodex) => refresh_openai_codex(&oauth.refresh_token).await,
+        Some(OAuthType::GrokBuild) => refresh_grok_build(&oauth.refresh_token).await,
+        None => Err(OAuthError::Protocol(format!(
+            "unknown OAuth type `{}`",
+            oauth.oauth_type
+        ))),
     };
     match result {
         Ok(mut cred) => {
@@ -222,7 +226,7 @@ pub fn oauth_status_in(dir: &Path, provider: Option<&str>) -> Result<Vec<OAuthSt
                 out.push(OAuthStatus {
                     provider: p,
                     kind: "oauth".into(),
-                    oauth_type: Some(oauth.oauth_type),
+                    oauth_type: OAuthType::parse(&oauth.oauth_type),
                     expires_at: Some(oauth.expires_at),
                     expired,
                     account_id: oauth.account_id,
@@ -294,7 +298,7 @@ mod tests {
             &dir,
             "codex",
             &AuthCredential::OAuth(OAuthCredential {
-                oauth_type: OAuthType::OpenaiCodex,
+                oauth_type: OAuthType::OpenaiCodex.as_str().to_string(),
                 access_token: "fresh-access".into(),
                 refresh_token: "rt".into(),
                 expires_at: expires,
@@ -319,7 +323,7 @@ mod tests {
             &dir,
             "grok",
             &AuthCredential::OAuth(OAuthCredential {
-                oauth_type: OAuthType::GrokBuild,
+                oauth_type: OAuthType::GrokBuild.as_str().to_string(),
                 access_token: "a".into(),
                 refresh_token: "r".into(),
                 expires_at: expires.clone(),
@@ -346,7 +350,7 @@ mod tests {
             &dir,
             "codex",
             &AuthCredential::OAuth(OAuthCredential {
-                oauth_type: OAuthType::OpenaiCodex,
+                oauth_type: OAuthType::OpenaiCodex.as_str().to_string(),
                 access_token: "stale-t0".into(),
                 refresh_token: "rt-0".into(),
                 expires_at: expires,

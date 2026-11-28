@@ -4,33 +4,39 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use hya_provider::{
     AuthPresence, CatalogDiscoveryRequest, CatalogFailure, HttpProvider, ModelCatalogSource,
-    ProviderAuthState, ProviderCatalogResult, ProviderCatalogSnapshot, ProviderCatalogSource,
-    ProviderCatalogState, ProviderDiscoveryOutcome, ProviderKind, ProviderModel, ProviderRouter,
-    ReasoningEffort, discover_models,
+    Protocol, ProviderAuthState, ProviderCatalogResult, ProviderCatalogSnapshot,
+    ProviderCatalogSource, ProviderCatalogState, ProviderDiscoveryOutcome, ProviderKinds,
+    ProviderModel, ProviderRouter, ReasoningEffort, discover_models,
 };
-use serde_norway::Value;
 
 use super::ResolvedConfig;
 use super::edit::ConfigEditError;
-use super::file::{EngineSettings, config_path, parse_config, resolve_mcp, resolve_permission};
+use super::file::{
+    EngineSettings, FileConfig, config_path, parse_config, resolve_mcp, resolve_permission,
+};
 use super::provider::{
-    EffectiveModel, PROVIDER_KIND_LABELS, ParsedProvider, ProviderCredential, ProviderKindConfig,
-    discovery_auth, merge_provider_models, resolve_provider_credential, resolve_providers,
-    resolve_providers_filtered, route_for_models, status_auth, validate_base_url,
+    EffectiveModel, ParsedProvider, ProviderCredential, kind_protocol, merge_provider_models,
+    resolve_provider_credential, resolve_providers, resolve_providers_filtered, route_for_models,
+    status_auth, validate_base_url,
 };
 
 /// One provider deferred to background discovery refresh (no cached rows,
 /// or a discovery-only provider with an empty `models:` list).
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PendingCatalogDiscovery {
     /// Declared provider id.
     pub provider_id: String,
-    /// Protocol kind for discovery adapters.
-    pub kind: ProviderKind,
     /// Catalog base URL from config.
     pub base_url: String,
     pub(crate) credential: ProviderCredential,
     pub(crate) provider: ParsedProvider,
+    pub(crate) kinds: Arc<ProviderKinds>,
+}
+
+/// A read and schema-checked `config.yaml`, before its provider kinds resolve.
+pub struct ParsedConfig {
+    path: std::path::PathBuf,
+    file: FileConfig,
 }
 
 fn failed_result(error: &CatalogFailure) -> ProviderCatalogResult {
@@ -143,6 +149,7 @@ impl DiscoveryResult {
 async fn discover_provider(
     provider: &ParsedProvider,
     credential: &ProviderCredential,
+    protocol: Arc<dyn Protocol>,
 ) -> DiscoveryResult {
     let presence = |auth: AuthPresence| match auth {
         AuthPresence::Credentialed => ProviderAuthState::Credentialed,
@@ -151,9 +158,9 @@ async fn discover_provider(
     let fetched_at = crate::model_cache::now_ms();
     match discover_models(CatalogDiscoveryRequest::new(
         provider.id.clone(),
-        provider.kind,
+        protocol,
         provider.base_url.clone(),
-        discovery_auth(provider.kind, credential),
+        credential.route_credential(),
     ))
     .await
     {
@@ -229,24 +236,23 @@ async fn apply_discovery(
 /// saved.
 ///
 /// # Errors
-/// [`ConfigEditError::Invalid`] for an unknown `kind` label or a bad base URL.
+/// [`ConfigEditError::Invalid`] for a `kind` label `kinds` does not have or
+/// a bad base URL.
 pub async fn probe_provider(
     provider_id: &str,
     kind: &str,
     base_url: &str,
     api_key: Option<&str>,
+    kinds: &ProviderKinds,
 ) -> Result<DiscoveryResult, ConfigEditError> {
-    let kind: ProviderKindConfig = serde_norway::from_value(Value::String(kind.to_string()))
-        .map_err(|_| {
-            ConfigEditError::Invalid(format!(
-                "unknown provider kind `{kind}` (expected one of {})",
-                PROVIDER_KIND_LABELS.join(", ")
-            ))
-        })?;
+    let protocol = kinds
+        .protocol(kind)
+        .cloned()
+        .ok_or_else(|| ConfigEditError::Invalid(unknown_kind(kind, kinds)))?;
     validate_base_url(base_url).map_err(ConfigEditError::Invalid)?;
     let provider = ParsedProvider {
         id: provider_id.to_string(),
-        kind: kind.into(),
+        kind: kind.to_string(),
         base_url: base_url.to_string(),
         api_key: None,
         models: Vec::new(),
@@ -258,12 +264,18 @@ pub async fn probe_provider(
             .map(str::trim)
             .filter(|key| !key.is_empty())
             .map(str::to_string),
-        use_grok_session: false,
-        use_codex_session: false,
         account_id: None,
         use_oauth_refresh: false,
     };
-    Ok(discover_provider(&provider, &credential).await)
+    Ok(discover_provider(&provider, &credential, protocol).await)
+}
+
+/// The error for a provider `kind` label that `kinds` does not have.
+pub(crate) fn unknown_kind(kind: &str, kinds: &ProviderKinds) -> String {
+    format!(
+        "unknown provider kind `{kind}` (expected one of {})",
+        kinds.labels().collect::<Vec<_>>().join(", ")
+    )
 }
 
 /// Persist a [`probe_provider`] result as `provider_id`'s model cache rows
@@ -279,8 +291,10 @@ pub(super) fn plan_for_provider(
     credential: &ProviderCredential,
     cached: &[crate::model_cache::CachedModel],
     discovery: Option<&DiscoveryResult>,
+    kinds: &ProviderKinds,
 ) -> anyhow::Result<ProviderPlanResult> {
-    let merged = merge_provider_models(provider, cached);
+    let protocol = kind_protocol(kinds, &provider.id, None, &provider.kind)?;
+    let merged = merge_provider_models(provider, cached, kinds)?;
     let auth = discovery.map_or_else(|| status_auth(credential), |discovery| discovery.auth);
     let source = if merged.is_empty() {
         ProviderCatalogSource::None
@@ -299,7 +313,10 @@ pub(super) fn plan_for_provider(
     };
     let state = ProviderCatalogState {
         provider_id: provider.id.clone(),
-        kind: provider.kind,
+        kind: protocol.kind().to_string(),
+        // Label-derived until the OAuth flows register with their kinds.
+        supports_oauth: matches!(protocol.kind(), "openai-codex" | "grok-build"),
+        min_output_tokens: protocol.min_output_tokens(),
         source,
         auth,
         result,
@@ -317,18 +334,19 @@ pub(super) fn plan_for_provider(
     // policy; `ProviderRouter::resolve` picks the route whose models claim
     // the requested ref, so the partitions' disjoint model sets route
     // themselves.
-    let mut partitions: Vec<(ProviderKind, Vec<EffectiveModel>)> = Vec::new();
+    let mut partitions: Vec<(&str, Vec<EffectiveModel>)> = Vec::new();
     for model in &merged {
         match partitions.iter_mut().find(|(kind, _)| *kind == model.kind) {
             Some((_, models)) => models.push(model.clone()),
-            None => partitions.push((model.kind, vec![model.clone()])),
+            None => partitions.push((&model.kind, vec![model.clone()])),
         }
     }
-    partitions.sort_by_key(|(kind, _)| usize::from(*kind != provider.kind));
+    partitions.sort_by_key(|(kind, _)| usize::from(*kind != protocol.kind()));
     let mut routes = Vec::with_capacity(partitions.len());
     let mut models = Vec::new();
     for (kind, partition) in partitions {
-        let route = route_for_models(provider, credential, kind, &partition)?;
+        let route_protocol = kind_protocol(kinds, &provider.id, None, kind)?;
+        let route = route_for_models(provider, credential, route_protocol, &partition)?;
         models.extend(hya_provider::Provider::catalog(&route));
         routes.push(route);
     }
@@ -339,16 +357,12 @@ pub(super) fn plan_for_provider(
     })
 }
 
-/// Load Hya config and resolve every provider catalog before publishing.
+/// Read and schema-check `config.yaml`; `None` when there is none or it is
+/// blank.
 ///
-/// A provider's effective model list is its model-cache rows
-/// (`$XDG_CACHE_HOME/hya/model_cache.db`) merged per model id with its
-/// config `models:` entries (config fields win). Providers with cached rows
-/// or config entries start without waiting on discovery HTTP; a provider with
-/// neither makes one bounded blocking request. Providers with no cached rows,
-/// and discovery-only providers (empty `models:`), are queued on
-/// [`ResolvedConfig::pending_discovery`] for background refresh.
-pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
+/// # Errors
+/// The file cannot be read or does not parse.
+pub fn parse() -> anyhow::Result<Option<ParsedConfig>> {
     let Some(path) = config_path() else {
         return Ok(None);
     };
@@ -357,7 +371,31 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     if yaml.trim().is_empty() {
         return Ok(None);
     }
-    let file = parse_config(&yaml)?;
+    Ok(Some(ParsedConfig {
+        file: parse_config(&yaml)?,
+        path,
+    }))
+}
+
+/// Resolve a parsed config against the registered provider `kinds`: resolve
+/// every provider catalog before publishing.
+///
+/// A provider's effective model list is its model-cache rows
+/// (`$XDG_CACHE_HOME/hya/model_cache.db`) merged per model id with its
+/// config `models:` entries (config fields win). Providers with cached rows
+/// or config entries start without waiting on discovery HTTP; a provider with
+/// neither makes one bounded blocking request. Providers with no cached rows,
+/// and discovery-only providers (empty `models:`), are queued on
+/// [`ResolvedConfig::pending_discovery`] for background refresh.
+///
+/// # Errors
+/// Invalid permission, MCP, or provider declarations (a kind `kinds` does
+/// not have included), or a route-build failure.
+pub async fn resolve(
+    parsed: ParsedConfig,
+    kinds: &Arc<ProviderKinds>,
+) -> anyhow::Result<ResolvedConfig> {
+    let ParsedConfig { path, file } = parsed;
     let permission = resolve_permission(&file)?;
     let mcp = resolve_mcp(&file)?;
     let parsed = resolve_providers(&file)?;
@@ -374,19 +412,26 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     let mut pending_discovery = Vec::new();
     for provider in parsed {
         let credential = resolve_provider_credential(&provider)?;
+        let protocol = kind_protocol(kinds, &provider.id, None, &provider.kind)?;
         let cached = cache.remove(&provider.id).unwrap_or_default();
         let pending = PendingCatalogDiscovery {
             provider_id: provider.id.clone(),
-            kind: provider.kind,
             base_url: provider.base_url.clone(),
             credential: credential.clone(),
             provider: provider.clone(),
+            kinds: Arc::clone(kinds),
         };
         if !provider.models.is_empty() || !cached.is_empty() {
             if cached.is_empty() || provider.models.is_empty() {
                 pending_discovery.push(pending);
             }
-            plans.push(plan_for_provider(&provider, &credential, &cached, None)?);
+            plans.push(plan_for_provider(
+                &provider,
+                &credential,
+                &cached,
+                None,
+                kinds,
+            )?);
             continue;
         }
         // Nothing cached and nothing configured: one bounded blocking
@@ -394,10 +439,11 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         // queued refresh is kept only when this attempt fails.
         pending_discovery.push(pending);
         let semaphore = Arc::clone(&semaphore);
+        let kinds = Arc::clone(kinds);
         tasks.spawn(async move {
             let discovery = match tokio::time::timeout_at(deadline, async {
                 let _permit = semaphore.acquire_owned().await.ok();
-                discover_provider(&provider, &credential).await
+                discover_provider(&provider, &credential, protocol).await
             })
             .await
             {
@@ -405,7 +451,7 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
                 Err(_) => DiscoveryResult::timed_out(status_auth(&credential)),
             };
             let rows = apply_discovery(&provider.id, Vec::new(), &discovery).await;
-            plan_for_provider(&provider, &credential, &rows, Some(&discovery))
+            plan_for_provider(&provider, &credential, &rows, Some(&discovery), &kinds)
         });
     }
     while let Some(result) = tasks.join_next().await {
@@ -442,7 +488,7 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     {
         anyhow::bail!("invalid global reasoning effort `{value}`");
     }
-    Ok(Some(ResolvedConfig {
+    Ok(ResolvedConfig {
         router,
         default_model: catalog.default_model().to_string(),
         catalog,
@@ -455,7 +501,7 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
             file,
             config_file: Some(path),
         },
-    }))
+    })
 }
 
 /// Replace the routes, rows, and statuses of `replaced` providers in the
@@ -542,7 +588,8 @@ pub async fn refresh_pending_catalogs(
     let mut cache = crate::model_cache::read_all_or_empty().await;
     let mut plans = Vec::with_capacity(pending.len());
     for entry in pending {
-        let discovery = discover_provider(&entry.provider, &entry.credential).await;
+        let protocol = kind_protocol(&entry.kinds, &entry.provider.id, None, &entry.provider.kind)?;
+        let discovery = discover_provider(&entry.provider, &entry.credential, protocol).await;
         let cached = cache.remove(&entry.provider_id).unwrap_or_default();
         let rows = apply_discovery(&entry.provider_id, cached, &discovery).await;
         plans.push(plan_for_provider(
@@ -550,6 +597,7 @@ pub async fn refresh_pending_catalogs(
             &entry.credential,
             &rows,
             Some(&discovery),
+            &entry.kinds,
         )?);
     }
     Ok(splice_catalog(current, current_router, &replaced, plans))
@@ -579,9 +627,9 @@ pub struct ProviderRebuild {
 }
 
 /// Re-read `config.yaml`, credentials, and the model cache, then rebuild
-/// `ids` (every declared provider when `None`) and splice them into the
-/// current router/catalog. A requested id no longer declared in config loses
-/// its route and rows.
+/// `ids` (every declared provider when `None`) over `kinds` and splice them
+/// into the current router/catalog. A requested id no longer declared in
+/// config loses its route and rows.
 ///
 /// # Errors
 /// Returns config read/parse/validation or route-build failures.
@@ -590,6 +638,7 @@ pub async fn rebuild_providers(
     mode: DiscoverMode,
     current: &ProviderCatalogSnapshot,
     current_router: &ProviderRouter,
+    kinds: &ProviderKinds,
 ) -> anyhow::Result<ProviderRebuild> {
     let selected = match config_path() {
         Some(path) => {
@@ -616,6 +665,7 @@ pub async fn rebuild_providers(
     let mut discovery = BTreeMap::new();
     for provider in selected {
         let credential = resolve_provider_credential(&provider)?;
+        let protocol = kind_protocol(kinds, &provider.id, None, &provider.kind)?;
         let mut cached = cache.remove(&provider.id).unwrap_or_default();
         let fetch = match mode {
             DiscoverMode::Always => true,
@@ -623,7 +673,7 @@ pub async fn rebuild_providers(
             DiscoverMode::Never => false,
         };
         let outcome = if fetch {
-            let outcome = discover_provider(&provider, &credential).await;
+            let outcome = discover_provider(&provider, &credential, protocol).await;
             cached = apply_discovery(&provider.id, cached, &outcome).await;
             Some(outcome)
         } else {
@@ -634,6 +684,7 @@ pub async fn rebuild_providers(
             &credential,
             &cached,
             outcome.as_ref(),
+            kinds,
         )?);
         if let Some(outcome) = outcome {
             discovery.insert(provider.id.clone(), outcome);

@@ -267,7 +267,7 @@ pub async fn refresh_openai_codex(refresh_token: &str) -> Result<OAuthCredential
     .map_err(|e| match e {
         OAuthError::Protocol(msg) if msg.contains("invalid_grant") => OAuthError::needs_login(
             "?",
-            OAuthType::OpenaiCodex,
+            OAuthType::OpenaiCodex.as_str(),
             "refresh token rejected (invalid_grant)",
         ),
         other => other,
@@ -353,7 +353,7 @@ fn credential_from_token_response(
         .and_then(extract_chatgpt_account_id)
         .or_else(|| extract_chatgpt_account_id(&access_token));
     Ok(OAuthCredential {
-        oauth_type: OAuthType::OpenaiCodex,
+        oauth_type: OAuthType::OpenaiCodex.as_str().to_string(),
         access_token,
         refresh_token,
         expires_at,
@@ -462,7 +462,7 @@ mod tests {
         assert_eq!(cred.access_token, "access");
         assert_eq!(cred.refresh_token, "refresh");
         assert_eq!(cred.account_id.as_deref(), Some("acct-99"));
-        assert_eq!(cred.oauth_type, OAuthType::OpenaiCodex);
+        assert_eq!(cred.oauth_type, OAuthType::OpenaiCodex.as_str());
     }
 
     #[test]

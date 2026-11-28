@@ -612,7 +612,10 @@ async fn model_cache_restores_metadata_merges_pinned_and_queues_miss() {
     )
     .await;
     let started = Instant::now();
-    let loaded = hya_app::config::load().await.unwrap().unwrap();
+    let kinds = hya_app::provider_kinds::builtin().unwrap();
+    let loaded = hya_app::config::resolve(hya_app::config::parse().unwrap().unwrap(), &kinds)
+        .await
+        .unwrap();
     assert!(started.elapsed() < Duration::from_secs(2));
     let rich = loaded
         .catalog
@@ -653,7 +656,10 @@ async fn model_cache_restores_metadata_merges_pinned_and_queues_miss() {
         ],
     )
     .await;
-    let loaded = hya_app::config::load().await.unwrap().unwrap();
+    let kinds = hya_app::provider_kinds::builtin().unwrap();
+    let loaded = hya_app::config::resolve(hya_app::config::parse().unwrap().unwrap(), &kinds)
+        .await
+        .unwrap();
     let find = |id: &str| {
         loaded
             .catalog
@@ -681,7 +687,10 @@ async fn model_cache_restores_metadata_merges_pinned_and_queues_miss() {
         ),
     );
     let started = Instant::now();
-    let loaded = hya_app::config::load().await.unwrap().unwrap();
+    let kinds = hya_app::provider_kinds::builtin().unwrap();
+    let loaded = hya_app::config::resolve(hya_app::config::parse().unwrap().unwrap(), &kinds)
+        .await
+        .unwrap();
     assert!(started.elapsed() < Duration::from_secs(2));
     assert_eq!(loaded.pending_discovery.len(), 1);
     assert_eq!(loaded.catalog.default_model().as_str(), "gateway/pinned");

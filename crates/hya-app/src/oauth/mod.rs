@@ -12,8 +12,6 @@ mod pkce;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use thiserror::Error;
-
 use crate::auth::{AuthCredential, OAuthType};
 use crate::config;
 
@@ -25,62 +23,7 @@ pub use grok_build::login_grok_build;
 pub use models_catalog::fetch_oauth_models;
 pub use openai_codex::{login_openai_codex, login_openai_codex_device};
 
-/// Errors from OAuth login, refresh, or credential loading.
-#[derive(Debug, Error)]
-pub enum OAuthError {
-    /// Stored credentials are missing, expired, or revoked; user must re-login.
-    #[error(
-        "OAuth credentials for provider '{provider}' require re-login ({reason}). Run: hya oauth login --provider {provider} --type {oauth_type}"
-    )]
-    NeedsLogin {
-        /// Config/auth provider id.
-        provider: String,
-        /// Canonical OAuth type string for the re-login command line.
-        oauth_type: String,
-        /// Short reason shown in the error message.
-        reason: String,
-    },
-    /// Token is valid but the subscription cannot call the API.
-    #[error(
-        "provider '{provider}' OAuth grant is valid but not entitled for API access ({detail}). Re-login will not help; use an API key path or upgrade the subscription."
-    )]
-    Entitlement {
-        /// Provider id that failed entitlement checks.
-        provider: String,
-        /// Upstream detail describing the entitlement failure.
-        detail: String,
-    },
-    /// HTTP/transport failure talking to the OAuth or catalog endpoint.
-    #[error("OAuth network error: {0}")]
-    Network(String),
-    /// Unexpected OAuth protocol response or missing fields.
-    #[error("OAuth protocol error: {0}")]
-    Protocol(String),
-    /// Interactive flow or network wait exceeded the configured timeout.
-    #[error("OAuth timed out: {0}")]
-    Timeout(String),
-    /// Local filesystem failure while reading/writing auth or config.
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-    /// Config path or YAML update failure (non-network).
-    #[error("config error: {0}")]
-    Config(String),
-}
-
-impl OAuthError {
-    /// Build a re-login error for a known OAuth type.
-    pub fn needs_login(
-        provider: impl Into<String>,
-        oauth_type: OAuthType,
-        reason: impl Into<String>,
-    ) -> Self {
-        Self::NeedsLogin {
-            provider: provider.into(),
-            oauth_type: oauth_type.as_str().to_string(),
-            reason: reason.into(),
-        }
-    }
-}
+pub use hya_provider::OAuthError;
 
 /// Options for `oauth login`.
 #[derive(Debug, Clone)]

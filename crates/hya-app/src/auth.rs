@@ -70,24 +70,7 @@ impl std::fmt::Display for OAuthType {
     }
 }
 
-/// Full OAuth credential bundle stored on disk.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OAuthCredential {
-    /// Which OAuth implementation produced this bundle.
-    pub oauth_type: OAuthType,
-    /// Short-lived bearer access token for API calls.
-    pub access_token: String,
-    /// Long-lived refresh token used to mint new access tokens.
-    pub refresh_token: String,
-    /// RFC3339 UTC timestamp when the access token expires.
-    pub expires_at: String,
-    /// Optional ChatGPT/Grok account id from token claims when known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub account_id: Option<String>,
-    /// Optional OpenID id_token (not used as the API bearer).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id_token: Option<String>,
-}
+pub use hya_provider::OAuthCredential;
 
 /// On-disk auth document for one provider id.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,7 +111,7 @@ struct AuthFile {
     #[serde(default)]
     token: Option<String>,
     #[serde(default)]
-    oauth_type: Option<OAuthType>,
+    oauth_type: Option<String>,
     #[serde(default)]
     access_token: Option<String>,
     #[serde(default)]
@@ -157,8 +140,10 @@ impl AuthFile {
             let oauth_type = self
                 .oauth_type
                 .ok_or_else(|| invalid_credential("missing oauth_type"))?;
+            let oauth_type = OAuthType::parse(&oauth_type)
+                .ok_or_else(|| invalid_credential("unknown oauth_type"))?;
             return Ok(AuthCredential::OAuth(OAuthCredential {
-                oauth_type,
+                oauth_type: oauth_type.as_str().to_string(),
                 access_token: required_field(self.access_token, "access_token")?,
                 refresh_token: required_field(self.refresh_token, "refresh_token")?,
                 expires_at: required_field(self.expires_at, "expires_at")?,
@@ -187,7 +172,7 @@ impl AuthFile {
             AuthCredential::OAuth(oauth) => Self {
                 kind: Some("oauth".to_string()),
                 token: None,
-                oauth_type: Some(oauth.oauth_type),
+                oauth_type: Some(oauth.oauth_type.clone()),
                 access_token: Some(oauth.access_token.clone()),
                 refresh_token: Some(oauth.refresh_token.clone()),
                 expires_at: Some(oauth.expires_at.clone()),
@@ -395,7 +380,7 @@ mod tests {
         assert_eq!(list_tokens_in(&dir).unwrap(), vec!["anthropic"]);
 
         let oauth = AuthCredential::OAuth(OAuthCredential {
-            oauth_type: OAuthType::OpenaiCodex,
+            oauth_type: "openai-codex".into(),
             access_token: "access-abc".into(),
             refresh_token: "refresh-xyz".into(),
             expires_at: "2026-07-22T12:00:00Z".into(),
@@ -424,6 +409,17 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("missing oauth_type")
+        );
+        std::fs::write(
+            dir.join("unknown.yaml"),
+            "type: oauth\noauth_type: other\naccess_token: a\nrefresh_token: r\nexpires_at: x\n",
+        )
+        .unwrap();
+        assert!(
+            load_credential_in(&dir, "unknown")
+                .unwrap_err()
+                .to_string()
+                .contains("unknown oauth_type")
         );
         std::fs::write(dir.join("malformed.yaml"), "token: [\n").unwrap();
         assert!(load_credential_in(&dir, "malformed").is_err());

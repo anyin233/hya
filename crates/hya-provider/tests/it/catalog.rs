@@ -4,9 +4,11 @@
 
 use hya_proto::ModelRef;
 use hya_provider::{
-    Capabilities, CatalogFailure, CatalogNotice, DiscoveredModel, ModelCatalogSource,
-    ProviderAuthState, ProviderCatalogResult, ProviderCatalogSnapshot, ProviderCatalogSource,
-    ProviderCatalogState, ProviderKind, ProviderModel, parse_catalog_payload, valid_provider_id,
+    AnthropicMessagesProtocol, Capabilities, CatalogFailure, CatalogNotice, DiscoveredModel,
+    GoogleProtocol, ModelCatalogSource, OpenAiChatProtocol, OpenAiCodexProtocol,
+    OpenAiResponsesProtocol, Protocol, ProviderAuthState, ProviderCatalogResult,
+    ProviderCatalogSnapshot, ProviderCatalogSource, ProviderCatalogState, ProviderModel,
+    parse_catalog_payload, valid_provider_id,
 };
 use serde_json::json;
 
@@ -30,7 +32,9 @@ fn state(
 ) -> ProviderCatalogState {
     ProviderCatalogState {
         provider_id: provider_id.to_string(),
-        kind: ProviderKind::OpenAiCompatible,
+        kind: "openai".to_string(),
+        supports_oauth: false,
+        min_output_tokens: 1,
         source,
         auth: ProviderAuthState::Unauthenticated,
         result,
@@ -215,7 +219,7 @@ fn catalog_snapshot_sorting_dedup_defaults_provenance_and_offline_isolation() {
 fn catalog_discovery_parses_provider_payloads_and_metadata() {
     // OpenAI data ids with trim, dedup, empty drop, and case sensitivity.
     let openai = parse_catalog_payload(
-        ProviderKind::OpenAiCompatible,
+        &OpenAiChatProtocol,
         &json!({"data": [{"id": " gpt-5 "}, {"id": "gpt-5"}, {"id": ""}, {"id": "GPT-5"}]}),
     )
     .unwrap();
@@ -235,7 +239,7 @@ fn catalog_discovery_parses_provider_payloads_and_metadata() {
 
     // Codex keeps slug & reasoning metadata.
     let codex = parse_catalog_payload(
-        ProviderKind::OpenAiCodex,
+        &OpenAiCodexProtocol,
         &json!({
             "models": [{
                 "slug": " codex-model ",
@@ -257,7 +261,7 @@ fn catalog_discovery_parses_provider_payloads_and_metadata() {
 
     // Google filters generateContent, strips models/ prefix, keeps displayName & limits.
     let google = parse_catalog_payload(
-        ProviderKind::Google,
+        &GoogleProtocol,
         &json!({
             "models": [
                 {
@@ -280,7 +284,7 @@ fn catalog_discovery_parses_provider_payloads_and_metadata() {
 
     // Anthropic & gateway display names and token limits.
     let anthropic = parse_catalog_payload(
-        ProviderKind::Anthropic,
+        &AnthropicMessagesProtocol,
         &json!({"data": [{"id": "claude-x", "display_name": "Claude X"}]}),
     )
     .unwrap();
@@ -288,7 +292,7 @@ fn catalog_discovery_parses_provider_payloads_and_metadata() {
     assert_eq!(anthropic[0].context_limit, None);
 
     let gateway = parse_catalog_payload(
-        ProviderKind::OpenAiCompatible,
+        &OpenAiChatProtocol,
         &json!({"data": [{
             "id": "vendor/model",
             "name": "Vendor Model",
@@ -304,17 +308,19 @@ fn catalog_discovery_parses_provider_payloads_and_metadata() {
 
 #[test]
 fn catalog_discovery_rejects_guessed_slug_and_malformed_shapes() {
-    for (kind, payload) in [
+    let cases: [(&dyn Protocol, _); 2] = [
         (
-            ProviderKind::OpenAiCompatible,
+            &OpenAiChatProtocol,
             json!({ "data": [{ "slug": "guessed" }] }),
         ),
-        (ProviderKind::OpenAiResponse, json!({ "models": [] })),
-    ] {
+        (&OpenAiResponsesProtocol, json!({ "models": [] })),
+    ];
+    for (protocol, payload) in cases {
         assert_eq!(
-            parse_catalog_payload(kind, &payload).unwrap_err(),
+            parse_catalog_payload(protocol, &payload).unwrap_err(),
             CatalogFailure::Schema,
-            "{kind:?}"
+            "{}",
+            protocol.kind()
         );
     }
 }

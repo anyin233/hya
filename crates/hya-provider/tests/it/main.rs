@@ -3,4 +3,5 @@
 mod catalog;
 mod conformance;
 mod http_headers;
+mod kinds;
 mod tool_result_images;

@@ -3,12 +3,15 @@
 //!
 //! # Adding a backend
 //!
-//! 1. Implement [`Protocol`] (`encode` + `decoder`) for the upstream JSON/SSE shape.
+//! 1. Implement [`Protocol`] (`kind`, `description`, `encode` + `decoder`) for the
+//!    upstream JSON/SSE shape; override its auth headers, compaction wire, and
+//!    model-list adapter where they differ from OpenAI-compatible.
 //! 2. Implement [`Decoder`] as a stateful SSE frame consumer that emits batches of
 //!    `hya_proto::Event` (SSE framing itself is owned by [`HttpProvider`], not the decoder).
-//! 3. Implement [`Provider`] (`id`, `capabilities`, `stream`) — or wrap the protocol
-//!    in [`HttpProvider`] for HTTP+SSE routes.
-//! 4. Register the provider on a [`ProviderRouter`] with [`ProviderRouter::with`].
+//! 3. Register the protocol as a [`ProviderKindEntry`] in [`ProviderKinds`], so
+//!    config `kind:` labels resolve to it.
+//! 4. Configured providers of that kind become [`HttpProvider`] routes on a
+//!    [`ProviderRouter`]; a non-HTTP backend implements [`Provider`] directly.
 //!
 //! Call order for a live turn: router [`ProviderRouter::resolve`] → [`preflight`] →
 //! [`Provider::stream`] → HTTP SSE → [`Decoder::push`] / [`Decoder::finish`].
@@ -17,11 +20,12 @@ use std::{collections::BTreeMap, time::Duration};
 
 /// Anthropic Messages protocol and stream decoder.
 pub mod anthropic;
-mod auth;
 /// Immutable startup model catalog and provider resolution metadata.
 pub mod catalog;
 /// Bounded model-list endpoint discovery and typed provider outcomes.
 pub mod catalog_discovery;
+/// Compact-window envelope carried in system messages.
+pub mod compact;
 /// Offline echo provider for local/dev runs without API keys.
 pub mod dev;
 /// Scripted provider fixtures, available with the Cargo feature test-support.
@@ -29,15 +33,23 @@ pub mod dev;
 pub mod fake;
 /// Gemini generateContent protocol and decoder.
 pub mod google;
-/// Generic HTTP+SSE driver shared by OpenAI-compatible, Responses, Anthropic, Google, Grok.
+/// Generic HTTP+SSE driver shared by every protocol.
 pub mod http;
+/// Registered provider kinds by config label.
+pub mod kinds;
 mod media;
+/// OAuth credentials and provider login flows.
+pub mod oauth;
 /// OpenAI Chat Completions and Responses protocols and decoders.
 pub mod openai;
 /// Ordered model routing with first-match resolution.
 pub mod router;
 mod stream_error;
-mod wire;
+/// Test servers and fixtures for protocol tests (feature `test-support`).
+#[cfg(feature = "test-support")]
+pub mod test_support;
+/// Helpers for encoding stored tool parts into provider wire formats.
+pub mod wire;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
@@ -50,24 +62,36 @@ pub use catalog::{
     ProviderCatalogSnapshot, ProviderCatalogSource, ProviderCatalogState,
 };
 pub use catalog_discovery::{
-    AuthPresence, CatalogAuth, CatalogDiscoveryRequest, CatalogFailure, DiscoveredModel,
-    ProviderDiscoveryOutcome, discover_models, is_grok_executable_model_id, parse_catalog_payload,
+    AuthPresence, CatalogDiscoveryRequest, CatalogFailure, DiscoveredModel,
+    ProviderDiscoveryOutcome, discover_models, parse_catalog_payload,
+};
+pub use compact::{
+    COMPACT_CONTEXT_MARKER, RESPONSES_COMPACT_ITEMS_MARKER, format_responses_compact_system,
+    parse_responses_compact_items,
 };
 pub use dev::DevProvider;
 #[cfg(any(test, feature = "test-support", feature = "legacy-fake-provider"))]
 #[allow(deprecated)]
 pub use fake::{FakeProvider, FakeStep};
 pub use google::{GoogleDecoder, GoogleProtocol};
-pub use http::{
-    AuthRefresher, BearerResolver, HttpProvider, ModelLimitOverride, ProviderKind, RetryConfig,
-};
+pub use http::{AuthRefresher, BearerResolver, HttpProvider, ModelLimitOverride, RetryConfig};
+pub use kinds::{KindConflict, ProviderKindEntry, ProviderKinds};
+pub use oauth::{OAuthCredential, OAuthError, OAuthLoginRequest, ProviderAuthFlow};
 pub use openai::{
-    COMPACT_CONTEXT_MARKER, OpenAiChatDecoder, OpenAiChatProtocol, OpenAiResponsesDecoder,
-    OpenAiResponsesProtocol, RESPONSES_COMPACT_ITEMS_MARKER, encode_input_items,
-    format_responses_compact_system, parse_responses_compact_items,
+    GrokBuildProtocol, OpenAiChatDecoder, OpenAiChatProtocol, OpenAiCodexProtocol,
+    OpenAiResponsesDecoder, OpenAiResponsesProtocol, encode_input_items,
 };
 pub use router::ProviderRouter;
 pub use wire::invalid_tool_arguments;
+
+/// Source files that define the provider types crossing the Native ABI; the
+/// ABI digest hashes them so a contract change changes the digest.
+pub const NATIVE_ABI_SOURCES: [&[u8]; 4] = [
+    include_bytes!("lib.rs"),
+    include_bytes!("kinds.rs"),
+    include_bytes!("oauth.rs"),
+    include_bytes!("catalog_discovery.rs"),
+];
 
 /// Check the provider ID format used by provider management.
 ///
@@ -528,7 +552,7 @@ pub struct CompletionRequest {
     pub headers: BTreeMap<String, String>,
 }
 
-/// Result of a standalone Responses `/responses/compact` call.
+/// Result of a native compaction call ([`Provider::compact_responses`]).
 #[derive(Clone, Debug)]
 pub struct CompactedWindow {
     /// Canonical next input items (pass as-is into the following `/responses` call).
@@ -585,9 +609,10 @@ pub trait Provider: Send + Sync {
         message: MessageId,
     ) -> Result<EventStream, ProviderError>;
 
-    /// When supported (OpenAI Responses / Codex / Grok Build), compact `messages`
-    /// via `POST /responses/compact`. Returns `Ok(None)` when the route has no
-    /// compact endpoint so callers can fall back to a local summarizer.
+    /// When the route's protocol has a native compaction wire
+    /// ([`Protocol::compaction`]), compact `messages` through it. Returns
+    /// `Ok(None)` when it has none so callers can fall back to a local
+    /// summarizer.
     async fn compact_responses(
         &self,
         _model: &ModelRef,
@@ -598,23 +623,159 @@ pub trait Provider: Send + Sync {
     }
 }
 
-/// Encoder/decoder pair for one upstream API shape (HTTP body + stream grammar).
+/// Credential material a route authenticates with. `token` is never empty.
+///
+/// Deliberately not [`Debug`], so the secret cannot reach diagnostics.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RouteCredential {
+    /// Bearer or API-key material.
+    pub token: String,
+    /// Account id that goes with the token (ChatGPT Codex), when known.
+    pub account_id: Option<String>,
+}
+
+/// Request a protocol builds headers for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequestPurpose {
+    /// A streamed completion or a native compaction call.
+    Completion,
+    /// A model-list (catalog discovery) request.
+    Catalog,
+}
+
+/// One HTTP request header a protocol asks the transport to send.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RequestHeader {
+    /// Header name (lower case).
+    pub name: String,
+    /// Header value.
+    pub value: String,
+    /// Whether the value is secret (kept out of debug output).
+    pub sensitive: bool,
+}
+
+impl RequestHeader {
+    /// Build one header.
+    pub fn new(name: impl Into<String>, value: impl Into<String>, sensitive: bool) -> Self {
+        Self {
+            name: name.into(),
+            value: value.into(),
+            sensitive,
+        }
+    }
+}
+
+/// `Authorization: Bearer <token>` for `credential`, when there is one.
+#[must_use]
+pub fn bearer_header(credential: Option<&RouteCredential>) -> Option<RequestHeader> {
+    credential.map(|credential| {
+        RequestHeader::new(
+            "authorization",
+            format!("Bearer {}", credential.token),
+            true,
+        )
+    })
+}
+
+/// A protocol's native context-compaction call (`/responses/compact`).
+pub trait CompactWire: Send + Sync {
+    /// Compaction URL for a trimmed API base.
+    fn endpoint(&self, base: &str) -> String;
+    /// Encode `messages` (and an explicit `system` prompt) for `model_id`;
+    /// `images` as in [`Protocol::encode_for_model`].
+    fn encode(
+        &self,
+        messages: &[Message],
+        system: Option<&str>,
+        model_id: &str,
+        images: bool,
+    ) -> Result<serde_json::Value, ProviderError>;
+    /// The compacted input items of a successful reply.
+    fn parse(&self, payload: &serde_json::Value) -> Result<Vec<serde_json::Value>, ProviderError>;
+}
+
+/// Encoder/decoder pair for one upstream API shape (HTTP body + stream grammar),
+/// with the headers and model-list adapter that go with it.
 ///
 /// [`Protocol::encode`] builds the request JSON. [`Protocol::decoder`] returns a
 /// fresh stateful decoder; the transport (e.g. [`HttpProvider`]) owns SSE framing
-/// and feeds frame data into [`Decoder::push`].
+/// and feeds frame data into [`Decoder::push`]. The catalog methods default to
+/// the OpenAI-compatible `GET <base>/models` list.
 pub trait Protocol: Send + Sync {
+    /// Config `kind` label of this protocol, unique per process.
+    fn kind(&self) -> &str;
+
+    /// Other config labels accepted for this protocol.
+    fn aliases(&self) -> &[&str] {
+        &[]
+    }
+
+    /// One-line description shown when choosing a protocol.
+    fn description(&self) -> &str;
+
     /// Completion URL for a trimmed API base and the upstream model ID.
     fn endpoint_url(&self, base: &str, _model: &str) -> String {
         base.to_owned()
     }
 
-    /// Native context-compaction URL, when the protocol supports it.
-    fn compact_endpoint(&self, _base: &str) -> Option<String> {
+    /// Headers that authenticate one request. `model` is the served model id
+    /// of a completion or compaction, `None` for a catalog request.
+    fn auth_headers(
+        &self,
+        credential: Option<&RouteCredential>,
+        _purpose: RequestPurpose,
+        _model: Option<&str>,
+    ) -> Vec<RequestHeader> {
+        bearer_header(credential).into_iter().collect()
+    }
+
+    /// Native context compaction, when the protocol has it.
+    fn compaction(&self) -> Option<&dyn CompactWire> {
         None
     }
 
-    /// Whether this wire can add prompt-cache breakpoints.
+    /// Smallest `max_output_tokens` the upstream accepts (model probes).
+    fn min_output_tokens(&self) -> u32 {
+        1
+    }
+
+    /// Model-list URL for a configured API base. The caller checks the
+    /// scheme, host and userinfo of the result.
+    fn models_url(&self, base: &str) -> Result<String, CatalogFailure> {
+        catalog_discovery::models_resource_url(base, None).map(String::from)
+    }
+
+    /// URL of one model-list page; `cursor` is the previous page's
+    /// [`Protocol::models_next_cursor`].
+    fn models_page_url(
+        &self,
+        endpoint: &str,
+        cursor: Option<&str>,
+    ) -> Result<String, CatalogFailure> {
+        match cursor {
+            Some(cursor) => catalog_discovery::append_query(endpoint, "after_id", cursor),
+            None => Ok(endpoint.to_owned()),
+        }
+    }
+
+    /// Cursor of the next model-list page, `None` on the last page.
+    fn models_next_cursor(
+        &self,
+        _payload: &serde_json::Value,
+    ) -> Result<Option<String>, CatalogFailure> {
+        Ok(None)
+    }
+
+    /// Model rows of one model-list page.
+    fn parse_models(
+        &self,
+        payload: &serde_json::Value,
+    ) -> Result<Vec<DiscoveredModel>, CatalogFailure> {
+        catalog_discovery::parse_rows(payload, &catalog_discovery::RowShape::DATA)
+    }
+
+    /// Whether this wire can add prompt-cache breakpoints; it is also the
+    /// route's prompt-cache default.
     fn supports_prompt_cache(&self) -> bool {
         false
     }
@@ -626,11 +787,6 @@ pub trait Protocol: Send + Sync {
         _headers: &mut BTreeMap<String, String>,
         _prompt_caching: bool,
     ) {
-    }
-
-    /// Model ID to send as a session header when this protocol requires one.
-    fn session_model_override<'a>(&self, _model: &'a str) -> Option<&'a str> {
-        None
     }
 
     /// Whether the protocol can attach tool-result images on image-capable models.

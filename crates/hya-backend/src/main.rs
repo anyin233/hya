@@ -925,11 +925,13 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 let ids = provider
                     .clone()
                     .map(|id| std::collections::BTreeSet::from([id]));
+                let kinds = hya_app::provider_kinds::builtin()?;
                 let rebuilt = config::rebuild_providers(
                     ids.as_ref(),
                     config::DiscoverMode::Always,
                     runtime.catalog.as_ref(),
                     &runtime.router,
+                    &kinds,
                 )
                 .await
                 .context("refresh provider catalog")?;

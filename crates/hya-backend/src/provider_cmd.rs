@@ -327,10 +327,16 @@ async fn add(args: AddArgs, db: &str) -> anyhow::Result<()> {
 
     let probe_id = named.clone().unwrap_or_else(|| suggested_id(&base_url));
     eprintln!("Fetching models from {base_url}/models …");
-    let discovery =
-        config::probe_provider(&probe_id, protocol.kind(), &base_url, api_key.as_deref())
-            .await
-            .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let kinds = hya_app::provider_kinds::builtin()?;
+    let discovery = config::probe_provider(
+        &probe_id,
+        protocol.kind(),
+        &base_url,
+        api_key.as_deref(),
+        &kinds,
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!("{error}"))?;
     let ids = discovery.model_ids();
     if discovery.ok() {
         println!(
@@ -376,6 +382,7 @@ async fn add(args: AddArgs, db: &str) -> anyhow::Result<()> {
             .as_deref()
             .map_or(SavedProviderKey::Remove, SavedProviderKey::Set),
         Some(&discovery),
+        &kinds,
     )
     .await?;
 
@@ -424,15 +431,18 @@ async fn list(refresh: bool, db: &str) -> anyhow::Result<()> {
     }
     let mut models: BTreeMap<String, Vec<(String, ModelCatalogSource)>> = BTreeMap::new();
     if !declared.is_empty() {
-        // The backend writes the model cache that `load` then reads.
+        // The backend writes the model cache that `resolve` then reads.
         let refreshed = refresh && refresh_through_backend(db, None).await?.is_some();
-        let resolved = config::load().await?.context("config.yaml is missing")?;
+        let kinds = hya_app::provider_kinds::builtin()?;
+        let parsed = config::parse()?.context("config.yaml is missing")?;
+        let resolved = config::resolve(parsed, &kinds).await?;
         let catalog = if refresh && !refreshed {
             config::rebuild_providers(
                 None,
                 config::DiscoverMode::Always,
                 resolved.catalog.as_ref(),
                 &resolved.router,
+                &kinds,
             )
             .await?
             .catalog

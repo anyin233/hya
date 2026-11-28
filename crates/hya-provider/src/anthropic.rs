@@ -2,9 +2,13 @@ use hya_proto::{Message, MessageId, Part, SessionId};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
+use crate::catalog_discovery::append_query;
 use crate::media::anthropic_image_source;
 use crate::wire::{ToolImages, tool_input, tool_result};
-use crate::{CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort};
+use crate::{
+    CatalogFailure, CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort,
+    RequestHeader, RequestPurpose, RouteCredential,
+};
 
 mod decoder;
 
@@ -72,8 +76,11 @@ pub(crate) fn add_prompt_cache_breakpoints(body: &mut Value) {
     }
 }
 
-/// Anthropic Messages API request encoder + stream decoder factory.
+/// Anthropic Messages API request encoder + stream decoder factory (`kind: anthropic`).
 pub struct AnthropicMessagesProtocol;
+
+/// `anthropic-version` header value sent with every request.
+const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 /// Anthropic's beta header for thinking block-binding controls.
 pub(crate) const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
@@ -118,8 +125,63 @@ fn uses_anthropic_adaptive_thinking(model_id: &str) -> bool {
 }
 
 impl Protocol for AnthropicMessagesProtocol {
+    fn kind(&self) -> &str {
+        "anthropic"
+    }
+
+    fn description(&self) -> &str {
+        "Anthropic Messages (<base>/messages)"
+    }
+
     fn endpoint_url(&self, base: &str, _model: &str) -> String {
         format!("{base}/messages")
+    }
+
+    fn auth_headers(
+        &self,
+        credential: Option<&RouteCredential>,
+        _purpose: RequestPurpose,
+        _model: Option<&str>,
+    ) -> Vec<RequestHeader> {
+        let mut headers: Vec<_> = credential
+            .map(|credential| RequestHeader::new("x-api-key", &credential.token, true))
+            .into_iter()
+            .collect();
+        headers.push(RequestHeader::new(
+            "anthropic-version",
+            ANTHROPIC_VERSION,
+            false,
+        ));
+        headers
+    }
+
+    fn models_page_url(
+        &self,
+        endpoint: &str,
+        cursor: Option<&str>,
+    ) -> Result<String, CatalogFailure> {
+        match cursor {
+            Some(cursor) => append_query(endpoint, "after_id", cursor),
+            None => append_query(endpoint, "limit", "1000"),
+        }
+    }
+
+    fn models_next_cursor(&self, payload: &Value) -> Result<Option<String>, CatalogFailure> {
+        let has_more = payload
+            .get("has_more")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if !has_more {
+            return Ok(None);
+        }
+        payload
+            .get("last_id")
+            .or_else(|| payload.get("after_id"))
+            .and_then(Value::as_str)
+            .filter(|cursor| !cursor.is_empty())
+            .map(str::to_owned)
+            .ok_or(CatalogFailure::PaginationLimit)
+            .map(Some)
     }
 
     fn reasoning_replay_policy(&self) -> crate::ReasoningReplayPolicy {

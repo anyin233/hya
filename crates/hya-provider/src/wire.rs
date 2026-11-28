@@ -1,11 +1,14 @@
 //! Shared helpers for encoding stored tool parts into provider wire formats.
 
-pub(crate) use hya_proto::context::ToolImageReplay as ToolImages;
+pub use crate::media::image_url;
+/// Which stored tool-result images a request may carry.
+pub use hya_proto::context::ToolImageReplay as ToolImages;
 use hya_proto::context::{tool_attachment_limit_notice, tool_result_text};
 use hya_proto::{PartId, ToolCallId, ToolPartState};
 use serde_json::Value;
 
-pub(crate) fn tool_input(state: &ToolPartState) -> &Value {
+/// The recorded input of a tool part in any state.
+pub fn tool_input(state: &ToolPartState) -> &Value {
     match state {
         ToolPartState::Pending { input }
         | ToolPartState::Running { input }
@@ -15,12 +18,14 @@ pub(crate) fn tool_input(state: &ToolPartState) -> &Value {
 }
 
 /// A tool's result as the model of one request receives it.
-pub(crate) struct ToolResult<'a> {
-    pub(crate) text: String,
-    pub(crate) is_error: bool,
+pub struct ToolResult<'a> {
+    /// Result text, with notices for attachments that are not sent.
+    pub text: String,
+    /// Whether the tool failed.
+    pub is_error: bool,
     /// Images to send with the result as `(media type, data)`, already
-    /// accepted by [`crate::media`].
-    pub(crate) images: Vec<(&'a str, &'a str)>,
+    /// accepted by [`image_url`].
+    pub images: Vec<(&'a str, &'a str)>,
 }
 
 /// Render the stored tool result of tool part `part` for one request.
@@ -30,7 +35,7 @@ pub(crate) struct ToolResult<'a> {
 /// with another model is told the truth. A pending or running state should not
 /// reach the encoder, but is handled so request pairing (every call needs a
 /// result) never breaks.
-pub(crate) fn tool_result<'a>(
+pub fn tool_result<'a>(
     part: &PartId,
     state: &'a ToolPartState,
     images: &ToolImages<'_>,

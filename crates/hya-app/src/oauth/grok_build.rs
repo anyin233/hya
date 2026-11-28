@@ -155,7 +155,7 @@ pub async fn refresh_grok_build(refresh_token: &str) -> Result<OAuthCredential, 
         let err = json_str(&json, "error").unwrap_or("invalid_grant");
         return Err(OAuthError::needs_login(
             "?",
-            OAuthType::GrokBuild,
+            OAuthType::GrokBuild.as_str(),
             format!("refresh failed: {err}"),
         ));
     }
@@ -198,7 +198,7 @@ fn credential_from_token_response(
     };
     let id_token = json_str(payload, "id_token").map(str::to_string);
     Ok(OAuthCredential {
-        oauth_type: OAuthType::GrokBuild,
+        oauth_type: OAuthType::GrokBuild.as_str().to_string(),
         access_token,
         refresh_token,
         expires_at,
@@ -233,7 +233,7 @@ mod tests {
         let cred = credential_from_token_response(&resp, None).unwrap();
         assert_eq!(cred.refresh_token, "rt-1");
         assert!(cred.expires_at.starts_with("2030-01-01"));
-        assert_eq!(cred.oauth_type, OAuthType::GrokBuild);
+        assert_eq!(cred.oauth_type, OAuthType::GrokBuild.as_str());
     }
 
     #[test]

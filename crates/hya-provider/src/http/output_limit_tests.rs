@@ -6,18 +6,26 @@
 use hya_proto::ModelRef;
 use serde_json::Value;
 
-use super::{HttpProvider, ModelLimitOverride, ProviderKind};
-use crate::{CompletionRequest, Provider as _, ReasoningEffort};
+use std::sync::Arc;
+
+use super::{HttpProvider, ModelLimitOverride};
+use crate::{
+    AnthropicMessagesProtocol, CompletionRequest, GoogleProtocol, OpenAiChatProtocol,
+    OpenAiResponsesProtocol, Protocol, Provider as _, ReasoningEffort, RouteCredential,
+};
 
 const LIMITED: &str = "glm-5.3-flash";
 const UNLIMITED: &str = "glm-5.3";
 
-fn route(kind: ProviderKind, output: u32) -> HttpProvider {
+fn route(protocol: impl Protocol + 'static, output: u32) -> HttpProvider {
     HttpProvider::new(
         "12th",
-        kind,
+        Arc::new(protocol),
         "https://api.12th.day/v1",
-        Some("key".to_string()),
+        Some(RouteCredential {
+            token: "key".to_string(),
+            account_id: None,
+        }),
         [LIMITED.to_string(), UNLIMITED.to_string()],
     )
     .unwrap()
@@ -73,7 +81,7 @@ fn anthropic_prompt_cache_marks_only_system_last_tool_and_final_message_block() 
             }],
         })
         .collect();
-    let enabled = body(&route(ProviderKind::Anthropic, 0), req.clone());
+    let enabled = body(&route(AnthropicMessagesProtocol, 0), req.clone());
     let marker = json!({"type":"ephemeral"});
     assert_eq!(enabled["system"][0]["cache_control"], marker);
     assert!(enabled["tools"][0].get("cache_control").is_none());
@@ -90,27 +98,24 @@ fn anthropic_prompt_cache_marks_only_system_last_tool_and_final_message_block() 
     assert_eq!(enabled.to_string().matches("cache_control").count(), 3);
 
     let disabled = body(
-        &route(ProviderKind::Anthropic, 0).with_prompt_cache(false),
+        &route(AnthropicMessagesProtocol, 0).with_prompt_cache(false),
         req.clone(),
     );
     assert!(!disabled.to_string().contains("cache_control"));
     assert_eq!(disabled["system"], "shared prefix");
-    let other = body(
-        &route(ProviderKind::OpenAiCompatible, 0).with_prompt_cache(true),
-        req,
-    );
+    let other = body(&route(OpenAiChatProtocol, 0).with_prompt_cache(true), req);
     assert!(!other.to_string().contains("cache_control"));
 }
 
 #[test]
 fn prompt_cache_changes_anthropic_route_capabilities() {
-    let enabled = route(ProviderKind::Anthropic, 0);
-    let disabled = route(ProviderKind::Anthropic, 0).with_prompt_cache(false);
+    let enabled = route(AnthropicMessagesProtocol, 0);
+    let disabled = route(AnthropicMessagesProtocol, 0).with_prompt_cache(false);
     let model = ModelRef::new(LIMITED);
     assert!(enabled.capabilities(&model).unwrap().prompt_caching);
     assert!(!disabled.capabilities(&model).unwrap().prompt_caching);
     assert!(
-        !route(ProviderKind::Google, 0)
+        !route(GoogleProtocol, 0)
             .capabilities(&model)
             .unwrap()
             .prompt_caching
@@ -119,7 +124,7 @@ fn prompt_cache_changes_anthropic_route_capabilities() {
 
 #[test]
 fn anthropic_defaults_max_tokens_to_the_known_output_limit() {
-    let route = route(ProviderKind::Anthropic, 131_072);
+    let route = route(AnthropicMessagesProtocol, 131_072);
     let body = body(&route, request("12th/glm-5.3-flash", None, None));
     assert_eq!(body["max_tokens"], 131_072);
     assert_eq!(body["model"], LIMITED);
@@ -127,7 +132,7 @@ fn anthropic_defaults_max_tokens_to_the_known_output_limit() {
 
 #[test]
 fn anthropic_clamps_an_explicit_request_to_the_known_output_limit() {
-    let route = route(ProviderKind::Anthropic, 131_072);
+    let route = route(AnthropicMessagesProtocol, 131_072);
     let over = body(&route, request(LIMITED, Some(200_000), None));
     assert_eq!(over["max_tokens"], 131_072);
     let under = body(&route, request(LIMITED, Some(1_000), None));
@@ -136,10 +141,10 @@ fn anthropic_clamps_an_explicit_request_to_the_known_output_limit() {
 
 #[test]
 fn anthropic_without_a_known_limit_keeps_the_4096_fallback() {
-    let route = route(ProviderKind::Anthropic, 131_072);
+    let route = route(AnthropicMessagesProtocol, 131_072);
     let body = body(&route, request(UNLIMITED, None, None));
     assert_eq!(body["max_tokens"], 4096);
-    let context_only = self::route(ProviderKind::Anthropic, 0);
+    let context_only = self::route(AnthropicMessagesProtocol, 0);
     let body = self::body(&context_only, request(LIMITED, None, None));
     assert_eq!(
         body["max_tokens"], 4096,
@@ -150,7 +155,7 @@ fn anthropic_without_a_known_limit_keeps_the_4096_fallback() {
 #[test]
 fn anthropic_thinking_budget_stays_below_the_known_output_limit() {
     // A large limit leaves the budget untouched.
-    let wide = route(ProviderKind::Anthropic, 131_072);
+    let wide = route(AnthropicMessagesProtocol, 131_072);
     let body = body(&wide, request(LIMITED, None, Some(ReasoningEffort::Max)));
     assert_eq!(body["max_tokens"], 131_072);
     assert_eq!(body["thinking"]["budget_tokens"], 31_999);
@@ -164,13 +169,13 @@ fn anthropic_thinking_budget_stays_below_the_known_output_limit() {
     assert_eq!(body["thinking"]["budget_tokens"], 16_000);
 
     // A limit below the budget shrinks the budget to leave room for an answer.
-    let narrow = route(ProviderKind::Anthropic, 8_192);
+    let narrow = route(AnthropicMessagesProtocol, 8_192);
     let body = self::body(&narrow, request(LIMITED, None, Some(ReasoningEffort::High)));
     assert_eq!(body["max_tokens"], 8_192);
     assert_eq!(body["thinking"]["budget_tokens"], 4_096);
 
     // A limit too small for the minimum 1024-token budget drops thinking.
-    let tiny = route(ProviderKind::Anthropic, 1_500);
+    let tiny = route(AnthropicMessagesProtocol, 1_500);
     let body = self::body(&tiny, request(LIMITED, None, Some(ReasoningEffort::Medium)));
     assert_eq!(body["max_tokens"], 1_500);
     assert!(body.get("thinking").is_none(), "got {body}");
@@ -183,7 +188,7 @@ fn anthropic_thinking_budget_stays_below_the_known_output_limit() {
 
 #[test]
 fn openai_compatible_sends_max_tokens_only_when_the_limit_is_known() {
-    let route = route(ProviderKind::OpenAiCompatible, 131_072);
+    let route = route(OpenAiChatProtocol, 131_072);
     assert_eq!(
         body(&route, request(LIMITED, None, None))["max_tokens"],
         131_072
@@ -202,7 +207,7 @@ fn openai_compatible_sends_max_tokens_only_when_the_limit_is_known() {
 
 #[test]
 fn responses_and_google_follow_the_same_limit_rule() {
-    let responses = route(ProviderKind::OpenAiResponse, 131_072);
+    let responses = route(OpenAiResponsesProtocol, 131_072);
     assert_eq!(
         body(&responses, request(LIMITED, None, None))["max_output_tokens"],
         131_072
@@ -210,7 +215,7 @@ fn responses_and_google_follow_the_same_limit_rule() {
     let unknown = body(&responses, request(UNLIMITED, None, None));
     assert!(unknown.get("max_output_tokens").is_none(), "got {unknown}");
 
-    let google = route(ProviderKind::Google, 65_536);
+    let google = route(GoogleProtocol, 65_536);
     assert_eq!(
         body(&google, request(LIMITED, Some(100_000), None))["generationConfig"]["maxOutputTokens"],
         65_536
@@ -221,7 +226,7 @@ fn responses_and_google_follow_the_same_limit_rule() {
 
 #[test]
 fn catalog_rows_advertise_the_known_output_limit() {
-    let route = route(ProviderKind::Anthropic, 131_072);
+    let route = route(AnthropicMessagesProtocol, 131_072);
     let caps = route
         .capabilities(&ModelRef::new("12th/glm-5.3-flash"))
         .unwrap();
@@ -267,7 +272,7 @@ fn only_a_model_declared_to_take_images_gets_tool_result_images() {
         last_step_start: Some(0),
     }];
     let result = |support: Option<bool>| {
-        let route = route(ProviderKind::Anthropic, 0)
+        let route = route(AnthropicMessagesProtocol, 0)
             .with_model_image_input(support.map(|value| (LIMITED.to_string(), value)));
         body(&route, req.clone())["messages"][1]["content"][0]["content"].clone()
     };

@@ -16,27 +16,28 @@ pub async fn fetch_oauth_models(
     account_id: Option<&str>,
     base_url: &str,
 ) -> Result<Vec<hya_provider::DiscoveredModel>, OAuthError> {
-    let (kind, endpoint, auth) = match oauth_type {
-        OAuthType::OpenaiCodex => (
-            hya_provider::ProviderKind::OpenAiCodex,
-            OAuthType::OpenaiCodex.default_base_url(),
-            hya_provider::CatalogAuth::bearer(access_token, account_id.map(str::to_owned)),
-        ),
-        OAuthType::GrokBuild => (
-            hya_provider::ProviderKind::GrokBuild,
-            base_url,
-            hya_provider::CatalogAuth::grok(
-                Some(access_token.to_owned()),
-                hya_version::BACKEND_VERSION,
-                "grok-cli",
-            ),
-        ),
+    let endpoint = match oauth_type {
+        OAuthType::OpenaiCodex => OAuthType::OpenaiCodex.default_base_url(),
+        OAuthType::GrokBuild => base_url,
     };
+    let kinds = crate::provider_kinds::builtin().map_err(|e| OAuthError::Config(e.to_string()))?;
+    let protocol = kinds
+        .protocol(oauth_type.provider_kind())
+        .cloned()
+        .ok_or_else(|| {
+            OAuthError::Config(format!(
+                "provider kind `{}` is not registered",
+                oauth_type.provider_kind()
+            ))
+        })?;
     let outcome = hya_provider::discover_models(hya_provider::CatalogDiscoveryRequest::new(
         "oauth-preview",
-        kind,
+        protocol,
         endpoint,
-        auth,
+        Some(hya_provider::RouteCredential {
+            token: access_token.to_owned(),
+            account_id: account_id.map(str::to_owned),
+        }),
     ))
     .await;
     preview_models_from_outcome(outcome)
@@ -60,7 +61,7 @@ fn preview_models_from_outcome(
             Err(OAuthError::Protocol(error.to_string()))
         }
         hya_provider::ProviderDiscoveryOutcome::Unsupported { kind } => Err(OAuthError::Protocol(
-            format!("OAuth model catalog does not support {kind:?}"),
+            format!("OAuth model catalog does not support kind `{kind}`"),
         )),
     }
 }
@@ -87,7 +88,7 @@ mod tests {
             ]
         });
         let shared =
-            hya_provider::parse_catalog_payload(hya_provider::ProviderKind::OpenAiCodex, &payload)
+            hya_provider::parse_catalog_payload(&hya_provider::OpenAiCodexProtocol, &payload)
                 .unwrap();
         let models =
             preview_models_from_outcome(hya_provider::ProviderDiscoveryOutcome::Discovered {
@@ -121,7 +122,7 @@ mod tests {
             ]
         });
         let shared =
-            hya_provider::parse_catalog_payload(hya_provider::ProviderKind::GrokBuild, &payload)
+            hya_provider::parse_catalog_payload(&hya_provider::GrokBuildProtocol, &payload)
                 .unwrap();
         let models =
             preview_models_from_outcome(hya_provider::ProviderDiscoveryOutcome::Discovered {

@@ -46,6 +46,8 @@ pub mod project_plugins;
 mod project_scope;
 /// Live provider management behind the v1 provider routes.
 pub mod provider_control;
+/// Provider kinds the runtime routes, by config `kind` label.
+pub mod provider_kinds;
 /// Runtime assembly: store, engine, team supervisor, and [`HyaRuntime`].
 pub mod runtime;
 mod runtime_extensions_refresh;

@@ -1,13 +1,13 @@
 //! Build a provider router from hya's own config (`~/.config/hya/config.yaml`).
 //!
 //! Reads YAML: each entry under `providers.<id>` maps to one `HttpProvider`
-//! (route chosen by `kind`), and the union of `models` becomes the set hya can
-//! address. API keys come from `~/.config/hya/auth/<id>.yaml` (via `hya login`)
-//! or an inline `api_key` in the provider block. `kind: grok-build` always uses
-//! CLI chat-proxy session headers with that configured bearer token (self-contained
-//! config — it does not read `~/.grok/auth.json`). `kind: openai-codex` targets the
-//! ChatGPT Codex backend. OAuth credentials live under `~/.config/hya/auth/` and
-//! are auto-refreshed when near expiry. No resolved live model rows → offline.
+//! whose protocol is the registered provider kind named by `kind`, and the
+//! union of `models` becomes the set hya can address. [`parse`] reads the file;
+//! [`resolve`] resolves it against the registered kinds. API keys come from
+//! `~/.config/hya/auth/<id>.yaml` (via `hya login`) or an inline `api_key` in
+//! the provider block; the kind's protocol decides which headers carry them.
+//! OAuth credentials live under `~/.config/hya/auth/` and are auto-refreshed
+//! when near expiry. No resolved live model rows → offline.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -22,9 +22,10 @@ mod edit;
 mod file;
 mod provider;
 
+pub(crate) use catalog::unknown_kind;
 pub use catalog::{
-    DiscoverMode, DiscoveryResult, PendingCatalogDiscovery, ProviderRebuild, load, probe_provider,
-    rebuild_providers, refresh_pending_catalogs, store_discovery,
+    DiscoverMode, DiscoveryResult, ParsedConfig, PendingCatalogDiscovery, ProviderRebuild, parse,
+    probe_provider, rebuild_providers, refresh_pending_catalogs, resolve, store_discovery,
 };
 pub use edit::{
     ConfigEditError, ModelEntryOverride, ProviderDeclaration, provider_declarations,
@@ -39,7 +40,7 @@ pub use file::{
 };
 pub(crate) use file::{parse_plugin_config, read_bundle_config_json};
 pub(crate) use provider::resolve_secret;
-pub use provider::{PROVIDER_KIND_LABELS, validate_base_url};
+pub use provider::validate_base_url;
 
 /// Fully loaded Hya config: provider routes, one immutable catalog snapshot,
 /// and derived runtime knobs.

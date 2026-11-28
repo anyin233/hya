@@ -22,10 +22,12 @@ const MAX_GOOGLE_MEDIA_DECODED_BYTES: usize = 20 * 1024 * 1024;
 const BASE64_CHUNK_CHARS: usize = 1_024;
 const BASE64_CHUNK_BYTES: usize = BASE64_CHUNK_CHARS / 4 * 3;
 
-pub(crate) fn image_url<'a>(
-    media_type: &str,
-    data: &'a str,
-) -> Result<Cow<'a, str>, ProviderError> {
+/// The image as a URL a request can carry: an `http(s)` URL as is, base64
+/// data as a `data:` URL.
+///
+/// # Errors
+/// [`ProviderError`] for a media type or payload that is not a supported image.
+pub fn image_url<'a>(media_type: &str, data: &'a str) -> Result<Cow<'a, str>, ProviderError> {
     match image_data(media_type, data)? {
         ImageData::Url(url) => Ok(Cow::Borrowed(url)),
         ImageData::Base64 { .. } if data.starts_with("data:") => Ok(Cow::Borrowed(data)),

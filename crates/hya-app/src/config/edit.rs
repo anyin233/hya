@@ -4,7 +4,7 @@ use anyhow::Context as _;
 use serde_norway::{Mapping, Value};
 
 use super::file::{DEFAULT_CONFIG_YAML, config_path, parse_config};
-use super::provider::{PROVIDER_KIND_LABELS, resolve_providers_filtered};
+use super::provider::resolve_providers_filtered;
 
 /// Upsert a non-secret OAuth provider route into `config.yaml`.
 ///
@@ -191,21 +191,18 @@ fn write_config_value(
 /// provider gets `models: []` (discovery). Returns whether the provider was
 /// created.
 ///
+/// `kind` is written as given: callers check it against the registered
+/// kinds, and validation of the whole file does not resolve kinds.
+///
 /// # Errors
-/// [`ConfigEditError::Invalid`] for an unknown kind or an edit that fails
-/// validation; [`ConfigEditError::Io`] for read/parse/write failures.
+/// [`ConfigEditError::Invalid`] for an edit that fails validation;
+/// [`ConfigEditError::Io`] for read/parse/write failures.
 pub fn upsert_provider_entry(
     config_path: &Path,
     provider_id: &str,
     kind: &str,
     base_url: &str,
 ) -> Result<bool, ConfigEditError> {
-    if !PROVIDER_KIND_LABELS.contains(&kind) {
-        return Err(ConfigEditError::Invalid(format!(
-            "unknown provider kind `{kind}` (expected one of {})",
-            PROVIDER_KIND_LABELS.join(", ")
-        )));
-    }
     let _lock = crate::agent_model_config::lock_for(config_path)?;
     let source = read_config_source(config_path)?;
     let mut root = source.root.clone();
