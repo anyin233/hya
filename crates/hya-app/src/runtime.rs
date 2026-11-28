@@ -855,6 +855,8 @@ struct EngineBuildOptions {
     /// `--pure`: the runtime registry serves builtin skills only and never
     /// reads external skill directories.
     pure: bool,
+    /// Load `<root>/.hya/plugins` manifests (always off under `pure`).
+    project_plugins: bool,
 }
 
 /// Build a fully wired [`SessionEngine`] plus plugin host, MCP, and ask/question channels.
@@ -880,6 +882,7 @@ pub async fn build_session_engine(
         EngineBuildOptions {
             defer_mcp: defer_sideplanes(),
             pure: false,
+            project_plugins: true,
         },
     )
     .await
@@ -906,6 +909,33 @@ pub async fn build_session_engine_pure(
         EngineBuildOptions {
             defer_mcp: defer_sideplanes(),
             pure: true,
+            project_plugins: true,
+        },
+    )
+    .await
+}
+
+/// [`build_session_engine`] that loads no project plugins: a read-only
+/// command must not run commands from the repository it inspects.
+pub async fn build_session_engine_without_project_plugins(
+    store: SessionStore,
+    router: ProviderRouter,
+    agent: &AgentSpec,
+    mcp: BTreeMap<String, McpServerConfig>,
+    plugins: Vec<PluginSpec>,
+    tool_config: (InvocationPolicy, config::EngineSettings),
+) -> anyhow::Result<BuiltSessionEngine> {
+    build_session_engine_with_mcp_defer(
+        store,
+        router,
+        agent,
+        mcp,
+        plugins,
+        tool_config,
+        EngineBuildOptions {
+            defer_mcp: defer_sideplanes(),
+            pure: false,
+            project_plugins: false,
         },
     )
     .await
@@ -1061,7 +1091,7 @@ async fn build_session_engine_with_mcp_defer(
         }
     }
 
-    let project_plugins = if options.pure {
+    let project_plugins = if options.pure || !options.project_plugins {
         crate::project_plugins::ProjectPluginSettings::disabled()
     } else {
         let configured = settings.plugin_ids();
@@ -1397,6 +1427,7 @@ impl ServerEngine {
             EngineBuildOptions {
                 defer_mcp: defer_sideplanes(),
                 pure: runtime.pure,
+                project_plugins: true,
             },
         )
         .await?;

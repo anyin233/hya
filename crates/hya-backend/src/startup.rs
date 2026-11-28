@@ -28,16 +28,18 @@ pub(crate) async fn start(
     }
     let runtime = hya_app::resolve_runtime(model).await;
     hya_app::startup_trace::mark("runtime_resolved", None);
-    start_with(store, runtime, yolo, bare, pure).await
+    start_with(store, runtime, yolo, bare, pure, true).await
 }
 
-/// [`start`] on an already resolved runtime configuration.
+/// [`start`] on an already resolved runtime configuration; `project_plugins`
+/// false loads no `<root>/.hya/plugins` manifests.
 async fn start_with(
     store: SessionStore,
     runtime: hya_app::RuntimeConfig,
     yolo: bool,
     bare: bool,
     pure: bool,
+    project_plugins: bool,
 ) -> anyhow::Result<StartedEngine> {
     let exit_store = store.clone();
     let runtime = runtime.with_yolo(yolo).with_pure(pure).with_bare(bare);
@@ -45,6 +47,16 @@ async fn start_with(
     let tool_config = (runtime.permission, runtime.settings);
     let built_res = if pure {
         hya_app::build_session_engine_pure(
+            store,
+            runtime.router,
+            &agent,
+            runtime.mcp,
+            runtime.plugins,
+            tool_config,
+        )
+        .await
+    } else if !project_plugins {
+        hya_app::build_session_engine_without_project_plugins(
             store,
             runtime.router,
             &agent,
@@ -104,7 +116,8 @@ impl HeadlessRuntime {
     }
 
     /// A runtime on the offline provider that reads no `config.yaml`
-    /// providers, MCP servers, or plugins and writes no config file.
+    /// providers, MCP servers, or plugins, loads no project plugins, and
+    /// writes no config file.
     pub(crate) async fn start_offline(
         store: SessionStore,
         model: Option<String>,
@@ -114,7 +127,7 @@ impl HeadlessRuntime {
         let explicit_model = model.is_some();
         let runtime = hya_app::offline_runtime(model, false);
         Self::from_started(
-            start_with(store, runtime, false, bare, pure).await?,
+            start_with(store, runtime, false, bare, pure, false).await?,
             explicit_model,
         )
         .await

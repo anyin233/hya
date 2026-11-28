@@ -974,6 +974,7 @@ async fn shutdown_stops_sources_retained_by_a_plugin_tool_and_a_retired_mcp_bind
         EngineBuildOptions {
             defer_mcp: false,
             pure: true,
+            project_plugins: true,
         },
     )
     .await
@@ -1065,6 +1066,7 @@ async fn built_shutdown_cancels_and_joins_deferred_mcp_preparation() {
         EngineBuildOptions {
             defer_mcp: true,
             pure: true,
+            project_plugins: true,
         },
     )
     .await
@@ -1121,6 +1123,7 @@ async fn built_shutdown_cancels_started_workflow_while_reads_stay_unblocked() {
         EngineBuildOptions {
             defer_mcp: false,
             pure: true,
+            project_plugins: true,
         },
     )
     .await
@@ -1935,6 +1938,7 @@ async fn deferred_mcp_and_hot_reload_plugin_source_wiring() {
         EngineBuildOptions {
             defer_mcp: true,
             pure: false,
+            project_plugins: true,
         },
     )
     .await
@@ -1998,6 +2002,7 @@ async fn startup_mixed_mcp_plugin_and_compat_mcp_control() {
         EngineBuildOptions {
             defer_mcp: false,
             pure: false,
+            project_plugins: true,
         },
     )
     .await
@@ -2121,6 +2126,7 @@ async fn initial_context_backfills_and_survives_runtime_restart() {
                 EngineBuildOptions {
                     defer_mcp: false,
                     pure,
+                    project_plugins: true,
                 },
             )
             .await

@@ -232,6 +232,31 @@ fn list_reads_the_db_project_from_a_subdirectory_and_warns_about_broken_bundles(
     );
     fs::create_dir_all(s.0.join(".hya/bundles/broken"))?;
     fs::write(s.0.join(".hya/bundles/broken/bundle.yaml"), "kind: [\n")?;
+    // `list` loads no project plugins: neither a broken manifest's warning
+    // nor a spawned process.
+    fs::create_dir_all(s.0.join(".hya/plugins/bad"))?;
+    fs::write(s.0.join(".hya/plugins/bad/plugin.toml"), "id = [\n")?;
+    fs::create_dir_all(s.0.join(".hya/plugins/spy"))?;
+    let spawned = s.0.join("SPAWNED");
+    fs::write(
+        s.0.join(".hya/plugins/spy/plugin.toml"),
+        format!(
+            "id = \"spy\"\nkind = \"rust\"\ncommand = [\"sh\", \"-c\", \"touch '{}'; exit 1\"]\n",
+            spawned.display()
+        ),
+    )?;
+    let wal = s.0.join("sessions.db-wal");
+    for _ in 0..200 {
+        if !wal.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let before = fs::read(&db)?;
+    // The finished `run` leaves its released lock file behind.
+    let lock = s.0.join("sessions.db.runtime-owner.lock");
+    assert!(lock.exists());
+    fs::remove_file(&lock)?;
     let sub = s.0.join("sub/dir");
     fs::create_dir_all(&sub)?;
     let out = s
@@ -253,6 +278,9 @@ fn list_reads_the_db_project_from_a_subdirectory_and_warns_about_broken_bundles(
             && stderr.lines().count() == 1,
         "{stderr}"
     );
+    assert!(!spawned.exists(), "list spawned a project plugin");
+    assert_eq!(fs::read(&db)?, before, "list changed the database");
+    assert!(!lock.exists(), "list claimed the database");
     Ok(())
 }
 

@@ -176,7 +176,7 @@ Uses `~/.local/state/hya/sessions.db` unless `--db <PATH>` is given:
 
 Contributed by the built-in ABI v2 native bundle `hya/workflow` (`bundles/builtin/workflow/`, `cli:` in its `bundle.yaml`); each subcommand calls one of the bundle's `cli_*` endpoints and prints its reply. Under `--bare`, or with `hya/workflow` disabled in `config.yaml`, there is no `workflow` command: `hya` reports `unrecognized subcommand 'workflow'` and exits `2`.
 
-`list` and `info` (`database: read`) only read `--db`: they never take its lock or go through its server; an existing database is opened read-only to find the working directory's Project, and the catalog is built with the offline provider (no `config.yaml` providers, MCP servers, or plugins). Installed bundles that cannot be read and project bundles that fail to load are printed as `warning: …` lines on stderr. `use`, `run`, and `state` (`database: true`) hold the database lock or go through the server that owns `--db`; a routed `run` exits `75` with `--revision`, `--pure`, or `--yolo`.
+`list` and `info` (`database: read`) only read `--db`: they never take its lock or go through its server; an existing database is opened read-only to find the working directory's Project, and the catalog is built with the offline provider (no `config.yaml` providers, MCP servers, or plugins, and no `.hya/plugins` project plugins). Installed bundles that cannot be read and project bundles that fail to load are printed as `warning: …` lines on stderr. `use`, `run`, and `state` (`database: true`) hold the database lock or go through the server that owns `--db`; a routed `run` exits `75` with `--revision`, `--pure`, or `--yolo`.
 
 ```sh
 hya workflow list [--json]
