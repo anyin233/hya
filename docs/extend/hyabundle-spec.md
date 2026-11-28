@@ -54,9 +54,9 @@ All 14 bundles in `bundles/builtin/` ship in every release archive under `<prefi
 | `bundles/builtin/hashline` | *(extracted from `base-tools`)* | `hya/hashline` | **Native ABI v2** (`cdylib`) | 4 tools (`overrides: hya/bare`): `read`, `write`, `edit`, `grep` + `HashlineRuntime` | **Full default** via `hya-tool-loader` (`load_v2`); disable via `bundles.builtin.disable: [hya/hashline]` or `--bare` to fall back to `hya-bare` standard file tools |
 | `bundles/builtin/base-tools` | `bundles/presets/base-tools` | `hya/base-tools` | **Native** (`cdylib`) | 6 tools: `ls`, `glob`, `find`, `ask_user`, `bash`, `apply_patch` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
 | `bundles/builtin/extended-tools` | `bundles/presets/extended-tools` | `hya/extended-tools` | **Native** (`cdylib`) | 8 tools: `lsp`, `list_agents`, `search_agent`, `task`, `archive`, `workflow`, `project_activity`, `wait` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
-| `bundles/builtin/network-tools` | `bundles/presets/network-tools` | `hya/network-tools` | **Native** (`cdylib`) | 2 tools: `webfetch`, `websearch` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
+| `bundles/builtin/network` | `bundles/presets/network-tools` | `hya/network` | **Native ABI v2** (`cdylib`) | 2 tools (`webfetch`, `websearch`) + `NetworkService` + `ToolVisibility` hook (`config.yml`) | **Full default** via `hya-tool-loader`; disableable for air-gapped operation & skipped in `--bare` |
 | `bundles/builtin/channel-tools` | `bundles/presets/channel-tools` | `hya/channel-tools` | **Native** (`cdylib`) | 4 tools: `send`, `list_channel`, `wait`, `report` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
-| `bundles/builtin/compaction` | `bundles/internal/compaction` | `hya/compaction` | **Native** (`cdylib`) | 1 `Rewriter`: `shake` + `remote` context compaction | **Full required** via `hya_core::bundles::load_internal()`; skipped in `--bare` |
+| `bundles/builtin/compaction` | `bundles/internal/compaction` | `hya/compaction` | **Native ABI v2** (`cdylib`) | 1 `Rewriter` (`shake` + `remote`) + 1 `ProjectionReducer` (`Event::Extension`) | **Full required** via `hya_core::bundles::load_internal_with_runtime()`; skipped in `--bare` |
 | `bundles/builtin/plan` | *(extracted from `extended-tools` + `core-agents`)* | `hya/plan` | **Native ABI v2** (`cdylib`) | `hya-plan` read-only main agent, `plan_exit` tool (hidden alias `plan`), and `tool.visibility` native hook | **Full catalog + native ABI v2** via `hya-tool-loader` & `hya-app`; skipped in `--bare` |
 | `bundles/builtin/core-agents` | `bundles/presets/core-agents` | `hya/core-agents` | **Static** | 5 built-in agents (`hya-main`, `hya-task`, `hya-scout`, `hya-reviewer`, `hya-title`) + `policy.yaml` | **Full required** via `hya-engine::builtin_agents` |
 | `bundles/builtin/core-skills` | `bundles/presets/core-skills` | `hya/core-skills` | **Static** | 2 built-in skills (`agent-bundle-authoring`, `secure-self-update`) | **Full required** via `hya-engine::skill_catalog` |
@@ -421,16 +421,18 @@ Implemented in `crates/hya-tool/src/native_bundle.rs` and verified by `crates/hy
 | `hya_tool_bundle_register_rewriters_v1(out: *mut Vec<Arc<dyn Rewriter>>)` | Optional | Registers `hya_context::rewrite::Rewriter` extensions (used by `hya/compaction`). |
 | `hya_tool_bundle_register_hooks_v1(...)` | Reserved | Planned native hook registration symbol for parity with JS bundles. |
 
-#### ABI v2 — Unified Native Runtime ABI (`hya-runtime-abi`)
+#### ABI v2 — Unified Lockstep Rust ABI (`hya-runtime-abi`, Active for Migrated Built-in Bundles)
 
-Implemented in `crates/hya-runtime-abi` (exported via `export_native_bundle_v2!`) and loaded by `crates/hya-tool-loader` (used by `hya/plan` and subsequent v2 native bundles per [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)). Native v2 crates depend only on the narrow `hya-runtime-abi` / `hya-tool` / `hya-proto` boundary — never on `hya-store`, `sqlx`, `hya-engine`, `hya-server`, `axum`, or `tonic`.
+Implemented in `crates/hya-runtime-abi` (exported via `export_native_bundle_v2!`) and loaded by `crates/hya-tool-loader` (`load_v2`, `NativeBundleLoader`), used by `hya/hashline`, `hya/network`, `hya/compaction`, `hya/plan`, and subsequent v2 native bundles per [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md). Native ABI v2 crates MUST NOT depend on `hya-store`, `sqlx`, `hya-engine`, `hya-server`, `axum`, or `tonic`; instead, the host injects an `Arc<dyn HostRuntime>` into `NativePluginContext`.
 
 | Exported C symbol | Required | Purpose |
 | --- | --- | --- |
-| `hya_native_abi_v2(out: *mut u8)` | Yes | Writes the 32-byte SHA-256 ABI v2 digest covering protocol version, Hya version, `rustc -V`, target OS/arch, and core trait/struct layouts. Any mismatch aborts load immediately. |
-| `hya_native_share_deadline_v2(cell: *const c_void)` | Yes | Shares host deadline and active task registry pointers. |
-| `hya_native_with_runtime_v2(handle, callback, state)` | Yes | Polls futures synchronously inside the bundle's Tokio runtime context. |
-| `hya_native_register_v2(runtime, out: *mut NativeBundleRegistrations)` | Yes | Registers the bundle's `Tool`, `NativeHook` (including `tool.visibility`), `Rewriter`, `SubagentDriver`, `WorkflowDriver`, `HostService`, and `ApiHandler` implementations in one entry point. |
+| `hya_native_abi_v2(out: *mut u8)` | Yes | Writes a 32-byte SHA-256 ABI v2 digest verified before registration. Mismatches fail cleanly with `AbiError::DigestMismatch`. |
+| `hya_native_with_runtime_v2(handle, callback, state)` | Yes | Polls async futures synchronously inside the bundle's Tokio runtime context. |
+| `hya_native_share_deadline_v2(cell: *const c_void)` | Yes | Shares the host's process-lifetime deadline cell with the dynamic library. |
+| `hya_native_register_v2(ctx, regs, error_out) -> i32` | Yes | Populates `NativeRegistrations` (`tools`, `rewriters`, `services`, `hooks`, `api_handlers`, `projection_reducers`, `uri_schema_handlers`, `goal_drivers`, `loop_drivers`) via `export_native_bundle_v2!`. |
+
+Future third-party and closed-source native bundles may later target a compiler-independent C-ABI boundary removing lockstep `rustc` coupling.
 
 ---
 
@@ -487,7 +489,7 @@ flowchart TD
 
 ### 7.2 Physical Load Sources for `bundles/builtin/`
 
-Hya selects the physical load source for the 13 built-in bundles automatically based on how `hya` is launched:
+Hya selects the physical load source for the 12 built-in bundles automatically based on how `hya` is launched:
 
 1. **Development checkout (Cargo build outside `<prefix>/bin/`):**
    - *Manifests & static assets:* Reads directly from `bundles/builtin/<name>/` (or `HYA_FIRST_PARTY_SOURCE_ROOT` when pinned by daemon rollback snapshots), falling back to `<target-dir>/bundles/hya-<name>.hyabundle`.
@@ -526,11 +528,11 @@ scripts/bundle-ci/
 
 Scoped strictly to `bundles/builtin/**` (plus bundle core/loader crates and workflow self-changes), running without `hya-e2e`, unrelated crates, or TUI suites:
 
-1. **`discover`** — scans `bundles/builtin/*` and emits separate `native` (5 bundles) and `js_static` (8 bundles) matrices.
-2. **`validate`** — runs `scripts/bundle-ci/verify.mjs` static schema and descriptor validation across all 13 built-in bundles.
-3. **`test-native`** *(5-way matrix)* — runs per-crate `cargo clippy` and `cargo test`, compiles the `cdylib`, verifies required exported ABI v1 symbols (`hya_tool_bundle_abi_v1`, `hya_tool_bundle_register_v1`, `hya_tool_bundle_with_runtime_v1`, `hya_tool_bundle_share_deadline_v1`, plus `hya_tool_bundle_register_rewriters_v1` for `compaction`), and packs/verifies `.hyabundle`.
-4. **`test-js-static`** *(8-way matrix)* — requires only Bun (no Rust build); executes `check.command` and black-box JSON-RPC protocol smoke tests via `scripts/bundle-ci/verify.mjs`, plus `.hyabundle` pack/verify.
-5. **`bare-vs-full-smoke`** — confirms `hya exec --bare` runs without `bundles/builtin/` and that all 13 staged `.hyabundle` packages load cleanly.
+1. **`discover`** — scans `bundles/builtin/*` and emits separate `native` (5 bundles, with `abi_version: 1 | 2`) and `js_static` (7 bundles) matrices.
+2. **`validate`** — runs `scripts/bundle-ci/verify.mjs` static schema and descriptor validation across all 12 built-in bundles.
+3. **`test-native`** *(5-way matrix)* — runs per-crate `cargo clippy` and `cargo test`, compiles the `cdylib`, verifies required exported symbols (`hya_native_abi_v2`, `hya_native_with_runtime_v2`, `hya_native_share_deadline_v2`, `hya_native_register_v2` for `abi_version: 2` bundles such as `network` and `compaction`; legacy v1 symbols for `abi_version: 1` bundles), and packs/verifies `.hyabundle`.
+4. **`test-js-static`** *(7-way matrix)* — requires only Bun (no Rust build); executes `check.command` and black-box JSON-RPC protocol smoke tests via `scripts/bundle-ci/verify.mjs`, plus `.hyabundle` pack/verify.
+5. **`bare-vs-full-smoke`** — confirms `hya exec --bare` runs without `bundles/builtin/` and that all 12 staged `.hyabundle` packages load cleanly.
 6. **`builtin-bundles-gate`** — single summary status check for branch protection.
 
 ### 8.2 `bundles` Workflow (`.github/workflows/bundles.yml` — Marketplace-Portable)

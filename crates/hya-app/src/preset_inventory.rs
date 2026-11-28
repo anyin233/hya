@@ -10,7 +10,7 @@ const TOOL_FAMILY_BUNDLES: [&str; 5] = [
     "hya/hashline",
     "hya/base-tools",
     "hya/extended-tools",
-    "hya/network-tools",
+    "hya/network",
     "hya/channel-tools",
 ];
 

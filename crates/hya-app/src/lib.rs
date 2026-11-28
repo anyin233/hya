@@ -72,8 +72,7 @@ pub use formatter::BuiltinFormatterProvider;
 pub use headless::{HeadlessEvaluatorRoute, prepare_goal, prepare_loop};
 pub use hya_proto::{WorkflowInfo, WorkflowStageInfo, WorkflowSummary};
 pub use hya_tool::{
-    InvocationPolicy, WebSearchConfig, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery,
-    WorkflowRunResult,
+    InvocationPolicy, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowRunResult,
 };
 pub use installed_bundle_refresh::{
     InstalledBundleRefresh, bundle_registry_path, first_party_catalogs, first_party_catalogs_for,

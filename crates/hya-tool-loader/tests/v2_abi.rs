@@ -27,7 +27,7 @@ use hya_tool::handle::ArtifactPlane;
 use hya_tool::{
     AgentDef, InteractionPlane, LifecyclePlane, MailboxPlane, NestedToolPlane, PermissionPlane,
     PermissionRules, ProjectActivityPlane, SkillCatalogEntry, SkillPlane, SpawnerPlane, ToolCtx,
-    ToolOperation, WebSearchPlane, WorkflowPlane,
+    ToolOperation, WorkflowPlane,
 };
 use hya_tool_loader::{NativeBundleLoader, load_v2_from_path, try_from_tool_families};
 use serde_json::{Value, json};
@@ -534,7 +534,6 @@ fn test_tool_ctx(session: SessionId) -> ToolCtx {
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         agents: Arc::from([]),
-        websearch: WebSearchPlane::default(),
         lsp: hya_tool::LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
         roots: vec![workdir.clone()],

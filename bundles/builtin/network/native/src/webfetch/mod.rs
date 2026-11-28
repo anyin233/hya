@@ -1,23 +1,37 @@
 mod html;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hya_proto::ToolSchema;
+use hya_runtime_abi::HostRuntime;
 use hya_tool::tool::obj_schema;
+use hya_tool::{Action, Resource, Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use hya_tool::{Action, Resource};
-use hya_tool::{Tool, ToolCtx, ToolError};
+use crate::config::NetworkPlane;
 
 const MAX_RESPONSE_BYTES: usize = 5 * 1024 * 1024;
 const RESPONSE_TOO_LARGE: &str = "response too large (exceeds 5MB limit)";
 const DEFAULT_TIMEOUT_SECS: f64 = 30.0;
 const MAX_TIMEOUT_SECS: f64 = 120.0;
 
-pub struct WebFetchTool;
+/// Built-in `webfetch` tool owned by `hya/network`.
+pub struct WebFetchTool {
+    plane: Arc<NetworkPlane>,
+    runtime: Option<Arc<dyn HostRuntime>>,
+}
+
+impl WebFetchTool {
+    /// Construct a `webfetch` tool backed by `plane` and optional `runtime`.
+    #[must_use]
+    pub fn new(plane: Arc<NetworkPlane>, runtime: Option<Arc<dyn HostRuntime>>) -> Self {
+        Self { plane, runtime }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -68,6 +82,12 @@ impl Tool for WebFetchTool {
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
         if ctx.cancel.is_cancelled() {
             return Err(ToolError::Cancelled);
+        }
+        let cfg = self.plane.effective_config(self.runtime.as_deref()).await;
+        if !cfg.webfetch.enabled {
+            return Err(ToolError::Other(
+                "webfetch is disabled by hya/network configuration".to_string(),
+            ));
         }
         let input: WebFetchInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;

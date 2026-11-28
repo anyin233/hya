@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "name": "websearch",
+  "description": "Search the web using the configured search backend (Exa or Parallel).",
+  "permission": "tool",
+  "aliases": [
+    { "name": "search", "visibility": "hidden" }
+  ],
+  "prompt_hint": "search the web",
+  "protected": false,
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Websearch query"
+      },
+      "numResults": {
+        "type": "number",
+        "description": "Number of search results to return (default: 8)"
+      },
+      "livecrawl": {
+        "type": "string",
+        "enum": ["fallback", "preferred"],
+        "description": "Live crawl mode - 'fallback': use live crawling as backup if cached content unavailable, 'preferred': prioritize live crawling (default: 'fallback')"
+      },
+      "type": {
+        "type": "string",
+        "enum": ["auto", "fast", "deep"],
+        "description": "Search type - 'auto': balanced search (default), 'fast': quick results, 'deep': comprehensive search"
+      },
+      "contextMaxCharacters": {
+        "type": "number",
+        "description": "Maximum characters for context string optimized for LLMs (default: 10000)"
+      }
+    },
+    "required": ["query"]
+  },
+  "entrypoint": {
+    "native": "websearch"
+  }
+}

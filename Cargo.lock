@@ -1310,11 +1310,12 @@ dependencies = [
  "hya-extended-tools",
  "hya-hashline",
  "hya-mcp",
- "hya-network-tools",
+ "hya-network",
  "hya-plan",
  "hya-plugin",
  "hya-proto",
  "hya-provider",
+ "hya-runtime-abi",
  "hya-server",
  "hya-store",
  "hya-tool",
@@ -1440,11 +1441,15 @@ name = "hya-compaction"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "hya-bundle",
  "hya-context",
  "hya-proto",
+ "hya-runtime-abi",
  "hya-tool",
  "serde",
  "serde_json",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1529,7 +1534,7 @@ dependencies = [
  "hya-core",
  "hya-extended-tools",
  "hya-hashline",
- "hya-network-tools",
+ "hya-network",
  "hya-plan",
  "hya-proto",
  "hya-provider",
@@ -1605,17 +1610,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "hya-network-tools"
+name = "hya-network"
 version = "0.0.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "hya-bundle",
  "hya-proto",
+ "hya-runtime-abi",
  "hya-tool",
  "reqwest",
  "serde",
  "serde_json",
+ "serde_norway",
  "time",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1841,7 +1851,7 @@ dependencies = [
  "hya-context",
  "hya-extended-tools",
  "hya-hashline",
- "hya-network-tools",
+ "hya-network",
  "hya-plan",
  "hya-proto",
  "hya-tool-error",
@@ -1879,7 +1889,7 @@ dependencies = [
  "hya-context",
  "hya-extended-tools",
  "hya-hashline",
- "hya-network-tools",
+ "hya-network",
  "hya-plan",
  "hya-proto",
  "hya-runtime-abi",

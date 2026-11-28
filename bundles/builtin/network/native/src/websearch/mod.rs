@@ -1,20 +1,39 @@
-//! Web search tool implementation.
+//! Web search tool implementation backed by `hya/network`'s [`NetworkPlane`].
+
+use std::sync::Arc;
+use std::time::Duration;
+
 use async_trait::async_trait;
 use hya_proto::{SessionId, ToolSchema};
+use hya_runtime_abi::HostRuntime;
 use hya_tool::tool::obj_schema;
-use hya_tool::{Action, Resource, Tool, ToolCtx, ToolError, WebSearchConfig, WebSearchProvider};
+use hya_tool::{Action, Resource, Tool, ToolCtx, ToolError};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::time::Duration;
 use time::OffsetDateTime;
 
+use crate::config::{NetworkPlane, WebSearchConfig, WebSearchProvider};
+
 mod response;
+
 const DEFAULT_TIMEOUT_SECS: u64 = 25;
 const EXA_URL: &str = "https://mcp.exa.ai/mcp";
 const PARALLEL_URL: &str = "https://search.parallel.ai/mcp";
 
-pub struct WebSearchTool;
+/// Built-in `websearch` tool owned by `hya/network`.
+pub struct WebSearchTool {
+    plane: Arc<NetworkPlane>,
+    runtime: Option<Arc<dyn HostRuntime>>,
+}
+
+impl WebSearchTool {
+    /// Construct a `websearch` tool backed by `plane` and optional `runtime`.
+    #[must_use]
+    pub fn new(plane: Arc<NetworkPlane>, runtime: Option<Arc<dyn HostRuntime>>) -> Self {
+        Self { plane, runtime }
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,13 +84,22 @@ impl Tool for WebSearchTool {
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+        if ctx.cancel.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
+        let cfg = self.plane.effective_config(self.runtime.as_deref()).await;
+        if !cfg.websearch.enabled {
+            return Err(ToolError::Other(
+                "websearch is disabled by hya/network configuration".to_string(),
+            ));
+        }
         let input: WebSearchInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
         ctx.permission
             .assert(Action::WebSearch, Resource::WebSearch(input.query.clone()))
             .await?;
-        let provider = ctx.websearch.config().provider;
-        let result = call_provider(ctx.websearch.config(), provider, &input, ctx.session).await?;
+        let provider = cfg.websearch.provider;
+        let result = call_provider(&cfg.websearch, provider, &input, ctx.session).await?;
         Ok(json!({
             "title": format!("{}: {}", provider.label(), input.query),
             "output": result.unwrap_or_else(|| "No search results found. Please try a different query.".to_string()),

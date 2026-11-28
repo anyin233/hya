@@ -196,11 +196,18 @@ function readNativeCrateMeta(bundleDir, manifest) {
     caps.includes("rewriters") ||
     libRsText.includes("hya_tool_bundle_register_rewriters_v1") ||
     libRsText.includes("export_native_rewriter_bundle");
+  const abiVersion =
+    typeof manifest?.runtime?.abi_version === "number"
+      ? manifest.runtime.abi_version
+      : libRsText.includes("export_native_bundle_v2") ||
+          libRsText.includes("hya_native_register_v2")
+        ? 2
+        : 1;
   return {
     crate_dir: crateDir,
     crate_name: crateName,
     lib_stem: libStem,
-    abi_version: manifest?.runtime?.abi_version ?? 1,
+    abi_version: abiVersion,
     has_exposure: existsSync(join(bundleDir, "exposure.yaml")),
     has_rewriters: hasRewriters,
   };

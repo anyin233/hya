@@ -111,8 +111,7 @@ mod tests {
         Action, FormatterError, FormatterPlane, FormatterProvider, FormatterStatus,
         InteractionPlane, LifecyclePlane, LspError, LspPlane, LspProvider, LspRequest,
         MailboxPlane, Mode, NestedToolPlane, PermissionPlane, PermissionRules,
-        ProjectActivityPlane, Rule, SkillPlane, SpawnerPlane, ToolOperation, WebSearchPlane,
-        WorkflowPlane,
+        ProjectActivityPlane, Rule, SkillPlane, SpawnerPlane, ToolOperation, WorkflowPlane,
     };
     use serde_json::{Value, json};
     use tokio_util::sync::CancellationToken;
@@ -249,7 +248,6 @@ mod tests {
             skills: SkillPlane::default(),
             artifacts: ArtifactPlane::default(),
             agents: Arc::from([]),
-            websearch: WebSearchPlane::default(),
             lsp: LspPlane::new(Arc::new(CountingLsp(lsp_calls))),
             formatter: FormatterPlane::new(Arc::new(CountingFormatter(formatter_calls))),
             workdir: workdir.to_path_buf(),

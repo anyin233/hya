@@ -59,7 +59,6 @@ mod skill;
 pub mod spawn;
 /// Tool trait, registry, and permission class metadata.
 pub mod tool;
-mod websearch;
 /// User-authored workflow plane and the `workflow` tool.
 pub mod workflow_plane;
 pub use workflow_plane::{
@@ -122,4 +121,3 @@ pub use tool::{
     ToolError, ToolOperation, ToolPermission, ToolRegistry, ToolRegistrySnapshot, ToolResultPolicy,
     is_reserved_kernel_tool,
 };
-pub use websearch::{WebSearchConfig, WebSearchPlane, WebSearchProvider};

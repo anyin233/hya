@@ -53,7 +53,7 @@ use cli_args::{Cli, Command};
 use stop_signals::{StopSignals, exit_if_stopped, run_until_stopped, start_headless_with_signals};
 
 pub use hya_app::{
-    InvocationPolicy, RuntimeConfig, WebSearchConfig, agent_base_with_model, agent_with_model,
+    InvocationPolicy, RuntimeConfig, agent_base_with_model, agent_with_model,
     agent_with_model_pure, discover_context_files, host_info, offline_router, open_store,
     resolve_headless_agent_name, resolve_runtime, spawn_team_supervisor, today,
 };
@@ -834,7 +834,6 @@ mod tests {
             Default::default(),
             Vec::new(),
             (
-                WebSearchConfig::default(),
                 InvocationPolicy::default(),
                 config::EngineSettings::default(),
             ),

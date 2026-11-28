@@ -29,8 +29,7 @@ mod tests {
     use hya_tool::{
         FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, NestedToolPlane,
         PermissionPlane, PermissionRules, ProjectActivityPlane, QuestionAnswer, QuestionKind,
-        SkillPlane, SpawnerPlane, Tool, ToolCtx, ToolError, ToolOperation, WebSearchPlane,
-        WorkflowPlane,
+        SkillPlane, SpawnerPlane, Tool, ToolCtx, ToolError, ToolOperation, WorkflowPlane,
     };
     use serde_json::json;
     use tokio_util::sync::CancellationToken;
@@ -59,7 +58,6 @@ mod tests {
             skills: SkillPlane::default(),
             artifacts: ArtifactPlane::default(),
             agents: Arc::from([]),
-            websearch: WebSearchPlane::default(),
             lsp: LspPlane::default(),
             formatter: FormatterPlane::default(),
             roots: vec![workdir.clone()],

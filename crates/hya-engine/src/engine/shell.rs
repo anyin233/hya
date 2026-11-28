@@ -508,7 +508,6 @@ impl SessionEngine {
                                 skills: resources.skill_plane(),
                                 artifacts: self.artifacts.clone(),
                                 agents: agent_roster(binding, agent.name.as_str())?,
-                                websearch: self.websearch.clone(),
                                 lsp: self.lsp.clone(),
                                 formatter: self.formatter.clone(),
                                 workdir: binding.workdir().to_path_buf(),

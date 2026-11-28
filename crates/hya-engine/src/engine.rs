@@ -8,7 +8,7 @@ use hya_store::SessionStore;
 use hya_tool::handle::ArtifactPlane;
 use hya_tool::{
     FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, PermissionPlane,
-    ResolvedTool, ToolError, WebSearchPlane,
+    ResolvedTool, ToolError,
 };
 use serde_json::Value;
 
@@ -176,7 +176,6 @@ pub struct SessionEngine {
     lifecycle: LifecyclePlane,
     /// Mints subagent handle leaves (`<prefix>-<operator>`); injectable RNG.
     handle_namer: Arc<crate::handle_naming::HandleNamer>,
-    websearch: WebSearchPlane,
     /// User-registered `artifact://` post-processing, carried to every tool call.
     artifacts: ArtifactPlane,
     formatter: FormatterPlane,
@@ -236,7 +235,6 @@ impl Clone for SessionEngine {
             project_activity: self.project_activity.clone(),
             lifecycle: self.lifecycle.clone(),
             handle_namer: self.handle_namer.clone(),
-            websearch: self.websearch.clone(),
             artifacts: self.artifacts.clone(),
             formatter: self.formatter.clone(),
             lsp: self.lsp.clone(),
@@ -293,7 +291,8 @@ impl SessionEngine {
             .unwrap_or_else(|error| panic!("load internal bundles: {error}"))
     }
 
-    /// Build the engine after loading the required native rewriters.
+    /// Build the engine after loading the required native rewriters and
+    /// projection reducers from internal ABI v2 bundles.
     ///
     /// # Errors
     /// Returns [`CoreError::BundleRuntime`] when an internal bundle cannot load.
@@ -304,7 +303,7 @@ impl SessionEngine {
         permission: PermissionPlane,
         bus: EventBus,
     ) -> Result<Self, CoreError> {
-        let rewriters = internal_rewriters()?;
+        let (rewriters, reducers) = internal_bundles()?;
         let native_hooks = default_native_hooks();
         Ok(Self::build_with_rewriters(
             store,
@@ -314,6 +313,37 @@ impl SessionEngine {
             bus,
             rewriters,
             native_hooks,
+            reducers,
+            true,
+        ))
+    }
+
+    /// Build the engine loading internal ABI v2 bundles with a caller-supplied
+    /// [`hya_runtime_abi::HostRuntime`] (for example to expose per-bundle
+    /// `config.yml` files to `hya/compaction`).
+    ///
+    /// # Errors
+    /// Returns [`CoreError::BundleRuntime`] when an internal bundle cannot load.
+    pub fn try_new_with_host_runtime(
+        store: SessionStore,
+        providers: Arc<ProviderRouter>,
+        runtime: Arc<RuntimeRegistry>,
+        permission: PermissionPlane,
+        bus: EventBus,
+        host_runtime: Arc<dyn hya_runtime_abi::HostRuntime>,
+    ) -> Result<Self, CoreError> {
+        let regs = hya_core::bundles::load_internal_with_runtime(host_runtime)?;
+        let rewriters: NativeRewriters = regs.rewriters.into();
+        let native_hooks = default_native_hooks();
+        Ok(Self::build_with_rewriters(
+            store,
+            providers,
+            runtime,
+            permission,
+            bus,
+            rewriters,
+            native_hooks,
+            regs.projection_reducers,
             true,
         ))
     }
@@ -338,6 +368,7 @@ impl SessionEngine {
             bus,
             Arc::from([]),
             None,
+            Vec::new(),
             false,
         )
     }
@@ -359,10 +390,16 @@ impl SessionEngine {
         bus: EventBus,
         rewriters: NativeRewriters,
         native_hooks: Option<Arc<dyn HookDispatcher>>,
+        abi_reducers: Vec<Arc<dyn hya_runtime_abi::ProjectionReducer>>,
         use_tool_family_prompts: bool,
     ) -> Self {
         if store.projection_reducers().is_empty() {
             store.set_projection_reducers(hya_tool::extension::projection_reducers());
+        }
+        for reducer in abi_reducers {
+            store.register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
+                inner: reducer,
+            }));
         }
         let (interaction, _rx) = InteractionPlane::new();
         let spawner = BoundSpawnSender::disconnected();
@@ -370,7 +407,6 @@ impl SessionEngine {
         let lifecycle = LifecyclePlane::disconnected();
         let mailbox = MailboxPlane::disconnected();
         let (project_activity, activity_rx) = hya_tool::ProjectActivityPlane::new();
-        let websearch = WebSearchPlane::default();
         let formatter = FormatterPlane::default();
         let lsp = LspPlane::default();
 
@@ -397,7 +433,6 @@ impl SessionEngine {
             project_activity,
             lifecycle,
             handle_namer: Arc::new(crate::handle_naming::HandleNamer::default()),
-            websearch,
             artifacts: ArtifactPlane::default(),
             formatter,
             lsp,
@@ -665,13 +700,6 @@ impl SessionEngine {
         self
     }
 
-    /// Replace the default web-search plane configuration.
-    #[must_use]
-    pub fn with_websearch(mut self, websearch: WebSearchPlane) -> Self {
-        self.websearch = websearch;
-        self
-    }
-
     /// Set both the terminal handoff summarizer and rewriter retention.
     ///
     /// Use [`Self::with_terminal_handoff`] and [`Self::with_rewriter_keep_recent`]
@@ -781,18 +809,84 @@ fn fixed_system_agent(
 /// The rewriters registered by internal bundles, in registration order.
 /// Successful registrations are shared process-wide.
 type NativeRewriters = Arc<[Arc<dyn hya_context::rewrite::Rewriter>]>;
+type NativeProjectionReducers = Vec<Arc<dyn hya_runtime_abi::ProjectionReducer>>;
 
-fn internal_rewriters() -> Result<NativeRewriters, CoreError> {
-    static REWRITERS: std::sync::Mutex<Option<NativeRewriters>> = std::sync::Mutex::new(None);
-    let mut slot = REWRITERS
+fn internal_bundles() -> Result<(NativeRewriters, NativeProjectionReducers), CoreError> {
+    static BUNDLES: std::sync::Mutex<Option<(NativeRewriters, NativeProjectionReducers)>> =
+        std::sync::Mutex::new(None);
+    let mut slot = BUNDLES
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(rewriters) = slot.as_ref() {
-        return Ok(Arc::clone(rewriters));
+    if let Some((rewriters, reducers)) = slot.as_ref() {
+        return Ok((Arc::clone(rewriters), reducers.clone()));
     }
-    let rewriters: NativeRewriters = hya_core::bundles::load_internal()?.rewriters.into();
-    *slot = Some(Arc::clone(&rewriters));
-    Ok(rewriters)
+    let regs = hya_core::bundles::load_internal()?;
+    let rewriters: NativeRewriters = regs.rewriters.into();
+    let reducers = regs.projection_reducers;
+    *slot = Some((Arc::clone(&rewriters), reducers.clone()));
+    Ok((rewriters, reducers))
+}
+
+/// Bridges an ABI v2 native bundle [`hya_runtime_abi::ProjectionReducer`] onto
+/// the host's [`hya_proto::ProjectionReducer`] pipeline.
+struct AbiV2ProjectionReducerAdapter {
+    inner: Arc<dyn hya_runtime_abi::ProjectionReducer>,
+}
+
+impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
+    fn bundle_id(&self) -> &str {
+        self.inner.bundle_id()
+    }
+
+    fn fold_extension(
+        &self,
+        projection: &mut hya_proto::Projection,
+        session: SessionId,
+        kind: &str,
+        payload: &Value,
+    ) {
+        let bundle_id = self.inner.bundle_id();
+        let state = projection
+            .extensions
+            .entry(bundle_id.to_string())
+            .or_insert_with(|| self.inner.initial_state());
+        let ctx = hya_runtime_abi::ExtensionEventContext {
+            session,
+            seq: hya_proto::EventSeq(projection.last_seq),
+            ts_millis: 0,
+            bundle: bundle_id.to_string(),
+            kind: kind.to_string(),
+            payload: payload.clone(),
+        };
+        if self.inner.apply(state, &ctx).is_err() {
+            return;
+        }
+        // Mirror compaction tool-output eviction notices onto PartProjection::Tool.
+        if bundle_id == hya_tool::extension::BUNDLE_COMPACTION
+            && kind == "context_evicted"
+            && let Some(parts) = payload.get("parts").and_then(Value::as_array)
+        {
+            for entry in parts {
+                if let (Some(part_id), Some(notice)) = (
+                    entry
+                        .get("part")
+                        .and_then(|v| serde_json::from_value::<hya_proto::PartId>(v.clone()).ok()),
+                    entry.get("notice").and_then(Value::as_str),
+                ) && let Some(hya_proto::PartProjection::Tool {
+                    eviction_notice, ..
+                }) = projection
+                    .session
+                    .messages
+                    .iter_mut()
+                    .rev()
+                    .flat_map(|row| row.parts.iter_mut())
+                    .find(|part| part.id() == part_id)
+                {
+                    *eviction_notice = Some(notice.to_string());
+                }
+            }
+        }
+    }
 }
 
 /// Default native hooks registered by first-party ABI v2 native tool bundles

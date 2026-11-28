@@ -9,9 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_app::{
-    InvocationPolicy, WebSearchConfig, WorkflowCatalog, WorkflowCatalogOwner, WorkflowCatalogRoots,
-    WorkflowCommand, WorkflowCommandResult, WorkflowControlError, WorkflowInvocation,
-    agent_with_model, build_session_engine, offline_router,
+    InvocationPolicy, WorkflowCatalog, WorkflowCatalogOwner, WorkflowCatalogRoots, WorkflowCommand,
+    WorkflowCommandResult, WorkflowControlError, WorkflowInvocation, agent_with_model,
+    build_session_engine, offline_router,
 };
 use hya_bundle::{BundleCatalog, BundleSource, SourceFile, prepare_package};
 use hya_engine::{AgentCatalog, CreateSession, RuntimeRegistry};
@@ -58,7 +58,6 @@ async fn offline_built() -> (hya_app::BuiltSessionEngine, hya_engine::AgentSpec)
         BTreeMap::new(),
         Vec::new(),
         (
-            WebSearchConfig::default(),
             InvocationPolicy::default(),
             hya_app::config::EngineSettings::default(),
         ),
@@ -266,7 +265,6 @@ async fn run_is_idempotent_by_tool_operation_and_rejects_changed_inputs() {
         BTreeMap::new(),
         Vec::new(),
         (
-            WebSearchConfig::default(),
             InvocationPolicy::default(),
             hya_app::config::EngineSettings::default(),
         ),

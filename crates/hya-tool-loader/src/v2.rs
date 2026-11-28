@@ -15,21 +15,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use hya_bundle::{
-    Bundle, FirstPartySource, PreparedAgent, first_party_bundle, first_party_source,
-    load_first_party,
-};
+use hya_bundle::{FirstPartySource, first_party_bundle, first_party_source, load_first_party};
 use hya_context::rewrite::Rewriter;
-use hya_proto::{
-    ActorClaim, AgentName, Envelope, Event, EventSeq, Message, ModelRef, Projection, SessionId,
-};
+use hya_proto::{Envelope, ModelRef, SessionId};
 use hya_runtime_abi::{
-    AbiDigestFn, AbiError, BundleApiInvocation, BundleApiResult, BundleCatalogSummary,
-    BundleClaimLease, BundleClaimRequest, BundleStateEntry, DriverRunOutcome, ExtensionEntry,
-    ExtensionKind, GoalDriver, GoalRunRequest, HookPoint, HostBundleStorage, HostCatalogReader,
-    HostError, HostEventBus, HostExtensionRegistry, HostModelCaller, HostRuntime, HostSessionStore,
-    HostTurnRunner, LoopDriver, LoopRunRequest, ModelCallRequest, ModelCallResponse,
-    ModelStreamChunk, ModelWindowInfo, NativeAgentSpawnInput, NativeApiEndpoint,
+    AbiDigestFn, AbiError, DriverRunOutcome, GoalDriver, GoalRunRequest, HookPoint, HostError,
+    HostRuntime, LoopDriver, LoopRunRequest, NativeAgentSpawnInput, NativeApiEndpoint,
     NativeBundleApiHandler, NativeBundleApiReply, NativeBundleApiRequest, NativeChatParamsInput,
     NativeCommandBeforeInput, NativeCompactionAfterInput, NativeCompactionBeforeInput,
     NativeCompactionDecision, NativeGoalEvaluateVerdict, NativeHook, NativeLoopPlanInput,
@@ -38,14 +29,13 @@ use hya_runtime_abi::{
     NativeSessionLifecycleInput, NativeTextCompleteInput, NativeToolAfterInput,
     NativeToolAfterOutcome, NativeToolBeforeInput, NativeToolBeforeOutcome, NativeVerifierVerdict,
     RegisterV2Fn, SYMBOL_ABI_V2, SYMBOL_REGISTER_V2, SYMBOL_SHARE_DEADLINE_V2,
-    SYMBOL_WITH_RUNTIME_V2, ServiceHealth, SessionListFilter, SessionSummaryMeta, ShareDeadlineFn,
-    ToolVisibilityInput, ToolVisibilityOutcome, TurnOutcome, TurnSpawnRequest, TurnStartRequest,
-    TurnStatus, UriContent, UriResolveCtx, UriSchemaHandler, abi_digest_v2, deadline_cell_v2,
+    SYMBOL_WITH_RUNTIME_V2, ServiceHealth, ShareDeadlineFn, ToolVisibilityInput,
+    ToolVisibilityOutcome, UriContent, UriResolveCtx, UriSchemaHandler, abi_digest_v2,
+    deadline_cell_v2,
 };
-use hya_tool::{Action, AgentDef, Decision, Resource, SkillCatalogEntry, Tool};
+use hya_tool::{Action, Decision, Resource, Tool};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::native_bundle::{
@@ -1050,44 +1040,62 @@ fn invoke_register_v2(
     Ok(wrap_registrations_with_runtime(regs, checked.with_runtime))
 }
 
-/// Minimal [`HostRuntime`] whose capability planes return [`HostError::Unavailable`].
-///
-/// Used when loading pure-tool ABI v2 bundles (such as `hya/hashline`) in contexts
-/// that assemble only a [`hya_tool::ToolRegistry`] without a full host engine.
-#[must_use]
-pub fn noop_host_runtime() -> Arc<dyn HostRuntime> {
-    static NOOP: OnceLock<Arc<dyn HostRuntime>> = OnceLock::new();
-    Arc::clone(NOOP.get_or_init(|| Arc::new(NoopHostRuntime)))
+// ---------------------------------------------------------------------------
+// MinimalHostRuntime — reusable lightweight HostRuntime implementation
+// ---------------------------------------------------------------------------
+
+type BundleConfigCallback = Arc<dyn Fn(&str) -> Value + Send + Sync>;
+
+/// Lightweight [`HostRuntime`] implementation for callers that only need
+/// per-bundle configuration lookup (or no-op defaults for standalone tool
+/// family / test loading).
+pub struct MinimalHostRuntime {
+    bundle_config: BundleConfigCallback,
 }
 
-struct NoopHostRuntime;
+impl MinimalHostRuntime {
+    /// Create a no-op runtime whose `bundle_config` always returns `Value::Null`.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            bundle_config: Arc::new(|_| Value::Null),
+        }
+    }
 
-fn noop_unavailable() -> HostError {
-    HostError::Unavailable("host runtime is not wired for standalone tool-registry loading".into())
+    /// Create a runtime backed by a custom per-bundle config reader callback.
+    #[must_use]
+    pub fn with_bundle_config<F>(reader: F) -> Self
+    where
+        F: Fn(&str) -> Value + Send + Sync + 'static,
+    {
+        Self {
+            bundle_config: Arc::new(reader),
+        }
+    }
 }
 
 #[async_trait]
-impl HostSessionStore for NoopHostRuntime {
+impl hya_runtime_abi::HostSessionStore for MinimalHostRuntime {
     async fn session_exists(&self, _session: SessionId) -> Result<bool, HostError> {
-        Err(noop_unavailable())
+        Ok(false)
     }
 
     async fn read_events(
         &self,
         _session: SessionId,
-        _after_seq: Option<EventSeq>,
+        _after_seq: Option<hya_proto::EventSeq>,
         _limit: Option<usize>,
     ) -> Result<Vec<Envelope>, HostError> {
-        Err(noop_unavailable())
+        Ok(Vec::new())
     }
 
     async fn append_events(
         &self,
         _session: SessionId,
-        _claim: Option<ActorClaim>,
-        _events: Vec<Event>,
+        _claim: Option<hya_proto::ActorClaim>,
+        _events: Vec<hya_proto::Event>,
     ) -> Result<Vec<Envelope>, HostError> {
-        Err(noop_unavailable())
+        Err(HostError::Unavailable("session store unavailable".into()))
     }
 
     async fn append_extension_event(
@@ -1096,13 +1104,16 @@ impl HostSessionStore for NoopHostRuntime {
         _bundle: &str,
         _kind: &str,
         _payload: Value,
-        _claim: Option<ActorClaim>,
+        _claim: Option<hya_proto::ActorClaim>,
     ) -> Result<Envelope, HostError> {
-        Err(noop_unavailable())
+        Err(HostError::Unavailable("session store unavailable".into()))
     }
 
-    async fn read_projection(&self, _session: SessionId) -> Result<Arc<Projection>, HostError> {
-        Err(noop_unavailable())
+    async fn read_projection(
+        &self,
+        _session: SessionId,
+    ) -> Result<Arc<hya_proto::Projection>, HostError> {
+        Err(HostError::Unavailable("session store unavailable".into()))
     }
 
     async fn read_extension_state(
@@ -1110,33 +1121,33 @@ impl HostSessionStore for NoopHostRuntime {
         _session: SessionId,
         _bundle: &str,
     ) -> Result<Option<Value>, HostError> {
-        Err(noop_unavailable())
+        Ok(None)
     }
 
     async fn session_metadata(
         &self,
         _session: SessionId,
-    ) -> Result<Option<SessionSummaryMeta>, HostError> {
-        Err(noop_unavailable())
+    ) -> Result<Option<hya_runtime_abi::SessionSummaryMeta>, HostError> {
+        Ok(None)
     }
 
     async fn list_sessions(
         &self,
-        _filter: SessionListFilter,
-    ) -> Result<Vec<SessionSummaryMeta>, HostError> {
-        Err(noop_unavailable())
+        _filter: hya_runtime_abi::SessionListFilter,
+    ) -> Result<Vec<hya_runtime_abi::SessionSummaryMeta>, HostError> {
+        Ok(Vec::new())
     }
 }
 
 #[async_trait]
-impl HostBundleStorage for NoopHostRuntime {
+impl hya_runtime_abi::HostBundleStorage for MinimalHostRuntime {
     async fn get_state(
         &self,
         _bundle: &str,
         _scope: &str,
         _key: &str,
-    ) -> Result<Option<BundleStateEntry>, HostError> {
-        Err(noop_unavailable())
+    ) -> Result<Option<hya_runtime_abi::BundleStateEntry>, HostError> {
+        Ok(None)
     }
 
     async fn put_state(
@@ -1146,8 +1157,8 @@ impl HostBundleStorage for NoopHostRuntime {
         _key: &str,
         _value: Value,
         _expected_version: Option<u64>,
-    ) -> Result<BundleStateEntry, HostError> {
-        Err(noop_unavailable())
+    ) -> Result<hya_runtime_abi::BundleStateEntry, HostError> {
+        Err(HostError::Unavailable("bundle storage unavailable".into()))
     }
 
     async fn delete_state(
@@ -1156,7 +1167,7 @@ impl HostBundleStorage for NoopHostRuntime {
         _scope: &str,
         _key: &str,
     ) -> Result<bool, HostError> {
-        Err(noop_unavailable())
+        Err(HostError::Unavailable("bundle storage unavailable".into()))
     }
 
     async fn list_state(
@@ -1164,62 +1175,68 @@ impl HostBundleStorage for NoopHostRuntime {
         _bundle: &str,
         _scope: &str,
         _prefix: Option<&str>,
-    ) -> Result<Vec<BundleStateEntry>, HostError> {
-        Err(noop_unavailable())
+    ) -> Result<Vec<hya_runtime_abi::BundleStateEntry>, HostError> {
+        Ok(Vec::new())
     }
 
     async fn acquire_claim(
         &self,
-        _request: BundleClaimRequest,
-    ) -> Result<BundleClaimLease, HostError> {
-        Err(noop_unavailable())
+        _request: hya_runtime_abi::BundleClaimRequest,
+    ) -> Result<hya_runtime_abi::BundleClaimLease, HostError> {
+        Err(HostError::Unavailable("bundle storage unavailable".into()))
     }
 
     async fn renew_claim(
         &self,
-        _lease: &BundleClaimLease,
+        _lease: &hya_runtime_abi::BundleClaimLease,
         _ttl_millis: u64,
-    ) -> Result<BundleClaimLease, HostError> {
-        Err(noop_unavailable())
+    ) -> Result<hya_runtime_abi::BundleClaimLease, HostError> {
+        Err(HostError::Unavailable("bundle storage unavailable".into()))
     }
 
-    async fn release_claim(&self, _lease: &BundleClaimLease) -> Result<(), HostError> {
-        Err(noop_unavailable())
+    async fn release_claim(
+        &self,
+        _lease: &hya_runtime_abi::BundleClaimLease,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unavailable("bundle storage unavailable".into()))
     }
 
     async fn read_claim(
         &self,
         _bundle: &str,
         _resource_key: &str,
-    ) -> Result<Option<BundleClaimLease>, HostError> {
-        Err(noop_unavailable())
+    ) -> Result<Option<hya_runtime_abi::BundleClaimLease>, HostError> {
+        Ok(None)
     }
 }
 
 #[async_trait]
-impl HostTurnRunner for NoopHostRuntime {
-    async fn spawn_session(&self, _request: TurnSpawnRequest) -> Result<SessionId, HostError> {
-        Err(noop_unavailable())
+impl hya_runtime_abi::HostTurnRunner for MinimalHostRuntime {
+    async fn spawn_session(
+        &self,
+        _request: hya_runtime_abi::TurnSpawnRequest,
+    ) -> Result<SessionId, HostError> {
+        Err(HostError::Unavailable("turn runner unavailable".into()))
     }
 
     async fn run_turn(
         &self,
-        _request: TurnStartRequest,
+        _request: hya_runtime_abi::TurnStartRequest,
         _cancel: CancellationToken,
-    ) -> Result<TurnOutcome, HostError> {
-        Err(noop_unavailable())
+    ) -> Result<hya_runtime_abi::TurnOutcome, HostError> {
+        Err(HostError::Unavailable("turn runner unavailable".into()))
     }
 
     async fn spawn_session_and_run(
         &self,
-        _request: TurnSpawnRequest,
+        _request: hya_runtime_abi::TurnSpawnRequest,
         _cancel: CancellationToken,
-    ) -> Result<TurnOutcome, HostError> {
-        Err(noop_unavailable())
+    ) -> Result<hya_runtime_abi::TurnOutcome, HostError> {
+        Err(HostError::Unavailable("turn runner unavailable".into()))
     }
 
     async fn steer_turn(&self, _session: SessionId, _message: String) -> Result<(), HostError> {
-        Err(noop_unavailable())
+        Err(HostError::Unavailable("turn runner unavailable".into()))
     }
 
     async fn cancel_turn(
@@ -1227,53 +1244,62 @@ impl HostTurnRunner for NoopHostRuntime {
         _session: SessionId,
         _reason: Option<String>,
     ) -> Result<bool, HostError> {
-        Err(noop_unavailable())
+        Err(HostError::Unavailable("turn runner unavailable".into()))
     }
 
-    async fn turn_status(&self, _session: SessionId) -> Result<TurnStatus, HostError> {
-        Err(noop_unavailable())
+    async fn turn_status(
+        &self,
+        _session: SessionId,
+    ) -> Result<hya_runtime_abi::TurnStatus, HostError> {
+        Ok(hya_runtime_abi::TurnStatus::Idle)
     }
 }
 
 #[async_trait]
-impl HostModelCaller for NoopHostRuntime {
+impl hya_runtime_abi::HostModelCaller for MinimalHostRuntime {
     async fn complete(
         &self,
-        _request: ModelCallRequest,
+        _request: hya_runtime_abi::ModelCallRequest,
         _cancel: CancellationToken,
-    ) -> Result<ModelCallResponse, HostError> {
-        Err(noop_unavailable())
+    ) -> Result<hya_runtime_abi::ModelCallResponse, HostError> {
+        Err(HostError::Unavailable("model caller unavailable".into()))
     }
 
     async fn stream(
         &self,
-        _request: ModelCallRequest,
+        _request: hya_runtime_abi::ModelCallRequest,
         _cancel: CancellationToken,
-    ) -> Result<mpsc::Receiver<Result<ModelStreamChunk, HostError>>, HostError> {
-        Err(noop_unavailable())
+    ) -> Result<
+        tokio::sync::mpsc::Receiver<Result<hya_runtime_abi::ModelStreamChunk, HostError>>,
+        HostError,
+    > {
+        Err(HostError::Unavailable("model caller unavailable".into()))
     }
 
     async fn compact_window(
         &self,
         _model: &ModelRef,
-        _messages: &[Message],
+        _messages: &[hya_proto::Message],
     ) -> Result<Option<String>, HostError> {
-        Err(noop_unavailable())
+        Ok(None)
     }
 
-    async fn model_window(&self, _model: &ModelRef) -> Result<Option<ModelWindowInfo>, HostError> {
-        Err(noop_unavailable())
+    async fn model_window(
+        &self,
+        _model: &ModelRef,
+    ) -> Result<Option<hya_runtime_abi::ModelWindowInfo>, HostError> {
+        Ok(None)
     }
 }
 
 #[async_trait]
-impl HostEventBus for NoopHostRuntime {
+impl hya_runtime_abi::HostEventBus for MinimalHostRuntime {
     fn publish(&self, _envelope: Envelope) -> Result<(), HostError> {
-        Err(noop_unavailable())
+        Err(HostError::Unavailable("event bus unavailable".into()))
     }
 
-    fn subscribe(&self) -> Result<broadcast::Receiver<Envelope>, HostError> {
-        Err(noop_unavailable())
+    fn subscribe(&self) -> Result<tokio::sync::broadcast::Receiver<Envelope>, HostError> {
+        Err(HostError::Unavailable("event bus unavailable".into()))
     }
 
     async fn publish_extension(
@@ -1283,66 +1309,71 @@ impl HostEventBus for NoopHostRuntime {
         _kind: &str,
         _payload: Value,
     ) -> Result<(), HostError> {
-        Err(noop_unavailable())
+        Err(HostError::Unavailable("event bus unavailable".into()))
     }
 }
 
 #[async_trait]
-impl HostCatalogReader for NoopHostRuntime {
-    async fn list_agents(&self, _session: Option<SessionId>) -> Result<Vec<AgentDef>, HostError> {
-        Err(noop_unavailable())
+impl hya_runtime_abi::HostCatalogReader for MinimalHostRuntime {
+    async fn list_agents(
+        &self,
+        _session: Option<SessionId>,
+    ) -> Result<Vec<hya_tool::AgentDef>, HostError> {
+        Ok(Vec::new())
     }
 
     async fn get_agent(
         &self,
-        _name: &AgentName,
+        _name: &hya_proto::AgentName,
         _session: Option<SessionId>,
-    ) -> Result<Option<PreparedAgent>, HostError> {
-        Err(noop_unavailable())
+    ) -> Result<Option<hya_bundle::PreparedAgent>, HostError> {
+        Ok(None)
     }
 
     async fn list_skills(
         &self,
         _session: Option<SessionId>,
-    ) -> Result<Vec<SkillCatalogEntry>, HostError> {
-        Err(noop_unavailable())
+    ) -> Result<Vec<hya_tool::SkillCatalogEntry>, HostError> {
+        Ok(Vec::new())
     }
 
-    async fn list_bundles(&self) -> Result<Vec<BundleCatalogSummary>, HostError> {
-        Err(noop_unavailable())
+    async fn list_bundles(&self) -> Result<Vec<hya_runtime_abi::BundleCatalogSummary>, HostError> {
+        Ok(Vec::new())
     }
 
-    async fn get_bundle(&self, _id: &str) -> Result<Option<Bundle>, HostError> {
-        Err(noop_unavailable())
+    async fn get_bundle(&self, _id: &str) -> Result<Option<hya_bundle::Bundle>, HostError> {
+        Ok(None)
     }
 
-    async fn bundle_config(&self, _bundle_id: &str) -> Result<Value, HostError> {
-        Err(noop_unavailable())
+    async fn bundle_config(&self, bundle_id: &str) -> Result<Value, HostError> {
+        Ok((self.bundle_config)(bundle_id))
     }
 
     async fn global_config(&self) -> Result<Value, HostError> {
-        Err(noop_unavailable())
+        Ok(Value::Null)
     }
 }
 
 #[async_trait]
-impl HostExtensionRegistry for NoopHostRuntime {
+impl hya_runtime_abi::HostExtensionRegistry for MinimalHostRuntime {
     async fn list_extensions(
         &self,
-        _kind: Option<ExtensionKind>,
-    ) -> Result<Vec<ExtensionEntry>, HostError> {
-        Err(noop_unavailable())
+        _kind: Option<hya_runtime_abi::ExtensionKind>,
+    ) -> Result<Vec<hya_runtime_abi::ExtensionEntry>, HostError> {
+        Ok(Vec::new())
     }
 
     async fn has_bundle(&self, _bundle_id: &str) -> Result<bool, HostError> {
-        Err(noop_unavailable())
+        Ok(false)
     }
 
     async fn invoke_bundle_api(
         &self,
-        _call: BundleApiInvocation,
-    ) -> Result<BundleApiResult, HostError> {
-        Err(noop_unavailable())
+        _call: hya_runtime_abi::BundleApiInvocation,
+    ) -> Result<hya_runtime_abi::BundleApiResult, HostError> {
+        Err(HostError::Unavailable(
+            "extension registry unavailable".into(),
+        ))
     }
 
     async fn invoke_tool(
@@ -1352,36 +1383,45 @@ impl HostExtensionRegistry for NoopHostRuntime {
         _input: Value,
         _cancel: CancellationToken,
     ) -> Result<Value, HostError> {
-        Err(noop_unavailable())
+        Err(HostError::Unavailable(
+            "extension registry unavailable".into(),
+        ))
     }
 }
 
-impl HostRuntime for NoopHostRuntime {
-    fn session_store(&self) -> &dyn HostSessionStore {
+impl HostRuntime for MinimalHostRuntime {
+    fn session_store(&self) -> &dyn hya_runtime_abi::HostSessionStore {
         self
     }
 
-    fn bundle_storage(&self) -> &dyn HostBundleStorage {
+    fn bundle_storage(&self) -> &dyn hya_runtime_abi::HostBundleStorage {
         self
     }
 
-    fn turn_runner(&self) -> &dyn HostTurnRunner {
+    fn turn_runner(&self) -> &dyn hya_runtime_abi::HostTurnRunner {
         self
     }
 
-    fn model_caller(&self) -> &dyn HostModelCaller {
+    fn model_caller(&self) -> &dyn hya_runtime_abi::HostModelCaller {
         self
     }
 
-    fn event_bus(&self) -> &dyn HostEventBus {
+    fn event_bus(&self) -> &dyn hya_runtime_abi::HostEventBus {
         self
     }
 
-    fn catalog_reader(&self) -> &dyn HostCatalogReader {
+    fn catalog_reader(&self) -> &dyn hya_runtime_abi::HostCatalogReader {
         self
     }
 
-    fn extension_registry(&self) -> &dyn HostExtensionRegistry {
+    fn extension_registry(&self) -> &dyn hya_runtime_abi::HostExtensionRegistry {
         self
     }
+}
+
+/// Minimal [`HostRuntime`] whose capability planes return no-op / unavailable defaults.
+#[must_use]
+pub fn noop_host_runtime() -> Arc<dyn HostRuntime> {
+    static NOOP: std::sync::OnceLock<Arc<dyn HostRuntime>> = std::sync::OnceLock::new();
+    Arc::clone(NOOP.get_or_init(|| Arc::new(MinimalHostRuntime::empty())))
 }

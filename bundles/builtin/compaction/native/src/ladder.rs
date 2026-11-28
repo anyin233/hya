@@ -5,23 +5,70 @@
 //! (`RewriteCtx::pressure`) and rewrites itself after these steps when the
 //! request is still over its threshold.
 
+use std::sync::Arc;
+
 use hya_context::rewrite::{RewriteCtx, ToolError};
 use hya_context::tokens::{TokenAccounting, TokenSource};
 use hya_proto::context::{ReasoningReplayPolicy, marker_goal};
 use hya_proto::{
     CompactionStrategy, Event, FinishReason, Message, MessageId, PartId, Role, SessionId,
 };
-use hya_tool::extension::ExtensionEvent;
+use hya_runtime_abi::HostRuntime;
+use hya_tool::extension::{BUNDLE_COMPACTION, ExtensionEvent};
 
 use crate::config::Config;
 use crate::evict::{ArtifactEvictionSink, evict_stale_tool_outputs, has_spillable_tool_output};
+
+async fn resolve_config(
+    cx: &RewriteCtx<'_>,
+    runtime: Option<&Arc<dyn HostRuntime>>,
+) -> Result<Config, ToolError> {
+    if !cx.config.is_null() {
+        return Config::from_value(cx.config);
+    }
+    if let Some(runtime) = runtime
+        && let Ok(value) = runtime
+            .catalog_reader()
+            .bundle_config(BUNDLE_COMPACTION)
+            .await
+    {
+        return Config::from_value(&value);
+    }
+    Ok(Config::default())
+}
+
+async fn try_compact_window(
+    cx: &RewriteCtx<'_>,
+    runtime: Option<&Arc<dyn HostRuntime>>,
+    messages: &[Message],
+) -> Option<String> {
+    if let Some(models) = cx.models {
+        return models
+            .compact_window(cx.model, messages)
+            .await
+            .ok()
+            .flatten();
+    }
+    if let Some(runtime) = runtime {
+        return runtime
+            .model_caller()
+            .compact_window(cx.model, messages)
+            .await
+            .ok()
+            .flatten();
+    }
+    None
+}
 
 /// Over the threshold, run `shake`, then `remote` while the request is still
 /// over it; a route without native compaction, or a failed call, leaves the
 /// rest to the kernel. Every round, record the round's `ContextStatus`.
 /// `true` when the log changed.
-pub(crate) async fn walk(cx: &RewriteCtx<'_>) -> Result<bool, ToolError> {
-    let config = Config::from_value(cx.config)?;
+pub(crate) async fn walk(
+    cx: &RewriteCtx<'_>,
+    runtime: Option<&Arc<dyn HostRuntime>>,
+) -> Result<bool, ToolError> {
+    let config = resolve_config(cx, runtime).await?;
     let accounting = TokenAccounting::new(config.token_accounting)
         .with_tool_images(cx.window.is_some_and(|window| window.sends_tool_images));
     let session = cx.session;
@@ -66,8 +113,8 @@ pub(crate) async fn walk(cx: &RewriteCtx<'_>) -> Result<bool, ToolError> {
             let freed = before.saturating_sub(count(&messages));
             tokens = tokens.saturating_sub(freed);
             let after = used.saturating_sub(u64::try_from(freed).unwrap_or(u64::MAX));
-            // The notices ride on the event, so later requests send exactly
-            // these bytes.
+            // The notices ride on the Event::Extension record, so later
+            // requests send exactly these bytes.
             cx.log
                 .append(
                     session,
@@ -88,8 +135,8 @@ pub(crate) async fn walk(cx: &RewriteCtx<'_>) -> Result<bool, ToolError> {
             over = Some(after).filter(|after| *after > threshold);
         }
     }
-    if let (Some(used), Some(models)) = (over, cx.models)
-        && let Ok(Some(body)) = models.compact_window(cx.model, &messages).await
+    if let Some(used) = over
+        && let Some(body) = try_compact_window(cx, runtime, &messages).await
     {
         let summary_tokens = body.len() / 4;
         commit(cx, body, &messages, used, threshold).await?;
@@ -127,12 +174,12 @@ pub(crate) async fn walk(cx: &RewriteCtx<'_>) -> Result<bool, ToolError> {
 /// Fold the transcript `cx` yields with the route's native compaction now
 /// (`/summarize`); `false` when the route has none or the call failed, which
 /// leaves the fold to the kernel.
-pub(crate) async fn compact_now(cx: &RewriteCtx<'_>) -> Result<bool, ToolError> {
-    let Some(models) = cx.models else {
-        return Ok(false);
-    };
+pub(crate) async fn compact_now(
+    cx: &RewriteCtx<'_>,
+    runtime: Option<&Arc<dyn HostRuntime>>,
+) -> Result<bool, ToolError> {
     let messages = cx.transcript.messages(cx.projection).await?;
-    let Ok(Some(body)) = models.compact_window(cx.model, &messages).await else {
+    let Some(body) = try_compact_window(cx, runtime, &messages).await else {
         return Ok(false);
     };
     let (used, threshold) = cx

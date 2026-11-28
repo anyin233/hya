@@ -70,7 +70,6 @@ async fn mail_auth_non_member_rejected_across_engine_plane_and_send_tool() {
         skills: Default::default(),
         artifacts: Default::default(),
         agents: Default::default(),
-        websearch: Default::default(),
         lsp: Default::default(),
         formatter: Default::default(),
         workdir: PathBuf::from("."),

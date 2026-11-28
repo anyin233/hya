@@ -42,7 +42,7 @@ fn inventory_exposes_immutable_noninstallable_presets_and_internal_bundles() {
             "hya/core-skills",
             "hya/extended-tools",
             "hya/hashline",
-            "hya/network-tools",
+            "hya/network",
         ]
     );
     assert_eq!(inventory[0].id, "hya/agent-channels");

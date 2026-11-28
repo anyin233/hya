@@ -1,29 +1,44 @@
-//! Loading the internal native bundles (ADR-0033, D9): the full-mode features
-//! that run outside the kernel. Bare mode never calls this.
+//! Loading the internal native bundles (ADR-0033, ADR-0039): the full-mode
+//! features that run outside the kernel over lockstep ABI v2. Bare mode never
+//! calls this.
 
-use hya_tool_loader::Registrations;
+use std::sync::Arc;
+
+use hya_runtime_abi::{HostRuntime, NativeRegistrations};
+use hya_tool_loader::MinimalHostRuntime;
 
 use crate::error::CoreError;
 
-/// Load every bundle in [`hya_bundle::INTERNAL_BUNDLES`], in order, and
-/// collect their registrations.
+/// Load every bundle in [`hya_bundle::INTERNAL_BUNDLES`] with a default
+/// [`MinimalHostRuntime`], in order, and collect their ABI v2 registrations.
 ///
 /// # Errors
 ///
 /// Returns [`CoreError::BundleRuntime`] for the first bundle whose library
 /// cannot be found, verified, or loaded.
-pub fn load_internal() -> Result<Registrations, CoreError> {
-    let mut all = Registrations {
-        tools: Vec::new(),
-        rewriters: Vec::new(),
-    };
+pub fn load_internal() -> Result<NativeRegistrations, CoreError> {
+    load_internal_with_runtime(Arc::new(MinimalHostRuntime::empty()))
+}
+
+/// Load every bundle in [`hya_bundle::INTERNAL_BUNDLES`] with the given
+/// [`HostRuntime`], in order, and collect their ABI v2 registrations.
+///
+/// # Errors
+///
+/// Returns [`CoreError::BundleRuntime`] for the first bundle whose library
+/// cannot be found, verified, or loaded.
+pub fn load_internal_with_runtime(
+    runtime: Arc<dyn HostRuntime>,
+) -> Result<NativeRegistrations, CoreError> {
+    let mut all = NativeRegistrations::new();
     for identity in hya_bundle::INTERNAL_BUNDLES {
-        let loaded = hya_tool_loader::load(identity).map_err(|error| CoreError::BundleRuntime {
-            bundle_id: (*identity).to_string(),
-            source: Box::new(CoreError::Invalid(error)),
+        let loaded = hya_tool_loader::load_v2(identity, Arc::clone(&runtime)).map_err(|error| {
+            CoreError::BundleRuntime {
+                bundle_id: (*identity).to_string(),
+                source: Box::new(CoreError::Invalid(error.to_string())),
+            }
         })?;
-        all.tools.extend(loaded.tools);
-        all.rewriters.extend(loaded.rewriters);
+        all.extend(loaded);
     }
     Ok(all)
 }

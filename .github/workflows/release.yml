@@ -106,7 +106,7 @@ jobs:
           set -euo pipefail
           cargo build --release --locked -p hya-backend --bins --target "$TARGET"
           cargo build --release --locked -p hya-extended-tools --lib --target "$TARGET"
-          cargo build --release --locked -p hya-hashline -p hya-base-tools -p hya-network-tools -p hya-channel-tools -p hya-compaction -p hya-plan --lib --target "$TARGET"
+          cargo build --release --locked -p hya-hashline -p hya-base-tools -p hya-network -p hya-channel-tools -p hya-compaction -p hya-plan --lib --target "$TARGET"
           cargo build --locked -p xtask
       - name: Package unified release asset
         if: github.ref_type == 'tag'

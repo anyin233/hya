@@ -14,7 +14,7 @@ use hya_tool::{
     Action, FormatterError, FormatterPlane, FormatterProvider, FormatterStatus, InteractionPlane,
     LifecyclePlane, LspError, LspPlane, LspProvider, LspRequest, MailboxPlane, Mode,
     NestedToolPlane, PermissionPlane, PermissionRules, ProjectActivityPlane, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolOperation, WebSearchPlane, WorkflowPlane,
+    SpawnerPlane, ToolCtx, ToolOperation, WorkflowPlane,
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -71,7 +71,6 @@ pub fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
         parent_session: None,
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
-        websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: FormatterPlane::default(),
         agents: Default::default(),

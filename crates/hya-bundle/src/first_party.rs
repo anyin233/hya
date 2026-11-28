@@ -22,7 +22,7 @@ pub const FIRST_PARTY_BUNDLES: &[&str] = &[
     "hya/hashline",
     "hya/base-tools",
     "hya/extended-tools",
-    "hya/network-tools",
+    "hya/network",
     "hya/channel-tools",
     "hya/core-skills",
     "hya/core-commands",

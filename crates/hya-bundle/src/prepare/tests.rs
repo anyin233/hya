@@ -483,13 +483,8 @@ fn rejects_exposure_yaml_and_exposure_asset_except_transitional_tool_families()
             if detail.contains("exposure") && detail.contains("schema_version 2")
     ));
 
-    // 5. The four transitional Phase 0–4 legacy tool-family bundles remain accepted.
-    for transitional_id in [
-        "hya/base-tools",
-        "hya/extended-tools",
-        "hya/network-tools",
-        "hya/channel-tools",
-    ] {
+    // 5. The remaining transitional Phase 0–4 legacy tool-family bundles stay accepted.
+    for transitional_id in ["hya/base-tools", "hya/extended-tools", "hya/channel-tools"] {
         let manifest = format!(
             "kind: Bundle\nschema_version: 2\nidentity: {{ id: {transitional_id}, version: 1.0.0, publisher: hya }}\nassets:\n  - {{ id: exposure, path: exposure.yaml }}\n"
         );
@@ -735,7 +730,7 @@ fn builtin_bundle_profile_and_selective_resolution_never_panics() -> Result<(), 
     };
     assert!(bare.is_enabled("hya/base-tools"));
     assert!(!bare.is_enabled("hya/core-skills")); // disable overrides enable
-    assert!(!bare.is_enabled("hya/network-tools"));
+    assert!(!bare.is_enabled("hya/network"));
     assert_eq!(bare.enabled_identities(), vec!["hya/base-tools"]);
     assert_eq!(bare.unknown_identities(), vec!["unknown/missing"]);
 
@@ -766,7 +761,7 @@ identity: { id: hya/base-tools, version: 1.0.0, publisher: hya }
     let full = BuiltinBundleSelection {
         profile: BuiltinBundleProfile::Full,
         enable: Vec::new(),
-        disable: vec!["hya/network-tools".to_string()],
+        disable: vec!["hya/network".to_string()],
     };
     let report =
         resolve_first_party_bundles_with(&full, &[&project_override.bundles()[0]], |id| match id {
@@ -783,7 +778,7 @@ identity: { id: hya/base-tools, version: 1.0.0, publisher: hya }
         Some(&BuiltinBundleStatus::Loaded)
     );
     assert_eq!(
-        report.status("hya/network-tools"),
+        report.status("hya/network"),
         Some(&BuiltinBundleStatus::Disabled)
     );
     assert_eq!(

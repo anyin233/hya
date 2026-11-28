@@ -39,9 +39,8 @@ use hya_tool::extension::{
 use hya_tool::{
     AgentDef, ArchiveReason, FormatterPlane, InlineAgent, InteractionPlane, LspPlane, MailboxPlane,
     Mode, PermissionModel, PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnMember,
-    SpawnerPlane, Tool, ToolCtx, ToolError, ToolOperation, ToolPermission, WebSearchPlane,
-    WorkflowCommand, WorkflowCommandResult, WorkflowRunStatus, WorkflowStagePlan,
-    handle::ArtifactPlane,
+    SpawnerPlane, Tool, ToolCtx, ToolError, ToolOperation, ToolPermission, WorkflowCommand,
+    WorkflowCommandResult, WorkflowRunStatus, WorkflowStagePlan, handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -259,7 +258,6 @@ async fn review_runtime() -> (BuiltSessionEngine, AgentSpec, SessionId) {
         BTreeMap::new(),
         Vec::new(),
         (
-            WebSearchConfig::default(),
             InvocationPolicy::default(),
             config::EngineSettings::default(),
         ),
@@ -459,7 +457,6 @@ fn sidecar_test_ctx(root: &Path) -> ToolCtx {
         parent_session: None,
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
-        websearch: WebSearchPlane::default(),
         formatter: FormatterPlane::default(),
         agents: Default::default(),
         lsp: LspPlane::default(),
@@ -765,7 +762,6 @@ async fn workflow_control_cold_run_and_shutdown_invariants() {
         BTreeMap::new(),
         Vec::new(),
         (
-            WebSearchConfig::default(),
             InvocationPolicy::default(),
             config::EngineSettings::default(),
         ),
@@ -975,7 +971,6 @@ async fn shutdown_stops_sources_retained_by_a_plugin_tool_and_a_retired_mcp_bind
             launch: Default::default(),
         }],
         (
-            WebSearchConfig::default(),
             InvocationPolicy::default(),
             config::EngineSettings::default(),
         ),
@@ -1067,7 +1062,6 @@ async fn built_shutdown_cancels_and_joins_deferred_mcp_preparation() {
         )]),
         Vec::new(),
         (
-            WebSearchConfig::default(),
             InvocationPolicy::default(),
             config::EngineSettings::default(),
         ),
@@ -1124,7 +1118,6 @@ async fn built_shutdown_cancels_started_workflow_while_reads_stay_unblocked() {
         BTreeMap::new(),
         Vec::new(),
         (
-            WebSearchConfig::default(),
             InvocationPolicy::compile(PermissionModel::Danger, Vec::new()).unwrap(),
             config::EngineSettings::default(),
         ),
@@ -1251,7 +1244,6 @@ async fn runtime_store_ownership_contention_and_startup_recovery() {
                 BTreeMap::new(),
                 Vec::new(),
                 (
-                    WebSearchConfig::default(),
                     InvocationPolicy::default(),
                     config::EngineSettings::default(),
                 ),
@@ -1375,7 +1367,7 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
         &agent,
         rt.mcp,
         rt.plugins,
-        (rt.websearch, rt.permission, rt.settings),
+        (rt.permission, rt.settings),
     )
     .await
     .unwrap();
@@ -1400,31 +1392,21 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
         PermissionModel::Strict
     );
 
-    // 3. Websearch + webfetch independent exposure via per-bundle config.
+    // 3. Websearch + webfetch independent exposure via per-bundle `hya/network` config.yml.
     std::fs::write(&config_path, "schema_version: 2\n").unwrap();
     let net_loc = crate::bundle_config::bundle_config_location(
         &config_path,
-        "hya/network-tools",
+        "hya/network",
         crate::bundle_config::BundleConfigScope::User,
     )
     .unwrap();
     std::fs::create_dir_all(net_loc.dir()).unwrap();
     std::fs::write(
         net_loc.file(),
-        "websearch:\n  provider: parallel\n  endpoint: https://search.example.test/mcp\n  key: secret\n  enabled: false\nwebfetch:\n  enabled: false\n",
+        "webfetch:\n  enabled: false\nwebsearch:\n  provider: parallel\n  endpoint: https://search.example.test/mcp\n  key: secret\n  enabled: false\n",
     )
     .unwrap();
     let ws_rt = resolve_runtime_strict(None).await.unwrap();
-    assert_eq!(
-        ws_rt.websearch.provider,
-        hya_tool::WebSearchProvider::Parallel
-    );
-    assert_eq!(
-        ws_rt.websearch.endpoint.as_deref(),
-        Some("https://search.example.test/mcp")
-    );
-    assert_eq!(ws_rt.websearch.key.as_deref(), Some("secret"));
-    assert!(!ws_rt.websearch.enabled);
     let ws_agent = agent_with_model(&ws_rt.model, None);
     let mut ws_built = build_session_engine(
         SessionStore::connect_memory().await.unwrap(),
@@ -1432,7 +1414,7 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
         &ws_agent,
         ws_rt.mcp,
         ws_rt.plugins,
-        (ws_rt.websearch, ws_rt.permission, ws_rt.settings),
+        (ws_rt.permission, ws_rt.settings),
     )
     .await
     .unwrap();
@@ -1445,6 +1427,42 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
     assert!(!names.iter().any(|n| n == "websearch"));
     assert!(!names.iter().any(|n| n == "webfetch"));
     ws_built.shutdown().await.unwrap();
+
+    // 3b. Air-gapped mode: disabling `hya/network` removes all internet tools and aliases.
+    std::fs::write(
+        &config_path,
+        "schema_version: 2\nbundles:\n  builtin:\n    profile: full\n    disable: [hya/network]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        net_loc.file(),
+        "webfetch:\n  enabled: true\nwebsearch:\n  enabled: true\n",
+    )
+    .unwrap();
+    let airgap_rt = resolve_runtime_strict(None).await.unwrap();
+    let airgap_agent = agent_with_model(&airgap_rt.model, None);
+    let mut airgap_built = build_session_engine(
+        SessionStore::connect_memory().await.unwrap(),
+        airgap_rt.router,
+        &airgap_agent,
+        airgap_rt.mcp,
+        airgap_rt.plugins,
+        (airgap_rt.permission, airgap_rt.settings),
+    )
+    .await
+    .unwrap();
+    let airgap_names: Vec<String> = airgap_built
+        .engine()
+        .tool_schemas()
+        .into_iter()
+        .map(|s| s.name.to_string())
+        .collect();
+    assert!(!airgap_names.iter().any(|n| n == "websearch"));
+    assert!(!airgap_names.iter().any(|n| n == "webfetch"));
+    assert!(!airgap_names.iter().any(|n| n == "search"));
+    assert!(!airgap_names.iter().any(|n| n == "fetch"));
+    assert!(airgap_names.iter().any(|n| n == "read"));
+    airgap_built.shutdown().await.unwrap();
 
     // 4. Selected model reasoning default stays in catalog, not baked into root Agent.
     std::fs::write(
@@ -1511,12 +1529,10 @@ fn agent_spec_catalog_and_pure_runtime_invariants() {
             ..Default::default()
         },
     );
-    let expected_endpoint = runtime.websearch.endpoint.clone();
     let pure = runtime.with_pure(true);
     assert!(pure.pure);
     assert!(pure.mcp.is_empty());
     assert!(pure.plugins.is_empty());
-    assert_eq!(pure.websearch.endpoint, expected_endpoint);
 }
 
 #[tokio::test]
@@ -1536,7 +1552,6 @@ async fn built_engine_lazily_refreshes_installed_catalog_at_root_binding() {
         BTreeMap::new(),
         Vec::new(),
         (
-            WebSearchConfig::default(),
             InvocationPolicy::default(),
             config::EngineSettings::default(),
         ),
@@ -1791,7 +1806,6 @@ async fn engine_build_fences_residents_but_defers_queued_work_until_start() {
         BTreeMap::new(),
         Vec::new(),
         (
-            WebSearchConfig::default(),
             InvocationPolicy::default(),
             config::EngineSettings::default(),
         ),
@@ -1898,7 +1912,6 @@ async fn deferred_mcp_and_hot_reload_plugin_source_wiring() {
             },
         ],
         (
-            WebSearchConfig::default(),
             InvocationPolicy::default(),
             config::EngineSettings::default(),
         ),
@@ -1962,7 +1975,6 @@ async fn startup_mixed_mcp_plugin_and_compat_mcp_control() {
             launch: Default::default(),
         }],
         (
-            WebSearchConfig::default(),
             InvocationPolicy::default(),
             config::EngineSettings::default(),
         ),
@@ -2086,7 +2098,6 @@ async fn initial_context_backfills_and_survives_runtime_restart() {
                 BTreeMap::new(),
                 Vec::new(),
                 (
-                    WebSearchConfig::default(),
                     InvocationPolicy::default(),
                     config::EngineSettings::default(),
                 ),
@@ -3652,7 +3663,6 @@ async fn startup_recovery_rebuilds_executable_resident_sidecar_before_queued_mai
         BTreeMap::new(),
         Vec::new(),
         (
-            WebSearchConfig::default(),
             InvocationPolicy::default(),
             config::EngineSettings::default(),
         ),
@@ -3810,11 +3820,7 @@ async fn bare_profile_builds_unified_session_engine_with_eight_bare_tools_and_hy
         &agent,
         BTreeMap::new(),
         Vec::new(),
-        (
-            WebSearchConfig::default(),
-            InvocationPolicy::default(),
-            bare_settings(),
-        ),
+        (InvocationPolicy::default(), bare_settings()),
     )
     .await
     .unwrap();
@@ -3874,11 +3880,7 @@ async fn bare_profile_builds_unified_session_engine_with_eight_bare_tools_and_hy
         &agent,
         BTreeMap::new(),
         Vec::new(),
-        (
-            WebSearchConfig::default(),
-            InvocationPolicy::default(),
-            bare_settings(),
-        ),
+        (InvocationPolicy::default(), bare_settings()),
     )
     .await
     .unwrap();

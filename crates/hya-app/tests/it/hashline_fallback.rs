@@ -15,7 +15,7 @@ use hya_tool::handle::ArtifactPlane;
 use hya_tool::{
     Action, FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, Mode,
     NestedToolPlane, PermissionPlane, PermissionRules, ProjectActivityPlane, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolOperation, WebSearchPlane, WorkflowPlane,
+    SpawnerPlane, ToolCtx, ToolOperation, WorkflowPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -61,7 +61,6 @@ fn tool_ctx(workdir: &Path) -> ToolCtx {
         skills: SkillPlane::default(),
         artifacts: ArtifactPlane::default(),
         agents: Arc::from([]),
-        websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: FormatterPlane::default(),
         workdir: workdir.to_path_buf(),

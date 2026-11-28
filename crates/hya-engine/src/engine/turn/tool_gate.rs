@@ -203,7 +203,6 @@ impl TurnToolGate<'_> {
                                 skills: resources.skill_plane(),
                                 artifacts: engine.artifacts.clone(),
                                 agents: agents.clone(),
-                                websearch: engine.websearch.clone(),
                                 lsp: engine.lsp.clone(),
                                 formatter: engine.formatter.clone(),
                                 workdir: binding.workdir().to_path_buf(),

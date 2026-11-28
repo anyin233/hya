@@ -16,7 +16,8 @@ pub use hya_runtime_abi::{
 pub use hya_tool::{AliasVisibility, native_bundle::Registrations};
 pub use native_bundle::{load, loaded_library_sources};
 pub use v2::{
-    LoadedNativeBundles, NativeBundleLoader, load_v2, load_v2_from_path, noop_host_runtime,
+    LoadedNativeBundles, MinimalHostRuntime, NativeBundleLoader, load_v2, load_v2_from_path,
+    noop_host_runtime,
 };
 pub use v2_tools::{NATIVE_V2_TOOL_BUNDLES, load_and_register_v2_bundle, register_v2_bundle_tools};
 
@@ -39,8 +40,9 @@ pub fn builtins() -> ToolRegistry {
 }
 
 /// Non-panicking selective loader for a subset of the trusted native tool
-/// bundles, dispatching ABI v2 bundles (such as `hya/hashline` and `hya/plan`)
-/// through [`load_v2`] and transitional ABI v1 tool families through [`load`].
+/// bundles, dispatching ABI v2 bundles (such as `hya/hashline`, `hya/network`,
+/// and `hya/plan`) through [`load_v2`] and transitional ABI v1 tool families
+/// through [`load`].
 ///
 /// # Errors
 ///
@@ -51,7 +53,7 @@ pub fn try_from_tool_families(identities: &[&str]) -> Result<ToolRegistry, Strin
     if identities.is_empty() {
         return Ok(ToolRegistry::default());
     }
-    try_from_tool_families_with_runtime(identities, noop_host_runtime())
+    try_from_tool_families_with_runtime(identities, Arc::new(MinimalHostRuntime::empty()))
 }
 
 /// Non-panicking selective loader for trusted native tool bundles using an

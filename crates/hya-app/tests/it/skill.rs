@@ -13,7 +13,7 @@ use hya_engine::skill_catalog::{
 };
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolError, WebSearchPlane, handle::ArtifactPlane,
+    SpawnerPlane, ToolCtx, ToolError, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -58,7 +58,6 @@ fn ctx_with(rules: Vec<Rule>, skills: SkillPlane, workdir: PathBuf) -> ToolCtx {
         session: None,
         parent_session: None,
         skills,
-        websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
         artifacts: ArtifactPlane::default(),

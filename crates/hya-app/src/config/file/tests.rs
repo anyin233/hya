@@ -96,7 +96,7 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
     std::fs::create_dir_all(dir.join("hya")).unwrap();
     std::fs::write(
         &cfg_path,
-        "schema_version: 2\nbundles:\n  builtin:\n    profile: bare\n    enable: [hya/base-tools, hya/network-tools, hya/compaction, hya/goal-loop, hya/extended-tools]\n    disable: [hya/channel-tools]\n",
+        "schema_version: 2\nbundles:\n  builtin:\n    profile: bare\n    enable: [hya/base-tools, hya/network, hya/compaction, hya/goal-loop, hya/extended-tools]\n    disable: [hya/channel-tools]\n",
     )
     .unwrap();
 
@@ -120,13 +120,14 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
         "compaction:\n  keep_recent: 12\n  summary_max_tokens: 8192\n  token_accounting: estimate\n",
     );
     write_bundle_cfg(
-        "hya/network-tools",
+        "hya/network",
         "webfetch:\n  enabled: false\nwebsearch:\n  provider: parallel\n  endpoint: https://search.example/mcp\n  key: secret\n  enabled: false\n",
     );
 
     let file = parse_config(&std::fs::read_to_string(&cfg_path).unwrap()).unwrap();
     assert_eq!(file.bundles.builtin.profile, BuiltinBundleProfile::Bare);
     assert!(file.bundles.builtin.is_enabled("hya/base-tools"));
+    assert!(file.bundles.builtin.is_enabled("hya/network"));
     assert!(!file.bundles.builtin.is_enabled("hya/channel-tools"));
 
     let settings = EngineSettings {
@@ -137,16 +138,14 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
         settings.goal().evaluator_model.as_deref(),
         Some("deep/o3-mini")
     );
-    assert!(!settings.webfetch_enabled());
-    let ws = resolve_websearch(&settings.file, &cfg_path);
+    let net_json = settings.bundle_config_json("hya/network");
+    assert_eq!(net_json["webfetch"]["enabled"], false);
+    assert_eq!(net_json["websearch"]["provider"], "parallel");
     assert_eq!(
-        (ws.provider, ws.endpoint.as_deref(), ws.enabled),
-        (
-            hya_tool::WebSearchProvider::Parallel,
-            Some("https://search.example/mcp"),
-            false
-        )
+        net_json["websearch"]["endpoint"],
+        "https://search.example/mcp"
     );
+    assert_eq!(net_json["websearch"]["enabled"], false);
 
     let sub = settings.subagents();
     assert_eq!(
@@ -203,7 +202,7 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
         TokenAccountingMode::Estimate
     );
 
-    // Bare without hya/network-tools forces webfetch & websearch off cleanly.
+    // Bare without hya/network disables the network bundle cleanly.
     let bare_settings = EngineSettings {
         file: FileConfig {
             bundles: BundlesConfig {
@@ -213,8 +212,7 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
         },
         config_file: Some(cfg_path.clone()),
     };
-    assert!(!bare_settings.webfetch_enabled());
-    assert!(!resolve_websearch(&bare_settings.file, &cfg_path).enabled);
+    assert!(!bare_settings.builtin_bundles().is_enabled("hya/network"));
 
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -239,7 +237,8 @@ fn tools_categories_and_plugins_sections_parse_and_validate() {
             file: parse_config("schema_version: 2\n").unwrap(),
             config_file: None,
         }
-        .webfetch_enabled()
+        .builtin_bundles()
+        .is_enabled("hya/network")
     );
 
     let f = parse_config(

@@ -10,9 +10,7 @@ use hya_engine::{
 use hya_mcp::McpServerConfig;
 use hya_plugin::config::PluginEntry;
 use hya_provider::ReasoningEffort;
-use hya_tool::{
-    InvocationPolicy, InvocationRule, Mode, PermissionModel, PermissionTarget, WebSearchConfig,
-};
+use hya_tool::{InvocationPolicy, InvocationRule, Mode, PermissionModel, PermissionTarget};
 use serde::Deserialize;
 
 use super::provider::{ProviderConfig, ProviderRetryFile};
@@ -82,12 +80,19 @@ pub struct EngineSettings {
 }
 
 impl EngineSettings {
-    fn resolved_config_file(&self) -> PathBuf {
+    pub(crate) fn resolved_config_file(&self) -> PathBuf {
         self.config_file.clone().unwrap_or_else(active_config_path)
     }
 
     fn read_bundle_config_value(&self, bundle_ids: &[&str]) -> Option<serde_norway::Value> {
         read_bundle_config_for(&self.resolved_config_file(), bundle_ids)
+    }
+
+    /// Read a bundle's `config.yml` as a JSON value (`Value::Null` when absent
+    /// or unreadable).
+    #[must_use]
+    pub fn bundle_config_json(&self, bundle_id: &str) -> serde_json::Value {
+        read_bundle_config_json(&self.resolved_config_file(), bundle_id)
     }
 
     /// Active built-in bundle selection from `bundles.builtin`.
@@ -154,15 +159,6 @@ impl EngineSettings {
         resolve_catalog_scope_cache(self.file.catalog_scopes.as_ref())
     }
 
-    pub(crate) fn webfetch_enabled(&self) -> bool {
-        if !self.file.bundles.builtin.is_enabled("hya/network-tools") {
-            return false;
-        }
-        self.read_bundle_config_value(&["hya/network-tools", "hya/network"])
-            .and_then(|val| decode_bundle_section::<WebFetchConfig>(&val, Some("webfetch")))
-            .is_none_or(|cfg| cfg.enabled)
-    }
-
     pub(crate) fn code_mode(&self) -> CodeMode {
         self.file
             .tools
@@ -222,25 +218,6 @@ struct CatalogScopesFile {
 pub(super) struct ToolsConfig {
     #[serde(default)]
     code: CodeToolConfig,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WebFetchConfig {
-    #[serde(default = "default_true")]
-    enabled: bool,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-impl Default for WebFetchConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_true(),
-        }
-    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -316,6 +293,12 @@ fn read_bundle_config_for(config_file: &Path, bundle_ids: &[&str]) -> Option<ser
     None
 }
 
+pub(crate) fn read_bundle_config_json(config_file: &Path, bundle_id: &str) -> serde_json::Value {
+    read_bundle_config_for(config_file, &[bundle_id])
+        .and_then(|value| serde_json::to_value(value).ok())
+        .unwrap_or(serde_json::Value::Null)
+}
+
 fn decode_bundle_section<T: for<'de> Deserialize<'de>>(
     value: &serde_norway::Value,
     nested_key: Option<&str>,
@@ -326,18 +309,6 @@ fn decode_bundle_section<T: for<'de> Deserialize<'de>>(
         return serde_norway::from_value(nested.clone()).ok();
     }
     serde_norway::from_value(value.clone()).ok()
-}
-
-pub(super) fn resolve_websearch(file: &FileConfig, config_file: &Path) -> WebSearchConfig {
-    if !file.bundles.builtin.is_enabled("hya/network-tools") {
-        return WebSearchConfig {
-            enabled: false,
-            ..WebSearchConfig::default()
-        };
-    }
-    read_bundle_config_for(config_file, &["hya/network-tools", "hya/network"])
-        .and_then(|val| decode_bundle_section::<WebSearchConfig>(&val, Some("websearch")))
-        .unwrap_or_default()
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -540,7 +511,7 @@ pub(super) fn parse_config(yaml: &str) -> anyhow::Result<FileConfig> {
         for key in ["websearch", "webfetch"] {
             if tools.contains_key(key) {
                 anyhow::bail!(
-                    "config.yaml v1 section `tools.{key}` was moved to per-bundle config for `hya/network-tools`; run `hya-migration run` to migrate"
+                    "config.yaml v1 section `tools.{key}` was moved to per-bundle config for `hya/network`; run `hya-migration run` to migrate"
                 );
             }
         }

@@ -223,7 +223,7 @@ mod tests {
     use hya_proto::SessionId;
     use hya_tool::{
         InteractionPlane, LspPlane, PermissionPlane, PermissionRules, SkillPlane, SpawnerPlane,
-        WebSearchPlane, handle::ArtifactPlane,
+        handle::ArtifactPlane,
     };
     use std::path::PathBuf;
     use tokio_util::sync::CancellationToken;
@@ -243,7 +243,6 @@ mod tests {
             parent_session: None,
             skills: SkillPlane::default(),
             artifacts: ArtifactPlane::default(),
-            websearch: WebSearchPlane::default(),
             lsp: LspPlane::default(),
             formatter: hya_tool::FormatterPlane::default(),
             agents: Default::default(),

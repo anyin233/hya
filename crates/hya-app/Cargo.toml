@@ -13,9 +13,10 @@ workspace = true
 [dependencies]
 hya-extended-tools = { workspace = true }
 hya-channel-tools = { workspace = true }
-hya-network-tools = { workspace = true }
+hya-network = { workspace = true }
 hya-plan = { workspace = true }
 hya-bundle = { workspace = true }
+hya-runtime-abi = { workspace = true }
 hya-version = { workspace = true }
 hya-core = { workspace = true }
 hya-engine = { workspace = true }

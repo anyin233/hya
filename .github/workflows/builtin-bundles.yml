@@ -167,6 +167,7 @@ jobs:
           ABI_VERSION: ${{ matrix.abi_version }}
           BUNDLE_NAME: ${{ matrix.name }}
           BUNDLE_PATH: ${{ matrix.path }}
+          ABI_VERSION: ${{ matrix.abi_version }}
           HAS_REWRITERS: ${{ matrix.has_rewriters }}
         run: |
           set -euo pipefail
@@ -184,9 +185,9 @@ jobs:
           if [[ "${ABI_VERSION:-1}" == "2" ]]; then
             required_syms=(
               hya_native_abi_v2
-              hya_native_register_v2
               hya_native_with_runtime_v2
               hya_native_share_deadline_v2
+              hya_native_register_v2
             )
           else
             required_syms=(
@@ -338,7 +339,7 @@ jobs:
             hya/hashline \
             hya/base-tools \
             hya/extended-tools \
-            hya/network-tools \
+            hya/network \
             hya/channel-tools \
             hya/compaction \
             hya/plan \

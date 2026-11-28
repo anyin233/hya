@@ -25,7 +25,7 @@ const WITHOUT_CHANNEL_TOOLS: [&str; 4] = [
     "hya/hashline",
     "hya/base-tools",
     "hya/extended-tools",
-    "hya/network-tools",
+    "hya/network",
 ];
 
 fn catalog_from(bundles: &[Bundle]) -> Arc<AgentCatalog> {
@@ -404,7 +404,6 @@ fn dispatch_ctx(workdir: &Path) -> ToolCtx {
         skills: SkillPlane::default(),
         artifacts: hya_tool::handle::ArtifactPlane::default(),
         agents: Default::default(),
-        websearch: hya_tool::WebSearchPlane::default(),
         lsp: hya_tool::LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
         workdir: workdir.to_path_buf(),

@@ -21,7 +21,7 @@ pub(crate) const TOOL_FAMILIES: [&str; 5] = [
     "hya/hashline",
     "hya/base-tools",
     "hya/extended-tools",
-    "hya/network-tools",
+    "hya/network",
     "hya/channel-tools",
 ];
 
@@ -99,6 +99,7 @@ enum DescriptorPermission {
     ReadOnly,
     Tool,
     Command,
+    Task,
     Interactive,
 }
 
@@ -108,13 +109,14 @@ impl From<DescriptorPermission> for ToolPermission {
             DescriptorPermission::ReadOnly => Self::ReadOnly,
             DescriptorPermission::Tool | DescriptorPermission::Interactive => Self::Tool,
             DescriptorPermission::Command => Self::Command,
+            DescriptorPermission::Task => Self::Task,
         }
     }
 }
 
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum DescriptorAlias {
+enum V2ToolAlias {
     Name(String),
     Detailed {
         name: String,
@@ -124,75 +126,64 @@ enum DescriptorAlias {
 }
 
 #[derive(Deserialize)]
-struct StructuredToolDescriptor {
+struct V2ToolDescriptor {
     #[serde(default)]
     schema_version: Option<u32>,
     name: String,
     #[serde(default)]
     permission: Option<DescriptorPermission>,
+    #[serde(default = "default_exposed")]
+    exposed: bool,
     #[serde(default)]
-    aliases: Vec<DescriptorAlias>,
+    aliases: Vec<V2ToolAlias>,
+    #[serde(default)]
+    overrides: Option<String>,
     #[serde(default)]
     prompt_hint: Option<String>,
     #[serde(default)]
-    protected: bool,
+    prompt: Option<String>,
     #[serde(default)]
-    overrides: Option<String>,
+    protected: bool,
 }
 
-fn load_preset(identity: &str) -> Result<BaseToolsPreset, String> {
-    let catalog = first_party_bundle(identity).map_err(|error| error.to_string())?;
-    let [bundle] = catalog.bundles() else {
-        return Err("tool family must prepare one bundle".to_string());
-    };
-    if !bundle.agents().is_empty() || bundle.workflow().is_some() {
-        return Err("tool family must be an agentless Bundle".to_string());
-    }
-    if let Some(asset) = bundle
-        .extensions()
-        .iter()
-        .find(|asset| asset.local_id == "exposure")
-    {
-        let policy: ExposurePolicy =
-            serde_norway::from_str(&asset.content).map_err(|error| error.to_string())?;
-        validate_policy(&policy, identity)?;
-        return Ok(BaseToolsPreset {
-            schema_version: policy.schema_version,
-            identity: policy.identity,
-            bundle_digest: bundle.digest().to_string(),
-            prepared_catalog_bytes: catalog.bytes(),
-            protected_names: policy.protected_names,
-            tools: policy.tools,
-            file_operations_rule: policy.file_operations_rule,
-        });
-    }
-    load_v2_tool_preset(bundle, catalog.bytes(), identity)
+#[derive(Deserialize)]
+struct V2ToolCollection {
+    tools: Vec<V2ToolDescriptor>,
 }
 
-fn load_v2_tool_preset(
-    bundle: &Bundle,
-    prepared_catalog_bytes: &'static [u8],
-    identity: &str,
-) -> Result<BaseToolsPreset, String> {
-    if bundle.tools().is_empty() {
-        return Err("native tool bundle has no exposure policy or declared tools".to_string());
-    }
-    let mut protected_names = Vec::new();
+fn parse_v2_tool_descriptors(bundle: &Bundle) -> Result<ExposurePolicy, String> {
     let mut tools = Vec::with_capacity(bundle.tools().len());
+    let mut protected_names = Vec::new();
     for resource in bundle.tools() {
-        let descriptor: StructuredToolDescriptor = if resource.source_path.ends_with(".json") {
+        let value: serde_json::Value = if resource.source_path.ends_with(".json") {
             serde_json::from_str(&resource.content).map_err(|error| {
-                format!(
-                    "parse JSON tool descriptor `{}`: {error}",
-                    resource.source_path
-                )
+                format!("parse tool descriptor `{}`: {error}", resource.source_path)
             })?
         } else {
             serde_norway::from_str(&resource.content).map_err(|error| {
+                format!("parse tool descriptor `{}`: {error}", resource.source_path)
+            })?
+        };
+        let descriptor = if value.get("tools").is_some() {
+            let collection: V2ToolCollection = serde_json::from_value(value).map_err(|error| {
                 format!(
-                    "parse YAML tool descriptor `{}`: {error}",
+                    "decode tool descriptor collection `{}`: {error}",
                     resource.source_path
                 )
+            })?;
+            collection
+                .tools
+                .into_iter()
+                .find(|entry| entry.name == resource.local_id)
+                .ok_or_else(|| {
+                    format!(
+                        "tool descriptor `{}` missing entry `{}`",
+                        resource.source_path, resource.local_id
+                    )
+                })?
+        } else {
+            serde_json::from_value::<V2ToolDescriptor>(value).map_err(|error| {
+                format!("decode tool descriptor `{}`: {error}", resource.source_path)
             })?
         };
         if descriptor.name != resource.local_id {
@@ -204,24 +195,30 @@ fn load_v2_tool_preset(
         if descriptor.protected {
             protected_names.push(descriptor.name.clone());
         }
-        let aliases = descriptor
+        let mut seen_aliases = BTreeSet::new();
+        let mut aliases: Vec<BaseToolAlias> = descriptor
             .aliases
             .into_iter()
             .map(|alias| match alias {
-                DescriptorAlias::Name(name) => BaseToolAlias {
+                V2ToolAlias::Name(name) => BaseToolAlias {
                     name,
                     visibility: AliasVisibility::Hidden,
                 },
-                DescriptorAlias::Detailed { name, visibility } => BaseToolAlias {
+                V2ToolAlias::Detailed { name, visibility } => BaseToolAlias {
                     name,
                     visibility: visibility.unwrap_or(AliasVisibility::Hidden),
                 },
             })
+            .filter(|alias| seen_aliases.insert(alias.name.clone()))
             .collect();
-        let overrides = descriptor
-            .overrides
-            .or_else(|| resource.overrides.clone())
-            .or_else(|| bundle.overrides().map(str::to_owned));
+        for alias in &resource.aliases {
+            if seen_aliases.insert(alias.clone()) {
+                aliases.push(BaseToolAlias {
+                    name: alias.clone(),
+                    visibility: AliasVisibility::Hidden,
+                });
+            }
+        }
         tools.push(BaseToolExposure {
             name: descriptor.name,
             schema_version: descriptor.schema_version.unwrap_or(1),
@@ -229,25 +226,49 @@ fn load_v2_tool_preset(
                 .permission
                 .map(ToolPermission::from)
                 .unwrap_or(ToolPermission::Tool),
-            exposed: true,
+            exposed: descriptor.exposed,
             aliases,
-            overrides,
-            prompt: descriptor.prompt_hint,
+            overrides: descriptor
+                .overrides
+                .or_else(|| resource.overrides.clone())
+                .or_else(|| bundle.overrides().map(str::to_owned)),
+            prompt: descriptor.prompt_hint.or(descriptor.prompt),
         });
     }
-    let policy = ExposurePolicy {
+    Ok(ExposurePolicy {
         schema_version: 2,
-        identity: identity.to_string(),
+        identity: bundle.identity().id.clone(),
         protected_names,
         tools,
         file_operations_rule: None,
+    })
+}
+
+fn load_preset(identity: &str) -> Result<BaseToolsPreset, String> {
+    let catalog = first_party_bundle(identity).map_err(|error| error.to_string())?;
+    let [bundle] = catalog.bundles() else {
+        return Err("tool family must prepare one bundle".to_string());
+    };
+    if !bundle.agents().is_empty() || bundle.workflow().is_some() {
+        return Err("tool family must be an agentless Bundle".to_string());
+    }
+    let policy = if let Some(asset) = bundle
+        .extensions()
+        .iter()
+        .find(|asset| asset.local_id == "exposure")
+    {
+        serde_norway::from_str(&asset.content).map_err(|error| error.to_string())?
+    } else if !bundle.tools().is_empty() {
+        parse_v2_tool_descriptors(bundle)?
+    } else {
+        return Err("tool family has neither exposure policy nor resources.tools".to_string());
     };
     validate_policy(&policy, identity)?;
     Ok(BaseToolsPreset {
         schema_version: policy.schema_version,
         identity: policy.identity,
         bundle_digest: bundle.digest().to_string(),
-        prepared_catalog_bytes,
+        prepared_catalog_bytes: catalog.bytes(),
         protected_names: policy.protected_names,
         tools: policy.tools,
         file_operations_rule: policy.file_operations_rule,
@@ -614,7 +635,7 @@ tools:
             "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/extended-tools }",
         );
         let wrong_target = tools(
-            "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/network-tools }",
+            "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/network }",
         );
         let accepted = check_family_exports(&[
             ("hya/extended-tools", &extended),
@@ -645,11 +666,8 @@ tools:
             "- { name: waiting, schema_version: 1, permission: read_only, aliases: [{ name: wait, visibility: hidden }] }",
         );
         assert!(
-            check_family_exports(&[
-                ("hya/extended-tools", &extended),
-                ("hya/network-tools", &aliased),
-            ])
-            .is_err()
+            check_family_exports(&[("hya/extended-tools", &extended), ("hya/network", &aliased),])
+                .is_err()
         );
     }
 
@@ -689,7 +707,7 @@ tools:
                     "wait",
                 ],
             ),
-            ("hya/network-tools", 1, &["webfetch", "websearch"]),
+            ("hya/network", 2, &["webfetch", "websearch"]),
             (
                 "hya/channel-tools",
                 1,

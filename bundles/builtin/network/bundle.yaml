@@ -1,0 +1,26 @@
+kind: Bundle
+schema_version: 2
+version_ref: hya
+identity:
+  id: hya/network
+  version: 0.0.0
+  publisher: hya
+namespace: network
+runtime:
+  kind: native
+  abi_version: 2
+  crate_dir: native
+  capabilities:
+    - tools
+    - hooks
+resources:
+  tools:
+    - id: webfetch
+      path: tools/webfetch.json
+      aliases: [fetch]
+    - id: websearch
+      path: tools/websearch.json
+      aliases: [search]
+assets:
+  - id: config-example
+    path: config.example.yml

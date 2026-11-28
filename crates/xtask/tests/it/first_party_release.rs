@@ -14,7 +14,7 @@ const NATIVE_FAMILIES: [&str; 7] = [
     "hashline",
     "base-tools",
     "extended-tools",
-    "network-tools",
+    "network",
     "channel-tools",
     "compaction",
     "plan",

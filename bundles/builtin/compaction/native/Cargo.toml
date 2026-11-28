@@ -16,8 +16,14 @@ workspace = true
 
 [dependencies]
 hya-proto = { workspace = true }
+hya-runtime-abi = { workspace = true }
 hya-tool = { workspace = true }
 hya-context = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+hya-bundle = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }

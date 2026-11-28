@@ -8,7 +8,7 @@ identity:
 namespace: compaction
 runtime:
   kind: native
-  abi_version: 1
+  abi_version: 2
   crate_dir: native
   capabilities:
     - rewriters

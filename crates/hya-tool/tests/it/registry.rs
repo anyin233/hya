@@ -242,7 +242,7 @@ fn builtin_bundle_ownership_and_removed_kill_tool() {
             .as_slice(),
         ),
         ("hya/plan", ["plan_exit"].as_slice()),
-        ("hya/network-tools", ["webfetch", "websearch"].as_slice()),
+        ("hya/network", ["webfetch", "websearch"].as_slice()),
         (
             "hya/channel-tools",
             ["send", "list_channel", "report", "wait"].as_slice(),
@@ -316,7 +316,7 @@ async fn wait_override_selects_mail_aware_or_member_only_variant() {
     let without_channels = hya_tool_loader::from_tool_families(&[
         "hya/base-tools",
         "hya/extended-tools",
-        "hya/network-tools",
+        "hya/network",
     ]);
     assert!(without_channels.get("send").is_none());
     assert_eq!(
@@ -389,7 +389,7 @@ fn replacement_child() {
     };
     if mode == "wrong" {
         let panic = std::panic::catch_unwind(|| {
-            hya_tool_loader::from_tool_families(&["hya/network-tools"])
+            hya_tool_loader::from_tool_families(&["hya/channel-tools"])
         });
         let error = panic.err().expect("wrong ABI must be rejected");
         let message = error
@@ -400,8 +400,8 @@ fn replacement_child() {
         assert!(message.contains("different hya-tool ABI"), "{message}");
         return;
     }
-    let registry = hya_tool_loader::from_tool_families(&["hya/network-tools"]);
-    let tool = registry.resolve("webfetch").unwrap();
+    let registry = hya_tool_loader::from_tool_families(&["hya/channel-tools"]);
+    let tool = registry.resolve("send").unwrap();
     let ctx = ctx_with(vec![], std::env::current_dir().unwrap());
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let result = runtime
@@ -417,10 +417,10 @@ fn replacement_child() {
         .unwrap();
     assert_eq!(result["budgetSeconds"], 8);
     assert_eq!(result["cappedSeconds"], hya_tool::deadline::MIN_TOOL_SECS);
-    let _ = hya_tool_loader::from_tool_families(&["hya/network-tools"]);
+    let _ = hya_tool_loader::from_tool_families(&["hya/channel-tools"]);
     assert_eq!(
-        registry.builtin_bundle_origin("webfetch"),
-        Some("hya/network-tools")
+        registry.builtin_bundle_origin("send"),
+        Some("hya/channel-tools")
     );
 }
 
@@ -447,7 +447,7 @@ fn native_family_can_be_replaced_and_wrong_abi_is_rejected() {
             std::env::consts::DLL_SUFFIX
         );
         let dst = format!(
-            "{}hya_network_tools{}",
+            "{}hya_channel_tools{}",
             std::env::consts::DLL_PREFIX,
             std::env::consts::DLL_SUFFIX
         );

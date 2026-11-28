@@ -6,9 +6,15 @@ mod replay_bare;
 mod standard_tools;
 
 #[test]
-fn internal_native_bundle_loads_its_rewriter() -> Result<(), hya_core::CoreError> {
+fn internal_native_bundle_loads_its_rewriter_and_projection_reducer()
+-> Result<(), hya_core::CoreError> {
     let registrations = hya_core::bundles::load_internal()?;
     assert!(registrations.tools.is_empty());
     assert_eq!(registrations.rewriters.len(), 1);
+    assert_eq!(registrations.projection_reducers.len(), 1);
+    assert_eq!(
+        registrations.projection_reducers[0].bundle_id(),
+        "hya/compaction"
+    );
     Ok(())
 }

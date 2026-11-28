@@ -406,7 +406,6 @@ fn tool_ctx(workdir: &Path, cancel: &CancellationToken) -> ToolCtx {
         skills: hya_tool::SkillPlane::default(),
         artifacts: hya_tool::handle::ArtifactPlane::default(),
         agents: Arc::default(),
-        websearch: hya_tool::WebSearchPlane::default(),
         lsp: hya_tool::LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
         workdir: workdir.to_path_buf(),

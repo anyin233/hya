@@ -81,25 +81,53 @@ When `hya/hashline` is disabled (or under `--bare` / `profile: bare`), `hya/hash
 **Usage:**
 - In interactive TUI/WebUI sessions, switch to the planner with `/agent hya-plan` (or configure `default_agent: hya-plan`). When planning finishes, `hya-plan` calls `plan_exit` to request user approval before implementation begins.
 - In headless runs (no interactive interaction receiver), the bundle's `tool.visibility` hook automatically hides `plan_exit` from advertised tool schemas and nested tool listings.
-- Disable the bundle in `config.yaml` via `bundles.builtin.disabled: [hya/plan]` (or run `hya --bare`).
+- Disable the bundle in `config.yaml` via `bundles.builtin.disable: [hya/plan]` (or run `hya --bare`).
 
 **Interfaces exposed by `hya/plan`:**
 - **Tool `plan_exit`** (hidden alias `plan`, permission `Tool`):
   - Input schema: `{ "plan": string (required), "title"?: string, "summary"?: string }`.
   - Output: `{ "approved": boolean, "action": "approved" | "declined", "title": string, "plan": string, "summary"?: string, "feedback"?: string }`.
 - **Agent `hya-plan`** (`role: main`): read-only (`resource_view.deny: [write, edit, apply_patch, bash]`), may spawn `hya-scout`, `hya-task`, and `hya-reviewer`.
-- **Native Hook `tool.visibility`** (`plan_exit_visibility`): receives `ToolVisibilityInput { session, agent, tools, interactive }` and returns `ToolVisibilityOutcome::Hide { tools: ["plan_exit"] }` when `interactive == false`, or `ToolVisibilityOutcome::Preserve` otherwise.
+- **Native Hook `tool.visibility`** (`plan_exit_visibility`): receives `ToolVisibilityInput { session, agent, candidate_tools, interactive }` and returns `ToolVisibilityOutcome::Hide { tools: ["plan_exit"] }` when `interactive == false`, or `ToolVisibilityOutcome::Preserve` otherwise.
 
 | Tool | Default permission | What it does |
 | --- | --- | --- |
 | `plan_exit` | Interactive | Hand off a completed plan from `hya-plan` for user approval (hidden alias `plan`; hidden automatically in headless runs by `hya/plan`'s `tool.visibility` native hook). |
 
-### `hya/network-tools` (Web Access)
+### `hya/network` (Web Access & Air-Gapped Control)
 
-| Tool | Default permission | What it does |
-| --- | --- | --- |
-| `webfetch` | Ask | Fetch a URL and extract readable content (up to 5 MiB; disable via `tools.webfetch.enabled: false`). |
-| `websearch` | Ask | Search the web via Exa (default, no key required) or Parallel (`tools.websearch`). |
+`hya/network` (`bundles/builtin/network`, native ABI v2) owns all internet-access tools (`webfetch`, `websearch`) and their search backend configuration outside `hya-tool` and `hya-app`.
+
+| Tool | Hidden Alias | Default permission | What it does |
+| --- | --- | --- | --- |
+| `webfetch` | `fetch` | Ask | Fetch an HTTP(S) URL as `markdown`, `text`, or `html` (up to 5 MiB, default 30s timeout capped at 120s). |
+| `websearch` | `search` | Ask | Search the web via Exa (default, no key required) or Parallel. |
+
+- **Per-bundle configuration (`~/.config/hya/bundles/hya%2Fnetwork/config.yml`, see `bundles/builtin/network/config.example.yml`):**
+  ```yaml
+  webfetch:
+    enabled: true
+    max_response_bytes: 5242880
+    default_timeout_secs: 30
+    max_timeout_secs: 120
+  websearch:
+    enabled: true
+    provider: exa          # exa | parallel
+    # endpoint: https://mcp.exa.ai/mcp
+    # key: ${env:PARALLEL_API_KEY}
+  ```
+- **Air-gapped mode:** Disable the bundle in `~/.config/hya/config.yaml` to remove `webfetch`, `websearch`, `fetch`, and `search` cleanly from the runtime without loading `libhya_network`:
+  ```yaml
+  schema_version: 2
+  bundles:
+    builtin:
+      profile: full
+      disable: [hya/network]
+  ```
+- **Interface definitions:**
+  - `webfetch` input schema: `{ "url": string, "format"?: "text" | "markdown" | "html", "timeout"?: number }`
+  - `websearch` input schema: `{ "query": string, "numResults"?: number, "livecrawl"?: "fallback" | "preferred", "type"?: "auto" | "fast" | "deep", "contextMaxCharacters"?: number }`
+  - Native ABI v2 exports (`hya_native_register_v2`): tools `webfetch` & `websearch`, service `hya/network:service` (`NativeService` reading `HostCatalogReader::bundle_config("hya/network")`), and visibility hook `hya/network:visibility` (`HookPoint::ToolVisibility`).
 
 ### `hya/channel-tools` (Parent ⇄ Child Team Messaging)
 
@@ -136,9 +164,9 @@ Every Hya installation ships with 14 trusted first-party bundles sourced from `b
 | `hya/hashline` | `bundles/builtin/hashline` | Native ABI v2 (`cdylib`) | Hashline-addressed `read`, `write`, `edit`, and `grep` + `HashlineRuntime` (`overrides: hya/bare`, 4 tools). |
 | `hya/base-tools` | `bundles/builtin/base-tools` | Native (`cdylib`) | Directory search, shell, patch, and `ask_user` tools (6 tools). |
 | `hya/extended-tools` | `bundles/builtin/extended-tools` | Native (`cdylib`) | Code intelligence (`lsp`), subagents, workflows, and project activity (8 tools; `skill` promoted to `hya-bare` core, `plan_exit` extracted to `hya/plan`). |
-| `hya/network-tools` | `bundles/builtin/network-tools` | Native (`cdylib`) | Web fetch and web search (`webfetch`, `websearch`). |
+| `hya/network` | `bundles/builtin/network` | Native ABI v2 (`cdylib`) | Web fetch and web search (`webfetch`, `websearch`) + per-bundle `config.yml` and air-gapped disable. |
 | `hya/channel-tools` | `bundles/builtin/channel-tools` | Native (`cdylib`) | Team mailbox tools (`send`, `list_channel`, `wait`, `report`). |
-| `hya/compaction` | `bundles/builtin/compaction` | Native (`cdylib`) | Context `Rewriter` running `shake` and `remote` compaction before Kernel `Rewrite`. |
+| `hya/compaction` | `bundles/builtin/compaction` | Native ABI v2 (`cdylib`) | Context `Rewriter` (`shake` + `remote`) and `ProjectionReducer` (`Event::Extension`) before Kernel `Rewrite`. |
 | `hya/plan` | `bundles/builtin/plan` | Native ABI v2 (`cdylib`) | Read-only `hya-plan` agent, `plan_exit` tool (alias `plan`), and `tool.visibility` native hook. |
 | `hya/core-agents` | `bundles/builtin/core-agents` | Static | Built-in agent definitions (`hya-main`, `hya-task`, `hya-scout`, `hya-reviewer`, `hya-title`). |
 | `hya/core-skills` | `bundles/builtin/core-skills` | Static | Built-in fallback skills (`agent-bundle-authoring`, `secure-self-update`). |
