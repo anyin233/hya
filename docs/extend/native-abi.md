@@ -324,9 +324,9 @@ pub trait HostRuntime: Send + Sync {
 
 | Sub-Trait | Methods & Purpose | Key DTOs |
 | --- | --- | --- |
-| **`HostSessionStore`** | `session_exists`, `read_events(session, after_seq, limit)`, `append_events(session, claim, events)`, `append_extension_event(session, bundle, kind, payload, claim)`, `read_projection(session)`, `read_extension_state(session, bundle)`, `session_metadata(session)`, `list_sessions(filter)`, `runtime_owner_id()`, `find_sessions_with_extension(bundle, kind)` | `SessionSummaryMeta`, `SessionListFilter`, `Envelope`, `Event`, `Projection` |
+| **`HostSessionStore`** | `session_exists`, `read_events(session, after_seq, limit)`, `append_events(session, claim, events)`, `append_extension_event(session, bundle, kind, payload, claim)`, `read_projection(session)`, `read_extension_state(session, bundle)`, `session_metadata(session)`, `list_sessions(filter)`, `runtime_owner_id()`, `find_sessions_with_extension(bundle, kind)`, `stage_extension_event(during, target, bundle, kind, payload, on_commit)` | `SessionSummaryMeta`, `SessionListFilter`, `Envelope`, `Event`, `Projection` |
 | **`HostBundleStorage`** | Scoped KV (`bundle_state` table): `get_state`, `put_state(bundle, scope, key, value, expected_version)` (optimistic CAS), `delete_state`, `list_state(bundle, scope, prefix)`. Fenced leases (`bundle_claim` table): `acquire_claim`, `renew_claim`, `release_claim`, `read_claim`, `list_claims`. | `BundleStateEntry`, `BundleClaimRequest`, `BundleClaimLease` |
-| **`HostTurnRunner`** | Session trees: `spawn_session`, `list_child_sessions`, `archive_session_tree`. Core turns: `run_turn(request, cancel)`, `spawn_session_and_run`, `steer_turn`, `cancel_turn`, `turn_status`. Managed resident members & channels: `preflight_member_capacity`, `begin_root_activity`, `spawn_managed_member`, `activate_managed_member`, `end_managed_member`, `session_channel_policy`, `mail_mark`, `notify_mail_consumed`, `is_member_stopped_by_user`, `is_mail_steer_suppressed`, `active_actor_claim`, `stage_mail_steer_ack`, `revive_archived_member_with_mail`, `archive_subagent`, `steer_subagent`. | `TurnStartRequest`, `TurnSpawnRequest`, `TurnOutcome`, `TurnStatus`, `ManagedMemberHandle`, `ManagedMemberSpawnRequest`, `ManagedMemberActivateRequest`, `ManagedMemberActivationOutcome`, `MemberMailRevivalRequest`, `StagedMailAck`, `TurnRouteOutcome`, `TurnRouteFailureClass` |
+| **`HostTurnRunner`** | Session trees: `spawn_session`, `list_child_sessions`, `archive_session_tree`. Core turns: `run_turn(request, cancel)`, `spawn_session_and_run`, `steer_turn`, `cancel_turn`, `turn_status`. Managed resident members & channels: `preflight_member_capacity`, `begin_root_activity`, `spawn_managed_member`, `activate_managed_member`, `end_managed_member`, `session_channel_policy`, `mail_mark`, `notify_mail_consumed`, `is_member_stopped_by_user`, `active_actor_claim`, `revive_archived_member_with_mail`, `archive_subagent`, `steer_subagent`. | `TurnStartRequest`, `TurnSpawnRequest`, `TurnOutcome`, `TurnStatus`, `ManagedMemberHandle`, `ManagedMemberSpawnRequest`, `ManagedMemberActivateRequest`, `ManagedMemberActivationOutcome`, `MemberMailRevivalRequest`, `TurnRouteOutcome`, `TurnRouteFailureClass` |
 | **`HostModelCaller`** | `complete(request, cancel)`, `stream(request, cancel)`, `compact_window(model, messages)`, `model_window(model)`, `resolve_model_route(entries)` | `ModelCallRequest`, `ModelCallResponse`, `ModelToolCall`, `ModelStreamChunk`, `ModelWindowInfo`, `ModelRouteEntry`, `ResolvedModelRoute`, `ResolvedModelRouteCandidate` |
 | **`HostEventBus`** | `publish(envelope)`, `subscribe() -> broadcast::Receiver<Envelope>`, `publish_extension(session, bundle, kind, payload)` | `Envelope` |
 | **`HostCatalogReader`** | `list_agents(session)`, `get_agent(name, session)`, `list_skills(session)`, `list_bundles()`, `get_bundle(id)`, `bundle_config(bundle_id)`, `global_config()`, `resolve_scope_catalog(session, directory)`, `authorize_workflow_agent(session, caller, agent)` | `BundleCatalogSummary`, `ScopeCatalogSnapshot`, `AgentDef`, `PreparedAgent`, `SkillCatalogEntry`, `Bundle` |
@@ -340,13 +340,28 @@ Values live in the host process and disappear on restart.
 
 | Interface | Contract | Current consumer |
 | --- | --- | --- |
-| `bundle_storage().get_transient_state(bundle: &str, session: SessionId, key: &str)` | Returns `Result<Option<Value>, HostError>`. | The unread-mail steer hook in `hya/agent-channels` reads `steer_suppressed` through its compatibility method. |
-| `bundle_storage().set_transient_state(bundle: &str, session: SessionId, key: &str, value: Option<Value>)` | Returns `Result<(), HostError>`. Pass `None` to remove the key. | The tool-result path sets and clears `steer_suppressed` for `hya/agent-channels` around after-hooks. |
+| `bundle_storage().get_transient_state(bundle: &str, session: SessionId, key: &str)` | Returns `Result<Option<Value>, HostError>`. | The unread-mail steer hook in `hya/agent-channels` reads `steer_suppressed` and stays silent while it is `true`. |
+| `bundle_storage().set_transient_state(bundle: &str, session: SessionId, key: &str, value: Option<Value>)` | Returns `Result<(), HostError>`. Pass `None` to remove the key. | The tool-result path sets `steer_suppressed` for `hya/agent-channels` around after-hooks while the result shows no further notices (`report` latched, steer deferred, or a `wait` ran), then clears it. |
 | `bundle_storage().subscribe_transient_state(bundle: &str, session: SessionId, key: &str)` | Returns `Result<watch::Receiver<Option<Value>>, HostError>`. The receiver exposes the current value and coalesces updates. Equal writes do not signal a change. | The state regression test observes the suppression key. The current unread-mail hook reads it synchronously. |
 
 For example, subscribe to a bundle's `"ready"` key, copy the value from
 `borrow_and_update()`, and await `changed()` for a later value. Release the
 borrow before waiting or writing to the key.
+
+### Staged extension events
+
+A `tool.execute.after` hook can stage an `Event::Extension` that commits in
+the same store transaction as the tool result it runs for. Use it when the
+event must exist only if the result does, such as an inbox acknowledgement for
+mail the hook shows in that result.
+
+| Interface | Contract | Current consumer |
+| --- | --- | --- |
+| `session_store().stage_extension_event(during: SessionId, target: SessionId, bundle: &str, kind: &str, payload: Value, on_commit: Option<Box<dyn FnOnce() + Send>>)` | Returns `Result<(), HostError>`. `during` is the session whose tool result is in its after-hooks; `target` is the log that receives the event. The event commits only when the tool succeeds and no `wait` acknowledgement owns the result; otherwise the host drops the event and `on_commit`. The host runs each `on_commit` after the commit, in staging order, before the next tool call. Returns `InvalidInput` when `during` has no tool result in its after-hooks, and `Unavailable` on a host without a turn path. | The unread-mail steer hook in `hya/agent-channels` stages `mail_consumed` for the team root and advances the host's mail watermark in `on_commit`. |
+
+For example, a hook stages `("acme/audit", "seen", json!({"call": call}))` for
+`input.session` and returns the result unchanged; the audit event is then
+appended in the same batch as the tool result, or not at all.
 
 ### Session trees
 

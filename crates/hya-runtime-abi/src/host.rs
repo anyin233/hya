@@ -135,6 +135,27 @@ pub trait HostSessionStore: Send + Sync {
     ) -> Result<Vec<SessionId>, HostError> {
         Ok(Vec::new())
     }
+
+    /// Stage an `Event::Extension` for `target`'s log that commits in the same
+    /// store transaction as the tool result `during` is producing.
+    ///
+    /// Call it from a `tool.execute.after` hook. When the result commits, the
+    /// host runs `on_commit` after the commit, in staging order; otherwise it
+    /// drops the event and `on_commit`. Returns `InvalidInput` when `during`
+    /// has no tool result in its after-hooks.
+    fn stage_extension_event(
+        &self,
+        _during: SessionId,
+        _target: SessionId,
+        _bundle: &str,
+        _kind: &str,
+        _payload: Value,
+        _on_commit: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unavailable(
+            "staged extension events are unavailable".into(),
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -534,20 +555,6 @@ pub struct MemberMailRevivalRequest {
     pub actor_claim: Option<ActorClaim>,
 }
 
-/// Staged unread-mail acknowledgment to be committed atomically alongside a
-/// tool result (ADR-0001 / atomic tool-result + `mail_consumed` invariant).
-#[derive(Clone, Debug, PartialEq)]
-pub struct StagedMailAck {
-    /// Team root session receiving the `mail_consumed` extension event.
-    pub root: SessionId,
-    /// Durable `Event::Extension` (`hya/agent-channels::mail_consumed`) to commit.
-    pub event: Event,
-    /// Updated local inbox watermark after acknowledgment.
-    pub mark: u64,
-    /// Whether incoming (non-self) unread mail was consumed.
-    pub consumed_incoming: bool,
-}
-
 /// Result of archiving a session subtree.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionTreeArchive {
@@ -678,23 +685,11 @@ pub trait HostTurnRunner: Send + Sync {
         false
     }
 
-    /// Return `true` when unread-mail steering is currently suppressed for `session`
-    /// (for example after `report` latched or while a defer-steer batch is active).
-    // Adapter: removed in CHR-47.
-    fn is_mail_steer_suppressed(&self, _session: SessionId) -> bool {
-        false
-    }
-
     /// Return the active fenced actor claim for the running turn on `session`, if any.
     // Adapter: removed in CHR-47.
     fn active_actor_claim(&self, _session: SessionId) -> Option<ActorClaim> {
         None
     }
-
-    /// Stage a `mail_consumed` acknowledgment to be committed atomically with the
-    /// current tool result on `session`.
-    // Adapter: removed in CHR-47.
-    fn stage_mail_steer_ack(&self, _session: SessionId, _ack: StagedMailAck) {}
 
     /// Revive an archived direct child member and deliver its pending DM mail.
     ///

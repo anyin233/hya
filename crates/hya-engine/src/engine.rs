@@ -197,9 +197,9 @@ pub struct SessionEngine {
     /// Captured per-session lifecycle/event hooks ([`session_hooks`]).
     session_bundle_hooks: Arc<RwLock<session_hooks::SessionHookMap>>,
     session_channel_policies: Arc<RwLock<HashMap<SessionId, hya_tool::ChannelPolicySnapshot>>>,
-    // Shared bundle transient state. The legacy field name keeps constructor wiring intact.
-    mail_steer_suppressed: channel_host::TransientState,
-    staged_mail_acks: Arc<RwLock<HashMap<SessionId, hya_runtime_abi::StagedMailAck>>>,
+    transient_state: channel_host::TransientState,
+    /// Extension events staged by after-hooks of the tool result in flight.
+    staged_events: channel_host::StagedEvents,
     governor: Option<StreamGovernor>,
     sidecar_environment: Option<Arc<dyn SidecarEnvironment>>,
     /// Revival seam (ADR-0015): a downward mail to an archived direct child
@@ -255,8 +255,8 @@ impl Clone for SessionEngine {
             hooks: Arc::clone(&self.hooks),
             session_bundle_hooks: Arc::clone(&self.session_bundle_hooks),
             session_channel_policies: Arc::clone(&self.session_channel_policies),
-            mail_steer_suppressed: Arc::clone(&self.mail_steer_suppressed),
-            staged_mail_acks: Arc::clone(&self.staged_mail_acks),
+            transient_state: Arc::clone(&self.transient_state),
+            staged_events: Arc::clone(&self.staged_events),
             governor: self.governor.clone(),
             sidecar_environment: self.sidecar_environment.clone(),
             reviver: Arc::clone(&self.reviver),
@@ -298,8 +298,6 @@ impl SessionEngine {
         let formatter = FormatterPlane::default();
         let lsp = LspPlane::default();
         let session_channel_policies = Arc::new(RwLock::new(HashMap::new()));
-        let mail_steer_suppressed = Arc::new(RwLock::new(HashMap::new()));
-        let staged_mail_acks = Arc::new(RwLock::new(HashMap::new()));
         let reviver = Arc::new(RwLock::new(None));
         let runtime_owner = hya_proto::OwnerRunId::new();
         let turn_gate = Arc::new(turn_gate::TurnGate::default());
@@ -340,8 +338,8 @@ impl SessionEngine {
             hooks: Arc::new(crate::hooks::HookChain::default()),
             session_bundle_hooks: Arc::new(RwLock::new(HashMap::new())),
             session_channel_policies,
-            mail_steer_suppressed,
-            staged_mail_acks,
+            transient_state: Arc::default(),
+            staged_events: Arc::default(),
             governor: None,
             sidecar_environment: None,
             reviver,
@@ -394,8 +392,8 @@ impl SessionEngine {
                 bus: self.bus.clone(),
                 runtime_owner: self.runtime_owner,
                 session_channel_policies: Arc::clone(&self.session_channel_policies),
-                mail_steer_suppressed: Arc::clone(&self.mail_steer_suppressed),
-                staged_mail_acks: Arc::clone(&self.staged_mail_acks),
+                transient_state: Arc::clone(&self.transient_state),
+                staged_events: Arc::clone(&self.staged_events),
                 reviver: Arc::clone(&self.reviver),
                 turn_gate: Arc::clone(&self.turn_gate),
             });
@@ -576,7 +574,7 @@ impl SessionEngine {
         session: SessionId,
         key: &str,
     ) -> Option<Value> {
-        channel_host::get_transient(&self.mail_steer_suppressed, bundle, session, key)
+        channel_host::get_transient(&self.transient_state, bundle, session, key)
     }
 
     /// Set a process-local bundle value or remove it with `None`.
@@ -587,7 +585,7 @@ impl SessionEngine {
         key: &str,
         value: Option<Value>,
     ) {
-        channel_host::set_transient(&self.mail_steer_suppressed, bundle, session, key, value);
+        channel_host::set_transient(&self.transient_state, bundle, session, key, value);
     }
 
     /// Subscribe to changes of a process-local bundle value.
@@ -597,7 +595,7 @@ impl SessionEngine {
         session: SessionId,
         key: &str,
     ) -> tokio::sync::watch::Receiver<Option<Value>> {
-        channel_host::subscribe_transient(&self.mail_steer_suppressed, bundle, session, key)
+        channel_host::subscribe_transient(&self.transient_state, bundle, session, key)
     }
 
     /// Suppress or re-enable in-turn unread-mail steering for `session`.
@@ -610,35 +608,46 @@ impl SessionEngine {
         );
     }
 
-    /// Whether in-turn unread-mail steering is currently suppressed for `session`.
-    #[must_use]
-    pub fn is_mail_steer_suppressed(&self, session: SessionId) -> bool {
-        self.get_transient_state(
-            channel_host::STEER_STATE_BUNDLE,
-            session,
-            channel_host::STEER_SUPPRESSION_KEY,
-        ) == Some(Value::Bool(true))
-    }
-
-    /// Stage a `mail_consumed` acknowledgement from `UnreadMailSteerHook` to
-    /// commit atomically with the current tool result on `session`.
-    pub fn stage_mail_steer_ack(&self, session: SessionId, ack: hya_runtime_abi::StagedMailAck) {
-        self.staged_mail_acks
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(session, ack);
-    }
-
-    /// Take and clear any staged `mail_consumed` acknowledgement for `session`.
-    #[must_use]
-    pub fn take_staged_mail_ack(
+    /// Stage an extension event with the tool result `during` is committing
+    /// ([`hya_runtime_abi::HostSessionStore::stage_extension_event`]).
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` when `during` has no tool result in its after-hooks.
+    pub fn stage_extension_event(
         &self,
-        session: SessionId,
-    ) -> Option<hya_runtime_abi::StagedMailAck> {
-        self.staged_mail_acks
-            .write()
+        during: SessionId,
+        target: SessionId,
+        bundle: &str,
+        kind: &str,
+        payload: Value,
+        on_commit: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), hya_runtime_abi::HostError> {
+        channel_host::stage_event(
+            &self.staged_events,
+            during,
+            target,
+            bundle,
+            kind,
+            payload,
+            on_commit,
+        )
+    }
+
+    /// Accept staged events for `session`'s tool result, dropping stale ones.
+    pub(crate) fn open_staged_events(&self, session: SessionId) {
+        self.staged_events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(session, Vec::new());
+    }
+
+    /// Stop accepting staged events for `session` and return them in order.
+    pub(crate) fn take_staged_events(&self, session: SessionId) -> Vec<channel_host::StagedEvent> {
+        self.staged_events
+            .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&session)
+            .unwrap_or_default()
     }
 
     /// Return `true` when `handle` under `root` is currently stopped by the user.
@@ -687,8 +696,8 @@ impl SessionEngine {
             bus: self.bus.clone(),
             runtime_owner: self.runtime_owner,
             session_channel_policies: Arc::clone(&self.session_channel_policies),
-            mail_steer_suppressed: Arc::clone(&self.mail_steer_suppressed),
-            staged_mail_acks: Arc::clone(&self.staged_mail_acks),
+            transient_state: Arc::clone(&self.transient_state),
+            staged_events: Arc::clone(&self.staged_events),
             reviver: Arc::clone(&self.reviver),
             turn_gate: Arc::clone(&self.turn_gate),
         })

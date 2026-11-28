@@ -277,6 +277,7 @@ impl TurnToolGate<'_> {
         let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         engine.validate_actor_claim(actor_claim).await?;
         let mut was_hook_replaced = false;
+        let mut staged = Vec::new();
         let result =
             if !cancel.is_cancelled() && !matches!(&result, Err(ToolError::Cancelled)) && has_hooks
             {
@@ -291,7 +292,7 @@ impl TurnToolGate<'_> {
                     },
                 };
                 let original_native = native.clone();
-                let _ = engine.take_staged_mail_ack(session);
+                engine.open_staged_events(session);
                 engine.set_mail_steer_suppressed(
                     session,
                     state.report_latch.is_set() || *defer_steer || wait_ack.saw_wait(),
@@ -304,6 +305,7 @@ impl TurnToolGate<'_> {
                 )
                 .await;
                 engine.set_mail_steer_suppressed(session, false);
+                staged = engine.take_staged_events(session);
                 if activation_hooks
                     .as_ref()
                     .is_some_and(|hooks| !hooks.is_healthy())
@@ -330,8 +332,6 @@ impl TurnToolGate<'_> {
         } else {
             None
         };
-        let mail_mark = engine.mail_mark(session);
-        let staged_mail_ack = engine.take_staged_mail_ack(session);
         let tool_succeeded = result.is_ok();
         state.done |= state.report_latch.is_set() || (ends_turn && tool_succeeded);
         let (event, retains_artifact) = match result {
@@ -386,13 +386,22 @@ impl TurnToolGate<'_> {
                 )
             }
         };
-        let (acknowledgement, mail_mark, consumed_incoming) = match wait_ack {
-            Some(ack) => (Some(ack.event), Some(ack.mark), ack.consumed_incoming),
-            None if tool_succeeded => match staged_mail_ack {
-                Some(ack) => (Some(ack.event), Some(ack.mark), ack.consumed_incoming),
-                None => (None, mail_mark, false),
-            },
-            None => (None, mail_mark, false),
+        // A wait ack takes precedence; staged events commit only with a
+        // successful result, and dropped ones take their callbacks with them.
+        let (extra, wait_mail, callbacks) = match wait_ack {
+            Some(ack) => (
+                vec![ack.event],
+                Some((ack.mark, ack.consumed_incoming)),
+                Vec::new(),
+            ),
+            None if tool_succeeded => {
+                let (extra, callbacks) = staged
+                    .into_iter()
+                    .map(|staged| (staged.event, staged.on_commit))
+                    .unzip();
+                (extra, None, callbacks)
+            }
+            None => (Vec::new(), None, Vec::new()),
         };
         let mut events = vec![event];
         events.extend(observation(
@@ -401,9 +410,15 @@ impl TurnToolGate<'_> {
             stamps_by_path.into_values().collect(),
         ));
         engine
-            .emit_tool_result_with_mail(actor_claim, session, events, acknowledgement)
+            .emit_tool_result_with_staged(actor_claim, session, events, extra)
             .await?;
-        engine.notify_mail_consumed(session, mail_mark, consumed_incoming);
+        if let Some((mark, consumed_incoming)) = wait_mail {
+            engine.notify_mail_consumed(session, Some(mark), consumed_incoming);
+        }
+        callbacks
+            .into_iter()
+            .flatten()
+            .for_each(|on_commit| on_commit());
         if retains_artifact {
             artifact_guard.disarm();
         } else {
@@ -476,24 +491,5 @@ fn append_steer_notice(output: &mut serde_json::Value, notice: &str) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::append_steer_notice;
-
-    #[test]
-    fn steer_notices_on_one_result_accumulate() {
-        for (mut output, key, expected) in [
-            (
-                serde_json::json!({"output":"ok"}),
-                "output",
-                "ok\n\nmail\n\ntime",
-            ),
-            (serde_json::json!({"title":"t"}), "steer", "mail\n\ntime"),
-            (serde_json::json!({"output":42}), "steer", "mail\n\ntime"),
-            (serde_json::json!("ok"), "steer", "mail\n\ntime"),
-        ] {
-            append_steer_notice(&mut output, "\n\nmail");
-            append_steer_notice(&mut output, "\n\ntime");
-            assert_eq!(output[key], expected);
-        }
-    }
-}
+#[path = "tool_gate_tests.rs"]
+mod tests;

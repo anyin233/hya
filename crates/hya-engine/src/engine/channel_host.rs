@@ -7,7 +7,7 @@
 //! `AppHostRuntime` honoring `BuiltinBundleSelection`.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use async_trait::async_trait;
 use hya_bundle::{Bundle, PreparedAgent};
@@ -21,7 +21,7 @@ use hya_runtime_abi::{
     HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry, HostModelCaller,
     HostRuntime, HostSessionStore, HostTurnRunner, MemberMailRevivalRequest, ModelCallRequest,
     ModelCallResponse, ModelStreamChunk, ModelWindowInfo, SessionListFilter, SessionSummaryMeta,
-    SessionTreeArchive, StagedMailAck, TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus,
+    SessionTreeArchive, TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus,
 };
 use hya_store::{BundleClaim, SessionStore};
 use hya_tool::{AgentDef, SkillCatalogEntry};
@@ -40,6 +40,46 @@ pub(super) const STEER_SUPPRESSION_KEY: &str = "steer_suppressed";
 
 type TransientKey = (SessionId, String, String);
 pub(super) type TransientState = Arc<RwLock<HashMap<TransientKey, watch::Sender<Option<Value>>>>>;
+
+/// An extension event an after-hook staged for the tool result being committed.
+pub(crate) struct StagedEvent {
+    pub(crate) event: Event,
+    pub(crate) on_commit: Option<Box<dyn FnOnce() + Send>>,
+}
+
+/// Staged events per session; a session has an entry only while its tool
+/// result runs its after-hooks.
+pub(super) type StagedEvents = Arc<Mutex<HashMap<SessionId, Vec<StagedEvent>>>>;
+
+pub(super) fn stage_event(
+    staged: &StagedEvents,
+    during: SessionId,
+    target: SessionId,
+    bundle: &str,
+    kind: &str,
+    payload: Value,
+    on_commit: Option<Box<dyn FnOnce() + Send>>,
+) -> Result<(), HostError> {
+    staged
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get_mut(&during)
+        .ok_or_else(|| {
+            HostError::InvalidInput(format!(
+                "session `{during}` has no tool result in its after-hooks"
+            ))
+        })?
+        .push(StagedEvent {
+            event: Event::Extension {
+                session: target,
+                bundle: bundle.to_string(),
+                kind: kind.to_string(),
+                payload,
+            },
+            on_commit,
+        });
+    Ok(())
+}
 
 pub(super) fn get_transient(
     state: &TransientState,
@@ -108,8 +148,8 @@ pub(crate) struct EngineChannelsHostRuntime {
     pub(crate) bus: EventBus,
     pub(crate) runtime_owner: OwnerRunId,
     pub(crate) session_channel_policies: Arc<RwLock<HashMap<SessionId, ChannelPolicySnapshot>>>,
-    pub(super) mail_steer_suppressed: TransientState,
-    pub(crate) staged_mail_acks: Arc<RwLock<HashMap<SessionId, StagedMailAck>>>,
+    pub(super) transient_state: TransientState,
+    pub(super) staged_events: StagedEvents,
     pub(crate) reviver: Arc<RwLock<Option<Weak<ResidentSupervisor>>>>,
     pub(crate) turn_gate: Arc<TurnGate>,
 }
@@ -337,6 +377,26 @@ impl HostSessionStore for EngineChannelsHostRuntime {
     fn runtime_owner_id(&self) -> Option<OwnerRunId> {
         Some(self.runtime_owner)
     }
+
+    fn stage_extension_event(
+        &self,
+        during: SessionId,
+        target: SessionId,
+        bundle: &str,
+        kind: &str,
+        payload: Value,
+        on_commit: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), HostError> {
+        stage_event(
+            &self.staged_events,
+            during,
+            target,
+            bundle,
+            kind,
+            payload,
+            on_commit,
+        )
+    }
 }
 
 #[async_trait]
@@ -347,12 +407,7 @@ impl HostBundleStorage for EngineChannelsHostRuntime {
         session: SessionId,
         key: &str,
     ) -> Result<Option<Value>, HostError> {
-        Ok(get_transient(
-            &self.mail_steer_suppressed,
-            bundle,
-            session,
-            key,
-        ))
+        Ok(get_transient(&self.transient_state, bundle, session, key))
     }
 
     fn set_transient_state(
@@ -362,7 +417,7 @@ impl HostBundleStorage for EngineChannelsHostRuntime {
         key: &str,
         value: Option<Value>,
     ) -> Result<(), HostError> {
-        set_transient(&self.mail_steer_suppressed, bundle, session, key, value);
+        set_transient(&self.transient_state, bundle, session, key, value);
         Ok(())
     }
 
@@ -373,7 +428,7 @@ impl HostBundleStorage for EngineChannelsHostRuntime {
         key: &str,
     ) -> Result<watch::Receiver<Option<Value>>, HostError> {
         Ok(subscribe_transient(
-            &self.mail_steer_suppressed,
+            &self.transient_state,
             bundle,
             session,
             key,
@@ -722,24 +777,6 @@ impl HostTurnRunner for EngineChannelsHostRuntime {
     fn is_member_stopped_by_user(&self, root: SessionId, handle: &str) -> bool {
         self.supervisor()
             .is_some_and(|sup| sup.stopped_by_user(root, handle))
-    }
-
-    // Adapter: removed in CHR-47.
-    fn is_mail_steer_suppressed(&self, session: SessionId) -> bool {
-        get_transient(
-            &self.mail_steer_suppressed,
-            STEER_STATE_BUNDLE,
-            session,
-            STEER_SUPPRESSION_KEY,
-        ) == Some(Value::Bool(true))
-    }
-
-    // Adapter: removed in CHR-47.
-    fn stage_mail_steer_ack(&self, session: SessionId, ack: StagedMailAck) {
-        self.staged_mail_acks
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(session, ack);
     }
 
     // Adapter: removed in CHR-47.

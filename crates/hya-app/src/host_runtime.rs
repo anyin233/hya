@@ -30,8 +30,8 @@ use hya_runtime_abi::{
     ManagedMemberSpawnRequest, MemberMailRevivalRequest, ModelCallRequest, ModelCallResponse,
     ModelRouteEntry, ModelStreamChunk, ModelToolCall, ModelWindowInfo, NativeDriver,
     ResolvedModelRoute, ResolvedModelRouteCandidate, ScopeCatalogSnapshot, SessionListFilter,
-    SessionSummaryMeta, SessionTreeArchive, StagedMailAck, TurnOutcome, TurnSpawnRequest,
-    TurnStartRequest, TurnStatus,
+    SessionSummaryMeta, SessionTreeArchive, TurnOutcome, TurnSpawnRequest, TurnStartRequest,
+    TurnStatus,
 };
 use hya_store::SessionStore;
 use hya_tool::{AgentDef, ReportOutcome, SkillCatalogEntry, SpawnMember};
@@ -596,6 +596,19 @@ impl HostSessionStore for AppHostRuntime {
         appended.pop().ok_or_else(|| {
             HostError::Internal("append_extension_event produced no envelope".into())
         })
+    }
+
+    fn stage_extension_event(
+        &self,
+        during: SessionId,
+        target: SessionId,
+        bundle: &str,
+        kind: &str,
+        payload: Value,
+        on_commit: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), HostError> {
+        self.engine()?
+            .stage_extension_event(during, target, bundle, kind, payload, on_commit)
     }
 
     async fn read_projection(&self, session: SessionId) -> Result<Arc<Projection>, HostError> {
@@ -1380,20 +1393,6 @@ impl HostTurnRunner for AppHostRuntime {
         self.engine()
             .ok()
             .is_some_and(|engine| engine.is_member_stopped_by_user(root, handle))
-    }
-
-    // Adapter: removed in CHR-47.
-    fn is_mail_steer_suppressed(&self, session: SessionId) -> bool {
-        self.engine()
-            .ok()
-            .is_some_and(|engine| engine.is_mail_steer_suppressed(session))
-    }
-
-    // Adapter: removed in CHR-47.
-    fn stage_mail_steer_ack(&self, session: SessionId, ack: StagedMailAck) {
-        if let Ok(engine) = self.engine() {
-            engine.stage_mail_steer_ack(session, ack);
-        }
     }
 
     // Adapter: removed in CHR-47.

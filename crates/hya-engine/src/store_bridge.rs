@@ -17,11 +17,11 @@ use hya_store::{
     BundleClaim, SessionStore, StoreError, StoreTransaction, append_event_in_transaction,
     open_turn_terminal_events,
 };
+use hya_tool::ChannelPolicySnapshot;
 use hya_tool::extension::{
     BUNDLE_MULTI_AGENT, ExtensionEvent, ResidentWorkProjection, RosterEntry, handoff_projection,
     members_projection, projection_reducers, team_projection,
 };
-use hya_tool::mailbox::ChannelPolicySnapshot;
 use hya_tool::{ArchiveReason, ReportOutcome};
 use serde_json::{Value, json};
 
@@ -505,13 +505,14 @@ pub trait SessionStoreExt {
         current_task: String,
     ) -> Result<(MessageId, Vec<Envelope>), CoreError>;
 
-    /// Commit a tool outcome, its file observations, and optional team-mail acknowledgement together.
-    async fn commit_tool_result_with_mail(
+    /// Commit a tool outcome and its file observations to `session`, and each
+    /// staged event to its own session, in one transaction.
+    async fn commit_tool_result_with_staged(
         &self,
         claim: Option<&ActorClaim>,
         session: SessionId,
         events: Vec<Event>,
-        acknowledgement: Option<Event>,
+        staged: Vec<Event>,
     ) -> Result<Vec<Envelope>, CoreError>;
 
     /// Session ids of resident actors currently in the `active` claim state.
@@ -905,42 +906,31 @@ impl SessionStoreExt for SessionStore {
         Ok((message, envelopes))
     }
 
-    async fn commit_tool_result_with_mail(
+    async fn commit_tool_result_with_staged(
         &self,
         claim: Option<&ActorClaim>,
         session: SessionId,
         events: Vec<Event>,
-        acknowledgement: Option<Event>,
+        staged: Vec<Event>,
     ) -> Result<Vec<Envelope>, CoreError> {
-        if claim.is_none() {
-            let mut batch: Vec<(SessionId, Event)> =
-                events.into_iter().map(|ev| (session, ev)).collect();
-            if let Some(ack) = acknowledgement {
-                let root = ack.session().ok_or_else(|| {
-                    CoreError::Store(StoreError::BundleClaimData(
-                        "mail acknowledgement has no session".into(),
-                    ))
-                })?;
-                batch.push((root, ack));
-            }
-            return Ok(self.append_events_batch(batch).await?);
-        }
-        let mut tx = self.begin_transaction().await?;
-        if let Some(claim) = claim {
-            fence_actor_claim(&mut tx, claim).await?;
-        }
-        let mut envelopes =
-            Vec::with_capacity(events.len() + usize::from(acknowledgement.is_some()));
-        for event in events {
-            envelopes.push(append_event_in_transaction(&mut tx, session, event).await?);
-        }
-        if let Some(acknowledgement) = acknowledgement {
-            let root = acknowledgement.session().ok_or_else(|| {
+        let mut batch: Vec<(SessionId, Event)> =
+            events.into_iter().map(|ev| (session, ev)).collect();
+        for event in staged {
+            let target = event.session().ok_or_else(|| {
                 CoreError::Store(StoreError::BundleClaimData(
-                    "mail acknowledgement has no session".into(),
+                    "staged event has no session".into(),
                 ))
             })?;
-            envelopes.push(append_event_in_transaction(&mut tx, root, acknowledgement).await?);
+            batch.push((target, event));
+        }
+        let Some(claim) = claim else {
+            return Ok(self.append_events_batch(batch).await?);
+        };
+        let mut tx = self.begin_transaction().await?;
+        fence_actor_claim(&mut tx, claim).await?;
+        let mut envelopes = Vec::with_capacity(batch.len());
+        for (target, event) in batch {
+            envelopes.push(append_event_in_transaction(&mut tx, target, event).await?);
         }
         tx.commit().await?;
         Ok(envelopes)
