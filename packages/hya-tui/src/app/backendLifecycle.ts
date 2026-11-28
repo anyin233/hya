@@ -173,15 +173,6 @@ export function createBackendLifecycle({
   async function switchServer(next: ServerSwitch): Promise<void> {
     client.setBaseUrl(next.url)
     store.setServerUrl(next.url)
-    const backend = store.state.backend
-    if (backend) {
-      store.setBackend({
-        ...backend,
-        pid: next.pid,
-        ...(next.version ? { version: next.version } : {}),
-        ...(next.startedAt !== undefined ? { startedAt: next.startedAt } : {}),
-      })
-    }
     try {
       const bootstrap = await client.bootstrap()
       requireCompatibleBackend(bootstrap.location?.version)
@@ -194,16 +185,26 @@ export function createBackendLifecycle({
     void onScopeChanged?.()
     startGlobalStream()
     const selected = store.state.selected
-    if (!selected) return
-    await openSession(selected.id).catch(async (error: unknown) => {
-      // Gone while no stream watched it (an unused ephemeral session the daemon dropped, or a
-      // delete another client made meanwhile): never stay on a session with no log behind it.
-      if (!(error instanceof HttpError && error.status === 404)) return status(`Open failed: ${String(error)}`)
-      store.dropSessionRow(selected.id)
-      await newSession().catch((failure: unknown) => status(`Session ${selected.id} is gone · new session failed: ${String(failure)}`))
-    })
-    // A turn that ran on the old server died with it; the transcript above shows how far it got.
-    if (store.state.running && !store.state.selected?.busy) store.endTurn()
+    if (selected) {
+      await openSession(selected.id).catch(async (error: unknown) => {
+        // Gone while no stream watched it (an unused ephemeral session the daemon dropped, or a
+        // delete another client made meanwhile): never stay on a session with no log behind it.
+        if (!(error instanceof HttpError && error.status === 404)) return status(`Open failed: ${String(error)}`)
+        store.dropSessionRow(selected.id)
+        await newSession().catch((failure: unknown) => status(`Session ${selected.id} is gone · new session failed: ${String(failure)}`))
+      })
+      // A turn that ran on the old server died with it; the transcript above shows how far it got.
+      if (store.state.running && !store.state.selected?.busy) store.endTurn()
+    }
+    const backend = store.state.backend
+    if (backend) {
+      store.setBackend({
+        ...backend,
+        pid: next.pid,
+        ...(next.version ? { version: next.version } : {}),
+        ...(next.startedAt !== undefined ? { startedAt: next.startedAt } : {}),
+      })
+    }
   }
 
   const reconnector = reconnect
