@@ -1,4 +1,5 @@
 use super::*;
+use hya_agent_channels_core::AgentChannelsService;
 
 #[derive(Default)]
 struct MailObserver(std::sync::Mutex<Vec<(SessionId, u64)>>);
@@ -43,15 +44,14 @@ async fn superseded_channel_reader_cannot_advance_the_inbox_cursor() {
     .unwrap();
     eng.store().recover_claim(caller, owner).await.unwrap();
     let before = eng.replay(o.root).await.unwrap();
-    let (plane, rx) = hya_tool::MailboxPlane::new();
-    let stop = tokio_util::sync::CancellationToken::new();
-    let svc = tokio::spawn(crate::run_mailbox_service(eng.clone(), rx, stop.clone()));
-    let res = plane
-        .for_session_with_actor(caller, Some(old))
-        .read_channel(ch, Some(10))
-        .await;
-    stop.cancel();
-    svc.await.unwrap();
+    let res = AgentChannelsService::read_channel_history(
+        eng.channel_host_runtime().as_ref(),
+        Some(old),
+        caller,
+        &ch,
+        Some(10),
+    )
+    .await;
     assert!(res.is_err());
     assert_eq!(eng.replay(o.root).await.unwrap(), before);
 }
@@ -84,9 +84,15 @@ async fn cursor_cleanup_marks_only_incoming_work_for_wait_and_read() {
                     &o.lead_1.path,
                 )
                 .unwrap();
-                eng.read_channel_history(None, o.root, &ch, Some(10))
-                    .await
-                    .unwrap();
+                AgentChannelsService::read_channel_history(
+                    eng.channel_host_runtime().as_ref(),
+                    None,
+                    o.root,
+                    &ch,
+                    Some(10),
+                )
+                .await
+                .unwrap();
             } else {
                 crate::member_wait::wait_for_members(
                     None,
@@ -120,18 +126,12 @@ async fn cursor_cleanup_marks_only_incoming_work_for_wait_and_read() {
 }
 
 #[tokio::test]
-async fn steer_denies_archived_group_mail_and_acks_incoming_only() {
+async fn steer_skips_archived_members_and_acks_incoming_only() {
     let eng = engine().await;
     let o = org(&eng).await;
     eng.mail_announce(o.lead_1.session, "group mail before archive".into())
         .await
         .unwrap();
-    let mut steer = eng
-        .steer_mailbox_snapshot_with_policy(
-            o.worker_1.session,
-            eng.session_channel_policy(o.worker_1.session),
-        )
-        .await;
     eng.store()
         .append_event(
             o.root,
@@ -145,7 +145,13 @@ async fn steer_denies_archived_group_mail_and_acks_incoming_only() {
         )
         .await
         .unwrap();
-    assert!(steer.drain(&eng).await.unwrap().is_none() && steer.take_acknowledgement().unwrap().1);
+    let host = eng.channel_host_runtime();
+    assert_eq!(
+        AgentChannelsService::prepare_unread_steer(host.as_ref(), o.worker_1.session)
+            .await
+            .unwrap(),
+        None
+    );
 
     let eng2 = engine().await;
     let o2 = org(&eng2).await;
@@ -157,22 +163,21 @@ async fn steer_denies_archived_group_mail_and_acks_incoming_only() {
     )
     .await
     .unwrap();
+    let host2 = eng2.channel_host_runtime();
     for (session, handle, incoming) in [
         (o2.root, "main", false),
         (o2.lead_1.session, o2.lead_1.path.as_str(), true),
     ] {
-        let mut s = eng2
-            .steer_mailbox_snapshot_with_policy(
-                session,
-                Some(hya_tool::ChannelPolicySnapshot::default()),
-            )
-            .await;
-        assert!(s.drain(&eng2).await.unwrap().is_none());
-        let (ack, consumed_incoming) = s.take_acknowledgement().unwrap();
+        eng2.update_session_channel_policy(session, hya_tool::ChannelPolicySnapshot::default());
+        let prepared = AgentChannelsService::prepare_unread_steer(host2.as_ref(), session)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(prepared.notice, None);
         assert!(matches!(
-            hya_tool::extension::ExtensionEvent::from_event(&ack),
+            hya_tool::extension::ExtensionEvent::from_event(&prepared.ack),
             Some(hya_tool::extension::ExtensionEvent::MailConsumed { handle: target, through: 1, .. }) if target == handle
         ));
-        assert_eq!(consumed_incoming, incoming);
+        assert_eq!(prepared.consumed_incoming, incoming);
     }
 }

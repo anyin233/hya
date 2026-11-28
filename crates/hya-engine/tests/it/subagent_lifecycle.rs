@@ -27,7 +27,7 @@ use hya_engine::{
     CreateSession, EventBus, NativeHook, ResidentRecovery, ResidentSupervisor, RuntimeSource,
     RuntimeSourceId, SessionEngine, SessionStoreExt as _, SidecarEnvironment, SidecarHandle,
     SidecarLifecycle, SidecarStart, SubagentGovernor, SubagentLimits, SummarizeOptions, Summarizer,
-    TaskSpawnOrigin, TurnBinding, run_lifecycle_service, run_mailbox_service,
+    TaskSpawnOrigin, TurnBinding, run_lifecycle_service,
 };
 use hya_proto::{
     ActorEpoch, AgentName, ChannelKind, Envelope, Event, FinishCause, FinishReason, MailEndpoint,
@@ -43,8 +43,8 @@ use hya_tool::extension::{
     ExtensionEvent, handoff_projection, members_projection, projection_reducers, team_projection,
 };
 use hya_tool::{
-    Action, LifecyclePlane, MailboxPlane, MemberOutcome, Mode, PermissionPlane, PermissionRules,
-    ResolvedTool, Resource, Rule, Tool, ToolCtx, ToolError, ToolPermission,
+    Action, LifecyclePlane, MemberOutcome, Mode, PermissionPlane, PermissionRules, ResolvedTool,
+    Resource, Rule, Tool, ToolCtx, ToolError, ToolPermission,
 };
 use hya_tool::{ArchiveReason, ReportOutcome};
 use serde_json::{Value, json};
@@ -2464,22 +2464,9 @@ async fn resident_wakes_for_one_turn_quiescence_synthesizes_and_report_notice_ow
         .archive_member(n_root, "worker-1", "failed")
         .await
         .unwrap();
-    let mut steer = n_engine
-        .steer_mailbox_snapshot_with_policy(
-            n_root,
-            Some(hya_tool::ChannelPolicySnapshot {
-                unit_leader: u8::MAX,
-                unit_member: u8::MAX,
-                dm_parent: u8::MAX,
-                dm_child: u8::MAX,
-            }),
-        )
-        .await;
     assert!(
-        steer
-            .drain(&n_engine)
+        support::steer_notice(&n_engine, n_root)
             .await
-            .unwrap()
             .unwrap()
             .contains("worker failed; no result")
     );
@@ -3014,7 +3001,6 @@ async fn narrow_bundle_member_gets_coordination_tools_reads_dm_and_reports() {
         .unwrap(),
     );
     let provider = Arc::new(CoordScriptProvider::default());
-    let (mailbox, mailbox_rx) = MailboxPlane::new();
     let (lifecycle, lifecycle_rx) = LifecyclePlane::new();
     let engine = Arc::new(
         support::engine_with_router_and_runtime(
@@ -3023,15 +3009,9 @@ async fn narrow_bundle_member_gets_coordination_tools_reads_dm_and_reports() {
             PermissionRules::new(vec![Rule::new(Action::Read, "*", Mode::Allow)]),
         )
         .await
-        .with_mailbox(mailbox)
         .with_lifecycle(lifecycle)
         .with_governor(SubagentGovernor::new(SubagentLimits::default())),
     );
-    tokio::spawn(run_mailbox_service(
-        engine.clone(),
-        mailbox_rx,
-        CancellationToken::new(),
-    ));
     let sup = ResidentSupervisor::start(engine.clone());
     tokio::spawn(run_lifecycle_service(
         engine.clone(),

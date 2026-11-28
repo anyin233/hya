@@ -1,7 +1,6 @@
 //! Subagent lifecycle plane (ADR-0015): the `report`, `archive`, and `wait`
-//! tools ride a narrow request channel to the resident supervisor, mirroring
-//! the mailbox plane's dependency inversion (`hya-tool` never sees
-//! `CoreError`).
+//! tools ride a narrow request channel to the resident supervisor
+//! (`hya-tool` never sees `CoreError`).
 //!
 //! `wait` has two implementations sharing this contract: the extended-tools
 //! one wakes when subagents report or are archived (or stop without a
@@ -20,7 +19,7 @@ use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::mailbox::ChannelPolicySnapshot;
+use crate::ChannelPolicySnapshot;
 use crate::tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
 
 /// Terminal subagent report outcome (ADR-0015).

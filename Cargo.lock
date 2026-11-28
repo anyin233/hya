@@ -1323,7 +1323,6 @@ dependencies = [
  "base64 0.22.1",
  "futures",
  "http-body-util",
- "hya-agent-channels",
  "hya-api",
  "hya-bundle",
  "hya-child-io",
@@ -1558,7 +1557,6 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "futures",
- "hya-agent-channels",
  "hya-agent-channels-core",
  "hya-bundle",
  "hya-coding-extras",
@@ -1948,7 +1946,6 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "futures",
- "hya-agent-channels",
  "hya-context",
  "hya-multi-agent",
  "hya-proto",

@@ -532,11 +532,6 @@ impl SessionEngine {
                                         .for_session_with_agents(session, roster.clone()),
                                 )
                                 .with(
-                                    self.mailbox
-                                        .for_session(session)
-                                        .with_channel_policy(channel_policy),
-                                )
-                                .with(
                                     self.lifecycle
                                         .for_session(session)
                                         .with_channel_policy(channel_policy),

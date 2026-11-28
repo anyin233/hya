@@ -20,7 +20,7 @@ use hya_engine::{
     AgentSpec, BoundSpawnRequest, BoundSpawnSender, CategoryRegistry, CoreError, DRAIN_DEADLINE,
     EventBus, ModelSummarizer, ResidentSupervisor, RuntimeRegistry, RuntimeSourceKind,
     SessionEngine, SubagentGovernor, Summarizer, TerminalHandoffOptions, TokenAccounting,
-    TurnDrainReport, run_lifecycle_service, run_mailbox_service,
+    TurnDrainReport, run_lifecycle_service,
 };
 
 // Single discovery/date implementation lives in hya-engine; re-export for callers.
@@ -32,9 +32,9 @@ use hya_proto::{AgentName, FinishCause, ModelRef, OwnerRunId, SessionId};
 use hya_provider::{DevProvider, ProviderCatalogSnapshot, ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
 use hya_tool::{
-    Action, AliasVisibility, AskRequest, InteractionPlane, InvocationPolicy, LifecyclePlane,
-    MailboxPlane, Mode, PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, Rule,
-    SpawnError, ToolPermission, ToolRegistry,
+    Action, AliasVisibility, AskRequest, InteractionPlane, InvocationPolicy, LifecyclePlane, Mode,
+    PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, Rule, SpawnError,
+    ToolPermission, ToolRegistry,
 };
 #[cfg(test)]
 use sha2::{Digest, Sha256};
@@ -1142,7 +1142,6 @@ async fn build_session_engine_with_mcp_defer(
         .unwrap_or(tokio::sync::Semaphore::MAX_PERMITS)
         .clamp(1, tokio::sync::Semaphore::MAX_PERMITS);
     let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(spawn_queue_capacity);
-    let (mailbox, mailbox_rx) = MailboxPlane::new();
     let (lifecycle_plane, lifecycle_rx) = LifecyclePlane::new();
 
     let bus = EventBus::new(crate::config::resolve_event_bus_capacity());
@@ -1192,7 +1191,6 @@ async fn build_session_engine_with_mcp_defer(
         // Explicit cancellation closes intake: the engine owns each sender while
         // its receiver service retains the engine.
         .with_spawn_sender(spawn_sender)
-        .with_mailbox(mailbox)
         .with_lifecycle(lifecycle_plane);
     let engine_builder = if native_ids.contains(&"hya/multi-agent") {
         engine_builder.with_governor(SubagentGovernor::new(subagent_limits))
@@ -1302,19 +1300,12 @@ async fn build_session_engine_with_mcp_defer(
         sidecar_environment,
         lifecycle,
     );
-    // Drive the event-sourced mailbox: append MailSent/Channel*/AgentRegistered to
-    // the team-root log and serve roster/channel reads (ADR-0001).
     // Release idle Project scopes (and their plugin/bundle processes) even
     // when nothing binds.
     lifecycle.tasks.spawn(run_catalog_scope_sweeper(
         Arc::downgrade(&engine),
         lifecycle.stop.clone(),
         CATALOG_SCOPE_SWEEP_PERIOD,
-    ));
-    lifecycle.tasks.spawn(run_mailbox_service(
-        engine.clone(),
-        mailbox_rx,
-        lifecycle.stop.clone(),
     ));
     lifecycle.tasks.spawn(run_lifecycle_service(
         engine.clone(),

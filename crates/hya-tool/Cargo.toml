@@ -31,7 +31,6 @@ futures = { workspace = true }
 hya-tool-loader = { workspace = true }
 hya-runtime-abi = { workspace = true }
 hya-multi-agent = { workspace = true }
-hya-agent-channels = { workspace = true }
 hya-workflow-bundle = { workspace = true }
 
 [[example]]

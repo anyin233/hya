@@ -165,12 +165,6 @@ impl TurnToolGate<'_> {
                                 )
                                 .with(
                                     engine
-                                        .mailbox
-                                        .for_session_with_actor(session, actor_claim.copied())
-                                        .with_channel_policy(channel_policy),
-                                )
-                                .with(
-                                    engine
                                         .lifecycle
                                         .for_session_with_actor(session, actor_claim.copied())
                                         .with_channel_policy(channel_policy)

@@ -26,8 +26,8 @@ use hya_runtime_abi::{
 };
 use hya_tool::extension::{BUNDLE_CHANNELS, BUNDLE_MULTI_AGENT, ExtensionEvent, team_projection};
 use hya_tool::{
-    AgentDef, InteractionPlane, MailboxPlane, PermissionPlane, PermissionRules, SkillCatalogEntry,
-    Tool, ToolCtx, ToolError,
+    AgentDef, InteractionPlane, PermissionPlane, PermissionRules, SkillCatalogEntry, Tool, ToolCtx,
+    ToolError,
 };
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
@@ -615,15 +615,14 @@ impl HostRuntime for MockHost {
     }
 }
 
-fn tool_ctx(session: SessionId, policy: ChannelPolicySnapshot) -> ToolCtx {
+fn tool_ctx(session: SessionId) -> ToolCtx {
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![]));
     let (interaction, _irx) = InteractionPlane::new();
     let mut ctx = ToolCtx::new(
         PathBuf::from("."),
         permission.for_session(session),
         CancellationToken::new(),
-    )
-    .with_extension(MailboxPlane::disconnected().with_channel_policy(policy));
+    );
     ctx.session = Some(session);
     ctx.interaction = interaction.for_session(session);
     ctx
@@ -786,10 +785,7 @@ async fn send_list_and_channel_uri_handler_round_trip() {
     // Child sends DM to parent via default channel (`channel` omitted).
     let send = SendTool::new(Arc::clone(&service));
     let out = send
-        .execute(
-            &tool_ctx(child, allow_all_policy()),
-            json!({ "body": "status ok" }),
-        )
+        .execute(&tool_ctx(child), json!({ "body": "status ok" }))
         .await
         .unwrap();
     assert_eq!(out["metadata"]["from"], "main/scout-1");
@@ -797,10 +793,7 @@ async fn send_list_and_channel_uri_handler_round_trip() {
 
     // Root lists channels and sees 1 unread in DM + 1 direct child in team section.
     let list = ListChannelTool::new(Arc::clone(&service));
-    let listed = list
-        .execute(&tool_ctx(root, allow_all_policy()), json!({}))
-        .await
-        .unwrap();
+    let listed = list.execute(&tool_ctx(root), json!({})).await.unwrap();
     let channels = listed["channels"].as_array().unwrap();
     assert_eq!(channels.len(), 2);
     let dm_row = channels.iter().find(|c| c["id"] == dm).unwrap();
@@ -830,10 +823,7 @@ async fn send_list_and_channel_uri_handler_round_trip() {
     assert_eq!(*host.notified.lock().unwrap(), vec![(root, 7, true)]);
 
     // Subsequent list_channel shows 0 unread.
-    let listed_after = list
-        .execute(&tool_ctx(root, allow_all_policy()), json!({}))
-        .await
-        .unwrap();
+    let listed_after = list.execute(&tool_ctx(root), json!({})).await.unwrap();
     let dm_after = listed_after["channels"]
         .as_array()
         .unwrap()
@@ -841,6 +831,80 @@ async fn send_list_and_channel_uri_handler_round_trip() {
         .find(|c| c["id"] == dm)
         .unwrap();
     assert_eq!(dm_after["unread"], 0);
+}
+
+#[tokio::test]
+async fn send_routes_each_address_form_and_list_channel_renders_team_heartbeats() {
+    let (host, root, child, group, dm) = setup_team();
+    let idle_child = SessionId::new();
+    host.register_session(idle_child, Some(root));
+    host.push_extension(
+        root,
+        ExtensionEvent::AgentRegistered {
+            session: root,
+            agent_session: idle_child,
+            handle: "scout-2".to_string(),
+            parent: Some("main".to_string()),
+            agent_type: AgentName::new("scout"),
+            mode: SubagentMode::Transient,
+        },
+    );
+    let now = u64::try_from(hya_proto::now_millis()).unwrap();
+    host.push_extension(
+        root,
+        ExtensionEvent::AgentHeartbeat {
+            session: root,
+            handle: "main/scout-1".to_string(),
+            heartbeat_ms: now - 42_000,
+        },
+    );
+    let service = Arc::new(AgentChannelsService::with_runtime(
+        Arc::clone(&host) as Arc<dyn HostRuntime>
+    ));
+    let send = SendTool::new(Arc::clone(&service));
+
+    for (session, channel, to) in [
+        (root, Some(format!("#{group}")), format!("#{group}")),
+        (root, Some(dm.clone()), format!("#{dm}")),
+        (root, None, format!("#{group}")),
+        (child, Some("^parent".to_string()), format!("#{dm}")),
+    ] {
+        let mut input = json!({ "body": "hello" });
+        if let Some(channel) = channel {
+            input["channel"] = json!(channel);
+        }
+        let out = send.execute(&tool_ctx(session), input).await.unwrap();
+        assert_eq!(out["metadata"]["to"], to);
+    }
+    assert!(matches!(
+        send.execute(&tool_ctx(root), json!({ "channel": dm, "body": "   " })).await,
+        Err(ToolError::Input(message)) if message.contains("empty")
+    ));
+
+    let list = ListChannelTool::new(Arc::clone(&service));
+    let listed = list.execute(&tool_ctx(root), json!({})).await.unwrap();
+    let output = listed["output"].as_str().unwrap();
+    assert!(
+        output.contains(&format!("#{dm} · dm · peer main/scout-1 · 1 unread")),
+        "{output}"
+    );
+    assert!(
+        output.contains("scout-1 · idle · last active 42s ago (heartbeat)"),
+        "{output}"
+    );
+    assert!(
+        output.contains("scout-2 · idle · no heartbeat yet"),
+        "{output}"
+    );
+
+    let childless = list.execute(&tool_ctx(child), json!({})).await.unwrap();
+    assert!(childless.get("team").is_none());
+
+    let unstarted = SendTool::new(Arc::new(AgentChannelsService::new()));
+    assert!(matches!(
+        unstarted.execute(&tool_ctx(root), json!({ "body": "hi" })).await,
+        Err(ToolError::Other(message)) if message.contains("only available inside a running team")
+    ));
 }
 
 #[tokio::test]
@@ -852,18 +916,16 @@ async fn send_enforces_policy_user_stop_claim_and_revival() {
     let send = SendTool::new(Arc::clone(&service));
 
     // 1. Policy denies send -> rejected.
-    let denied = ChannelPolicySnapshot::default();
+    host.set_policy(root, ChannelPolicySnapshot::default());
     let err = send
-        .execute(
-            &tool_ctx(root, denied),
-            json!({ "channel": dm, "body": "blocked" }),
-        )
+        .execute(&tool_ctx(root), json!({ "channel": dm, "body": "blocked" }))
         .await
         .unwrap_err();
     assert!(
         err.to_string().contains("direction denied by policy"),
         "{err}"
     );
+    host.set_policy(root, allow_all_policy());
 
     // 2. User-stopped guard -> rejected.
     host.stopped_by_user
@@ -871,10 +933,7 @@ async fn send_enforces_policy_user_stop_claim_and_revival() {
         .unwrap()
         .push((root, "main/scout-1".to_string()));
     let err = send
-        .execute(
-            &tool_ctx(root, allow_all_policy()),
-            json!({ "channel": dm, "body": "wake up" }),
-        )
+        .execute(&tool_ctx(root), json!({ "channel": dm, "body": "wake up" }))
         .await
         .unwrap_err();
     assert!(err.to_string().contains("the user stopped"), "{err}");
@@ -884,7 +943,7 @@ async fn send_enforces_policy_user_stop_claim_and_revival() {
     host.claims.lock().unwrap().clear();
     let err = send
         .execute(
-            &tool_ctx(root, allow_all_policy()),
+            &tool_ctx(root),
             json!({ "channel": dm, "body": "no claim" }),
         )
         .await
@@ -903,7 +962,7 @@ async fn send_enforces_policy_user_stop_claim_and_revival() {
     );
     let out = send
         .execute(
-            &tool_ctx(root, allow_all_policy()),
+            &tool_ctx(root),
             json!({ "channel": dm, "body": "revive now" }),
         )
         .await
@@ -1114,7 +1173,7 @@ fn channel_read_tool_uri_parser_and_policy_helpers() {
     }
     let rt = tokio::runtime::Runtime::new().unwrap();
     let tool = ChannelReadTool::new(Arc::new(Echo));
-    let ctx = tool_ctx(SessionId::new(), allow_all_policy());
+    let ctx = tool_ctx(SessionId::new());
     let out = rt
         .block_on(tool.execute(&ctx, json!({"path": "#DM-12345678"})))
         .unwrap();

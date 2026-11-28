@@ -12,9 +12,8 @@ impl SessionEngine {
     /// every current subscriber. Returns a receipt with the resolved sender handle
     /// and the recipient count at send time.
     ///
-    /// Public so callers outside the mailbox service (the resident supervisor's
-    /// tests, integration drivers) can inject team mail directly; the normal path
-    /// is still the `MailboxPlane` → [`run_mailbox_service`](crate::run_mailbox_service).
+    /// Public so tests and integration drivers can inject team mail directly;
+    /// the model's `send` tool goes through the `hya/agent-channels` service.
     pub async fn mail_send(
         &self,
         from_session: SessionId,
@@ -216,50 +215,5 @@ impl SessionEngine {
             from,
             recipients,
         })
-    }
-
-    pub(crate) async fn mail_send_default_for_actor_with_policy(
-        &self,
-        from_session: SessionId,
-        body: String,
-        actor_claim: Option<&ActorClaim>,
-        channel_policy: Option<hya_tool::ChannelPolicySnapshot>,
-    ) -> Result<MailReceipt, CoreError> {
-        let root = self.team_root(from_session).await?;
-        let from = self.resolve_handle(root, from_session).await?;
-        let projection = self.read_projection_shared(root).await?;
-        let leads_unit = team_projection(&projection)
-            .channels
-            .iter()
-            .any(|(_, channel)| {
-                channel.kind == hya_proto::ChannelKind::Group
-                    && channel.unit.as_deref() == Some(from.as_str())
-            });
-        drop(projection);
-        if leads_unit {
-            return self
-                .mail_announce_for_actor_with_policy(
-                    from_session,
-                    body,
-                    actor_claim,
-                    channel_policy,
-                )
-                .await;
-        }
-        if let Some(parent) = hya_proto::scope::parent_path(&from) {
-            return self
-                .mail_send_for_actor_with_policy(
-                    from_session,
-                    MailEndpoint::Handle(parent.to_string()),
-                    MailKind::Message,
-                    body,
-                    actor_claim,
-                    channel_policy,
-                )
-                .await;
-        }
-        Err(CoreError::Invalid(
-            "no default channel: you neither lead a unit nor report to one; address a channel explicitly with `#channel` or a peer handle".to_string(),
-        ))
     }
 }

@@ -7,8 +7,8 @@ use hya_provider::{ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
 use hya_tool::handle::{ArtifactPlane, UriSchemaPlane};
 use hya_tool::{
-    FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, PermissionPlane,
-    ResolvedTool, ToolError,
+    FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, PermissionPlane, ResolvedTool,
+    ToolError,
 };
 use serde_json::Value;
 
@@ -66,7 +66,6 @@ mod session_state;
 mod session_title;
 mod shell;
 mod spawn_requests;
-mod steer;
 mod stream_round;
 mod summary;
 /// Model-backed terminal handoff documents for resident agents.
@@ -138,7 +137,7 @@ impl MailPreAppendGate {
 /// Central session runtime: persistence, providers, tools, and turn execution.
 ///
 /// Construct with [`SessionEngine::new`], then chain `with_*` builders for
-/// interaction, spawn, mailbox, hooks, compaction, and governors. Turns append
+/// interaction, spawn, lifecycle, hooks, compaction, and governors. Turns append
 /// events to the store and publish on the bus; observers never write the log.
 ///
 /// Clones share execution handles and live provider publications.
@@ -172,7 +171,6 @@ pub struct SessionEngine {
     interaction: InteractionPlane,
     spawner: BoundSpawnSender,
     native_services: Arc<RwLock<Vec<Arc<dyn hya_runtime_abi::NativeService>>>>,
-    mailbox: MailboxPlane,
     project_activity: hya_tool::ProjectActivityPlane,
     lifecycle: LifecyclePlane,
     /// Mints subagent handle leaves (`<prefix>-<operator>`); injectable RNG.
@@ -238,7 +236,6 @@ impl Clone for SessionEngine {
             interaction: self.interaction.clone(),
             spawner: self.spawner.clone(),
             native_services: Arc::clone(&self.native_services),
-            mailbox: self.mailbox.clone(),
             project_activity: self.project_activity.clone(),
             lifecycle: self.lifecycle.clone(),
             handle_namer: self.handle_namer.clone(),
@@ -293,7 +290,6 @@ impl SessionEngine {
         let (interaction, _rx) = InteractionPlane::new();
         let spawner = BoundSpawnSender::disconnected();
         let lifecycle = LifecyclePlane::disconnected();
-        let mailbox = MailboxPlane::disconnected();
         let (project_activity, activity_rx) = hya_tool::ProjectActivityPlane::new();
         let formatter = FormatterPlane::default();
         let lsp = LspPlane::default();
@@ -321,7 +317,6 @@ impl SessionEngine {
             interaction,
             spawner,
             native_services: Arc::new(RwLock::new(Vec::new())),
-            mailbox,
             project_activity,
             lifecycle,
             handle_namer: Arc::new(crate::handle_naming::HandleNamer::default()),
@@ -775,16 +770,6 @@ impl SessionEngine {
                 .map_err(|error| CoreError::Invalid(error.to_string()))?;
         }
         Ok(())
-    }
-
-    /// Inject the mailbox plane whose service loop this engine drives (see
-    /// [`run_mailbox_service`](crate::mailbox::run_mailbox_service)). Wired from
-    /// the app layer alongside the spawner, mirroring the established plane
-    /// pattern so `hya-tool` stays free of a `hya-engine` dependency.
-    #[must_use]
-    pub fn with_mailbox(mut self, mailbox: MailboxPlane) -> Self {
-        self.mailbox = mailbox;
-        self
     }
 
     /// Install the lifecycle plane drained by

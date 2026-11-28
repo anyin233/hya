@@ -18,9 +18,7 @@ hya-compaction = { workspace = true }
 hya-plan = { workspace = true }
 # Built for its `cdylib`: the `hya/workflow` native ABI v2 bundle (`workflow` tool, DAG service, BundleApi).
 hya-workflow-bundle = { workspace = true }
-# Built for its `cdylib`: the `hya/agent-channels` native ABI v2 bundle (mailbox, channel:// schema, steer hook, BundleApi).
 hya-agent-channels-core = { workspace = true }
-hya-agent-channels = { workspace = true }
 # Built for its `cdylib`: the `hya/multi-agent` native ABI v2 bundle (governor, handle naming, claims, tools, BundleApi).
 hya-multi-agent-core = { workspace = true }
 hya-multi-agent = { workspace = true }

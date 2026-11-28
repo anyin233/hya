@@ -1868,8 +1868,7 @@ async fn consumed_results_suppress_redundant_synthesis_while_unseen_mail_wakes()
                 svc.abort();
             }
             _ => {
-                let read = engine
-                    .read_channel_history(None, root, "scout", None)
+                let read = support::read_channel(&engine, root, "scout", None)
                     .await
                     .unwrap();
                 assert_eq!(read.messages[0].1, "findings ready");
@@ -1965,8 +1964,7 @@ async fn consumed_results_suppress_redundant_synthesis_while_unseen_mail_wakes()
         })
         .await
     );
-    engine
-        .read_channel_history(None, root, "scout", None)
+    support::read_channel(&engine, root, "scout", None)
         .await
         .unwrap();
     drop(lease);

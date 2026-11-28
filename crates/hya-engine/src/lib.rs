@@ -9,9 +9,9 @@
 //!   [`HookDispatcher`], [`RuntimeCatalogRefresh`], [`Summarizer`],
 //!   and [`RuntimeSourceOwner`].
 //! - **Team/subagent orchestration** — admission, governors, resident supervisors,
-//!   and mailbox delivery over the same event-sourced log.
+//!   and mail delivery over the same event-sourced log.
 //!
-//! Downstream crates wire planes (permission, tools, mailbox) and plugins; this
+//! Downstream crates wire planes (permission, tools) and plugins; this
 //! crate stays free of terminal UI and HTTP routing.
 
 pub use hya_core::{error, kernel};
@@ -51,9 +51,8 @@ pub mod engine;
 pub mod handle_naming;
 /// Plugin/host hook dispatch contract and native payload types.
 pub mod hooks;
-/// Team mailbox service loop (event-sourced mail/channels).
+/// Lifecycle service loop (`report`, `archive`, `wait`) into the resident supervisor.
 pub mod lifecycle;
-pub mod mailbox;
 mod member_wait;
 /// Subagent concurrency governor and team budgets.
 pub mod orchestrator;
@@ -118,7 +117,6 @@ pub use hooks::{
     chat_params_value,
 };
 pub use lifecycle::run_lifecycle_service;
-pub use mailbox::run_mailbox_service;
 pub use orchestrator::{SubagentGovernor, SubagentLimits};
 pub use permission_mode::{PublishedPermissionMode, RuntimePermissionMode, SessionPermissionMode};
 pub use prompt::{

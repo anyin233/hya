@@ -3943,3 +3943,162 @@ async fn bare_profile_builds_unified_session_engine_with_eight_bare_tools_and_hy
     assert!(!pure_sys.contains("BARE_APP_MARKER"), "{pure_sys}");
     assert!(!pure_sys.contains("unit-skill"), "{pure_sys}");
 }
+
+/// What a runtime built with `selection` exposes of `hya/agent-channels`:
+/// started native service ids, its tools, steer hooks, and the tool result a
+/// model `read channel://…` gets.
+struct ChannelsSurface {
+    services: Vec<String>,
+    tools: Vec<String>,
+    steer_hooks: usize,
+    channel_read: String,
+}
+
+async fn channels_surface(selection: hya_bundle::BuiltinBundleSelection) -> ChannelsSurface {
+    let workdir = tempdir();
+    let agent_id = if core_agents_available(&selection) {
+        BUILTIN_DEFAULT_AGENT_ID
+    } else {
+        hya_engine::BARE_AGENT_ID
+    };
+    let mut settings = config::EngineSettings::default();
+    settings.set_builtin_bundles(selection);
+    let agent = AgentSpec {
+        name: AgentName::new(agent_id),
+        model: ModelRef::new("fake/model"),
+        system_prompt: String::new(),
+        workdir: workdir.clone(),
+        reasoning: None,
+    };
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "read".into(),
+                input: json!({ "path": "channel://DM-12345678" }),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![
+            FakeStep::Text("done".into()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+    ]);
+    let mut built = build_session_engine(
+        SessionStore::connect_memory().await.unwrap(),
+        ProviderRouter::new().with(Arc::new(provider)),
+        &agent,
+        BTreeMap::new(),
+        Vec::new(),
+        (InvocationPolicy::default(), settings),
+    )
+    .await
+    .unwrap();
+    let engine = built.engine();
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: agent.name.clone(),
+            model: agent.model.clone(),
+            workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "read the channel".into())
+        .await
+        .unwrap();
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+    let channel_read = engine
+        .replay(session)
+        .await
+        .unwrap()
+        .into_iter()
+        .find_map(|envelope| match envelope.event {
+            Event::ToolResult { output, .. } => Some(output.to_string()),
+            Event::ToolError { message_text, .. } => Some(message_text),
+            _ => None,
+        })
+        .expect("read tool result");
+    let surface = ChannelsSurface {
+        services: built
+            .native_services
+            .iter()
+            .map(|service| service.id().to_string())
+            .collect(),
+        tools: engine
+            .tool_schemas()
+            .into_iter()
+            .map(|schema| schema.name.to_string())
+            .filter(|name| name == "send" || name == "list_channel")
+            .collect(),
+        steer_hooks: engine
+            .process_hooks()
+            .entries()
+            .iter()
+            .filter(|entry| entry.hook().id() == "unread-mail-steer")
+            .count(),
+        channel_read,
+    };
+    built.shutdown().await.unwrap();
+    surface
+}
+
+#[tokio::test]
+async fn channels_disabled_runtime_has_no_channels_service_tool_scheme_or_hook() {
+    let home = tempdir();
+    let _env = EnvGuard::with_home(&home, &home);
+    let disabled = hya_bundle::BuiltinBundleSelection {
+        disable: vec!["hya/agent-channels".into()],
+        ..hya_bundle::BuiltinBundleSelection::full()
+    };
+    for selection in [hya_bundle::BuiltinBundleSelection::bare(), disabled] {
+        let surface = channels_surface(selection.clone()).await;
+        assert!(
+            !surface.services.iter().any(|id| id == "agent-channels"),
+            "{selection:?}: {:?}",
+            surface.services
+        );
+        assert!(
+            surface.tools.is_empty(),
+            "{selection:?}: {:?}",
+            surface.tools
+        );
+        assert_eq!(surface.steer_hooks, 0, "{selection:?}");
+        assert!(
+            surface
+                .channel_read
+                .contains("unknown handle scheme: channel://"),
+            "{selection:?}: {}",
+            surface.channel_read
+        );
+    }
+}
+
+#[tokio::test]
+async fn channels_enabled_registers_exactly_one_channels_service_hook_and_scheme() {
+    let home = tempdir();
+    let _env = EnvGuard::with_home(&home, &home);
+    let surface = channels_surface(hya_bundle::BuiltinBundleSelection::full()).await;
+    assert_eq!(
+        surface
+            .services
+            .iter()
+            .filter(|id| *id == "agent-channels")
+            .count(),
+        1,
+        "{:?}",
+        surface.services
+    );
+    assert_eq!(surface.tools.len(), 2, "{:?}", surface.tools);
+    assert_eq!(surface.steer_hooks, 1);
+    assert!(
+        !surface.channel_read.contains("unknown handle scheme"),
+        "{}",
+        surface.channel_read
+    );
+}

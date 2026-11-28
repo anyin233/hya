@@ -1,4 +1,5 @@
 use super::*;
+use hya_tool::Tool as _;
 
 async fn send(
     engine: &SessionEngine,
@@ -16,7 +17,7 @@ async fn dm_id(engine: &SessionEngine, root: SessionId, a: &str, b: &str) -> Str
 }
 
 #[tokio::test]
-async fn mail_auth_non_member_rejected_across_engine_plane_and_send_tool() {
+async fn mail_auth_non_member_rejected_by_engine_and_send_tool() {
     let eng = Arc::new(engine().await);
     let o = org(&eng).await;
     mint_dm(&eng, o.root, "main", &o.lead_1.path).await;
@@ -34,45 +35,23 @@ async fn mail_auth_non_member_rejected_across_engine_plane_and_send_tool() {
         &ch,
     );
 
-    let (plane, rx) = hya_tool::MailboxPlane::new();
-    let svc = tokio::spawn(crate::run_mailbox_service(
-        eng.clone(),
-        rx,
-        tokio_util::sync::CancellationToken::new(),
-    ));
-    let sp = plane
-        .for_session(o.lead_2.session)
-        .with_channel_policy(eng.session_channel_policy(o.lead_2.session).unwrap());
-    let plane_res = sp
-        .send(
-            MailEndpoint::Channel(ch.clone()),
-            MailKind::Message,
-            "intrusion".into(),
-        )
-        .await;
-    assert!(
-        matches!(plane_res, Err(hya_tool::MailboxError::Rejected(ref m)) if m.contains(&o.lead_2.path) && m.contains(&ch))
-    );
-
     let (permission, _) = PermissionPlane::new(PermissionRules::default());
     let mut ctx = hya_tool::ToolCtx::new(
         PathBuf::from("."),
         permission,
         tokio_util::sync::CancellationToken::new(),
     )
-    .with_extension(sp)
     .with_extension(hya_tool::ParentSession(o.root));
     ctx.session = Some(o.lead_2.session);
-    let tool_res = hya_tool_loader::builtins()
-        .get("send")
-        .unwrap()
+    let service = Arc::new(hya_agent_channels_core::AgentChannelsService::with_runtime(
+        eng.channel_host_runtime(),
+    ));
+    let tool_res = hya_agent_channels_core::SendTool::new(service)
         .execute(
             &ctx,
             serde_json::json!({"channel": ch, "body": "intrusion"}),
         )
         .await;
-    drop((ctx, plane));
-    svc.await.unwrap();
     assert!(
         matches!(tool_res, Err(hya_tool::ToolError::Input(ref m)) if m.contains(&o.lead_2.path) && m.contains(&ch))
     );
@@ -365,37 +344,6 @@ async fn announce_and_group_posts_reach_direct_reports_and_reject_impersonation_
     assert_eq!(inbox(&eng, o.root, &o.worker_1.path).await, ["unit relay"]);
     assert_eq!(inbox(&eng, o.root, &o.worker_2.path).await, ["unit relay"]);
     assert!(inbox(&eng, o.root, &o.other_worker.path).await.is_empty());
-}
-
-#[tokio::test]
-async fn send_default_routes_by_role() {
-    let eng = engine().await;
-    let o = org(&eng).await;
-    let lead = eng
-        .mail_send_default_for_actor_with_policy(o.root, "default all hands".into(), None, None)
-        .await
-        .unwrap();
-    assert!(lead.recipients >= 2 && matches!(lead.to, MailEndpoint::Channel(_)));
-    assert_eq!(
-        inbox(&eng, o.root, &o.lead_1.path).await,
-        ["default all hands"]
-    );
-
-    let leaf = eng
-        .mail_send_default_for_actor_with_policy(
-            o.worker_1.session,
-            "leaf default up".into(),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-    assert_eq!(leaf.recipients, 2);
-    assert!(matches!(leaf.to, MailEndpoint::Channel(ref id) if id.starts_with("DM-")));
-    assert_eq!(
-        inbox(&eng, o.root, &o.lead_1.path).await,
-        ["default all hands", "leaf default up"]
-    );
 }
 
 #[tokio::test]

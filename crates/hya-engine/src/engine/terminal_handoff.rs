@@ -8,7 +8,6 @@
 //! failed call, or engine-synthesized terminality falls back to a deterministic
 //! projection-derived document flagged `degraded`.
 
-mod read_view;
 use std::fmt::Write as _;
 use std::sync::Arc;
 

@@ -15,13 +15,15 @@ use hya_proto::{
 use hya_runtime_abi::{
     HostError, HostRuntime, MemberMailRevivalRequest, NativeService, ServiceHealth,
 };
+use hya_tool::MailReceipt;
 use hya_tool::extension::{
     BUNDLE_CHANNELS, BUNDLE_MULTI_AGENT, ChannelProjection, ExtensionEvent, TeamProjection,
     team_projection,
 };
-use hya_tool::{ChannelRow, MailReceipt, MemberStatusRow};
 
-use crate::mail::{ChannelHistoryRead, MAIN_HANDLE, SteeredMail, mail_preview};
+use crate::mail::{
+    ChannelHistoryRead, ChannelRow, MAIN_HANDLE, MemberStatusRow, SteeredMail, mail_preview,
+};
 use crate::policy::{BIT_SEND, allows_steer_message, channel_topology};
 
 /// Canonical bundle id for `hya/agent-channels`.

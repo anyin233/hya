@@ -4,23 +4,27 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_proto::{ChannelKind, MailEndpoint, MailKind, ToolSchema};
+use hya_proto::{ChannelKind, MailEndpoint, MailKind, SessionId, ToolSchema};
+use hya_runtime_abi::{HostError, HostRuntime};
 use hya_tool::tool::obj_schema;
-use hya_tool::{
-    LifecyclePlane, MailboxError, MailboxPlane, ReportOutcome, Tool, ToolCtx, ToolError,
-};
+use hya_tool::{LifecyclePlane, ReportOutcome, Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::service::{AgentChannelsService, host_error_to_tool_error};
 
-fn channel_error(error: MailboxError) -> ToolError {
-    match error {
-        MailboxError::Unavailable => {
-            ToolError::Other("mailbox is only available inside a running team".to_string())
-        }
-        error => error.into(),
-    }
+/// The started service's host runtime and the calling session.
+fn team_session(
+    service: &AgentChannelsService,
+    ctx: &ToolCtx,
+) -> Result<(Arc<dyn HostRuntime>, SessionId), ToolError> {
+    let session = ctx
+        .session
+        .ok_or_else(|| HostError::Unavailable("no team session".to_string()));
+    service
+        .runtime()
+        .and_then(|runtime| Ok((runtime, session?)))
+        .map_err(host_error_to_tool_error)
 }
 
 /// Send mail on a channel, peer DM, or default role channel (`send`).
@@ -29,8 +33,7 @@ pub struct SendTool {
 }
 
 impl SendTool {
-    /// Create a `send` tool backed by `service` (with [`hya_tool::MailboxPlane`] fallback
-    /// for disconnected unit-test harnesses).
+    /// Create a `send` tool backed by `service`.
     #[must_use]
     pub fn new(service: Arc<AgentChannelsService>) -> Self {
         Self { service }
@@ -98,20 +101,19 @@ impl Tool for SendTool {
         if input.body.trim().is_empty() {
             return Err(ToolError::Input("message body is empty".to_string()));
         }
-        let mailbox = ctx
-            .extension::<MailboxPlane>()
-            .cloned()
-            .unwrap_or_else(MailboxPlane::disconnected);
-        let receipt = if let Ok(runtime) = self.service.runtime() {
-            let session = ctx.session.ok_or_else(|| {
-                ToolError::Other("mailbox is only available inside a running team".to_string())
-            })?;
-            let policy = mailbox.channel_policy().ok_or_else(|| {
+        let (runtime, session) = team_session(&self.service, ctx)?;
+        let policy = runtime
+            .turn_runner()
+            .session_channel_policy(session)
+            .await
+            .map_err(host_error_to_tool_error)?
+            .ok_or_else(|| {
                 ToolError::Input("channel policy snapshot missing for admitted send".to_string())
             })?;
-            let claim = ctx.operation.actor_claim();
-            match send_endpoint(&input.channel) {
-                Some(endpoint) => AgentChannelsService::send(
+        let claim = ctx.operation.actor_claim();
+        let receipt = match send_endpoint(&input.channel) {
+            Some(endpoint) => {
+                AgentChannelsService::send(
                     runtime.as_ref(),
                     session,
                     endpoint,
@@ -122,8 +124,9 @@ impl Tool for SendTool {
                     false,
                 )
                 .await
-                .map_err(host_error_to_tool_error)?,
-                None => AgentChannelsService::send_default(
+            }
+            None => {
+                AgentChannelsService::send_default(
                     runtime.as_ref(),
                     session,
                     input.body,
@@ -131,15 +134,9 @@ impl Tool for SendTool {
                     Some(policy),
                 )
                 .await
-                .map_err(host_error_to_tool_error)?,
             }
-        } else {
-            match send_endpoint(&input.channel) {
-                Some(endpoint) => mailbox.send(endpoint, MailKind::Message, input.body).await,
-                None => mailbox.send_default(input.body).await,
-            }
-            .map_err(channel_error)?
-        };
+        }
+        .map_err(host_error_to_tool_error)?;
         let address = send_address(&receipt.to);
         Ok(json!({
             "title": format!("Sent to {address}"),
@@ -165,8 +162,7 @@ pub struct ListChannelTool {
 }
 
 impl ListChannelTool {
-    /// Create a `list_channel` tool backed by `service` (with [`hya_tool::MailboxPlane`]
-    /// fallback for disconnected unit-test harnesses).
+    /// Create a `list_channel` tool backed by `service`.
     #[must_use]
     pub fn new(service: Arc<AgentChannelsService>) -> Self {
         Self { service }
@@ -195,26 +191,13 @@ impl Tool for ListChannelTool {
     }
 
     async fn execute(&self, ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {
-        let (rows, team) = if let Ok(runtime) = self.service.runtime() {
-            let session = ctx.session.ok_or_else(|| {
-                ToolError::Other("mailbox is only available inside a running team".to_string())
-            })?;
-            let rows = AgentChannelsService::list_channels(runtime.as_ref(), session)
-                .await
-                .map_err(host_error_to_tool_error)?;
-            let team = AgentChannelsService::team_status(runtime.as_ref(), session)
-                .await
-                .map_err(host_error_to_tool_error)?;
-            (rows, team)
-        } else {
-            let mailbox = ctx
-                .extension::<MailboxPlane>()
-                .cloned()
-                .unwrap_or_else(MailboxPlane::disconnected);
-            let rows = mailbox.list_channels().await.map_err(channel_error)?;
-            let team = mailbox.team_status().await.map_err(channel_error)?;
-            (rows, team)
-        };
+        let (runtime, session) = team_session(&self.service, ctx)?;
+        let rows = AgentChannelsService::list_channels(runtime.as_ref(), session)
+            .await
+            .map_err(host_error_to_tool_error)?;
+        let team = AgentChannelsService::team_status(runtime.as_ref(), session)
+            .await
+            .map_err(host_error_to_tool_error)?;
         let rendered: Vec<String> = rows
             .iter()
             .map(|row| {

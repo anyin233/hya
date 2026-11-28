@@ -296,6 +296,35 @@ pub async fn engine_with_router_and_runtime(
         .with_round_retry_waits(&ZERO_RETRY_WAITS)
 }
 
+/// The unread-mail notice the `hya/agent-channels` steer hook would show
+/// `session` now, under the session's cached channel policy.
+pub async fn steer_notice(engine: &SessionEngine, session: SessionId) -> Option<String> {
+    hya_agent_channels_core::AgentChannelsService::prepare_unread_steer(
+        engine.channel_host_runtime().as_ref(),
+        session,
+    )
+    .await
+    .expect("prepare unread steer")
+    .and_then(|prepared| prepared.notice)
+}
+
+/// Read `channel` as `session` through the `hya/agent-channels` service.
+pub async fn read_channel(
+    engine: &SessionEngine,
+    session: SessionId,
+    channel: &str,
+    last: Option<usize>,
+) -> Result<hya_agent_channels_core::ChannelHistoryRead, hya_runtime_abi::HostError> {
+    hya_agent_channels_core::AgentChannelsService::read_channel_history(
+        engine.channel_host_runtime().as_ref(),
+        None,
+        session,
+        channel,
+        last,
+    )
+    .await
+}
+
 /// Create a root project session on `engine`.
 pub async fn create_root_session(
     engine: &SessionEngine,

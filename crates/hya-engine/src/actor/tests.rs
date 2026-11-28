@@ -4,6 +4,7 @@ use super::inbox::{recipient_channel_role, resident_delivery_allowed};
 use super::*;
 use crate::store_bridge::{RecoveredActorClaim, SessionStoreExt as _};
 use crate::{CreateSession, EventBus};
+use hya_agent_channels_core::AgentChannelsService;
 use hya_proto::{AgentName, ChannelKind, MailKind, ModelRef, SessionKind, SubagentMode};
 use hya_provider::{DevProvider, ProviderRouter};
 use hya_store::SessionStore;
@@ -367,19 +368,18 @@ async fn list_channels_and_steer_count_incoming_only_ignoring_outgoing_copy() {
     )
     .unwrap()
     .snapshot_for("hya-main");
+    eng.update_session_channel_policy(r, policy);
+    let host = eng.channel_host_runtime();
     assert!(
-        eng.steer_mailbox_snapshot_with_policy(r, Some(policy))
-            .await
-            .drain(&eng)
+        AgentChannelsService::prepare_unread_steer(host.as_ref(), r)
             .await
             .unwrap()
-            .is_none()
+            .is_none_or(|prepared| prepared.notice.is_none())
     );
 
-    let (mailbox, rx) = hya_tool::MailboxPlane::new();
-    let stop = CancellationToken::new();
-    let svc = tokio::spawn(crate::run_mailbox_service(eng.clone(), rx, stop.clone()));
-    let root_rows = mailbox.for_session(r).list_channels().await.unwrap();
+    let root_rows = AgentChannelsService::list_channels(host.as_ref(), r)
+        .await
+        .unwrap();
     assert!(!root_rows.is_empty() && root_rows.iter().all(|row| row.unread == 0));
 
     let through =
@@ -411,15 +411,15 @@ async fn list_channels_and_steer_count_incoming_only_ignoring_outgoing_copy() {
             )
             .await
             .unwrap();
-        let rows = mailbox.for_session(child).list_channels().await.unwrap();
+        let rows = AgentChannelsService::list_channels(host.as_ref(), child)
+            .await
+            .unwrap();
         assert_eq!(rows.iter().find(|x| x.id == dm).unwrap().unread, 1);
         assert_eq!(
             rows.iter().find(|x| x.id == announce).unwrap().unread,
             group_unread
         );
     }
-    stop.cancel();
-    svc.await.unwrap();
     drop(lead);
     drain_sup(&sup).await;
 }
@@ -736,9 +736,15 @@ async fn activation_rest_waits_for_followup_mail_live_children_and_skips_consume
         .unwrap()
         .on_mail("main", &MailEndpoint::Channel(dm.clone()))
         .await;
-    eng.read_channel_history(None, child, &dm, None)
-        .await
-        .unwrap();
+    AgentChannelsService::read_channel_history(
+        eng.channel_host_runtime().as_ref(),
+        None,
+        child,
+        &dm,
+        None,
+    )
+    .await
+    .unwrap();
     release.notify_one();
     assert!(matches!(
         waiter.wait().await.unwrap(),

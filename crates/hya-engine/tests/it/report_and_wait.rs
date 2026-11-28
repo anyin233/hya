@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use futures::stream;
+use hya_agent_channels_core::AgentChannelsService;
 use hya_bundle::{
     AgentRole, BundleCatalog, BundleSource, ChannelCapability, ChannelParticipantRole, SourceFile,
     prepare_package,
@@ -20,7 +21,6 @@ use hya_engine::{
     AgentCatalog, AgentSpec, ChannelPolicy, CompactionConfig, CoreError, EventBus,
     ResidentSupervisor, SessionEngine, SessionStoreExt as _, SubagentGovernor, SubagentLimits,
     SummarizeOptions, Summarizer, TurnBinding, TurnLease, run_lifecycle_service,
-    run_mailbox_service,
 };
 use hya_proto::{
     ChannelKind, Event, FinishCause, FinishReason, MailEndpoint, MailKind, MemberId,
@@ -36,9 +36,8 @@ use hya_tool::extension::{
     ExtensionEvent, MemberProjection, handoff_projection, members_projection, team_projection,
 };
 use hya_tool::{
-    Action, ChannelPolicySnapshot, LifecyclePlane, MailboxPlane, Mode, PermissionPlane,
-    PermissionRules, Rule, Tool, ToolCtx, ToolError, WaitMemberState, WaitMode, WaitOutcome,
-    WaitSpec, WaitWake,
+    Action, ChannelPolicySnapshot, LifecyclePlane, Mode, PermissionPlane, PermissionRules, Rule,
+    Tool, ToolCtx, ToolError, WaitMemberState, WaitMode, WaitOutcome, WaitSpec, WaitWake,
 };
 use hya_tool::{ArchiveReason, ReportOutcome};
 use serde_json::{Value, json};
@@ -346,15 +345,6 @@ async fn mail_main_from_peer(engine: &SessionEngine, root: SessionId, body: &str
         )
         .await
         .unwrap();
-}
-
-fn steer_all() -> ChannelPolicySnapshot {
-    ChannelPolicySnapshot {
-        unit_leader: u8::MAX,
-        unit_member: u8::MAX,
-        dm_parent: u8::MAX,
-        dm_child: u8::MAX,
-    }
 }
 
 async fn member_row(
@@ -753,17 +743,13 @@ async fn forced_stop_handoff_carries_prior_facts_and_is_searchable() {
     let h = handoff_projection(&engine.read_projection(child).await.unwrap()).unwrap();
     assert!(h.doc.starts_with("1. Goal - ") && h.doc.contains("5. Pending tasks - "));
 
-    let (mailbox, rx) = MailboxPlane::new();
-    tokio::spawn(run_mailbox_service(
-        engine.clone(),
-        rx,
-        CancellationToken::new(),
-    ));
-    let rows = mailbox
-        .for_session(root)
-        .search_agents("quartz".into())
-        .await
-        .unwrap();
+    let rows = hya_multi_agent_core::MultiAgentService::search_archived(
+        engine.channel_host_runtime().as_ref(),
+        root,
+        "quartz",
+    )
+    .await
+    .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].session, child.to_string());
     assert!(!rows[0].goal.is_empty() && rows[0].pending.contains("quartz investigation"));
@@ -1123,26 +1109,20 @@ async fn steer_tool_result_injection_non_object_shapes_and_transactional_rollbac
 }
 
 #[tokio::test]
-async fn steer_notice_multibyte_channel_id_harness_notice_and_bus_lag_resync() {
+async fn steer_notice_multibyte_channel_id_and_harness_notice() {
     let engine = stub_engine().await;
     let root = root_team(&engine).await;
     let sup = ResidentSupervisor::start(engine.clone());
     ensure_main(&sup, &engine, root).await;
     let _lead = engine.try_begin_turn(root).unwrap();
     mail_main_from_peer(&engine, root, &"配置很长的中文邮件内容".repeat(120)).await;
-    let mut steer = engine
-        .steer_mailbox_snapshot_with_policy(root, Some(steer_all()))
-        .await;
-    let notice = steer.drain(&engine).await.unwrap().unwrap();
+    let notice = support::steer_notice(&engine, root).await.unwrap();
     assert!(notice.contains("[mail from main/peer-1 @DM-12345678]") && notice.contains("配置很长"));
 
     let (child, handle) = spawn_idle(&sup, &engine, root, "hya-scout").await;
     let dm = dm_for(&engine, root, &handle).await;
     send_mail(&engine, child, "main", "handle-addressed status update").await;
-    let mut steer2 = engine
-        .steer_mailbox_snapshot_with_policy(root, Some(steer_all()))
-        .await;
-    let n2 = steer2.drain(&engine).await.unwrap().unwrap();
+    let n2 = support::steer_notice(&engine, root).await.unwrap();
     assert!(n2.contains(&format!("@{dm}")) && n2.contains("handle-addressed status update"));
 
     engine
@@ -1150,58 +1130,9 @@ async fn steer_notice_multibyte_channel_id_harness_notice_and_bus_lag_resync() {
         .append_harness_mail(root, &handle, "notice from harness".into())
         .await
         .unwrap();
-    let mut c_steer = engine.steer_mailbox_snapshot_with_policy(child, None).await;
-    let h_notice = c_steer.drain(&engine).await.unwrap().unwrap();
+    let h_notice = support::steer_notice(&engine, child).await.unwrap();
     assert!(
         h_notice.contains("[mail from harness] notice from harness") && !h_notice.contains("@DM-")
-    );
-
-    // Bus lag resyncs from durable log without advancing cursor prematurely.
-    let (perm, _) = PermissionPlane::new(PermissionRules::default());
-    let lag_engine = Arc::new(
-        support::fixture_engine(
-            SessionStore::connect_memory().await.unwrap(),
-            Arc::new(ProviderRouter::new().with(Arc::new(EmptyStub))),
-            support::builtin_test_runtime(),
-            perm,
-            EventBus::new(4),
-        )
-        .await
-        .with_round_retry_waits(&support::ZERO_RETRY_WAITS),
-    );
-    let lag_root = root_team(&lag_engine).await;
-    let lag_sup = ResidentSupervisor::start(lag_engine.clone());
-    ensure_main(&lag_sup, &lag_engine, lag_root).await;
-    let _lag_lead = lag_engine.try_begin_turn(lag_root).unwrap();
-    let (lag_child, _) = spawn_idle(&lag_sup, &lag_engine, lag_root, "hya-scout").await;
-    let mut lag_steer = lag_engine
-        .steer_mailbox_snapshot_with_policy(lag_root, Some(steer_all()))
-        .await;
-    send_mail(&lag_engine, lag_child, "main", "LAGGED_MAIL_BODY").await;
-    for _ in 0..32 {
-        lag_engine.bus().publish(hya_proto::Envelope {
-            seq: hya_proto::EventSeq(0),
-            ts_millis: 0,
-            event: ExtensionEvent::AgentHeartbeat {
-                session: lag_root,
-                handle: "main".into(),
-                heartbeat_ms: 1,
-            }
-            .into_event(),
-        });
-    }
-    assert!(
-        lag_steer
-            .drain(&lag_engine)
-            .await
-            .unwrap()
-            .unwrap()
-            .contains("LAGGED_MAIL_BODY")
-    );
-    assert_eq!(
-        team_projection(&lag_engine.read_projection(lag_root).await.unwrap()).roster["main"]
-            .resident_cursor,
-        1
     );
 }
 
@@ -1231,14 +1162,19 @@ async fn channel_read_history_normalization_handle_dm_and_heartbeats_status() {
             .count(),
         2
     );
-    let rows = engine.team_member_status(root).await.unwrap();
+    let rows = AgentChannelsService::team_status(engine.channel_host_runtime().as_ref(), root)
+        .await
+        .unwrap();
     assert_eq!(
         (rows.len(), rows[0].handle.as_str(), rows[0].status.as_str()),
         (1, handle.as_str(), "idle")
     );
     assert!(
         rows[0].last_active_seconds.is_some()
-            && engine.team_member_status(child).await.unwrap().is_empty()
+            && AgentChannelsService::team_status(engine.channel_host_runtime().as_ref(), child)
+                .await
+                .unwrap()
+                .is_empty()
     );
 
     for body in ["first note", "second note"] {
@@ -1253,8 +1189,7 @@ async fn channel_read_history_normalization_handle_dm_and_heartbeats_status() {
         .clone();
     let dm = dm_for(&engine, root, &handle).await;
 
-    let latest = engine
-        .read_channel_history(None, child, &group, None)
+    let latest = support::read_channel(&engine, child, &group, None)
         .await
         .unwrap();
     assert_eq!(
@@ -1265,8 +1200,7 @@ async fn channel_read_history_normalization_handle_dm_and_heartbeats_status() {
         ),
         (1, "second note", None)
     );
-    let hist = engine
-        .read_channel_history(None, child, &group, Some(10))
+    let hist = support::read_channel(&engine, child, &group, Some(10))
         .await
         .unwrap();
     assert_eq!(
@@ -1295,8 +1229,7 @@ async fn channel_read_history_normalization_handle_dm_and_heartbeats_status() {
             format!("normalized channel id `  {group}  ` → `{group}`"),
         ),
     ] {
-        let r = engine
-            .read_channel_history(None, child, &raw, None)
+        let r = support::read_channel(&engine, child, &raw, None)
             .await
             .unwrap();
         assert_eq!(
@@ -1305,8 +1238,7 @@ async fn channel_read_history_normalization_handle_dm_and_heartbeats_status() {
         );
     }
     assert!(
-        engine
-            .read_channel_history(None, child, "no-such-channel", None)
+        support::read_channel(&engine, child, "no-such-channel", None)
             .await
             .is_err()
     );
@@ -1316,8 +1248,7 @@ async fn channel_read_history_normalization_handle_dm_and_heartbeats_status() {
         handle.clone(),
         scope::leaf(&handle).into(),
     ] {
-        let r = engine
-            .read_channel_history(None, root, &spelling, None)
+        let r = support::read_channel(&engine, root, &spelling, None)
             .await
             .unwrap();
         let w = r.warning.unwrap_or_default();
@@ -1325,15 +1256,13 @@ async fn channel_read_history_normalization_handle_dm_and_heartbeats_status() {
         assert!(w.contains("member handle") && w.contains(&dm));
     }
     assert_eq!(
-        engine
-            .read_channel_history(None, root, &dm, None)
+        support::read_channel(&engine, root, &dm, None)
             .await
             .unwrap()
             .warning,
         None
     );
-    let err = engine
-        .read_channel_history(None, root, "#main/nobody-here", None)
+    let err = support::read_channel(&engine, root, "#main/nobody-here", None)
         .await
         .unwrap_err()
         .to_string();
@@ -1347,17 +1276,14 @@ async fn channel_read_history_normalization_handle_dm_and_heartbeats_status() {
 #[tokio::test]
 async fn channel_policy_denials_for_steer_report_public_send_and_unit_mail() {
     // 1) Steer & report denials.
-    let engine = stub_engine().await;
+    let engine = restricted_engine("  - { id: dm, kind: parent_dm, participants: [{kind: role, role: parent}], capabilities: [], scope: vertical, retention: team_session }").await;
     let root = root_team(&engine).await;
     let sup = ResidentSupervisor::start(engine.clone());
     ensure_main(&sup, &engine, root).await;
     let _lead = engine.try_begin_turn(root).unwrap();
     let (child, _) = spawn_idle(&sup, &engine, root, "hya-scout").await;
     send_mail(&engine, child, "main", "must stay hidden").await;
-    let mut steer = engine
-        .steer_mailbox_snapshot_with_policy(root, Some(ChannelPolicySnapshot::default()))
-        .await;
-    assert!(steer.drain(&engine).await.unwrap().is_none());
+    assert!(support::steer_notice(&engine, root).await.is_none());
     assert_eq!(
         team_projection(&engine.read_projection(root).await.unwrap()).roster["main"]
             .resident_cursor,
@@ -1798,7 +1724,6 @@ async fn report_turn_team(provider: Arc<ReportTurnProvider>) -> ReportTurnTeam {
         ))
         .unwrap(),
     );
-    let (mailbox, m_rx) = MailboxPlane::new();
     let (lifecycle, l_rx) = LifecyclePlane::new();
     let engine = Arc::new(
         support::engine_with_router_and_runtime(
@@ -1807,15 +1732,9 @@ async fn report_turn_team(provider: Arc<ReportTurnProvider>) -> ReportTurnTeam {
             PermissionRules::new(vec![Rule::new(Action::Read, "*", Mode::Allow)]),
         )
         .await
-        .with_mailbox(mailbox)
         .with_lifecycle(lifecycle)
         .with_governor(SubagentGovernor::new(SubagentLimits::default())),
     );
-    tokio::spawn(run_mailbox_service(
-        engine.clone(),
-        m_rx,
-        CancellationToken::new(),
-    ));
     let sup = ResidentSupervisor::start(engine.clone());
     tokio::spawn(run_lifecycle_service(
         engine.clone(),
@@ -2821,15 +2740,7 @@ async fn wait_mail_wake_channels_off_harness_mail_and_snapshot_timeout_zero() {
 async fn wait_mail_dedup_cursor_and_direct_mail_survives_twenty_reports() {
     let team = wait_team().await;
     let lead_turn = hold_lead(&team);
-    let mut stale_steer = team
-        .engine
-        .steer_mailbox_snapshot_with_policy(team.root, Some(steer_all()))
-        .await;
     let (child, handle) = spawn_gated(&team, team.root, true).await;
-    let mut steer = team
-        .engine
-        .steer_mailbox_snapshot_with_policy(team.root, Some(steer_all()))
-        .await;
     let dm = dm_for(&team.engine, team.root, &handle).await;
     team.engine
         .mail_send(
@@ -2857,15 +2768,11 @@ async fn wait_mail_dedup_cursor_and_direct_mail_survives_twenty_reports() {
         team_p.roster["main"].resident_cursor,
         team_p.inboxes["main"].len() as u64
     );
-    for m in [&mut steer, &mut stale_steer] {
-        assert!(
-            m.drain(&team.engine)
-                .await
-                .unwrap()
-                .as_deref()
-                .is_none_or(|n| !n.contains("RESEND_FULL_REPORT"))
-        );
-    }
+    assert!(
+        support::steer_notice(&team.engine, team.root)
+            .await
+            .is_none_or(|n| !n.contains("RESEND_FULL_REPORT"))
+    );
     let started = Instant::now();
     let second = wait_now(&team, team.root, spec_ms(vec![], WaitMode::All, 25, true)).await;
     assert!(
@@ -2884,7 +2791,9 @@ async fn wait_mail_dedup_cursor_and_direct_mail_survives_twenty_reports() {
         )
         .await
         .unwrap();
-    let steered = stale_steer.drain(&team.engine).await.unwrap().unwrap();
+    let steered = support::steer_notice(&team.engine, team.root)
+        .await
+        .unwrap();
     assert!(steered.contains(&fresh_status) && !steered.contains("RESEND_FULL_REPORT"));
     assert!(
         wait_now(&team, team.root, spec_ms(vec![], WaitMode::All, 0, true))

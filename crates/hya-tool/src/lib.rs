@@ -35,8 +35,7 @@ pub mod interaction;
 pub mod lifecycle;
 pub mod literal_span;
 mod lsp_plane;
-/// Team mailbox requests and the mailbox plane used by send/channel tools.
-pub mod mailbox;
+mod mail;
 pub mod media;
 /// Namespaced tool names (`namespace__local`) and namespaced registration.
 pub mod namespace;
@@ -74,6 +73,7 @@ pub use formatter::{
     FormatterConfig, FormatterEntry, FormatterError, FormatterPlane, FormatterProvider,
     FormatterStatus,
 };
+pub use hya_proto::mail::ChannelPolicySnapshot;
 pub use interaction::{
     InteractionError, InteractionPlane, QuestionAnswer, QuestionInfo, QuestionKind, QuestionOption,
     QuestionPrompt, QuestionReply, QuestionRequest,
@@ -85,10 +85,7 @@ pub use lifecycle::{
     WaitMode, WaitOutcome, WaitSpec, WaitWake, wait_tool_schema,
 };
 pub use lsp_plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
-pub use mailbox::{
-    ArchivedAgentRow, ChannelInfo, ChannelPolicySnapshot, ChannelRow, MailReceipt, MailboxError,
-    MailboxPlane, MailboxRequest, MemberStatusRow,
-};
+pub use mail::MailReceipt;
 pub use namespace::{InvalidNamespacedName, NAMESPACE_SEPARATOR, namespace_of, namespaced_name};
 pub use nested::{NestedToolPlane, NestedTools};
 pub use output_cap::{
