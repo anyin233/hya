@@ -70,7 +70,7 @@ pub(crate) fn agent_catalog_for_selection(
     if core_agents_available(selection) {
         AgentCatalog::new(bundles)
     } else {
-        AgentCatalog::new_bare(bundles)
+        AgentCatalog::with_minimal_agent(bundles)
     }
 }
 
@@ -928,12 +928,12 @@ fn category_model_fallbacks(categories: &CategoryRegistry) -> HashMap<ModelRef, 
 }
 
 /// The enabled, present first-party bundles that run a native library, in
-/// first-party order. `hya/compaction` loads with the engine itself.
+/// first-party order.
 fn enabled_native_bundles(selection: &hya_bundle::BuiltinBundleSelection) -> Vec<&'static str> {
     hya_bundle::FIRST_PARTY_BUNDLES
         .iter()
         .copied()
-        .filter(|id| *id != "hya/compaction" && selection.is_enabled(id))
+        .filter(|id| selection.is_enabled(id))
         .filter(|id| {
             hya_bundle::first_party_bundle_optional(id)
                 .ok()
@@ -1015,12 +1015,17 @@ async fn build_session_engine_with_mcp_defer(
     let host_runtime: Arc<dyn hya_runtime_abi::HostRuntime> = app_host_runtime.clone();
     let native_ids = enabled_native_bundles(&builtins);
     let (registry, native_regs) =
-        hya_tool_loader::load_native_bundles(&native_ids, Arc::clone(&host_runtime))
-            .map_err(|error| anyhow::anyhow!("load native bundles: {error}"))?;
+        match hya_tool_loader::load_native_bundles(&native_ids, Arc::clone(&host_runtime)) {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                store.release_runtime_owner(owner_run_id)?;
+                return Err(anyhow::anyhow!("load native bundles: {error}"));
+            }
+        };
     register_missing_bare_tools(&registry);
     let mut native = crate::native_bundles::NativeInstall::default();
     for (bundle_id, regs) in native_regs {
-        native.add(&app_host_runtime, &bundle_id, regs)?;
+        native.add(&app_host_runtime, &bundle_id, regs);
     }
     // Installed native bundles load the same way as first-party ones
     // (`--pure` loads no installed extensions).
@@ -1047,7 +1052,7 @@ async fn build_session_engine_with_mcp_defer(
                 Arc::clone(&host_runtime),
             )
             .map_err(anyhow::Error::msg)?;
-            native.add(&app_host_runtime, &bundle_id, regs)?;
+            native.add(&app_host_runtime, &bundle_id, regs);
         }
     }
 
@@ -1109,8 +1114,7 @@ async fn build_session_engine_with_mcp_defer(
         )
         .context("prepare core code-mode runtime specification")?
     };
-    let load_compaction = builtins.is_enabled("hya/compaction");
-    let use_tool_family_prompts = !native_ids.is_empty();
+    let use_tool_family_prompts = native_ids.iter().any(|id| *id != "hya/compaction");
     let catalog_refresh = Arc::new(
         RuntimeExtensionsRefresh::new(
             crate::ProjectScopeRefresh::new(Arc::new(
@@ -1142,38 +1146,21 @@ async fn build_session_engine_with_mcp_defer(
     let (lifecycle_plane, lifecycle_rx) = LifecyclePlane::new();
 
     let bus = EventBus::new(crate::config::resolve_event_bus_capacity());
-    let governor = SubagentGovernor::new(subagent_limits);
     let sidecar_environment = Arc::new(BundleSidecarEnvironment::production(
         lifecycle.io_tasks.clone(),
     ));
     let context_settings = settings.context();
-    let engine = if load_compaction {
-        match SessionEngine::try_new_with_host_runtime(
-            store.clone(),
-            router,
-            runtime,
-            permission,
-            bus,
-            Arc::clone(&host_runtime),
-        ) {
-            Ok(engine) => engine,
-            Err(error) => {
-                store.release_runtime_owner(owner_run_id)?;
-                return Err(error).context("load internal native rewriters at startup");
-            }
-        }
-    } else {
-        SessionEngine::new_bare(store.clone(), router, runtime, permission, bus)
-    };
+    let engine = SessionEngine::new(store.clone(), router, runtime, permission, bus)
+        .with_rewriters(std::mem::take(&mut native.registrations.rewriters));
     let summarizer: Arc<dyn Summarizer> =
         Arc::new(ModelSummarizer::for_engine(&engine, agent.model.clone()));
     let engine_builder = engine
         .with_base_system_prompt(agent.system_prompt.clone())
         .with_pure_context(options.pure)
         .with_tool_family_prompts(use_tool_family_prompts)
-        .with_hook_list(std::mem::take(&mut native.hooks))
+        .with_hook_list(std::mem::take(&mut native.registrations.hooks))
         .with_uri_schema_handlers(
-            std::mem::take(&mut native.uri_handlers),
+            std::mem::take(&mut native.registrations.uri_schema_handlers),
             Arc::clone(&host_runtime),
         )
         // Stop/start records use this store's runtime-owner claim.
@@ -1206,8 +1193,12 @@ async fn build_session_engine_with_mcp_defer(
         // its receiver service retains the engine.
         .with_spawn_sender(spawn_sender)
         .with_mailbox(mailbox)
-        .with_lifecycle(lifecycle_plane)
-        .with_governor(governor);
+        .with_lifecycle(lifecycle_plane);
+    let engine_builder = if native_ids.contains(&"hya/multi-agent") {
+        engine_builder.with_governor(SubagentGovernor::new(subagent_limits))
+    } else {
+        engine_builder
+    };
 
     let engine = Arc::new(engine_builder);
     app_host_runtime.attach_engine(&engine);

@@ -12,14 +12,17 @@ use super::{CoreError, EventBus, SessionEngine};
 async fn missing_native_rewriter_returns_startup_error() -> Result<(), Box<dyn std::error::Error>> {
     const CHILD: &str = "HYA_TEST_NATIVE_REWRITER_CHILD";
     if std::env::var_os(CHILD).is_some() {
-        let engine = SessionEngine::try_new(
+        let engine = SessionEngine::new(
             SessionStore::connect_memory().await?,
             Arc::new(ProviderRouter::new()),
             crate::test_support::runtime(hya_tool_loader::from_tool_families(&[])),
             PermissionPlane::new(PermissionRules::default()).0,
             EventBus::default(),
         );
-        let Err(CoreError::BundleRuntime { bundle_id, source }) = engine else {
+        assert!(engine.rewriters.is_empty());
+        let Err(CoreError::BundleRuntime { bundle_id, source }) =
+            hya_core::bundles::load_internal()
+        else {
             panic!("startup must return a bundle load error");
         };
         assert_eq!(bundle_id, "hya/compaction");

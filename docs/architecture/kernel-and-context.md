@@ -30,7 +30,7 @@ Passing the global `--bare` flag (`hya --bare`, `hya serve --bare`, or `hya exec
 
 | Surface / Capability | Full Mode (`profile: full`) | Global `--bare` (`BuiltinBundleProfile::Bare`) | `--bare --pure` |
 | --- | --- | --- | --- |
-| Engine & Kernel loop | `SessionEngine` on `hya-core::kernel` | `SessionEngine::new_bare` on `hya-core::kernel` | `SessionEngine::new_bare` on `hya-core::kernel` |
+| Engine & Kernel loop | `SessionEngine` on `hya-core::kernel` | `SessionEngine` on `hya-core::kernel` | `SessionEngine` on `hya-core::kernel` |
 | Built-in bundles (`bundles/builtin/`) | Loaded per `bundles.builtin` selection | **None loaded** (zero disk dependency on `bundles/builtin/`) | **None loaded** |
 | Default agent | `hya-main` (from `hya/core-agents`) | `hya-bare` (`hya_engine::BARE_AGENT_ID`) | `hya-bare` |
 | Core tools | Built-in native ABI v2 bundles (`hya/hashline`, `hya/coding-extras`, `hya/multi-agent`, `hya/network`, `hya/agent-channels`, `hya/plan`, `hya/workflow`) + core `bash`, `skill`, and kernel `todo`/`rewrite` | 8 standard bare tools: `read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill` | 8 standard bare tools (`skill` catalog empty) |
@@ -41,7 +41,7 @@ Passing the global `--bare` flag (`hya --bare`, `hya serve --bare`, or `hya exec
 - **CLI usage:** `hya --bare` (interactive TUI/WebUI + auto-started `--bare` daemon), `hya serve --bare` / `hya serve start --bare` (HTTP/gRPC server), `hya exec --bare "<prompt>"`, `hya exec --bare --pure "<prompt>"`, `hya --bare agent list`.
 - **Rust / config interfaces:**
   - `hya_app::RuntimeConfig::with_bare(bool)` applies `BuiltinBundleProfile::Bare` (equivalent to `bundles.builtin.profile: bare` in `config.yaml`).
-  - `hya_engine::BARE_AGENT_ID` (`"hya-bare"`), `hya_engine::AgentCatalog::new_bare()`, and `hya_engine::SessionEngine::new_bare(...)` construct the bare engine without calling `hya_core::bundles::load_internal()` or reading `bundles/builtin/`.
+  - `hya_engine::AgentCatalog::with_minimal_agent` selects `hya-bare`. All profiles construct the engine with `SessionEngine::new`. The application passes enabled native registrations through `with_rewriters` and the other extension builders.
   - `hya_server::AppState::with_core_commands(bool)` disables `hya/core-commands` loading in bare servers (`GET /v2/commands` returns only workspace/skill/bundle commands; `GET /v2/agents` returns `hya-bare`; `GET /v2/bundles` reports zero built-in bundles).
 
 ---

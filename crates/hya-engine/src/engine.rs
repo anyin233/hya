@@ -276,13 +276,9 @@ impl SessionEngine {
         self.runtime.set_session_sources(session, sources);
     }
 
-    /// Build an engine with disconnected mailbox/spawner and default tool planes.
+    /// Build an engine with an empty native extension chain and disconnected tool planes.
     ///
-    /// Wire product planes with `with_*` before serving interactive traffic.
-    ///
-    /// # Panics
-    /// Panics if an internal rewriter cannot load. Use [`Self::try_new`] at startup
-    /// boundaries that return errors.
+    /// Install runtime registrations with the relevant `with_*` builders.
     #[must_use]
     pub fn new(
         store: SessionStore,
@@ -291,119 +287,8 @@ impl SessionEngine {
         permission: PermissionPlane,
         bus: EventBus,
     ) -> Self {
-        Self::try_new(store, providers, runtime, permission, bus)
-            .unwrap_or_else(|error| panic!("load internal bundles: {error}"))
-    }
-
-    /// Build the engine after loading the required native rewriters and
-    /// projection reducers from internal ABI v2 bundles.
-    ///
-    /// # Errors
-    /// Returns [`CoreError::BundleRuntime`] when an internal bundle cannot load.
-    pub fn try_new(
-        store: SessionStore,
-        providers: Arc<ProviderRouter>,
-        runtime: Arc<RuntimeRegistry>,
-        permission: PermissionPlane,
-        bus: EventBus,
-    ) -> Result<Self, CoreError> {
-        let (rewriters, reducers) = internal_bundles()?;
-        let native_hooks = default_native_hook_list();
-        Ok(Self::build_with_rewriters(
-            store,
-            providers,
-            runtime,
-            permission,
-            bus,
-            rewriters,
-            native_hooks,
-            reducers,
-            true,
-        ))
-    }
-
-    /// Build the engine loading internal ABI v2 bundles with a caller-supplied
-    /// [`hya_runtime_abi::HostRuntime`] (for example to expose per-bundle
-    /// `config.yml` files to `hya/compaction`).
-    ///
-    /// # Errors
-    /// Returns [`CoreError::BundleRuntime`] when an internal bundle cannot load.
-    pub fn try_new_with_host_runtime(
-        store: SessionStore,
-        providers: Arc<ProviderRouter>,
-        runtime: Arc<RuntimeRegistry>,
-        permission: PermissionPlane,
-        bus: EventBus,
-        host_runtime: Arc<dyn hya_runtime_abi::HostRuntime>,
-    ) -> Result<Self, CoreError> {
-        let regs = hya_core::bundles::load_internal_with_runtime(host_runtime)?;
-        let rewriters: NativeRewriters = regs.rewriters.into();
-        let native_hooks = default_native_hook_list();
-        Ok(Self::build_with_rewriters(
-            store,
-            providers,
-            runtime,
-            permission,
-            bus,
-            rewriters,
-            native_hooks,
-            regs.projection_reducers,
-            true,
-        ))
-    }
-
-    /// Build the engine in bare mode without loading any internal native
-    /// bundles (such as `hya/compaction`) or tool-family prompt presets
-    /// (ADR-0039). Context compaction relies solely on the kernel's `rewrite`
-    /// primitive.
-    #[must_use]
-    pub fn new_bare(
-        store: SessionStore,
-        providers: Arc<ProviderRouter>,
-        runtime: Arc<RuntimeRegistry>,
-        permission: PermissionPlane,
-        bus: EventBus,
-    ) -> Self {
-        Self::build_with_rewriters(
-            store,
-            providers,
-            runtime,
-            permission,
-            bus,
-            Arc::from([]),
-            Vec::new(),
-            Vec::new(),
-            false,
-        )
-    }
-
-    /// Control whether system prompts consult first-party tool-family exposure
-    /// policies (`hya_tool_loader`).
-    #[must_use]
-    pub fn with_tool_family_prompts(mut self, enabled: bool) -> Self {
-        self.use_tool_family_prompts = enabled;
-        self
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn build_with_rewriters(
-        store: SessionStore,
-        providers: Arc<ProviderRouter>,
-        runtime: Arc<RuntimeRegistry>,
-        permission: PermissionPlane,
-        bus: EventBus,
-        rewriters: NativeRewriters,
-        mut native_hooks: Vec<Arc<dyn hya_runtime_abi::NativeHook>>,
-        abi_reducers: Vec<Arc<dyn hya_runtime_abi::ProjectionReducer>>,
-        use_tool_family_prompts: bool,
-    ) -> Self {
         if store.projection_reducers().is_empty() {
             store.set_projection_reducers(hya_tool::extension::projection_reducers());
-        }
-        for reducer in abi_reducers {
-            store.register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
-                inner: reducer,
-            }));
         }
         let (interaction, _rx) = InteractionPlane::new();
         let spawner = BoundSpawnSender::disconnected();
@@ -419,68 +304,13 @@ impl SessionEngine {
         let runtime_owner = hya_proto::OwnerRunId::new();
         let turn_gate = Arc::new(turn_gate::TurnGate::default());
         let artifacts = ArtifactPlane;
-        let mut schemas = UriSchemaPlane::default();
-
-        if use_tool_family_prompts {
-            let channels_runtime: Arc<dyn hya_runtime_abi::HostRuntime> =
-                Arc::new(channel_host::EngineChannelsHostRuntime {
-                    store: store.clone(),
-                    bus: bus.clone(),
-                    runtime_owner,
-                    session_channel_policies: Arc::clone(&session_channel_policies),
-                    mail_steer_suppressed: Arc::clone(&mail_steer_suppressed),
-                    staged_mail_acks: Arc::clone(&staged_mail_acks),
-                    reviver: Arc::clone(&reviver),
-                    turn_gate: Arc::clone(&turn_gate),
-                });
-            let channels_service =
-                Arc::new(hya_agent_channels_core::AgentChannelsService::with_runtime(
-                    Arc::clone(&channels_runtime),
-                ));
-            native_hooks.push(Arc::new(hya_agent_channels_core::UnreadMailSteerHook::new(
-                Arc::clone(&channels_service),
-            )));
-            let channel_uri: Arc<dyn hya_runtime_abi::UriSchemaHandler> = Arc::new(
-                hya_agent_channels_core::ChannelUriSchemaHandler::new(channels_service),
-            );
-            if let Ok(updated) =
-                schemas
-                    .clone()
-                    .with_uri_handler(hya_runtime_abi::adapt_uri_schema_handler(
-                        channel_uri,
-                        Some(Arc::clone(&channels_runtime)),
-                    ))
-            {
-                schemas = updated;
-            }
-            store.register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
-                inner: Arc::new(hya_agent_channels_core::AgentChannelsProjectionReducer),
-            }));
-
-            let multi_service = Arc::new(hya_multi_agent_core::MultiAgentService::with_runtime(
-                Arc::clone(&channels_runtime),
-            ));
-            native_hooks.push(Arc::new(
-                hya_multi_agent_core::MultiAgentLifecycleHook::new(Arc::clone(&multi_service)),
-            ));
-            store.register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
-                inner: Arc::new(hya_multi_agent_core::MultiAgentProjectionReducer),
-            }));
-            let _ = runtime.register_native_bundle_apis(
-                hya_tool::extension::BUNDLE_MULTI_AGENT,
-                vec![Arc::new(
-                    hya_multi_agent_core::MultiAgentBundleApiHandler::new(multi_service),
-                )],
-            );
-        }
-
         let engine = Self {
             workspace_watches: Default::default(),
             store,
             providers: ProviderSnapshots::new(providers),
             base_system_prompt: String::new(),
             pure_context: false,
-            use_tool_family_prompts,
+            use_tool_family_prompts: false,
 
             global_reasoning: None,
             exclusive_tool: None,
@@ -498,7 +328,7 @@ impl SessionEngine {
             lifecycle,
             handle_namer: Arc::new(crate::handle_naming::HandleNamer::default()),
             artifacts,
-            schemas,
+            schemas: UriSchemaPlane::default(),
             formatter,
             lsp,
             bus,
@@ -506,8 +336,8 @@ impl SessionEngine {
             handoff_options: TerminalHandoffOptions::default(),
             rewriter_keep_recent: CompactionConfig::default().keep_recent,
             token_accounting: TokenAccounting::default(),
-            rewriters,
-            hooks: Arc::new(crate::hooks::HookChain::of_hooks(native_hooks)),
+            rewriters: Arc::from([]),
+            hooks: Arc::new(crate::hooks::HookChain::default()),
             session_bundle_hooks: Arc::new(RwLock::new(HashMap::new())),
             session_channel_policies,
             mail_steer_suppressed,
@@ -532,6 +362,85 @@ impl SessionEngine {
             ));
         }
         engine
+    }
+
+    /// Control whether system prompts consult first-party tool-family exposure
+    /// policies (`hya_tool_loader`).
+    #[must_use]
+    pub fn with_tool_family_prompts(mut self, enabled: bool) -> Self {
+        self.use_tool_family_prompts = enabled;
+        self
+    }
+
+    /// Install native context rewriters in registration order.
+    #[must_use]
+    pub fn with_rewriters(
+        mut self,
+        rewriters: Vec<Arc<dyn hya_context::rewrite::Rewriter>>,
+    ) -> Self {
+        self.rewriters = rewriters.into();
+        self
+    }
+
+    /// Wire the inline coordination adapters used by engine fixtures.
+    ///
+    /// Application runtimes install the corresponding native registrations.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_legacy_coordination(mut self) -> Self {
+        let channels_runtime: Arc<dyn hya_runtime_abi::HostRuntime> =
+            Arc::new(channel_host::EngineChannelsHostRuntime {
+                store: self.store.clone(),
+                bus: self.bus.clone(),
+                runtime_owner: self.runtime_owner,
+                session_channel_policies: Arc::clone(&self.session_channel_policies),
+                mail_steer_suppressed: Arc::clone(&self.mail_steer_suppressed),
+                staged_mail_acks: Arc::clone(&self.staged_mail_acks),
+                reviver: Arc::clone(&self.reviver),
+                turn_gate: Arc::clone(&self.turn_gate),
+            });
+        let channels_service =
+            Arc::new(hya_agent_channels_core::AgentChannelsService::with_runtime(
+                Arc::clone(&channels_runtime),
+            ));
+        self = self.with_hooks(Arc::new(hya_agent_channels_core::UnreadMailSteerHook::new(
+            Arc::clone(&channels_service),
+        )));
+        let channel_uri: Arc<dyn hya_runtime_abi::UriSchemaHandler> = Arc::new(
+            hya_agent_channels_core::ChannelUriSchemaHandler::new(channels_service),
+        );
+        if let Ok(updated) =
+            self.schemas
+                .clone()
+                .with_uri_handler(hya_runtime_abi::adapt_uri_schema_handler(
+                    channel_uri,
+                    Some(Arc::clone(&channels_runtime)),
+                ))
+        {
+            self.schemas = updated;
+        }
+        self.store
+            .register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
+                inner: Arc::new(hya_agent_channels_core::AgentChannelsProjectionReducer),
+            }));
+
+        let multi_service = Arc::new(hya_multi_agent_core::MultiAgentService::with_runtime(
+            Arc::clone(&channels_runtime),
+        ));
+        self = self.with_hooks(Arc::new(
+            hya_multi_agent_core::MultiAgentLifecycleHook::new(Arc::clone(&multi_service)),
+        ));
+        self.store
+            .register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
+                inner: Arc::new(hya_multi_agent_core::MultiAgentProjectionReducer),
+            }));
+        let _ = self.runtime.register_native_bundle_apis(
+            hya_tool::extension::BUNDLE_MULTI_AGENT,
+            vec![Arc::new(
+                hya_multi_agent_core::MultiAgentBundleApiHandler::new(multi_service),
+            )],
+        );
+        self
     }
 
     /// Record the id claimed with `SessionStore::claim_runtime_owner`.
@@ -621,8 +530,7 @@ impl SessionEngine {
         self
     }
 
-    /// Replace the process-wide chain with the hooks of the enabled sources,
-    /// dropping the defaults loaded by [`Self::try_new`].
+    /// Replace the process-wide chain with the hooks of the enabled sources.
     #[must_use]
     pub fn with_hook_list(mut self, hooks: Vec<Arc<dyn hya_runtime_abi::NativeHook>>) -> Self {
         self.hooks = Arc::new(crate::hooks::HookChain::of_hooks(hooks));
@@ -1081,27 +989,6 @@ fn fixed_system_agent(
         })
 }
 
-/// The rewriters registered by internal bundles, in registration order.
-/// Successful registrations are shared process-wide.
-type NativeRewriters = Arc<[Arc<dyn hya_context::rewrite::Rewriter>]>;
-type NativeProjectionReducers = Vec<Arc<dyn hya_runtime_abi::ProjectionReducer>>;
-
-fn internal_bundles() -> Result<(NativeRewriters, NativeProjectionReducers), CoreError> {
-    static BUNDLES: std::sync::Mutex<Option<(NativeRewriters, NativeProjectionReducers)>> =
-        std::sync::Mutex::new(None);
-    let mut slot = BUNDLES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((rewriters, reducers)) = slot.as_ref() {
-        return Ok((Arc::clone(rewriters), reducers.clone()));
-    }
-    let regs = hya_core::bundles::load_internal()?;
-    let rewriters: NativeRewriters = regs.rewriters.into();
-    let reducers = regs.projection_reducers;
-    *slot = Some((Arc::clone(&rewriters), reducers.clone()));
-    Ok((rewriters, reducers))
-}
-
 /// Bridges an ABI v2 native bundle [`hya_runtime_abi::ProjectionReducer`] onto
 /// the host's [`hya_proto::ProjectionReducer`] pipeline.
 struct AbiV2ProjectionReducerAdapter {
@@ -1321,36 +1208,6 @@ impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
             }
         }
     }
-}
-
-/// Default native hooks registered by first-party ABI v2 native tool bundles
-/// (`hya/plan`, etc.), cached process-wide for [`SessionEngine::try_new`].
-/// Callers with explicit [`hya_bundle::BuiltinBundleSelection`] override this
-/// via [`SessionEngine::with_native_hook_list`].
-fn default_native_hook_list() -> Vec<Arc<dyn hya_runtime_abi::NativeHook>> {
-    static HOOKS: std::sync::Mutex<Option<Vec<Arc<dyn hya_runtime_abi::NativeHook>>>> =
-        std::sync::Mutex::new(None);
-    let mut slot = HOOKS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(cached) = slot.as_ref() {
-        return cached.clone();
-    }
-    let mut hooks = Vec::new();
-    for identity in hya_tool_loader::NATIVE_V2_TOOL_BUNDLES {
-        match hya_tool_loader::load_v2(identity, hya_tool_loader::noop_host_runtime()) {
-            Ok(regs) => hooks.extend(regs.hooks),
-            Err(error) => {
-                tracing::debug!(
-                    bundle = identity,
-                    %error,
-                    "default native v2 hooks unavailable"
-                );
-            }
-        }
-    }
-    *slot = Some(hooks.clone());
-    hooks
 }
 
 /// Build summarize options from a fixed system definition and bound preference.

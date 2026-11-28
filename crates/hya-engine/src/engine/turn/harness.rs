@@ -76,17 +76,14 @@ impl SessionEngine {
             rebind,
             effort_fallback,
         } = execution;
-        // Depth in the subagent tree, derived from the parent chain. Subagents use
-        // the general live provider-stream class; the root uses the independent
-        // reserved class so root progress never waits behind background work.
         let projection = self.store.read_projection_shared(session).await?;
-        let depth = match (&self.governor, projection.session.parent) {
-            (Some(_), Some(parent)) => self
+        let depth = match projection.session.parent {
+            Some(parent) => self
                 .session_lineage(parent)
                 .await
                 .map(|(_, depth)| depth + 1)
                 .unwrap_or(0),
-            _ => 0,
+            None => 0,
         };
         let mut events = Vec::with_capacity(2);
         let workdir = session_workdir(agent, &projection);

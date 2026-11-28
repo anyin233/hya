@@ -103,7 +103,7 @@ impl AgentCatalog {
     /// # Errors
     /// Returns [`BundleError::BuiltinAgentIdShadowed`] when an installed bundle
     /// claims `hya-bare`.
-    pub fn new_bare(bundles: Arc<BundleCatalog>) -> Result<Self, BundleError> {
+    pub fn with_minimal_agent(bundles: Arc<BundleCatalog>) -> Result<Self, BundleError> {
         let catalog = Self {
             preset: BuiltinAgents::Bare,
             bundles,

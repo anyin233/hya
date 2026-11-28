@@ -55,7 +55,7 @@ Lower-level crates never depend on `hya-backend` or frontend packages. `hya-prot
 | **`hya-plugin-bun`** | Bun JS extension adapter (`adapter/`), translating high-level JS tool/hook modules onto the JSON-RPC stdio wire. |
 | **`hya-plugin-claude`** | Claude Code plugin importer (`--claude`) and runtime hook adapter (`adapter/`). |
 | **`hya-core`** | The three-primitive `kernel` loop (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, plus built-in `skill`), kernel prompt builder, 80% `Rewrite` trigger, and internal native bundle loader (`bundles::load_internal_with_runtime`). |
-| **`hya-engine`** | Slimmed single-agent `SessionEngine` + extension host adapters (`TurnBinding`, `CatalogScope` overlays, `NativeService`/`NativeHook`/`ProjectionReducer` wiring, and `SessionEngine::new_bare` for `--bare`). |
+| **`hya-engine`** | Slimmed single-agent `SessionEngine` + extension host adapters (`TurnBinding`, `CatalogScope` overlays, `NativeService`/`NativeHook`/`ProjectionReducer` wiring, and one kernel harness for all profiles). |
 | **`hya-app`** | Runtime composition: `config.yaml` (`schema_version: 2`) & per-bundle `config.yml`, OAuth/provider loading, core `code_mode` adapter (`packages/hya-code-mode`), `HostRuntime` implementation, project bundle/plugin watchers, and `HyaRuntime` shutdown orchestration. |
 | **`hya-server`** | Single-port `/v2` Axum HTTP/SSE/WS router + `V2Grpc` (`BundleApi` mounting native + JS handlers), Host allowlist guard, ephemeral session reaper, and `relay_host` connector. |
 | **`hya-sdk`** | Typed Rust `/v2` HTTP + SSE client (`Sdk`, `Client`) and `SessionMirror` transcript + `extensions` reducer. |

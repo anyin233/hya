@@ -1159,7 +1159,7 @@ async fn steer_notice_multibyte_channel_id_harness_notice_and_bus_lag_resync() {
     // Bus lag resyncs from durable log without advancing cursor prematurely.
     let (perm, _) = PermissionPlane::new(PermissionRules::default());
     let lag_engine = Arc::new(
-        SessionEngine::new(
+        support::fixture_engine(
             SessionStore::connect_memory().await.unwrap(),
             Arc::new(ProviderRouter::new().with(Arc::new(EmptyStub))),
             support::test_runtime(Arc::new(hya_tool_loader::builtins())),
@@ -1513,7 +1513,7 @@ async fn resident_member_row_lifecycle_cancel_failed_turn_and_failed_shutdown_ro
     let store = SessionStore::connect_memory().await.unwrap();
     let root_id = {
         let (perm, _) = PermissionPlane::new(PermissionRules::default());
-        let tmp = SessionEngine::new(
+        let tmp = support::fixture_engine(
             store.clone(),
             Arc::new(ProviderRouter::new().with(Arc::new(EmptyStub))),
             support::test_runtime(Arc::new(hya_tool_loader::builtins())),
@@ -1524,7 +1524,7 @@ async fn resident_member_row_lifecycle_cancel_failed_turn_and_failed_shutdown_ro
     };
     let (perm, _) = PermissionPlane::new(PermissionRules::default());
     let f_engine = Arc::new(
-        SessionEngine::new(
+        support::fixture_engine(
             store,
             Arc::new(ProviderRouter::new().with(Arc::new(FailingMembers(root_id)))),
             support::test_runtime(Arc::new(hya_tool_loader::builtins())),
@@ -1573,7 +1573,7 @@ async fn resident_member_row_lifecycle_cancel_failed_turn_and_failed_shutdown_ro
         .unwrap();
     let (perm2, _) = PermissionPlane::new(PermissionRules::default());
     let t_engine = Arc::new(
-        SessionEngine::new(
+        support::fixture_engine(
             file_store,
             Arc::new(ProviderRouter::new().with(Arc::new(EmptyStub))),
             support::test_runtime(Arc::new(hya_tool_loader::builtins())),

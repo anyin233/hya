@@ -201,7 +201,7 @@ async fn post_edit_hook_fires_on_both_bare_and_hashline_write_and_edit() {
         let runtime = Arc::new(RuntimeRegistry::new(
             registry,
             Arc::new(
-                AgentCatalog::new_bare(Arc::new(
+                AgentCatalog::with_minimal_agent(Arc::new(
                     hya_bundle::BundleCatalog::from_prepared(&[]).unwrap(),
                 ))
                 .unwrap(),
@@ -212,7 +212,7 @@ async fn post_edit_hook_fires_on_both_bare_and_hashline_write_and_edit() {
             Rule::new(Action::Edit, "*", Mode::Allow),
             Rule::new(Action::Read, "*", Mode::Allow),
         ]));
-        let engine = SessionEngine::new_bare(store, router, runtime, permission, EventBus::new(64))
+        let engine = SessionEngine::new(store, router, runtime, permission, EventBus::new(64))
             .with_hook_list(native_hooks);
 
         let session = support::create_root_session(&engine, "hya-bare", "fake", dir.path()).await;

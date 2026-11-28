@@ -421,7 +421,7 @@ async fn tool_output_eviction_avoids_rewrite_sticks_and_matches_after_restart() 
             "/**",
             Mode::Allow,
         )]));
-        SessionEngine::new(
+        support::fixture_engine(
             store,
             Arc::new(ProviderRouter::new().with(provider.clone())),
             support::test_runtime(Arc::new(hya_tool_loader::builtins())),
@@ -2082,7 +2082,7 @@ async fn todo_list_survives_restart_and_builds_on_prior_state() {
     };
     let make_engine = |script: Vec<Vec<FakeStep>>| {
         let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
-        SessionEngine::new(
+        support::fixture_engine(
             store.clone(),
             Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted_turns(script)))),
             support::test_runtime(Arc::new(hya_tool_loader::builtins())),

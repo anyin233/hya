@@ -158,6 +158,23 @@ pub fn test_runtime_with_catalog(
     )
 }
 
+/// Compose real native extensions for the fixtures that exercise them.
+pub fn fixture_engine(
+    store: SessionStore,
+    router: Arc<ProviderRouter>,
+    runtime: Arc<RuntimeRegistry>,
+    permission: PermissionPlane,
+    bus: EventBus,
+) -> SessionEngine {
+    let regs = hya_core::bundles::load_internal().expect("load native rewriters");
+    let engine = SessionEngine::new(store, router, runtime, permission, bus)
+        .with_rewriters(regs.rewriters)
+        .with_tool_family_prompts(true)
+        .with_legacy_coordination();
+    engine.register_native_projection_reducers(regs.projection_reducers);
+    engine
+}
+
 /// Compact `SessionEngine` with in-memory SQLite, builtin tools, and zero retry backoff.
 pub async fn engine_with_provider(
     provider: Arc<dyn Provider>,
@@ -179,7 +196,7 @@ pub async fn engine_with_router_and_runtime(
 ) -> SessionEngine {
     let store = SessionStore::connect_memory().await.expect("memory store");
     let (permission, _rx) = PermissionPlane::new(rules);
-    SessionEngine::new(store, router, runtime, permission, EventBus::default())
+    fixture_engine(store, router, runtime, permission, EventBus::default())
         .with_round_retry_waits(&ZERO_RETRY_WAITS)
 }
 
