@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use anyhow::Context as _;
 use hya_bundle::BuiltinBundleSelection;
@@ -171,32 +170,32 @@ impl EngineSettings {
     }
 
     pub(crate) fn formatter(&self) -> hya_tool::FormatterPlane {
-        if !self.file.bundles.builtin.is_enabled("hya/base-tools") {
+        if !self.file.bundles.builtin.is_enabled("hya/coding-extras") {
             return hya_tool::FormatterPlane::default();
         }
         let raw: crate::formatter_config::RawFormatterConfig = self
-            .read_bundle_config_value(&["hya/base-tools", "hya/coding-extras"])
+            .read_bundle_config_value(&["hya/coding-extras"])
             .and_then(|val| {
                 val.get("formatter")
                     .cloned()
                     .and_then(|sub| serde_norway::from_value(sub).ok())
             })
             .unwrap_or_default();
-        hya_tool::FormatterPlane::new(Arc::new(crate::BuiltinFormatterProvider::new(raw.into())))
+        hya_coding_extras::build_formatter_plane(raw)
     }
 
     pub(crate) fn lsp(&self) -> anyhow::Result<hya_tool::LspPlane> {
-        if !self.file.bundles.builtin.is_enabled("hya/extended-tools") {
+        if !self.file.bundles.builtin.is_enabled("hya/coding-extras") {
             return Ok(hya_tool::LspPlane::default());
         }
         let selection = self
-            .read_bundle_config_value(&["hya/extended-tools", "hya/coding-extras"])
+            .read_bundle_config_value(&["hya/coding-extras"])
             .and_then(|val| {
                 val.get("lsp")
                     .cloned()
                     .and_then(|sub| serde_norway::from_value(sub).ok())
             });
-        crate::lsp::from_selection(selection)
+        hya_coding_extras::build_lsp_plane(selection).map_err(|error| anyhow::anyhow!("{error}"))
     }
 }
 
@@ -495,9 +494,9 @@ pub(super) fn parse_config(yaml: &str) -> anyhow::Result<FileConfig> {
     }
     const REMOVED_V1_SECTIONS: [(&str, &str); 5] = [
         ("compaction", "hya/compaction"),
-        ("formatter", "hya/base-tools"),
+        ("formatter", "hya/coding-extras"),
         ("goal", "hya/goal-loop"),
-        ("lsp", "hya/extended-tools"),
+        ("lsp", "hya/coding-extras"),
         ("subagents", "hya/extended-tools"),
     ];
     for (key, bundle_id) in REMOVED_V1_SECTIONS {

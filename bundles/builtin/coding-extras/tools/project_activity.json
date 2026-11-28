@@ -1,0 +1,26 @@
+{
+  "schema_version": 2,
+  "name": "project_activity",
+  "description": "Show recent sessions and changed files in the caller's Project.",
+  "permission": "read_only",
+  "prompt_hint": "show recent sessions and changed files in this project",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "since_ms": {
+        "type": "integer"
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200
+      },
+      "include_self": {
+        "type": "boolean"
+      }
+    }
+  },
+  "entrypoint": {
+    "native": "project_activity"
+  }
+}

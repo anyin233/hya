@@ -19,7 +19,7 @@ pub(crate) const BARE_CORE_IDENTITY: &str = "hya/bare";
 /// Tool-family bundles in stable registry order.
 pub(crate) const TOOL_FAMILIES: [&str; 5] = [
     "hya/hashline",
-    "hya/base-tools",
+    "hya/coding-extras",
     "hya/extended-tools",
     "hya/network",
     "hya/channel-tools",
@@ -235,12 +235,19 @@ fn parse_v2_tool_descriptors(bundle: &Bundle) -> Result<ExposurePolicy, String> 
             prompt: descriptor.prompt_hint.or(descriptor.prompt),
         });
     }
+    let file_operations_rule = (["ls", "glob", "find"]
+        .iter()
+        .all(|needed| tools.iter().any(|tool| tool.name == *needed)))
+    .then(|| FileOperationsRule {
+        text: "Use the file tools, not shell commands, to list, find, and search files".to_string(),
+        tools: vec!["ls".to_string(), "glob".to_string(), "find".to_string()],
+    });
     Ok(ExposurePolicy {
         schema_version: 2,
         identity: bundle.identity().id.clone(),
         protected_names,
         tools,
-        file_operations_rule: None,
+        file_operations_rule,
     })
 }
 
@@ -570,12 +577,12 @@ pub fn file_operations_rule(offered: impl Fn(&str) -> bool) -> Option<&'static s
         .map(|rule| rule.text.as_str())
 }
 
-/// Return the foundational `hya/base-tools` policy for compatibility.
+/// Return the foundational `hya/coding-extras` policy for compatibility.
 #[must_use]
 pub fn base_tools_preset() -> &'static BaseToolsPreset {
     tool_bundle_presets()
         .iter()
-        .find(|preset| preset.identity() == "hya/base-tools")
+        .find(|preset| preset.identity() == "hya/coding-extras")
         .unwrap_or_else(|| &tool_bundle_presets()[0])
 }
 
@@ -689,19 +696,25 @@ tools:
         let expected_families: [(&str, u32, &[&str]); 5] = [
             ("hya/hashline", 2, &["read", "write", "edit", "grep"]),
             (
-                "hya/base-tools",
-                1,
-                &["ls", "glob", "find", "ask_user", "bash", "apply_patch"],
+                "hya/coding-extras",
+                2,
+                &[
+                    "ls",
+                    "glob",
+                    "find",
+                    "apply_patch",
+                    "ask_user",
+                    "lsp",
+                    "project_activity",
+                ],
             ),
             (
                 "hya/extended-tools",
                 1,
                 &[
-                    "lsp",
                     "list_agents",
                     "task",
                     "workflow",
-                    "project_activity",
                     "search_agent",
                     "archive",
                     "wait",
@@ -715,7 +728,7 @@ tools:
             ),
         ];
         assert_eq!(presets.len(), expected_families.len());
-        assert_eq!(base_tools_preset().identity(), "hya/base-tools");
+        assert_eq!(base_tools_preset().identity(), "hya/coding-extras");
 
         for (preset, (identity, expected_schema_version, expected_names)) in
             presets.iter().zip(expected_families)
@@ -770,7 +783,6 @@ tools:
             ("wait", ToolPermission::ReadOnly, &[]),
             ("wait", ToolPermission::ReadOnly, &[]),
             ("ask_user", ToolPermission::Tool, &["question"]),
-            ("bash", ToolPermission::Command, &["shell"]),
             ("apply_patch", ToolPermission::Tool, &["patch"]),
             ("webfetch", ToolPermission::Tool, &["fetch"]),
             ("websearch", ToolPermission::Tool, &["search"]),

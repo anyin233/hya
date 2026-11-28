@@ -369,7 +369,7 @@ async fn lsp_dot_workdir_and_dot_file_reach_provider_as_current_dir() {
         return;
     };
 
-    let tool = hya_tool_loader::from_tool_families(&["hya/extended-tools"])
+    let tool = hya_tool_loader::from_tool_families(&["hya/coding-extras"])
         .get("lsp")
         .unwrap();
     std::fs::remove_dir(child_dir).unwrap();

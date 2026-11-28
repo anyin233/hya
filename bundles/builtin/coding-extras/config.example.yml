@@ -1,0 +1,24 @@
+# Configuration for the `hya/coding-extras` built-in bundle.
+# Place active settings at:
+#   ~/.config/hya/bundles/hya%2Fcoding-extras/config.yml
+#
+# Formatter configuration:
+#   formatter: false   # disabled (default)
+#   formatter: true    # enable built-in language formatters found on PATH
+#   formatter:         # or customize individual entries
+#     rustfmt:
+#       command: [rustfmt, "$FILE"]
+#       extensions: [.rs]
+#     gofmt:
+#       disabled: true
+formatter: false
+
+# Language Server Protocol (LSP) configuration:
+#   lsp: false         # disabled
+#   lsp: true          # auto-detect built-in servers on PATH (default)
+#   lsp:               # or override / add language servers
+#     rust:
+#       command: [rust-analyzer]
+#       extensions: [.rs]
+#       root_markers: [Cargo.toml, .git]
+lsp: true

@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 
 use hya_tool::{FormatterConfig, FormatterEntry};
 
-use crate::formatter_catalog::{BuiltinSpec, CheckKind, builtins};
-use crate::formatter_command::builtin_environment;
+use super::catalog::{BuiltinSpec, CheckKind, builtins};
+use super::command::builtin_environment;
 
 #[derive(Clone, Debug)]
 pub(crate) struct FormatterDefinition {

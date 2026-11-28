@@ -35,11 +35,10 @@ mod tool_gate;
 pub use messages::advertise_tool;
 use messages::{AttachmentData, attachment_blobs, filtered_tool_schemas};
 
-/// Human-answer tools that remain gated by host interaction availability until
-/// their owning bundle supplies a `tool.visibility` hook (see `hya/plan` for
-/// `plan_exit`).
-pub(super) fn tool_available(name: &str, interaction_available: bool) -> bool {
-    interaction_available || name != "ask_user"
+/// Tool availability hook point: both `ask_user` (`hya/coding-extras`) and
+/// `plan_exit` (`hya/plan`) are now governed by `tool.visibility` native hooks.
+pub(super) fn tool_available(_name: &str, _interaction_available: bool) -> bool {
+    true
 }
 
 struct TurnExecution<'a> {

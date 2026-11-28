@@ -69,6 +69,7 @@ impl PermissionInterceptor for UserShellApproval {
 struct OwnedBashArtifact {
     path: PathBuf,
     output_path: String,
+    remove_parent_dir: bool,
     #[cfg(unix)]
     device: u64,
     #[cfg(unix)]
@@ -171,6 +172,11 @@ impl Drop for BashArtifactGuard {
 }
 
 /// Validate a pre-hook Bash output path without trusting hook-provided metadata.
+///
+/// Accepts either:
+/// - `hya-core`'s per-call private temp spill `<temp_dir>/hya-bash-XXXXXX/output`
+///   inside a `0o700` directory, or
+/// - `<workdir>/.hya/tool-output/tool_*.txt` (`0o600`).
 fn validated_bash_artifact(output: &Value, workdir: &Path) -> Option<OwnedBashArtifact> {
     let output_path = output
         .get("metadata")?
@@ -182,25 +188,53 @@ fn validated_bash_artifact(output: &Value, workdir: &Path) -> Option<OwnedBashAr
         return None;
     }
     let file_name = supplied.file_name()?.to_str()?;
-    if !file_name.starts_with("tool_") || !file_name.ends_with(".txt") {
-        return None;
-    }
-    let root = std::fs::canonicalize(workdir.join(".hya/tool-output")).ok()?;
-    let parent = std::fs::canonicalize(supplied.parent()?).ok()?;
-    if parent != root {
-        return None;
-    }
+    let parent_dir = supplied.parent()?;
     let metadata = std::fs::symlink_metadata(supplied).ok()?;
     if !metadata.file_type().is_file() {
         return None;
     }
     #[cfg(unix)]
-    if metadata.mode() & 0o077 != 0 || metadata.nlink() != 1 {
+    if metadata.nlink() != 1 {
         return None;
     }
+    let remove_parent_dir = if file_name == "output"
+        && parent_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("hya-bash-"))
+    {
+        let temp_root = std::fs::canonicalize(std::env::temp_dir()).ok()?;
+        let parent_meta = std::fs::symlink_metadata(parent_dir).ok()?;
+        if !parent_meta.file_type().is_dir() {
+            return None;
+        }
+        #[cfg(unix)]
+        if parent_meta.mode() & 0o077 != 0 {
+            return None;
+        }
+        let grand_parent = std::fs::canonicalize(parent_dir.parent()?).ok()?;
+        if grand_parent != temp_root {
+            return None;
+        }
+        true
+    } else if file_name.starts_with("tool_") && file_name.ends_with(".txt") {
+        let root = std::fs::canonicalize(workdir.join(".hya/tool-output")).ok()?;
+        let parent = std::fs::canonicalize(parent_dir).ok()?;
+        if parent != root {
+            return None;
+        }
+        #[cfg(unix)]
+        if metadata.mode() & 0o077 != 0 {
+            return None;
+        }
+        false
+    } else {
+        return None;
+    };
     Some(OwnedBashArtifact {
         path: supplied.to_path_buf(),
         output_path,
+        remove_parent_dir,
         #[cfg(unix)]
         device: metadata.dev(),
         #[cfg(unix)]
@@ -227,7 +261,13 @@ fn remove_owned_bash_artifact(artifact: &OwnedBashArtifact) -> io::Result<()> {
             error.kind(),
             format!("remove unpublished Bash output artifact: {error}"),
         )
-    })
+    })?;
+    if artifact.remove_parent_dir
+        && let Some(parent) = artifact.path.parent()
+    {
+        let _ = std::fs::remove_dir(parent);
+    }
+    Ok(())
 }
 
 impl SessionEngine {

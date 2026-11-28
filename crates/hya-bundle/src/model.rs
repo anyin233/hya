@@ -343,12 +343,14 @@ impl PreparedJsRuntimeMode {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PreparedNativeCapability {
-    /// Registers native tools via `hya_tool_bundle_register_v1`.
+    /// Registers native tools via ABI v1 or v2.
     Tools,
-    /// Registers native hooks via `hya_tool_bundle_register_hooks_v1`.
+    /// Registers native hooks via ABI v1 or v2.
     Hooks,
-    /// Registers native context rewriters via `hya_tool_bundle_register_rewriters_v1`.
+    /// Registers native context rewriters via ABI v1 or v2.
     Rewriters,
+    /// Registers long-lived native services via ABI v2 (`NativeService`).
+    Services,
 }
 
 impl PreparedNativeCapability {
@@ -359,6 +361,7 @@ impl PreparedNativeCapability {
             Self::Tools => "tools",
             Self::Hooks => "hooks",
             Self::Rewriters => "rewriters",
+            Self::Services => "services",
         }
     }
 }

@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Stdio;
 
-use crate::formatter_catalog::CheckKind;
-use crate::formatter_definition::FormatterDefinition;
+use super::catalog::CheckKind;
+use super::definition::FormatterDefinition;
 
 #[derive(Clone, Debug)]
 pub(crate) struct FormatterCommand {

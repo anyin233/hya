@@ -321,16 +321,13 @@ impl SessionEngine {
         session: SessionId,
         text: String,
     ) -> String {
-        let text = if let Some(hooks) = &self.hooks {
-            match hooks
+        let mut text = text;
+        for hooks in self.native_hooks.iter().chain(self.hooks.iter()) {
+            let MessageUserBeforeOutcome::Continue { text: next } = hooks
                 .message_user_before(MessageUserBeforeInput { session, text })
-                .await
-            {
-                MessageUserBeforeOutcome::Continue { text } => text,
-            }
-        } else {
-            text
-        };
+                .await;
+            text = next;
+        }
         self.apply_bundle_message_hook(binding, stable_id, session, text)
             .await
     }
@@ -534,21 +531,18 @@ impl SessionEngine {
     ) -> Result<MessageId, CoreError> {
         self.ensure_external_turn_allowed(session).await?;
         let (binding, stable_id) = self.admission_binding(session).await?;
-        let text = if let Some(hooks) = &self.hooks {
-            match hooks
+        let mut text = text;
+        for hooks in self.native_hooks.iter().chain(self.hooks.iter()) {
+            let CommandExecuteBeforeOutcome::Continue { text: next } = hooks
                 .command_execute_before(CommandExecuteBeforeInput {
                     session,
                     command: command.clone(),
                     arguments: arguments.clone(),
                     text,
                 })
-                .await
-            {
-                CommandExecuteBeforeOutcome::Continue { text } => text,
-            }
-        } else {
-            text
-        };
+                .await;
+            text = next;
+        }
         let text = self
             .apply_bundle_command_hook(
                 &binding,

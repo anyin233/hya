@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT_TEMP_SKILL_DIR: AtomicU64 = AtomicU64::new(0);
 const WITHOUT_CHANNEL_TOOLS: [&str; 4] = [
     "hya/hashline",
-    "hya/base-tools",
+    "hya/coding-extras",
     "hya/extended-tools",
     "hya/network",
 ];
@@ -1495,8 +1495,9 @@ fn both_planes_keep_builtin_aliases_out_of_model_schemas() {
         .into_iter()
         .map(|s| s.name.as_str().into())
         .collect();
-    assert_eq!(expected.len(), 24);
+    assert_eq!(expected.len(), 23);
     expected.insert(crate::kernel::tools::SKILL.to_string());
+    expected.insert(crate::kernel::tools::BASH.to_string());
     for name in crate::coordination::SPAWN_TOOLS {
         expected.remove(name);
     }

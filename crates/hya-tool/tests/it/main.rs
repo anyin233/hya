@@ -9,4 +9,3 @@ mod patch_hooks;
 mod permissions;
 mod read_write;
 mod registry;
-mod shell;

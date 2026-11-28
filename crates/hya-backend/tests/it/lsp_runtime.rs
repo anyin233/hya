@@ -23,10 +23,10 @@ async fn configured_language_server_exposes_workspace_symbols() -> TestResult {
     )?;
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lsp_server.py");
     std::fs::write(config.join("hya/config.yaml"), "schema_version: 2\n")?;
-    let extended_dir = config.join("hya/bundles/hya%2Fextended-tools");
-    std::fs::create_dir_all(&extended_dir)?;
+    let coding_extras_dir = config.join("hya/bundles/hya%2Fcoding-extras");
+    std::fs::create_dir_all(&coding_extras_dir)?;
     std::fs::write(
-        extended_dir.join("config.yml"),
+        coding_extras_dir.join("config.yml"),
         serde_norway::to_string(&json!({
             "lsp": {
                 "typescript": {"disabled": true},

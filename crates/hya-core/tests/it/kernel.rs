@@ -2542,13 +2542,10 @@ async fn budgeted_bash_detached_writer_and_worker_thread_lifetime() {
         );
 
         let _deadline = deadline::install_scoped(Duration::from_secs(180));
-        let full_bash = hya_tool_loader::from_tool_families(&["hya/base-tools"])
-            .get("bash")
-            .unwrap();
         let bare_bash = builtin_tool("bash");
         let pid_file = dir.path().join("worker-ids");
 
-        for (case, bash) in [("full", full_bash), ("bare", bare_bash)] {
+        for (case, bash) in [("bare", bare_bash)] {
             for cancel in [false, true] {
                 let token = CancellationToken::new();
                 let mut ctx = tool_ctx(dir.path(), &token);

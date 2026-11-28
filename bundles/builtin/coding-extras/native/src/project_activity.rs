@@ -6,7 +6,8 @@ use hya_tool::{ProjectActivityRequest, Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-pub struct ProjectActivityTool;
+/// Read-only activity query tool for sessions sharing a Project.
+pub(crate) struct ProjectActivityTool;
 
 #[derive(Deserialize, Default)]
 struct Input {

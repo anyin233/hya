@@ -151,7 +151,7 @@ pub(super) fn filtered_tool_schemas(
     shown
 }
 
-fn offered_tool_schemas(
+pub(super) fn offered_tool_schemas(
     resources: &CompiledResourceView,
     depth: u32,
     interaction_available: bool,
@@ -519,7 +519,8 @@ mod tests {
         }
 
         // Headless surface omits human tools (canonical or aliased) from schemas and exclusive docs.
-        // `plan_exit` visibility is controlled by the `tool.visibility` hook outcome (not hardcoded).
+        // Both `ask_user` (`hya/coding-extras`) and `plan_exit` (`hya/plan`) visibility are
+        // controlled by `tool.visibility` native hooks (never hardcoded in `hya-engine`).
         for aliases in [
             "",
             ", aliases: { ask: 'harness:tool/ask_user', approve: 'harness:tool/plan_exit' }",
@@ -532,23 +533,21 @@ mod tests {
             } else {
                 ["ask", "approve"]
             };
-            // Without a visibility hook hiding `plan_exit`, only `ask_user` is filtered by `tool_available`.
+            // Without visibility hooks hiding them, neither human tool is hardcoded out.
             let without_hook = filtered_tool_schemas(&view, false, &preserve, 0, None, &model());
-            assert!(
-                !without_hook.iter().any(|t| t.name.as_str() == human[0]),
-                "ask_user stays hidden headless"
-            );
-            assert!(
-                without_hook.iter().any(|t| t.name.as_str() == human[1]),
-                "plan_exit visibility is owned by the tool.visibility hook, not hardcoded"
-            );
+            for name in human {
+                assert!(
+                    without_hook.iter().any(|t| t.name.as_str() == name),
+                    "{name} visibility is owned by the tool.visibility hook, not hardcoded"
+                );
+            }
 
             for interactive in [false, true] {
                 let visibility = if interactive {
                     ToolVisibilityOutcome::Preserve
                 } else {
                     ToolVisibilityOutcome::Hide {
-                        tools: vec!["plan_exit".to_string()],
+                        tools: vec!["ask_user".to_string(), "plan_exit".to_string()],
                     }
                 };
                 let offered =
@@ -626,7 +625,7 @@ mod tests {
             .into_iter()
             .map(|s| s.name.to_string())
             .collect();
-        assert_eq!(builtins.len(), 24);
+        assert_eq!(builtins.len(), 23);
         for (model, gpt) in [
             ("openai/gpt-5.5", true),
             ("x/y/gpt-6.2-sol#high", true),

@@ -93,7 +93,7 @@ async fn toggling_bundles_builtin_disable_hashline_switches_between_hashline_and
     }
     assert_eq!(
         full_registry.builtin_bundle_origin("ls"),
-        Some("hya/base-tools")
+        Some("hya/coding-extras")
     );
     // `todo` and `rewrite` remain permanently kernel-exclusive.
     assert!(full_registry.get("todo").is_none());
@@ -187,7 +187,7 @@ bundles:
     }
     assert_eq!(
         fallback_registry.builtin_bundle_origin("ls"),
-        Some("hya/base-tools")
+        Some("hya/coding-extras")
     );
     assert!(fallback_registry.get("todo").is_none());
     assert!(fallback_registry.get("rewrite").is_none());

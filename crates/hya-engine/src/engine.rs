@@ -188,6 +188,7 @@ pub struct SessionEngine {
     /// Context-reduction extensions the kernel runs before its own Rewrite,
     /// before each round and on `/summarize`.
     rewriters: Arc<[Arc<dyn hya_context::rewrite::Rewriter>]>,
+    /// Process-wide ABI v2 native bundle hooks (run before external plugin hooks).
     native_hooks: Option<Arc<dyn HookDispatcher>>,
     hooks: Option<Arc<dyn HookDispatcher>>,
     /// Captured per-session lifecycle/event hooks ([`session_hooks`]).
@@ -548,6 +549,13 @@ impl SessionEngine {
         self
     }
 
+    /// Install ABI v2 native bundle hooks (preserved across [`Self::with_hooks`]).
+    #[must_use]
+    pub fn with_native_hooks(mut self, hooks: Arc<dyn HookDispatcher>) -> Self {
+        self.native_hooks = Some(hooks);
+        self
+    }
+
     /// Install plugin/host hooks for command/tool/chat interception and events.
     #[must_use]
     pub fn with_hooks(mut self, hooks: Arc<dyn HookDispatcher>) -> Self {
@@ -560,7 +568,10 @@ impl SessionEngine {
     /// Replaces any default native hooks loaded by [`Self::try_new`] so
     /// disabling a native bundle cleanly removes its hooks.
     #[must_use]
-    pub fn with_native_hooks(mut self, hooks: Vec<Arc<dyn hya_runtime_abi::NativeHook>>) -> Self {
+    pub fn with_native_hook_list(
+        mut self,
+        hooks: Vec<Arc<dyn hya_runtime_abi::NativeHook>>,
+    ) -> Self {
         self.native_hooks = (!hooks.is_empty()).then(|| {
             Arc::new(crate::hooks::NativeHookDispatcher::new(hooks)) as Arc<dyn HookDispatcher>
         });

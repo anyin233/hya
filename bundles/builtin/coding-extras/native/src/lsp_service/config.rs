@@ -2,39 +2,51 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::bail;
 use serde::Deserialize;
 use serde_json::Value;
 
+/// Single language server process definition.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ServerConfig {
+pub struct ServerConfig {
+    /// Command argv starting the language server on stdio.
     #[serde(default)]
     pub command: Vec<String>,
+    /// File extensions served by this language server (e.g. `.rs`).
     #[serde(default)]
     pub extensions: Vec<String>,
+    /// Workspace root marker files/directories (e.g. `Cargo.toml`, `.git`).
     #[serde(default)]
     pub root_markers: Vec<String>,
+    /// Extra environment variables for the spawned server process.
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
+    /// LSP `initializationOptions` JSON payload.
     #[serde(default)]
     pub initialization_options: Value,
+    /// Workspace configuration settings JSON sent via `workspace/didChangeConfiguration`.
     #[serde(default)]
     pub settings: Value,
+    /// When `true`, disable this server entry.
     #[serde(default)]
     pub disabled: bool,
 }
 
+/// Top-level `lsp:` configuration selection (`bool` or named server map).
 #[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
-pub(crate) enum Selection {
+pub enum Selection {
+    /// Enable auto-detection of built-in servers (`true`) or disable LSP (`false`).
     Enabled(bool),
+    /// Per-server overrides and custom server definitions.
     Servers(BTreeMap<String, ServerConfig>),
 }
 
-pub(crate) fn resolve(
-    selection: Option<Selection>,
-) -> anyhow::Result<BTreeMap<String, ServerConfig>> {
+/// Resolve effective language servers for `selection`.
+///
+/// # Errors
+/// Returns a diagnostic message when a configured server omits a command or extensions.
+pub fn resolve(selection: Option<Selection>) -> Result<BTreeMap<String, ServerConfig>, String> {
     if matches!(selection, Some(Selection::Enabled(false))) {
         return Ok(BTreeMap::new());
     }
@@ -64,7 +76,9 @@ pub(crate) fn resolve(
                 || config.command[0].is_empty()
                 || config.extensions.is_empty()
             {
-                bail!("LSP server {name} requires a nonempty command and extensions");
+                return Err(format!(
+                    "LSP server {name} requires a nonempty command and extensions"
+                ));
             }
             for extension in &mut config.extensions {
                 if !extension.starts_with('.') {

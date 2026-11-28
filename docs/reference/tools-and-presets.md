@@ -13,7 +13,7 @@ These core tools live directly inside Hya's core kernel (`hya-core`), alongside 
 | `read` | Allow *(inside Project)* | Read text files (with `LINE#HASH` anchors when `hya/hashline` is enabled; standard verbatim/offset text when disabled or under `--bare`), images (`png`/`jpeg`/`gif`/`webp`), directories, internal handles (`artifact://`, `skill://`, `local://`), and any registered custom URI scheme via `HandleRouter`. |
 | `write` | Ask | Create or overwrite a file on disk, `local://<name>`, or any registered writable custom URI scheme (post-edit formatting/LSP run via hooks rather than hardcoded calls). |
 | `edit` | Ask | Edit an existing file via standard exact text replacement (`hya-bare`) or content-hashed `LINE#HASH` anchors (`hya/hashline`). |
-| `bash` | Ask | Execute a shell command (supports `timeout`, `cwd`, `env`, and `pty: true`). |
+| `bash` | Ask (`command`, alias `shell`) | Execute a shell command (`hya-core` kernel primitive; supports `timeout`, `cwd`, run-budget yielding, and coding output caps). |
 | `grep` | Allow | Search file contents with a regex or literal pattern (returns `path:line:text` in `hya-bare` or hashline-anchored matches when `hya/hashline` is enabled). |
 | `todo` | Allow | Replace/update the session's ordered checklist (`pending`, `in_progress`, `completed`, `blocked`). Permanently kernel-exclusive; cannot be overridden. |
 | `rewrite` | Allow | Fold earlier steps in the current turn behind a clean marker while preserving user messages and todos. Permanently kernel-exclusive; cannot be overridden. |
@@ -22,9 +22,9 @@ These core tools live directly inside Hya's core kernel (`hya-core`), alongside 
 
 ---
 
-## 2. Registry Tools (Full mode — 24 bundle tools + core `skill`)
+## 2. Registry Tools (Full mode — 23 bundle tools + core `bash` & `skill`)
 
-In full mode, Hya loads its native tool bundles (`hya/hashline` and `hya/plan` over Lockstep Native ABI v2 plus the transitional tool families `hya/base-tools`, `hya/extended-tools`, `hya/network-tools`, and `hya/channel-tools`) alongside the kernel-exclusive `todo` and `rewrite`.
+In full mode, Hya loads its native tool bundles (`hya/hashline`, `hya/coding-extras`, `hya/network`, and `hya/plan` over Lockstep Native ABI v2, plus the remaining transitional tool families `hya/extended-tools` and `hya/channel-tools`) alongside core `bash`, `skill`, and the kernel-exclusive `todo` and `rewrite`.
 
 ### `hya/hashline` (Content-Hashed File Tools — `overrides: hya/bare`)
 
@@ -51,28 +51,55 @@ When `hya/hashline` is disabled (or under `--bare` / `profile: bare`), `hya/hash
 | `edit` | Ask (`tool`) | `tools/edit.json` (`overrides: hya/bare`) | Strict hashline edits (`replace`, `append`, `prepend` by `LINE#HASH` anchor, or `replace_text`) with stale-anchor recovery. |
 | `grep` | Allow (`read_only`) | `tools/grep.json` (`overrides: hya/bare`) | Regex or literal content search returning hashline-anchored matches and recording recovery snapshots. |
 
-### `hya/base-tools` (Directory Search, Shell, Patch & User Questions)
+### `hya/coding-extras` (Workspace Search, Patching, User Questions, LSP & Formatters)
+
+`hya/coding-extras` is a Lockstep Native ABI v2 bundle (`bundles/builtin/coding-extras/`, `schema_version: 2`, `capabilities: [tools, hooks, services]`, exported via `export_native_bundle_v2!` / `hya_native_register_v2`) that packages workspace ergonomics, code intelligence, and automatic post-edit formatting/diagnostics on top of `hya-bare`.
+
+**Configuration & Usage:**
+
+Configure formatters and LSP language servers in `~/.config/hya/bundles/hya%2Fcoding-extras/config.yml` (see `bundles/builtin/coding-extras/config.example.yml`):
+
+```yaml
+# ~/.config/hya/bundles/hya%2Fcoding-extras/config.yml
+formatter:
+  rustfmt:
+    command: ["rustfmt", "$FILE"]
+    extensions: [".rs"]
+lsp:
+  rust-analyzer:
+    command: ["rust-analyzer"]
+    extensions: [".rs"]
+```
+
+Set `formatter: false` or `lsp: false` to disable either subsystem, or disable the entire bundle in `~/.config/hya/config.yaml` with `bundles.builtin.disable: [hya/coding-extras]`.
+
+**Tools (7):**
+
+| Tool | Default permission | Descriptor / Aliases | What it does |
+| --- | --- | --- | --- |
+| `ls` | Allow (`read_only`) | `tools/ls.json` | List directory entries as a compact tree (skipping ignored directories). |
+| `glob` | Allow (`read_only`) | `tools/glob.json` | Fast breadth-first filename glob matching (up to 100 matches, 30s traversal cap). |
+| `find` | Allow (`read_only`) | `tools/find.json` | Structured directory/file search with 30s traversal cap. |
+| `apply_patch` | Ask (`tool`) | `tools/apply_patch.json` (hidden alias `patch`) | Multi-file unified patch tool (advertised automatically to `gpt*` / `*codex*` models; hidden alias `patch` works for all models). |
+| `ask_user` | Interactive (`interactive`) | `tools/ask_user.json` (hidden alias `question`) | Ask the user structured multiple-choice or free-text questions. |
+| `lsp` | Allow (`read_only`) | `tools/lsp.json` | Query language servers (`goToDefinition`, `findReferences`, `hover`, `documentSymbol`, `workspaceSymbol`, `goToImplementation`, `prepareCallHierarchy`, `incomingCalls`, `outgoingCalls`). |
+| `project_activity` | Allow (`read_only`) | `tools/project_activity.json` | Inspect recent activity across sessions in the current Project. |
+
+**Service & Native Hook Interfaces:**
+
+- **Service (`lsp-formatter`):** Implements `hya_runtime_abi::NativeService`. Reads `formatter` (`bool | map<name, { command, extensions, environment, disabled }>`) and `lsp` (`bool | map<name, { command, extensions, disabled, env, initialization }>`) from `hya/coding-extras` bundle config on `start()`, reports readiness via `health()`, and shuts down spawned LSP server subprocesses on `stop()`.
+- **Post-Edit Hook (`coding-extras.post-edit` on `HookPoint::ToolExecuteAfter`):** Intercepts successful non-noop `write` and `edit` results for both standard `hya-bare` file tools (`metadata.path`) and `hya/hashline` file tools (`metadata.path` / `metadata.filediff.file`), runs the configured formatter while preserving any UTF-8 BOM, notifies LSP (`touch_file`), and attaches LSP error diagnostics to `metadata.diagnostics` and the tool `output` text.
+- **Interactive Visibility Hook (`coding-extras.ask-user-visibility` on `HookPoint::ToolVisibility`):** Inspects `ToolVisibilityInput.interaction_available` and returns `ToolVisibilityOutcome::Hide { tools: ["ask_user"] }` whenever no interactive human receiver is connected.
+
+### `hya/extended-tools` (Subagents & Workflows)
 
 | Tool | Default permission | What it does |
 | --- | --- | --- |
-| `bash` | Ask (`command`, alias `shell`) | Full-mode shell execution with PTY support and multi-root `ProjectScope`. |
-| `apply_patch` | Ask (`tool`, alias `patch`) | Multi-file unified patch tool (advertised automatically to `gpt*` / `*codex*` models; hidden alias `patch` works for all models). |
-| `ls` | Allow (`read_only`) | List entries in a directory. |
-| `glob` | Allow (`read_only`) | Fast breadth-first filename glob matching (up to 100 matches, 30s traversal cap). |
-| `find` | Allow (`read_only`) | Structured directory/file search with 30s traversal cap. |
-| `ask_user` | Interactive (`tool`, alias `question`) | Ask the user structured multiple-choice or free-text questions (omitted automatically in in-process headless runs). |
-
-### `hya/extended-tools` (Code Intelligence, Subagents & Workflows)
-
-| Tool | Default permission | What it does |
-| --- | --- | --- |
-| `lsp` | Allow | Query language servers (go-to-definition, references, hover, symbols, diagnostics). |
 | `list_agents` | Allow | List spawnable agent definitions in the active catalog. |
 | `search_agent` | Allow | Search available agents by keyword. |
 | `task` | Allow | Spawn one or more episodic resident subagents in parallel (`tasks[]`). |
 | `archive` | Allow | Stop and archive a child subagent (can still be woken later via follow-up mail). |
 | `workflow` | Allow | List, inspect, select, run, or check state of compiled `*.hya.md` Workflows. |
-| `project_activity` | Allow | Inspect recent activity across sessions in the current Project. |
 
 ### `hya/plan` (Interactive Plan Mode — Native ABI v2)
 
@@ -162,8 +189,8 @@ Every Hya installation ships with 14 trusted first-party bundles sourced from `b
 | Bundle ID | Source path | Runtime | Role |
 | --- | --- | --- | --- |
 | `hya/hashline` | `bundles/builtin/hashline` | Native ABI v2 (`cdylib`) | Hashline-addressed `read`, `write`, `edit`, and `grep` + `HashlineRuntime` (`overrides: hya/bare`, 4 tools). |
-| `hya/base-tools` | `bundles/builtin/base-tools` | Native (`cdylib`) | Directory search, shell, patch, and `ask_user` tools (6 tools). |
-| `hya/extended-tools` | `bundles/builtin/extended-tools` | Native (`cdylib`) | Code intelligence (`lsp`), subagents, workflows, and project activity (8 tools; `skill` promoted to `hya-bare` core, `plan_exit` extracted to `hya/plan`). |
+| `hya/coding-extras` | `bundles/builtin/coding-extras` | Native ABI v2 (`cdylib`) | Workspace search (`ls`, `glob`, `find`), `apply_patch`, `ask_user`, `lsp`, `project_activity`, `lsp-formatter` `NativeService`, and post-edit + visibility `NativeHook`s (7 tools). |
+| `hya/extended-tools` | `bundles/builtin/extended-tools` | Native (`cdylib`) | Subagents and workflows (6 tools; `skill` promoted to `hya-bare` core, `lsp`/`project_activity` moved to `hya/coding-extras`, `plan_exit` extracted to `hya/plan`). |
 | `hya/network` | `bundles/builtin/network` | Native ABI v2 (`cdylib`) | Web fetch and web search (`webfetch`, `websearch`) + per-bundle `config.yml` and air-gapped disable. |
 | `hya/channel-tools` | `bundles/builtin/channel-tools` | Native (`cdylib`) | Team mailbox tools (`send`, `list_channel`, `wait`, `report`). |
 | `hya/compaction` | `bundles/builtin/compaction` | Native ABI v2 (`cdylib`) | Context `Rewriter` (`shake` + `remote`) and `ProjectionReducer` (`Event::Extension`) before Kernel `Rewrite`. |

@@ -57,9 +57,68 @@ fn signal(sender: &watch::Sender<u64>) {
 }
 
 pub(super) fn file_uri(path: &Path) -> Result<String, LspError> {
-    reqwest::Url::from_file_path(path)
-        .map(String::from)
-        .map_err(|()| LspError(format!("cannot encode LSP file URI: {}", path.display())))
+    if !path.is_absolute() {
+        return Err(LspError(format!(
+            "cannot encode relative LSP file URI: {}",
+            path.display()
+        )));
+    }
+    let raw = path.to_string_lossy();
+    let normalized = raw.replace('\\', "/");
+    let mut encoded = String::with_capacity(normalized.len() + 16);
+    encoded.push_str("file://");
+    if !normalized.starts_with('/') {
+        encoded.push('/');
+    }
+    for byte in normalized.as_bytes() {
+        let keep =
+            byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_' | b'.' | b'~' | b':');
+        if keep {
+            encoded.push(char::from(*byte));
+        } else {
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            encoded.push('%');
+            encoded.push(char::from(HEX[(byte >> 4) as usize]));
+            encoded.push(char::from(HEX[(byte & 0x0F) as usize]));
+        }
+    }
+    Ok(encoded)
+}
+
+fn uri_to_file_path(uri: &str) -> Option<std::path::PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    let path_part = if let Some(after_local) = rest.strip_prefix("localhost/") {
+        format!("/{after_local}")
+    } else if rest.starts_with('/') {
+        rest.to_string()
+    } else {
+        return None;
+    };
+    let bytes = path_part.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let high = decode_hex_nibble(bytes[index + 1])?;
+            let low = decode_hex_nibble(bytes[index + 2])?;
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    let text = String::from_utf8(decoded).ok()?;
+    Some(std::path::PathBuf::from(text))
+}
+
+fn decode_hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 impl Shared {
@@ -337,6 +396,10 @@ impl Client {
         }
     }
 
+    pub(super) fn shutdown(&self) {
+        self.shared.shutdown.cancel();
+    }
+
     pub(super) fn diagnostics(
         &self,
         workdir: &Path,
@@ -345,7 +408,7 @@ impl Client {
         lock(&self.shared.diagnostics)
             .iter()
             .filter_map(|(uri, state)| {
-                let path = reqwest::Url::parse(uri).ok()?.to_file_path().ok()?;
+                let path = uri_to_file_path(uri)?;
                 if !path.starts_with(workdir) && !targets.contains(&path.as_path()) {
                     return None;
                 }

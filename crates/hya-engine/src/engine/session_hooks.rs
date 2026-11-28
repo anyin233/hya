@@ -248,8 +248,9 @@ impl SessionEngine {
 impl SessionEngine {
     pub(crate) async fn notify_session_start(&self, session: SessionId) {
         for hooks in self
-            .hooks
+            .native_hooks
             .iter()
+            .chain(self.hooks.iter())
             .cloned()
             .chain(self.runtime.global_plugin_hooks())
         {
@@ -261,8 +262,9 @@ impl SessionEngine {
     /// log their own failures, and the engine never propagates them.
     pub(super) async fn notify_session_lifecycle(&self, session: SessionId, start: bool) {
         for hooks in self
-            .hooks
+            .native_hooks
             .iter()
+            .chain(self.hooks.iter())
             .cloned()
             .chain(self.runtime.global_plugin_hooks())
         {
@@ -297,8 +299,9 @@ impl SessionEngine {
     /// captured hooks and channel policy the turn still reads.
     pub(super) async fn notify_session_end_keeping_state(&self, session: SessionId) {
         for hooks in self
-            .hooks
+            .native_hooks
             .iter()
+            .chain(self.hooks.iter())
             .cloned()
             .chain(self.runtime.global_plugin_hooks())
         {

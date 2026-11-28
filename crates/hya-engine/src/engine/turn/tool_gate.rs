@@ -100,7 +100,9 @@ impl TurnToolGate<'_> {
             call: tc.call,
             tool: &tc.name,
         };
-        if engine.native_hooks.is_some() || engine.hooks.is_some() || activation_hooks.is_some() {
+        let has_hooks =
+            engine.native_hooks.is_some() || engine.hooks.is_some() || activation_hooks.is_some();
+        if has_hooks {
             let input = apply_tool_execute_before_hooks(
                 engine.native_hooks.as_ref(),
                 engine.hooks.as_ref(),
@@ -131,9 +133,7 @@ impl TurnToolGate<'_> {
                 }
             }
         }
-        let input_for_after =
-            (engine.native_hooks.is_some() || engine.hooks.is_some() || activation_hooks.is_some())
-                .then(|| tc.input.clone());
+        let input_for_after = has_hooks.then(|| tc.input.clone());
         let started = std::time::Instant::now();
         let mut file_capture = FileCapture::default();
         let nested_stamps = Arc::new(Mutex::new(BTreeMap::new()));
@@ -289,50 +289,47 @@ impl TurnToolGate<'_> {
         let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         engine.validate_actor_claim(actor_claim).await?;
         let mut was_hook_replaced = false;
-        let result = if !cancel.is_cancelled()
-            && !matches!(&result, Err(ToolError::Cancelled))
-            && (engine.native_hooks.is_some()
-                || engine.hooks.is_some()
-                || activation_hooks.is_some())
-        {
-            let was_permission_err = matches!(&result, Err(ToolError::Permission(_)));
-            let mut native = match &result {
-                Ok(output) => ToolOutcomeNative::Ok {
-                    output: output.clone(),
-                    time_ms,
-                },
-                Err(e) => ToolOutcomeNative::Err {
-                    message: e.to_string(),
-                },
-            };
-            let original_native = native.clone();
-            native = apply_tool_execute_after_hooks(
-                engine.native_hooks.as_ref(),
-                engine.hooks.as_ref(),
-                activation_hooks.as_ref(),
-                &hook_context,
-                input_for_after.unwrap_or_default(),
-                native,
-            )
-            .await;
-            if activation_hooks
-                .as_ref()
-                .is_some_and(|hooks| !hooks.is_healthy())
+        let result =
+            if !cancel.is_cancelled() && !matches!(&result, Err(ToolError::Cancelled)) && has_hooks
             {
-                return Err(CoreError::Cancelled);
-            }
-            if was_permission_err || native == original_native {
-                result
-            } else {
-                was_hook_replaced = true;
-                match native {
-                    ToolOutcomeNative::Ok { output, .. } => Ok(output),
-                    ToolOutcomeNative::Err { message } => Err(ToolError::Other(message)),
+                let was_permission_err = matches!(&result, Err(ToolError::Permission(_)));
+                let mut native = match &result {
+                    Ok(output) => ToolOutcomeNative::Ok {
+                        output: output.clone(),
+                        time_ms,
+                    },
+                    Err(e) => ToolOutcomeNative::Err {
+                        message: e.to_string(),
+                    },
+                };
+                let original_native = native.clone();
+                native = apply_tool_execute_after_hooks(
+                    engine.native_hooks.as_ref(),
+                    engine.hooks.as_ref(),
+                    activation_hooks.as_ref(),
+                    &hook_context,
+                    input_for_after.unwrap_or_default(),
+                    native,
+                )
+                .await;
+                if activation_hooks
+                    .as_ref()
+                    .is_some_and(|hooks| !hooks.is_healthy())
+                {
+                    return Err(CoreError::Cancelled);
                 }
-            }
-        } else {
-            result
-        };
+                if was_permission_err || native == original_native {
+                    result
+                } else {
+                    was_hook_replaced = true;
+                    match native {
+                        ToolOutcomeNative::Ok { output, .. } => Ok(output),
+                        ToolOutcomeNative::Err { message } => Err(ToolError::Other(message)),
+                    }
+                }
+            } else {
+                result
+            };
         let wait_state = wait_ack.take_state();
         let wait_ack = if wait_state.saw_wait {
             let intact = result.is_ok() && !was_hook_replaced && !cancel.is_cancelled();

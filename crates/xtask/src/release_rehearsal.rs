@@ -93,7 +93,7 @@ const BINARY_NAME: &str = "hya";
 /// internal bundles) package.
 const NATIVE_BUNDLE_CRATES: [&str; 7] = [
     "hya-hashline",
-    "hya-base-tools",
+    "hya-coding-extras",
     "hya-extended-tools",
     "hya-network",
     "hya-channel-tools",

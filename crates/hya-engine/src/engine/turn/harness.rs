@@ -127,15 +127,17 @@ impl SessionEngine {
             }
         };
         // The first round's model: the tool list depends on it.
+        let initial_stable_id = projection
+            .session
+            .agent
+            .as_ref()
+            .unwrap_or(&agent.name)
+            .as_str()
+            .to_string();
         let model = self.requested_turn_model(
             &router,
             apply_default_overlays.then_some(&binding),
-            projection
-                .session
-                .agent
-                .as_ref()
-                .unwrap_or(&agent.name)
-                .as_str(),
+            &initial_stable_id,
             explicit_model,
             &projection,
             agent,

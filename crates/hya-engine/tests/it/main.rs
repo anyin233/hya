@@ -3,6 +3,7 @@
 mod support;
 
 mod catalog_and_agents;
+mod coding_extras_hooks;
 mod goal_and_loop;
 mod hooks_and_scope;
 mod permissions_and_tools;

@@ -337,7 +337,7 @@ jobs:
           echo "$list_out"
           for expected in \
             hya/hashline \
-            hya/base-tools \
+            hya/coding-extras \
             hya/extended-tools \
             hya/network \
             hya/channel-tools \

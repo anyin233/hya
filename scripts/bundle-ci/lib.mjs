@@ -82,7 +82,7 @@ export const ALLOWED_HOOK_HANDLER_KINDS = new Set(["js", "rpc", "command", "nati
 export const ALLOWED_PROCESS_KINDS = new Set(["rust", "bun", "claude"]);
 export const ALLOWED_RUNTIME_KINDS = new Set(["static", "js", "native"]);
 export const ALLOWED_JS_MODES = new Set(["managed", "process", "claude"]);
-export const ALLOWED_NATIVE_CAPABILITIES = new Set(["tools", "hooks", "rewriters"]);
+export const ALLOWED_NATIVE_CAPABILITIES = new Set(["tools", "hooks", "rewriters", "services"]);
 
 const MAX_SKILL_BYTES = 256 * 1024;
 const MAX_PACKAGE_BYTES = 128 * 1024 * 1024;

@@ -1,9 +1,7 @@
-//! Load optional formatter configuration into a `FormatterPlane`.
+//! Load optional formatter configuration into a [`hya_tool::FormatterConfig`].
 
 use std::collections::BTreeMap;
 
-#[cfg(test)]
-use anyhow::Context as _;
 use hya_tool::{FormatterConfig, FormatterEntry};
 use serde::Deserialize;
 
@@ -14,10 +12,14 @@ struct FileConfig {
     formatter: RawFormatterConfig,
 }
 
+/// Raw YAML/JSON representation of the `formatter:` block in `hya/coding-extras`
+/// `config.yml`.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
-pub(crate) enum RawFormatterConfig {
+pub enum RawFormatterConfig {
+    /// Enable all built-in formatters (`true`) or disable all (`false`).
     Bool(bool),
+    /// Per-formatter overrides merged over built-in formatters.
     Map(BTreeMap<String, RawFormatterEntry>),
 }
 
@@ -27,16 +29,21 @@ impl Default for RawFormatterConfig {
     }
 }
 
+/// One named formatter entry in [`RawFormatterConfig::Map`].
 #[derive(Clone, Debug, Default, Deserialize)]
-pub(crate) struct RawFormatterEntry {
+pub struct RawFormatterEntry {
+    /// When `true`, disable this formatter.
     #[serde(default)]
-    disabled: bool,
+    pub disabled: bool,
+    /// Explicit command argv with optional `$FILE` placeholder.
     #[serde(default)]
-    command: Option<Vec<String>>,
+    pub command: Option<Vec<String>>,
+    /// Extra environment variables passed to the formatter command.
     #[serde(default)]
-    environment: BTreeMap<String, String>,
+    pub environment: BTreeMap<String, String>,
+    /// File extensions owned by this formatter (with leading dots).
     #[serde(default)]
-    extensions: Option<Vec<String>>,
+    pub extensions: Option<Vec<String>>,
 }
 
 impl From<RawFormatterConfig> for FormatterConfig {
@@ -66,11 +73,12 @@ impl From<RawFormatterEntry> for FormatterEntry {
 }
 
 #[cfg(test)]
-fn parse_formatter_config(yaml: &str) -> anyhow::Result<FormatterConfig> {
+fn parse_formatter_config(yaml: &str) -> Result<FormatterConfig, String> {
     if yaml.trim().is_empty() {
         return Ok(FormatterConfig::Disabled);
     }
-    let file: FileConfig = serde_norway::from_str(yaml).context("parse formatter config")?;
+    let file: FileConfig =
+        serde_norway::from_str(yaml).map_err(|error| format!("parse formatter config: {error}"))?;
     Ok(file.formatter.into())
 }
 

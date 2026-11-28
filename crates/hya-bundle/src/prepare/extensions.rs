@@ -880,6 +880,7 @@ pub(super) fn resolve_runtime(
                     SourceNativeCapability::Tools => PreparedNativeCapability::Tools,
                     SourceNativeCapability::Hooks => PreparedNativeCapability::Hooks,
                     SourceNativeCapability::Rewriters => PreparedNativeCapability::Rewriters,
+                    SourceNativeCapability::Services => PreparedNativeCapability::Services,
                 };
                 if !seen.insert(prepared) {
                     return Err(invalid(format!(

@@ -270,18 +270,30 @@ impl RuntimeRegistry {
 
     /// Start a registry from a frozen tool snapshot.
     ///
-    /// Ensures core `hya-bare` tools (such as `skill`, ADR-0039) are always
+    /// Ensures core `hya-bare` tools (`skill` and `bash`, ADR-0039) are always
     /// registered even when no native tool-family bundles are loaded.
     #[must_use]
     pub fn from_snapshot(tools: ToolRegistrySnapshot, catalog: Arc<AgentCatalog>) -> Self {
-        let tools = if tools.resolve(crate::kernel::tools::SKILL).is_none() {
+        let needs_skill = tools.resolve(crate::kernel::tools::SKILL).is_none();
+        let needs_bash = tools.resolve(crate::kernel::tools::BASH).is_none();
+        let tools = if needs_skill || needs_bash {
             let builder = ToolRegistry::from_snapshot(&tools);
-            builder.register_builtin(
-                crate::kernel::tools::skill_tool(),
-                ToolPermission::ReadOnly,
-                [],
-                "hya/bare",
-            );
+            if needs_skill {
+                builder.register_builtin(
+                    crate::kernel::tools::skill_tool(),
+                    ToolPermission::ReadOnly,
+                    [],
+                    "hya/bare",
+                );
+            }
+            if needs_bash {
+                builder.register_builtin(
+                    crate::kernel::tools::bash_tool(),
+                    ToolPermission::Command,
+                    [("shell", hya_tool::AliasVisibility::Hidden)],
+                    "hya/bare",
+                );
+            }
             builder.snapshot()
         } else {
             tools

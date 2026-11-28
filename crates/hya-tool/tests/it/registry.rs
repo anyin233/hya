@@ -58,7 +58,6 @@ fn registry_rejects_duplicates_hides_aliases_and_freezes_snapshots() {
         .map(|s| s.name.as_str().to_string())
         .collect();
     for (canonical, alias) in [
-        ("bash", "shell"),
         ("webfetch", "fetch"),
         ("websearch", "search"),
         ("ask_user", "question"),
@@ -96,7 +95,7 @@ fn dispatch_identity_and_permission_metadata_resolution() {
         .into_iter()
         .map(|(n, _)| n)
         .collect();
-    assert_eq!(canonical_names.len(), 24);
+    assert_eq!(canonical_names.len(), 23);
     for name in &canonical_names {
         let a = first.dispatch_identity_v1(name).expect("builtin identity");
         assert_eq!(Some(a), second.dispatch_identity_v1(name));
@@ -149,21 +148,6 @@ fn dispatch_identity_and_permission_metadata_resolution() {
     assert_eq!(
         registry.resolve("write").unwrap().permission,
         ToolPermission::Tool
-    );
-    assert_eq!(
-        registry.resolve("bash").unwrap().permission,
-        ToolPermission::Command
-    );
-    assert_eq!(
-        registry.resolve("shell").unwrap().permission,
-        ToolPermission::Command
-    );
-    assert!(
-        registry
-            .resolve("shell")
-            .unwrap()
-            .invocation(&json!({ "command": 1 }))
-            .is_err()
     );
     let alias = registry.resolve("fetch").unwrap();
     assert_eq!(alias.tool.name(), "webfetch");
@@ -226,20 +210,21 @@ fn builtin_bundle_ownership_and_removed_kill_tool() {
     for (bundle, names) in [
         ("hya/hashline", ["read", "write", "edit", "grep"].as_slice()),
         (
-            "hya/base-tools",
-            ["ls", "glob", "find", "ask_user", "bash", "apply_patch"].as_slice(),
+            "hya/coding-extras",
+            [
+                "ls",
+                "glob",
+                "find",
+                "apply_patch",
+                "ask_user",
+                "lsp",
+                "project_activity",
+            ]
+            .as_slice(),
         ),
         (
             "hya/extended-tools",
-            [
-                "lsp",
-                "list_agents",
-                "task",
-                "workflow",
-                "search_agent",
-                "archive",
-            ]
-            .as_slice(),
+            ["list_agents", "task", "workflow", "search_agent", "archive"].as_slice(),
         ),
         ("hya/plan", ["plan_exit"].as_slice()),
         ("hya/network", ["webfetch", "websearch"].as_slice()),
@@ -314,7 +299,7 @@ async fn wait_override_selects_mail_aware_or_member_only_variant() {
     assert!(requested_mail_wake(&full).await);
 
     let without_channels = hya_tool_loader::from_tool_families(&[
-        "hya/base-tools",
+        "hya/coding-extras",
         "hya/extended-tools",
         "hya/network",
     ]);

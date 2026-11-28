@@ -483,8 +483,8 @@ fn rejects_exposure_yaml_and_exposure_asset_except_transitional_tool_families()
             if detail.contains("exposure") && detail.contains("schema_version 2")
     ));
 
-    // 5. The remaining transitional Phase 0–4 legacy tool-family bundles stay accepted.
-    for transitional_id in ["hya/base-tools", "hya/extended-tools", "hya/channel-tools"] {
+    // 5. The two remaining transitional Phase 0–4 legacy tool-family bundles stay accepted.
+    for transitional_id in ["hya/extended-tools", "hya/channel-tools"] {
         let manifest = format!(
             "kind: Bundle\nschema_version: 2\nidentity: {{ id: {transitional_id}, version: 1.0.0, publisher: hya }}\nassets:\n  - {{ id: exposure, path: exposure.yaml }}\n"
         );
@@ -722,16 +722,16 @@ fn builtin_bundle_profile_and_selective_resolution_never_panics() -> Result<(), 
     let bare = BuiltinBundleSelection {
         profile: BuiltinBundleProfile::Bare,
         enable: vec![
-            "hya/base-tools".to_string(),
+            "hya/coding-extras".to_string(),
             "hya/core-skills".to_string(),
             "unknown/missing".to_string(),
         ],
         disable: vec!["hya/core-skills".to_string()],
     };
-    assert!(bare.is_enabled("hya/base-tools"));
+    assert!(bare.is_enabled("hya/coding-extras"));
     assert!(!bare.is_enabled("hya/core-skills")); // disable overrides enable
     assert!(!bare.is_enabled("hya/network"));
-    assert_eq!(bare.enabled_identities(), vec!["hya/base-tools"]);
+    assert_eq!(bare.enabled_identities(), vec!["hya/coding-extras"]);
     assert_eq!(bare.unknown_identities(), vec!["unknown/missing"]);
 
     // Full profile with one override bundle and one disabled bundle and one missing bundle.
@@ -748,12 +748,12 @@ overrides: hya/core-skills
         )],
     ))?;
     let sample_catalog = prepare_package(BundleSource::new(
-        "sample-base",
+        "sample-coding-extras",
         vec![SourceFile::new(
             "bundle.yaml",
             br#"kind: Bundle
 schema_version: 2
-identity: { id: hya/base-tools, version: 1.0.0, publisher: hya }
+identity: { id: hya/coding-extras, version: 1.0.0, publisher: hya }
 "#
             .as_slice(),
         )],
@@ -765,7 +765,7 @@ identity: { id: hya/base-tools, version: 1.0.0, publisher: hya }
     };
     let report =
         resolve_first_party_bundles_with(&full, &[&project_override.bundles()[0]], |id| match id {
-            "hya/base-tools" => Ok(Some(sample_catalog.clone())),
+            "hya/coding-extras" => Ok(Some(sample_catalog.clone())),
             "hya/extended-tools" => Err(BundleError::InvalidManifest {
                 source_name: id.to_string(),
                 detail: "corrupt".to_string(),
@@ -774,7 +774,7 @@ identity: { id: hya/base-tools, version: 1.0.0, publisher: hya }
         });
     assert_eq!(report.entries.len(), FIRST_PARTY_BUNDLES.len());
     assert_eq!(
-        report.status("hya/base-tools"),
+        report.status("hya/coding-extras"),
         Some(&BuiltinBundleStatus::Loaded)
     );
     assert_eq!(

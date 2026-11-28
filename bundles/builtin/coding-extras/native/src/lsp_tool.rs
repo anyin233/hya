@@ -1,15 +1,29 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
 use hya_tool::tool::obj_schema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::service::CodingExtrasState;
 use hya_tool::path::{absolutize, display_path, file_uri, normalize, resolve_file};
 use hya_tool::{Action, ProjectScope, Resource};
 use hya_tool::{LspOperation, LspRequest};
 use hya_tool::{Tool, ToolCtx, ToolError};
 
-pub struct LspTool;
+/// Read-only LSP code-intelligence tool (`lsp`).
+pub struct LspTool {
+    state: Arc<CodingExtrasState>,
+}
+
+impl LspTool {
+    /// Construct an `lsp` tool backed by `state` (falling back when `ctx.lsp` is unconfigured).
+    #[must_use]
+    pub fn new(state: Arc<CodingExtrasState>) -> Self {
+        Self { state }
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,8 +87,12 @@ impl Tool for LspTool {
                 display_path(&file)
             )));
         }
-        if !ctx
-            .lsp
+        let lsp = if ctx.lsp.is_configured() {
+            ctx.lsp.clone()
+        } else {
+            self.state.lsp()
+        };
+        if !lsp
             .has_clients(&file)
             .await
             .map_err(|e| ToolError::Other(e.to_string()))?
@@ -103,8 +121,7 @@ impl Tool for LspTool {
             character: input.character - 1,
             query: input.query,
         };
-        let result = ctx
-            .lsp
+        let result = lsp
             .execute(request)
             .await
             .map_err(|e| ToolError::Other(e.to_string()))?;

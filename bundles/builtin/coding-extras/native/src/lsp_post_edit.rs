@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use hya_tool::path::display_path;
-use hya_tool::{ToolCtx, ToolError};
+use hya_tool::{LspPlane, ToolError};
 
 const MAX_PER_FILE: usize = 20;
 
@@ -73,19 +73,18 @@ fn path_key(file: &Path) -> String {
     display_path(file)
 }
 
-pub(crate) async fn touch_many_and_diagnostics(
-    ctx: &ToolCtx,
+pub(crate) async fn touch_many_and_diagnostics_with_plane(
+    lsp: &LspPlane,
+    workdir: &Path,
     paths: &[PathBuf],
 ) -> Result<Value, ToolError> {
     for path in paths {
-        ctx.lsp
-            .touch_file(path, "document")
+        lsp.touch_file(path, "document")
             .await
             .map_err(|error| ToolError::Other(error.to_string()))?;
     }
     let targets: Vec<_> = paths.iter().map(PathBuf::as_path).collect();
-    ctx.lsp
-        .diagnostics(&ctx.workdir, &targets)
+    lsp.diagnostics(workdir, &targets)
         .await
         .map_err(|error| ToolError::Other(error.to_string()))
 }

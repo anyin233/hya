@@ -530,7 +530,7 @@ pub struct BuiltSessionEngine {
     asks: Option<tokio::sync::mpsc::UnboundedReceiver<AskRequest>>,
     questions: Option<tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>>,
     mcp_control: Arc<dyn hya_server::McpControl>,
-    native_services: Vec<Arc<dyn hya_runtime_abi::NativeService>>,
+    native_services: Arc<[Arc<dyn hya_runtime_abi::NativeService>]>,
     lifecycle: RuntimeTaskOwner,
     runtime_owner: Option<OwnerRunId>,
 }
@@ -626,12 +626,18 @@ impl BuiltSessionEngine {
     ) -> impl std::future::Future<Output = TurnDrainReport> + Send + 'static + use<> {
         let engine = self.engine.clone();
         let residents = self.resident_supervisor.clone();
+        let native_services = Arc::clone(&self.native_services);
         let shutdown = self.lifecycle.shutdown();
         let io_tasks = self.lifecycle.io_tasks.clone();
         async move {
             engine.begin_drain(cause);
             shutdown.await;
             let report = residents.drain(cause, DRAIN_DEADLINE).await;
+            for service in native_services.iter() {
+                if let Err(error) = service.stop().await {
+                    tracing::warn!(service = service.id(), %error, "native service stop failed");
+                }
+            }
             engine.runtime_registry().shutdown_sources().await;
             io_tasks.close();
             io_tasks.wait().await;
@@ -647,11 +653,6 @@ impl BuiltSessionEngine {
     }
 
     async fn finish_shutdown(&mut self) -> Result<(), CoreError> {
-        for service in self.native_services.drain(..) {
-            if let Err(error) = service.stop().await {
-                tracing::warn!(service = service.id(), %error, "native service stop failed");
-            }
-        }
         self.engine
             .store()
             .drain_and_report_exit(hya_store::EXIT_DRAIN_TIMEOUT)
@@ -1061,7 +1062,7 @@ fn enabled_native_tool_families(
     let candidates: &[&'static str] = if include_network {
         &[
             "hya/hashline",
-            "hya/base-tools",
+            "hya/coding-extras",
             "hya/extended-tools",
             "hya/network",
             "hya/channel-tools",
@@ -1069,7 +1070,7 @@ fn enabled_native_tool_families(
     } else {
         &[
             "hya/hashline",
-            "hya/base-tools",
+            "hya/coding-extras",
             "hya/extended-tools",
             "hya/channel-tools",
         ]
@@ -1089,11 +1090,12 @@ fn enabled_native_tool_families(
 
 /// Compose the built-in [`ToolRegistry`] for `selection` (`config.yaml` -> `bundles.builtin`).
 ///
-/// Enabled native bundles load first (`hya/hashline` via ABI v2 overriding
-/// `hya/bare`'s standard `read`/`write`/`edit`/`grep`, plus any enabled
-/// transitional tool families). Any non-kernel-exclusive `hya/bare` standard
-/// primitive (`read`, `write`, `edit`, `bash`, `grep`, `skill`) not overridden
-/// by an enabled bundle is registered from `hya-core` with origin `"hya/bare"`.
+/// Enabled native bundles load first (`hya/hashline` and `hya/coding-extras`
+/// via ABI v2 overriding `hya/bare`'s standard `read`/`write`/`edit`/`grep`,
+/// plus any enabled transitional tool families). Any non-kernel-exclusive
+/// `hya/bare` standard primitive (`read`, `write`, `edit`, `bash`, `grep`,
+/// `skill`) not overridden by an enabled bundle is registered from `hya-core`
+/// with origin `"hya/bare"`.
 ///
 /// Kernel-exclusive primitives (`todo`, `rewrite`) are never registered into
 /// [`ToolRegistry`] and remain permanently owned by the kernel loop.
@@ -1104,10 +1106,26 @@ fn enabled_native_tool_families(
 pub fn compose_builtin_tool_registry(
     selection: &hya_bundle::BuiltinBundleSelection,
 ) -> Result<ToolRegistry, String> {
-    let enabled_families = enabled_native_tool_families(selection, true);
-    let registry = hya_tool_loader::try_from_tool_families(&enabled_families)?;
+    compose_builtin_tool_registry_with_runtime(selection, None, true).map(|(registry, _)| registry)
+}
+
+fn compose_builtin_tool_registry_with_runtime(
+    selection: &hya_bundle::BuiltinBundleSelection,
+    host_runtime: Option<Arc<dyn hya_runtime_abi::HostRuntime>>,
+    include_network: bool,
+) -> Result<(ToolRegistry, hya_tool_loader::NativeRegistrations), String> {
+    let enabled_families = enabled_native_tool_families(selection, include_network);
+    let (registry, registrations) = match host_runtime {
+        Some(runtime) => {
+            hya_tool_loader::try_load_tool_families_with_runtime(&enabled_families, runtime)?
+        }
+        None => (
+            hya_tool_loader::try_from_tool_families(&enabled_families)?,
+            hya_tool_loader::NativeRegistrations::default(),
+        ),
+    };
     register_missing_bare_tools(&registry);
-    Ok(registry)
+    Ok((registry, registrations))
 }
 
 async fn build_session_engine_with_mcp_defer(
@@ -1142,20 +1160,33 @@ async fn build_session_engine_with_mcp_defer(
     crate::startup_trace::mark("store_recovery", None);
     let (invocation_policy, settings) = tool_config;
     let builtins = settings.builtin_bundles().clone();
-    let config_file = settings.resolved_config_file();
-    let host_runtime: Arc<dyn hya_runtime_abi::HostRuntime> =
-        Arc::new(hya_tool_loader::MinimalHostRuntime::with_bundle_config(
-            move |bundle_id| crate::config::read_bundle_config_json(&config_file, bundle_id),
-        ));
     let router = Arc::new(router);
+    let host_runtime: Arc<dyn hya_runtime_abi::HostRuntime> = Arc::new(
+        crate::host_runtime::AppHostRuntime::new(store.clone(), settings.resolved_config_file()),
+    );
     let enabled_families = enabled_native_tool_families(&builtins, false);
-    let registry = hya_tool_loader::try_from_tool_families_with_runtime(
-        &enabled_families,
-        Arc::clone(&host_runtime),
+    let (registry, native_registrations) = compose_builtin_tool_registry_with_runtime(
+        &builtins,
+        Some(Arc::clone(&host_runtime)),
+        false,
     )
     .map_err(|error| anyhow::anyhow!("compose built-in tool registry: {error}"))?;
-    let mut native_hooks = Vec::new();
-    let mut native_services: Vec<Arc<dyn hya_runtime_abi::NativeService>> = Vec::new();
+    let mut started_services: Vec<Arc<dyn hya_runtime_abi::NativeService>> =
+        Vec::with_capacity(native_registrations.services.len());
+    for service in native_registrations.services {
+        if let Err(error) = service.start(Arc::clone(&host_runtime)).await {
+            for started in started_services.into_iter().rev() {
+                let _ = started.stop().await;
+            }
+            store.release_runtime_owner(owner_run_id)?;
+            return Err(anyhow::anyhow!(
+                "start native bundle service `{}`: {error}",
+                service.id()
+            ));
+        }
+        started_services.push(service);
+    }
+    let mut all_native_hooks = native_registrations.hooks;
     let mut loaded_v2_tools = false;
     if builtins.is_enabled("hya/plan")
         && hya_bundle::first_party_bundle_optional("hya/plan")
@@ -1171,7 +1202,7 @@ async fn build_session_engine_with_mcp_defer(
         .map_err(anyhow::Error::msg)
         .context("load first-party native bundle hya/plan")?;
         loaded_v2_tools = !regs.tools.is_empty();
-        native_hooks.extend(regs.hooks);
+        all_native_hooks.extend(regs.hooks);
     }
     let network_enabled = builtins.is_enabled("hya/network")
         && hya_bundle::first_party_bundle_optional("hya/network")
@@ -1182,12 +1213,16 @@ async fn build_session_engine_with_mcp_defer(
         let regs = hya_tool_loader::load_v2("hya/network", Arc::clone(&host_runtime))
             .map_err(|error| anyhow::anyhow!("load native bundle hya/network: {error}"))?;
         for service in &regs.services {
-            service
-                .start(Arc::clone(&host_runtime))
-                .await
-                .map_err(|error| {
-                    anyhow::anyhow!("start native service `{}`: {error}", service.id())
-                })?;
+            if let Err(error) = service.start(Arc::clone(&host_runtime)).await {
+                for started in started_services.into_iter().rev() {
+                    let _ = started.stop().await;
+                }
+                store.release_runtime_owner(owner_run_id)?;
+                return Err(anyhow::anyhow!(
+                    "start native service `{}`: {error}",
+                    service.id()
+                ));
+            }
         }
         let advertised: Vec<String> = regs
             .tools
@@ -1250,8 +1285,9 @@ async fn build_session_engine_with_mcp_defer(
                 registry.register_builtin(tool, ToolPermission::Tool, [], "hya/network");
             }
         }
-        native_services.extend(regs.services);
+        started_services.extend(regs.services);
     }
+    let native_services: Arc<[Arc<dyn hya_runtime_abi::NativeService>]> = started_services.into();
     register_missing_bare_tools(&registry);
 
     let project_plugins = if options.pure {
@@ -1377,7 +1413,7 @@ async fn build_session_engine_with_mcp_defer(
         .with_base_system_prompt(agent.system_prompt.clone())
         .with_pure_context(options.pure)
         .with_tool_family_prompts(use_tool_family_prompts)
-        .with_native_hooks(native_hooks)
+        .with_native_hook_list(all_native_hooks)
         // Stop/start records use this store's runtime-owner claim.
         .with_runtime_owner(owner_run_id)
         .with_global_reasoning(settings.reasoning())

@@ -1,0 +1,32 @@
+kind: Bundle
+schema_version: 2
+version_ref: hya
+identity:
+  id: hya/coding-extras
+  version: 0.0.0
+  publisher: hya
+namespace: coding-extras
+runtime:
+  kind: native
+  abi_version: 2
+  crate_dir: native
+  capabilities:
+    - tools
+    - hooks
+    - services
+resources:
+  tools:
+    - id: ls
+      path: tools/ls.json
+    - id: glob
+      path: tools/glob.json
+    - id: find
+      path: tools/find.json
+    - id: apply_patch
+      path: tools/apply_patch.json
+    - id: ask_user
+      path: tools/ask_user.json
+    - id: lsp
+      path: tools/lsp.json
+    - id: project_activity
+      path: tools/project_activity.json

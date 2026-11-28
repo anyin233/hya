@@ -52,8 +52,8 @@ All 14 bundles in `bundles/builtin/` ship in every release archive under `<prefi
 | Path | Legacy path | Bundle ID | Runtime | Capabilities | `bare` vs `full` loading role |
 | --- | --- | --- | --- | --- | --- |
 | `bundles/builtin/hashline` | *(extracted from `base-tools`)* | `hya/hashline` | **Native ABI v2** (`cdylib`) | 4 tools (`overrides: hya/bare`): `read`, `write`, `edit`, `grep` + `HashlineRuntime` | **Full default** via `hya-tool-loader` (`load_v2`); disable via `bundles.builtin.disable: [hya/hashline]` or `--bare` to fall back to `hya-bare` standard file tools |
-| `bundles/builtin/base-tools` | `bundles/presets/base-tools` | `hya/base-tools` | **Native** (`cdylib`) | 6 tools: `ls`, `glob`, `find`, `ask_user`, `bash`, `apply_patch` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
-| `bundles/builtin/extended-tools` | `bundles/presets/extended-tools` | `hya/extended-tools` | **Native** (`cdylib`) | 8 tools: `lsp`, `list_agents`, `search_agent`, `task`, `archive`, `workflow`, `project_activity`, `wait` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
+| `bundles/builtin/coding-extras` | *(extracted from `base-tools` & `extended-tools`)* | `hya/coding-extras` | **Native ABI v2** (`cdylib`) | 7 tools (`ls`, `glob`, `find`, `apply_patch`, `ask_user`, `lsp`, `project_activity`), `lsp-formatter` `NativeService`, and `tool.execute.after` + `tool.visibility` `NativeHook`s | **Full default** via `hya-tool-loader` (`load_v2`); disable via `bundles.builtin.disable: [hya/coding-extras]` or `--bare` |
+| `bundles/builtin/extended-tools` | `bundles/presets/extended-tools` | `hya/extended-tools` | **Native** (`cdylib`) | 6 tools: `list_agents`, `search_agent`, `task`, `archive`, `workflow`, `wait` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
 | `bundles/builtin/network` | `bundles/presets/network-tools` | `hya/network` | **Native ABI v2** (`cdylib`) | 2 tools (`webfetch`, `websearch`) + `NetworkService` + `ToolVisibility` hook (`config.yml`) | **Full default** via `hya-tool-loader`; disableable for air-gapped operation & skipped in `--bare` |
 | `bundles/builtin/channel-tools` | `bundles/presets/channel-tools` | `hya/channel-tools` | **Native** (`cdylib`) | 4 tools: `send`, `list_channel`, `wait`, `report` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
 | `bundles/builtin/compaction` | `bundles/internal/compaction` | `hya/compaction` | **Native ABI v2** (`cdylib`) | 1 `Rewriter` (`shake` + `remote`) + 1 `ProjectionReducer` (`Event::Extension`) | **Full required** via `hya_core::bundles::load_internal_with_runtime()`; skipped in `--bare` |
@@ -150,10 +150,10 @@ runtime:
   command: [bun, run, "${BUNDLE_ROOT}/src/index.ts"]  # process mode argv
   timeout_ms: 30000             # Optional: 1000..=3600000
   # --- when kind: native ---
-  abi_version: 1                # 1 = lockstep ABI v1; 2 reserved for stable C-ABI
+  abi_version: 2                # 1 = lockstep ABI v1; 2 = Lockstep Native ABI v2 (hya-runtime-abi)
   crate_dir: native             # Source build directory (not packed as source files into .hyabundle)
   library: native/libacme_my_bundle.so  # Target dynamic library path inside packaged .hyabundle
-  capabilities: [tools, hooks]  # Declared native capabilities: tools | hooks | rewriters
+  capabilities: [tools, hooks, services]  # Declared native capabilities: tools | hooks | rewriters | services | apis | reducers | uri_handlers | goal_drivers | loop_drivers
 
 # Self-check contract executed by CI and `hya bundle verify`
 # Tip: use `--pass-with-no-tests` with `bun test` so stripped `.hyabundle` archives (which omit `*.test.ts`) still verify cleanly.

@@ -73,7 +73,10 @@ impl Provider for RecordingProvider {
     }
 }
 
-struct OversizedDirectResultHook;
+#[derive(Default)]
+struct OversizedDirectResultHook {
+    captured_output_path: std::sync::Mutex<Option<String>>,
+}
 
 #[async_trait]
 impl HookDispatcher for OversizedDirectResultHook {
@@ -104,7 +107,12 @@ impl HookDispatcher for OversizedDirectResultHook {
         ToolExecuteBeforeOutcome::Continue { input: input.input }
     }
 
-    async fn tool_execute_after(&self, _input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
+    async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
+        if let ToolOutcomeNative::Ok { output, .. } = &input.result
+            && let Some(path) = output["metadata"]["outputPath"].as_str()
+        {
+            *self.captured_output_path.lock().unwrap() = Some(path.to_string());
+        }
         ToolExecuteAfterOutcome::Continue {
             result: ToolOutcomeNative::Ok {
                 output: json!({
@@ -318,13 +326,13 @@ async fn direct_shell_bypasses_ask_but_honours_explicit_deny_rules() {
 #[tokio::test]
 async fn direct_shell_caps_oversized_post_hook_coding_envelope() {
     let dir = support::TestDir::new("shell-cap");
-    let artifact_root = dir.path().join(".hya/tool-output");
+    let hook = Arc::new(OversizedDirectResultHook::default());
     let engine = support::engine_with_provider(
         Arc::new(FakeProvider::scripted(vec![])),
         PermissionRules::new(vec![Rule::new(Action::Bash, "**", Mode::Allow)]),
     )
     .await
-    .with_hooks(Arc::new(OversizedDirectResultHook));
+    .with_hooks(Arc::clone(&hook) as Arc<dyn HookDispatcher>);
     let session = support::create_root_session(&engine, "hya-main", "fake", dir.path()).await;
     let agent = support::agent_spec("hya-main", "fake", dir.path());
 
@@ -354,8 +362,16 @@ async fn direct_shell_caps_oversized_post_hook_coding_envelope() {
     assert_eq!(output["metadata"]["outputTruncated"], true);
     assert!(output["metadata"].get("outputPath").is_none());
     assert!(output["metadata"].get("unexpected").is_none());
-    let mut artifacts = tokio::fs::read_dir(&artifact_root).await.unwrap();
-    assert!(artifacts.next_entry().await.unwrap().is_none());
+    let spilled = hook
+        .captured_output_path
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("direct bash must have spilled oversized output before hook rewrite");
+    assert!(
+        !Path::new(&spilled).exists(),
+        "unpublished bash spill artifact must be deleted: {spilled}"
+    );
 }
 
 #[tokio::test]

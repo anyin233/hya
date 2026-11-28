@@ -43,7 +43,7 @@ libc = { workspace = true }
 hya-provider = { workspace = true, features = ["test-support"] }
 hya-store = { workspace = true, features = ["lifecycle-bench"] }
 hya-hashline = { workspace = true }
-hya-base-tools = { workspace = true }
+hya-coding-extras = { workspace = true }
 hya-extended-tools = { workspace = true }
 hya-channel-tools = { workspace = true }
 hya-network = { workspace = true }

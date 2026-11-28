@@ -1,5 +1,7 @@
-//! App-owned language-server lifecycle behind the existing tool LSP plane.
-pub(crate) mod config;
+//! Language-server lifecycle owned by `hya/coding-extras`.
+
+/// Process LSP configuration types and server auto-detection.
+pub mod config;
 mod transport;
 
 use std::collections::BTreeMap;
@@ -16,25 +18,57 @@ use transport::{Client, file_uri};
 
 type ClientSlot = Arc<OnceCell<Result<Arc<Client>, String>>>;
 
-pub(crate) fn from_selection(selection: Option<config::Selection>) -> anyhow::Result<LspPlane> {
+/// Build an [`LspPlane`] and optional concrete [`ProcessLspProvider`] handle
+/// from `selection`.
+///
+/// # Errors
+/// Returns a diagnostic message when a configured LSP server entry is invalid.
+pub fn from_selection(
+    selection: Option<config::Selection>,
+) -> Result<(LspPlane, Option<Arc<ProcessLspProvider>>), String> {
     let servers = config::resolve(selection)?;
     if servers.is_empty() {
-        return Ok(LspPlane::default());
+        return Ok((LspPlane::default(), None));
     }
-    Ok(LspPlane::new(Arc::new(ProcessLspProvider {
+    let provider = Arc::new(ProcessLspProvider {
         servers,
         clients: Mutex::new(BTreeMap::new()),
         updates: watch::channel(0).0,
-    })))
+    });
+    Ok((
+        LspPlane::new(Arc::clone(&provider) as Arc<dyn LspProvider>),
+        Some(provider),
+    ))
 }
 
-struct ProcessLspProvider {
-    servers: BTreeMap<String, ServerConfig>,
+/// Build an [`LspPlane`] from `selection`.
+///
+/// # Errors
+/// Returns a diagnostic message when a configured LSP server entry is invalid.
+pub fn plane_from_selection(selection: Option<config::Selection>) -> Result<LspPlane, String> {
+    from_selection(selection).map(|(plane, _)| plane)
+}
+
+/// Process-backed LSP provider managing stdio language server subprocesses.
+pub struct ProcessLspProvider {
+    pub(crate) servers: BTreeMap<String, ServerConfig>,
     clients: Mutex<BTreeMap<(String, PathBuf), ClientSlot>>,
-    updates: watch::Sender<u64>,
+    pub(crate) updates: watch::Sender<u64>,
 }
 
 impl ProcessLspProvider {
+    /// Stop and release all currently spawned language server subprocesses.
+    pub async fn shutdown_all(&self) {
+        let drained: Vec<ClientSlot> = {
+            let mut clients = self.clients.lock().await;
+            std::mem::take(&mut *clients).into_values().collect()
+        };
+        for slot in drained {
+            if let Some(Ok(client)) = slot.get() {
+                client.shutdown();
+            }
+        }
+    }
     async fn clients_for(&self, file: &Path) -> Result<Vec<Arc<Client>>, LspError> {
         let directory = file.is_dir();
         let mut clients = Vec::new();

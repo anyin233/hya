@@ -521,6 +521,16 @@ async fn capture_request(
     if !interactive {
         drop(questions);
     }
+    let mut hooks = hya_coding_extras::coding_extras_hooks(
+        Arc::new(hya_coding_extras::CodingExtrasState::new()),
+        None,
+    );
+    hooks.extend(
+        hya_tool_loader::load_v2("hya/plan", hya_tool_loader::noop_host_runtime())
+            .unwrap()
+            .hooks,
+    );
+    let native_hooks = Arc::new(hya_engine::NativeHookDispatcher::new(hooks));
     let engine = support::engine_with_provider(
         Arc::new(RequestCaptureProvider {
             id: provider_id,
@@ -529,6 +539,7 @@ async fn capture_request(
         PermissionRules::default(),
     )
     .await
+    .with_native_hooks(native_hooks)
     .with_interaction(interaction);
     let session = support::create_root_session(&engine, "build", model, dir.path()).await;
     engine
@@ -546,25 +557,23 @@ async fn capture_request(
 
 #[tokio::test]
 async fn tool_filtering_base_tools_gpt_patch_websearch_human_and_variants() {
-    // 1. Native bundles replace kernel tools except kernel-owned `rewrite` and `todo`.
+    // 1. Native bundles replace kernel file tools; `bash` stays in `hya/bare`,
+    //    and `rewrite` / `todo` remain kernel-exclusive.
     let registry = hya_tool_loader::builtins();
     for tool in hya_engine::kernel::tools::builtin() {
         let name = tool.name();
         if [
             hya_engine::kernel::tools::REWRITE,
             hya_engine::kernel::tools::TODO,
+            hya_engine::kernel::tools::BASH,
         ]
         .contains(&name)
         {
             assert!(registry.get(name).is_none(), "{name}");
         } else {
-            let expected = match name {
-                "read" | "write" | "edit" | "grep" => "hya/hashline",
-                _ => "hya/base-tools",
-            };
             assert_eq!(
                 registry.builtin_bundle_origin(name),
-                Some(expected),
+                Some("hya/hashline"),
                 "{name}"
             );
         }
@@ -803,7 +812,19 @@ async fn nested_calls_run_in_callers_view_and_record_against_caller() {
             Rule::new(Action::Edit, denied.to_string_lossy(), Mode::Deny),
         ]),
     )
-    .await;
+    .await
+    .with_native_hooks(Arc::new(hya_engine::NativeHookDispatcher::new({
+        let mut hooks = hya_coding_extras::coding_extras_hooks(
+            Arc::new(hya_coding_extras::CodingExtrasState::new()),
+            None,
+        );
+        hooks.extend(
+            hya_tool_loader::load_v2("hya/plan", hya_tool_loader::noop_host_runtime())
+                .unwrap()
+                .hooks,
+        );
+        hooks
+    })));
     let session =
         support::create_root_session(&engine, "nesting-agent", "fake", workdir.path()).await;
     engine

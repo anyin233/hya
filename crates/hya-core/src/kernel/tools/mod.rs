@@ -38,6 +38,9 @@ pub use hya_tool::{RESERVED_KERNEL_TOOLS as RESERVED, is_reserved_kernel_tool as
 /// Name of the tool whose calls the kernel loop handles itself.
 pub const REWRITE: &str = "rewrite";
 
+/// Name of the core `bash` tool owned by `hya-bare` (ADR-0039).
+pub const BASH: &str = "bash";
+
 /// Name of the core `skill` tool promoted into `hya-bare` (ADR-0039).
 pub const SKILL: &str = "skill";
 
@@ -59,6 +62,12 @@ pub fn builtin() -> Vec<Arc<dyn Tool>> {
         Arc::new(todo::Todo),
         Arc::new(rewrite::Rewrite),
     ]
+}
+
+/// Core `bash` tool instance for `hya-bare` and full-mode registries.
+#[must_use]
+pub fn bash_tool() -> Arc<dyn Tool> {
+    Arc::new(bash::Bash)
 }
 
 /// Core `skill` tool instance for `hya-bare` and full-mode registries.

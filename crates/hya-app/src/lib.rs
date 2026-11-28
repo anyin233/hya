@@ -24,16 +24,10 @@ pub mod code_mode;
 /// `config.yaml` load, first-run bootstrap, and Compat import.
 pub mod config;
 mod config_edit;
-mod formatter;
-mod formatter_catalog;
-mod formatter_command;
-/// Formatter plane construction from optional formatter config.
-pub mod formatter_config;
-mod formatter_definition;
 mod headless;
+mod host_runtime;
 mod installed_bundle_refresh;
 mod lead_wrapup;
-mod lsp;
 /// SQLite remote-model cache (`$XDG_CACHE_HOME/hya/model_cache.db`).
 pub mod model_cache;
 /// Interactive OAuth login and access-token refresh.
@@ -68,8 +62,10 @@ pub mod workflow_control;
 pub use agent_model_control::{
     AgentModelControlError, AgentModelIdentity, PersistentAgentModelControl,
 };
-pub use formatter::BuiltinFormatterProvider;
 pub use headless::{HeadlessEvaluatorRoute, prepare_goal, prepare_loop};
+pub use hya_coding_extras::BuiltinFormatterProvider;
+/// Formatter plane construction from optional formatter config (owned by `hya/coding-extras`).
+pub use hya_coding_extras::formatter::config as formatter_config;
 pub use hya_proto::{WorkflowInfo, WorkflowStageInfo, WorkflowSummary};
 pub use hya_tool::{
     InvocationPolicy, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowRunResult,

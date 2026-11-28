@@ -132,7 +132,7 @@ class ClassifyPathsTests(unittest.TestCase):
         self.assertFalse(res.docs)
 
     def test_builtin_bundles_trigger_rust_and_tui_in_main_ci(self) -> None:
-        res = classify_paths(["bundles/builtin/base-tools/native/src/lib.rs"])
+        res = classify_paths(["bundles/builtin/coding-extras/native/src/lib.rs"])
         self.assertEqual(res, ScopeResult(rust=True))
         self.assertTrue(res.build_bin)
         self.assertTrue(res.tui)

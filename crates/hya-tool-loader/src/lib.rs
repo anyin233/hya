@@ -57,19 +57,21 @@ pub fn try_from_tool_families(identities: &[&str]) -> Result<ToolRegistry, Strin
 }
 
 /// Non-panicking selective loader for trusted native tool bundles using an
-/// explicit [`HostRuntime`] for ABI v2 registrations.
+/// explicit [`HostRuntime`] for ABI v2 registrations, returning both the
+/// populated [`ToolRegistry`] and all collected ABI v2 [`NativeRegistrations`]
+/// (services, hooks, rewriters, APIs, reducers, URI handlers, drivers).
 ///
 /// # Errors
 ///
 /// Returns a diagnostic string when `identities` contains an unknown bundle,
 /// when a bundle's native library cannot be loaded, or when its exported tools
 /// disagree with its bundle policy.
-pub fn try_from_tool_families_with_runtime(
+pub fn try_load_tool_families_with_runtime(
     identities: &[&str],
     runtime: Arc<dyn HostRuntime>,
-) -> Result<ToolRegistry, String> {
+) -> Result<(ToolRegistry, NativeRegistrations), String> {
     if identities.is_empty() {
-        return Ok(ToolRegistry::default());
+        return Ok((ToolRegistry::default(), NativeRegistrations::new()));
     }
     for identity in identities {
         if !TOOL_FAMILIES.contains(identity) && !NATIVE_V2_TOOL_BUNDLES.contains(identity) {
@@ -81,6 +83,7 @@ pub fn try_from_tool_families_with_runtime(
         let _ = tool_bundle_presets();
     }
     let registry = ToolRegistry::default();
+    let mut combined_regs = NativeRegistrations::new();
     let mut implementations: HashMap<(&'static str, String), Arc<dyn Tool>> = HashMap::new();
     for identity in TOOL_FAMILIES {
         if !identities.contains(&identity) {
@@ -92,9 +95,11 @@ pub fn try_from_tool_families_with_runtime(
             .and_then(|bundle| bundle.runtime())
             .is_some_and(|rt| rt.abi_version == Some(2));
         let tools = if is_v2 {
-            load_v2(identity, Arc::clone(&runtime))
-                .map_err(|error| format!("load {identity}: {error}"))?
-                .tools
+            let mut regs = load_v2(identity, Arc::clone(&runtime))
+                .map_err(|error| format!("load {identity}: {error}"))?;
+            let tools = std::mem::take(&mut regs.tools);
+            combined_regs.extend(regs);
+            tools
         } else {
             load(identity)
                 .map_err(|error| format!("load {identity}: {error}"))?
@@ -190,9 +195,26 @@ pub fn try_from_tool_families_with_runtime(
         if !identities.contains(&identity) {
             continue;
         }
-        let _ = load_and_register_v2_bundle(&registry, identity, Arc::clone(&runtime))?;
+        let mut regs = load_and_register_v2_bundle(&registry, identity, Arc::clone(&runtime))?;
+        let _ = std::mem::take(&mut regs.tools);
+        combined_regs.extend(regs);
     }
-    Ok(registry)
+    Ok((registry, combined_regs))
+}
+
+/// Non-panicking selective loader for trusted native tool bundles using an
+/// explicit [`HostRuntime`] for ABI v2 registrations.
+///
+/// # Errors
+///
+/// Returns a diagnostic string when `identities` contains an unknown bundle,
+/// when a bundle's native library cannot be loaded, or when its exported tools
+/// disagree with its bundle policy.
+pub fn try_from_tool_families_with_runtime(
+    identities: &[&str],
+    runtime: Arc<dyn HostRuntime>,
+) -> Result<ToolRegistry, String> {
+    try_load_tool_families_with_runtime(identities, runtime).map(|(registry, _)| registry)
 }
 
 /// Install the builtins of a subset of the trusted tool families.

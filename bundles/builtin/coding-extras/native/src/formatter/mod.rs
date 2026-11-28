@@ -1,4 +1,10 @@
-//! External command formatter provider configured by the application host.
+//! External code-formatter provider configured by `hya/coding-extras`.
+
+pub(crate) mod catalog;
+pub(crate) mod command;
+/// Formatter configuration parsing (`formatter:` section of `config.yml`).
+pub mod config;
+pub(crate) mod definition;
 
 use std::path::Path;
 use std::process::Stdio;
@@ -7,8 +13,8 @@ use async_trait::async_trait;
 use hya_tool::{FormatterConfig, FormatterError, FormatterProvider, FormatterStatus};
 use tokio::process::Command;
 
-use crate::formatter_command::{FormatterCommand, builtin_enabled, command_for_definition};
-use crate::formatter_definition::definitions_for_config;
+use command::{FormatterCommand, builtin_enabled, command_for_definition};
+use definition::definitions_for_config;
 
 /// Default provider that runs builtin/custom command formatters from config.
 pub struct BuiltinFormatterProvider {

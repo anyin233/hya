@@ -309,8 +309,9 @@ impl SessionEngine {
             }
         }
         for hooks in self
-            .hooks
+            .native_hooks
             .iter()
+            .chain(self.hooks.iter())
             .cloned()
             .chain(self.runtime.global_plugin_hooks())
         {
