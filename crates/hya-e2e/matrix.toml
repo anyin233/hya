@@ -140,7 +140,7 @@ path = "crates/hya-e2e/tests/it/p07_bundle_policies_and_extras.rs"
 
 [[scenario]]
 id = "T1.26"
-title = "hya/agent-channels disabled: no channel:// scheme, send/list_channel tools, or BundleApi; multi-agent tools stay"
+title = "hya/agent-channels disabled: no channel:// scheme, send/list_channel tools, or BundleApi; multi-agent tools stay and a worker's plain answer reaches the lead"
 track = "P"
 path = "crates/hya-e2e/tests/it/p44_v2_bare_bundles_and_migration.rs"
 
