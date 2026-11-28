@@ -194,16 +194,19 @@ impl ProjectScopeRefresh {
             .into_iter()
             .map(|error| (key.to_string(), error))
             .collect::<Vec<_>>();
-        // Reported with this scope's errors but kept out of its diagnostics:
-        // the installed base reports its own.
-        let base_failures = match base_error {
-            Some(CoreError::BundleRefresh(failures)) => failures,
-            Some(CoreError::BundleRuntime { bundle_id, source }) => {
-                vec![(bundle_id, source.to_string())]
+        // The installed base failures are reported with this scope's errors
+        // but kept out of its diagnostics: the installed base reports its own.
+        let base_start = errors.len();
+        if let Some(error) = base_error {
+            match error {
+                CoreError::BundleRefresh(failures) => errors.extend(failures),
+                CoreError::BundleRuntime { bundle_id, source } => {
+                    errors.push((bundle_id, source.to_string()))
+                }
+                other => errors.push((key.to_string(), other.to_string())),
             }
-            Some(other) => vec![(key.to_string(), other.to_string())],
-            None => Vec::new(),
-        };
+        }
+        let base_end = errors.len();
         changed |= plugins_changed;
         let dirs = if scan_bundles {
             project_bundle_dirs(roots, &state.bundles, &mut errors)
@@ -319,8 +322,11 @@ impl ProjectScopeRefresh {
                 namespaces.insert(bundle.namespace().to_string());
             }
         }
-        state.diagnostics = errors.iter().map(|(_, message)| message.clone()).collect();
-        errors.extend(base_failures);
+        state.diagnostics = errors[..base_start]
+            .iter()
+            .chain(&errors[base_end..])
+            .map(|(_, message)| message.clone())
+            .collect();
         if !changed {
             return if errors.is_empty() {
                 Ok(false)
