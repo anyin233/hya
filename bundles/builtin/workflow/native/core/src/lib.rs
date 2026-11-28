@@ -11,10 +11,16 @@ use std::sync::Arc;
 pub mod api;
 /// Workflow filesystem & bundle catalog discovery.
 pub mod catalog;
+/// Compiler for user-authored Workflow documents.
+pub mod compile;
 /// Workflow DAG preflight, scheduling, and loop verification.
 pub mod dag;
 /// Typed workflow execution and control error definitions.
 pub mod error;
+/// Durable `hya/workflow` extension events.
+pub mod events;
+/// Workflow identities, commands, and replay projections.
+pub mod model;
 /// Durable `Event::Extension` projection reducer for `hya/workflow`.
 pub mod reducer;
 /// Managed [`hya_runtime_abi::NativeService`] owning workflow admission and runs.
@@ -36,6 +42,7 @@ pub use error::{
     WorkflowControlError, WorkflowError, bounded_error, map_workflow_error_with_detail,
     map_workflow_preflight_error,
 };
+pub use events::WorkflowEvent;
 pub use reducer::{
     WorkflowProjectionReducer, decode_workflow_projection, extension_event_parts, historical_run,
     workflow_event_run,

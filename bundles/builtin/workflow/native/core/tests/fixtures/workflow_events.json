@@ -1,0 +1,264 @@
+{
+  "session": "hysec_CTI5f4TpjWCsVOwhaiRs",
+  "events": [
+    {
+      "bundle": "hya/workflow",
+      "kind": "workflow_selected",
+      "payload": {
+        "workflow": {
+          "source": "bundle:hya/workflow/workflow/plan-impl-review",
+          "name": "plan-impl-review",
+          "revision": "abababababababababababababababababababababababababababababababab"
+        }
+      }
+    },
+    {
+      "bundle": "hya/workflow",
+      "kind": "workflow_run_started",
+      "payload": {
+        "run": "01a222c6-7762-7085-9321-df4ebe44c408",
+        "workflow": {
+          "source": "bundle:hya/workflow/workflow/plan-impl-review",
+          "name": "plan-impl-review",
+          "revision": "abababababababababababababababababababababababababababababababab"
+        },
+        "request_hash": "f00d",
+        "owner": "ba0a0f04-357f-423e-ba29-108ee67b8513",
+        "stages": [
+          {
+            "id": "plan",
+            "title": "Plan it",
+            "agent": "hya-task",
+            "mode": "loop",
+            "level": 0,
+            "worker_model": {
+              "id": "hya/offline",
+              "reasoning": "high",
+              "fallback": [
+                {
+                  "id": "openai/gpt"
+                }
+              ]
+            },
+            "selected_worker_model": {
+              "index": 1,
+              "id": "openai/gpt",
+              "reasoning": "none"
+            },
+            "verifier_model": {
+              "id": "hya/offline",
+              "reasoning": "high",
+              "fallback": [
+                {
+                  "id": "openai/gpt"
+                }
+              ]
+            }
+          },
+          {
+            "id": "implement",
+            "agent": "hya-task",
+            "mode": "once",
+            "level": 1
+          },
+          {
+            "id": "review",
+            "agent": "hya-task",
+            "mode": "once",
+            "level": 1
+          }
+        ]
+      }
+    },
+    {
+      "bundle": "hya/workflow",
+      "kind": "workflow_stage_started",
+      "payload": {
+        "run": "01a222c6-7762-7085-9321-df4ebe44c408",
+        "stage": "plan"
+      }
+    },
+    {
+      "bundle": "hya/workflow",
+      "kind": "workflow_stage_member_linked",
+      "payload": {
+        "run": "01a222c6-7762-7085-9321-df4ebe44c408",
+        "stage": "plan",
+        "member": "01a222c6-7762-7085-9321-df4f618a1356",
+        "role": "worker",
+        "iteration": 0
+      }
+    },
+    {
+      "bundle": "hya/workflow",
+      "kind": "workflow_stage_member_linked",
+      "payload": {
+        "run": "01a222c6-7762-7085-9321-df4ebe44c408",
+        "stage": "plan",
+        "member": "01a222c6-7762-7085-9321-df4f618a1356",
+        "role": "worker",
+        "iteration": 0
+      }
+    },
+    {
+      "bundle": "hya/workflow",
+      "kind": "workflow_stage_member_linked",
+      "payload": {
+        "run": "01a222c6-7762-7085-9321-df4ebe44c408",
+        "stage": "plan",
+        "member": "01a222c6-7762-7085-9321-df503a4790d3",
+        "role": "verifier",
+        "iteration": 1
+      }
+    },
+    {
+      "bundle": "hya/workflow",
+      "kind": "workflow_stage_route_outcome",
+      "payload": {
+        "run": "01a222c6-7762-7085-9321-df4ebe44c408",
+        "stage": "plan",
+        "member": "01a222c6-7762-7085-9321-df4f618a1356",
+        "role": "worker",
+        "iteration": 0,
+        "step": 0,
+        "candidate_index": 1,
+        "model": "openai/gpt",
+        "reasoning": "none",
+        "failure_class": "rate_limited"
+      }
+    },
+    {
+      "bundle": "hya/workflow",
+      "kind": "workflow_stage_finished",
+      "payload": {
+        "run": "01a222c6-7762-7085-9321-df4ebe44c408",
+        "stage": "plan",
+        "status": "completed"
+      }
+    },
+    {
+      "bundle": "hya/workflow",
+      "kind": "workflow_stage_started",
+      "payload": {
+        "run": "01a222c6-7762-7085-9321-df4ebe44c408",
+        "stage": "implement"
+      }
+    },
+    {
+      "bundle": "hya/workflow",
+      "kind": "workflow_run_finished",
+      "payload": {
+        "run": "01a222c6-7762-7085-9321-df4ebe44c408",
+        "status": "failed",
+        "error": "implement failed"
+      }
+    },
+    {
+      "bundle": "hya/workflow",
+      "kind": "workflow_stage_finished",
+      "payload": {
+        "run": "01a222c6-7762-7085-9321-df4ebe44c408",
+        "stage": "implement",
+        "status": "completed"
+      }
+    }
+  ],
+  "projection": {
+    "selection": {
+      "source": "bundle:hya/workflow/workflow/plan-impl-review",
+      "name": "plan-impl-review",
+      "revision": "abababababababababababababababababababababababababababababababab"
+    },
+    "run": {
+      "id": "01a222c6-7762-7085-9321-df4ebe44c408",
+      "workflow": {
+        "source": "bundle:hya/workflow/workflow/plan-impl-review",
+        "name": "plan-impl-review",
+        "revision": "abababababababababababababababababababababababababababababababab"
+      },
+      "request_hash": "f00d",
+      "owner": "ba0a0f04-357f-423e-ba29-108ee67b8513",
+      "status": "failed",
+      "stages": [
+        {
+          "id": "plan",
+          "title": "Plan it",
+          "agent": "hya-task",
+          "mode": "loop",
+          "level": 0,
+          "worker_model": {
+            "id": "hya/offline",
+            "reasoning": "high",
+            "fallback": [
+              {
+                "id": "openai/gpt"
+              }
+            ]
+          },
+          "selected_worker_model": {
+            "index": 1,
+            "id": "openai/gpt",
+            "reasoning": "none"
+          },
+          "verifier_model": {
+            "id": "hya/offline",
+            "reasoning": "high",
+            "fallback": [
+              {
+                "id": "openai/gpt"
+              }
+            ]
+          },
+          "status": "completed",
+          "members": [
+            {
+              "member": "01a222c6-7762-7085-9321-df4f618a1356",
+              "role": "worker",
+              "iteration": 0
+            },
+            {
+              "member": "01a222c6-7762-7085-9321-df503a4790d3",
+              "role": "verifier",
+              "iteration": 1
+            }
+          ],
+          "route_outcomes": [
+            {
+              "session": "hysec_CTI5f4TpjWCsVOwhaiRs",
+              "run": "01a222c6-7762-7085-9321-df4ebe44c408",
+              "stage": "plan",
+              "member": "01a222c6-7762-7085-9321-df4f618a1356",
+              "role": "worker",
+              "iteration": 0,
+              "step": 0,
+              "candidate_index": 1,
+              "model": "openai/gpt",
+              "reasoning": "none",
+              "failure_class": "rate_limited"
+            }
+          ]
+        },
+        {
+          "id": "implement",
+          "agent": "hya-task",
+          "mode": "once",
+          "level": 1,
+          "status": "failed",
+          "members": []
+        },
+        {
+          "id": "review",
+          "agent": "hya-task",
+          "mode": "once",
+          "level": 1,
+          "status": "skipped",
+          "members": []
+        }
+      ],
+      "error": "implement failed"
+    },
+    "seen_runs": [
+      "01a222c6-7762-7085-9321-df4ebe44c408"
+    ]
+  }
+}

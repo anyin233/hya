@@ -12,16 +12,17 @@ use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use hya_bundle::{ApiMethod, ApiScope};
-use hya_proto::{WorkflowRevision, WorkflowRunId};
 use hya_runtime_abi::{
     HostError, NativeApiEndpoint, NativeBundleApiHandler, NativeBundleApiReply,
     NativeBundleApiRequest,
 };
-use hya_tool::{WorkflowCommand, WorkflowCommandResult, WorkflowDelivery};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::WorkflowControlError;
+use crate::model::{
+    WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowRevision, WorkflowRunId,
+};
 use crate::service::{WORKFLOW_BUNDLE_ID, WorkflowInvocation, WorkflowService};
 
 /// Native HTTP/gRPC bundle API handler for `hya/workflow`.

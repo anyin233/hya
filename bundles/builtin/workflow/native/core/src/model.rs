@@ -1,0 +1,646 @@
+//! Workflow identities, catalog metadata, commands, and replay projections.
+//!
+//! Every type here keeps the JSON shape the durable event log and the
+//! `hya/workflow` BundleApi already carry.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::str::FromStr;
+
+use hya_proto::{AgentName, MemberId, ModelRef, OperationId, OwnerRunId, SessionId};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+/// Stable catalog origin for a compiled Workflow source.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct WorkflowSourceId(String);
+
+impl WorkflowSourceId {
+    /// Construct a stable source identity from a catalog-owned value.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Borrow the stable source identity.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for WorkflowSourceId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// Canonical SHA-256 revision of normalized Workflow semantics.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct WorkflowRevision([u8; 32]);
+
+impl WorkflowRevision {
+    /// Construct a revision from compiler digest bytes.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Return canonical digest bytes.
+    #[must_use]
+    pub const fn as_bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
+
+impl std::fmt::Display for WorkflowRevision {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for byte in self.0 {
+            write!(formatter, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl FromStr for WorkflowRevision {
+    type Err = WorkflowRevisionParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.len() != 64 {
+            return Err(WorkflowRevisionParseError(
+                "Workflow revision must contain exactly 64 hexadecimal characters".to_string(),
+            ));
+        }
+        let mut bytes = [0_u8; 32];
+        for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
+            let high = hex_value(pair[0]).ok_or_else(|| {
+                WorkflowRevisionParseError("Workflow revision contains non-hex data".to_string())
+            })?;
+            let low = hex_value(pair[1]).ok_or_else(|| {
+                WorkflowRevisionParseError("Workflow revision contains non-hex data".to_string())
+            })?;
+            bytes[index] = (high << 4) | low;
+        }
+        Ok(Self(bytes))
+    }
+}
+
+impl Serialize for WorkflowRevision {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for WorkflowRevision {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// Error returned by [`WorkflowRevision`] text parsing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkflowRevisionParseError(String);
+
+impl std::fmt::Display for WorkflowRevisionParseError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for WorkflowRevisionParseError {}
+
+/// Decode one ASCII hexadecimal digit.
+const fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Durable Workflow run identity (`wfrun_` + UUIDv7).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct WorkflowRunId(
+    /// Underlying UUIDv7 (or rehydrated UUID) for this id.
+    pub Uuid,
+);
+
+const WORKFLOW_RUN_ID_NAMESPACE: Uuid = Uuid::from_u128(0x19aa_6124_335d_54fb_b7e1_c271_82d6_6638);
+
+impl WorkflowRunId {
+    /// Mint a fresh, time-ordered (v7) id.
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Uuid::now_v7())
+    }
+
+    /// Wrap an existing UUID (tests, storage rehydration).
+    #[must_use]
+    pub fn from_uuid(u: Uuid) -> Self {
+        Self(u)
+    }
+
+    /// Borrow the underlying UUID.
+    #[must_use]
+    pub fn as_uuid(&self) -> Uuid {
+        self.0
+    }
+
+    /// Derive the single durable Workflow run id for one Tool operation.
+    #[must_use]
+    pub fn from_operation(operation: OperationId) -> Self {
+        Self::from_uuid(Uuid::new_v5(
+            &WORKFLOW_RUN_ID_NAMESPACE,
+            operation.as_uuid().as_bytes(),
+        ))
+    }
+}
+
+impl Default for WorkflowRunId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for WorkflowRunId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "wfrun_{}", self.0.simple())
+    }
+}
+
+impl FromStr for WorkflowRunId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let raw = s.strip_prefix("wfrun_").unwrap_or(s);
+        Uuid::parse_str(raw).map(Self)
+    }
+}
+
+/// One authored Workflow model candidate in an ordered fallback chain.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowModelCandidate {
+    /// Base model identity without a Workflow variant suffix.
+    pub id: String,
+    /// Optional author-provided effort label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+}
+
+impl WorkflowModelCandidate {
+    /// Base model reference without a Workflow variant suffix.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Author-provided reasoning effort label, before runtime capability parsing.
+    #[must_use]
+    pub fn reasoning(&self) -> Option<&str> {
+        self.reasoning.as_deref()
+    }
+}
+
+/// Preferred authored model plus its ordered fallback candidates.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowModelAssignment {
+    /// Preferred base model identity.
+    pub id: String,
+    /// Optional preferred effort label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    /// Ordered fallback tail.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback: Vec<WorkflowModelCandidate>,
+}
+
+impl WorkflowModelAssignment {
+    /// Preferred base model reference without a Workflow variant suffix.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Preferred author-provided reasoning effort label.
+    #[must_use]
+    pub fn reasoning(&self) -> Option<&str> {
+        self.reasoning.as_deref()
+    }
+
+    /// Ordered fallback tail after the preferred model.
+    #[must_use]
+    pub fn fallback(&self) -> &[WorkflowModelCandidate] {
+        &self.fallback
+    }
+}
+
+/// Candidate selected during Workflow admission, with canonical effort.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowModelResolvedCandidate {
+    /// Declaration-order index in the complete route.
+    pub index: u32,
+    /// Base model identity without a variant suffix.
+    pub id: String,
+    /// Required canonical effort label (`none` means Off).
+    pub reasoning: String,
+}
+
+/// One Stage in a compiled Workflow info response.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowStageInfo {
+    /// Compiled Stage id.
+    pub id: String,
+    /// Optional author title.
+    pub title: Option<String>,
+    /// Target Agent id.
+    pub agent: String,
+    /// Zero-based topological level.
+    pub level: usize,
+    /// Direct predecessor ids in compiled join order.
+    pub predecessors: Vec<String>,
+    /// Optional resident actor key.
+    pub actor: Option<String>,
+    /// `once` or `loop`.
+    pub mode: String,
+    /// Optional authored worker model assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_model: Option<WorkflowModelAssignment>,
+    /// Optional authored verifier model assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_model: Option<WorkflowModelAssignment>,
+}
+
+/// Valid compiled Workflow metadata returned by an `info` command.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowInfo {
+    /// Stable source/name/revision identity.
+    pub identity: WorkflowIdentity,
+    /// Human-readable description.
+    pub description: String,
+    /// Required input names and descriptions.
+    pub inputs: BTreeMap<String, String>,
+    /// Failure policy wire value.
+    pub on_failure: String,
+    /// Compiled Stages in stable graph order.
+    pub stages: Vec<WorkflowStageInfo>,
+    /// Source path for diagnostics.
+    pub path: String,
+}
+
+/// One discovery row. Invalid sources remain visible with an explicit error.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowSummary {
+    /// Declared name, or source stem when compilation failed.
+    pub name: String,
+    /// Description when compilation succeeded.
+    pub description: String,
+    /// Stable source identity when compilation succeeded.
+    pub source: Option<WorkflowSourceId>,
+    /// Canonical revision when compilation succeeded.
+    pub revision: Option<WorkflowRevision>,
+    /// Compiled Stage ids, or empty for an invalid source.
+    pub stages: Vec<String>,
+    /// Source path for diagnostics.
+    pub path: String,
+    /// Compiler failure for an invalid source.
+    pub error: Option<String>,
+}
+
+/// Exact compiled Workflow identity selected or executed by a Session.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowIdentity {
+    /// Stable catalog source identity.
+    pub source: WorkflowSourceId,
+    /// Author-declared Workflow name.
+    pub name: String,
+    /// Canonical compiler revision.
+    pub revision: WorkflowRevision,
+}
+
+/// Runtime catalog availability for a persisted Workflow identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowAvailability {
+    /// The exact source and revision are present in the current catalog.
+    Available,
+    /// The exact source remains present but changed or no longer compiles.
+    Stale,
+    /// The exact source is absent from the current catalog.
+    Unavailable,
+}
+
+/// Delivery contract requested by a Workflow caller.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowDelivery {
+    /// Return after durable admission; progress arrives in events.
+    Started,
+    /// Await the terminal run projection before returning.
+    #[default]
+    Finished,
+}
+
+/// One command accepted by the Workflow control service.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "command", rename_all = "snake_case")]
+pub enum WorkflowCommand {
+    /// List every discovered Workflow source.
+    List,
+    /// Return one exact compiled Workflow graph.
+    Info {
+        /// Declared Workflow name.
+        name: String,
+    },
+    /// Persist one selected source/revision identity.
+    Select {
+        /// Declared Workflow name.
+        name: String,
+        /// Optional optimistic compiler revision.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_revision: Option<WorkflowRevision>,
+    },
+    /// Return replay-derived state for one Session.
+    State,
+    /// Admit and optionally execute one named or selected Workflow.
+    Run {
+        /// Explicit name, or `None` to use the durable selection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        /// Optional optimistic compiler revision.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_revision: Option<WorkflowRevision>,
+        /// Exact values for every declared Workflow input.
+        #[serde(default)]
+        inputs: BTreeMap<String, String>,
+        /// Stable direct-call id for idempotent retries.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run: Option<WorkflowRunId>,
+    },
+}
+
+/// Typed result returned by the Workflow control service.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorkflowCommandResult {
+    /// Discovery rows from `List`.
+    List {
+        /// Discovered source rows.
+        workflows: Vec<WorkflowSummary>,
+    },
+    /// Compiled graph from `Info`.
+    Info {
+        /// Exact compiled metadata.
+        workflow: WorkflowInfo,
+    },
+    /// Replay-derived state after `Select`.
+    Selected {
+        /// Current Workflow projection.
+        state: WorkflowProjection,
+    },
+    /// Replay-derived state from `State`.
+    State {
+        /// Current Workflow projection.
+        state: WorkflowProjection,
+    },
+    /// Run admission or terminal state from `Run`.
+    Run {
+        /// Current or terminal run projection.
+        result: WorkflowRunResult,
+    },
+}
+
+/// Result of a new or idempotently replayed Workflow run request.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowRunResult {
+    /// Replay-derived current or historical run state.
+    pub run: WorkflowRunProjection,
+    /// True when the run had already been admitted and no work ran again.
+    pub replayed: bool,
+}
+
+/// Terminal and active states of one Workflow run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowRunStatus {
+    /// The run can still admit or complete Stages.
+    Running,
+    /// Every required Stage completed.
+    Completed,
+    /// At least one Stage failed.
+    Failed,
+    /// The current owner cancelled the run.
+    Cancelled,
+    /// Startup proved that the prior runtime owner exited.
+    Interrupted,
+}
+
+impl WorkflowRunStatus {
+    /// Return whether later run-terminal events must be ignored.
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        !matches!(self, Self::Running)
+    }
+}
+
+/// Terminal and active states of one Workflow Stage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowStageStatus {
+    /// The Stage is in the compiled plan but has not started.
+    Pending,
+    /// The Stage owns admitted work.
+    Running,
+    /// The Stage completed successfully.
+    Completed,
+    /// The Stage completed with a failure.
+    Failed,
+    /// Cancellation stopped the Stage.
+    Cancelled,
+    /// The run terminalized before this Stage started.
+    Skipped,
+}
+
+impl WorkflowStageStatus {
+    /// Return whether later Stage lifecycle events must not change this status.
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        !matches!(self, Self::Pending | Self::Running)
+    }
+}
+
+/// Stable display/provenance data captured at run admission.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowStagePlan {
+    /// Compiled Stage id.
+    pub id: String,
+    /// Optional author title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Resolved target Agent id.
+    pub agent: AgentName,
+    /// `once` or `loop`.
+    pub mode: String,
+    /// Zero-based topological level.
+    pub level: usize,
+    /// Optional authored worker model assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_model: Option<WorkflowModelAssignment>,
+    /// Admission-selected worker candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_worker_model: Option<WorkflowModelResolvedCandidate>,
+    /// Optional authored verifier model assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_model: Option<WorkflowModelAssignment>,
+    /// Admission-selected verifier candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_verifier_model: Option<WorkflowModelResolvedCandidate>,
+}
+
+/// Role of one canonical Member reference within a Workflow Stage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowMemberRole {
+    /// Worker or resident actor activation.
+    Worker,
+    /// Independent loop verifier judgment.
+    Verifier,
+}
+
+/// One canonical Member reference linked to a Workflow Stage.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowMemberProjection {
+    /// Member identity in the Session tree.
+    pub member: MemberId,
+    /// Worker or independent verifier role.
+    pub role: WorkflowMemberRole,
+    /// Zero-based activation iteration.
+    pub iteration: u32,
+}
+
+/// Stable, bounded classification for one Workflow route outcome.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowRouteFailureClass {
+    /// The selected candidate succeeded without a fallback advance.
+    None,
+    /// Retryable transport failure before a stream was established.
+    Transport,
+    /// Upstream rate limiting before a stream was established.
+    RateLimited,
+    /// Retryable upstream server failure before a stream was established.
+    Server,
+    /// No provider route claimed the candidate model.
+    UnknownModel,
+    /// Authentication or authorization failure.
+    Auth,
+    /// Provider capability or request incompatibility.
+    Incompatible,
+    /// Non-retryable HTTP/provider response failure.
+    Http,
+    /// Malformed or truncated provider stream.
+    Decode,
+    /// Internal invariant, store, or claim failure after an attempt started.
+    Internal,
+    /// Sidecar loss or task abort after an attempt started.
+    Aborted,
+    /// Explicit Workflow-owned activation cancellation.
+    Cancelled,
+}
+
+/// Durable fields for one finalized explicit Workflow route stream group.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowStageRouteOutcome {
+    /// Owning root Session log.
+    pub session: SessionId,
+    /// Workflow run containing the Stage.
+    pub run: WorkflowRunId,
+    /// Compiled Stage id.
+    pub stage: String,
+    /// Canonical Session member reference.
+    pub member: MemberId,
+    /// Worker or independent verifier route.
+    pub role: WorkflowMemberRole,
+    /// Zero-based loop activation iteration.
+    pub iteration: u32,
+    /// Assistant/provider stream-group index.
+    pub step: u32,
+    /// Declaration-order candidate index selected or finally attempted.
+    pub candidate_index: u32,
+    /// Base model identity without a Workflow variant suffix.
+    pub model: ModelRef,
+    /// Required canonical effort label (`none` means Off).
+    pub reasoning: String,
+    /// Stable provider/activation failure class.
+    pub failure_class: WorkflowRouteFailureClass,
+}
+
+/// Folded state of one Stage in the newest Workflow run.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowStageProjection {
+    /// Stable plan metadata captured by run start.
+    #[serde(flatten)]
+    pub plan: WorkflowStagePlan,
+    /// Latest monotonic Stage state.
+    pub status: WorkflowStageStatus,
+    /// Canonical Member references in event order.
+    #[serde(default)]
+    pub members: Vec<WorkflowMemberProjection>,
+    /// Canonical finalized route outcomes in append order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub route_outcomes: Vec<WorkflowStageRouteOutcome>,
+}
+
+/// Folded state of the newest Workflow run in one Session.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowRunProjection {
+    /// Durable run identity.
+    pub id: WorkflowRunId,
+    /// Exact source/revision identity executed by this run.
+    pub workflow: WorkflowIdentity,
+    /// Canonical hash of source, caller, inputs, and bound runtime semantics.
+    pub request_hash: String,
+    /// Runtime owner that admitted this run.
+    pub owner: OwnerRunId,
+    /// Latest monotonic run state.
+    pub status: WorkflowRunStatus,
+    /// Declaration-ordered Stage projections.
+    pub stages: Vec<WorkflowStageProjection>,
+    /// Bounded terminal error, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Replay-only Workflow state attached to a Session without changing transcript rows.
+#[derive(Clone, Debug, Default, Eq, Serialize, Deserialize)]
+pub struct WorkflowProjection {
+    /// Current selected compiled identity, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<WorkflowIdentity>,
+    /// Newest run, active or terminal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<WorkflowRunProjection>,
+    /// Current runtime catalog status for the selected identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub availability: Option<WorkflowAvailability>,
+    /// Run ids already admitted during this replay; not compared in `PartialEq`.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub seen_runs: BTreeSet<WorkflowRunId>,
+}
+
+impl PartialEq for WorkflowProjection {
+    fn eq(&self, other: &Self) -> bool {
+        self.selection == other.selection
+            && self.run == other.run
+            && self.availability == other.availability
+    }
+}

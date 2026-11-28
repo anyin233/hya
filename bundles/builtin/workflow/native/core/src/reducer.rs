@@ -1,26 +1,28 @@
 //! ABI v2 [`ProjectionReducer`] for `hya/workflow` extension events.
 
-use hya_proto::{Envelope, Event, SessionId, WorkflowRunId};
+use hya_proto::{Envelope, Event, SessionId};
 use hya_runtime_abi::{ExtensionEventContext, HostError, ProjectionReducer};
-use hya_tool::extension::{BUNDLE_WORKFLOW, ExtensionEvent};
-use hya_tool::{
-    WorkflowMemberProjection, WorkflowProjection, WorkflowRunProjection, WorkflowRunStatus,
-    WorkflowStageProjection, WorkflowStageRouteOutcome, WorkflowStageStatus,
-};
 use serde_json::Value;
+
+use crate::events::WorkflowEvent;
+use crate::model::{
+    WorkflowMemberProjection, WorkflowProjection, WorkflowRunId, WorkflowRunProjection,
+    WorkflowRunStatus, WorkflowStageProjection, WorkflowStageRouteOutcome, WorkflowStageStatus,
+};
+use crate::service::WORKFLOW_BUNDLE_ID;
 
 /// Deterministic event-log projection reducer for `hya/workflow`.
 #[derive(Clone, Debug, Default)]
 pub struct WorkflowProjectionReducer;
 
 impl WorkflowProjectionReducer {
-    /// Fold one decoded [`ExtensionEvent`] into a [`WorkflowProjection`].
-    pub fn fold_event(wf: &mut WorkflowProjection, ext: ExtensionEvent) {
+    /// Fold one decoded [`WorkflowEvent`] into a [`WorkflowProjection`].
+    pub fn fold_event(wf: &mut WorkflowProjection, ext: WorkflowEvent) {
         match ext {
-            ExtensionEvent::WorkflowSelected { workflow, .. } => {
+            WorkflowEvent::WorkflowSelected { workflow, .. } => {
                 wf.selection = Some(workflow);
             }
-            ExtensionEvent::WorkflowRunStarted {
+            WorkflowEvent::WorkflowRunStarted {
                 run,
                 workflow,
                 request_hash,
@@ -49,7 +51,7 @@ impl WorkflowProjectionReducer {
                     });
                 }
             }
-            ExtensionEvent::WorkflowStageStarted { run, stage, .. } => {
+            WorkflowEvent::WorkflowStageStarted { run, stage, .. } => {
                 if let Some(current) = wf.run.as_mut().filter(|r| r.id == run)
                     && current.status == WorkflowRunStatus::Running
                     && let Some(existing) =
@@ -59,7 +61,7 @@ impl WorkflowProjectionReducer {
                     existing.status = WorkflowStageStatus::Running;
                 }
             }
-            ExtensionEvent::WorkflowStageMemberLinked {
+            WorkflowEvent::WorkflowStageMemberLinked {
                 run,
                 stage,
                 member,
@@ -82,7 +84,7 @@ impl WorkflowProjectionReducer {
                     });
                 }
             }
-            ExtensionEvent::WorkflowStageRouteOutcome {
+            WorkflowEvent::WorkflowStageRouteOutcome {
                 session,
                 run,
                 stage,
@@ -123,7 +125,7 @@ impl WorkflowProjectionReducer {
                     });
                 }
             }
-            ExtensionEvent::WorkflowStageFinished {
+            WorkflowEvent::WorkflowStageFinished {
                 run, stage, status, ..
             } => {
                 if status.is_terminal()
@@ -136,7 +138,7 @@ impl WorkflowProjectionReducer {
                     stage_row.status = status;
                 }
             }
-            ExtensionEvent::WorkflowRunFinished {
+            WorkflowEvent::WorkflowRunFinished {
                 run, status, error, ..
             } => {
                 if status.is_terminal()
@@ -160,14 +162,13 @@ impl WorkflowProjectionReducer {
                     }
                 }
             }
-            _ => {}
         }
     }
 }
 
 impl ProjectionReducer for WorkflowProjectionReducer {
     fn bundle_id(&self) -> &str {
-        BUNDLE_WORKFLOW
+        WORKFLOW_BUNDLE_ID
     }
 
     fn initial_state(&self) -> Value {
@@ -175,8 +176,7 @@ impl ProjectionReducer for WorkflowProjectionReducer {
     }
 
     fn apply(&self, state: &mut Value, event: &ExtensionEventContext) -> Result<(), HostError> {
-        let Some(ext) =
-            ExtensionEvent::from_parts(event.session, BUNDLE_WORKFLOW, &event.kind, &event.payload)
+        let Some(ext) = WorkflowEvent::from_parts(event.session, &event.kind, &event.payload)
         else {
             return Ok(());
         };
@@ -195,15 +195,7 @@ impl ProjectionReducer for WorkflowProjectionReducer {
 /// Return the Workflow run identity carried by one lifecycle event.
 #[must_use]
 pub fn workflow_event_run(event: &Event) -> Option<WorkflowRunId> {
-    match ExtensionEvent::from_event(event)? {
-        ExtensionEvent::WorkflowRunStarted { run, .. }
-        | ExtensionEvent::WorkflowStageStarted { run, .. }
-        | ExtensionEvent::WorkflowStageMemberLinked { run, .. }
-        | ExtensionEvent::WorkflowStageRouteOutcome { run, .. }
-        | ExtensionEvent::WorkflowStageFinished { run, .. }
-        | ExtensionEvent::WorkflowRunFinished { run, .. } => Some(run),
-        _ => None,
-    }
+    WorkflowEvent::from_event(event)?.run()
 }
 
 /// Reconstruct one historical run from only the durable events owned by `run`.
@@ -214,7 +206,7 @@ pub fn historical_run(events: &[Envelope], run: WorkflowRunId) -> Option<Workflo
         if workflow_event_run(&envelope.event) != Some(run) {
             continue;
         }
-        if let Some(ext) = ExtensionEvent::from_event(&envelope.event) {
+        if let Some(ext) = WorkflowEvent::from_event(&envelope.event) {
             WorkflowProjectionReducer::fold_event(&mut projection, ext);
         }
     }
@@ -229,22 +221,17 @@ pub fn decode_workflow_projection(value: Option<Value>) -> WorkflowProjection {
         .unwrap_or_default()
 }
 
-/// Extract `(bundle, kind, payload)` from an [`ExtensionEvent`] for `append_extension_event`.
+/// Extract `(session, bundle, kind, payload)` from a [`WorkflowEvent`] for `append_extension_event`.
 ///
 /// # Errors
-/// Returns [`HostError::Internal`] if the event is not an `Event::Extension`.
+/// Returns [`HostError::Internal`] if the payload cannot be serialized.
 pub fn extension_event_parts(
-    event: ExtensionEvent,
+    event: WorkflowEvent,
 ) -> Result<(SessionId, String, String, Value), HostError> {
-    match event.into_event() {
-        Event::Extension {
-            session,
-            bundle,
-            kind,
-            payload,
-        } => Ok((session, bundle, kind, payload)),
-        _ => Err(HostError::Internal(
-            "workflow extension event did not serialize as Event::Extension".into(),
-        )),
-    }
+    let session = event.session();
+    let kind = event.kind().to_owned();
+    let payload = event
+        .payload()
+        .map_err(|error| HostError::Internal(format!("serialize workflow event: {error}")))?;
+    Ok((session, WORKFLOW_BUNDLE_ID.to_owned(), kind, payload))
 }

@@ -5,14 +5,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hya_bundle::Bundle;
-use hya_proto::{
-    WorkflowAvailability, WorkflowIdentity, WorkflowInfo, WorkflowRevision, WorkflowSourceId,
-    WorkflowStageInfo, WorkflowSummary,
-};
-use hya_workflow::CompiledWorkflow;
 use sha2::{Digest, Sha256};
 
+use crate::compile::{CompiledWorkflow, WorkflowSource, compile};
 use crate::error::{WorkflowControlError, WorkflowError, bounded_error};
+use crate::model::{
+    WorkflowAvailability, WorkflowIdentity, WorkflowInfo, WorkflowModelAssignment,
+    WorkflowRevision, WorkflowSourceId, WorkflowStageInfo, WorkflowSummary,
+};
 
 /// Bundle identity reserved for the read-only first-party Workflow bundle.
 pub const FIRST_PARTY_BUNDLE_ID: &str = "hya/workflow";
@@ -66,8 +66,7 @@ pub fn load_workflow_file(path: &Path) -> Result<CompiledWorkflow, WorkflowError
         detail: error.to_string(),
     })?;
     let source_name = path.display().to_string();
-    hya_workflow::compile(hya_workflow::WorkflowSource::new(&source_name, &content))
-        .map_err(WorkflowError::Compile)
+    compile(WorkflowSource::new(&source_name, &content)).map_err(WorkflowError::Compile)
 }
 
 fn is_workflow_source(path: &Path) -> bool {
@@ -265,10 +264,9 @@ impl WorkflowCatalog {
             };
             let source = format!("bundle:{}/workflow/{}", bundle.identity().id, prepared.id);
             let workflow =
-                hya_workflow::compile(hya_workflow::WorkflowSource::new(&source, &prepared.source))
-                    .map_err(|error| {
-                        WorkflowControlError::InvalidSource(bounded_error(&error.to_string()))
-                    })?;
+                compile(WorkflowSource::new(&source, &prepared.source)).map_err(|error| {
+                    WorkflowControlError::InvalidSource(bounded_error(&error.to_string()))
+                })?;
             if workflow.definition().name() != prepared.id {
                 return Err(WorkflowControlError::InvalidSource(format!(
                     "prepared Workflow `{}` declares `{}`",
@@ -313,7 +311,7 @@ impl WorkflowCatalog {
 
     /// Return the effective list in source precedence order.
     #[must_use]
-    pub fn list(&self) -> Vec<WorkflowSummary> {
+    pub fn summaries(&self) -> Vec<WorkflowSummary> {
         let mut seen = BTreeSet::new();
         let mut summaries = Vec::new();
         for row in &self.rows {
@@ -422,9 +420,62 @@ impl WorkflowCatalog {
     ///
     /// # Errors
     /// Propagates the exact resolution error from [`Self::resolve`].
-    pub fn info(&self, reference: &str) -> Result<WorkflowInfo, WorkflowControlError> {
+    pub fn describe(&self, reference: &str) -> Result<WorkflowInfo, WorkflowControlError> {
         let entry = self.resolve(reference)?;
         Ok(workflow_info(entry))
+    }
+
+    /// [`Self::summaries`] as `hya_proto` rows for the core `hya workflow list`,
+    /// until that command runs through this bundle's `cli_list` endpoint.
+    #[must_use]
+    pub fn list(&self) -> Vec<hya_proto::WorkflowSummary> {
+        self.summaries()
+            .into_iter()
+            .map(|summary| hya_proto::WorkflowSummary {
+                name: summary.name,
+                description: summary.description,
+                source: summary.source.as_ref().map(proto_source),
+                revision: summary.revision.map(proto_revision),
+                stages: summary.stages,
+                path: summary.path,
+                error: summary.error,
+            })
+            .collect()
+    }
+
+    /// [`Self::describe`] as `hya_proto` metadata for the core `hya workflow info`,
+    /// until that command runs through this bundle's `cli_info` endpoint.
+    ///
+    /// # Errors
+    /// Propagates the exact resolution error from [`Self::resolve`].
+    pub fn info(&self, reference: &str) -> Result<hya_proto::WorkflowInfo, WorkflowControlError> {
+        let info = self.describe(reference)?;
+        Ok(hya_proto::WorkflowInfo {
+            identity: hya_proto::WorkflowIdentity {
+                source: proto_source(&info.identity.source),
+                name: info.identity.name,
+                revision: proto_revision(info.identity.revision),
+            },
+            description: info.description,
+            inputs: info.inputs,
+            on_failure: info.on_failure,
+            stages: info
+                .stages
+                .into_iter()
+                .map(|stage| hya_proto::WorkflowStageInfo {
+                    id: stage.id,
+                    title: stage.title,
+                    agent: stage.agent,
+                    level: stage.level,
+                    predecessors: stage.predecessors,
+                    actor: stage.actor,
+                    mode: stage.mode,
+                    worker_model: stage.worker_model.map(proto_assignment),
+                    verifier_model: stage.verifier_model.map(proto_assignment),
+                })
+                .collect(),
+            path: info.path,
+        })
     }
 
     /// Compare one persisted identity with this exact catalog snapshot.
@@ -539,6 +590,29 @@ fn workflow_info(entry: &ResolvedWorkflow) -> WorkflowInfo {
             })
             .collect(),
         path: entry.display_path().to_string(),
+    }
+}
+
+fn proto_source(source: &WorkflowSourceId) -> hya_proto::WorkflowSourceId {
+    hya_proto::WorkflowSourceId::new(source.as_str())
+}
+
+const fn proto_revision(revision: WorkflowRevision) -> hya_proto::WorkflowRevision {
+    hya_proto::WorkflowRevision::from_bytes(revision.as_bytes())
+}
+
+fn proto_assignment(assignment: WorkflowModelAssignment) -> hya_proto::WorkflowModelAssignment {
+    hya_proto::WorkflowModelAssignment {
+        id: assignment.id,
+        reasoning: assignment.reasoning,
+        fallback: assignment
+            .fallback
+            .into_iter()
+            .map(|candidate| hya_proto::WorkflowModelCandidate {
+                id: candidate.id,
+                reasoning: candidate.reasoning,
+            })
+            .collect(),
     }
 }
 
