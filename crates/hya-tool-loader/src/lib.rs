@@ -4,6 +4,7 @@
 mod base_tools;
 mod native_bundle;
 mod v2;
+mod v2_tools;
 
 pub use base_tools::{
     BaseToolAlias, BaseToolExposure, BaseToolsPreset, base_tools_preset, file_operations_rule,
@@ -17,6 +18,7 @@ pub use native_bundle::{load, loaded_library_sources};
 pub use v2::{
     LoadedNativeBundles, NativeBundleLoader, load_v2, load_v2_from_path, noop_host_runtime,
 };
+pub use v2_tools::{NATIVE_V2_TOOL_BUNDLES, load_and_register_v2_bundle, register_v2_bundle_tools};
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -30,12 +32,15 @@ use base_tools::TOOL_FAMILIES;
 /// from all trusted native tool bundles (ABI v2 and transitional ABI v1).
 #[must_use]
 pub fn builtins() -> ToolRegistry {
-    from_tool_families(&TOOL_FAMILIES)
+    let mut all = Vec::with_capacity(TOOL_FAMILIES.len() + NATIVE_V2_TOOL_BUNDLES.len());
+    all.extend_from_slice(&TOOL_FAMILIES);
+    all.extend_from_slice(&NATIVE_V2_TOOL_BUNDLES);
+    from_tool_families(&all)
 }
 
 /// Non-panicking selective loader for a subset of the trusted native tool
-/// bundles, dispatching ABI v2 bundles (such as `hya/hashline`) through
-/// [`load_v2`] and transitional ABI v1 tool families through [`load`].
+/// bundles, dispatching ABI v2 bundles (such as `hya/hashline` and `hya/plan`)
+/// through [`load_v2`] and transitional ABI v1 tool families through [`load`].
 ///
 /// # Errors
 ///
@@ -65,11 +70,14 @@ pub fn try_from_tool_families_with_runtime(
         return Ok(ToolRegistry::default());
     }
     for identity in identities {
-        if !TOOL_FAMILIES.contains(identity) {
+        if !TOOL_FAMILIES.contains(identity) && !NATIVE_V2_TOOL_BUNDLES.contains(identity) {
             return Err(format!("unknown tool family {identity}"));
         }
     }
-    let _ = tool_bundle_presets();
+    let has_v1 = identities.iter().any(|id| TOOL_FAMILIES.contains(id));
+    if has_v1 {
+        let _ = tool_bundle_presets();
+    }
     let registry = ToolRegistry::default();
     let mut implementations: HashMap<(&'static str, String), Arc<dyn Tool>> = HashMap::new();
     for identity in TOOL_FAMILIES {
@@ -119,53 +127,55 @@ pub fn try_from_tool_families_with_runtime(
                 .map(|tool| ((identity, tool.name().to_string()), tool)),
         );
     }
-    let loaded = tool_bundle_presets()
-        .iter()
-        .filter(|preset| identities.contains(&preset.identity()))
-        .collect::<Vec<_>>();
-    for preset in &loaded {
-        let Some(identity) = TOOL_FAMILIES
-            .into_iter()
-            .find(|identity| *identity == preset.identity())
-        else {
-            return Err(format!("unknown tool family {}", preset.identity()));
-        };
-        for exposure in preset.tools() {
-            let Some(tool) = implementations.remove(&(identity, exposure.name().to_string()))
+    if has_v1 {
+        let loaded = tool_bundle_presets()
+            .iter()
+            .filter(|preset| identities.contains(&preset.identity()))
+            .collect::<Vec<_>>();
+        for preset in &loaded {
+            let Some(identity) = TOOL_FAMILIES
+                .into_iter()
+                .find(|identity| *identity == preset.identity())
             else {
-                return Err(format!(
-                    "{} declares `{}` without a Rust implementation",
-                    preset.identity(),
-                    exposure.name()
-                ));
+                return Err(format!("unknown tool family {}", preset.identity()));
             };
-            if !exposure.exposed() {
-                continue;
+            for exposure in preset.tools() {
+                let Some(tool) = implementations.remove(&(identity, exposure.name().to_string()))
+                else {
+                    return Err(format!(
+                        "{} declares `{}` without a Rust implementation",
+                        preset.identity(),
+                        exposure.name()
+                    ));
+                };
+                if !exposure.exposed() {
+                    continue;
+                }
+                let overridden = loaded.iter().any(|other| {
+                    other
+                        .tool(exposure.name())
+                        .is_some_and(|winner| winner.overrides() == Some(identity))
+                });
+                if overridden {
+                    continue;
+                }
+                if tool.name() != exposure.name() {
+                    return Err(format!(
+                        "preset and implementation names differ: {} vs {}",
+                        exposure.name(),
+                        tool.name()
+                    ));
+                }
+                registry.register_builtin(
+                    tool,
+                    exposure.permission(),
+                    exposure
+                        .aliases()
+                        .iter()
+                        .map(|alias| (alias.name(), alias.visibility())),
+                    identity,
+                );
             }
-            let overridden = loaded.iter().any(|other| {
-                other
-                    .tool(exposure.name())
-                    .is_some_and(|winner| winner.overrides() == Some(identity))
-            });
-            if overridden {
-                continue;
-            }
-            if tool.name() != exposure.name() {
-                return Err(format!(
-                    "preset and implementation names differ: {} vs {}",
-                    exposure.name(),
-                    tool.name()
-                ));
-            }
-            registry.register_builtin(
-                tool,
-                exposure.permission(),
-                exposure
-                    .aliases()
-                    .iter()
-                    .map(|alias| (alias.name(), alias.visibility())),
-                identity,
-            );
         }
     }
     if !implementations.is_empty() {
@@ -173,6 +183,12 @@ pub fn try_from_tool_families_with_runtime(
             "Rust builtin implementations are missing from tool-family presets: {:?}",
             implementations.keys().collect::<BTreeSet<_>>()
         ));
+    }
+    for identity in NATIVE_V2_TOOL_BUNDLES {
+        if !identities.contains(&identity) {
+            continue;
+        }
+        let _ = load_and_register_v2_bundle(&registry, identity, Arc::clone(&runtime))?;
     }
     Ok(registry)
 }

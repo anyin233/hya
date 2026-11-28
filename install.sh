@@ -78,7 +78,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-tool_libraries=(-p hya-hashline -p hya-base-tools -p hya-extended-tools -p hya-network-tools -p hya-channel-tools -p hya-compaction)
+tool_libraries=(-p hya-hashline -p hya-base-tools -p hya-extended-tools -p hya-network-tools -p hya-channel-tools -p hya-compaction -p hya-plan)
 case "$profile" in
   release)
     profile_args=(--profile release)
@@ -275,7 +275,7 @@ for index in "${!lib_names[@]}"; do
 done
 
 verify_home="${TMPDIR:-/tmp}/hya-install-verify.$$"
-first_party=(hashline base-tools extended-tools network-tools channel-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review basic-tui-components)
+first_party=(hashline base-tools extended-tools network-tools channel-tools compaction plan core-skills core-commands core-agents agent-channels goal-loop plan-impl-review basic-tui-components)
 if [[ "$dry_run" -eq 0 ]]; then
   "$bin_dir/hya" --version >/dev/null
   "$bin_dir/hya" --help >/dev/null

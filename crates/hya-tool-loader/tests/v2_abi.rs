@@ -618,6 +618,7 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
             session,
             agent: None,
             candidate_tools: vec!["read".to_string(), "edit".to_string()],
+            interactive: true,
         })
         .await?;
     assert_eq!(

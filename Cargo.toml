@@ -2,7 +2,7 @@
 # See CONTEXT.md for the full architecture and agent-spec contract.
 [workspace]
 resolver = "3"
-members = ["crates/*", "bundles/builtin/hashline/native", "bundles/builtin/base-tools/native", "bundles/builtin/extended-tools/native", "bundles/builtin/channel-tools/native", "bundles/builtin/network-tools/native", "bundles/builtin/compaction/native"]
+members = ["crates/*", "bundles/builtin/hashline/native", "bundles/builtin/base-tools/native", "bundles/builtin/extended-tools/native", "bundles/builtin/channel-tools/native", "bundles/builtin/network-tools/native", "bundles/builtin/compaction/native", "bundles/builtin/plan/native"]
 exclude = ["crates/hya-plugin-bun", "vendor/sevenz-rust2-0.20.2"]
 
 [workspace.package]
@@ -29,6 +29,7 @@ hya-extended-tools = { path = "bundles/builtin/extended-tools/native" }
 hya-channel-tools = { path = "bundles/builtin/channel-tools/native" }
 hya-network-tools = { path = "bundles/builtin/network-tools/native" }
 hya-compaction = { path = "bundles/builtin/compaction/native" }
+hya-plan = { path = "bundles/builtin/plan/native" }
 hya-store = { path = "crates/hya-store" }
 hya-core = { path = "crates/hya-core" }
 hya-engine = { path = "crates/hya-engine" }

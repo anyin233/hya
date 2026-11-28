@@ -2255,13 +2255,20 @@ fn coordination_read_injection_and_deny_rules() {
 
 #[test]
 fn builtin_agent_views_enforce_read_only_and_coordination_sets() {
-    let b = bind(&reg_for(&[]));
+    let plan_bundle = hya_bundle::first_party_bundle("hya/plan").unwrap();
+    let b = bind(&reg_with(
+        hya_tool_loader::builtins(),
+        verified_catalog(&[plan_bundle]),
+    ));
     let names = |id: &str| schema_names(&basic(&b, id));
     let writes = ["write", "edit", "apply_patch", "bash"];
 
     let plan = names("hya-plan");
     assert!(
-        writes.iter().all(|d| !plan.contains(*d)) && plan.contains("grep") && plan.contains("task")
+        writes.iter().all(|d| !plan.contains(*d))
+            && plan.contains("grep")
+            && plan.contains("task")
+            && plan.contains("plan_exit")
     );
 
     let scout = names("hya-scout");

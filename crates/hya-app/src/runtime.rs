@@ -1145,6 +1145,24 @@ async fn build_session_engine_with_mcp_defer(
     let enabled_families = enabled_native_tool_families(&builtins);
     let registry = compose_builtin_tool_registry(&builtins)
         .map_err(|error| anyhow::anyhow!("compose built-in tool registry: {error}"))?;
+    let mut native_hooks = Vec::new();
+    let mut loaded_v2_tools = false;
+    if builtins.is_enabled("hya/plan")
+        && hya_bundle::first_party_bundle_optional("hya/plan")
+            .ok()
+            .flatten()
+            .is_some()
+    {
+        let regs = hya_tool_loader::load_and_register_v2_bundle(
+            &registry,
+            "hya/plan",
+            hya_tool_loader::noop_host_runtime(),
+        )
+        .map_err(anyhow::Error::msg)
+        .context("load first-party native bundle hya/plan")?;
+        loaded_v2_tools = !regs.tools.is_empty();
+        native_hooks.extend(regs.hooks);
+    }
     if !builtins.is_enabled("hya/network-tools") || !settings.webfetch_enabled() {
         registry.remove("webfetch");
     }
@@ -1212,7 +1230,7 @@ async fn build_session_engine_with_mcp_defer(
         .context("prepare core code-mode runtime specification")?
     };
     let load_compaction = builtins.is_enabled("hya/compaction");
-    let use_tool_family_prompts = !enabled_families.is_empty();
+    let use_tool_family_prompts = !enabled_families.is_empty() || loaded_v2_tools;
     let catalog_refresh = Arc::new(
         RuntimeExtensionsRefresh::new(
             crate::ProjectScopeRefresh::new(Arc::new(
@@ -1267,6 +1285,7 @@ async fn build_session_engine_with_mcp_defer(
         .with_base_system_prompt(agent.system_prompt.clone())
         .with_pure_context(options.pure)
         .with_tool_family_prompts(use_tool_family_prompts)
+        .with_native_hooks(native_hooks)
         // Stop/start records use this store's runtime-owner claim.
         .with_runtime_owner(owner_run_id)
         .with_global_reasoning(settings.reasoning())

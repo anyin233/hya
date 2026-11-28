@@ -189,6 +189,7 @@ pub struct SessionEngine {
     /// Context-reduction extensions the kernel runs before its own Rewrite,
     /// before each round and on `/summarize`.
     rewriters: Arc<[Arc<dyn hya_context::rewrite::Rewriter>]>,
+    native_hooks: Option<Arc<dyn HookDispatcher>>,
     hooks: Option<Arc<dyn HookDispatcher>>,
     /// Captured per-session lifecycle/event hooks ([`session_hooks`]).
     session_bundle_hooks: Arc<RwLock<session_hooks::SessionHookMap>>,
@@ -245,6 +246,7 @@ impl Clone for SessionEngine {
             rewriter_keep_recent: self.rewriter_keep_recent,
             token_accounting: self.token_accounting.clone(),
             rewriters: Arc::clone(&self.rewriters),
+            native_hooks: self.native_hooks.clone(),
             hooks: self.hooks.clone(),
             session_bundle_hooks: Arc::clone(&self.session_bundle_hooks),
             session_channel_policies: Arc::clone(&self.session_channel_policies),
@@ -303,8 +305,16 @@ impl SessionEngine {
         bus: EventBus,
     ) -> Result<Self, CoreError> {
         let rewriters = internal_rewriters()?;
+        let native_hooks = default_native_hooks();
         Ok(Self::build_with_rewriters(
-            store, providers, runtime, permission, bus, rewriters, true,
+            store,
+            providers,
+            runtime,
+            permission,
+            bus,
+            rewriters,
+            native_hooks,
+            true,
         ))
     }
 
@@ -327,6 +337,7 @@ impl SessionEngine {
             permission,
             bus,
             Arc::from([]),
+            None,
             false,
         )
     }
@@ -339,6 +350,7 @@ impl SessionEngine {
         self
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_with_rewriters(
         store: SessionStore,
         providers: Arc<ProviderRouter>,
@@ -346,6 +358,7 @@ impl SessionEngine {
         permission: PermissionPlane,
         bus: EventBus,
         rewriters: NativeRewriters,
+        native_hooks: Option<Arc<dyn HookDispatcher>>,
         use_tool_family_prompts: bool,
     ) -> Self {
         if store.projection_reducers().is_empty() {
@@ -394,6 +407,7 @@ impl SessionEngine {
             rewriter_keep_recent: CompactionConfig::default().keep_recent,
             token_accounting: TokenAccounting::default(),
             rewriters,
+            native_hooks,
             hooks: None,
             session_bundle_hooks: Arc::new(RwLock::new(HashMap::new())),
             session_channel_policies: Arc::new(RwLock::new(HashMap::new())),
@@ -503,6 +517,18 @@ impl SessionEngine {
     #[must_use]
     pub fn with_hooks(mut self, hooks: Arc<dyn HookDispatcher>) -> Self {
         self.hooks = Some(hooks);
+        self
+    }
+
+    /// Install ABI v2 native hooks registered by enabled native bundles.
+    ///
+    /// Replaces any default native hooks loaded by [`Self::try_new`] so
+    /// disabling a native bundle cleanly removes its hooks.
+    #[must_use]
+    pub fn with_native_hooks(mut self, hooks: Vec<Arc<dyn hya_runtime_abi::NativeHook>>) -> Self {
+        self.native_hooks = (!hooks.is_empty()).then(|| {
+            Arc::new(crate::hooks::NativeHookDispatcher::new(hooks)) as Arc<dyn HookDispatcher>
+        });
         self
     }
 
@@ -767,6 +793,39 @@ fn internal_rewriters() -> Result<NativeRewriters, CoreError> {
     let rewriters: NativeRewriters = hya_core::bundles::load_internal()?.rewriters.into();
     *slot = Some(Arc::clone(&rewriters));
     Ok(rewriters)
+}
+
+/// Default native hooks registered by first-party ABI v2 native tool bundles
+/// (`hya/plan`, etc.), cached process-wide for [`SessionEngine::try_new`].
+/// Callers with explicit [`hya_bundle::BuiltinBundleSelection`] override this
+/// via [`SessionEngine::with_native_hooks`].
+fn default_native_hooks() -> Option<Arc<dyn HookDispatcher>> {
+    static HOOKS: std::sync::Mutex<Option<Option<Arc<dyn HookDispatcher>>>> =
+        std::sync::Mutex::new(None);
+    let mut slot = HOOKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(cached) = slot.as_ref() {
+        return cached.clone();
+    }
+    let mut hooks = Vec::new();
+    for identity in hya_tool_loader::NATIVE_V2_TOOL_BUNDLES {
+        match hya_tool_loader::load_v2(identity, hya_tool_loader::noop_host_runtime()) {
+            Ok(regs) => hooks.extend(regs.hooks),
+            Err(error) => {
+                tracing::debug!(
+                    bundle = identity,
+                    %error,
+                    "default native v2 hooks unavailable"
+                );
+            }
+        }
+    }
+    let dispatcher = (!hooks.is_empty()).then(|| {
+        Arc::new(crate::hooks::NativeHookDispatcher::new(hooks)) as Arc<dyn HookDispatcher>
+    });
+    *slot = Some(dispatcher.clone());
+    dispatcher
 }
 
 /// Build summarize options from a fixed system definition and bound preference.

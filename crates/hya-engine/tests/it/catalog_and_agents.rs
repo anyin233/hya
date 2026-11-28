@@ -486,7 +486,6 @@ impl RuntimeCatalogRefresh for FnRefresh {
 fn builtin_agents_preset_and_core_catalog_invariants() {
     const EXPECTED: &[&str] = &[
         "hya-main",
-        "hya-plan",
         "hya-reviewer",
         "hya-scout",
         "hya-task",
@@ -513,7 +512,7 @@ fn builtin_agents_preset_and_core_catalog_invariants() {
         assert_eq!(preset.is_reserved(id), reserved);
         assert_eq!(
             a.role,
-            if matches!(id, "hya-main" | "hya-plan") {
+            if id == "hya-main" {
                 AgentRole::Main
             } else {
                 AgentRole::Subagent
@@ -529,7 +528,7 @@ fn builtin_agents_preset_and_core_catalog_invariants() {
             );
         }
     }
-    assert_eq!(ordinary, 5);
+    assert_eq!(ordinary, 4);
 
     let empty = catalog_from_bundles(&[]);
     let preset_ids: Vec<_> = preset.agents().iter().map(|a| a.id.as_str()).collect();
@@ -627,7 +626,6 @@ async fn agent_catalog_bundle_resolution_shadowing_and_spawn_authorization() {
             "acme-lead",
             "acme-zeta",
             "hya-main",
-            "hya-plan",
             "hya-reviewer",
             "hya-scout",
             "hya-task"
@@ -699,7 +697,9 @@ async fn agent_catalog_bundle_resolution_shadowing_and_spawn_authorization() {
         .unwrap();
     let names: Vec<_> = builtin_roster.iter().map(|a| a.name.as_str()).collect();
     assert!(
-        names.contains(&"research") && names.contains(&"hya-plan") && !names.contains(&"hya-title")
+        names.contains(&"research")
+            && names.contains(&"hya-scout")
+            && !names.contains(&"hya-title")
     );
     assert_eq!(
         builtin_roster

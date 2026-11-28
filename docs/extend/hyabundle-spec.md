@@ -3,7 +3,7 @@
 `hyabundle` (`.hyabundle` archive format) is Hya's unified, deterministic extension package format. Conceptually aligned with the Claude Code Plugin ecosystem, a single bundle can package any combination of:
 
 - **Tools** — model-callable tools exposed through Hya's tool plane;
-- **Hooks** — lifecycle interceptors and observers across Hya's 19 standard hook points;
+- **Hooks** — lifecycle interceptors and observers across Hya's 20 standard hook points;
 - **MCP Servers** — bundle-local `stdio` MCP servers or external `http` / `sse` MCP endpoints;
 - **Agents** — custom main or subagent roles with system prompts, model policies, and scoped resource views;
 - **Skills & Commands** — on-demand `SKILL.md` guides and `/command` slash-command templates;
@@ -40,24 +40,25 @@ The repository organizes all bundles into **three top-level directories** (conso
 
 ```text
 bundles/
-├── builtin/        # 13 trusted first-party bundles upgrading hya --bare to full mode
+├── builtin/        # 14 trusted first-party bundles upgrading hya --bare to full mode
 ├── extra/          # 6 optional official extension bundles (Marketplace-ready)
 └── examples/       # Developer starter & workflow examples
 ```
 
-### 2.1 `bundles/builtin/` (13 Built-in Bundles)
+### 2.1 `bundles/builtin/` (14 Built-in Bundles)
 
-All 13 bundles in `bundles/builtin/` ship in every release archive under `<prefix>/bundles/hya-<name>.hyabundle` and are verified by the independent `builtin-bundles` CI workflow. (`skill` and `code-mode` have been promoted into `hya-bare` core — `crates/hya-core/src/kernel/tools/skill.rs` and `packages/hya-code-mode/` + `crates/hya-app/src/code_mode.rs` — per [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md).)
+All 14 bundles in `bundles/builtin/` ship in every release archive under `<prefix>/bundles/hya-<name>.hyabundle` and are verified by the independent `builtin-bundles` CI workflow. (`skill` and `code-mode` have been promoted into `hya-bare` core — `crates/hya-core/src/kernel/tools/skill.rs` and `packages/hya-code-mode/` + `crates/hya-app/src/code_mode.rs` — per [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md).)
 
 | Path | Legacy path | Bundle ID | Runtime | Capabilities | `bare` vs `full` loading role |
 | --- | --- | --- | --- | --- | --- |
 | `bundles/builtin/hashline` | *(extracted from `base-tools`)* | `hya/hashline` | **Native ABI v2** (`cdylib`) | 4 tools (`overrides: hya/bare`): `read`, `write`, `edit`, `grep` + `HashlineRuntime` | **Full default** via `hya-tool-loader` (`load_v2`); disable via `bundles.builtin.disable: [hya/hashline]` or `--bare` to fall back to `hya-bare` standard file tools |
 | `bundles/builtin/base-tools` | `bundles/presets/base-tools` | `hya/base-tools` | **Native** (`cdylib`) | 6 tools: `ls`, `glob`, `find`, `ask_user`, `bash`, `apply_patch` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
-| `bundles/builtin/extended-tools` | `bundles/presets/extended-tools` | `hya/extended-tools` | **Native** (`cdylib`) | 9 tools: `lsp`, `list_agents`, `search_agent`, `task`, `archive`, `workflow`, `plan_exit`, `project_activity`, `wait` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
+| `bundles/builtin/extended-tools` | `bundles/presets/extended-tools` | `hya/extended-tools` | **Native** (`cdylib`) | 8 tools: `lsp`, `list_agents`, `search_agent`, `task`, `archive`, `workflow`, `project_activity`, `wait` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
 | `bundles/builtin/network-tools` | `bundles/presets/network-tools` | `hya/network-tools` | **Native** (`cdylib`) | 2 tools: `webfetch`, `websearch` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
 | `bundles/builtin/channel-tools` | `bundles/presets/channel-tools` | `hya/channel-tools` | **Native** (`cdylib`) | 4 tools: `send`, `list_channel`, `wait`, `report` | **Full required** via `hya-tool-loader`; skipped in `--bare` |
 | `bundles/builtin/compaction` | `bundles/internal/compaction` | `hya/compaction` | **Native** (`cdylib`) | 1 `Rewriter`: `shake` + `remote` context compaction | **Full required** via `hya_core::bundles::load_internal()`; skipped in `--bare` |
-| `bundles/builtin/core-agents` | `bundles/presets/core-agents` | `hya/core-agents` | **Static** | 6 built-in agents (`hya-main`, `hya-plan`, `hya-task`, `hya-scout`, `hya-reviewer`, `hya-title`) + `policy.yaml` | **Full required** via `hya-engine::builtin_agents` |
+| `bundles/builtin/plan` | *(extracted from `extended-tools` + `core-agents`)* | `hya/plan` | **Native ABI v2** (`cdylib`) | `hya-plan` read-only main agent, `plan_exit` tool (hidden alias `plan`), and `tool.visibility` native hook | **Full catalog + native ABI v2** via `hya-tool-loader` & `hya-app`; skipped in `--bare` |
+| `bundles/builtin/core-agents` | `bundles/presets/core-agents` | `hya/core-agents` | **Static** | 5 built-in agents (`hya-main`, `hya-task`, `hya-scout`, `hya-reviewer`, `hya-title`) + `policy.yaml` | **Full required** via `hya-engine::builtin_agents` |
 | `bundles/builtin/core-skills` | `bundles/presets/core-skills` | `hya/core-skills` | **Static** | 2 built-in skills (`agent-bundle-authoring`, `secure-self-update`) | **Full required** via `hya-engine::skill_catalog` |
 | `bundles/builtin/core-commands` | `bundles/presets/core-commands` | `hya/core-commands` | **Static** | 2 built-in slash commands (`/init`, `/review`) | **Full required** via `hya-server::support::command_catalog` |
 | `bundles/builtin/agent-channels` | `bundles/presets/agent-channels` | `hya/agent-channels` | **Static** | 2 vertical channel policies (`unit-default`, `parent-dm-default`) | **Full required** via `hya-engine::channel_policy` |
@@ -290,11 +291,11 @@ Aligned with Claude Code's `hooks/hooks.json` semantics:
 }
 ```
 
-#### The 19 Standard Hook Events
+#### The 20 Standard Hook Events
 
 | Category | Hook events |
 | --- | --- |
-| **Tools & Permissions (4)** | `tool.execute.before` *(always fail-closed)*, `tool.execute.after`, `permission.ask`, `permission.approve` |
+| **Tools & Permissions (5)** | `tool.execute.before` *(always fail-closed)*, `tool.execute.after`, `tool.visibility`, `permission.ask`, `permission.approve` |
 | **Requests & Routing (4)** | `chat.params`, `model.fallback`, `message.user.before`, `command.execute.before` |
 | **Text & Context (3)** | `experimental.text.complete`, `compaction.before`, `compaction.after` |
 | **Goal & Loop Evaluators (4)** | `goal.evaluate`, `loop.verifier`, `loop.planner`, `loop.should_stop` |
@@ -307,7 +308,7 @@ Aligned with Claude Code's `hooks/hooks.json` semantics:
 | `js` | Exported function loaded by `hya-plugin-bun` (`<path>#<export>`) |
 | `rpc` | Standalone JSON-RPC 2.0 process method (`hook/<event>`) |
 | `command` | Shell command hook executed by `hya-plugin-claude` (Claude Code compatibility) |
-| `native` | Native dynamic-library hook handler (reserved symbol `hya_tool_bundle_register_hooks_v1`) |
+| `native` | Native dynamic-library hook handler registered via ABI v2 (`hya_native_register_v2` / `NativeBundleRegistrar::register_hook`) |
 
 ### 4.3 MCP Server Descriptor (`mcp/<server-id>.json`)
 
@@ -420,9 +421,16 @@ Implemented in `crates/hya-tool/src/native_bundle.rs` and verified by `crates/hy
 | `hya_tool_bundle_register_rewriters_v1(out: *mut Vec<Arc<dyn Rewriter>>)` | Optional | Registers `hya_context::rewrite::Rewriter` extensions (used by `hya/compaction`). |
 | `hya_tool_bundle_register_hooks_v1(...)` | Reserved | Planned native hook registration symbol for parity with JS bundles. |
 
-#### ABI v2 — Stable C-ABI (Roadmap for Third-Party Native Bundles)
+#### ABI v2 — Unified Native Runtime ABI (`hya-runtime-abi`)
 
-Future third-party and closed-source native bundles will target `abi_version: 2`: a compiler-independent `extern "C"` boundary passing length-delimited JSON/Protobuf byte buffers with explicit host/plugin deallocation callbacks and version negotiation, removing the lockstep `rustc` coupling of ABI v1.
+Implemented in `crates/hya-runtime-abi` (exported via `export_native_bundle_v2!`) and loaded by `crates/hya-tool-loader` (used by `hya/plan` and subsequent v2 native bundles per [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)). Native v2 crates depend only on the narrow `hya-runtime-abi` / `hya-tool` / `hya-proto` boundary — never on `hya-store`, `sqlx`, `hya-engine`, `hya-server`, `axum`, or `tonic`.
+
+| Exported C symbol | Required | Purpose |
+| --- | --- | --- |
+| `hya_native_abi_v2(out: *mut u8)` | Yes | Writes the 32-byte SHA-256 ABI v2 digest covering protocol version, Hya version, `rustc -V`, target OS/arch, and core trait/struct layouts. Any mismatch aborts load immediately. |
+| `hya_native_share_deadline_v2(cell: *const c_void)` | Yes | Shares host deadline and active task registry pointers. |
+| `hya_native_with_runtime_v2(handle, callback, state)` | Yes | Polls futures synchronously inside the bundle's Tokio runtime context. |
+| `hya_native_register_v2(runtime, out: *mut NativeBundleRegistrations)` | Yes | Registers the bundle's `Tool`, `NativeHook` (including `tool.visibility`), `Rewriter`, `SubagentDriver`, `WorkflowDriver`, `HostService`, and `ApiHandler` implementations in one entry point. |
 
 ---
 

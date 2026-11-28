@@ -13,16 +13,6 @@ agents:
     description: Default primary agent. Owns the request end to end and delegates focused work to hya-scout, hya-task, and hya-reviewer.
     role: main
     prompt: prompts/hya-main.md
-  - id: hya-plan
-    description: Read-only planning agent. Investigates and returns an ordered implementation plan; cannot edit files or run shell commands.
-    role: main
-    prompt: prompts/hya-plan.md
-    resource_view:
-      deny:
-        - harness:tool/write
-        - harness:tool/edit
-        - harness:tool/apply_patch
-        - harness:tool/bash
   - id: hya-task
     description: General-purpose worker with the full tool set for one delegated multi-step task. The default `task` target.
     role: subagent

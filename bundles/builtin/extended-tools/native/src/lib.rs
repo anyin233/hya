@@ -7,14 +7,13 @@ use hya_tool::Tool;
 mod agents;
 mod archive;
 mod lsp;
-mod plan;
 mod project_activity;
 mod search_agent;
 mod task;
 mod workflow;
 
 hya_tool::export_native_tool_bundle!(|out| {
-    let tools: [Arc<dyn Tool>; 9] = [
+    let tools: [Arc<dyn Tool>; 8] = [
         Arc::new(lsp::LspTool),
         Arc::new(agents::ListAgentsTool),
         Arc::new(task::TaskTool),
@@ -22,7 +21,6 @@ hya_tool::export_native_tool_bundle!(|out| {
         Arc::new(project_activity::ProjectActivityTool),
         Arc::new(search_agent::SearchAgentTool),
         Arc::new(archive::ArchiveTool),
-        Arc::new(plan::PlanExitTool),
         Arc::new(hya_tool::lifecycle::WaitTool::new(false)),
     ];
     out.extend(tools);

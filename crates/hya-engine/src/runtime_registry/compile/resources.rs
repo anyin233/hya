@@ -309,6 +309,16 @@ impl TurnBinding {
             // A built-in owns no bundle resources, so it never needs a sidecar.
             return Ok(false);
         }
+        if policy.bundle_id.as_deref().is_some_and(|id| {
+            self.snapshot.catalog.bundles().bundles().iter().any(|b| {
+                b.identity().id == id
+                    && b.runtime()
+                        .is_some_and(|rt| rt.kind == hya_bundle::PreparedRuntimeKind::Native)
+            })
+        }) {
+            // Native bundles load in-process via ABI v2 rather than a JS sidecar.
+            return Ok(false);
+        }
         if policy
             .bundle_id
             .as_deref()

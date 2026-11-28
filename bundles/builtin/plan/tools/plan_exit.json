@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "plan_exit",
+  "description": "Exit plan mode after asking the user to approve switching to build mode.",
+  "permission": "tool",
+  "aliases": [
+    {
+      "name": "plan",
+      "visibility": "hidden"
+    }
+  ],
+  "prompt_hint": "submit the finished plan for the user's approval",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  },
+  "entrypoint": {
+    "native": "plan_exit"
+  }
+}

@@ -238,10 +238,10 @@ fn builtin_bundle_ownership_and_removed_kill_tool() {
                 "workflow",
                 "search_agent",
                 "archive",
-                "plan_exit",
             ]
             .as_slice(),
         ),
+        ("hya/plan", ["plan_exit"].as_slice()),
         ("hya/network-tools", ["webfetch", "websearch"].as_slice()),
         (
             "hya/channel-tools",

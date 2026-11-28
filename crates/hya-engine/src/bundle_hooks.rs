@@ -110,6 +110,13 @@ impl HookDispatcher for ScopedBundleHooks {
             None
         }
     }
+    async fn tool_visibility(&self, input: ToolVisibilityInput) -> ToolVisibilityOutcome {
+        if self.has("tool.visibility") {
+            self.dispatcher.tool_visibility(input).await
+        } else {
+            ToolVisibilityOutcome::Preserve
+        }
+    }
     async fn command_execute_before(
         &self,
         input: CommandExecuteBeforeInput,

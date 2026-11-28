@@ -23,6 +23,7 @@ export const CANONICAL_HOOKS = new Set([
   "event",
   "tool.execute.before",
   "tool.execute.after",
+  "tool.visibility",
   "command.execute.before",
   "experimental.text.complete",
   "message.user.before",

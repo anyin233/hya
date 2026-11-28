@@ -81,8 +81,8 @@ jobs:
 
           data = json.loads(os.environ["DISCOVERED"])
           bundles = data["all"]
-          if len(bundles) != 13:
-              print(f"ERROR: expected 13 builtin bundles, found {len(bundles)}", file=sys.stderr)
+          if len(bundles) != 14:
+              print(f"ERROR: expected 14 builtin bundles, found {len(bundles)}", file=sys.stderr)
               sys.exit(1)
 
           seen_ids = set()
@@ -310,7 +310,7 @@ jobs:
           echo "$bare_out"
           grep -q "bare-smoke-ok" <<< "$bare_out"
 
-          # 2. Full installed prefix: bin/hya + all 13 staged builtin .hyabundle archives.
+          # 2. Full installed prefix: bin/hya + all 14 staged builtin .hyabundle archives.
           full_prefix="${RUNNER_TEMP}/full-prefix"
           full_home="${RUNNER_TEMP}/full-home"
           rm -rf "$full_prefix" "$full_home"
@@ -320,7 +320,7 @@ jobs:
 
           pkg_count="$(find "$full_prefix/bundles" -maxdepth 1 -name 'hya-*.hyabundle' | wc -l)"
           echo "Staged builtin packages: ${pkg_count}"
-          test "$pkg_count" -eq 13
+          test "$pkg_count" -eq 14
 
           for pkg in "$full_prefix/bundles/"hya-*.hyabundle; do
             "$full_prefix/bin/hya" bundle info -f "$pkg" >/dev/null
@@ -341,6 +341,7 @@ jobs:
             hya/network-tools \
             hya/channel-tools \
             hya/compaction \
+            hya/plan \
             hya/core-agents \
             hya/core-skills \
             hya/core-commands \

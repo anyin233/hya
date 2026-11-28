@@ -519,17 +519,21 @@ pub fn is_protected_tool_name(name: &str) -> bool {
         .is_some_and(|presets| presets.iter().any(|preset| preset.is_protected(name)))
 }
 
-/// The `<tools>` line the tool families declare for `name`; when two families
-/// export it, the line of the entry that overrides the other. Returns `None`
-/// cleanly when tool-family bundles are absent.
+/// The `<tools>` line the tool families or ABI v2 native tool bundles declare
+/// for `name`; when two families export it, the line of the entry that
+/// overrides the other. Returns `None` cleanly when tool bundles are absent.
 #[must_use]
 pub fn tool_prompt(name: &str) -> Option<&'static str> {
     cached_presets()
-        .ok()?
-        .iter()
-        .filter_map(|preset| preset.tool(name))
-        .max_by_key(|tool| tool.overrides.is_some())
-        .and_then(|tool| tool.prompt.as_deref())
+        .ok()
+        .and_then(|presets| {
+            presets
+                .iter()
+                .filter_map(|preset| preset.tool(name))
+                .max_by_key(|tool| tool.overrides.is_some())
+                .and_then(|tool| tool.prompt.as_deref())
+        })
+        .or_else(|| crate::v2_tools::v2_tool_prompt(name))
 }
 
 /// The rule a tool family declares in place of the kernel prompt's
@@ -682,7 +686,6 @@ tools:
                     "project_activity",
                     "search_agent",
                     "archive",
-                    "plan_exit",
                     "wait",
                 ],
             ),
@@ -753,7 +756,6 @@ tools:
             ("apply_patch", ToolPermission::Tool, &["patch"]),
             ("webfetch", ToolPermission::Tool, &["fetch"]),
             ("websearch", ToolPermission::Tool, &["search"]),
-            ("plan_exit", ToolPermission::Tool, &["plan"]),
         ];
         let mut actual_policy: Vec<_> = presets
             .iter()
@@ -783,13 +785,21 @@ tools:
             .into_iter()
             .map(|s| s.name.as_str().to_string())
             .collect();
-        let expected_exposed: BTreeSet<_> = presets
+        let mut expected_exposed: BTreeSet<_> = presets
             .iter()
             .flat_map(|p| p.tools())
             .filter(|t| t.exposed())
             .map(|t| t.name().to_string())
             .collect();
+        expected_exposed.insert("plan_exit".to_string());
         assert_eq!(advertised, expected_exposed);
+        assert_eq!(
+            registry.builtin_bundle_origin("plan_exit"),
+            Some("hya/plan")
+        );
+        assert_eq!(registry.resolve("plan").unwrap().tool.name(), "plan_exit");
+        assert!(!advertised.contains("plan"));
+        assert!(tool_prompt("plan_exit").is_some());
 
         for tool in presets.iter().flat_map(|p| p.tools()) {
             assert!(

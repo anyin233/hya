@@ -1,12 +1,16 @@
+//! Interactive `plan_exit` tool requesting user approval to leave plan mode.
+
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
 use hya_tool::tool::obj_schema;
+use hya_tool::{QuestionAnswer, QuestionKind, Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use hya_tool::{QuestionAnswer, QuestionKind};
-use hya_tool::{Tool, ToolCtx, ToolError};
+/// Canonical tool name for exiting plan mode.
+pub const PLAN_EXIT_TOOL_NAME: &str = "plan_exit";
 
+/// Prompts the user to approve switching from `hya-plan` to the build agent.
 pub struct PlanExitTool;
 
 #[derive(Deserialize)]
@@ -15,12 +19,12 @@ struct PlanExitInput {}
 #[async_trait]
 impl Tool for PlanExitTool {
     fn name(&self) -> &str {
-        "plan_exit"
+        PLAN_EXIT_TOOL_NAME
     }
 
     fn schema(&self) -> ToolSchema {
         obj_schema(
-            "plan_exit",
+            PLAN_EXIT_TOOL_NAME,
             "Exit plan mode after asking the user to approve switching to build mode.",
             json!({}),
             &[],

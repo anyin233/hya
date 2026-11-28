@@ -143,7 +143,9 @@ impl SessionEngine {
         drop(projection);
         // Digests of the system prompt and tool list, recorded with the
         // binding at turn start and again whenever a round's differ.
-        let tools = self.offered_tools(&resources, depth, &model);
+        let tools = self
+            .offered_tools(session, Some(&agent.name), &resources, depth, &model)
+            .await;
         let system = system_prompt(
             agent,
             &workdir,
@@ -492,7 +494,15 @@ impl Harness for TurnHarness<'_> {
         self.parent_session = projection.session.parent;
         self.attachments = engine.attachment_data(self.session, projection).await?;
         // What the system prompt and tools cost: a request with no messages.
-        let tools = engine.offered_tools(&self.resources, self.depth, &self.model);
+        let tools = engine
+            .offered_tools(
+                self.session,
+                Some(&self.live_agent.name),
+                &self.resources,
+                self.depth,
+                &self.model,
+            )
+            .await;
         let workdir = session_workdir(&self.live_agent, projection);
         let overhead_tokens = engine.token_accounting.estimate_request(
             &[],
@@ -560,7 +570,15 @@ impl Harness for TurnHarness<'_> {
             )
             .await?
             .effort;
-        let tools = engine.offered_tools(&self.resources, self.depth, &self.model);
+        let tools = engine
+            .offered_tools(
+                session,
+                Some(&self.live_agent.name),
+                &self.resources,
+                self.depth,
+                &self.model,
+            )
+            .await;
         let system = system_prompt(
             &self.live_agent,
             &session_workdir(&self.live_agent, view.projection),

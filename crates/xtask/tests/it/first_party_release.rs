@@ -1,4 +1,4 @@
-//! Release staging of the thirteen trusted first-party bundle packages.
+//! Release staging of the fourteen trusted first-party bundle packages.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -10,13 +10,14 @@ use std::process::{Command, Output};
 
 const TARGET: &str = "x86_64-unknown-linux-gnu";
 const VERSION: &str = hya_version::BACKEND_VERSION;
-const NATIVE_FAMILIES: [&str; 6] = [
+const NATIVE_FAMILIES: [&str; 7] = [
     "hashline",
     "base-tools",
     "extended-tools",
     "network-tools",
     "channel-tools",
     "compaction",
+    "plan",
 ];
 const DATA_BUNDLES: [&str; 7] = [
     "core-skills",

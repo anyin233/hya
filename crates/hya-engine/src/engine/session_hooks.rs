@@ -356,6 +356,9 @@ impl SessionEngine {
         session: SessionId,
     ) -> Option<Arc<dyn HookDispatcher>> {
         let mut dispatchers = Vec::new();
+        if let Some(hooks) = &self.native_hooks {
+            dispatchers.push(Arc::clone(hooks));
+        }
         if let Some(hooks) = &self.hooks {
             dispatchers.push(Arc::clone(hooks));
         }
@@ -370,12 +373,16 @@ impl SessionEngine {
         }
     }
 
-    /// Startup hooks followed by the immutable activation-bound hook chain.
+    /// Startup hooks (native bundle hooks + host hooks) followed by the
+    /// immutable activation-bound hook chain.
     pub(crate) fn active_hook_dispatcher(
         &self,
         session: SessionId,
     ) -> Option<Arc<dyn HookDispatcher>> {
         let mut dispatchers = Vec::new();
+        if let Some(hooks) = &self.native_hooks {
+            dispatchers.push(Arc::clone(hooks));
+        }
         if let Some(hooks) = &self.hooks {
             dispatchers.push(Arc::clone(hooks));
         }

@@ -14,6 +14,8 @@ workspace = true
 hya-bundle = { workspace = true }
 # Built for its `cdylib`: the internal `hya/compaction` bundle loaded at runtime.
 hya-compaction = { workspace = true }
+# Built for its `cdylib`: the `hya/plan` native ABI v2 bundle (`plan_exit` + visibility hook).
+hya-plan = { workspace = true }
 hya-core = { workspace = true }
 hya-proto = { workspace = true }
 hya-provider = { workspace = true }

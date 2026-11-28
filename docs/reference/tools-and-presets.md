@@ -24,7 +24,7 @@ These core tools live directly inside Hya's core kernel (`hya-core`), alongside 
 
 ## 2. Registry Tools (Full mode — 24 bundle tools + core `skill`)
 
-In full mode, Hya loads five native tool bundles (`hya/hashline` over Lockstep Native ABI v2 plus the transitional tool families) alongside the kernel-exclusive `todo` and `rewrite`.
+In full mode, Hya loads its native tool bundles (`hya/hashline` and `hya/plan` over Lockstep Native ABI v2 plus the transitional tool families `hya/base-tools`, `hya/extended-tools`, `hya/network-tools`, and `hya/channel-tools`) alongside the kernel-exclusive `todo` and `rewrite`.
 
 ### `hya/hashline` (Content-Hashed File Tools — `overrides: hya/bare`)
 
@@ -72,8 +72,27 @@ When `hya/hashline` is disabled (or under `--bare` / `profile: bare`), `hya/hash
 | `task` | Allow | Spawn one or more episodic resident subagents in parallel (`tasks[]`). |
 | `archive` | Allow | Stop and archive a child subagent (can still be woken later via follow-up mail). |
 | `workflow` | Allow | List, inspect, select, run, or check state of compiled `*.hya.md` Workflows. |
-| `plan_exit` | Interactive | Hand off a completed plan from `hya-plan` for user approval (omitted in headless runs). |
 | `project_activity` | Allow | Inspect recent activity across sessions in the current Project. |
+
+### `hya/plan` (Interactive Plan Mode — Native ABI v2)
+
+`hya/plan` packages Hya's read-only planning workflow as a self-contained native ABI v2 bundle (`bundles/builtin/plan`, `id: hya/plan`), combining the `hya-plan` agent, the `plan_exit` approval tool, and its `tool.visibility` native hook so plan mode can be enabled or disabled independently without hardcoding plan logic in `hya-engine`.
+
+**Usage:**
+- In interactive TUI/WebUI sessions, switch to the planner with `/agent hya-plan` (or configure `default_agent: hya-plan`). When planning finishes, `hya-plan` calls `plan_exit` to request user approval before implementation begins.
+- In headless runs (no interactive interaction receiver), the bundle's `tool.visibility` hook automatically hides `plan_exit` from advertised tool schemas and nested tool listings.
+- Disable the bundle in `config.yaml` via `bundles.builtin.disabled: [hya/plan]` (or run `hya --bare`).
+
+**Interfaces exposed by `hya/plan`:**
+- **Tool `plan_exit`** (hidden alias `plan`, permission `Tool`):
+  - Input schema: `{ "plan": string (required), "title"?: string, "summary"?: string }`.
+  - Output: `{ "approved": boolean, "action": "approved" | "declined", "title": string, "plan": string, "summary"?: string, "feedback"?: string }`.
+- **Agent `hya-plan`** (`role: main`): read-only (`resource_view.deny: [write, edit, apply_patch, bash]`), may spawn `hya-scout`, `hya-task`, and `hya-reviewer`.
+- **Native Hook `tool.visibility`** (`plan_exit_visibility`): receives `ToolVisibilityInput { session, agent, tools, interactive }` and returns `ToolVisibilityOutcome::Hide { tools: ["plan_exit"] }` when `interactive == false`, or `ToolVisibilityOutcome::Preserve` otherwise.
+
+| Tool | Default permission | What it does |
+| --- | --- | --- |
+| `plan_exit` | Interactive | Hand off a completed plan from `hya-plan` for user approval (hidden alias `plan`; hidden automatically in headless runs by `hya/plan`'s `tool.visibility` native hook). |
 
 ### `hya/network-tools` (Web Access)
 
@@ -93,16 +112,16 @@ When `hya/hashline` is disabled (or under `--bare` / `profile: bare`), `hya/hash
 
 ---
 
-## 3. Built-in Agents (`hya/core-agents`)
+## 3. Built-in Agents (`hya/core-agents` & `hya/plan`)
 
-| Agent ID | Kind | Tool restrictions | When to use |
-| --- | --- | --- | --- |
-| `hya-main` | Main *(default)* | Full toolset | Everyday coding, debugging, refactoring, and delegating subtasks. |
-| `hya-plan` | Main | Read-only (blocks `write`, `edit`, `apply_patch`, `bash`) | Exploring code and designing a plan before changing any files. |
-| `hya-task` | Subagent *(default)* | Full toolset | Focused implementation or testing subtasks delegated via `task`. |
-| `hya-scout` | Subagent | Read-only (blocks edits, `bash`, `task`, `archive`) | Fast codebase search and reading without cluttering the main chat. |
-| `hya-reviewer` | Subagent | Blocks file edits (`write`, `edit`, `apply_patch`), allows `bash` | Reviewing patches and running check suites without modifying code. |
-| `hya-title` | System *(reserved)* | Internal only | Generates short session titles after your first prompt. |
+| Agent ID | Bundle | Kind | Tool restrictions | When to use |
+| --- | --- | --- | --- | --- |
+| `hya-main` | `hya/core-agents` | Main *(default)* | Full toolset | Everyday coding, debugging, refactoring, and delegating subtasks. |
+| `hya-plan` | `hya/plan` | Main | Read-only (blocks `write`, `edit`, `apply_patch`, `bash`) | Exploring code and designing a plan before changing any files. |
+| `hya-task` | `hya/core-agents` | Subagent *(default)* | Full toolset | Focused implementation or testing subtasks delegated via `task`. |
+| `hya-scout` | `hya/core-agents` | Subagent | Read-only (blocks edits, `bash`, `task`, `archive`) | Fast codebase search and reading without cluttering the main chat. |
+| `hya-reviewer` | `hya/core-agents` | Subagent | Blocks file edits (`write`, `edit`, `apply_patch`), allows `bash` | Reviewing patches and running check suites without modifying code. |
+| `hya-title` | `hya/core-agents` | System *(reserved)* | Internal only | Generates short session titles after your first prompt. |
 
 *(Built-in workflow bundles also define private stage agents—`hya-goal-guide`, `hya-goal-verifier`, `hya-pir-planner`, `hya-pir-implementer`, and `hya-pir-reviewer`—used internally by Goal/Loop mode and the `plan-impl-review` Workflow.)*
 
@@ -110,17 +129,18 @@ When `hya/hashline` is disabled (or under `--bare` / `profile: bare`), `hya/hash
 
 ## 4. Built-in Bundles (`bundles/builtin/`)
 
-Every Hya installation ships with 13 trusted first-party bundles sourced from `bundles/builtin/` and packaged under `<prefix>/bundles/hya-<name>.hyabundle` (skipped in `--bare`, which runs only `hya-bare` core tools including `skill` and optional `code-mode`). See the **[`hyabundle` Specification](../extend/hyabundle-spec.md)** and **[ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)** for full paths, runtimes, and loading precedence.
+Every Hya installation ships with 14 trusted first-party bundles sourced from `bundles/builtin/` and packaged under `<prefix>/bundles/hya-<name>.hyabundle` (skipped in `--bare`, which runs only `hya-bare` core tools including `skill` and optional `code-mode`). See the **[`hyabundle` Specification](../extend/hyabundle-spec.md)** and **[ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)** for full paths, runtimes, and loading precedence.
 
 | Bundle ID | Source path | Runtime | Role |
 | --- | --- | --- | --- |
 | `hya/hashline` | `bundles/builtin/hashline` | Native ABI v2 (`cdylib`) | Hashline-addressed `read`, `write`, `edit`, and `grep` + `HashlineRuntime` (`overrides: hya/bare`, 4 tools). |
 | `hya/base-tools` | `bundles/builtin/base-tools` | Native (`cdylib`) | Directory search, shell, patch, and `ask_user` tools (6 tools). |
-| `hya/extended-tools` | `bundles/builtin/extended-tools` | Native (`cdylib`) | Code intelligence (`lsp`), subagents, workflows, and project activity (9 tools; `skill` promoted to `hya-bare` core). |
+| `hya/extended-tools` | `bundles/builtin/extended-tools` | Native (`cdylib`) | Code intelligence (`lsp`), subagents, workflows, and project activity (8 tools; `skill` promoted to `hya-bare` core, `plan_exit` extracted to `hya/plan`). |
 | `hya/network-tools` | `bundles/builtin/network-tools` | Native (`cdylib`) | Web fetch and web search (`webfetch`, `websearch`). |
 | `hya/channel-tools` | `bundles/builtin/channel-tools` | Native (`cdylib`) | Team mailbox tools (`send`, `list_channel`, `wait`, `report`). |
 | `hya/compaction` | `bundles/builtin/compaction` | Native (`cdylib`) | Context `Rewriter` running `shake` and `remote` compaction before Kernel `Rewrite`. |
-| `hya/core-agents` | `bundles/builtin/core-agents` | Static | Built-in agent definitions (`hya-main`, `hya-plan`, `hya-task`, `hya-scout`, `hya-reviewer`, `hya-title`). |
+| `hya/plan` | `bundles/builtin/plan` | Native ABI v2 (`cdylib`) | Read-only `hya-plan` agent, `plan_exit` tool (alias `plan`), and `tool.visibility` native hook. |
+| `hya/core-agents` | `bundles/builtin/core-agents` | Static | Built-in agent definitions (`hya-main`, `hya-task`, `hya-scout`, `hya-reviewer`, `hya-title`). |
 | `hya/core-skills` | `bundles/builtin/core-skills` | Static | Built-in fallback skills (`agent-bundle-authoring`, `secure-self-update`). |
 | `hya/core-commands` | `bundles/builtin/core-commands` | Static | Built-in slash command templates (`/init`, `/review`). |
 | `hya/agent-channels` | `bundles/builtin/agent-channels` | Static | Default vertical parent/child and unit broadcast channel policy. |

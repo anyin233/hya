@@ -10,8 +10,3 @@ tools:
   - { name: project_activity, schema_version: 1, permission: read_only, prompt: show recent sessions and changed files in this project }
   - { name: archive, schema_version: 1, permission: task, prompt: stop a live subagent and archive it }
   - { name: wait, schema_version: 1, permission: read_only, prompt: block until your subagents finish }
-  - name: plan_exit
-    schema_version: 1
-    permission: tool
-    aliases: [{ name: plan, visibility: hidden }]
-    prompt: submit the finished plan for the user's approval
