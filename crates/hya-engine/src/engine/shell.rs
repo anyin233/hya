@@ -521,38 +521,50 @@ impl SessionEngine {
                     };
                     match authorized {
                         Ok(permission) => {
-                            let channel_policy = crate::ChannelPolicy::from_binding(binding)
+                            let channel_policy = crate::channel_policy::from_binding(binding)
                                 .map_err(CoreError::bundle)?
                                 .snapshot_for(agent.name.as_str());
+                            let roster = agent_roster(binding, agent.name.as_str())?;
+                            let mut extensions = hya_tool::ExtensionPlanes::new()
+                                .with(
+                                    self.spawner
+                                        .for_binding(binding)
+                                        .for_session_with_agents(session, roster.clone()),
+                                )
+                                .with(
+                                    self.mailbox
+                                        .for_session(session)
+                                        .with_channel_policy(channel_policy),
+                                )
+                                .with(
+                                    self.lifecycle
+                                        .for_session(session)
+                                        .with_channel_policy(channel_policy),
+                                )
+                                .with(self.project_activity.for_session(session))
+                                .with(roster);
+                            if let Some(parent) = parent_session {
+                                extensions.insert(hya_tool::ParentSession(parent));
+                            }
+                            if self.lsp.is_configured() {
+                                extensions.insert(self.lsp.clone());
+                            }
+                            if self.formatter.is_configured() {
+                                extensions.insert(self.formatter.clone());
+                            }
                             let ctx = ToolCtx {
-                                nested: hya_tool::NestedToolPlane::disconnected(),
-                                workflows: hya_tool::WorkflowPlane::disconnected(),
-                                permission,
-                                interaction: self.interaction.for_session(session),
-                                spawner: self.spawner.for_binding(binding).for_session_with_agents(
-                                    session,
-                                    agent_roster(binding, agent.name.as_str())?,
-                                ),
-                                operation: hya_tool::ToolOperation::from_tool_call(shell_part.call),
-                                mailbox: self
-                                    .mailbox
-                                    .for_session(session)
-                                    .with_channel_policy(channel_policy),
-                                project_activity: self.project_activity.for_session(session),
-                                lifecycle: self
-                                    .lifecycle
-                                    .for_session(session)
-                                    .with_channel_policy(channel_policy),
-                                session: Some(session),
-                                parent_session,
-                                skills: resources.skill_plane(),
-                                artifacts: self.artifacts.clone(),
-                                agents: agent_roster(binding, agent.name.as_str())?,
-                                lsp: self.lsp.clone(),
-                                formatter: self.formatter.clone(),
                                 workdir: binding.workdir().to_path_buf(),
                                 roots: workspace.roots,
                                 cancel: cancel.clone(),
+                                session: Some(session),
+                                operation: hya_tool::ToolOperation::from_tool_call(shell_part.call),
+                                permission,
+                                interaction: self.interaction.for_session(session),
+                                skills: resources.skill_plane(),
+                                artifacts: self.artifacts,
+                                schemas: self.schemas.clone(),
+                                nested: hya_tool::NestedToolPlane::disconnected(),
+                                extensions,
                             };
                             file_capture = Box::pin(super::file_snapshot::FileCapture::full(
                                 resolved.tool.name(),

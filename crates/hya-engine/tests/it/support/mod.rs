@@ -54,7 +54,7 @@ pub fn discover_local_skills(workdir: Option<&Path>, roots: &[PathBuf]) -> Skill
 /// A bundle defines exactly one agent, so a fixture asking for N agents becomes
 /// N single-agent bundles.
 pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> {
-    let bundles = agents
+    let mut bundles = agents
         .iter()
         .filter(|(stable_id, _, _)| hya_engine::preset_agent(stable_id).is_none())
         .map(|(stable_id, role, can_spawn)| Bundle {
@@ -105,6 +105,18 @@ pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> 
             overrides: None,
         })
         .collect::<Vec<_>>();
+    let fixture_ids: std::collections::BTreeSet<&str> =
+        agents.iter().map(|(id, _, _)| *id).collect();
+    if let Ok(multi_agent) = hya_bundle::first_party_bundle("hya/multi-agent")
+        && multi_agent.bundles().iter().all(|bundle| {
+            bundle
+                .agents()
+                .iter()
+                .all(|agent| !fixture_ids.contains(agent.id.as_str()))
+        })
+    {
+        bundles.extend(multi_agent.bundles().iter().cloned());
+    }
     let catalog = BundleCatalog::from_prepared(&bundles);
     let Ok(catalog) = catalog else {
         panic!("test catalog must be valid: {catalog:?}");
@@ -124,10 +136,16 @@ pub fn builtin_only_catalog() -> Arc<AgentCatalog> {
 
 /// Default runtime for root/main turn integration fixtures.
 ///
-/// Uses the compiled-in built-in roster and workdir/root-only skill discovery
-/// (never reading `$HOME`) so tests stay hermetic and parallel-safe.
+/// Uses the compiled-in built-in roster plus `hya/multi-agent` and
+/// workdir/root-only skill discovery (never reading `$HOME`) so tests stay
+/// hermetic and parallel-safe.
 pub fn test_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegistry> {
-    test_runtime_with_catalog(tools, builtin_only_catalog())
+    let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").expect("hya/multi-agent");
+    let bundles =
+        BundleCatalog::from_verified_catalogs(&[multi_agent]).expect("multi-agent catalog");
+    let catalog =
+        Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("multi-agent agent catalog"));
+    test_runtime_with_catalog(tools, catalog)
 }
 
 /// Runtime backed by a custom agent catalog and workdir/root-only skill discovery.

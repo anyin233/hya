@@ -899,6 +899,7 @@ async fn host_runtime_subtraits_and_extension_traits_dispatch_cleanly()
         .read(
             UriResolveCtx {
                 session: Some(session),
+                actor_claim: None,
                 workdir: Path::new("."),
                 runtime: Some(runtime.as_ref()),
             },

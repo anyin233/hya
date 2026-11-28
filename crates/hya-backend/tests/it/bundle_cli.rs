@@ -163,12 +163,10 @@ fn bundle_user_and_project_lifecycle_verify_install_list_info_search_schema_remo
             && !reg.exists()
     );
     let list = ok("list", root, &["list"])?;
-    assert!(
-        list.starts_with(LIST_HEADER) && list.contains("hya/plan-impl-review") && !reg.exists()
-    );
-    let fp = ok("fp info", root, &["info", "hya/plan-impl-review"])?;
+    assert!(list.starts_with(LIST_HEADER) && list.contains("hya/workflow") && !reg.exists());
+    let fp = ok("fp info", root, &["info", "hya/workflow"])?;
     assert!(fp.contains("origin=first-party") && fp.contains("immutable=true"));
-    let fp_rm = run(root, &["uninstall", "-y", "hya/plan-impl-review"])?;
+    let fp_rm = run(root, &["uninstall", "-y", "hya/workflow"])?;
     assert!(
         !fp_rm.status.success()
             && String::from_utf8_lossy(&fp_rm.stderr).contains("immutable first-party")

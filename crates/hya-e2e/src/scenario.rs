@@ -53,6 +53,7 @@ pub struct E2eEnvBuilder {
     additional_models: Vec<String>,
     extra_env: Vec<(String, String)>,
     serve_args: Vec<String>,
+    disabled_builtin_bundles: Vec<String>,
 }
 
 impl Default for E2eEnvBuilder {
@@ -72,6 +73,7 @@ impl Default for E2eEnvBuilder {
             additional_models: Vec::new(),
             extra_env: Vec::new(),
             serve_args: Vec::new(),
+            disabled_builtin_bundles: Vec::new(),
         }
     }
 }
@@ -151,6 +153,13 @@ impl E2eEnvBuilder {
         self
     }
 
+    /// Disable a built-in bundle id in `config.yaml` (`bundles.builtin.disable`).
+    #[must_use]
+    pub fn disable_builtin_bundle(mut self, bundle_id: impl Into<String>) -> Self {
+        self.disabled_builtin_bundles.push(bundle_id.into());
+        self
+    }
+
     /// Install the fixture echo MCP server into project + config before boot.
     #[must_use]
     pub fn with_mcp_echo(mut self) -> Self {
@@ -218,6 +227,7 @@ impl E2eEnvBuilder {
         spec.preinstall_bundles = self.preinstall_bundles;
         spec.env = self.extra_env;
         spec.serve_args = self.serve_args;
+        spec.disabled_builtin_bundles = self.disabled_builtin_bundles;
         let backend = tokio::task::spawn_blocking(move || BackendProcess::start(&spec))
             .await
             .map_err(|e| E2eError::Other(format!("join backend spawn: {e}")))??;
@@ -252,6 +262,7 @@ impl E2eEnvBuilder {
         spec.preinstall_bundles = self.preinstall_bundles;
         spec.env = self.extra_env;
         spec.serve_args = self.serve_args;
+        spec.disabled_builtin_bundles = self.disabled_builtin_bundles;
         let mat = tokio::task::spawn_blocking(move || materialize_root(&spec))
             .await
             .map_err(|e| E2eError::Other(format!("join headless fixture: {e}")))??;

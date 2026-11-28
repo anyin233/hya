@@ -177,7 +177,7 @@ impl ArtifactEvictionSink {
     /// the root the `read` tool resolves `artifact://` handles against.
     pub(crate) fn new(workdir: &Path) -> Self {
         Self {
-            store: ArtifactPlane::default().store(workdir),
+            store: ArtifactPlane.store(workdir),
         }
     }
 }

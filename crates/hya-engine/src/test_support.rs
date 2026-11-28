@@ -60,7 +60,10 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
             overrides: None,
         })
         .collect::<Vec<_>>();
-    let bundles = bundles.into_iter().collect::<Vec<_>>();
+    let mut bundles = bundles.into_iter().collect::<Vec<_>>();
+    if let Ok(multi_agent) = hya_bundle::first_party_bundle("hya/multi-agent") {
+        bundles.extend(multi_agent.bundles().iter().cloned());
+    }
     let catalog = BundleCatalog::from_prepared(&bundles);
     let Ok(catalog) = catalog else {
         panic!("unit-test catalog must be valid: {catalog:?}");

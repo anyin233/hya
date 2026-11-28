@@ -253,6 +253,18 @@ impl MailboxPlane {
         self
     }
 
+    /// Return the channel policy captured on this turn's mailbox plane, if any.
+    #[must_use]
+    pub const fn channel_policy(&self) -> Option<ChannelPolicySnapshot> {
+        self.channel_policy
+    }
+
+    /// Whether this plane has a connected backing mailbox service channel.
+    #[must_use]
+    pub const fn is_connected(&self) -> bool {
+        self.tx.is_some()
+    }
+
     async fn request<T>(
         &self,
         make: impl FnOnce(oneshot::Sender<T>) -> MailboxRequest,

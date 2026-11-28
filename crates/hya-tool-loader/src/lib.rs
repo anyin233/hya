@@ -221,7 +221,7 @@ pub fn try_from_tool_families_with_runtime(
 ///
 /// A name two loaded families both export resolves to the entry that
 /// declares `overrides: <the other family>` in its exposure policy (for
-/// example channel-tools' mail-aware `wait` over extended-tools' `wait`);
+/// example `hya/agent-channels`' mail-aware `wait` over `hya/multi-agent`'s `wait`);
 /// when the overriding family is not loaded, the overridden tool is
 /// installed. Load order never decides.
 ///

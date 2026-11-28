@@ -632,23 +632,31 @@ impl Harness {
         let directory = self.dir.join(".hya/workflows");
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join("m4.hya.md"), format!("---\nkind: Workflow\nname: m4\ndescription: Lifecycle fixture\nnodes:\n{nodes}---\nflowchart TD\n{graph}\n")).unwrap();
-        tokio::time::timeout(
+        let outcome = tokio::time::timeout(
             BOUND,
-            self.built.workflow_control().execute(
-                self.root,
-                hya_app::WorkflowInvocation::default(),
-                hya_app::WorkflowCommand::Run {
-                    name: Some("m4".into()),
-                    expected_revision: None,
-                    inputs: BTreeMap::new(),
-                    run: None,
-                },
-                CancellationToken::new(),
-            ),
+            self.built
+                .engine()
+                .invoke_bundle_api(hya_engine::BundleApiCall {
+                    bundle: "hya/workflow".to_owned(),
+                    method: hya_engine::ApiMethod::Post,
+                    session: Some(self.root),
+                    path: "/command".to_owned(),
+                    query: BTreeMap::new(),
+                    body: serde_json::json!({
+                        "run": {
+                            "name": "m4",
+                            "delivery": "finished"
+                        }
+                    }),
+                }),
         )
         .await
         .expect("Workflow exceeded fixture deadline")
-        .unwrap()
+        .unwrap();
+        assert_eq!(outcome.status, 200, "{}", outcome.body);
+        let result: hya_app::WorkflowRunResult =
+            serde_json::from_value(outcome.body["started"].clone()).unwrap();
+        hya_app::WorkflowCommandResult::Run { result }
     }
 }
 

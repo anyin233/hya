@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "name": "list_channel",
+  "description": "List your channels: the group broadcast pipes you can hear (and post to, when you lead the unit) and your DM channels with live peers and their unread counts. Group channels never list members. When you lead agents, a team section follows with each direct child's live status and how long ago the harness last saw it make progress (heartbeat).",
+  "permission": "read_only",
+  "prompt_hint": "list your channels with unread counts and team status",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  },
+  "entrypoint": {
+    "native": "list_channel"
+  }
+}

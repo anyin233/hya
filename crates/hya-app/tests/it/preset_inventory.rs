@@ -34,14 +34,13 @@ fn inventory_exposes_immutable_noninstallable_presets_and_internal_bundles() {
             .collect::<Vec<_>>(),
         [
             "hya/agent-channels",
-            "hya/channel-tools",
             "hya/coding-extras",
             "hya/compaction",
             "hya/core-agents",
             "hya/core-commands",
             "hya/core-skills",
-            "hya/extended-tools",
             "hya/hashline",
+            "hya/multi-agent",
             "hya/network",
         ]
     );
@@ -51,20 +50,18 @@ fn inventory_exposes_immutable_noninstallable_presets_and_internal_bundles() {
         inventory[0].resource_ids,
         ["parent-dm-default", "unit-default"]
     );
-    assert_eq!(inventory[1].id, "hya/channel-tools");
+    assert_eq!(inventory[1].id, "hya/coding-extras");
     assert_eq!(inventory[1].kind, "Bundle");
-    assert_eq!(inventory[2].id, "hya/coding-extras");
     assert_eq!(inventory[2].kind, "Bundle");
     assert_eq!(inventory[3].kind, "Bundle");
+    assert_eq!(inventory[4].resource_ids, ["init", "review"]);
     assert_eq!(inventory[4].kind, "Bundle");
-    assert_eq!(inventory[5].resource_ids, ["init", "review"]);
     assert_eq!(inventory[5].kind, "Bundle");
-    assert_eq!(inventory[6].kind, "Bundle");
     assert_eq!(
-        inventory[6].resource_ids,
+        inventory[5].resource_ids,
         ["agent-bundle-authoring", "secure-self-update"]
     );
-    assert!(inventory[7..].iter().all(|item| item.kind == "Bundle"));
+    assert!(inventory[6..].iter().all(|item| item.kind == "Bundle"));
     for preset in inventory {
         assert!(preset.immutable);
         assert!(!preset.installable);

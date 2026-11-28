@@ -11,20 +11,17 @@ use std::sync::Arc;
 use hya_proto::{
     ActorClaim, ActorEpoch, ChannelKind, Envelope, Event, FinishCause, FinishReason, MailEndpoint,
     MailKind, MemberRunStatus, MessageId, OwnerRunId, PartId, PartProjection, Projection, Role,
-    RosterStatus, SessionId, SubagentMode, ToolCallId, ToolPartState, WorkflowRunId, now_millis,
-    scope,
+    RosterStatus, SessionId, SubagentMode, ToolCallId, ToolPartState, now_millis, scope,
 };
 use hya_store::{
     BundleClaim, SessionStore, StoreError, StoreTransaction, append_event_in_transaction,
     open_turn_terminal_events,
 };
 use hya_tool::extension::{
-    BUNDLE_MULTI_AGENT, BUNDLE_WORKFLOW, ExtensionEvent, ResidentWorkProjection, RosterEntry,
-    handoff_projection, members_projection, projection_reducers, team_projection,
-    workflow_projection,
+    BUNDLE_MULTI_AGENT, ExtensionEvent, ResidentWorkProjection, RosterEntry, handoff_projection,
+    members_projection, projection_reducers, team_projection,
 };
 use hya_tool::mailbox::ChannelPolicySnapshot;
-use hya_tool::workflow_plane::WorkflowRunStatus;
 use hya_tool::{ArchiveReason, ReportOutcome};
 use serde_json::{Value, json};
 
@@ -130,34 +127,6 @@ pub enum ResidentArchiveOutcome {
     Committed,
     /// Only a harness notice committed; the episode remains live.
     Refused,
-}
-
-/// Result of atomically admitting one durable Workflow run.
-#[derive(Debug, PartialEq)]
-pub enum WorkflowAdmissionOutcome {
-    /// The start event was appended by this request.
-    Admitted(Box<Envelope>),
-    /// This run id was already admitted with the same immutable request hash.
-    Existing,
-    /// This run id was already admitted with different immutable request data.
-    Conflict,
-    /// Another run currently owns the Session.
-    Busy {
-        /// Active run identity.
-        run: WorkflowRunId,
-    },
-}
-
-/// Result of atomically changing one Session's Workflow selection.
-#[derive(Debug, PartialEq)]
-pub enum WorkflowSelectionOutcome {
-    /// The selection event was appended by this request.
-    Selected(Box<Envelope>),
-    /// A run currently owns the Session, so selection did not change.
-    Busy {
-        /// Active run identity.
-        run: WorkflowRunId,
-    },
 }
 
 fn owner_to_string(owner: OwnerRunId) -> String {
@@ -626,29 +595,6 @@ pub trait SessionStoreExt {
         handle: &str,
         archive: ResidentArchive,
     ) -> Result<(ResidentArchiveOutcome, Vec<Envelope>), CoreError>;
-
-    /// Atomically fence, deduplicate, exclude, and append one Workflow run start.
-    async fn admit_workflow_run(
-        &self,
-        actor_claim: Option<&ActorClaim>,
-        session: SessionId,
-        event: Event,
-    ) -> Result<WorkflowAdmissionOutcome, CoreError>;
-
-    /// Atomically reject selection during an active run and append otherwise.
-    async fn select_workflow(
-        &self,
-        actor_claim: Option<&ActorClaim>,
-        session: SessionId,
-        event: Event,
-    ) -> Result<WorkflowSelectionOutcome, CoreError>;
-
-    /// Mark every persisted nonterminal Workflow run as interrupted.
-    async fn recover_nonterminal_workflows(
-        &self,
-        current_owner: OwnerRunId,
-        reason: &str,
-    ) -> Result<Vec<Envelope>, CoreError>;
 
     /// Append a pending restart resume prompt including interrupted subagent handles.
     async fn take_restart_resume_with_subagents(
@@ -1661,138 +1607,6 @@ impl SessionStoreExt for SessionStore {
         }
         tx.commit().await?;
         Ok((ResidentArchiveOutcome::Committed, envelopes))
-    }
-
-    async fn admit_workflow_run(
-        &self,
-        actor_claim: Option<&ActorClaim>,
-        session: SessionId,
-        event: Event,
-    ) -> Result<WorkflowAdmissionOutcome, CoreError> {
-        let (run, request_hash) = match ExtensionEvent::from_event(&event) {
-            Some(ExtensionEvent::WorkflowRunStarted {
-                session: event_session,
-                run,
-                request_hash,
-                ..
-            }) if event_session == session => (run, request_hash),
-            _ => {
-                return Err(CoreError::Invalid(
-                    "run admission requires a matching WorkflowRunStarted event".to_string(),
-                ));
-            }
-        };
-        let mut tx = self.begin_transaction().await?;
-        if let Some(claim) = actor_claim {
-            fence_actor_claim(&mut tx, claim).await?;
-        }
-        let events = SessionStore::replay_in_transaction(&mut tx, session).await?;
-        if let Some(existing_hash) =
-            events.iter().find_map(
-                |envelope| match ExtensionEvent::from_event(&envelope.event) {
-                    Some(ExtensionEvent::WorkflowRunStarted {
-                        run: existing,
-                        request_hash,
-                        ..
-                    }) if existing == run => Some(request_hash),
-                    _ => None,
-                },
-            )
-        {
-            tx.commit().await?;
-            return Ok(if existing_hash == request_hash {
-                WorkflowAdmissionOutcome::Existing
-            } else {
-                WorkflowAdmissionOutcome::Conflict
-            });
-        }
-        let projection = Projection::from_events_with(&events, &projection_reducers());
-        if let Some(active) = workflow_projection(&projection).and_then(|wf| wf.run)
-            && active.status == WorkflowRunStatus::Running
-        {
-            let run = active.id;
-            tx.commit().await?;
-            return Ok(WorkflowAdmissionOutcome::Busy { run });
-        }
-        let envelope = append_event_in_transaction(&mut tx, session, event).await?;
-        tx.commit().await?;
-        Ok(WorkflowAdmissionOutcome::Admitted(Box::new(envelope)))
-    }
-
-    async fn select_workflow(
-        &self,
-        actor_claim: Option<&ActorClaim>,
-        session: SessionId,
-        event: Event,
-    ) -> Result<WorkflowSelectionOutcome, CoreError> {
-        if !matches!(
-            ExtensionEvent::from_event(&event),
-            Some(ExtensionEvent::WorkflowSelected { session: event_session, .. }) if event_session == session
-        ) {
-            return Err(CoreError::Invalid(
-                "selection requires a matching WorkflowSelected event".to_string(),
-            ));
-        }
-        let mut tx = self.begin_transaction().await?;
-        if let Some(claim) = actor_claim {
-            fence_actor_claim(&mut tx, claim).await?;
-        }
-        let projection = self
-            .replay_projection_in_transaction(&mut tx, session)
-            .await?;
-        if let Some(active) = workflow_projection(&projection).and_then(|wf| wf.run)
-            && active.status == WorkflowRunStatus::Running
-        {
-            let run = active.id;
-            tx.commit().await?;
-            return Ok(WorkflowSelectionOutcome::Busy { run });
-        }
-        let envelope = append_event_in_transaction(&mut tx, session, event).await?;
-        tx.commit().await?;
-        Ok(WorkflowSelectionOutcome::Selected(Box::new(envelope)))
-    }
-
-    async fn recover_nonterminal_workflows(
-        &self,
-        current_owner: OwnerRunId,
-        reason: &str,
-    ) -> Result<Vec<Envelope>, CoreError> {
-        self.require_runtime_owner(current_owner)?;
-        let mut tx = self.begin_transaction().await?;
-        let sessions = SessionStore::find_sessions_with_extension_event(
-            &mut tx,
-            BUNDLE_WORKFLOW,
-            "workflow_run_started",
-        )
-        .await?;
-        let mut recovered = Vec::new();
-        for session in sessions {
-            let projection = self
-                .replay_projection_in_transaction(&mut tx, session)
-                .await?;
-            let Some(run) = workflow_projection(&projection).and_then(|wf| wf.run) else {
-                continue;
-            };
-            if run.status != WorkflowRunStatus::Running || run.owner == current_owner {
-                continue;
-            }
-            recovered.push(
-                append_event_in_transaction(
-                    &mut tx,
-                    session,
-                    ExtensionEvent::WorkflowRunFinished {
-                        session,
-                        run: run.id,
-                        status: WorkflowRunStatus::Interrupted,
-                        error: Some(reason.chars().take(2_048).collect()),
-                    }
-                    .into_event(),
-                )
-                .await?,
-            );
-        }
-        tx.commit().await?;
-        Ok(recovered)
     }
 
     async fn take_restart_resume_with_subagents(

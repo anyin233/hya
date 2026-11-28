@@ -200,10 +200,9 @@ pub trait HookDispatcher: Send + Sync {
     /// **Contract:** fail-open by construction — implementors treat transport
     /// errors and malformed replies as `None` (with a warning), so a broken
     /// hook can never decide the loop by itself. A stop forced here is a
-    /// **legitimate stop**: v1 records it as
-    /// [`crate::completion::RunOutcome::Achieved`] with the prefixed reason,
-    /// exactly like a satisfied deterministic predicate; it is *not* modeled
-    /// as an engine-suppressed success.
+    /// **legitimate stop**: records [`hya_runtime_abi::DriverRunOutcome::Achieved`]
+    /// with the prefixed reason, exactly like a satisfied deterministic
+    /// predicate; it is *not* modeled as an engine-suppressed success.
     async fn loop_should_stop(&self, target: &str, transcript: &str) -> Option<String> {
         let _ = (target, transcript);
         None

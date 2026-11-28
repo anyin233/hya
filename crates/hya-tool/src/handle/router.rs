@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_proto::SessionId;
+use hya_proto::{ActorClaim, SessionId};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -29,6 +29,8 @@ const VIEW_DIR: &str = ".views";
 pub struct DynamicUriCtx<'a> {
     /// Session id requesting the handle, if known.
     pub session: Option<SessionId>,
+    /// Optional actor claim fencing resident/subagent side effects.
+    pub actor_claim: Option<ActorClaim>,
     /// Session working directory.
     pub workdir: &'a Path,
 }
@@ -118,6 +120,7 @@ pub struct HandleRouter {
     local_root: PathBuf,
     workdir: PathBuf,
     skills: SkillPlane,
+    actor_claim: Option<ActorClaim>,
     dynamic_handlers: Arc<BTreeMap<String, Arc<dyn DynamicUriHandler>>>,
 }
 
@@ -145,8 +148,16 @@ impl HandleRouter {
             local_root: workdir.join(LOCAL_DIR),
             workdir,
             skills: SkillPlane::default(),
+            actor_claim: None,
             dynamic_handlers: Arc::default(),
         }
+    }
+
+    /// Attach an optional actor claim forwarded to dynamic URI handlers.
+    #[must_use]
+    pub const fn with_actor_claim(mut self, actor_claim: Option<ActorClaim>) -> Self {
+        self.actor_claim = actor_claim;
+        self
     }
 
     /// Replace the artifact store.
@@ -249,6 +260,7 @@ impl HandleRouter {
             .read(
                 DynamicUriCtx {
                     session,
+                    actor_claim: self.actor_claim,
                     workdir: &self.workdir,
                 },
                 uri,
@@ -296,6 +308,7 @@ impl HandleRouter {
             .write(
                 DynamicUriCtx {
                     session,
+                    actor_claim: self.actor_claim,
                     workdir: &self.workdir,
                 },
                 uri,

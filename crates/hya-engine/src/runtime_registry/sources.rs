@@ -129,6 +129,9 @@ impl RuntimeCandidate {
         self,
         generation: ConfigGeneration,
         basic_tools: ToolRegistrySnapshot,
+        native_bundle_apis: Arc<
+            std::sync::RwLock<BTreeMap<String, crate::bundle_apis::SourceApis>>,
+        >,
     ) -> RuntimeSnapshot {
         let Self {
             catalog,
@@ -148,6 +151,7 @@ impl RuntimeCandidate {
             sources,
             masks: Arc::new(masks),
             schemes: Arc::new(schemes),
+            native_bundle_apis,
         }
     }
 

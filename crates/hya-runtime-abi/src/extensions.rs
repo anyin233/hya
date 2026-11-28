@@ -12,7 +12,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use hya_bundle::{ApiMethod, ApiScope};
 use hya_proto::{
-    AgentName, Envelope, EventSeq, MessageId, ModelRef, PartId, SessionId, ToolCallId,
+    ActorClaim, AgentName, Envelope, EventSeq, MessageId, ModelRef, PartId, SessionId, ToolCallId,
 };
 use hya_tool::{Action, Decision, Resource};
 use serde::{Deserialize, Serialize};
@@ -73,6 +73,23 @@ pub trait NativeService: Send + Sync {
 
     /// Query current service health.
     async fn health(&self) -> ServiceHealth;
+
+    /// Return `true` if this service currently owns active background work on `session`.
+    fn is_session_busy(&self, _session: SessionId) -> bool {
+        false
+    }
+
+    /// Request cancellation of any active service work on `session`.
+    ///
+    /// Returns `true` if an active operation on `session` was signalled.
+    fn cancel_session(&self, _session: SessionId) -> bool {
+        false
+    }
+
+    /// Wait until any active service work on `session` has fully stopped.
+    async fn wait_session_idle(&self, _session: SessionId) -> Result<(), HostError> {
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -712,6 +729,8 @@ pub trait ProjectionReducer: Send + Sync {
 pub struct UriResolveCtx<'a> {
     /// Session id requesting the handle, if known.
     pub session: Option<SessionId>,
+    /// Optional actor claim fencing resident/subagent side effects.
+    pub actor_claim: Option<ActorClaim>,
     /// Session working directory.
     pub workdir: &'a Path,
     /// Optional host runtime reference for backing lookups.
@@ -812,6 +831,7 @@ impl hya_tool::handle::DynamicUriHandler for UriSchemaHandleAdapter {
             .read(
                 UriResolveCtx {
                     session: ctx.session,
+                    actor_claim: ctx.actor_claim,
                     workdir: ctx.workdir,
                     runtime: self.runtime.as_deref(),
                 },
@@ -836,6 +856,7 @@ impl hya_tool::handle::DynamicUriHandler for UriSchemaHandleAdapter {
             .write(
                 UriResolveCtx {
                     session: ctx.session,
+                    actor_claim: ctx.actor_claim,
                     workdir: ctx.workdir,
                     runtime: self.runtime.as_deref(),
                 },

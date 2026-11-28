@@ -12,7 +12,9 @@ Hya discovers Workflows automatically from three places (top wins when names mat
 
 1. **Your Project:** `<project-root>/.hya/workflows/*.hya.md`
 2. **Your User folder:** `~/.config/hya/workflows/*.hya.md`
-3. **Installed & built-in Bundles:** such as the built-in `hya/plan-impl-review` workflow or any `.hyabundle` you install.
+3. **Installed & built-in Bundles:** such as the built-in `plan-impl-review` workflow shipped in `hya/workflow` or any `.hyabundle` you install.
+
+> **Built-in bundle (`hya/workflow`):** Workflow discovery, DAG execution, durable event replay, the `workflow` tool, and the v2 Bundle API endpoints (`GET /v2/bundles/hya%2Fworkflow/api/workflows`, `GET /v2/sessions/{id}/bundles/hya%2Fworkflow/state`, `POST /v2/sessions/{id}/bundles/hya%2Fworkflow/command`) are provided by the first-party ABI v2 native bundle `hya/workflow` (`bundles/builtin/workflow/`). In `--bare` mode or when `hya/workflow` is disabled under `bundles.builtin.disable` in `config.yaml`, workflow commands return an unavailable error cleanly without affecting core sessions.
 
 ---
 

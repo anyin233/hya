@@ -258,6 +258,8 @@ pub(crate) enum SourceNativeCapability {
     Rewriters,
     Services,
     Drivers,
+    Schemas,
+    Apis,
 }
 
 /// Top-level `runtime:` block in `bundle.yaml`.
@@ -513,6 +515,7 @@ pub(crate) enum SourceToolPermission {
     ReadOnly,
     Tool,
     Command,
+    Task,
     Interactive,
 }
 

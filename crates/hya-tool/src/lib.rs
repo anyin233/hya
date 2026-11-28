@@ -9,9 +9,9 @@
 //! - **Permission state machine** — invocation-level policies plus resource-level
 //!   allow/ask/deny rules, remembered grants, optional interceptors, and user-ask
 //!   channels ([`permission`]).
-//! - **Runtime planes** — session-scoped services injected through [`ToolCtx`]:
-//!   interaction/questions, subagent spawning, skills, web search, LSP,
-//!   mailbox, and formatters.
+//! - **Runtime planes** — single-agent core planes (`permission`, `interaction`,
+//!   `skills`, `artifacts`, `schemas`, `nested`) plus extensible domain planes
+//!   attached via [`ExtensionPlanes`] on [`ToolCtx`].
 //! - **Native bundle ABI** — shared by the host loader and the first-party
 //!   tool families that ship lockstep dynamic libraries.
 //!
@@ -117,7 +117,7 @@ pub use spawn::{
     SpawnRequestSendError, SpawnRequestSink, SpawnerPlane, sanitize_handle_prefix,
 };
 pub use tool::{
-    AliasVisibility, DuplicateName, NamedTool, RESERVED_KERNEL_TOOLS, ResolvedTool, Tool, ToolCtx,
-    ToolError, ToolOperation, ToolPermission, ToolRegistry, ToolRegistrySnapshot, ToolResultPolicy,
-    is_reserved_kernel_tool,
+    AliasVisibility, DuplicateName, ExtensionPlanes, NamedTool, ParentSession,
+    RESERVED_KERNEL_TOOLS, ResolvedTool, Tool, ToolCtx, ToolError, ToolOperation, ToolPermission,
+    ToolRegistry, ToolRegistrySnapshot, ToolResultPolicy, is_reserved_kernel_tool,
 };

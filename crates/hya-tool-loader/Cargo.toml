@@ -29,12 +29,13 @@ tokio-util = { workspace = true }
 [dev-dependencies]
 hya-hashline = { workspace = true }
 hya-coding-extras = { workspace = true }
-hya-extended-tools = { workspace = true }
-hya-channel-tools = { workspace = true }
+hya-multi-agent = { workspace = true }
+hya-agent-channels = { workspace = true }
 hya-network = { workspace = true }
 hya-plan = { workspace = true }
 hya-goal = { workspace = true }
 hya-loop = { workspace = true }
+hya-workflow-bundle = { workspace = true }
 hya-tool-error = { workspace = true }
 
 [[example]]

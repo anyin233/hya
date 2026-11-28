@@ -21,15 +21,13 @@ hya_runtime_abi::export_native_bundle_v2!(|out| {
 mod tests {
     use std::path::PathBuf;
 
-    use hya_proto::{AgentName, SessionId, ToolCallId};
+    use hya_proto::{AgentName, SessionId};
     use hya_runtime_abi::{
         HookPoint, NativeHook, ToolVisibilityInput, ToolVisibilityOutcome, abi_digest_v2,
     };
-    use hya_tool::handle::ArtifactPlane;
     use hya_tool::{
-        FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, NestedToolPlane,
-        PermissionPlane, PermissionRules, ProjectActivityPlane, QuestionAnswer, QuestionKind,
-        SkillPlane, SpawnerPlane, Tool, ToolCtx, ToolError, ToolOperation, WorkflowPlane,
+        InteractionPlane, PermissionPlane, PermissionRules, QuestionAnswer, QuestionKind, Tool,
+        ToolCtx, ToolError,
     };
     use serde_json::json;
     use tokio_util::sync::CancellationToken;
@@ -38,33 +36,14 @@ mod tests {
 
     fn test_ctx(session: Option<SessionId>, interaction: InteractionPlane) -> ToolCtx {
         let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
-        let (spawner, _srx) = SpawnerPlane::new();
         let interaction = match session {
             Some(id) => interaction.for_session(id),
             None => interaction,
         };
-        let workdir = PathBuf::from(".");
-        ToolCtx {
-            permission,
-            interaction,
-            spawner,
-            workflows: WorkflowPlane::disconnected(),
-            operation: ToolOperation::from_tool_call(ToolCallId::new()),
-            mailbox: MailboxPlane::disconnected(),
-            project_activity: ProjectActivityPlane::disconnected(),
-            lifecycle: LifecyclePlane::disconnected(),
-            session,
-            parent_session: None,
-            skills: SkillPlane::default(),
-            artifacts: ArtifactPlane::default(),
-            agents: Arc::from([]),
-            lsp: LspPlane::default(),
-            formatter: FormatterPlane::default(),
-            roots: vec![workdir.clone()],
-            workdir,
-            cancel: CancellationToken::new(),
-            nested: NestedToolPlane::disconnected(),
-        }
+        let mut ctx = ToolCtx::new(PathBuf::from("."), permission, CancellationToken::new());
+        ctx.interaction = interaction;
+        ctx.session = session;
+        ctx
     }
 
     #[tokio::test]

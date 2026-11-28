@@ -379,10 +379,11 @@ async fn list_channels_and_steer_count_incoming_only_ignoring_outgoing_copy() {
     )
     .await
     .unwrap();
-    let policy =
-        ChannelPolicy::from_binding(&eng.bind_runtime(std::path::Path::new("/tmp")).unwrap())
-            .unwrap()
-            .snapshot_for("hya-main");
+    let policy = crate::channel_policy::from_binding(
+        &eng.bind_runtime(std::path::Path::new("/tmp")).unwrap(),
+    )
+    .unwrap()
+    .snapshot_for("hya-main");
     assert!(
         eng.steer_mailbox_snapshot_with_policy(r, Some(policy))
             .await
@@ -443,9 +444,10 @@ async fn list_channels_and_steer_count_incoming_only_ignoring_outgoing_copy() {
 #[tokio::test]
 async fn mandatory_parent_delivery_requires_actual_parent_and_own_dm() {
     let eng = engine().await;
-    let policy =
-        ChannelPolicy::from_binding(&eng.bind_runtime(std::path::Path::new("/tmp")).unwrap())
-            .unwrap();
+    let policy = crate::channel_policy::from_binding(
+        &eng.bind_runtime(std::path::Path::new("/tmp")).unwrap(),
+    )
+    .unwrap();
     let mut team = TeamProjection::default();
     for (id, members) in [
         ("own", vec!["main/lead", "main/lead/child"]),
@@ -503,34 +505,44 @@ async fn stage_activation_keeps_one_supervisor_subscription() {
     let subs = eng.bus().subscriber_count();
     let binding = eng.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = AgentSpec {
-        name: AgentName::new("hya-main"),
+        name: AgentName::new("hya-task"),
         model: ModelRef::new("hya/offline"),
         workdir: "/tmp".into(),
         system_prompt: String::new(),
         reasoning: None,
     };
-    let wf = hya_workflow::compile(hya_workflow::WorkflowSource::new(
-        "stage.hya.md",
-        "---\nkind: Workflow\nname: stage\ndescription: stage\nnodes:\n  run:\n    agent: hya-task\n    directive: Answer with hello.\n---\nflowchart TD\n  run\n",
-    )).unwrap();
+    let agents = eng.agent_roster_for_binding(&binding, "hya-task").unwrap();
+    let resources = eng
+        .agent_resource_policy_for_binding(&binding, "hya-task")
+        .unwrap();
+    let resolved = (base, (binding, agents, resources, None));
+    let (child, _handle, _member) = sup
+        .spawn_resident_parked(
+            r,
+            resolved.0.clone(),
+            resolved.1.clone(),
+            "stage".into(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
     let task = tokio::spawn({
-        let (eng, sup) = (eng.clone(), sup.clone());
+        let sup = sup.clone();
         async move {
-            crate::run_workflow(
-                eng,
-                r,
-                &wf,
-                crate::WorkflowRunContext {
-                    binding,
-                    caller: "hya-main".into(),
-                    base_agent: base,
-                    inputs: BTreeMap::new(),
-                    resident_supervisor: Some(sup),
-                    routing: None,
-                },
-                CancellationToken::new(),
-            )
-            .await
+            let mut waiter = sup
+                .activate(
+                    r,
+                    child,
+                    resolved,
+                    "Answer with hello.".into(),
+                    Arc::from(""),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            waiter.wait().await
         }
     });
     tokio::time::timeout(Duration::from_secs(3), entered.notified())
@@ -538,17 +550,18 @@ async fn stage_activation_keeps_one_supervisor_subscription() {
         .unwrap();
     let during = eng.bus().subscriber_count();
     release.notify_one();
-    assert_eq!(
+    assert!(matches!(
         tokio::time::timeout(Duration::from_secs(3), task)
             .await
             .unwrap()
             .unwrap()
-            .unwrap()
-            .status,
-        crate::WorkflowStatus::Completed
-    );
+            .unwrap(),
+        ActivationResult::Settled { .. }
+    ));
     drain_sup(&sup).await;
-    assert_eq!(during, subs + 1);
+    // Unread-mail steering runs via the `hya/agent-channels` NativeHook without
+    // opening a per-turn bus subscription, so only the supervisor subscription exists.
+    assert_eq!(during, subs);
 }
 
 #[tokio::test]

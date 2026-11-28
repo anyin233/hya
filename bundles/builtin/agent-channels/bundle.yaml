@@ -6,6 +6,27 @@ identity:
   version: 0.0.0
   publisher: hya
 namespace: agent-channels
+runtime:
+  kind: native
+  abi_version: 2
+  crate_dir: native
+  capabilities:
+    - tools
+    - hooks
+    - services
+    - schemas
+    - apis
+resources:
+  tools:
+    - id: send
+      path: tools/send.json
+    - id: list_channel
+      path: tools/list_channel.json
+    - id: report
+      path: tools/report.json
+    - id: wait
+      path: tools/wait.json
+      overrides: hya/multi-agent
 channels:
   - id: unit-default
     kind: unit

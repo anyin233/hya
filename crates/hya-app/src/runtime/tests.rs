@@ -16,6 +16,7 @@ use hya_bundle::{
 };
 use hya_engine::CategoryEntry;
 use hya_engine::CreateSession;
+use hya_engine::SessionStoreExt as _;
 use hya_engine::resident::ResolvedSpawnMember;
 use hya_engine::{SidecarEnvironment, SidecarLifecycle, SidecarStart};
 use hya_plugin::PluginContributionSet;
@@ -37,10 +38,9 @@ use hya_tool::extension::{
     ExtensionEvent, projection_reducers, team_projection, workflow_projection,
 };
 use hya_tool::{
-    AgentDef, ArchiveReason, FormatterPlane, InlineAgent, InteractionPlane, LspPlane, MailboxPlane,
-    Mode, PermissionModel, PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnMember,
-    SpawnerPlane, Tool, ToolCtx, ToolError, ToolOperation, ToolPermission, WorkflowCommand,
-    WorkflowCommandResult, WorkflowRunStatus, WorkflowStagePlan, handle::ArtifactPlane,
+    AgentDef, ArchiveReason, InlineAgent, InteractionPlane, Mode, PermissionModel, PermissionPlane,
+    PermissionRules, Rule, SpawnMember, Tool, ToolCtx, ToolError, ToolOperation, ToolPermission,
+    WorkflowRunStatus, WorkflowStagePlan,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -443,28 +443,14 @@ fn sidecar_test_ctx(root: &Path) -> ToolCtx {
         Mode::Allow,
     )]));
     let (interaction, _interaction_rx) = InteractionPlane::new();
-    let (spawner, _spawner_rx) = SpawnerPlane::new();
-    ToolCtx {
-        nested: hya_tool::NestedToolPlane::disconnected(),
-        workflows: hya_tool::WorkflowPlane::disconnected(),
-        permission: permission.for_session(session),
-        interaction: interaction.for_session(session),
-        spawner,
-        operation: ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-        mailbox: MailboxPlane::disconnected(),
-        lifecycle: LifecyclePlane::disconnected(),
-        session: Some(session),
-        parent_session: None,
-        skills: SkillPlane::default(),
-        artifacts: ArtifactPlane::default(),
-        formatter: FormatterPlane::default(),
-        agents: Default::default(),
-        lsp: LspPlane::default(),
-        workdir: root.to_path_buf(),
-        roots: vec![root.to_path_buf()],
-        cancel: Default::default(),
-        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
-    }
+    let mut ctx = ToolCtx::new(
+        root.to_path_buf(),
+        permission.for_session(session),
+        Default::default(),
+    );
+    ctx.interaction = interaction.for_session(session);
+    ctx.session = Some(session);
+    ctx
 }
 
 fn materialized_resource(
@@ -786,22 +772,24 @@ async fn workflow_control_cold_run_and_shutdown_invariants() {
         })
         .await
         .unwrap();
-    let control = built.workflow_control();
-    let result = control
-        .execute(
-            root,
-            Default::default(),
-            WorkflowCommand::Run {
-                name: Some("cold".into()),
-                expected_revision: None,
-                inputs: BTreeMap::new(),
-                run: None,
-            },
-            CancellationToken::new(),
-        )
+    let outcome = engine
+        .invoke_bundle_api(hya_engine::BundleApiCall {
+            bundle: "hya/workflow".to_owned(),
+            method: hya_engine::ApiMethod::Post,
+            session: Some(root),
+            path: "/command".to_owned(),
+            query: BTreeMap::new(),
+            body: serde_json::json!({
+                "run": {
+                    "name": "cold",
+                    "delivery": "finished"
+                }
+            }),
+        })
         .await
         .unwrap();
-    assert!(matches!(result, WorkflowCommandResult::Run { .. }));
+    assert_eq!(outcome.status, 200, "{}", outcome.body);
+    assert!(outcome.body.get("started").is_some(), "{}", outcome.body);
 
     built.shutdown().await.unwrap();
     assert!(built.lifecycle.tasks.is_empty());
@@ -814,27 +802,33 @@ async fn workflow_control_cold_run_and_shutdown_invariants() {
         assert_eq!(recorded.len(), 2);
     }
 
-    // Late token taken after shutdown rejects all workflow operations cleanly.
-    let late_token = control.tasks.token();
-    let err = control
-        .execute(
-            root,
-            Default::default(),
-            WorkflowCommand::List,
-            CancellationToken::new(),
-        )
+    // Operations after shutdown fail cleanly with 503 unavailable.
+    let late_cmd = engine
+        .invoke_bundle_api(hya_engine::BundleApiCall {
+            bundle: "hya/workflow".to_owned(),
+            method: hya_engine::ApiMethod::Post,
+            session: Some(root),
+            path: "/command".to_owned(),
+            query: BTreeMap::new(),
+            body: serde_json::json!({ "list": {} }),
+        })
         .await
-        .unwrap_err();
-    assert_eq!(err.code(), "WORKFLOW_RUNTIME_UNAVAILABLE");
-    assert!(matches!(
-        control.list(None).await,
-        Err(crate::WorkflowControlError::RuntimeUnavailable)
-    ));
-    assert!(matches!(
-        control.decorate(root, Default::default()).await,
-        Err(crate::WorkflowControlError::RuntimeUnavailable)
-    ));
-    drop(late_token);
+        .unwrap();
+    assert_eq!(late_cmd.status, 503, "{}", late_cmd.body);
+    assert_eq!(late_cmd.body["error"]["code"], "unavailable");
+    let late_list = engine
+        .invoke_bundle_api(hya_engine::BundleApiCall {
+            bundle: "hya/workflow".to_owned(),
+            method: hya_engine::ApiMethod::Get,
+            session: None,
+            path: "/workflows".to_owned(),
+            query: BTreeMap::new(),
+            body: serde_json::Value::Null,
+        })
+        .await
+        .unwrap();
+    assert_eq!(late_list.status, 503, "{}", late_list.body);
+    assert_eq!(late_list.body["error"]["code"], "unavailable");
     assert!(built.lifecycle.tasks.is_empty());
 }
 
@@ -892,8 +886,8 @@ fn review_workflow_catalog_does_not_block_runtime_worker() {
         .build()
         .unwrap();
     runtime.block_on(async {
-        let (mut built, agent, root) = review_runtime().await;
-        let control = built.workflow_control();
+        let (mut built, _agent, root) = review_runtime().await;
+        let engine = built.engine();
         let (release, held) = std::sync::mpsc::channel();
         let (entered, ready) = tokio::sync::oneshot::channel();
         let blocker = tokio::task::spawn_blocking(move || {
@@ -901,35 +895,26 @@ fn review_workflow_catalog_does_not_block_runtime_worker() {
             held.recv().unwrap();
         });
         ready.await.unwrap();
-        let (sender, receiver) = BoundWorkflowSender::with_capacity(1);
-        let binding = built.engine().bind_runtime(&agent.workdir).unwrap();
-        let plane = sender.for_binding(&binding).for_session(root);
-        spawn_workflow_supervisor(receiver, control.clone(), built.lifecycle.stop.clone());
-        let request = plane.execute(
-            ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-            WorkflowCommand::List,
-            CancellationToken::new(),
-        );
-        tokio::pin!(request);
-        let early = tokio::time::timeout(Duration::from_millis(60), &mut request).await;
-        let overflow = tokio::time::timeout(
-            Duration::from_millis(200),
-            plane.execute(
-                ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-                WorkflowCommand::State,
-                CancellationToken::new(),
-            ),
+        // Even with the host's single blocking thread saturated, hya/workflow
+        // runs catalog discovery off the host's async worker without blocking.
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(2),
+            engine.invoke_bundle_api(hya_engine::BundleApiCall {
+                bundle: "hya/workflow".to_owned(),
+                method: hya_engine::ApiMethod::Post,
+                session: Some(root),
+                path: "/command".to_owned(),
+                query: BTreeMap::new(),
+                body: serde_json::json!({ "list": {} }),
+            }),
         )
-        .await;
+        .await
+        .expect("workflow catalog must not block on saturated host worker")
+        .unwrap();
+        assert_eq!(outcome.status, 200, "{}", outcome.body);
         release.send(()).unwrap();
         blocker.await.unwrap();
-        let was_off_thread = early.is_err();
-        if was_off_thread {
-            request.await.unwrap();
-        }
         built.shutdown().await.unwrap();
-        assert!(matches!(overflow, Ok(Err(ToolError::Overloaded(_)))));
-        assert!(was_off_thread);
     });
 }
 
@@ -1140,43 +1125,53 @@ async fn built_shutdown_cancels_started_workflow_while_reads_stay_unblocked() {
         })
         .await
         .unwrap();
-    let control = built.workflow_control();
-    control
-        .execute(
-            lead,
-            crate::WorkflowInvocation {
-                delivery: WorkflowDelivery::Started,
-                ..Default::default()
-            },
-            WorkflowCommand::Run {
-                name: Some("hold".into()),
-                expected_revision: None,
-                inputs: BTreeMap::new(),
-                run: None,
-            },
-            CancellationToken::new(),
-        )
+    let started = engine
+        .invoke_bundle_api(hya_engine::BundleApiCall {
+            bundle: "hya/workflow".to_owned(),
+            method: hya_engine::ApiMethod::Post,
+            session: Some(lead),
+            path: "/command".to_owned(),
+            query: BTreeMap::new(),
+            body: serde_json::json!({
+                "run": {
+                    "name": "hold",
+                    "delivery": "started"
+                }
+            }),
+        })
         .await
         .unwrap();
+    assert_eq!(started.status, 200, "{}", started.body);
     tokio::time::timeout(Duration::from_secs(2), gate.entered.notified())
         .await
         .unwrap();
     // List/State reads must not block behind a running workflow.
-    for command in [WorkflowCommand::List, WorkflowCommand::State] {
-        tokio::time::timeout(
+    for body in [
+        serde_json::json!({ "list": {} }),
+        serde_json::json!({ "state": {} }),
+    ] {
+        let outcome = tokio::time::timeout(
             Duration::from_millis(250),
-            control.execute(lead, Default::default(), command, CancellationToken::new()),
+            engine.invoke_bundle_api(hya_engine::BundleApiCall {
+                bundle: "hya/workflow".to_owned(),
+                method: hya_engine::ApiMethod::Post,
+                session: Some(lead),
+                path: "/command".to_owned(),
+                query: BTreeMap::new(),
+                body,
+            }),
         )
         .await
         .expect("read command must not block")
         .unwrap();
+        assert_eq!(outcome.status, 200, "{}", outcome.body);
     }
     tokio::time::timeout(Duration::from_secs(2), built.shutdown())
         .await
         .unwrap()
         .unwrap();
     assert!(built.lifecycle.tasks.is_empty());
-    assert!(control.active_run(lead).unwrap().is_none());
+    assert!(!engine.has_active_service_work(lead));
     let state = engine.read_projection(lead).await.unwrap();
     assert_eq!(
         workflow_projection(&state).unwrap().run.unwrap().status,

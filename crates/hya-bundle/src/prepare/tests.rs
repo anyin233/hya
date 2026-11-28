@@ -519,23 +519,25 @@ fn rejects_exposure_yaml_and_exposure_asset_except_transitional_tool_families()
             if detail.contains("exposure") && detail.contains("schema_version 2")
     ));
 
-    // 5. The two remaining transitional Phase 0–4 legacy tool-family bundles stay accepted.
-    for transitional_id in ["hya/extended-tools", "hya/channel-tools"] {
-        let manifest = format!(
-            "kind: Bundle\nschema_version: 2\nidentity: {{ id: {transitional_id}, version: 1.0.0, publisher: hya }}\nassets:\n  - {{ id: exposure, path: exposure.yaml }}\n"
-        );
-        let policy = format!(
-            "schema_version: 1\nidentity: {transitional_id}\nprotected_names: []\ntools: []\n"
-        );
-        let ok = prepare_package(BundleSource::new(
-            transitional_id,
+    // 5. All first-party built-in bundles now use schema_version 2 `resources.tools`;
+    // `exposure.yaml` is rejected universally, including for first-party ids.
+    let former_id = "hya/extended-tools";
+    let manifest = format!(
+        "kind: Bundle\nschema_version: 2\nidentity: {{ id: {former_id}, version: 1.0.0, publisher: hya }}\nassets:\n  - {{ id: exposure, path: exposure.yaml }}\n"
+    );
+    let policy =
+        format!("schema_version: 1\nidentity: {former_id}\nprotected_names: []\ntools: []\n");
+    assert!(matches!(
+        prepare_package(BundleSource::new(
+            former_id,
             vec![
                 SourceFile::new("bundle.yaml", manifest.into_bytes()),
                 SourceFile::new("exposure.yaml", policy.into_bytes()),
             ],
-        ))?;
-        assert_eq!(ok.bundles()[0].identity().id, transitional_id);
-    }
+        )),
+        Err(BundleError::InvalidManifest { detail, .. })
+            if detail.contains("exposure.yaml") && detail.contains("schema_version 2")
+    ));
     Ok(())
 }
 
@@ -802,7 +804,7 @@ identity: { id: hya/coding-extras, version: 1.0.0, publisher: hya }
     let report =
         resolve_first_party_bundles_with(&full, &[&project_override.bundles()[0]], |id| match id {
             "hya/coding-extras" => Ok(Some(sample_catalog.clone())),
-            "hya/extended-tools" => Err(BundleError::InvalidManifest {
+            "hya/multi-agent" => Err(BundleError::InvalidManifest {
                 source_name: id.to_string(),
                 detail: "corrupt".to_string(),
             }),
@@ -824,11 +826,11 @@ identity: { id: hya/coding-extras, version: 1.0.0, publisher: hya }
         })
     );
     assert!(matches!(
-        report.status("hya/extended-tools"),
+        report.status("hya/multi-agent"),
         Some(BuiltinBundleStatus::Failed { .. })
     ));
     assert!(matches!(
-        report.status("hya/channel-tools"),
+        report.status("hya/agent-channels"),
         Some(BuiltinBundleStatus::Missing { .. })
     ));
     assert_eq!(report.loaded.len(), 1);

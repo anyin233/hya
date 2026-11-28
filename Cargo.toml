@@ -2,7 +2,23 @@
 # See CONTEXT.md for the full architecture and agent-spec contract.
 [workspace]
 resolver = "3"
-members = ["crates/*", "bundles/builtin/hashline/native", "bundles/builtin/coding-extras/native", "bundles/builtin/extended-tools/native", "bundles/builtin/channel-tools/native", "bundles/builtin/network/native", "bundles/builtin/compaction/native", "bundles/builtin/plan/native", "bundles/builtin/goal/native", "bundles/builtin/loop/native"]
+members = [
+    "crates/*",
+    "bundles/builtin/hashline/native",
+    "bundles/builtin/coding-extras/native/core",
+    "bundles/builtin/coding-extras/native",
+    "bundles/builtin/multi-agent/native/core",
+    "bundles/builtin/multi-agent/native",
+    "bundles/builtin/agent-channels/native/core",
+    "bundles/builtin/agent-channels/native",
+    "bundles/builtin/network/native",
+    "bundles/builtin/compaction/native",
+    "bundles/builtin/plan/native",
+    "bundles/builtin/goal/native",
+    "bundles/builtin/loop/native",
+    "bundles/builtin/workflow/native/core",
+    "bundles/builtin/workflow/native",
+]
 exclude = ["crates/hya-plugin-bun", "vendor/sevenz-rust2-0.20.2"]
 
 [workspace.package]
@@ -24,14 +40,19 @@ hya-tool-loader = { path = "crates/hya-tool-loader" }
 hya-context = { path = "crates/hya-context" }
 hya-tool-error = { path = "crates/hya-tool-error" }
 hya-hashline = { path = "bundles/builtin/hashline/native" }
+hya-coding-extras-core = { path = "bundles/builtin/coding-extras/native/core" }
 hya-coding-extras = { path = "bundles/builtin/coding-extras/native" }
-hya-extended-tools = { path = "bundles/builtin/extended-tools/native" }
-hya-channel-tools = { path = "bundles/builtin/channel-tools/native" }
+hya-multi-agent-core = { path = "bundles/builtin/multi-agent/native/core" }
+hya-multi-agent = { path = "bundles/builtin/multi-agent/native" }
+hya-agent-channels-core = { path = "bundles/builtin/agent-channels/native/core" }
+hya-agent-channels = { path = "bundles/builtin/agent-channels/native" }
 hya-network = { path = "bundles/builtin/network/native" }
 hya-compaction = { path = "bundles/builtin/compaction/native" }
 hya-plan = { path = "bundles/builtin/plan/native" }
 hya-goal = { path = "bundles/builtin/goal/native" }
 hya-loop = { path = "bundles/builtin/loop/native" }
+hya-workflow-bundle-core = { path = "bundles/builtin/workflow/native/core" }
+hya-workflow-bundle = { path = "bundles/builtin/workflow/native" }
 hya-store = { path = "crates/hya-store" }
 hya-core = { path = "crates/hya-core" }
 hya-engine = { path = "crates/hya-engine" }

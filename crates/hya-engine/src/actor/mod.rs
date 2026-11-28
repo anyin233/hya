@@ -53,16 +53,15 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::engine::{
-    AgentSpec, ArchiveReviver, DRAIN_DEADLINE, SessionEngine, TurnBoundaryObserver,
-    TurnDrainReport, TurnLease, TurnRequestContext,
+    AgentSpec, ArchiveReviver, DRAIN_DEADLINE, ExplicitTurnRoute, SessionEngine,
+    TurnBoundaryObserver, TurnDrainReport, TurnLease, TurnRequestContext,
 };
 use crate::error::CoreError;
 use crate::hooks::{
     AgentSpawnInput, HookDispatcher, SessionLifecycleInput, scope_activation_hooks,
 };
 use crate::sidecar::{BoundSidecarFactory, SidecarHandle, SidecarStart};
-use crate::workflow::WorkflowTurnRoute;
-use crate::{AgentResourcePolicy, ChannelPolicy, TurnBinding};
+use crate::{AgentResourcePolicy, TurnBinding};
 
 /// Runtime pieces needed to resume a resident after process restart.
 pub type ResolvedResidentRuntime = (
@@ -150,7 +149,7 @@ struct ResidentActivation {
     parent_claim: Option<ActorClaim>,
     initial: Option<String>,
     guidance: Option<Arc<str>>,
-    route: Option<WorkflowTurnRoute>,
+    route: Option<ExplicitTurnRoute>,
     sidecar_factory: Option<Arc<dyn BoundSidecarFactory>>,
 }
 
@@ -354,12 +353,12 @@ use ending::finish_episode;
 pub(crate) use ending::resolve_member_target;
 use ending::stop_sidecar;
 use ending::{Ending, commit_episode_ending};
-pub(crate) use episode::ActivationResult;
 use episode::await_episode;
 use episode::episode_task;
 use episode::{
-    Action, ActivationCompletion, ActivationWaiter, Episode, EpisodeDone, EpisodeInit, RunPlan,
-    SlotStatus, WorkflowActivation,
+    Action, ActivationCompletion, Episode, EpisodeDone, EpisodeInit, RunPlan, SlotStatus,
+    WorkflowActivation,
 };
+pub use episode::{ActivationResult, ActivationWaiter};
 use report::PendingReport;
 use team::{TeamActor, TeamEvent, TeamPhase};

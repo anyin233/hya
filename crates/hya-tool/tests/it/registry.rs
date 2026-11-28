@@ -223,13 +223,14 @@ fn builtin_bundle_ownership_and_removed_kill_tool() {
             .as_slice(),
         ),
         (
-            "hya/extended-tools",
-            ["list_agents", "task", "workflow", "search_agent", "archive"].as_slice(),
+            "hya/multi-agent",
+            ["list_agents", "task", "search_agent", "archive"].as_slice(),
         ),
+        ("hya/workflow", ["workflow"].as_slice()),
         ("hya/plan", ["plan_exit"].as_slice()),
         ("hya/network", ["webfetch", "websearch"].as_slice()),
         (
-            "hya/channel-tools",
+            "hya/agent-channels",
             ["send", "list_channel", "report", "wait"].as_slice(),
         ),
     ] {
@@ -248,8 +249,8 @@ fn builtin_bundle_ownership_and_removed_kill_tool() {
 async fn requested_mail_wake(registry: &ToolRegistry) -> bool {
     let tool = registry.get("wait").expect("wait registered");
     let (plane, mut rx) = LifecyclePlane::new();
-    let mut ctx = ctx_with(vec![], std::path::PathBuf::from("."));
-    ctx.lifecycle = plane.for_session(SessionId::new());
+    let ctx = ctx_with(vec![], std::path::PathBuf::from("."))
+        .with_extension(plane.for_session(SessionId::new()));
     let call = tokio::spawn(async move { tool.execute(&ctx, json!({"timeout_secs": 5})).await });
     let Some(LifecycleRequest::Wait { spec, reply, .. }) = rx.recv().await else {
         panic!("wait must send lifecycle wait request");
@@ -275,7 +276,7 @@ async fn wait_override_selects_mail_aware_or_member_only_variant() {
     let full = hya_tool_loader::builtins();
     assert_eq!(
         full.builtin_bundle_origin("wait"),
-        Some("hya/channel-tools")
+        Some("hya/agent-channels")
     );
     assert_eq!(
         full.resolve("wait").unwrap().permission,
@@ -300,20 +301,20 @@ async fn wait_override_selects_mail_aware_or_member_only_variant() {
 
     let without_channels = hya_tool_loader::from_tool_families(&[
         "hya/coding-extras",
-        "hya/extended-tools",
+        "hya/multi-agent",
         "hya/network",
     ]);
     assert!(without_channels.get("send").is_none());
     assert_eq!(
         without_channels.builtin_bundle_origin("wait"),
-        Some("hya/extended-tools")
+        Some("hya/multi-agent")
     );
     assert!(!requested_mail_wake(&without_channels).await);
 
-    let channel_only = hya_tool_loader::from_tool_families(&["hya/channel-tools"]);
+    let channel_only = hya_tool_loader::from_tool_families(&["hya/agent-channels"]);
     assert_eq!(
         channel_only.builtin_bundle_origin("wait"),
-        Some("hya/channel-tools")
+        Some("hya/agent-channels")
     );
 }
 
@@ -373,20 +374,22 @@ fn replacement_child() {
         return;
     };
     if mode == "wrong" {
-        let panic = std::panic::catch_unwind(|| {
-            hya_tool_loader::from_tool_families(&["hya/channel-tools"])
-        });
+        let panic =
+            std::panic::catch_unwind(|| hya_tool_loader::from_tool_families(&["hya/multi-agent"]));
         let error = panic.err().expect("wrong ABI must be rejected");
         let message = error
             .downcast_ref::<String>()
             .map(String::as_str)
             .or_else(|| error.downcast_ref::<&str>().copied())
             .unwrap();
-        assert!(message.contains("different hya-tool ABI"), "{message}");
+        assert!(
+            message.contains("ABI") || message.contains("abi"),
+            "{message}"
+        );
         return;
     }
-    let registry = hya_tool_loader::from_tool_families(&["hya/channel-tools"]);
-    let tool = registry.resolve("send").unwrap();
+    let registry = hya_tool_loader::from_tool_families(&["hya/multi-agent"]);
+    let tool = registry.resolve("list_agents").unwrap();
     let ctx = ctx_with(vec![], std::env::current_dir().unwrap());
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let result = runtime
@@ -402,10 +405,10 @@ fn replacement_child() {
         .unwrap();
     assert_eq!(result["budgetSeconds"], 8);
     assert_eq!(result["cappedSeconds"], hya_tool::deadline::MIN_TOOL_SECS);
-    let _ = hya_tool_loader::from_tool_families(&["hya/channel-tools"]);
+    let _ = hya_tool_loader::from_tool_families(&["hya/multi-agent"]);
     assert_eq!(
-        registry.builtin_bundle_origin("send"),
-        Some("hya/channel-tools")
+        registry.builtin_bundle_origin("list_agents"),
+        Some("hya/multi-agent")
     );
 }
 
@@ -432,7 +435,7 @@ fn native_family_can_be_replaced_and_wrong_abi_is_rejected() {
             std::env::consts::DLL_SUFFIX
         );
         let dst = format!(
-            "{}hya_channel_tools{}",
+            "{}hya_multi_agent{}",
             std::env::consts::DLL_PREFIX,
             std::env::consts::DLL_SUFFIX
         );

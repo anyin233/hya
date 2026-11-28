@@ -5,18 +5,11 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use hya_app::compose_builtin_tool_registry;
 use hya_bundle::{BuiltinBundleProfile, BuiltinBundleSelection};
-use hya_proto::ToolCallId;
-use hya_tool::handle::ArtifactPlane;
-use hya_tool::{
-    Action, FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, Mode,
-    NestedToolPlane, PermissionPlane, PermissionRules, ProjectActivityPlane, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolOperation, WorkflowPlane,
-};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolCtx};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -47,27 +40,7 @@ fn tool_ctx(workdir: &Path) -> ToolCtx {
         Rule::new(Action::Edit, "*", Mode::Allow),
         Rule::new(Action::Grep, "*", Mode::Allow),
     ]));
-    ToolCtx {
-        permission,
-        interaction: InteractionPlane::new().0,
-        spawner: SpawnerPlane::new().0,
-        workflows: WorkflowPlane::disconnected(),
-        operation: ToolOperation::from_tool_call(ToolCallId::new()),
-        mailbox: MailboxPlane::disconnected(),
-        project_activity: ProjectActivityPlane::disconnected(),
-        lifecycle: LifecyclePlane::disconnected(),
-        session: None,
-        parent_session: None,
-        skills: SkillPlane::default(),
-        artifacts: ArtifactPlane::default(),
-        agents: Arc::from([]),
-        lsp: LspPlane::default(),
-        formatter: FormatterPlane::default(),
-        workdir: workdir.to_path_buf(),
-        roots: vec![workdir.to_path_buf()],
-        cancel: CancellationToken::new(),
-        nested: NestedToolPlane::disconnected(),
-    }
+    ToolCtx::new(workdir.to_path_buf(), permission, CancellationToken::new())
 }
 
 #[tokio::test]

@@ -6,12 +6,11 @@ use hya_bundle::{
 };
 use serde::Deserialize;
 
-const TOOL_FAMILY_BUNDLES: [&str; 5] = [
+const TOOL_FAMILY_BUNDLES: [&str; 4] = [
     "hya/hashline",
     "hya/coding-extras",
-    "hya/extended-tools",
+    "hya/multi-agent",
     "hya/network",
-    "hya/channel-tools",
 ];
 
 #[derive(Debug, Default, Deserialize)]
@@ -89,7 +88,11 @@ pub fn trusted_preset_inventory_for(
             digest: catalog.digest().to_string(),
             immutable: true,
             installable: false,
-            agent_ids: Vec::new(),
+            agent_ids: bundle
+                .agents()
+                .iter()
+                .map(|agent| agent.id.as_str().to_string())
+                .collect(),
             resource_ids: tool_resource_ids(bundle)?,
         });
     }

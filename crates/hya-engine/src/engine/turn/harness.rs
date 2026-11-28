@@ -17,12 +17,12 @@ use hya_proto::{
     SessionId, TokenUsage, ToolSchema,
 };
 use hya_provider::{CompletionRequest, EventStream, ProviderRetryClass, ProviderRouter};
-use hya_tool::{AgentDef, ReportLatch, WorkflowRouteFailureClass};
+use hya_runtime_abi::TurnRouteFailureClass;
+use hya_tool::{AgentDef, ReportLatch};
 use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::sync::CancellationToken;
 
 use super::super::roots::SessionWorkspace;
-use super::super::steer::SteerMailbox;
 use super::super::stream_round::TurnEmit;
 use super::super::{
     AgentSpec, SessionEngine, agent_roster, effective_agent_for_binding_with_sidecar_tools,
@@ -30,11 +30,9 @@ use super::super::{
 };
 use super::messages::{AttachmentData, prompt_digests, system_prompt};
 use super::rewrite_host::{HostErrors, TurnLog, TurnModels, TurnTranscript, model_window};
+use super::route::{ExplicitTurnRoute, core_route_failure_class, provider_route_failure_class};
 use super::tool_gate::{TurnToolGate, can_report};
-use super::{
-    RequestLineage, TurnExecution, TurnRebindInputs, workflow_failure_class,
-    workflow_provider_failure_class,
-};
+use super::{RequestLineage, TurnExecution, TurnRebindInputs};
 use crate::TurnBinding;
 use crate::error::CoreError;
 use crate::hooks::{
@@ -44,7 +42,6 @@ use crate::hooks::{
 use crate::kernel::{self, Failure, Harness, Round, ToolCall, ToolGate, View};
 use crate::prompt::{PromptEnv, discover_context_files, render_environment_and_context, today};
 use crate::runtime_registry::CompiledResourceView;
-use crate::workflow::WorkflowTurnRoute;
 
 impl SessionEngine {
     /// Drive the streaming rounds of one turn activation on the kernel loop,
@@ -166,16 +163,13 @@ impl SessionEngine {
         });
         self.emit_batch_for_actor(actor_claim, session, events)
             .await?;
-        // Steer mailbox (fix for the unread-mail blindness): unread mail is
-        // surfaced inside tool results, mid-turn, without breaking the model's
-        // chain of thought. Snapshot the durable backlog once, then follow the
-        // live bus so no per-tool projection replay is needed.
-        let steer_policy = crate::ChannelPolicy::from_binding(&binding)
+        // Keep the session's channel policy synced with the admitted turn binding
+        // so the `hya/agent-channels` `UnreadMailSteerHook` sees the exact
+        // binding-pinned policy on every tool call.
+        let steer_policy = crate::channel_policy::from_binding(&binding)
             .map_err(CoreError::bundle)?
             .snapshot_for(agent.name.as_str());
-        let steer = self
-            .steer_mailbox_snapshot_with_policy(session, Some(steer_policy))
-            .await;
+        self.update_session_channel_policy(session, steer_policy);
         let emit = TurnEmit {
             engine: self,
             actor_claim,
@@ -210,7 +204,6 @@ impl SessionEngine {
             actor_claim,
             cancel,
             depth,
-            steer,
             defer_steer: false,
             recorded_digests,
             report_latch: ReportLatch::new(),
@@ -267,14 +260,13 @@ struct TurnHarness<'a> {
     rebind: Option<TurnRebindInputs<'a>>,
     apply_default_overlays: bool,
     explicit_model: Option<&'a ModelRef>,
-    workflow_route: Option<&'a WorkflowTurnRoute>,
+    workflow_route: Option<&'a ExplicitTurnRoute>,
     guidance: Option<Arc<str>>,
     external_dirs: &'a [PathBuf],
     workspace: Arc<SessionWorkspace>,
     actor_claim: Option<&'a ActorClaim>,
     cancel: &'a CancellationToken,
     depth: u32,
-    steer: SteerMailbox,
     defer_steer: bool,
     /// Prompt digests last recorded in `TurnBindingRecorded`.
     recorded_digests: (String, String),
@@ -315,9 +307,7 @@ impl TurnHarness<'_> {
     async fn check_failure_cancelled(&self) -> Result<(), CoreError> {
         if self.cancel.is_cancelled() {
             if let Some(route) = self.workflow_route {
-                route
-                    .finalize(Some(WorkflowRouteFailureClass::Cancelled))
-                    .await?;
+                route.finalize(Some(TurnRouteFailureClass::Cancelled))?;
             }
             return Err(CoreError::Cancelled);
         }
@@ -417,10 +407,9 @@ impl TurnHarness<'_> {
         let hooks =
             (!hooks.is_empty()).then(|| Arc::new(HookChain::new(hooks)) as Arc<dyn HookDispatcher>);
         replace_activation_hooks(session, hooks);
-        let channel_policy = crate::ChannelPolicy::from_binding(&self.binding)
+        let channel_policy = crate::channel_policy::from_binding(&self.binding)
             .map_err(CoreError::bundle)?
             .snapshot_for(self.live_agent.name.as_str());
-        self.steer.set_policy(channel_policy);
         engine.update_session_channel_policy(session, channel_policy);
         Ok(())
     }
@@ -444,7 +433,6 @@ impl ToolGate for TurnHarness<'_> {
             cancel: self.cancel,
             report_latch: &self.report_latch,
             nested_engine: &mut self.nested_engine,
-            steer: &mut self.steer,
             defer_steer: self.defer_steer,
             parent_session: self.parent_session,
             offered: &self.offered,
@@ -704,9 +692,7 @@ impl Harness for TurnHarness<'_> {
             Err(_) if cancel.is_cancelled() => Ok(None),
             Err(error) => {
                 if let Some(route) = workflow_route {
-                    route
-                        .finalize(Some(workflow_provider_failure_class(&error)))
-                        .await?;
+                    route.finalize(Some(provider_route_failure_class(&error)))?;
                 }
                 Err(error.into())
             }
@@ -773,9 +759,7 @@ impl Harness for TurnHarness<'_> {
         }
         self.check_failure_cancelled().await?;
         if let Some(route) = self.workflow_route {
-            route
-                .finalize(Some(workflow_failure_class(&failure.error, self.cancel)))
-                .await?;
+            route.finalize(Some(core_route_failure_class(&failure.error, self.cancel)))?;
         }
         Ok(false)
     }
@@ -790,7 +774,7 @@ impl Harness for TurnHarness<'_> {
             });
         }
         if let Some(route) = self.workflow_route {
-            route.finalize(None).await?;
+            route.finalize(None)?;
         }
         self.serving_model = None;
         self.workflow_candidate = None;

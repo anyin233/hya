@@ -8,13 +8,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use hya_proto::{SessionId, ToolCallId};
-use hya_tool::handle::ArtifactPlane;
+use hya_proto::SessionId;
 use hya_tool::{
-    Action, FormatterError, FormatterPlane, FormatterProvider, FormatterStatus, InteractionPlane,
-    LifecyclePlane, LspError, LspPlane, LspProvider, LspRequest, MailboxPlane, Mode,
-    NestedToolPlane, PermissionPlane, PermissionRules, ProjectActivityPlane, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolOperation, WorkflowPlane,
+    Action, FormatterError, FormatterPlane, FormatterProvider, FormatterStatus, LspError, LspPlane,
+    LspProvider, LspRequest, Mode, PermissionPlane, PermissionRules, Rule, ToolCtx,
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -56,29 +53,7 @@ impl Drop for TempDirGuard {
 
 pub fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(rules));
-    let (interaction, _irx) = InteractionPlane::new();
-    let (spawner, _srx) = SpawnerPlane::new();
-    ToolCtx {
-        nested: NestedToolPlane::disconnected(),
-        workflows: WorkflowPlane::disconnected(),
-        permission,
-        interaction,
-        spawner,
-        operation: ToolOperation::from_tool_call(ToolCallId::new()),
-        mailbox: MailboxPlane::disconnected(),
-        lifecycle: LifecyclePlane::disconnected(),
-        session: None,
-        parent_session: None,
-        skills: SkillPlane::default(),
-        artifacts: ArtifactPlane::default(),
-        lsp: LspPlane::default(),
-        formatter: FormatterPlane::default(),
-        agents: Default::default(),
-        roots: vec![workdir.clone()],
-        workdir,
-        cancel: CancellationToken::new(),
-        project_activity: ProjectActivityPlane::disconnected(),
-    }
+    ToolCtx::new(workdir, permission, CancellationToken::new())
 }
 
 pub fn ctx_with_planes(
@@ -89,9 +64,9 @@ pub fn ctx_with_planes(
     cancel: CancellationToken,
     session: Option<SessionId>,
 ) -> ToolCtx {
-    let mut ctx = ctx_with(rules, workdir);
-    ctx.formatter = formatter;
-    ctx.lsp = lsp;
+    let mut ctx = ctx_with(rules, workdir)
+        .with_extension(formatter)
+        .with_extension(lsp);
     ctx.cancel = cancel;
     ctx.session = session;
     if let Some(sid) = session {

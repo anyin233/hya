@@ -63,6 +63,8 @@ pub struct BackendSpec {
     pub env: Vec<(String, String)>,
     /// Extra arguments appended to `hya serve --bind 127.0.0.1:0` (e.g. `--relay <url>`).
     pub serve_args: Vec<String>,
+    /// Built-in bundle ids disabled under `bundles.builtin.disable` in config.yaml.
+    pub disabled_builtin_bundles: Vec<String>,
 }
 
 impl BackendSpec {
@@ -83,6 +85,7 @@ impl BackendSpec {
             preinstall_bundles: Vec::new(),
             env: Vec::new(),
             serve_args: Vec::new(),
+            disabled_builtin_bundles: Vec::new(),
         }
     }
 }
@@ -186,6 +189,12 @@ pub(crate) fn materialize_root(spec: &BackendSpec) -> Result<MaterializedRoot, E
         .as_ref()
         .map(|mode| format!("tools:\n  code:\n    mode: {mode}\n"))
         .unwrap_or_default();
+    let bundles_yaml = if spec.disabled_builtin_bundles.is_empty() {
+        String::new()
+    } else {
+        let items = spec.disabled_builtin_bundles.join(", ");
+        format!("bundles:\n  builtin:\n    profile: full\n    disable: [{items}]\n")
+    };
     let config = format!(
         r#"schema_version: 2
 default_model: {model_ref}
@@ -200,7 +209,7 @@ plugins: {{}}
 permission:
   model: {perm}
   rules: []
-{tools}"#,
+{tools}{bundles}"#,
         model_ref = model_ref,
         provider = spec.provider_id,
         base = spec.fake_base_url,
@@ -208,6 +217,7 @@ permission:
         mcp = mcp_yaml,
         perm = spec.permission_model,
         tools = tools_yaml,
+        bundles = bundles_yaml,
     );
     std::fs::write(hya_cfg.join("config.yaml"), config)?;
     std::fs::write(

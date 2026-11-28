@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "name": "send",
+  "description": "Send a message on one channel; the channel's own nature decides the delivery. `#channel` (or a bare `DM-…`/`announce-…` id from `list_channel`) posts on that channel: group channels broadcast to the unit (leader-only), DM channels stay private. A bare handle sends private mail to that vertical peer (`^parent` for your parent; mail to an archived child revives it). Omit `channel` to use your default: the unit you lead, or your parent.",
+  "permission": "tool",
+  "prompt_hint": "send mail to a channel or agent",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "channel": {
+        "type": "string",
+        "description": "`#channel`, a channel id, a peer handle, or `^parent`; omit for the default"
+      },
+      "body": {
+        "type": "string",
+        "description": "The message body"
+      }
+    },
+    "required": ["body"]
+  },
+  "entrypoint": {
+    "native": "send"
+  }
+}

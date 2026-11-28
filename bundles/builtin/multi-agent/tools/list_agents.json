@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "name": "list_agents",
+  "description": "List the agent definitions available to spawn via the `task` tool.",
+  "permission": "read_only",
+  "prompt_hint": "list the agents you can start with task",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  },
+  "entrypoint": {
+    "native": "list_agents"
+  }
+}

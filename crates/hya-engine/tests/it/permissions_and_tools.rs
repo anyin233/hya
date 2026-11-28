@@ -521,8 +521,8 @@ async fn capture_request(
     if !interactive {
         drop(questions);
     }
-    let mut hooks = hya_coding_extras::coding_extras_hooks(
-        Arc::new(hya_coding_extras::CodingExtrasState::new()),
+    let mut hooks = hya_coding_extras_core::coding_extras_hooks(
+        Arc::new(hya_coding_extras_core::CodingExtrasState::new()),
         None,
     );
     hooks.extend(
@@ -814,8 +814,8 @@ async fn nested_calls_run_in_callers_view_and_record_against_caller() {
     )
     .await
     .with_native_hooks(Arc::new(hya_engine::NativeHookDispatcher::new({
-        let mut hooks = hya_coding_extras::coding_extras_hooks(
-            Arc::new(hya_coding_extras::CodingExtrasState::new()),
+        let mut hooks = hya_coding_extras_core::coding_extras_hooks(
+            Arc::new(hya_coding_extras_core::CodingExtrasState::new()),
             None,
         );
         hooks.extend(

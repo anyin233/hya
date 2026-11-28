@@ -1,0 +1,19 @@
+[package]
+name = "hya-agent-channels"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[package.metadata.hya]
+version-reference = "hya"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+hya-agent-channels-core = { workspace = true }
+hya-runtime-abi = { workspace = true }

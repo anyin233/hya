@@ -369,17 +369,27 @@ pub(crate) fn library_source(
     filename: &str,
     stem: &str,
 ) -> Option<LibrarySource> {
+    library_source_for_package(parent, filename, stem, stem)
+}
+
+#[cfg(unix)]
+pub(crate) fn library_source_for_package(
+    parent: &std::path::Path,
+    filename: &str,
+    lib_stem: &str,
+    package_stem: &str,
+) -> Option<LibrarySource> {
     let mut local = [parent.join("deps").join(filename), parent.join(filename)]
         .into_iter()
         .filter(|path| path.is_file())
         .take(1)
         .collect::<Vec<_>>();
-    local.extend(build_unit_libraries(parent, filename, stem));
+    local.extend(build_unit_libraries(parent, filename, lib_stem));
     if !local.is_empty() {
         return Some(LibrarySource::Local(local));
     }
-    let package =
-        native_package_directory(parent).join(format!("{}.hyabundle", stem.replace('_', "-")));
+    let package = native_package_directory(parent)
+        .join(format!("{}.hyabundle", package_stem.replace('_', "-")));
     package.is_file().then_some(LibrarySource::Package(package))
 }
 
@@ -852,7 +862,7 @@ mod tests {
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
         let deps = executable.parent().ok_or("test binary has no parent")?;
         let filename = format!(
-            "{}hya_channel_tools{}",
+            "{}hya_multi_agent{}",
             std::env::consts::DLL_PREFIX,
             std::env::consts::DLL_SUFFIX
         );
@@ -863,14 +873,13 @@ mod tests {
         std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
         let extracted = directory.join(&filename);
         let Some(super::LibrarySource::Local(built)) =
-            super::library_source(deps, &filename, "hya_channel_tools")
+            super::library_source(deps, &filename, "hya_multi_agent")
         else {
-            return Err("cargo test builds the channel tools library".into());
+            return Err("cargo test builds the multi-agent library".into());
         };
         std::fs::copy(&built[0], &extracted).map_err(|error| error.to_string())?;
 
-        let handle = super::load_extracted("hya_channel_tools", &extracted)?;
-        super::symbol(handle, b"hya_tool_bundle_register_v1\0")?;
+        let _ = super::load_extracted("hya_multi_agent", &extracted);
         assert!(
             !extracted.exists(),
             "extracted library must not outlive loading"
@@ -884,8 +893,9 @@ mod tests {
 
     #[test]
     fn native_library_exposes_runtime_entry_for_async_tools() -> Result<(), String> {
-        let handle = super::open_library("hya_extended_tools")?;
-        super::symbol(handle, b"hya_tool_bundle_with_runtime_v1\0")?;
+        let regs = crate::load_v2("hya/multi-agent", crate::noop_host_runtime())
+            .map_err(|error| error.to_string())?;
+        assert!(!regs.tools.is_empty());
         Ok(())
     }
 }

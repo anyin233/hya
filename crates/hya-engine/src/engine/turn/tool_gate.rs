@@ -13,7 +13,6 @@ use tokio::sync::Mutex;
 use super::super::file_snapshot::{FileCapture, observation};
 use super::super::roots::SessionWorkspace;
 use super::super::shell::BashArtifactGuard;
-use super::super::steer::SteerMailbox;
 use super::super::tool_error::{tool_error_message_value, tool_error_value};
 use super::super::{AgentSpec, SessionEngine, authorize_tool_call};
 use super::messages::hidden_behind;
@@ -44,7 +43,6 @@ pub(super) struct TurnToolGate<'a> {
     pub(super) report_latch: &'a ReportLatch,
     /// Engine handle for nested tool calls, cloned once per turn on first use.
     pub(super) nested_engine: &'a mut Option<Arc<SessionEngine>>,
-    pub(super) steer: &'a mut SteerMailbox,
     pub(super) defer_steer: bool,
     pub(super) parent_session: Option<SessionId>,
     /// Tool schemas the round's request offered.
@@ -60,7 +58,7 @@ pub(super) fn can_report(
     parent_session: Option<SessionId>,
     offered: &[ToolSchema],
 ) -> Result<bool, CoreError> {
-    let policy = crate::ChannelPolicy::from_binding(binding)
+    let policy = crate::channel_policy::from_binding(binding)
         .map_err(CoreError::bundle)?
         .snapshot_for(agent.name.as_str());
     Ok(parent_session.is_some()
@@ -87,7 +85,6 @@ impl TurnToolGate<'_> {
             cancel,
             report_latch,
             ref mut nested_engine,
-            ref mut steer,
             ref mut defer_steer,
             parent_session,
             offered,
@@ -166,57 +163,60 @@ impl TurnToolGate<'_> {
                     };
                     let result = match authorized {
                         Ok(permission) => {
-                            let channel_policy = crate::ChannelPolicy::from_binding(binding)
+                            let channel_policy = crate::channel_policy::from_binding(binding)
                                 .map_err(CoreError::bundle)?
                                 .snapshot_for(live_agent.name.as_str());
+                            let mut extensions = hya_tool::ExtensionPlanes::new()
+                                .with(
+                                    engine
+                                        .spawner
+                                        .for_binding(binding)
+                                        .for_session_with_agents_and_guidance(
+                                            session,
+                                            agents.clone(),
+                                            guidance.clone(),
+                                        ),
+                                )
+                                .with(
+                                    engine
+                                        .mailbox
+                                        .for_session_with_actor(session, actor_claim.copied())
+                                        .with_channel_policy(channel_policy),
+                                )
+                                .with(
+                                    engine
+                                        .lifecycle
+                                        .for_session_with_actor(session, actor_claim.copied())
+                                        .with_channel_policy(channel_policy)
+                                        .with_report_latch(report_latch.clone())
+                                        .with_wait_ack(wait_ack.clone()),
+                                )
+                                .with(engine.project_activity.for_session(session))
+                                .with(agents.clone());
+                            if let Some(parent) = parent_session {
+                                extensions.insert(hya_tool::ParentSession(parent));
+                            }
+                            if engine.lsp.is_configured() {
+                                extensions.insert(engine.lsp.clone());
+                            }
+                            if engine.formatter.is_configured() {
+                                extensions.insert(engine.formatter.clone());
+                            }
                             let mut ctx = ToolCtx {
-                                nested: hya_tool::NestedToolPlane::disconnected(),
-                                workflows: engine
-                                    .workflows
-                                    .for_binding(binding)
-                                    .for_session_with_agents(session, agents.clone()),
-                                permission,
-                                interaction: engine.interaction.for_session(session),
-                                spawner: engine
-                                    .spawner
-                                    .for_binding(binding)
-                                    .for_session_with_agents_and_guidance(
-                                        session,
-                                        agents.clone(),
-                                        guidance.clone(),
-                                    ),
-                                operation: hya_tool::ToolOperation::from_tool_call(tc.call)
-                                    .with_actor_claim(actor_claim.copied()),
-                                mailbox: engine
-                                    .mailbox
-                                    .for_session_with_actor(session, actor_claim.copied())
-                                    .with_channel_policy(channel_policy),
-                                lifecycle: engine
-                                    .lifecycle
-                                    .for_session_with_actor(session, actor_claim.copied())
-                                    .with_channel_policy(channel_policy)
-                                    .with_report_latch(report_latch.clone())
-                                    .with_wait_ack(wait_ack.clone()),
-                                project_activity: engine.project_activity.for_session(session),
-                                session: Some(session),
-                                parent_session,
-                                skills: resources.skill_plane(),
-                                artifacts: engine.artifacts.clone(),
-                                agents: agents.clone(),
-                                lsp: engine.lsp.clone(),
-                                formatter: engine.formatter.clone(),
                                 workdir: binding.workdir().to_path_buf(),
                                 roots: workspace.roots.clone(),
                                 cancel: cancel.clone(),
+                                session: Some(session),
+                                operation: hya_tool::ToolOperation::from_tool_call(tc.call)
+                                    .with_actor_claim(actor_claim.copied()),
+                                permission,
+                                interaction: engine.interaction.for_session(session),
+                                skills: resources.skill_plane(),
+                                artifacts: engine.artifacts,
+                                schemas: engine.schemas.clone(),
+                                nested: hya_tool::NestedToolPlane::disconnected(),
+                                extensions,
                             };
-                            if !ctx.handles().has_uri_handler("channel") {
-                                let handler = Arc::new(crate::coordination::ChannelUriHandler(
-                                    ctx.mailbox.clone(),
-                                ));
-                                if let Ok(with_channel) = ctx.clone().with_uri_handler(handler) {
-                                    ctx = with_channel;
-                                }
-                            }
                             let visibility = engine
                                 .tool_visibility_outcome(session, Some(&live_agent.name), resources)
                                 .await;
@@ -303,6 +303,11 @@ impl TurnToolGate<'_> {
                     },
                 };
                 let original_native = native.clone();
+                let _ = engine.take_staged_mail_ack(session);
+                engine.set_mail_steer_suppressed(
+                    session,
+                    report_latch.is_set() || *defer_steer || wait_ack.saw_wait(),
+                );
                 native = apply_tool_execute_after_hooks(
                     engine.native_hooks.as_ref(),
                     engine.hooks.as_ref(),
@@ -312,6 +317,7 @@ impl TurnToolGate<'_> {
                     native,
                 )
                 .await;
+                engine.set_mail_steer_suppressed(session, false);
                 if activation_hooks
                     .as_ref()
                     .is_some_and(|hooks| !hooks.is_healthy())
@@ -339,6 +345,8 @@ impl TurnToolGate<'_> {
             None
         };
         let mail_mark = engine.mail_mark(session);
+        let staged_mail_ack = engine.take_staged_mail_ack(session);
+        let tool_succeeded = result.is_ok();
         let (event, retains_artifact) = match result {
             Ok(mut output) => {
                 artifact_guard.remove_unowned_path(&mut output);
@@ -356,29 +364,19 @@ impl TurnToolGate<'_> {
                     &engine.artifacts.store(binding.workdir()),
                     tc.name.as_str(),
                 );
-                // Steer (ADR-0016 follow-up): unread team mail rides the
-                // tail of this tool result so a long turn stays aware
-                // of new messages without breaking the model's flow.
-                // Not once a report was accepted: this turn takes no
-                // further round, so mail arriving now stays unread
-                // and wakes the member for a new episode instead.
-                // Deadline notices use the same result tail and commit.
-                if !report_latch.is_set() {
-                    if wait_ack.is_none()
-                        && !*defer_steer
-                        && let Some(notice) = steer.drain(engine).await?
-                    {
-                        append_steer_notice(&mut output, &notice);
-                    }
-                    if let Some(deadline) = hya_tool::deadline::current() {
-                        if let Some(stage) = deadline.take_notice(session) {
-                            let can_report =
-                                can_report(engine, binding, live_agent, parent_session, offered)?;
-                            let notice = deadline.notice(stage, can_report);
-                            append_steer_notice(&mut output, &format!("\n\n{notice}"));
-                        } else if let Some(clock) = deadline.take_clock(session) {
-                            append_steer_notice(&mut output, &format!("\n\n{clock}"));
-                        }
+                // Deadline notices ride the same result tail; unread-mail
+                // steering ran through the `hya/agent-channels` NativeHook
+                // during `apply_tool_execute_after_hooks`.
+                if !report_latch.is_set()
+                    && let Some(deadline) = hya_tool::deadline::current()
+                {
+                    if let Some(stage) = deadline.take_notice(session) {
+                        let can_report =
+                            can_report(engine, binding, live_agent, parent_session, offered)?;
+                        let notice = deadline.notice(stage, can_report);
+                        append_steer_notice(&mut output, &format!("\n\n{notice}"));
+                    } else if let Some(clock) = deadline.take_clock(session) {
+                        append_steer_notice(&mut output, &format!("\n\n{clock}"));
                     }
                 }
                 let retains_artifact = artifact_guard.retained_by(&output);
@@ -397,10 +395,11 @@ impl TurnToolGate<'_> {
         };
         let (acknowledgement, mail_mark, consumed_incoming) = match wait_ack {
             Some(ack) => (Some(ack.event), Some(ack.mark), ack.consumed_incoming),
-            None => {
-                let (event, incoming) = steer.take_acknowledgement().unzip();
-                (event, mail_mark, incoming.unwrap_or(false))
-            }
+            None if tool_succeeded => match staged_mail_ack {
+                Some(ack) => (Some(ack.event), Some(ack.mark), ack.consumed_incoming),
+                None => (None, mail_mark, false),
+            },
+            None => (None, mail_mark, false),
         };
         let mut events = vec![event];
         events.extend(observation(

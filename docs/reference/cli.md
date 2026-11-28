@@ -169,6 +169,8 @@ Uses `~/.local/state/hya/sessions.db` unless `--db <PATH>` is given:
 
 ### `hya workflow`
 
+Backed by the built-in ABI v2 native bundle `hya/workflow` (`bundles/builtin/workflow/`). Returns an actionable error when run under `--bare` or when `hya/workflow` is disabled in `config.yaml`.
+
 ```sh
 hya workflow list [--json]
 hya workflow info <NAME> [--json]
@@ -176,6 +178,14 @@ hya [--db <DB>] workflow use <NAME> --session <SESSION_ID> [--revision <REV>]
 hya [--db <DB>] workflow run [<NAME>] [--session <SESSION_ID>] [--input KEY=VALUE]... [--revision <REV>] [--json]
 hya [--db <DB>] workflow state --session <SESSION_ID> [--json]
 ```
+
+**Bundle API surface (`hya/workflow`):**
+
+| Method & Scope | Path | Payload / Response |
+| --- | --- | --- |
+| `GET` (global) | `/v2/bundles/hya%2Fworkflow/api/workflows?directory=<abs>` | `{ "workflows": WorkflowSummary[] }` |
+| `GET` (session) | `/v2/sessions/{id}/bundles/hya%2Fworkflow/state` | `WorkflowProjection` (`extensions["hya/workflow"]`) |
+| `POST` (session) | `/v2/sessions/{id}/bundles/hya%2Fworkflow/command` | Body: `{ list }` \| `{ state }` \| `{ info: { name } }` \| `{ select: { name, expectedRevision? } }` \| `{ run: { name?, expectedRevision?, inputs?, run?, delivery?: "started"\|"finished" } }` |
 
 ### `hya bundle`
 

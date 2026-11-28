@@ -4,7 +4,6 @@ mod support;
 
 mod catalog_and_agents;
 mod coding_extras_hooks;
-mod goal_and_loop;
 mod hooks_and_scope;
 mod permissions_and_tools;
 mod report_and_wait;
@@ -14,4 +13,3 @@ mod shell_and_attachments;
 mod subagent_lifecycle;
 mod turn_end_and_recovery;
 mod turn_loop;
-mod workflow;

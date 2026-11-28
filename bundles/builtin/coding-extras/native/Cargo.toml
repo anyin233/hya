@@ -14,19 +14,5 @@ crate-type = ["rlib", "cdylib"]
 workspace = true
 
 [dependencies]
+hya-coding-extras-core = { workspace = true }
 hya-runtime-abi = { workspace = true }
-hya-tool = { workspace = true }
-hya-proto = { workspace = true }
-hya-version = { workspace = true }
-async-trait = { workspace = true }
-libc = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-serde_norway = { workspace = true }
-similar = { workspace = true }
-tokio = { workspace = true }
-tokio-util = { workspace = true }
-tracing = { workspace = true }
-
-[dev-dependencies]
-hya-bundle = { workspace = true }

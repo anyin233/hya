@@ -13,21 +13,7 @@ impl TeamActor {
             return Vec::new();
         };
         let team = hya_tool::extension::team_projection(&projection);
-        let handles: Vec<String> = match to {
-            // Handle targets are harness notices, never agent-to-agent mail.
-            MailEndpoint::Handle(handle) => vec![handle.clone()],
-            MailEndpoint::Channel(channel) => team
-                .channels
-                .get(channel)
-                .map(|ch| {
-                    ch.members
-                        .iter()
-                        .filter(|m| m.as_str() != from)
-                        .cloned()
-                        .collect()
-                })
-                .unwrap_or_default(),
-        };
+        let handles = hya_agent_channels_core::mail_recipient_handles(&team, from, to);
         let st = self.lock();
         handles
             .into_iter()
@@ -105,12 +91,13 @@ impl TeamActor {
                     let inbox = Inbox::new(&projection, &slot.handle);
                     let inbox_len = inbox.len();
                     let cursor = slot.cursor.max(inbox.durable_cursor().unwrap_or(0));
-                    let allowed = ChannelPolicy::from_binding(&slot.binding).is_ok_and(|policy| {
-                        inbox
-                            .resident_mail(cursor, slot.agent.name.as_str(), Some(&policy))
-                            .next()
-                            .is_some()
-                    });
+                    let allowed =
+                        crate::channel_policy::from_binding(&slot.binding).is_ok_and(|policy| {
+                            inbox
+                                .resident_mail(cursor, slot.agent.name.as_str(), Some(&policy))
+                                .next()
+                                .is_some()
+                        });
                     if allowed {
                         slot.pending = true;
                         slot.notify.notify_one();
@@ -169,7 +156,7 @@ impl TeamActor {
                 if inbox.len() <= slot.cursor {
                     continue;
                 }
-                let policy = ChannelPolicy::from_binding(&slot.binding).ok();
+                let policy = crate::channel_policy::from_binding(&slot.binding).ok();
                 let has_deliverable = inbox
                     .resident_mail(slot.cursor, slot.agent.name.as_str(), policy.as_ref())
                     .next()

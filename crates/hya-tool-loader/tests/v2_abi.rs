@@ -23,12 +23,7 @@ use hya_runtime_abi::{
     SessionSummaryMeta, ToolVisibilityInput, ToolVisibilityOutcome, TurnOutcome, TurnSpawnRequest,
     TurnStartRequest, TurnStatus, UriResolveCtx,
 };
-use hya_tool::handle::ArtifactPlane;
-use hya_tool::{
-    AgentDef, InteractionPlane, LifecyclePlane, MailboxPlane, NestedToolPlane, PermissionPlane,
-    PermissionRules, ProjectActivityPlane, SkillCatalogEntry, SkillPlane, SpawnerPlane, ToolCtx,
-    ToolOperation, WorkflowPlane,
-};
+use hya_tool::{AgentDef, PermissionPlane, PermissionRules, SkillCatalogEntry, ToolCtx};
 use hya_tool_loader::{NativeBundleLoader, load_v2_from_path, try_from_tool_families};
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
@@ -518,29 +513,9 @@ fn find_example_cdylib(name: &str) -> Result<PathBuf, Box<dyn std::error::Error>
 fn test_tool_ctx(session: SessionId) -> ToolCtx {
     let workdir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let (permission, _prx) = PermissionPlane::new(PermissionRules::new(Vec::new()));
-    let (interaction, _irx) = InteractionPlane::new();
-    let (spawner, _srx) = SpawnerPlane::new();
-    ToolCtx {
-        permission,
-        interaction,
-        spawner,
-        workflows: WorkflowPlane::disconnected(),
-        operation: ToolOperation::from_tool_call(ToolCallId::new()),
-        mailbox: MailboxPlane::disconnected(),
-        project_activity: ProjectActivityPlane::disconnected(),
-        lifecycle: LifecyclePlane::disconnected(),
-        session: Some(session),
-        parent_session: None,
-        skills: SkillPlane::default(),
-        artifacts: ArtifactPlane::default(),
-        agents: Arc::from([]),
-        lsp: hya_tool::LspPlane::default(),
-        formatter: hya_tool::FormatterPlane::default(),
-        roots: vec![workdir.clone()],
-        workdir,
-        cancel: CancellationToken::new(),
-        nested: NestedToolPlane::disconnected(),
-    }
+    let mut ctx = ToolCtx::new(workdir, permission, CancellationToken::new());
+    ctx.session = Some(session);
+    ctx
 }
 
 #[cfg(unix)]
@@ -562,15 +537,17 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
     assert_eq!(regs.loop_drivers.len(), 1);
 
     let session = SessionId::new();
-    let ctx = test_tool_ctx(session);
+    let parent = SessionId::new();
+    let ctx = test_tool_ctx(session).with_extension(hya_tool::ParentSession(parent));
 
-    // Tool execution + scoped deadline cell + Tokio sleep inside cdylib + HostRuntime KV write
+    // Tool execution + scoped deadline cell + Tokio sleep inside cdylib + HostRuntime KV write + ExtensionPlanes across cdylib boundary
     let _deadline = hya_tool::deadline::install_scoped(std::time::Duration::from_secs(42));
     let tool_out = regs.tools[0].execute(&ctx, json!({"hello": "v2"})).await?;
     assert_eq!(tool_out["bundle_id"], "hya/probe");
     assert_eq!(tool_out["written_version"], 1);
     assert_eq!(tool_out["read_value"], json!({"hello": "v2"}));
     assert_eq!(tool_out["budget_secs"], 42);
+    assert_eq!(tool_out["parent_session"], parent.to_string());
 
     // Rewriter execution across runtime bridge
     let projection = Projection::default();
@@ -670,6 +647,7 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
     // UriSchemaHandler
     let uri_ctx = UriResolveCtx {
         session: Some(session),
+        actor_claim: None,
         workdir: &ctx.workdir,
         runtime: Some(runtime.as_ref()),
     };
@@ -682,6 +660,7 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
         .write(
             UriResolveCtx {
                 session: Some(session),
+                actor_claim: None,
                 workdir: &ctx.workdir,
                 runtime: Some(runtime.as_ref()),
             },

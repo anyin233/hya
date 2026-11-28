@@ -39,8 +39,8 @@ use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
 use crate::native_bundle::{
-    LibrarySource, NativeRewriter, NativeTool, RuntimeEntry, cache_library, library_source,
-    native_cache_root, record_library_source, symbol,
+    LibrarySource, NativeRewriter, NativeTool, RuntimeEntry, cache_library,
+    library_source_for_package, native_cache_root, record_library_source, symbol,
 };
 
 struct GenericPollState<R> {
@@ -135,6 +135,18 @@ impl NativeService for NativeServiceAdapter {
             ServiceHealth::unhealthy("native runtime bridge did not poll service health")
         })
         .await
+    }
+
+    fn is_session_busy(&self, session: SessionId) -> bool {
+        self.inner.is_session_busy(session)
+    }
+
+    fn cancel_session(&self, session: SessionId) -> bool {
+        self.inner.cancel_session(session)
+    }
+
+    async fn wait_session_idle(&self, session: SessionId) -> Result<(), HostError> {
+        poll_host_result(self.inner.wait_session_idle(session), self.with_runtime).await
     }
 }
 
@@ -655,6 +667,17 @@ fn bundle_stem(identity: &str) -> Result<String, AbiError> {
         .strip_prefix("hya/")
         .filter(|rest| !rest.is_empty())
         .ok_or_else(|| AbiError::InvalidBundleIdentity(identity.to_string()))?;
+    if name == "workflow" {
+        return Ok("hya_workflow_bundle".to_string());
+    }
+    Ok(format!("hya_{}", name.replace('-', "_")))
+}
+
+fn bundle_package_stem(identity: &str) -> Result<String, AbiError> {
+    let name = identity
+        .strip_prefix("hya/")
+        .filter(|rest| !rest.is_empty())
+        .ok_or_else(|| AbiError::InvalidBundleIdentity(identity.to_string()))?;
     Ok(format!("hya_{}", name.replace('-', "_")))
 }
 
@@ -742,7 +765,8 @@ fn open_discovered_v2(
         bundle: identity.to_string(),
         detail: "backend executable has no parent directory".to_string(),
     })?;
-    match library_source(parent, filename, stem) {
+    let package_stem = bundle_package_stem(identity)?;
+    match library_source_for_package(parent, filename, stem, &package_stem) {
         Some(LibrarySource::Local(libraries)) => {
             let mut failures = Vec::new();
             for library in &libraries {

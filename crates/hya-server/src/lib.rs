@@ -40,7 +40,6 @@ mod support;
 mod test_support;
 mod v2;
 mod workflow;
-mod workflow_control;
 
 pub use agent_model_control::{
     AGENT_MODEL_CONFIGURED, AGENT_MODEL_CONTROL_FAILURE, AGENT_MODEL_CONTROL_UNAVAILABLE,
@@ -85,9 +84,6 @@ pub const MAX_TURN_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 /// re-encodes them as protojson (base64) for the shared router. A larger
 /// message fails with gRPC `out_of_range` before any validation.
 pub const MAX_TURN_GRPC_MESSAGE_BYTES: usize = MAX_TURN_REQUEST_BYTES / 4 * 3;
-pub use workflow_control::{
-    WorkflowControl, WorkflowControlError, WorkflowControlFuture, WorkflowDecorationFuture,
-};
 
 /// Build the full HTTP app: the `/v2` contract routes + CORS, behind the
 /// request admission guard (Host allowlist, no browsers over the relay;

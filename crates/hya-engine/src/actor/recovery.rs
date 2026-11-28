@@ -5,7 +5,6 @@ use super::{
     ResidentRecoveryReport, ResidentSupervisor, ResolvedResidentRuntime, RootDriverActivity,
     SlotStatus, TeamEvent, WorkflowActivation, await_episode,
 };
-use crate::ChannelPolicy;
 use crate::store_bridge::{RecoveredActorClaim, RecoveredResidentWork, SessionStoreExt as _};
 use crate::{AgentSpec, CoreError, SessionEngine};
 use hya_proto::{ActorClaim, OwnerRunId, SessionId, SubagentMode};
@@ -266,7 +265,7 @@ impl ResidentSupervisor {
                 self.engine
                     .resolve_resident_runtime(binding, &base, &stable)?
             };
-        let channel_policy = ChannelPolicy::from_binding(&binding)
+        let channel_policy = crate::channel_policy::from_binding(&binding)
             .map_err(CoreError::bundle)?
             .snapshot_for(agent.name.as_str());
         let mut team = self.team_for(root).await?;

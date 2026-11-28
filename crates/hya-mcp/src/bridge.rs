@@ -246,39 +246,14 @@ fn format_bytes(value: usize) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use hya_tool::{
-        InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-        SpawnerPlane, handle::ArtifactPlane,
-    };
+    use hya_tool::{Mode, PermissionPlane, PermissionRules, Rule};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex};
     use tokio_util::sync::CancellationToken;
 
     fn ctx_with(action: Action, mode: Mode) -> ToolCtx {
         let (permission, _rx) =
             PermissionPlane::new(PermissionRules::new(vec![Rule::new(action, "*", mode)]));
-        let (interaction, _irx) = InteractionPlane::new();
-        let (spawner, _srx) = SpawnerPlane::new();
-        ToolCtx {
-            nested: hya_tool::NestedToolPlane::disconnected(),
-            workflows: hya_tool::WorkflowPlane::disconnected(),
-            permission,
-            interaction,
-            spawner,
-            operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-            mailbox: hya_tool::MailboxPlane::disconnected(),
-            lifecycle: hya_tool::LifecyclePlane::disconnected(),
-            session: None,
-            parent_session: None,
-            skills: SkillPlane::default(),
-            artifacts: ArtifactPlane::default(),
-            lsp: LspPlane::default(),
-            formatter: hya_tool::FormatterPlane::default(),
-            agents: Default::default(),
-            workdir: std::env::temp_dir(),
-            roots: vec![std::env::temp_dir()],
-            cancel: CancellationToken::new(),
-            project_activity: hya_tool::ProjectActivityPlane::disconnected(),
-        }
+        ToolCtx::new(std::env::temp_dir(), permission, CancellationToken::new())
     }
 
     #[tokio::test]

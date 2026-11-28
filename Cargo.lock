@@ -1279,6 +1279,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
+name = "hya-agent-channels"
+version = "0.0.0"
+dependencies = [
+ "hya-agent-channels-core",
+ "hya-runtime-abi",
+]
+
+[[package]]
+name = "hya-agent-channels-core"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "hya-bundle",
+ "hya-proto",
+ "hya-runtime-abi",
+ "hya-tool",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "hya-api"
 version = "0.0.0"
 dependencies = [
@@ -1300,18 +1323,19 @@ dependencies = [
  "base64 0.22.1",
  "futures",
  "http-body-util",
+ "hya-agent-channels",
  "hya-api",
  "hya-bundle",
- "hya-channel-tools",
  "hya-child-io",
  "hya-coding-extras",
+ "hya-coding-extras-core",
  "hya-core",
  "hya-engine",
- "hya-extended-tools",
  "hya-goal",
  "hya-hashline",
  "hya-loop",
  "hya-mcp",
+ "hya-multi-agent",
  "hya-network",
  "hya-plan",
  "hya-plugin",
@@ -1323,7 +1347,8 @@ dependencies = [
  "hya-tool",
  "hya-tool-loader",
  "hya-version",
- "hya-workflow",
+ "hya-workflow-bundle",
+ "hya-workflow-bundle-core",
  "libc",
  "libsqlite3-sys",
  "rand_core 0.9.5",
@@ -1402,17 +1427,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hya-channel-tools"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "hya-proto",
- "hya-tool",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "hya-child-io"
 version = "0.0.0"
 dependencies = [
@@ -1425,6 +1439,14 @@ dependencies = [
 
 [[package]]
 name = "hya-coding-extras"
+version = "0.0.0"
+dependencies = [
+ "hya-coding-extras-core",
+ "hya-runtime-abi",
+]
+
+[[package]]
+name = "hya-coding-extras-core"
 version = "0.0.0"
 dependencies = [
  "async-trait",
@@ -1533,14 +1555,17 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "futures",
+ "hya-agent-channels",
+ "hya-agent-channels-core",
  "hya-bundle",
- "hya-channel-tools",
  "hya-coding-extras",
+ "hya-coding-extras-core",
  "hya-compaction",
  "hya-context",
  "hya-core",
- "hya-extended-tools",
  "hya-hashline",
+ "hya-multi-agent",
+ "hya-multi-agent-core",
  "hya-network",
  "hya-plan",
  "hya-proto",
@@ -1549,7 +1574,7 @@ dependencies = [
  "hya-store",
  "hya-tool",
  "hya-tool-loader",
- "hya-workflow",
+ "hya-workflow-bundle",
  "libc",
  "serde",
  "serde_json",
@@ -1561,18 +1586,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
-]
-
-[[package]]
-name = "hya-extended-tools"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "hya-proto",
- "hya-tool",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -1646,6 +1659,29 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "hya-multi-agent"
+version = "0.0.0"
+dependencies = [
+ "hya-multi-agent-core",
+ "hya-runtime-abi",
+]
+
+[[package]]
+name = "hya-multi-agent-core"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "hya-bundle",
+ "hya-proto",
+ "hya-runtime-abi",
+ "hya-tool",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1885,17 +1921,19 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "futures",
- "hya-channel-tools",
+ "hya-agent-channels",
  "hya-coding-extras",
  "hya-context",
- "hya-extended-tools",
  "hya-hashline",
+ "hya-multi-agent",
  "hya-network",
  "hya-plan",
  "hya-proto",
+ "hya-runtime-abi",
  "hya-tool-error",
  "hya-tool-loader",
  "hya-version",
+ "hya-workflow-bundle",
  "image",
  "libc",
  "regex",
@@ -1922,20 +1960,21 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "futures",
+ "hya-agent-channels",
  "hya-bundle",
- "hya-channel-tools",
  "hya-coding-extras",
  "hya-context",
- "hya-extended-tools",
  "hya-goal",
  "hya-hashline",
  "hya-loop",
+ "hya-multi-agent",
  "hya-network",
  "hya-plan",
  "hya-proto",
  "hya-runtime-abi",
  "hya-tool",
  "hya-tool-error",
+ "hya-workflow-bundle",
  "libc",
  "serde",
  "serde_json",
@@ -1968,6 +2007,34 @@ dependencies = [
  "serde_norway",
  "sha2",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "hya-workflow-bundle"
+version = "0.0.0"
+dependencies = [
+ "hya-runtime-abi",
+ "hya-workflow-bundle-core",
+]
+
+[[package]]
+name = "hya-workflow-bundle-core"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "hya-bundle",
+ "hya-proto",
+ "hya-runtime-abi",
+ "hya-tool",
+ "hya-workflow",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

@@ -3,20 +3,24 @@ use std::io::Write as _;
 
 use anyhow::Context as _;
 use clap::Subcommand;
-use hya_app::{WorkflowCommand as ControlCommand, WorkflowCommandResult, WorkflowInvocation};
+use hya_app::{WorkflowCommand as ControlCommand, WorkflowCommandResult};
+use hya_engine::{ApiMethod, BundleApiCall, BundleApiError, SessionEngine};
 use hya_proto::{
-    WorkflowInfo, WorkflowModelAssignment, WorkflowModelResolvedCandidate, WorkflowRevision,
-    WorkflowSummary,
+    SessionId, WorkflowInfo, WorkflowModelAssignment, WorkflowModelResolvedCandidate,
+    WorkflowRevision, WorkflowSummary,
 };
 use hya_tool::{
     WorkflowMemberRole, WorkflowProjection, WorkflowRouteFailureClass, WorkflowRunProjection,
     WorkflowRunResult, WorkflowRunStatus, WorkflowStagePlan, WorkflowStageRouteOutcome,
     WorkflowStageStatus,
 };
+use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::db_writer::Writer;
 use crate::routed::WorkflowRoute;
+
+const WORKFLOW_BUNDLE_ID: &str = "hya/workflow";
 
 /// CLI commands backed by the app-owned Workflow control seam.
 #[derive(Subcommand)]
@@ -77,15 +81,31 @@ pub(crate) enum WorkflowCliCommand {
     },
 }
 
+fn ensure_workflow_bundle_enabled(bare: bool) -> anyhow::Result<()> {
+    if bare {
+        anyhow::bail!(
+            "workflow runtime is unavailable in --bare mode: built-in bundle `{WORKFLOW_BUNDLE_ID}` \
+             is disabled (omit `--bare` to enable workflows)"
+        );
+    }
+    if !hya_app::config::configured_builtin_bundles().is_enabled(WORKFLOW_BUNDLE_ID) {
+        anyhow::bail!(
+            "workflow runtime is unavailable: built-in bundle `{WORKFLOW_BUNDLE_ID}` is disabled \
+             in config.yaml (enable `{WORKFLOW_BUNDLE_ID}` under `bundles.builtin`)"
+        );
+    }
+    Ok(())
+}
+
 async fn catalog(db: &str) -> anyhow::Result<hya_app::WorkflowCatalog> {
     let workdir = std::env::current_dir().context("resolve current directory")?;
-    hya_app::WorkflowCatalog::inspect_read_only(db, &workdir, |warning| {
+    hya_app::inspect_workflow_catalog_read_only(db, &workdir, |warning| {
         eprintln!("warning: {warning}");
     })
     .await
 }
 
-/// Run one CLI Workflow command through `WorkflowControl::execute`.
+/// Run one CLI Workflow command through `hya/workflow`'s BundleApi surface.
 pub(crate) async fn run(
     command: WorkflowCliCommand,
     model_override: Option<String>,
@@ -94,6 +114,7 @@ pub(crate) async fn run(
     bare: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
+    ensure_workflow_bundle_enabled(bare)?;
     let (command, json_output, is_run, session) = match command {
         WorkflowCliCommand::List { json } => {
             let result = WorkflowCommandResult::List {
@@ -211,16 +232,12 @@ pub(crate) async fn run(
     )
     .await?;
     let cancel = CancellationToken::new();
+    let engine = runtime.built.engine();
     let (result, stop) = crate::stop_signals::run_until_stopped(
         &runtime.built,
         &mut signals,
         &cancel,
-        runtime.built.workflow_control().execute(
-            runtime.session,
-            WorkflowInvocation::default(),
-            command,
-            cancel.clone(),
-        ),
+        invoke_workflow_bundle_api(&engine, runtime.session, &command),
     )
     .await;
     let shutdown_res = signals
@@ -228,8 +245,115 @@ pub(crate) async fn run(
         .await;
     shutdown_res?;
     crate::stop_signals::exit_if_stopped(stop);
-    let result = result.map_err(control_error)?;
+    let result = result?;
     finish(&result, json_output, is_run)
+}
+
+async fn invoke_workflow_bundle_api(
+    engine: &SessionEngine,
+    session: SessionId,
+    command: &ControlCommand,
+) -> anyhow::Result<WorkflowCommandResult> {
+    let body = match command {
+        ControlCommand::List => json!({ "list": {} }),
+        ControlCommand::State => json!({ "state": {} }),
+        ControlCommand::Info { name } => json!({ "info": { "name": name } }),
+        ControlCommand::Select {
+            name,
+            expected_revision,
+        } => {
+            let mut select = serde_json::Map::new();
+            select.insert("name".to_owned(), json!(name));
+            if let Some(revision) = expected_revision {
+                select.insert("expectedRevision".to_owned(), json!(revision.to_string()));
+            }
+            json!({ "select": select })
+        }
+        ControlCommand::Run {
+            name,
+            expected_revision,
+            inputs,
+            run,
+        } => {
+            let mut run_body = serde_json::Map::new();
+            if let Some(name) = name {
+                run_body.insert("name".to_owned(), json!(name));
+            }
+            if let Some(revision) = expected_revision {
+                run_body.insert("expectedRevision".to_owned(), json!(revision.to_string()));
+            }
+            if !inputs.is_empty() {
+                run_body.insert("inputs".to_owned(), json!(inputs));
+            }
+            if let Some(run) = run {
+                run_body.insert("run".to_owned(), json!(run.to_string()));
+            }
+            run_body.insert("delivery".to_owned(), json!("finished"));
+            json!({ "run": run_body })
+        }
+    };
+    let outcome = match engine
+        .invoke_bundle_api(BundleApiCall {
+            bundle: WORKFLOW_BUNDLE_ID.to_owned(),
+            method: ApiMethod::Post,
+            session: Some(session),
+            path: "/command".to_owned(),
+            query: BTreeMap::new(),
+            body,
+        })
+        .await
+    {
+        Ok(outcome) => outcome,
+        Err(BundleApiError::NotFound { .. }) => {
+            anyhow::bail!(
+                "workflow runtime is unavailable: built-in bundle `{WORKFLOW_BUNDLE_ID}` is not \
+                 enabled in this runtime"
+            );
+        }
+        Err(error) => anyhow::bail!("invoke `{WORKFLOW_BUNDLE_ID}` API: {error}"),
+    };
+    if outcome.status >= 400 {
+        let code = outcome
+            .body
+            .get("error")
+            .and_then(|err| err.get("code"))
+            .and_then(Value::as_str)
+            .unwrap_or("internal");
+        let message = outcome
+            .body
+            .get("error")
+            .and_then(|err| err.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("workflow command failed");
+        anyhow::bail!("{code}: {message}");
+    }
+    if let Some(list) = outcome.body.get("list") {
+        let workflows = serde_json::from_value(
+            list.get("workflows")
+                .cloned()
+                .unwrap_or_else(|| Value::Array(Vec::new())),
+        )
+        .context("decode workflow list")?;
+        return Ok(WorkflowCommandResult::List { workflows });
+    }
+    if let Some(info) = outcome.body.get("info") {
+        let workflow = serde_json::from_value(info.clone()).context("decode workflow info")?;
+        return Ok(WorkflowCommandResult::Info { workflow });
+    }
+    if let Some(selected) = outcome.body.get("selected") {
+        let state =
+            serde_json::from_value(selected.clone()).context("decode workflow selection")?;
+        return Ok(WorkflowCommandResult::Selected { state });
+    }
+    if let Some(state) = outcome.body.get("state") {
+        let state = serde_json::from_value(state.clone()).context("decode workflow state")?;
+        return Ok(WorkflowCommandResult::State { state });
+    }
+    if let Some(started) = outcome.body.get("started") {
+        let result = serde_json::from_value(started.clone()).context("decode workflow run")?;
+        return Ok(WorkflowCommandResult::Run { result });
+    }
+    anyhow::bail!("unexpected response from `{WORKFLOW_BUNDLE_ID}` command API")
 }
 
 /// Print a Workflow command result; a run that did not complete is an error.
@@ -799,7 +923,7 @@ mod tests {
         let before = std::fs::read(&db).unwrap();
 
         let mut warnings = Vec::new();
-        let cat = hya_app::WorkflowCatalog::inspect_read_only(db.to_str().unwrap(), &nested, |w| {
+        let cat = hya_app::inspect_workflow_catalog_read_only(db.to_str().unwrap(), &nested, |w| {
             warnings.push(w.to_owned());
         })
         .await

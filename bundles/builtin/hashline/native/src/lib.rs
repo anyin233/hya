@@ -102,16 +102,12 @@ mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     use async_trait::async_trait;
-    use hya_proto::ToolCallId;
     use hya_runtime_abi::{
         HostError, UriContent, UriResolveCtx, UriSchemaHandler, adapt_uri_schema_handler,
     };
-    use hya_tool::handle::ArtifactPlane;
     use hya_tool::{
-        Action, FormatterError, FormatterPlane, FormatterProvider, FormatterStatus,
-        InteractionPlane, LifecyclePlane, LspError, LspPlane, LspProvider, LspRequest,
-        MailboxPlane, Mode, NestedToolPlane, PermissionPlane, PermissionRules,
-        ProjectActivityPlane, Rule, SkillPlane, SpawnerPlane, ToolOperation, WorkflowPlane,
+        Action, FormatterError, FormatterPlane, FormatterProvider, FormatterStatus, LspError,
+        LspPlane, LspProvider, LspRequest, Mode, PermissionPlane, PermissionRules, Rule,
     };
     use serde_json::{Value, json};
     use tokio_util::sync::CancellationToken;
@@ -234,27 +230,11 @@ mod tests {
             Rule::new(Action::Edit, "*", Mode::Allow),
             Rule::new(Action::Grep, "*", Mode::Allow),
         ]));
-        ToolCtx {
-            permission,
-            interaction: InteractionPlane::new().0,
-            spawner: SpawnerPlane::new().0,
-            workflows: WorkflowPlane::disconnected(),
-            operation: ToolOperation::from_tool_call(ToolCallId::new()),
-            mailbox: MailboxPlane::disconnected(),
-            project_activity: ProjectActivityPlane::disconnected(),
-            lifecycle: LifecyclePlane::disconnected(),
-            session: None,
-            parent_session: None,
-            skills: SkillPlane::default(),
-            artifacts: ArtifactPlane::default(),
-            agents: Arc::from([]),
-            lsp: LspPlane::new(Arc::new(CountingLsp(lsp_calls))),
-            formatter: FormatterPlane::new(Arc::new(CountingFormatter(formatter_calls))),
-            workdir: workdir.to_path_buf(),
-            roots: vec![workdir.to_path_buf()],
-            cancel: CancellationToken::new(),
-            nested: NestedToolPlane::disconnected(),
-        }
+        ToolCtx::new(workdir.to_path_buf(), permission, CancellationToken::new())
+            .with_extension(LspPlane::new(Arc::new(CountingLsp(lsp_calls))))
+            .with_extension(FormatterPlane::new(Arc::new(CountingFormatter(
+                formatter_calls,
+            ))))
     }
 
     fn tool_by_name(tools: &[Arc<dyn Tool>], name: &str) -> Arc<dyn Tool> {

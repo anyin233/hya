@@ -96,7 +96,7 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
     std::fs::create_dir_all(dir.join("hya")).unwrap();
     std::fs::write(
         &cfg_path,
-        "schema_version: 2\nbundles:\n  builtin:\n    profile: bare\n    enable: [hya/coding-extras, hya/network, hya/compaction, hya/goal-loop, hya/extended-tools]\n    disable: [hya/channel-tools]\n",
+        "schema_version: 2\nbundles:\n  builtin:\n    profile: bare\n    enable: [hya/coding-extras, hya/network, hya/compaction, hya/goal-loop, hya/multi-agent]\n    disable: [hya/agent-channels]\n",
     )
     .unwrap();
 
@@ -113,7 +113,7 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
     write_bundle_cfg("hya/goal-loop", "goal:\n  evaluator_model: deep/o3-mini\n");
     write_bundle_cfg("hya/coding-extras", "lsp: false\n");
     write_bundle_cfg(
-        "hya/extended-tools",
+        "hya/multi-agent",
         "subagents:\n  max_concurrency: 200\n  per_run_budget: 1000\n  per_team_turn_budget: 700\n  per_team_message_budget: 800\n",
     );
     write_bundle_cfg(
@@ -129,7 +129,7 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
     assert_eq!(file.bundles.builtin.profile, BuiltinBundleProfile::Bare);
     assert!(file.bundles.builtin.is_enabled("hya/coding-extras"));
     assert!(file.bundles.builtin.is_enabled("hya/network"));
-    assert!(!file.bundles.builtin.is_enabled("hya/channel-tools"));
+    assert!(!file.bundles.builtin.is_enabled("hya/agent-channels"));
 
     let settings = EngineSettings {
         file,

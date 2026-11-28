@@ -24,7 +24,7 @@ static NEXT_TEMP_SKILL_DIR: AtomicU64 = AtomicU64::new(0);
 const WITHOUT_CHANNEL_TOOLS: [&str; 4] = [
     "hya/hashline",
     "hya/coding-extras",
-    "hya/extended-tools",
+    "hya/multi-agent",
     "hya/network",
 ];
 
@@ -373,14 +373,15 @@ fn compile_bundle_agent(
     ag: PreparedAgent,
 ) -> Result<Arc<CompiledResourceView>, BundleError> {
     let id = ag.id.as_str().to_string();
-    let reg = reg_with(
-        tools,
-        catalog_from(&[bundle_with_agent(
-            &format!("hya/coord-{id}"),
-            ag,
-            Vec::new(),
-        )]),
-    );
+    let mut bundles = vec![bundle_with_agent(
+        &format!("hya/coord-{id}"),
+        ag,
+        Vec::new(),
+    )];
+    if let Ok(multi_agent) = hya_bundle::first_party_bundle("hya/multi-agent") {
+        bundles.extend(multi_agent.bundles().iter().cloned());
+    }
+    let reg = reg_with(tools, catalog_from(&bundles));
     compile_on(&bind(&reg), &id, None)
 }
 
@@ -390,27 +391,11 @@ fn dispatch_ctx(workdir: &Path) -> ToolCtx {
         "*",
         Mode::Allow,
     )]));
-    ToolCtx {
-        nested: hya_tool::NestedToolPlane::disconnected(),
-        workflows: hya_tool::WorkflowPlane::disconnected(),
+    ToolCtx::new(
+        workdir.to_path_buf(),
         permission,
-        interaction: hya_tool::InteractionPlane::new().0,
-        spawner: hya_tool::SpawnerPlane::new().0,
-        operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-        mailbox: hya_tool::MailboxPlane::disconnected(),
-        lifecycle: hya_tool::LifecyclePlane::disconnected(),
-        session: None,
-        parent_session: None,
-        skills: SkillPlane::default(),
-        artifacts: hya_tool::handle::ArtifactPlane::default(),
-        agents: Default::default(),
-        lsp: hya_tool::LspPlane::default(),
-        formatter: hya_tool::FormatterPlane::default(),
-        workdir: workdir.to_path_buf(),
-        roots: vec![workdir.to_path_buf()],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
-    }
+        tokio_util::sync::CancellationToken::new(),
+    )
 }
 
 fn is_coord(name: &str) -> bool {
@@ -933,6 +918,7 @@ fn dispatch_identity_and_base_semantic_fingerprint_invariants() {
                 sources: BTreeMap::new(),
                 masks: Arc::new(BTreeMap::new()),
                 schemes: Arc::new(BTreeMap::new()),
+                native_bundle_apis: Arc::new(std::sync::RwLock::new(BTreeMap::new())),
             }),
             "/tmp/rf",
             &perm,
@@ -1028,6 +1014,7 @@ fn semantic_fingerprint_tracks_selected_workdir_skills() {
                 sources: BTreeMap::new(),
                 masks: Arc::new(BTreeMap::new()),
                 schemes: Arc::new(BTreeMap::new()),
+                native_bundle_apis: Arc::new(std::sync::RwLock::new(BTreeMap::new())),
             }),
             "/tmp/rf-sk",
             &perm,
@@ -2256,9 +2243,10 @@ fn coordination_read_injection_and_deny_rules() {
 #[test]
 fn builtin_agent_views_enforce_read_only_and_coordination_sets() {
     let plan_bundle = hya_bundle::first_party_bundle("hya/plan").unwrap();
+    let multi_agent_bundle = hya_bundle::first_party_bundle("hya/multi-agent").unwrap();
     let b = bind(&reg_with(
         hya_tool_loader::builtins(),
-        verified_catalog(&[plan_bundle]),
+        verified_catalog(&[plan_bundle, multi_agent_bundle]),
     ));
     let names = |id: &str| schema_names(&basic(&b, id));
     let writes = ["write", "edit", "apply_patch", "bash"];

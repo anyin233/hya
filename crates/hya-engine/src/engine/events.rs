@@ -116,7 +116,11 @@ impl SessionEngine {
         }
     }
 
-    pub(crate) async fn emit_for_actor(
+    /// Append and publish one event under an optional actor claim fence.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::StaleActorClaim`] if `claim` was superseded, or a store error.
+    pub async fn emit_for_actor(
         &self,
         actor_claim: Option<&ActorClaim>,
         session: SessionId,

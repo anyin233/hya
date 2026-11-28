@@ -1,0 +1,18 @@
+[package]
+name = "hya-workflow-bundle"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+[package.metadata.hya]
+version-reference = "hya"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+hya-runtime-abi = { workspace = true }
+hya-workflow-bundle-core = { workspace = true }

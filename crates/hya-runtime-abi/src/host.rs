@@ -7,14 +7,15 @@
 //! registered extensions.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_bundle::{ApiMethod, Bundle, BundleIdentity, PreparedAgent};
 use hya_proto::{
-    ActorClaim, AgentName, Envelope, Event, EventSeq, FinishReason, Message, MessageId, ModelRef,
-    ProjectId, Projection, SessionId, TokenUsage, ToolCallId, ToolName, ToolSchema, UsagePurpose,
+    ActorClaim, AgentName, ChannelPolicySnapshot, Envelope, Event, EventSeq, FinishReason,
+    MemberId, Message, MessageId, ModelRef, OwnerRunId, ProjectId, Projection, SessionId,
+    TokenUsage, ToolCallId, ToolName, ToolSchema, UsagePurpose,
 };
 use hya_tool::{AgentDef, SkillCatalogEntry};
 use serde::{Deserialize, Serialize};
@@ -123,6 +124,21 @@ pub trait HostSessionStore: Send + Sync {
         &self,
         filter: SessionListFilter,
     ) -> Result<Vec<SessionSummaryMeta>, HostError>;
+
+    /// Stable process-instance owner id used to detect stale runs across restarts.
+    fn runtime_owner_id(&self) -> Option<OwnerRunId> {
+        None
+    }
+
+    /// Find all sessions whose durable event log contains an `Event::Extension`
+    /// matching `(bundle, kind)`.
+    async fn find_sessions_with_extension(
+        &self,
+        _bundle: &str,
+        _kind: &str,
+    ) -> Result<Vec<SessionId>, HostError> {
+        Ok(Vec::new())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -232,6 +248,11 @@ pub trait HostBundleStorage: Send + Sync {
         bundle: &str,
         resource_key: &str,
     ) -> Result<Option<BundleClaimLease>, HostError>;
+
+    /// List all active (non-expired) claims owned by `bundle`.
+    async fn list_claims(&self, _bundle: &str) -> Result<Vec<BundleClaimLease>, HostError> {
+        Ok(Vec::new())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +328,193 @@ pub enum TurnStatus {
     Failed(String),
 }
 
+/// Failure classification recorded when an explicit turn model route advances or fails.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnRouteFailureClass {
+    /// Selected candidate succeeded with no failure.
+    None,
+    /// Retryable transport failure before a stream was established.
+    Transport,
+    /// Upstream rate limiting (`429`) before a stream was established.
+    RateLimited,
+    /// Retryable upstream server error (`5xx` or overloaded).
+    Server,
+    /// No provider route claimed the candidate model.
+    UnknownModel,
+    /// Authentication or authorization failure.
+    Auth,
+    /// Provider capability or request incompatibility.
+    Incompatible,
+    /// Non-retryable HTTP/provider response failure.
+    Http,
+    /// Malformed or truncated provider stream.
+    Decode,
+    /// Internal invariant, store, or claim failure after an attempt started.
+    Internal,
+    /// Sidecar loss or task abort after an attempt started.
+    Aborted,
+    /// Explicit cancellation.
+    Cancelled,
+}
+
+/// One candidate in an ordered explicit model route request.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelRouteEntry {
+    /// Base model reference (without effort suffix).
+    pub model: ModelRef,
+    /// Optional authored reasoning effort label (e.g. `"low"`, `"medium"`, `"high"`).
+    pub reasoning: Option<String>,
+}
+
+/// One host-validated candidate in a resolved explicit model route.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedModelRouteCandidate {
+    /// Base model reference.
+    pub model: ModelRef,
+    /// Canonical reasoning effort string (e.g. `"off"`, `"medium"`, `"high"`).
+    pub reasoning: String,
+}
+
+/// Ordered explicit model route validated against the host's provider router.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedModelRoute {
+    /// Full declaration-order candidates.
+    pub candidates: Vec<ResolvedModelRouteCandidate>,
+    /// Index of the first routable candidate at admission time.
+    pub selected_index: usize,
+}
+
+impl ResolvedModelRoute {
+    /// Return the candidate selected at admission time.
+    #[must_use]
+    pub fn selected(&self) -> Option<&ResolvedModelRouteCandidate> {
+        self.candidates.get(self.selected_index)
+    }
+}
+
+/// One finalized candidate attempt outcome emitted during a routed turn.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnRouteOutcome {
+    /// Zero-based stream-group step within the activation.
+    pub step: u32,
+    /// Zero-based index into [`ResolvedModelRoute::candidates`].
+    pub candidate_index: u32,
+    /// Model reference that handled or terminated the stream group.
+    pub model: ModelRef,
+    /// Canonical reasoning effort applied to that candidate.
+    pub reasoning: String,
+    /// Failure class causing a fallback advance or terminal failure, if any.
+    pub failure_class: TurnRouteFailureClass,
+}
+
+/// Handle to a parked managed resident child member spawned under a parent session.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagedMemberHandle {
+    /// Child session identifier.
+    pub session: SessionId,
+    /// Resident supervisor handle within the parent's root team.
+    pub handle: String,
+    /// Durable member identifier.
+    pub member: MemberId,
+}
+
+/// Request to spawn a parked managed resident child member.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManagedMemberSpawnRequest {
+    /// Parent session spawning the member.
+    pub parent: SessionId,
+    /// Caller agent id authorizing the spawn (used for scope/policy validation).
+    pub caller: AgentName,
+    /// Target agent id to run inside the member.
+    pub agent: AgentName,
+    /// Human-readable display label for the spawned member.
+    pub label: String,
+    /// Optional explicit model route resolved via [`HostModelCaller::resolve_model_route`].
+    pub route: Option<ResolvedModelRoute>,
+    /// Optional initial system context guidance attached to the member.
+    pub system_context: Option<String>,
+    /// Optional actor claim fencing parent mutations.
+    pub actor_claim: Option<ActorClaim>,
+}
+
+/// Request to activate a parked managed resident child member for one episode.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManagedMemberActivateRequest {
+    /// Parent session owning the member.
+    pub parent: SessionId,
+    /// Previously spawned member handle.
+    pub member: ManagedMemberHandle,
+    /// Target agent id bound to the member.
+    pub agent: AgentName,
+    /// Directive prompt delivered to the member.
+    pub directive: String,
+    /// System context guidance for this activation.
+    pub system_context: String,
+    /// Optional explicit model route for this activation.
+    pub route: Option<ResolvedModelRoute>,
+    /// Optional actor claim fencing parent mutations.
+    pub actor_claim: Option<ActorClaim>,
+}
+
+/// Terminal disposition of one managed resident member activation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagedMemberActivationStatus {
+    /// Member settled or reported `Done`.
+    Done,
+    /// Member failed or reported a non-`Done` outcome.
+    Failed,
+    /// Activation was cancelled cooperatively.
+    Cancelled,
+}
+
+/// Result of activating a managed resident child member.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagedMemberActivationOutcome {
+    /// Terminal disposition.
+    pub status: ManagedMemberActivationStatus,
+    /// Final assistant output or error note.
+    pub output_text: String,
+    /// Ordered route attempt outcomes finalized during this activation.
+    pub route_outcomes: Vec<TurnRouteOutcome>,
+}
+
+/// Request to revive an archived direct child member and deliver mail to its DM.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemberMailRevivalRequest {
+    /// Team root session owning the channel log.
+    pub root: SessionId,
+    /// Sender session requesting delivery.
+    pub from_session: SessionId,
+    /// Canonical handle of the sender.
+    pub from_handle: String,
+    /// Canonical handle of the archived direct child.
+    pub target_handle: String,
+    /// Minted DM channel id between sender and target.
+    pub channel: String,
+    /// Message kind (`"message"` or `"announcement"`).
+    pub kind: hya_proto::MailKind,
+    /// Message body text.
+    pub body: String,
+    /// Optional actor claim fencing the sender's mutations.
+    pub actor_claim: Option<ActorClaim>,
+}
+
+/// Staged unread-mail acknowledgment to be committed atomically alongside a
+/// tool result (ADR-0001 / atomic tool-result + `mail_consumed` invariant).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StagedMailAck {
+    /// Team root session receiving the `mail_consumed` extension event.
+    pub root: SessionId,
+    /// Durable `Event::Extension` (`hya/agent-channels::mail_consumed`) to commit.
+    pub event: Event,
+    /// Updated local inbox watermark after acknowledgment.
+    pub mark: u64,
+    /// Whether incoming (non-self) unread mail was consumed.
+    pub consumed_incoming: bool,
+}
+
 /// Session creation and turn-driving capability without linking `hya-engine`.
 #[async_trait]
 pub trait HostTurnRunner: Send + Sync {
@@ -339,6 +547,121 @@ pub trait HostTurnRunner: Send + Sync {
 
     /// Query the current turn status of `session`.
     async fn turn_status(&self, session: SessionId) -> Result<TurnStatus, HostError>;
+
+    /// Preflight team depth and capacity budget for `wanted` activations under `parent`.
+    async fn preflight_member_capacity(
+        &self,
+        _parent: SessionId,
+        _wanted: u64,
+    ) -> Result<(), HostError> {
+        Ok(())
+    }
+
+    /// Acquire a root-session driver activity guard keeping the resident team active
+    /// until the returned handle is dropped.
+    async fn begin_root_activity(
+        &self,
+        _parent: SessionId,
+    ) -> Result<Arc<dyn Send + Sync>, HostError> {
+        Ok(Arc::new(()))
+    }
+
+    /// Spawn a parked managed resident child member under `request.parent`.
+    async fn spawn_managed_member(
+        &self,
+        _request: ManagedMemberSpawnRequest,
+    ) -> Result<ManagedMemberHandle, HostError> {
+        Err(HostError::Unavailable(
+            "managed resident member execution is unavailable in this runtime".into(),
+        ))
+    }
+
+    /// Activate a parked managed resident child member and await settlement.
+    async fn activate_managed_member(
+        &self,
+        _request: ManagedMemberActivateRequest,
+        _cancel: CancellationToken,
+    ) -> Result<ManagedMemberActivationOutcome, HostError> {
+        Err(HostError::Unavailable(
+            "managed resident member execution is unavailable in this runtime".into(),
+        ))
+    }
+
+    /// End a managed resident child member and release its live capacity slot.
+    async fn end_managed_member(&self, _parent: SessionId, _handle: &str) -> Result<(), HostError> {
+        Ok(())
+    }
+
+    /// Resolve the effective channel policy snapshot for `session`, if any.
+    async fn session_channel_policy(
+        &self,
+        _session: SessionId,
+    ) -> Result<Option<ChannelPolicySnapshot>, HostError> {
+        Ok(None)
+    }
+
+    /// Return the in-memory acknowledged inbox watermark for `session`, if tracked.
+    fn mail_mark(&self, _session: SessionId) -> Option<u64> {
+        None
+    }
+
+    /// Advance the in-memory mail watermark for `session` and notify listeners.
+    fn notify_mail_consumed(&self, _session: SessionId, _mark: u64, _consumed_incoming: bool) {}
+
+    /// Return `true` when `handle` under `root` is currently parked by an explicit
+    /// user stop/cancellation and should not receive in-flight resident wakeups.
+    fn is_member_stopped_by_user(&self, _root: SessionId, _handle: &str) -> bool {
+        false
+    }
+
+    /// Return `true` when unread-mail steering is currently suppressed for `session`
+    /// (for example after `report` latched or while a defer-steer batch is active).
+    fn is_mail_steer_suppressed(&self, _session: SessionId) -> bool {
+        false
+    }
+
+    /// Return the active fenced actor claim for the running turn on `session`, if any.
+    fn active_actor_claim(&self, _session: SessionId) -> Option<ActorClaim> {
+        None
+    }
+
+    /// Stage a `mail_consumed` acknowledgment to be committed atomically with the
+    /// current tool result on `session`.
+    fn stage_mail_steer_ack(&self, _session: SessionId, _ack: StagedMailAck) {}
+
+    /// Revive an archived direct child member and deliver its pending DM mail.
+    ///
+    /// Returns the delivered recipient count (`1`) on success.
+    async fn revive_archived_member_with_mail(
+        &self,
+        _request: MemberMailRevivalRequest,
+    ) -> Result<usize, HostError> {
+        Err(HostError::Unavailable(
+            "archived member revival is unavailable in this runtime".into(),
+        ))
+    }
+
+    /// Archive a subagent session on the user's behalf, cancelling any active
+    /// turn and archiving live descendants first.
+    async fn archive_subagent(
+        &self,
+        _child: SessionId,
+    ) -> Result<hya_tool::ArchiveReceipt, HostError> {
+        Err(HostError::InvalidInput(
+            "subagents are not supervised by this process".into(),
+        ))
+    }
+
+    /// Steer a subagent session with a user message delivered on its parent DM.
+    async fn steer_subagent(
+        &self,
+        _child: SessionId,
+        _text: &str,
+    ) -> Result<hya_tool::MailReceipt, HostError> {
+        Err(HostError::Unavailable(
+            "subagent steering is unavailable in this runtime".into(),
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -449,6 +772,17 @@ pub trait HostModelCaller: Send + Sync {
 
     /// Inspect window capabilities for `model`, if known.
     async fn model_window(&self, model: &ModelRef) -> Result<Option<ModelWindowInfo>, HostError>;
+
+    /// Validate an ordered explicit model route against configured providers and
+    /// reasoning capabilities, returning the resolved candidates and start index.
+    async fn resolve_model_route(
+        &self,
+        _entries: &[ModelRouteEntry],
+    ) -> Result<ResolvedModelRoute, HostError> {
+        Err(HostError::Unavailable(
+            "explicit model route resolution is unavailable in this runtime".into(),
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -489,6 +823,19 @@ pub struct BundleCatalogSummary {
     pub description: Option<String>,
 }
 
+/// Resolved scope-aware catalog snapshot for directory- or session-bound lookups.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScopeCatalogSnapshot {
+    /// Effective working directory for this scope.
+    pub workdir: PathBuf,
+    /// Registered project roots (empty outside a registered project).
+    pub project_roots: Vec<PathBuf>,
+    /// Active prepared bundles in this scope.
+    pub bundles: Vec<Bundle>,
+    /// Stable runtime fingerprint covering active catalogs/bundles.
+    pub runtime_fingerprint: String,
+}
+
 /// Read-only access to agents, skills, bundles, and effective configuration.
 #[async_trait]
 pub trait HostCatalogReader: Send + Sync {
@@ -519,6 +866,27 @@ pub trait HostCatalogReader: Send + Sync {
 
     /// Read effective global configuration JSON (`config.yaml`).
     async fn global_config(&self) -> Result<Value, HostError>;
+
+    /// Resolve the active scope catalog snapshot for a session or directory.
+    async fn resolve_scope_catalog(
+        &self,
+        _session: Option<SessionId>,
+        _directory: Option<&Path>,
+    ) -> Result<ScopeCatalogSnapshot, HostError> {
+        Err(HostError::Unavailable(
+            "scope catalog resolution is unavailable in this runtime".into(),
+        ))
+    }
+
+    /// Authorize spawning `agent` from `caller` within `session`'s active scope.
+    async fn authorize_workflow_agent(
+        &self,
+        _session: SessionId,
+        _caller: &AgentName,
+        _agent: &AgentName,
+    ) -> Result<(), HostError> {
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

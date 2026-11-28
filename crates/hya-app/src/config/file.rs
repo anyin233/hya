@@ -135,7 +135,7 @@ impl EngineSettings {
 
     pub(crate) fn subagents(&self) -> SubagentLimits {
         let block = self
-            .read_bundle_config_value(&["hya/extended-tools", "hya/multi-agent"])
+            .read_bundle_config_value(&["hya/multi-agent", "hya/extended-tools"])
             .and_then(|val| decode_bundle_section::<SubagentLimitsFile>(&val, Some("subagents")));
         resolve_subagent_limits(block.as_ref())
     }
@@ -184,7 +184,7 @@ impl EngineSettings {
                     .and_then(|sub| serde_norway::from_value(sub).ok())
             })
             .unwrap_or_default();
-        hya_coding_extras::build_formatter_plane(raw)
+        hya_coding_extras_core::build_formatter_plane(raw)
     }
 
     pub(crate) fn lsp(&self) -> anyhow::Result<hya_tool::LspPlane> {
@@ -198,7 +198,8 @@ impl EngineSettings {
                     .cloned()
                     .and_then(|sub| serde_norway::from_value(sub).ok())
             });
-        hya_coding_extras::build_lsp_plane(selection).map_err(|error| anyhow::anyhow!("{error}"))
+        hya_coding_extras_core::build_lsp_plane(selection)
+            .map_err(|error| anyhow::anyhow!("{error}"))
     }
 }
 
@@ -500,7 +501,7 @@ pub(super) fn parse_config(yaml: &str) -> anyhow::Result<FileConfig> {
         ("formatter", "hya/coding-extras"),
         ("goal", "hya/goal-loop"),
         ("lsp", "hya/coding-extras"),
-        ("subagents", "hya/extended-tools"),
+        ("subagents", "hya/multi-agent"),
     ];
     for (key, bundle_id) in REMOVED_V1_SECTIONS {
         if map.contains_key(key) {

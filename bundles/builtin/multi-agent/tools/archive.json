@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "name": "archive",
+  "description": "Stop one of your subagents and archive it.",
+  "permission": "task",
+  "prompt_hint": "stop a live subagent and archive it",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "target": {
+        "type": "string",
+        "description": "The subagent handle or session id to archive"
+      },
+      "reason": {
+        "type": "string",
+        "description": "Short reason recorded on its member row"
+      }
+    },
+    "required": ["target"]
+  },
+  "entrypoint": {
+    "native": "archive"
+  }
+}

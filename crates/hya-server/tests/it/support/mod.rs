@@ -178,9 +178,9 @@ pub fn test_agents() -> Vec<AgentFixture> {
     ]
 }
 
-/// One prepared bundle per agent, over the compiled-in built-ins.
+/// One prepared bundle per agent, over the compiled-in built-ins and `hya/multi-agent`.
 fn prepared_bundles(agents: &[AgentFixture]) -> Vec<Bundle> {
-    agents
+    let mut out: Vec<Bundle> = agents
         .iter()
         .filter(|agent| hya_engine::preset_agent(agent.stable_id).is_none())
         .map(|agent| Bundle {
@@ -250,7 +250,20 @@ fn prepared_bundles(agents: &[AgentFixture]) -> Vec<Bundle> {
             permission_modes: vec![],
             overrides: None,
         })
-        .collect()
+        .collect();
+    let fixture_ids: std::collections::BTreeSet<&str> =
+        agents.iter().map(|agent| agent.stable_id).collect();
+    if let Ok(multi_agent) = hya_bundle::first_party_bundle("hya/multi-agent")
+        && multi_agent.bundles().iter().all(|bundle| {
+            bundle
+                .agents()
+                .iter()
+                .all(|agent| !fixture_ids.contains(agent.id.as_str()))
+        })
+    {
+        out.extend(multi_agent.bundles().iter().cloned());
+    }
+    out
 }
 
 /// Adapt one server fixture bundle's prepared Skill into its runtime source.

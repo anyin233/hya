@@ -199,9 +199,10 @@ async fn restricted_engine(channels: &str) -> Arc<SessionEngine> {
         )],
     ))
     .unwrap();
+    let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").unwrap();
     let catalog = Arc::new(
         AgentCatalog::new(Arc::new(
-            BundleCatalog::from_prepared(prepared.bundles()).unwrap(),
+            BundleCatalog::from_verified_catalogs(&[&prepared, multi_agent]).unwrap(),
         ))
         .unwrap(),
     );
@@ -1786,9 +1787,10 @@ async fn report_turn_team(provider: Arc<ReportTurnProvider>) -> ReportTurnTeam {
         vec![SourceFile::new("bundle.yaml", BUNDLE)],
     ))
     .unwrap();
+    let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").unwrap();
     let catalog = Arc::new(
         AgentCatalog::new(Arc::new(
-            BundleCatalog::from_prepared(prepared.bundles()).unwrap(),
+            BundleCatalog::from_verified_catalogs(&[&prepared, multi_agent]).unwrap(),
         ))
         .unwrap(),
     );

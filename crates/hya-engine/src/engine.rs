@@ -5,7 +5,7 @@ use std::time::Duration;
 use hya_proto::{MessageId, ModelRef, SessionId, ToolCallId};
 use hya_provider::{ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
-use hya_tool::handle::ArtifactPlane;
+use hya_tool::handle::{ArtifactPlane, UriSchemaPlane};
 use hya_tool::{
     FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, PermissionPlane,
     ResolvedTool, ToolError,
@@ -44,6 +44,7 @@ impl FixedSystemAgent {
 
 mod admission;
 mod agent_binding;
+mod channel_host;
 mod events;
 mod file_snapshot;
 mod fork;
@@ -76,7 +77,6 @@ mod tool_error;
 mod turn;
 mod turn_end;
 mod turn_gate;
-mod workflow_requests;
 
 pub use agent_binding::AgentSpec;
 use agent_binding::{agent_roster, agent_with_bound_skills};
@@ -96,7 +96,7 @@ use session_state::session_workdir;
 pub use spawn_requests::{BoundSpawnRequest, BoundSpawnSender};
 use terminal_handoff::{SummarizeOptions, Summarizer, TerminalHandoffOptions};
 pub(crate) use turn::TurnRequestContext;
-pub use workflow_requests::{BoundWorkflowRequest, BoundWorkflowSender};
+pub use turn::{ExplicitModelRoute, ExplicitModelRouteCandidate, ExplicitTurnRoute};
 
 async fn authorize_tool_call(
     resolved: &ResolvedTool,
@@ -170,14 +170,16 @@ pub struct SessionEngine {
     permission: PermissionPlane,
     interaction: InteractionPlane,
     spawner: BoundSpawnSender,
-    workflows: BoundWorkflowSender,
+    native_services: Arc<RwLock<Vec<Arc<dyn hya_runtime_abi::NativeService>>>>,
     mailbox: MailboxPlane,
     project_activity: hya_tool::ProjectActivityPlane,
     lifecycle: LifecyclePlane,
     /// Mints subagent handle leaves (`<prefix>-<operator>`); injectable RNG.
     handle_namer: Arc<crate::handle_naming::HandleNamer>,
-    /// User-registered `artifact://` post-processing, carried to every tool call.
+    /// Spilled tool-output artifact store carried to every tool call.
     artifacts: ArtifactPlane,
+    /// Dynamic URI scheme handlers carried to every tool call.
+    schemas: UriSchemaPlane,
     formatter: FormatterPlane,
     lsp: LspPlane,
     bus: EventBus,
@@ -194,6 +196,8 @@ pub struct SessionEngine {
     /// Captured per-session lifecycle/event hooks ([`session_hooks`]).
     session_bundle_hooks: Arc<RwLock<session_hooks::SessionHookMap>>,
     session_channel_policies: Arc<RwLock<HashMap<SessionId, hya_tool::ChannelPolicySnapshot>>>,
+    mail_steer_suppressed: Arc<RwLock<HashMap<SessionId, bool>>>,
+    staged_mail_acks: Arc<RwLock<HashMap<SessionId, hya_runtime_abi::StagedMailAck>>>,
     governor: Option<crate::orchestrator::SubagentGovernor>,
     sidecar_environment: Option<Arc<dyn SidecarEnvironment>>,
     /// Revival seam (ADR-0015): a downward mail to an archived direct child
@@ -201,7 +205,7 @@ pub struct SessionEngine {
     /// implementor (resident supervisor) itself holds the engine —
     /// [`ResidentSupervisor::start`](crate::resident::ResidentSupervisor::start)
     /// wires it.
-    reviver: RwLock<Option<std::sync::Weak<crate::resident::ResidentSupervisor>>>,
+    reviver: Arc<RwLock<Option<std::sync::Weak<crate::resident::ResidentSupervisor>>>>,
     /// Runtime-owner claim used for durable stop/start records.
     runtime_owner: hya_proto::OwnerRunId,
     /// Single-active-turn registry shared by every clone of this engine.
@@ -231,12 +235,13 @@ impl Clone for SessionEngine {
             permission: self.permission.clone(),
             interaction: self.interaction.clone(),
             spawner: self.spawner.clone(),
-            workflows: self.workflows.clone(),
+            native_services: Arc::clone(&self.native_services),
             mailbox: self.mailbox.clone(),
             project_activity: self.project_activity.clone(),
             lifecycle: self.lifecycle.clone(),
             handle_namer: self.handle_namer.clone(),
-            artifacts: self.artifacts.clone(),
+            artifacts: self.artifacts,
+            schemas: self.schemas.clone(),
             formatter: self.formatter.clone(),
             lsp: self.lsp.clone(),
             bus: self.bus.clone(),
@@ -249,14 +254,11 @@ impl Clone for SessionEngine {
             hooks: self.hooks.clone(),
             session_bundle_hooks: Arc::clone(&self.session_bundle_hooks),
             session_channel_policies: Arc::clone(&self.session_channel_policies),
+            mail_steer_suppressed: Arc::clone(&self.mail_steer_suppressed),
+            staged_mail_acks: Arc::clone(&self.staged_mail_acks),
             governor: self.governor.clone(),
             sidecar_environment: self.sidecar_environment.clone(),
-            reviver: RwLock::new(
-                self.reviver
-                    .read()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone(),
-            ),
+            reviver: Arc::clone(&self.reviver),
             runtime_owner: self.runtime_owner,
             turn_gate: Arc::clone(&self.turn_gate),
             round_retry_waits: self.round_retry_waits,
@@ -305,7 +307,7 @@ impl SessionEngine {
         bus: EventBus,
     ) -> Result<Self, CoreError> {
         let (rewriters, reducers) = internal_bundles()?;
-        let native_hooks = default_native_hooks();
+        let native_hooks = default_native_hook_list();
         Ok(Self::build_with_rewriters(
             store,
             providers,
@@ -335,7 +337,7 @@ impl SessionEngine {
     ) -> Result<Self, CoreError> {
         let regs = hya_core::bundles::load_internal_with_runtime(host_runtime)?;
         let rewriters: NativeRewriters = regs.rewriters.into();
-        let native_hooks = default_native_hooks();
+        let native_hooks = default_native_hook_list();
         Ok(Self::build_with_rewriters(
             store,
             providers,
@@ -368,7 +370,7 @@ impl SessionEngine {
             permission,
             bus,
             Arc::from([]),
-            None,
+            Vec::new(),
             Vec::new(),
             false,
         )
@@ -390,7 +392,7 @@ impl SessionEngine {
         permission: PermissionPlane,
         bus: EventBus,
         rewriters: NativeRewriters,
-        native_hooks: Option<Arc<dyn HookDispatcher>>,
+        mut native_hooks: Vec<Arc<dyn hya_runtime_abi::NativeHook>>,
         abi_reducers: Vec<Arc<dyn hya_runtime_abi::ProjectionReducer>>,
         use_tool_family_prompts: bool,
     ) -> Self {
@@ -404,12 +406,77 @@ impl SessionEngine {
         }
         let (interaction, _rx) = InteractionPlane::new();
         let spawner = BoundSpawnSender::disconnected();
-        let workflows = BoundWorkflowSender::disconnected();
         let lifecycle = LifecyclePlane::disconnected();
         let mailbox = MailboxPlane::disconnected();
         let (project_activity, activity_rx) = hya_tool::ProjectActivityPlane::new();
         let formatter = FormatterPlane::default();
         let lsp = LspPlane::default();
+        let session_channel_policies = Arc::new(RwLock::new(HashMap::new()));
+        let mail_steer_suppressed = Arc::new(RwLock::new(HashMap::new()));
+        let staged_mail_acks = Arc::new(RwLock::new(HashMap::new()));
+        let reviver = Arc::new(RwLock::new(None));
+        let runtime_owner = hya_proto::OwnerRunId::new();
+        let turn_gate = Arc::new(turn_gate::TurnGate::default());
+        let artifacts = ArtifactPlane;
+        let mut schemas = UriSchemaPlane::default();
+
+        if use_tool_family_prompts {
+            let channels_runtime: Arc<dyn hya_runtime_abi::HostRuntime> =
+                Arc::new(channel_host::EngineChannelsHostRuntime {
+                    store: store.clone(),
+                    bus: bus.clone(),
+                    runtime_owner,
+                    session_channel_policies: Arc::clone(&session_channel_policies),
+                    mail_steer_suppressed: Arc::clone(&mail_steer_suppressed),
+                    staged_mail_acks: Arc::clone(&staged_mail_acks),
+                    reviver: Arc::clone(&reviver),
+                    turn_gate: Arc::clone(&turn_gate),
+                });
+            let channels_service =
+                Arc::new(hya_agent_channels_core::AgentChannelsService::with_runtime(
+                    Arc::clone(&channels_runtime),
+                ));
+            native_hooks.push(Arc::new(hya_agent_channels_core::UnreadMailSteerHook::new(
+                Arc::clone(&channels_service),
+            )));
+            let channel_uri: Arc<dyn hya_runtime_abi::UriSchemaHandler> = Arc::new(
+                hya_agent_channels_core::ChannelUriSchemaHandler::new(channels_service),
+            );
+            if let Ok(updated) =
+                schemas
+                    .clone()
+                    .with_uri_handler(hya_runtime_abi::adapt_uri_schema_handler(
+                        channel_uri,
+                        Some(Arc::clone(&channels_runtime)),
+                    ))
+            {
+                schemas = updated;
+            }
+            store.register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
+                inner: Arc::new(hya_agent_channels_core::AgentChannelsProjectionReducer),
+            }));
+
+            let multi_service = Arc::new(hya_multi_agent_core::MultiAgentService::with_runtime(
+                Arc::clone(&channels_runtime),
+            ));
+            native_hooks.push(Arc::new(
+                hya_multi_agent_core::MultiAgentLifecycleHook::new(Arc::clone(&multi_service)),
+            ));
+            store.register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
+                inner: Arc::new(hya_multi_agent_core::MultiAgentProjectionReducer),
+            }));
+            let _ = runtime.register_native_bundle_apis(
+                hya_tool::extension::BUNDLE_MULTI_AGENT,
+                vec![Arc::new(
+                    hya_multi_agent_core::MultiAgentBundleApiHandler::new(multi_service),
+                )],
+            );
+        }
+
+        let native_hooks = (!native_hooks.is_empty()).then(|| {
+            Arc::new(crate::hooks::NativeHookDispatcher::new(native_hooks))
+                as Arc<dyn HookDispatcher>
+        });
 
         let engine = Self {
             workspace_watches: Default::default(),
@@ -429,12 +496,13 @@ impl SessionEngine {
             permission,
             interaction,
             spawner,
-            workflows,
+            native_services: Arc::new(RwLock::new(Vec::new())),
             mailbox,
             project_activity,
             lifecycle,
             handle_namer: Arc::new(crate::handle_naming::HandleNamer::default()),
-            artifacts: ArtifactPlane::default(),
+            artifacts,
+            schemas,
             formatter,
             lsp,
             bus,
@@ -446,12 +514,14 @@ impl SessionEngine {
             native_hooks,
             hooks: None,
             session_bundle_hooks: Arc::new(RwLock::new(HashMap::new())),
-            session_channel_policies: Arc::new(RwLock::new(HashMap::new())),
+            session_channel_policies,
+            mail_steer_suppressed,
+            staged_mail_acks,
             governor: None,
             sidecar_environment: None,
-            reviver: RwLock::new(None),
-            runtime_owner: hya_proto::OwnerRunId::new(),
-            turn_gate: Arc::new(turn_gate::TurnGate::default()),
+            reviver,
+            runtime_owner,
+            turn_gate,
             round_retry_waits: &crate::kernel::ROUND_RETRY_WAITS,
             #[cfg(test)]
             mail_pre_append_gate: None,
@@ -578,6 +648,130 @@ impl SessionEngine {
         self
     }
 
+    /// Replace dynamic URI scheme handlers on this engine's [`UriSchemaPlane`]
+    /// with the given ABI v2 [`hya_runtime_abi::UriSchemaHandler`] list.
+    ///
+    /// Passing an empty list clears any default URI handlers (e.g. when
+    /// `hya/agent-channels` is explicitly disabled).
+    #[must_use]
+    pub fn with_uri_schema_handlers(
+        mut self,
+        handlers: Vec<Arc<dyn hya_runtime_abi::UriSchemaHandler>>,
+        runtime: Arc<dyn hya_runtime_abi::HostRuntime>,
+    ) -> Self {
+        let mut schemas = self.schemas.clear_uri_handlers();
+        for handler in handlers {
+            let adapted =
+                hya_runtime_abi::adapt_uri_schema_handler(handler, Some(Arc::clone(&runtime)));
+            match schemas.clone().with_uri_handler(adapted) {
+                Ok(updated) => schemas = updated,
+                Err(error) => {
+                    tracing::warn!(%error, "skipping duplicate or protected ABI v2 URI handler");
+                }
+            }
+        }
+        self.schemas = schemas;
+        self
+    }
+
+    /// Suppress or re-enable in-turn unread-mail steering for `session`.
+    pub fn set_mail_steer_suppressed(&self, session: SessionId, suppressed: bool) {
+        let mut map = self
+            .mail_steer_suppressed
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if suppressed {
+            map.insert(session, true);
+        } else {
+            map.remove(&session);
+        }
+    }
+
+    /// Whether in-turn unread-mail steering is currently suppressed for `session`.
+    #[must_use]
+    pub fn is_mail_steer_suppressed(&self, session: SessionId) -> bool {
+        self.mail_steer_suppressed
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&session)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Stage a `mail_consumed` acknowledgement from `UnreadMailSteerHook` to
+    /// commit atomically with the current tool result on `session`.
+    pub fn stage_mail_steer_ack(&self, session: SessionId, ack: hya_runtime_abi::StagedMailAck) {
+        self.staged_mail_acks
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(session, ack);
+    }
+
+    /// Take and clear any staged `mail_consumed` acknowledgement for `session`.
+    #[must_use]
+    pub fn take_staged_mail_ack(
+        &self,
+        session: SessionId,
+    ) -> Option<hya_runtime_abi::StagedMailAck> {
+        self.staged_mail_acks
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&session)
+    }
+
+    /// Return `true` when `handle` under `root` is currently stopped by the user.
+    #[must_use]
+    pub fn is_member_stopped_by_user(&self, root: SessionId, handle: &str) -> bool {
+        self.archive_reviver()
+            .is_some_and(|reviver| reviver.stopped_by_user(root, handle))
+    }
+
+    /// Revive an archived direct child member and deliver its pending DM mail.
+    ///
+    /// # Errors
+    /// Returns [`CoreError`] when no resident supervisor is attached or revival fails.
+    pub async fn revive_archived_member_with_mail(
+        &self,
+        request: hya_runtime_abi::MemberMailRevivalRequest,
+    ) -> Result<usize, CoreError> {
+        let Some(supervisor) = self.resident_supervisor() else {
+            return Err(CoreError::MailRevivalRequired {
+                sender: request.from_handle,
+                channel: request.channel,
+                target: request.target_handle,
+            });
+        };
+        let policy = self.session_channel_policy(request.from_session);
+        supervisor
+            .revive_episode(
+                request.root,
+                &request.from_handle,
+                &request.target_handle,
+                request.channel,
+                request.kind,
+                request.body,
+                request.actor_claim.as_ref(),
+                policy,
+            )
+            .await
+    }
+
+    /// Build a lightweight [`hya_runtime_abi::HostRuntime`] backed by this
+    /// engine's store, bus, turn gate, and reviver handles.
+    #[must_use]
+    pub(crate) fn channel_host_runtime(&self) -> Arc<dyn hya_runtime_abi::HostRuntime> {
+        Arc::new(channel_host::EngineChannelsHostRuntime {
+            store: self.store.clone(),
+            bus: self.bus.clone(),
+            runtime_owner: self.runtime_owner,
+            session_channel_policies: Arc::clone(&self.session_channel_policies),
+            mail_steer_suppressed: Arc::clone(&self.mail_steer_suppressed),
+            staged_mail_acks: Arc::clone(&self.staged_mail_acks),
+            reviver: Arc::clone(&self.reviver),
+            turn_gate: Arc::clone(&self.turn_gate),
+        })
+    }
+
     /// Install the environment used to start Bundle sidecars for public packages.
     #[must_use]
     pub fn with_sidecar_environment(mut self, environment: Arc<dyn SidecarEnvironment>) -> Self {
@@ -621,15 +815,71 @@ impl SessionEngine {
         self
     }
 
-    /// Install the host-side receiver pair that serves `workflow` tool runs.
-    ///
-    /// Mirrors [`Self::with_spawn_sender`]: the engine owns this sender for its
-    /// whole life, and the host worker owns an `Arc<SessionEngine>` while it
-    /// drains, so queued requests always find a live executor.
+    /// Register started ABI v2 [`NativeService`](hya_runtime_abi::NativeService) instances
+    /// so session busy, cancellation, and delete-idle coordination include them.
+    pub fn register_native_services(&self, services: Vec<Arc<dyn hya_runtime_abi::NativeService>>) {
+        self.native_services
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(services);
+    }
+
+    /// Register ABI v2 [`ProjectionReducer`](hya_runtime_abi::ProjectionReducer)
+    /// instances on the underlying event store.
+    pub fn register_native_projection_reducers(
+        &self,
+        reducers: Vec<Arc<dyn hya_runtime_abi::ProjectionReducer>>,
+    ) {
+        for reducer in reducers {
+            self.store
+                .register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
+                    inner: reducer,
+                }));
+        }
+    }
+
+    /// Return `true` if any registered native service owns active background work on `session`.
     #[must_use]
-    pub fn with_workflow_sender(mut self, workflows: BoundWorkflowSender) -> Self {
-        self.workflows = workflows;
-        self
+    pub fn has_active_service_work(&self, session: SessionId) -> bool {
+        self.native_services
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .any(|service| service.is_session_busy(session))
+    }
+
+    /// Cancel active background work on `session` across all registered native services.
+    #[must_use]
+    pub fn cancel_service_work(&self, session: SessionId) -> bool {
+        let services = self
+            .native_services
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let mut cancelled = false;
+        for service in services {
+            cancelled |= service.cancel_session(session);
+        }
+        cancelled
+    }
+
+    /// Wait until all registered native services finish any active work on `session`.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Invalid`] if a native service reports a wait error.
+    pub async fn wait_service_work_idle(&self, session: SessionId) -> Result<(), CoreError> {
+        let services = self
+            .native_services
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        for service in services {
+            service
+                .wait_session_idle(session)
+                .await
+                .map_err(|error| CoreError::Invalid(error.to_string()))?;
+        }
+        Ok(())
     }
 
     /// Inject the mailbox plane whose service loop this engine drives (see
@@ -857,6 +1107,33 @@ impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
         payload: &Value,
     ) {
         let bundle_id = self.inner.bundle_id();
+        let multi_reviving_path =
+            if bundle_id == hya_tool::extension::BUNDLE_MULTI_AGENT && kind == "agent_registered" {
+                let handle = payload.get("handle").and_then(Value::as_str);
+                let parent = payload.get("parent").and_then(Value::as_str);
+                handle.map(|handle| {
+                    let path = match parent {
+                        Some(parent) => hya_proto::scope::join_path(parent, handle),
+                        None => handle.to_string(),
+                    };
+                    let prev = projection
+                        .extensions
+                        .get(bundle_id)
+                        .and_then(|val| {
+                            serde_json::from_value::<hya_tool::extension::MultiAgentExtensionState>(
+                                val.clone(),
+                            )
+                            .ok()
+                        })
+                        .unwrap_or_default();
+                    let was_reviving =
+                        prev.archived.contains_key(&path) && !prev.roster.contains_key(&path);
+                    let is_new = !prev.roster.contains_key(&path);
+                    (path, parent.map(str::to_string), was_reviving, is_new)
+                })
+            } else {
+                None
+            };
         let state = projection
             .extensions
             .entry(bundle_id.to_string())
@@ -871,6 +1148,78 @@ impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
         };
         if self.inner.apply(state, &ctx).is_err() {
             return;
+        }
+        // Mirror `hya/multi-agent` registration and archive events into
+        // `hya/agent-channels` group membership and initial inbox cursor.
+        if bundle_id == hya_tool::extension::BUNDLE_MULTI_AGENT {
+            if let Some((path, parent, was_reviving, is_new)) = multi_reviving_path
+                && let Some(channels_val) = projection
+                    .extensions
+                    .get(hya_tool::extension::BUNDLE_CHANNELS)
+                && let Ok(mut channels) = serde_json::from_value::<
+                    hya_tool::extension::ChannelsExtensionState,
+                >(channels_val.clone())
+            {
+                if was_reviving
+                    && let Some(parent) = parent
+                    && let Some(channel) = channels.channels.values_mut().find(|channel| {
+                        channel.kind == hya_proto::ChannelKind::Group
+                            && channel.unit.as_ref() == Some(&parent)
+                    })
+                {
+                    channel.members.insert(path.clone());
+                    if let Ok(serialized) = serde_json::to_value(&channels) {
+                        projection
+                            .extensions
+                            .insert(hya_tool::extension::BUNDLE_CHANNELS.to_string(), serialized);
+                    }
+                }
+                if is_new {
+                    let cursor = channels
+                        .inboxes
+                        .get(&path)
+                        .map_or(0, |inbox| inbox.len() as u64);
+                    if cursor > 0
+                        && let Some(multi_val) = projection
+                            .extensions
+                            .get(hya_tool::extension::BUNDLE_MULTI_AGENT)
+                        && let Ok(mut multi) = serde_json::from_value::<
+                            hya_tool::extension::MultiAgentExtensionState,
+                        >(multi_val.clone())
+                        && let Some(entry) = multi.roster.get_mut(&path)
+                    {
+                        entry.resident_cursor = entry.resident_cursor.max(cursor);
+                        if let Ok(serialized) = serde_json::to_value(&multi) {
+                            projection.extensions.insert(
+                                hya_tool::extension::BUNDLE_MULTI_AGENT.to_string(),
+                                serialized,
+                            );
+                        }
+                    }
+                }
+            } else if kind == "agent_archived"
+                && let Some(handle) = payload.get("handle").and_then(Value::as_str)
+                && let Some(channels_val) = projection
+                    .extensions
+                    .get(hya_tool::extension::BUNDLE_CHANNELS)
+                && let Ok(mut channels) = serde_json::from_value::<
+                    hya_tool::extension::ChannelsExtensionState,
+                >(channels_val.clone())
+            {
+                let mut changed = false;
+                for channel in channels.channels.values_mut() {
+                    if channel.kind == hya_proto::ChannelKind::Group
+                        && channel.members.remove(handle)
+                    {
+                        changed = true;
+                    }
+                }
+                if changed && let Ok(serialized) = serde_json::to_value(&channels) {
+                    projection
+                        .extensions
+                        .insert(hya_tool::extension::BUNDLE_CHANNELS.to_string(), serialized);
+                }
+            }
         }
         // Mirror compaction tool-output eviction notices onto PartProjection::Tool.
         if bundle_id == hya_tool::extension::BUNDLE_COMPACTION
@@ -897,15 +1246,75 @@ impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
                 }
             }
         }
+        // Bridge `hya/agent-channels` mail events with `hya/multi-agent` roster state
+        // (cursor synchronization and terminal-resident inbox filtering) until CHR-30.
+        if bundle_id == hya_tool::extension::BUNDLE_CHANNELS {
+            if kind == "mail_consumed"
+                && let (Some(handle), Some(through)) = (
+                    payload.get("handle").and_then(Value::as_str),
+                    payload.get("through").and_then(Value::as_u64),
+                )
+                && let Some(multi_val) = projection
+                    .extensions
+                    .get(hya_tool::extension::BUNDLE_MULTI_AGENT)
+                && let Ok(mut multi) = serde_json::from_value::<
+                    hya_tool::extension::MultiAgentExtensionState,
+                >(multi_val.clone())
+                && let Some(entry) = multi.roster.get_mut(handle)
+            {
+                entry.resident_cursor = entry.resident_cursor.max(through);
+                if let Ok(serialized) = serde_json::to_value(&multi) {
+                    projection.extensions.insert(
+                        hya_tool::extension::BUNDLE_MULTI_AGENT.to_string(),
+                        serialized,
+                    );
+                }
+            } else if kind == "mail_sent"
+                && let Some(multi_val) = projection
+                    .extensions
+                    .get(hya_tool::extension::BUNDLE_MULTI_AGENT)
+                && let Ok(multi) = serde_json::from_value::<
+                    hya_tool::extension::MultiAgentExtensionState,
+                >(multi_val.clone())
+                && let Some(channels_val) = projection
+                    .extensions
+                    .get(hya_tool::extension::BUNDLE_CHANNELS)
+                && let Ok(mut channels) = serde_json::from_value::<
+                    hya_tool::extension::ChannelsExtensionState,
+                >(channels_val.clone())
+                && let Some(last_idx) = channels.mail.len().checked_sub(1)
+                && matches!(
+                    channels.mail[last_idx].to,
+                    hya_proto::MailEndpoint::Channel(_)
+                )
+            {
+                let mut pruned = false;
+                for (member, inbox) in &mut channels.inboxes {
+                    let is_live = multi
+                        .roster
+                        .get(member)
+                        .is_none_or(hya_tool::extension::RosterEntry::accepts_mail);
+                    if !is_live && inbox.last() == Some(&last_idx) {
+                        inbox.pop();
+                        pruned = true;
+                    }
+                }
+                if pruned && let Ok(serialized) = serde_json::to_value(&channels) {
+                    projection
+                        .extensions
+                        .insert(hya_tool::extension::BUNDLE_CHANNELS.to_string(), serialized);
+                }
+            }
+        }
     }
 }
 
 /// Default native hooks registered by first-party ABI v2 native tool bundles
 /// (`hya/plan`, etc.), cached process-wide for [`SessionEngine::try_new`].
 /// Callers with explicit [`hya_bundle::BuiltinBundleSelection`] override this
-/// via [`SessionEngine::with_native_hooks`].
-fn default_native_hooks() -> Option<Arc<dyn HookDispatcher>> {
-    static HOOKS: std::sync::Mutex<Option<Option<Arc<dyn HookDispatcher>>>> =
+/// via [`SessionEngine::with_native_hook_list`].
+fn default_native_hook_list() -> Vec<Arc<dyn hya_runtime_abi::NativeHook>> {
+    static HOOKS: std::sync::Mutex<Option<Vec<Arc<dyn hya_runtime_abi::NativeHook>>>> =
         std::sync::Mutex::new(None);
     let mut slot = HOOKS
         .lock()
@@ -926,11 +1335,8 @@ fn default_native_hooks() -> Option<Arc<dyn HookDispatcher>> {
             }
         }
     }
-    let dispatcher = (!hooks.is_empty()).then(|| {
-        Arc::new(crate::hooks::NativeHookDispatcher::new(hooks)) as Arc<dyn HookDispatcher>
-    });
-    *slot = Some(dispatcher.clone());
-    dispatcher
+    *slot = Some(hooks.clone());
+    hooks
 }
 
 /// Build summarize options from a fixed system definition and bound preference.

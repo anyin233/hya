@@ -20,9 +20,9 @@ pub(crate) const BARE_CORE_IDENTITY: &str = "hya/bare";
 pub(crate) const TOOL_FAMILIES: [&str; 5] = [
     "hya/hashline",
     "hya/coding-extras",
-    "hya/extended-tools",
+    "hya/multi-agent",
     "hya/network",
-    "hya/channel-tools",
+    "hya/agent-channels",
 ];
 
 /// Metadata that owns one family's builtin visibility, aliases, and defaults.
@@ -57,8 +57,8 @@ pub struct BaseToolExposure {
     #[serde(default)]
     aliases: Vec<BaseToolAlias>,
     /// Identity of another tool family whose same-named tool this entry
-    /// replaces whenever both families are loaded (for example channel-tools'
-    /// mail-aware `wait` over extended-tools' `wait`). The only way two
+    /// replaces whenever both families are loaded (for example `hya/agent-channels`'
+    /// mail-aware `wait` over `hya/multi-agent`'s `wait`). The only way two
     /// families may export one name: the winner is declared, never implied by
     /// load or lexicographic order.
     #[serde(default)]
@@ -256,9 +256,6 @@ fn load_preset(identity: &str) -> Result<BaseToolsPreset, String> {
     let [bundle] = catalog.bundles() else {
         return Err("tool family must prepare one bundle".to_string());
     };
-    if !bundle.agents().is_empty() || bundle.workflow().is_some() {
-        return Err("tool family must be an agentless Bundle".to_string());
-    }
     let policy = if let Some(asset) = bundle
         .extensions()
         .iter()
@@ -636,35 +633,33 @@ tools:
 
     #[test]
     fn a_shared_name_needs_exactly_one_declared_override() {
-        let extended = tools("- { name: wait, schema_version: 1, permission: read_only }");
+        let multi = tools("- { name: wait, schema_version: 1, permission: read_only }");
         let plain = tools("- { name: wait, schema_version: 1, permission: read_only }");
         let overriding = tools(
-            "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/extended-tools }",
+            "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/multi-agent }",
         );
         let wrong_target = tools(
             "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/network }",
         );
         let accepted = check_family_exports(&[
-            ("hya/extended-tools", &extended),
-            ("hya/channel-tools", &overriding),
+            ("hya/multi-agent", &multi),
+            ("hya/agent-channels", &overriding),
         ]);
         assert_eq!(accepted, Ok(()));
         for (label, other) in [("undeclared", &plain), ("wrong target", &wrong_target)] {
-            let error = check_family_exports(&[
-                ("hya/extended-tools", &extended),
-                ("hya/channel-tools", other),
-            ])
-            .unwrap_err();
+            let error =
+                check_family_exports(&[("hya/multi-agent", &multi), ("hya/agent-channels", other)])
+                    .unwrap_err();
             assert!(error.contains("`wait`"), "{label}: {error}");
         }
         // Both sides claiming the override is as ambiguous as neither.
         let back = tools(
-            "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/channel-tools }",
+            "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/agent-channels }",
         );
         assert!(
             check_family_exports(&[
-                ("hya/extended-tools", &back),
-                ("hya/channel-tools", &overriding),
+                ("hya/multi-agent", &back),
+                ("hya/agent-channels", &overriding),
             ])
             .is_err()
         );
@@ -673,19 +668,19 @@ tools:
             "- { name: waiting, schema_version: 1, permission: read_only, aliases: [{ name: wait, visibility: hidden }] }",
         );
         assert!(
-            check_family_exports(&[("hya/extended-tools", &extended), ("hya/network", &aliased),])
+            check_family_exports(&[("hya/multi-agent", &multi), ("hya/network", &aliased),])
                 .is_err()
         );
     }
 
     #[test]
     fn overrides_must_name_another_tool_family() {
-        for target in ["hya/channel-tools", "acme/unknown"] {
+        for target in ["hya/agent-channels", "acme/unknown"] {
             let policy: ExposurePolicy = serde_norway::from_str(&format!(
-                "schema_version: 1\nidentity: hya/channel-tools\nprotected_names: []\ntools:\n  - {{ name: wait, schema_version: 1, permission: read_only, overrides: {target} }}\n"
+                "schema_version: 1\nidentity: hya/agent-channels\nprotected_names: []\ntools:\n  - {{ name: wait, schema_version: 1, permission: read_only, overrides: {target} }}\n"
             ))
             .unwrap_or_else(|error| panic!("{error}"));
-            let error = validate_policy(&policy, "hya/channel-tools").unwrap_err();
+            let error = validate_policy(&policy, "hya/agent-channels").unwrap_err();
             assert!(error.contains("overrides"), "{target}: {error}");
         }
     }
@@ -709,21 +704,14 @@ tools:
                 ],
             ),
             (
-                "hya/extended-tools",
-                1,
-                &[
-                    "list_agents",
-                    "task",
-                    "workflow",
-                    "search_agent",
-                    "archive",
-                    "wait",
-                ],
+                "hya/multi-agent",
+                2,
+                &["list_agents", "task", "search_agent", "archive", "wait"],
             ),
             ("hya/network", 2, &["webfetch", "websearch"]),
             (
-                "hya/channel-tools",
-                1,
+                "hya/agent-channels",
+                2,
                 &["send", "list_channel", "report", "wait"],
             ),
         ];
@@ -773,7 +761,6 @@ tools:
             ("lsp", ToolPermission::ReadOnly, &[]),
             ("list_agents", ToolPermission::ReadOnly, &[]),
             ("task", ToolPermission::Task, &[]),
-            ("workflow", ToolPermission::Tool, &[]),
             ("project_activity", ToolPermission::ReadOnly, &[]),
             ("send", ToolPermission::Tool, &[]),
             ("list_channel", ToolPermission::ReadOnly, &[]),
@@ -822,14 +809,20 @@ tools:
             .map(|t| t.name().to_string())
             .collect();
         expected_exposed.insert("plan_exit".to_string());
+        expected_exposed.insert("workflow".to_string());
         assert_eq!(advertised, expected_exposed);
         assert_eq!(
             registry.builtin_bundle_origin("plan_exit"),
             Some("hya/plan")
         );
+        assert_eq!(
+            registry.builtin_bundle_origin("workflow"),
+            Some("hya/workflow")
+        );
         assert_eq!(registry.resolve("plan").unwrap().tool.name(), "plan_exit");
         assert!(!advertised.contains("plan"));
         assert!(tool_prompt("plan_exit").is_some());
+        assert!(tool_prompt("workflow").is_some());
 
         for tool in presets.iter().flat_map(|p| p.tools()) {
             assert!(

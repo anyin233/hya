@@ -33,18 +33,11 @@ pub(crate) use parse::normalize_source_path;
 
 const PREPARED_FORMAT_VERSION: u32 = 4;
 
-/// Transitional Phase 0–4 legacy tool-family bundles that temporarily retain
-/// `exposure.yaml` until their tools migrate across Phases 2–4 (`CHR-22`–`CHR-31`).
-const TRANSITIONAL_EXPOSURE_BUNDLES: [&str; 2] = ["hya/extended-tools", "hya/channel-tools"];
-
 fn reject_removed_exposure(
     bundle_id: &str,
     files: &std::collections::BTreeMap<String, Vec<u8>>,
     assets: &[crate::source::SourceResource],
 ) -> Result<(), BundleError> {
-    if TRANSITIONAL_EXPOSURE_BUNDLES.contains(&bundle_id) {
-        return Ok(());
-    }
     if let Some(path) = files
         .keys()
         .find(|path| *path == "exposure.yaml" || path.ends_with("/exposure.yaml"))

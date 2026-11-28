@@ -1076,9 +1076,10 @@ mod tests {
             context: OnceLock::new(),
             spawned: false.into(),
         });
+        let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").unwrap();
         let catalog = Arc::new(
             hya_engine::AgentCatalog::new(Arc::new(
-                hya_bundle::BundleCatalog::from_prepared(&[]).unwrap(),
+                hya_bundle::BundleCatalog::from_verified_catalogs(&[multi_agent]).unwrap(),
             ))
             .unwrap(),
         );

@@ -100,20 +100,12 @@ fn bad_request(message: impl Into<String>) -> Response {
 }
 
 /// Serve one call through the engine (covering both JS process and native ABI v2
-/// bundles, plus in-tree Phase 0 adapters); shared by HTTP and gRPC.
+/// bundles); shared by HTTP and gRPC.
 pub(crate) async fn invoke(
     st: &ServerState,
     call: BundleApiCall,
 ) -> Result<BundleApiOutcome, BundleApiError> {
-    match st.engine.invoke_bundle_api(call.clone()).await {
-        Ok(outcome) => Ok(outcome),
-        Err(BundleApiError::NotFound { .. })
-            if matches!(call.bundle.as_str(), "hya/workflow" | "hya/multi-agent") =>
-        {
-            super::builtin_bundle_apis::invoke_builtin(st, call).await
-        }
-        Err(error) => Err(error),
-    }
+    st.engine.invoke_bundle_api(call).await
 }
 
 /// Parse a method name for the gRPC binding (HTTP routes by method already).

@@ -12,8 +12,7 @@ use hya_engine::skill_catalog::{
     skill_dirs_for_workdir,
 };
 use hya_tool::{
-    Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolError, handle::ArtifactPlane,
+    Action, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane, ToolCtx, ToolError,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -44,29 +43,10 @@ fn write_skill(dir: &Path, name: &str, description: &str, body: &str) {
 
 fn ctx_with(rules: Vec<Rule>, skills: SkillPlane, workdir: PathBuf) -> ToolCtx {
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(rules));
-    let (interaction, _irx) = InteractionPlane::new();
-    let (spawner, _srx) = SpawnerPlane::new();
-    ToolCtx {
-        nested: hya_tool::NestedToolPlane::disconnected(),
-        workflows: hya_tool::WorkflowPlane::disconnected(),
-        permission,
-        interaction,
-        spawner,
-        operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-        mailbox: hya_tool::MailboxPlane::disconnected(),
-        lifecycle: hya_tool::LifecyclePlane::disconnected(),
-        session: None,
-        parent_session: None,
-        skills,
-        lsp: LspPlane::default(),
-        formatter: hya_tool::FormatterPlane::default(),
-        artifacts: ArtifactPlane::default(),
-        agents: Default::default(),
-        workdir,
-        roots: vec![PathBuf::from(".")],
-        cancel: CancellationToken::new(),
-        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
-    }
+    let mut ctx = ToolCtx::new(workdir, permission, CancellationToken::new());
+    ctx.skills = skills;
+    ctx.roots = vec![PathBuf::from(".")];
+    ctx
 }
 
 #[tokio::test]
@@ -297,10 +277,10 @@ async fn skill_catalog_dir_order_first_win_and_builtin_override_precedence() {
 }
 
 #[test]
-fn skill_tool_lives_in_core_not_extended_tools_and_registers_in_bare_runtime() {
+fn skill_tool_lives_in_core_not_multi_agent_and_registers_in_bare_runtime() {
     assert!(
         hya_tool_loader::builtins().get("skill").is_none(),
-        "skill must not remain in bundles/builtin/extended-tools"
+        "skill must not remain in bundles/builtin/multi-agent"
     );
     assert!(
         hya_core::kernel::tools::bare_tools()

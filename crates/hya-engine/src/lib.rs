@@ -6,8 +6,8 @@
 //!   compact/summarize, and emit canonical events through the store and bus.
 //! - **[`EventBus`]** — in-process broadcast of [`hya_proto::Envelope`] for SSE/TUI.
 //! - **Extension traits** implemented by the app/plugin layers:
-//!   [`HookDispatcher`], [`RuntimeCatalogRefresh`], [`Summarizer`], goal/loop
-//!   gates and verifiers, and [`RuntimeSourceOwner`].
+//!   [`HookDispatcher`], [`RuntimeCatalogRefresh`], [`Summarizer`],
+//!   and [`RuntimeSourceOwner`].
 //! - **Team/subagent orchestration** — admission, governors, resident supervisors,
 //!   and mailbox delivery over the same event-sourced log.
 //!
@@ -41,10 +41,8 @@ pub mod category;
 pub mod channel_policy;
 /// Combined compaction configuration and handoff types.
 pub mod compaction;
-/// Transitional iteration primitives for loop mode and workflow loop stages.
-pub mod completion;
 /// Harness coordination tools injected into every agent view at startup.
-mod coordination;
+pub(crate) use hya_agent_channels_core::coordination;
 /// Effective reasoning effort resolution shared by request and display layers.
 pub mod effort;
 /// Session engine, agent specs, and turn admission.
@@ -80,8 +78,6 @@ pub mod store_bridge;
 pub mod title;
 /// Token accounting: local estimation and provider-usage reliability.
 pub use hya_context::tokens;
-/// User-authored workflow DAGs over the governed team primitives.
-pub mod workflow;
 
 #[cfg(test)]
 mod test_support;
@@ -106,16 +102,15 @@ pub use category::{
 };
 pub use channel_policy::{AGENT_CHANNELS_PRESET_ID, ChannelPolicy};
 pub use compaction::CompactionConfig;
-pub use completion::{GateOutcome, IterationDriver, IterationGate, RunOutcome, SafetyCaps};
 pub use effort::{AgentEffortSource, EffectiveEffort, EffortSource, agent_effort, resolve_effort};
 pub use engine::terminal_handoff;
 pub use engine::{
-    AgentSpec, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest, BoundWorkflowSender,
-    BundleRefresh, CatalogScopeCacheConfig, CreateSession, DRAIN_DEADLINE, ForkAt, ForkError,
-    MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES, MAX_SESSION_BLOB_BYTES, MODEL_PROBE_PROMPT,
-    ModelProbeReply, ProviderSnapshot, RevertError, RevertOutcome, RevertTarget,
-    RuntimeCatalogRefresh, SessionEngine, TurnBoundaryObserver, TurnDrainReport, TurnLease,
-    advertise_tool, fork_cut,
+    AgentSpec, BoundSpawnRequest, BoundSpawnSender, BundleRefresh, CatalogScopeCacheConfig,
+    CreateSession, DRAIN_DEADLINE, ExplicitModelRoute, ExplicitModelRouteCandidate,
+    ExplicitTurnRoute, ForkAt, ForkError, MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES,
+    MAX_SESSION_BLOB_BYTES, MODEL_PROBE_PROMPT, ModelProbeReply, ProviderSnapshot, RevertError,
+    RevertOutcome, RevertTarget, RuntimeCatalogRefresh, SessionEngine, TurnBoundaryObserver,
+    TurnDrainReport, TurnLease, advertise_tool, fork_cut,
 };
 pub use error::CoreError;
 pub use hooks::{
@@ -147,7 +142,7 @@ pub use sidecar::{
 pub use store_bridge::{
     EpisodeRegistration, RecoveredActorClaim, RecoveredResidentOutcome, RecoveredResidentWork,
     ResidentArchive, ResidentArchiveOutcome, ResidentArchiveOwner, ResidentWorkPrompt,
-    SessionStoreExt, WorkflowAdmissionOutcome, WorkflowSelectionOutcome,
+    SessionStoreExt,
 };
 pub use terminal_handoff::{
     ModelSummarizer, SummarizeOptions, Summarizer, TerminalHandoff, TerminalHandoffOptions,
@@ -156,13 +151,23 @@ pub use terminal_handoff::{
 pub use tokens::{
     CalibratedTokenizer, TokenAccounting, TokenAccountingMode, TokenCount, TokenSource, Tokenizer,
 };
-pub use workflow::{
-    CompiledWorkflow, DurableWorkflowAdmission, DurableWorkflowSelection, FailurePolicy,
-    PreparedWorkflowRun, StageMode, StageReport, StageStatus, VerifySpec, WorkflowDefinition,
-    WorkflowError, WorkflowModelAssignment, WorkflowModelCandidate, WorkflowModelRoute,
-    WorkflowModelRouteCandidate, WorkflowPlan, WorkflowRevision, WorkflowRoutingContext,
-    WorkflowRunContext, WorkflowRunReport, WorkflowStage, WorkflowStatus,
-    discover_workflow_files_in_root, load_workflow_file, prepare_workflow_run,
-    prepare_workflow_run_for_actor, run_workflow, workflow_dirs_for_workdir, workflow_project_dir,
-    workflow_user_dir,
-};
+
+/// Render a simple role-tagged transcript string from a session projection.
+#[must_use]
+pub fn render_transcript(projection: &hya_proto::Projection) -> String {
+    let mut s = String::new();
+    for m in &projection.session.messages {
+        let mut text = String::new();
+        for p in &m.parts {
+            match p {
+                hya_proto::PartProjection::Text { text: t, .. } => text.push_str(t),
+                hya_proto::PartProjection::Tool { name, state, .. } => {
+                    text.push_str(&format!("[tool:{name}:{state:?}]"));
+                }
+                hya_proto::PartProjection::Reasoning { .. } => {}
+            }
+        }
+        s.push_str(&format!("[{:?}] {}\n", m.role, text));
+    }
+    s
+}
