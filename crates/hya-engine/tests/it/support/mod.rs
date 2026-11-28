@@ -158,6 +158,38 @@ pub fn test_runtime_with_catalog(
     )
 }
 
+/// The production turn path with only the tools explicitly installed by the test.
+pub fn kernel_engine(
+    store: SessionStore,
+    router: Arc<ProviderRouter>,
+    permission: PermissionPlane,
+    tools: &[Arc<dyn Tool>],
+) -> SessionEngine {
+    let registry = ToolRegistry::default();
+    for tool in tools {
+        let permission = match tool.name() {
+            "read" | "grep" => hya_tool::ToolPermission::ReadOnly,
+            "bash" => hya_tool::ToolPermission::Command,
+            _ => hya_tool::ToolPermission::Tool,
+        };
+        registry.register_builtin(tool.clone(), permission, [], "hya/bare");
+    }
+    kernel_engine_with_registry(store, router, permission, registry)
+}
+
+pub fn kernel_engine_with_registry(
+    store: SessionStore,
+    router: Arc<ProviderRouter>,
+    permission: PermissionPlane,
+    registry: ToolRegistry,
+) -> SessionEngine {
+    let bundles = Arc::new(BundleCatalog::from_verified_catalogs(&[]).unwrap());
+    let catalog = Arc::new(AgentCatalog::with_minimal_agent(bundles).unwrap());
+    let runtime = Arc::new(RuntimeRegistry::new(registry, catalog).with_pure_skills(true));
+    SessionEngine::new(store, router, runtime, permission, EventBus::default())
+        .with_pure_context(true)
+}
+
 /// Compose real native extensions for the fixtures that exercise them.
 pub fn fixture_engine(
     store: SessionStore,

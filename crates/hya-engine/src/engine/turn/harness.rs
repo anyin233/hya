@@ -410,11 +410,6 @@ impl ToolGate for EngineHarness<'_> {
         self.defer_steer = gate.defer_steer;
         Ok(())
     }
-
-    /// Unrun calls stay open; the turn end closes them as `CANCELLED`.
-    async fn cancelled(&mut self, _calls: Vec<ToolCall>) -> Result<(), CoreError> {
-        Ok(())
-    }
 }
 
 #[async_trait]

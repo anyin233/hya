@@ -16,7 +16,11 @@ A running session's state reduces to three pieces derived from the event log:
 
 ## 2. The Three Primitives (`hya-core::kernel`)
 
-Every round in `hya-core` updates Context through strictly three primitives:
+Every turn uses `SessionEngine` to drive `kernel::drive`. The runtime composes
+the enabled bundle registrations with that turn path. Round retries and the
+80% context rewrite apply even when the turn has no hook entries.
+
+Each round updates Context through three primitives:
 
 | Primitive | What it means | Key Events |
 | --- | --- | --- |
@@ -89,7 +93,7 @@ turn-ending tool, it names the tool the model can call to deliver its result.
     ```
 - **Permanent reservation of `todo` and `rewrite`:**
   - `hya_tool::RESERVED_KERNEL_TOOLS` / `hya_core::kernel::tools::is_reserved(name)` mark `todo` and `rewrite` as permanently kernel-exclusive.
-  - `ToolRegistry` rejects registering or aliasing either name, ABI v2 bundle loading (`hya-tool-loader`) rejects bundles exporting either name, and `hya_core::kernel::run` always advertises the canonical kernel schemas and intercepts calls inside the kernel loop.
+  - `ToolRegistry` rejects registering or aliasing either name, ABI v2 bundle loading (`hya-tool-loader`) rejects bundles exporting either name, and `SessionEngine` advertises the canonical kernel schemas, and `kernel::drive` intercepts the calls.
 
 ---
 
