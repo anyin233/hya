@@ -95,7 +95,7 @@ async fn bundles_api_lifecycle_and_project_root_inventory_refresh() -> TestResul
         vec![
             hya_bundle::SourceFile::new(
                 "bundle.yaml",
-                b"schema_version: 2\nkind: Bundle\nidentity: { id: e2e/tui-panel, version: 1.0.0, publisher: e2e }\nassets: [{ id: panel, path: tui/main.ts }]\ntui: { api_version: 1, entry: tui/main.ts, sdk: 1.0.0, permissions: [tui.panel] }\n".to_vec(),
+                b"schema_version: 2\nkind: Bundle\nidentity: { id: e2e/tui-panel, version: 1.0.0, publisher: e2e }\nassets: [{ id: panel, path: tui/main.ts }]\ntui: { api_version: 2, entry: tui/main.ts, sdk: 2.0.0, permissions: [tui.panel] }\n".to_vec(),
             ),
             hya_bundle::SourceFile::new("tui/main.ts", b"export default {}\n".to_vec()),
         ],

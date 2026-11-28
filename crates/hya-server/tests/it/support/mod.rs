@@ -152,9 +152,9 @@ pub fn agent_catalog_with_tui(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
         bundle.digest = "a".repeat(64);
         bundle.extensions = resources;
         bundle.tui = Some(PreparedTuiExtension {
-            api_version: 1,
+            api_version: 2,
             entry: "extensions/main.ts".to_string(),
-            sdk: "1.0.0".to_string(),
+            sdk: "2.0.0".to_string(),
             permissions: vec!["read".to_string()],
         });
     }
