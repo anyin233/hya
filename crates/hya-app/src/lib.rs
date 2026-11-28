@@ -31,6 +31,7 @@ mod installed_bundle_refresh;
 mod lead_wrapup;
 /// SQLite remote-model cache (`$XDG_CACHE_HOME/hya/model_cache.db`).
 pub mod model_cache;
+mod native_bundles;
 /// Interactive OAuth login and access-token refresh.
 pub mod oauth;
 /// Headless permission auto-reject responder for non-interactive runs.

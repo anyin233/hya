@@ -927,35 +927,23 @@ fn category_model_fallbacks(categories: &CategoryRegistry) -> HashMap<ModelRef, 
     fallbacks
 }
 
-fn enabled_native_tool_families(
-    selection: &hya_bundle::BuiltinBundleSelection,
-    include_network: bool,
-) -> Vec<&'static str> {
-    let candidates: &[&'static str] = if include_network {
-        &[
-            "hya/hashline",
-            "hya/coding-extras",
-            "hya/multi-agent",
-            "hya/network",
-            "hya/agent-channels",
-        ]
-    } else {
-        &[
-            "hya/hashline",
-            "hya/coding-extras",
-            "hya/multi-agent",
-            "hya/agent-channels",
-        ]
-    };
-    candidates
+/// The enabled, present first-party bundles that run a native library, in
+/// first-party order. `hya/compaction` loads with the engine itself.
+fn enabled_native_bundles(selection: &hya_bundle::BuiltinBundleSelection) -> Vec<&'static str> {
+    hya_bundle::FIRST_PARTY_BUNDLES
         .iter()
         .copied()
+        .filter(|id| *id != "hya/compaction" && selection.is_enabled(id))
         .filter(|id| {
-            selection.is_enabled(id)
-                && hya_bundle::first_party_bundle_optional(id)
-                    .ok()
-                    .flatten()
-                    .is_some()
+            hya_bundle::first_party_bundle_optional(id)
+                .ok()
+                .flatten()
+                .and_then(|catalog| catalog.bundles().first())
+                .and_then(|bundle| bundle.runtime())
+                .is_some_and(|runtime| {
+                    runtime.kind == hya_bundle::PreparedRuntimeKind::Native
+                        && runtime.abi_version == Some(2)
+                })
         })
         .collect()
 }
@@ -978,26 +966,12 @@ fn enabled_native_tool_families(
 pub fn compose_builtin_tool_registry(
     selection: &hya_bundle::BuiltinBundleSelection,
 ) -> Result<ToolRegistry, String> {
-    compose_builtin_tool_registry_with_runtime(selection, None, true).map(|(registry, _)| registry)
-}
-
-fn compose_builtin_tool_registry_with_runtime(
-    selection: &hya_bundle::BuiltinBundleSelection,
-    host_runtime: Option<Arc<dyn hya_runtime_abi::HostRuntime>>,
-    include_network: bool,
-) -> Result<(ToolRegistry, hya_tool_loader::NativeRegistrations), String> {
-    let enabled_families = enabled_native_tool_families(selection, include_network);
-    let (registry, registrations) = match host_runtime {
-        Some(runtime) => {
-            hya_tool_loader::try_load_tool_families_with_runtime(&enabled_families, runtime)?
-        }
-        None => (
-            hya_tool_loader::try_from_tool_families(&enabled_families)?,
-            hya_tool_loader::NativeRegistrations::default(),
-        ),
-    };
+    let (registry, _) = hya_tool_loader::load_native_bundles(
+        &enabled_native_bundles(selection),
+        hya_tool_loader::noop_host_runtime(),
+    )?;
     register_missing_bare_tools(&registry);
-    Ok((registry, registrations))
+    Ok(registry)
 }
 
 async fn build_session_engine_with_mcp_defer(
@@ -1039,201 +1013,15 @@ async fn build_session_engine_with_mcp_defer(
         Arc::clone(&categories),
     ));
     let host_runtime: Arc<dyn hya_runtime_abi::HostRuntime> = app_host_runtime.clone();
-    let enabled_families = enabled_native_tool_families(&builtins, false);
-    let (registry, native_registrations) = compose_builtin_tool_registry_with_runtime(
-        &builtins,
-        Some(Arc::clone(&host_runtime)),
-        false,
-    )
-    .map_err(|error| anyhow::anyhow!("compose built-in tool registry: {error}"))?;
-    let mut started_services: Vec<Arc<dyn hya_runtime_abi::NativeService>> =
-        Vec::with_capacity(native_registrations.services.len());
-    for service in native_registrations.services {
-        if let Err(error) = service.start(Arc::clone(&host_runtime)).await {
-            for started in started_services.into_iter().rev() {
-                let _ = started.stop().await;
-            }
-            store.release_runtime_owner(owner_run_id)?;
-            return Err(anyhow::anyhow!(
-                "start native bundle service `{}`: {error}",
-                service.id()
-            ));
-        }
-        started_services.push(service);
-    }
-    let mut all_native_hooks = native_registrations.hooks;
-    let native_uri_handlers = native_registrations.uri_schema_handlers;
-    let native_projection_reducers = native_registrations.projection_reducers;
-    let native_api_handlers = native_registrations.api_handlers;
-    let mut loaded_v2_tools = false;
-    if builtins.is_enabled("hya/plan")
-        && hya_bundle::first_party_bundle_optional("hya/plan")
-            .ok()
-            .flatten()
-            .is_some()
-    {
-        let regs = hya_tool_loader::load_and_register_v2_bundle(
-            &registry,
-            "hya/plan",
-            Arc::clone(&host_runtime),
-        )
-        .map_err(anyhow::Error::msg)
-        .context("load first-party native bundle hya/plan")?;
-        loaded_v2_tools |= !regs.tools.is_empty();
-        all_native_hooks.extend(regs.hooks);
-    }
-    let mut deferred_workflow_regs: Option<hya_tool_loader::NativeRegistrations> = None;
-    if builtins.is_enabled("hya/workflow")
-        && hya_bundle::first_party_bundle_optional("hya/workflow")
-            .ok()
-            .flatten()
-            .is_some()
-    {
-        let mut regs = hya_tool_loader::load_and_register_v2_bundle(
-            &registry,
-            "hya/workflow",
-            Arc::clone(&host_runtime),
-        )
-        .map_err(anyhow::Error::msg)
-        .context("load first-party native bundle hya/workflow")?;
-        loaded_v2_tools |= !regs.tools.is_empty();
-        all_native_hooks.extend(std::mem::take(&mut regs.hooks));
-        deferred_workflow_regs = Some(regs);
-    }
-    let network_enabled = builtins.is_enabled("hya/network")
-        && hya_bundle::first_party_bundle_optional("hya/network")
-            .ok()
-            .flatten()
-            .is_some();
-    if network_enabled {
-        let regs = hya_tool_loader::load_v2("hya/network", Arc::clone(&host_runtime))
-            .map_err(|error| anyhow::anyhow!("load native bundle hya/network: {error}"))?;
-        for service in &regs.services {
-            if let Err(error) = service.start(Arc::clone(&host_runtime)).await {
-                for started in started_services.into_iter().rev() {
-                    let _ = started.stop().await;
-                }
-                store.release_runtime_owner(owner_run_id)?;
-                return Err(anyhow::anyhow!(
-                    "start native service `{}`: {error}",
-                    service.id()
-                ));
-            }
-        }
-        let advertised: Vec<String> = regs
-            .tools
-            .iter()
-            .map(|tool| tool.name().to_string())
-            .collect();
-        let mut hidden: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for hook in &regs.hooks {
-            if hook
-                .hook_points()
-                .contains(&hya_runtime_abi::HookPoint::ToolVisibility)
-            {
-                let outcome = hook
-                    .tool_visibility(hya_runtime_abi::ToolVisibilityInput {
-                        session: SessionId::new(),
-                        agent: None,
-                        candidate_tools: advertised.clone(),
-                        interactive: true,
-                    })
-                    .await
-                    .map_err(|error| {
-                        anyhow::anyhow!("evaluate tool visibility hook `{}`: {error}", hook.id())
-                    })?;
-                match outcome {
-                    hya_runtime_abi::ToolVisibilityOutcome::Preserve => {}
-                    hya_runtime_abi::ToolVisibilityOutcome::Hide { tools } => {
-                        hidden.extend(tools);
-                    }
-                    hya_runtime_abi::ToolVisibilityOutcome::AllowOnly { tools } => {
-                        for candidate in &advertised {
-                            if !tools.contains(candidate) {
-                                hidden.insert(candidate.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        let network_preset = hya_tool_loader::tool_bundle_presets()
-            .iter()
-            .find(|preset| preset.identity() == "hya/network");
-        for tool in regs.tools {
-            if hidden.contains(tool.name()) {
-                continue;
-            }
-            if let Some(exposure) = network_preset.and_then(|preset| preset.tool(tool.name())) {
-                if !exposure.exposed() {
-                    continue;
-                }
-                registry.register_builtin(
-                    tool,
-                    exposure.permission(),
-                    exposure
-                        .aliases()
-                        .iter()
-                        .map(|alias| (alias.name(), alias.visibility())),
-                    "hya/network",
-                );
-            } else {
-                registry.register_builtin(tool, ToolPermission::Tool, [], "hya/network");
-            }
-        }
-        started_services.extend(regs.services);
-    }
-    if builtins.is_enabled("hya/goal")
-        && hya_bundle::first_party_bundle_optional("hya/goal")
-            .ok()
-            .flatten()
-            .is_some()
-    {
-        let regs = hya_tool_loader::load_v2("hya/goal", Arc::clone(&host_runtime))
-            .map_err(|error| anyhow::anyhow!("load first-party native bundle hya/goal: {error}"))?;
-        for service in &regs.services {
-            if let Err(error) = service.start(Arc::clone(&host_runtime)).await {
-                for started in started_services.into_iter().rev() {
-                    let _ = started.stop().await;
-                }
-                store.release_runtime_owner(owner_run_id)?;
-                return Err(anyhow::anyhow!(
-                    "start native service `{}`: {error}",
-                    service.id()
-                ));
-            }
-        }
-        app_host_runtime.declare_hook_points("hya/goal", &regs.hook_points);
-        app_host_runtime.register_drivers("hya/goal", regs.drivers);
-        all_native_hooks.extend(regs.hooks);
-        started_services.extend(regs.services);
-    }
-    if builtins.is_enabled("hya/loop")
-        && hya_bundle::first_party_bundle_optional("hya/loop")
-            .ok()
-            .flatten()
-            .is_some()
-    {
-        let regs = hya_tool_loader::load_v2("hya/loop", Arc::clone(&host_runtime))
-            .map_err(|error| anyhow::anyhow!("load first-party native bundle hya/loop: {error}"))?;
-        for service in &regs.services {
-            if let Err(error) = service.start(Arc::clone(&host_runtime)).await {
-                for started in started_services.into_iter().rev() {
-                    let _ = started.stop().await;
-                }
-                store.release_runtime_owner(owner_run_id)?;
-                return Err(anyhow::anyhow!(
-                    "start native service `{}`: {error}",
-                    service.id()
-                ));
-            }
-        }
-        started_services.extend(regs.services);
-        all_native_hooks.extend(regs.hooks);
-        app_host_runtime.register_drivers("hya/loop", regs.drivers);
-        app_host_runtime.declare_hook_points("hya/loop", &regs.hook_points);
-    }
+    let native_ids = enabled_native_bundles(&builtins);
+    let (registry, native_regs) =
+        hya_tool_loader::load_native_bundles(&native_ids, Arc::clone(&host_runtime))
+            .map_err(|error| anyhow::anyhow!("load native bundles: {error}"))?;
     register_missing_bare_tools(&registry);
+    let mut native = crate::native_bundles::NativeInstall::default();
+    for (bundle_id, regs) in native_regs {
+        native.add(&app_host_runtime, &bundle_id, regs)?;
+    }
 
     let project_plugins = if options.pure {
         crate::project_plugins::ProjectPluginSettings::disabled()
@@ -1294,8 +1082,7 @@ async fn build_session_engine_with_mcp_defer(
         .context("prepare core code-mode runtime specification")?
     };
     let load_compaction = builtins.is_enabled("hya/compaction");
-    let use_tool_family_prompts =
-        !enabled_families.is_empty() || loaded_v2_tools || network_enabled;
+    let use_tool_family_prompts = !native_ids.is_empty();
     let catalog_refresh = Arc::new(
         RuntimeExtensionsRefresh::new(
             crate::ProjectScopeRefresh::new(Arc::new(
@@ -1356,8 +1143,11 @@ async fn build_session_engine_with_mcp_defer(
         .with_base_system_prompt(agent.system_prompt.clone())
         .with_pure_context(options.pure)
         .with_tool_family_prompts(use_tool_family_prompts)
-        .with_hook_list(all_native_hooks)
-        .with_uri_schema_handlers(native_uri_handlers, Arc::clone(&host_runtime))
+        .with_hook_list(std::mem::take(&mut native.hooks))
+        .with_uri_schema_handlers(
+            std::mem::take(&mut native.uri_handlers),
+            Arc::clone(&host_runtime),
+        )
         // Stop/start records use this store's runtime-owner claim.
         .with_runtime_owner(owner_run_id)
         .with_global_reasoning(settings.reasoning())
@@ -1393,25 +1183,7 @@ async fn build_session_engine_with_mcp_defer(
 
     let engine = Arc::new(engine_builder);
     app_host_runtime.attach_engine(&engine);
-    if !native_projection_reducers.is_empty() {
-        engine.register_native_projection_reducers(native_projection_reducers);
-    }
-    if !native_api_handlers.is_empty() {
-        let mut by_bundle: BTreeMap<String, Vec<Arc<dyn hya_runtime_abi::NativeBundleApiHandler>>> =
-            BTreeMap::new();
-        for handler in native_api_handlers {
-            by_bundle
-                .entry(handler.id().to_string())
-                .or_default()
-                .push(handler);
-        }
-        for (bundle_id, handlers) in by_bundle {
-            engine
-                .runtime_registry()
-                .register_native_bundle_apis(&bundle_id, handlers)
-                .map_err(|error| anyhow::anyhow!("register {bundle_id} native APIs: {error}"))?;
-        }
-    }
+    native.register_with(&engine)?;
     let (agent_configuration, agent_efforts) = settings.agents()?;
     let agent_model_control = PersistentAgentModelControl::load(
         engine.store().clone(),
@@ -1493,26 +1265,13 @@ async fn build_session_engine_with_mcp_defer(
     .await?;
     app_host_runtime.attach_resident_supervisor(&resident_supervisor);
     app_host_runtime.attach_sidecar_environment(Arc::clone(&sidecar_environment));
-    if let Some(regs) = deferred_workflow_regs {
-        engine.register_native_projection_reducers(regs.projection_reducers);
-        engine
-            .runtime_registry()
-            .register_native_bundle_apis("hya/workflow", regs.api_handlers)
-            .map_err(|error| anyhow::anyhow!("register hya/workflow native APIs: {error}"))?;
-        for service in &regs.services {
-            if let Err(error) = service.start(Arc::clone(&host_runtime)).await {
-                for started in started_services.into_iter().rev() {
-                    let _ = started.stop().await;
-                }
-                store.release_runtime_owner(owner_run_id)?;
-                return Err(anyhow::anyhow!(
-                    "start native service `{}`: {error}",
-                    service.id()
-                ));
-            }
+    let started_services = match native.start_services(&host_runtime).await {
+        Ok(started) => started,
+        Err(error) => {
+            store.release_runtime_owner(owner_run_id)?;
+            return Err(error);
         }
-        started_services.extend(regs.services);
-    }
+    };
     engine.register_native_services(started_services.clone());
     let native_services: Arc<[Arc<dyn hya_runtime_abi::NativeService>]> = started_services.into();
     let lifecycle = spawn_team_supervisor_with_environment(

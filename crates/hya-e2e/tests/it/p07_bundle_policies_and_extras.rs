@@ -219,7 +219,9 @@ for line in sys.stdin:
 
     // 2b. Without `hya/goal` (`--bare`, or disabled), `hya -p` runs one plain
     // headless turn: no goal driver, no evaluator.
-    env.fake.push_scripts([text_step("bare turn done")]).unwrap();
+    env.fake
+        .push_scripts([text_step("bare turn done")])
+        .unwrap();
     let bare_goal = Command::new(&env.backend.binary)
         .args(["--bare", "-p", "verify bare failure"])
         .env("XDG_CONFIG_HOME", &env.backend.xdg_config_home)

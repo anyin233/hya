@@ -1417,14 +1417,24 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
     )
     .await
     .unwrap();
-    let names: Vec<String> = ws_built
+    // Disabled network tools stay registered but hya/network's own
+    // `tool.visibility` hook hides them from every turn.
+    let outcome = ws_built
         .engine()
-        .tool_schemas()
-        .into_iter()
-        .map(|s| s.name.to_string())
-        .collect();
-    assert!(!names.iter().any(|n| n == "websearch"));
-    assert!(!names.iter().any(|n| n == "webfetch"));
+        .process_hooks()
+        .tool_visibility(hya_runtime_abi::ToolVisibilityInput {
+            session: hya_proto::SessionId::new(),
+            agent: None,
+            candidate_tools: vec!["webfetch".into(), "websearch".into(), "read".into()],
+            interactive: true,
+        })
+        .await;
+    assert_eq!(
+        outcome,
+        hya_runtime_abi::ToolVisibilityOutcome::Hide {
+            tools: vec!["webfetch".into(), "websearch".into()]
+        }
+    );
     ws_built.shutdown().await.unwrap();
 
     // 3b. Air-gapped mode: disabling `hya/network` removes all internet tools and aliases.

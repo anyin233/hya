@@ -13,7 +13,6 @@ workspace = true
 [dependencies]
 hya-multi-agent = { workspace = true }
 hya-agent-channels = { workspace = true }
-hya-network = { workspace = true }
 hya-plan = { workspace = true }
 hya-bundle = { workspace = true }
 hya-runtime-abi = { workspace = true }
@@ -23,9 +22,7 @@ hya-engine = { workspace = true }
 hya-provider = { workspace = true }
 hya-tool = { workspace = true }
 hya-tool-loader = { workspace = true }
-hya-hashline = { workspace = true }
 hya-coding-extras-core = { workspace = true }
-hya-coding-extras = { workspace = true }
 hya-workflow-bundle-core = { workspace = true }
 hya-workflow-bundle = { workspace = true }
 hya-store = { workspace = true }
